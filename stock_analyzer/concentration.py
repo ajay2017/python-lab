@@ -33,6 +33,8 @@ def assess_add_concentration(
     single_ceiling: float,
     sector_ceiling: float,
     sector_elevated: float,
+    net_capital: float | None = None,
+    capital_ceiling: float | None = None,
 ) -> dict | None:
     """Resulting concentration of a BUY, or None if no ceiling is approached.
 
@@ -40,7 +42,18 @@ def assess_add_concentration(
     slightly conservative (warns marginally earlier) and correct when the buy is
     new capital; harmless when it's a reshuffle. `suggested_trim_shares` is the
     exact count to remove to bring the single-name weight back to the ceiling
-    (accounts for the total shrinking as you trim).
+    (accounts for the total shrinking as you trim). Never derived from the
+    capital-basis reading below — trims stay on the existing gross-book basis.
+
+    `net_capital`/`capital_ceiling` (F-255, both optional, default-off): when
+    BOTH are supplied and positive, also reports the post-add CAPITAL-basis
+    weight (post_name_mv / net_capital) alongside the existing gross-basis
+    `post_name_wt`, mirroring margin.capital_basis_weight's percentage. When
+    omitted (either is None/non-positive), `capital_breach` is always False
+    and `post_name_capital_pct` is always None — same "absent data reads as
+    a clean no" convention this dict already uses elsewhere (e.g. a caller
+    that never supplies sector data still gets `sector_hard`/`sector_elevated`
+    keys, just never True).
     """
     new_mv = float(add_shares) * float(price)
     if new_mv <= 0 or portfolio_value <= 0 or price <= 0:
@@ -56,7 +69,13 @@ def assess_add_concentration(
     sector_hard = post_sector_wt >= sector_ceiling
     sector_elev = (not sector_hard) and post_sector_wt >= sector_elevated
 
-    if not (name_breach or sector_hard or sector_elev):
+    post_name_capital_pct = None
+    capital_breach = False
+    if net_capital is not None and net_capital > 0 and capital_ceiling is not None:
+        post_name_capital_pct = post_name_mv / net_capital * 100.0
+        capital_breach = post_name_capital_pct >= capital_ceiling
+
+    if not (name_breach or sector_hard or sector_elev or capital_breach):
         return None
 
     # Exact trim to hit the single-name ceiling: solve
@@ -81,6 +100,10 @@ def assess_add_concentration(
         "sector_elevated_thresh": sector_elevated,
         "suggested_trim_shares": trim_shares,
         "new_mv": round(new_mv, 0),
+        "capital_breach": capital_breach,
+        "post_name_capital_pct": (
+            round(post_name_capital_pct, 1) if post_name_capital_pct is not None else None
+        ),
     }
 
 

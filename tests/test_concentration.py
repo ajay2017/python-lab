@@ -7,7 +7,9 @@ functions with no I/O, so exact boundary behaviour is pinned here rather than
 only being exercised implicitly through the UI.
 """
 from stock_analyzer.concentration import assess_add_concentration, gating_denominator, high_beta_share
-from stock_analyzer.constants import SECTOR_CEILING, SECTOR_ELEVATED, SINGLE_NAME_CEILING
+from stock_analyzer.constants import (
+    SECTOR_CEILING, SECTOR_ELEVATED, SINGLE_NAME_CEILING, NET_CAPITAL_POSITION_CAP_PCT,
+)
 
 
 # ── gating_denominator ───────────────────────────────────────────────────────
@@ -105,6 +107,59 @@ def test_assess_add_concentration_flags_sector_elevated_only():
     assert result is not None
     assert result["sector_elevated"] is True
     assert result["sector_hard"] is False
+
+
+# ── assess_add_concentration — capital-basis (F-255, additive/optional) ───────
+
+def test_assess_add_concentration_omitting_capital_kwargs_leaves_shape_unchanged():
+    """Default-off: capital_breach always False, post_name_capital_pct always
+    None when net_capital/capital_ceiling are omitted -- and a would-be-clean
+    add (no gross-basis breach) still returns None, same as before F-255."""
+    result = _assess()
+    assert result is None
+
+    breach = _assess(existing_name_mv=15_000.0, add_shares=100, price=100.0)
+    assert breach is not None
+    assert breach["capital_breach"] is False
+    assert breach["post_name_capital_pct"] is None
+
+
+def test_assess_add_concentration_flags_capital_breach():
+    """A buy that clears the gross-book ceiling entirely can still breach the
+    SEPARATE net-capital cap once net_capital/capital_ceiling are supplied
+    (ALB/OXY-shaped: small net capital relative to gross book)."""
+    result = assess_add_concentration(
+        ticker="OXY",
+        add_shares=59,
+        price=60.10,
+        existing_name_mv=0.0,
+        sector_mv=0.0,
+        portfolio_value=24_503.0,
+        single_ceiling=SINGLE_NAME_CEILING,
+        sector_ceiling=SECTOR_CEILING,
+        sector_elevated=SECTOR_ELEVATED,
+        net_capital=7_802.0,
+        capital_ceiling=NET_CAPITAL_POSITION_CAP_PCT,
+    )
+    assert result is not None
+    assert result["capital_breach"] is True
+    assert result["post_name_capital_pct"] is not None
+    assert result["post_name_capital_pct"] >= NET_CAPITAL_POSITION_CAP_PCT
+    # Gross-book basis alone would not have flagged this add.
+    assert result["name_breach"] is False
+
+
+def test_assess_add_concentration_capital_kwargs_partial_stays_inert():
+    """Supplying only ONE of net_capital/capital_ceiling must not compute a
+    capital reading -- both are required together."""
+    only_net_capital = assess_add_concentration(
+        ticker="AAPL", add_shares=100, price=100.0, existing_name_mv=15_000.0,
+        sector_mv=0.0, portfolio_value=100_000.0,
+        single_ceiling=SINGLE_NAME_CEILING, sector_ceiling=SECTOR_CEILING,
+        sector_elevated=SECTOR_ELEVATED, net_capital=7_802.0, capital_ceiling=None,
+    )
+    assert only_net_capital["capital_breach"] is False
+    assert only_net_capital["post_name_capital_pct"] is None
 
 
 # ── high_beta_share ───────────────────────────────────────────────────────────

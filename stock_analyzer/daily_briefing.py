@@ -31,6 +31,7 @@ from stock_analyzer.constants import (
     COMPOSITE_HIGH_CONVICTION,
     COMPOSITE_BUY_FLAT_DAY,
     SINGLE_NAME_CEILING,
+    NET_CAPITAL_POSITION_CAP_PCT,
     SECTOR_CEILING,
     SECTOR_ELEVATED,
     UNCLASSIFIED_SECTOR,
@@ -103,8 +104,11 @@ def _f(val, default=0.0):
 #       concentration cap). Never actually persisted — nothing captured sizes
 #       before F-249 — so a NULL in the DB means "pre-capture", not "version 1".
 #   2 = F-249: ceiling-capped risk.position_sizing() off the ATR stop.
+#   3 = F-255: adds the SEPARATE net-capital cap (NET_CAPITAL_POSITION_CAP_PCT)
+#       on top of the existing gross-book ceiling — inert (identical to v2's
+#       output) whenever the caller doesn't pass net_capital.
 # Bump this whenever the formula changes; do NOT reuse a number.
-SIZING_FORMULA_VERSION = 2
+SIZING_FORMULA_VERSION = 3
 
 
 def _position_size_for_render(
@@ -113,6 +117,7 @@ def _position_size_for_render(
     stop: float,
     entry_lo,
     entry_hi,
+    net_capital: float | None = None,
 ) -> dict:
     """Wrap position_sizing() into renderer-compatible keys.
 
@@ -120,19 +125,28 @@ def _position_size_for_render(
     used by Analysis, Watchlist Advisor, etc.) and maps its output to the dict
     shape the Grow Today renderers (app.py) and cron emails (notify.py) expect.
 
-    Three states, deliberately distinct:
+    Four states, deliberately distinct:
       - ``{}``                  — a required input is MISSING (price <= 0,
                                   portfolio_value <= 0, stop <= 0). Nothing to
                                   explain; the caller simply has no data yet.
       - ``ceiling_infeasible``  — inputs are fine but one share alone breaches
                                   the single-name cap. Account-size constraint.
+      - ``capital_infeasible``  — inputs are fine but one share alone breaches
+                                  the SEPARATE net-capital cap (F-255). Only
+                                  reachable when `net_capital` is supplied;
+                                  every existing caller that omits it can never
+                                  hit this branch. An account-size constraint,
+                                  just on net capital rather than gross book.
       - ``stop_infeasible``     — inputs are fine but price is at/below the stop.
-    The two markers carry NO ``shares`` key, so a renderer gating its size text
+    These markers carry NO ``shares`` key, so a renderer gating its size text
     on ``shares`` can never print "0 shares"; they exist so a card that already
     says BUY never shows a blank size with no reason.
 
     Carries ceiling_capped and uncapped_shares so the render layer can show a
-    disclosure when the single-name cap binds.
+    disclosure when the single-name cap binds. When `net_capital` is supplied,
+    also carries capital_capped/capital_pct for the same disclosure on the
+    net-capital cap. `net_capital=None` (the default) makes the whole net-
+    capital cap inert — output is byte-identical to before F-255.
     """
     if not (price > 0 and portfolio_value > 0 and stop > 0):
         return {}
@@ -141,6 +155,7 @@ def _position_size_for_render(
     # position_sizing's own guards change.
     _reason = sizing_unavailable_reason(
         portfolio_value, price, stop, max_position_pct=SINGLE_NAME_CEILING,
+        net_capital=net_capital, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
     )
     if _reason == "ceiling":
         # One share alone breaches the single-name cap, so no honest size
@@ -151,6 +166,20 @@ def _position_size_for_render(
         return {
             "ceiling_infeasible": True,
             "one_share_pct": round(price / portfolio_value * 100, 1),
+            "portfolio_value": round(portfolio_value, 2),
+            "sizing_version": SIZING_FORMULA_VERSION,
+        }
+    if _reason == "capital":
+        # One share alone breaches the SEPARATE net-capital cap (or net_capital
+        # is already <= 0 / margin-called). Only reachable when net_capital
+        # was supplied and positive-or-called — every existing caller that
+        # passes net_capital=None never routes here.
+        return {
+            "capital_infeasible": True,
+            "one_share_capital_pct": (
+                round(price / net_capital * 100, 1) if net_capital and net_capital > 0 else None
+            ),
+            "net_capital": round(net_capital, 2) if net_capital is not None else None,
             "portfolio_value": round(portfolio_value, 2),
             "sizing_version": SIZING_FORMULA_VERSION,
         }
@@ -168,6 +197,7 @@ def _position_size_for_render(
     raw = position_sizing(
         portfolio_value, RISK_PCT_PER_TRADE, price, stop,
         max_position_pct=SINGLE_NAME_CEILING,
+        net_capital=net_capital, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
     )
     if raw is None:
         # Unreachable today: position_sizing delegates the identical predicate
@@ -175,7 +205,7 @@ def _position_size_for_render(
         # of its None causes were already branched on. Kept as defence-in-depth
         # against the two drifting apart — not a live route.
         return {}
-    return {
+    out = {
         "shares":          raw["shares"],
         "total_cost":      raw["total_cost"],
         "stop":            round(stop, 2),
@@ -191,6 +221,10 @@ def _position_size_for_render(
         "portfolio_value": round(portfolio_value, 2),
         "sizing_version":  SIZING_FORMULA_VERSION,
     }
+    if net_capital is not None:
+        out["capital_capped"] = raw.get("capital_capped", False)
+        out["capital_pct"]    = raw.get("capital_pct")
+    return out
 
 
 def _gate_wt(row) -> float:
@@ -594,7 +628,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 macro_events: list | None = None,
                 movers: list | None = None,
                 deterioration: list | None = None,
-                winner_profile: dict | None = None) -> dict:
+                winner_profile: dict | None = None,
+                net_capital: float | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -630,6 +665,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                  a fresh entry decision) as pick["personalized_match"]. Diagnostic
                  annotation only, same as "divergence" above — never gates,
                  re-scores, or re-ranks; the pick has already cleared every gate.
+    net_capital : optional (F-255) — equity after margin debit, threaded straight
+                 into every _position_size_for_render call so new-pick and
+                 add-to-winner sizing both respect the SEPARATE net-capital cap.
+                 None (the default, and every caller before F-255) leaves sizing
+                 byte-identical to the pre-F-255 output.
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -1046,6 +1086,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             sizing = (
                 _position_size_for_render(
                     portfolio_value, price, _pick_stop, _pick_lo, _pick_hi,
+                    net_capital=net_capital,
                 )
                 if price > 0 and portfolio_value > 0 else {}
             )
@@ -1301,6 +1342,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     _position_size_for_render(
                         portfolio_value, price, _held_stop,
                         _held_bundle.get("entry_lo"), _held_bundle.get("entry_hi"),
+                        net_capital=net_capital,
                     )
                     if price > 0 and portfolio_value > 0 else {}
                 )
@@ -2565,6 +2607,7 @@ def build_daily_briefing(
     vix_level:       float | None = None,
     winner_profile:  dict | None = None,
     trades_df:       object | None = None,
+    net_capital:     float | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -2578,6 +2621,10 @@ def build_daily_briefing(
                      Pre-Commitment Enforcement (docs/plans/premortem-
                      enforcement.md); omitted or None degrades to no
                      premortem_triggered cards, never an error.
+    net_capital:     optional (F-255) equity after margin debit, passed straight
+                     through to _grow_today's SEPARATE net-capital sizing cap.
+                     None (the default, and every caller before F-255) leaves
+                     sizing byte-identical to the pre-F-255 output.
 
     Returns dict with: act_today, buy_candidates, review_list, grow_today.
     """
@@ -2643,7 +2690,8 @@ def build_daily_briefing(
                          earnings_lookup=earnings_lookup, macro_events=macro_events,
                          deterioration=deterioration,
                          movers=movers,
-                         winner_profile=winner_profile)
+                         winner_profile=winner_profile,
+                         net_capital=net_capital)
     # Tune-up beta/sharpe cards restate a trim; if that name is already carrying
     # an Act Today card (incl. the risk-off TRIM appended above) or a Review
     # card, drop the redundant restatement (2026-08-04 audit — same broad

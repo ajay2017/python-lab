@@ -622,3 +622,64 @@ class TestSizingProvenance:
         """
         assert _position_size_for_render(0, 100.0, 94.0, None, None) == {}
         assert _position_size_for_render(100_000, 0.0, 94.0, None, None) == {}
+
+
+# ── 11. Net-capital cap (F-255) ────────────────────────────────────────────────
+# SEPARATE, additive cap: 25% of net capital (equity after margin debit) on
+# top of the existing 15%-of-gross-book ceiling. Version bumped 2 -> 3
+# regardless of whether net_capital is ever supplied (provenance marks the
+# FORMULA, not whether a given call happened to use the new branch); the
+# sizing OUTPUT itself stays byte-identical when net_capital is omitted.
+
+class TestNetCapitalCap:
+
+    def test_sizing_formula_version_is_3(self):
+        assert SIZING_FORMULA_VERSION == 3
+
+    def test_net_capital_none_is_byte_identical_to_pre_f255_output(self):
+        """_position_size_for_render(..., net_capital=None) (the default, and
+        every call site before F-255) must produce the same shape as calling
+        it with no net_capital argument at all."""
+        cases = [
+            (100_000, 100.0, 94.0, 99.0, 101.0),   # full size
+            (10_000, 4_500.0, 4_365.0, None, None),  # ceiling_infeasible
+            (100_000, 90.0, 94.0, None, None),       # stop_infeasible
+            (0, 100.0, 94.0, None, None),            # missing input -> {}
+        ]
+        for args in cases:
+            without_kw = _position_size_for_render(*args)
+            with_none = _position_size_for_render(*args, net_capital=None)
+            assert with_none == without_kw
+            assert "capital_capped" not in with_none
+            assert "capital_pct" not in with_none
+
+    def test_net_capital_triggers_capped_key_in_render_dict(self):
+        """A net_capital small enough to bind produces capital_capped/capital_pct
+        in the normal (non-infeasible) render dict."""
+        sz = _position_size_for_render(
+            24503, 143.25, 140.0, None, None, net_capital=7802,
+        )
+        assert "capital_capped" in sz
+        assert "capital_pct" in sz
+        assert sz["capital_capped"] is True
+        assert sz["capital_pct"] <= 25.0
+
+    def test_net_capital_infeasible_marker_shape(self):
+        """net_capital small enough that even one share breaches the capital
+        cap must give an explained capital_infeasible marker, never a bare
+        0-share dict and never silently falling through to {}."""
+        sz = _position_size_for_render(
+            100_000, 500.0, 450.0, None, None, net_capital=100.0,
+        )
+        assert sz.get("capital_infeasible") is True
+        assert "shares" not in sz
+        assert sz["sizing_version"] == SIZING_FORMULA_VERSION
+        assert sz["net_capital"] == 100.0
+
+    def test_net_capital_called_state_is_infeasible_not_missing(self):
+        """net_capital <= 0 (margin-called) must also route to
+        capital_infeasible, not to the bare-missing-input {} branch."""
+        sz = _position_size_for_render(
+            100_000, 100.0, 94.0, None, None, net_capital=0.0,
+        )
+        assert sz.get("capital_infeasible") is True

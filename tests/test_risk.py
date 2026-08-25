@@ -11,6 +11,7 @@ import pytest
 from stock_analyzer.risk import (
     atr_stop_loss,
     position_sizing,
+    sizing_unavailable_reason,
     sharpe_ratio,
     sortino_ratio,
     max_drawdown_pct,
@@ -137,6 +138,108 @@ def test_position_sizing_ceiling_not_capped_when_under_limit():
     )
     assert result["ceiling_capped"] is False
     assert result["shares"] == result["uncapped_shares"]
+
+
+# ─── position_sizing — net-capital cap (F-255) ────────────────────────────────
+# SEPARATE, additive cap: 25% of net capital (equity after margin debit), on
+# top of the existing 15%-of-gross-book max_position_pct ceiling above. Must
+# be completely inert (byte-identical output) whenever a caller omits
+# net_capital/max_capital_pct — every caller before F-255 does.
+
+def test_position_sizing_net_capital_none_is_byte_identical_to_pre_f255():
+    """The exact existing test cases above, called again with net_capital
+    omitted (the implicit default) — output must be identical, key-for-key,
+    to calling without the new kwargs at all."""
+    cases = [
+        dict(portfolio_value=100_000, risk_pct=0.01, entry=50.0, stop=45.0),
+        dict(portfolio_value=1_000, risk_pct=0.001, entry=500.0, stop=400.0),
+        dict(portfolio_value=0, risk_pct=0.01, entry=50.0, stop=45.0),
+        dict(portfolio_value=100_000, risk_pct=0.01, entry=50.0, stop=45.0,
+             max_position_pct=50.0),
+        dict(portfolio_value=100_000, risk_pct=0.02, entry=100.0, stop=99.0,
+             max_position_pct=15.0),
+    ]
+    for kwargs in cases:
+        without_new_kwargs = position_sizing(**kwargs)
+        with_defaulted_new_kwargs = position_sizing(
+            **kwargs, net_capital=None, max_capital_pct=None,
+        )
+        assert with_defaulted_new_kwargs == without_new_kwargs
+        assert set(with_defaulted_new_kwargs.keys()) == set(without_new_kwargs.keys())
+        assert "capital_capped" not in with_defaulted_new_kwargs
+        assert "capital_pct" not in with_defaulted_new_kwargs
+
+
+def test_position_sizing_alb_boundary_case_caps_to_net_capital():
+    """Real-book-shaped case (ALB, 2026-08-24): $24,503 gross book, $7,802 net
+    capital (post-margin-debit equity), $143.25 entry. The 15%-of-gross
+    ceiling alone would allow far more shares than 25%-of-net-capital does."""
+    result = position_sizing(
+        portfolio_value=24503, risk_pct=0.02, entry=143.25, stop=140.0,
+        max_position_pct=15, net_capital=7802, max_capital_pct=25,
+    )
+    assert result is not None
+    expected_cap_shares = int(7802 * 0.25 / 143.25)
+    assert expected_cap_shares == 13
+    assert result["capital_capped"] is True
+    assert result["shares"] <= expected_cap_shares
+    assert result["capital_pct"] <= 25.0
+
+
+def test_position_sizing_net_capital_unlevered_never_binds():
+    """net_capital >= portfolio_value (no real leverage) — the capital cap
+    should never be the binding constraint."""
+    result = position_sizing(
+        portfolio_value=100_000, risk_pct=0.01, entry=50.0, stop=45.0,
+        max_position_pct=15.0, net_capital=150_000, max_capital_pct=25.0,
+    )
+    assert result["capital_capped"] is False
+
+
+def test_position_sizing_net_capital_non_positive_returns_none():
+    assert position_sizing(
+        24503, 0.02, 143.25, 140.0, max_position_pct=15,
+        net_capital=0, max_capital_pct=25,
+    ) is None
+    assert position_sizing(
+        24503, 0.02, 143.25, 140.0, max_position_pct=15,
+        net_capital=-500, max_capital_pct=25,
+    ) is None
+    assert sizing_unavailable_reason(
+        24503, 143.25, 140.0, max_position_pct=15,
+        net_capital=0, max_capital_pct=25,
+    ) == "capital"
+    assert sizing_unavailable_reason(
+        24503, 143.25, 140.0, max_position_pct=15,
+        net_capital=-500, max_capital_pct=25,
+    ) == "capital"
+
+
+def test_position_sizing_one_share_exceeds_capital_cap_returns_none():
+    """Small net_capital + high entry price -> even one share breaches the
+    25%-of-net-capital cap. Must return None, never a 0-share dict."""
+    result = position_sizing(
+        portfolio_value=100_000, risk_pct=0.01, entry=500.0, stop=450.0,
+        max_position_pct=50.0, net_capital=100.0, max_capital_pct=25.0,
+    )
+    assert result is None
+    assert sizing_unavailable_reason(
+        100_000, 500.0, 450.0, max_position_pct=50.0,
+        net_capital=100.0, max_capital_pct=25.0,
+    ) == "capital"
+
+
+def test_position_sizing_capital_pct_never_exceeds_the_cap():
+    """Boundary invariant: construct a case landing capital_pct as close to
+    25.0 as integer share rounding allows -- it must never exceed the cap."""
+    from stock_analyzer.constants import NET_CAPITAL_POSITION_CAP_PCT
+    result = position_sizing(
+        portfolio_value=24503, risk_pct=0.05, entry=143.25, stop=142.0,
+        max_position_pct=15, net_capital=7802,
+        max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+    )
+    assert result is not None
+    assert result["capital_pct"] <= NET_CAPITAL_POSITION_CAP_PCT
 
 
 # ─── sharpe_ratio / sortino_ratio ─────────────────────────────────────────────

@@ -33,11 +33,13 @@ def atr_stop_loss(df: pd.DataFrame, multiplier: float = ATR_STOP_MULT) -> tuple[
 def sizing_unavailable_reason(
     portfolio_value: float, entry: float, stop: float,
     max_position_pct: float | None = None,
+    net_capital: float | None = None, max_capital_pct: float | None = None,
 ) -> str | None:
     """Why `position_sizing` would decline to size, or None if it would size.
 
-    `position_sizing` returns None for two STRUCTURALLY DIFFERENT reasons, and a
-    caller that conflates them tells the user to fix the wrong thing:
+    `position_sizing` returns None for THREE structurally different reasons
+    (2026-08-25: F-255 added the third), and a caller that conflates them
+    tells the user to fix the wrong thing:
 
       "stop"    — degenerate stop (entry <= stop, or stop <= 0). A data problem;
                   the user can inspect or reset the stop.
@@ -47,10 +49,19 @@ def sizing_unavailable_reason(
                   helper existed, the Analysis and Watchlist fallback captions
                   said "stop price too close to entry or not set" for this case,
                   while rendering a perfectly healthy 2xATR stop directly above.
+      "capital" — the SEPARATE net-capital cap (F-255, NET_CAPITAL_POSITION_CAP_PCT)
+                  cannot afford one whole share, OR net_capital is already <= 0
+                  (margin-called / net-negative — no capital to weigh a position
+                  against). Distinct from "ceiling": "ceiling" gates the GROSS
+                  book (15%), "capital" gates NET CAPITAL after margin debit
+                  (25%) — at real leverage a book can clear the gross ceiling
+                  and still fail the capital cap well before it (ALB/OXY,
+                  2026-08-24: ~15% of gross book was ~45% of net capital).
+                  Both are independent; neither is derived from the other.
 
-    Kept as the single predicate for both conditions so `position_sizing`, the
+    Kept as the single predicate for all three conditions so `position_sizing`, the
     Grow Today adapter and the fallback captions cannot drift apart. Do NOT
-    re-derive either test at a call site.
+    re-derive any test at a call site.
     """
     # Public helper called from render branches that are reached BECAUSE values
     # are missing, so coerce rather than trusting the caller: a None entry would
@@ -69,15 +80,22 @@ def sizing_unavailable_reason(
     if (max_position_pct is not None and portfolio_value > 0
             and int((portfolio_value * (_num(max_position_pct) / 100.0)) / entry) < 1):
         return "ceiling"
+    if net_capital is not None and net_capital <= 0:
+        return "capital"
+    if (net_capital is not None and net_capital > 0 and max_capital_pct is not None
+            and int((net_capital * _num(max_capital_pct) / 100.0) / entry) < 1):
+        return "capital"
     return None
 
 
 def position_sizing(
     portfolio_value: float, risk_pct: float, entry: float, stop: float,
     max_position_pct: float | None = None,
+    net_capital: float | None = None, max_capital_pct: float | None = None,
 ) -> dict | None:
-    # Both no-size conditions live in one place — see sizing_unavailable_reason.
-    if sizing_unavailable_reason(portfolio_value, entry, stop, max_position_pct):
+    # All no-size conditions live in one place — see sizing_unavailable_reason.
+    if sizing_unavailable_reason(portfolio_value, entry, stop, max_position_pct,
+                                  net_capital, max_capital_pct):
         return None
     risk_dollars   = portfolio_value * risk_pct
     risk_per_share = entry - stop
@@ -101,6 +119,23 @@ def position_sizing(
             shares = ceiling_shares
             ceiling_capped = True
 
+    # SEPARATE net-capital cap (F-255), applied AFTER the gross-book ceiling
+    # above so it can only ever reduce shares further, never let more through
+    # than the gross ceiling already allowed — capital basis is <= gross
+    # basis whenever levered (net_capital <= gross book), so this is the
+    # tighter-of-both, same posture as concentration.gating_denominator.
+    # Default-off: no-ops entirely when net_capital/max_capital_pct are None,
+    # which every existing caller still is.
+    capital_capped = False
+    if (net_capital is not None and net_capital > 0
+            and max_capital_pct is not None and entry > 0):
+        # Guaranteed >= 1 by the "capital" guard in sizing_unavailable_reason
+        # above (same formula), so no max(1, ...) floor needed here either.
+        capital_cap_shares = int((net_capital * max_capital_pct / 100.0) / entry)
+        if shares > capital_cap_shares:
+            shares = capital_cap_shares
+            capital_capped = True
+
     total_cost  = round(shares * entry, 2)
     actual_risk = round(shares * risk_per_share, 2)
     out = {
@@ -117,6 +152,16 @@ def position_sizing(
         out["ceiling_capped"]  = ceiling_capped
         out["uncapped_shares"] = risk_based_shares
         out["uncapped_pct"]    = round(risk_based_shares * entry / portfolio_value * 100, 1) if portfolio_value else 0.0
+    if net_capital is not None:
+        # net_capital <= 0 already short-circuited to None above (the
+        # "capital" reason in sizing_unavailable_reason), so net_capital > 0
+        # is guaranteed here. Re-derives the same percentage
+        # margin.capital_basis_weight computes, inline — risk.py deliberately
+        # does NOT import stock_analyzer.margin (see tests/test_margin.py's
+        # gate-module allowlist, which enumerates risk.py as a module that
+        # must never import it).
+        out["capital_capped"] = capital_capped
+        out["capital_pct"]    = round(total_cost / net_capital * 100.0, 1)
     return out
 
 

@@ -4,9 +4,15 @@ import importlib
 import importlib.util
 from pathlib import Path
 
+import pandas as pd
 import pytest
-from stock_analyzer.margin import call_distance, capital_basis_weight
-from stock_analyzer.constants import FRAGILITY_PULLBACK_PCT, MARGIN_MAINTENANCE_RATE
+from stock_analyzer.margin import (
+    call_distance, capital_basis_weight, resolve_net_capital, held_over_capital_cap,
+)
+from stock_analyzer.constants import (
+    FRAGILITY_PULLBACK_PCT, MARGIN_MAINTENANCE_RATE, ACCOUNT_CASH_STALE_DAYS,
+    NET_CAPITAL_POSITION_CAP_PCT,
+)
 
 
 # ── Founding-measurement test ─────────────────────────────────────────────────
@@ -175,6 +181,93 @@ def test_capital_basis_weight_negative_capital_returns_none():
     """A margin-called or net-negative account has no meaningful capital
     percentage to display."""
     assert capital_basis_weight(1000.0, -500.0) is None
+
+
+# ── resolve_net_capital (F-255) ────────────────────────────────────────────────
+
+def test_resolve_net_capital_none_rec_is_unlevered():
+    now = pd.Timestamp.now(tz="UTC")
+    assert resolve_net_capital(24503.0, None, ACCOUNT_CASH_STALE_DAYS, now) == (None, "unlevered")
+
+
+def test_resolve_net_capital_no_updated_at_is_unlevered():
+    now = pd.Timestamp.now(tz="UTC")
+    rec = {"cash_balance": -16701.0}  # no "updated_at" key at all
+    assert resolve_net_capital(24503.0, rec, ACCOUNT_CASH_STALE_DAYS, now) == (None, "unlevered")
+
+
+def test_resolve_net_capital_no_debit_is_unlevered():
+    now = pd.Timestamp.now(tz="UTC")
+    rec = {"cash_balance": 500.0, "updated_at": now.isoformat()}
+    assert resolve_net_capital(24503.0, rec, ACCOUNT_CASH_STALE_DAYS, now) == (None, "unlevered")
+
+
+def test_resolve_net_capital_stale_debit():
+    now = pd.Timestamp.now(tz="UTC")
+    old = now - pd.Timedelta(days=ACCOUNT_CASH_STALE_DAYS + 1)
+    rec = {"cash_balance": -16701.0, "updated_at": old.isoformat()}
+    assert resolve_net_capital(24503.0, rec, ACCOUNT_CASH_STALE_DAYS, now) == (None, "stale")
+
+
+def test_resolve_net_capital_fresh_levered():
+    """Real-book-shaped case (2026-08-23): $24,503 gross book, $16,701 debit
+    -> $7,802 net capital, fresh."""
+    now = pd.Timestamp.now(tz="UTC")
+    rec = {"cash_balance": -16701.0, "updated_at": now.isoformat()}
+    net, basis = resolve_net_capital(24503.0, rec, ACCOUNT_CASH_STALE_DAYS, now)
+    assert basis == "levered"
+    assert abs(net - 7802.0) < 0.01
+
+
+def test_resolve_net_capital_fresh_called():
+    """Debit exceeds gross book -> net capital <= 0 -> "called", and the
+    non-positive number is returned (not None) so a caller can fail closed."""
+    now = pd.Timestamp.now(tz="UTC")
+    rec = {"cash_balance": -30000.0, "updated_at": now.isoformat()}
+    net, basis = resolve_net_capital(24503.0, rec, ACCOUNT_CASH_STALE_DAYS, now)
+    assert basis == "called"
+    assert net is not None
+    assert net <= 0
+
+
+# ── held_over_capital_cap (F-255) ───────────────────────────────────────────────
+
+def _port_df(rows):
+    return pd.DataFrame(rows)
+
+
+def test_held_over_capital_cap_flags_alb_oxy_shaped_row():
+    """A $3,546 position (OXY-sized) against $7,802 net capital is ~45% of
+    capital -- well over the 25% cap."""
+    df = _port_df([{"Ticker": "OXY", "Market Value": 3546.0}])
+    result = held_over_capital_cap(df, net_capital=7802.0, cap_pct=NET_CAPITAL_POSITION_CAP_PCT)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["ticker"] == "OXY"
+    assert result[0]["capital_pct"] > NET_CAPITAL_POSITION_CAP_PCT
+
+
+def test_held_over_capital_cap_does_not_flag_under_cap_row():
+    df = _port_df([{"Ticker": "SPY", "Market Value": 780.0}])  # ~10% of net_capital
+    result = held_over_capital_cap(df, net_capital=7802.0, cap_pct=NET_CAPITAL_POSITION_CAP_PCT)
+    assert result == []
+
+
+def test_held_over_capital_cap_returns_none_when_net_capital_unavailable():
+    df = _port_df([{"Ticker": "OXY", "Market Value": 3546.0}])
+    assert held_over_capital_cap(df, net_capital=None, cap_pct=25.0) is None
+    assert held_over_capital_cap(df, net_capital=0.0, cap_pct=25.0) is None
+    assert held_over_capital_cap(df, net_capital=-100.0, cap_pct=25.0) is None
+
+
+def test_held_over_capital_cap_valid_net_capital_none_breach_returns_empty_list():
+    """A real 'checked, none over' answer -- distinct from None ('couldn't check')."""
+    df = _port_df([
+        {"Ticker": "A", "Market Value": 100.0},
+        {"Ticker": "B", "Market Value": 200.0},
+    ])
+    result = held_over_capital_cap(df, net_capital=100_000.0, cap_pct=25.0)
+    assert result == []
 
 
 def _module_imports_margin(mod_name: str) -> bool:

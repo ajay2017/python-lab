@@ -118,6 +118,12 @@ MARGIN_MAINTENANCE_RATE = 0.25   # estimated Reg T maintenance floor; Robinhood 
 SECTOR_CEILING    = 35.0         # hard sector cap (% of portfolio)
 SECTOR_ELEVATED   = 25.0         # soft warn above this
 SINGLE_NAME_CEILING = 15.0       # hard single-name cap — no add-to-winner above this
+NET_CAPITAL_POSITION_CAP_PCT = 25.0  # SEPARATE capital-basis cap for NEW-position
+# sizing only. Caps a single new/added position at 25% of net capital (equity
+# after margin debit) — additive to, and independent of, SINGLE_NAME_CEILING
+# (15% of gross book). At real leverage, "15% of book" can be ~45% of capital
+# (ALB/OXY, 2026-08-24). Never changes SINGLE_NAME_CEILING or any existing
+# gross-book gate. Effective new-position size = min(risk-based, 15%-gross, 25%-net).
 SINGLE_NAME_TRIM_TRIGGER = 18.0  # soft trim trigger — position that grew past ceiling (price appreciation after entry)
 SECTOR_REDUCE_TRIGGER = 20.0     # sector diversification reduce trigger — recommend reducing to SINGLE_NAME_CEILING
 # diversification_recommendations() literals, named per 2026-07-29 audit

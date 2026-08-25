@@ -3,8 +3,22 @@ Margin maintenance awareness computations.
 
 Pure functions only — no Streamlit, no DB calls, no side effects.
 All results are awareness-only; nothing here gates a trade or recommendation.
+
+Exception (F-255, 2026-08-25): `resolve_net_capital` and `held_over_capital_cap`
+below feed the NEW-POSITION capital-basis sizing cap (NET_CAPITAL_POSITION_CAP_PCT,
+stock_analyzer.risk.position_sizing / sizing_unavailable_reason). That cap is a
+real, additive sizing constraint — the module-level "awareness only" claim above
+still holds for `call_distance`/`capital_basis_weight` and the account-page
+panel, but is no longer true of every function in this file. risk.py itself
+does NOT import this module (see tests/test_margin.py's gate-module
+allowlist) — it re-derives the same percentage inline rather than importing
+capital_basis_weight, to keep this module out of the decision-engine import
+graph even though one policy decision (the 25%-of-net-capital cap) now
+consumes numbers this module computes.
 """
 from __future__ import annotations
+
+import pandas as pd
 
 
 def call_distance(
@@ -69,3 +83,88 @@ def capital_basis_weight(market_value: float, net_capital: float) -> float | Non
     if net_capital <= 0:
         return None
     return market_value / net_capital * 100.0
+
+
+def resolve_net_capital(
+    gross_book: float,
+    account_cash_rec: dict | None,
+    stale_days_limit: int,
+    now,
+) -> tuple[float | None, str]:
+    """Net capital (equity after margin debit) for the F-255 capital-basis cap.
+
+    Parameters
+    ----------
+    gross_book : total market value of held positions — the same gross-book
+        figure SINGLE_NAME_CEILING/SECTOR_CEILING already gate on.
+    account_cash_rec : the manually-entered account-cash record (the same
+        shape the Account page's margin-awareness panel reads), or None if
+        never entered. Expected keys: "cash_balance" (signed net cash;
+        negative = a margin debit) and "updated_at" (freshness timestamp).
+    stale_days_limit : age in days beyond which a debit figure is untrusted
+        (pass ACCOUNT_CASH_STALE_DAYS — this function takes it as a
+        parameter rather than importing constants itself, staying pure).
+    now : a tz-aware "current time" passed in by the caller (this function
+        does no clock reads of its own, so it stays pure/testable).
+
+    Returns ``(net_capital, basis)``:
+      (None, "unlevered") — no record, no "updated_at", or cash_balance >= 0
+          (no debit to net against gross book). The capital cap is simply
+          INERT here — callers should skip it, not treat this as an error.
+      (None, "stale")     — a debit exists but the record is older than
+          `stale_days_limit` days. Same "unknown degrades to inert" posture
+          as concentration.gating_denominator's equity-basis fallback — an
+          old manually-entered number must not drive a live sizing cap.
+      (net, "levered")    — a fresh debit exists and
+          net = gross_book + cash_balance (cash_balance is negative, so this
+          subtracts the debit) is positive.
+      (net, "called")     — a fresh debit exists and net is <= 0
+          (margin-called / net-negative). Deliberately returns the
+          non-positive number, NOT None — callers use this to fail CLOSED
+          (e.g. held_over_capital_cap treats a non-positive net_capital as
+          "can't evaluate" via its own None/<=0 guard, while a caller that
+          wants to surface the called state explicitly still has the number).
+    """
+    if not account_cash_rec or not account_cash_rec.get("updated_at"):
+        return None, "unlevered"
+    cash_balance = account_cash_rec.get("cash_balance")
+    if cash_balance is None or cash_balance >= 0:
+        return None, "unlevered"
+    age_days = (now - pd.to_datetime(account_cash_rec["updated_at"], utc=True)).days
+    if age_days > stale_days_limit:
+        return None, "stale"
+    net = gross_book + cash_balance
+    if net > 0:
+        return net, "levered"
+    return net, "called"
+
+
+def held_over_capital_cap(port_df, net_capital: float | None, cap_pct: float) -> list | None:
+    """Held positions whose capital-basis weight exceeds `cap_pct`, or None.
+
+    Returns None when `net_capital` is None or <= 0 — "can't evaluate" (no
+    valid capital denominator), NEVER an empty list standing in for unknown.
+    An empty list is a real answer distinct from "couldn't check": it means
+    net_capital WAS valid and nothing breached it.
+
+    `port_df` must carry "Ticker" and "Market Value" columns (the same
+    columns app.py/portfolio.py already use for the gross-book weight read).
+    """
+    if net_capital is None or net_capital <= 0:
+        return None
+    breaches = []
+    for _, row in port_df.iterrows():
+        market_value = row.get("Market Value")
+        if market_value is None:
+            continue
+        capital_pct = capital_basis_weight(float(market_value), net_capital)
+        # >= , not > : matches the breach convention already used by the sizing
+        # cap (risk.py) and assess_add_concentration (concentration.py), both of
+        # which treat "at the ceiling" as a breach, not "over" it.
+        if capital_pct is not None and capital_pct >= cap_pct:
+            breaches.append({
+                "ticker": row.get("Ticker"),
+                "market_value": float(market_value),
+                "capital_pct": capital_pct,
+            })
+    return breaches
