@@ -1828,6 +1828,30 @@ def _run_broker(now_et, force: bool) -> int:
     except Exception as exc:
         _log(f"broker/snapshot: UNCAUGHT — {str(exc)[:160]}")
 
+    # Guard (2026-08-24 review): refuse balance/transaction sync when account
+    # selection is ambiguous. If EVERY account that responded shows 0
+    # positions AND at least one account's read failed, the failed read could
+    # have been the real heavy brokerage account (the slowest read, per the
+    # comment above) — proceeding would sync balance/transactions against an
+    # empty auxiliary account, silently overwriting account_cash (feeds
+    # _leverage_cache / the margin-awareness surface) with the wrong value.
+    # Does NOT fire when some account read returned real positions (_best_count
+    # > 0 — the legitimate main-account-selected case) or when every account
+    # read succeeded and all are genuinely empty (_pos_read_failed False — a
+    # real all-cash account should still sync).
+    if _pos_read_failed and _best_count == 0:
+        _detail = (
+            "every account with a confirmed read shows 0 positions, but at "
+            "least one other account's read failed — cannot rule out that "
+            "the failed read was the real brokerage account; skipping "
+            "balance/transaction sync to avoid overwriting account_cash "
+            "with an empty auxiliary account's balance"
+        )
+        _LAST_LANE_FAILURE_DETAIL = _detail
+        _log(f"broker: {_detail}")
+        _notify_broker_failure(now_et, _detail)
+        return 1
+
     # ① balance sync — writes account_cash.
     try:
         raw_balance = snaptrade_client.get_account_balance(account_id)
@@ -1875,15 +1899,15 @@ def _run_broker(now_et, force: bool) -> int:
             n_income = db.save_snaptrade_income_events(classified["income_events"])
             for bf in classified["backfill_broker_txn_id"]:
                 db.backfill_trade_broker_txn_id(bf["trade_id"], bf["broker_txn_id"])
-            for flow in classified["flows"]:
-                db.add_account_flow(
-                    flow["flow_date"], flow["flow_type"], flow["amount"],
-                    note="Synced via SnapTrade (Robinhood)",
-                )
+            # Batched, deduped upsert (2026-08-24 review) — the prior per-item
+            # db.add_account_flow() loop had no dedup key, so re-scanning this
+            # same 90-day window twice daily re-inserted every real deposit/
+            # withdrawal on every run, inflating net_contributed_capital.
+            n_flows = db.save_account_flows(classified["flows"])
             _log(
                 f"broker: transactions synced — {n_pending} pending, "
                 f"{n_income} income events, {len(classified['backfill_broker_txn_id'])} "
-                f"backfilled, {len(classified['flows'])} flows, "
+                f"backfilled, {n_flows} flows, "
                 f"ignored={classified['ignored']}"
             )
     except Exception as exc:

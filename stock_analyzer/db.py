@@ -757,6 +757,31 @@ the user acted on it):
     CREATE UNIQUE INDEX IF NOT EXISTS snaptrade_income_events_txn_id_unique
         ON public.snaptrade_income_events (snaptrade_txn_id)
         WHERE snaptrade_txn_id IS NOT NULL;
+
+    -- account_flows.snaptrade_txn_id: added post-ship (2026-08-24 review) to
+    -- dedup re-fetches of the same 90-day window, mirroring the
+    -- snaptrade_income_events fix above exactly. Without this, every
+    -- CONTRIBUTION/WITHDRAWAL SnapTrade reports gets re-inserted on every
+    -- broker-cron run (2x/day) for as long as it stays inside the lookback
+    -- window, inflating net_contributed_capital and silently understating
+    -- reported account growth%. save_account_flows() below is inert (no-ops)
+    -- until this migration is applied.
+    --
+    -- MANUAL FOLLOW-UP after applying this (Opus reviewer, 2026-08-24): this
+    -- migration only stops FUTURE duplication. Pre-fix duplicate rows already
+    -- in account_flows have snaptrade_txn_id = NULL, so the partial unique
+    -- index does not match them — the fix does not retroactively collapse
+    -- them, and net_contributed_capital stays inflated until they are
+    -- manually reviewed/deleted. Query
+    -- `select flow_date, flow_type, amount, count(*) from account_flows
+    --  where note = 'Synced via SnapTrade (Robinhood)' group by 1,2,3
+    --  having count(*) > 1;` to find candidates, then delete all but one row
+    -- per group before/after applying the ALTER above.
+    ALTER TABLE public.account_flows
+        ADD COLUMN IF NOT EXISTS snaptrade_txn_id text;
+    CREATE UNIQUE INDEX IF NOT EXISTS account_flows_txn_id_unique
+        ON public.account_flows (snaptrade_txn_id)
+        WHERE snaptrade_txn_id IS NOT NULL;
 """
 
 import os
@@ -3779,6 +3804,43 @@ def add_account_flow(flow_date: str, flow_type: str, amount: float,
         return False
 
 
+def save_account_flows(rows: list[dict]) -> int:
+    """Upsert broker-sourced cash-flow rows (from broker_sync.classify_transactions'
+    `flows` list). Rows carrying a `snaptrade_txn_id` are upserted via the
+    partial unique index — re-fetching the same 90-day window on every cron
+    run is a no-op for those rows. Rows without an id (None) are dropped, not
+    inserted — without a snaptrade_txn_id we cannot dedup, so inserting would
+    silently re-inflate net_contributed_capital on every sync (2026-08-24
+    review finding). Mirrors save_snaptrade_income_events exactly. Returns the
+    number of rows attempted. Read-only-viewer gated — costs the cron nothing
+    since is_readonly() resolves False there. Inert (returns 0) until the
+    account_flows.snaptrade_txn_id migration above has been applied."""
+    if is_readonly(): return 0  # read-only viewer: no-op
+    if not has_db() or not rows:
+        return 0
+    try:
+        records = [
+            {
+                "snaptrade_txn_id": r["snaptrade_txn_id"],
+                "flow_date":        r["flow_date"],
+                "flow_type":        r["flow_type"],
+                "amount":           abs(float(r["amount"])),
+                "note":             "Synced via SnapTrade (Robinhood)",
+            }
+            for r in rows if r.get("snaptrade_txn_id")
+        ]
+        if not records:
+            return 0
+        _client().table("account_flows").upsert(
+            records,
+            on_conflict="snaptrade_txn_id",
+            ignore_duplicates=True,
+        ).execute()
+        return len(records)
+    except Exception:
+        return 0
+
+
 def delete_account_flow(flow_id) -> bool:
     """Delete one cash-flow row by id. USER data → honours the read-only viewer
     guard. Best-effort; swallows failures."""
@@ -4025,8 +4087,10 @@ def save_snaptrade_income_events(rows: list[dict]) -> int:
     """Upsert income-event rows (from broker_sync.classify_transactions'
     `income_events` list). Rows carrying a `snaptrade_txn_id` are upserted
     via the partial unique index — re-fetching the same 90-day window on
-    every cron run is a no-op for those rows. Rows without an id (None) fall
-    back to a plain insert (rare; only if SnapTrade omits the activity id).
+    every cron run is a no-op for those rows. Rows without an id (None) are
+    dropped, not inserted (2026-08-24 correction: without an id we cannot
+    dedup a future re-fetch, so inserting would silently re-inflate the
+    trend chart on every sync — same convention as save_account_flows).
     This table is DISPLAY/TREND ONLY — never a gate or return calculation.
     Returns the number of rows attempted. Read-only-
     viewer gated — see save_snaptrade_config's rationale; this costs the

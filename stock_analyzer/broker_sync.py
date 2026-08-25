@@ -265,9 +265,12 @@ def classify_transactions(rh_txns: list[dict] | None, existing_trades: pd.DataFr
         income_events           : [{event_type, ticker, amount, event_date}, ...]
                                    dividend/interest/fee — display/trend only,
                                    NEVER read by account.py's return math.
-        flows                   : [{flow_type, amount, flow_date}, ...]
+        flows                   : [{snaptrade_txn_id, flow_type, amount, flow_date}, ...]
                                    CONTRIBUTION/WITHDRAWAL only — the sole
                                    category allowed to touch net_contributed_capital.
+                                   snaptrade_txn_id may be None (dropped by
+                                   db.save_account_flows, same convention as
+                                   income_events — can't dedup an id-less row).
         ignored                 : {type: count} — activity types not handled
                                    above (OPTIONEXPIRATION, TRANSFER, SPLIT,
                                    etc.), surfaced for transparency rather than
@@ -398,6 +401,7 @@ def classify_transactions(rh_txns: list[dict] | None, existing_trades: pd.DataFr
                 ignored[ttype] = ignored.get(ttype, 0) + 1
                 continue
             flows.append({
+                "snaptrade_txn_id": str(txn_id) if txn_id is not None else None,
                 "flow_type": _FLOW_TYPES[ttype],
                 "amount": abs(float(amount)),
                 "flow_date": flow_date.isoformat(),
