@@ -25,6 +25,8 @@ Verdict tiers:
 
 from datetime import date, datetime as _dt, time as _time, timedelta
 
+import pandas as pd
+
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_STRONG_BUY,
@@ -246,6 +248,36 @@ def _gate_wt(row) -> float:
 def _gate_wt_col(port_df) -> str:
     """Column name the sector gate sums — gate-basis if present, else equity."""
     return "Gate Weight (%)" if "Gate Weight (%)" in port_df.columns else "Weight (%)"
+
+
+def _has_positions(port_df) -> bool:
+    """True only when port_df is a usable frame with a Ticker column.
+
+    `port_df is not None` is NOT sufficient: build_portfolio_df returns a
+    0x0 DataFrame with NO columns for a zero-holdings book, so a bare
+    port_df["Ticker"] raises KeyError rather than yielding an empty result.
+
+    The None branch is DEFENSIVE ONLY — build_portfolio_df never returns None,
+    and None must never be adopted as an "unreadable book" sentinel here: this
+    would collapse it to "nothing held", which is the offline-sentinel fail-open
+    CLAUDE.md warns about. Unreadable is handled upstream by outage_gate.decide.
+    """
+    return port_df is not None and not port_df.empty and "Ticker" in port_df.columns
+
+
+def _held_tickers(port_df) -> set:
+    """Held-ticker set, empty for a zero-holdings book. See _has_positions."""
+    return set(port_df["Ticker"].tolist()) if _has_positions(port_df) else set()
+
+
+def _port_rows(port_df, ticker: str):
+    """Rows for one ticker, or an empty frame when there is no book to match
+    against. Callers all branch on .empty, so an empty frame is the correct
+    "not held" answer — never a fabricated row.
+    """
+    if not _has_positions(port_df):
+        return pd.DataFrame()
+    return port_df[port_df["Ticker"] == ticker]
 
 
 def _days_until(date_str: str, today: date) -> int | None:
@@ -677,7 +709,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     nasdaq_pct  = _f(market_context.get("nasdaq_pct", 0))
     lead_secs   = market_context.get("leading_sectors", [])
     lead_names  = {ls.get("sector", "") for ls in lead_secs}
-    held_tickers = set(port_df["Ticker"].tolist()) if port_df is not None else set()
+    held_tickers = _held_tickers(port_df)
 
     # ── Cross-reference the Brief to block conflicting picks ──────────────────
     # Any ticker already flagged ANYWHERE in today's Brief (act_today OR
@@ -1639,7 +1671,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
     # same ticker, never merge — never a new gate, purely an audit/confront).
     for pmt in (premortem_triggers or []):
         _pmt_ticker = pmt["ticker"]
-        _pmt_prow = port_df[port_df["Ticker"] == _pmt_ticker]
+        _pmt_prow = _port_rows(port_df, _pmt_ticker)
         _pmt_weight = _f(_pmt_prow.iloc[0].get("Weight (%)"), None) if not _pmt_prow.empty else None
         _pmt_pnl    = _f(_pmt_prow.iloc[0].get("P&L (%)"), None) if not _pmt_prow.empty else None
         _pmt_dir_word = "below" if pmt["direction"] == "below" else "above"
@@ -1670,7 +1702,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
 
     # 3 — Critical news on held positions (compound ≤ NEWS_SENTIMENT_CRITICAL, tier ≤ 2,
     #     minimum NEWS_CRITICAL_MIN_HEADLINES qualifying headlines per ticker)
-    held_tickers = set(port_df["Ticker"].tolist())
+    held_tickers = _held_tickers(port_df)
     _crit_by_ticker: dict = {}
     for item in (news_items or []):
         _t = str(item.get("ticker", "")).upper()
@@ -1683,7 +1715,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
         if len(_crit_items) < NEWS_CRITICAL_MIN_HEADLINES:
             continue
         if ticker not in {i["ticker"] for i in items}:
-            pm = port_df[port_df["Ticker"] == ticker]
+            pm = _port_rows(port_df, ticker)
             row = pm.iloc[0] if not pm.empty else {}
             _worst = min(_crit_items, key=lambda x: x.get("compound", 0))
             _n = len(_crit_items)
@@ -1839,7 +1871,7 @@ def _consolidate_act_today(items: list[dict], port_df) -> list[dict]:
     consolidated: list[dict] = []
     for ticker, group in by_ticker.items():
         # Pull weight/pnl from port_df so merged cards always have them.
-        pm = port_df[port_df["Ticker"] == ticker] if port_df is not None else None
+        pm = _port_rows(port_df, ticker)
         w  = _f(pm["Weight (%)"].iloc[0]) if pm is not None and not pm.empty else None
         p  = _f(pm["P&L (%)"].iloc[0]) if pm is not None and not pm.empty else None
 
@@ -1932,7 +1964,7 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                as contradicting the Review lane's early-deterioration tripwire.
     """
     items: list[dict] = []
-    held_tickers = set(port_df["Ticker"].tolist())
+    held_tickers = _held_tickers(port_df)
 
     # Block any ticker already flagged ANYWHERE in today's Brief (act_today OR
     # review_list) — same canonical set as _grow_today's gate.
@@ -2120,7 +2152,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     directives; passed in by build_daily_briefing.
     """
     items: list[dict] = []
-    held_tickers = set(port_df["Ticker"].tolist())
+    held_tickers = _held_tickers(port_df)
     # Tickers already surfaced in Act Today — the news-warning block below
     # excludes them so a ticker's negative-news risk shows ONCE, on the
     # higher-priority surface, instead of appearing as a Critical-News ACT here
@@ -2270,7 +2302,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         seen_earn.add(ticker)
         if ticker in _act_tickers:
             continue
-        pm = port_df[port_df["Ticker"] == ticker]
+        pm = _port_rows(port_df, ticker)
         if pm.empty:
             continue
         weight = _f(pm["Weight (%)"].iloc[0])

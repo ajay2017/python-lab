@@ -1140,6 +1140,7 @@ def test_build_daily_briefing_sold_today_suppressed_via_trades_df():
     }])
     brief = build_daily_briefing(
         port_df, [], [], [], [], {}, scanner, 100_000.0, _TODAY,
+        market_context={"tone": "bull"},
         grow_composites=composites,
         trades_df=trades_df,
     )
@@ -1164,6 +1165,7 @@ def test_build_daily_briefing_sold_today_suppression_misses_yesterday_sell():
     }])
     brief = build_daily_briefing(
         port_df, [], [], [], [], {}, scanner, 100_000.0, _TODAY,
+        market_context={"tone": "bull"},
         grow_composites=composites,
         trades_df=trades_df,
     )
@@ -1187,8 +1189,63 @@ def test_build_daily_briefing_sold_today_mixed_offset_traded_at():
     ])
     brief = build_daily_briefing(
         port_df, [], [], [], [], {}, scanner, 100_000.0, _TODAY,
+        market_context={"tone": "bull"},
         grow_composites=composites,
         trades_df=trades_df,
     )
     grow = brief.get("grow_today", {})
     assert find_item(grow.get("new_picks", []), "SAP") is None
+
+
+# ── Zero-holdings book (empty port_df) ───────────────────────────────────────
+# build_portfolio_df({}, {}) returns a 0x0 DataFrame with NO columns, so the
+# `port_df is not None` guard did NOT make port_df["Ticker"] safe: all four
+# decision functions raised KeyError('Ticker') on that shape. LATENT, not a live
+# crash -- two upstream guards (app.py:4401 st.stop(), headless_alert_engine.py's
+# empty_port_df early return) mean it was never reached in production. Fixed as
+# defence-in-depth so relaxing either guard cannot resurface it silently.
+# Regression for the _has_positions/_held_tickers/_port_rows helpers.
+
+def test_build_portfolio_df_empty_really_has_no_ticker_column():
+    """Pins the upstream shape these guards exist for. If build_portfolio_df
+    ever starts returning a typed empty frame, this test says so loudly rather
+    than letting the guards quietly become dead code."""
+    from stock_analyzer.portfolio import build_portfolio_df
+    df = build_portfolio_df({}, {})
+    assert df.empty
+    assert "Ticker" not in df.columns
+
+
+def test_held_tickers_helpers_tolerate_every_empty_shape():
+    import pandas as pd
+    from stock_analyzer.daily_briefing import _has_positions, _held_tickers, _port_rows
+    from stock_analyzer.portfolio import build_portfolio_df
+    for empty in (None, pd.DataFrame(), build_portfolio_df({}, {})):
+        assert _has_positions(empty) is False
+        assert _held_tickers(empty) == set()
+        assert _port_rows(empty, "SAP").empty
+    held = make_port_df([{"ticker": "SAP"}])
+    assert _has_positions(held) is True
+    assert _held_tickers(held) == {"SAP"}
+    assert len(_port_rows(held, "SAP")) == 1
+    assert _port_rows(held, "NOPE").empty
+
+
+def test_build_daily_briefing_survives_a_zero_holdings_book():
+    """The whole brief must build for a user who holds nothing — this raised
+    KeyError('Ticker') in _grow_today, _act_today, _buy_candidates and
+    _review_list before the fix (latent: upstream guards stopped it reaching
+    here in production)."""
+    scanner = _scanner_df([{"ticker": "SAP", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
+    composites = {"SAP": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    from stock_analyzer.portfolio import build_portfolio_df
+    brief = build_daily_briefing(
+        build_portfolio_df({}, {}), [], [], [], [], {}, scanner, 100_000.0, _TODAY,
+        market_context={"tone": "bull"},
+        grow_composites=composites,
+    )
+    # A zero-holdings user can still be shown new picks — nothing is held, so
+    # nothing can be blocked as already-held.
+    assert find_item(brief.get("grow_today", {}).get("new_picks", []), "SAP") is not None
+    assert brief.get("act_today") == []
+    assert brief.get("review_list") == []
