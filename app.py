@@ -6293,7 +6293,52 @@ if page == "🏠 Home":
     # review-list trim read "Act Today (1)" in the section while the badge/chip showed
     # 0 (and a macro-only day badged 🔴 for an item the split demotes to Awareness).
     _split_def  = split_defensive(_daily_brief["act_today"], _daily_brief["review_list"])
-    _db_act_n   = len(_split_def["act"])
+
+    # ── Stop-breach live-price re-classification (runs once, before any count) ──
+    # The Brief is memoized on portfolio composition, not price, so a stop_breach
+    # card can reflect yesterday's close while live price has already recovered
+    # above the stop. Re-evaluate each stop_breach against _port_df_enriched
+    # (rebuilt on live prices every render) and demote resolved breaches so the
+    # badge, chip and section header all agree on the post-demotion count.
+    from stock_analyzer.util import stop_recovery_state as _stop_rec_state
+    from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT as _STOP_REC_MARGIN
+    _pe_live = st.session_state.get("_port_df_enriched")
+    _lp_live = st.session_state.get("_live_prices")
+    if _lp_live is None:
+        _lp_live = {}
+    _resolved_breaches: list[dict] = []
+    _active_act_bucket: list[dict] = []
+    for _ab_item in _split_def["act"]:
+        if _ab_item.get("kind") == "stop_breach":
+            _ab_tk = str(_ab_item.get("ticker", "")).upper()
+            _ab_gap: float | None = None
+            _ab_stop_px: float | None = None
+            if _pe_live is not None and not _pe_live.empty:
+                if "Gap to Stop (%)" in _pe_live.columns:
+                    _ab_row = _pe_live[
+                        _pe_live["Ticker"].astype(str).str.upper() == _ab_tk
+                    ]
+                    if not _ab_row.empty:
+                        _g = _ab_row["Gap to Stop (%)"].iloc[0]
+                        _ab_gap = float(_g) if pd.notna(_g) else None
+                        if "Stop" in _ab_row.columns:
+                            _s = _ab_row["Stop"].iloc[0]
+                            _ab_stop_px = float(_s) if pd.notna(_s) else None
+            _ab_state = _stop_rec_state(_ab_gap, _STOP_REC_MARGIN)
+            _lp_entry = _lp_live.get(_ab_tk)
+            _ab_copy = dict(_ab_item)
+            _ab_copy["_breach_state"] = _ab_state
+            _ab_copy["_live_gap"]     = _ab_gap
+            _ab_copy["_live_px"]      = _lp_entry.get("price") if isinstance(_lp_entry, dict) else None
+            _ab_copy["_live_stop"]    = _ab_stop_px
+            if _ab_state == "recovered":
+                _resolved_breaches.append(_ab_copy)
+            else:
+                _active_act_bucket.append(_ab_copy)
+        else:
+            _active_act_bucket.append(_ab_item)
+
+    _db_act_n   = len(_active_act_bucket)
     _db_buy_n   = len(_daily_brief["buy_candidates"])
     _db_icon    = " 🔴" if _db_act_n else ""
     # ═══════════════════════════════════════════════════════════════════════════
@@ -7013,9 +7058,9 @@ if page == "🏠 Home":
         # Counts mirror the post-split buckets (and the Tune-up lane) rendered in
         # the defensive column below — never the raw act_today/review_list lists —
         # so the chip can't contradict the section headers.
-        _act_n      = len(_split_def["act"])
+        _act_n      = len(_active_act_bucket)
         _grow_n     = len(_db_grow.get("new_picks", [])) + len(_db_grow.get("add_positions", []))
-        _review_n   = len(_split_def["aware"])
+        _review_n   = len(_split_def["aware"]) + len(_resolved_breaches)
         _tuneup_n   = len(_db_tuneup)
         _act_color  = "#7f1d1d" if _act_n > 0 else "#0f172a"
         _act_border = "#ef4444" if _act_n > 0 else "#334155"
@@ -8255,6 +8300,8 @@ if page == "🏠 Home":
         # chip counts and these section headers can't drift apart.
         _act_bucket   = _split_def["act"]
         _aware_bucket = _split_def["aware"]
+        # _active_act_bucket and _resolved_breaches computed once at line ~6296
+        # (before the badge/chip) so all three count surfaces stay consistent.
 
         _db_trades = st.session_state.get("trades_df")
 
@@ -8428,6 +8475,22 @@ if page == "🏠 Home":
                 unsafe_allow_html=True,
             )
             if _db_ticker:
+                # Live-price caption for stop_breach cards — confirm active or
+                # flag unavailable data so the user knows the signal's data age.
+                if _db_item.get("kind") == "stop_breach":
+                    _sb_state   = _db_item.get("_breach_state", "unavailable")
+                    _sb_live_px = _db_item.get("_live_px")
+                    _sb_stop    = _db_item.get("_live_stop")
+                    if _sb_state == "active" and _sb_live_px and _sb_stop:
+                        st.caption(
+                            f"⚠️ Breach confirmed at live price ${_sb_live_px:.2f} "
+                            f"— still below stop ${_sb_stop:.2f}."
+                        )
+                    elif _sb_state == "unavailable":
+                        st.caption(
+                            "Live price unavailable — signal is from yesterday's close. "
+                            "Verify the current price before acting."
+                        )
                 _act_cols = st.columns([2, 3, 5])
                 with _act_cols[0]:
                     if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_act_{_db_ticker}_{_db_item['action'][:10]}",
@@ -9218,11 +9281,11 @@ if page == "🏠 Home":
             else:
                 _render_act_card(_item, in_act=in_act)
 
-        # Act Today — genuine decisions only
-        _act_label  = (f"🔴 Act Today ({len(_act_bucket)})" if _act_bucket
+        # Act Today — genuine decisions only (resolved stop_breaches demoted below)
+        _act_label  = (f"🔴 Act Today ({len(_active_act_bucket)})" if _active_act_bucket
                        else "✅ Act Today — you're set")
-        _act_bg     = "#7f1d1d" if _act_bucket else "#14532d"
-        _act_border = "#ef4444" if _act_bucket else "#22c55e"
+        _act_bg     = "#7f1d1d" if _active_act_bucket else "#14532d"
+        _act_border = "#ef4444" if _active_act_bucket else "#22c55e"
         st.markdown(
             f"<div style='background:{_act_bg};border-left:4px solid {_act_border};"
             f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
@@ -9230,8 +9293,8 @@ if page == "🏠 Home":
             f"</div>",
             unsafe_allow_html=True,
         )
-        if not _act_bucket:
-            _n_aware = len(_aware_bucket)
+        if not _active_act_bucket:
+            _n_aware = len(_aware_bucket) + len(_resolved_breaches)
             st.markdown(
                 f"<div style='background:#052e16;border:1px solid #22c55e;border-radius:8px;"
                 f"padding:12px 16px;margin-bottom:10px'>"
@@ -9242,12 +9305,65 @@ if page == "🏠 Home":
                 unsafe_allow_html=True,
             )
         else:
-            for _ci, _item in enumerate(_act_bucket):
+            for _ci, _item in enumerate(_active_act_bucket):
                 _render_defensive_card(_item, _ci, in_act=True)
 
         # Holdings table removed from here 2026-07-26 — it now lives on the
         # 🧾 Summary page (_render_holdings_table(), shared/module-level, still
         # used from there) so it isn't duplicated across two pages.
+
+        # ── Resolved stop-breach cards (demoted from Act Today) ─────────────
+        # These breaches fired on yesterday's close but live price has since
+        # recovered above the stop (+ STOP_RECOVERY_MARGIN_PCT buffer). They
+        # remain visible here so the history isn't lost, but urgency is
+        # correctly lowered — the user should monitor, not immediately sell.
+        if _resolved_breaches:
+            st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+            st.markdown(
+                "<div style='background:#1c1917;border-left:4px solid #f59e0b;"
+                "border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+                f"<span style='font-size:1em;font-weight:700;color:#fde68a'>"
+                f"⚠️ Stop Breach — Resolved ({len(_resolved_breaches)})</span>"
+                "<span style='color:#d6d3d1;font-size:0.82em'>"
+                " · signal fired on yesterday's close; live price has since recovered above stop"
+                "</span></div>",
+                unsafe_allow_html=True,
+            )
+            for _rb_i, _rb_item in enumerate(_resolved_breaches):
+                _rb_tk   = str(_rb_item.get("ticker", "")).upper()
+                _rb_live = _rb_item.get("_live_px")
+                _rb_stop = _rb_item.get("_live_stop")
+                _rb_gap  = _rb_item.get("_live_gap")
+                _rb_annotation = ""
+                if _rb_live and _rb_stop:
+                    _rb_annotation = (
+                        f" · Live ${_rb_live:.2f} vs stop ${_rb_stop:.2f}"
+                        + (f" (+{_rb_gap:.1f}% above)" if _rb_gap is not None else "")
+                    )
+                from stock_analyzer.util import safe_html as _sh
+                st.markdown(
+                    "<div style='background:#1c1917;border-left:3px solid #f59e0b;"
+                    "border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                    f"<div style='color:#fde68a;font-weight:600;font-size:0.88em'>"
+                    f"🛑 {_sh(_rb_item.get('action',''))} — "
+                    f"<span style='color:#fbbf24'>{_sh(_rb_tk)}</span>"
+                    f"<span style='color:#9ca3af;font-weight:400'>"
+                    + (f" · {_rb_item['weight']:.1f}% of portfolio" if _rb_item.get("weight") else "")
+                    + f"</span></div>"
+                    f"<div style='color:#a8a29e;font-size:0.78em;margin-top:4px'>"
+                    f"Stop breach fired on yesterday's close — live price has since recovered.{_rb_annotation}"
+                    f"</div>"
+                    f"<div style='color:#78716c;font-size:0.75em;margin-top:2px'>"
+                    f"Monitor the position; re-evaluate if price returns to or below the stop."
+                    f"</div></div>",
+                    unsafe_allow_html=True,
+                )
+                if _rb_tk:
+                    if st.button(f"▶ Analyze {_rb_tk}", key=f"_rb_analyze_{_rb_tk}_{_rb_i}",
+                                 use_container_width=False):
+                        st.session_state["_pending_page"]    = "📈 Analysis"
+                        st.session_state["_analysis_ticker"] = _rb_tk
+                        st.rerun()
 
         # Monitoring / Awareness — FYI, nothing to execute
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)

@@ -41,6 +41,35 @@ def get_or_offline(container: dict | None, key: str) -> Any:
     return container.get(key)
 
 
+def stop_recovery_state(
+    live_gap_to_stop: float | None,
+    margin_pct: float = 0.0,
+) -> str:
+    """Classify a stop_breach card's current live status.
+
+    ``live_gap_to_stop`` is the Gap-to-Stop (%) from ``_port_df_enriched``,
+    positive when price is above the stop, negative when below.
+
+    Returns:
+    - ``"recovered"``: live price is above stop by more than *margin_pct* —
+      the breach has resolved and the card should be demoted to Review.
+    - ``"active"``: live price is at or below stop + margin — still breached.
+    - ``"unavailable"``: live price data is missing or non-finite. Must NEVER
+      be treated as ``"active"`` at the render layer; show a neutral offline
+      note instead.
+    """
+    if live_gap_to_stop is None:
+        return "unavailable"
+    try:
+        g = float(live_gap_to_stop)
+    except (TypeError, ValueError):
+        return "unavailable"
+    import math
+    if not math.isfinite(g):
+        return "unavailable"
+    return "recovered" if g > margin_pct else "active"
+
+
 def safe_html(value: Any) -> str:
     """HTML-escape a value for safe interpolation into an ``unsafe_allow_html``
     string.

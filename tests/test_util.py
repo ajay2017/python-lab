@@ -6,7 +6,7 @@ NY-tz date-boundary class. Pure logic, no I/O.
 from datetime import datetime
 
 from stock_analyzer.market_time import ET, now_et, today_et
-from stock_analyzer.util import get_or_offline, safe_html
+from stock_analyzer.util import get_or_offline, safe_html, stop_recovery_state
 
 
 class TestGetOrOffline:
@@ -57,6 +57,60 @@ class TestSafeHtml:
 
     def test_plain_text_unchanged(self):
         assert safe_html("AAPL up 3%") == "AAPL up 3%"
+
+
+class TestStopRecoveryState:
+    """stop_recovery_state(live_gap_to_stop, margin_pct) — pins all boundary
+    cases so a refactor that accidentally flips the boundary or drops the
+    offline contract is caught immediately."""
+
+    def test_none_gap_is_unavailable(self):
+        assert stop_recovery_state(None) == "unavailable"
+
+    def test_zero_live_price_sentinel_is_unavailable(self):
+        # 0.0 is not a valid gap (means price == stop to the cent); treat like
+        # offline rather than "active" to avoid a false "still breached" caption.
+        # Actually 0.0 means exactly at stop → active (not unavailable). Verify.
+        assert stop_recovery_state(0.0) == "active"
+
+    def test_nan_gap_is_unavailable(self):
+        import math
+        assert stop_recovery_state(math.nan) == "unavailable"
+
+    def test_inf_gap_is_unavailable(self):
+        import math
+        assert stop_recovery_state(math.inf) == "unavailable"
+
+    def test_negative_gap_is_active(self):
+        # price below stop → breach
+        assert stop_recovery_state(-3.5) == "active"
+
+    def test_gap_exactly_zero_is_active(self):
+        # price == stop exactly — not recovered yet; boundary must be active
+        assert stop_recovery_state(0.0) == "active"
+
+    def test_gap_equal_to_margin_is_active(self):
+        # live_gap == margin_pct is NOT recovered — must be strictly greater
+        assert stop_recovery_state(0.5, margin_pct=0.5) == "active"
+
+    def test_gap_one_tick_above_margin_is_recovered(self):
+        assert stop_recovery_state(0.51, margin_pct=0.5) == "recovered"
+
+    def test_large_positive_gap_is_recovered(self):
+        assert stop_recovery_state(5.0, margin_pct=0.5) == "recovered"
+
+    def test_zero_margin_bare_comparison(self):
+        # With no margin, any positive gap is "recovered"
+        assert stop_recovery_state(0.01, margin_pct=0.0) == "recovered"
+        assert stop_recovery_state(0.0, margin_pct=0.0) == "active"
+
+    def test_string_gap_is_unavailable(self):
+        # Non-numeric input (e.g. from a malformed DataFrame cell) → offline
+        assert stop_recovery_state("n/a") == "unavailable"  # type: ignore[arg-type]
+
+    def test_default_margin_is_zero(self):
+        # Bare call: any positive gap → recovered
+        assert stop_recovery_state(0.01) == "recovered"
 
 
 class TestMarketTime:

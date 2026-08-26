@@ -390,6 +390,15 @@ STOP_TIGHTEN_MIN_GAIN_PCT = 8.0
 # precision (was a bare literal 1 in each). Not a stop-width policy value;
 # it only controls where the rounding tips a near-zero gap to <=0.
 GAP_TO_STOP_ROUND_DECIMALS = 1
+# Minimum live gap_to_stop (%) for a stop_breach card to be demoted from Act
+# Today to the Review lane. When the live price has recovered this far above
+# the stop (e.g. 0.5% = half a percent of breathing room), the breach is no
+# longer actionable at the current price — the card moves to Review so the
+# user sees the history but isn't nudged into selling into a recovery. Bare
+# 0.0 would flicker as price oscillates a penny around the stop boundary;
+# 0.5 is one ATR tick of margin before the "recovered" state is declared.
+# Policy value — change = investment-policy decision.
+STOP_RECOVERY_MARGIN_PCT   = 0.5
 
 # Profit-lock ratchet ladder: as a position's gain grows, floor its
 # protective stop at (avg_cost × (1 + floor_pct)) so accumulated profit is
