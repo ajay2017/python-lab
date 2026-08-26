@@ -2,7 +2,7 @@
 
 **Status:** ✅ **PHASE 1 + PHASE 2 SHIPPED 2026-08-14** (tab, journey chart, Trade Plan
 pointer F-237c, vs-SPY window guard F-237d). ✅ **F-237e (situational-category tag)
-SHIPPED 2026-08-26** — see §7. Design questions resolved with the user 2026-08-14 (see §0).
+SHIPPED 2026-08-25** — see §7. Design questions resolved with the user 2026-08-14 (see §0).
 **Proposed F-ID:** F-237
 **Mockup:** [docs/mockups/prior-trades-tab.html](../mockups/prior-trades-tab.html)
 **Originating ask (2026-08-14):** DELL surfaced under New Positions to initiate; the
@@ -250,7 +250,7 @@ Per `feedback_phased_ux_rollout_cadence` — one phase per deploy, pause for liv
   produced 3 closed round trips + 1 open, and the open position's unrealized −$36.96
   reconciled to the cent with the Summary Scorecard (4 sh @ $499.68 avg vs $490.44 =
   −1.8%), confirming the "cannot disagree with Portfolio" property on real data.
-- **F-237e — situational-category tag.** ✅ **SHIPPED 2026-08-26.** The "What you wrote
+- **F-237e — situational-category tag.** ✅ **SHIPPED 2026-08-25.** The "What you wrote
   at the time" expander now shows the entry's `situational_category` (F-257's locked
   vocabulary — Institutional Flow / Earnings Catalyst / Technical Read / Macro-News /
   Other) as a `:blue-background[📍 …]` badge, read off the opening BUY row via
