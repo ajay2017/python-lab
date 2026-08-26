@@ -247,6 +247,41 @@ Per `feedback_phased_ux_rollout_cadence` — one phase per deploy, pause for liv
      ticker on every rerun. I/O is cached; the pandas/plotly work isn't. Relevant to
      `project_perf_cache_bounding` — a session-state memo keyed on
      `(ticker, trades signature)` would close it.
+- **Two NEW defects found live 2026-08-25, neither part of the original 4 above — both
+  FIXED same day.** Found via two real screenshots (CRWD, MRVL) showing the
+  "What you wrote at the time" expander missing content that should have been there:
+  1. ~~**"Conditions at entry" caption never rendered, for ANY trade, ever.**~~ — ✅
+     **FIXED.** `decision_context.build_snapshot()` (`stock_analyzer/decision_context.py`)
+     nests its output under `market.{macro_regime,tone}` and
+     `portfolio.{value,beta,highbeta_share_pct,n_positions,top_sector}`, but the render
+     code at this expander read FLAT top-level keys (`_pt_cx.get("macro_regime")`,
+     `.get("portfolio_value")`, etc.) that never existed in the real snapshot shape —
+     a schema mismatch between the producer and the one consumer, present since this
+     line shipped 2026-08-14 and never caught because no live trade with a populated
+     snapshot was screenshotted until now. Every `.get()` in that block silently
+     returned `None`, so `_pt_cbits` was always empty and the caption never appeared —
+     not a data-capture gap, a pure display bug. Fixed by reading the correct nested
+     paths (`_pt_cx.get("market")`/`.get("portfolio")`, each defended with an explicit
+     `isinstance(..., dict)` check rather than `... or {}`, since the AST-based
+     `check_antipatterns.py` gate correctly flags the latter as
+     `OFFLINE_SENTINEL_COLLAPSE` even here). **Lesson: a feature that only degrades
+     gracefully (never crashes, never warns) can silently render nothing forever — the
+     "3 date-time-bomb"/"disprovable by construction" checks above only catch *wrong*
+     numbers, not an always-empty optional block.**
+  2. ~~**Pre-mortem case-against rendered as a raw Python list-of-dicts.**~~ — ✅
+     **FIXED.** `premortem_case_against` is `jsonb`, always either `None` or a
+     `list[dict]` of exactly 3 `{"angle","argument"}` items by construction
+     (`premortem_advisor.generate_case_against` — pillar/portfolio/macro), never a
+     plain string. It was in the same generic `f"{_lbl}  \n> {_pt_v2}"` string-loop as
+     `user_thesis`/`notes`/etc., which just `str()`-interpolated the whole list —
+     visibly showing `[{'angle': 'pillar', 'argument': '...'}, ...]` verbatim on a real
+     CRWD trade card. Pulled out of the generic loop into its own block that iterates
+     the 3 items and renders each with the same friendly angle label
+     (📊 Pillar concern / 📦 Portfolio impact / 🌐 Macro / earnings) the live
+     Log Trade pre-mortem preview already uses, via native `st.markdown` blockquotes
+     (no `unsafe_allow_html`, matching this tab's own no-raw-HTML convention — the
+     LLM-generated `argument` text is not escaped for HTML since it never goes through
+     `unsafe_allow_html` here).
 - **Phase 2 — the Trade Plan pointer.** ✅ **SHIPPED 2026-08-14** as F-237c. A one-line
   `st.info` after the R:R caveat banner (Buy branch) and after the ATR-level caption
   (Exit branch), so the history is discoverable at the decision moment rather than

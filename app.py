@@ -21890,8 +21890,6 @@ elif page == "📈 Analysis":
                                         st.markdown(f":blue-background[📍 {_pt_sc}]")
                                     for _lbl, _key in (
                                         ("**Your thesis (entry)**", "user_thesis"),
-                                        ("**Pre-mortem — what would make me wrong**",
-                                         "premortem_case_against"),
                                         ("**Commitment**", "premortem_commitment"),
                                         ("**Why you deviated**", "deviation_reason"),
                                         ("**Lesson (exit)**", "lesson"),
@@ -21900,6 +21898,36 @@ elif page == "📈 Analysis":
                                         _pt_v2 = _pt_j.get(_key)
                                         if _pt_v2:
                                             st.markdown(f"{_lbl}  \n> {_pt_v2}")
+                                    # premortem_case_against is a list of exactly
+                                    # 3 {"angle","argument"} dicts by construction
+                                    # (premortem_advisor.generate_case_against) —
+                                    # it was in the generic string loop above
+                                    # until 2026-08-25, which rendered the raw
+                                    # Python repr of the list instead of the
+                                    # text (found via a live screenshot showing
+                                    # "[{'angle': 'pillar', 'argument': ...}]"
+                                    # verbatim on screen).
+                                    _pt_pm = _pt_j.get("premortem_case_against")
+                                    if isinstance(_pt_pm, list) and _pt_pm:
+                                        _pt_pm_lbl = {
+                                            "pillar":    "📊 Pillar concern",
+                                            "portfolio": "📦 Portfolio impact",
+                                            "macro":     "🌐 Macro / earnings",
+                                        }
+                                        st.markdown(
+                                            "**Pre-mortem — what would make me wrong**"
+                                        )
+                                        for _pt_pmi in _pt_pm:
+                                            if not isinstance(_pt_pmi, dict):
+                                                continue
+                                            _pt_pma = _pt_pmi.get("argument")
+                                            if not _pt_pma:
+                                                continue
+                                            _pt_pml = _pt_pm_lbl.get(
+                                                _pt_pmi.get("angle"),
+                                                str(_pt_pmi.get("angle", "")).title(),
+                                            )
+                                            st.markdown(f"> **{_pt_pml}:** {_pt_pma}")
                                     _pt_tp = _pt_j.get("premortem_trigger_price")
                                     _pt_td = _pt_j.get("premortem_trigger_direction")
                                     if _pt_tp:
@@ -21912,23 +21940,36 @@ elif page == "📈 Analysis":
                                     if _pt_lc:
                                         st.markdown(f":gray-background[{_pt_lc}]")
                                     if isinstance(_pt_cx, dict):
+                                        # decision_context.build_snapshot() nests
+                                        # everything under "market"/"portfolio" —
+                                        # this used to read flat top-level keys
+                                        # that never existed in the real snapshot
+                                        # shape, so this caption never rendered
+                                        # for any trade, ever (found 2026-08-25
+                                        # via live screenshots of two different
+                                        # tickers, both with a populated context
+                                        # and neither showing this line).
+                                        _pt_mkt = _pt_cx.get("market")
+                                        _pt_mkt = _pt_mkt if isinstance(_pt_mkt, dict) else {}
+                                        _pt_pf  = _pt_cx.get("portfolio")
+                                        _pt_pf  = _pt_pf if isinstance(_pt_pf, dict) else {}
                                         _pt_cbits = []
-                                        _pt_rg = _pt_cx.get("macro_regime")
+                                        _pt_rg = _pt_mkt.get("macro_regime")
                                         if isinstance(_pt_rg, dict) and _pt_rg.get("regime"):
                                             _pt_cbits.append(f"regime {_pt_rg['regime']}")
-                                        if _pt_cx.get("market_tone"):
-                                            _pt_cbits.append(f"tone {_pt_cx['market_tone']}")
-                                        if _pt_cx.get("portfolio_value") is not None:
+                                        if _pt_mkt.get("tone"):
+                                            _pt_cbits.append(f"tone {_pt_mkt['tone']}")
+                                        if _pt_pf.get("value") is not None:
                                             _pt_cbits.append(
                                                 "portfolio "
-                                                + _m(_pt_money(_pt_cx["portfolio_value"],
+                                                + _m(_pt_money(_pt_pf["value"],
                                                                signed=False))
                                             )
-                                        if _pt_cx.get("n_positions") is not None:
+                                        if _pt_pf.get("n_positions") is not None:
                                             _pt_cbits.append(
-                                                f"{_pt_cx['n_positions']} positions"
+                                                f"{_pt_pf['n_positions']} positions"
                                             )
-                                        _pt_ts = _pt_cx.get("top_sector")
+                                        _pt_ts = _pt_pf.get("top_sector")
                                         if isinstance(_pt_ts, dict) and _pt_ts.get("sector"):
                                             _pt_cbits.append(
                                                 f"top sector {_pt_ts['sector']}"
@@ -21936,9 +21977,9 @@ elif page == "📈 Analysis":
                                                    if _pt_ts.get("weight_pct") is not None
                                                    else "")
                                             )
-                                        if _pt_cx.get("portfolio_beta") is not None:
+                                        if _pt_pf.get("beta") is not None:
                                             _pt_cbits.append(
-                                                f"beta {_pt_cx['portfolio_beta']:.2f}"
+                                                f"beta {_pt_pf['beta']:.2f}"
                                             )
                                         if _pt_cbits:
                                             st.caption(
