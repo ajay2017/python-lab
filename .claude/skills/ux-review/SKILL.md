@@ -1,7 +1,7 @@
 ---
 name: ux-review
 description: "Conduct a structured UX audit of the DRISHTA app from the perspective of a daily retail investor user. Evaluates navigation, information hierarchy, copy clarity, cognitive load, action clarity, consistency, and edge-case handling. Writes findings to docs/reviews/<date>-UX-review.md. Invoke with /ux-review."
-allowed-tools: Read, Glob, Grep, Bash(git *)
+allowed-tools: Read, Glob, Grep, Write, Bash(git *)
 argument-hint: "[page-or-component]"
 ---
 
@@ -15,9 +15,26 @@ If `$ARGUMENTS` names a specific page or component, scope the audit to that area
 
 Read `CLAUDE.md` first for project conventions and the app's operating posture ("decides, not informs").
 
-Then gather the raw material in two parallel passes:
+**Then read the most recent prior UX review** — `ls docs/reviews/*-UX-review.md` and take the
+latest. For every Critical and Improvement finding in it, check the current code and classify it:
+**fixed** (say so in one line and move on), **still open** (you may re-raise, but mark it
+`[repeat from <date>]` and say why it still matters), or **deliberately not done** (leave it alone
+unless you have new evidence). Do not present a known repeat as a fresh discovery. Also skim
+`CLAUDE.md`'s "What's queued" section — several UX-adjacent items there are explicitly PARKED or
+DECLINED with a recorded rationale; engage that rationale or leave them out.
 
-**Pass A — app.py**: Read the full file. Capture:
+**Scope your reading — do not attempt to read everything.** `app.py` is ~37.6k lines and
+`stock_analyzer/` has ~109 modules; a full read degrades into skimming, and skimming is where
+fabricated findings come from. Instead:
+- Run `git log --oneline --since=<date of the last UX review> --name-only` and treat the surfaces
+  touched since then as the primary target — that is the genuinely un-reviewed material.
+- Add the highest-traffic decision surfaces regardless of whether they changed: 🏠 Home,
+  🧑‍⚖️ The Judge, 🧾 Summary, 📡 Signals & Advice, 💰 Account.
+- Read those regions of `app.py` with `sed -n`/targeted `grep`, not end-to-end.
+- Say in the report header exactly which pages and modules you actually read. An honest partial
+  scope beats an implied full sweep.
+
+**Pass A — app.py (scoped as above)**. Capture:
 - Navigation structure: group labels, page labels, icons, order
 - For each page: sections rendered (in order), headings, metric labels, button text, info/warning/error/success messages, expander labels, tab labels, spinner text, empty states, loading states
 - All `st.metric`, `st.info`, `st.warning`, `st.error`, `st.success`, `st.button`, `st.expander`, `st.tabs`, `st.dataframe` calls and their string arguments
@@ -51,7 +68,16 @@ For each finding, note the file path and (where possible) line number.
 - Empty states, loading states, and error messages: clear and actionable?
 
 **4. Cognitive load and density**
-- Which pages feel overwhelming? Flag any page with more than 8 distinct interactive sections visible before scrolling
+
+> **You cannot see the rendered app.** You are reading source, and per `CLAUDE.md` hard rule #3 the
+> app is never run locally. Anything about *visual* density, spacing, type size, color, alignment, or
+> what is "visible before scrolling" is therefore **inferred from code structure, not observed** —
+> mark every such finding `[code-inferred]` and state the structural evidence (e.g. "12 sequential
+> `st.` render calls before the first `st.expander`"). Never assert a visual outcome as fact. If the
+> user has supplied screenshots of the live app, use those instead and mark those findings
+> `[observed]`.
+
+- Which pages carry the most rendered sections? Flag any page with more than 8 distinct interactive sections before the first collapsed/expander boundary
 - Where would progressive disclosure (show details only when needed) reduce noise without hiding important data?
 - Repeated or redundant information shown in multiple places on the same screen
 
@@ -89,7 +115,7 @@ Produce the report in this exact structure:
 
 ---
 
-## Critical Issues (fix before launch)
+## Critical Issues (act now)
 
 ### C1 — {title}
 - **Location**: which page / component / file
@@ -111,8 +137,11 @@ Produce the report in this exact structure:
 
 ---
 
-## Quick Wins (under 30 minutes each)
-Bullet list — small copy, spacing, or visual changes only. One sentence per item.
+## Parked — cosmetic polish backlog
+Small copy, spacing, or visual-only changes. **This is a backlog for the eventual dedicated UI/UX
+polish pass, NOT a to-do list** — the owner's standing preference is functionality-first, with
+cosmetic work batched into one deliberate pass rather than trickled in. List them so they are not
+lost; do not frame them as quick wins to pick up now. One sentence per item.
 
 ---
 
@@ -127,6 +156,13 @@ Then write the report to `docs/reviews/<YYYY-MM-DD>-UX-review.md` using today's 
 ## Step 4 — Rules
 
 - **Base every finding on observable evidence in the code.** No speculative issues.
+- **Separate "this could cause a wrong trade" from "this is cosmetic."** The first belongs in
+  Critical or Improvements and is worth acting on now; the second belongs in the parked backlog.
+  A confusing gate message that could be misread as "checked and fine" is the former, not the latter.
+- **Mark every visual/layout claim `[code-inferred]`** unless you were given a screenshot. See the
+  note under dimension 4.
+- **Do not propose new features, threshold changes, or gate changes.** This is a review of how
+  existing functionality is *surfaced and worded*. Capability gaps belong to `/app-review`.
 - **Do not suggest removing functionality** — only surface, reorganize, or clarify it.
 - **Cite specific file paths** for every finding. "Somewhere on the home page" is not acceptable.
 - **Prioritize by user impact**, not implementation effort. A confusing label that causes a wrong trade is more critical than a misaligned button.
