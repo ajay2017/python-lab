@@ -2817,9 +2817,19 @@ with st.sidebar:
     if not mkt["is_open"]:
         # Compute last trading day for the closed-market note
         from datetime import timedelta as _td
-        _now_et   = datetime.now(_pytz.timezone("America/New_York"))
-        _weekday  = _now_et.weekday()          # 0=Mon … 6=Sun
-        _hour_et  = _now_et.hour + _now_et.minute / 60
+        # Named _sb_now_et (not the bare _now_et) -- this sidebar block runs on
+        # EVERY page whenever the market is closed, unconditional on `page`,
+        # and Python's lack of block scoping means reusing the imported
+        # now_et function's name here would shadow it for the rest of this
+        # script run on every page, not just the sidebar. That exact collision
+        # caused a production TypeError ('datetime.datetime' object is not
+        # callable) on downstream _now_et() calls whenever the market was
+        # closed -- see memory feedback_shadowed_now_et_home for the incident
+        # this refines (that fix wrongly assumed the shadowing was scoped to
+        # the Home page branch; it is not -- it's here, and it hits every page).
+        _sb_now_et = datetime.now(_pytz.timezone("America/New_York"))
+        _weekday   = _sb_now_et.weekday()          # 0=Mon … 6=Sun
+        _hour_et   = _sb_now_et.hour + _sb_now_et.minute / 60
         if _weekday >= 5:                       # weekend → back to Friday
             _last_close = _today_et() - _td(days=_weekday - 4)
         elif _hour_et < 9.5:                    # pre-market → previous trading day
@@ -4714,7 +4724,7 @@ if page == "🏠 Home":
         _drift_verdict = broker_sync.decide_drift_banner(
             _bsnap,
             st.session_state.get("holdings_df"),
-            _now_et,
+            _now_et(),
             SNAPTRADE_BALANCE_STALE_HOURS,
             price_map={t: (v or {}).get("price") for t, v in _lp_map.items()},
             # A ticker traded since the capture differs for a good reason.
@@ -4781,7 +4791,7 @@ if page == "🏠 Home":
     # full-rebuild one (alternate branches of the same synthesis block) reuse it.
     _f255_acct = db.load_account_cash()
     _f255_net_cap, _f255_basis = _margin_mod.resolve_net_capital(
-        total_val, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et
+        total_val, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
     )
 
     # Best / worst position tiles stay live (cheap, price-driven) — kept
