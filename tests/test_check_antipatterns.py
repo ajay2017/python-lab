@@ -126,3 +126,116 @@ class TestBaselineRoundTrip:
                 if n > base.get(key, 0):
                     new.append((rel, key))
         assert not new, f"baseline out of date — regenerate: {new[:5]}"
+
+
+class TestSentinelBareTruthiness:
+    """The D9 form (2026-08-26 app review): the read is clean, and the None is
+    destroyed one line later by truthiness. Structurally invisible to
+    TestOfflineSentinel's rule, which is why it needed its own."""
+
+    def test_flags_bare_if_on_a_sentinel_read(self):
+        code = (
+            '_sg = st.session_state.get("_div_recs_cache")\n'
+            'if _sg:\n'
+            '    pass\n'
+        )
+        assert "SENTINEL_BARE_TRUTHINESS" in _rules(code)
+
+    def test_flags_negated_form(self):
+        code = (
+            '_sg = st.session_state.get("_reduce_calls")\n'
+            'if not _sg:\n'
+            '    pass\n'
+        )
+        assert "SENTINEL_BARE_TRUTHINESS" in _rules(code)
+
+    @pytest.mark.parametrize("code", [
+        # Not a documented coordination key — no None-on-failure contract.
+        '_v = st.session_state.get("some_other_key")\nif _v:\n    pass\n',
+        # A supplied default is the sibling rule's business, not this one.
+        '_v = st.session_state.get("_div_recs_cache", [])\nif _v:\n    pass\n',
+        # An explicit `is None` check is the correct idiom.
+        '_v = st.session_state.get("_div_recs_cache")\nif _v is None:\n    pass\n',
+        # Not a session_state read at all.
+        '_v = d.get("_div_recs_cache")\nif _v:\n    pass\n',
+    ])
+    def test_ignores_non_instances(self, code):
+        assert "SENTINEL_BARE_TRUTHINESS" not in _rules(code)
+
+    def test_a_coord_cache_state_guard_clears_the_hit(self):
+        """The guard is what silences the rule — NOT a baseline entry. Baselining
+        is keyed on the source segment, so deleting the guard would leave the
+        segment identical and the gate silently green; this way the hit returns."""
+        guarded = (
+            '_sg = st.session_state.get("_div_recs_cache")\n'
+            'if _coord_cache_state("_div_recs_cache") != "ready":\n'
+            '    pass\n'
+            'elif _sg:\n'
+            '    pass\n'
+        )
+        assert "SENTINEL_BARE_TRUTHINESS" not in _rules(guarded)
+
+    def test_removing_that_guard_brings_the_hit_back(self):
+        unguarded = (
+            '_sg = st.session_state.get("_div_recs_cache")\n'
+            'if False:\n'
+            '    pass\n'
+            'elif _sg:\n'
+            '    pass\n'
+        )
+        assert "SENTINEL_BARE_TRUTHINESS" in _rules(unguarded)
+
+    def test_a_guard_on_a_DIFFERENT_key_does_not_clear_the_hit(self):
+        """Guard-awareness must be key-specific, or one guard would launder every
+        bare test in the same if/elif chain."""
+        code = (
+            '_sg = st.session_state.get("_div_recs_cache")\n'
+            'if _coord_cache_state("_reduce_calls") != "ready":\n'
+            '    pass\n'
+            'elif _sg:\n'
+            '    pass\n'
+        )
+        assert "SENTINEL_BARE_TRUTHINESS" in _rules(code)
+
+    def test_guard_scope_does_not_leak_past_the_chain(self):
+        """A guarded chain must not silence a later, unrelated bare test."""
+        code = (
+            '_sg = st.session_state.get("_div_recs_cache")\n'
+            'if _coord_cache_state("_div_recs_cache") != "ready":\n'
+            '    pass\n'
+            'elif _sg:\n'
+            '    pass\n'
+            'if _sg:\n'
+            '    pass\n'
+        )
+        assert "SENTINEL_BARE_TRUTHINESS" in _rules(code)
+
+    def test_guard_does_not_launder_a_bare_test_inside_its_own_branch(self):
+        """Reviewer finding (2026-08-26): the guard clears bare tests in the SAME
+        chain, but generic_visit also descends into the guard branch's own body —
+        which is the degraded branch, precisely where a bare test IS the defect.
+        Documented as a known limit; this test pins the behaviour so it cannot
+        change silently."""
+        code = (
+            '_sg = st.session_state.get("_div_recs_cache")\n'
+            'if _coord_cache_state("_div_recs_cache") != "ready":\n'
+            '    if _sg:\n'
+            '        pass\n'
+        )
+        # KNOWN LIMIT, not an assertion that this is correct: the nested test is
+        # cleared. If a future change makes the guard body-aware, flip this to
+        # `in` — do not delete the case.
+        assert "SENTINEL_BARE_TRUTHINESS" not in _rules(code)
+
+    def test_a_bare_test_in_a_sibling_function_is_not_cleared(self):
+        """_sentinel_vars is file-scoped, not per-function. Pins that a read in one
+        function and a bare test in another still flags (the conservative
+        direction) rather than silently crossing over into a miss."""
+        code = (
+            'def a():\n'
+            '    _sg = st.session_state.get("_div_recs_cache")\n'
+            'def b():\n'
+            '    if _sg:\n'
+            '        pass\n'
+        )
+        assert "SENTINEL_BARE_TRUTHINESS" in _rules(code)

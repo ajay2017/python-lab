@@ -124,6 +124,8 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_sidebar_news\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_tj_drift_state\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"watchlist\", []) or []": 6,
+      "SENTINEL_BARE_TRUTHINESS\u001f_frag <- session_state.get('_fragility_cache')": 1,
+      "SENTINEL_BARE_TRUTHINESS\u001f_jo_fragility <- session_state.get('_fragility_cache')": 1,
       "UNSAFE_HTML_DYNAMIC\u001f_bhc1.markdown( f\"<div style='text-align:center'>\" f\"<div style='color:#9ca3af;font-size:0.75em'>\ud83c\udfaf Win Rate</div>\" f\"<div style='color:{_wr_color};font-weight:600'>{_beh_wr:.0f}%</div></div>\", unsafe_allow_html=True, )": 1,
       "UNSAFE_HTML_DYNAMIC\u001f_bhc2.markdown( f\"<div style='text-align:center'>\" f\"<div style='color:#9ca3af;font-size:0.75em'>\ud83d\udcc8 Profit Factor</div>\" f\"<div style='color:{_pf_color};font-weight:600'>{f'{_beh_pf:.2f}' if _beh_pf else '\u2014'}</div></div>\", unsafe_allow_html=True, )": 1,
       "UNSAFE_HTML_DYNAMIC\u001f_bhc3.markdown( f\"<div style='text-align:center'>\" f\"<div style='color:#9ca3af;font-size:0.75em'>\ud83d\udd04 Trades This Month</div>\" f\"<div style='color:{_ot_color}'>{_ot_label}</div></div>\", unsafe_allow_html=True, )": 1,

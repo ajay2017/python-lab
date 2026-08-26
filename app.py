@@ -2233,6 +2233,24 @@ def _tax_exit_note_html(ticker: str | None) -> str:
         return ""
 
 
+def _coord_cache_state(key: str) -> str:
+    """Distinguish the three states a coordination cache can be in.
+
+    Returns "missing" (the producer never ran this session), "offline" (the
+    producer ran and FAILED, publishing the None sentinel), or "ready".
+
+    Consumers that write `or {}` / `.get(k, {})` / a bare `if _v:` collapse
+    all three into one falsy branch, which renders "checked, found nothing"
+    for a check that never executed. That is the failure mode the operating
+    posture names as most dangerous: silence a user reads as "checked and
+    fine". Use this wherever the falsy branch renders a CONFIDENT negative;
+    a cache whose absence merely omits an optional adornment does not need it.
+    """
+    if key not in st.session_state:
+        return "missing"
+    return "offline" if st.session_state.get(key) is None else "ready"
+
+
 def _render_portfolio_not_loaded(show_home_button: bool = True, key_suffix: str = "") -> None:
     """
     Render the shared "holdings not loaded this session" empty state, used by
@@ -15691,8 +15709,16 @@ elif page == "🥧 Portfolio Overview":
         # This surfaces the same data as a lightweight pointer here — NOT a
         # duplicate full card — per single-surface-priority: the actionable
         # card (candidates, $ sizing) stays on Signals & Advice only.
+        # None = the correlation computation FAILED (offline sentinel set by the
+        # producer); [] = ran and found no gaps. A bare `if _sg_recs:` folded
+        # both into one branch and the section vanished with no explanation.
         _sg_recs = st.session_state.get("_div_recs_cache")
-        if _sg_recs:
+        if _coord_cache_state("_div_recs_cache") != "ready":
+            st.caption(
+                "ℹ Sector-gap check unavailable this run — diversification data was not "
+                "computed, so this is not 'no gaps found'."
+            )
+        elif _sg_recs:
             _sg_adds = [r for r in _sg_recs if r["type"] == "ADD"]
             if _sg_adds:
                 st.subheader("🧭 Sector Gaps")
@@ -20305,6 +20331,13 @@ elif page == "📈 Analysis":
             _sa_is_sell = rec["label"] in ("Sell", "Strong Sell")
             _sa_is_hold = rec["label"] == "Hold"
             _sa_holding = None
+            # Holdings context state BEFORE reading it: with the cache absent,
+            # _sa_holding stays None, so the "Already held" banner never renders
+            # and _under_reduce is False -- the page would present a clean
+            # NEW-position trade plan for a name you may already hold and may be
+            # under an active Reduce call. Reachable on a market-data outage,
+            # where Home st.stop()s BEFORE publishing _port_df_enriched.
+            _sa_port_state = _coord_cache_state("_port_df_enriched")
             _sa_port = st.session_state.get("_port_df_enriched", pd.DataFrame())
             if not _sa_port.empty and ticker in _sa_port["Ticker"].values:
                 _sa_holding = _sa_port[_sa_port["Ticker"] == ticker].iloc[0].to_dict()
@@ -20628,6 +20661,30 @@ elif page == "📈 Analysis":
                     # surfaces agree. Stop-breach (mechanical) still takes priority.
                     _rc = (st.session_state.get("_reduce_calls") or {}).get(str(ticker).upper())
                     _under_reduce = bool(_sa_holding and _rc and not _stop_breached)
+
+                    # Say so when the two checks above could not run at all. The
+                    # mechanical stop-breach half is immune (it recomputes live),
+                    # so this names only what is genuinely unverified.
+                    # Home publishes _last_held_tickers BEFORE its empty-book
+                    # st.stop(), so an EMPTY list there means "definitively holds
+                    # nothing" rather than "could not check". Warning such a user
+                    # would claim a blind spot the app does not have -- and tell
+                    # them to visit a page that will st.stop() again, leaving the
+                    # banner unclearable.
+                    _sa_held_known = st.session_state.get("_last_held_tickers")
+                    _sa_definitely_flat = (
+                        isinstance(_sa_held_known, (list, tuple, set))
+                        and len(_sa_held_known) == 0
+                    )
+                    if _sa_port_state != "ready" and not _sa_definitely_flat:
+                        st.warning(
+                            "⚠ **Holdings context unavailable** — the plan below assumes a "
+                            "**new position**. This session could not check whether you already "
+                            f"hold {ticker}, or whether it is under an active Reduce/Exit call, so "
+                            "neither the add-to-position sizing nor the Reduce suppression could "
+                            "run. Open the 🏠 Home page once to load your holdings, "
+                            "then re-check before acting."
+                        )
 
                     if _sa_holding and _stop_breached:
                         _br_shares   = int(_sa_holding.get("Shares", 0))
@@ -22287,12 +22344,39 @@ elif page == "📋 Watchlist":
     _wl_grow_sectors = set(_wl_grow_sectors_raw or [])
     _wl_port_beta  = _wl_port_risk.get("beta")
 
+    # The G-05 sector-CEILING fallback is driven by the enriched portfolio
+    # frame, NOT by the Brief. Those fail independently: _port_df_enriched is
+    # published BEFORE the synthesis block, so the ordinary failure is a
+    # healthy frame plus a thrown risk advisor -- in which case G-05 is
+    # computing correctly and claiming otherwise would be a false "gate is
+    # off" statement, the mirror image of the silence this section fixes.
+    # COUPLING, load-bearing: this only ever reaches the user inside the
+    # `if _wl_brief_offline:` banner below. If _wl_gate_blind were ever True
+    # while _wl_brief_offline was False, G-05 would fail open silently again.
+    # Today that cannot happen -- Home's st.stop() also leaves
+    # _grow_today_sectors_cache absent, which forces _wl_brief_offline True --
+    # but that is INCIDENTAL, not designed. If the Home publish order ever
+    # changes, widen the banner condition to `_wl_brief_offline or
+    # _wl_gate_blind` rather than relying on this.
+    _wl_gate_blind = (
+        _coord_cache_state("_port_df_enriched") != "ready"
+        or _wl_port_df.empty
+        or "Sector" not in _wl_port_df.columns
+    )
+
     if _wl_brief_offline:
         st.warning(
             "⚠ **Today's Brief offline** — sector-overlap and active-risk-alert gates "
             "on Ready-to-Enter recommendations cannot run. The Watchlist will still show "
             "stock-level signals, but coordination with Grow Today / Risk Advisor is "
             "currently disabled. Visit the Portfolio page first to rebuild the briefing."
+            + (
+                "\n\n**Also off: the sector ceiling check (G-05).** The enriched "
+                "portfolio frame is unavailable, so the sector weight falls back to "
+                "0.0 and a name is never held back for concentration — this one "
+                "fails OPEN."
+                if _wl_gate_blind else ""
+            )
         )
 
     # ── Build recommendations ─────────────────────────────────────────────────
@@ -30525,6 +30609,15 @@ elif page == "🔔 Catalyst Watch":
         )
 
         _cw_watchlist_tickers = list(st.session_state.get("watchlist", []))
+        # _grow_composites is published ONLY inside the Home block. Without it
+        # build_earnings_catalyst_candidates filters every ticker on `bundle is
+        # None`, so the empty result below must NOT be described as "nothing
+        # passed the composite filter" -- the composite filter never ran.
+        # NOTE: "offline" is currently unreachable for this key -- no writer
+        # assigns _grow_composites = None; Home fails by st.stop()/pop instead.
+        # The arm is kept because the contract, not the current writer set, is
+        # what consumers must honour.
+        _cw_comp_state        = _coord_cache_state("_grow_composites")
         _cw_composites        = st.session_state.get("_grow_composites") or {}
 
         if not _cw_watchlist_tickers:
@@ -30534,6 +30627,17 @@ elif page == "🔔 Catalyst Watch":
             from stock_analyzer.db import load_earnings_context_batch as _load_ec_batch
 
             _cw_ec_batch = _load_ec_batch(list(_cw_watchlist_tickers), max_age_days=90)
+            # Which watchlist names the composite filter could not judge at all.
+            # Scope to names that actually REACHED the composite gate: a ticker
+            # with no pasted earnings context was dropped at the `ctx` filter
+            # (earnings_advisor.py:557-559) long before composite mattered, so
+            # counting it here would blame the wrong filter -- and would turn a
+            # quiet empty state into a standing warning on every visit (the
+            # calm-advisor concern, requirements 2B).
+            _cw_no_comp = [
+                t for t in _cw_watchlist_tickers
+                if t not in _cw_held and t not in _cw_composites and t in _cw_ec_batch
+            ]
             _cw_candidates = _build_candidates(
                 watchlist_tickers=_cw_watchlist_tickers,
                 held_tickers=_cw_held,
@@ -30549,6 +30653,31 @@ elif page == "🔔 Catalyst Watch":
                         "No CNBC earnings articles pasted for watchlist names yet. "
                         "Use **🧠 AI Insights → Ideas Inbox → 📅 Pre-Earnings** to paste articles "
                         "and the scanner will populate here."
+                    )
+                elif _cw_comp_state != "ready":
+                    st.warning(
+                        "⚠ **Composite filter did not run** — this is NOT 'nothing qualified'. "
+                        + ("Composite scores have not been computed this session"
+                           if _cw_comp_state == "missing"
+                           else "Composite scoring failed this session")
+                        + ", so every watchlist name was filtered out for missing data rather "
+                        "than on its merits. Open the 🏠 Home page once to "
+                        "populate them, then return here."
+                    )
+                elif _cw_no_comp:
+                    # Structural, not a failure, so st.info not st.warning.
+                    # READY-but-incomplete: _grow_composites is populated from
+                    # scanner top-N non-held picks (+ movers, which explicitly
+                    # EXCLUDE watchlist tickers), so on a perfectly healthy
+                    # session a watchlist name can simply have no composite. The
+                    # candidate builder drops it on `bundle is None`, which is not
+                    # the same as failing the composite bar.
+                    st.info(
+                        f"⚠ **{len(_cw_no_comp)} of {len(_cw_watchlist_tickers)} watchlist name(s) had no composite score "
+                        f"this session** — they were dropped for missing data, NOT on their merits. "
+                        "Composites are computed for scanner picks and held names; a watchlist-only "
+                        f"ticker may never get one. Missing: {', '.join(sorted(_cw_no_comp)[:8])}"
+                        + (" …" if len(_cw_no_comp) > 8 else "")
                     )
                 else:
                     st.info(

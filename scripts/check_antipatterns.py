@@ -67,6 +67,28 @@ Rules (each an AST signature, low false-positive by design):
       This rule currently baselines at ZERO, so any hit is a real finding.
       Memory `feedback_pandas_mixed_tz_parsing`.
 
+  SENTINEL_BARE_TRUTHINESS — `_v = st.session_state.get("<coordination key>")`
+      (no default) followed by a bare `if _v:` / `if not _v:` on that name. This is
+      the SAME offline-sentinel collapse as the rule above, in the one form that
+      rule structurally cannot see: the read itself is clean, and the None is
+      destroyed one line later by truthiness. Live instance found 2026-08-26 in the
+      app review (D9, app.py Sector Gaps): the producer sets `_div_recs_cache = None`
+      when the correlation computation fails, and `if _sg_recs:` folded that into the
+      same branch as `[]` = "checked, no gaps", so the section vanished with no
+      banner. That was the THIRD consecutive review to find this detector narrower
+      than the class it is named for, which is what earns the widening.
+      Scoped to the documented coordination keys in _SENTINEL_KEYS rather than every
+      session_state read, because only those carry the None-on-failure contract —
+      a broad rule would bury the signal. LIMIT, stated honestly: single-assignment
+      tracking by name within a file, so a variable reassigned between the read and
+      the test, or one passed into a helper and tested there, is NOT caught. Do not
+      read a green gate as proof that every consumer honours the sentinel. The
+      mapping is write-only (a later `_v = other()` does not clear it), so that
+      reassignment case is a FALSE POSITIVE, not a miss. The rule also sees only
+      the `if _v:` / `if not _v:` shape — `for x in _v or []`, `len(_v)`,
+      subscripting and BoolOp uses are all invisible to it, so a green gate means
+      "no new bare-truthiness instance", never "the class is closed."
+
 Baseline: like check_constants_documented.py, a snapshot of the existing tail is
 recorded (scripts/antipattern_baseline.json) so CI is green on day one and only
 NEW instances fail. The baseline is keyed on the *normalized source segment*
@@ -90,6 +112,29 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "scripts" / "antipattern_baseline.json"
 
+# The coordination caches that carry the None-on-failure contract (CLAUDE.md
+# "Coordination pattern"). Only these are gated by SENTINEL_BARE_TRUTHINESS: a
+# key NOT in this set has no documented offline sentinel, so a bare truthiness
+# test on it is not a defect. Keep in sync with CLAUDE.md when a producer adds
+# a cache. Four documented keys are deliberately OMITTED: _portfolio_value and
+# _holdings_sig_at_home_build (scalars, not offline sentinels), the dynamic
+# _rh_prices_cache_* family (name is not a literal), and _daily_brief_offline --
+# which must NEVER be added, because it is a plain bool whose falsy state is
+# meaningful and `if _x:` is the CORRECT idiom for it (app.py:9732, 22327).
+_SENTINEL_KEYS = frozenset({
+    "_last_port_df", "_port_df_enriched", "_last_held_data", "_last_held_tickers",
+    "_port_risk_cache", "_fragility_cache", "_highbeta_share",
+    "_risk_high_alerts_cache", "_risk_advisor_recs_cache", "_alert_list_cache",
+    "_actions_cache", "_div_recs_cache", "_corr_df_cache", "_div_score_cache",
+    "_avg_corr_cache", "_risk_pairs_cache", "_div_label_cache",
+    "_corr_coverage_cache", "_grow_today_sectors_cache", "_grow_composites",
+    "_grow_composites_coverage", "_acct_gate_cache", "_leverage_cache",
+    "_reduce_calls", "_day_shock_cache", "_structural_alert_cache", "_dpnl_cache",
+    "_leading_sectors_cache", "_market_tone_cache", "_mirror_orphans",
+    "_mirror_overexp", "_mirror_overhangs", "_pi_factor_tilt_cache",
+    "_broker_drift_cache", "_home_synth_cache",
+})
+
 # Files in scope: the two runtimes + the pure-logic package. Tests and scripts
 # are intentionally out of scope (a test may deliberately construct a bad case).
 TARGETS = [ROOT / "app.py", ROOT / "cron_runner.py"] + sorted(
@@ -110,6 +155,26 @@ def _has_get_call(node: ast.AST) -> bool:
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         return node.func.attr == "get"
     return False
+
+
+def _sentinel_read_key(node: ast.AST) -> str | None:
+    """Key name for `st.session_state.get("<key>")` with NO default argument.
+
+    A supplied default is deliberately NOT matched here: that form is already
+    the OFFLINE_SENTINEL_COLLAPSE rule's business when the default is an empty
+    container, and a non-empty default is a considered choice.
+    """
+    if not isinstance(node, ast.Call) or len(node.args) != 1 or node.keywords:
+        return None
+    if not (isinstance(node.func, ast.Attribute) and node.func.attr == "get"):
+        return None
+    base = node.func.value
+    if not (isinstance(base, ast.Attribute) and base.attr == "session_state"):
+        return None
+    arg = node.args[0]
+    if isinstance(arg, ast.Constant) and arg.value in _SENTINEL_KEYS:
+        return str(arg.value)
+    return None
 
 
 def _is_dynamic_html(node: ast.AST) -> bool:
@@ -141,10 +206,53 @@ class _Visitor(ast.NodeVisitor):
     def __init__(self, src: str) -> None:
         self.src = src
         self.hits: list[tuple[str, str]] = []  # (rule, normalized_segment)
+        # varname -> sentinel key it was read from, for SENTINEL_BARE_TRUTHINESS.
+        self._sentinel_vars: dict[str, str] = {}
+        # Keys whose three-state check is in scope on the current branch, so a
+        # downstream bare test is already guarded and must NOT be flagged.
+        self._guarded_keys: set[str] = set()
 
     def _seg(self, node: ast.AST) -> str:
         seg = ast.get_source_segment(self.src, node) or ""
         return " ".join(seg.split())  # normalize whitespace/newlines
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        # SENTINEL_BARE_TRUTHINESS, part 1: remember `_v = ss.get("<key>")`.
+        key = _sentinel_read_key(node.value)
+        if key and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            self._sentinel_vars[node.targets[0].id] = key
+        self.generic_visit(node)
+
+    def visit_If(self, node: ast.If) -> None:
+        # An `if _coord_cache_state("<key>") != "ready":` branch handles the
+        # missing/offline states explicitly, so any bare test on that key in the
+        # SAME if/elif chain is downstream of a real guard. Recognising this here
+        # rather than baselining the instance matters: a baseline entry is keyed
+        # on the source segment, so deleting the guard would leave the segment
+        # unchanged and the gate silently green. This way the guard is what
+        # clears the hit, and removing it brings the hit back.
+        guarded_here: set[str] = set()
+        for sub in ast.walk(node.test):
+            if (isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Name)
+                    and sub.func.id == "_coord_cache_state"
+                    and sub.args
+                    and isinstance(sub.args[0], ast.Constant)):
+                guarded_here.add(str(sub.args[0].value))
+        self._guarded_keys |= guarded_here
+
+        # SENTINEL_BARE_TRUTHINESS, part 2: `if _v:` / `if not _v:` on one.
+        test = node.test
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            test = test.operand
+        if isinstance(test, ast.Name) and test.id in self._sentinel_vars:
+            if self._sentinel_vars[test.id] not in self._guarded_keys:
+                self.hits.append((
+                    "SENTINEL_BARE_TRUTHINESS",
+                    "%s <- session_state.get(%r)" % (test.id, self._sentinel_vars[test.id]),
+                ))
+        self.generic_visit(node)
+        self._guarded_keys -= guarded_here
 
     def visit_BoolOp(self, node: ast.BoolOp) -> None:
         if isinstance(node.op, ast.Or):
