@@ -1,6 +1,9 @@
 # Plan: Email Alerts Cron — Exit-discipline Phase 3
 
-**Status: SHIPPED 2026-06-24 (commits `9add28f`→`cb37862`)**
+**Status: SHIPPED 2026-06-24 (commits `9add28f`→`cb37862`). Runtime migrated
+off GitHub Actions to Railway native Cron Job services 2026-08-07 — the design
+below is unchanged, but every GitHub-Actions reference in it describes the retired
+host. Secrets pointer corrected 2026-08-26.**
 
 All code shipped: `cron_runner.py`, `headless_alert_engine.py`, `notify.py`,
 `.github/workflows/alerts.yml`, `alert_state` Supabase DDL applied, Resend wired.
@@ -101,8 +104,13 @@ The build ships inert; these flip it on:
 ## Risks / notes
 - FMP free tier (250/day) is shared by API key; a once-daily ~10-name run is
   cheap and well within budget. Coordinate with rate-limit resilience.
-- Service-role key in GitHub secrets = same key class as Streamlit; RLS stays on.
-- `requirements.txt` install on Actions ~1–2 min; fine for a daily job.
+- Service-role key lives in **Railway → Variables** (all 7 cron lanes are
+  Railway native Cron Job services since the 2026-08-07 migration; the
+  GitHub-secrets wording here described the retired Actions workflow). Same key
+  class as the Streamlit fallback; RLS stays on. Hard rule #2's remedy for an
+  "RLS blocking" error is to correct `SUPABASE_KEY` in **Railway → Variables** —
+  never to disable RLS — so this pointer must not send an operator to GitHub.
+- `requirements.txt` install per cron run ~1–2 min; fine for a daily job.
 
 ## Out of scope (DEFERRED)
 - Pullback-awareness Phase 2 reactive alert + Today's-P&L EOD snapshot — will
