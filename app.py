@@ -21921,8 +21921,8 @@ elif page == "📈 Analysis":
                                         if _pt_cx.get("portfolio_value") is not None:
                                             _pt_cbits.append(
                                                 "portfolio "
-                                                + _pt_money(_pt_cx["portfolio_value"],
-                                                            signed=False)
+                                                + _m(_pt_money(_pt_cx["portfolio_value"],
+                                                               signed=False))
                                             )
                                         if _pt_cx.get("n_positions") is not None:
                                             _pt_cbits.append(

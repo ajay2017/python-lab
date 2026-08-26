@@ -233,9 +233,15 @@ Per `feedback_phased_ux_rollout_cadence` — one phase per deploy, pause for liv
      `r["df"]`'s window, the UI names which trips fall outside it. The degrade works;
      the caption is missing (the only caption fires when the figure is `None`, not when
      it's cropped).
-  3. **`_m()` privacy mask** on this tab's dollar figures — notably
-     `decision_context.portfolio_value` in the conditions-at-entry line, which is the
-     same class of figure masked on Home/Summary.
+  3. ~~**`_m()` privacy mask**~~ — ✅ **DONE 2026-08-25.** `decision_context.
+     portfolio_value` in the conditions-at-entry line now wraps through `_m()`,
+     matching the same figure's masking on Home/Summary. Scoped deliberately narrow:
+     the round trip's OWN entry/exit/realized/unrealized figures on this tab are
+     unchanged — those are the ticker-specific facts the tab exists to show, not the
+     ambient portfolio-wide total this one line borrows from `decision_context`.
+     Widening the mask to the round-trip figures themselves would be a real UX
+     decision (arguably counter to "your own history in this name" tone), not a bug
+     fix, and was not made here.
   4. **Per-rerun recompute cost.** Streamlit renders inactive tab content, so the SPY
      fetch, rebuild, `build_pnl_series` and figure construction run for every analysed
      ticker on every rerun. I/O is cached; the pandas/plotly work isn't. Relevant to
