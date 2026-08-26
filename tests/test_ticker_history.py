@@ -27,6 +27,7 @@ def _trade_row(
     premortem_trigger_price=None, premortem_trigger_direction=None,
     notes=None, lesson=None, lesson_category=None,
     deviation_reason=None, decision_context=None,
+    situational_category=None,
 ):
     return {
         "id":                        id_,
@@ -49,6 +50,7 @@ def _trade_row(
         "lesson_category":           lesson_category,
         "deviation_reason":          deviation_reason,
         "decision_context":          decision_context,
+        "situational_category":      situational_category,
     }
 
 
@@ -639,8 +641,28 @@ def test_legacy_row_missing_journal_columns_no_keyerror():
     assert ep["journal"]["premortem_case_against"] is None
     assert ep["journal"]["lesson"]                is None
     assert ep["journal"]["lesson_category"]       is None
+    assert ep["journal"]["situational_category"]  is None
     assert ep["context"]        is None
     assert ep["followed_signal"] is None
+
+
+def test_situational_category_read_from_the_opening_buy_not_the_closing_sell():
+    """
+    situational_category (F-257) is a BUY-only, entry-side tag — it must be
+    read off the opening_row, and a value on the closing SELL row (which
+    should never be written there) must not leak through.
+    """
+    rows = [
+        _trade_row(id_=1, action="BUY", shares=10.0, price=100.0,
+                   traded_at="2026-01-05T09:30:00Z",
+                   situational_category="Earnings Catalyst"),
+        _trade_row(id_=2, action="SELL", shares=10.0, price=110.0,
+                   traded_at="2026-02-15T15:00:00Z", realized_pnl=100.0,
+                   situational_category="Technical Read"),
+    ]
+    result = build_ticker_history(_df(rows), "AAA", today=date(2026, 3, 1))
+    ep = result["episodes"][0]
+    assert ep["journal"]["situational_category"] == "Earnings Catalyst"
 
 
 def test_legacy_row_missing_trigger_type_fill_has_none():

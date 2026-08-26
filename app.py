@@ -21885,6 +21885,9 @@ elif page == "📈 Analysis":
                             _pt_cx = _pt_ep.get("context")
                             if any(_pt_j.get(_k) for _k in _pt_j) or _pt_cx:
                                 with st.expander("What you wrote at the time"):
+                                    _pt_sc = _pt_j.get("situational_category")
+                                    if _pt_sc:
+                                        st.markdown(f":blue-background[📍 {_pt_sc}]")
                                     for _lbl, _key in (
                                         ("**Your thesis (entry)**", "user_thesis"),
                                         ("**Pre-mortem — what would make me wrong**",
@@ -31479,7 +31482,7 @@ When a ticker surfaces as a new position to initiate, the one thing you often al
 
 **The journey chart** sits at the top: your price history with your own buys and sells marked and each holding period shaded, and below it — sharing the same timeline — how the position's P&L moved while you held it. After your most recent exit, a faded dashed line continues to today, showing what the position *would* have done had you held. That line is there deliberately: it's the honest answer to "should I get back in?", even when it's uncomfortable reading.
 
-**"What you wrote at the time."** Expand any card to replay your own words from that trade — the thesis you typed at entry, the pre-mortem ("what would make me wrong") and the trigger price you committed to, why you deviated from a signal if you did, and the lesson you recorded at exit. It also shows the conditions you bought into: the macro regime, market tone, your portfolio size and beta that day. This is the only place in the app where your pre-mortem is put side by side with what actually happened.
+**"What you wrote at the time."** Expand any card to replay your own words from that trade — the thesis you typed at entry, the pre-mortem ("what would make me wrong") and the trigger price you committed to, why you deviated from a signal if you did, and the lesson you recorded at exit. If you tagged the buy with a situational read (Institutional Flow, Earnings Catalyst, Technical Read, Macro-News, Other), that tag shows up here too. It also shows the conditions you bought into: the macro regime, market tone, your portfolio size and beta that day. This is the only place in the app where your pre-mortem is put side by side with what actually happened.
 
 **When the journal has gaps, it says so.** A sell with no matching buy — from a rebaselined holding or history that pre-dates your imports — raises a visible banner and is left out of the totals rather than quietly producing a wrong number. A stock split inside a round trip is flagged too, because the per-share prices either side of it aren't comparable (the P&L figures still are).
 

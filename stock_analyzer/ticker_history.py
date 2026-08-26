@@ -194,6 +194,7 @@ def _build_journal(opening_row: Any, closing_row: Any) -> dict:
     return {
         "user_thesis":                  _g(opening_row, "user_thesis"),
         "thesis_source":                _g(opening_row, "thesis_source"),
+        "situational_category":         _g(opening_row, "situational_category"),
         "premortem_case_against":       _g(opening_row, "premortem_case_against"),
         "premortem_commitment":         _g(opening_row, "premortem_commitment"),
         "premortem_trigger_price":      _g(opening_row, "premortem_trigger_price"),
