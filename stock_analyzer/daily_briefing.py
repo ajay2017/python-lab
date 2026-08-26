@@ -629,7 +629,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 movers: list | None = None,
                 deterioration: list | None = None,
                 winner_profile: dict | None = None,
-                net_capital: float | None = None) -> dict:
+                net_capital: float | None = None,
+                sold_today: set | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -686,6 +687,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # set (2026-07-29 audit H6) and resolves ticker=None/action.trim_ticker
     # macro-card shapes correctly, which a naive `.get("ticker")` loop misses.
     _act_blocked: set = decision_bucket.all_flagged_tickers(act_today, review_list)
+    # Tickers sold this session must never immediately re-appear as buys.
+    if sold_today:
+        _act_blocked |= sold_today
     _act_risk_flags: list[str] = []
     for _ai in (act_today or []):
         _action = str(_ai.get("action", ""))
@@ -1909,7 +1913,8 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                     risk_recs: list | None = None,
                     earnings_lookup: dict | None = None,
                     composites: dict | None = None,
-                    deterioration: list | None = None) -> list[dict]:
+                    deterioration: list | None = None,
+                    sold_today: set | None = None) -> list[dict]:
     """
     Build buy candidate list with multi-signal confidence verdict for each pick.
     act_today: output of _act_today — tickers already flagged are excluded.
@@ -1932,6 +1937,9 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
     # Block any ticker already flagged ANYWHERE in today's Brief (act_today OR
     # review_list) — same canonical set as _grow_today's gate.
     _act_blocked: set = decision_bucket.all_flagged_tickers(act_today, review_list)
+    # Tickers sold this session must never immediately re-appear as buys.
+    if sold_today:
+        _act_blocked |= sold_today
 
     # Risk Advisor trim targets — suppress same-ticker add-to-winner conflicts.
     _trim_set = _trim_targets(risk_recs)
@@ -2673,6 +2681,25 @@ def build_daily_briefing(
     from stock_analyzer.premortem_monitor import detect_premortem_triggers
     premortem_triggers = detect_premortem_triggers(trades_df, held_data, today)
 
+    # Tickers with a SELL trade today — block from new-pick and add-to-winner so
+    # a just-exited position never immediately re-surfaces as a BUY in the same
+    # session (the exit advisor stops watching a ticker the moment it leaves the
+    # portfolio, so _act_blocked alone has no memory of the exit).
+    _sold_today: set[str] = set()
+    if trades_df is not None and not getattr(trades_df, "empty", True):
+        try:
+            import pandas as _pd
+            _ta = _pd.to_datetime(trades_df["traded_at"], utc=True, errors="coerce",
+                                  format="ISO8601")
+            _ta_date = _ta.dt.tz_convert("America/New_York").dt.date
+            _mask = (trades_df["action"].str.upper() == "SELL") & (_ta_date == today)
+            _sold_today = {
+                str(t).upper() for t in trades_df.loc[_mask, "ticker"]
+                if _pd.notna(t) and t
+            }
+        except Exception:
+            pass
+
     act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                         deterioration=deterioration,
                         premortem_triggers=premortem_triggers)
@@ -2704,7 +2731,8 @@ def build_daily_briefing(
                              act_today=act, review_list=review, risk_recs=risk_recs,
                              earnings_lookup=earnings_lookup,
                              composites=grow_composites or {},
-                             deterioration=deterioration)
+                             deterioration=deterioration,
+                             sold_today=_sold_today)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, review_list=review, composites=grow_composites or {},
                          risk_recs=risk_recs,
@@ -2712,7 +2740,8 @@ def build_daily_briefing(
                          deterioration=deterioration,
                          movers=movers,
                          winner_profile=winner_profile,
-                         net_capital=net_capital)
+                         net_capital=net_capital,
+                         sold_today=_sold_today)
     # Tune-up beta/sharpe cards restate a trim; if that name is already carrying
     # an Act Today card (incl. the risk-off TRIM appended above) or a Review
     # card, drop the redundant restatement (2026-08-04 audit — same broad

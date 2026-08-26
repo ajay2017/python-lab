@@ -1076,3 +1076,119 @@ def test_stop_breach_suppresses_deterioration_exit_on_same_ticker():
     matches = [i for i in items if i.get("ticker") == "ABC"]
     assert len(matches) == 1
     assert matches[0]["kind"] == "stop_breach"
+
+
+# ── sold_today suppression (SAP buy-after-exit bug, 2026-08-26) ───────────────
+# When a user sells a position, the exit advisor stops watching it, so
+# _act_blocked (built from exit/reduce calls on HELD tickers) has no memory of
+# the exit. The sold_today parameter closes this gap by blocking just-sold
+# tickers from re-appearing as new-pick or add-to-winner recommendations.
+
+def test_buy_candidates_scanner_pick_suppressed_by_sold_today():
+    port_df = make_port_df([])
+    scanner = _scanner_df([{"ticker": "SAP", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
+    items = _buy_candidates(port_df, scanner, [], {}, _TODAY, sold_today={"SAP"})
+    assert find_item(items, "SAP") is None
+
+
+def test_buy_candidates_scanner_pick_not_suppressed_without_sold_today():
+    port_df = make_port_df([])
+    scanner = _scanner_df([{"ticker": "SAP", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
+    items = _buy_candidates(port_df, scanner, [], {}, _TODAY)
+    assert find_item(items, "SAP") is not None
+
+
+def test_buy_candidates_add_to_winner_suppressed_by_sold_today():
+    # Add-to-winner block: SAP is currently held (so it would normally qualify)
+    # but was partially sold today — must be blocked.
+    port_df = make_port_df([{"ticker": "SAP", "weight": 5.0, "score": COMPOSITE_BUY + 5}])
+    items = _buy_candidates(port_df, None, [], {}, _TODAY, sold_today={"SAP"})
+    assert find_item(items, "SAP") is None
+
+
+def test_grow_today_new_pick_suppressed_by_sold_today():
+    port_df = make_port_df([])
+    scanner = _scanner_df([{"ticker": "SAP", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
+    composites = {"SAP": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       composites=composites, sold_today={"SAP"})
+    assert find_item(grow["new_picks"], "SAP") is None
+
+
+def test_grow_today_new_pick_not_suppressed_for_unsold_ticker():
+    port_df = make_port_df([])
+    scanner = _scanner_df([{"ticker": "SAP", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
+    composites = {"SAP": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       composites=composites, sold_today={"OTHER"})
+    assert find_item(grow["new_picks"], "SAP") is not None
+
+
+def test_build_daily_briefing_sold_today_suppressed_via_trades_df():
+    """A today's SELL in trades_df blocks the ticker from grow_today new_picks."""
+    import pandas as pd
+    port_df = make_port_df([])
+    scanner = _scanner_df([{"ticker": "SAP", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
+    composites = {"SAP": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    # traded_at in UTC ISO8601 format, matching today (2026-07-27 in ET)
+    trades_df = pd.DataFrame([{
+        "ticker": "SAP",
+        "action": "SELL",
+        "shares": 7,
+        "price": 210.0,
+        "traded_at": f"{_TODAY.isoformat()}T13:00:00+00:00",
+    }])
+    brief = build_daily_briefing(
+        port_df, [], [], [], [], {}, scanner, 100_000.0, _TODAY,
+        grow_composites=composites,
+        trades_df=trades_df,
+    )
+    grow = brief.get("grow_today", {})
+    assert find_item(grow.get("new_picks", []), "SAP") is None
+
+
+def test_build_daily_briefing_sold_today_suppression_misses_yesterday_sell():
+    """A SELL from yesterday must NOT suppress the ticker today."""
+    import pandas as pd
+    from datetime import timedelta
+    port_df = make_port_df([])
+    scanner = _scanner_df([{"ticker": "SAP", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
+    composites = {"SAP": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    yesterday = _TODAY - timedelta(days=1)
+    trades_df = pd.DataFrame([{
+        "ticker": "SAP",
+        "action": "SELL",
+        "shares": 7,
+        "price": 210.0,
+        "traded_at": f"{yesterday.isoformat()}T13:00:00+00:00",
+    }])
+    brief = build_daily_briefing(
+        port_df, [], [], [], [], {}, scanner, 100_000.0, _TODAY,
+        grow_composites=composites,
+        trades_df=trades_df,
+    )
+    grow = brief.get("grow_today", {})
+    assert find_item(grow.get("new_picks", []), "SAP") is not None
+
+
+def test_build_daily_briefing_sold_today_mixed_offset_traded_at():
+    """Mixed-offset traded_at (the blocking fix: format='ISO8601' required)
+    must still suppress the ticker, not silently drop the row as NaT."""
+    import pandas as pd
+    port_df = make_port_df([])
+    scanner = _scanner_df([{"ticker": "SAP", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
+    composites = {"SAP": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    # Mix: UTC +00:00 and ET offset -04:00 in the same frame (normalize_traded_at shape)
+    trades_df = pd.DataFrame([
+        {"ticker": "SAP", "action": "SELL", "shares": 7, "price": 210.0,
+         "traded_at": f"{_TODAY.isoformat()}T13:00:00+00:00"},
+        {"ticker": "OTHER", "action": "BUY", "shares": 5, "price": 100.0,
+         "traded_at": f"{_TODAY.isoformat()}T09:30:00-04:00"},
+    ])
+    brief = build_daily_briefing(
+        port_df, [], [], [], [], {}, scanner, 100_000.0, _TODAY,
+        grow_composites=composites,
+        trades_df=trades_df,
+    )
+    grow = brief.get("grow_today", {})
+    assert find_item(grow.get("new_picks", []), "SAP") is None
