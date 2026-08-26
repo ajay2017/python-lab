@@ -292,7 +292,7 @@ Per-request timeout `LLM_REQUEST_TIMEOUT_SEC` (=30s); a timeout just yields the 
 - **New columns must be backward-compatible** — `db.load_trades()` backfills `None` for legacy rows; additive columns are dropped-and-retried by the writer until the DDL is applied.
 - **RLS is always on** — every table is `FOR ALL TO service_role`. The Streamlit secret `[supabase] key` must be the **service-role/secret** key. "RLS blocking" errors → swap secrets & reboot, never disable RLS.
 
-**Deployment:** primary is **Streamlit Community Cloud**, auto-deploying from `main`. A **Railway Hobby pilot** (`drishta.up.railway.app`) runs in parallel against the same Supabase DB. **Never run locally** — both deploys assume hosted secrets delivery. To ship a change: push to `main`, wait ~2 min for auto-redeploy, hard-refresh (Ctrl+F5). Single-user, gated by a password screen; all secrets in the Cloud dashboard.
+**Deployment:** primary is **Railway Hobby** (`drishta.up.railway.app`), auto-deploying from `main` — cut over 2026-08-15. **Streamlit Community Cloud** is kept as a **dormant cold fallback** on the same Supabase DB; it still auto-deploys, but it is not the deploy you verify against. **Never run locally** — both deploys assume hosted secrets delivery. To ship a change: push to `main`, wait ~2 min for auto-redeploy, hard-refresh (Ctrl+F5). Single-user, gated by a password screen; all secrets in the Cloud dashboard.
 
 ---
 

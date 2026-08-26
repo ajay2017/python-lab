@@ -1047,7 +1047,7 @@ def _run_thesis(now_et, force: bool) -> int:
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
-        _log("thesis: INERT — no ANTHROPIC_API_KEY set. Add it to GitHub secrets to activate.")
+        _log("thesis: INERT — no ANTHROPIC_API_KEY set. Add it to Railway → Variables to activate.")
         return 0
 
     from stock_analyzer import thesis_advisor as _ta

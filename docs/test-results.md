@@ -18,7 +18,61 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-22 (F-247 readiness + F-248 + three withheld-basis disclosure fixes)
+## 1. Latest run — 2026-08-26 (zero-holdings port_df guard + doc-drift repair)
+
+**4317 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
+--cov-report=term -q`: 78.67s — TOTAL 18359 stmts, 4062 missed, **78%**
+overall coverage). Python (local `.venv`). Transcribed from the run, not
+recalled.
+
+**This entry closes a 4-day, ~20-commit logging gap** (previous entry 2026-08-22
+at 3834 / 76%) — and it exists because the gap hid something. The suite was **RED
+at HEAD** when this run started: seven tests in `tests/test_daily_briefing.py`
+were failing, and a throwaway `git worktree` at `77205a5` confirms they were
+already failing **at the commit that introduced them** — they never passed once,
+despite that commit carrying a full `Review = Opus reviewer … SHIP after fix`
+citation.
+
+The commit hook's pytest gate is correct on a red *result* (`ok is False` →
+`sys.exit(2)`, `.claude/hooks/pre_tool_checks.py:129-137`), but it downgrades to
+a **non-blocking WARNING** when `.venv` python cannot be resolved
+(`pre_tool_checks.py:138-139`) — the most plausible path for a red suite to
+reach `main`. Recorded here rather than only in a commit body because this log
+is the project's only coverage-trend signal, and a 4-day gap is roughly how long
+the red went unnoticed. **If this log is kept current, a red HEAD cannot survive
+a doc-sync pass.**
+
+**+483 over 2026-08-22's 3834**, of which only **+3** are new in this session
+(commit `b6f46a4`); the other +480 accrued across the unlogged commits — F-249
+Phase 2, F-250, F-251, F-255, F-256, F-257, F-237e and F-22d/F-23a. Coverage rose
+76% → 78% on a statement base that grew 17723 → 18359.
+
+**The +3** pin the new `_has_positions` / `_held_tickers` / `_port_rows`
+helpers in `daily_briefing.py`. `build_portfolio_df({}, {})` returns a **0x0
+DataFrame with NO columns** for a zero-holdings book, so `port_df is not None`
+never made `port_df["Ticker"]` safe — all four decision functions raised
+`KeyError('Ticker')` on that shape. Latent rather than live (two upstream
+guards stop it reaching production), fixed as defence-in-depth. One of the three
+asserts the *upstream* shape rather than the fix, so the guards cannot silently
+become dead code if `build_portfolio_df` ever starts returning a typed empty
+frame.
+
+**Two of the seven were passing vacuously and are now load-bearing.** They called
+`build_daily_briefing` without `market_context`, so tone defaulted to flat, where
+`min_score = COMPOSITE_BUY_FLAT_DAY` (78) exceeds their seeded score of 75 —
+`new_picks` was structurally **always empty**, so "assert ticker absent" passed for
+entirely the wrong reason. Fixed in the fixture, not the engine: flat-day deferral
+of new entries is intended behaviour. Both directions were then **mutation-tested**
+— disabling the `sold_today` suppression fails all 4 suppression tests, and
+reverting `_held_tickers` to the old guard fails 4 including both new ones — so
+the greenness is demonstrated, not assumed.
+
+---
+
+## 2. History
+
+### 2026-08-22 (F-247 readiness + F-248 + three withheld-basis disclosure fixes)
+
 
 **3834 passed, 0 failed, 0 skipped** (`pytest -q --cov=stock_analyzer
 --cov-report=term`: 69.67s — TOTAL 17723 stmts, 4170 missed, **76%** overall
@@ -186,9 +240,6 @@ tests deliberately inject around rather than exercise, since covering them would
 mean live network calls inside the suite. That is the correct trade — but it is
 also exactly why three display/runtime defects in this session were caught by
 review rather than by the suite.
-
-
-## 2. History
 
 ### 2026-08-04 (morning-picks cron bug fix + trades-idempotency catch-up)
 

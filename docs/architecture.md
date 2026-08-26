@@ -2573,12 +2573,16 @@ floor. Every other lane self-skips a wrongly-timed fire; this one runs whenever
 its cron fires, weekends included (confirmed: it ran Sunday 2026-08-23). So the
 comma-list DST pattern used by the other weekday lanes would cause it to run
 BOTH slots rather than dedup one, and its schedule cannot be reasoned about from
-the code — read the dashboard. `system_health` grades it against 14:00/19:00 ET
-(`_Lane("broker", …, fire_hours_et=(14, 19))`), but a real fire was observed at
-**17:02 ET**, so that expectation and reality currently disagree; the live cron
-expression has not been read yet. Not known to affect any number — the lane is
-idempotent and its consumers all handle staleness — but do not treat the
-`fire_hours_et` values as the schedule.
+the code — read the dashboard. **Resolved 2026-08-24:** the live cron expression WAS read from the dashboard —
+`0 16,21 * * *` (16:00/21:00 UTC = 12:00/17:00 ET in EDT, 11:00/16:00 ET in EST),
+confirmed by two real captures (2026-08-23 17:02 ET, 2026-08-24 12:02 ET). The
+old `fire_hours_et=(14, 19)` was never dashboard-verified and matched neither
+slot; it is now `(12, 18)` (`system_health.py:205`). The 18 rather than a literal
+17 is deliberate — this file's lane-table design principle puts the deadline PAST
+each lane's fire+write time, and 18 keeps that margin while still exceeding the
+EST-equivalent max of 16. The earlier mismatch never produced a wrong health
+signal (the deadline check uses only `max(fire_hours_et)`, and 19 already
+exceeded both DST maxima) — it was inaccurate documentation, not a live bug.
 
 **The schedule column is a MIRROR of the Railway dashboard, which is the source of truth**
 (these services are dashboard-managed, not repo-managed — see the ⚠️ note below). Read the

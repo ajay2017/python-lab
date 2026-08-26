@@ -130,7 +130,7 @@ This is deliberate scope, not an oversight — re-read this before asking
   blocking/allowing as intended, real schema drift, actual cron write paths).
   Pytest never touches the real DB.
 - **Cron/headless jobs** (Railway native Cron Job services → `cron_runner.py` →
-  `headless_alert_engine.py`; 6 lanes as of 2026-08-15, migrated off GitHub
+  `headless_alert_engine.py`; 7 lanes as of 2026-08-18, migrated off GitHub
   Actions on 2026-08-07 — `.github/workflows/alerts.yml` is now
   manual-dispatch-only). These run on Railway's schedule infrastructure, not
   in-process — pytest can exercise the pure functions they call, but not "did
