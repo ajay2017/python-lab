@@ -12,6 +12,8 @@ these tests, not assumed from the prior description.
 """
 from datetime import date, timedelta
 
+from stock_analyzer.market_time import today_et
+
 import pandas as pd
 
 from stock_analyzer.macro_playbook import (
@@ -313,8 +315,14 @@ def _port_df_row(ticker="XYZ", sector="Financials", weight=5.0, score=60.0,
 
 
 def _event(name="Non-Farm Payrolls", days_ahead=5, impact="HIGH"):
+    # today_et(), NOT date.today() -- build_event_playbooks compares against
+    # _today_et() (ET), and date.today() is the system/UTC date. They disagree
+    # for ~4 hours a day (UTC has rolled to a new date, ET has not), which made
+    # this fixture flip a genuinely-past event into a same-day one and fail
+    # test_build_event_playbooks_skips_past_events on CI runs landing in that
+    # window (observed 2026-08-26/27, 3 occurrences).
     return {
-        "event": name, "date": date.today() + timedelta(days=days_ahead),
+        "event": name, "date": today_et() + timedelta(days=days_ahead),
         "impact": impact, "days_label": f"{days_ahead}d", "category": "Labor",
         "description": "", "estimate": None, "previous": None, "context": "",
         "watch_for": [],
