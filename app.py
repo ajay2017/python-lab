@@ -1008,10 +1008,16 @@ def _render_broker_drift(placeholder, verdict) -> None:
                     return
             except Exception:
                 return
-            st.caption(
-                "⚠️ Broker drift **not checked** — no broker snapshot available, so "
-                "the app can't confirm Portfolio Value matches your broker."
-            )
+            if verdict.get("reason") == "check_failed":
+                st.caption(
+                    "⚠️ Broker drift **not checked** — the comparison against your broker didn't "
+                    "complete this run, so the app can't confirm Portfolio Value matches your broker."
+                )
+            else:
+                st.caption(
+                    "⚠️ Broker drift **not checked** — no broker snapshot available, so "
+                    "the app can't confirm Portfolio Value matches your broker."
+                )
             return
 
         _asof = _fmt_asof_et(verdict.get("captured_at"))
@@ -4762,7 +4768,10 @@ if page == "🏠 Home":
             ),
         )
     except Exception:
-        _drift_verdict = None      # unknown, not "clean" — nothing renders
+        # Route through the renderer's "unknown" branch so the user sees
+        # "not checked" rather than silence — silence was backwards (the crash
+        # case was quieter than the milder "no snapshot yet" case).
+        _drift_verdict = {"state": "unknown", "reason": "check_failed"}
     _render_broker_drift(_alert_ph_drift, _drift_verdict)
     # Published for the F-250 day-P&L captions below, which defer to this
     # banner for any ticker it already explains (see the qty_drift block).
@@ -6153,7 +6162,11 @@ if page == "🏠 Home":
     )
 
     _c1, _c2, _c3, _c4, _c5, _c6, _c7, _c8 = st.columns(8)
-    _c1.metric("Portfolio Value",  _m(f"${total_val:,.0f}"))
+    _c1.metric("Portfolio Value",  _m(f"${total_val:,.0f}"),
+               help=(
+                   "Market value of everything you hold, including any shares bought on margin. It is not\n"
+                   "your net worth in the account — see 💰 Account for the net figure after margin debit."
+               ))
     _c2.metric(
         "Unrealized P&L",
         _m(f"${total_pnl:,.0f}"),
@@ -6216,6 +6229,18 @@ if page == "🏠 Home":
                _m(f"${best_row['P&L ($)']:,.0f}"), f"{best_row['P&L (%)']:+.1f}%", delta_color="normal")
     _c8.metric(f"Worst: {worst_row['Ticker']}",
                _m(f"${worst_row['P&L ($)']:,.0f}"), f"{worst_row['P&L (%)']:+.1f}%", delta_color="normal")
+
+    # Leverage caption — awareness only, never a gate (option (c) was parked
+    # 2026-08-25; this is surfacing only). Reads the cache published earlier this
+    # render; stale debit is worse than no claim, so suppress on stale too.
+    _lev_h = st.session_state.get("_leverage_cache")
+    if _lev_h is not None and _lev_h.get("levered") and not _lev_h.get("stale"):
+        _lev_debit = _m(f"${_lev_h['margin_debit']:,.0f}")
+        _lev_net   = _m(f"${_lev_h['net_capital']:,.0f}")
+        st.caption(
+            f"📐 Leveraged {_lev_h['ratio']:.2f}× — {_lev_debit} of margin debit against "
+            f"{_lev_net} of capital. Awareness only; this never changes a recommendation."
+        )
 
     # Fail-loud: if any held position didn't price, say so — a partial Today's
     # P&L must never masquerade as the whole book (CLAUDE.md: never silently filter).
@@ -29725,7 +29750,13 @@ elif page == "💰 Account":
         _ac1, _ac2, _ac3, _ac4 = st.columns(4)
         _ac1.metric("Total Account Value", _m(f"${_total_acct:,.0f}"),
                     help="Invested equity + net cash (cash − any margin debit) = your net worth in the account.")
-        _ac2.metric("Invested Equity", _m(f"${_equity:,.0f}"))
+        _ac2.metric("Invested Equity", _m(f"${_equity:,.0f}"),
+                    help=(
+                        "Market value of all your holdings, including any shares bought on margin. This is\n"
+                        "larger than Total Account Value whenever you carry a margin debit, because the debit\n"
+                        "is money you owe: it counts against the account total but not against how much is\n"
+                        "invested."
+                    ))
         _ac3.metric("Net Cash" if _levered else "Cash", _m(f"${_cash:,.0f}"),
                     help="Uninvested cash you own; NEGATIVE = a margin debit (you've borrowed to hold more stock than your cash covers).")
         _ac4.metric("Cash % of Account", f"{_cash_pct:.1f}%",
@@ -29778,7 +29809,7 @@ elif page == "💰 Account":
                     _mg2.metric(
                         "Call Triggers At",
                         f"{_md['call_distance_pct']:.1f}%",
-                        help="Estimated book decline that would trigger a margin call at the standard 25% maintenance rate.",
+                        help=f"Estimated book decline that would trigger a margin call at the standard {MARGIN_MAINTENANCE_RATE*100:.0f}% maintenance rate.",
                     )
                     _mg3.metric(
                         "Leverage",
@@ -29884,21 +29915,24 @@ elif page == "💰 Account":
             _conc = _acc_pdf[["Ticker", "Market Value", "Weight (%)"]].copy()
             _conc["Account Wt (%)"] = (_conc["Market Value"] / _total_acct * 100).round(1)
             _conc = (
-                _conc.rename(columns={"Weight (%)": "Equity Wt (%)"})
+                _conc.rename(columns={"Weight (%)": "Holdings Wt (%)"})
                 .sort_values("Account Wt (%)", ascending=False)
             )
             with st.expander("Per-position concentration breakdown", expanded=False):
                 st.caption(
-                    "True concentration — each position as % of your **whole account** "
-                    "(equity + net cash) vs % of invested equity. The concentration **gates "
-                    "use equity-basis** (% of invested equity) — that basis is deliberate "
+                    "True concentration — each position measured two ways: as % of your "
+                    "**whole account** (holdings + net cash, so a margin debit reduces it), "
+                    "and as % of your **holdings alone**. The second is what the "
+                    "concentration **gates measure** — % of total holdings at market value, "
+                    "margin-bought shares included, cash and margin debit excluded"
+                    " — and that basis is deliberate "
                     "policy, not a hedge against day-to-day cash noise, so a **structural** "
                     "margin debit (like yours) means the gate number and the account number "
                     "diverge persistently, not just transiently. Leverage/margin risk is "
                     "surfaced separately as an **awareness** signal (🔗 Risk Analysis), never a gate."
                 )
                 st.dataframe(
-                    _conc[["Ticker", "Equity Wt (%)", "Account Wt (%)"]],
+                    _conc[["Ticker", "Holdings Wt (%)", "Account Wt (%)"]],
                     hide_index=True, width='stretch',
                 )
                 if "Sector" in _acc_pdf.columns:
@@ -29906,15 +29940,15 @@ elif page == "💰 Account":
                         _acc_pdf.groupby("Sector")["Market Value"].sum()
                         .sort_values(ascending=False).reset_index()
                     )
-                    _sec_conc["Equity Wt (%)"] = (
+                    _sec_conc["Holdings Wt (%)"] = (
                         _sec_conc["Market Value"] / _equity * 100
                     ).round(1) if _equity > 0 else None
                     _sec_conc["Account Wt (%)"] = (
                         _sec_conc["Market Value"] / _total_acct * 100
                     ).round(1)
-                    st.caption("Sector-level, same two bases — this is what `SECTOR_CEILING` reads (Equity Wt):")
+                    st.caption("Sector-level, same two bases — this is what `SECTOR_CEILING` reads (Holdings Wt):")
                     st.dataframe(
-                        _sec_conc[["Sector", "Equity Wt (%)", "Account Wt (%)"]],
+                        _sec_conc[["Sector", "Holdings Wt (%)", "Account Wt (%)"]],
                         hide_index=True, width='stretch',
                     )
     elif _cash is not None and not _have_pf:
@@ -32193,7 +32227,7 @@ On the 💰 Account page, enter your **Net cash / margin ($)**:
 
 Once set, the page shows **Total Account Value** (equity + net cash), **Cash %**, and **true concentration** — each holding as a % of your *whole account*, not just your invested stocks (so a name looks as big as it really is relative to all your money).
 
-**How the gates use this — equity-basis, with leverage watched separately.** The concentration gates (the 15% single-name and 35% sector ceilings) measure each name against your **invested equity** — its share of your stock holdings. That's deliberately **stable**: a *transient* margin balance won't suddenly make a well-sized book look over-concentrated and demand a large trim. **Leverage isn't ignored — it's surfaced separately as awareness (never a gate):** when you carry a margin debit, the **🔗 Risk Analysis** page shows a leverage read — your margin debit, your net capital (equity minus the loan), the leverage multiple, and roughly what a −10% move on your largest sector would cost your equity — and the ⚖️ note on this Account page flags it too. When you're leveraged and a held position is worth more than 25% of your net capital, the Account page also flags it in a separate **"📐 Positions Over Your Net-Capital Cap"** banner — pure awareness, never a gate; existing holdings are never forced to trim, only new sizing respects the cap going forward. So *position sizing* is judged on your equity (and won't lurch when you dip in and out of margin), while the *financing* dimension is something you **monitor**, not something that forces a trim.
+**How the gates use this — % of total holdings at market value, with leverage watched separately.** The concentration gates (the 15% single-name and 35% sector ceilings) measure each name against your **total holdings at market value** — its share of your stock holdings. That's deliberately **stable**: a *transient* margin balance won't suddenly make a well-sized book look over-concentrated and demand a large trim. **Leverage isn't ignored — it's surfaced separately as awareness (never a gate):** when you carry a margin debit, the **🔗 Risk Analysis** page shows a leverage read — your margin debit, your net capital (equity minus the loan), the leverage multiple, and roughly what a −10% move on your largest sector would cost your equity — and the ⚖️ note on this Account page flags it too. When you're leveraged and a held position is worth more than 25% of your net capital, the Account page also flags it in a separate **"📐 Positions Over Your Net-Capital Cap"** banner — pure awareness, never a gate; existing holdings are never forced to trim, only new sizing respects the cap going forward. So *position sizing* is judged on your total holdings at market value (and won't lurch when you dip in and out of margin), while the *financing* dimension is something you **monitor**, not something that forces a trim.
 
 **2. Set a baseline + log deposits/withdrawals (to see real growth).**
 Under **Growth & Contributions**, set a **baseline** (your contributed capital — default = today's total, which tracks growth from today; or enter your lifetime net deposits for all-time gain). Then log **deposits** and **withdrawals** as they happen. The app computes:
