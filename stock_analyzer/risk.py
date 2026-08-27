@@ -37,29 +37,36 @@ def sizing_unavailable_reason(
 ) -> str | None:
     """Why `position_sizing` would decline to size, or None if it would size.
 
-    `position_sizing` returns None for THREE structurally different reasons
-    (2026-08-25: F-255 added the third), and a caller that conflates them
-    tells the user to fix the wrong thing:
+    `position_sizing` returns None for FOUR structurally different reasons
+    (2026-08-25: F-255 added the third; 2026-08-27: this commit adds the fourth),
+    and a caller that conflates them tells the user to fix the wrong thing:
 
-      "stop"    — degenerate stop (entry <= stop, or stop <= 0). A data problem;
-                  the user can inspect or reset the stop.
-      "ceiling" — the single-name cap cannot afford one whole share
-                  (`price > portfolio_value * max_position_pct%`). An ACCOUNT-SIZE
-                  constraint; no change to the stop will ever fix it. Before this
-                  helper existed, the Analysis and Watchlist fallback captions
-                  said "stop price too close to entry or not set" for this case,
-                  while rendering a perfectly healthy 2xATR stop directly above.
-      "capital" — the SEPARATE net-capital cap (F-255, NET_CAPITAL_POSITION_CAP_PCT)
-                  cannot afford one whole share, OR net_capital is already <= 0
-                  (margin-called / net-negative — no capital to weigh a position
-                  against). Distinct from "ceiling": "ceiling" gates the GROSS
-                  book (15%), "capital" gates NET CAPITAL after margin debit
-                  (25%) — at real leverage a book can clear the gross ceiling
-                  and still fail the capital cap well before it (ALB/OXY,
-                  2026-08-24: ~15% of gross book was ~45% of net capital).
-                  Both are independent; neither is derived from the other.
+      "stop"      — degenerate stop (entry <= stop, or stop <= 0). A data problem;
+                    the user can inspect or reset the stop.
+      "portfolio" — the portfolio value is unknown or non-positive, so no honest
+                    size exists at any stop or any cap. This is NOT an account-size
+                    constraint like "ceiling": the account may be perfectly adequate;
+                    the app simply does not know it yet because 🏠 Home has not been
+                    visited this session. The fix is to load the portfolio, not to
+                    change anything about the trade. None, NaN, and non-numeric
+                    inputs all land here via `_num()` coercion (all become 0.0).
+      "ceiling"   — the single-name cap cannot afford one whole share
+                    (`price > portfolio_value * max_position_pct%`). An ACCOUNT-SIZE
+                    constraint; no change to the stop will ever fix it. Before this
+                    helper existed, the Analysis and Watchlist fallback captions
+                    said "stop price too close to entry or not set" for this case,
+                    while rendering a perfectly healthy 2xATR stop directly above.
+      "capital"   — the SEPARATE net-capital cap (F-255, NET_CAPITAL_POSITION_CAP_PCT)
+                    cannot afford one whole share, OR net_capital is already <= 0
+                    (margin-called / net-negative — no capital to weigh a position
+                    against). Distinct from "ceiling": "ceiling" gates the GROSS
+                    book (15%), "capital" gates NET CAPITAL after margin debit
+                    (25%) — at real leverage a book can clear the gross ceiling
+                    and still fail the capital cap well before it (ALB/OXY,
+                    2026-08-24: ~15% of gross book was ~45% of net capital).
+                    Both are independent; neither is derived from the other.
 
-    Kept as the single predicate for all three conditions so `position_sizing`, the
+    Kept as the single predicate for all four conditions so `position_sizing`, the
     Grow Today adapter and the fallback captions cannot drift apart. Do NOT
     re-derive any test at a call site.
     """
@@ -77,6 +84,17 @@ def sizing_unavailable_reason(
     portfolio_value, entry, stop = _num(portfolio_value), _num(entry), _num(stop)
     if entry <= 0 or stop <= 0 or entry <= stop:
         return "stop"
+    # "portfolio" must come BEFORE "ceiling": "ceiling" arithmetically requires
+    # portfolio_value > 0 (its own guard skips it when zero), so without this
+    # branch a zero book falls through to return None — meaning "I would size".
+    # And the result is NOT a harmless zero: position_sizing computes
+    # risk_dollars = 0 * risk_pct = 0, then `max(1, int(0 / risk_per_share))`
+    # floors it to **1 share** — an ACTIONABLE "buy 1 share" at 0.0% of book.
+    # (Measured 2026-08-27; an earlier version of this comment said "0 shares",
+    # which understated it. The floor lives on the risk-based path; only the
+    # ceiling path dropped its floor.) An honest refusal is the only safe answer.
+    if portfolio_value <= 0:
+        return "portfolio"
     if (max_position_pct is not None and portfolio_value > 0
             and int((portfolio_value * (_num(max_position_pct) / 100.0)) / entry) < 1):
         return "ceiling"

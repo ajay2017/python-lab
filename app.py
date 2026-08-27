@@ -153,7 +153,6 @@ from stock_analyzer.constants import (
     DATA_LOAD_MAX_WORKERS,
     DATA_LOAD_STAGGER_SEC,
     BUNDLE_CACHE_MAX_AGE_DAYS,
-    DEFAULT_PORTFOLIO_VALUE,
     GAP_TO_STOP_ROUND_DECIMALS,
     COMPOSITE_STRONG_BUY,
     COMPOSITE_SELL,
@@ -2975,7 +2974,7 @@ with st.sidebar:
     )
     _news_slot = st.container()   # placeholder — filled by page code below
 
-    portfolio_value = _pv if _pv > 0 else DEFAULT_PORTFOLIO_VALUE
+    portfolio_value = _pv if _pv > 0 else 0.0
     st.divider()
     # Severity aligned with 🩺 System Trust check ③ on 2026-08-17. This used to
     # read "🟡 Local session only — configure DB to persist", dev-flavoured
@@ -20082,6 +20081,16 @@ elif page == "📈 Analysis":
 
     # ── Summary scorecard ──────────────────────────────────────────────────
     st.subheader("Summary Scorecard")
+    # Without a portfolio total the Shares and P&L/Cost columns below render "—"
+    # for every row. Say so: the Trade Plan caption and the exported brief header
+    # both disclose it, and a silently-blank column is the one gap in this fix
+    # against the house "never silently filter" rule.
+    if not portfolio_value or portfolio_value <= 0:
+        st.info(
+            "Position sizing unavailable — your portfolio value isn't loaded in this "
+            "session, so any share count would be a guess. Open 🏠 Home to load it, "
+            "then come back."
+        )
     _sc_port = st.session_state.get("_port_df_enriched", pd.DataFrame())
     rows = []
     for ticker, r in results.items():
@@ -21169,6 +21178,12 @@ elif page == "📈 Analysis":
                                 f"~{price / _f255_net_cap * 100:.0f}% of your net capital, above the "
                                 f"{int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap. This is separate from "
                                 "the single-name book cap."
+                            )
+                        elif _sa_no_size_reason == "portfolio":
+                            st.caption(
+                                "Position sizing unavailable — your portfolio value isn't loaded in this "
+                                "session, so any share count would be a guess. Open 🏠 Home to "
+                                "load it, then come back."
                             )
                         else:
                             st.caption("Position sizing unavailable — stop price too close to entry or not set.")
@@ -22379,8 +22394,10 @@ elif page == "📈 Analysis":
     # Analysis summary
     with st.expander("📋 Analysis Summary"):
         today_str = _today_et().strftime("%B %d, %Y")
+        _brief_pv_str = (f"${portfolio_value:,.0f}" if portfolio_value > 0
+                         else "not loaded this session")
         lines = [f"# Investment Brief — {today_str}",
-                 f"Portfolio: ${portfolio_value:,.0f} · Moderate Risk\n\n---"]
+                 f"Portfolio: {_brief_pv_str} · Moderate Risk\n\n---"]
         for ticker, r in results.items():
             price = r["current_price"]
             targets = r["targets"]
@@ -22730,7 +22747,7 @@ elif page == "📋 Watchlist":
 
     # F-255: resolve the net-capital sizing cap ONCE for the whole watchlist
     # render, not per row — every row below reads the same portfolio value.
-    _f255_wl_pv = st.session_state.get("_portfolio_value") or DEFAULT_PORTFOLIO_VALUE
+    _f255_wl_pv = st.session_state.get("_portfolio_value") or 0.0
     _f255_wl_acct = db.load_account_cash()
     _f255_wl_net_cap, _f255_wl_basis = _margin_mod.resolve_net_capital(
         _f255_wl_pv, _f255_wl_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
@@ -22801,7 +22818,7 @@ elif page == "📋 Watchlist":
         _earn_d   = _wr["earn_days"]
 
         # Position sizing for this watchlist candidate
-        _pv_now = st.session_state.get("_portfolio_value") or DEFAULT_PORTFOLIO_VALUE
+        _pv_now = st.session_state.get("_portfolio_value") or 0.0
         _wl_ps = None
         if _price and _stop and _price > _stop and _pv_now > 0:
             try:
@@ -23000,6 +23017,12 @@ elif page == "📋 Watchlist":
                             f"~{_price / _f255_wl_net_cap * 100:.0f}% of your net capital, above the "
                             f"{int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap. This is separate from "
                             "the single-name book cap."
+                        )
+                    elif _wl_no_size_reason == "portfolio":
+                        st.caption(
+                            "Position sizing unavailable — your portfolio value isn't loaded in this "
+                            "session, so any share count would be a guess. Open 🏠 Home to "
+                            "load it, then come back."
                         )
                     else:
                         st.caption("Position sizing unavailable — stop price too close to entry or not set.")

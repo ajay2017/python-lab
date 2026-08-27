@@ -9,10 +9,11 @@ ceiling-capped position_sizing() for both the new-pick and add-winner paths:
 3. When the ceiling cannot afford one whole share, NO size is suggested (the
    old max(1, ...) floor emitted one share = 45% of book with ceiling_capped
    False). shares >= 1 whenever a size IS returned.
-4. No no-size path is ever SILENT: missing inputs give {} (nothing to explain),
-   but a ceiling that can't afford one share gives `ceiling_infeasible` and a
-   price at/below the stop gives `stop_infeasible` — each with a reason the
-   renderer prints, and neither carrying a `shares` key.
+4. No no-size path is ever SILENT: missing price/stop gives {} (nothing to
+   explain), a zero portfolio gives `portfolio_unknown`, a ceiling that can't
+   afford one share gives `ceiling_infeasible`, and a price at/below the stop
+   gives `stop_infeasible` — each with a reason the renderer prints, and none
+   carrying a `shares` key.
 5. Both lanes size off an ATR stop, not a hardcoded trend bucket, verified
    end-to-end through _grow_today (new-pick lane re-derives against the LIVE
    price; the add lane reads held_data's stop verbatim, which is deliberate).
@@ -222,12 +223,14 @@ class TestSharesFloor:
 class TestNoneDegradation:
     """position_sizing() returns None on bad input; the adapter never raises.
 
-    Note the split: inputs that are MISSING (zero price / zero portfolio value)
-    degrade to a bare {} because there is nothing to explain — the caller simply
-    has no data yet. Inputs that are PRESENT but unworkable (a stop at or above
-    the price) return an explained marker instead, because a card that already
-    says BUY must not show a blank size with no reason. That distinction is the
-    Opus review's blocking finding B2.
+    Note the split:
+    - Zero PRICE or STOP -> {} (market data missing; nothing to explain).
+    - Zero PORTFOLIO VALUE -> portfolio_unknown marker (2026-08-27 fix):
+      price/stop are present and valid, but the app does not know the book
+      yet. Returns a marker so the card can explain WHY, not silently blank.
+    - Stop AT or ABOVE price -> stop_infeasible marker (card explains itself).
+    That distinction (explained marker vs bare {}) is the Opus review's
+    blocking finding B2, extended to the portfolio case here.
     """
 
     def test_stop_equal_to_price_is_explained_not_empty(self):
@@ -248,9 +251,13 @@ class TestNoneDegradation:
         sz = _position_size_for_render(100_000, 100.0, 0.0, None, None)
         assert sz == {}
 
-    def test_zero_portfolio_value_returns_empty(self):
+    def test_zero_portfolio_value_returns_portfolio_unknown_marker(self):
+        # 2026-08-27 (fabricated-book fix): a non-positive portfolio_value with
+        # valid price/stop now returns a portfolio_unknown marker instead of {},
+        # so the card can explain WHY rather than silently showing no size.
         sz = _position_size_for_render(0, 100.0, 90.0, None, None)
-        assert sz == {}
+        assert sz.get("portfolio_unknown") is True
+        assert "shares" not in sz
 
     def test_zero_price_returns_empty(self):
         sz = _position_size_for_render(100_000, 0.0, 90.0, None, None)
@@ -549,7 +556,9 @@ class TestSizingUnavailableReason:
         position_sizing delegates BOTH guards to this function, so a
         disagreement would mean the delegation was undone.
         """
-        for pv in (5_000, 10_000, 50_000, 250_000):
+        # 0 included 2026-08-27: the cheapest direct pin that the detector and
+        # position_sizing still agree at the new "portfolio" branch.
+        for pv in (0, 5_000, 10_000, 50_000, 250_000):
             for entry in (5.0, 100.0, 1_500.0, 4_500.0):
                 for stop_frac in (0.0, 0.03, 0.5, 1.0, 1.2):
                     stop = entry * (1 - stop_frac)
@@ -615,13 +624,18 @@ class TestSizingProvenance:
     def test_missing_input_carries_nothing(self):
         """{} must stay bare -- a version with no capture would misreport state.
 
-        The three-state contract reads "version set" as "the app made a sizing
-        decision". A missing-input {} made no decision, so stamping a version
-        on it would make a data gap indistinguishable from a deliberate
-        no-size.
+        The contract reads "version set" as "the app made a sizing decision".
+        A missing price or stop gives {} (nothing to explain; the caller simply
+        has no market data). A zero portfolio_value is distinct: the market data
+        is present, but the app does not know the book — it returns a
+        portfolio_unknown marker with sizing_version set, so the renderer can
+        explain WHY rather than silently showing nothing.
         """
-        assert _position_size_for_render(0, 100.0, 94.0, None, None) == {}
+        # Zero price -> {} (no market data, nothing to explain)
         assert _position_size_for_render(100_000, 0.0, 94.0, None, None) == {}
+        # Zero portfolio_value with valid price/stop -> portfolio_unknown marker
+        sz = _position_size_for_render(0, 100.0, 94.0, None, None)
+        assert sz.get("portfolio_unknown") is True and "shares" not in sz
 
 
 # ── 11. Net-capital cap (F-255) ────────────────────────────────────────────────
@@ -644,7 +658,7 @@ class TestNetCapitalCap:
             (100_000, 100.0, 94.0, 99.0, 101.0),   # full size
             (10_000, 4_500.0, 4_365.0, None, None),  # ceiling_infeasible
             (100_000, 90.0, 94.0, None, None),       # stop_infeasible
-            (0, 100.0, 94.0, None, None),            # missing input -> {}
+            (0, 100.0, 94.0, None, None),            # zero book -> portfolio_unknown marker
         ]
         for args in cases:
             without_kw = _position_size_for_render(*args)

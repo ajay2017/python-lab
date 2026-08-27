@@ -1,9 +1,9 @@
 # Surface Proprioception (F-260) — audit first, then decide
 
-**Status: CHUNK 1 IN PROGRESS 2026-08-27.** The sweep is built and committed
-(`scripts/sweep_coordination_reads.py`, commit `ea7e59b`); classification is under way.
-Nothing is built beyond the sweep. **Chunk 2 is deliberately un-chosen until Chunk 1's
-count is known**, against thresholds pre-registered below *before* the count existed.
+**Status: CHUNK 1 COMPLETE 2026-08-27 — N = 25 CLAIM findings, which trips the
+pre-registered `N > 15` branch: THE COUNTER IS NOT BUILT.** The class is structural.
+Chunk 3 (the registry-aware gate) and the ranked fixes proceed; the instrumentation
+does not. See §10 for the classified result and §11 for the leverage point.
 
 Design source: [docs/reviews/2026-08-26-app-review.md](../reviews/2026-08-26-app-review.md)
 Part 3 Innovation #3, plus its Part 2 #2. Opus `planner` design pass 2026-08-27, verdict
@@ -194,3 +194,137 @@ exist. Mutation-test it — deleting a registry row must make the test fail, not
 7. This file's `**Status:**` line.
 
 Plus `docs/architecture.md` §6.x DDL and a `system_health.py` module note if ⑥ ships.
+
+
+---
+
+## 10. CHUNK 1 RESULT — classified 2026-08-27
+
+All 115 consumer-page reads were read and verdicted against §4's inclusion rule.
+
+| Verdict | Count |
+|---|---|
+| **CLAIM** (a finding) | **25** |
+| HANDLED | 74 |
+| INERT | 16 |
+| RAW-UNGUARDED | 0 |
+| UNCLEAR | 0 |
+
+**N = 25 ⇒ the §5 pre-registered `N > 15` branch fires: the class is structural, the counter is
+NOT built.** Recorded plainly because the threshold was set before the number existed, which is
+the only thing that makes this outcome trustworthy rather than a rationalisation.
+
+**The app is in better shape than the raw count implies, and this matters for how the remaining
+work is framed.** 74 of 115 sites already carry an explicit offline branch, several of them
+exemplary — 🔔 Catalyst Watch renders *"⚠ Composite filter did not run — this is NOT 'nothing
+qualified'"*; 🎯 My Edge's `_last_held_tickers` read carries a comment naming the false
+"No missed exits" all-clear it prevents; 🔗 Risk Analysis has an "unavailable, treat the figures
+above as unverified" arm for correlation coverage. **This class is an incompletely-applied good
+pattern, not neglect.** Zero sites were UNCLEAR and zero were RAW-UNGUARDED — every raw read is
+either `is None`-checked, wrapped in `try/except`, or passed to a documented None-safe callee.
+
+### The 25 CLAIM findings, ranked by how badly a user could be misled
+
+1. **`_portfolio_value` → a fabricated $50,000 book** (shared sidebar global + 📋 Watchlist ×2).
+   Sizes every trade on 📈 Analysis and Watchlist and prints "Portfolio: $50,000" in the
+   exportable brief, on a real book of ~$24,500. **Money-moving; fixed first, separately — see
+   §12.**
+2. **📈 Analysis Summary Scorecard** (`_port_df_enriched`) — a name you already own renders as a
+   fresh entry with a suggested share count.
+3. **📈 Analysis `_reduce_calls`** — the "not a place to add" suppression vanishes, *and* the
+   compensating warning provably cannot fire in that state because it keys on a different cache.
+4. **🪞 Trade Review `_last_port_df`** — *fabricates* a finding ("100% of your trades are in
+   Other, above the 25% warn level") plus prescriptive advice. Invents advice rather than
+   omitting it.
+5. **🧾 Summary `_structural_alert_cache`** — asserts a "diversified" correlation structure when
+   the cluster scan never ran, and **persists it** to `portfolio_thesis`, where it becomes next
+   week's HELD/SHIFTED baseline. The only finding that poisons a durable record.
+6. **🥧 Sankey `_acct_gate_cache`** — an over-cap sector/name renders neutral blue instead of
+   red. A red flag turning green.
+7. **🏆 Health `_fragility_cache` / `_highbeta_share`** — fabricates a neutral 65 and drops a
+   25-point penalty into the headline A–F grade, while `n_available == 5` **suppresses** the
+   "some dimensions unavailable" banner. Insidious: the disclosure mechanism exists and is
+   defeated.
+8. **🎯 My Edge `_reduce_calls` ×2** — republishes the BKNG "size up a name flagged to trim"
+   contradiction and propagates it to 📈 Analysis.
+9. **📒 Trade Journal `_acct_gate_cache`** — the post-buy concentration breach warning silently
+   does not fire at the moment of the trade, when it is most actionable.
+10. **📅 Economic Calendar** — itemised *"No direct holdings"* on every macro event for a check
+    that never ran. High false-comfort volume, low stakes each.
+11. Then: 🔗 Risk Analysis's whole risk dashboard vanishing with no `else`; 🥧 Portfolio
+    Overview's two documented fail-opens; the awareness-only leverage/sector-chart surfaces
+    going quiet; and annotation-level omissions.
+
+### A doc defect the audit exposed in passing
+CLAUDE.md's coordination list names **🔗 Risk Analysis** as the consumer of
+`_pi_factor_tilt_cache`, but the **producer** is 🧩 Intelligence. So Risk Analysis reading it
+absent is the *common* case, not an edge case — the LLM adversarial-scenario narrative is
+generated and persisted to `regime_scenario_cache` with no factor-concentration evidence and no
+disclosure. Fix the doc alongside the code.
+
+---
+
+## 11. The leverage point — verified in code
+
+`_refresh_portfolio_cache_after_trade` (`app.py` ~2352, 6 call sites across 📒 Trade Journal and
+the broker/screenshot imports) publishes `_last_port_df`, `_last_held_data`,
+`_last_held_tickers`, `_manual_stops`, `_holdings_sig_at_home_build`, `_port_df_enriched` and
+`_portfolio_value` — and **none** of `_reduce_calls`, `_port_risk_cache`, `_fragility_cache`,
+`_acct_gate_cache`, `_leverage_cache`, `_grow_composites`, `_corr_df_cache`.
+
+So after any logged trade it makes the portfolio keys `ready` while the sibling caches stay
+absent, **defeating precisely the guards that key on `port_df`.** This is the single mechanism
+that turns §3's "a hard portfolio guard does not protect a non-portfolio key" from a caveat into
+the actual delivery vector for **~8 of the 25 findings**.
+
+**If one thing is built rather than 25 patched, it is this function.** It is also materially
+smaller than the general render-layer refactor the `N > 15` branch nominally points at, so it
+should be designed (`planner`) before Part 2 #3 is opened.
+
+---
+
+## 12. Ordering from here
+
+1. **The fabricated-$50k sizing fix — DONE FIRST, separately.** Money-moving; user decided
+   2026-08-27 that no size may be proposed when the book is unknown. The fix lands in
+   `risk.sizing_unavailable_reason` (a new `"portfolio"` reason) rather than at the three
+   substitution sites, because that function is the documented single predicate and it had **no
+   branch for a non-positive portfolio value** — its `"ceiling"` check is itself gated on
+   `portfolio_value > 0`, so a zero book returned `None` ("I would size").
+   **CORRECTED 2026-08-27 by the Opus review, and the correction matters:** the fall-through
+   result was **not** a harmless 0 shares. `position_sizing` computes `risk_dollars = 0`, then
+   `max(1, int(0 / risk_per_share))` floors it to **1 share** — an ACTIONABLE "buy 1 share" at
+   0.0% of book. (The `max(1, ...)` floor lives on the risk-based path; only the ceiling path
+   dropped its floor in the 2026-08-24 sizing overhaul.) So removing the substitution alone
+   would have swapped a fabricated size for a *differently* fabricated one, not for silence —
+   which is why the fix had to land in the predicate. `risk.py` + `daily_briefing.py` ⇒
+   mandatory Opus review; verdict SHIP, 0 blocking.
+2. **The `_refresh_portfolio_cache_after_trade` republisher** (§11) — `planner` first.
+3. **Chunk 3, the registry-aware `check_antipatterns.py` rule** — stops regrowth, needs no
+   runtime code, and is independent of the branch.
+4. **The remaining ranked findings**, highest-severity first, each with its own rationale in the
+   diff and a per-arm test at the boundary it claims.
+
+
+---
+
+## 13. Recorded for whoever picks up flag 6a (the `_grow_today` pre-guards)
+
+The Opus review established a prerequisite set that must land in the SAME commit as any
+removal of `daily_briefing.py`'s `if price > 0 and portfolio_value > 0 else {}` pre-guards:
+
+- **The `portfolio_unknown` marker is currently unreachable AND unhandled.** `app.py` ~7919 and
+  ~8209, plus `notify._sizing_cap_note`, all key on specific marker names and fall through to
+  no-caption / `""` for an unrecognised one. So removing the pre-guard *alone* converts `{}`
+  into an equally silent drop — no improvement.
+- **It would falsify a schema comment.** `db.py` ~232-237 documents "all four NULL = ... or no
+  portfolio value"; the marker carries `sizing_version` with no `shares`, producing a
+  `rec_sizing_version NOT NULL` + `rec_shares NULL` row that `db.py` ~229-231 enumerates as
+  only reachable for ceiling-or-stop.
+
+So flag 6a is three renderer arms + a schema-comment fix, not a one-line guard removal. That is
+why it was correctly left out of the sizing fix rather than bundled.
+
+**One residual, future-callers only:** with a NaN book *and* a degenerate stop, the `"stop"` arm
+returns `portfolio_value: nan`, which would persist as NaN via `_rec_sizing_cols`. Unreachable
+from both current call sites.

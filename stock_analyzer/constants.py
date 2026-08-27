@@ -324,10 +324,14 @@ WATCHLIST_STALE_DAYS = 30
 # ── Risk per trade (position sizing) ─────────────────────────────────────────
 RISK_PCT_PER_TRADE = 0.015       # 1.5% portfolio risk per trade (Moderate)
 
-# Display-only fallback portfolio value when the real total can't be determined
-# yet (no holdings priced / session value missing). Feeds position-sizing DISPLAY
-# math only — never a gate. Operational/display default, not an investment
-# threshold. Hoisted from two duplicated literals in app.py so they can't drift.
+# RETIRED 2026-08-27 — UNUSED, and must not be reintroduced as a silent fallback.
+# This was a display-only substitute for an unknown portfolio total, and the F-260
+# audit found it was sizing real trade suggestions against a fabricated $50,000
+# book (real book ~$24,500), so share counts read ~2x too large with no
+# disclosure. The app now refuses to propose any size when the total is unknown
+# (`risk.sizing_unavailable_reason` returns "portfolio"), per OP-01 and the same
+# no-size-rather-than-a-wrong-size rule G-22 already applies. Kept defined only
+# so this note has somewhere to live; zero references remain in the codebase.
 DEFAULT_PORTFOLIO_VALUE = 50_000
 
 # ── Add-to-winner / approaching-stop boundaries ──────────────────────────────

@@ -32,12 +32,14 @@ from stock_analyzer.constants import (
     WEAK_CONVICTION_SCORE,
 )
 from stock_analyzer.daily_briefing import (
+    SIZING_FORMULA_VERSION,
     _act_today,
     _buy_candidates,
     _cross_reference,
     _dynamic_overweight_floor,
     _grow_today,
     _portfolio_tuneup,
+    _position_size_for_render,
     _recently_added,
     _review_list,
     _rewrite_macro_affected,
@@ -1604,3 +1606,56 @@ def test_new_pick_real_scanner_path_one_liner_still_claims_agreement():
     assert item is not None and item["type"] == "new_pick"
     one_liner = item["xref"]["verdict_reconciled"]["one_liner"]
     assert "technical momentum and full-score analysis agree" in one_liner, one_liner
+
+
+# ── _position_size_for_render — portfolio_unknown marker (2026-08-27) ──────────
+
+def test_position_size_for_render_zero_book_returns_portfolio_unknown_marker():
+    """Zero portfolio_value with valid price/stop must return a portfolio_unknown
+    marker, not an empty dict or a 0-share result."""
+    sz = _position_size_for_render(
+        portfolio_value=0, price=100.0, stop=95.0,
+        entry_lo=None, entry_hi=None,
+    )
+    assert sz.get("portfolio_unknown") is True
+
+
+def test_position_size_for_render_portfolio_unknown_marker_carries_no_shares():
+    """The marker must carry NO shares key — every renderer gates its size text
+    on shares, so a marker can never print '0 shares'."""
+    sz = _position_size_for_render(
+        portfolio_value=0, price=100.0, stop=95.0,
+        entry_lo=None, entry_hi=None,
+    )
+    assert "shares" not in sz
+
+
+def test_position_size_for_render_portfolio_unknown_marker_carries_no_one_share_pct():
+    """The marker must NOT carry one_share_pct or portfolio_value — both would
+    require dividing by or reporting the value we do not have."""
+    sz = _position_size_for_render(
+        portfolio_value=0, price=100.0, stop=95.0,
+        entry_lo=None, entry_hi=None,
+    )
+    assert "one_share_pct" not in sz
+    assert "portfolio_value" not in sz
+
+
+def test_position_size_for_render_portfolio_unknown_marker_carries_sizing_version():
+    """The marker must carry sizing_version (same convention as ceiling/capital
+    markers) so the DB provenance stamp is set correctly."""
+    sz = _position_size_for_render(
+        portfolio_value=0, price=100.0, stop=95.0,
+        entry_lo=None, entry_hi=None,
+    )
+    assert sz.get("sizing_version") == SIZING_FORMULA_VERSION
+
+
+def test_position_size_for_render_zero_price_still_returns_empty():
+    """Zero price (not zero portfolio) must still return {} — the early guard
+    protects against missing market data, which is distinct from unknown book."""
+    sz = _position_size_for_render(
+        portfolio_value=100_000, price=0.0, stop=95.0,
+        entry_lo=None, entry_hi=None,
+    )
+    assert sz == {}

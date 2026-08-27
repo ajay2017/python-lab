@@ -103,10 +103,12 @@ def test_position_sizing_shares_floor_at_one():
     assert result["shares"] == 1
 
 
-def test_position_sizing_zero_portfolio_value_guards_division():
+def test_position_sizing_zero_portfolio_value_returns_none():
+    # After the "portfolio" fix (2026-08-27): a zero/non-positive portfolio value
+    # means the app does not know the book — no honest size exists. Returns None,
+    # not a dict with 0 shares.
     result = position_sizing(portfolio_value=0, risk_pct=0.01, entry=50.0, stop=45.0)
-    assert result["portfolio_pct"] == 0.0
-    assert result["risk_pct_actual"] == 0.0
+    assert result is None
 
 
 def test_position_sizing_no_ceiling_omits_ceiling_keys():
@@ -149,7 +151,12 @@ def test_position_sizing_ceiling_not_capped_when_under_limit():
 def test_position_sizing_net_capital_none_is_byte_identical_to_pre_f255():
     """The exact existing test cases above, called again with net_capital
     omitted (the implicit default) — output must be identical, key-for-key,
-    to calling without the new kwargs at all."""
+    to calling without the new kwargs at all.
+
+    The portfolio_value=0 case returns None (not a dict) since the "portfolio"
+    fix (2026-08-27). None == None is still the correct byte-identical assertion;
+    the .keys() check is skipped for None returns.
+    """
     cases = [
         dict(portfolio_value=100_000, risk_pct=0.01, entry=50.0, stop=45.0),
         dict(portfolio_value=1_000, risk_pct=0.001, entry=500.0, stop=400.0),
@@ -165,6 +172,9 @@ def test_position_sizing_net_capital_none_is_byte_identical_to_pre_f255():
             **kwargs, net_capital=None, max_capital_pct=None,
         )
         assert with_defaulted_new_kwargs == without_new_kwargs
+        if with_defaulted_new_kwargs is None:
+            # portfolio_value=0 path: both return None — no .keys() to compare
+            continue
         assert set(with_defaulted_new_kwargs.keys()) == set(without_new_kwargs.keys())
         assert "capital_capped" not in with_defaulted_new_kwargs
         assert "capital_pct" not in with_defaulted_new_kwargs
@@ -240,6 +250,73 @@ def test_position_sizing_capital_pct_never_exceeds_the_cap():
     )
     assert result is not None
     assert result["capital_pct"] <= NET_CAPITAL_POSITION_CAP_PCT
+
+
+# ─── sizing_unavailable_reason / position_sizing — "portfolio" reason ──────────
+# 2026-08-27 (fabricated-book fix): a zero/non-positive portfolio value is a
+# FOURTH, structurally distinct reason the app cannot size. Before this fix,
+# portfolio_value=0 fell through to None ("I would size"), and position_sizing
+# computed risk_dollars = 0, which `max(1, int(0 / risk_per_share))` then floored
+# to **1 share** — an actionable "buy 1 share" at 0.0% of book, not a harmless
+# zero. Now both functions treat it as "portfolio unknown".
+
+def test_sizing_unavailable_reason_portfolio_for_zero_book():
+    """portfolio_value=0 returns "portfolio" with a valid entry/stop."""
+    assert sizing_unavailable_reason(0, entry=100.0, stop=95.0) == "portfolio"
+
+
+def test_sizing_unavailable_reason_portfolio_for_negative_book():
+    assert sizing_unavailable_reason(-1, entry=100.0, stop=95.0) == "portfolio"
+
+
+def test_sizing_unavailable_reason_portfolio_for_none_book():
+    assert sizing_unavailable_reason(None, entry=100.0, stop=95.0) == "portfolio"
+
+
+def test_sizing_unavailable_reason_portfolio_for_nan_book():
+    assert sizing_unavailable_reason(float("nan"), entry=100.0, stop=95.0) == "portfolio"
+
+
+def test_sizing_unavailable_reason_portfolio_for_string_book():
+    assert sizing_unavailable_reason("abc", entry=100.0, stop=95.0) == "portfolio"
+
+
+def test_sizing_unavailable_reason_stop_beats_portfolio_when_stop_degenerate():
+    """Degenerate stop with a zero book -> "stop" wins (stop check comes first).
+    This matters: a stop data problem is worth reporting even when the book is
+    unknown, whereas "portfolio" requires a valid stop to be meaningful.
+    """
+    assert sizing_unavailable_reason(0, entry=95.0, stop=100.0) == "stop"
+    assert sizing_unavailable_reason(0, entry=100.0, stop=0) == "stop"
+
+
+def test_sizing_unavailable_reason_portfolio_beats_ceiling():
+    """A zero book with a max_position_pct set must NOT return "ceiling".
+    "ceiling" requires portfolio_value > 0 (its own guard), so "portfolio" must
+    be checked before it — otherwise the branch is dead and the defect returns.
+    """
+    reason = sizing_unavailable_reason(
+        0, entry=100.0, stop=95.0, max_position_pct=15.0,
+    )
+    assert reason == "portfolio"
+    assert reason != "ceiling"
+
+
+def test_position_sizing_returns_none_for_zero_book():
+    """Regression pin for the fabricated-book defect: a zero portfolio must not
+    produce a sized result of any kind."""
+    result = position_sizing(0, risk_pct=0.01, entry=100.0, stop=95.0)
+    assert result is None
+    # Pin the old (wrong) behaviour explicitly gone: not a dict, not 0 shares.
+    assert not isinstance(result, dict)
+
+
+def test_position_sizing_returns_none_for_negative_book():
+    assert position_sizing(-1, risk_pct=0.01, entry=100.0, stop=95.0) is None
+
+
+def test_position_sizing_returns_none_for_none_book():
+    assert position_sizing(None, risk_pct=0.01, entry=100.0, stop=95.0) is None
 
 
 # ─── sharpe_ratio / sortino_ratio ─────────────────────────────────────────────

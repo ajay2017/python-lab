@@ -127,10 +127,14 @@ def _position_size_for_render(
     used by Analysis, Watchlist Advisor, etc.) and maps its output to the dict
     shape the Grow Today renderers (app.py) and cron emails (notify.py) expect.
 
-    Four states, deliberately distinct:
-      - ``{}``                  — a required input is MISSING (price <= 0,
-                                  portfolio_value <= 0, stop <= 0). Nothing to
-                                  explain; the caller simply has no data yet.
+    Five states, deliberately distinct:
+      - ``{}``                  — a required input is MISSING (price <= 0 or
+                                  stop <= 0). Nothing to explain; the caller
+                                  simply has no data yet.
+      - ``portfolio_unknown``   — price and stop are valid but portfolio_value is
+                                  non-positive. No honest size exists. The account
+                                  may be perfectly adequate; the app just does not
+                                  know it (🏠 Home not yet visited this session).
       - ``ceiling_infeasible``  — inputs are fine but one share alone breaches
                                   the single-name cap. Account-size constraint.
       - ``capital_infeasible``  — inputs are fine but one share alone breaches
@@ -150,7 +154,7 @@ def _position_size_for_render(
     net-capital cap. `net_capital=None` (the default) makes the whole net-
     capital cap inert — output is byte-identical to before F-255.
     """
-    if not (price > 0 and portfolio_value > 0 and stop > 0):
+    if not (price > 0 and stop > 0):
         return {}
     # Why no size, if there is no size. Asks the shared detector rather than
     # re-deriving either predicate here — a second copy drifts the moment
@@ -183,6 +187,16 @@ def _position_size_for_render(
             ),
             "net_capital": round(net_capital, 2) if net_capital is not None else None,
             "portfolio_value": round(portfolio_value, 2),
+            "sizing_version": SIZING_FORMULA_VERSION,
+        }
+    if _reason == "portfolio":
+        # Portfolio value is unknown or non-positive — no honest size exists.
+        # Carries NO shares key (same convention as the other infeasible markers:
+        # every renderer gates its size text on `shares`, so a marker can never
+        # print "0 shares"). Also carries NO one_share_pct or portfolio_value —
+        # both would require dividing by or reporting the very number we don't have.
+        return {
+            "portfolio_unknown": True,
             "sizing_version": SIZING_FORMULA_VERSION,
         }
     if _reason == "stop":
