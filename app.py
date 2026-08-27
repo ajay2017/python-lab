@@ -564,7 +564,7 @@ def _time_ago(ts: int) -> str:
     if not ts:
         return ""
     try:
-        delta = int((datetime.now() - datetime.fromtimestamp(ts)).total_seconds())
+        delta = int((_now_et() - datetime.fromtimestamp(ts, _ET_TZ)).total_seconds())
     except Exception:
         return ""
     if delta < 3600:
@@ -2526,7 +2526,7 @@ if (st.session_state.scanner_results is None
         # hydrated scanner results (same signal a manual scan raises).
         st.session_state["_scanner_ver"] = st.session_state.get("_scanner_ver", 0) + 1
 if "last_refresh" not in st.session_state:
-    st.session_state.last_refresh = datetime.now()
+    st.session_state.last_refresh = _now_et()
 if "nav_page" not in st.session_state:
     st.session_state.nav_page = "🏠 Home"
 # Apply any pending navigation set by mid-page buttons (must run before
@@ -2671,7 +2671,9 @@ with st.sidebar:
     # of script). Buttons set _pending_page + rerun — never write nav_page
     # directly (raises StreamlitAPIException per CLAUDE.md).
     _cur_page = st.session_state.get("nav_page", "🏠 Home")
-    _cw_alerts        = len(st.session_state.get("_risk_high_alerts_cache") or [])
+    _risk_alerts_raw  = st.session_state.get("_risk_high_alerts_cache")
+    _cw_alerts        = 0 if _risk_alerts_raw is None else len(_risk_alerts_raw)
+    _cw_alerts_offline = _risk_alerts_raw is None
     _earnings_alerts  = st.session_state.get("_earnings_posture_alerts_cache") or 0
     _n_danger_nav     = st.session_state.get("_n_danger_cache") or 0
     _n_warning_nav    = st.session_state.get("_n_warning_cache") or 0
@@ -2779,10 +2781,14 @@ with st.sidebar:
             if _dest is None:  # sentinel
                 st.markdown('<hr class="nav-divider">', unsafe_allow_html=True)
                 continue
-            # Catalyst Watch / Signals & Advice get a live alert badge on their label
-            if _dest == "🔔 Catalyst Watch" and (_cw_alerts > 0 or _earnings_alerts > 0):
+            # Catalyst Watch / Signals & Advice get a live alert badge on their label.
+            # _cw_alerts_offline means the risk check did not run — show a grey ● ?
+            # so "not checked" is distinguishable from "0 alerts" and "N alerts".
+            if _dest == "🔔 Catalyst Watch" and (_cw_alerts > 0 or _earnings_alerts > 0 or _cw_alerts_offline):
                 _cw_parts = []
-                if _cw_alerts > 0:
+                if _cw_alerts_offline:
+                    _cw_parts.append(":grey-background[● ?]")
+                elif _cw_alerts > 0:
                     _cw_parts.append(f":red-background[● {_cw_alerts}]")
                 if _earnings_alerts > 0:
                     _cw_parts.append(f":orange-background[● {_earnings_alerts}]")
@@ -2880,12 +2886,15 @@ with st.sidebar:
         _refresh_gate_arm("data")
         _ah.reset()
         st.cache_data.clear()
-        st.session_state.last_refresh = datetime.now()
+        st.session_state.last_refresh = _now_et()
         st.rerun()
     if _rl_locked:
         st.caption(f"⏳ Refresh cooling down — available in {_rl_rem}s")
 
-    refresh_ago = int((datetime.now() - st.session_state.last_refresh).total_seconds())
+    _lrf = st.session_state.last_refresh
+    if _lrf.tzinfo is None:  # tolerate a naive value stored before this fix
+        _lrf = _ET_TZ.localize(_lrf)
+    refresh_ago = int((_now_et() - _lrf).total_seconds())
     if refresh_ago < 60:
         st.caption(f"Last refresh: {refresh_ago}s ago")
     else:
@@ -3567,7 +3576,7 @@ def _render_holdings_earnings(port_df, held_data):
     )
 
     # Build earnings rows from already-loaded held_data
-    _today = datetime.now().date()
+    _today = _today_et()
     # Backfill: when a held name's bundle (yfinance) earnings date is missing, fill
     # from the same two-source path the Radar tier uses — FMP market-wide calendar
     # then a per-name yfinance fallback — so held names get equal coverage instead
@@ -4359,7 +4368,7 @@ if page == "🏠 Home":
         (str(_h.get("Ticker") or "").upper(), float(_h.get("Shares") or 0))
         for _h in holdings
     )
-    st.session_state["_signals_computed_at"] = datetime.now().strftime("%I:%M %p")  # for staleness warning
+    st.session_state["_signals_computed_at"] = _now_et().strftime("%I:%M %p")  # for staleness warning
 
     _pd_dropped = port_df.attrs.get("dropped_holdings") or []
     if _pd_dropped:
@@ -4383,7 +4392,7 @@ if page == "🏠 Home":
             # marking it stale-due-to-outage (2026-08-04 audit finding). Flag
             # it so _render_portfolio_stale_banner() can warn on those pages
             # too, not just the shares-changed case it already covers.
-            st.session_state["_home_data_outage_at"] = datetime.now().strftime("%I:%M %p")
+            st.session_state["_home_data_outage_at"] = _now_et().strftime("%I:%M %p")
             _n = len(held_tickers)
             st.error(
                 f"⚠️ **Couldn't load market data for your {_n} holding"
@@ -5860,7 +5869,7 @@ if page == "🏠 Home":
                 "_grow_composites":   st.session_state.get("_grow_composites", {}),
                 "_movers_candidates": st.session_state.get("_movers_candidates", []),
                 "_grow_composites_coverage": st.session_state.get("_grow_composites_coverage", {}),
-                "_risk_high_alerts_cache":   st.session_state.get("_risk_high_alerts_cache", []),
+                "_risk_high_alerts_cache":   st.session_state.get("_risk_high_alerts_cache"),
                 "_grow_today_sectors_cache": st.session_state.get("_grow_today_sectors_cache"),
                 "_leading_sectors_cache":    st.session_state.get("_leading_sectors_cache", []),
                 "_daily_brief_offline":      st.session_state.get("_daily_brief_offline", False),
@@ -6138,7 +6147,7 @@ if page == "🏠 Home":
         f"border-radius:20px;font-size:0.7em;font-weight:800;letter-spacing:0.05em'>"
         f"{_rag_label}</span>"
         f"<span style='margin-left:auto;color:#6b7280;font-size:0.75em'>"
-        f"{len(port_df)} positions · {datetime.now().strftime('%b %d, %Y')}</span>"
+        f"{len(port_df)} positions · {_now_et().strftime('%b %d, %Y')}</span>"
         f"</div>{_cc_alert_row}{_cc_catalyst_row}</div>",
         unsafe_allow_html=True,
     )
@@ -6525,7 +6534,8 @@ if page == "🏠 Home":
             _sig_ts = st.session_state.get("_brief_signals_ts")
             _ssm    = st.session_state.get("_scanner_results_meta") or {}
             if _sig_ts:
-                _sig_age = int((datetime.now() - _sig_ts).total_seconds())
+                _sig_ts_et = _sig_ts if _sig_ts.tzinfo is not None else _ET_TZ.localize(_sig_ts)
+                _sig_age = int((_now_et() - _sig_ts_et).total_seconds())
                 if _sig_age < 60:
                     _rs_help = f"Signals refreshed {_sig_age}s ago — live prices current."
                 elif _sig_age < 3600:
@@ -6627,7 +6637,7 @@ if page == "🏠 Home":
                     if _b is not None:
                         _grow_composites[_tc] = _b
             st.session_state._grow_composites    = _grow_composites
-            st.session_state._brief_signals_ts   = datetime.now()
+            st.session_state._brief_signals_ts   = _now_et()
             st.rerun()
         else:
             st.warning("Scanner returned no results — check your connection and try again.")
@@ -7106,7 +7116,8 @@ if page == "🏠 Home":
         # so the chip can't contradict the section headers.
         _act_n      = len(_active_act_bucket)
         _grow_n     = len(_db_grow.get("new_picks", [])) + len(_db_grow.get("add_positions", []))
-        _review_n   = len(_split_def["aware"]) + len(_resolved_breaches)
+        _aware_n    = len(_split_def["aware"])
+        _resolved_n = len(_resolved_breaches)
         _tuneup_n   = len(_db_tuneup)
         _act_color  = "#7f1d1d" if _act_n > 0 else "#0f172a"
         _act_border = "#ef4444" if _act_n > 0 else "#334155"
@@ -7116,10 +7127,10 @@ if page == "🏠 Home":
             f"<div style='font-size:0.72em;font-weight:700;letter-spacing:0.08em;"
             f"text-transform:uppercase;color:#9ca3af;margin-bottom:8px'>Today's Actions</div>"
             f"<div style='color:#f9fafb;font-size:0.95em;font-weight:600;line-height:1.7'>"
-            f"{'🔴' if _act_n > 0 else '⚪'} {_act_n} urgent action{'s' if _act_n != 1 else ''}<br>"
-            f"🟢 {_grow_n} growth setup{'s' if _grow_n != 1 else ''}<br>"
-            f"🟡 {_review_n} to review<br>"
-            f"🔧 {_tuneup_n} to maintain"
+            f"{'🔴' if _act_n > 0 else '⚪'} {_act_n} Act Today<br>"
+            f"📈 {_grow_n} Grow Today<br>"
+            f"🟡 {_aware_n} monitoring · {_resolved_n} resolved breaches<br>"
+            f"🔧 {_tuneup_n} Portfolio Tune-up"
             f"</div>"
             f"</div>",
             unsafe_allow_html=True,
@@ -10296,7 +10307,7 @@ if page == "🏠 Home":
     if _gen_btn and _active_key:
         # Build portfolio context (same for all providers)
         _ctx_lines = [
-            f"Date: {datetime.now().strftime('%A, %B %d, %Y %H:%M ET')}",
+            f"Date: {_now_et().strftime('%A, %B %d, %Y %H:%M ET')}",
             f"Portfolio Value: ${total_val:,.0f}  |  Total P&L: ${total_pnl:,.0f} ({total_pnl_pct:+.1f}%)",
             f"Avg Conviction: {avg_score:.0f}/100  |  Diversification: {div_score:.0f}/100 ({_div_label})",
             "", "## HOLDINGS",
@@ -10353,7 +10364,7 @@ if page == "🏠 Home":
                 _brief_text = _call_ai_brief(
                     _sel_provider, _sel_model, _active_key, _sys_prompt, _usr_prompt
                 )
-                _ts_now = datetime.now().strftime("%b %d %Y %H:%M ET")
+                _ts_now = _now_et().strftime("%b %d %Y %H:%M ET")
                 st.session_state[_brief_cache_key]           = _brief_text
                 st.session_state[f"{_brief_cache_key}__ts"]  = _ts_now
                 _brief_cached = _brief_text
@@ -10443,7 +10454,7 @@ if page == "🏠 Home":
             return "\n".join(out)
 
         _body_html = _md_to_html(_brief_cached)
-        _today_str = datetime.now().strftime("%A · %B %d, %Y")
+        _today_str = _now_et().strftime("%A · %B %d, %Y")
         _model_label = _model_opts.get(_sel_model, _sel_model)
 
         # Render the brief card.
@@ -10857,7 +10868,7 @@ elif page == "🧾 Summary":
     st.title("🧾 Summary")
     st.caption(
         "Portfolio state + today's actions, at a glance. Full detail lives on 🏠 Home. "
-        f"· Data as of {datetime.now().strftime('%b %d, %Y')}."
+        f"· Data as of {_now_et().strftime('%b %d, %Y')}."
     )
     _sm_pdf = st.session_state.get("_port_df_enriched")
     _sm_hd  = st.session_state.get("_last_held_data")
@@ -11232,7 +11243,7 @@ elif page == "🧾 Summary":
     # page uses, not an invented "this week" cutoff. Always shows a state
     # (including "0 reporting") rather than hiding — earnings timing is
     # useful to see even when the answer is "none soon."
-    _sm_today_d = datetime.now().date()
+    _sm_today_d = _today_et()
     _sm_n_earnings_soon = 0
     try:
         _sm_earn_held_tuple = tuple(sorted(
@@ -11983,15 +11994,25 @@ elif page == "📡 Signals & Advice":
 
     port_df    = _aa_pdf
     held_data  = _aa_hd
-    alert_list = st.session_state.get("_alert_list_cache") or []
-    actions    = st.session_state.get("_actions_cache") or []
+    _alert_list_raw = st.session_state.get("_alert_list_cache")
+    _actions_raw    = st.session_state.get("_actions_cache")
+    # Preserve the None sentinel for the offline-state check below; use empty
+    # lists for iteration-safe downstream references (list comprehensions etc.).
+    _sa_offline = _alert_list_raw is None or _actions_raw is None
+    alert_list  = [] if _alert_list_raw is None else _alert_list_raw
+    actions     = [] if _actions_raw is None else _actions_raw
     _div_recs_raw = st.session_state.get("_div_recs_cache")
     div_recs   = _div_recs_raw or []
 
     _sa_tab1, _sa_tab2 = st.tabs(["📡 Active Signals", "🧩 Diversification"])
 
     with _sa_tab1:
-        if not actions:
+        if _sa_offline:
+            st.warning(
+                "⚠ **Risk analysis offline** — the gates that compute alerts and "
+                "actions did not run this session. Visit 🏠 Home to rebuild."
+            )
+        elif not actions:
             st.success("✅ Portfolio is well-balanced — no signal-driven actions needed at this time.")
 
         # ── Active Alerts — grouped by category ──────────────────────────────
@@ -11999,7 +12020,9 @@ elif page == "📡 Signals & Advice":
         _warning_alerts = [a for a in alert_list if a["level"] == "warning"]
         _info_alerts    = [a for a in alert_list if a["level"] == "info"]
 
-        if not alert_list:
+        if _sa_offline:
+            pass  # offline banner already rendered above
+        elif not alert_list:
             st.success("✅ No active alerts — portfolio is within normal parameters.")
         else:
             _CAT_LABELS = {
@@ -22837,7 +22860,7 @@ elif page == "📋 Watchlist":
             # For HOLD_OFF_EARNINGS: show when to return once earnings clear.
             if _action == "HOLD_OFF_EARNINGS" and _earn_d is not None and _earn_d >= 0:
                 from datetime import timedelta as _hoe_td
-                _hoe_date = (datetime.now() + _hoe_td(days=_earn_d)).strftime("%b %d")
+                _hoe_date = (_now_et() + _hoe_td(days=_earn_d)).strftime("%b %d")
                 st.info(
                     f"🗓️ **Re-evaluate after {_hoe_date}** — hold off until earnings clear, "
                     f"then reassess the post-earnings setup before entering."
@@ -23386,7 +23409,7 @@ elif page == "📒 Trade Journal":
                     db.mark_snaptrade_pending_import_logged(_ps_broker_pid)
                     st.session_state.pop("_tj_broker_prefill", None)
                 if not db.has_db():
-                    _ps_new_row = pd.DataFrame([{**_pending_sell, "id": None, "traded_at": datetime.now().isoformat()}])
+                    _ps_new_row = pd.DataFrame([{**_pending_sell, "id": None, "traded_at": _now_et().isoformat()}])
                     st.session_state.trades_df = pd.concat(
                         [_ps_new_row, st.session_state.trades_df], ignore_index=True
                     )
@@ -23491,7 +23514,7 @@ elif page == "📒 Trade Journal":
                 st.session_state.pop("_tj_premortem_commitment", None)
                 st.session_state.pop("_tj_premortem_commitment_for", None)
                 if not db.has_db():
-                    _pb_new_row = pd.DataFrame([{**_pending_buy, "id": None, "traded_at": datetime.now().isoformat()}])
+                    _pb_new_row = pd.DataFrame([{**_pending_buy, "id": None, "traded_at": _now_et().isoformat()}])
                     st.session_state.trades_df = pd.concat(
                         [_pb_new_row, st.session_state.trades_df], ignore_index=True
                     )
@@ -30535,6 +30558,7 @@ elif page == "💰 Account":
         if not _snap_income:
             st.caption("No dividend/interest/fee events synced yet.")
         else:
+            _sii_chart_priv = st.session_state.get("_privacy", True)
             _sii_df = pd.DataFrame(_snap_income)
             _sii_df["event_date"] = pd.to_datetime(_sii_df["event_date"])
             _sii_df["month"] = _sii_df["event_date"].dt.to_period("M").dt.to_timestamp()
@@ -30551,7 +30575,11 @@ elif page == "💰 Account":
                     _sii_fig.add_trace(_sii_pgo.Bar(
                         x=_sii_piv.index, y=_sii_vals,
                         name=_et.title(), marker_color=_sii_colors[_et],
-                        text=[f"${v:.2f}" if v >= 2 else "" for v in _sii_vals],
+                        text=(
+                            ["••••••" if v >= 2 else "" for v in _sii_vals]
+                            if _sii_chart_priv
+                            else [f"${v:.2f}" if v >= 2 else "" for v in _sii_vals]
+                        ),
                         textposition="inside",
                         insidetextanchor="middle",
                         textfont=dict(size=11, color="white"),
@@ -30561,7 +30589,10 @@ elif page == "💰 Account":
                 margin=dict(l=0, r=0, t=20, b=0),
                 legend=dict(orientation="h", y=1.15, x=0),
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                yaxis=dict(tickprefix="$", gridcolor="rgba(128,128,128,0.15)"),
+                yaxis=dict(
+                    showticklabels=not _sii_chart_priv,
+                    tickprefix="$", gridcolor="rgba(128,128,128,0.15)",
+                ),
             )
             st.plotly_chart(_sii_fig, use_container_width=True)
             _sii_ytd = _sii_df[_sii_df["event_date"].dt.year == _today_et().year]
@@ -30569,8 +30600,9 @@ elif page == "💰 Account":
             _sii_int_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "interest", "amount"].sum()
             _sii_fee_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "fee", "amount"].sum()
             st.caption(
-                f"YTD: **+${_sii_div_ytd:,.2f}** dividends · **+${_sii_int_ytd:,.2f}** "
-                f"interest · **-${abs(_sii_fee_ytd):,.2f}** fees"
+                f"YTD: **+{_m(f'${_sii_div_ytd:,.2f}')}** dividends · "
+                f"**+{_m(f'${_sii_int_ytd:,.2f}')}** interest · "
+                f"**-{_m(f'${abs(_sii_fee_ytd):,.2f}')}** fees"
             )
 
 elif page == "🔔 Catalyst Watch":

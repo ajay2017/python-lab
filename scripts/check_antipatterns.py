@@ -42,9 +42,12 @@ Rules (each an AST signature, low false-positive by design):
       before rendering.
   NAIVE_UTCNOW               — `datetime.utcnow()` (naive AND deprecated); the
       project convention is NY-tz-aware time (pytz / America/New_York).
-  NAIVE_DATE_TODAY           — bare `date.today()` / `datetime.today()`; off-by-
-      one across ~8pm-midnight ET vs the project's NY-tz convention. Use the
-      shared trading-day / _today_et helper on any date that feeds a decision.
+  NAIVE_DATE_TODAY           — bare `date.today()` / `datetime.today()` / zero-arg
+      `datetime.now()`; off-by-one across ~8pm-midnight ET vs the project's
+      NY-tz convention (the UTC container has no TZ var). Two-arg `datetime.now(tz)`
+      is the correct form and must NOT be flagged. Use the shared trading-day /
+      _today_et / _now_et helpers on any time or date that feeds a decision or
+      a user-visible timestamp.
   MIXED_TZ_PARSE             — `pd.to_datetime(...)` on `traded_at` WITHOUT
       `format="ISO8601"`. pandas infers a strict format from the first non-null
       value, so a column mixing microsecond and second precision silently
@@ -211,6 +214,10 @@ class _Visitor(ast.NodeVisitor):
         # Keys whose three-state check is in scope on the current branch, so a
         # downstream bare test is already guarded and must NOT be flagged.
         self._guarded_keys: set[str] = set()
+        # id() of `datetime.now()` Call nodes that are the receiver of an
+        # `.astimezone()` call. Those ARE tz-aware, so flagging them is a false
+        # positive — see the NAIVE_DATE_TODAY branch in visit_Call.
+        self._tz_safe_calls: set[int] = set()
 
     def _seg(self, node: ast.AST) -> str:
         seg = ast.get_source_segment(self.src, node) or ""
@@ -306,6 +313,15 @@ class _Visitor(ast.NodeVisitor):
             # broad rule would bury the signal.
             if "traded_at" in self._seg(node):
                 self.hits.append(("MIXED_TZ_PARSE", self._seg(node)))
+        # `datetime.now().astimezone()` is tz-AWARE — the .astimezone() supplies
+        # the offset, and aware-minus-aware arithmetic is correct regardless of
+        # which zone each side carries. This visitor reaches the OUTER
+        # .astimezone() call before recursing into the inner now(), so mark the
+        # inner one safe here rather than flagging it below.
+        if (isinstance(node.func, ast.Attribute)
+                and node.func.attr == "astimezone"
+                and isinstance(node.func.value, ast.Call)):
+            self._tz_safe_calls.add(id(node.func.value))
         # NAIVE_UTCNOW / NAIVE_DATE_TODAY
         if isinstance(node.func, ast.Attribute):
             if node.func.attr == "utcnow":
@@ -315,6 +331,13 @@ class _Visitor(ast.NodeVisitor):
                 base = node.func.value
                 base_name = getattr(base, "id", None) or getattr(base, "attr", None)
                 if base_name in {"date", "datetime"}:
+                    self.hits.append(("NAIVE_DATE_TODAY", self._seg(node)))
+            elif node.func.attr == "now" and not node.args and not node.keywords:
+                # datetime.now() with no tz argument — naive; datetime.now(tz)
+                # with an argument is the correct form and must NOT be flagged.
+                base = node.func.value
+                base_name = getattr(base, "id", None) or getattr(base, "attr", None)
+                if base_name in {"datetime"} and id(node) not in self._tz_safe_calls:
                     self.hits.append(("NAIVE_DATE_TODAY", self._seg(node)))
         self.generic_visit(node)
 
