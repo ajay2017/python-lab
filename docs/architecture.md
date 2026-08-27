@@ -1847,12 +1847,13 @@ often. `_grow_today` returns every blocked bucket on every build and nothing per
 them. This table is the capture half only: **no readout, no card, no new constant.**
 Design + the pre-registered retirement criterion: `docs/plans/gate-suppression-ledger.md`.
 
-**Manual DDL** — the statements live in that plan's §4; the feature ships **inert** until
-they are applied. Same precedent as `model_predictions` §6.31.
+**Manual DDL** — the statements live in that plan's §4 (and in the fence below); the feature
+ships **inert** until they are applied. Same precedent as `model_predictions` §6.31.
 
-**DDL applied:** _not yet (as of 2026-08-27)._ Record the date here the same day it
-happens — CLAUDE.md carried a stale "DDL pending" claim about `model_predictions` for
-three weeks after it was live.
+**DDL applied 2026-08-27 — active.** Applied the same day the capture half shipped, so this
+table was never actually inert in production. (The "record it the same day" discipline exists
+because CLAUDE.md carried a stale "DDL pending" claim about `model_predictions` for three
+weeks after it was live.)
 
 ```sql
 CREATE TABLE IF NOT EXISTS public.gate_suppressions (

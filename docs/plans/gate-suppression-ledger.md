@@ -1,6 +1,6 @@
 # Gate Suppression Ledger — capture half
 
-**Status: CAPTURE HALF BUILT + Opus-reviewed (SHIP, 0 blocking) 2026-08-27. SHIPS INERT — the §4 DDL is NOT yet applied, so nothing accrues until it is. Readout half NOT started and must not be bundled.** Design was the Opus `planner` pass 2026-08-26; the build overturned two of this document's own premises — see §5a.
+**Status: CAPTURE HALF LIVE 2026-08-27** — built, Opus-reviewed (SHIP, 0 blocking), shipped, and its §4 DDL applied the same day, so it is ACTIVE and accruing. **Readout half NOT started and must not be bundled.** Design was the Opus `planner` pass 2026-08-26; the build overturned two of this document's own premises — see §5a.
 
 Design source: [docs/reviews/2026-08-26-app-review.md](../reviews/2026-08-26-app-review.md) Part 2 #1.
 The readout is a separate, later build (that review's Innovation #1) and must not be bundled.
@@ -134,7 +134,10 @@ CREATE POLICY "Allow all (service role)" ON public.gate_suppressions
 day it happens:** CLAUDE.md carried a stale "DDL pending" claim about `model_predictions` for
 three weeks after it was live.
 
-**DDL applied:** _not yet._
+**DDL applied: 2026-08-27** (same day as the capture half shipped). The table is live, so
+the feature is ACTIVE — rows accrue from the next Home brief build (`source='app'`) and the
+next ~09:45 ET scan (`source='cron'`). **The §5 retirement clock starts at the first row**,
+i.e. review on/after **2027-08-27** once the first row's date is confirmed.
 
 Volume: ceiling ≈ 30 rows/day/source ≈ 7,600/year worst case, realistically 2,000–5,000.
 **Accrue indefinitely, no retention policy.**
