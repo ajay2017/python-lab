@@ -1,4 +1,5 @@
 .venv/
+.claude/hooks/.venv_fail_open.log
 __pycache__/
 *.pyc
 *.pyo

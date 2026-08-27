@@ -11,6 +11,7 @@ What this CANNOT do: prove a reviewer subagent actually ran. It verifies a
 correctly-formatted citation is present. See CLAUDE.md "Review & test economy"
 for the honesty caveat and the SubagentStop-hook upgrade path.
 """
+import datetime
 import json
 import os
 import re
@@ -22,6 +23,23 @@ import sys
 # at ~3x the observed runtime (~110s for 3573 tests as of 2026-08-15) so a
 # merely-growing suite never blocks a commit as a false hang. See _run_pytest.
 _PYTEST_TIMEOUT_SEC = 300
+
+# Durable record of a pytest-gate fail-open (2026-08-27 finding): the single
+# stderr line _gate_on_pytest prints when ok is None is easy to miss and
+# leaves no trace once the terminal scrolls -- which is how a fail-open can
+# go unnoticed (see the 77205a5 incident). Gitignored: a machine-local
+# diagnostic, not repo content.
+_VENV_FAIL_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv_fail_open.log")
+
+
+def _log_venv_fail_open(detail: str) -> None:
+    """Append one line recording a pytest-gate fail-open. Never raises --
+    a logging failure must not compound an already-degraded run."""
+    try:
+        with open(_VENV_FAIL_LOG, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.datetime.now().isoformat()}\t{os.getcwd()}\t{detail}\n")
+    except Exception:
+        pass
 
 
 def main() -> None:
@@ -415,16 +433,44 @@ def _missing_provenance_trailers(message: str) -> list[str]:
     return missing
 
 
+def _venv_candidates(root: str) -> tuple:
+    return (
+        os.path.join(root, ".venv", "Scripts", "python.exe"),  # Windows
+        os.path.join(root, ".venv", "bin", "python"),          # POSIX
+    )
+
+
 def _find_python() -> str | None:
-    """Locate the project .venv's python, assuming cwd is the repo root (same
-    assumption _get_staged_files already relies on via bare `git` calls)."""
-    here = os.getcwd()
-    for candidate in (
-        os.path.join(here, ".venv", "Scripts", "python.exe"),  # Windows
-        os.path.join(here, ".venv", "bin", "python"),          # POSIX
-    ):
+    """Locate the project .venv's python.
+
+    Checks the current directory first (the fast path -- unchanged from
+    before, zero extra cost when it hits). Falls back to the MAIN checkout's
+    .venv via `git rev-parse --git-common-dir` when not found there.
+
+    Why the fallback: `.venv/` is gitignored by design (venvs are never
+    committed), so a git worktree -- used by this project's agent isolation
+    and by ad-hoc verification checkouts -- structurally has no .venv of its
+    own. But a worktree shares the exact same requirements-dev.txt as the
+    main checkout, so borrowing its interpreter runs the real pinned suite,
+    not a downgrade. Verified from an actual worktree, 2026-08-27.
+    """
+    for candidate in _venv_candidates(os.getcwd()):
         if os.path.isfile(candidate):
             return candidate
+
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            main_root = os.path.dirname(os.path.abspath(r.stdout.strip()))
+            for candidate in _venv_candidates(main_root):
+                if os.path.isfile(candidate):
+                    return candidate
+    except Exception:
+        pass
+
     return None
 
 
@@ -443,7 +489,9 @@ def _run_pytest() -> tuple:
     """
     py = _find_python()
     if not py:
-        return None, ".venv python not found -- run `pip install -r requirements-dev.txt` in .venv"
+        detail = ".venv python not found -- run `pip install -r requirements-dev.txt` in .venv"
+        _log_venv_fail_open(detail)
+        return None, detail
     try:
         r = subprocess.run(
             [py, "-m", "pytest", "tests/", "-q"],
@@ -453,7 +501,9 @@ def _run_pytest() -> tuple:
         return False, (f"pytest timed out after {_PYTEST_TIMEOUT_SEC}s -- investigate a hang "
                        "before proceeding (normal runtime is ~110s)")
     except Exception as e:
-        return None, f"could not invoke pytest ({e})"
+        detail = f"could not invoke pytest ({e})"
+        _log_venv_fail_open(detail)
+        return None, detail
 
     if r.returncode == 0:
         return True, ""
