@@ -1557,3 +1557,50 @@ def test_new_pick_item_rsi_is_none_when_source_row_has_no_rsi():
     assert item is not None and item["type"] == "new_pick"
     assert item["rsi"] is None, f"Expected rsi=None; got {item['rsi']}"
     assert item["mom_1m"] is None, f"Expected mom_1m=None; got {item['mom_1m']}"
+
+
+# ── momentum_available wiring — docs/plans/signal-reconciliation-momentum-available.md ──
+#
+# The add-winner path's synthetic scanner row makes reconcile_signals compare
+# the composite against itself, but the pre-fix GO one-liner still claimed
+# "technical momentum and full-score analysis agree" — a false corroboration
+# claim. daily_briefing.py:596 now passes
+# momentum_available=not scanner_row_is_synthetic into reconcile_signals.
+# These two tests drive the real producer end to end (not the unit function
+# directly) so a dropped kwarg at the wiring site shows up as a failure here.
+
+def test_add_winner_synthetic_path_one_liner_is_honest_about_the_single_source():
+    """Synthetic add-winner path: the reconciled one_liner must say there is
+    no separate scanner momentum reading, and must never claim two sources
+    agree.
+
+    Mutation guide: drop `momentum_available=not scanner_row_is_synthetic` at
+    daily_briefing.py:596 (or hardcode momentum_available=True) — the
+    one_liner reverts to "technical momentum and full-score analysis agree"
+    and this test fails.
+    """
+    port_df = make_port_df([_winner_row()])
+    items = _buy_candidates(port_df, None, [], {}, _TODAY)
+    item = find_item(items, "AAA")
+    assert item is not None and item["type"] == "add_winner"
+    one_liner = item["xref"]["verdict_reconciled"]["one_liner"]
+    assert "no separate scanner momentum reading" in one_liner, one_liner
+    assert "agree" not in one_liner, one_liner
+
+
+def test_new_pick_real_scanner_path_one_liner_still_claims_agreement():
+    """A real scanner new_pick (scanner_row_is_synthetic defaults False) with
+    a confirming composite must still render the "...agree..." one-liner —
+    proves momentum_available defaulted True on the non-synthetic path and
+    the new kwarg didn't leak into surfaces that have a real momentum score.
+    """
+    scanner = _scanner_df([{"ticker": "NEW", "score": float(COMPOSITE_BUY + 10)}])
+    port_df = make_port_df([{"ticker": "HELD"}])
+    composites = {
+        "NEW": {"rec": {"label": "Strong Buy"}, "total": float(COMPOSITE_BUY + 10)},
+    }
+    items = _buy_candidates(port_df, scanner, [], {}, _TODAY, composites=composites)
+    item = find_item(items, "NEW")
+    assert item is not None and item["type"] == "new_pick"
+    one_liner = item["xref"]["verdict_reconciled"]["one_liner"]
+    assert "technical momentum and full-score analysis agree" in one_liner, one_liner

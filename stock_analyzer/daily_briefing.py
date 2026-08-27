@@ -603,6 +603,7 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         is_mover=is_mover,
         earnings_days=earn_days,
         news_sentiment=_news_compound,
+        momentum_available=not scanner_row_is_synthetic,
     )
 
     return {

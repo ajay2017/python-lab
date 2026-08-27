@@ -225,3 +225,111 @@ def test_effective_bucket_falls_back_to_legacy_when_reconciled_missing():
 def test_effective_bucket_defaults_to_unverified_on_empty_xref():
     assert effective_verdict_bucket({}) == "unverified"
     assert effective_verdict_bucket(None) == "unverified"  # type: ignore[arg-type]  -- exercises the function's own None guard
+
+
+# ── momentum_available display flag ──────────────────────────────────────────
+#
+# docs/plans/signal-reconciliation-momentum-available.md — the add-winner path
+# calls reconcile_signals() with a synthetic "momentum_score" that is really
+# the composite compared against itself (daily_briefing._cross_reference's
+# scanner_row_is_synthetic=True call site), so the GO one-liner used to claim
+# "technical momentum and full-score analysis agree" when there was only ever
+# one source. momentum_available=False rewrites the COPY only -- it must never
+# change verdict/label/color/icon/composite_available, and must NEVER be read
+# inside a branch CONDITION (the protective negative-news skip in particular).
+
+import pytest
+
+
+_INVARIANCE_CASES = [
+    pytest.param(
+        dict(momentum_score=80.0, momentum_signal="Buy",
+             composite_score=90.0, composite_signal="Strong Buy"),
+        id="go",
+    ),
+    pytest.param(
+        dict(momentum_score=90.0, momentum_signal="Buy",
+             composite_score=90.0, composite_signal="Strong Buy",
+             news_sentiment=-0.9),
+        id="skip_negative_news",
+    ),
+    pytest.param(
+        dict(momentum_score=80.0, momentum_signal="Buy",
+             composite_score=90.0, composite_signal="Strong Buy",
+             earnings_days=2),
+        id="caution_earnings",
+    ),
+    pytest.param(
+        dict(momentum_score=80.0, momentum_signal="Buy",
+             composite_score=40.0, composite_signal="Sell"),
+        id="skip_composite_contradicts",
+    ),
+    pytest.param(
+        dict(momentum_score=COMPOSITE_BUY - 1, momentum_signal="Hold",
+             composite_score=50.0, composite_signal="Hold"),
+        id="fallback_mixed_conviction",
+    ),
+]
+
+
+@pytest.mark.parametrize("kwargs", _INVARIANCE_CASES)
+def test_momentum_available_never_changes_verdict_fields(kwargs):
+    # Core safety proof: momentum_available may only change the one_liner
+    # COPY. verdict/label/color/icon/composite_available must be identical
+    # whether momentum_available is True or False, for every reachable and
+    # defensive branch.
+    result_true  = reconcile_signals("AAA", momentum_available=True, **kwargs)
+    result_false = reconcile_signals("AAA", momentum_available=False, **kwargs)
+    for key in ("verdict", "label", "color", "icon", "composite_available"):
+        assert result_true[key] == result_false[key], (
+            f"{key} differs across momentum_available for case {kwargs!r}"
+        )
+
+
+def test_momentum_available_false_does_not_defeat_protective_negative_news_skip():
+    # THE TRAP (docs/plans/signal-reconciliation-momentum-available.md §2).
+    # momentum_score keeps gating the protective negative-news skip
+    # regardless of momentum_available -- a "clean up the fabricated value"
+    # fix that nulled/zeroed momentum_score itself would silently flip this
+    # verdict from skip to go for every add-winner with negative news.
+    result = reconcile_signals(
+        "AAA", momentum_score=90.0, composite_score=90.0,
+        composite_signal="Strong Buy", news_sentiment=-0.9,
+        momentum_available=False,
+    )
+    assert result["verdict"] == "skip"
+    assert result["label"] == "❌ Skip — Negative News"
+
+
+def test_momentum_available_false_copy_never_fabricates_corroboration():
+    _false_forbidden = (
+        "technical momentum and full-score analysis agree",
+        "technical momentum",
+        "Momentum ",
+        "agree",
+    )
+    for kwargs in [c.values[0] for c in _INVARIANCE_CASES]:
+        result = reconcile_signals("AAA", momentum_available=False, **kwargs)
+        one_liner = result["one_liner"]
+        for phrase in _false_forbidden:
+            assert phrase not in one_liner, (
+                f"forbidden phrase {phrase!r} leaked into False-copy: {one_liner!r}"
+            )
+
+    go_result = reconcile_signals(
+        "AAA", momentum_score=80.0, momentum_signal="Buy",
+        composite_score=90.0, composite_signal="Strong Buy",
+        momentum_available=False,
+    )
+    assert "no separate scanner momentum reading" in go_result["one_liner"]
+
+
+def test_momentum_available_true_go_one_liner_unchanged_default_behaviour():
+    # Regression: default (momentum_available=True, i.e. every existing call
+    # site that doesn't pass the new kwarg) must be byte-identical to
+    # pre-change behaviour.
+    result = reconcile_signals(
+        "AAA", momentum_score=80.0, momentum_signal="Buy",
+        composite_score=90.0, composite_signal="Strong Buy",
+    )
+    assert "technical momentum and full-score analysis agree" in result["one_liner"]

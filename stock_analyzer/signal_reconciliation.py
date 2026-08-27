@@ -69,6 +69,7 @@ def reconcile_signals(
     is_mover: bool = False,
     earnings_days: int | None = None,
     news_sentiment: float | None = None,
+    momentum_available: bool = True,
 ) -> dict:
     """
     Central conflict resolver. Returns:
@@ -78,6 +79,14 @@ def reconcile_signals(
       color     : hex
       icon      : emoji
       composite_available : bool
+
+    momentum_available: display-only flag. When False (the caller has no
+    independent scanner momentum reading — e.g. the add-winner path, where
+    "momentum_score" is really the composite compared against itself), the
+    one-liner is rewritten to stop claiming two independent signals agree.
+    momentum_score itself is NEVER gated on this flag — it still drives the
+    branch conditions (including the protective negative-news skip) exactly
+    as before. Only the returned copy string changes.
     """
     comp_class = _composite_class(composite_signal, composite_score)
     composite_available = comp_class != "unknown"
@@ -85,7 +94,16 @@ def reconcile_signals(
     # Display strings used inside the one-liner.
     # Movers qualify via day-change breakout, not scanner momentum score —
     # "Breakout today" is the honest context phrase for that entry trigger.
-    mom_str  = "Breakout today" if is_mover else f"Momentum {momentum_score:.0f}"
+    if is_mover:
+        mom_str = "Breakout today"
+    elif not momentum_available:
+        mom_str = None  # no independent scanner momentum reading for a held position
+    else:
+        mom_str = f"Momentum {momentum_score:.0f}"
+    # INVARIANT (verified 2026-08-27, Opus review of the momentum_available fix):
+    # no one_liner branch below interpolates mom_str when it can be None -- the
+    # momentum_available=False branches use only comp_str/fixed text. If you add
+    # a new branch, do not reference mom_str there without re-checking this.
     comp_str = (
         f"Score: {composite_signal or 'n/a'}"
         + (f" ({composite_score:.0f}/100)" if composite_score is not None else "")
@@ -102,14 +120,22 @@ def reconcile_signals(
     # ── SKIP: composite contradicts momentum ────────────────────────────────
     if composite_available and comp_class in ("sell", "hold") and momentum_score >= COMPOSITE_BUY:
         verb = "Sell" if comp_class == "sell" else "Hold"
-        return {
-            "verdict":   "skip",
-            "label":     "❌ Skip — Signals Disagree",
-            "one_liner": (
+        if momentum_available:
+            one_liner = (
                 f"{mom_str} but {comp_str} — full multi-factor analysis says {verb}. "
                 "Technical momentum is a breakout signal; the full score also weighs fundamentals and sentiment. "
                 "Skip until scores align."
-            ),
+            )
+        else:
+            one_liner = (
+                f"{comp_str} — full multi-factor analysis says {verb}. "
+                "The full score weighs fundamentals and sentiment, not just price action. "
+                "Skip until it turns."
+            )
+        return {
+            "verdict":   "skip",
+            "label":     "❌ Skip — Signals Disagree",
+            "one_liner": one_liner,
             "color": "#ef4444",
             "icon":  "❌",
             "composite_available": True,
@@ -117,13 +143,20 @@ def reconcile_signals(
 
     # ── SKIP: strong negative news regardless of other signals ──────────────
     if negative_news and momentum_score >= COMPOSITE_BUY:
+        if momentum_available:
+            one_liner = (
+                f"{mom_str} but news sentiment is negative ({news_sentiment:+.2f}). "
+                "Wait for the news catalyst to clear before entering."
+            )
+        else:
+            one_liner = (
+                f"{comp_str} but news sentiment is negative ({news_sentiment:+.2f}). "
+                "Hold off adding until the news catalyst clears."
+            )
         return {
             "verdict":   "skip",
             "label":     "❌ Skip — Negative News",
-            "one_liner": (
-                f"{mom_str} but news sentiment is negative ({news_sentiment:+.2f}). "
-                "Wait for the news catalyst to clear before entering."
-            ),
+            "one_liner": one_liner,
             "color": "#ef4444",
             "icon":  "❌",
             "composite_available": composite_available,
@@ -131,15 +164,22 @@ def reconcile_signals(
 
     # ── CAUTION: earnings imminent regardless of signal strength ────────────
     if earnings_imminent:
-        return {
-            "verdict":   "caution",
-            "label":     f"⚠️ Caution — Earnings {earnings_label}",
-            "one_liner": (
+        if momentum_available:
+            one_liner = (
                 f"{mom_str}"
                 + (f" · {comp_str}" if composite_available else "")
                 + f" — but earnings {earnings_label} make entry a binary event. "
                 "Wait for the post-print setup."
-            ),
+            )
+        else:
+            one_liner = (
+                f"{comp_str} — but earnings {earnings_label} make adding a binary event. "
+                "Wait for the post-print setup."
+            )
+        return {
+            "verdict":   "caution",
+            "label":     f"⚠️ Caution — Earnings {earnings_label}",
+            "one_liner": one_liner,
             "color": "#f59e0b",
             "icon":  "⚠️",
             "composite_available": composite_available,
@@ -147,13 +187,20 @@ def reconcile_signals(
 
     # ── VERIFY: composite not loaded — can't resolve conflict ───────────────
     if not composite_available:
+        if momentum_available:
+            one_liner = (
+                f"{mom_str} suggests a breakout, but the full score hasn't loaded yet. "
+                "Open Analysis to confirm before acting."
+            )
+        else:
+            one_liner = (
+                "The full score hasn't loaded yet for this held position — "
+                "open Analysis to confirm before adding."
+            )
         return {
             "verdict":   "verify",
             "label":     "🔍 Verify — Run Analysis First",
-            "one_liner": (
-                f"{mom_str} suggests a breakout, but the full score hasn't loaded yet. "
-                "Open Analysis to confirm before acting."
-            ),
+            "one_liner": one_liner,
             "color": "#f59e0b",
             "icon":  "🔍",
             "composite_available": False,
@@ -161,26 +208,41 @@ def reconcile_signals(
 
     # ── GO: composite confirms momentum ─────────────────────────────────────
     if comp_class == "buy":
+        if momentum_available:
+            one_liner = (
+                f"{mom_str} · {comp_str} — technical momentum and full-score analysis agree. "
+                "Cleared to act within position-sizing rules."
+            )
+        else:
+            one_liner = (
+                f"{comp_str} — full multi-factor analysis confirms this add; "
+                "there is no separate scanner momentum reading for a position you already hold. "
+                "Cleared to act within position-sizing rules."
+            )
         return {
             "verdict":   "go",
             "label":     "✅ Go — All Signals Agree",
-            "one_liner": (
-                f"{mom_str} · {comp_str} — technical momentum and full-score analysis agree. "
-                "Cleared to act within position-sizing rules."
-            ),
+            "one_liner": one_liner,
             "color": "#22c55e",
             "icon":  "✅",
             "composite_available": True,
         }
 
     # ── FALLBACK: composite is Hold and momentum is moderate ────────────────
+    if momentum_available:
+        one_liner = (
+            f"{mom_str} · {comp_str} — momentum is positive but the full score is neutral. "
+            "Review the Analysis page before acting."
+        )
+    else:
+        one_liner = (
+            f"{comp_str} — the full score is neutral. "
+            "Review the Analysis page before adding."
+        )
     return {
         "verdict":   "verify",
         "label":     "🔍 Verify — Mixed Conviction",
-        "one_liner": (
-            f"{mom_str} · {comp_str} — momentum is positive but the full score is neutral. "
-            "Review the Analysis page before acting."
-        ),
+        "one_liner": one_liner,
         "color": "#f59e0b",
         "icon":  "🔍",
         "composite_available": True,
