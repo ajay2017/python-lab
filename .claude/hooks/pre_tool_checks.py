@@ -154,7 +154,33 @@ def _gate_on_pytest(noun: str, gerund: str) -> None:
         )
         sys.exit(2)
     elif ok is None:
-        print(f"WARNING: could not run the regression suite ({detail}) -- not blocking {noun}.", file=sys.stderr)
+        # Fail-CLOSED (2026-08-27, superseding the prior warn-only behaviour):
+        # a suite that couldn't run at all is not a softer case than one that
+        # ran and failed -- it's the SAME "I have zero signal" state, and this
+        # project's own stated position is that the deterministic gates ARE
+        # the real pre-deploy safety net. Made safe to flip by first fixing
+        # the actual common trigger (a git worktree has no .venv of its own,
+        # since .venv/ is gitignored by design) with the _find_python()
+        # fallback above -- so what remains here is genuinely "no verified
+        # Python exists anywhere reachable", not a routine worktree hiccup.
+        # Investigated and ruled out before flipping: a subprocess decode
+        # failure on this codebase's non-ASCII test output (cp1252 is this
+        # machine's default locale) could in principle produce this same
+        # `None` state for a reason unrelated to code correctness -- tested
+        # directly with a real failing assertion containing a non-ASCII
+        # character and it decoded cleanly, so that risk did not materialize.
+        print(
+            f"BLOCKED (no verified environment): could not run the regression suite -- "
+            f"this {noun} cannot proceed.\n"
+            f"{detail}\n"
+            f"The app's only pre-deploy safety net cannot verify this change at all before "
+            f"{gerund} -- not \"probably fine\", genuinely unknown.\n"
+            f"Fix: run `pip install -r requirements-dev.txt` in a `.venv` reachable from "
+            f"here (the main checkout's .venv is used automatically from a git worktree), "
+            f"then retry.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
 
 def _gate_on_antipatterns(noun: str, gerund: str) -> None:
