@@ -8,9 +8,9 @@ For each upcoming high-impact macro event generates:
   - Post-event decision rules (what to do the morning the number drops)
 """
 
-from datetime import date as _date, datetime as _datetime
 import pandas as _pd
-import pytz as _pytz
+
+from stock_analyzer.market_time import today_et
 
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
@@ -29,8 +29,13 @@ from stock_analyzer.constants import (
     MACRO_EXPOSURE_MEDIUM_PCT,
 )
 
-def _today_et() -> _date:
-    return _datetime.now(_pytz.timezone("America/New_York")).date()
+# NOTE: _today_et() used to be redefined here (byte-identical to
+# stock_analyzer.market_time.today_et()) -- one of the ~7 duplicate copies
+# market_time.py's own module docstring calls out. Closed by importing the
+# canonical helper directly, so this module can never independently drift
+# from the ET-vs-UTC fix in market_time.py (see the 2026-08-27 CI fix in
+# tests/test_macro_playbook.py, which hit exactly this class one layer up,
+# in a test fixture rather than here).
 
 
 def _f(val, default=0.0):
@@ -493,7 +498,7 @@ def build_event_playbooks(
     if port_df is None or port_df.empty:
         return []
 
-    today     = _today_et()
+    today     = today_et()
     playbooks = []
 
     for event in events:
