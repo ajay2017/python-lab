@@ -516,7 +516,11 @@ def compute_morning_picks(today: date | None = None, scanner_results=None) -> di
 
     return {"picks": grow.get("new_picks", []) or [], "built_at": built_at,
             "errors": errors, "diag": diag, "book_drift": book_drift,
-            "macro_coverage": macro_coverage}
+            "macro_coverage": macro_coverage,
+            # grow_today dict — gate_ledger.build_suppression_rows reads the
+            # suppression buckets from here (W5 capture half). Additive; existing
+            # callers that ignore this key are unaffected.
+            "grow": grow}
 
 
 def _assess_pullback(spy_6mo, fragility, threshold: float) -> dict | None:

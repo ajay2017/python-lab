@@ -5666,6 +5666,33 @@ if page == "🏠 Home":
                                         "error": str(_rec_save_err)[:200]}
                 st.session_state["_rec_log_save_result"] = _rec_save_result
 
+            # ── Gate Suppression Ledger (W5 capture — app source) ─────────────
+            # Persists which gates fired this build so restraint can be graded.
+            # Under the SAME triple guard as the rec-log write above (has_db,
+            # not locked, not read-only). Own try/except — a failure here must
+            # not disturb the brief render or _rec_log_save_result.
+            if db.has_db() and not _brief_use_lock and not st.session_state.get("_readonly", False):
+                _gate_ledger_save_result: dict = {"attempted": 0, "saved": 0, "error": None}
+                try:
+                    from stock_analyzer.gate_ledger import build_suppression_rows as _bsr
+                    _gl_tone = _market_context.get("tone")
+                    _gl_sp500 = _market_context.get("sp500_pct")
+                    # _daily_brief.get("grow_today") — raw (no `or {}`); None signals
+                    # offline to build_suppression_rows, which returns [] cleanly.
+                    _gl_grow = _daily_brief.get("grow_today")
+                    _gl_rows = _bsr(
+                        _gl_grow,
+                        rec_date=_today_et(),
+                        source="app",
+                        tone=_gl_tone,
+                        sp500_pct=_gl_sp500,
+                    )
+                    _gate_ledger_save_result = db.save_gate_suppressions(_gl_rows)
+                except Exception as _gl_save_err:
+                    _gate_ledger_save_result = {"attempted": 0, "saved": 0,
+                                                "error": str(_gl_save_err)[:200]}
+                st.session_state["_gate_ledger_save_result"] = _gate_ledger_save_result
+
             # Decorate each pick with its first-seen surfaced_at so the card
             # render can show "Recommended at HH:MM ET" without an extra round-trip
             # per card. Single fetch for today; build (ticker, rec_type) → ts map.

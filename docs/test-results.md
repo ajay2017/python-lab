@@ -18,7 +18,34 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-26 (zero-holdings port_df guard + doc-drift repair)
+## 1. Latest run — 2026-08-27 (F-259 Gate Suppression Ledger, capture half)
+
+**4417 passed, 0 failed, 0 skipped** (`python -m pytest -q`: 71.58s). Python
+(local `.venv`). **Transcribed from a run the Opus `reviewer` executed itself**,
+not from the implementing agent's self-report — the prior entry's whole lesson
+was that an unverified count is how a red suite reached `main`, and on the first
+review pass the reviewer explicitly recorded the 4407 figure as
+"the implementing agent attesting to its own verification". Asking it to re-run
+cost one extra pass and made the number citable.
+
+**+100 over the 4317 entry below**, of which 39 are F-259's own two files
+(`tests/test_gate_registry.py` 16, `tests/test_gate_ledger.py` 32 — 8 of the
+registry tests parse §2A.3 out of `docs/requirements.md`, 8 scan the producer
+modules for `"G-NN"` literals). No coverage run this pass; the previous 78%
+figure is the last measured one.
+
+**One test in this batch is worth reading before writing another sentinel test.**
+`test_offline_never_fabricates_a_bear_day_row` replaced four tests that all
+asserted `== []` for `None`, `{}`, missing-key and `[]` — a set fully satisfied
+by `grow = grow or {}`, i.e. by the exact collapse they existed to forbid. One of
+them said so in its own docstring ("verified here by asserting neither raises").
+The replacement pins the one *observable* consequence and was mutation-checked in
+both directions. A sentinel test that cannot fail is worse than no test, because
+it reads as coverage.
+
+---
+
+## 1a. Previous run — 2026-08-26 (zero-holdings port_df guard + doc-drift repair)
 
 **4317 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
 --cov-report=term -q`: 78.67s — TOTAL 18359 stmts, 4062 missed, **78%**

@@ -1,6 +1,6 @@
 # Gate Suppression Ledger — capture half
 
-**Status: DESIGNED 2026-08-26 (Opus `planner` pass), NOT YET BUILT. Capture only — no readout.**
+**Status: CAPTURE HALF BUILT + Opus-reviewed (SHIP, 0 blocking) 2026-08-27. SHIPS INERT — the §4 DDL is NOT yet applied, so nothing accrues until it is. Readout half NOT started and must not be bundled.** Design was the Opus `planner` pass 2026-08-26; the build overturned two of this document's own premises — see §5a.
 
 Design source: [docs/reviews/2026-08-26-app-review.md](../reviews/2026-08-26-app-review.md) Part 2 #1.
 The readout is a separate, later build (that review's Innovation #1) and must not be bundled.
@@ -161,6 +161,62 @@ does not say per-gate or aggregate, does not define "consistent sign", and has n
   the table either drops or stays as a passive log.
 
 **Retiring is the success condition of this criterion, not a failure of the project.**
+
+### 5a. Four constraints on §5 added 2026-08-27 by the capture-half build
+
+Found by the Opus `reviewer` pass on the capture half. Recorded here because each one changes
+how §5 must be *read*, and three of them would otherwise make the readout draw a confident
+wrong conclusion from correct data.
+
+1. **The new-pick lane's `counterfactual = true` means "first binding gate", NOT "would have
+   been bought".** G-07 and G-16 fire in `_grow_today`'s pick loop *before* `_cross_reference`,
+   the conflicted skip, the flat-day verdict gate, the stale-bundle gate, the composite
+   `>= COMPOSITE_BUY` gate and the `max_picks` cap. So a momentum-qualifying name can be
+   recorded as macro-suppressed when the composite gate would have killed it anyway. The bias
+   is directional, not random: composite-failing names underperform by the app's own model, so
+   G-07/G-16 read as **more** protective than they are, which biases §5 *against* retirement.
+   **The readout must therefore restrict the new-pick lane to `composite_score >= COMPOSITE_BUY`,
+   and must REPORT the `composite_score IS NULL` rows as a separate, labelled subset rather than
+   silently folding them either way.** That NULL arm is a live judgment, not a settled formula,
+   and it is the one place this note could mislead: `_grow_today` also refuses to surface names
+   whose composite never loaded (they go to `composite_unavailable` and never reach `new_picks`),
+   so admitting NULLs partially re-admits the very population this item exists to exclude — while
+   dropping them shrinks an already-small sample and discards names that were legitimately
+   unmeasured rather than measured-and-failed. Whoever builds the readout must make that call
+   knowingly, with both counts on screen. The capture half stores `composite_score` at those two
+   sites precisely so the choice is available at all; without it the distinction is unrecoverable.
+   Sites 3-9 (the add lane) need no such filter — after G-09 the
+   code goes straight to `add_positions.append` with no further gate and no cap, so reaching
+   any add-lane gate genuinely proves the name would have been an add.
+2. **G-20's `counterfactual = true` count is an undercount, and bull-day-only.** The in-loop
+   upgrade is gated on `tone == "bull"`, and `save_gate_suppressions` is first-writer-wins, so
+   an intraday flat→bull tone flip keeps the morning's `False` and discards the later binding
+   `True`. Lost data, never wrong data — but **a low G-20 True count must not be read as "the
+   gate rarely binds."** One caveat on the caveat: this holds only on the normal write path. If
+   the deployed supabase-py rejects `ignore_duplicates`, the compat retry flips the table to
+   **last**-writer-wins, under which the upgrade survives and this undercount does not occur —
+   so check the `error` string before reasoning about the count either way.
+3. **G-23 can never be evaluated per-ticker.** Its synthetic rows carry `ticker="__MARKET__"`,
+   so `forward_alpha_at_horizon` has no instrument to price. **Exclude G-23 from the
+   evaluable-gate tally** — otherwise it counts as a permanently un-evaluable gate and drags
+   the 12-month "no gate produced a verdict" test toward a false retirement.
+4. **Every row needs a usable `price_at_suppress` or §5 cannot run at all.** §5 mandates reusing
+   `predictive_analytics.forward_alpha_at_horizon`, which returns `None` when `price_at_entry`
+   is missing or `<= 0`. The capture half's first draft stored no price at any site, which would
+   have made every row unevaluable for every gate, forever — and produced a *false retirement*
+   at the 12-month review caused by a missing column rather than by useless gates. Fixed in the
+   same build by storing `price` at all nine sites. **Do not "simplify" it away**, and do not
+   backfill a `rec_date` close later: that is a different price basis from
+   `recommendations.price_at_surface`, so suppressed-name and surfaced-name alpha would be
+   computed on two different bases.
+
+**Do not later "fix" `headless_alert_engine.py`'s `brief.get("grow_today") or {}`** believing it
+is this feature's offline-sentinel path. It is not — the cron's `None` route is the
+`build_daily_briefing`-failed early return, which omits the `grow` key entirely. Collapsing that
+`or {}` is harmless here; the sentinel that matters is `build_suppression_rows`' own
+`grow is None` check, which **must** stay ahead of its `tone == "bear"` branch (a pinned test
+enforces this — reorder them and an offline day carrying a stale bear tone would write a
+synthetic row claiming the app exercised restraint on a day the engine never ran).
 
 Recorded in two places by design: here, and as a dated row in CLAUDE.md's "What's queued".
 Definition-of-Done step 6 exists because a future-dated gate living only in memory is invisible

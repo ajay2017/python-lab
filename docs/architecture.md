@@ -1837,6 +1837,142 @@ renders as fabricated drift, with the known-good snapshot destroyed. Skipping is
 the safe direction: the prior row ages past `SNAPTRADE_BALANCE_STALE_HOURS` into
 Home's dated "no mismatch as of ‹date› — not re-checked since". Pinned by
 `tests/test_broker_position_snapshot.py`.
+
+### 6.37 `gate_suppressions` table
+
+**The suppressions the app already computed and threw away.** The app grades its buy
+calls (F-229), its protective calls, the owner's trades (F-233/F-256) and outside
+analysts (F-154c) — but never its own *restraint*, which is the thing it does most
+often. `_grow_today` returns every blocked bucket on every build and nothing persisted
+them. This table is the capture half only: **no readout, no card, no new constant.**
+Design + the pre-registered retirement criterion: `docs/plans/gate-suppression-ledger.md`.
+
+**Manual DDL** — the statements live in that plan's §4; the feature ships **inert** until
+they are applied. Same precedent as `model_predictions` §6.31.
+
+**DDL applied:** _not yet (as of 2026-08-27)._ Record the date here the same day it
+happens — CLAUDE.md carried a stale "DDL pending" claim about `model_predictions` for
+three weeks after it was live.
+
+```sql
+CREATE TABLE IF NOT EXISTS public.gate_suppressions (
+    id                bigint primary key generated always as identity,
+    rec_date          date  not null,
+    ticker            text  not null,
+    gate_id           text  not null,
+    source            text  not null,
+    lane              text,
+    counterfactual    boolean,
+    tone              text,
+    price_at_suppress numeric,
+    composite_score   numeric,
+    momentum_score    numeric,
+    sector            text,
+    gate_value        numeric,
+    gate_threshold    numeric,
+    reason            text,
+    suppressed_at     timestamptz default now(),
+    CONSTRAINT gate_suppressions_unique_per_day
+        UNIQUE (ticker, rec_date, gate_id, source)
+);
+CREATE INDEX IF NOT EXISTS gate_suppressions_rec_date_idx
+    ON public.gate_suppressions (rec_date desc);
+CREATE INDEX IF NOT EXISTS gate_suppressions_gate_date_idx
+    ON public.gate_suppressions (gate_id, rec_date desc);
+ALTER TABLE public.gate_suppressions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow all (service role)" ON public.gate_suppressions;
+CREATE POLICY "Allow all (service role)" ON public.gate_suppressions
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+```
+
+**Why `source` is in the unique key, and it is not optional.** The cron lane calls
+`build_daily_briefing` with `risk_recs=[]`, so **G-01 is structurally unreachable on
+cron — forever**, and a smaller `_act_blocked` set means tickers the interactive app
+would have skipped *before any gate* instead reach the macro/sector gates, so the cron
+lane **over-counts** G-07/G-16. Without `source`, "G-01: 0 rows" would be permanently
+ambiguous between *the gate never fired* and *the gate was never evaluable* — the
+checked-vs-never-checked failure this app treats as its worst mode, baked into the data.
+First-writer-wins still holds *within* a source, so the two DST cron slots dedup to the
+09:45 price, while the complete interactive row is no longer suppressed by the
+incomplete cron one. Cost is at most 2× rows.
+
+**Why `counterfactual` exists.** `true` = the gate was the **binding** constraint. The
+deterioration pre-pass appends *every* held WATCH ticker regardless of tone, score or
+gap, so capturing that merged list unqualified would measure the forward returns of
+names below their trend MA *by construction* rather than the value of the restraint —
+a strong spurious signal that would make the retirement test return a false positive.
+**Read `docs/plans/gate-suppression-ledger.md` §5a before analysing this column:** the
+new-pick lane's `true` means "first binding gate", not "would have been bought", and
+needs its own composite filter.
+
+**Why `gate_value` + `gate_threshold`.** The measured quantity and the boundary it
+crossed, neither reconstructible later (weights move daily, `risk_advisor` recomputes
+live). Without them you can only grade *whether a gate helps on average*; with them you
+can grade *whether `SINGLE_NAME_CEILING` is set at the right number* — and calibration
+is the real policy question.
+
+**Why `sector` is stored despite looking reconstructible.** Sector *classification*
+drifts (the F-240/F-242 roster refreshes, the IGV alias fix), and
+as-classified-at-the-time is unrecoverable after a taxonomy change.
+
+**Deliberately NOT included:** portfolio state (`daily_snapshots` + `account_cash`
+already own it, joinable on date — a second source of truth for a number that has one),
+and a brief pointer (no brief id exists in this codebase; `(rec_date, source)` already
+identifies the build).
+
+**`reason` is human forensics ONLY.** Quarantined at 300 chars. **Nothing may ever parse
+it.**
+
+**Upsert only — there is no `insert` fallback.** `save_recommendations` carries one on
+`TypeError`; copying that shape here would make the unique constraint the only thing
+standing between this table and the `account_flows` unbounded-reinsert bug of
+2026-08-24. The `TypeError` compat path drops only `ignore_duplicates` and stays an
+upsert, which flips first-writer-wins to last-writer-wins — a real tradeoff, flagged in
+the returned `error` string because the cron log is the only place it is visible.
+
+Volume: ceiling ≈ 30 rows/day/source ≈ 7,600/year worst case, realistically 2,000–5,000.
+**Accrues indefinitely, no retention policy.**
+
+### `stock_analyzer/gate_registry.py`
+
+Frozen, **append-only** `gate_id` → label map for the ids the ledger can emit (G-01,
+G-04, G-07, G-09, G-16, G-20, G-23, G-24). Deliberately **not** in `constants.py`:
+these are identifiers, not thresholds, so they are not investment policy. Decides
+nothing, so it is deliberately **not** in the commit hook's `_GATE_FILES`.
+
+Two anti-rot tests, because a registry nothing reads is a registry that rots:
+`tests/test_gate_registry.py` parses the §2A.3 gate table out of `docs/requirements.md`
+and asserts every registry id has a row there, **and** scans `daily_briefing.py` +
+`gate_ledger.py` for `"G-NN"` literals and asserts each is a registry key — so a
+typo'd id at a producer site fails immediately instead of silently persisting an
+unregistered gate.
+
+### `stock_analyzer/gate_ledger.py`
+
+Pure `build_suppression_rows(grow, *, rec_date, source, tone, sp500_pct)`. No DB, no
+Streamlit, no clock read — `rec_date` is passed in.
+
+**`grow is None` returns `[]`, and that check MUST stay ahead of the `tone == "bear"`
+branch.** Offline means no rows. Reversed, an offline day carrying a stale bear tone
+would write a synthetic row asserting *the app exercised restraint* on a day the engine
+never ran — the exact lie this table exists to expose, in the one table whose only
+purpose is to be trusted. `check_antipatterns.py` cannot see that ordering, so a test
+pins it (`test_offline_never_fabricates_a_bear_day_row`), and that test was
+mutation-checked: with `grow = grow or {}` inserted it fails.
+
+**Bear days.** `_grow_today` early-returns before both the pick and add lanes, and
+`cooldown_adds` / `deterioration_blocked_adds` are not even keys in that return — so on
+the day the app performs its single largest act of restraint the ledger would otherwise
+record nothing. One synthetic row is emitted instead: `ticker="__MARKET__"`, G-23,
+`lane="tone"`, `gate_value=sp500_pct`, `gate_threshold=MARKET_TONE_BEAR_PCT`.
+
+**`gate_id` is read off the item, never inferred from the bucket name** — an unlabelled
+item is skipped, because `concentration_blocked_adds` carries two different gates
+(G-04 single-name ceiling, G-09 drift-trim conflict) with opposite meanings, and a
+bucket→gate 1:1 map would destroy that distinction. Both score columns are likewise
+read from explicit `composite_score` / `momentum_score` keys set at the producer; the
+module does **not** infer which of the two a site's `score` field meant.
+
 ### `stock_analyzer/system_health.py`
 
 Pure-ish diagnostic module for the owner-only 🩺 System Trust page (System

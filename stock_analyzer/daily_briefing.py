@@ -1007,6 +1007,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "ticker": ticker, "sector": sector,
                     "score":  _f(row.get("Score", 0)),
                     "reason": _macro_block,
+                    "gate_id":        "G-07",
+                    "counterfactual": True,
+                    "gate_value":     None,
+                    "gate_threshold": MACRO_IMMINENT_DAYS,
+                    "price":          price,
+                    "composite_score": _f((composites or {}).get(ticker, {}).get("total"), None),
+                    "momentum_score":  _f(row.get("Score"), None),
                 })
                 continue
 
@@ -1017,6 +1024,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "ticker": ticker, "sector": sector,
                     "score":  _f(row.get("Score", 0)),
                     "reason": f"{sector} sector already ≥ {SECTOR_CEILING:.0f}% hard cap",
+                    "gate_id":        "G-16",
+                    "counterfactual": True,
+                    "gate_value":     _sector_wt_map.get(sector),
+                    "gate_threshold": SECTOR_CEILING,
+                    "price":          price,
+                    "composite_score": _f((composites or {}).get(ticker, {}).get("total"), None),
+                    "momentum_score":  _f(row.get("Score"), None),
                 })
                 continue
 
@@ -1305,6 +1319,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                         f"${_dw_pre['peak']:.2f} peak, below SMA{_dw_pre['trend_ma']} — "
                         "early deterioration Watch. Don't add to a weakening name."
                     ),
+                    "gate_id":        "G-20",
+                    "counterfactual": False,
+                    "gate_value":     _dw_pre["dd_from_peak_pct"],
+                    "gate_threshold": None,
+                    "price":          _f(_wr.get("Price"), None),
+                    "composite_score": _f(_wr.get("Score"), None),
+                    "momentum_score":  None,
                 })
     if tone == "bull" and port_df is not None:
         for _, row in port_df.iterrows():
@@ -1326,9 +1347,16 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 # suppression is surfaced (never silent) via deterioration_blocked_adds.
                 _dw = _watch_by_ticker.get(ticker.upper())
                 if _dw:
-                    # Pre-pass (above) already added this in bear/protect mode;
-                    # skip duplicate in bull mode.
-                    if not any(x["ticker"].upper() == ticker.upper() for x in deterioration_blocked_adds):
+                    # Pre-pass (above) always inserted this ticker first; in bull
+                    # mode upgrade counterfactual to True in-place (A2). Reaching
+                    # here proves G-20 is the BINDING constraint — the ticker
+                    # cleared _act_blocked + Strong Buy + COMPOSITE_BUY + gap.
+                    _dw_existing_idx = next(
+                        (i for i, x in enumerate(deterioration_blocked_adds)
+                         if x["ticker"].upper() == ticker.upper()), -1
+                    )
+                    if _dw_existing_idx < 0:
+                        # Not yet present (edge: pure bull path, pre-pass skipped).
                         deterioration_blocked_adds.append({
                             "ticker":  ticker,
                             "score":   scr,
@@ -1339,7 +1367,21 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                                 f"${_dw['peak']:.2f} peak, below SMA{_dw['trend_ma']} — "
                                 "early deterioration Watch. Don't add to a weakening name."
                             ),
+                            "gate_id":        "G-20",
+                            "counterfactual": True,
+                            "gate_value":     _dw["dd_from_peak_pct"],
+                            "gate_threshold": None,
+                            "price":          _f(row.get("Price"), None),
+                            "composite_score": _f(row.get("Score"), None),
+                            "momentum_score":  None,
                         })
+                    else:
+                        # Already present from pre-pass — upgrade to binding (A2).
+                        deterioration_blocked_adds[_dw_existing_idx]["counterfactual"] = True
+                        if deterioration_blocked_adds[_dw_existing_idx].get("gate_value") is None:
+                            deterioration_blocked_adds[_dw_existing_idx]["gate_value"] = (
+                                _dw["dd_from_peak_pct"]
+                            )
                     continue
                 # Post-add cooldown — you already acted on this add recently; let
                 # the new shares settle before nudging to add more (anti-churn).
@@ -1355,6 +1397,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                             f"({_dslb}d ago) — letting the new shares settle before "
                             "suggesting more."
                         ),
+                        "gate_id":        "G-24",
+                        "counterfactual": True,
+                        "gate_value":     _dslb,
+                        "gate_threshold": ADD_WINNER_COOLDOWN_DAYS,
+                        "price":          _f(row.get("Price"), None),
+                        "composite_score": _f(row.get("Score"), None),
+                        "momentum_score":  None,
                     })
                     continue
                 # Sector concentration gate — don't add to a position whose sector
@@ -1372,6 +1421,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                             "trim the sector before adding. A Strong Buy here is a "
                             "KEEP, not an add."
                         ),
+                        "gate_id":        "G-16",
+                        "counterfactual": True,
+                        "gate_value":     _sector_wt_map.get(sector),
+                        "gate_threshold": SECTOR_CEILING,
+                        "price":          _f(row.get("Price"), None),
+                        "composite_score": _f(row.get("Score"), None),
+                        "momentum_score":  None,
                     })
                     continue
                 # Skip — and record — if Risk Advisor is recommending trim on this ticker
@@ -1385,6 +1441,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                         "score":    scr,
                         "pnl_pct":  _f(row.get("P&L (%)")),
                         "gap":      gap,
+                        "gate_id":        "G-01",
+                        "counterfactual": True,
+                        "gate_value":     None,
+                        "gate_threshold": None,
+                        "price":          _f(row.get("Price"), None),
+                        "composite_score": _f(row.get("Score"), None),
+                        "momentum_score":  None,
                     })
                     continue
                 # Single-name ceiling — hard suppress if current weight ≥ ceiling.
@@ -1404,6 +1467,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                             f"(≥ {SINGLE_NAME_CEILING:.0f}% single-name ceiling). "
                             "Trim to target before adding."
                         ),
+                        "gate_id":        "G-04",
+                        "counterfactual": True,
+                        "gate_value":     _cur_wt,
+                        "gate_threshold": SINGLE_NAME_CEILING,
+                        "price":          _f(row.get("Price"), None),
+                        "composite_score": _f(row.get("Score"), None),
+                        "momentum_score":  None,
                     })
                     continue
                 # Drift-trim conflict — Rebalancer would trim this position to
@@ -1420,6 +1490,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                             f"(would be flagged for drift-trim by Rebalancer). "
                             "Don't add to a position you'd trim."
                         ),
+                        "gate_id":        "G-09",
+                        "counterfactual": True,
+                        "gate_value":     _cur_wt,
+                        "gate_threshold": None,
+                        "price":          _f(row.get("Price"), None),
+                        "composite_score": _f(row.get("Score"), None),
+                        "momentum_score":  None,
                     })
                     continue
                 price   = _f(row.get("Price", 0))

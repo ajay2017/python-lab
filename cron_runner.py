@@ -842,6 +842,32 @@ def _run_scan(now_et, force: bool) -> int:
     except Exception as _rec_log_err:
         _log(f"rec log: FAILED — {str(_rec_log_err)[:120]} — continuing (email unaffected).")
 
+    # ── Gate Suppression Ledger (W5 capture — cron source) ────────────────────
+    # Persist which gates fired today so restraint can be graded later.
+    # source="cron" is in the dedup key: G-01 is structurally unreachable here
+    # (build_daily_briefing is called with risk_recs=[]) — that is plan finding
+    # F1 and is exactly why source is part of the unique constraint. Must NEVER
+    # abort the scan or block the buy-list email built below.
+    try:
+        from stock_analyzer.gate_ledger import build_suppression_rows
+        _gl_diag = payload.get("diag")
+        _gl_tone  = _gl_diag.get("tone") if _gl_diag is not None else None
+        _gl_sp500 = _gl_diag.get("sp500_pct") if _gl_diag is not None else None
+        _gl_grow  = payload.get("grow")   # None when compute_morning_picks failed
+        _gl_rows  = build_suppression_rows(
+            _gl_grow,
+            rec_date=now_et.date(),
+            source="cron",
+            tone=_gl_tone,
+            sp500_pct=_gl_sp500,
+        )
+        _gl_result = db.save_gate_suppressions(_gl_rows)
+        _log(f"gate ledger: saved={_gl_result.get('saved', 0)}/"
+             f"{_gl_result.get('attempted', 0)} suppression row(s)"
+             + (f" — {_gl_result.get('error')}" if _gl_result.get("error") else ""))
+    except Exception as _gl_err:
+        _log(f"gate ledger: FAILED — {str(_gl_err)[:120]} — continuing (email unaffected).")
+
     # High-conviction = the green "✅ Go — Composite Confirms" set. Key on the SAME
     # field the Home badge reads — the reconciliation engine's verdict
     # (xref.verdict_reconciled.verdict == "go", signal_reconciliation.py) — so the

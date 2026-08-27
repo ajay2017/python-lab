@@ -2597,6 +2597,111 @@ def save_recommendations(records: list[dict]) -> dict:
     return {"attempted": len(payload), "saved": 0, "error": (err or "")[:200]}
 
 
+def save_gate_suppressions(rows: list[dict]) -> dict:
+    """Persist gate-suppression rows to gate_suppressions (UPSERT ONLY).
+
+    Returns {"attempted": N, "saved": M, "error": str | None}.
+
+    Hard rules:
+    - is_readonly() → immediate no-op (read-only viewer must never write).
+    - not rows or not has_db() → clean no-op.
+    - UPSERT only (on_conflict="ticker,rec_date,gate_id,source",
+      ignore_duplicates=True). NO plain .insert() fallback — copying
+      save_recommendations' TypeError fallback would expose this table to the
+      same unbounded-reinsert bug account_flows suffered 2026-08-24 (plan F5).
+    - Does NOT set suppressed_at client-side; the DB default owns it (same
+      reasoning as surfaced_at in save_recommendations).
+    - Drops rows missing ticker / rec_date / gate_id / source.
+    - Never raises; catches broadly and returns the error string.
+    """
+    if is_readonly():
+        return {"attempted": 0, "saved": 0, "error": "read-only"}
+    if not rows or not has_db():
+        return {"attempted": 0, "saved": 0, "error": None}
+
+    def _pos_num_gs(x):
+        """float if strictly positive, else None — mirrors _pos_num / price_at_surface."""
+        try:
+            v = float(x) if x is not None else None
+        except (TypeError, ValueError):
+            return None
+        if v is None or v != v or v <= 0:   # v != v filters NaN
+            return None
+        return v
+
+    def _safe_float_gs(x):
+        """NaN/numpy-safe float coerce; PERMITS <= 0 — for gate_value, thresholds, scores."""
+        try:
+            v = float(x) if x is not None else None
+        except (TypeError, ValueError):
+            return None
+        if v is None or v != v:   # v != v filters NaN
+            return None
+        return v
+
+    payload: list[dict] = []
+    for r in rows:
+        tk  = str(r.get("ticker", "")).strip().upper()
+        gid = str(r.get("gate_id", "")).strip()
+        rd  = r.get("rec_date")
+        src = str(r.get("source", "")).strip()
+        if not tk or not gid or rd is None or not src:
+            continue
+        rd_str = rd.isoformat() if hasattr(rd, "isoformat") else str(rd)[:10]
+
+        payload.append({
+            "ticker":           tk,
+            "gate_id":          gid,
+            "rec_date":         rd_str,
+            "source":           src,
+            "lane":             r.get("lane"),
+            "counterfactual":   r.get("counterfactual"),
+            "tone":             r.get("tone"),
+            "price_at_suppress": _pos_num_gs(r.get("price_at_suppress")),
+            "composite_score":  _safe_float_gs(r.get("composite_score")),
+            "momentum_score":   _safe_float_gs(r.get("momentum_score")),
+            "sector":           r.get("sector"),
+            "gate_value":       _safe_float_gs(r.get("gate_value")),
+            "gate_threshold":   _safe_float_gs(r.get("gate_threshold")),
+            "reason":           (str(r.get("reason") or "")[:300]) or None,
+        })
+
+    if not payload:
+        return {"attempted": 0, "saved": 0, "error": None}
+
+    # Upsert only. No .insert() fallback — see plan finding F5 and the
+    # account_flows unbounded-reinsert bug (2026-08-24).
+    # TypeError compat: some deployed supabase-py versions raise TypeError on
+    # `ignore_duplicates`. Retry WITHOUT ignore_duplicates (still an upsert) so
+    # the unique constraint still deduplicates — but that flips first-writer-wins
+    # to last-writer-wins for the duplicate row. This is an acceptable tradeoff:
+    # the data is a snapshot, and the later write is more recent. Record it in
+    # the error string so the cron _log line surfaces it.
+    try:
+        _client().table("gate_suppressions").upsert(
+            payload,
+            on_conflict="ticker,rec_date,gate_id,source",
+            ignore_duplicates=True,
+        ).execute()
+        return {"attempted": len(payload), "saved": len(payload), "error": None}
+    except TypeError:
+        # ignore_duplicates kwarg unsupported — retry without it (still upsert;
+        # tradeoff: last-writer-wins instead of first-writer-wins on duplicates).
+        try:
+            _client().table("gate_suppressions").upsert(
+                payload,
+                on_conflict="ticker,rec_date,gate_id,source",
+            ).execute()
+            return {"attempted": len(payload), "saved": len(payload),
+                    "error": "compat: ignore_duplicates unsupported (last-writer-wins)"}
+        except Exception as exc2:
+            _record_db_error(f"gate_suppressions_upsert_compat: {str(exc2)[:100]}")
+            return {"attempted": len(payload), "saved": 0, "error": str(exc2)[:200]}
+    except Exception as exc:
+        _record_db_error(f"gate_suppressions_upsert: {str(exc)[:100]}")
+        return {"attempted": len(payload), "saved": 0, "error": str(exc)[:200]}
+
+
 def load_recommendations(start_date=None, end_date=None) -> pd.DataFrame:
     """
     Read recommendation history. No date filter applied when start_date/
