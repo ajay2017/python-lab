@@ -389,7 +389,8 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
                      held_data: dict, today: date,
                      earnings_lookup: dict | None = None,
                      composites: dict | None = None,
-                     is_mover: bool = False) -> dict:
+                     is_mover: bool = False,
+                     scanner_row_is_synthetic: bool = False) -> dict:
     """
     Cross-check a buy candidate across all available signal layers.
 
@@ -425,12 +426,27 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
     if port_df is not None and not port_df.empty:
         is_held = not port_df[port_df["Ticker"] == ticker].empty
 
-    # ── Layer 1: Technical setup (always present from scanner) ────────────────
+    # ── Layer 1: Momentum setup (real scanner rows only) ──────────────────────
+    # scanner_row_is_synthetic=True means this is a fabricated dict from the
+    # add-winner path (port_df["Signal"]/["Score"]), not an actual scanner read.
+    # Omit Layer 1 entirely — absence of a momentum reading ≠ confirmation;
+    # same precedent as Layer 3's "No news available" comment below.
     scan_sig   = str(scanner_row.get("Signal", ""))
-    scan_score = _f(scanner_row.get("Score", 0))
-    rsi        = _f(scanner_row.get("RSI", 0))
+    scan_score = _f(scanner_row.get("Score", 0))     # kept as-is: feeds reconcile_signals
+    rsi        = _f(scanner_row.get("RSI"), None)     # None-preserving: RSI 0 ≠ RSI missing
     trend      = str(scanner_row.get("Trend", ""))
-    agreed.append(f"Technical: {scan_sig} ({scan_score:.0f}/100) · {trend} · RSI {rsi:.0f}")
+    if not scanner_row_is_synthetic:
+        if scan_sig or scan_score:
+            _l1 = (
+                f"Momentum: {scan_sig} ({scan_score:.0f}/100)" if scan_sig
+                else f"Momentum: {scan_score:.0f}/100"
+            )
+            if trend:
+                _l1 += f" · {trend}"
+            if rsi is not None:
+                _l1 += f" · RSI {rsi:.0f}"
+            agreed.append(_l1)
+        # else: neither signal nor score — omit (data absence ≠ confirmation)
 
     # ── Layer 2: Composite signal — held OR pre-fetched scanner pick ─────────
     # Previously this only consulted port_df (held positions). That left every
@@ -2078,8 +2094,8 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                 "score":          _f(row.get("Score")),
                 "scanner_signal": str(row.get("Signal", "")),
                 "sector":         sector,
-                "rsi":            _f(row.get("RSI")),
-                "mom_1m":         _f(row.get("1M Momentum")),
+                "rsi":            _f(row.get("RSI"), None),
+                "mom_1m":         _f(row.get("1M Momentum"), None),
                 "trend":          str(row.get("Trend", "")),
                 "xref":           xref,
                 "sector_elevated_warning": _sector_warning(sector),
@@ -2115,17 +2131,24 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
             # add to a position whose sector is already over the hard cap.
             if _sector in _breached_sectors:
                 continue
-            # Build a minimal scanner_row from portfolio data for cross-reference
+            # Build a minimal scanner_row from portfolio data for cross-reference.
+            # "Signal" and "Score" are kept — they feed reconcile_signals() and
+            # are load-bearing for the protective Negative-News skip gate.
+            # "RSI", "1M Momentum" and "Trend" are omitted: all three are read
+            # ONLY inside the Layer-1 block, which synthetic rows skip. Keeping
+            # them would have re-created the fabricated-value problem this fix
+            # closes ("Trend": sig was tautological anyway - it re-printed the
+            # composite label as if it were a trend reading).
             _synthetic = {
                 "Signal": sig, "Score": scr,
-                "RSI": 0, "1M Momentum": 0, "Trend": sig,
             }
             # Deterioration WATCH — suppress entirely (don't annotate-and-include;
             # "ADD — Winning Position" next to a Watch contradicts the Review lane).
             if _watch_by_ticker.get(ticker.upper()):
                 continue
             xref = _cross_reference(ticker, _synthetic, port_df, news_items, held_data, today,
-                                    earnings_lookup=earnings_lookup, composites=composites)
+                                    earnings_lookup=earnings_lookup, composites=composites,
+                                    scanner_row_is_synthetic=True)
             items.append({
                 "type":           "add_winner",
                 "icon":           "➕",
@@ -2135,8 +2158,6 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                 "score":          scr,
                 "scanner_signal": sig,
                 "sector":         _sector,
-                "rsi":            0,
-                "mom_1m":         _f(row.get("1M Momentum", 0)),
                 "trend":          sig,
                 "gap_to_stop":    gap,
                 "pnl_pct":        _f(row.get("P&L (%)")),

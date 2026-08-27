@@ -13,7 +13,10 @@ ceiling, drift-trim, deterioration WATCH) individually, since a refactor that
 accidentally drops just one of six independent `continue` guards would be
 invisible without a test targeting that exact guard.
 """
+import re
 from datetime import date
+
+import pytest
 
 from stock_analyzer.constants import (
     ADD_WINNER_COOLDOWN_DAYS,
@@ -22,6 +25,7 @@ from stock_analyzer.constants import (
     EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT,
     EARNINGS_OVERWEIGHT_TRIM_PCT,
     LARGE_POSITION_WEIGHT_PCT,
+    NEWS_SENTIMENT_NEGATIVE,
     SECTOR_CEILING,
     SECTOR_ELEVATED,
     SINGLE_NAME_CEILING,
@@ -40,6 +44,7 @@ from stock_analyzer.daily_briefing import (
     _trim_targets,
     build_daily_briefing,
 )
+from stock_analyzer.signal_reconciliation import effective_verdict_bucket
 from tests.conftest import find_item, make_port_df
 
 _TODAY = date(2026, 7, 27)
@@ -1249,3 +1254,306 @@ def test_build_daily_briefing_survives_a_zero_holdings_book():
     assert find_item(brief.get("grow_today", {}).get("new_picks", []), "SAP") is not None
     assert brief.get("act_today") == []
     assert brief.get("review_list") == []
+
+
+# ── _cross_reference: scanner_row_is_synthetic — label-fix tests (F-26 fix) ──
+#
+# The direct-call tests below pin the function-level contract: that
+# scanner_row_is_synthetic=True works correctly when the flag is handed to
+# _cross_reference.  They do NOT verify the wiring at the call site inside
+# _buy_candidates.  The two WIRING tests below (test_add_winner_via_buy_candidates_*)
+# fill that gap — they go through the real producer so a dropped kwarg or a
+# re-added RSI: 0 in the synthetic dict shows up as a test failure.
+
+
+# ── Wiring test A — RSI / key contract through the real producer ─────────────
+def test_add_winner_via_buy_candidates_xref_wiring():
+    """Goes through _buy_candidates (the real producer) rather than calling
+    _cross_reference directly.  Verifies that:
+    1. No RSI clause appears in xref agreed/conflicts (Layer 1 skipped on the
+       real add-winner path).
+    2. The composite score appears in at most one entry (not doubled across
+       layers).
+    3. The item itself carries no truthy rsi / mom_1m keys.
+
+    Mutation guide - VERIFIED, and narrower than it first looks:
+    * Flip the call site (daily_briefing.py ~line 2148) to
+      scanner_row_is_synthetic=False → Layer 1 renders for a synthetic
+      row, so the composite appears in BOTH Layer 1 and Layer 2 and
+      ASSERTION 2 (duplicate score) fails. Combined with restoring
+      "RSI": 0 to the synthetic dict, assertion 1 fails too.
+    * Restoring "RSI": 0 ALONE is INERT and this test still passes -
+      Layer 1 is skipped for synthetic rows, so the key is never read.
+      Do not read that as the guard being weak; it is the flag, not the
+      absent key, that does the work. Stated precisely because an
+      overstated mutation guide is how a future reader over-trusts a test.
+    """
+    scr = float(COMPOSITE_BUY + 20)
+    port_df = make_port_df([_winner_row(score=scr)])
+    items = _buy_candidates(port_df, None, [], {}, _TODAY)
+    item = find_item(items, "AAA")
+    assert item is not None and item["type"] == "add_winner"
+    xref = item["xref"]
+    all_entries = xref["agreed"] + xref["conflicts"]
+    all_text = " ".join(all_entries)
+    # 1 — no RSI in display output
+    assert not re.search(r"\bRSI\b", all_text), (
+        f"RSI appeared in xref via real path: {all_entries}"
+    )
+    # 2 — composite score at most once (Layer 1 omitted, Layer 2 has it once)
+    assert all_text.count(f"{scr:.0f}") <= 1, (
+        f"Score {scr:.0f} appeared >1 times: {all_entries}"
+    )
+    # 3 — item-level key contract
+    assert not item.get("rsi"), f"add_winner item must not carry truthy rsi; got {item.get('rsi')}"
+    assert not item.get("mom_1m"), f"add_winner item must not carry truthy mom_1m; got {item.get('mom_1m')}"
+
+
+# ── Wiring test B — fail-open boundary through the real producer ──────────────
+def test_add_winner_negative_news_skip_via_buy_candidates():
+    """The Negative-News skip gate (signal_reconciliation.py:119) fires when
+    momentum_score >= COMPOSITE_BUY AND news is negative.  For a synthetic
+    add-winner row, momentum_score = scanner_row['Score'] = port_df['Score'].
+    This test goes through _buy_candidates to verify the gate fires on the
+    real path, not just on a hand-constructed dict.
+
+    Mutation guide: change 'Score': 0 in the _synthetic dict inside
+    _buy_candidates (~line 2140) → scan_score = 0 < COMPOSITE_BUY →
+    reconcile_signals returns 'verify', not 'skip' → assertion fails.
+    """
+    news = [{"ticker": "AAA", "compound": NEWS_SENTIMENT_NEGATIVE - 0.1, "headline": "bad"}]
+    port_df = make_port_df([_winner_row(score=float(COMPOSITE_BUY))])
+    items = _buy_candidates(port_df, None, news, {}, _TODAY)
+    item = find_item(items, "AAA")
+    assert item is not None and item["type"] == "add_winner"
+    assert item["xref"]["verdict_reconciled"]["verdict"] == "skip", (
+        f"Expected reconciled skip; got {item['xref']['verdict_reconciled']}"
+    )
+
+
+def _synth_row():
+    """Minimal synthetic dict that matches what _buy_candidates builds."""
+    return {"Signal": "Strong Buy", "Score": float(COMPOSITE_BUY + 15), "Trend": "Strong Buy"}
+
+
+# ── Test 1 — fabricated-RSI invariant ────────────────────────────────────────
+def test_synthetic_add_winner_no_rsi_in_agreed_or_conflicts():
+    """No RSI clause must appear in agreed or conflicts for a synthetic row.
+
+    Mutation guide: add "RSI": 0 to _synth_row() AND call with
+    scanner_row_is_synthetic=False — the regex below must FAIL.
+    """
+    result = _cross_reference(
+        "AAA", _synth_row(), None, [], {}, _TODAY,
+        scanner_row_is_synthetic=True,
+    )
+    all_text = " ".join(result["agreed"] + result["conflicts"])
+    assert not re.search(r"\bRSI\b", all_text), (
+        f"RSI appeared in agreed/conflicts: {result['agreed'] + result['conflicts']}"
+    )
+
+
+# ── Test 2 — label policy pin ─────────────────────────────────────────────────
+def test_real_scanner_row_layer1_starts_with_momentum_not_technical():
+    """Real scanner row: Layer 1 must say 'Momentum:' and nothing in
+    agreed/conflicts may contain the word 'Technical'.
+
+    Mutation guide: change 'Momentum:' back to 'Technical:' in the Layer 1
+    f-string — the second assert below must FAIL.
+    """
+    result = _cross_reference("AAA", _scanner_row(), None, [], {}, _TODAY)
+    layer1_entries = [
+        s for s in result["agreed"] + result["conflicts"]
+        if s.startswith("Momentum:")
+    ]
+    assert len(layer1_entries) >= 1, "Expected at least one Momentum: Layer-1 entry"
+    assert not any(
+        "Technical" in s for s in result["agreed"] + result["conflicts"]
+    ), f"'Technical' found: {result['agreed'] + result['conflicts']}"
+
+
+# ── Test 3 — no-duplicate-number ─────────────────────────────────────────────
+def test_synthetic_composite_score_appears_at_most_once_across_all_layers():
+    """Layer 1 is skipped for synthetic rows, so the composite score (which
+    would have appeared both in the fabricated Layer-1 text AND in Layer-2's
+    composite line) now appears at most once.
+    """
+    scr = float(COMPOSITE_BUY + 20)
+    synthetic = {"Signal": "Strong Buy", "Score": scr, "Trend": "Strong Buy"}
+    composites = {"AAA": {"rec": {"label": "Strong Buy"}, "total": scr}}
+    result = _cross_reference(
+        "AAA", synthetic, None, [], {}, _TODAY,
+        composites=composites, scanner_row_is_synthetic=True,
+    )
+    all_entries = result["agreed"] + result["conflicts"]
+    all_text = " ".join(all_entries)
+    count = all_text.count(f"{scr:.0f}")
+    assert count <= 1, (
+        f"Score {scr:.0f} appeared {count} times across layers: {all_entries}"
+    )
+
+
+# ── Test 4 — verdict invariance (parametrize) ─────────────────────────────────
+# Prove that scanner_row_is_synthetic only touches the display layer.
+# Verdicts depend solely on composite_conflict / sentiment_conflict /
+# earnings_conflict flags — set by Layers 2-4.  Layer 1 sets none of them.
+#
+# The parametrize set covers the key verdict-chain branches:
+#   clean buy, no composite, composite conflict, negative news, earnings imminent,
+#   negative-news + earnings (escalation), composite conflict + earnings.
+
+_VERDICT_CASES = [
+    # (composites dict, news_items, earnings_lookup)
+    # 1. composite buy, no news, no earnings → confirmed
+    ({"AAA": {"rec": {"label": "Strong Buy"}, "total": COMPOSITE_BUY + 15}}, [], {}),
+    # 2. no composite, no news, no earnings → unverified
+    ({}, [], {}),
+    # 3. composite hold — triggers conflict
+    ({"AAA": {"rec": {"label": "Hold"}, "total": 50.0}}, [], {}),
+    # 4. composite sell — triggers conflict
+    ({"AAA": {"rec": {"label": "Sell"}, "total": 30.0}}, [], {}),
+    # 5. composite buy, negative news → mixed (reconciled: skip)
+    (
+        {"AAA": {"rec": {"label": "Strong Buy"}, "total": COMPOSITE_BUY + 15}},
+        [{"ticker": "AAA", "compound": NEWS_SENTIMENT_NEGATIVE - 0.1, "headline": "bad"}],
+        {},
+    ),
+    # 6. composite buy, earnings imminent → caution
+    (
+        {"AAA": {"rec": {"label": "Strong Buy"}, "total": COMPOSITE_BUY + 15}},
+        [],
+        {"AAA": str(_TODAY.replace(day=_TODAY.day + 2))},
+    ),
+    # 7. composite hold, negative news → conflicted (multiple)
+    (
+        {"AAA": {"rec": {"label": "Hold"}, "total": 50.0}},
+        [{"ticker": "AAA", "compound": NEWS_SENTIMENT_NEGATIVE - 0.1, "headline": "bad"}],
+        {},
+    ),
+]
+
+
+@pytest.mark.parametrize("composites,news,earn_lookup", _VERDICT_CASES)
+def test_verdict_invariant_to_scanner_row_is_synthetic(composites, news, earn_lookup):
+    """verdict, verdict_reconciled['verdict'], and effective_verdict_bucket
+    must be identical whether scanner_row_is_synthetic is True or False,
+    given the same numeric inputs to reconcile_signals.
+    """
+    real_row = _scanner_row(Score=float(COMPOSITE_BUY + 15))
+    result_real = _cross_reference(
+        "AAA", real_row, None, news, {}, _TODAY,
+        composites=composites, earnings_lookup=earn_lookup,
+        scanner_row_is_synthetic=False,
+    )
+    synthetic = {
+        "Signal": "Strong Buy", "Score": float(COMPOSITE_BUY + 15), "Trend": "Strong Buy",
+    }
+    result_synth = _cross_reference(
+        "AAA", synthetic, None, news, {}, _TODAY,
+        composites=composites, earnings_lookup=earn_lookup,
+        scanner_row_is_synthetic=True,
+    )
+    assert result_real["verdict"] == result_synth["verdict"], (
+        f"verdict mismatch: real={result_real['verdict']} synth={result_synth['verdict']}"
+    )
+    assert (
+        result_real["verdict_reconciled"]["verdict"]
+        == result_synth["verdict_reconciled"]["verdict"]
+    ), "verdict_reconciled verdict mismatch"
+    assert (
+        effective_verdict_bucket(result_real)
+        == effective_verdict_bucket(result_synth)
+    ), "effective_verdict_bucket mismatch"
+
+
+# ── Test 5 — fail-open boundary ──────────────────────────────────────────────
+def test_synthetic_negative_news_at_composite_buy_still_skips():
+    """The Negative-News gate at signal_reconciliation.py:119 fires when
+    momentum_score >= COMPOSITE_BUY.  For a synthetic row, momentum_score
+    comes from port_df["Score"] (the composite), passed as scanner_row["Score"].
+    This gate must still fire after scanner_row_is_synthetic=True.
+
+    Mutation guide: call _cross_reference with momentum_score=0 (i.e.
+    scanner_row["Score"]=0) — the reconciled verdict must be 'verify', not
+    'skip', so the assert below must FAIL.
+    """
+    news = [{"ticker": "AAA", "compound": NEWS_SENTIMENT_NEGATIVE - 0.05, "headline": "bad"}]
+    synthetic = {
+        "Signal": "Strong Buy",
+        "Score": float(COMPOSITE_BUY),   # exactly at the gate boundary
+        "Trend": "Strong Buy",
+    }
+    result = _cross_reference(
+        "AAA", synthetic, None, news, {}, _TODAY,
+        scanner_row_is_synthetic=True,
+    )
+    assert result["verdict_reconciled"]["verdict"] == "skip", (
+        f"Expected 'skip' at COMPOSITE_BUY boundary; got {result['verdict_reconciled']}"
+    )
+
+
+# ── Test 6 — RSI genuinely missing on a REAL row ─────────────────────────────
+def test_real_scanner_row_missing_rsi_omits_rsi_clause():
+    """A real scanner row with no 'RSI' key must not render 'RSI 0' in Layer 1;
+    the RSI clause is simply absent.  Same for an empty Trend.
+    """
+    # No RSI key in the row at all
+    row_no_rsi = {"Signal": "Buy", "Score": 75.0, "Trend": "Uptrend"}
+    result = _cross_reference("AAA", row_no_rsi, None, [], {}, _TODAY)
+    layer1 = [s for s in result["agreed"] + result["conflicts"] if s.startswith("Momentum:")]
+    assert len(layer1) == 1
+    assert "RSI" not in layer1[0], f"RSI clause appeared without a source: {layer1[0]}"
+    assert "Uptrend" in layer1[0], "Trend should still be present"
+
+    # Empty Trend, real RSI present — exactly one " · " separator (before RSI), no empty-trend gap
+    row_no_trend = {"Signal": "Buy", "Score": 75.0, "RSI": 62.0}
+    result2 = _cross_reference("AAA", row_no_trend, None, [], {}, _TODAY)
+    layer1_2 = [s for s in result2["agreed"] + result2["conflicts"] if s.startswith("Momentum:")]
+    assert len(layer1_2) == 1
+    assert "RSI 62" in layer1_2[0]
+    assert layer1_2[0].count(" · ") == 1, f"Expected exactly one separator; got: {layer1_2[0]}"
+
+    # Neither signal nor score → no Layer-1 entry; layers_checked still matches
+    row_empty = {}
+    result3 = _cross_reference("AAA", row_empty, None, [], {}, _TODAY)
+    layer1_3 = [s for s in result3["agreed"] + result3["conflicts"] if s.startswith("Momentum:")]
+    assert len(layer1_3) == 0, "Empty scanner row must produce no Layer-1 entry"
+    assert result3["layers_checked"] == len(result3["agreed"]) + len(result3["conflicts"])
+
+
+# ── Test 7 — item-key contract ────────────────────────────────────────────────
+def test_add_winner_item_exposes_no_rsi_or_mom1m():
+    """add_winner items must not carry truthy rsi or mom_1m keys — those
+    fields are intentionally absent now that Layer 1 is skipped.
+    """
+    port_df = make_port_df([_winner_row()])
+    items = _buy_candidates(port_df, None, [], {}, _TODAY)
+    item = find_item(items, "AAA")
+    assert item is not None and item["type"] == "add_winner"
+    # Keys either absent entirely or present as None — never truthy
+    assert not item.get("rsi"), f"add_winner must not carry truthy rsi; got {item.get('rsi')}"
+    assert not item.get("mom_1m"), f"add_winner must not carry truthy mom_1m; got {item.get('mom_1m')}"
+
+
+def test_new_pick_item_rsi_is_none_when_source_row_has_no_rsi():
+    """new_pick items must expose rsi=None (not 0.0) when the scanner row
+    lacks the 'RSI' key — the None-preserving _f(..., None) contract.
+    """
+    # Build a scanner df with no RSI column
+    import pandas as pd
+    scanner_no_rsi = pd.DataFrame([{
+        "Ticker": "NEW", "Score": float(COMPOSITE_BUY + 10), "Price": 50.0,
+        "Signal": "Buy", "Sector": "Tech", "Trend": "Uptrend",
+        # '1M Momentum' and 'RSI' deliberately absent
+    }])
+    port_df = make_port_df([{"ticker": "HELD"}])
+    composites = {
+        "NEW": {"rec": {"label": "Buy"}, "total": float(COMPOSITE_BUY + 10),
+                "fundamentals_available": True},
+    }
+    items = _buy_candidates(port_df, scanner_no_rsi, [], {}, _TODAY,
+                            composites=composites)
+    item = find_item(items, "NEW")
+    assert item is not None and item["type"] == "new_pick"
+    assert item["rsi"] is None, f"Expected rsi=None; got {item['rsi']}"
+    assert item["mom_1m"] is None, f"Expected mom_1m=None; got {item['mom_1m']}"

@@ -9644,8 +9644,26 @@ if page == "🏠 Home":
                 _v_one      = _reconciled.get("one_liner") or _xref.get("verdict_one_liner", "")
                 _vagreed    = _xref.get("agreed", [])
                 _vconflicts = _xref.get("conflicts", [])
-                _vlayers    = _xref.get("layers_checked", 0)
                 _db_bg      = "#1c1917"
+                # 📊 detail line — shown only when RSI is available (is not None).
+                # Each clause (RSI, 1M, Trend) is assembled independently so a
+                # missing value omits its clause rather than printing a placeholder.
+                # Guard is `is not None` not bare truthiness: RSI 0 is a real value,
+                # add_winner items carry no rsi key at all (returns None).
+                _db_rsi   = _db_buy.get("rsi")
+                _db_m1m   = _db_buy.get("mom_1m")
+                _db_sig   = _db_buy.get("scanner_signal", "")
+                _db_tr    = _db_buy.get("trend", "")
+                if _db_rsi is not None:
+                    _db_detail = (
+                        f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>📊 {_db_sig}"
+                        + f" · RSI {_db_rsi:.0f}"
+                        + (f" · 1M {_db_m1m:+.1f}%" if _db_m1m is not None else "")
+                        + (f" · {_db_tr}" if _db_tr else "")
+                        + "</div>"
+                    )
+                else:
+                    _db_detail = ""
                 st.markdown(
                     f"<div style='background:{_db_bg};border-left:3px solid {_vcolor};"
                     f"border-radius:6px;padding:10px 14px;margin-bottom:4px'>"
@@ -9672,12 +9690,7 @@ if page == "🏠 Home":
                     # block with the explicit reconciled verdict for this ticker.
                     + (f"<div style='color:{_vcolor};font-size:0.85em;margin-top:5px;"
                        f"font-weight:600'>→ {_v_one}</div>" if _v_one else "")
-                    + (f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>"
-                       f"📊 {_db_buy.get('scanner_signal','')} · "
-                       f"RSI {_db_buy.get('rsi',0):.0f} · "
-                       f"1M {_db_buy.get('mom_1m',0):+.1f}% · "
-                       f"{_db_buy.get('trend','')}"
-                       f"</div>" if _db_buy.get("rsi") else "")
+                    + _db_detail
                     + ("".join(
                         f"<div style='color:#fca5a5;font-size:0.8em;margin-top:3px'>⚠ {c}</div>"
                         for c in _vconflicts
