@@ -6234,8 +6234,16 @@ if page == "🏠 Home":
     # render; stale debit is worse than no claim, so suppress on stale too.
     _lev_h = st.session_state.get("_leverage_cache")
     if _lev_h is not None and _lev_h.get("levered") and not _lev_h.get("stale"):
-        _lev_debit = _m(f"${_lev_h['margin_debit']:,.0f}")
-        _lev_net   = _m(f"${_lev_h['net_capital']:,.0f}")
+        # st.caption renders markdown, and Streamlit turns a $...$ PAIR into
+        # LaTeX math. This line carries TWO dollar figures, so unescaped they
+        # garbled into an italic math run AND both signs vanished entirely —
+        # observed live on 2026-08-27 ("16,604 of margin debit against 7,319").
+        # Escape as a DOUBLED backslash in source (matching app.py ~1925/~8905)
+        # so the emitted string is a literal \$ with no SyntaxWarning. The
+        # sibling leverage banner on 🔗 Risk Analysis already did this; this one
+        # shipped without it, which is the sibling-regression class again.
+        _lev_debit = _m(f"\\${_lev_h['margin_debit']:,.0f}")
+        _lev_net   = _m(f"\\${_lev_h['net_capital']:,.0f}")
         st.caption(
             f"📐 Leveraged {_lev_h['ratio']:.2f}× — {_lev_debit} of margin debit against "
             f"{_lev_net} of capital. Awareness only; this never changes a recommendation."
@@ -6261,9 +6269,18 @@ if page == "🏠 Home":
         # move — nothing offsets the baseline subtraction. The old wording said
         # "move", understating the largest of the three shapes by one to two
         # orders of magnitude, in the reassuring direction.
+        # PRE-EXISTING BUG, fixed 2026-08-27 alongside the leverage caption above.
+        # These amounts are joined with ", " into ONE st.caption, so two or more
+        # tickers put two unescaped "$" on a single line and Streamlit renders the
+        # pair as LaTeX math — losing BOTH dollar signs, on a warning whose entire
+        # job is explaining why a displayed P&L number is wrong. Escaped as a
+        # doubled backslash in source (app.py ~1925 / ~8905 convention). The four
+        # sites are here, qty_drift, unbaselined and unbaselined_sells.
+        # st.metric callers deliberately do NOT need this — metrics don't render
+        # markdown; only st.caption / st.markdown do.
         _or_bits = []
         for _d in _dpnl["orphans"]:
-            _or_amt = _m(f"${abs(_d['value_impact']):,.0f}")
+            _or_amt = _m(f"\\${abs(_d['value_impact']):,.0f}")
             _or_bits.append(
                 f"**{_d['ticker']}** ("
                 + (f"{_or_amt} understated" if _d["value_impact"] else "amount unavailable")
@@ -6288,7 +6305,7 @@ if page == "🏠 Home":
             # (an unheld name with no baseline close) — say that, rather than
             # printing "$0 understated", which reads as "no problem".
             if _d["value_impact"]:
-                _amt  = _m(f"${abs(_d['value_impact']):,.0f}")
+                _amt  = _m(f"\\${abs(_d['value_impact']):,.0f}")
                 _dirn = "overstated" if _d["value_impact"] > 0 else "understated"
                 _tail = f", {_amt} {_dirn}"
             else:
@@ -6336,7 +6353,7 @@ if page == "🏠 Home":
     if _dpnl is not None and _dpnl.get("unbaselined"):
         _ub_bits = []
         for _d in _dpnl["unbaselined"]:
-            _ub_amt = _m(f"${_d['value_impact']:,.0f}")
+            _ub_amt = _m(f"\\${_d['value_impact']:,.0f}")
             _ub_bits.append(f"**{_d['ticker']}** (~{_ub_amt})")
         _ub_parts = ", ".join(_ub_bits)
         _dq_msgs.append(
@@ -6356,7 +6373,7 @@ if page == "🏠 Home":
     if _dpnl is not None and _dpnl.get("unbaselined_sells"):
         _ubs_bits = []
         for _d in _dpnl["unbaselined_sells"]:
-            _ubs_amt = _m(f"${_d['value_impact']:,.0f}")
+            _ubs_amt = _m(f"\\${_d['value_impact']:,.0f}")
             _ubs_bits.append(f"**{_d['ticker']}** (~{_ubs_amt})")
         _ubs_parts = ", ".join(_ubs_bits)
         _dq_msgs.append(
