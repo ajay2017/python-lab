@@ -222,6 +222,7 @@ from stock_analyzer.macro_calendar import (
     build_macro_calendar,
     detect_macro_regime as detect_macro_regime_fred,
     HIGH as MC_HIGH, MEDIUM as MC_MEDIUM, _REGIME_NOTES as _MC_REGIME_NOTES,
+    is_all_sector_category,
 )
 from stock_analyzer.macro_playbook import (
     build_event_playbooks, classify_scenario,
@@ -7301,6 +7302,9 @@ if page == "🏠 Home":
         macro_blocked = grow.get("macro_blocked_picks", [])
         comp_skipped  = grow.get("composite_skipped", [])
         comp_unavail  = grow.get("composite_unavailable", [])
+        # None = could not verify; [] = verified, nothing expired.
+        # Do NOT collapse with "or []" — that destroys the sentinel contract.
+        _macro_coverage_expired = grow.get("macro_coverage_expired")
 
         _g_bg    = "#052e16" if tone == "bull" else "#1c1917"
         _g_bdr   = "#22c55e" if tone == "bull" else "#ef4444" if tone == "bear" else "#4b5563"
@@ -7590,6 +7594,41 @@ if page == "🏠 Home":
                     "⚠️ Pre-market read — prices provisional until the "
                     "9:30 ET open; picks may re-price at the open."
                 )
+
+            # Macro coverage banner — rendered only when expired series exist
+            # and new_picks is non-empty (G-07 gates new picks only).
+            # Three states — checked with explicit is None; never "or []".
+            if _macro_coverage_expired is None:
+                # Could not verify this session.
+                st.caption("Macro coverage could not be verified this session.")
+            elif _macro_coverage_expired:
+                # Non-empty list: one or more expired recurring series.
+                for _mce in _macro_coverage_expired:
+                    _mce_name      = _mce.get("name", "")
+                    _mce_last      = _mce.get("last_date", "")
+                    _mce_expected  = _mce.get("expected_by", "")
+                    _mce_overdue   = _mce.get("is_overdue", False)
+                    _mce_all_sec   = is_all_sector_category(_mce.get("category", ""))
+                    _mce_scope_str = "affects **all sectors**" if _mce_all_sec else f"affects *{_mce.get('category', 'some sectors')}*"
+                    if _mce_overdue:
+                        st.warning(
+                            f"⚠️ **The imminent-event check is running blind on one release** "
+                            f"— *{_mce_name}* ({_mce_scope_str}) should have published by now "
+                            f"and is not on the calendar. Picks below cleared every other gate, "
+                            f"but **were not screened against this release**. "
+                            f"This is not “no macro events are near.” "
+                            f"Coverage detail: \U0001f9fa System Trust → Reference data."
+                        )
+                    else:
+                        st.info(
+                            f"ℹ️ **Macro calendar coverage has lapsed** "
+                            f"— *{_mce_name}* ({_mce_scope_str}) has no dates listed "
+                            f"past {_mce_last}. The next release is not expected until around "
+                            f"{_mce_expected} and is not on the calendar yet. Every other release "
+                            f"series is still covered and still screening. "
+                            f"Coverage detail: \U0001f9fa System Trust → Reference data."
+                        )
+            # else: _macro_coverage_expired == [] — verified, nothing expired; silent.
 
             # Layer 1 — sort by composite descending, momentum as tiebreaker
             new_picks.sort(key=lambda p: (-(p.get("composite_score") or 0), -(p.get("score") or 0)))
@@ -8300,6 +8339,15 @@ if page == "🏠 Home":
                 "</div></div>",
                 unsafe_allow_html=True,
             )
+
+    # Hoist macro coverage key to module scope BEFORE the columns are created.
+    # _render_grow_today assigns _macro_coverage_expired inside the function, so
+    # that name is not visible here.  Read from _db_grow directly — it is already
+    # in scope and carries the same key.  The second consumer (Monitoring / Awareness
+    # block below) is at module scope and reads _db_macro_cov.
+    # None = could not verify; [] = verified clean.  Never "or []" here — that
+    # destroys the sentinel contract the whole feature exists to preserve.
+    _db_macro_cov = (_db_grow or {}).get("macro_coverage_expired")
 
     # ── Two-column layout: Act Today (left) | Grow Today (right) ────────
     _db_col_left, _db_col_right = st.columns([1, 1])
@@ -9399,6 +9447,36 @@ if page == "🏠 Home":
         else:
             for _ci, _item in enumerate(_aware_bucket):
                 _render_defensive_card(_item, 1000 + _ci)
+
+        # Macro-exposure trim coverage note — one caption when the macro calendar
+        # has lapsed.  The review-list item 5 (macro-affected sector trim) goes
+        # silent when _STATIC runs out; surface that blind-spot here.
+        # Uses the module-scope _db_macro_cov (hoisted above the column creation)
+        # rather than _macro_coverage_expired which lives inside _render_grow_today.
+        # Collapsing None and [] into the same silent branch is deliberate: the
+        # Grow Today banner above already disclosed the None case; duplicating it
+        # here adds noise without adding information.
+        if _db_macro_cov:
+            _mce_names = [e.get("name", "an expired release") for e in _db_macro_cov]
+            # A MIXED list (some lapsed, some overdue) is promoted to the harsher
+            # "overdue" wording on purpose — safe direction, and it matches
+            # notify._macro_coverage_banner's any-overdue-fires shape. Do NOT
+            # "fix" this into per-series wording; that reintroduces the caption loop.
+            _mce_overdue_any = any(e.get("is_overdue") for e in _db_macro_cov)
+            if len(_mce_names) <= 3:
+                _mce_name_str = ", ".join(_mce_names)
+            else:
+                _mce_name_str = ", ".join(_mce_names[:3]) + f" and {len(_mce_names) - 3} more"
+            if _mce_overdue_any:
+                st.caption(
+                    f"Macro-exposure trims were not evaluated against "
+                    f"{_mce_name_str} — calendar is overdue for an update."
+                )
+            else:
+                st.caption(
+                    f"Macro-exposure trims were not evaluated against "
+                    f"{_mce_name_str} — next release not yet on the calendar."
+                )
 
         # Portfolio Tune-up — slow-moving risk-metric improvements (Sharpe /
         # beta / volatility / drawdown / tail). NOT time-boxed decisions, so

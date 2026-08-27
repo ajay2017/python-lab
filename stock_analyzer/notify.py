@@ -128,6 +128,38 @@ def _book_drift_banner(verdict: dict | None) -> str:
     )
 
 
+def _macro_coverage_banner(expired: "list[dict] | None") -> str:
+    """Macro calendar coverage disclosure for an email, or "" when silent.
+
+    Modelled on `_book_drift_banner`: same silent-unless-positive shape, same
+    HTML conventions.
+
+    Returns "" for None (could not verify), "" for [] (nothing expired), and
+    "" when nothing in the list is overdue.  Fires only when at least one
+    recurring series is genuinely overdue — i.e. today is past the date the
+    next release was expected based on the series' own cadence.
+
+    Never changes a suggested share count — annotation only.
+    """
+    if not isinstance(expired, list) or not expired:
+        return ""
+    overdue = [e for e in expired if e.get("is_overdue")]
+    if not overdue:
+        return ""
+    names = ", ".join(e.get("name", "") for e in overdue)
+    return (
+        f'<div style="border-left:4px solid #ef4444;background:#1c0a0a;border-radius:0 6px 6px 0;'
+        f'padding:10px 16px;margin:0 0 12px 0;font-family:Arial,Helvetica,sans-serif">'
+        f'<div style="color:#ef4444;font-weight:700;font-size:12px">'
+        f'&#9888;&#65039; Macro calendar blind spot — {names} is overdue and not on the calendar</div>'
+        f'<div style="color:#cbd5e1;font-size:12px;margin-top:3px">'
+        f'Picks above cleared every other gate but were NOT screened against this release. '
+        f'This is not “no macro events are near.” Update the calendar in the app '
+        f'(\U0001f9fa System Trust → Reference data).</div>'
+        f'</div>'
+    )
+
+
 # Per-kind accent + headline label for the email cards.
 _KIND_STYLE = {
     "stop_breach":        ("#ef4444", "🛑 STOP BREACH"),
@@ -488,12 +520,14 @@ def render_daily_action_email(
     other_picks: list[dict],
     built_at: str,
     book_drift: dict | None = None,
+    macro_coverage_expired: "list[dict] | None" = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the single-action morning email.
 
     Replaces the flat buy-list format with a priority-first layout:
       Section 1 (if any EXIT/TRIM signals from premarket run) — handle exits first
       Section 1b (if book_drift shows real drift) — book-vs-broker disclosure
+      Section 1c (if macro calendar is overdue) — macro coverage blind-spot
       Section 2 — #1 entry action today (top composite pick, full detail)
       Section 3 — other setups as a compact reference list
 
@@ -502,6 +536,8 @@ def render_daily_action_email(
     `other_picks` are the remaining go-verdict picks (may be empty).
     `book_drift` is the verdict dict from broker_sync.decide_drift_banner, or
     None — see `_book_drift_banner` for when it renders (F-252 follow-up).
+    `macro_coverage_expired` is from reference_shelf.expired_macro_series or
+    None — see `_macro_coverage_banner` for when it renders.
     """
     from stock_analyzer.constants import SCAN_TOP_PICK_MIN_COMPOSITE
 
@@ -560,6 +596,9 @@ def render_daily_action_email(
 
     # ── Section 1b: book-vs-broker drift disclosure (if any) ─────────────────
     drift_html = _book_drift_banner(book_drift)
+
+    # ── Section 1c: macro calendar blind-spot (if any) ────────────────────────
+    macro_cov_html = _macro_coverage_banner(macro_coverage_expired)
 
     # ── Section 2: #1 action card ─────────────────────────────────────────────
     score_bits = []
@@ -640,6 +679,7 @@ def render_daily_action_email(
         </div>
         {exit_html}
         {drift_html}
+        {macro_cov_html}
         {top_card}
         {other_html}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;
@@ -659,6 +699,7 @@ def render_intraday_entry_email(
     spy_drop: float | None,
     built_at: str,
     book_drift: dict | None = None,
+    macro_coverage_expired: "list[dict] | None" = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the intraday pullback entry-window email.
 
@@ -667,6 +708,8 @@ def render_intraday_entry_email(
     by caller. `spy_drop` is SPY's intraday drop (negative float) or None.
     `book_drift` is the verdict dict from broker_sync.decide_drift_banner, or
     None — see `_book_drift_banner` for when it renders (F-252 follow-up).
+    `macro_coverage_expired` is from reference_shelf.expired_macro_series or
+    None — see `_macro_coverage_banner` for when it renders.
     """
     n = len(entries)
     top = entries[0]
@@ -720,7 +763,8 @@ def render_intraday_entry_email(
     if spy_drop is not None:
         spy_line = f"SPY {float(spy_drop):+.1f}% intraday — broad market not in freefall."
 
-    drift_html = _book_drift_banner(book_drift)
+    drift_html    = _book_drift_banner(book_drift)
+    macro_cov_html = _macro_coverage_banner(macro_coverage_expired)
 
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
       <div style="max-width:640px;margin:0 auto">
@@ -732,6 +776,7 @@ def render_intraday_entry_email(
           {f'&nbsp;·&nbsp;{_html.escape(spy_line)}' if spy_line else ''}
         </div>
         {drift_html}
+        {macro_cov_html}
         {''.join(cards)}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;
                     margin-top:18px;border-top:1px solid #292524;padding-top:10px">

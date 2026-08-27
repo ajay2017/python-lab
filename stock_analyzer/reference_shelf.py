@@ -7,6 +7,14 @@ is overdue for a human refresh?* — and reports it on the owner-only 🩺 Syste
 Trust page. It never raises: a proprioception layer that can crash the page it
 reports on is worse than none.
 
+One note about the G-07 macro-event gate: `daily_briefing._grow_today` imports
+`macro_calendar` directly to suppress picks in sectors with imminent HIGH-impact
+events.  The `expired_macro_series` function below only annotates that gate's
+blind-spots for the UI; it is not read by `_grow_today` and cannot cause that
+function to suppress or un-suppress any pick.  The gate always uses its own live
+read of `macro_calendar._STATIC`; a failure in this module can never remove a
+suppression there.
+
 Why this exists (2026-08-15 audit): the app carries several curated tables that
 drift SILENTLY. `SECTOR_UNIVERSE` — the ~70 names Grow Today scans every single
 day — had not been refreshed since 2026-05-05 and carried no date at all, so
@@ -36,7 +44,7 @@ the obligation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Callable
 
 KIND_AS_OF = "as_of"
@@ -67,7 +75,53 @@ class _RefTable:
 _MACRO_MIN_SERIES_ROWS = 4
 
 
-def _macro_static_horizon() -> tuple[date, str] | None:
+def _macro_series_index() -> "dict[str, dict]":
+    """Parse _STATIC once and return per-series metadata.
+
+    Returns ``{event_name: {"last": date, "count": int, "category": str,
+    "max_gap": int}}`` where ``max_gap`` is the largest gap in DAYS between
+    consecutive rows of that same series.
+
+    Callers that need different views of the same table (horizon, expiry list)
+    should call this once and derive their view from the result — two
+    independent parsers of the same table will drift.  Raises on import/parse
+    failure so callers can handle it in one try/except.
+    """
+    from stock_analyzer.macro_calendar import _STATIC  # may raise
+
+    rows_per_event: dict[str, list[date]] = {}
+    category_per_event: dict[str, str] = {}
+    for row in _STATIC or []:
+        try:
+            when     = date.fromisoformat(str(row[0])[:10])
+            event    = str(row[2])
+            category = str(row[3]) if len(row) > 3 else ""
+        except Exception:
+            continue
+        rows_per_event.setdefault(event, []).append(when)
+        if event not in category_per_event:
+            category_per_event[event] = category
+
+    index: dict[str, dict] = {}
+    for event, dates in rows_per_event.items():
+        count = len(dates)
+        last  = max(dates)
+        sorted_dates = sorted(dates)
+        max_gap = 0
+        for i in range(1, len(sorted_dates)):
+            gap = (sorted_dates[i] - sorted_dates[i - 1]).days
+            if gap > max_gap:
+                max_gap = gap
+        index[event] = {
+            "last":     last,
+            "count":    count,
+            "category": category_per_event.get(event, ""),
+            "max_gap":  max_gap,
+        }
+    return index
+
+
+def _macro_static_horizon() -> "tuple[date, str] | None":
     """Earliest point at which the macro calendar starts losing coverage, plus
     the name of the series that runs out first.
 
@@ -86,26 +140,72 @@ def _macro_static_horizon() -> tuple[date, str] | None:
     unactionable when only GDP has run out.
     """
     try:
-        from stock_analyzer.macro_calendar import _STATIC
+        index = _macro_series_index()
     except Exception:
         return None
-    latest_per_event: dict[str, date] = {}
-    counts: dict[str, int] = {}
-    for row in _STATIC or []:
-        try:
-            when = date.fromisoformat(str(row[0])[:10])
-            event = str(row[2])
-        except Exception:
-            continue
-        counts[event] = counts.get(event, 0) + 1
-        if event not in latest_per_event or when > latest_per_event[event]:
-            latest_per_event[event] = when
-    recurring = {e: d for e, d in latest_per_event.items()
-                 if counts.get(e, 0) >= _MACRO_MIN_SERIES_ROWS}
+    recurring = {e: meta["last"] for e, meta in index.items()
+                 if meta["count"] >= _MACRO_MIN_SERIES_ROWS}
     if not recurring:
         return None
     event = min(recurring, key=lambda e: recurring[e])
     return recurring[event], event
+
+
+def expired_macro_series(today: "date | None" = None) -> "list[dict] | None":
+    """Return entries for backbone macro series whose last date is in the past.
+
+    Three possible return values:
+      ``None``  — _STATIC could not be read (import/parse failure).  Do NOT
+                  treat this as "nothing expired" — the distinction between
+                  "checked, nothing expired" and "could not check" is the
+                  entire point of this function.
+      ``[]``    — _STATIC was read successfully and no recurring series has
+                  expired (all last dates are >= today).
+      list      — one dict per expired recurring series, sorted by last_date.
+
+    Each entry: ``{"name", "category", "last_date" (ISO str),
+    "expected_by" (ISO str), "is_overdue" (bool)}``.
+
+    ``expected_by`` is derived purely from the series' own cadence
+    (``last + max_gap``).  ``is_overdue = today > expected_by``.  No new
+    constants and no constants.py changes — the module docstring principle
+    ("always DERIVED from the table itself") applies here too.
+
+    ``max_gap`` is the MAXIMUM observed gap between consecutive rows, so
+    ``is_overdue`` is the most lenient possible call — it only fires once today
+    is past the LARGEST interval ever seen for that series.  This errs toward
+    silence over false alarms: a series that occasionally slips by an extra
+    week won't trigger until it has exceeded even that widest gap.
+
+    Only recurring series (>= _MACRO_MIN_SERIES_ROWS rows) are included, so a
+    one-off Jackson Hole or debt-ceiling date is never reported.
+
+    Uses ``_today()`` (ET-aware via ``market_time.today_et``) as the default —
+    never ``date.today()``.
+    """
+    day = today if today is not None else _today()
+    try:
+        index = _macro_series_index()
+    except Exception:
+        return None
+
+    out: list[dict] = []
+    for event, meta in index.items():
+        if meta["count"] < _MACRO_MIN_SERIES_ROWS:
+            continue
+        last: date = meta["last"]
+        if last >= day:
+            continue  # still current
+        expected_by = last + timedelta(days=meta["max_gap"])
+        out.append({
+            "name":        event,
+            "category":    meta["category"],
+            "last_date":   last.isoformat(),
+            "expected_by": expected_by.isoformat(),
+            "is_overdue":  day > expected_by,
+        })
+    out.sort(key=lambda e: e["last_date"])
+    return out
 
 
 def _nyse_calendar_horizon() -> date | None:

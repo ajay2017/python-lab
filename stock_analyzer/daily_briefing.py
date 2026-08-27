@@ -650,6 +650,28 @@ def _recently_added(ticker, held_data, cooldown: int = ADD_WINNER_COOLDOWN_DAYS)
     return dslb is not None and dslb < cooldown
 
 
+def _expired_macro_series(today) -> "list[dict] | None":
+    """Thin wrapper around reference_shelf.expired_macro_series for use inside
+    _grow_today.
+
+    Return contract (critical — do not collapse):
+      ``None``  — could not verify (import error, parse failure, any exception).
+                  This is NOT "nothing expired".  A caller that treats None as []
+                  silently turns "we don't know" into "we checked and it's fine."
+      ``[]``    — verified, nothing expired.
+      list      — one or more expired recurring series.
+
+    G-07 never reads this value: the new-pick suppression in _grow_today uses
+    macro_calendar directly and runs BEFORE this call.  A failure here can never
+    remove a suppression; it can only mean the UI annotation is missing.
+    """
+    try:
+        from stock_analyzer import reference_shelf as _rs
+        return _rs.expired_macro_series(today)
+    except Exception:
+        return None
+
+
 def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 portfolio_value: float, market_context: dict,
                 act_today: list | None = None,
@@ -819,6 +841,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
 
     # On bear days — no new entries, return protection message
     if tone == "bear":
+        # macro_coverage_expired is built AFTER all suppression decisions so it
+        # is physically impossible for the gate to read it.  On the bear path,
+        # new_picks == [] regardless of coverage, so the render condition
+        # `macro_expired and new_picks` is provably False.
+        _bear_expired = _expired_macro_series(today)
         return {
             "tone":          "bear",
             "message":       (
@@ -837,6 +864,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "composite_unavailable":      [],
             "deploy_note":                None,
             "risk_banner":                risk_banner,
+            # LATE construction: built after every suppression decision so the
+            # gate above can never read this value.
+            "macro_coverage_expired":     _bear_expired,
         }
 
     # Score threshold: higher bar on flat days, standard on bull days
@@ -1475,6 +1505,10 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "sp500_pct":                  sp500_pct,
         "nasdaq_pct":                 nasdaq_pct,
         "leading_sectors":            lead_secs,
+        # LATE construction: built after every suppression decision so the G-07
+        # macro gate above can never read this value.  None means "could not
+        # verify"; [] means "verified, nothing expired".  Never gates a pick.
+        "macro_coverage_expired":     _expired_macro_series(today),
     }
 
 

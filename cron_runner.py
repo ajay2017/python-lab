@@ -913,6 +913,7 @@ def _run_scan(now_et, force: bool) -> int:
                 other_picks=other_picks,
                 built_at=payload.get("built_at", today_str),
                 book_drift=payload.get("book_drift"),
+                macro_coverage_expired=payload.get("macro_coverage"),
             )
             sent = _send_email("morning-action", subject, html)
             # Save dedup state ONLY on a real send — so a transient Resend failure
@@ -1028,6 +1029,7 @@ def _run_intraday(now_et, force: bool) -> int:
                 spy_drop=spy_drop_pct,
                 built_at=today_str,
                 book_drift=payload.get("book_drift"),
+                macro_coverage_expired=payload.get("macro_coverage"),
             )
             sent = _send_email("intraday-entry", subject, html)
             if sent and db.save_alert_state(today_str, fp, _INTRADAY_ROW):

@@ -507,8 +507,16 @@ def compute_morning_picks(today: date | None = None, scanner_results=None) -> di
         "composite_short":  len(grow.get("composite_skipped", []) or []),
         "composite_unavail": len(grow.get("composite_unavailable", []) or []),
     }
+    # Macro calendar coverage — passes through from _grow_today's LATE-built
+    # "macro_coverage_expired" key so the email renderers can show the
+    # blind-spot banner when a backbone series has expired.  None means
+    # "could not verify"; [] means "verified, nothing expired".  Isolated so
+    # a reference_shelf failure here can never abort pick computation.
+    macro_coverage = grow.get("macro_coverage_expired")   # may be None or []
+
     return {"picks": grow.get("new_picks", []) or [], "built_at": built_at,
-            "errors": errors, "diag": diag, "book_drift": book_drift}
+            "errors": errors, "diag": diag, "book_drift": book_drift,
+            "macro_coverage": macro_coverage}
 
 
 def _assess_pullback(spy_6mo, fragility, threshold: float) -> dict | None:
