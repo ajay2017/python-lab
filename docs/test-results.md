@@ -18,10 +18,18 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-27 (F-259 Gate Suppression Ledger, capture half)
+## 1. Latest run — 2026-08-27 (F-259 gate ledger, the UX review, and F-261 sizing)
 
-**4417 passed, 0 failed, 0 skipped** (`python -m pytest -q`: 71.58s). Python
-(local `.venv`). **Transcribed from a run the Opus `reviewer` executed itself**,
+**4432 passed, 0 failed, 0 skipped** (`python -m pytest -q`: 107.59s, final run
+of the day). Python (local `.venv`).
+
+**Two caveats on that number, both worth more than the number.** (1) The `.venv`
+runs **streamlit 1.60.0** while production installs **1.57.0** from
+`requirements.txt`, so this suite validates a version the app does not deploy —
+open, deliberate, and recorded in CLAUDE.md's queue rather than silently fixed.
+(2) It stood at **4417** earlier the same day (+15 from F-261's sizing tests);
+the earlier figure was **transcribed from a run the Opus `reviewer` executed
+itself**,
 not from the implementing agent's self-report — the prior entry's whole lesson
 was that an unverified count is how a red suite reached `main`, and on the first
 review pass the reviewer explicitly recorded the 4407 figure as
