@@ -1116,7 +1116,7 @@ def _render_sparkline(values: list[float], color: str, key: str) -> None:
         xaxis=dict(visible=False), yaxis=dict(visible=False), showlegend=False,
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
     )
-    st.plotly_chart(_fig, use_container_width=True, config={"displayModeBar": False}, key=key)
+    st.plotly_chart(_fig, width="stretch", config={"displayModeBar": False}, key=key)
 
 
 def _debate_verdict_icon(verdict: str | None, debate_type: str) -> str:
@@ -1526,7 +1526,7 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
             xaxis=dict(title="Price ($)", range=[_xmin, _xmax], zeroline=False),
             yaxis=dict(visible=False, range=[-1, 1]),
         )
-        st.plotly_chart(_fig, use_container_width=True, key=f"stopladder_{holding.get('Ticker','')}")
+        st.plotly_chart(_fig, width="stretch", key=f"stopladder_{holding.get('Ticker','')}")
         # #1 — role legend (colour → what it means), so the short chart labels
         # never need a paragraph next to them.
         _leg = " &nbsp;·&nbsp; ".join(
@@ -1595,7 +1595,7 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
                 yaxis=dict(title="Locked stop floor ($)",
                            range=[min(min(_ys), _active) * 0.98, max(max(_ys), _active) * 1.02]),
             )
-            st.plotly_chart(_sfig, use_container_width=True, key=f"stopstair_{holding.get('Ticker','')}")
+            st.plotly_chart(_sfig, width="stretch", key=f"stopstair_{holding.get('Ticker','')}")
             if _src == "manual":
                 _stair_cap = (
                     "Green = tier reached · grey = ahead · ringed = your current tier. The floor is the "
@@ -1744,7 +1744,7 @@ def _render_trade_button(
     notes: str = "",
     key_suffix: str = "",
     label: str | None = None,
-    use_container_width: bool = False,
+    width: str = "content",
 ) -> None:
     """
     Render a "📒 Trade {ticker}" button that, on click, stages prefill values
@@ -1763,7 +1763,7 @@ def _render_trade_button(
     """
     _label = label or f"📒 Trade {ticker}"
     _key   = f"_trade_btn_{ticker}_{key_suffix or 'default'}"
-    if st.button(_label, key=_key, use_container_width=use_container_width,
+    if st.button(_label, key=_key, width=width,
                  disabled=st.session_state.get("_readonly", False)):
         _prefill: dict = {
             "ticker":  ticker.upper(),
@@ -2814,7 +2814,7 @@ with st.sidebar:
                 key=f"_nav_{_disp.lower().replace(' ', '_')}",
                 icon=_icon,
                 disabled=_is_active,
-                use_container_width=True,
+                width="stretch",
             ):
                 st.session_state["_pending_page"] = _dest
                 st.rerun()
@@ -2826,7 +2826,7 @@ with st.sidebar:
 
     _eye_icon = "👁" if _priv_on else "🙈"
     if st.button(f"{_eye_icon} {'Show' if _priv_on else 'Hide'} values",
-                 key="_privacy_toggle", use_container_width=True,
+                 key="_privacy_toggle", width="stretch",
                  help="Hide or show all dollar amounts — useful in public"):
         st.session_state["_privacy"] = not _priv_on
         st.rerun()
@@ -2879,7 +2879,7 @@ with st.sidebar:
     _rl_locked, _rl_rem = _refresh_gate("data")
     if st.button(
         "🔄 Refresh All Data",
-        use_container_width=True,
+        width="stretch",
         disabled=_rl_locked,
         help=(
             f"Cooling down — available in {_rl_rem}s. Providers are rate-limited; "
@@ -2961,7 +2961,7 @@ with st.sidebar:
                     "</span>",
                     unsafe_allow_html=True,
                 )
-        if st.button("Reset counters", key="_ah_reset", use_container_width=True):
+        if st.button("Reset counters", key="_ah_reset", width="stretch"):
             _ah.reset()
             st.rerun()
 
@@ -3691,7 +3691,7 @@ def _render_holdings_earnings(port_df, held_data):
             plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
             hovermode="closest",
         )
-        st.plotly_chart(_earn_fig, use_container_width=True)
+        st.plotly_chart(_earn_fig, width="stretch")
     else:
         st.info("No upcoming earnings dates found for current holdings.")
 
@@ -4001,7 +4001,7 @@ if page == "🏠 Home":
                 with _sh_c1:
                     (st.error if _sh_sev == "down" else st.warning)(_sh_msg)
                 with _sh_c2:
-                    if st.button("Open →", key="_sysh_chip_open", use_container_width=True,
+                    if st.button("Open →", key="_sysh_chip_open", width="stretch",
                                  help="Open the System Trust diagnostic page"):
                         st.session_state["_pending_page"] = "🩺 System Trust"
                         st.rerun()
@@ -4480,7 +4480,7 @@ if page == "🏠 Home":
             _sp_c1, _sp_c2, _sp_c3 = st.columns([2, 2, 8])
             with _sp_c1:
                 if st.button(f"✅ Apply Adjustment", key=f"_sp_apply_{_sp_key}",
-                             type="primary", use_container_width=True,
+                             type="primary", width="stretch",
                              disabled=st.session_state.get("_readonly", False),
                              help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
                     _hdf = st.session_state.holdings_df.copy()
@@ -4536,7 +4536,7 @@ if page == "🏠 Home":
                         st.error("Failed to save — check Supabase connection.")
             with _sp_c2:
                 if st.button("Dismiss", key=f"_sp_dismiss_{_sp_key}",
-                             use_container_width=True):
+                             width="stretch"):
                     _dismissed = st.session_state.get("_dismissed_splits", set())
                     _dismissed.add(_sp_key)
                     st.session_state["_dismissed_splits"] = _dismissed
@@ -6572,7 +6572,7 @@ if page == "🏠 Home":
             "🔄 Refresh macro",
             key="_refresh_macro_home",
             help=f"Source: {_macro_src} · cache invalidates at midnight ET. Re-fetch FRED actuals + release dates mid-day when the calendar looks stale.",
-            use_container_width=True,
+            width="stretch",
         ):
             _mc_clear_key = f"_macro_cal_{_today_et()}"
             if _mc_clear_key in st.session_state:
@@ -6609,7 +6609,7 @@ if page == "🏠 Home":
         _do_refresh = st.button(
             "🔄 Refresh Signals",
             key="_db_refresh_signals",
-            use_container_width=True,
+            width="stretch",
             disabled=_rs_locked,
             help=_rs_help,
         )
@@ -6621,7 +6621,7 @@ if page == "🏠 Home":
                 "🔓 Unlock",
                 key="_brief_unlock_btn",
                 help="Resume live Brief updates. Recommendations will refresh on the next render.",
-                use_container_width=True,
+                width="stretch",
             ):
                 st.session_state["_brief_locked"] = False
                 st.session_state.pop("_brief_locked_snapshot", None)
@@ -6635,7 +6635,7 @@ if page == "🏠 Home":
                 "🔒 Lock Setup",
                 key="_brief_lock_btn",
                 help="Freeze today's recommendations. Lock expires at end of trading day.",
-                use_container_width=True,
+                width="stretch",
                 disabled=_daily_brief is None,
             ):
                 st.session_state["_brief_locked"]          = True
@@ -6759,7 +6759,7 @@ if page == "🏠 Home":
                     _pms_refresh = st.button(
                         "🔄 Refresh",
                         key="_pms_refresh_btn",
-                        use_container_width=True,
+                        width="stretch",
                         help="Re-runs the AI stance with the latest pre-market data.",
                     )
 
@@ -7130,7 +7130,7 @@ if page == "🏠 Home":
                         height=130, margin={"l": 5, "r": 5, "t": 10, "b": 0},
                         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                     )
-                    st.plotly_chart(_fg_fig, use_container_width=True,
+                    st.plotly_chart(_fg_fig, width="stretch",
                                     config={"displayModeBar": False})
                 with _fg_right:
                     _hb = st.session_state.get("_highbeta_share")
@@ -7230,7 +7230,7 @@ if page == "🏠 Home":
         )
     with _qr_ic2:
         _qr_btn = st.button(
-            "Research →", key="_qr_btn", use_container_width=True,
+            "Research →", key="_qr_btn", width="stretch",
             help="Enter any ticker for an instant actionable summary — spot a news catalyst fast.",
         )
 
@@ -7519,7 +7519,7 @@ if page == "🏠 Home":
                             template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
                             font=dict(size=11, color="#cbd5e1"),
                         )
-                        st.plotly_chart(_fn_fig, use_container_width=True)
+                        st.plotly_chart(_fn_fig, width="stretch")
                         st.caption(
                             f"The funnel above, drawn to scale. Of **{_fn_universe}** names "
                             f"screened, **{_fn_scored}** reached full composite scoring and "
@@ -8655,7 +8655,7 @@ if page == "🏠 Home":
                 _act_cols = st.columns([2, 3, 5])
                 with _act_cols[0]:
                     if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_act_{_db_ticker}_{_db_item['action'][:10]}",
-                                 use_container_width=False):
+                                 width="content"):
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _db_ticker
                         st.rerun()
@@ -8698,7 +8698,7 @@ if page == "🏠 Home":
                         if st.button(
                             "🔴 Thesis broken — view AI note →",
                             key=f"_db_act_ainote_{_db_ticker}_{_db_item['action'][:10]}",
-                            use_container_width=False,
+                            width="content",
                         ):
                             st.session_state["_pending_page"] = "🧠 AI Insights"
                             st.rerun()
@@ -9330,7 +9330,7 @@ if page == "🏠 Home":
                 with _btn_c1:
                     if _db_ticker and st.button(f"▶ Analyze {_db_ticker}",
                                  key=f"_db_rev_{_db_ticker}_{_db_rev['icon']}",
-                                 use_container_width=False):
+                                 width="content"):
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _db_ticker
                         st.rerun()
@@ -9400,14 +9400,14 @@ if page == "🏠 Home":
                                     _md_submitted = st.form_submit_button(
                                         "💾 Save",
                                         type="primary",
-                                        use_container_width=True,
+                                        width="stretch",
                                         disabled=st.session_state.get("_readonly", False),
                                         help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
                                     )
                                 with _sub_c2:
                                     _md_revert = st.form_submit_button(
                                         "↩️ Revert to ATR",
-                                        use_container_width=True,
+                                        width="stretch",
                                         disabled=st.session_state.get("_readonly", False),
                                         help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else "Clear any manual stop override for this ticker",
                                     )
@@ -9521,7 +9521,7 @@ if page == "🏠 Home":
                 )
                 if _rb_tk:
                     if st.button(f"▶ Analyze {_rb_tk}", key=f"_rb_analyze_{_rb_tk}_{_rb_i}",
-                                 use_container_width=False):
+                                 width="content"):
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _rb_tk
                         st.rerun()
@@ -9803,7 +9803,7 @@ if page == "🏠 Home":
                 if _db_buy.get("sector_elevated_warning"):
                     st.caption(f"⚠️ {_db_buy['sector_elevated_warning']}")
                 if st.button(f"▶ Analyze {_db_buy['ticker']}", key=f"_db_buy_{_db_buy['ticker']}",
-                             use_container_width=False):
+                             width="content"):
                     st.session_state["_pending_page"]    = "📈 Analysis"
                     st.session_state["_analysis_ticker"] = _db_buy["ticker"]
                     st.rerun()
@@ -10348,7 +10348,7 @@ if page == "🏠 Home":
         _gen_btn = st.button(
             "🔄 Refresh Brief" if _brief_cached else "✨ Generate Brief",
             key="_gen_brief_btn",
-            use_container_width=True,
+            width="stretch",
             type="primary",
             disabled=not _active_key or st.session_state.get("_readonly", False),
         )
@@ -12660,7 +12660,7 @@ elif page == "📡 Signals & Advice":
                         if st.button(
                             f"📝 Log trade for {ticker}",
                             key=f"log_btn_{ticker}_{act['type']}",
-                            use_container_width=True,
+                            width="stretch",
                             type="primary",
                         ):
                             st.session_state["_tj_prefill"] = {
@@ -12907,7 +12907,7 @@ elif page == "📡 Signals & Advice":
                                     # control as the New-Position cards) — trade
                                     # decisions happen on Analysis; this is the bridge.
                                     if st.button(f"▶ Analyze {_cand}", key=_div_an_key,
-                                                 use_container_width=True):
+                                                 width="stretch"):
                                         st.session_state["_pending_page"]    = "📈 Analysis"
                                         st.session_state["_analysis_ticker"] = _cand
                                         st.rerun()
@@ -12939,7 +12939,7 @@ elif page == "📡 Signals & Advice":
                                 # (same control as the New-Position cards) — the
                                 # bridge from "good candidate" to "trade from there."
                                 if st.button(f"▶ Analyze {_cand}", key=_div_an_key,
-                                             use_container_width=True):
+                                             width="stretch"):
                                     st.session_state["_pending_page"]    = "📈 Analysis"
                                     st.session_state["_analysis_ticker"] = _cand
                                     st.rerun()
@@ -13195,7 +13195,7 @@ elif page == "🔗 Risk Analysis":
                         height=180, margin=dict(l=10, r=10, t=10, b=10),
                         template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
                     )
-                    st.plotly_chart(_pfig, use_container_width=True)
+                    st.plotly_chart(_pfig, width="stretch")
                 with _pg2:
                     # Display-only override: exit_advisor's "Steady" tier icon is
                     # 🛡️, which collides with the risk-off de-risk TRIM card's own
@@ -13296,7 +13296,7 @@ elif page == "🔗 Risk Analysis":
                     plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
                     showlegend=False,
                 )
-                st.plotly_chart(_dd_fig, use_container_width=True)
+                st.plotly_chart(_dd_fig, width="stretch")
                 st.caption(
                     "Drawdown = portfolio decline from its most recent peak (high-water mark). "
                     "Red fill = periods below prior high. "
@@ -13364,7 +13364,7 @@ elif page == "🔗 Risk Analysis":
                         plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
                         showlegend=False,
                     )
-                    st.plotly_chart(_bc_fig, use_container_width=True)
+                    st.plotly_chart(_bc_fig, width="stretch")
                     st.caption(
                         "Contribution = position beta × portfolio weight. "
                         "🔴 Red bars are the primary beta drivers — reducing these positions "
@@ -13455,7 +13455,7 @@ elif page == "🔗 Risk Analysis":
                 margin=dict(l=0, r=0, t=10, b=0),
                 xaxis=dict(side="bottom", tickangle=-30),
             )
-            st.plotly_chart(hm, use_container_width=True)
+            st.plotly_chart(hm, width="stretch")
             st.caption(
                 "🟢 Green = low/negative correlation (genuine diversification)  |  "
                 "⬛ Dark = near-zero (independent)  |  "
@@ -13815,7 +13815,7 @@ elif page == "🔗 Risk Analysis":
                                             if st.button(
                                                 f"Analyze {_dp_ticker}",
                                                 key=f"_def_analyze_{_dp_ticker}_{_rtype}",
-                                                use_container_width=True,
+                                                width="stretch",
                                             ):
                                                 st.session_state["_analysis_ticker"] = _dp_ticker
                                                 st.session_state["_pending_page"]    = "📈 Analysis"
@@ -14102,7 +14102,7 @@ elif page == "🔗 Risk Analysis":
                     yaxis_title="Estimated P&L ($)",
                     margin=dict(l=0, r=0, t=40, b=0),
                 )
-                st.plotly_chart(_st_fig, use_container_width=True)
+                st.plotly_chart(_st_fig, width="stretch")
 
                 # Detail table
                 with st.expander("📋 Full position breakdown", expanded=False):
@@ -14561,7 +14561,7 @@ elif page == "🔗 Risk Analysis":
                     xaxis_title="Trading Days Ahead",
                     margin=dict(l=0, r=0, t=40, b=0),
                 )
-                st.plotly_chart(_mc_fig, use_container_width=True)
+                st.plotly_chart(_mc_fig, width="stretch")
 
                 st.markdown(
                     f"**Outcome at horizon end ({_mc_summary['horizon_days']} trading days)** — "
@@ -14903,7 +14903,7 @@ elif page == "🔗 Risk Analysis":
                     "Confirmed": _fs_p[_fsim.TIER_CONFIRMED] or "—",
                 } for _fs_p in _fs_out["positions"]]
                 st.dataframe(
-                    pd.DataFrame(_fs_rows), use_container_width=True, hide_index=True
+                    pd.DataFrame(_fs_rows), width="stretch", hide_index=True
                 )
 
             # ── Honest gaps — never silent ───────────────────────────────────
@@ -15312,7 +15312,7 @@ elif page == "🧩 Intelligence":
                             xanchor="right", x=1),
                 margin=dict(l=0, r=0, t=10, b=0),
             )
-            st.plotly_chart(_pi_rb_fig, use_container_width=True)
+            st.plotly_chart(_pi_rb_fig, width="stretch")
 
             _pi_rb_table = pd.DataFrame([
                 {
@@ -15401,7 +15401,7 @@ elif page == "🧩 Intelligence":
                 margin=dict(l=0, r=0, t=10, b=0),
                 yaxis=dict(autorange="reversed"),
             )
-            st.plotly_chart(_pi_factor_fig, use_container_width=True)
+            st.plotly_chart(_pi_factor_fig, width="stretch")
 
             _pi_port_tilt = _pi_factor_cache["portfolio_tilt"]
             _pi_tilt_valid = {k: v for k, v in _pi_port_tilt.items() if v is not None}
@@ -15420,7 +15420,7 @@ elif page == "🧩 Intelligence":
                     xaxis=dict(range=[-1, 1], title="Weighted Correlation"),
                     margin=dict(l=0, r=0, t=10, b=0),
                 )
-                st.plotly_chart(_pi_tilt_fig, use_container_width=True)
+                st.plotly_chart(_pi_tilt_fig, width="stretch")
 
                 _pi_dom_factor = max(_pi_tilt_valid, key=lambda k: abs(_pi_tilt_valid[k]))
                 _pi_dom_val = _pi_tilt_valid[_pi_dom_factor]
@@ -15835,7 +15835,7 @@ elif page == "🥧 Portfolio Overview":
                 height=320, margin=dict(l=0, r=0, t=40, b=0),
                 showlegend=False,
             )
-            st.plotly_chart(pie, use_container_width=True)
+            st.plotly_chart(pie, width="stretch")
 
         with ch2:
             # P&L bar
@@ -15852,7 +15852,7 @@ elif page == "🥧 Portfolio Overview":
                 height=320, yaxis_title="P&L ($)",
                 margin=dict(l=0, r=0, t=40, b=0),
             )
-            st.plotly_chart(pnl_fig, use_container_width=True)
+            st.plotly_chart(pnl_fig, width="stretch")
 
         # Sector exposure — inline (no extra expander needed inside tab)
         sector_df = sector_exposure(port_df)
@@ -15898,7 +15898,7 @@ elif page == "🥧 Portfolio Overview":
                             xanchor="right", x=1),
                 margin=dict(l=0, r=0, t=10, b=0),
             )
-            st.plotly_chart(sec_fig, use_container_width=True)
+            st.plotly_chart(sec_fig, width="stretch")
             if _sx_lever:
                 st.caption(
                     f"You carry a margin debit, so your concentration gates measure each "
@@ -16016,7 +16016,7 @@ elif page == "🥧 Portfolio Overview":
                 font=dict(size=11, color="#cbd5e1"),
                 paper_bgcolor="rgba(0,0,0,0)",
             )
-            st.plotly_chart(_cmp_fig, use_container_width=True)
+            st.plotly_chart(_cmp_fig, width="stretch")
             st.caption(
                 f"Band width = share of portfolio value. **Red** flags concentration: a "
                 f"sector over the **{SECTOR_CEILING:.0f}%** hard cap or a single name over the "
@@ -16139,7 +16139,7 @@ elif page == "🥧 Portfolio Overview":
                     followed_intent=("yes" if _ps_is_sell_signal else None),
                     key_suffix="drill_sell",
                     label=f"📒 Sell {sel}",
-                    use_container_width=True,
+                    width="stretch",
                 )
             with _trc2:
                 _render_trade_button(
@@ -16151,7 +16151,7 @@ elif page == "🥧 Portfolio Overview":
                     followed_intent=("yes" if "Buy" in _ps_sig else None),
                     key_suffix="drill_buy",
                     label=f"📒 Add to {sel}",
-                    use_container_width=True,
+                    width="stretch",
                 )
             with _trc3:
                 st.caption(
@@ -16291,7 +16291,7 @@ elif page == "🥧 Portfolio Overview":
                 xaxis_rangeslider_visible=False,
                 margin=dict(l=0, r=80, t=10, b=0),
             )
-            st.plotly_chart(mini, use_container_width=True)
+            st.plotly_chart(mini, width="stretch")
 
     with _pa_tab_rb:
         # ── News Intelligence ─────────────────────────────────────────────────
@@ -16650,7 +16650,7 @@ elif page == "🥧 Portfolio Overview":
                 yaxis_title="Drift (pp)",
                 margin=dict(l=0, r=100, t=40, b=0),
             )
-            st.plotly_chart(_rb_fig, use_container_width=True)
+            st.plotly_chart(_rb_fig, width="stretch")
             st.caption(
                 "🔴 Red = overweight >5pp (trim)  ·  "
                 "🟡 Amber = overweight 2–5pp (watch)  ·  "
@@ -17373,7 +17373,7 @@ elif page == "🥧 Portfolio Overview":
                         xaxis=dict(gridcolor="#1f2937"),
                         plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
                     )
-                    st.plotly_chart(_perf_fig, use_container_width=True)
+                    st.plotly_chart(_perf_fig, width="stretch")
                     st.caption(
                         "Uses current portfolio weights applied to historical prices. "
                         "Assumes constant allocation throughout the selected period. "
@@ -17484,7 +17484,7 @@ elif page == "🥧 Portfolio Overview":
                         plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
                         showlegend=False,
                     )
-                    st.plotly_chart(_attr_fig, use_container_width=True)
+                    st.plotly_chart(_attr_fig, width="stretch")
                     st.caption(
                         "🟢 Green = outperforming SPY ≥ 5% (alpha generator)  |  "
                         "⬛ Gray = within ±5% of SPY  |  "
@@ -17663,7 +17663,7 @@ elif page == "🥧 Portfolio Overview":
                 plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
                 showlegend=False,
             )
-            st.plotly_chart(_wf_fig, use_container_width=True)
+            st.plotly_chart(_wf_fig, width="stretch")
 
         with _pf_t3:
             # ── Sector attribution breakdown ──────────────────────────────────────
@@ -17703,7 +17703,7 @@ elif page == "🥧 Portfolio Overview":
                 plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
                 showlegend=False,
             )
-            st.plotly_chart(_sec_fig, use_container_width=True)
+            st.plotly_chart(_sec_fig, width="stretch")
             st.caption(
                 "Waterfall: each bar is one position's dollar P&L contribution; "
                 "the final 'Total' bar is the portfolio sum.  "
@@ -17741,7 +17741,7 @@ elif page == "🥧 Portfolio Overview":
                     yaxis_title="Return (%)", yaxis_zeroline=True,
                     margin=dict(l=0, r=0, t=40, b=0),
                 )
-                st.plotly_chart(ret_fig, use_container_width=True)
+                st.plotly_chart(ret_fig, width="stretch")
 
                 # ETF benchmarks — gated behind button to avoid extra API calls on load
                 if st.button("📊 Load sector ETF benchmarks", key="_rs_load_btn"):
@@ -17805,7 +17805,7 @@ elif page == "🥧 Portfolio Overview":
                             yaxis_title="Alpha (%)",
                             margin=dict(l=0, r=0, t=40, b=0),
                         )
-                        st.plotly_chart(alpha_fig, use_container_width=True)
+                        st.plotly_chart(alpha_fig, width="stretch")
                         st.caption(
                             "🟢 Green = outperforming sector (genuine alpha)  |  "
                             "⬜ Gray = in line with sector  |  "
@@ -17980,7 +17980,7 @@ elif page == "🥧 Portfolio Overview":
                     yaxis=dict(autorange="reversed"),
                     plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
                 )
-                st.plotly_chart(_hmap, use_container_width=True)
+                st.plotly_chart(_hmap, width="stretch")
                 st.caption("◀ = sector you hold (weight % shown) · gold border = your position · sorted by 3M return")
 
                 # ── Exposure vs momentum table ────────────────────────────────────
@@ -18052,7 +18052,7 @@ elif page == "🥧 Portfolio Overview":
                     yaxis_title="Portfolio − S&P 500 (pp)",
                     margin=dict(l=0, r=0, t=40, b=0),
                 )
-                st.plotly_chart(_tilt_fig, use_container_width=True)
+                st.plotly_chart(_tilt_fig, width="stretch")
                 st.caption(
                     "🟢 Green = overweight this real sector vs. the S&P 500  |  "
                     "🔴 Red = underweight  |  "
@@ -18146,7 +18146,7 @@ elif page == "🥧 Portfolio Overview":
                         yaxis_title="Percentile", yaxis_range=[0, 110],
                         margin=dict(l=0, r=60, t=40, b=0),
                     )
-                    st.plotly_chart(pct_fig, use_container_width=True)
+                    st.plotly_chart(pct_fig, width="stretch")
 
                     # Styled ranking table
                     def _tier_col(val):
@@ -18718,7 +18718,7 @@ elif page == "🏆 Health":
             icon="📅",
         )
     else:
-        st.plotly_chart(_ph_fig_scatter, use_container_width=True)
+        st.plotly_chart(_ph_fig_scatter, width="stretch")
 
     # ── Cohort bar + Donut ────────────────────────────────────────────────────
     _ph_col_bar, _ph_col_donut = st.columns([3, 2])
@@ -18759,7 +18759,7 @@ elif page == "🏆 Health":
                 height=230,
                 showlegend=False,
             )
-            st.plotly_chart(_ph_fig_bar, use_container_width=True)
+            st.plotly_chart(_ph_fig_bar, width="stretch")
         else:
             st.caption("Cohort data unavailable — trade history needed.")
 
@@ -18796,7 +18796,7 @@ elif page == "🏆 Health":
             showlegend=True,
             legend=dict(bgcolor="rgba(0,0,0,0)", orientation="v", x=0.78, y=0.5),
         )
-        st.plotly_chart(_ph_fig_donut, use_container_width=True)
+        st.plotly_chart(_ph_fig_donut, width="stretch")
 
     # ── Return efficiency callouts ────────────────────────────────────────────
     # Period toggle — drives both sort order and displayed rate
@@ -19080,7 +19080,7 @@ elif page == "🌐 Macro":
                             xaxis_title="Rate Sensitivity Score",
                             margin=dict(l=0, r=60, t=40, b=0),
                         )
-                        st.plotly_chart(rs_fig, use_container_width=True)
+                        st.plotly_chart(rs_fig, width="stretch")
                     # Sits directly under the chart, BEFORE the colour legend, so
                     # it reads as a qualification of the chart rather than as
                     # commentary on the legend.
@@ -19170,7 +19170,7 @@ elif page == "🔍 Market Scanner":
 
     col_btn, col_info = st.columns([1, 3])
     with col_btn:
-        run_scan = st.button("🔍 Scan Now", type="primary", use_container_width=True)
+        run_scan = st.button("🔍 Scan Now", type="primary", width="stretch")
     with col_info:
         _ms_wl          = st.session_state.get("watchlist", []) or []
         _ms_sector_set  = set().union(*[SECTOR_UNIVERSE.get(s, []) for s in selected_sectors])
@@ -19285,7 +19285,7 @@ elif page == "🔍 Market Scanner":
                     if st.button(
                         f"▶ Analyze",
                         key=f"_sc_top_analyze_{row['Ticker']}",
-                        use_container_width=True,
+                        width="stretch",
                     ):
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = row["Ticker"]
@@ -19319,7 +19319,7 @@ elif page == "🔍 Market Scanner":
             _load_ev = st.button(
                 "📊 Load Signal Evidence",
                 key="_load_ev_btn",
-                use_container_width=True,
+                width="stretch",
             )
         with _ev_hint_col:
             st.caption(
@@ -19531,7 +19531,7 @@ elif page == "🔍 Market Scanner":
                         if st.button(
                             f"▶ Analyze {_evr['ticker']}",
                             key=f"_sc_ev_analyze_{_evr['ticker']}",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             st.session_state["_pending_page"]    = "📈 Analysis"
                             st.session_state["_analysis_ticker"] = _evr["ticker"]
@@ -19752,7 +19752,7 @@ elif page == "🔍 Market Scanner":
                     yaxis_title="Avg Score", yaxis_range=[0, 105],
                     margin=dict(l=0, r=0, t=10, b=0),
                 )
-                st.plotly_chart(heat_fig, use_container_width=True)
+                st.plotly_chart(heat_fig, width="stretch")
 
         def _scan_sig_color(val):
             s = str(val)
@@ -19825,7 +19825,7 @@ elif page == "🔍 Market Scanner":
             st.write("")
             st.write("")
             if st.button("▶ Analyze", key="_sc_quick_analyze_go",
-                         disabled=not _qa_pick, use_container_width=True):
+                         disabled=not _qa_pick, width="stretch"):
                 st.session_state["_pending_page"]    = "📈 Analysis"
                 st.session_state["_analysis_ticker"] = _qa_pick
                 st.rerun()
@@ -20674,7 +20674,7 @@ elif page == "📈 Analysis":
                                 height=300, template="plotly_dark", showlegend=False,
                                 margin=dict(l=0, r=80, t=30, b=0),
                             )
-                            st.plotly_chart(_sfig, use_container_width=True)
+                            st.plotly_chart(_sfig, width="stretch")
                         with _sc2:
                             st.markdown("**Potential outcomes if held**")
                             _held_shares = int(_sa_holding.get("Shares", 0)) if _sa_holding else None
@@ -20773,7 +20773,7 @@ elif page == "📈 Analysis":
                                 height=300, template="plotly_dark", showlegend=False,
                                 margin=dict(l=0, r=80, t=30, b=0),
                             )
-                            st.plotly_chart(_sfig, use_container_width=True)
+                            st.plotly_chart(_sfig, width="stretch")
                         with _sc2:
                             st.markdown("**Scenarios**")
                             for _lbl, _tgt, _pct, _clr in [
@@ -21231,7 +21231,7 @@ elif page == "📈 Analysis":
                                 height=300, template="plotly_dark", showlegend=False,
                                 margin=dict(l=0, r=80, t=30, b=0),
                             )
-                            st.plotly_chart(_sfig, use_container_width=True)
+                            st.plotly_chart(_sfig, width="stretch")
                         with _sc2:
                             st.markdown("**Scenarios**")
                             for _lbl, _tgt, _pct, _clr in [
@@ -21310,7 +21310,7 @@ elif page == "📈 Analysis":
                             followed_intent=_ap_followed_sell,
                             key_suffix=f"plan_sell_{ticker}",
                             label=f"📒 Sell {ticker}",
-                            use_container_width=True,
+                            width="stretch",
                         )
                 elif _sa_is_hold:
                     # Hold — surface both sides so user picks
@@ -21324,7 +21324,7 @@ elif page == "📈 Analysis":
                             trigger="MANUAL",
                             key_suffix=f"plan_sell_{ticker}",
                             label=f"📒 Trim {ticker}",
-                            use_container_width=True,
+                            width="stretch",
                         )
                     with _ap_c2:
                         _render_trade_button(
@@ -21336,7 +21336,7 @@ elif page == "📈 Analysis":
                             trigger="MANUAL",
                             key_suffix=f"plan_buy_{ticker}",
                             label=f"📒 Add {ticker}",
-                            use_container_width=True,
+                            width="stretch",
                         )
                 else:
                     # Buy signal — primary action is BUY (new or add)
@@ -21351,7 +21351,7 @@ elif page == "📈 Analysis":
                             followed_intent=_ap_followed_buy,
                             key_suffix=f"plan_buy_{ticker}",
                             label=(f"📒 Add {ticker}" if _sa_holding else f"📒 Buy {ticker}"),
-                            use_container_width=True,
+                            width="stretch",
                         )
                     if _sa_holding:
                         with _ap_c2:
@@ -21364,7 +21364,7 @@ elif page == "📈 Analysis":
                                 trigger="MANUAL",
                                 key_suffix=f"plan_sell_{ticker}",
                                 label=f"📒 Sell {ticker}",
-                                use_container_width=True,
+                                width="stretch",
                             )
                 with _ap_c3:
                     st.caption(
@@ -21443,7 +21443,7 @@ elif page == "📈 Analysis":
                     legend=dict(orientation="h", y=1.02),
                     margin=dict(l=0, r=80, t=30, b=0),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
             # ── Risk ──────────────────────────────────────────────────────
             with risk_tab:
@@ -21485,7 +21485,7 @@ elif page == "📈 Analysis":
                             xaxis_title="Daily Return (%)",
                             margin=dict(l=0, r=0, t=10, b=0),
                         )
-                        st.plotly_chart(hfig, use_container_width=True)
+                        st.plotly_chart(hfig, width="stretch")
                 with rc2:
                     vals_closed = vals + [vals[0]]
                     cats_closed = cats + [cats[0]]
@@ -21500,7 +21500,7 @@ elif page == "📈 Analysis":
                         margin=dict(l=30, r=30, t=30, b=30),
                         title="Risk Radar",
                     )
-                    st.plotly_chart(rfig, use_container_width=True)
+                    st.plotly_chart(rfig, width="stretch")
 
             # ── Deep Dive ─────────────────────────────────────────────────
             with deep_tab:
@@ -22053,7 +22053,7 @@ elif page == "📈 Analysis":
                             _pt_fig = None
                         if _pt_fig is not None:
                             st.plotly_chart(
-                                _pt_fig, use_container_width=True,
+                                _pt_fig, width="stretch",
                                 key=f"_pt_fig_{ticker}",
                             )
                             # The dashed line and the per-card "since you
@@ -22406,7 +22406,7 @@ elif page == "📈 Analysis":
                 title="Return Correlation (>0.8 = concentrated risk)",
                 margin=dict(l=0, r=0, t=40, b=0),
             )
-            st.plotly_chart(hfig, use_container_width=True)
+            st.plotly_chart(hfig, width="stretch")
 
     # Analysis summary
     with st.expander("📋 Analysis Summary"):
@@ -23147,7 +23147,7 @@ elif page == "⚖️ Compare":
         ).strip().upper()
     with _cmp_c3:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        _cmp_go = st.button("⚖️ Compare", type="primary", use_container_width=True)
+        _cmp_go = st.button("⚖️ Compare", type="primary", width="stretch")
 
     # Quick-pick row from watchlist + holdings
     _cmp_qp_options = []
@@ -23163,7 +23163,7 @@ elif page == "⚖️ Compare":
         for _qpi, (_lbl, _qpa, _qpb) in enumerate(_cmp_qp_options):
             with _qp_cols[_qpi]:
                 if st.button(f"🎯 {_lbl}: {_qpa} vs {_qpb}", key=f"_cmp_qp_{_qpi}",
-                             use_container_width=True):
+                             width="stretch"):
                     # The text_input widgets are bound to _cmp_a_input /
                     # _cmp_b_input via the key= arg — writing to those keys
                     # directly raises StreamlitAPIException. Instead, set the
@@ -23313,13 +23313,13 @@ elif page == "⚖️ Compare":
         _da, _db_ = st.columns(2)
         with _da:
             if st.button(f"📈 Deep dive on {_cmp_a_in}",
-                         key=f"_cmp_dd_a_{_cmp_a_in}", use_container_width=True):
+                         key=f"_cmp_dd_a_{_cmp_a_in}", width="stretch"):
                 st.session_state["_pending_page"]    = "📈 Analysis"
                 st.session_state["_analysis_ticker"] = _cmp_a_in
                 st.rerun()
         with _db_:
             if st.button(f"📈 Deep dive on {_cmp_b_in}",
-                         key=f"_cmp_dd_b_{_cmp_b_in}", use_container_width=True):
+                         key=f"_cmp_dd_b_{_cmp_b_in}", width="stretch"):
                 st.session_state["_pending_page"]    = "📈 Analysis"
                 st.session_state["_analysis_ticker"] = _cmp_b_in
                 st.rerun()
@@ -23481,7 +23481,7 @@ elif page == "📒 Trade Journal":
                     unsafe_allow_html=True,
                 )
         _ps_c1, _ps_c2 = st.columns([1, 1])
-        if _ps_c1.button("✅ Confirm SELL", type="primary", key="_tj_confirm_sell", use_container_width=True,
+        if _ps_c1.button("✅ Confirm SELL", type="primary", key="_tj_confirm_sell", width="stretch",
                           disabled=st.session_state.get("_readonly", False)):
             _ps_saved = db.save_trade(_pending_sell)
             if _ps_saved or not db.has_db():
@@ -23536,7 +23536,7 @@ elif page == "📒 Trade Journal":
                 st.session_state["_tj_last_submit_sig"] = (_ps_ticker, "SELL", _ps_shares)
                 st.session_state["_tj_last_submit_ts"]  = _ps_time.time()
                 st.rerun()
-        if _ps_c2.button("✗ Cancel", key="_tj_cancel_sell", use_container_width=True):
+        if _ps_c2.button("✗ Cancel", key="_tj_cancel_sell", width="stretch"):
             st.session_state["_tj_prefill"] = {
                 "ticker": _ps_ticker,
                 "action": "SELL",
@@ -23578,7 +23578,7 @@ elif page == "📒 Trade Journal":
         )
         _pb_c1, _pb_c2 = st.columns([1, 1])
         if _pb_c1.button("✅ Confirm BUY", type="primary", key="_tj_confirm_buy",
-                          use_container_width=True,
+                          width="stretch",
                           disabled=st.session_state.get("_readonly", False)):
             _pb_saved = db.save_trade(_pending_buy)
             if _pb_saved or not db.has_db():
@@ -23722,7 +23722,7 @@ elif page == "📒 Trade Journal":
                 st.session_state["_tj_last_submit_sig"] = (_pb_ticker, "BUY", _pb_shares)
                 st.session_state["_tj_last_submit_ts"]  = _pb_time.time()
                 st.rerun()
-        if _pb_c2.button("✗ Cancel", key="_tj_cancel_buy", use_container_width=True):
+        if _pb_c2.button("✗ Cancel", key="_tj_cancel_buy", width="stretch"):
             st.session_state["_tj_prefill"] = {
                 "ticker": _pb_ticker,
                 "action": "BUY",
@@ -24904,7 +24904,7 @@ elif page == "📒 Trade Journal":
                     yaxis_title="Realized P&L ($)",
                     margin=dict(l=0, r=0, t=40, b=0),
                 )
-                st.plotly_chart(pnl_bar, use_container_width=True)
+                st.plotly_chart(pnl_bar, width="stretch")
 
                 # Top 5 / Bottom 5 by realized P&L (only meaningful with >5 tickers)
                 if len(stats["realized_by_ticker"]) > 5:
@@ -25034,7 +25034,7 @@ elif page == "📒 Trade Journal":
                         yaxis_title="Realized P&L ($)",
                         margin=dict(l=0, r=0, t=40, b=0),
                     )
-                    st.plotly_chart(_mon_fig, use_container_width=True)
+                    st.plotly_chart(_mon_fig, width="stretch")
 
                 # ── Trigger performance breakdown ─────────────────────────────────
                 if not _ta["trigger_df"].empty:
@@ -26566,7 +26566,7 @@ elif page == "🪞 Trade Review":
                     yaxis=dict(gridcolor="#1e293b", title="Cumulative $ P&L"),
                     showlegend=False,
                 )
-                st.plotly_chart(_fig_cum, use_container_width=True)
+                st.plotly_chart(_fig_cum, width="stretch")
 
                 # Rolling win rate
                 if _tr_roll_wr:
@@ -26590,7 +26590,7 @@ elif page == "🪞 Trade Review":
                         yaxis=dict(gridcolor="#1e293b", title="Win rate %", range=[0, 100]),
                         showlegend=False,
                     )
-                    st.plotly_chart(_fig_wr, use_container_width=True)
+                    st.plotly_chart(_fig_wr, width="stretch")
                 else:
                     st.caption(
                         "Rolling 5-trade win rate needs at least 5 judged trades — "
@@ -26688,7 +26688,7 @@ elif page == "🪞 Trade Review":
                     yaxis=dict(gridcolor="#1e293b"),
                     showlegend=False,
                 )
-                st.plotly_chart(_fig_sec, use_container_width=True)
+                st.plotly_chart(_fig_sec, width="stretch")
                 if _tr_sec_mix.get("top_sector_pct") and _tr_sec_mix["top_sector_pct"] > _tr_sec_mix["elevated_threshold"]:
                     st.caption(
                         f"⚠ **{_tr_sec_mix['top_sector']}** is above the "
@@ -27456,7 +27456,7 @@ elif page == "📜 Recommendations History":
                 "Signal flow — New Positions to Initiate → acted / missed → outcome",
             )
             if _rh_sk_fig is not None:
-                st.plotly_chart(_rh_sk_fig, use_container_width=True)
+                st.plotly_chart(_rh_sk_fig, width="stretch")
                 st.caption(
                     f"**Distinct tickers** surfaced as New Positions to Initiate — "
                     f"a name recurring across days counts once. The awareness only More Buy "
@@ -27546,7 +27546,7 @@ elif page == "📜 Recommendations History":
                     yaxis=dict(title=None),
                     showlegend=False,
                 )
-                st.plotly_chart(_rh_fig, use_container_width=True)
+                st.plotly_chart(_rh_fig, width="stretch")
                 st.caption(
                     "Green = names that rose after the App surfaced them (process misses — "
                     "worth asking why you skipped); red = names that fell (your discretion "
@@ -27806,7 +27806,7 @@ elif page == "📜 Recommendations History":
                 )
                 with _rh_j2:
                     if st.button(f"▶ Analyze {_rh_jump}" if _rh_jump != "—" else "▶ Analyze",
-                                 key="_rh_jump_btn", use_container_width=True,
+                                 key="_rh_jump_btn", width="stretch",
                                  disabled=(_rh_jump == "—")):
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _rh_jump
@@ -28336,7 +28336,7 @@ elif page == "📊 Predictive Analytics":
                 yaxis_title="Avg Alpha vs SPY (pp)", xaxis_title="Composite Score Band",
                 margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
             )
-            st.plotly_chart(_pac_calib_fig, use_container_width=True)
+            st.plotly_chart(_pac_calib_fig, width="stretch")
 
         with st.expander("📋 Full outcome history", expanded=False):
             st.caption(
@@ -28365,7 +28365,7 @@ elif page == "📊 Predictive Analytics":
             if _pac_raw_rows:
                 st.dataframe(
                     _pa_pd.DataFrame(_pac_raw_rows).sort_values("Date", ascending=False),
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                 )
             else:
                 st.info("No outcomes available yet.")
@@ -28462,7 +28462,7 @@ elif page == "📊 Predictive Analytics":
                 margin=dict(l=0, r=0, t=10, b=0),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             )
-            st.plotly_chart(_dq_fig, use_container_width=True)
+            st.plotly_chart(_dq_fig, width="stretch")
         else:
             st.info("Not enough split data per band to render this chart yet.")
 
@@ -28501,7 +28501,7 @@ elif page == "📊 Predictive Analytics":
                 yaxis_title="Avg Alpha vs SPY (pp)",
                 margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
             )
-            st.plotly_chart(_cv_fig, use_container_width=True)
+            st.plotly_chart(_cv_fig, width="stretch")
 
             _cv_cols = st.columns(len(_pac_conv))
             for _ci, (_cc, _cd) in enumerate(zip(_cv_cols, _pac_conv)):
@@ -28545,7 +28545,7 @@ elif page == "📊 Predictive Analytics":
                 yaxis_title="Avg Alpha vs SPY (pp)",
                 margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
             )
-            st.plotly_chart(_rt_fig, use_container_width=True)
+            st.plotly_chart(_rt_fig, width="stretch")
 
             _rt_cols = st.columns(len(_pac_rtype))
             for _rti, (_rtc, _rtd) in enumerate(zip(_rt_cols, _pac_rtype)):
@@ -28596,7 +28596,7 @@ elif page == "📊 Predictive Analytics":
                 yaxis_title="Avg Alpha vs SPY (pp)", xaxis_title="Sector",
                 margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
             )
-            st.plotly_chart(_sa_fig, use_container_width=True)
+            st.plotly_chart(_sa_fig, width="stretch")
 
             # Top / bottom sector callouts
             _sa_best  = _pac_sec_alph[0]
@@ -28652,7 +28652,7 @@ elif page == "📊 Predictive Analytics":
 
             st.dataframe(
                 _pac_hm_df.style.applymap(_pac_color_cell),
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.info(
@@ -28783,7 +28783,7 @@ elif page == "📊 Predictive Analytics":
                 margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
                 yaxis=dict(autorange="reversed"),
             )
-            st.plotly_chart(_sv_fig, use_container_width=True)
+            st.plotly_chart(_sv_fig, width="stretch")
 
         # ── Per-verdict detail table ───────────────────────────────────────────
         with st.expander("📋 Per-verdict detail", expanded=False):
@@ -28801,7 +28801,7 @@ elif page == "📊 Predictive Analytics":
                 ]
                 st.dataframe(
                     _pa_pd.DataFrame(_sv_rows),
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                 )
             else:
                 st.info("No graded outcomes yet.")
@@ -28956,7 +28956,7 @@ elif page == "📊 Predictive Analytics":
                         margin=dict(l=0, r=0, t=10, b=0),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     )
-                    st.plotly_chart(_et_fig, use_container_width=True)
+                    st.plotly_chart(_et_fig, width="stretch")
 
                 with _et_cards_col:
                     for _et_b in _et_bands:
@@ -29020,7 +29020,7 @@ elif page == "📊 Predictive Analytics":
                         for b in _et_bands
                     ]
                     st.dataframe(
-                        _pa_pd.DataFrame(_et_raw_rows), use_container_width=True, hide_index=True,
+                        _pa_pd.DataFrame(_et_raw_rows), width="stretch", hide_index=True,
                     )
                     st.caption(
                         f"n shown per horizon — each horizon's own outcome count can differ from "
@@ -29531,7 +29531,7 @@ elif page == "🔬 Model Lab":
                 height=380, xaxis_title="predicted vol", yaxis_title="realized vol",
                 showlegend=False, margin=dict(l=10, r=10, t=10, b=10),
             )
-            st.plotly_chart(_pv_fig, use_container_width=True)
+            st.plotly_chart(_pv_fig, width="stretch")
 
             st.markdown("###### Recently matured")
             _sort_col = "scored_at" if "scored_at" in _ml_matured.columns else "made_at"
@@ -29541,7 +29541,7 @@ elif page == "🔬 Model Lab":
                             "baseline_value", "realized_value", "abs_error", "source"]
                 if c in _ml_recent.columns
             ]
-            st.dataframe(_ml_recent[_ml_disp_cols], use_container_width=True, hide_index=True)
+            st.dataframe(_ml_recent[_ml_disp_cols], width="stretch", hide_index=True)
 
         st.caption(
             "Baseline logged at prediction time (never recomputed at scoring). "
@@ -29928,7 +29928,7 @@ elif page == "💰 Account":
                             plot_bgcolor="rgba(0,0,0,0)",
                             font_color="#ccc",
                         )
-                        st.plotly_chart(_fig_mg, use_container_width=True)
+                        st.plotly_chart(_fig_mg, width="stretch")
                         st.caption(
                             "**How to read:** You are at ▶ Now (0% decline). "
                             "The green zone is your runway — how far the book can fall before a call. "
@@ -30341,7 +30341,7 @@ elif page == "💰 Account":
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(_t_fig, use_container_width=True)
+        st.plotly_chart(_t_fig, width="stretch")
 
         # Auto-narration — computed, no LLM call
         _t_first_eq  = float(_tdf["equity"].iloc[0])
@@ -30684,7 +30684,7 @@ elif page == "💰 Account":
                     tickprefix="$", gridcolor="rgba(128,128,128,0.15)",
                 ),
             )
-            st.plotly_chart(_sii_fig, use_container_width=True)
+            st.plotly_chart(_sii_fig, width="stretch")
             _sii_ytd = _sii_df[_sii_df["event_date"].dt.year == _today_et().year]
             _sii_div_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "dividend", "amount"].sum()
             _sii_int_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "interest", "amount"].sum()
@@ -30732,7 +30732,7 @@ elif page == "🔔 Catalyst Watch":
                     _cw_an = st.selectbox("holding", _cw_hold_tk, key="_cw_hold_analyze_sel",
                                           label_visibility="collapsed")
                 with _cw_ac2:
-                    if st.button("▶ Open", key="_cw_hold_analyze_btn", use_container_width=True):
+                    if st.button("▶ Open", key="_cw_hold_analyze_btn", width="stretch"):
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _cw_an
                         st.rerun()
@@ -30768,7 +30768,7 @@ elif page == "🔔 Catalyst Watch":
 
         _cw_rc1, _cw_rc2 = st.columns([5, 1])
         with _cw_rc2:
-            if st.button("🔄 Refresh", key="_cw_refresh", use_container_width=True,
+            if st.button("🔄 Refresh", key="_cw_refresh", width="stretch",
                          help="Re-fetch today's earnings calendar (otherwise cached for the day)."):
                 _cached_catalyst_calendar.clear()
                 st.rerun()
@@ -30834,7 +30834,7 @@ elif page == "🔔 Catalyst Watch":
                     _cw_ran = st.selectbox("radar", _cw_radar_tk, key="_cw_radar_analyze_sel",
                                            label_visibility="collapsed")
                 with _cw_rc4:
-                    if st.button("▶ Open", key="_cw_radar_analyze_btn", use_container_width=True):
+                    if st.button("▶ Open", key="_cw_radar_analyze_btn", width="stretch"):
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _cw_ran
                         st.rerun()
@@ -32206,7 +32206,7 @@ The app's intelligence is computed live in your browser — so it can only reach
                 Note [label="Gate thresholds are rules-only (constants.py).\\nSentiment (10% of composite) uses LLM scoring.\\nAll other AI outputs are awareness-only and\\nnever read back by the engine." shape=note style=filled fillcolor="#fff9c4" color="#a16207"]
             }
                 """,
-                use_container_width=True,
+                width="stretch",
             )
             st.markdown(
                 """
@@ -33310,7 +33310,7 @@ elif page == "🧠 AI Insights":
                     yaxis=dict(title="Alpha (pp)", zeroline=True, zerolinecolor="#475569"),
                     xaxis=dict(title=None), showlegend=False,
                 )
-                st.plotly_chart(_wt_fig, use_container_width=True)
+                st.plotly_chart(_wt_fig, width="stretch")
                 _wt_beat = sum(1 for v in _wt_a if v > 0)
                 st.caption(
                     f"Portfolio return minus SPY, per week — green = beat the market. "
@@ -33594,7 +33594,7 @@ elif page == "🧠 AI Insights":
                     "This month's signal flow — New Positions → acted / missed → outcome",
                 )
                 if _mr_sk is not None:
-                    st.plotly_chart(_mr_sk, use_container_width=True)
+                    st.plotly_chart(_mr_sk, width="stretch")
                     st.caption(
                         "New Positions to Initiate this period → acted / missed → outcome "
                         "(distinct by ticker, matured only). Same engine as Recommendations "
@@ -33631,7 +33631,7 @@ elif page == "🧠 AI Insights":
                     yaxis=dict(title="Avg alpha (pp)", zeroline=True, zerolinecolor="#475569"),
                     xaxis=dict(title=None), showlegend=False,
                 )
-                st.plotly_chart(_mb_fig, use_container_width=True)
+                st.plotly_chart(_mb_fig, width="stretch")
                 st.caption(
                     "Higher-conviction bands *should* sit higher. If Strong Buy (≥75) trails "
                     "Buy (65–74), the engine's top tier underperformed this period — the "
@@ -33664,7 +33664,7 @@ elif page == "🧠 AI Insights":
                     xaxis=dict(title="Outcome %", zeroline=True, zerolinecolor="#475569"),
                     yaxis=dict(title=None), showlegend=False,
                 )
-                st.plotly_chart(_mr_fig, use_container_width=True)
+                st.plotly_chart(_mr_fig, width="stretch")
                 st.caption(
                     f"Of **{_mr_sp.get('n_distinct', len(_mr_miss))}** name(s) surfaced as **New Positions to Initiate** "
                     f"but never acted on this period: **{_mr_sp.get('n_winners', 0)}** rose (missed), "
@@ -35767,7 +35767,7 @@ elif page == "🎯 My Edge":
                         shapes=_me_flow_shapes,
                         hovermode="x unified",
                     )
-                    st.plotly_chart(_me_fig, use_container_width=True)
+                    st.plotly_chart(_me_fig, width="stretch")
                     st.caption(
                         f"🟡 Vertical dotted lines = cash deposits. "
                         f"Shadow = same dollars invested in {_me_bench_ticker} on each deposit date — "
@@ -35818,7 +35818,7 @@ elif page == "🎯 My Edge":
                         xaxis=dict(title=f"Gain / Loss if invested in {_me_bench_ticker} ($)", gridcolor="#1f2937"),
                         yaxis=dict(title=None, gridcolor="#1f2937"),
                     )
-                    st.plotly_chart(_me_fig2, use_container_width=True)
+                    st.plotly_chart(_me_fig2, width="stretch")
                     st.caption(
                         f"Each bar = what that cash deployment is worth today if it had gone into "
                         f"{_me_bench_ticker}. Green = the benchmark grew it; red = it would have lost value."
@@ -35860,7 +35860,7 @@ elif page == "🎯 My Edge":
                         yaxis=dict(title="Drawdown from peak (%)", gridcolor="#1f2937"),
                         hovermode="x unified",
                     )
-                    st.plotly_chart(_me_fig3, use_container_width=True)
+                    st.plotly_chart(_me_fig3, width="stretch")
                     st.caption(
                         f"How far {_me_bench_ticker} fell from its own recent peak at each point — "
                         "context for what passive investing felt like during this period. "
@@ -36050,7 +36050,7 @@ elif page == "🎯 My Edge":
                         xaxis=dict(title=None),
                         showlegend=False,
                     )
-                    st.plotly_chart(_me_fig_wf, use_container_width=True)
+                    st.plotly_chart(_me_fig_wf, width="stretch")
                     st.caption(
                         "Tiers: **Full Prep** = thesis + analyst research + earnings context · "
                         "**Thorough** = thesis + one of analyst/earnings · "
@@ -36111,7 +36111,7 @@ elif page == "🎯 My Edge":
                             ),
                             hovermode="closest",
                         )
-                        st.plotly_chart(_me_fig_s, use_container_width=True)
+                        st.plotly_chart(_me_fig_s, width="stretch")
 
                         # Tier definition key
                         st.markdown(
@@ -36178,7 +36178,7 @@ elif page == "🎯 My Edge":
                         height=320,
                         margin=dict(t=10, b=10, l=0, r=0),
                     )
-                    st.plotly_chart(_me_fig_fn, use_container_width=True)
+                    st.plotly_chart(_me_fig_fn, width="stretch")
 
                     with st.expander("Why so many Cold Entry trades?"):
                         st.markdown(
@@ -36445,7 +36445,7 @@ elif page == "🎯 My Edge":
                                 row=1, col=1,
                             )
 
-                    st.plotly_chart(_me_fig_g, use_container_width=True)
+                    st.plotly_chart(_me_fig_g, width="stretch")
                     if _me_grade_metric == "Composite Grade":
                         st.caption(
                             "Grade bands: 🟢 A ≥80 (Elite) · 🔵 B ≥65 (Disciplined) · "
@@ -36507,7 +36507,7 @@ elif page == "🎯 My Edge":
                         xaxis=dict(tickfont=dict(size=13), side="bottom"),
                         yaxis=dict(tickfont=dict(size=14)),
                     )
-                    st.plotly_chart(_me_fig_hm, use_container_width=True)
+                    st.plotly_chart(_me_fig_hm, width="stretch")
 
                     # Row definition key (mirrors Trade Scatter tier key pattern)
                     st.markdown(
@@ -36627,7 +36627,7 @@ elif page == "🎯 My Edge":
                                     y=1.01, xanchor="left", x=0,
                                 ),
                             )
-                            st.plotly_chart(_me_fig_cc, use_container_width=True)
+                            st.plotly_chart(_me_fig_cc, width="stretch")
 
                             # Plain-English summary
                             _me_wr_a = _me_ga.get("win_rate") or 0
@@ -37078,7 +37078,7 @@ elif page == "🎯 My Edge":
                         plot_bgcolor="rgba(0,0,0,0)",
                         paper_bgcolor="rgba(0,0,0,0)",
                     )
-                    st.plotly_chart(_mi_fig, use_container_width=True)
+                    st.plotly_chart(_mi_fig, width="stretch")
 
                 # Misalignment callout columns
                 # Orphan Conviction ("size up") vs. an active Act Today reduce
@@ -37138,7 +37138,7 @@ elif page == "🎯 My Edge":
                         if st.button(
                             f"📈 Analyse {_p['Ticker']}",
                             key=f"_mi_nav_orphan_{_p['Ticker']}",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             st.session_state["_analysis_ticker"] = _p["Ticker"]
                             st.session_state["_pending_page"] = "📈 Analysis"
@@ -37182,7 +37182,7 @@ elif page == "🎯 My Edge":
                         if st.button(
                             f"📈 Analyse {_p['Ticker']}",
                             key=f"_mi_nav_overexp_{_p['Ticker']}",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             st.session_state["_analysis_ticker"] = _p["Ticker"]
                             st.session_state["_pending_page"] = "📈 Analysis"
@@ -37209,7 +37209,7 @@ elif page == "🎯 My Edge":
                         if st.button(
                             f"📈 Analyse {_p['Ticker']}",
                             key=f"_mi_nav_overhang_{_p['Ticker']}",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             st.session_state["_analysis_ticker"] = _p["Ticker"]
                             st.session_state["_pending_page"] = "📈 Analysis"
@@ -37372,7 +37372,7 @@ elif page == "🎯 My Edge":
                             plot_bgcolor="rgba(0,0,0,0)",
                             paper_bgcolor="rgba(0,0,0,0)",
                         )
-                        st.plotly_chart(_mi_ba_fig, use_container_width=True)
+                        st.plotly_chart(_mi_ba_fig, width="stretch")
                     st.caption(
                         "A spike in the −2 to 0% bracket means positions lingered "
                         "unusually long when close to breakeven — anchoring to the "
@@ -37708,7 +37708,7 @@ elif page == "🎯 My Edge":
                             for row in _stv_breakdown
                         ]
                         st.dataframe(
-                            pd.DataFrame(_stv_bd_rows), hide_index=True, use_container_width=True,
+                            pd.DataFrame(_stv_bd_rows), hide_index=True, width="stretch",
                         )
                         st.caption(
                             "An observed pattern in your own decisions, not a verdict on it."
@@ -37978,4 +37978,4 @@ elif page == "🎯 My Edge":
                                 }
                                 for r in _sts_rows
                             ])
-                            st.dataframe(_sts_table, hide_index=True, use_container_width=True)
+                            st.dataframe(_sts_table, hide_index=True, width="stretch")
