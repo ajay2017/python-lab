@@ -6242,10 +6242,16 @@ if page == "🏠 Home":
             f"{_lev_net} of capital. Awareness only; this never changes a recommendation."
         )
 
+    # I7: these five data-integrity warnings are independent, so any combination
+    # can fire at once — five stacked multi-sentence captions between the KPI row
+    # and the page content. Collect them and choose the container by count: one
+    # renders exactly as before; two or more get a single st.warning lede with the
+    # full explanations inside an expander. Every sentence is preserved verbatim.
+    _dq_msgs: list[str] = []
     # Fail-loud: if any held position didn't price, say so — a partial Today's
     # P&L must never masquerade as the whole book (CLAUDE.md: never silently filter).
     if _today_loaded and _today_missing:
-        st.caption(
+        _dq_msgs.append(
             f"⚠️ Today's P&L (held) covers {_today_priced_n} of {_today_total_n} positions — "
             f"no live price for **{', '.join(_today_missing)}**, so it understates the rest."
         )
@@ -6264,7 +6270,7 @@ if page == "🏠 Home":
                 + (f"{_or_amt} understated" if _d["value_impact"] else "amount unavailable")
                 + ")"
             )
-        st.caption(
+        _dq_msgs.append(
             f"⚠️ Day-P&L baseline includes {', '.join(_or_bits)} from the prior close with no "
             f"current holding and no recorded trade today — check the Trade Journal. Nothing "
             f"offsets the baseline value, so the figure is understated by that whole position, "
@@ -6318,7 +6324,7 @@ if page == "🏠 Home":
             if not _dpnl_is_current else
             "an imported trade carrying a date-only timestamp, or a genuine position drift"
         )
-        st.caption(
+        _dq_msgs.append(
             f"⚠️ Share count doesn't match the baseline plus today's trades: {_qd_parts}. "
             f"Today's P&L is off by roughly that amount (exact only if the shares are simply "
             f"wrong; an unlogged fill was bought at a price this can't see). Most likely "
@@ -6334,7 +6340,7 @@ if page == "🏠 Home":
             _ub_amt = _m(f"${_d['value_impact']:,.0f}")
             _ub_bits.append(f"**{_d['ticker']}** (~{_ub_amt})")
         _ub_parts = ", ".join(_ub_bits)
-        st.caption(
+        _dq_msgs.append(
             f"⚠️ Held with no prior-close baseline row: {_ub_parts}. Their **full value**, not "
             f"a day's move, is counted as gain — so Today's P&L is overstated by roughly that "
             f"much (the exact error is the cost basis, so treat these as approximate). Expected "
@@ -6354,7 +6360,7 @@ if page == "🏠 Home":
             _ubs_amt = _m(f"${_d['value_impact']:,.0f}")
             _ubs_bits.append(f"**{_d['ticker']}** (~{_ubs_amt})")
         _ubs_parts = ", ".join(_ubs_bits)
-        st.caption(
+        _dq_msgs.append(
             f"⚠️ Sold today with no prior-close baseline row and no current holding: "
             f"{_ubs_parts}. The sale proceeds are counted with nothing subtracting the "
             f"acquisition cost, so Today's P&L is overstated by roughly that much "
@@ -6362,6 +6368,16 @@ if page == "🏠 Home":
             f"value, so treat this as approximate). Expected if the position was bought "
             f"after the baseline date and held uncaptured until today's sale."
         )
+    if len(_dq_msgs) == 1:
+        st.caption(_dq_msgs[0])
+    elif len(_dq_msgs) > 1:
+        st.warning(
+            f"⚠️ Today's P&L is affected by {len(_dq_msgs)} data issues — "
+            "expand for the details and dollar impact of each."
+        )
+        with st.expander(f"Why Today's P&L may be off ({len(_dq_msgs)} issues)", expanded=False):
+            for _dq_m in _dq_msgs:
+                st.caption(_dq_m)
 
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
@@ -10569,7 +10585,7 @@ elif page == "🧑‍⚖️ The Judge":
         "signals, composite, momentum, verdict reconciliation) across your "
         "portfolio and today's Grow Today picks. Blend weight is now "
         "track-record-adjusted per witness once it clears the min-sample gate "
-        "below (Phase 3) — until then every witness stays at equal, neutral "
+        "below — until then every witness stays at equal, neutral "
         "weight, same as before. The protective veto and contradiction audit "
         "are never weighted — those stay hard gates. "
         "**Does not change any recommendation** — visit 🏠 Home first so "
@@ -10689,11 +10705,11 @@ elif page == "🧑‍⚖️ The Judge":
     st.caption(
         "The Judge's one piece of real authority so far — an AUDIT, never a "
         "new gate. Cross-checks every ticker under an active protective veto "
-        "against `_reduce_calls` specifically (the app's other "
+        "against the app's active reduce calls specifically (its other "
         "already-published cross-feature risk surface — not every "
         "enforcement mechanism in the app) to catch coherence gaps "
-        "systematically rather than reactively (the design plan's "
-        "\"Job 3\"). Never suppresses or changes any recommendation itself."
+        "systematically rather than reactively. Never suppresses or "
+        "changes any recommendation itself."
     )
     if _jr is None:
         st.caption("Unavailable — see the notice above.")
@@ -10736,8 +10752,8 @@ elif page == "🧑‍⚖️ The Judge":
     st.markdown("##### 📊 Track record")
     st.caption(
         "Grades each witness's PAST opinions against what actually happened — "
-        "not the Judge's aggregate posture, which is never itself graded (see "
-        "the design plan's Q2). A witness needs at least "
+        "not the Judge's aggregate posture, which is never itself graded. "
+        "A witness needs at least "
         f"{BEHAVIORAL_MIN_SAMPLE_N} graded opinions before its accuracy feeds "
         "the blend above as a weight — below that it stays at neutral, "
         "equal weight. Still no override/gating authority; the veto and "
@@ -10825,7 +10841,7 @@ elif page == "🧑‍⚖️ The Judge":
                     f"{_jg_n_pending} still pending maturity. "
                     f"{_jg_n_skipped_advisory} advisory (never graded). "
                     f"{_jg_n_withheld_protective} protective (withheld — no "
-                    f"counterfactual grader yet, see design plan Gap B)."
+                    f"counterfactual grader yet)."
                 )
             except Exception as _jg_err:
                 st.error(f"Grading pass failed: {str(_jg_err)[:300]}")
@@ -21095,8 +21111,8 @@ elif page == "📈 Analysis":
                             )
                         if ps.get("capital_capped"):
                             st.warning(
-                                f"⚠️ **Also capped to your {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap "
-                                "(F-255).** This is separate from the single-name book cap above — it gates on "
+                                f"⚠️ **Also capped to your {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap"
+                                ".** This is separate from the single-name book cap above — it gates on "
                                 "equity after margin debit, not gross book value. The figures above are sized to "
                                 f"**{ps['shares']:,} shares (~{ps['capital_pct']:.0f}% of your net capital)**."
                             )
@@ -22962,8 +22978,8 @@ elif page == "📋 Watchlist":
                         )
                     if _wl_ps and _wl_ps.get("capital_capped"):
                         st.caption(
-                            f"↳ also capped to {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap "
-                            f"(F-255) — ~{_wl_ps['capital_pct']:.0f}% of your net capital"
+                            f"↳ also capped to {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap"
+                            f" — ~{_wl_ps['capital_pct']:.0f}% of your net capital"
                         )
                 elif _price:
                     # Same two/three-cause split as Analysis — see the note there.
@@ -23626,7 +23642,7 @@ elif page == "📒 Trade Journal":
                             if _pb_cc["capital_breach"]:
                                 _pb_cc_msgs.append(
                                     f"**{_pb_ticker}** is now ~**{_pb_cc['post_name_capital_pct']:.0f}%** "
-                                    f"of your net capital (F-255 net-capital cap "
+                                    f"of your net capital (net-capital cap "
                                     f"{int(NET_CAPITAL_POSITION_CAP_PCT)}%) — separate from the single-name "
                                     "book cap above."
                                 )
@@ -29331,7 +29347,7 @@ elif page == "📊 Predictive Analytics":
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "🔬 Model Lab":
     st.title("🔬 Model Lab — forecast calibration")
-    st.caption("Owner-only · experimental · the shadow layer's own track record (Phase 1, F-234)")
+    st.caption("Owner-only · experimental · the shadow layer's own track record (Phase 1)")
 
     if db.is_readonly():
         # Defense in depth: the sidebar nav entry is already hidden for a
@@ -29900,7 +29916,7 @@ elif page == "💰 Account":
             st.markdown("#### 📐 Positions Over Your Net-Capital Cap")
             st.caption(
                 f"Awareness only — these positions were sized before this "
-                f"{int(NET_CAPITAL_POSITION_CAP_PCT)}%-of-capital cap existed (F-255) and are not "
+                f"{int(NET_CAPITAL_POSITION_CAP_PCT)}%-of-capital cap existed and are not "
                 "flagged for any forced action. New/added sizing now respects the cap; existing "
                 "holdings are left to your own judgment and the Exit Advisor's own signals."
             )
@@ -29946,7 +29962,7 @@ elif page == "💰 Account":
                     _sec_conc["Account Wt (%)"] = (
                         _sec_conc["Market Value"] / _total_acct * 100
                     ).round(1)
-                    st.caption("Sector-level, same two bases — this is what `SECTOR_CEILING` reads (Holdings Wt):")
+                    st.caption("Sector-level, same two bases — this is the basis the 35% sector cap reads (Holdings Wt):")
                     st.dataframe(
                         _sec_conc[["Sector", "Holdings Wt (%)", "Account Wt (%)"]],
                         hide_index=True, width='stretch',
@@ -32186,9 +32202,9 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). A position whose label changed since the last day it was scored auto-expands with a **"🆕 Changed since your last visit"** badge, so a real tier shift can't get missed just because this tab only recomputes once per trading day. Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears at the end of Today's Brief on 🏠 Home when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Awareness only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
 
-- **⚔️ Debate — "make me the strongest case on both sides before I buy this"** On any 📈 Grow Today entry candidate, click **⚔️ Debate** to run a structured 4-round argument: a Bull agent opens the case for the position, a Bear agent counters, Bull rebuts, Bear delivers its closing concern — then an impartial Judge scores both sides and names the **one specific claim** they disagree on most. Verdict reads as 🟢 Bull wins, 🔴 Bear wins, or ⚖️ Contested (the most common and most useful outcome — it tells you exactly what to research further before deciding). Both agents debate the same evidence — composite score, momentum, and relative strength vs the market — so neither side is arguing from information you don't also have. Runs once per candidate per day (results are cached — reopen the card any time to reread it), capped at 3 new debates per session. **The debate never reorders candidates or changes the composite score — it's a second opinion you read before deciding, not a vote that counts.**
+- **⚔️ Debate — "make me the strongest case on both sides before I buy this"** On any 📈 Grow Today entry candidate, click **⚔️ Debate** to run a structured 4-round argument: a Bull agent opens the case for the position, a Bear agent counters, Bull rebuts, Bear delivers its closing concern — then an impartial judge scores both sides and names the **one specific claim** they disagree on most. Verdict reads as 🟢 Bull wins, 🔴 Bear wins, or ⚖️ Contested (the most common and most useful outcome — it tells you exactly what to research further before deciding). Both agents debate the same evidence — composite score, momentum, and relative strength vs the market — so neither side is arguing from information you don't also have. Runs once per candidate per day (results are cached — reopen the card any time to reread it), capped at 3 new debates per session. **The debate never reorders candidates or changes the composite score — it's a second opinion you read before deciding, not a vote that counts.**
 
-- **⚔️ Challenge This Exit — "make me the strongest case for holding before I sell this"** When a held name rolls over into a **deterioration TRIM or EXIT** call on Today's Brief, that card gets a **⚔️ Challenge This Exit** button — the mirror image of the entry debate, pointed at the sell decision (which is where panic and premature selling do the most damage). A Bull agent defends *continuing to hold*, anchored on your original buy thesis if you saved one — and it's explicitly forbidden from arguing "hold just because we're underwater." A Bear agent argues the exit, citing the actual deterioration numbers (how far off the peak, sessions below trend, how much it's lagging the market). The Judge reads it as 🟢 Hold defensible, 🔴 Exit supported, or ⚖️ Contested. Shares the same 3-per-session cap and daily cache as the entry debate. **It's a second opinion only — the exit recommendation stands exactly as shown; the debate never removes the card, changes the tier, or touches the score.**
+- **⚔️ Challenge This Exit — "make me the strongest case for holding before I sell this"** When a held name rolls over into a **deterioration TRIM or EXIT** call on Today's Brief, that card gets a **⚔️ Challenge This Exit** button — the mirror image of the entry debate, pointed at the sell decision (which is where panic and premature selling do the most damage). A Bull agent defends *continuing to hold*, anchored on your original buy thesis if you saved one — and it's explicitly forbidden from arguing "hold just because we're underwater." A Bear agent argues the exit, citing the actual deterioration numbers (how far off the peak, sessions below trend, how much it's lagging the market). The debate judge reads it as 🟢 Hold defensible, 🔴 Exit supported, or ⚖️ Contested. Shares the same 3-per-session cap and daily cache as the entry debate. **It's a second opinion only — the exit recommendation stands exactly as shown; the debate never removes the card, changes the tier, or touches the score.**
 
 - **🧬 Structural Scan — "which of my positions are secretly dangerous together?"** On 🧩 Intelligence, click **🧬 Generate structural narrative** to have Haiku synthesize the Correlation Clusters, Risk Budget, and Factor Tilt panels above it into one plain-English explanation of your portfolio's single most dangerous structural pattern — naming the specific tickers and numbers involved rather than a generic warning. The **Blast Radius Map** above the narrative always shows live, without a click: it estimates what a -20% shock to each of your top 3 risk-contributing positions would cost the *whole* portfolio, given how correlated your other holdings are to it. **Directional, not precise** — the cascade estimate is a simplified approximation, exactly as rough as the Factor Tilt estimates beside it. Refreshes once per trading day. **Awareness only: nothing here reorders a panel, resizes a position, or changes the composite score.**
 
@@ -32267,6 +32283,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
                 """
 - **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Awareness only, same as Day Shock.
 - **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions. **8 KPI tiles** (Portfolio Value, Unrealized P&L, Today's P&L, **Alpha vs SPY**, Avg Score, Diversification, Best/Worst) — Alpha vs SPY sits in tile 4 where Alerts used to be; Alerts detail lives on 📡 Signals & Advice. Alpha shows "n/a" when a trade during the window means the equity-level return is flow-inflated (the precise money-weighted read is on 💰 Account → Capital Trend). A slim **Act Today** strip below the KPI row shows the count + first item and links to 🏠 Home for the full detail — the same `split_defensive()` call as Home, so it can never under-report. A **2×2 pointer grid** ("🧭 Elsewhere in DRISHTA") shows four cards: **🎯 Engine Track Record** (hero — top-left: whether acting on the app's new-position calls has beaten SPY, same data as 📜 Recommendations History "All time" row, cached for the day), **🩺 Thesis Review** (top-right: how many held names' review needs attention, never a second verdict), **🔔 Catalyst Watch** (bottom-left: holdings reporting earnings within the week), and **🔗 Risk Posture** (bottom-right: the market-risk posture dial, never a second independent verdict). Full Holdings table at the bottom. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
+- **🧑‍⚖️ The Judge** — **BETA, audit authority only: it never gates a recommendation.** Collects each advisor's opinion on a ticker, weights them by their own past accuracy once they clear a minimum sample, and flags **coherence gaps** — a name under an active protective veto that no other risk surface is currently flagging. It reports; it never suppresses or changes a call.
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
@@ -32419,7 +32436,7 @@ The **🧯 After My Rules** tab (5th tab on 🔗 Risk Analysis) is the third sce
         with st.expander("🚦 Signal severity — what the colors mean", expanded=False):
             st.markdown(
                 """
-The app uses three primary color bands — the color always carries the same meaning, even when the words differ by page. A neutral **HOLD** state (grey on the Pre-Event Playbook, blue on the Post-Event Results tab) appears on the Economic Calendar to signal no specific action is needed for that position around this event.
+The app uses three primary color bands — in every **action** context the color carries the same meaning, even when the words differ by page. Two surfaces deliberately use color as a *scale* rather than an urgency signal; both are listed in the mapping table below. A neutral **HOLD** state (grey on the Pre-Event Playbook, blue on the Post-Event Results tab) appears on the Economic Calendar to signal no specific action is needed for that position around this event.
 
 | Color | Meaning | When to act |
 |---|---|---|
@@ -32436,8 +32453,12 @@ The app uses three primary color bands — the color always carries the same mea
 | 📋 Watchlist | Remove | Wait for Entry · Wait for Catalyst · Hold Off — Earnings Soon | Ready to Enter · Near Entry |
 | 📅 Economic Calendar | PROTECT | Watch | OPPORTUNITY |
 | Risk Advisor cards | HIGH | MEDIUM | OK |
+| 💰 Account — Margin Call Distance | Past the call floor | — | Your remaining runway |
+| 🧑‍⚖️ The Judge — coherence gap | Coherence gap found (audit only, never a gate) | — | No gap found |
 
 *Economic Calendar also uses **HOLD** (grey/blue — this position needs no specific action for this event).*
+
+*The last two rows are the deliberate exceptions to "red = act today": the margin bar's colors measure **distance** to the call floor, and The Judge's red marks an **audit** finding. Neither is a time-sensitive instruction, and neither gates anything.*
 
 **Rule of thumb:** red = decide today; amber = keep in view, don't trade yet; green = the app has nothing to add right now.
 """
