@@ -202,10 +202,16 @@ def derive_dropoffs(
 
         else:
             _reason_code   = "unattributed"
-            _first_ref     = _first_seen_at or "earlier today"
+            # Deliberately NO timestamp in this sentence. The render layer
+            # already prints first_seen_at two clauses earlier, formatted to
+            # ET by _fmt_first_seen(). Interpolating the raw field repeated
+            # the SAME instant as an unformatted UTC ISO string with
+            # microseconds, directly beside its own ET rendering - so it read
+            # as a second, later event, and broke the app-wide ET convention
+            # for user-facing dates. Found on a live screenshot 2026-08-26.
             _reason_text   = (
                 f"no longer clearing this pass — its momentum or composite "
-                f"re-priced below the entry bar since {_first_ref}; "
+                f"re-priced below the entry bar; "
                 f"re-run Refresh Signals for a fresh pass."
             )
             _has_confident = False

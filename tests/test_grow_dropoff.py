@@ -4,6 +4,8 @@ Spec: test exact boundaries (2026-08-04 edge-case lesson), reason honesty,
 reduce-call precedence, never-resurrect, acted/held suppression, no-action
 shape, and None-reduce_calls safety.
 """
+import re
+
 import pytest
 
 from stock_analyzer.grow_dropoff import derive_dropoffs, firmness, tier_floor_for
@@ -319,3 +321,57 @@ class TestDeriveDropoffs:
         assert len(result) == 1
         assert result[0]["first_seen_at"] == "2026-08-12T09:30:00+00:00"
         assert result[0]["composite_at_surface"] == 68.0
+
+
+# ── No raw machine timestamps in user-facing prose ───────────────────────────
+# Found on a live screenshot 2026-08-26: the "unattributed" branch interpolated
+# the raw `first_seen_at` field into reason_text, so the card read
+#   "first surfaced 9:50 AM ET ... re-priced below the entry bar since
+#    2026-08-26T13:50:08.578781+00:00"
+# — the SAME instant, printed twice, once formatted to ET by the render layer
+# and once as an unformatted UTC ISO string. It read as a second, later event.
+# The 31 tests that existed at the time all passed. This class needs its own.
+
+_ISO_LIKE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
+
+
+class TestNoRawTimestampsInProse:
+
+    @pytest.mark.parametrize("buckets_kw,expected_code", [
+        ({}, "unattributed"),
+        ({"composite_skipped": [{"ticker": "AAPL", "composite_score": 58.0,
+                                 "composite_label": "Hold"}]}, "composite_below_bar"),
+        ({"sector_blocked_picks": [{"ticker": "AAPL", "reason": "Tech at cap"}]},
+         "sector_blocked"),
+        ({"macro_blocked_picks": [{"ticker": "AAPL", "reason": "CPI tomorrow"}]},
+         "macro_blocked"),
+        ({"composite_unavailable": [{"ticker": "AAPL"}]}, "composite_unavailable"),
+    ])
+    def test_no_reason_text_contains_a_raw_iso_timestamp(self, buckets_kw, expected_code):
+        """reason_text is USER-FACING PROSE. first_seen_at is rendered separately
+        by the caller, converted to ET — repeating it raw here duplicates the
+        same moment in the wrong timezone and in a developer-internal format."""
+        surfaced = [_make_surfaced("AAPL", first_seen_at="2026-08-26T13:50:08.578781+00:00")]
+        result = derive_dropoffs(surfaced, set(), _make_buckets(**buckets_kw), None, set())
+        assert len(result) == 1
+        row = result[0]
+        assert row["reason_code"] == expected_code
+        assert not _ISO_LIKE.search(row["reason_text"]), (
+            f"reason_text leaked a raw machine timestamp: {row['reason_text']!r}"
+        )
+
+    def test_reduce_call_reason_has_no_raw_timestamp(self):
+        surfaced = [_make_surfaced("AAPL", first_seen_at="2026-08-26T13:50:08.578781+00:00")]
+        result = derive_dropoffs(
+            surfaced, set(), _make_buckets(), {"AAPL": {"kind": "reduce"}}, set()
+        )
+        assert len(result) == 1
+        assert not _ISO_LIKE.search(result[0]["reason_text"])
+
+    def test_first_seen_at_is_still_carried_for_the_caller_to_format(self):
+        """Removing it from the PROSE must not remove it from the payload —
+        the render layer needs it for the ET-formatted 'first surfaced' clause."""
+        ts = "2026-08-26T13:50:08.578781+00:00"
+        result = derive_dropoffs([_make_surfaced("AAPL", first_seen_at=ts)],
+                                 set(), _make_buckets(), None, set())
+        assert result[0]["first_seen_at"] == ts

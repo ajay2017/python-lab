@@ -9653,7 +9653,15 @@ if page == "🏠 Home":
                     f"<span style='color:#f9fafb;font-weight:700;font-size:0.9em'>"
                     f"{_db_buy['icon']} {_db_buy['action']} — "
                     f"<span style='color:#fbbf24'>{_db_buy['ticker']}</span></span>"
-                    f"<span style='color:#9ca3af;font-size:0.8em'>Score {_db_buy['score']:.0f}/100"
+                    # "Score" meant two DIFFERENT numbers in this one card list:
+                    # new_pick carries scanner_results["Score"] (momentum only),
+                    # add_winner carries port_df["Score"] (the 4-pillar composite,
+                    # see F-232). Label by type so the word means exactly one
+                    # thing per row. A blanket rename would have been wrong for
+                    # one of the two paths.
+                    f"<span style='color:#9ca3af;font-size:0.8em'>"
+                    f"{'Composite' if _db_buy.get('type') == 'add_winner' else 'Momentum'} "
+                    f"{_db_buy['score']:.0f}/100"
                     + (f" · {_db_buy.get('sector','')}" if _db_buy.get('sector') else "")
                     + f"</span>"
                     f"<span style='background:{_vcolor}22;border:1px solid {_vcolor};"
