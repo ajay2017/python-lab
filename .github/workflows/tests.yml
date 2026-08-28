@@ -10,6 +10,8 @@ on:
   push:
     branches: [main]
     paths:
+      - "app.py"
+      - "cron_runner.py"
       - "stock_analyzer/**"
       - "tests/**"
       - "requirements.txt"
@@ -17,6 +19,8 @@ on:
       - "pytest.ini"
   pull_request:
     paths:
+      - "app.py"
+      - "cron_runner.py"
       - "stock_analyzer/**"
       - "tests/**"
       - "requirements.txt"

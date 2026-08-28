@@ -295,7 +295,22 @@ def _gate_files_staged(staged: list[str]) -> list[str]:
 
 
 def _touches_tested_code(staged: list[str]) -> bool:
-    return any(f.startswith("stock_analyzer/") or f.startswith("tests/") for f in staged)
+    """Files a passing suite actually says something about.
+
+    app.py and cron_runner.py are included (2026-08-28) even though no test
+    imports them: tests/test_repo_hygiene.py byte-compiles BOTH, so the suite
+    is the only gate that catches a syntax error in the two entrypoints -- and
+    app.py is the largest file in the repo with no unit coverage of its own.
+    Leaving them out meant an app.py-only commit ran no suite here AND none in
+    CI (.github/workflows/tests.yml path filters omitted them too, fixed in the
+    same commit), so the single push-time run was the only execution -- in the
+    local .venv, which does not match production's pinned dependency set.
+    """
+    return any(
+        f == "app.py" or f == "cron_runner.py"
+        or f.startswith("stock_analyzer/") or f.startswith("tests/")
+        for f in staged
+    )
 
 
 def _touches_scanned_code(staged: list[str]) -> bool:
