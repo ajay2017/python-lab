@@ -281,6 +281,7 @@ from stock_analyzer import ticker_history as _ticker_history
 from stock_analyzer.util import safe_html as _safe_html
 from stock_analyzer.util import md_bold_to_html as _md_bold
 from stock_analyzer.util import factor_tilt_state as _factor_tilt_state
+from stock_analyzer.util import sizing_cap_lines as _sizing_cap_lines
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -23207,17 +23208,14 @@ elif page == "📋 Watchlist":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    if _wl_ps and _wl_ps.get("ceiling_capped"):
-                        st.caption(
-                            f"↳ capped to {_wl_ps['ceiling_pct']:.0f}% single-name ceiling "
-                            f"(risk-based would be {_wl_ps['uncapped_shares']:,} sh / "
-                            f"~{_wl_ps['uncapped_pct']:.0f}%)"
-                        )
-                    if _wl_ps and _wl_ps.get("capital_capped"):
-                        st.caption(
-                            f"↳ also capped to {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap"
-                            f" — ~{_wl_ps['capital_pct']:.0f}% of your net capital"
-                        )
+                    # Render-only: which cap actually BOUND is decided in the
+                    # pure util.sizing_cap_lines. This used to say "capped to
+                    # 15% single-name ceiling" above a 63-share / 7.6% result
+                    # that the 15% ceiling (124 sh) did not produce — the
+                    # net-capital cap did, and it was mentioned only as "also".
+                    for _cap_line in _sizing_cap_lines(
+                            _wl_ps, NET_CAPITAL_POSITION_CAP_PCT):
+                        st.caption(_cap_line)
                 elif _price:
                     # Same two/three-cause split as Analysis — see the note there.
                     _wl_no_size_reason = sizing_unavailable_reason(

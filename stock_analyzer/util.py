@@ -214,3 +214,71 @@ def md_bold_to_html(value: Any) -> str:
     """
     escaped = safe_html(value)
     return _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped)
+
+
+def sizing_cap_lines(ps: Any, net_capital_cap_pct: Any) -> list[str]:
+    """Disclosure lines for which cap actually determined a position size.
+
+    `risk.position_sizing` applies its two caps SEQUENTIALLY — the gross-book
+    single-name ceiling first, then the net-capital cap, which can only reduce
+    further. So whichever fired LAST is the one that bound, and when both fire
+    the first is an intermediate step, not the answer.
+
+    That is the defect this exists to fix (production screenshot 2026-08-28).
+    📋 Watchlist rendered "capped to 15% single-name ceiling (risk-based would
+    be 159 sh / ~19%)" directly above a result of **63 shares = 7.6% of
+    portfolio**. Every number was individually true, but the line named a cap
+    that did not produce the figure shown — the 15% ceiling would have allowed
+    124 shares. The binding constraint was the net-capital cap on the next
+    line, mentioned only as "also". A reader had to reconstruct the chain to
+    see which one governed.
+
+    Note 📈 Analysis did NOT have this problem: its longer warnings each end by
+    restating the resulting share count. This lifts that property into one
+    tested place. `notify._sizing_cap_note` is a third implementation of the
+    same disclosure, deliberately left alone here (it is email copy with its
+    own format) — but it is why this belongs in a function rather than in a
+    third inline copy.
+
+    Policy-free by construction: the cap percentage is PASSED IN, never
+    imported, so no threshold lives in this module.
+
+    Returns [] when neither cap bound — the ordinary case, where the risk-based
+    size stood and there is nothing to disclose.
+    """
+    if not isinstance(ps, dict):
+        return []
+    ceiling = bool(ps.get("ceiling_capped"))
+    capital = bool(ps.get("capital_capped"))
+    if not (ceiling or capital):
+        return []
+
+    def _n(key, default=0):
+        val = ps.get(key, default)
+        return val if isinstance(val, (int, float)) else default
+
+    shares = _n("shares")
+    out: list[str] = []
+    if ceiling:
+        line = (f"↳ risk-based size {_n('uncapped_shares'):,} sh "
+                f"(~{_n('uncapped_pct'):.0f}%) trimmed by the "
+                f"{_n('ceiling_pct'):.0f}% single-name ceiling")
+        # Only claim this produced the final number when nothing tightened it
+        # further. With the capital cap also firing, saying so here is the
+        # misattribution above.
+        if not capital:
+            line += f" → {shares:,} sh ({_n('portfolio_pct'):.1f}% of book)"
+        out.append(line)
+    if capital:
+        out.append(
+            f"↳ {'then ' if ceiling else ''}bound by the "
+            f"{_n_pct(net_capital_cap_pct):.0f}% net-capital cap → {shares:,} sh "
+            f"({_n('portfolio_pct'):.1f}% of book, "
+            f"~{_n('capital_pct'):.0f}% of net capital)"
+        )
+    return out
+
+
+def _n_pct(value: Any) -> float:
+    """Numeric coercion for a passed-in percentage; 0.0 rather than a crash."""
+    return float(value) if isinstance(value, (int, float)) else 0.0

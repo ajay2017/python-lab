@@ -6,6 +6,7 @@ NY-tz date-boundary class. Pure logic, no I/O.
 from datetime import datetime
 
 from stock_analyzer.market_time import ET, now_et, today_et
+from stock_analyzer import util
 from stock_analyzer.util import (
     factor_tilt_evidence_line,
     factor_tilt_state,
@@ -226,6 +227,76 @@ class TestFactorTiltState:
                          "not enough data", "fetch failed"):
             assert invented not in line
         assert "cause not distinguished" in line
+
+
+class TestSizingCapLines:
+    """Production screenshot 2026-08-28: 📋 Watchlist showed
+    "capped to 15% single-name ceiling (risk-based would be 159 sh / ~19%)"
+    directly above a result of 63 shares = 7.6% of portfolio. Every number was
+    true, but the line named a cap that did not produce the figure shown — the
+    15% ceiling would have allowed ~124 shares. The net-capital cap bound, and
+    appeared only as "also"."""
+
+    # The real ONON card, numbers reconciled against the screenshot.
+    _ONON = {
+        "shares": 63, "portfolio_pct": 7.6, "capital_pct": 25.0,
+        "ceiling_capped": True, "ceiling_pct": 15.0,
+        "uncapped_shares": 159, "uncapped_pct": 19.0,
+        "capital_capped": True,
+    }
+
+    def test_no_cap_bound_says_nothing(self):
+        assert util.sizing_cap_lines({"shares": 10}, 25.0) == []
+        assert util.sizing_cap_lines(
+            {"shares": 10, "ceiling_capped": False, "capital_capped": False}, 25.0) == []
+
+    def test_when_both_fire_only_the_binding_one_claims_the_result(self):
+        lines = util.sizing_cap_lines(self._ONON, 25.0)
+        assert len(lines) == 2
+        ceiling, capital = lines
+        # THE defect: the ceiling line must not present itself as the answer.
+        assert "63" not in ceiling, f"ceiling line claims the final size: {ceiling!r}"
+        assert "7.6" not in ceiling
+        # It still discloses what it did, so the chain is followable.
+        assert "159" in ceiling and "15" in ceiling
+        # And the binding one carries the result.
+        assert "bound by" in capital
+        assert "63" in capital and "7.6" in capital and "25" in capital
+
+    def test_ceiling_alone_does_claim_the_result(self):
+        ps = dict(self._ONON, capital_capped=False)
+        (line,) = util.sizing_cap_lines(ps, 25.0)
+        assert "63" in line, "nothing tightened it further, so it DID produce this"
+
+    def test_capital_alone_does_not_say_then(self):
+        ps = dict(self._ONON, ceiling_capped=False)
+        (line,) = util.sizing_cap_lines(ps, 25.0)
+        assert "then" not in line, "there was no prior step to follow"
+        assert "bound by" in line
+
+    def test_the_cap_percentage_is_passed_in_not_imported(self):
+        """Keeps util.py policy-free: no threshold may live here."""
+        import inspect
+        src = inspect.getsource(util.sizing_cap_lines)
+        assert "NET_CAPITAL" not in src
+        assert "constants" not in src
+        a = util.sizing_cap_lines(dict(self._ONON, ceiling_capped=False), 25.0)[0]
+        b = util.sizing_cap_lines(dict(self._ONON, ceiling_capped=False), 30.0)[0]
+        assert a != b, "the passed-in percentage is ignored"
+
+    def test_malformed_input_never_raises(self):
+        for junk in (None, "x", 5, [], {}):
+            assert util.sizing_cap_lines(junk, 25.0) == []
+        # Missing numeric fields degrade to 0 rather than KeyError/TypeError.
+        assert util.sizing_cap_lines({"capital_capped": True}, 25.0)
+        assert util.sizing_cap_lines(dict(self._ONON, shares=None), None)
+
+    def test_no_markdown_bold_that_would_print_literally(self):
+        """These render via st.caption. A ** here would show as asterisks —
+        the renderer-mismatch class that only a screenshot catches."""
+        for line in util.sizing_cap_lines(self._ONON, 25.0):
+            assert "**" not in line
+            assert "$" not in line
 
 
 class TestMdBoldToHtml:
