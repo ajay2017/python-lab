@@ -232,6 +232,9 @@ from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
 from stock_analyzer.portfolio import (
+    attach_gate_weight,
+    gate_basis,
+    refresh_outcome,
     build_portfolio_df, sector_exposure, alerts, rebalance_actions,
     correlation_matrix, diversification_score, diversification_recommendations,
     annotate_add_candidates, resolve_sector, stop_ladder, protective_stop,
@@ -258,6 +261,7 @@ from stock_analyzer import db
 from stock_analyzer import decision_context as _dctx
 from stock_analyzer import premortem_advisor as _pm_advisor
 from stock_analyzer import regime_targets as _rgt_mod
+from stock_analyzer import coord_freshness
 from stock_analyzer import portfolio_intelligence
 from stock_analyzer import structural_scanner
 from stock_analyzer import regime_stress
@@ -2304,6 +2308,44 @@ def _portfolio_snapshot_stale() -> bool:
     return _live_sig != _built_sig
 
 
+def _coord_epoch() -> int:
+    """The portfolio generation. Bumped only when the BOOK changes (a logged
+    trade), never on a plain rerun — so a cache computed two reruns ago is
+    still 'fresh' if no trade happened in between. Freshness here means
+    "describes the current book", not "was computed recently"."""
+    return int(st.session_state.get("_coord_epoch", 0))
+
+
+def _stamp_coord(keys=None) -> None:
+    """Mark registered coordination caches as describing the CURRENT book.
+
+    Stamps only keys actually present in session_state, so a key a code path
+    never published is reported absent rather than silently claimed fresh.
+    Called AFTER a publish block, never before: if an exception intervenes the
+    stamp simply does not run, and the key reads stale — the safe direction.
+    Under-reporting freshness costs a banner; over-reporting it is exactly the
+    confident false negative this mechanism exists to prevent.
+    """
+    # Explicit, not `... or {}`: the recurring-defect gate flags that shape and
+    # it would be actively wrong here if the value were ever a non-dict — this
+    # is the one map the whole freshness mechanism trusts, so a silent reset to
+    # {} would mark every cache absent and (per decide_stale_banner) say
+    # nothing at all. Fail toward keeping what we have.
+    _existing = st.session_state.get("_coord_stamps")
+    stamps = dict(_existing) if isinstance(_existing, dict) else {}
+    epoch = _coord_epoch()
+    for k in (keys or coord_freshness.PORTFOLIO_DEPENDENT_KEYS):
+        if k in coord_freshness.PORTFOLIO_DEPENDENT_KEYS and k in st.session_state:
+            stamps[k] = epoch
+    st.session_state["_coord_stamps"] = stamps
+
+
+def _bump_coord_epoch() -> None:
+    """The book changed. Everything derived from it is now a generation behind
+    until its producer re-publishes and re-stamps."""
+    st.session_state["_coord_epoch"] = _coord_epoch() + 1
+
+
 def _render_portfolio_stale_banner(key_suffix: str = "") -> None:
     """
     Non-blocking companion to _render_portfolio_not_loaded: holdings HAVE
@@ -2318,10 +2360,22 @@ def _render_portfolio_stale_banner(key_suffix: str = "") -> None:
     keeps serving the pre-outage snapshot with nothing marking it stale —
     _home_data_outage_at flags that case too.
     """
+    # A crashed republisher is louder than a stale cache, so it goes first.
+    # Rendering this is the point: _refresh_error used to be written and read
+    # nowhere, which made a crashed refresh indistinguishable from a successful
+    # no-op — the same dead-diagnostic problem already logged against
+    # _gate_ledger_save_result / _rec_log_save_result.
+    _refresh_err = st.session_state.get("_refresh_error")
+    if _refresh_err:
+        st.warning(
+            f"⚠️ The post-trade refresh did not complete ({_refresh_err}). The "
+            "figures below may predate your last trade. Revisit 🏠 Home to rebuild."
+        )
+
     _outage_at = st.session_state.get("_home_data_outage_at")
     if _outage_at:
         st.warning(
-            f"⚠️ Home's last data refresh (at {_outage_at}) failed for one or "
+            f"⚠️ The last data refresh (at {_outage_at}) failed for one or "
             "more holdings — the figures below may reflect an earlier, "
             "pre-outage snapshot. Revisit 🏠 Home to retry."
         )
@@ -2338,6 +2392,30 @@ def _render_portfolio_stale_banner(key_suffix: str = "") -> None:
         )
 
     if not _portfolio_snapshot_stale():
+        # Holdings themselves are current — but the caches DERIVED from them
+        # may not be. Weakest branch deliberately last: an outage or a changed
+        # holdings signature is a bigger claim and should win.
+        # Narrowed to the caches THIS surface actually reads (measured per
+        # page, not assumed). Without it, 🪞 Trade Review / 📅 Economic Calendar
+        # / 🌐 Macro — which read none of these — would warn about dimensions
+        # they never display, including a suppression clause that is false on a
+        # page showing no suggestions. A banner that fabricates its own scope
+        # is the defect class this feature exists to close.
+        _nf = coord_freshness.not_fresh_keys(
+            st.session_state.get("_coord_stamps"), _coord_epoch(),
+            coord_freshness.keys_for_surface(key_suffix),
+        )
+        _decided = coord_freshness.decide_stale_banner(_nf)
+        if _decided:
+            _sev, _msg = _decided
+            (st.warning if _sev == "warn" else st.caption)(
+                ("⚠️ " if _sev == "warn" else "") + _msg
+            )
+            if _sev == "warn" and st.button(
+                "🔄 Refresh from Home", key=f"_coord_stale_refresh_{key_suffix or 'default'}"
+            ):
+                st.session_state["_pending_page"] = "🏠 Home"
+                st.rerun()
         return
     st.warning(
         "⚠️ Your holdings changed since this was last loaded (a trade was "
@@ -2372,19 +2450,64 @@ def _refresh_portfolio_cache_after_trade(h_df: pd.DataFrame) -> None:
                     held_data[t] = bundle
         manual_stops = db.load_manual_stops()
         port_df = build_portfolio_df(holdings, held_data, manual_stops=manual_stops)
+        port_df = attach_gate_weight(port_df)
+
+        # ── The empty-frame branch, which used to be a single silent skip ────
+        # `if not port_df.empty` collapsed two states that mean opposite things:
+        #   holdings empty      -> the book genuinely IS $0 (checked, nothing)
+        #   holdings non-empty  -> every bundle failed (could not determine)
+        # Both left _portfolio_value at its PRE-TRADE value, so selling the last
+        # position left a positive, fabricated book size behind. F-261 does not
+        # catch it: sizing_unavailable_reason's "portfolio" arm fires on <= 0,
+        # and this value is positive and wrong. _portfolio_snapshot_stale() also
+        # returns False on an empty holdings frame, so no banner fired either.
+        # (F-260 Phase 0, 2026-08-28.)
+        _outcome = refresh_outcome(holdings, port_df)
+        liquidated = _outcome == "liquidated"
+        if _outcome == "outage":
+            # Do NOT publish anything derived from a book we failed to measure;
+            # flag it so the existing _render_portfolio_stale_banner speaks.
+            st.session_state["_home_data_outage_at"] = _now_et().strftime("%I:%M %p")
+            st.session_state["_refresh_error"] = (
+                f"{len(holdings)} holding(s) could not be priced — cache left "
+                "untouched rather than republished from an unmeasured book."
+            )
+            return
+
+        # Atomic commit: build every value first, then assign in one block. A
+        # mid-body exception previously left a HALF-published cache set behind
+        # (bare `except: pass`), which is worse than not refreshing at all.
+        _sig = frozenset(
+            (str(h.get("Ticker") or "").upper(), float(h.get("Shares") or 0))
+            for h in holdings
+        )
+        _basis = gate_basis(port_df)
+        _value = 0.0 if liquidated else float(port_df["Market Value"].sum())
+
         st.session_state["_last_port_df"]      = port_df
         st.session_state["_last_held_data"]    = held_data
         st.session_state["_last_held_tickers"] = sorted(tickers)
         st.session_state["_manual_stops"]      = manual_stops
-        st.session_state["_holdings_sig_at_home_build"] = frozenset(
-            (str(h.get("Ticker") or "").upper(), float(h.get("Shares") or 0))
-            for h in holdings
-        )
-        st.session_state["_port_df_enriched"] = port_df
-        if not port_df.empty:
-            st.session_state["_portfolio_value"] = float(port_df["Market Value"].sum())
-    except Exception:
-        pass
+        st.session_state["_holdings_sig_at_home_build"] = _sig
+        st.session_state["_port_df_enriched"]  = port_df
+        st.session_state["_acct_gate_cache"]   = _basis
+        st.session_state["_portfolio_value"]   = _value
+        st.session_state["_refresh_error"]     = None
+
+        # The book changed: every portfolio-DERIVED cache is now a generation
+        # behind. Bump first, then stamp only what this function genuinely
+        # rebuilt (_acct_gate_cache). The rest keep their older stamp and are
+        # reported stale by _render_portfolio_stale_banner — which is the whole
+        # point: this function used to write _holdings_sig_at_home_build and
+        # thereby SILENCE that banner on 9 pages while risk, correlation and
+        # Reduce/Exit still described the pre-trade book.
+        _bump_coord_epoch()
+        _stamp_coord(["_acct_gate_cache"])
+    except Exception as _exc:
+        # Recorded rather than swallowed. A bare `pass` made a crashed
+        # republisher indistinguishable from a successful no-op — the same
+        # dead-diagnostic problem already logged against _gate_ledger_save_result.
+        st.session_state["_refresh_error"] = f"{type(_exc).__name__}: {_exc}"
 
 
 def _fill_news_slot(slot, items: list) -> None:
@@ -4571,12 +4694,13 @@ if page == "🏠 Home":
     # Gate Weight (%) == equity Weight (%) — kept as a column so the downstream
     # `_gate_wt`/`_gate_wt_col` consumers are unchanged. See account-baseline.md
     # (2026-07-09 reversal) + project_concentration_discipline.
-    _gate_denom = float(total_val)
-    if not port_df.empty:
-        port_df["Gate Weight (%)"] = port_df["Weight (%)"]
-    st.session_state["_acct_gate_cache"] = {
-        "denom": _gate_denom, "basis": "equity", "over_levered": False,
-    }
+    # Both produced by stock_analyzer.portfolio (extracted 2026-08-28) so this
+    # page and _refresh_portfolio_cache_after_trade cannot fork the gate's own
+    # denominator. Do not re-inline: a concentration basis that depended on
+    # which page you last visited would be a real gate defect.
+    port_df = attach_gate_weight(port_df)
+    st.session_state["_acct_gate_cache"] = gate_basis(port_df)
+    _gate_denom = float(st.session_state["_acct_gate_cache"]["denom"])
 
     # Judgment-layer opinion capture (Phase 0, log-only) — a real breach check
     # (worst single-name / sector weight vs the hard ceilings) rather than a
@@ -4910,7 +5034,8 @@ if page == "🏠 Home":
         _SYNTH_SCHEMA_VER,
     )
     _synth_cache = st.session_state.get("_home_synth_cache")
-    if _synth_cache is not None and _synth_cache.get("sig") == _synth_sig:
+    _synth_hit = _synth_cache is not None and _synth_cache.get("sig") == _synth_sig
+    if _synth_hit:
         _b = _synth_cache["bundle"]
         alert_list         = _b["alert_list"]
         n_danger           = _b["n_danger"]
@@ -6056,6 +6181,29 @@ if page == "🏠 Home":
         _struct_alert_new_clusters = None  # offline -- distinct from "[] checked, found nothing"
 
     st.session_state["_structural_alert_cache"] = _struct_alert_new_clusters
+
+    # ── Coordination freshness stamp (F-260 Phase 1) ─────────────────────────
+    # Placed here because this is where the _home_synth_cache hit/miss paths
+    # have converged and every portfolio-derived cache above has published.
+    # Home is the only full producer of these, so one stamp covers them all.
+    # Deliberately AFTER the publishes, not before: an exception on the way
+    # here leaves them unstamped and therefore reported stale, which is the
+    # safe direction. Only keys actually present are stamped, so a path that
+    # never published one reports it absent rather than falsely fresh.
+    #
+    # The memo-HIT path does NOT republish _reduce_calls (it is written only on
+    # the MISS path), so it must not be stamped there. Normally a HIT implies
+    # the book is unchanged — `_synth_sig` carries the (ticker, shares)
+    # frozenset — but it does NOT carry avg cost, while the broker/screenshot
+    # recalc paths can bump the epoch on a cost-basis-only correction with
+    # shares unchanged. exit_advisor's gain-based tiers read entry cost, so
+    # _reduce_calls can genuinely be behind on exactly that path. Found in
+    # review: a single blanket stamp would have LAUNDERED that into a positive
+    # freshness claim, which is worse than the staleness it describes.
+    _stamp_coord(
+        [k for k in coord_freshness.PORTFOLIO_DEPENDENT_KEYS if k != "_reduce_calls"]
+        if _synth_hit else None
+    )
 
     with _alert_ph_structural.container():
         if _struct_alert_new_clusters:
@@ -19894,6 +20042,7 @@ elif page == "📈 Analysis":
             st.rerun()
 
     st.title("📈 Analysis")
+    _render_portfolio_stale_banner(key_suffix="an")
 
     # Consume any ticker pre-selection set by navigation buttons (News Intelligence, etc.)
     _preselect_ticker = st.session_state.pop("_analysis_ticker", None)
@@ -23354,6 +23503,7 @@ elif page == "⚖️ Compare":
 elif page == "📒 Trade Journal":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
     st.title("📒 Trade Journal")
+    _render_portfolio_stale_banner(key_suffix="tj")
     st.caption(
         "Log every buy and sell here. Realized P&L is calculated automatically. "
         "Holdings update instantly when you record a sell."
@@ -26312,6 +26462,7 @@ elif page == "📒 Trade Journal":
 elif page == "🪞 Trade Review":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
     st.title("🪞 Trade Review")
+    _render_portfolio_stale_banner(key_suffix="tr")
     st.caption(
         "Behavioural retrospective on every trade you've recorded. The system infers "
         "categories from the Journal columns (signal compliance) and market context "
@@ -30993,6 +31144,7 @@ elif page == "🔔 Catalyst Watch":
 elif page == "📅 Economic Calendar":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
     st.title("📅 Economic Calendar")
+    _render_portfolio_stale_banner(key_suffix="ec")
     st.caption(
         f"High-impact macro events for the next {ECONOMIC_CALENDAR_WINDOW_DAYS} days — FOMC, CPI, NFP, GDP and more. "
         "Static backbone (Fed/BLS/BEA schedules) enriched with official released values from FRED (St. Louis Fed). "
@@ -35458,6 +35610,7 @@ elif page == "🎯 My Edge":
     _me_today = _me_datetime.now(_me_ET).date()
 
     st.title("🎯 My Edge")
+    _render_portfolio_stale_banner(key_suffix="me")
     st.caption(
         "Retrospective view only — no recommendations, no gates. "
         "Answers three questions: Am I beating passive? Does my prep pay off? Am I improving?"

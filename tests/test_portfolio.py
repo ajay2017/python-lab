@@ -19,6 +19,7 @@ from stock_analyzer.constants import (
     REDEPLOY_CORR_CORRELATED_MIN,
     REDEPLOY_CORR_DIVERSIFIER_MAX,
 )
+from stock_analyzer import portfolio
 from stock_analyzer.portfolio import (
     alerts,
     build_portfolio_df,
@@ -722,3 +723,117 @@ def test_sector_etf_consumer_staples_retail_does_not_collide():
     assert SECTOR_ETF["Consumer Staples & Retail"] == "XRT"
     _other_users = [k for k, v in SECTOR_ETF.items() if v == "XRT" and k != "Consumer Staples & Retail"]
     assert not _other_users, f"XRT unexpectedly shared with: {_other_users}"
+
+
+class TestGateBasisAndGateWeight:
+    """F-260 Phase 0 (2026-08-28). These two were inline in app.py's Home
+    branch, so the post-trade republisher rebuilt port_df without them —
+    "Gate Weight (%)" silently vanished from `_port_df_enriched` after every
+    trade, and `_acct_gate_cache` kept describing the pre-trade book. Extracted
+    so Home and the republisher cannot fork the concentration gate's own
+    denominator: a basis that depended on which page you last visited would be
+    a real gate defect, not a cosmetic one.
+    """
+
+    def _df(self, values=(100.0, 300.0)):
+        total = sum(values)
+        return pd.DataFrame({
+            "Ticker": [f"T{i}" for i in range(len(values))],
+            "Market Value": list(values),
+            "Weight (%)": [v / total * 100 for v in values],
+        })
+
+    def test_denom_is_total_market_value(self):
+        assert portfolio.gate_basis(self._df())["denom"] == 400.0
+
+    def test_basis_is_equity_and_never_over_levered(self):
+        """Pins the 2026-07-09 POLICY reversal: gates read plain equity weight,
+        never net capital. Leverage is awareness-only and must never gate."""
+        b = portfolio.gate_basis(self._df())
+        assert b["basis"] == "equity"
+        assert b["over_levered"] is False
+
+    def test_shape_matches_the_acct_gate_cache_contract_exactly(self):
+        assert set(portfolio.gate_basis(self._df())) == {"denom", "basis", "over_levered"}
+
+    def test_gate_weight_equals_weight_under_the_equity_basis(self):
+        df = portfolio.attach_gate_weight(self._df())
+        assert list(df["Gate Weight (%)"]) == list(df["Weight (%)"])
+
+    def test_empty_frame_yields_zero_denom_and_no_fabricated_column(self):
+        """A 0x0 frame has NO columns — `port_df["Market Value"]` would raise.
+        Home never hits this (it st.stop()s first); the republisher does, on a
+        full liquidation. An absent Gate Weight column is every consumer's
+        documented fallback; a fabricated one would not be."""
+        empty = pd.DataFrame()
+        assert portfolio.gate_basis(empty)["denom"] == 0.0
+        assert "Gate Weight (%)" not in portfolio.attach_gate_weight(empty).columns
+
+    def test_none_and_malformed_never_raise(self):
+        for junk in (None, pd.DataFrame({"Ticker": ["A"]})):
+            assert portfolio.gate_basis(junk)["denom"] == 0.0
+            portfolio.attach_gate_weight(junk)
+
+    def test_zero_denom_is_no_measurable_equity_not_no_concentration(self):
+        """Documents the caller contract the docstring states: 0.0 must never
+        be read as 'concentration checked and found fine'."""
+        assert portfolio.gate_basis(pd.DataFrame())["denom"] == 0.0
+
+    def test_nan_market_values_degrade_to_zero_rather_than_nan(self):
+        """A NaN denominator would propagate into every weight comparison and
+        silently make each `>=` ceiling test False — a gate that cannot fire."""
+        df = pd.DataFrame({"Market Value": [float("nan")], "Weight (%)": [100.0]})
+        assert portfolio.gate_basis(df)["denom"] == 0.0
+
+
+class TestRefreshOutcome:
+    """F-260 Phase 0. The branch this replaces was `if not port_df.empty:` in
+    app.py, which has no unit coverage — so the two states below, which mean
+    opposite things, were indistinguishable and BOTH silently kept the
+    pre-trade portfolio value."""
+
+    _POPULATED = None  # built per-test; a 0x0 frame has no columns
+
+    def test_no_holdings_is_liquidated_not_outage(self):
+        assert portfolio.refresh_outcome([], pd.DataFrame()) == "liquidated"
+
+    def test_holdings_present_but_unpriced_is_outage_not_liquidated(self):
+        """The distinction the whole fix rests on: this must NOT publish 0.0,
+        because the book was not measured — it failed to load."""
+        assert portfolio.refresh_outcome([{"Ticker": "A"}], pd.DataFrame()) == "outage"
+
+    def test_normal_rebuild_is_ok(self):
+        df = pd.DataFrame({"Market Value": [10.0], "Weight (%)": [100.0]})
+        assert portfolio.refresh_outcome([{"Ticker": "A"}], df) == "ok"
+
+    def test_the_three_outcomes_are_mutually_exclusive_and_total(self):
+        cases = [([], pd.DataFrame()), ([{"Ticker": "A"}], pd.DataFrame()),
+                 ([{"Ticker": "A"}], pd.DataFrame({"Market Value": [1.0]}))]
+        got = [portfolio.refresh_outcome(h, d) for h, d in cases]
+        assert got == ["liquidated", "outage", "ok"]
+        assert len(set(got)) == 3
+
+    def test_none_port_df_is_outage_when_holdings_exist(self):
+        assert portfolio.refresh_outcome([{"Ticker": "A"}], None) == "outage"
+
+    def test_liquidation_wins_over_a_none_frame(self):
+        """No holdings means liquidated regardless of the frame — there is
+        nothing that COULD have been priced, so it is not an outage."""
+        assert portfolio.refresh_outcome([], None) == "liquidated"
+
+
+class TestLiquidationReachesTheExistingSizingRefusal:
+    """Composition test: proves the Phase 0 fix lands on F-261's refusal rather
+    than needing a new one. Selling the last position now publishes 0.0, and
+    0.0 must produce the "portfolio" reason — a stale POSITIVE value would
+    produce None ("I would size"), which is the defect."""
+
+    def test_zero_book_refuses_to_size(self):
+        from stock_analyzer.risk import sizing_unavailable_reason
+        assert sizing_unavailable_reason(portfolio_value=0.0, entry=100.0, stop=90.0) == "portfolio"
+
+    def test_a_stale_positive_book_would_have_sized_which_is_the_bug(self):
+        """Documents WHY the empty-book branch mattered: with the pre-trade
+        value still in place, nothing refuses."""
+        from stock_analyzer.risk import sizing_unavailable_reason
+        assert sizing_unavailable_reason(portfolio_value=24500.0, entry=100.0, stop=90.0) is None

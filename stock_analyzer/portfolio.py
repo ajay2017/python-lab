@@ -1530,3 +1530,79 @@ def annotate_add_candidates(
 
     out.sort(key=_rank)
     return out
+
+
+# ── Concentration-gate basis (extracted 2026-08-28, F-260 Phase 0) ───────────
+# These two were inline in app.py's Home branch only (~4575-4579). The
+# post-trade republisher (_refresh_portfolio_cache_after_trade) rebuilt
+# port_df WITHOUT them, so after any logged trade:
+#   * "Gate Weight (%)" silently vanished from _port_df_enriched, and all six
+#     consumers fell through their `"Gate Weight (%)" if in columns else
+#     "Weight (%)"` fallbacks — inert only while the 2026-07-09 equity-basis
+#     reversal keeps the two columns identical, and a live defect the moment
+#     margin option (c) is ever taken; and
+#   * _acct_gate_cache kept describing the PRE-trade book.
+# Extracting them means Home and the republisher cannot fork the gate's own
+# denominator — a basis that depended on which page you last visited would be
+# a genuine gate defect. There must be exactly TWO call sites, both calling
+# these; do not reintroduce an inline copy.
+
+def gate_basis(port_df: pd.DataFrame) -> dict:
+    """The concentration gate's denominator and basis.
+
+    EQUITY basis (2026-07-09 POLICY, reversing the 2026-06-26 net-capital
+    "tighter-of-both"): the 15%/35% ceilings and the risk-advisor trim/nudge
+    recommendations gate on plain equity weight (MV / invested equity). A
+    TRANSIENT margin balance must not lurch a hard gate; leverage risk is
+    surfaced separately as awareness-only and never gates. See
+    account-baseline.md and project_concentration_discipline.
+
+    Returns the exact `_acct_gate_cache` shape: {denom, basis, over_levered}.
+    An empty/malformed frame yields denom 0.0 — callers must not treat that as
+    a real book (a 0 denominator is "no measurable equity", never "no
+    concentration"). Home reaches its own call only after an empty-frame
+    st.stop(), so 0.0 is the republisher's case, not Home's.
+    """
+    denom = 0.0
+    if port_df is not None and not port_df.empty and "Market Value" in port_df.columns:
+        denom = _safe_float(port_df["Market Value"].sum(), 0.0)
+    return {"denom": denom, "basis": "equity", "over_levered": False}
+
+
+def attach_gate_weight(port_df: pd.DataFrame) -> pd.DataFrame:
+    """Add the "Gate Weight (%)" column, mutating and returning `port_df`.
+
+    Gate Weight (%) == Weight (%) under the equity basis above. It is kept as
+    a distinct column so the downstream `_gate_wt`/`_gate_wt_col` consumers
+    read a name that means "the weight the gate judges", independent of any
+    later basis change. Empty or column-less frames are returned untouched —
+    an absent column is the documented fallback for every consumer, whereas a
+    fabricated one would not be.
+    """
+    if port_df is not None and not port_df.empty and "Weight (%)" in port_df.columns:
+        port_df["Gate Weight (%)"] = port_df["Weight (%)"]
+    return port_df
+
+
+def refresh_outcome(holdings: list, port_df: pd.DataFrame) -> str:
+    """Classify a post-trade cache rebuild: "liquidated" | "outage" | "ok".
+
+    Extracted so the branch is testable — it used to be `if not port_df.empty:`
+    inside app.py, which has no unit coverage, and that single test collapsed
+    two states meaning OPPOSITE things:
+
+      holdings empty            -> the book genuinely is $0   (checked, nothing)
+      holdings non-empty, but
+      port_df came back empty   -> every bundle failed        (cannot determine)
+
+    Both previously left `_portfolio_value` at its pre-trade figure, so selling
+    the last position left a POSITIVE, fabricated book size behind — which
+    F-261's refusal does not catch, because that fires on `<= 0` and this value
+    is positive and wrong. "liquidated" must publish 0.0; "outage" must publish
+    nothing at all and raise the staleness flag instead.
+    """
+    if not holdings:
+        return "liquidated"
+    if port_df is None or port_df.empty:
+        return "outage"
+    return "ok"

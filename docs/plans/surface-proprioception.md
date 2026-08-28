@@ -9,10 +9,27 @@ does not. See §10 for the classified result and §11 for the leverage point.
 Opus review SHIP, 0 blocking). It landed as a pure, tested module
 (`util.factor_tilt_evidence_line` / `factor_tilt_state`) rather than as edits to
 `app.py`'s render layer, which is what §5's `N > 15` branch actually asked for.
-**Everything else in this plan remains unbuilt** — §12 items 2 (the
-`_refresh_portfolio_cache_after_trade` republisher, still the highest-leverage
-item at ~8 of the 25 findings) and 3 (the registry-aware gate) are the next steps,
-and item 2 still needs its `planner` pass first.
+**2026-08-28, same day — §12 item 2 (the `_refresh_portfolio_cache_after_trade`
+republisher) is SHIPPED, Phases 0 and 1** (requirements.md F-260a / F-260b; Opus
+`planner` design pass then Opus review SHIP, 0 blocking). **Phase 2 was descoped
+by an explicit user decision**: on a stale suppressor cache the app DISCLOSES
+rather than withholds, so the fail-closed `risk.sizing_unavailable_reason`
+extension is not built and no new policy constant was introduced.
+
+**Still unbuilt:** §12 item 3 (the registry-aware `check_antipatterns.py` rule)
+and Phase 3 (lifting Home's risk/fragility/correlation producer block into a
+pure module, which is where this plan converges with §5's `N > 15` branch) —
+Phase 3 needs its own `planner` pass. The remaining ranked findings from §10
+also stand.
+
+Three corrections the build made to the design, worth not re-deriving: the
+planner's own candidate option 2 (null the un-refreshed caches) was shown to be
+a **net regression**, since `None` and absent render identically at the ~20
+sentinel-collapsing sites; the real regression was never the omitted keys but
+that the republisher **silenced `_portfolio_snapshot_stale()` on 9 pages**; and
+the review caught that a single blanket freshness stamp would have **laundered**
+a genuinely-stale `_reduce_calls` into a positive freshness claim on the
+memo-HIT path, because `_synth_sig` carries shares but not avg cost.
 
 Design source: [docs/reviews/2026-08-26-app-review.md](../reviews/2026-08-26-app-review.md)
 Part 3 Innovation #3, plus its Part 2 #2. Opus `planner` design pass 2026-08-27, verdict
