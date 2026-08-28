@@ -189,10 +189,79 @@ def _sentinel_read_key(node: ast.AST) -> str | None:
     return None
 
 
-def _is_dynamic_html(node: ast.AST) -> bool:
-    """True if an HTML value is anything other than a plain string literal."""
+def _is_dynamic_html(node: ast.AST, escapers: frozenset = frozenset()) -> bool:
+    """True if an HTML value is anything other than a plain string literal.
+
+    `escapers` are the local names bound to util's escaping helpers (see
+    `escaping_names`). An f-string whose EVERY interpolation is a direct call to
+    one of them carries no unescaped attacker-controlled value, so it is not
+    dynamic in the sense this rule cares about.
+
+    WHY THIS EXEMPTION EXISTS (2026-08-28). Without it the rule could never burn
+    down: wrapping a value in `safe_html()` earned zero credit — the site stayed
+    flagged and merely RE-KEYED the baseline on the new source text, which
+    happened twice in one day. So the gate charged you for improving escaping
+    and paid nothing back, which is the wrong gradient for a ratchet whose whole
+    job is to make the safe move the cheap one.
+
+    DELIBERATELY CONSERVATIVE, because this GRANTS an exemption rather than
+    withholding one. Only the OUTERMOST expression of each interpolation is
+    inspected and it must be a direct `Call` to a collected name:
+      * `f"{safe_html(a)} {b}"` — PARTIALLY wrapped, stays flagged. 4 such sites
+        exist; every one must keep firing.
+      * `f"{outer(safe_html(a))}"` — outer is not an escaper, stays flagged.
+      * `f"{safe_html(a) + b}"` — a BinOp, not a Call, stays flagged.
+      * a locally-defined `def safe_html` earns nothing, since `escapers` is
+        resolved from the import.
+    A CONVERSION (`!r`, `!s`, `!a`) cannot reintroduce markup — none of them can
+    produce `<` from an already-escaped string — so it does not revoke the
+    exemption. A FORMAT_SPEC mostly cannot either, but the earlier claim that it
+    "pads, rounds and quotes" was wrong in one case (2026-08-28 review): the fill
+    character is arbitrary, so `:<<40` pads with `<`, and in a NESTED spec
+    (`f"{safe_html(x):{spec}}"`) that fill is runtime-controlled. Zero such sites
+    exist, but a nested spec is now treated as dynamic rather than argued about.
+
+    ONE KNOWN FALSE POSITIVE, accepted on purpose: `app.py` ~33220 interpolates
+    `_html.escape(str(_thesis))`, which IS properly escaped but reaches us as an
+    ATTRIBUTE call, so it earns nothing and stays flagged. (Five attribute-form
+    `_html.escape` sites exist in flagged f-strings — 1218, 6976, 24399, 33217,
+    34586 — but four are PARTIAL and would stay flagged even if the attribute
+    form were credited, so 33220 is the only true false positive of the five.
+    Noted so nobody reopens this on a count of 5.) Crediting it would
+    mean matching `.attr == "escape"` on an arbitrary object, or resolving
+    `import html as _html` as well — more exemption surface on a security gate
+    to clear one site. A false positive here costs a baseline entry; a false
+    negative costs an XSS hole. Left flagged deliberately, recorded so it reads
+    as a decision rather than an oversight.
+
+    Measured against THIS rule, not the broader one first sketched: of 296
+    baselined instances, 4 are all-wrapped and 6 are f-strings with NO
+    interpolation at all (a plain literal the rule was simply wrong about);
+    214 unwrapped and 4 partial ones keep firing. The first draft of this note
+    said 5 / 209 / 8, taken under a definition that also credited the attribute
+    form `_html.escape(...)` — which the shipped `ast.Name`-only rule does not.
+    Corrected because the figures reconcile exactly (209+4+1=214, 4+4=8, 4+1=5),
+    so a future reviewer re-deriving them would find 4 partial against a
+    documented 8 and reasonably suspect four sites had been silently exempted.
+    """
     if isinstance(node, ast.JoinedStr):  # f-string
-        return True
+        formatted = [v for v in node.values if isinstance(v, ast.FormattedValue)]
+        if not formatted:
+            # No interpolation whatsoever — an f-string used for its quoting
+            # style alone. Indistinguishable from a Constant at runtime.
+            return False
+        return not all(
+            isinstance(v.value, ast.Call)
+            and isinstance(v.value.func, ast.Name)
+            and v.value.func.id in escapers
+            # A nested format spec smuggles a second, uninspected interpolation
+            # in through the fill character. Cheap to refuse; zero live cost.
+            and not (
+                isinstance(v.format_spec, ast.JoinedStr)
+                and any(isinstance(p, ast.FormattedValue) for p in v.format_spec.values)
+            )
+            for v in formatted
+        )
     if isinstance(node, ast.BinOp):  # concatenation ("..." + x, "..." % x)
         return True
     if isinstance(node, ast.Name):  # a variable holding assembled markup
@@ -215,9 +284,16 @@ def _is_dynamic_html(node: ast.AST) -> bool:
 
 
 class _Visitor(ast.NodeVisitor):
-    def __init__(self, src: str, rel: str = "", policy_consts: frozenset = frozenset()) -> None:
+    def __init__(self, src: str, rel: str = "", policy_consts: frozenset = frozenset(),
+                 escapers: frozenset = frozenset()) -> None:
         self.src = src
         self.rel = rel
+        # Local names bound to util's escaping helpers. Same up-front collection
+        # as policy_consts and for the same reason: the rule must not depend on
+        # imports being visited before the calls that use them. Defaults to
+        # EMPTY, so a caller that forgets to pass it grants no exemptions —
+        # failing toward flagging, never toward silence.
+        self.escapers = escapers
         # Names imported from stock_analyzer.constants INTO this file. Collected
         # up-front by scan() rather than during traversal, so the rule cannot
         # depend on import statements happening to be visited before the
@@ -324,7 +400,7 @@ class _Visitor(ast.NodeVisitor):
                 and kw.value.value is True
             ):
                 html_arg = node.args[0] if node.args else None
-                if html_arg is not None and _is_dynamic_html(html_arg):
+                if html_arg is not None and _is_dynamic_html(html_arg, self.escapers):
                     self.hits.append(("UNSAFE_HTML_DYNAMIC", self._seg(node)))
         # MIXED_TZ_PARSE — pd.to_datetime on a mixed-precision timestamptz
         # column without format="ISO8601". THIRD recurrence of one bug class
@@ -414,6 +490,99 @@ def policy_constants(tree: ast.AST) -> frozenset:
     )
 
 
+# The ONLY functions that count as escaping an interpolated value. Both escape
+# at the render boundary; md_bold_to_html escapes FIRST and only then converts
+# `**x**` to <b>, so its output carries no attacker-controlled markup either.
+_ESCAPING_HELPERS = frozenset({"safe_html", "md_bold_to_html"})
+
+
+def escaping_names(tree: ast.AST) -> frozenset:
+    """Local names bound to `stock_analyzer.util`'s escaping helpers.
+
+    Resolved from the IMPORT, never from a hardcoded name list, for the same
+    reason `policy_constants` does it: `app.py` imports these aliased
+    (`safe_html as _safe_html`, `md_bold_to_html as _md_bold`), so a literal
+    allowlist would miss them — and, more importantly, a hardcoded list would
+    credit a LOCALLY-DEFINED `def safe_html(...)` that escapes nothing. Binding
+    to the real import is what makes the credit mean something.
+
+    UNDER-collection is safe and is left alone: the attribute form
+    (`from stock_analyzer import util` then `util.safe_html(x)`) collects
+    nothing, so those sites stay FLAGGED. A missed escaper costs a false
+    positive.
+
+    OVER-collection is the dangerous direction and is what the shadow subtraction
+    below exists for (2026-08-28 review, BLOCKING finding). The set is
+    module-wide and scope-blind, so an exemption was granted to a NAME rather
+    than to a BINDING — and four bypasses worked: import-then-`def` the same
+    name, import-then-rebind to a lambda, a PARAMETER shadowing the alias, and a
+    function-local import whose name is reused as something else elsewhere. That
+    last one was live in shape: `app.py` imports `safe_html as _sh` inside a
+    function, while `_sh` is separately assigned six unrelated values elsewhere
+    in the file. None happened to be callable, so nothing was actually missed —
+    but the safety was coincidental on a name the codebase treats as disposable.
+
+    So any name that is ALSO bound anywhere in the module — assigned, def'd,
+    taken as a parameter, bound by `for`/`with`/`except`/walrus/comprehension —
+    is dropped. Shadowing is rare for a genuine escaper alias and cheap to avoid;
+    measured cost of this hardening was ZERO burn-down (286 either way).
+    """
+    bound = _module_bound_names(tree)
+    return frozenset(
+        (a.asname or a.name)
+        for n in ast.walk(tree)
+        # Exact match, not endswith(): `providers._util` also ends in "util" and
+        # is imported here. It exports no escaper today, but on a rule that
+        # GRANTS exemptions, breadth is the unsafe direction — the opposite of
+        # policy_constants, where the same idiom is safe because it withholds.
+        if isinstance(n, ast.ImportFrom) and n.module == "stock_analyzer.util"
+        for a in n.names
+        if a.name in _ESCAPING_HELPERS and (a.asname or a.name) not in bound
+    )
+
+
+def _module_bound_names(tree: ast.AST) -> set:
+    """Every name the module binds by means OTHER than an import.
+
+    Used to revoke an escaper alias that is also assigned, shadowed or reused,
+    since the exemption must attach to a binding rather than to a spelling.
+    """
+    out: set = set()
+
+    def _add_target(t: ast.AST) -> None:
+        if isinstance(t, ast.Name):
+            out.add(t.id)
+        elif isinstance(t, (ast.Tuple, ast.List)):
+            for el in t.elts:
+                _add_target(el)
+        elif isinstance(t, ast.Starred):
+            _add_target(t.value)
+
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Assign,)):
+            for t in n.targets:
+                _add_target(t)
+        elif isinstance(n, (ast.AnnAssign, ast.AugAssign, ast.For, ast.AsyncFor)):
+            _add_target(n.target)
+        elif isinstance(n, ast.NamedExpr):          # walrus
+            _add_target(n.target)
+        elif isinstance(n, ast.comprehension):
+            _add_target(n.target)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(n.name)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            out.add(n.name)
+        elif isinstance(n, ast.withitem) and n.optional_vars is not None:
+            _add_target(n.optional_vars)
+        elif isinstance(n, ast.arguments):
+            for a in (*n.posonlyargs, *n.args, *n.kwonlyargs):
+                out.add(a.arg)
+            for a in (n.vararg, n.kwarg):
+                if a is not None:
+                    out.add(a.arg)
+    return out
+
+
 def scan() -> dict[str, Counter]:
     """{relpath: Counter({(rule, segment): count})} across all target files."""
     out: dict[str, Counter] = {}
@@ -429,7 +598,7 @@ def scan() -> dict[str, Counter]:
         except (OSError, SyntaxError) as exc:  # never false-block on a parse error
             print(f"⚠️  skipped {rel}: {exc}", file=sys.stderr)
             continue
-        v = _Visitor(src, rel, policy_constants(tree))
+        v = _Visitor(src, rel, policy_constants(tree), escaping_names(tree))
         v.visit(tree)
         if v.hits:
             out[rel] = Counter((rule, seg) for rule, seg in v.hits)

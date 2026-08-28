@@ -369,3 +369,199 @@ class TestPolicyConstCollectorAgainstTheRealRepo:
             and any(rule == "POLICY_DECISION_IN_RENDER" for rule, _ in counter)
         ]
         assert not offenders, f"rule fired outside the render layer: {offenders}"
+
+
+def _rules_wired(code: str) -> set:
+    """`_rules` but wired the way `scan()` wires it — collectors run first.
+
+    Needed because the escaping exemption is only reachable when `escapers` is
+    populated from the imports. `_rules` deliberately passes nothing, which is
+    the fail-flagged default; using it here would make every exemption test
+    pass for the wrong reason (nothing exempted, nothing asserted)."""
+    tree = ast.parse(code)
+    v = ca._Visitor(code, "app.py", ca.policy_constants(tree), ca.escaping_names(tree))
+    v.visit(tree)
+    return {rule for rule, _ in v.hits}
+
+
+_IMPORTS = (
+    "from stock_analyzer.util import safe_html as _safe_html\n"
+    "from stock_analyzer.util import md_bold_to_html as _md_bold\n"
+)
+
+
+class TestUnsafeHtmlEscapingExemption:
+    """2026-08-28. Before this, wrapping a value in `safe_html()` earned ZERO
+    credit: the site stayed flagged and merely RE-KEYED the baseline on the new
+    source text — twice in one day. The gate charged you for improving escaping
+    and paid nothing back, so the rule could never burn down.
+
+    Every test here is written against the direction that matters: an exemption
+    granted wrongly is a missed XSS, so the flagged cases are the load-bearing
+    ones."""
+
+    def test_fully_wrapped_fstring_is_exempt(self):
+        code = _IMPORTS + 'st.markdown(f"<div>{_safe_html(x)}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" not in _rules_wired(code)
+
+    def test_md_bold_to_html_also_counts(self):
+        """It escapes FIRST and only then converts **x** to <b>, so its output
+        carries no attacker-controlled markup either."""
+        code = _IMPORTS + 'st.markdown(f"<div>{_md_bold(x)}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" not in _rules_wired(code)
+
+    def test_fstring_with_no_interpolation_is_exempt(self):
+        """A pure literal that happens to use f-quoting. The rule flagged 6 of
+        these; there is nothing dynamic about them."""
+        code = 'st.markdown(f"<div>static</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" not in _rules_wired(code)
+
+    # ── The load-bearing half: these MUST stay flagged ──────────────────────
+
+    def test_partially_wrapped_stays_flagged(self):
+        """8 real sites are this shape. Exempting them would be the actual
+        security regression — one escaped value does not launder its neighbour."""
+        code = _IMPORTS + 'st.markdown(f"<div>{_safe_html(a)}{b}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
+    def test_unwrapped_stays_flagged(self):
+        code = _IMPORTS + 'st.markdown(f"<div>{x}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
+    def test_an_escaper_nested_inside_another_call_earns_nothing(self):
+        """Only the OUTERMOST expression is inspected. `outer()` could undo the
+        escaping, and the rule cannot know that it doesn't."""
+        code = _IMPORTS + 'st.markdown(f"<div>{outer(_safe_html(x))}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
+    def test_escaper_in_a_binop_earns_nothing(self):
+        code = _IMPORTS + 'st.markdown(f"<div>{_safe_html(a) + b}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
+    def test_a_locally_defined_lookalike_earns_nothing(self):
+        """THE reason `escaping_names` resolves from the import instead of a
+        hardcoded name list. A local `def safe_html` that escapes nothing must
+        not be able to buy an exemption by picking the right name."""
+        code = (
+            "def safe_html(v):\n    return v\n"
+            'st.markdown(f"<div>{safe_html(x)}</div>", unsafe_allow_html=True)'
+        )
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
+    def test_no_escapers_collected_means_no_exemptions(self):
+        """Fail toward flagging. If the collector silently stops collecting —
+        the failure mode that took POLICY_DECISION_IN_RENDER to zero hits — the
+        result must be MORE flags, never fewer."""
+        code = 'st.markdown(f"<div>{_safe_html(x)}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code), (
+            "no util import present, so nothing may be exempted"
+        )
+
+    # ── The collector itself ────────────────────────────────────────────────
+
+    def test_collector_resolves_aliases(self):
+        names = ca.escaping_names(ast.parse(_IMPORTS))
+        assert names == {"_safe_html", "_md_bold"}
+
+    def test_collector_ignores_non_escaping_imports_from_util(self):
+        """util also exports get_or_offline, stop_recovery_state, etc. None of
+        them escape anything, so none may grant an exemption."""
+        code = "from stock_analyzer.util import get_or_offline, stop_recovery_state\n"
+        assert ca.escaping_names(ast.parse(code)) == frozenset()
+
+    def test_collector_finds_the_real_aliases_in_app_py(self):
+        """Against the REAL file, not a snippet — the scar from the vacuous
+        alias test that re-implemented the collector and so could never fail.
+        This is also how the third alias `_sh` was discovered."""
+        src = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8-sig")
+        names = ca.escaping_names(ast.parse(src))
+        assert names, "collector went dark against the real app.py"
+        assert "_md_bold" in names and "_safe_html" in names
+
+    def test_live_count_equals_the_committed_baseline_exactly(self):
+        """A gate whose broken state is GREEN is worse than no gate: the check
+        only fails on `n > allowed`, so it is structurally blind to a SHRINK —
+        an over-broad exemption reads as success.
+
+        This asserts EQUALITY, which catches over-broadening at one-instance
+        granularity. A `> 250` floor was tried first and measured too loose to
+        be worth having: of the three unsafe mutations, `all`→`any` leaves 282
+        and "credit any Call" leaves 269 — both sail past it — and only
+        "exempt any f-string" (68) trips it. It covered 1 of 3 while looking
+        like it covered the class.
+
+        It is also the symmetric half of the existing green-vs-baseline test,
+        which only looks upward."""
+        live = sum(
+            n for counter in ca.scan().values()
+            for (rule, _), n in counter.items()
+            if rule == "UNSAFE_HTML_DYNAMIC"
+        )
+        baseline = json.loads(
+            (Path(__file__).resolve().parent.parent
+             / "scripts" / "antipattern_baseline.json").read_text(encoding="utf-8")
+        )
+        expected = sum(
+            n for rules in baseline["instances"].values()
+            for key, n in rules.items()
+            if key.split("\x1f")[0] == "UNSAFE_HTML_DYNAMIC"
+        )
+        assert live == expected, (
+            f"live UNSAFE_HTML_DYNAMIC is {live}, baseline says {expected}. "
+            "A DROP means an exemption widened — re-derive it before "
+            "regenerating; a RISE means a new instance."
+        )
+
+    # ── The exemption attaches to a BINDING, not a spelling ──────────────────
+    # BLOCKING review finding 2026-08-28: the collected set is module-wide and
+    # scope-blind, so four ways of reusing an escaper's NAME earned its credit.
+    # `_sh` was live in this shape — a function-local import in app.py, with the
+    # same name separately assigned six unrelated values elsewhere in the file.
+
+    @pytest.mark.parametrize("shadow", [
+        "def _safe_html(v):\n    return v\n",              # redefined
+        "_safe_html = lambda v: v\n",                        # rebound
+        "def render(_safe_html):\n    pass\n",               # parameter
+        "for _safe_html in items:\n    pass\n",              # loop target
+        "with open(p) as _safe_html:\n    pass\n",           # with-as
+        "_safe_html, other = f()\n",                         # tuple unpack
+    ])
+    def test_a_shadowed_alias_loses_its_exemption(self, shadow):
+        code = (
+            "from stock_analyzer.util import safe_html as _safe_html\n"
+            + shadow
+            + 'st.markdown(f"<div>{_safe_html(x)}</div>", unsafe_allow_html=True)'
+        )
+        assert ca.escaping_names(ast.parse(code)) == frozenset(), (
+            "a name bound elsewhere in the module must not grant an exemption"
+        )
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
+    def test_an_unshadowed_alias_keeps_its_exemption(self):
+        """The control. Without this, the test above would pass just as well if
+        the collector had stopped collecting entirely."""
+        code = _IMPORTS + 'st.markdown(f"<div>{_safe_html(x)}</div>", unsafe_allow_html=True)'
+        assert ca.escaping_names(ast.parse(code)) == {"_safe_html", "_md_bold"}
+        assert "UNSAFE_HTML_DYNAMIC" not in _rules_wired(code)
+
+    def test_a_similarly_named_module_does_not_grant_credit(self):
+        """`endswith("util")` also matched `providers._util`, which IS imported
+        here. Breadth is safe for the withholding rules and unsafe for this
+        one."""
+        code = (
+            "from stock_analyzer.providers._util import safe_html as _safe_html\n"
+            'st.markdown(f"<div>{_safe_html(x)}</div>", unsafe_allow_html=True)'
+        )
+        assert ca.escaping_names(ast.parse(code)) == frozenset()
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
+    def test_a_nested_format_spec_revokes_the_exemption(self):
+        """A spec's FILL character is arbitrary — `:<<40` pads with `<` — and a
+        nested spec makes it runtime-controlled, in a second interpolation the
+        rule never inspects. Zero live sites; refused rather than argued."""
+        code = _IMPORTS + 'st.markdown(f"<div>{_safe_html(x):{spec}}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
+    def test_a_static_format_spec_is_still_fine(self):
+        code = _IMPORTS + 'st.markdown(f"<div>{_safe_html(x):>20}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" not in _rules_wired(code)
