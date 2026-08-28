@@ -8522,7 +8522,7 @@ if page == "🏠 Home":
                 + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
                 "These positions qualify as winners but Risk Advisor recommends trimming them. "
                 "Adding more would compound the risk metric being flagged. "
-                "Resolve in Portfolio → Risk Advisor before adding.</div>"
+                "Resolve in 🔗 Risk Analysis → Action Plan before adding.</div>"
                 "</div>",
                 unsafe_allow_html=True,
             )
@@ -16930,7 +16930,7 @@ elif page == "🥧 Portfolio Overview":
                 + _rba_rows
                 + "<div style='color:#fde68a;font-size:0.78em;margin-top:6px;font-style:italic'>"
                 "Adding to a position the investment view is currently telling you to TRIM is a "
-                "direct contradiction. Resolve the trim in Risk Advisor first."
+                "direct contradiction. Resolve the trim in 🔗 Risk Analysis → Action Plan first."
                 "</div></div>",
                 unsafe_allow_html=True,
             )

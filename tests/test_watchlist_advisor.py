@@ -3,6 +3,11 @@ Tests for stock_analyzer/watchlist_advisor.py — previously zero test
 coverage despite containing an actual portfolio-risk GATE
 (_portfolio_risk_gate) that can downgrade a stock-level ENTER_NOW call.
 """
+from stock_analyzer.constants import (
+    PORTFOLIO_BETA_ELEVATED,
+    SECTOR_ELEVATED,
+    TICKER_BETA_HIGH,
+)
 from stock_analyzer.watchlist_advisor import (
     _f,
     _earn_days_until,
@@ -113,6 +118,72 @@ def test_gate_soft_active_high_risk_alerts():
     assert gate is not None
     assert gate["severity"] == "soft"
     assert "Concentration Risk" in gate["reason"]
+
+
+def test_high_risk_alert_caution_does_not_read_as_a_precondition():
+    """It said "resolve in Portfolio → Risk Advisor first." — a blocking
+    instruction — on a card this function deliberately KEEPS at ENTER_NOW,
+    whose action block says "Open the position". Two opposing imperatives, no
+    way to tell which governed. Found on a production screenshot 2026-08-28.
+
+    The fix is the copy, not the severity: making it genuinely blocking would
+    suppress every watchlist entry for as long as any HIGH alert stands, which
+    is an investment-policy decision and not this one."""
+    gate = _portfolio_risk_gate(1.0, {"active_high_risk_alerts": ["Concentration Risk"]})
+    reason = gate["reason"]
+    assert "Risk Advisor first" not in reason
+    # Still names the alert, and still points at where to clear it.
+    assert "Concentration Risk" in reason
+    # The destination must be a page that EXISTS. There is no nav page named
+    # "Risk Advisor" — verified against app.py's nav; the real path is
+    # 🔗 Risk Analysis → Action Plan. Sending a user to a page name the app
+    # does not have is a small fabrication, and it was copied verbatim at two
+    # other sites, so pin the correct one rather than just "some pointer".
+    assert "Risk Analysis" in reason
+    assert "Risk Advisor" not in reason
+    # But offers a way to PROCEED, like its three siblings do.
+    assert " or " in reason
+    # Not the sector concern's exact affordance: the two commonly co-occur and
+    # are joined into one string, so identical wording read as two independent
+    # halvings.
+    assert "half-size" not in reason
+
+
+def test_no_soft_concern_reads_as_a_blocking_precondition():
+    """The CLASS, not the one string. Every soft concern rides on a card whose
+    action stays ENTER_NOW, so each must state its condition and then offer a
+    way to proceed — the pattern the three original siblings established
+    ("consider a half-size entry", "use conservative sizing", "pick the
+    higher-conviction setup, or wait a day"). A bare imperative here silently
+    contradicts the recommendation it is attached to.
+
+    HONEST SCOPE (narrowed after Opus review, 2026-08-28). This is a VOCABULARY
+    proxy, not the invariant its name suggests. It genuinely regresses the bug
+    it was written for — the old copy contained none of these words, verified by
+    mutation — and it survives a rewrite of the wording, so it is not a plain
+    change-detector. But it does NOT prove the class: "reduce exposure or
+    de-risk first." and "Consider closing the position first." are both flat
+    preconditions that would PASS. The invariant is not lexically testable in
+    either direction — the current copy itself contains "before opening" — so a
+    negative-keyword check would be equally brittle.
+
+    Claiming more than this would make it the thing it is guarding against: a
+    test that reads as a ratchet while proving something weaker."""
+    _AFFORDANCES = ("consider", "conservative", "half-size", " or ")
+    cases = {
+        "sector":      {"sector_of_ticker": "Tech", "sector_weight_pct": SECTOR_ELEVATED},
+        "beta":        {"portfolio_beta": PORTFOLIO_BETA_ELEVATED + 0.01},
+        "high_alerts": {"active_high_risk_alerts": ["Concentration Risk"]},
+        "grow_today":  {"sector_of_ticker": "Energy", "grow_today_sectors": {"Energy"}},
+    }
+    for label, ctx in cases.items():
+        gate = _portfolio_risk_gate(TICKER_BETA_HIGH + 0.01, ctx)
+        assert gate is not None, f"{label} produced no gate — test premise is stale"
+        assert gate["severity"] == "soft", f"{label} is not soft; re-check this test"
+        reason = gate["reason"].lower()
+        assert any(a in reason for a in _AFFORDANCES), (
+            f"{label} soft concern offers no way to proceed: {gate['reason']!r}"
+        )
 
 
 def test_gate_soft_same_sector_as_grow_today():

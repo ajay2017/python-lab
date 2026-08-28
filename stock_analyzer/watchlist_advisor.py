@@ -147,9 +147,40 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None) -> dict | None
             f"Portfolio beta {port_beta:.2f} + ticker β {ticker_beta:.2f} — use conservative sizing."
         )
     if high_alerts:
+        # Phrased as an adjustment, not a precondition (2026-08-28). This read
+        # "— resolve in Portfolio → Risk Advisor first.", which is a BLOCKING
+        # instruction, on a card this same function deliberately keeps at
+        # ENTER_NOW (see the docstring above) and whose action block says
+        # "Open the position". The user was handed two opposing imperatives on
+        # one card and no way to tell which governed. Its three siblings here
+        # all state the condition and then offer a way to PROCEED — a half-size
+        # entry, conservative sizing, pick-one-or-wait — and this was the lone
+        # outlier. The alert itself is about the BOOK, not this ticker, so
+        # "resolve it first" could also stall every new entry for as long as any
+        # HIGH alert stands. Making the gate genuinely blocking is a separate
+        # investment-policy decision (it would suppress all watchlist entries
+        # while portfolio beta is flagged) and is NOT what this changes.
+        #
+        # Opus review confirmed soft is CORRECT, not merely deferred, for two
+        # reasons worth keeping: `high_alerts` is heterogeneous (beta, Sharpe,
+        # volatility, drawdown, tail ratio, sector — several of them TRAILING
+        # book statistics), and it is not ticker-aware, so a HIGH "Technology
+        # hard cap breach" would block an Energy candidate that DILUTES the
+        # breach. The conditions that do warrant a hard block are already
+        # hard-blocked above, ticker-aware. Matches F-104 in requirements.md.
+        #
+        # "sizing down", not "a half-size entry": the sector concern above
+        # already says half-size and the two commonly co-occur (a HIGH
+        # concentration alert usually rides with an elevated sector weight),
+        # so identical wording read as two independent halvings.
+        # "🔗 Risk Analysis → Action Plan" because there is NO page named
+        # "Risk Advisor" — verified against the nav. The old pointer named a
+        # destination that does not exist under that name.
         soft.append(
             f"Active HIGH risk alert{'s' if len(high_alerts) > 1 else ''} "
-            f"({', '.join(high_alerts[:2])}) — resolve in Portfolio → Risk Advisor first."
+            f"({', '.join(high_alerts[:2])}) — this adds to a book already "
+            "flagged for risk; consider sizing down, or clear it in "
+            "🔗 Risk Analysis → Action Plan before opening."
         )
     # Same-sector overlap with Grow Today: following both stacks sector exposure.
     if sector_name and sector_name in grow_sectors:
