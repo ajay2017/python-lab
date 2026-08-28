@@ -239,3 +239,133 @@ class TestSentinelBareTruthiness:
             '        pass\n'
         )
         assert "SENTINEL_BARE_TRUTHINESS" in _rules(code)
+
+
+def _rules_in(code: str, rel: str, consts=("COMPOSITE_BUY",)) -> set:
+    """_rules() but for a file-scoped rule — POLICY_DECISION_IN_RENDER depends
+    on WHICH file the code is in, which the plain helper cannot express."""
+    v = ca._Visitor(code, rel, frozenset(consts))
+    v.visit(ast.parse(code))
+    return {r for r, _ in v.hits}
+
+
+class TestPolicyDecisionInRender:
+    """A RATCHET, not a bug detector (2026-08-28). Every one of the 95
+    baselined instances (90 distinct segments) may be correct today. The point is that app.py is
+    38,197 lines that NO test imports, so a policy threshold evaluated there
+    gets no verification beyond a screenshot — which is precisely why
+    rendering/decision-adjacent defects are the ones that reach production
+    while the pure-logic package catches its own. Baselined so nothing must be
+    fixed now; a NEW one fails, making extraction the path of least resistance
+    instead of a good intention that competes with shipping.
+    """
+
+    _DECISION = "x = score >= COMPOSITE_BUY"
+
+    def test_fires_in_the_untested_entrypoints(self):
+        assert "POLICY_DECISION_IN_RENDER" in _rules_in(self._DECISION, "app.py")
+        assert "POLICY_DECISION_IN_RENDER" in _rules_in(self._DECISION, "cron_runner.py")
+
+    def test_does_not_fire_in_the_pure_logic_package(self):
+        """The load-bearing half. Thresholds SHOULD be compared in
+        stock_analyzer/ — that is where decisions belong and where they are
+        tested. A rule that flagged those would push logic the wrong way."""
+        for rel in ("stock_analyzer/daily_briefing.py", "stock_analyzer/risk.py"):
+            assert "POLICY_DECISION_IN_RENDER" not in _rules_in(self._DECISION, rel)
+
+    def test_only_policy_constants_count_not_arbitrary_names(self):
+        """A comparison against a local or a literal is not a policy decision."""
+        assert "POLICY_DECISION_IN_RENDER" not in _rules_in("x = score >= 65", "app.py")
+        assert "POLICY_DECISION_IN_RENDER" not in _rules_in("x = a >= b", "app.py")
+
+    def test_detects_the_constant_on_either_side_and_in_compound_tests(self):
+        for code in ("x = COMPOSITE_BUY <= score",
+                     "x = lo < COMPOSITE_BUY < hi",
+                     "x = (score >= COMPOSITE_BUY * 0.9)"):
+            assert "POLICY_DECISION_IN_RENDER" in _rules_in(code, "app.py"), code
+
+    def test_an_empty_constant_set_cannot_fire(self):
+        """A file that imports no policy constants has no policy decision to
+        make — guards against flagging every comparison in the entrypoint."""
+        assert "POLICY_DECISION_IN_RENDER" not in _rules_in(
+            self._DECISION, "app.py", consts=()
+        )
+
+    def test_the_real_render_layer_scope_is_exactly_the_two_entrypoints(self):
+        """Pinned by name: silently widening this to stock_analyzer/ would
+        invert the rule's intent, and silently narrowing it would disable it."""
+        assert ca._RENDER_LAYER == {"app.py", "cron_runner.py"}
+
+
+class TestPolicyConstCollectorAgainstTheRealRepo:
+    """BLOCKING review finding, 2026-08-28 — the tests above cover the VISITOR
+    and hand it a hardcoded constant set, so they said nothing about the
+    COLLECTOR in scan(). Four separate mutations to that collector passed all
+    six of them while taking the rule to ZERO live hits:
+
+        (a.asname or a.name) -> a.name          loses 37 aliased names
+        endswith("constants") -> == "constants" 0 hits
+        policy_consts not passed to _Visitor    0 hits
+        ast.ImportFrom -> ast.Import            0 hits
+
+    And the failure is SILENTLY GREEN: main() only fails on `n > allowed`, so a
+    rule that stops finding anything passes. That is the same shape as the
+    .venv fail-open in feedback_hook_enforcement — a gate whose broken state is
+    indistinguishable from a clean one.
+
+    These tests assert against real scan() output, which is the only thing that
+    can catch a collector that has quietly stopped collecting.
+    """
+
+    # scan() walks the whole package; cached so three assertions cost one pass.
+    _CACHE = {}
+
+    def _scan(self):
+        if "r" not in self._CACHE:
+            self._CACHE["r"] = ca.scan()
+        return self._CACHE["r"]
+
+    def test_the_rule_still_finds_real_instances_in_app_py(self):
+        """The general fix for silent-fail-open on this rule: if app.py ever
+        reports ZERO policy decisions, the collector broke — the file has ~92
+        and they are not going to vanish in one commit."""
+        hits = sum(n for (rule, _), n in self._scan().get("app.py", {}).items()
+                   if rule == "POLICY_DECISION_IN_RENDER")
+        assert hits > 50, (
+            f"app.py reports {hits} POLICY_DECISION_IN_RENDER hits. A collapse to "
+            "near-zero means scan()'s policy-constant collector stopped working, "
+            "not that the debt was paid off."
+        )
+
+    def test_the_collector_resolves_aliased_imports(self):
+        """`from ... import X as _Y` — dropping `asname` silently loses most of
+        the rule's reach in app.py with no other test failing.
+
+        Calls the REAL ca.policy_constants(). An earlier version of this test
+        re-implemented the collection logic inline, so it tested a COPY and
+        passed happily while the real collector was mutated — the vacuous-test
+        trap, inside the test written to prevent it. That is also why the
+        collector had to be extracted from scan() to be callable at all."""
+        import ast as _ast
+        import pathlib
+        tree = _ast.parse(
+            (pathlib.Path(ca.ROOT) / "app.py").read_text(encoding="utf-8-sig")
+        )
+        consts = ca.policy_constants(tree)
+        assert "COMPOSITE_BUY" in consts, "plain import not collected"
+        aliased = {c for c in consts if c.startswith("_")}
+        assert len(aliased) > 20, (
+            f"only {len(aliased)} aliased policy constants collected — `asname` "
+            "dropped? app.py aliases dozens (_C_SOFT, _CW, _RO_VIX, ...), and "
+            "losing them silently removes most of the rule's reach."
+        )
+
+    def test_the_pure_logic_package_stays_unflagged_in_a_real_scan(self):
+        """Scope, against the real tree rather than a synthetic snippet: a rule
+        that crept into stock_analyzer/ would push decisions the wrong way."""
+        offenders = [
+            rel for rel, counter in self._scan().items()
+            if rel not in ca._RENDER_LAYER
+            and any(rule == "POLICY_DECISION_IN_RENDER" for rule, _ in counter)
+        ]
+        assert not offenders, f"rule fired outside the render layer: {offenders}"

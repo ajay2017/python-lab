@@ -138,6 +138,15 @@ _SENTINEL_KEYS = frozenset({
     "_broker_drift_cache", "_home_synth_cache",
 })
 
+# The RENDER LAYER: the two entrypoints, which together are ~40k lines that no
+# test imports (verified 2026-08-28: zero tests import app.py). A policy
+# threshold compared HERE is a decision made in the only part of the codebase
+# with no unit coverage — which is why rendering/decision-adjacent defects are
+# the ones that reach production, while the pure-logic package catches its own.
+# Comparing a threshold inside stock_analyzer/ is correct and NOT flagged; that
+# is where decisions belong and where they are tested.
+_RENDER_LAYER = {"app.py", "cron_runner.py"}
+
 # Files in scope: the two runtimes + the pure-logic package. Tests and scripts
 # are intentionally out of scope (a test may deliberately construct a bad case).
 TARGETS = [ROOT / "app.py", ROOT / "cron_runner.py"] + sorted(
@@ -206,8 +215,14 @@ def _is_dynamic_html(node: ast.AST) -> bool:
 
 
 class _Visitor(ast.NodeVisitor):
-    def __init__(self, src: str) -> None:
+    def __init__(self, src: str, rel: str = "", policy_consts: frozenset = frozenset()) -> None:
         self.src = src
+        self.rel = rel
+        # Names imported from stock_analyzer.constants INTO this file. Collected
+        # up-front by scan() rather than during traversal, so the rule cannot
+        # depend on import statements happening to be visited before the
+        # comparisons that use them.
+        self.policy_consts = policy_consts
         self.hits: list[tuple[str, str]] = []  # (rule, normalized_segment)
         # varname -> sentinel key it was read from, for SENTINEL_BARE_TRUTHINESS.
         self._sentinel_vars: dict[str, str] = {}
@@ -260,6 +275,26 @@ class _Visitor(ast.NodeVisitor):
                 ))
         self.generic_visit(node)
         self._guarded_keys -= guarded_here
+
+    def visit_Compare(self, node: ast.Compare) -> None:
+        """POLICY_DECISION_IN_RENDER — a threshold comparison in the untested
+        entrypoints.
+
+        Not a bug per se: every one of the 95 baselined instances (90
+        distinct segments; 5 comparisons are written twice) may be
+        perfectly correct today. It is a RATCHET. Each such comparison is an
+        investment-policy decision (a breach, a tone classification, a
+        staleness call) evaluated where nothing can unit-test it, so the only
+        verification it ever gets is a screenshot. Baselined at the current
+        count so nothing must be fixed now; a NEW one fails, which makes
+        "extract the decision into a pure function in stock_analyzer/ and test
+        it there" the path of least resistance rather than a good intention.
+        """
+        if self.rel in _RENDER_LAYER and self.policy_consts:
+            names = {x.id for x in ast.walk(node) if isinstance(x, ast.Name)}
+            if names & self.policy_consts:
+                self.hits.append(("POLICY_DECISION_IN_RENDER", self._seg(node)))
+        self.generic_visit(node)
 
     def visit_BoolOp(self, node: ast.BoolOp) -> None:
         if isinstance(node.op, ast.Or):
@@ -342,6 +377,43 @@ class _Visitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def policy_constants(tree: ast.AST) -> frozenset:
+    """Names imported from `stock_analyzer.constants` into this module.
+
+    EXTRACTED so it can be tested directly (2026-08-28 review). It was inline
+    in `scan()`, and four separate mutations to it — dropping `asname`,
+    requiring an exact module match, not passing the result through, and
+    matching `ast.Import` instead of `ast.ImportFrom` — each took
+    POLICY_DECISION_IN_RENDER to zero live hits while passing every test,
+    because the tests hand-fed the visitor a constant set instead of exercising
+    this. The rule's own implementation was violating the principle the rule
+    exists to enforce: a decision that nothing can test.
+
+    Collected up-front rather than during traversal, so the rule cannot depend
+    on import statements happening to be visited before the comparisons using
+    them.
+
+    KNOWN LIMITS, deliberately not closed — this is a ratchet against
+    accidental accretion, not an adversary barrier:
+      * attribute form (`from stock_analyzer import constants` then
+        `constants.X`, or `import stock_analyzer.constants as C`) collects
+        nothing and takes the whole file dark. A one-line, invisible off-switch.
+      * `from ...constants import *` yields the literal "*", which matches no
+        comparison, with the same effect.
+      * a threshold aliased through a local, read via getattr/a dict, or passed
+        as a function argument is not a Compare against a collected name.
+    The scan()-level tests in tests/test_check_antipatterns.py are what catch a
+    collector that has silently stopped collecting; a zero-hit rule is GREEN,
+    since the gate only fails on `n > allowed`.
+    """
+    return frozenset(
+        (a.asname or a.name)
+        for n in ast.walk(tree)
+        if isinstance(n, ast.ImportFrom) and n.module and n.module.endswith("constants")
+        for a in n.names
+    )
+
+
 def scan() -> dict[str, Counter]:
     """{relpath: Counter({(rule, segment): count})} across all target files."""
     out: dict[str, Counter] = {}
@@ -357,7 +429,7 @@ def scan() -> dict[str, Counter]:
         except (OSError, SyntaxError) as exc:  # never false-block on a parse error
             print(f"⚠️  skipped {rel}: {exc}", file=sys.stderr)
             continue
-        v = _Visitor(src)
+        v = _Visitor(src, rel, policy_constants(tree))
         v.visit(tree)
         if v.hits:
             out[rel] = Counter((rule, seg) for rule, seg in v.hits)
@@ -452,6 +524,9 @@ def main() -> int:
             "(or stock_analyzer.util.get_or_offline), not `... or []`.\n"
             "  UNSAFE_HTML_DYNAMIC       → escape interpolated values before "
             "unsafe_allow_html (stock_analyzer.util.safe_html / html.escape).\n"
+            "  POLICY_DECISION_IN_RENDER → a policy threshold compared inside app.py/cron_runner.py, "
+            "which no test imports. Extract the decision into a pure function in stock_analyzer/ and "
+            "test it there; leave the entrypoint as render-only wiring.\n"
             "  NAIVE_UTCNOW/DATE_TODAY   → use the NY-tz trading-day helper "
             "(stock_analyzer.market_time), not naive utcnow()/date.today().\n"
             "  MIXED_TZ_PARSE            → add format=\"ISO8601\"; utc=True "
