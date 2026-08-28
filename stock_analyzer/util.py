@@ -87,3 +87,92 @@ def safe_html(value: Any) -> str:
     attribute (e.g. ``title='{safe_html(x)}'``), not only in element text.
     """
     return _html.escape(str(value), quote=True)
+
+
+def _factor_tilt_state_and_values(factor_tilt: Any) -> tuple:
+    """(state, valid_correlations) for a `_pi_factor_tilt_cache` value.
+
+    state is one of "not_measured" | "unusable" | "measured". This is the SINGLE
+    classifier read by both the LLM evidence line and the on-screen disclosure
+    in app.py, so the two can never disagree about which state the app is in —
+    the divergence risk is the whole reason this fix exists.
+    """
+    if factor_tilt is None:
+        return "not_measured", {}
+
+    # Explicit, not `.get("portfolio_tilt") or {}` — the recurring-defect gate
+    # flags that shape and is right to: `or {}` would also swallow a truthy
+    # non-dict and then raise on .items() below.
+    try:
+        portfolio_tilt = factor_tilt.get("portfolio_tilt")
+    except AttributeError:
+        portfolio_tilt = None
+    if not isinstance(portfolio_tilt, dict):
+        portfolio_tilt = {}
+
+    valid = {k: v for k, v in portfolio_tilt.items() if v is not None}
+    return ("measured", valid) if valid else ("unusable", {})
+
+
+def factor_tilt_state(factor_tilt: Any) -> str:
+    """"not_measured" | "unusable" | "measured" — for UI disclosure decisions."""
+    return _factor_tilt_state_and_values(factor_tilt)[0]
+
+
+def factor_tilt_evidence_line(factor_tilt: Any) -> str:
+    """One evidence line describing style-factor exposure, for an LLM prompt.
+
+    ALWAYS returns a non-empty line. That is the whole point: both LLM
+    narrative surfaces that consume `_pi_factor_tilt_cache` used to *silently
+    omit* this line whenever factor data was absent, which handed the model an
+    evidence block indistinguishable from one where factor concentration had
+    been measured and found unremarkable. The model then wrote — and the app
+    persisted — an adversarial-scenario narrative as though its evidence were
+    complete. (F-260, 2026-08-28.)
+
+    The absence is the COMMON case, not an edge case: `_pi_factor_tilt_cache`
+    is produced only when the user clicks "📡 Load factor exposure" on 🧩
+    Intelligence, while both consumers live on OTHER pages (🔗 Risk Analysis,
+    and Intelligence's own 🧬 Structural Scan tab). A session that never
+    clicked that button reaches both consumers with `None`.
+
+    Three states, deliberately kept distinct — collapsing any two of them is
+    the defect this function exists to prevent:
+
+      None            -> never measured this session (no data was loaded)
+      measured, empty -> measured, but no usable per-factor correlation
+                         (e.g. too little overlapping history)
+      measured, valid -> the real reading
+
+    The first two previously produced the SAME output: nothing.
+    """
+    state, valid = _factor_tilt_state_and_values(factor_tilt)
+
+    if state == "not_measured":
+        return (
+            "Factor tilt: NOT MEASURED — factor-exposure data was not loaded "
+            "for this portfolio. The absence of a factor reading is NOT evidence "
+            "of low or balanced factor concentration. Do not state, imply, or "
+            "reason about factor exposure in any direction."
+        )
+    if state == "unusable":
+        # Deliberately does NOT name a cause. `portfolio_intelligence.factor_tilt`
+        # returns its empty shape from four different exits (no held data / no
+        # factor returns, <2 usable return series, all positions dropped, and a
+        # bare except), plus a genuine success path where every weight sums to
+        # zero. An earlier draft said "(insufficient overlapping return history)"
+        # — one of those five — which would have handed the model a SPECIFIC
+        # fabricated cause to restate as fact inside a persisted narrative. That
+        # is the same fabrication class this whole function exists to close, one
+        # clause further down. Caught in review, 2026-08-28.
+        return (
+            "Factor tilt: measured, but no usable per-factor correlation was "
+            "available (cause not distinguished). Treat factor concentration as "
+            "unknown — this is not a reading of 'no tilt'."
+        )
+
+    dom = max(valid, key=lambda k: abs(valid[k]))
+    return (
+        f"Factor tilt: portfolio leans {dom}-tilted "
+        f"(weighted correlation {valid[dom]:+.2f})"
+    )

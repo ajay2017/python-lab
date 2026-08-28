@@ -227,3 +227,49 @@ def test_parse_response_non_list_indicator_watchlist_falls_back_to_empty():
 def test_generate_regime_scenario_no_api_key_returns_none():
     assert rs.generate_regime_scenario({"some": "evidence"}, api_key=None) is None
     assert rs.generate_regime_scenario({"some": "evidence"}, api_key="") is None
+
+
+from stock_analyzer.util import factor_tilt_evidence_line  # noqa: E402
+
+
+class TestFactorTiltAlwaysDisclosedInEvidence:
+    """F-260 (2026-08-28) — the regime scenario is PERSISTED to
+    regime_scenario_cache and served for the rest of the ET day, so a narrative
+    written on silently-incomplete evidence becomes the day's reading. The
+    producer of `_pi_factor_tilt_cache` is 🧩 Intelligence's Factor Tilt button;
+    this consumer lives on 🔗 Risk Analysis, so absent is the COMMON case.
+    """
+
+    def _evidence(self, factor):
+        return rs.build_regime_scenario_inputs(
+            [], [], {"label": "Neutral"}, {}, factor
+        )
+
+    def test_factor_line_present_in_all_three_states(self):
+        for factor in (None,
+                       {"positions": [], "portfolio_tilt": {}, "n_included": 0},
+                       {"portfolio_tilt": {"MTUM": 0.81}}):
+            text = rs._format_evidence(self._evidence(factor))
+            assert "Factor tilt:" in text, f"no factor line for {factor!r}"
+            # Pin the CONTRACT, not the substring: the two consumers must emit
+            # the shared helper's exact line. A re-inlined near-copy that
+            # dropped the forbid-inference clause would pass the check above.
+            assert text.endswith(factor_tilt_evidence_line(factor))
+
+    def test_absent_factor_data_is_stated_not_omitted(self):
+        text = rs._format_evidence(self._evidence(None))
+        assert "NOT MEASURED" in text
+
+    def test_not_measured_differs_from_measured_with_a_real_tilt(self):
+        absent = rs._format_evidence(self._evidence(None))
+        present = rs._format_evidence(
+            self._evidence({"portfolio_tilt": {"MTUM": 0.81}})
+        )
+        assert absent != present
+        assert "MTUM-tilted" in present and "MTUM-tilted" not in absent
+
+    def test_system_prompt_instructs_the_model_on_the_absent_case(self):
+        """The evidence line is only half the fix — the model must be told not
+        to read absence as balance."""
+        assert "NOT MEASURED" in rs._SCENARIO_SYSTEM
+        assert "never treat its absence" in rs._SCENARIO_SYSTEM

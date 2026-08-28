@@ -15,6 +15,7 @@ bugs' *fixed* behavior directly so neither class of bug can silently return.
 import numpy as np
 import pandas as pd
 
+from stock_analyzer import structural_scanner
 from stock_analyzer.structural_scanner import blast_radius, detect_new_clusters
 
 
@@ -245,3 +246,40 @@ def test_detect_new_clusters_never_raises_on_malformed_input():
     assert detect_new_clusters([{"tickers": None}], [], df) == []
     assert detect_new_clusters("not a list", [], df) == []
     assert detect_new_clusters([_cluster(["AAPL", "MSFT"])], "not a list", df) == []
+
+
+from stock_analyzer.util import factor_tilt_evidence_line  # noqa: E402
+
+
+class TestFactorTiltAlwaysDisclosedInNarrativeInputs:
+    """F-260 (2026-08-28) — twin of the regime-scenario case. This narrative is
+    also persisted (structural_scan_cache, one row per scan_date). Factor Tilt
+    lives on the SAME page as this tab but behind its own button, so it is
+    still commonly unloaded when the narrative is generated.
+    """
+
+    def _evidence(self, factor):
+        return structural_scanner.build_narrative_inputs([], [], [], factor)
+
+    def test_factor_line_present_in_all_three_states(self):
+        for factor in (None,
+                       {"positions": [], "portfolio_tilt": {}, "n_included": 0},
+                       {"portfolio_tilt": {"QUAL": -0.66}}):
+            text = structural_scanner._format_evidence(self._evidence(factor))
+            assert "Factor tilt:" in text, f"no factor line for {factor!r}"
+            # Pin the CONTRACT, not the substring: the two consumers must emit
+            # the shared helper's exact line. A re-inlined near-copy that
+            # dropped the forbid-inference clause would pass the check above.
+            assert text.endswith(factor_tilt_evidence_line(factor))
+
+    def test_absent_factor_data_is_stated_not_omitted(self):
+        assert "NOT MEASURED" in structural_scanner._format_evidence(self._evidence(None))
+
+    def test_system_prompt_no_longer_assumes_the_line_can_be_absent(self):
+        """The old instruction was 'do not mention factor exposure if it isn't
+        supplied' — now it is ALWAYS supplied, so that wording would have been
+        unreachable guidance pointing at a state that no longer occurs."""
+        sys_prompt = structural_scanner._NARRATIVE_SYSTEM
+        assert "do not mention factor exposure if it isn't supplied" not in sys_prompt
+        assert "NOT MEASURED" in sys_prompt
+        assert "never treat its absence" in sys_prompt

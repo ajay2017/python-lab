@@ -5,6 +5,15 @@ pre-registered `N > 15` branch: THE COUNTER IS NOT BUILT.** The class is structu
 Chunk 3 (the registry-aware gate) and the ranked fixes proceed; the instrumentation
 does not. See §10 for the classified result and §11 for the leverage point.
 
+**2026-08-28 — the §10 factor-tilt finding is SHIPPED** (requirements.md F-260;
+Opus review SHIP, 0 blocking). It landed as a pure, tested module
+(`util.factor_tilt_evidence_line` / `factor_tilt_state`) rather than as edits to
+`app.py`'s render layer, which is what §5's `N > 15` branch actually asked for.
+**Everything else in this plan remains unbuilt** — §12 items 2 (the
+`_refresh_portfolio_cache_after_trade` republisher, still the highest-leverage
+item at ~8 of the 25 findings) and 3 (the registry-aware gate) are the next steps,
+and item 2 still needs its `planner` pass first.
+
 Design source: [docs/reviews/2026-08-26-app-review.md](../reviews/2026-08-26-app-review.md)
 Part 3 Innovation #3, plus its Part 2 #2. Opus `planner` design pass 2026-08-27, verdict
 **BUILD WITH CHANGES**. The change is the ordering — see §2.
@@ -261,6 +270,18 @@ CLAUDE.md's coordination list names **🔗 Risk Analysis** as the consumer of
 absent is the *common* case, not an edge case — the LLM adversarial-scenario narrative is
 generated and persisted to `regime_scenario_cache` with no factor-concentration evidence and no
 disclosure. Fix the doc alongside the code.
+
+**RESOLVED 2026-08-28 — both halves, and the finding was understated in two ways.**
+(1) The window is wider than "never opened Intelligence": the cache is written only by that
+page's "📡 Load factor exposure" BUTTON, so visiting the page without clicking still leaves both
+consumers with `None`. (2) There are **two** consumers, not one — Intelligence's own 🧬 Structural
+Scan tab has the identical defect, with a byte-identical `_format_evidence` block. Both now call
+one shared helper. `structural_scanner`'s prompt had a partial mitigation (*"do not mention factor
+exposure if it isn't supplied"*) that the fix would have silently invalidated by making the line
+unconditional; it was rewritten and a test pins the old wording's removal. **Residual, needs its
+own reviewed `db.py` commit:** neither persisted table can record that a narrative was built
+without factor evidence (no factor-tilt snapshot column), so the disclosure is generation-time
+only and a later reader of an earlier row sees no provenance.
 
 ---
 

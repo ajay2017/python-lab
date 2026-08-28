@@ -19,13 +19,14 @@ Design principles (mirrors debate_agent.py):
 from itertools import combinations
 
 from stock_analyzer.constants import CORR_HIGH_PAIRS_THRESHOLD, LLM_REQUEST_TIMEOUT_SEC
+from stock_analyzer.util import factor_tilt_evidence_line
 
 # ── Module-level defaults (what-if scenario inputs, NOT investment-policy
 # thresholds — same class of value as stress_test.py's _SECTOR_SHOCKS) ───────
 BLAST_RADIUS_SHOCK_PCT = -20.0   # default single-position shock magnitude
 BLAST_RADIUS_TOP_N     = 3       # number of top risk-contributors to shock
 
-_NARRATIVE_SYSTEM = """You are a portfolio structural-risk analyst. Given the clustering, risk concentration, and cascade-shock evidence below, write a 2-4 sentence explanation of the SINGLE most dangerous structural pattern in this portfolio — name the specific tickers and numbers involved. If factor tilt data is supplied, connect it to the cluster/blast-radius evidence only if they reinforce each other; do not mention factor exposure if it isn't supplied. Do not invent a real-world catalyst (news, sector story) not present in the evidence — describe the co-movement mechanics only. If the evidence shows no meaningful clustering or cascade risk, say so plainly instead of manufacturing a concern."""
+_NARRATIVE_SYSTEM = """You are a portfolio structural-risk analyst. Given the clustering, risk concentration, and cascade-shock evidence below, write a 2-4 sentence explanation of the SINGLE most dangerous structural pattern in this portfolio — name the specific tickers and numbers involved. A "Factor tilt:" line is ALWAYS present in the evidence and says one of three things: a measured tilt, that it was measured but unusable, or that it was NOT MEASURED. If it reports a measured tilt, connect it to the cluster/blast-radius evidence only if they reinforce each other. If it says NOT MEASURED or unknown, do not mention factor exposure at all, and never treat its absence as evidence that factor concentration is low or balanced. Do not invent a real-world catalyst (news, sector story) not present in the evidence — describe the co-movement mechanics only. If the evidence shows no meaningful clustering or cascade risk, say so plainly instead of manufacturing a concern."""
 
 
 # ── Blast Radius Map ──────────────────────────────────────────────────────
@@ -156,6 +157,11 @@ def build_narrative_inputs(clusters, risk_budget_positions, blast_radius_results
     (top 3 risk_budget_positions by risk_pct — reslice defensively even though
     input is expected pre-sorted), "blast_radius" (the blast_radius_results list),
     "factor_tilt" (the factor_tilt dict if given and non-empty, else None).
+
+    NOTE: a None here does NOT mean the prompt omits factor exposure.
+    _format_evidence emits a "Factor tilt:" line UNCONDITIONALLY via
+    util.factor_tilt_evidence_line, stating explicitly that the data was
+    not measured. Silently omitting it was the F-260 defect.
     """
     try:
         weakest_links = list(risk_budget_positions or [])
@@ -218,16 +224,12 @@ def _format_evidence(evidence: dict) -> str:
                         f"(corr {c.get('corr'):+.2f}, comove {c.get('comove_pct'):+.2f}%)"
                     )
 
-        factor = evidence.get("factor_tilt")
-        if factor:
-            portfolio_tilt = factor.get("portfolio_tilt") or {}
-            valid = {k: v for k, v in portfolio_tilt.items() if v is not None}
-            if valid:
-                dom = max(valid, key=lambda k: abs(valid[k]))
-                lines.append(
-                    f"Factor tilt: portfolio leans {dom}-tilted "
-                    f"(weighted correlation {valid[dom]:+.2f})"
-                )
+        # Unconditional by design — see util.factor_tilt_evidence_line. This
+        # used to be `if factor:` + `if valid:`, which silently emitted NOTHING
+        # both when factor data was never loaded and when it was loaded but
+        # unusable, so the model could not distinguish either from "measured,
+        # nothing notable" and wrote as if its evidence were complete (F-260).
+        lines.append(factor_tilt_evidence_line(evidence.get("factor_tilt")))
 
         return "\n".join(lines)
     except Exception:

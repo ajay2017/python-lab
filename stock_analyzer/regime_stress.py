@@ -31,8 +31,9 @@ Design principles (mirrors structural_scanner.py / debate_agent.py):
 import json
 
 from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
+from stock_analyzer.util import factor_tilt_evidence_line
 
-_SCENARIO_SYSTEM = """You are a portfolio structural-macro analyst. Given the portfolio's structural weak points (correlated clusters, cascade-shock estimates) and the current macro regime evidence below, name the SINGLE compound macro scenario — combining 2-3 concurrent macro conditions (e.g. rate direction, dollar strength, credit stress) — that would do the most damage to the SPECIFIC weak points identified. Cite the specific tickers, clusters, and regime readings supplied — never invent a macro condition not evidenced below. Then select 2-3 indicators from the supplied regime signals list that would be the earliest sign this scenario is developing — select ONLY from the supplied list, never invent a new indicator name. If the evidence doesn't support a coherent compound scenario (e.g. regime is neutral and no structural weak point stands out), say so plainly instead of manufacturing one. Output ONLY valid JSON: {"scenario_narrative": "2-4 sentences", "indicator_watchlist": ["<exact signal label>", ...]}"""
+_SCENARIO_SYSTEM = """You are a portfolio structural-macro analyst. Given the portfolio's structural weak points (correlated clusters, cascade-shock estimates) and the current macro regime evidence below, name the SINGLE compound macro scenario — combining 2-3 concurrent macro conditions (e.g. rate direction, dollar strength, credit stress) — that would do the most damage to the SPECIFIC weak points identified. Cite the specific tickers, clusters, and regime readings supplied — never invent a macro condition not evidenced below. A "Factor tilt:" line is ALWAYS present and says one of three things: a measured tilt, that it was measured but unusable, or that it was NOT MEASURED. Use a measured tilt only where it reinforces the structural evidence. If it says NOT MEASURED or unknown, do not reason about factor exposure in any direction, and never treat its absence as evidence of low or balanced factor concentration. Then select 2-3 indicators from the supplied regime signals list that would be the earliest sign this scenario is developing — select ONLY from the supplied list, never invent a new indicator name. If the evidence doesn't support a coherent compound scenario (e.g. regime is neutral and no structural weak point stands out), say so plainly instead of manufacturing one. Output ONLY valid JSON: {"scenario_narrative": "2-4 sentences", "indicator_watchlist": ["<exact signal label>", ...]}"""
 
 
 # ── Evidence assembly ─────────────────────────────────────────────────────
@@ -50,6 +51,11 @@ def build_regime_scenario_inputs(blast_radius_results, clusters, regime_data, cr
       "cross_asset": {"label", "score"} extracted from cross_asset_data, plus
                 any per-signal detail dicts present (e.g. "dollar" key)
       "factor_tilt": factor_tilt if truthy else None
+
+    NOTE: a None here does NOT mean the prompt omits factor exposure.
+    _format_evidence emits a "Factor tilt:" line UNCONDITIONALLY via
+    util.factor_tilt_evidence_line, stating explicitly that the data was
+    not measured. Silently omitting it was the F-260 defect.
     """
     try:
         regime_data = regime_data or {}
@@ -152,16 +158,12 @@ def _format_evidence(evidence: dict) -> str:
                 if v.get("label"):
                     lines.append(f"  - {v.get('label')} ({v.get('detail', '')})")
 
-        factor = evidence.get("factor_tilt")
-        if factor:
-            portfolio_tilt = factor.get("portfolio_tilt") or {}
-            valid = {k: v for k, v in portfolio_tilt.items() if v is not None}
-            if valid:
-                dom = max(valid, key=lambda k: abs(valid[k]))
-                lines.append(
-                    f"Factor tilt: portfolio leans {dom}-tilted "
-                    f"(weighted correlation {valid[dom]:+.2f})"
-                )
+        # Unconditional by design — see util.factor_tilt_evidence_line. This
+        # used to be `if factor:` + `if valid:`, which silently emitted NOTHING
+        # both when factor data was never loaded and when it was loaded but
+        # unusable, so the model could not distinguish either from "measured,
+        # nothing notable" and wrote as if its evidence were complete (F-260).
+        lines.append(factor_tilt_evidence_line(evidence.get("factor_tilt")))
 
         return "\n".join(lines)
     except Exception:

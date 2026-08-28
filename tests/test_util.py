@@ -6,7 +6,13 @@ NY-tz date-boundary class. Pure logic, no I/O.
 from datetime import datetime
 
 from stock_analyzer.market_time import ET, now_et, today_et
-from stock_analyzer.util import get_or_offline, safe_html, stop_recovery_state
+from stock_analyzer.util import (
+    factor_tilt_evidence_line,
+    factor_tilt_state,
+    get_or_offline,
+    safe_html,
+    stop_recovery_state,
+)
 
 
 class TestGetOrOffline:
@@ -128,3 +134,94 @@ class TestMarketTime:
         # date-boundary bug class hinges on.
         assert now_et().tzinfo is not None
         assert datetime(2020, 1, 1).tzinfo is None
+
+
+class TestFactorTiltEvidenceLine:
+    """F-260 (2026-08-28). Both LLM narrative surfaces that consume
+    `_pi_factor_tilt_cache` used to omit the factor line entirely when the data
+    was absent, so the model received an evidence block indistinguishable from
+    one where factor concentration HAD been measured and found unremarkable —
+    and the app persisted the resulting narrative as the day's reading.
+    """
+
+    _VALID = {"portfolio_tilt": {"MTUM": 0.81, "VLUE": -0.20}}
+    _MEASURED_EMPTY = {"positions": [], "portfolio_tilt": {}, "n_included": 0}
+
+    def test_never_returns_empty_in_any_state(self):
+        """The whole fix. A caller appends this unconditionally, so an empty
+        return would silently restore the original defect."""
+        for state in (None, self._MEASURED_EMPTY, self._VALID, {},
+                      {"portfolio_tilt": {"MTUM": None}}):
+            assert factor_tilt_evidence_line(state).strip()
+
+    def test_not_measured_and_measured_empty_are_distinguishable(self):
+        """THE defect: these two produced identical output (nothing). If this
+        ever passes trivially again, the class is back."""
+        assert factor_tilt_evidence_line(None) != factor_tilt_evidence_line(self._MEASURED_EMPTY)
+
+    def test_absent_states_forbid_the_inference_rather_than_going_quiet(self):
+        not_measured = factor_tilt_evidence_line(None)
+        assert "NOT MEASURED" in not_measured
+        # must actively block the wrong reading, not merely omit a number
+        assert "not evidence" in not_measured.lower()
+        measured_empty = factor_tilt_evidence_line(self._MEASURED_EMPTY)
+        assert "unknown" in measured_empty.lower()
+        assert "not a reading of 'no tilt'" in measured_empty.lower()
+
+    def test_valid_reading_is_byte_identical_to_the_pre_fix_format(self):
+        """The fix must not change what a SUCCESSFUL measurement says — only
+        what the two failure states say."""
+        assert factor_tilt_evidence_line(self._VALID) == (
+            "Factor tilt: portfolio leans MTUM-tilted (weighted correlation +0.81)"
+        )
+
+    def test_dominant_factor_is_by_absolute_magnitude_not_signed_max(self):
+        """A strong NEGATIVE tilt is as concentrated as a strong positive one."""
+        line = factor_tilt_evidence_line({"portfolio_tilt": {"MTUM": 0.20, "USMV": -0.77}})
+        assert "USMV-tilted" in line and "-0.77" in line
+
+    def test_all_none_correlations_are_treated_as_measured_but_unusable(self):
+        assert factor_tilt_evidence_line(
+            {"portfolio_tilt": {"MTUM": None, "VLUE": None}}
+        ) == factor_tilt_evidence_line(self._MEASURED_EMPTY)
+
+    def test_malformed_input_degrades_to_unknown_never_raises(self):
+        for junk in ({}, {"portfolio_tilt": None}, "nonsense", 42, []):
+            assert "unknown" in factor_tilt_evidence_line(junk).lower()
+
+
+class TestFactorTiltState:
+    """`factor_tilt_state` is the SINGLE classifier read by both the LLM
+    evidence line and app.py's on-screen disclosure, so the prompt and the user
+    can never be told different things about which state the app is in."""
+
+    def test_three_states(self):
+        assert factor_tilt_state(None) == "not_measured"
+        assert factor_tilt_state({"positions": [], "portfolio_tilt": {}, "n_included": 0}) == "unusable"
+        assert factor_tilt_state({"portfolio_tilt": {"MTUM": None}}) == "unusable"
+        assert factor_tilt_state({"portfolio_tilt": {"MTUM": 0.4}}) == "measured"
+
+    def test_state_and_line_never_disagree(self):
+        """If these two ever diverge, the caption and the prompt describe
+        different realities — which is the defect class, re-created in the fix."""
+        for value in (None, {}, {"portfolio_tilt": {}}, {"portfolio_tilt": {"M": None}},
+                      {"portfolio_tilt": {"M": 0.5}}, "junk", 42, []):
+            state, line = factor_tilt_state(value), factor_tilt_evidence_line(value)
+            if state == "not_measured":
+                assert "NOT MEASURED" in line
+            elif state == "unusable":
+                assert "unknown" in line.lower()
+            else:
+                assert "-tilted" in line
+
+    def test_unusable_arm_names_no_specific_cause(self):
+        """Caught in review 2026-08-28. An earlier draft said "(insufficient
+        overlapping return history)" — ONE of five distinct ways factor_tilt
+        can return its empty shape. Naming it would hand the model a specific
+        fabricated cause to restate as fact inside a PERSISTED narrative: the
+        same fabrication class this helper exists to close, one clause down."""
+        line = factor_tilt_evidence_line({"portfolio_tilt": {}}).lower()
+        for invented in ("insufficient overlapping", "too little history",
+                         "not enough data", "fetch failed"):
+            assert invented not in line
+        assert "cause not distinguished" in line

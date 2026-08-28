@@ -275,6 +275,7 @@ from stock_analyzer import api_health as _ah
 from stock_analyzer import grow_dropoff as _grow_dropoff
 from stock_analyzer import ticker_history as _ticker_history
 from stock_analyzer.util import safe_html as _safe_html
+from stock_analyzer.util import factor_tilt_state as _factor_tilt_state
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -14336,6 +14337,15 @@ elif page == "🔗 Risk Analysis":
                                     st.markdown(f"- {_rs_ind}")
                             st.caption(f"Computed {_rs_scan_date} ET.")
                         else:
+                            # F-260: disclose the missing input BEFORE generating,
+                            # not after — the narrative is day-cached, so a
+                            # scenario written without factor evidence is the one
+                            # served for the rest of the day.
+                            _ft_state = _factor_tilt_state(st.session_state.get("_pi_factor_tilt_cache"))
+                            if _ft_state == "not_measured":
+                                st.caption("⚠ Factor exposure has not been loaded this session, so the narrative below will be written without it — that is an absence of evidence, not a finding that your factor concentration is low. Load it on 🧩 Intelligence → Factor Tilt first if you want it included.")
+                            elif _ft_state == "unusable":
+                                st.caption("⚠ Factor exposure was loaded but produced no usable per-factor correlation, so the narrative below is written without it. Treat your factor concentration as unknown rather than low.")
                             if st.button("🎯 Generate regime-aware scenario", key="_rs_gen_btn",
                                          disabled=st.session_state.get("_readonly", False)):
                                 with st.spinner("Synthesizing regime-aware scenario…"):
@@ -15501,6 +15511,14 @@ elif page == "🧩 Intelligence":
                     st.markdown(_ss_cached["narrative"])
                     st.caption(f"Computed {_ss_scan_date} ET — quantitative panels above are always live.")
                 else:
+                    # F-260: same disclosure as 🔗 Risk Analysis's scenario card.
+                    # Factor Tilt lives on THIS page but in a different tab, so
+                    # it is still commonly unloaded when this narrative is built.
+                    _ft_state = _factor_tilt_state(st.session_state.get("_pi_factor_tilt_cache"))
+                    if _ft_state == "not_measured":
+                        st.caption("⚠ Factor exposure has not been loaded this session, so the narrative below will be written without it — that is an absence of evidence, not a finding that your factor concentration is low. Load it on 🧩 Intelligence → Factor Tilt first if you want it included.")
+                    elif _ft_state == "unusable":
+                        st.caption("⚠ Factor exposure was loaded but produced no usable per-factor correlation, so the narrative below is written without it. Treat your factor concentration as unknown rather than low.")
                     if st.button("🧬 Generate structural narrative", key="_ss_gen_narrative_btn",
                                  disabled=st.session_state.get("_readonly", False)):
                         with st.spinner("Synthesizing structural narrative…"):
