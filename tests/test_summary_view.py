@@ -327,6 +327,42 @@ def test_up_and_down_are_split_and_ordered_by_magnitude():
     assert [m["ticker"] for m in out["down"]] == ["DN1", "DN2"]
 
 
+def test_combined_ranks_by_magnitude_across_both_directions():
+    """The KPI tile renders `combined`, not up/down. A biggest-loser must
+    outrank a smaller gainer — direction is carried by the sign."""
+    df = _pdf(["WDAY", "UBER", "MRVL", "NVDA"])
+    prices = {
+        "WDAY": {"price": 105.8, "prev_close": 100.0},   # +5.8
+        "UBER": {"price": 102.4, "prev_close": 100.0},   # +2.4
+        "MRVL": {"price": 89.7,  "prev_close": 100.0},   # -10.3
+        "NVDA": {"price": 95.4,  "prev_close": 100.0},   # -4.6
+    }
+    out = summary_view.top_movers(df, prices, n=3)
+    assert [m["ticker"] for m in out["combined"]] == ["MRVL", "WDAY", "NVDA"]
+
+
+def test_combined_is_capped_so_the_tile_height_is_fixed():
+    """The whole reason `combined` exists: an up/down split yields 0..2n rows,
+    which made this tile taller than the st.metric tiles beside it."""
+    df = _pdf([f"T{i}" for i in range(10)])
+    prices = {f"T{i}": {"price": 100.0 + i + 1, "prev_close": 100.0} for i in range(10)}
+    assert len(summary_view.top_movers(df, prices, n=3)["combined"]) == 3
+
+
+def test_combined_excludes_flat_and_unpriced_names():
+    df = _pdf(["MOVER", "FLAT", "NOQUOTE"])
+    prices = {"MOVER": {"price": 103.0, "prev_close": 100.0},
+              "FLAT":  {"price": 100.0, "prev_close": 100.0}}
+    out = summary_view.top_movers(df, prices, n=3)
+    assert [m["ticker"] for m in out["combined"]] == ["MOVER"]
+    assert out["n_missing"] == 1
+
+
+def test_combined_is_empty_when_nothing_is_priced():
+    out = summary_view.top_movers(_pdf(["A", "B"]), None, n=3)
+    assert out["combined"] == []
+
+
 def test_n_caps_each_direction():
     df = _pdf(["A", "B", "C", "D"])
     prices = {t: {"price": 100.0 + i, "prev_close": 100.0}

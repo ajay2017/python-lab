@@ -274,6 +274,9 @@ def top_movers(
     dict with keys:
       up        : list of {"ticker": str, "change_pct": float}  (descending)
       down      : list of {"ticker": str, "change_pct": float}  (ascending)
+      combined  : the n biggest moves either way, ranked by |change_pct| --
+                  a FIXED row count, which is what the KPI tile renders
+      n_priced / n_missing
       n_priced  : int
       n_missing : int
     """
@@ -304,9 +307,27 @@ def top_movers(
     up_movers   = [x for x in priced_sorted if x["change_pct"] > 0][:n]
     down_movers = list(reversed([x for x in priced_sorted if x["change_pct"] < 0]))[:n]
 
+    # `combined` = the n biggest moves in EITHER direction, ranked by magnitude.
+    # The KPI strip renders this rather than up+down, because a fixed row count
+    # is what keeps the tile the same height as the four st.metric tiles beside
+    # it — an up/down split yields 0..2n rows and visibly broke the row's
+    # alignment on the first live render. Direction is carried by the sign, so
+    # nothing is lost except the guarantee that both directions appear; on a
+    # uniformly green day three up-movers IS the honest answer.
+    # Flat names are EXCLUDED, same rule as up/down above. A 0.00% is not a
+    # mover, and the renderer derives its arrow from the sign — so a flat name
+    # left in here would render "↓ TICK +0.0%", reintroducing the fabricated
+    # direction the strict > 0 / < 0 split exists to prevent. Caught by
+    # test_combined_excludes_flat_and_unpriced_names.
+    combined = sorted(
+        (x for x in priced if x["change_pct"] != 0),
+        key=lambda x: abs(x["change_pct"]), reverse=True,
+    )[:n]
+
     return {
         "up":       up_movers,
         "down":     down_movers,
+        "combined": combined,
         "n_priced": len(priced),
         "n_missing": n_missing,
     }

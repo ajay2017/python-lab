@@ -1317,6 +1317,22 @@ def _render_holdings_table(port_df) -> None:
     )
 
 
+def _render_section_label(label: str, top_margin: int = 18) -> None:
+    """Small-caps zone label for the 🧾 Summary cockpit (BOOK SAFETY / TODAY /
+    ACT TODAY / PORTFOLIO HEALTH).
+
+    Module-level because app.py executes top-to-bottom and the page blocks that
+    call it run far below (feedback_module_def_order). Takes a literal from the
+    call site only — never user or advisor text — so it needs no escaping.
+    """
+    st.markdown(
+        f"<div style='font-size:0.68rem;font-weight:700;letter-spacing:0.1em;"
+        f"text-transform:uppercase;color:#6b7280;"
+        f"margin:{top_margin}px 0 6px'>{label}</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _render_simple_action_card(item: dict, urgent: bool = False) -> None:
     """Lean Act-Today card for the Summary page: tier badge + ticker +
     one-line rationale — matches the approved Option-A mockup. Deliberately
@@ -11166,6 +11182,7 @@ elif page == "🧾 Summary":
     }
     _sm_sf_bg, _sm_sf_bar, _sm_sf_icon = _SM_SAFETY_STYLE[_sm_safety["level"]]
     _sm_sf_word = _sm_safety["headline"]
+    _render_section_label("Book Safety", top_margin=4)
     with st.container(border=True, key="sm_safety"):
         st.markdown(
             f"<style>.st-key-sm_safety{{background:{_sm_sf_bg};"
@@ -11338,6 +11355,7 @@ elif page == "🧾 Summary":
     # 1.60.0 while production installs 1.57.0 from requirements.txt, so a kwarg
     # that resolves here proves nothing about the deploy. st.container's border is
     # long-established and already used throughout this file.
+    _render_section_label("Today")
     _s1, _s2, _s3, _s4, _s5 = st.columns(5)
     with _s1, st.container(border=True):
         st.metric("Portfolio Value", _m(f"${_sm_total_val:,.0f}"))
@@ -11403,29 +11421,50 @@ elif page == "🧾 Summary":
         #
         # A ticker with no quote is reported as unpriced, NEVER as 0% — that
         # distinction is made in summary_view.top_movers and asserted there.
-        st.markdown("**Today's Movers**")
-        if not _sm_movers["up"] and not _sm_movers["down"]:
+        # Renders `combined` (top 3 by magnitude, either direction) rather than
+        # the up/down lists. An up/down split produced 0..4 rows, which made this
+        # tile visibly taller than the four st.metric tiles beside it and broke
+        # the row's alignment on the first live render. A fixed row count is what
+        # keeps the strip a strip.
+        #
+        # The all-time-best figure and the unpriced count moved into the tooltip
+        # for the same reason — as visible caption lines they added two more rows
+        # to the tallest tile in the row. Nothing is hidden, only relocated.
+        _sm_mv_help = (
+            f"Biggest same-day moves in your book, either direction. "
+            f"All-time best: {_sm_best['Ticker']} {_sm_best['P&L (%)']:+.0f}%."
+        )
+        if _sm_movers["n_missing"]:
+            _sm_mv_help += (
+                f" {_sm_movers['n_missing']} holding(s) had no quote this refresh "
+                f"and are excluded — they are NOT counted as flat."
+            )
+        st.markdown(
+            "<div style='font-size:0.8rem;color:#a3a8b8;margin-bottom:2px'>"
+            "TODAY'S MOVERS</div>",
+            unsafe_allow_html=True,
+        )
+        if not _sm_movers["combined"]:
             if _sm_movers["n_missing"] and not _sm_movers["n_priced"]:
                 st.caption("No live quotes yet — visit 🏠 Home, or wait ~60s.")
             else:
-                st.caption("No positions moved today.")
+                st.caption("Nothing moved today.")
         else:
-            for _mv in _sm_movers["up"]:
-                st.markdown(
-                    f"<span style='color:#57d98a'>↑ <b>{_safe_html(_mv['ticker'])}</b> "
-                    f"{_mv['change_pct']:+.1f}%</span>",
-                    unsafe_allow_html=True,
-                )
-            for _mv in _sm_movers["down"]:
-                st.markdown(
-                    f"<span style='color:#fca5a5'>↓ <b>{_safe_html(_mv['ticker'])}</b> "
-                    f"{_mv['change_pct']:+.1f}%</span>",
-                    unsafe_allow_html=True,
-                )
-        _sm_mv_foot = f"All-time best: {_sm_best['Ticker']} {_sm_best['P&L (%)']:+.0f}%"
-        if _sm_movers["n_missing"] and _sm_movers["n_priced"]:
-            _sm_mv_foot += f" · {_sm_movers['n_missing']} unpriced"
-        st.caption(_sm_mv_foot)
+            _sm_mv_rows = "".join(
+                f"<div style='margin:2px 0;font-size:0.92rem;"
+                f"color:{'#57d98a' if _mv['change_pct'] > 0 else '#fca5a5'}'>"
+                f"{'↑' if _mv['change_pct'] > 0 else '↓'} "
+                f"<b>{_safe_html(_mv['ticker'])}</b> {_mv['change_pct']:+.1f}%</div>"
+                for _mv in _sm_movers["combined"]
+            )
+            st.markdown(_sm_mv_rows, unsafe_allow_html=True)
+        # Native hover tooltip (title=) rather than another caption line — the
+        # whole point of this block is to stop the tile growing.
+        st.markdown(
+            f"<span title=\"{_safe_html(_sm_mv_help)}\" "
+            f"style='font-size:0.72rem;color:#6b7280;cursor:help'>ⓘ detail</span>",
+            unsafe_allow_html=True,
+        )
     with _s5, st.container(border=True):
         st.metric(
             "Avg Score", f"{_sm_avg_score:.0f}/100",
