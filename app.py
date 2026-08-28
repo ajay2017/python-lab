@@ -15562,7 +15562,9 @@ elif page == "🧩 Intelligence":
             _hsb_validated  = _hsb_cached.get("clusters") if _hsb_cached else None
 
             if _hsb_validated is None:
-                if st.button("🧠 Check for hidden shared bets", key="_hsb_gen_btn"):
+                if st.button("🧠 Check for hidden shared bets", key="_hsb_gen_btn",
+                             disabled=st.session_state.get("_readonly", False),
+                             help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
                     with st.spinner("Analyzing saved theses for shared assumptions…"):
                         _hsb_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
                         _hsb_result  = thesis_cluster.generate_thesis_clusters(_hsb_corpus, _hsb_api_key)
@@ -27599,7 +27601,9 @@ elif page == "📜 Recommendations History":
             _mo_patterns  = _mo_cached.get("patterns") if _mo_cached else None
 
             if _mo_patterns is None:
-                if st.button("🔍 Look for a pattern", key="_mo_gen_btn"):
+                if st.button("🔍 Look for a pattern", key="_mo_gen_btn",
+                             disabled=st.session_state.get("_readonly", False),
+                             help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
                     with st.spinner("Analyzing skipped recommendations for a shared pattern…"):
                         _mo_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
                         _mo_result  = missed_opportunity.generate_missed_opportunity_patterns(
@@ -34844,6 +34848,15 @@ elif page == "🧠 AI Insights":
                     _rt_results.append({"ticker": _rt_ticker, **_rt_cached})
                     continue
 
+                # Read-only viewer: render what is already cached, never author
+                # a new row. This guard is at the CALL SITE, not just in db.py,
+                # because generate_counter_evidence() below is a PAID Haiku call
+                # that runs BEFORE the save — a db-layer no-op alone would let a
+                # viewer bill the owner on every single rerun and never cache the
+                # result. Gate the cost, not the receipt. (2026-08-28 review.)
+                if db.is_readonly():
+                    continue
+
                 # Only compute on trading days (gate prevents weekend rows that
                 # corrupt the 5-session cross-day delta in future reads)
                 if not is_trading_day(_today_et()):
@@ -34959,6 +34972,18 @@ elif page == "🧠 AI Insights":
                 })
 
             # 6. Render
+            # Never silently filter (CLAUDE.md coding conventions): the read-only
+            # guard above skips uncached tickers, so the summary metrics below
+            # would otherwise under-count Breaking/Eroding with no denominator —
+            # a confident false negative on a protective surface. Mirrors the
+            # non-trading-day caption above, which suppresses the same way.
+            if db.is_readonly() and len(_rt_results) < len(_rt_held_tickers):
+                st.caption(
+                    f"Read-only viewer — showing {len(_rt_results)} of "
+                    f"{len(_rt_held_tickers)} holdings: only scores already "
+                    "computed today. New scores aren't generated for viewer "
+                    "sessions, so counts below are a floor, not a total."
+                )
             _rt_results.sort(key=lambda r: r.get("erosion_score") or 0, reverse=True)
 
             # Display-only rename: internal/DB erosion_label stays "Intact"
@@ -35001,10 +35026,17 @@ elif page == "🧠 AI Insights":
             _rt_c4.metric("Holding",   _rt_counts["Intact"])
 
             if not _rt_results:
-                st.info(
-                    "No erosion scores computed yet. "
-                    "Visit Home to load portfolio data on a trading day."
-                )
+                if db.is_readonly():
+                    st.info(
+                        "No erosion scores have been computed today yet. "
+                        "Read-only viewer sessions don't generate them — this "
+                        "fills in once the owner opens the app on a trading day."
+                    )
+                else:
+                    st.info(
+                        "No erosion scores computed yet. "
+                        "Visit Home to load portfolio data on a trading day."
+                    )
             else:
                 st.divider()
 

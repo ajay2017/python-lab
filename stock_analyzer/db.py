@@ -803,9 +803,41 @@ _DEFAULT_WATCHLIST = ["NVDA", "AMD", "INTC", "MU"]
 # Read-only viewer mode. When enabled, every USER/OWNER-data write function
 # below becomes a safe no-op — the security backstop behind the UI's disabled
 # controls (a missed UI gate still cannot mutate data). Set once at startup by
-# app.py after resolving the viewer's identity. NOTE: save_fundamentals_cache is
-# intentionally NOT gated — it's a system cache (not user data), and cache
-# warming on a viewer's visit is harmless/desirable.
+# app.py after resolving the viewer's identity.
+#
+# EXEMPT — deliberately NOT gated. These are system caches (not user data) that
+# populate AUTOMATICALLY during a normal page render, so warming them on a
+# viewer's visit is harmless and desirable. The full list, so the exemption
+# stops drifting (it was written naming only the first, then grew to 12 by
+# 2026-08-28 — six of which were not this class at all):
+#     save_fundamentals_cache, save_sector_cache, save_sentiment_llm_cache
+#         (bundle_loader, on load)
+#     save_price_xcheck_history_batch  (app.py, on render; no LLM, and the
+#         upsert is idempotent on (ticker, check_date))
+#     save_alert_state       (cron-only; no viewer code path reaches it)
+#     increment_daily_quota  (an .rpc() counter — observability, never a gate)
+#
+# save_thesis_erosion_cache was on this list until 2026-08-28 and should not
+# have been: it is automatic-on-render, but "automatic" was being used as a
+# proxy for "harmless", and those two diverge exactly there — it pays for a
+# Haiku call and stores prose. Automatic is the TRIGGER; harmless is the
+# CRITERION. Do not conflate them again.
+#
+# NOT exempt, and gated as of 2026-08-28: the six LLM-narrative caches
+# (save_debate_cache, save_structural_scan_cache, save_regime_scenario_cache,
+# save_catalyst_stress_cache, save_thesis_cluster_cache,
+# save_missed_opportunity_cache). The "harmless cache warming" rationale does
+# not transfer to them: they are button-triggered rather than automatic, each
+# write costs a paid model call, and they persist model-authored PROSE that the
+# owner subsequently reads as content on their own decision surfaces. A viewer
+# authoring content the owner reads is a different thing from a viewer warming
+# a fundamentals lookup. Two of the six (_mo_gen_btn, _hsb_gen_btn) were also
+# missing the UI `disabled=` their four siblings carry, so BOTH defence layers
+# were absent at the same point — exactly the case this backstop exists for.
+#
+# Adding the guard is safe for the owner and for cron: none of the six is
+# reachable from cron_runner.py, and cron never calls set_readonly() at all
+# (module-global _READONLY stays False there).
 #
 # Stored in st.session_state (per-browser-session), NOT as a bare module
 # global — Streamlit runs every active session's script in its own thread
@@ -3755,8 +3787,15 @@ def save_sentiment_llm_cache(
 
 # ── Thesis Red Team Agent — erosion score day-cache (ticker × date) ──────────
 # Persists the daily quantitative erosion score (Phase 1) and — in Phase 2 —
-# optional Haiku counter-evidence bullets. System cache → NOT _READONLY-gated
-# (same classification as sentiment_llm_cache / sector_cache). One row per
+# optional Haiku counter-evidence bullets. READ-ONLY-GATED as of 2026-08-28:
+# the "system cache, same as sentiment_llm_cache / sector_cache" call this
+# comment used to make was correct for Phase 1 (a pure quantitative score) and
+# was never revisited when Phase 2 bolted a PAID Haiku narrative onto it. The
+# saved counter_evidence is model-authored prose the owner reads, and it feeds
+# debate_agent.build_exit_corpus via app.py's Challenge-This-Exit path — so a
+# viewer's generation would reach a verdict the owner uses to decide whether to
+# honour an exit. The real cost guard is at the app.py call site (the paid call
+# precedes this write); this is defence-in-depth. One row per
 # (ticker, score_date); score_date is the ET date string from _today_et().
 # signals_snapshot MUST include composite_today for the 5-session-ago delta
 # lookback used in future rows. Degrades gracefully when table is absent.
@@ -3825,6 +3864,10 @@ def save_thesis_erosion_cache(
     composite_today for the 5-session lookback used by future rows.
     """
     t = str(ticker or "").upper().strip()
+    # Paid LLM-narrative cache — NOT the harmless-cache-warming class.
+    # Defence-in-depth only: the real guard is at the app.py call site,
+    # since the Haiku call precedes this write (2026-08-28 review).
+    if is_readonly(): return  # read-only viewer: no-op
     if not t or not has_db():
         return
     try:
@@ -4349,6 +4392,10 @@ def save_debate_cache(
     transcript is the [{round, agent, text}] list from run_debate().
     corpus_snapshot is the build_entry_corpus() dict persisted for audit.
     """
+    # LLM-narrative cache: NOT the 'harmless cache warming' class the
+    # exemption above covers. Each write costs a paid model call and
+    # persists model-authored prose the OWNER later reads as content.
+    if is_readonly(): return  # read-only viewer: no-op
     t = str(ticker or "").upper().strip()
     if not t or not has_db():
         return
@@ -4460,6 +4507,10 @@ def save_structural_scan_cache(scan_date, narrative, blast_radius, cluster_snaps
     Caller must only invoke this when narrative is non-None (a successful
     Haiku call) — never cache a failed/empty result.
     """
+    # LLM-narrative cache: NOT the 'harmless cache warming' class the
+    # exemption above covers. Each write costs a paid model call and
+    # persists model-authored prose the OWNER later reads as content.
+    if is_readonly(): return  # read-only viewer: no-op
     if not scan_date or not has_db():
         return
     try:
@@ -4546,6 +4597,10 @@ def save_regime_scenario_cache(scan_date, scenario_narrative, indicator_watchlis
     Caller must only invoke this when scenario_narrative is non-None (a
     successful Haiku call) — never cache a failed/empty result.
     """
+    # LLM-narrative cache: NOT the 'harmless cache warming' class the
+    # exemption above covers. Each write costs a paid model call and
+    # persists model-authored prose the OWNER later reads as content.
+    if is_readonly(): return  # read-only viewer: no-op
     if not scan_date or not has_db():
         return
     try:
@@ -4598,6 +4653,10 @@ def save_catalyst_stress_cache(scan_date, narrative, ranked_snapshot,
     Caller must only invoke this when narrative is non-None (a successful
     Haiku call) — never cache a failed/empty result.
     """
+    # LLM-narrative cache: NOT the 'harmless cache warming' class the
+    # exemption above covers. Each write costs a paid model call and
+    # persists model-authored prose the OWNER later reads as content.
+    if is_readonly(): return  # read-only viewer: no-op
     if not scan_date or not has_db():
         return
     try:
@@ -4654,6 +4713,10 @@ def save_thesis_cluster_cache(scan_date, clusters, thesis_snapshot, truncated=Fa
     was cut for the prompt, so the render can note it consistently on both
     the generation and cache-hit paths (not just the moment of generation).
     """
+    # LLM-narrative cache: NOT the 'harmless cache warming' class the
+    # exemption above covers. Each write costs a paid model call and
+    # persists model-authored prose the OWNER later reads as content.
+    if is_readonly(): return  # read-only viewer: no-op
     if not scan_date or not has_db():
         return
     try:
@@ -4707,6 +4770,10 @@ def save_missed_opportunity_cache(scan_date, patterns, missed_snapshot):
     cacheable result) — never cache a genuine failure (None from
     generate_missed_opportunity_patterns).
     """
+    # LLM-narrative cache: NOT the 'harmless cache warming' class the
+    # exemption above covers. Each write costs a paid model call and
+    # persists model-authored prose the OWNER later reads as content.
+    if is_readonly(): return  # read-only viewer: no-op
     if not scan_date or not has_db():
         return
     try:
