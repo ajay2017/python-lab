@@ -32,6 +32,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.x"
+          # Match runtime.txt / production (see tests.yml for the full note).
+          python-version: "3.12"
       - name: Check every constant is documented or allowlisted
         run: python scripts/check_constants_documented.py

@@ -35,7 +35,14 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.x"
+          # Must match runtime.txt (python-3.12), which is what Railway
+          # actually deploys. "3.x" resolved to 3.14.7 on 2026-08-28 — two
+          # minor versions AHEAD of production — so the gate that is supposed
+          # to block a broken push was validating an interpreter the app never
+          # runs on. A 3.13/3.14-only construct would have passed here and
+          # crashed on deploy. alerts.yml and backfill-analyst-prices.yml
+          # already pinned 3.12; only the three GATE workflows had drifted.
+          python-version: "3.12"
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Run pytest
