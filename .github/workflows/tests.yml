@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           # Must match runtime.txt (python-3.12), which is what Railway
           # actually deploys. "3.x" resolved to 3.14.7 on 2026-08-28 — two
