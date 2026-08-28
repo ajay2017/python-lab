@@ -16,6 +16,12 @@ on:
       - "docs/requirements.md"
       - "scripts/check_constants_documented.py"
       - "scripts/constants_doc_allowlist.txt"
+      # The gate must re-validate itself when its OWN definition changes.
+      # Without this, the 2026-08-28 python-version pin (3.x -> 3.12, i.e. a
+      # change to which interpreter every check runs on) landed WITHOUT
+      # running a single check, and could only be verified on some later,
+      # unrelated code push.
+      - ".github/workflows/**"
   pull_request:
     paths:
       - "stock_analyzer/constants.py"
@@ -23,6 +29,12 @@ on:
       - "docs/requirements.md"
       - "scripts/check_constants_documented.py"
       - "scripts/constants_doc_allowlist.txt"
+      # The gate must re-validate itself when its OWN definition changes.
+      # Without this, the 2026-08-28 python-version pin (3.x -> 3.12, i.e. a
+      # change to which interpreter every check runs on) landed WITHOUT
+      # running a single check, and could only be verified on some later,
+      # unrelated code push.
+      - ".github/workflows/**"
   workflow_dispatch: {}
 
 jobs:
