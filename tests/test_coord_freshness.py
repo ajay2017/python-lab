@@ -193,9 +193,16 @@ class TestSurfaceNarrowing:
             assert "SUPPRESS" in msg, suffix
 
     def test_a_decorative_only_surface_stays_a_caption(self):
-        """💰 Account reads only _leverage_cache, documented awareness-only."""
+        """🔔 Catalyst Watch reads only _grow_composites (decorative).
+
+        This used 💰 Account until 2026-08-28, when review found that mapping
+        was a FALSE claim — app.py ~30041 says Account computes its leverage
+        panel live, "NOT from _leverage_cache" — so `acct` is now () and the
+        test's premise no longer held. The failure was correct and is recorded
+        rather than papered over: a surface list is a claim about what a page
+        reads, and a wrong one captions a live figure as stale."""
         sev, msg = cf.decide_stale_banner(
-            cf.not_fresh_keys(self._stale(), 2, cf.keys_for_surface("acct"))
+            cf.not_fresh_keys(self._stale(), 2, cf.keys_for_surface("cw"))
         )
         assert sev == "caption"
         assert "SUPPRESS" not in msg
@@ -254,20 +261,24 @@ _NOT_PORTFOLIO_DERIVED = {
 # (ticker, shares) frozenset, so a book change misses the memo by construction.
 _SELF_INVALIDATING = {"_home_synth_cache"}
 
-# PORTFOLIO-DERIVED BUT NOT YET TRACKED — a real, bounded gap, recorded rather
-# than hidden. These go stale after a trade exactly like the tracked ones; the
-# banner simply does not mention them yet. Each needs a tier, a dimension label
-# and a per-surface mapping before it can move into PORTFOLIO_DEPENDENT_KEYS,
-# which is a judgement call per cache rather than a bulk edit. Shrinking this
-# set is the follow-up; GROWING it should be deliberate and explained.
-_PORTFOLIO_DERIVED_UNTRACKED = {
-    "_actions_cache", "_alert_list_cache", "_div_recs_cache",
-    "_risk_high_alerts_cache", "_risk_advisor_recs_cache",
-    "_dpnl_cache", "_day_shock_cache",
-    "_grow_today_sectors_cache", "_grow_composites_coverage",
-    "_mirror_orphans", "_mirror_overexp", "_mirror_overhangs",
-    "_pi_factor_tilt_cache", "_broker_drift_cache",
+# Portfolio-derived, but read ONLY by the page that produces them (measured
+# 2026-08-28 by mapping every write and read in app.py). A page reading its own
+# cache is not a cross-surface staleness problem — it recomputed it moments
+# earlier in the same run — so the banner has nothing to say about them. Kept as
+# a NAMED bucket rather than left unclassified, so the drift guard stays exact.
+_SELF_CONSUMED_BY_PRODUCER = {
+    "_day_shock_cache",          # Home only
+    "_grow_composites_coverage", # Home only
+    "_broker_drift_cache",       # Home only
 }
+
+# Was 14 on 2026-08-28 when the drift guard first exposed the gap. Now empty:
+# 11 were classified into PORTFOLIO_DEPENDENT_KEYS (with a producer, tier,
+# dimension label and measured per-surface mapping) and 3 into
+# _SELF_CONSUMED_BY_PRODUCER. Kept as an explicit empty set rather than deleted,
+# because the NEXT unclassified cache should land here and be argued about
+# rather than quietly widening the tracked set.
+_PORTFOLIO_DERIVED_UNTRACKED: set = set()
 
 
 def test_every_documented_coordination_cache_is_classified():
@@ -276,7 +287,7 @@ def test_every_documented_coordination_cache_is_classified():
     from stock_analyzer import coord_freshness as _cf
     classified = (set(_cf.PORTFOLIO_DEPENDENT_KEYS) | _REFRESHED_BY_REPUBLISHER
                   | _NOT_PORTFOLIO_DERIVED | _SELF_INVALIDATING
-                  | _PORTFOLIO_DERIVED_UNTRACKED)
+                  | _PORTFOLIO_DERIVED_UNTRACKED | _SELF_CONSUMED_BY_PRODUCER)
     unclassified = _sentinel_keys() - classified
     assert not unclassified, (
         f"Unclassified coordination cache(s): {sorted(unclassified)}. Each must go "
@@ -299,12 +310,177 @@ def test_the_exclusion_sets_do_not_overlap_the_tracked_set():
     for name, excluded in (("refreshed", _REFRESHED_BY_REPUBLISHER),
                            ("not-portfolio", _NOT_PORTFOLIO_DERIVED),
                            ("self-invalidating", _SELF_INVALIDATING),
-                           ("untracked", _PORTFOLIO_DERIVED_UNTRACKED)):
+                           ("untracked", _PORTFOLIO_DERIVED_UNTRACKED),
+                           ("self-consumed", _SELF_CONSUMED_BY_PRODUCER)):
         overlap = excluded & set(cf.PORTFOLIO_DEPENDENT_KEYS)
         assert not overlap, f"{name} set also claims to be tracked: {sorted(overlap)}"
 
 
-def test_the_untracked_gap_does_not_grow_silently():
-    """Pins the size of the known gap. Shrinking it is the follow-up; growing
-    it must be a deliberate, explained edit rather than drift."""
-    assert len(_PORTFOLIO_DERIVED_UNTRACKED) == 14
+def test_the_untracked_gap_is_closed_and_stays_closed():
+    """Was 14 when the guard first exposed it; now 0. Growing it again must be
+    a deliberate, explained edit rather than drift."""
+    assert _PORTFOLIO_DERIVED_UNTRACKED == set()
+
+
+class TestProducerScoping:
+    """The invariant that stops a freshness LAUNDER (2026-08-28, second pass).
+
+    Measuring the 14 previously-untracked caches showed 4 are NOT produced by
+    🏠 Home — the three `_mirror_*` keys come from 🎯 My Edge and
+    `_pi_factor_tilt_cache` from a BUTTON on 🧩 Intelligence. Home's blanket
+    `_stamp_coord()` would have marked all four current merely because Home ran,
+    claiming pre-trade data was fresh. That is the same defect the review caught
+    on the memo-HIT path, and it would have been introduced by the fix that was
+    supposed to close the gap.
+    """
+
+    def test_every_key_declares_a_producer(self):
+        for key, meta in cf.PORTFOLIO_DEPENDENT_KEYS.items():
+            assert meta.get("producer"), f"{key} has no producer — Home would stamp it by default"
+
+    def test_the_producers_partition_the_registry(self):
+        """Every key belongs to exactly one producer, and the producers together
+        cover the whole registry — otherwise a key is either never stamped
+        (permanently stale) or stamped twice by different pages."""
+        # NOTE: `_acct_gate_cache` genuinely has TWO writers — 🏠 Home and the
+        # module-scope post-trade republisher — which this single-`producer`
+        # model cannot express. Benign, because the republisher stamps that key
+        # explicitly itself; recorded so the partition below is not mistaken for
+        # ground truth about write sites.
+        producers = {m["producer"] for m in cf.PORTFOLIO_DEPENDENT_KEYS.values()}
+        covered = [k for p in producers for k in cf.keys_for_producer(p)]
+        assert sorted(covered) == sorted(cf.PORTFOLIO_DEPENDENT_KEYS)
+        assert len(covered) == len(set(covered)), "a key is claimed by two producers"
+
+    def test_home_does_not_claim_the_caches_it_does_not_produce(self):
+        """THE launder guard. If any of these ever appears in Home's stamp set,
+        a Home visit would certify a My Edge / Intelligence cache it never
+        recomputed."""
+        home = set(cf.keys_for_producer("home"))
+        for key in ("_mirror_orphans", "_mirror_overexp", "_mirror_overhangs",
+                    "_pi_factor_tilt_cache"):
+            assert key not in home, f"Home must not stamp {key}"
+
+    def test_the_non_home_producers_are_named_and_non_empty(self):
+        assert cf.keys_for_producer("my_edge") == (
+            "_mirror_orphans", "_mirror_overexp", "_mirror_overhangs")
+        assert cf.keys_for_producer("intelligence") == ("_pi_factor_tilt_cache",)
+
+    def test_an_unknown_producer_claims_nothing(self):
+        assert cf.keys_for_producer("no_such_page") == ()
+
+
+class TestSurfaceMapCoversTheWidenedRegistry:
+    def test_every_surface_key_is_registered(self):
+        for suffix, keys in cf.SURFACE_KEYS.items():
+            for k in keys:
+                assert k in cf.PORTFOLIO_DEPENDENT_KEYS, f"{suffix} lists unknown {k}"
+
+    def test_the_newly_tracked_keys_actually_reach_a_surface(self):
+        """A key tracked but mapped to no surface is inert — it would never be
+        reported. These four have known cross-page consumers, measured from
+        app.py, so each must appear in at least one surface's list."""
+        mapped = {k for keys in cf.SURFACE_KEYS.values() for k in keys}
+        for key in ("_dpnl_cache", "_risk_advisor_recs_cache",
+                    "_mirror_orphans", "_pi_factor_tilt_cache"):
+            assert key in mapped, f"{key} is tracked but reaches no banner surface"
+
+    def test_tracked_but_unmapped_keys_are_deliberate_not_forgotten(self):
+        """Some tracked keys legitimately reach no page BODY — the nav badge is
+        sidebar chrome, and 📋 Watchlist has no banner at all. Named here so the
+        absence reads as a decision rather than an oversight."""
+        mapped = {k for keys in cf.SURFACE_KEYS.values() for k in keys}
+        unmapped = set(cf.PORTFOLIO_DEPENDENT_KEYS) - mapped
+        assert unmapped == {
+            "_risk_high_alerts_cache",
+            "_grow_today_sectors_cache",
+        }, f"unexpected unmapped keys: {sorted(unmapped)}"
+        # BOTH are unmapped for the SAME reason: their cross-page consumer is
+        # 📋 Watchlist, which has no _render_portfolio_stale_banner call at all.
+        # An earlier version of this comment said the nav badge was "not a page
+        # body" — false, and it would have sent a future author looking in the
+        # wrong place. Adding a Watchlist banner maps both, and one of them
+        # (_grow_today_sectors_cache) is GATE-tier.
+
+
+class TestStampScopingCannotLaunder:
+    """BLOCKING review finding, 2026-08-28. `_stamp_coord` used
+    `for k in (keys or PORTFOLIO_DEPENDENT_KEYS)`, so an EMPTY producer tuple —
+    the honest answer for "this page owns nothing yet" — fell through `or` and
+    stamped ALL keys fresh. That is the launder the `producer` field exists to
+    prevent, in the helper the whole mechanism trusts, and this change is what
+    made it reachable: before it, every call site passed None or a non-empty
+    literal, never a computed value.
+
+    The helper lives in app.py (untestable), so these pin the DATA-SIDE
+    invariant that makes the bug impossible to express: an empty producer set
+    must never resolve to "everything".
+    """
+
+    def test_an_unknown_producer_yields_an_empty_tuple_not_the_whole_registry(self):
+        empty = cf.keys_for_producer("no_such_page")
+        assert empty == ()
+        assert empty != tuple(cf.PORTFOLIO_DEPENDENT_KEYS)
+
+    def test_empty_and_none_are_different_arguments(self):
+        """The distinction `or` destroys: () means "stamp nothing", None means
+        "stamp everything". If these ever compare equal the bug is back."""
+        assert cf.keys_for_producer("no_such_page") is not None
+        assert () != None  # noqa: E711 — the point is that they are distinguishable
+
+    def test_not_fresh_keys_already_honours_the_same_rule(self):
+        """Its sibling got this right; the stamp helper did not. Pinned so the
+        two cannot drift apart again."""
+        stale = {k: 0 for k in cf.PORTFOLIO_DEPENDENT_KEYS}
+        assert cf.not_fresh_keys(stale, 1, ()) == {}
+        assert len(cf.not_fresh_keys(stale, 1, None)) == len(cf.PORTFOLIO_DEPENDENT_KEYS)
+
+
+class TestBannerRemedyNamesTheRightPage:
+    """Second BLOCKING finding. The banner hard-coded "Revisit 🏠 Home to
+    refresh", which became FALSE for the four non-Home keys this change added —
+    on 🧩 Intelligence it pointed away from the only control that refreshes
+    factor exposure, so the banner could never be cleared by following its own
+    instruction. Same class as the ENTER NOW copy that told the user to use a
+    sizing panel the app had withheld."""
+
+    def test_home_key_names_home(self):
+        _, msg = cf.decide_stale_banner({"_reduce_calls": cf.STALE})
+        assert "🏠 Home" in msg
+
+    def test_intelligence_key_names_intelligence_not_home(self):
+        _, msg = cf.decide_stale_banner({"_pi_factor_tilt_cache": cf.STALE})
+        assert "🧩 Intelligence" in msg
+        assert "🏠 Home" not in msg, "sends the user somewhere that cannot help"
+
+    def test_my_edge_key_names_my_edge_not_home(self):
+        _, msg = cf.decide_stale_banner({"_mirror_orphans": cf.STALE})
+        assert "🎯 My Edge" in msg
+        assert "🏠 Home" not in msg
+
+    def test_mixed_producers_name_both(self):
+        _, msg = cf.decide_stale_banner(
+            {"_reduce_calls": cf.STALE, "_mirror_orphans": cf.STALE})
+        assert "🏠 Home" in msg and "🎯 My Edge" in msg
+
+    def test_stale_producers_drives_the_refresh_button(self):
+        """app.py offers "Refresh from Home" only when this contains "home" —
+        otherwise the button visibly does nothing."""
+        assert cf.stale_producers({"_pi_factor_tilt_cache": cf.STALE}) == {"intelligence"}
+        assert "home" not in cf.stale_producers({"_mirror_orphans": cf.STALE})
+        assert "home" in cf.stale_producers({"_reduce_calls": cf.STALE})
+
+    def test_absent_keys_do_not_contribute_a_remedy(self):
+        assert cf.stale_producers({"_reduce_calls": cf.ABSENT}) == set()
+
+    def test_every_producer_has_a_label(self):
+        """An unlabelled producer does not fail loudly — the remedy sentence
+        silently VANISHES and the banner ends mid-thought with no instruction
+        at all. Safe direction (it states nothing false) but useless, and it is
+        the one shape the tests above miss. Verified by simulation in review."""
+        producers = {m["producer"] for m in cf.PORTFOLIO_DEPENDENT_KEYS.values()}
+        missing = producers - set(cf.PRODUCER_LABELS)
+        assert not missing, (
+            f"producers with no PRODUCER_LABELS entry: {sorted(missing)} — the "
+            "banner would tell the user nothing about how to clear it."
+        )

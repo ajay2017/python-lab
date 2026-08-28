@@ -54,48 +54,63 @@ TIER_DECORATIVE = "decorative"
 # reads as permanently fresh, which is a confident false negative inside the
 # mechanism built to prevent them — hence the bidirectional test in
 # tests/test_coord_freshness.py and the planned check_antipatterns rule.
+# `producer` is load-bearing, not documentation. A key must be stamped ONLY by
+# the page that actually recomputes it: 🏠 Home's blanket stamp would otherwise
+# mark 🎯 My Edge's and 🧩 Intelligence's caches fresh merely because Home ran —
+# a freshness LAUNDER, the same defect the 2026-08-28 review caught on the
+# memo-HIT path. Producers were MEASURED by walking every
+# `st.session_state[...] =` write in app.py, not inferred from the key name.
 PORTFOLIO_DEPENDENT_KEYS: dict[str, dict] = {
     "_reduce_calls": {
+        "producer": "home",
         "tier": TIER_GATE,
         "why": "suppresses ADD suggestions for names under a Reduce/Exit call; "
                "stale means an add can be proposed on a name flagged to trim",
     },
     "_structural_alert_cache": {
+        "producer": "home",
         "tier": TIER_GATE,
         "why": "correlation-cluster formation; persists into portfolio_thesis, "
                "so a wrong value poisons next week's HELD/SHIFTED baseline",
     },
     "_port_risk_cache": {
+        "producer": "home",
         "tier": TIER_DECISION,
         "why": "portfolio beta; feeds fragility, the risk advisor and the "
                "persisted decision_context row captured at trade time",
     },
     "_fragility_cache": {
+        "producer": "home",
         "tier": TIER_DECISION,
         "why": "book fragility; a fabricated neutral drops a 25-point penalty "
                "into the 🏆 Health A-F grade shown as fact",
     },
     "_highbeta_share": {
+        "producer": "home",
         "tier": TIER_DECISION,
         "why": "high-beta concentration; a graded 🏆 Health dimension",
     },
     "_corr_df_cache": {
+        "producer": "home",
         "tier": TIER_DECISION,
         "why": "the correlation matrix itself; adding or removing one name "
                "genuinely moves it, and the diversification SCORE is derived",
     },
     "_grow_composites": {
+        "producer": "home",
         "tier": TIER_DECORATIVE,
         "why": "per-ticker composites for Grow Today; network-bound, and the "
                "surfaces recompute or re-rank before display",
     },
     "_leverage_cache": {
+        "producer": "home",
         "tier": TIER_DECORATIVE,
         "why": "margin/leverage awareness. Documented as read-only and NEVER "
                "gating (F-09d) — so a quiet surface here is a pure loss with "
                "no compensating safety benefit; disclose, never withhold",
     },
     "_acct_gate_cache": {
+        "producer": "home",
         "tier": TIER_GATE,
         "why": "the concentration gate's own denominator. Listed even though "
                "the post-trade republisher DOES refresh it (F-260 Phase 0), so "
@@ -104,14 +119,98 @@ PORTFOLIO_DEPENDENT_KEYS: dict[str, dict] = {
                "regression that stops refreshing it shows up as stale rather "
                "than as a silent gap in the registry",
     },
-    "_div_score_cache":     {"tier": TIER_DECORATIVE, "why": "derived from _corr_df_cache"},
-    "_avg_corr_cache":      {"tier": TIER_DECORATIVE, "why": "derived from _corr_df_cache"},
-    "_risk_pairs_cache":    {"tier": TIER_DECORATIVE, "why": "derived from _corr_df_cache"},
-    "_div_label_cache":     {"tier": TIER_DECORATIVE, "why": "derived from _corr_df_cache"},
-    "_corr_coverage_cache": {"tier": TIER_DECORATIVE, "why": "describes _corr_df_cache's sample"},
+    # ── Added 2026-08-28 (second pass). Phase 1's registry covered the seven
+    # siblings §11 enumerated; the drift guard then proved it was never a
+    # complete census. These 11 have CROSS-PAGE consumers and go stale after a
+    # trade exactly like the originals.
+    "_actions_cache": {
+        "producer": "home", "tier": TIER_DECISION,
+        "why": "rebalance actions; read by 📒 Trade Journal and 📡 Signals & Advice",
+    },
+    "_alert_list_cache": {
+        "producer": "home", "tier": TIER_DECISION,
+        "why": "the portfolio alert list behind 📡 Signals & Advice",
+    },
+    "_div_recs_cache": {
+        "producer": "home", "tier": TIER_DECISION,
+        "why": "diversification ADD suggestions; a stale one can propose a sector the trade just filled",
+    },
+    "_risk_high_alerts_cache": {
+        "producer": "home", "tier": TIER_DECISION,
+        "why": "drives the SIDEBAR NAV BADGE (module scope, app.py ~2804, so every "
+               "page) AND 📋 Watchlist's active-risk-alert caution (~22736/22743). "
+               "The widest-reach cache here; it is unmapped because Watchlist has "
+               "no banner call, NOT because the nav badge is mere chrome",
+    },
+    "_risk_advisor_recs_cache": {
+        "producer": "home", "tier": TIER_DECISION,
+        "why": "risk-advisor recommendations incl. TRIM calls; read by 🔗 Risk Analysis and 🥧 Portfolio Overview",
+    },
+    "_dpnl_cache": {
+        "producer": "home", "tier": TIER_DECISION,
+        "why": "Tier-B day P&L; 🧾 Summary renders it rather than recomputing, so a stale value shows as today's number",
+    },
+    "_grow_today_sectors_cache": {
+        "producer": "home", "tier": TIER_GATE,
+        "why": "sector-overlap GATE input on 📋 Watchlist (app.py ~22736), which "
+               "that page's own banner calls a gate on Ready-to-Enter. I first "
+               "tiered this DECORATIVE as 'an adornment' — wrong, and the wrong "
+               "direction: under this registry's own definition (can let through "
+               "an action the app would otherwise withhold) it qualifies as gate. "
+               "Inert only while Watchlist has no banner call at all",
+    },
+    "_mirror_orphans": {
+        "producer": "my_edge", "tier": TIER_DECISION,
+        "why": "Investor-Mirror orphans; consumed by 📈 Analysis. NOT Home-produced — see the producer note",
+    },
+    "_mirror_overexp": {
+        "producer": "my_edge", "tier": TIER_DECISION,
+        "why": "Investor-Mirror over-exposure; consumed by 📈 Analysis",
+    },
+    "_mirror_overhangs": {
+        "producer": "my_edge", "tier": TIER_DECISION,
+        "why": "Investor-Mirror overhangs; consumed by 📈 Analysis",
+    },
+    "_pi_factor_tilt_cache": {
+        "producer": "intelligence", "tier": TIER_DECISION,
+        "why": "style-factor exposure; consumed by 🔗 Risk Analysis and by both LLM narrative surfaces (F-260). Produced only by a BUTTON on 🧩 Intelligence",
+    },
+    "_div_score_cache":     {"producer": "home", "tier": TIER_DECORATIVE, "why": "derived from _corr_df_cache"},
+    "_avg_corr_cache":      {"producer": "home", "tier": TIER_DECORATIVE, "why": "derived from _corr_df_cache"},
+    "_risk_pairs_cache":    {"producer": "home", "tier": TIER_DECORATIVE, "why": "derived from _corr_df_cache"},
+    "_div_label_cache":     {"producer": "home", "tier": TIER_DECORATIVE, "why": "derived from _corr_df_cache"},
+    "_corr_coverage_cache": {"producer": "home", "tier": TIER_DECORATIVE, "why": "describes _corr_df_cache's sample"},
 }
 
 FRESH, STALE, ABSENT = "fresh", "stale", "absent"
+
+# The remedy must name the page that can actually clear the staleness. Before
+# 2026-08-28 the banner hard-coded "Revisit 🏠 Home", which became FALSE the
+# moment non-Home producers entered the registry: on 🧩 Intelligence it pointed
+# away from the only control that refreshes factor exposure, and the banner
+# could never be cleared by following its own instruction. A banner asserting a
+# remedy that does not work is the same defect class as the ENTER NOW copy that
+# told the user to "use the position sizing below" when that panel had been
+# withheld.
+PRODUCER_LABELS = {
+    "home":         "🏠 Home",
+    "my_edge":      "🎯 My Edge",
+    "intelligence": "🧩 Intelligence (reload factor exposure)",
+}
+
+
+def stale_producers(not_fresh: dict | None) -> set:
+    """Producers whose caches are STALE — i.e. which pages can clear this.
+
+    Exposed separately so a renderer can decide whether to offer a
+    "Refresh from Home" button at all: offering it when no Home-produced key is
+    stale sends the user somewhere that changes nothing.
+    """
+    return {
+        PORTFOLIO_DEPENDENT_KEYS[k]["producer"]
+        for k, v in (not_fresh or {}).items()
+        if v == STALE and k in PORTFOLIO_DEPENDENT_KEYS
+    }
 
 
 def classify(stamps: dict | None, epoch: int, key: str) -> str:
@@ -192,7 +291,12 @@ def decide_stale_banner(not_fresh: dict | None) -> tuple | None:
             " That includes a check that can SUPPRESS a suggestion, so an "
             "action may be shown here that the app would otherwise hold back."
         )
-    msg += " Revisit 🏠 Home to refresh."
+    producers = stale_producers(stale)
+    labels = [PRODUCER_LABELS[p] for p in sorted(producers) if p in PRODUCER_LABELS]
+    if len(labels) == 1:
+        msg += f" Revisit {labels[0]} to refresh."
+    elif labels:
+        msg += f" Revisit {' and '.join(labels)} to refresh."
     return severity, msg
 
 
@@ -211,6 +315,17 @@ _DIMENSION_LABELS = {
     "_div_label_cache": "diversification",
     "_corr_coverage_cache": "diversification",
     "_acct_gate_cache": "concentration limits",
+    "_actions_cache": "rebalance actions",
+    "_alert_list_cache": "portfolio alerts",
+    "_div_recs_cache": "diversification",
+    "_risk_high_alerts_cache": "portfolio alerts",
+    "_risk_advisor_recs_cache": "risk recommendations",
+    "_dpnl_cache": "today's P&L",
+    "_grow_today_sectors_cache": "leading sectors",
+    "_mirror_orphans": "Investor Mirror",
+    "_mirror_overexp": "Investor Mirror",
+    "_mirror_overhangs": "Investor Mirror",
+    "_pi_factor_tilt_cache": "factor exposure",
 }
 
 
@@ -251,24 +366,50 @@ def _dimension_names(stale: dict) -> tuple:
 # over-reporting is the safe direction, and a new surface that forgets to
 # register here gets a broader banner rather than a silent one.
 SURFACE_KEYS: dict[str, tuple] = {
-    "sm":    ("_fragility_cache", "_reduce_calls", "_structural_alert_cache"),
-    "aa":    ("_grow_composites",),
-    "ra":    ("_avg_corr_cache", "_corr_coverage_cache", "_corr_df_cache",
-              "_div_label_cache", "_div_score_cache", "_fragility_cache",
-              "_leverage_cache", "_port_risk_cache", "_risk_pairs_cache"),
-    "pi":    ("_corr_df_cache",),
-    "pa":    ("_acct_gate_cache", "_reduce_calls"),
-    "ph":    ("_avg_corr_cache", "_div_score_cache", "_fragility_cache",
-              "_highbeta_share", "_port_risk_cache"),
+    # 🧾 Summary reads three of these through the `_home_synth_cache` BUNDLE
+    # (app.py ~11129) rather than by key name, so the block-grep regeneration
+    # could not see them. Recorded because under-reporting is the unsafe
+    # direction: a surface that reads a stale cache and is never told.
+    "sm":    ("_alert_list_cache", "_div_label_cache", "_div_score_cache",
+              "_dpnl_cache", "_fragility_cache", "_reduce_calls",
+              "_structural_alert_cache"),
+    "aa":    ("_actions_cache", "_alert_list_cache", "_div_recs_cache", "_grow_composites"),
+    "ra":    ("_avg_corr_cache", "_corr_coverage_cache", "_corr_df_cache", "_div_label_cache",
+              "_div_score_cache", "_fragility_cache", "_leverage_cache", "_pi_factor_tilt_cache",
+              "_port_risk_cache", "_risk_advisor_recs_cache", "_risk_pairs_cache"),
+    "pi":    ("_corr_df_cache", "_pi_factor_tilt_cache"),
+    "pa":    ("_acct_gate_cache", "_div_recs_cache", "_reduce_calls", "_risk_advisor_recs_cache"),
+    "ph":    ("_avg_corr_cache", "_div_score_cache", "_fragility_cache", "_highbeta_share",
+              "_port_risk_cache"),
     "macro": (),
-    "an":    ("_port_risk_cache", "_reduce_calls"),
-    "tj":    ("_acct_gate_cache", "_grow_composites", "_highbeta_share", "_port_risk_cache"),
+    "an":    ("_mirror_orphans", "_mirror_overexp", "_mirror_overhangs", "_port_risk_cache",
+              "_reduce_calls"),
+    "tj":    ("_acct_gate_cache", "_actions_cache", "_grow_composites", "_highbeta_share",
+              "_port_risk_cache"),
     "tr":    (),
-    "acct":  ("_leverage_cache",),
+    # NOT ("_leverage_cache",): app.py ~30041 states outright that 💰 Account
+    # computes its panel live, "NOT from _leverage_cache". Claiming it here
+    # would caption a figure recomputed this run as stale. Pre-existing Phase 1
+    # error, found in review 2026-08-28.
+    "acct":  (),
     "cw":    ("_grow_composites",),
     "ec":    (),
-    "me":    ("_port_risk_cache", "_reduce_calls"),
+    "me":    ("_mirror_orphans", "_mirror_overexp", "_mirror_overhangs", "_port_risk_cache",
+              "_reduce_calls"),
 }
+
+
+def keys_for_producer(producer: str) -> tuple:
+    """Keys a given page is responsible for stamping.
+
+    The stamp must be scoped to the producer, never blanket: 🏠 Home running
+    does not make 🎯 My Edge's or 🧩 Intelligence's caches current, and stamping
+    them anyway would launder stale data into a positive freshness claim — the
+    exact failure the 2026-08-28 review caught on the memo-HIT path.
+    """
+    return tuple(sorted(
+        k for k, v in PORTFOLIO_DEPENDENT_KEYS.items() if v.get("producer") == producer
+    ))
 
 
 def keys_for_surface(suffix: str):

@@ -2335,7 +2335,15 @@ def _stamp_coord(keys=None) -> None:
     _existing = st.session_state.get("_coord_stamps")
     stamps = dict(_existing) if isinstance(_existing, dict) else {}
     epoch = _coord_epoch()
-    for k in (keys or coord_freshness.PORTFOLIO_DEPENDENT_KEYS):
+    # `is None`, NOT `keys or ...` — an EMPTY tuple is the honest answer for
+    # "this producer owns nothing yet", and `or` would fall through and stamp
+    # ALL 25 keys fresh: the exact launder the `producer` field exists to
+    # prevent, in the helper the mechanism trusts. Unreachable before today
+    # (every call site passed None or a non-empty literal); this change made
+    # the argument a COMPUTED value, which is what exposed it. The same rule is
+    # already documented on coord_freshness.not_fresh_keys — this violated its
+    # own module's stated invariant. (2026-08-28 review.)
+    for k in (coord_freshness.PORTFOLIO_DEPENDENT_KEYS if keys is None else keys):
         if k in coord_freshness.PORTFOLIO_DEPENDENT_KEYS and k in st.session_state:
             stamps[k] = epoch
     st.session_state["_coord_stamps"] = stamps
@@ -2412,9 +2420,15 @@ def _render_portfolio_stale_banner(key_suffix: str = "") -> None:
             (st.warning if _sev == "warn" else st.caption)(
                 ("⚠️ " if _sev == "warn" else "") + _msg
             )
-            if _sev == "warn" and st.button(
-                "🔄 Refresh from Home", key=f"_coord_stale_refresh_{key_suffix or 'default'}"
-            ):
+            # Offer the Home jump ONLY when a Home-produced cache is actually
+            # stale. Sending the user to Home to clear a 🎯 My Edge or 🧩
+            # Intelligence cache changes nothing, and the banner would still be
+            # there when they came back — a control that visibly does not work.
+            if (_sev == "warn"
+                    and "home" in coord_freshness.stale_producers(_nf)
+                    and st.button(
+                        "🔄 Refresh from Home",
+                        key=f"_coord_stale_refresh_{key_suffix or 'default'}")):
                 st.session_state["_pending_page"] = "🏠 Home"
                 st.rerun()
         return
@@ -6201,10 +6215,12 @@ if page == "🏠 Home":
     # _reduce_calls can genuinely be behind on exactly that path. Found in
     # review: a single blanket stamp would have LAUNDERED that into a positive
     # freshness claim, which is worse than the staleness it describes.
-    _stamp_coord(
-        [k for k in coord_freshness.PORTFOLIO_DEPENDENT_KEYS if k != "_reduce_calls"]
-        if _synth_hit else None
-    )
+    # Scoped to Home-PRODUCED keys (2026-08-28): the registry now also carries
+    # caches produced by 🎯 My Edge and 🧩 Intelligence, and stamping those here
+    # would mark them current merely because Home ran — a freshness launder.
+    # Each producer stamps its own; see coord_freshness.keys_for_producer.
+    _home_keys = coord_freshness.keys_for_producer("home")
+    _stamp_coord([k for k in _home_keys if k != "_reduce_calls"] if _synth_hit else _home_keys)
 
     with _alert_ph_structural.container():
         if _struct_alert_new_clusters:
@@ -15523,6 +15539,11 @@ elif page == "🧩 Intelligence":
                 _pi_hd, _pi_factor_weights, _pi_factor_returns,
             )
             st.session_state["_pi_factor_tilt_cache"] = _pi_factor_cache
+            # Inside the button branch ONLY: this is the sole path that
+            # recomputes factor tilt, so it is the only place that may claim it
+            # is current. Stamping on every Intelligence render would mark a
+            # pre-trade reading fresh just for visiting the page.
+            _stamp_coord(coord_freshness.keys_for_producer("intelligence"))
 
         if _pi_factor_cache is None:
             st.caption("Not loaded this session yet — click the button above.")
@@ -35705,6 +35726,12 @@ elif page == "🎯 My Edge":
         st.session_state["_mirror_orphans"]   = None
         st.session_state["_mirror_overexp"]   = None
         st.session_state["_mirror_overhangs"] = None
+
+    # Placed after ALL branches converge — every path above assigns all three,
+    # including the None (offline) paths, so a stamp here describes whatever was
+    # actually published. Scoped to my_edge: Home must not stamp these, and this
+    # page must not stamp Home's. (2026-08-28.)
+    _stamp_coord(coord_freshness.keys_for_producer("my_edge"))
 
     # ── 6 tabs ────────────────────────────────────────────────────────────────
     _me_tab_a, _me_tab_c, _me_tab_b, _me_tab_d, _me_tab_e, _me_tab_f = st.tabs([
