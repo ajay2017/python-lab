@@ -95,6 +95,21 @@ would also have suppressed the outage and refresh-error branches, i.e. a
 suppression with no banner. Nine tests, mutation-checked — reverting
 `apply_stamps` to the presence rule fails five of them.
 
+**Registering `_portfolio_value` / `_port_df_enriched` — MEASURED and DECLINED
+2026-08-28.** The same review asked whether the two sizing inputs belong in the
+registry, citing `_acct_gate_cache`'s own rationale (list a key even when the
+republisher refreshes it, so a future regression surfaces as stale rather than
+as a silent gap). Measured before deciding: **16 pages read them**, including
+three — 🪞 Trade Review, 📅 Economic Calendar, 🌐 Macro — that `SURFACE_KEYS`
+deliberately maps to `()` with a test asserting they stay silent. Registering
+would invalidate that premise, force a re-measure of every surface, and risk
+banners on pages that show none today — to guard a case the `_refresh_error`
+branch already reports FIRST, since these keys can only go stale when the
+republisher failed. The guard was instead placed where the risk is: a structural
+test that `_refresh_portfolio_cache_after_trade` still publishes all three keys
+(`tests/test_repo_hygiene.py`), mutation-checked against dropping each one.
+**Revisit with those numbers, not from the key names.**
+
 **Worth carrying forward:** the extraction is what made the fix verifiable.
 While the rule lived inline in `app.py` nothing could import it, which is
 exactly why a sentinel-stamping bug survived Phase 1, its own review, and a

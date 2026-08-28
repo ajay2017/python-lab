@@ -119,3 +119,41 @@ def test_gate_weight_column_is_attached_by_the_shared_helper_only():
         "both port_df producers (Home and the post-trade republisher) must "
         "attach the gate-weight column, or it disappears after a trade"
     )
+
+
+def test_the_republisher_still_refreshes_the_sizing_inputs():
+    """`_portfolio_value` and `_port_df_enriched` are the inputs every position
+    SIZE is computed from. They are portfolio-dependent, so a 2026-08-28 review
+    asked whether they belong in `coord_freshness.PORTFOLIO_DEPENDENT_KEYS`
+    alongside `_acct_gate_cache` — whose own docstring argues for listing a key
+    even when the republisher DOES refresh it, so that a future regression
+    surfaces as stale rather than as a silent gap in the registry.
+
+    MEASURED, then declined. 16 pages read these two keys, including three
+    (Trade Review, Economic Calendar, Macro) that SURFACE_KEYS deliberately
+    maps to () with a test asserting they stay silent. Registering them would
+    invalidate that premise, force a re-measure of every surface, and risk
+    banners on pages that show none today — all to guard a case the
+    `_refresh_error` branch already reports FIRST, since these keys can only go
+    stale when the republisher failed.
+
+    So the guard goes where the risk actually is: the republisher itself. Same
+    anti-fork shape as the three tests above, catching the real regression (a
+    refactor that drops one of the writes) at a fraction of the blast radius.
+    If the registry question is revisited, revisit it with these numbers rather
+    than from the key names.
+    """
+    src = _app_source()
+    start = src.index("def _refresh_portfolio_cache_after_trade")
+    # Bound the search at the next top-level def, so this cannot pass on a
+    # write that actually lives in some later function.
+    nxt = re.search(r"\ndef ", src[start + 1:])
+    body = src[start: start + 1 + nxt.start()] if nxt else src[start:]
+    for key in ("_last_port_df", "_port_df_enriched", "_portfolio_value"):
+        pattern = r'st\.session_state\["' + key + r'"\]\s*=[^=]'
+        assert re.search(pattern, body), (
+            f"_refresh_portfolio_cache_after_trade no longer publishes {key}. "
+            "Every position size is computed from these, so dropping one "
+            "leaves the app sizing trades against the PRE-TRADE book with no "
+            "banner — the F-260a defect class."
+        )
