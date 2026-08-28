@@ -9,6 +9,7 @@ does not. See §10 for the classified result and §11 for the leverage point.
 Opus review SHIP, 0 blocking). It landed as a pure, tested module
 (`util.factor_tilt_evidence_line` / `factor_tilt_state`) rather than as edits to
 `app.py`'s render layer, which is what §5's `N > 15` branch actually asked for.
+
 **2026-08-28, same day — §12 item 2 (the `_refresh_portfolio_cache_after_trade`
 republisher) is SHIPPED, Phases 0 and 1** (requirements.md F-260a / F-260b; Opus
 `planner` design pass then Opus review SHIP, 0 blocking). **Phase 2 was descoped
@@ -16,8 +17,29 @@ by an explicit user decision**: on a stale suppressor cache the app DISCLOSES
 rather than withholds, so the fail-closed `risk.sizing_unavailable_reason`
 extension is not built and no new policy constant was introduced.
 
-**Still unbuilt:** §12 item 3 (the registry-aware `check_antipatterns.py` rule)
-and Phase 3 (lifting Home's risk/fragility/correlation producer block into a
+**§12 item 3 SHIPPED 2026-08-28** as a registry-drift guard in
+`tests/test_coord_freshness.py` rather than an AST rule in
+`check_antipatterns.py` — the real risk was never a mis-shaped write, it was a
+portfolio-derived cache MISSING from `PORTFOLIO_DEPENDENT_KEYS`, which reads as
+permanently fresh and which nothing else would surface. Every key in
+`check_antipatterns._SENTINEL_KEYS` must now be classified: tracked, refreshed
+by the republisher, not portfolio-derived, self-invalidating, or explicitly
+listed as a known gap. Adding a cache without classifying it fails the suite.
+
+**It immediately exposed a real gap, recorded rather than hidden: 14
+portfolio-derived caches are NOT yet tracked for freshness** — `_actions_cache`,
+`_alert_list_cache`, `_div_recs_cache`, `_risk_high_alerts_cache`,
+`_risk_advisor_recs_cache`, `_dpnl_cache`, `_day_shock_cache`,
+`_grow_today_sectors_cache`, `_grow_composites_coverage`, the three `_mirror_*`
+keys, `_pi_factor_tilt_cache` and `_broker_drift_cache`. They go stale after a
+trade exactly like the tracked ones; the banner simply does not mention them
+yet. The Phase 1 registry covered the seven siblings the §11 analysis
+enumerated plus their derived keys — it was never a complete census, and this
+guard is what makes that visible. Each needs a tier, a dimension label and a
+per-surface mapping, which is a judgement call per cache rather than a bulk
+edit. A test pins the gap at exactly 14 so it cannot grow silently.
+
+**Still unbuilt:** shrinking that 14, and Phase 3 (lifting Home's risk/fragility/correlation producer block into a
 pure module, which is where this plan converges with §5's `N > 15` branch) —
 Phase 3 needs its own `planner` pass. The remaining ranked findings from §10
 also stand.

@@ -209,3 +209,102 @@ class TestSurfaceNarrowing:
         for suffix, keys in cf.SURFACE_KEYS.items():
             reported = set(cf.not_fresh_keys(self._stale(), 2, keys))
             assert reported <= set(keys), suffix
+
+
+# ── Registry-drift guard (F-260 §12 item 3, 2026-08-28) ──────────────────────
+# The failure this prevents: a portfolio-derived coordination cache that is
+# MISSING from PORTFOLIO_DEPENDENT_KEYS reads as permanently fresh — a
+# confident false negative inside the mechanism built to prevent them, and one
+# nothing else would ever surface.
+#
+# check_antipatterns.py's _SENTINEL_KEYS is the app's existing roster of
+# documented coordination caches. Every key on it must be classified here:
+# tracked for freshness, or explicitly excluded with a reason. Adding a cache
+# without classifying it fails the suite, which is the point.
+
+import importlib.util as _ilu
+import pathlib as _pl
+
+
+def _sentinel_keys():
+    spec = _ilu.spec_from_file_location(
+        "cap", _pl.Path(__file__).resolve().parents[1] / "scripts" / "check_antipatterns.py"
+    )
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return set(mod._SENTINEL_KEYS)
+
+
+# Refreshed by _refresh_portfolio_cache_after_trade itself, so they never go
+# stale relative to the book — and their staleness is ALREADY owned by the
+# stronger `_portfolio_snapshot_stale()` banner branch. Tracking them here too
+# would double-report the same fact in two branches of one banner.
+_REFRESHED_BY_REPUBLISHER = {
+    "_last_port_df", "_port_df_enriched", "_last_held_data", "_last_held_tickers",
+}
+
+# Genuinely not portfolio-derived — they describe the MARKET, and a trade does
+# not make them wrong.
+_NOT_PORTFOLIO_DERIVED = {
+    "_leading_sectors_cache",   # leading sector names from Grow Today
+    "_market_tone_cache",       # market tone
+}
+
+# Self-invalidating: `_home_synth_cache`'s own signature contains the
+# (ticker, shares) frozenset, so a book change misses the memo by construction.
+_SELF_INVALIDATING = {"_home_synth_cache"}
+
+# PORTFOLIO-DERIVED BUT NOT YET TRACKED — a real, bounded gap, recorded rather
+# than hidden. These go stale after a trade exactly like the tracked ones; the
+# banner simply does not mention them yet. Each needs a tier, a dimension label
+# and a per-surface mapping before it can move into PORTFOLIO_DEPENDENT_KEYS,
+# which is a judgement call per cache rather than a bulk edit. Shrinking this
+# set is the follow-up; GROWING it should be deliberate and explained.
+_PORTFOLIO_DERIVED_UNTRACKED = {
+    "_actions_cache", "_alert_list_cache", "_div_recs_cache",
+    "_risk_high_alerts_cache", "_risk_advisor_recs_cache",
+    "_dpnl_cache", "_day_shock_cache",
+    "_grow_today_sectors_cache", "_grow_composites_coverage",
+    "_mirror_orphans", "_mirror_overexp", "_mirror_overhangs",
+    "_pi_factor_tilt_cache", "_broker_drift_cache",
+}
+
+
+def test_every_documented_coordination_cache_is_classified():
+    """No cache may be silently unclassified. A new one must be tracked or
+    explicitly excluded with a reason — never left to default to 'fresh'."""
+    from stock_analyzer import coord_freshness as _cf
+    classified = (set(_cf.PORTFOLIO_DEPENDENT_KEYS) | _REFRESHED_BY_REPUBLISHER
+                  | _NOT_PORTFOLIO_DERIVED | _SELF_INVALIDATING
+                  | _PORTFOLIO_DERIVED_UNTRACKED)
+    unclassified = _sentinel_keys() - classified
+    assert not unclassified, (
+        f"Unclassified coordination cache(s): {sorted(unclassified)}. Each must go "
+        "in PORTFOLIO_DEPENDENT_KEYS (with a tier + dimension label + surface "
+        "mapping) or in one of the exclusion sets here, with a reason. An "
+        "unclassified portfolio-derived cache reads as permanently fresh."
+    )
+
+
+def test_no_freshness_key_is_a_typo():
+    """Every tracked key must be a real documented coordination cache. A typo'd
+    or renamed entry would silently monitor nothing while looking correct."""
+    unknown = set(cf.PORTFOLIO_DEPENDENT_KEYS) - _sentinel_keys()
+    assert not unknown, f"not documented coordination caches: {sorted(unknown)}"
+
+
+def test_the_exclusion_sets_do_not_overlap_the_tracked_set():
+    """A key claimed as both tracked and excluded means one of the two
+    rationales is wrong and nobody would notice which."""
+    for name, excluded in (("refreshed", _REFRESHED_BY_REPUBLISHER),
+                           ("not-portfolio", _NOT_PORTFOLIO_DERIVED),
+                           ("self-invalidating", _SELF_INVALIDATING),
+                           ("untracked", _PORTFOLIO_DERIVED_UNTRACKED)):
+        overlap = excluded & set(cf.PORTFOLIO_DEPENDENT_KEYS)
+        assert not overlap, f"{name} set also claims to be tracked: {sorted(overlap)}"
+
+
+def test_the_untracked_gap_does_not_grow_silently():
+    """Pins the size of the known gap. Shrinking it is the follow-up; growing
+    it must be a deliberate, explained edit rather than drift."""
+    assert len(_PORTFOLIO_DERIVED_UNTRACKED) == 14
