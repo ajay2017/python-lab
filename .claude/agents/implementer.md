@@ -9,7 +9,14 @@ description: >
   must follow); it makes the edits, compile-checks, and reports back. It does
   not commit/push.
 tools: Read, Edit, Write, Grep, Glob, Bash
-model: sonnet
+# EXACT ID, not the `sonnet` alias (2026-08-28). An alias resolves to "the
+# recommended version FOR YOUR PROVIDER" and that mapping differs: Anthropic API
+# gives Sonnet 5, AWS gives 4.6, Bedrock/Foundry give 4.5. So `model: sonnet`
+# silently delivered an older Sonnet than intended, which is what the owner
+# caught. A full ID does not auto-update — the tradeoff is that this line must
+# be bumped by hand when a newer Sonnet ships, which is the correct direction
+# for a project that would rather be stale-and-known than newer-and-unverified.
+model: claude-sonnet-5
 color: blue
 ---
 
