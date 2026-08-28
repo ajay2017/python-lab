@@ -444,9 +444,30 @@ def build_watchlist_recommendation(
                 f"R:R {rr:.1f}:1 — above 2:1 minimum" if rr else "Risk/reward acceptable",
                 f"No imminent earnings risk" if not earn_soon else "",
             ],
-            conditions_missing=(
-                [f"Portfolio fit caution: {soft_caution}"] if soft_caution else []
-            ),
+            # Deliberately EMPTY on this branch (2026-08-28). It used to carry
+            # `f"Portfolio fit caution: {soft_caution}"` — the same string
+            # already passed to `portfolio_caution` below — so the card filed a
+            # SOFT caution under the renderer's "⏳ Conditions pending" header
+            # while simultaneously saying "All conditions align for opening a
+            # position" in its own summary and "READY TO ENTER" as its action.
+            # Three claims, two of them contradicting the third, from one
+            # branch. A soft concern by definition is NOT an unmet condition:
+            # this branch is reached precisely because every condition passed.
+            #
+            # Nothing is lost by dropping it. `portfolio_caution` renders the
+            # same caution text in an amber banner ABOVE this section (not
+            # byte-identical — the deleted entry carried a "Portfolio fit
+            # caution: " prefix — but the same information). Review traced the
+            # reachability rather than assuming it: both `continue`s in the
+            # render loop precede BOTH renders, so they skip symmetrically, and
+            # the banner draws at FULL WIDTH in the container body while this
+            # section sat inside the left column of a 2-column split. The
+            # surface kept is strictly more reachable than the one removed.
+            # `conditions_missing` had no
+            # other content here — so the section (and its misleading header)
+            # simply does not render now. app.py ~23183 is its only consumer;
+            # it does not reach the email path.
+            conditions_missing=[],
             institutional_lens=(
                 "The hardest discipline in investing is not the analysis — it's the execution. "
                 "When a watchlist stock finally hits its entry zone with a confirmed thesis, "

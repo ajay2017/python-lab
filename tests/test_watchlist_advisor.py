@@ -5,6 +5,7 @@ coverage despite containing an actual portfolio-risk GATE
 """
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_ELEVATED,
+    SECTOR_CEILING,
     SECTOR_ELEVATED,
     TICKER_BETA_HIGH,
 )
@@ -312,6 +313,45 @@ def test_enter_now_keeps_action_but_adds_soft_caution():
     rec = build_watchlist_recommendation("XYZ", _base_data(), portfolio_ctx=ctx)
     assert rec["action"] == "ENTER_NOW"
     assert rec["portfolio_caution"] is not None
+
+
+def test_enter_now_never_files_a_soft_caution_as_a_pending_condition():
+    """A soft concern is NOT an unmet condition — this branch is reached
+    precisely because every condition passed, and the card says so in its own
+    summary ("All conditions align for opening a position") and its action
+    ("READY TO ENTER").
+
+    It used to put the same caution string into conditions_missing as well, so
+    the renderer filed it under "⏳ Conditions pending" beside both of those
+    claims. Three statements from one branch, two contradicting the third.
+    Seen on a production screenshot 2026-08-28.
+
+    The caution is NOT lost: portfolio_caution carries the identical text into
+    an amber banner above, which is the more prominent of the two surfaces."""
+    ctx = {"sector_weight_pct": SECTOR_ELEVATED + 2.0, "sector_of_ticker": "Technology"}
+    rec = build_watchlist_recommendation("XYZ", _base_data(), portfolio_ctx=ctx)
+    assert rec["action"] == "ENTER_NOW"
+    assert rec["conditions_missing"] == []
+    # Still disclosed, just once and in the right place. Pins the sector FIGURE:
+    # `or "%" in ...` would be near-tautological, since 3 of the 4 soft strings
+    # contain a percent sign.
+    assert rec["portfolio_caution"]
+    assert f"{SECTOR_ELEVATED + 2.0:.0f}" in rec["portfolio_caution"]
+
+
+def test_a_downgraded_card_DOES_still_list_its_blocker():
+    """The mirror of the test above — proof the fix was scoped to the branch
+    where the claim was false, not applied blindly. A HARD breach genuinely IS
+    an unmet condition, so NEAR_ENTRY must keep populating conditions_missing;
+    emptying it there would hide the reason the call was downgraded."""
+    ctx = {"sector_weight_pct": SECTOR_CEILING + 5.0, "sector_of_ticker": "Technology"}
+    rec = build_watchlist_recommendation("XYZ", _base_data(), portfolio_ctx=ctx)
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["conditions_missing"], "a downgraded card must say what blocked it"
+    # Assert WHAT it says, not merely that something is there — a non-empty
+    # check would still pass if the blocker text were replaced by something
+    # unrelated, which is the very failure this test claims to guard.
+    assert any("Portfolio fit" in c for c in rec["conditions_missing"])
 
 
 def test_enter_now_requires_validated_rr_not_just_present_price():
