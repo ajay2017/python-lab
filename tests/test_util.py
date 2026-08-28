@@ -10,6 +10,7 @@ from stock_analyzer.util import (
     factor_tilt_evidence_line,
     factor_tilt_state,
     get_or_offline,
+    md_bold_to_html,
     safe_html,
     stop_recovery_state,
 )
@@ -225,3 +226,63 @@ class TestFactorTiltState:
                          "not enough data", "fetch failed"):
             assert invented not in line
         assert "cause not distinguished" in line
+
+
+class TestMdBoldToHtml:
+    """Verified live from an owner screenshot 2026-08-28: 📋 Watchlist printed
+    `**Open the position.**` with literal asterisks. Streamlit does not process
+    markdown inside a raw `unsafe_allow_html` block, and `watchlist_advisor`
+    bolds the IMPERATIVE — so the phrases designed to stand out were exactly
+    the ones rendering broken, on a surface whose job is issuing a call."""
+
+    def test_converts_bold_to_b_tags(self):
+        assert md_bold_to_html("**Open the position**") == "<b>Open the position</b>"
+
+    def test_multiple_spans_each_convert(self):
+        assert md_bold_to_html("**A** then **B**") == "<b>A</b> then <b>B</b>"
+
+    def test_escapes_before_converting(self):
+        """Order is load-bearing. Escaping first leaves `**` intact (no HTML
+        metacharacters); converting first would let the escape mangle the tags
+        it had just produced."""
+        out = md_bold_to_html("<script>alert(1)</script> **x**")
+        assert "&lt;script&gt;" in out
+        assert "<b>x</b>" in out
+        assert "<script>" not in out
+
+    def test_the_call_sites_previously_interpolated_raw_so_this_also_escapes(self):
+        assert "&amp;" in md_bold_to_html("Tom & Jerry")
+
+    def test_a_lone_marker_stays_literal(self):
+        assert md_bold_to_html("a ** b") == "a ** b"
+
+    def test_odd_marker_counts_pair_left_to_right_and_strand_the_rest(self):
+        """Documents the REAL behaviour rather than the docstring's original
+        overclaim that unbalanced markers are 'left as literal'. Three markers
+        bold the first span and strand the third — which would land on the very
+        phrase an author chose to emphasise. Not reachable today (all advisor
+        spans are paired), pinned so it stays visible if that changes."""
+        assert md_bold_to_html("x ** y **Open the position** z") == (
+            "x <b> y </b>Open the position** z"
+        )
+        assert md_bold_to_html("***bold***") == "<b>*bold</b>*"
+
+    def test_tag_balance_is_structural_so_output_is_never_malformed(self):
+        """Whatever the marker count, every substitution emits exactly one open
+        and one close — so a stranded marker is a copy defect, never broken
+        layout. This is what makes the case above non-urgent."""
+        for probe in ("**a**", "a ** b", "***x***", "**a** **b**", "****", "**"):
+            out = md_bold_to_html(probe)
+            assert out.count("<b>") == out.count("</b>")
+
+    def test_newline_spanning_bold_is_left_alone(self):
+        """No re.DOTALL. Verified no advisor bold span crosses lines; re-check
+        before applying this helper to a new producer."""
+        probe = "**a\nb**"
+        assert md_bold_to_html(probe) == probe
+
+    def test_non_greedy_so_two_spans_do_not_merge_into_one(self):
+        assert md_bold_to_html("**A** x **B**").count("<b>") == 2
+
+    def test_plain_text_is_unchanged_apart_from_escaping(self):
+        assert md_bold_to_html("no markup here") == "no markup here"

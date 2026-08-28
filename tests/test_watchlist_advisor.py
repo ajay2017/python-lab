@@ -359,3 +359,39 @@ def test_sort_key_unknown_action_sorts_last():
         )
     ]
     assert sort_key_for_action("SOMETHING_UNRECOGNIZED") > max(known_ranks)
+
+
+# ── The advisor must not claim a UI affordance exists (2026-08-28) ───────────
+# The ENTER NOW copy used to end "Use the position sizing below to calibrate
+# shares" — but that panel is WITHHELD whenever the portfolio value is unknown
+# (F-261 refuses to size against a book it cannot measure), so a cold session
+# was told to use something that was not on screen. Verified live from an owner
+# screenshot. An advisor cannot see its own renderer; the concrete pointer now
+# lives at the render layer, gated on the panel actually having rendered.
+
+def _emitted_strings():
+    """String CONSTANTS from the module AST, not a grep of the file.
+
+    Deliberate: the comment explaining this fix necessarily contains the old
+    phrase, and a substring search over the source could be made to pass or
+    fail by that comment alone. Python `#` comments are absent from the AST.
+    (Docstrings ARE ast.Constant nodes, so the explanation must stay a comment.)
+    """
+    import ast
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    src = (root / "stock_analyzer" / "watchlist_advisor.py").read_text(encoding="utf-8")
+    return [n.value for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+
+
+def test_no_emitted_string_points_at_a_ui_element():
+    joined = " ".join(_emitted_strings()).lower()
+    for phrase in ("sizing below", "the panel below", "see below to calibrate"):
+        assert phrase not in joined, phrase
+
+
+def test_the_imperative_is_still_issued():
+    """The app decides, it does not inform — removing the false pointer must
+    not soften the call itself."""
+    assert any("Open the position" in s for s in _emitted_strings())

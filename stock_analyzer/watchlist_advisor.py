@@ -394,7 +394,16 @@ def build_watchlist_recommendation(
                 f"Price {'is inside' if in_zone else f'is within 3% of'} the entry zone "
                 f"(${entry_lo:.2f}–${entry_hi:.2f}). "
                 + (f"Risk/reward is {rr:.1f}:1 — well above the 2:1 minimum. " if rr else "")
-                + f"**Open the position.** Use the position sizing below to calibrate shares. "
+                # Deliberately does NOT say "use the position sizing below": that
+                # panel is WITHHELD whenever the portfolio value is unknown
+                # (F-261 refuses to size against a book it cannot measure), and
+                # a cold session reaching this card was shown an instruction to
+                # use something that was not on screen — verified live
+                # 2026-08-28. An advisor must not assert that a UI affordance
+                # exists; it cannot see its own renderer. Same root-cause family
+                # as the **bold**-into-raw-HTML leak fixed in the same commit:
+                # a string authored for one context, emitted into another.
+                + f"**Open the position**, sized to your risk rules. "
                 "Place the ATR stop immediately on entry — do not hold without a stop."
             ),
             conditions_met=[

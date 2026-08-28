@@ -8,6 +8,7 @@ gate/decision path gets its own review).
 from __future__ import annotations
 
 import html as _html
+import re as _re
 from typing import Any
 
 
@@ -176,3 +177,40 @@ def factor_tilt_evidence_line(factor_tilt: Any) -> str:
         f"Factor tilt: portfolio leans {dom}-tilted "
         f"(weighted correlation {valid[dom]:+.2f})"
     )
+
+
+def md_bold_to_html(value: Any) -> str:
+    """Escape for HTML, then render ``**bold**`` as ``<b>bold</b>``.
+
+    For strings authored as markdown but rendered inside a raw
+    ``unsafe_allow_html`` block. **Streamlit does not process markdown inside
+    raw HTML**, so the asterisks print literally — verified live on 📋 Watchlist
+    2026-08-27, where `watchlist_advisor` bolds the IMPERATIVE ("Open the
+    position", "Do not open the position at full size"), meaning the phrases
+    designed to stand out were exactly the ones rendering broken, on a surface
+    whose job is issuing a call.
+
+    Same root cause family as the `$…$`-as-LaTeX bug fixed in 4fa9edf: a string
+    authored for one renderer, emitted into another. The conversion belongs at
+    the RENDER boundary — the advisor must not know what renders it.
+
+    Order is load-bearing: escape FIRST, then convert. ``**`` contains no HTML
+    metacharacters so it survives escaping intact, whereas converting first
+    would let the escape mangle the tags it just produced. This also closes an
+    escaping gap, since the Watchlist call sites interpolated these strings raw.
+
+    Markers pair left-to-right, non-greedily. A LONE trailing marker stays
+    literal, but an odd count of three or more pairs the first two and strands
+    the rest — ``"x ** y **Open the position** z"`` bolds `` y `` and leaves
+    ``**`` mid-imperative. Never unsafe (tag balance is structural: every
+    substitution emits exactly one open and one close), and not currently
+    reachable, since all advisor bold spans are correctly paired. Stated
+    plainly rather than claimed away, because the failure would be silent and
+    would land on the phrase the author chose to emphasise.
+
+    No ``re.DOTALL``: a span containing a newline is left unconverted. Verified
+    2026-08-28 that no advisor bold span spans lines — re-check before applying
+    this to a new producer.
+    """
+    escaped = safe_html(value)
+    return _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped)

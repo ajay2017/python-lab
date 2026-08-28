@@ -279,6 +279,7 @@ from stock_analyzer import api_health as _ah
 from stock_analyzer import grow_dropoff as _grow_dropoff
 from stock_analyzer import ticker_history as _ticker_history
 from stock_analyzer.util import safe_html as _safe_html
+from stock_analyzer.util import md_bold_to_html as _md_bold
 from stock_analyzer.util import factor_tilt_state as _factor_tilt_state
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
@@ -13776,7 +13777,7 @@ elif page == "🔗 Risk Analysis":
                         f"border-left:4px solid {_border_clr};margin-bottom:14px'>"
                         f"<span style='font-size:0.72em;color:#888;font-weight:700;"
                         f"letter-spacing:0.09em;text-transform:uppercase'>The Problem</span><br>"
-                        f"<span style='color:#eee'>{_rec['problem']}</span>"
+                        f"<span style='color:#eee'>{_md_bold(_rec['problem'])}</span>"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
@@ -13819,7 +13820,7 @@ elif page == "🔗 Risk Analysis":
                             f"border-left:4px solid #4a9eff;margin-bottom:10px'>"
                             f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
                             f"letter-spacing:0.09em;text-transform:uppercase'>Recommended Action</span><br>"
-                            f"<span style='color:#eee;font-size:0.9em'>{_rec['recommendation']}</span>"
+                            f"<span style='color:#eee;font-size:0.9em'>{_md_bold(_rec['recommendation'])}</span>"
                             f"</div>",
                             unsafe_allow_html=True,
                         )
@@ -17697,7 +17698,7 @@ elif page == "🥧 Portfolio Overview":
                                         f"<span style='font-size:0.72em;color:#888;font-weight:700;"
                                         f"letter-spacing:0.09em;text-transform:uppercase'>"
                                         f"The Problem</span><br>"
-                                        f"<span style='color:#eee'>{_prec['problem']}</span>"
+                                        f"<span style='color:#eee'>{_md_bold(_prec['problem'])}</span>"
                                         f"</div>",
                                         unsafe_allow_html=True,
                                     )
@@ -17723,7 +17724,7 @@ elif page == "🥧 Portfolio Overview":
                                             f"font-weight:700;letter-spacing:0.09em;"
                                             f"text-transform:uppercase'>Recommendation</span><br>"
                                             f"<span style='color:#eee;font-size:0.9em'>"
-                                            f"{_prec['recommendation']}</span>"
+                                            f"{_md_bold(_prec['recommendation'])}</span>"
                                             f"</div>",
                                             unsafe_allow_html=True,
                                         )
@@ -23062,7 +23063,7 @@ elif page == "📋 Watchlist":
             if _ticker in _wl_resurrected:
                 _wl_added_days = (_wl_today - date.fromisoformat(_wl_added_dates[_ticker])).days
                 st.info(
-                    f"👁️ You've watched **{_ticker}** since {_wl_added_dates[_ticker]} "
+                    f"You've watched **{_ticker}** since {_wl_added_dates[_ticker]} "
                     f"({_wl_added_days}d) and it's actionable again.",
                     icon="👁️",
                 )
@@ -23096,7 +23097,7 @@ elif page == "📋 Watchlist":
                 f"border-radius:6px;border-left:4px solid {_bclr};margin:10px 0'>"
                 f"<span style='font-size:0.72em;color:#888;font-weight:700;"
                 f"letter-spacing:0.09em;text-transform:uppercase'>Buy Readiness Assessment</span><br>"
-                f"<span style='color:#eee'>{_wr['summary']}</span>"
+                f"<span style='color:#eee'>{_md_bold(_wr['summary'])}</span>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -23128,7 +23129,7 @@ elif page == "📋 Watchlist":
                     f"border-radius:6px;border-left:4px solid {_pc_brd};margin:6px 0 10px'>"
                     f"<span style='font-size:0.72em;color:{_pc_brd};font-weight:700;"
                     f"letter-spacing:0.09em;text-transform:uppercase'>{_pc_lbl}</span><br>"
-                    f"<span style='color:{_pc_txt_c};font-size:0.88em'>{_pcaution}</span>"
+                    f"<span style='color:{_pc_txt_c};font-size:0.88em'>{_md_bold(_pcaution)}</span>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -23142,7 +23143,7 @@ elif page == "📋 Watchlist":
                     for _cm in _wr["conditions_met"]:
                         st.markdown(
                             f"<div style='font-size:0.85em;color:#00C851;margin-left:6px'>"
-                            f"✓ {_cm}</div>",
+                            f"✓ {_md_bold(_cm)}</div>",
                             unsafe_allow_html=True,
                         )
                 if _wr["conditions_missing"]:
@@ -23150,7 +23151,7 @@ elif page == "📋 Watchlist":
                     for _cp in _wr["conditions_missing"]:
                         st.markdown(
                             f"<div style='font-size:0.85em;color:#ffbb33;margin-left:6px'>"
-                            f"○ {_cp}</div>",
+                            f"○ {_md_bold(_cp)}</div>",
                             unsafe_allow_html=True,
                         )
 
@@ -23213,14 +23214,26 @@ elif page == "📋 Watchlist":
                     else:
                         st.caption("Position sizing unavailable — stop price too close to entry or not set.")
 
-            # Detail recommendation
+            # Detail recommendation.
+            # The concrete pointer to the sizing panel lives HERE, not in the
+            # advisor, because only the renderer knows whether that panel
+            # actually rendered. The advisor used to assert it unconditionally
+            # ("Use the position sizing below to calibrate shares"), which
+            # became false the moment F-261 started refusing to size against an
+            # unknown book — a cold session was told to use something that was
+            # not on screen (verified live 2026-08-28). Warm sessions get the
+            # concrete affordance back; cold sessions keep the honest
+            # abstraction; the advisor still knows nothing about its renderer.
+            _detail_html = _md_bold(_wr["detail"])
+            if _wl_ps and _action == "ENTER_NOW":
+                _detail_html += " Use the position sizing panel above to set share count."
             st.markdown(
                 f"<div style='padding:12px 16px;background:#0d1117;"
                 f"border-radius:6px;border-left:4px solid {_bclr};margin:10px 0'>"
                 f"<span style='font-size:0.72em;color:{_bclr};font-weight:700;"
                 f"letter-spacing:0.09em;text-transform:uppercase'>"
                 f"{_a_icon} Recommended Action: {_a_label}</span><br>"
-                f"<span style='color:#eee;font-size:0.9em'>{_wr['detail']}</span>"
+                f"<span style='color:#eee;font-size:0.9em'>{_detail_html}</span>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
