@@ -104,6 +104,7 @@ python-lab/
     ├── discovery_universe.py       Broad ~200-name discovery universe (by sector) for movers; discovery_tickers() flatten/dedup
     ├── daily_briefing.py           Daily briefing engine (Act Today / Grow Today + Movers / Buy Candidates / Review); structured directives + per-ticker consolidation
     ├── decision_bucket.py          Brief defensive-item bucketing: Act Today vs Monitoring/Awareness split (calm-advisor, pure)
+    ├── summary_view.py             🧾 Summary cockpit view-helpers: book-safety classification, today's movers, position badge, day-direction + protective-signal counts (pure, no Streamlit/DB)
     ├── position_lifecycle.py       Held-position state (settling → established → winning; at_risk/exit override) — calm-advisor nudge-cadence gate
     ├── signal_hysteresis.py        Calm-advisor "steady vs yesterday" damper — annotate-only continuity marker (Tier 2C)
     ├── evening_debrief.py          Evening Debrief: PM companion to Today's Brief (plan-vs-reality, today's trades, tomorrow's setup)
@@ -477,9 +478,9 @@ Features publish to `st.session_state` when they own a piece of decision state; 
 | `_grow_composites_coverage` | Portfolio page | Grow Today UI | "Composite scores unavailable" banner when pre-fetch failed |
 | `_movers_candidates` | Portfolio page (`_cached_scan_movers` → composite-gate) | `_grow_today` via `movers=` arg | Discovery breakouts fed into the unified New Positions list |
 | `_daily_brief_offline` | Portfolio page (on `build_daily_briefing` exception) | Watchlist | Surfaces explicit offline state instead of silently disabling gates |
-| `_reduce_calls` | After `build_daily_briefing` (`decision_bucket.reduce_call_items`) | Stock Analysis Trade Plan | Held names under a Reduce/Exit call → suppress add-on sizing + "not a place to add" banner, so Analysis can't say "add" while the Brief says "reduce" |
+| `_reduce_calls` | After `build_daily_briefing` (`decision_bucket.reduce_call_items`) | Stock Analysis Trade Plan · **🧾 Summary veto strip + Active Vetoes card + Top-Positions badge (F-204a)** | Held names under a Reduce/Exit call → suppress add-on sizing + "not a place to add" banner, so Analysis can't say "add" while the Brief says "reduce" |
 | `_acct_gate_cache` | Portfolio page (concentration-gate wiring, ~app.py:2710) | Grow Today 15%/35% suppression, entry nudge, watchlist/quick-research/comparison entry-fit | One number all gate consumers read for the concentration basis + denom. **Now `basis="equity"`, `denom=invested equity`** (2026-07-09 — reqs G-19); the net-capital path is retired |
-| `_leverage_cache` | Portfolio page (same wiring point) | 🔗 Risk Analysis leverage read (+ 💰 Account ⚖️ note) | Margin/leverage AWARENESS (`{levered, margin_debit, net_capital, equity, ratio, stale}`) — read-only, **never gates** (F-09d) |
+| `_leverage_cache` | Portfolio page (same wiring point) | 🔗 Risk Analysis leverage read · 💰 Account ⚖️ note · **🧾 Summary Book Safety strip (F-204a)** | Margin/leverage AWARENESS (`{levered, margin_debit, net_capital, equity, ratio, stale, cash_seen}`) — read-only, **never gates** (F-09d). **`cash_seen` added 2026-08-28** and is load-bearing for any consumer that COLOURS or GRADES this cache: without it the publisher's default is byte-identical for "measured, no debt", "no `account_cash` row", and "the DB read threw" (bare `except`), so a green/safe verdict would render on zero evidence. `stale` does NOT cover the gap — a missing row never reaches the staleness branch. Consumers that merely STATE the figure are unaffected. Memory `project_leverage_cache_false_green`. |
 | `_day_shock_cache` | Home page (after `_price_strip`) | Home Day Shock banner (currently the only reader) | Held tickers moving ≥`DAY_SHOCK_PCT` same-day, `{ticker: {price, prev_close, chg_pct}}` — AWARENESS, **never gates** |
 
 ### 4.0.3 Coordination gates currently enforced

@@ -46,6 +46,15 @@ _REDUCE_ACT_KINDS = frozenset(
      "risk_off_derisk"}
 )
 
+# ── Severity split WITHIN the reduce set — the single source of truth ──────────
+# EXIT = "close the position"; TRIM = "cut it back". Consumers that need a badge
+# or a bucket label (summary_view.position_status_badge, bucket_act_by_type)
+# import these rather than re-declaring a parallel copy: TRIM is DERIVED as the
+# remainder, so a kind added to _REDUCE_ACT_KINDS lands in TRIM automatically
+# instead of silently falling through to WATCH in each copy.
+EXIT_KINDS = frozenset({"stop_breach", "sell_signal", "deterioration_exit"})
+TRIM_KINDS = _REDUCE_ACT_KINDS - EXIT_KINDS
+
 
 def _ticker(item: dict) -> str:
     # Fall back to action.trim_ticker: a macro PROTECTIVE_TRIM card carries
@@ -191,6 +200,71 @@ def reduce_call_tickers(act_today: list | None, review_list: list | None) -> set
     (scans both act + aware). Pure; safe on None/empty.
     """
     return set(reduce_call_items(act_today, review_list).keys())
+
+
+def bucket_act_by_type(act_items: list[dict] | None) -> dict:
+    """Group Act Today items into EXIT / TRIM / WATCH buckets.
+
+    Reuses the existing kind / action.type canon so chips match the cards.
+    Operates on the ALREADY-SPLIT act bucket (output of split_defensive's
+    "act" key), not on the raw act_today / review_list lists.
+
+    Buckets read the module-level canon (EXIT_KINDS / TRIM_KINDS derived from
+    _REDUCE_ACT_KINDS, and _ACT_REVIEW_TYPES) — no parallel copy lives here, so
+    a kind added to the canon cannot silently become WATCH.
+
+    EXIT kinds : EXIT_KINDS  (stop_breach, sell_signal, deterioration_exit)
+    TRIM kinds : TRIM_KINDS  (the rest of _REDUCE_ACT_KINDS) + _ACT_REVIEW_TYPES
+    WATCH      : premortem_triggered, critical_news, and anything else that
+                 landed in the act bucket but is not a reduce directive
+
+    Returns
+    -------
+    dict with keys:
+      EXIT   : list of items
+      TRIM   : list of items
+      WATCH  : list of items
+      counts : {"EXIT": N, "TRIM": N, "WATCH": N}
+    """
+    exit_items: list[dict] = []
+    trim_items: list[dict] = []
+    watch_items: list[dict] = []
+
+    for item in (act_items or []):
+        src = item.get("_source")
+        if src == "act":
+            kind = str(item.get("kind", ""))
+            if kind in EXIT_KINDS:
+                exit_items.append(item)
+            elif kind in TRIM_KINDS:
+                trim_items.append(item)
+            else:
+                watch_items.append(item)
+        elif src == "review":
+            # isinstance guard rather than `(x or {}).get(...)`: act-origin cards
+            # carry a STRING `action` (see _ticker's note), and `"str" or {}`
+            # evaluates to the string, so .get() on it would raise. Unreachable
+            # today because this branch is review-only, but the string-action
+            # shape is real and one line away.
+            _act = item.get("action")
+            atype = str(_act.get("type", "")) if isinstance(_act, dict) else ""
+            if atype in _ACT_REVIEW_TYPES:
+                trim_items.append(item)
+            else:
+                watch_items.append(item)
+        else:
+            watch_items.append(item)
+
+    return {
+        "EXIT":   exit_items,
+        "TRIM":   trim_items,
+        "WATCH":  watch_items,
+        "counts": {
+            "EXIT":  len(exit_items),
+            "TRIM":  len(trim_items),
+            "WATCH": len(watch_items),
+        },
+    }
 
 
 def all_flagged_tickers(act_today: list | None, review_list: list | None) -> set[str]:

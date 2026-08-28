@@ -3,7 +3,21 @@
 **Date:** 2026-07-27
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5
-**Status:** Card #1 (Risk Posture) shipped 2026-07-27 via a parallel session's
+**Status: SUPERSEDED 2026-08-28 by the F-204a six-zone cockpit redesign.** All
+four cards this plan scoped shipped as designed and then MOVED in the redesign —
+read `docs/requirements.md` F-204 for the current layout before trusting any
+placement described below. Specifically: **Risk Posture** and **Thesis Review**
+left the "🧭 Elsewhere in DRISHTA" grid for a new **Portfolio Health** zone (and
+both gained capability there — Risk Posture now has a cold-session fallback that
+counts protective signals from `port_df` instead of rendering "—", and Thesis
+Review now names the WEAKENING/BROKEN tickers rather than only counting them);
+**Catalyst Watch** stayed in the grid, moved beside Engine Track Record, and now
+names ticker + days-until; **Engine Track Record** is unchanged. The 2×2 grid is
+now a 2-card row. The card *contents* and the "never a second independent
+verdict" rule this plan established all survived intact — only the geography
+changed. Historical detail below is kept for the reasoning, not the layout.
+
+**Original status —** Card #1 (Risk Posture) shipped 2026-07-27 via a parallel session's
 "Summary KPI Tier 3" work, before this plan's Phase 1 build started — a plain
 read-only badge (emoji + label + one-line `summary` text + "→ see 🔗 Risk Analysis"
 caption) sitting in a second row under the KPI tiles (alongside an Alpha-vs-SPY

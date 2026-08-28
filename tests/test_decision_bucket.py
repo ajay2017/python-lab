@@ -11,6 +11,10 @@ from stock_analyzer.decision_bucket import (
     reduce_call_tickers,
     all_flagged_tickers,
     suppress_orphans_under_reduce_call,
+    bucket_act_by_type,
+    EXIT_KINDS,
+    TRIM_KINDS,
+    _REDUCE_ACT_KINDS,
 )
 
 
@@ -272,3 +276,76 @@ def test_suppress_orphans_ticker_match_is_case_insensitive():
 def test_suppress_orphans_safe_on_none_and_empty():
     assert suppress_orphans_under_reduce_call(None, None) == ([], [])
     assert suppress_orphans_under_reduce_call([], {}) == ([], [])
+
+
+# ─── EXIT_KINDS / TRIM_KINDS canon (F-204 Summary chips + badges) ─────────────
+# These two sets are the SINGLE source of the severity split. summary_view
+# imports them rather than re-declaring a copy; these tests pin the properties
+# that made a copy dangerous.
+
+def test_exit_and_trim_kinds_exactly_cover_the_reduce_set():
+    # If a kind is added to _REDUCE_ACT_KINDS it must land in exactly one
+    # bucket. Before TRIM_KINDS was DERIVED as the remainder, a new kind fell
+    # through to WATCH in two separate parallel copies — a reduce directive
+    # silently displayed as mere awareness.
+    assert EXIT_KINDS | TRIM_KINDS == _REDUCE_ACT_KINDS
+
+
+def test_exit_and_trim_kinds_are_disjoint():
+    assert not (EXIT_KINDS & TRIM_KINDS)
+
+
+# ─── bucket_act_by_type ──────────────────────────────────────────────────────
+
+def test_bucket_act_by_type_empty_is_all_zero():
+    out = bucket_act_by_type([])
+    assert out["counts"] == {"EXIT": 0, "TRIM": 0, "WATCH": 0}
+    assert out["EXIT"] == [] and out["TRIM"] == [] and out["WATCH"] == []
+
+
+def test_bucket_act_by_type_none_is_safe():
+    assert bucket_act_by_type(None)["counts"]["EXIT"] == 0
+
+
+def test_bucket_act_by_type_splits_the_three_severities():
+    items = [
+        {"_source": "act", "kind": "stop_breach",        "ticker": "COF"},
+        {"_source": "act", "kind": "deterioration_trim", "ticker": "LLY"},
+        {"_source": "act", "kind": "critical_news",      "ticker": "PLTR"},
+    ]
+    out = bucket_act_by_type(items)
+    assert out["counts"] == {"EXIT": 1, "TRIM": 1, "WATCH": 1}
+
+
+def test_bucket_act_by_type_review_trim_lands_in_trim():
+    items = [{"_source": "review", "action": {"type": "TRIM_AND_TIGHTEN"}, "ticker": "MSFT"}]
+    assert bucket_act_by_type(items)["counts"]["TRIM"] == 1
+
+
+def test_bucket_act_by_type_non_reduce_review_lands_in_watch():
+    items = [{"_source": "review", "action": {"type": "RECOMMIT"}, "ticker": "MSFT"}]
+    assert bucket_act_by_type(items)["counts"]["WATCH"] == 1
+
+
+def test_bucket_act_by_type_never_invents_an_enter_bucket():
+    # Act Today is defensive-only by design (user decision 2026-08-28): the
+    # buy-side stream is a different producer and must not leak in here.
+    out = bucket_act_by_type([{"_source": "act", "kind": "stop_breach"}])
+    assert set(out.keys()) == {"EXIT", "TRIM", "WATCH", "counts"}
+
+
+def test_bucket_act_by_type_unknown_source_is_watch_not_dropped():
+    # A malformed item must degrade to awareness, never vanish silently.
+    out = bucket_act_by_type([{"kind": "stop_breach"}])   # no _source
+    assert out["counts"]["WATCH"] == 1
+
+
+def test_bucket_act_by_type_counts_match_list_lengths():
+    items = [
+        {"_source": "act", "kind": "sell_signal"},
+        {"_source": "act", "kind": "risk"},
+        {"_source": "act", "kind": "risk_off_derisk"},
+    ]
+    out = bucket_act_by_type(items)
+    for k in ("EXIT", "TRIM", "WATCH"):
+        assert out["counts"][k] == len(out[k])

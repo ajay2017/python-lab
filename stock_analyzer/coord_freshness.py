@@ -410,8 +410,16 @@ SURFACE_KEYS: dict[str, tuple] = {
     # (app.py ~11129) rather than by key name, so the block-grep regeneration
     # could not see them. Recorded because under-reporting is the unsafe
     # direction: a surface that reads a stale cache and is never told.
+    # _leverage_cache added 2026-08-28: the redesigned Safety strip reads it
+    # directly to render the Book Safety zone.
+    # _broker_drift_cache and _day_shock_cache are intentionally NOT listed:
+    #   _broker_drift_cache is external broker ground truth — it is refreshed
+    #     by the broker sync lane and is not portfolio-epoch-derived, so a
+    #     post-trade epoch bump must not claim it is stale.
+    #   _day_shock_cache is intraday price-move awareness, not a portfolio-
+    #     derived computation — its freshness is time-based, not book-based.
     "sm":    ("_alert_list_cache", "_div_label_cache", "_div_score_cache",
-              "_dpnl_cache", "_fragility_cache", "_reduce_calls",
+              "_dpnl_cache", "_fragility_cache", "_leverage_cache", "_reduce_calls",
               "_structural_alert_cache"),
     "aa":    ("_actions_cache", "_alert_list_cache", "_div_recs_cache", "_grow_composites"),
     "ra":    ("_avg_corr_cache", "_corr_coverage_cache", "_corr_df_cache", "_div_label_cache",

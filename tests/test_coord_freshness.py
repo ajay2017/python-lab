@@ -413,6 +413,21 @@ class TestSurfaceMapCoversTheWidenedRegistry:
                     "_mirror_orphans", "_pi_factor_tilt_cache"):
             assert key in mapped, f"{key} is tracked but reaches no banner surface"
 
+    def test_summary_surface_tracks_leverage_for_the_safety_strip(self):
+        """F-204 (2026-08-28): the redesigned Summary opens with a colour-coded
+        Book Safety strip built from _leverage_cache, so a post-trade epoch bump
+        must be able to tell that surface its leverage figure is stale. Pinned
+        because under-reporting is the unsafe direction here: the strip renders
+        an affirmative safety colour, not a passive figure."""
+        assert "_leverage_cache" in cf.SURFACE_KEYS["sm"]
+
+    def test_broker_drift_is_deliberately_not_portfolio_dependent(self):
+        """_broker_drift_cache is EXTERNAL broker ground truth, refreshed by the
+        broker sync lane rather than derived from the book, so a portfolio epoch
+        bump must NOT mark it stale. Recorded as an assertion so a future
+        "complete the registry" pass cannot quietly add it."""
+        assert "_broker_drift_cache" not in cf.PORTFOLIO_DEPENDENT_KEYS
+
     def test_tracked_but_unmapped_keys_are_deliberate_not_forgotten(self):
         """Every tracked key now reaches at least one banner surface. This was
         {_risk_high_alerts_cache, _grow_today_sectors_cache} until 2026-08-28,
