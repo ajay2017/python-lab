@@ -183,9 +183,16 @@ class TestSurfaceNarrowing:
         )[0] == "warn"
 
     def test_a_surface_reading_a_suppressor_still_warns(self):
-        """📈 Analysis and 🎯 My Edge read _reduce_calls, so the suppression
-        clause is TRUE there and must survive narrowing."""
-        for suffix in ("an", "me"):
+        """📈 Analysis, 🎯 My Edge and 🧑‍⚖️ The Judge read _reduce_calls, so the
+        suppression clause is TRUE there and must survive narrowing.
+
+        `judge` added 2026-08-28: The Judge feeds _reduce_calls straight into
+        audit_coherence as the set it checks protective vetoes against, so a
+        stale one makes the audit report "no gap" against yesterday's reduce
+        set — a confident false negative on the page whose only authority IS
+        the audit. It read the cache from the start; what it lacked was any
+        banner call, so the staleness was real but unsayable."""
+        for suffix in ("an", "me", "judge"):
             sev, msg = cf.decide_stale_banner(
                 cf.not_fresh_keys(self._stale(), 2, cf.keys_for_surface(suffix))
             )

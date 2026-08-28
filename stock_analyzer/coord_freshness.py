@@ -384,6 +384,7 @@ SURFACE_KEYS: dict[str, tuple] = {
     "macro": (),
     "an":    ("_mirror_orphans", "_mirror_overexp", "_mirror_overhangs", "_port_risk_cache",
               "_reduce_calls"),
+    "judge": ("_reduce_calls",),
     "tj":    ("_acct_gate_cache", "_actions_cache", "_grow_composites", "_highbeta_share",
               "_port_risk_cache"),
     "tr":    (),

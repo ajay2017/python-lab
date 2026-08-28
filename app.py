@@ -10773,6 +10773,7 @@ elif page == "🧑‍⚖️ The Judge":
         "**Does not change any recommendation** — visit 🏠 Home first so "
         "today's witnesses have run."
     )
+    _render_portfolio_stale_banner(key_suffix="judge")
 
     def _jo_sig_class(sig: float) -> str:
         if sig > 0.05:
