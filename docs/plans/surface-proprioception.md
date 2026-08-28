@@ -66,15 +66,39 @@ comparison against that reduce set. The behaviour is pinned by extending
 assertion was **mutation-checked** (setting the mapping to `()` fails it), per
 the "a gate whose broken state is GREEN is worse than no rule" scar.
 
-**Still unbuilt — one GATE-tier cache with no freshness banner.** **📋
-Watchlist** reads `_grow_today_sectors_cache` (gate tier — its own copy calls it
-a sector-overlap gate on Ready-to-Enter) plus `_risk_high_alerts_cache`, and
-calls no banner. It needs a placement judgement rather than a tacked-on call —
-it is the ENTER NOW / sizing surface and already carries its own
-`_wl_brief_offline` gate-disclosure banner, so a second one beside it needs
-deliberate ordering. **Not a regression** (the page behaves exactly as it did
-before this change); what is new is that the gap is visible. Recorded here
-rather than left in a review transcript, per DoD step 6.
+**📋 Watchlist — CLOSED 2026-08-28, and it exposed a defect in the mechanism
+itself.** The banner now sits directly after the `_wl_brief_offline` block, so
+both disclosures precede the recommendations they qualify. Scope re-measured:
+**three** keys, not the two this paragraph used to claim — `_port_risk_cache`
+was missing, and never showed as a gap because it is mapped on other surfaces,
+so only walking the page block found it. The gap was also wider than "one
+gate-tier cache": Watchlist sizes real positions against `_portfolio_value` and
+had **no banner call at all**, so it silently omitted a crashed post-trade
+refresh, a data outage, dropped holdings and changed holdings as well.
+
+**The Opus review then found a Phase-1 defect this change made reachable.**
+`_stamp_coord` stamped on PRESENCE, but `None` is the offline sentinel for every
+registry key and a published sentinel is present — so a FAILED producer was
+stamped, and after the next epoch bump read as **STALE instead of ABSENT**. On
+Watchlist both banners then rendered, contradicting each other: one said the
+sector gate could not run, the other said it ran against an older book. Latent
+on six decision-tier surfaces (quiet caption); `_grow_today_sectors_cache` was
+the first GATE-tier key to reach it, which is what turned it into a warning
+carrying a false suppression clause on the sizing surface.
+
+Fixed at the source. The decision moved out of `app.py` into the pure
+`coord_freshness.apply_stamps()` — refuses to stamp a `None`, and **drops any
+stamp the key already had**, closing the second route (stamps persist across
+runs, so a producer that succeeded then later failed kept the old stamp).
+Gating the banner on `not _wl_brief_offline` was considered and rejected: it
+would also have suppressed the outage and refresh-error branches, i.e. a
+suppression with no banner. Nine tests, mutation-checked — reverting
+`apply_stamps` to the presence rule fails five of them.
+
+**Worth carrying forward:** the extraction is what made the fix verifiable.
+While the rule lived inline in `app.py` nothing could import it, which is
+exactly why a sentinel-stamping bug survived Phase 1, its own review, and a
+drift guard written specifically to police this registry.
 
 **Still unbuilt:** Phase 3 (lifting Home's risk/fragility/correlation producer block into a
 pure module, which is where this plan converges with §5's `N > 15` branch) —

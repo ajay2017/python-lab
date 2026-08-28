@@ -139,8 +139,9 @@ PORTFOLIO_DEPENDENT_KEYS: dict[str, dict] = {
         "producer": "home", "tier": TIER_DECISION,
         "why": "drives the SIDEBAR NAV BADGE (module scope, app.py ~2804, so every "
                "page) AND 📋 Watchlist's active-risk-alert caution (~22736/22743). "
-               "The widest-reach cache here; it is unmapped because Watchlist has "
-               "no banner call, NOT because the nav badge is mere chrome",
+               "The widest-reach cache here. MAPPED to the `wl` surface as of "
+               "2026-08-28, when Watchlist gained a banner; the nav badge half "
+               "still reaches no banner and never will, which is chrome, not a gap",
     },
     "_risk_advisor_recs_cache": {
         "producer": "home", "tier": TIER_DECISION,
@@ -247,6 +248,45 @@ def not_fresh_keys(stamps: dict | None, epoch: int, keys=None) -> dict[str, str]
         state = classify(stamps, epoch, k)
         if state != FRESH:
             out[k] = state
+    return out
+
+
+def apply_stamps(stamps: dict | None, values: dict, keys, epoch: int) -> dict:
+    """The new stamp map after a producer publishes `values` at `epoch`.
+
+    `keys` is the producer's OWN scope (None = every registered key); `values`
+    maps key -> the value currently in session_state.
+
+    The rule that matters: **a published `None` is never stamped, and clears any
+    stamp it already had.** `None` is the offline sentinel for every key in this
+    registry (NF-54 — a producer that FAILS publishes `None`, never an empty
+    container), so a sentinel is *present* while meaning "no answer exists".
+    Stamping on presence therefore recorded a failure as a freshness fact, and
+    after the next epoch bump `classify` read it as STALE — collapsing ABSENT
+    into STALE, which this module's own docstring forbids outright. The banner
+    then told the user a figure "still describes the book from before your last
+    trade" about a figure that was never produced.
+
+    Clearing an existing stamp is the second half and is not tidiness: `stamps`
+    persists across runs, so a key that published a real value earlier and whose
+    producer failed later would keep the old stamp and reach the same wrong
+    STALE by a different route.
+
+    Lives here rather than in `app.py` so it is testable at its boundaries —
+    the caller is render-only wiring. Found by Opus review 2026-08-28, on the
+    first change that routed a GATE-tier key to a banner; the class had been
+    latent on six decision-tier surfaces, where it only ever produced a quiet
+    caption instead of a warning carrying a suppression clause.
+    """
+    out = dict(stamps) if isinstance(stamps, dict) else {}
+    candidates = PORTFOLIO_DEPENDENT_KEYS if keys is None else keys
+    for k in candidates:
+        if k not in PORTFOLIO_DEPENDENT_KEYS:
+            continue
+        if values.get(k) is not None:
+            out[k] = epoch
+        else:
+            out.pop(k, None)
     return out
 
 
@@ -397,6 +437,7 @@ SURFACE_KEYS: dict[str, tuple] = {
     "ec":    (),
     "me":    ("_mirror_orphans", "_mirror_overexp", "_mirror_overhangs", "_port_risk_cache",
               "_reduce_calls"),
+    "wl":    ("_grow_today_sectors_cache", "_port_risk_cache", "_risk_high_alerts_cache"),
 }
 
 

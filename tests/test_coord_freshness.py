@@ -214,6 +214,27 @@ class TestSurfaceNarrowing:
         assert sev == "caption"
         assert "SUPPRESS" not in msg
 
+    def test_watchlist_warns_because_its_sector_gate_is_gate_tier(self):
+        """📋 Watchlist is the ENTER NOW / sizing surface. It reads
+        _grow_today_sectors_cache, whose own copy in app.py calls it a
+        sector-overlap GATE on Ready-to-Enter, so staleness there must
+        escalate to a warning rather than a quiet caption."""
+        sev, msg = cf.decide_stale_banner(
+            cf.not_fresh_keys(self._stale(), 2, cf.keys_for_surface("wl"))
+        )
+        assert sev == "warn"
+        # The suppression clause is what makes this a warning rather than a
+        # caption, and it is TRUE here: a stale sector-overlap gate can let
+        # through a Ready-to-Enter the app would otherwise hold back.
+        assert "SUPPRESS" in msg
+        # Copy discipline: a banner on the sizing surface must name dimensions,
+        # never session_state keys.
+        for _k in cf.keys_for_surface("wl"):
+            assert _k not in msg
+        assert set(cf.keys_for_surface("wl")) == {
+            "_grow_today_sectors_cache", "_port_risk_cache", "_risk_high_alerts_cache",
+        }
+
     def test_every_registered_surface_lists_only_real_registry_keys(self):
         for suffix, keys in cf.SURFACE_KEYS.items():
             for k in keys:
@@ -393,21 +414,16 @@ class TestSurfaceMapCoversTheWidenedRegistry:
             assert key in mapped, f"{key} is tracked but reaches no banner surface"
 
     def test_tracked_but_unmapped_keys_are_deliberate_not_forgotten(self):
-        """Some tracked keys legitimately reach no page BODY — the nav badge is
-        sidebar chrome, and 📋 Watchlist has no banner at all. Named here so the
-        absence reads as a decision rather than an oversight."""
+        """Every tracked key now reaches at least one banner surface. This was
+        {_risk_high_alerts_cache, _grow_today_sectors_cache} until 2026-08-28,
+        when 📋 Watchlist gained a banner — both were unmapped for the same
+        single reason, that their cross-page consumer had no
+        _render_portfolio_stale_banner call at all. Kept as an equality
+        assertion rather than deleted: a NEW tracked key that reaches no
+        surface is inert, and this is what says so."""
         mapped = {k for keys in cf.SURFACE_KEYS.values() for k in keys}
         unmapped = set(cf.PORTFOLIO_DEPENDENT_KEYS) - mapped
-        assert unmapped == {
-            "_risk_high_alerts_cache",
-            "_grow_today_sectors_cache",
-        }, f"unexpected unmapped keys: {sorted(unmapped)}"
-        # BOTH are unmapped for the SAME reason: their cross-page consumer is
-        # 📋 Watchlist, which has no _render_portfolio_stale_banner call at all.
-        # An earlier version of this comment said the nav badge was "not a page
-        # body" — false, and it would have sent a future author looking in the
-        # wrong place. Adding a Watchlist banner maps both, and one of them
-        # (_grow_today_sectors_cache) is GATE-tier.
+        assert unmapped == set()
 
 
 class TestStampScopingCannotLaunder:
@@ -441,6 +457,102 @@ class TestStampScopingCannotLaunder:
         stale = {k: 0 for k in cf.PORTFOLIO_DEPENDENT_KEYS}
         assert cf.not_fresh_keys(stale, 1, ()) == {}
         assert len(cf.not_fresh_keys(stale, 1, None)) == len(cf.PORTFOLIO_DEPENDENT_KEYS)
+
+
+class TestApplyStampsRefusesTheOfflineSentinel:
+    """BLOCKING review finding, 2026-08-28, found on the first change to route a
+    GATE-tier key to a banner (📋 Watchlist).
+
+    `_stamp_coord` stamped on PRESENCE (`k in st.session_state`). `None` is the
+    offline sentinel for every key in this registry, and a sentinel is present —
+    so a FAILED producer was recorded as a freshness fact, and after the next
+    epoch bump `classify` read it as STALE. That is ABSENT collapsed into STALE,
+    which this module's docstring forbids outright.
+
+    It was visible on Watchlist because that page also renders the
+    `_wl_brief_offline` banner: one said the gate could not run, the other said
+    it ran against an older book. Both on screen, contradicting each other, on
+    the ENTER NOW / sizing surface.
+    """
+
+    _KEY = "_grow_today_sectors_cache"   # gate tier
+    _OTHER = "_port_risk_cache"          # decision tier
+
+    def test_a_published_none_is_never_stamped(self):
+        out = cf.apply_stamps({}, {self._KEY: None}, [self._KEY], 0)
+        assert self._KEY not in out
+        assert cf.classify(out, 0, self._KEY) == cf.ABSENT
+
+    def test_a_real_value_is_stamped(self):
+        out = cf.apply_stamps({}, {self._KEY: {"Tech"}}, [self._KEY], 3)
+        assert out[self._KEY] == 3
+        assert cf.classify(out, 3, self._KEY) == cf.FRESH
+
+    def test_an_empty_container_still_counts_as_an_answer(self):
+        """The sentinel contract's other half: `[]`/`{}` mean "checked, nothing
+        found", which IS a real answer and must be stamped. Only `None` is the
+        failure. Collapsing these would be the mirror-image defect."""
+        for empty in ([], {}, set(), 0, 0.0, False, ""):
+            out = cf.apply_stamps({}, {self._KEY: empty}, [self._KEY], 1)
+            assert out.get(self._KEY) == 1, f"{empty!r} was treated as a failure"
+
+    def test_a_later_failure_clears_an_earlier_stamp(self):
+        """The second route to the same bug. Stamps persist across runs, so a
+        key that published a real value earlier and whose producer failed later
+        would keep the old stamp and read STALE after the next book change."""
+        good = cf.apply_stamps({}, {self._KEY: {"Tech"}}, [self._KEY], 0)
+        assert good[self._KEY] == 0
+        after_failure = cf.apply_stamps(good, {self._KEY: None}, [self._KEY], 0)
+        assert self._KEY not in after_failure
+        # Epoch bumps (a trade); the key must read ABSENT, never STALE.
+        assert cf.classify(after_failure, 1, self._KEY) == cf.ABSENT
+
+    def test_the_reproduction_that_produced_the_contradictory_banner(self):
+        """End to end: Home ran, its Brief threw (two sentinels published), the
+        user logged a trade elsewhere, then opened 📋 Watchlist. Before the fix
+        this warned that all three dimensions "still describe the book from
+        before your last trade" — about two values that never existed."""
+        values = {
+            "_grow_today_sectors_cache": None,   # producer failed
+            "_risk_high_alerts_cache": None,     # producer failed
+            "_port_risk_cache": {"beta": 1.2},   # genuinely computed
+        }
+        stamps = cf.apply_stamps({}, values, cf.keys_for_surface("wl"), 0)
+        nf = cf.not_fresh_keys(stamps, 1, cf.keys_for_surface("wl"))
+        assert nf == {
+            "_grow_today_sectors_cache": cf.ABSENT,
+            "_risk_high_alerts_cache": cf.ABSENT,
+            "_port_risk_cache": cf.STALE,
+        }
+        # Only the genuinely-stale one speaks, and _port_risk_cache is
+        # decision-tier, so it is a quiet caption -- NOT a warning claiming a
+        # suppressor is behind. The offline banner above it owns the other two.
+        sev, msg = cf.decide_stale_banner(nf)
+        assert sev == "caption"
+        assert "SUPPRESS" not in msg
+        assert "leading sectors" not in msg.lower()
+
+    def test_scope_is_honoured_so_a_producer_cannot_clear_another_s_stamp(self):
+        pre = {self._KEY: 0, "_mirror_orphans": 0}
+        out = cf.apply_stamps(pre, {self._KEY: None, "_mirror_orphans": None},
+                              [self._KEY], 0)
+        assert self._KEY not in out
+        assert out["_mirror_orphans"] == 0, "cleared a key outside its scope"
+
+    def test_none_scope_means_every_registered_key(self):
+        pre = {k: 0 for k in cf.PORTFOLIO_DEPENDENT_KEYS}
+        out = cf.apply_stamps(pre, {k: None for k in cf.PORTFOLIO_DEPENDENT_KEYS},
+                              None, 1)
+        assert out == {}
+
+    def test_unregistered_keys_are_ignored(self):
+        out = cf.apply_stamps({}, {"_not_real": 1}, ["_not_real"], 0)
+        assert out == {}
+
+    def test_a_malformed_prior_map_does_not_crash_or_wipe(self):
+        for junk in (None, "x", 5, []):
+            out = cf.apply_stamps(junk, {self._KEY: 1}, [self._KEY], 0)
+            assert out == {self._KEY: 0}
 
 
 class TestBannerRemedyNamesTheRightPage:

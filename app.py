@@ -2320,33 +2320,29 @@ def _coord_epoch() -> int:
 def _stamp_coord(keys=None) -> None:
     """Mark registered coordination caches as describing the CURRENT book.
 
-    Stamps only keys actually present in session_state, so a key a code path
-    never published is reported absent rather than silently claimed fresh.
     Called AFTER a publish block, never before: if an exception intervenes the
-    stamp simply does not run, and the key reads stale — the safe direction.
+    stamp simply does not run, and the key reads absent — the safe direction.
     Under-reporting freshness costs a banner; over-reporting it is exactly the
     confident false negative this mechanism exists to prevent.
+
+    Render-only wiring. The decision — which keys to stamp, and which stamps to
+    DROP because their producer published the offline sentinel — lives in the
+    pure `coord_freshness.apply_stamps`, where it is unit-tested at its
+    boundaries. It was inline here until 2026-08-28, and being inline in
+    `app.py` is why the sentinel-stamping bug it now prevents went unnoticed:
+    nothing imports this file, so no test could reach the rule.
     """
-    # Explicit, not `... or {}`: the recurring-defect gate flags that shape and
-    # it would be actively wrong here if the value were ever a non-dict — this
-    # is the one map the whole freshness mechanism trusts, so a silent reset to
-    # {} would mark every cache absent and (per decide_stale_banner) say
-    # nothing at all. Fail toward keeping what we have.
-    _existing = st.session_state.get("_coord_stamps")
-    stamps = dict(_existing) if isinstance(_existing, dict) else {}
-    epoch = _coord_epoch()
-    # `is None`, NOT `keys or ...` — an EMPTY tuple is the honest answer for
-    # "this producer owns nothing yet", and `or` would fall through and stamp
-    # ALL 25 keys fresh: the exact launder the `producer` field exists to
-    # prevent, in the helper the mechanism trusts. Unreachable before today
-    # (every call site passed None or a non-empty literal); this change made
-    # the argument a COMPUTED value, which is what exposed it. The same rule is
-    # already documented on coord_freshness.not_fresh_keys — this violated its
-    # own module's stated invariant. (2026-08-28 review.)
-    for k in (coord_freshness.PORTFOLIO_DEPENDENT_KEYS if keys is None else keys):
-        if k in coord_freshness.PORTFOLIO_DEPENDENT_KEYS and k in st.session_state:
-            stamps[k] = epoch
-    st.session_state["_coord_stamps"] = stamps
+    st.session_state["_coord_stamps"] = coord_freshness.apply_stamps(
+        st.session_state.get("_coord_stamps"),
+        # Read the CURRENT value of every key in scope, so a published `None`
+        # (a producer that failed) is distinguishable from a real answer.
+        {
+            k: st.session_state.get(k)
+            for k in (coord_freshness.PORTFOLIO_DEPENDENT_KEYS if keys is None else keys)
+        },
+        keys,
+        _coord_epoch(),
+    )
 
 
 def _bump_coord_epoch() -> None:
@@ -22794,6 +22790,21 @@ elif page == "📋 Watchlist":
                 if _wl_gate_blind else ""
             )
         )
+
+    # STALE is a different claim from the OFFLINE banner above, and the two
+    # cannot contradict each other — but NOT for the reason first written here.
+    # The original comment said decide_stale_banner() is "silent on ABSENT by
+    # design", which is true and yet did not deliver the invariant: a FAILED
+    # producer publishes the None sentinel, and `_stamp_coord` used to stamp on
+    # PRESENCE, so the sentinel was stamped and later read STALE. This page is
+    # where that became visible, because both banners render here: one said the
+    # gate could not run, the other said it ran against an older book. The real
+    # guarantee is upstream — `_stamp_coord` now refuses to stamp a None and
+    # drops any prior stamp — so a failed producer reads ABSENT and only the
+    # OFFLINE banner above speaks. Ordered second because "the gates could not
+    # run at all" is the stronger claim than "the gates ran on pre-trade data".
+    # Both must precede the recommendations they qualify.
+    _render_portfolio_stale_banner(key_suffix="wl")
 
     # ── Build recommendations ─────────────────────────────────────────────────
     _wl_recs: list[dict] = []
