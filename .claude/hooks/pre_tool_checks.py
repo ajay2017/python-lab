@@ -20,9 +20,25 @@ import subprocess
 import sys
 
 # Seconds the full pytest suite may take before the hook calls it a hang. Sized
-# at ~3x the observed runtime (~110s for 3573 tests as of 2026-08-15) so a
-# merely-growing suite never blocks a commit as a false hang. See _run_pytest.
-_PYTEST_TIMEOUT_SEC = 300
+# at ~3x the WORST observed runtime so a merely-growing suite never blocks a
+# commit as a false hang. See _run_pytest.
+#
+# Re-tuned 2026-08-28: 300 was set against ~110s / 3573 tests on 2026-08-15.
+# The suite is now 4500 tests, and observed runs that day ranged 75-130s (the
+# 130s was under concurrent load, which is exactly the case that would trip a
+# tight limit). At 300 the margin had fallen to ~2.3x.
+#
+# Why this matters more than it looks: the failure mode is not a slow commit,
+# it is a PASSING suite being reported as a hang and blocking every commit —
+# the precise false-block the 2026-08-27 fail-closed flip was designed to avoid,
+# arriving by a different route. Under-sizing this quietly converts the safety
+# net into an outage.
+#
+# 3x of 130s is 390; rounded to 450 for runway, because the suite grew ~26% in
+# under two weeks and re-tuning a timeout weekly is its own failure mode. The
+# cost of the larger value is bounded and one-directional: a GENUINE hang wastes
+# 7.5 minutes once, rather than a false one blocking work indefinitely.
+_PYTEST_TIMEOUT_SEC = 450
 
 # Durable record of a pytest-gate fail-open (2026-08-27 finding): the single
 # stderr line _gate_on_pytest prints when ok is None is easy to miss and
@@ -540,7 +556,8 @@ def _run_pytest() -> tuple:
         )
     except subprocess.TimeoutExpired:
         return False, (f"pytest timed out after {_PYTEST_TIMEOUT_SEC}s -- investigate a hang "
-                       "before proceeding (normal runtime is ~110s)")
+                       "before proceeding (normal runtime is ~100s, ~130s under load, "
+                       "for 4500 tests as of 2026-08-28)")
     except Exception as e:
         detail = f"could not invoke pytest ({e})"
         _log_venv_fail_open(detail)
