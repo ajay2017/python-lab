@@ -1341,6 +1341,17 @@ def _render_simple_action_card(item: dict, urgent: bool = False) -> None:
         text = item.get("directive") or item.get("why") or item.get("reason") or "—"
     # Pill badge (icon + label) + ticker on its own bold line below, matching
     # the approved Option-A mockup's card anatomy — not inline text.
+    #
+    # `text` goes through _md_bold (escape first, THEN **x** -> <b>x</b>), not
+    # raw. The advisors emit markdown and know nothing about their renderer:
+    # risk_advisor bolds DOLLAR LOSS FIGURES on the very TRIM cards this lane
+    # carries (e.g. "**$1,240 of unnecessary extra loss**"), so interpolating
+    # raw here would print literal asterisks around the number that matters
+    # most. This is the class fixed at 9 other sites on 2026-08-28
+    # (feedback_streamlit_renderer_mismatch); this function was written for the
+    # Summary page, never wired up, and so never received that fix — it was
+    # dead code until F-204a. Ticker/label are escaped but not md-converted:
+    # they are algorithmic symbols, never prose.
     st.markdown(
         f"<div style='background:#15161a;border:1px solid rgba(255,255,255,0.10);"
         f"border-left:3px solid {_color};border-radius:10px;padding:14px 16px;"
@@ -1348,10 +1359,10 @@ def _render_simple_action_card(item: dict, urgent: bool = False) -> None:
         f"<span style='display:inline-flex;align-items:center;gap:6px;font-size:0.68rem;"
         f"font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:3px 10px;"
         f"border-radius:20px;margin-bottom:10px;color:{_color};background:{_color}22'>"
-        f"{icon} {_label}</span>"
+        f"{_safe_html(icon)} {_safe_html(_label)}</span>"
         f"<div style='font-family:\"JetBrains Mono\",ui-monospace,monospace;font-weight:700;"
-        f"font-size:1.02rem;margin:4px 0;color:#f9fafb'>{ticker}</div>"
-        f"<div style='color:#c3c2b7;font-size:0.82rem;line-height:1.45'>{text}</div>"
+        f"font-size:1.02rem;margin:4px 0;color:#f9fafb'>{_safe_html(ticker)}</div>"
+        f"<div style='color:#c3c2b7;font-size:0.82rem;line-height:1.45'>{_md_bold(text)}</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -11318,8 +11329,17 @@ elif page == "🧾 Summary":
     # and the two all-time Best/Worst tiles were replaced by one Today's Movers
     # tile. Eight tiles at this width rendered as a wall of small numbers with no
     # ranking between them.
+    # Each tile sits in its OWN bordered container rather than bare in a column.
+    # Without it the tiles have wildly different natural heights — the Portfolio
+    # Value sparkline makes column 1 tall, and Today's Movers is a markdown block
+    # next to four st.metric widgets — so the baselines don't line up and the row
+    # reads as five unrelated fragments instead of a KPI strip.
+    # NB st.container(border=True), NOT st.columns(border=True): the local venv is
+    # 1.60.0 while production installs 1.57.0 from requirements.txt, so a kwarg
+    # that resolves here proves nothing about the deploy. st.container's border is
+    # long-established and already used throughout this file.
     _s1, _s2, _s3, _s4, _s5 = st.columns(5)
-    with _s1:
+    with _s1, st.container(border=True):
         st.metric("Portfolio Value", _m(f"${_sm_total_val:,.0f}"))
         if len(_sm_val_history) >= 2:
             _render_sparkline(
@@ -11327,53 +11347,55 @@ elif page == "🧾 Summary":
                 color=_HOME_GAIN if _sm_val_history[-1] >= _sm_val_history[0] else _HOME_LOSS,
                 key="sm_pv_spark",
             )
-    _s2.metric("Unrealized P&L", _m(f"${_sm_total_pnl:,.0f}"),
-               f"{_sm_total_pnl_pct:+.1f}%", delta_color="normal")
-    if _sm_dpnl is not None:
-        _sm_dp_scope = (
-            "" if _sm_dpnl_is_current
-            else f" · from {date.fromisoformat(_sm_dpnl_baseline_date).strftime('%b %d')}"
-        )
-        # Home publishes the number AND its integrity findings; this tile used to
-        # consume only the number, so a figure Home banners as off rendered here
-        # under the word "TRUE". Read the same four lists Home does — the
-        # coordination contract is the whole payload, not the headline.
-        # Explicit isinstance rather than `or []` — a dict cached by a session
-        # older than this feature simply lacks the keys, and `or []` is the
-        # offline-sentinel collapse the repo's own antipattern gate rejects.
-        _sm_dp_bad = 0
-        for _k in ("orphans", "qty_drift", "unbaselined", "unbaselined_sells"):
-            _v = _sm_dpnl.get(_k)
-            if isinstance(_v, list):
-                _sm_dp_bad += len(_v)
-        _s3.metric(
-            "Today's P&L", _m(f"${_sm_dpnl['day_pnl']:+,.0f}"),
-            f"{_sm_dpnl['day_pnl_pct']:+.2f}%{_sm_dp_scope}",
-            delta_color="normal" if _sm_dpnl["day_pnl"] >= 0 else "inverse",
-            help=(
-                (f"Day P&L for tracked positions, measured from the "
-                 f"{_sm_dpnl_baseline_date} close — held names + today's realized trades. "
-                 f"⚠️ {_sm_dp_bad} position(s) don't reconcile against that baseline, so this "
-                 f"figure is known to be off — see 🏠 Home for the amount and the names.")
-                if _sm_dp_bad else
-                (f"TRUE day P&L for tracked positions, measured from the "
-                 f"{_sm_dpnl_baseline_date} close — held names + today's realized trades. "
-                 f"Same figure as 🏠 Home (published this session).")
-            ),
-        )
-        if _sm_dp_bad:
-            _s3.caption(f"⚠️ {_sm_dp_bad} position(s) don't reconcile — see 🏠 Home")
-    elif _sm_today_pnl is not None:
-        _s3.metric(
-            "Today's P&L (held)", _m(f"${_sm_today_pnl:+,.0f}"), f"{_sm_today_pnl_pct:+.2f}%",
-            delta_color="normal" if _sm_today_pnl >= 0 else "inverse",
-            help="Held-position mark-to-market vs yesterday's close — excludes today's trades. "
-                 "Visit 🏠 Home first this session for the fuller Tier-B figure.",
-        )
-    else:
-        _s3.metric("Today's P&L", "Updating…",
-                    help="Loads once live prices are cached — visit 🏠 Home, or wait ~60s.")
-    with _s4:
+    with _s2, st.container(border=True):
+        st.metric("Unrealized P&L", _m(f"${_sm_total_pnl:,.0f}"),
+                  f"{_sm_total_pnl_pct:+.1f}%", delta_color="normal")
+    with _s3, st.container(border=True):
+        if _sm_dpnl is not None:
+            _sm_dp_scope = (
+                "" if _sm_dpnl_is_current
+                else f" · from {date.fromisoformat(_sm_dpnl_baseline_date).strftime('%b %d')}"
+            )
+            # Home publishes the number AND its integrity findings; this tile used to
+            # consume only the number, so a figure Home banners as off rendered here
+            # under the word "TRUE". Read the same four lists Home does — the
+            # coordination contract is the whole payload, not the headline.
+            # Explicit isinstance rather than `or []` — a dict cached by a session
+            # older than this feature simply lacks the keys, and `or []` is the
+            # offline-sentinel collapse the repo's own antipattern gate rejects.
+            _sm_dp_bad = 0
+            for _k in ("orphans", "qty_drift", "unbaselined", "unbaselined_sells"):
+                _v = _sm_dpnl.get(_k)
+                if isinstance(_v, list):
+                    _sm_dp_bad += len(_v)
+            st.metric(
+                "Today's P&L", _m(f"${_sm_dpnl['day_pnl']:+,.0f}"),
+                f"{_sm_dpnl['day_pnl_pct']:+.2f}%{_sm_dp_scope}",
+                delta_color="normal" if _sm_dpnl["day_pnl"] >= 0 else "inverse",
+                help=(
+                    (f"Day P&L for tracked positions, measured from the "
+                     f"{_sm_dpnl_baseline_date} close — held names + today's realized trades. "
+                     f"⚠️ {_sm_dp_bad} position(s) don't reconcile against that baseline, so this "
+                     f"figure is known to be off — see 🏠 Home for the amount and the names.")
+                    if _sm_dp_bad else
+                    (f"TRUE day P&L for tracked positions, measured from the "
+                     f"{_sm_dpnl_baseline_date} close — held names + today's realized trades. "
+                     f"Same figure as 🏠 Home (published this session).")
+                ),
+            )
+            if _sm_dp_bad:
+                st.caption(f"⚠️ {_sm_dp_bad} position(s) don't reconcile — see 🏠 Home")
+        elif _sm_today_pnl is not None:
+            st.metric(
+                "Today's P&L (held)", _m(f"${_sm_today_pnl:+,.0f}"), f"{_sm_today_pnl_pct:+.2f}%",
+                delta_color="normal" if _sm_today_pnl >= 0 else "inverse",
+                help="Held-position mark-to-market vs yesterday's close — excludes today's trades. "
+                     "Visit 🏠 Home first this session for the fuller Tier-B figure.",
+            )
+        else:
+            st.metric("Today's P&L", "Updating…",
+                        help="Loads once live prices are cached — visit 🏠 Home, or wait ~60s.")
+    with _s4, st.container(border=True):
         # Today's Movers — replaces the two all-time Best/Worst tiles. Shows the
         # biggest same-day move in each direction, which is what a daily summary
         # is actually for; the all-time winner is kept as a footnote so the older
@@ -11404,17 +11426,18 @@ elif page == "🧾 Summary":
         if _sm_movers["n_missing"] and _sm_movers["n_priced"]:
             _sm_mv_foot += f" · {_sm_movers['n_missing']} unpriced"
         st.caption(_sm_mv_foot)
-    _s5.metric(
-        "Avg Score", f"{_sm_avg_score:.0f}/100",
-        # The COMPOSITE_BUY comparison lives in summary_view, not here — a bare
-        # `_sm_avg_score >= COMPOSITE_BUY` in app.py would trip the
-        # POLICY_DECISION_IN_RENDER ratchet, and correctly so.
-        summary_view.avg_score_label(_sm_avg_score, COMPOSITE_BUY),
-        delta_color="off",
-        help=f"Mean composite score across held positions. The new-position buy "
-             f"threshold is {COMPOSITE_BUY:.0f}; this average is a portfolio-quality "
-             f"reading, not a signal to act.",
-    )
+    with _s5, st.container(border=True):
+        st.metric(
+            "Avg Score", f"{_sm_avg_score:.0f}/100",
+            # The COMPOSITE_BUY comparison lives in summary_view, not here — a
+            # bare `_sm_avg_score >= COMPOSITE_BUY` in app.py would trip the
+            # POLICY_DECISION_IN_RENDER ratchet, and correctly so.
+            summary_view.avg_score_label(_sm_avg_score, COMPOSITE_BUY),
+            delta_color="off",
+            help=f"Mean composite score across held positions. The new-position "
+                 f"buy threshold is {COMPOSITE_BUY:.0f}; this average is a "
+                 f"portfolio-quality reading, not a signal to act.",
+        )
 
     # ── Act Today — slim pointer. Full card detail lives on 🏠 Home; this
     # strip signals whether action is needed and links there. Reads the
@@ -11449,23 +11472,6 @@ elif page == "🧾 Summary":
                         unsafe_allow_html=True,
                     )
         else:
-            # Build a one-line summary from the first item (algorithmic labels
-            # and ticker symbols only — no user-entered free text).
-            _sm_first = _sm_act_bucket[0]
-            _sm_first_ticker = str(
-                _sm_first.get("ticker") or _sm_first.get("event") or ""
-            ).strip()
-            _sm_first_act_raw = _sm_first.get("action", "")
-            if isinstance(_sm_first_act_raw, dict):
-                _sm_first_label = _fmt_action(_sm_first_act_raw)[1]
-            else:
-                _sm_first_label = str(_sm_first_act_raw).upper()
-            _sm_act_summary = (
-                f"{_sm_first_label} {_sm_first_ticker}".strip()
-                if _sm_first_ticker else _sm_first_label
-            )
-            if len(_sm_act_bucket) > 1:
-                _sm_act_summary += f" + {len(_sm_act_bucket) - 1} more"
             # Bucketed counts (2026-08-28). "Act Today (3)" told you an alarm was
             # ringing but not its nature — 3 protective EXITs and 3 WATCHes call
             # for opposite responses, so the count alone forced a trip to Home
@@ -11496,14 +11502,28 @@ elif page == "🧾 Summary":
                     st.markdown(
                         f"🔴 <b style='color:#fca5a5'>Act Today ({len(_sm_act_bucket)})</b>"
                         f"&nbsp; {_sm_chip_html}"
-                        f"<span style='color:#8b94a7;font-size:0.9em'> — full detail on Home</span>",
+                        f"<span style='color:#8b94a7;font-size:0.9em'>"
+                        f" — sizing + full context on Home</span>",
                         unsafe_allow_html=True,
                     )
-                    st.caption(_sm_act_summary)
                 with _sm_act_btn_col:
                     if st.button("→ Home", key="sm_act_home_btn", type="tertiary"):
                         st.session_state["_pending_page"] = "🏠 Home"
                         st.rerun()
+
+                # ONE CARD PER ITEM (2026-08-28). This strip previously rendered
+                # a single derived line ("REDUCE — DETERIORATION EXIT APP" from
+                # the FIRST item plus "+N more"), which is a count with a label
+                # attached, not something you can triage: it named one ticker and
+                # silently hid the rest. `_render_simple_action_card` was written
+                # for exactly this page and this anatomy (badge + ticker +
+                # one-line rationale) and then never wired up — it had ZERO
+                # callers until now, which is also why it never received the
+                # 2026-08-28 markdown-escaping fix its siblings got.
+                # Deliberately still LEANER than Home: no Analyze button, no Exit
+                # Red-Team debate, no journal context, no tax notes.
+                for _sm_item in _sm_act_bucket:
+                    _render_simple_action_card(_sm_item, urgent=True)
 
     # ── Active protective vetoes ──────────────────────────────────────────────
     # `_reduce_calls` is consumed by 6 surfaces to SUPPRESS conflicting ADD
@@ -14629,7 +14649,7 @@ elif page == "🔗 Risk Analysis":
             _s1.metric("SPY Shock",        f"{_sc_result['spy_move']:+.0f}%")
             _s2.metric("Est. Portfolio Δ", f"{_est_move:+.1f}%",
                        delta_color="inverse" if _est_pnl < 0 else "normal")
-            _s3.metric("Est. $ Impact",    _m(f"${_est_pnl:+,.0f}"),
+            st.metric("Est. $ Impact",    _m(f"${_est_pnl:+,.0f}"),
                        delta_color="inverse" if _est_pnl < 0 else "normal")
             _s4.metric("Post-Shock Value", _m(f"${_post_val:,.0f}"))
 
@@ -19577,7 +19597,7 @@ elif page == "🌐 Macro":
                            delta="risk-off" if _vix >= RISK_OFF_VIX_LEVEL else "risk-on" if _vix <= RISK_ON_VIX_LEVEL else "neutral",
                            delta_color="inverse" if _vix >= RISK_OFF_VIX_LEVEL else "normal",
                            help=_sig.get("Volatility (VIX)", ""))
-                _s3.metric("Market (SPY 3mo)", f"{_spy:+.1f}%",
+                st.metric("Market (SPY 3mo)", f"{_spy:+.1f}%",
                            help=_sig.get("Market (SPY)", ""))
 
                 _fav = REGIME_FAVORED[regime["combined"]]
