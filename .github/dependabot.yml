@@ -1,0 +1,56 @@
+version: 2
+
+# Dependency-update + vulnerability visibility (2026-08-28 security review).
+#
+# Why this exists: several production dependencies float by range —
+# anthropic>=0.40.0,<1.0, openai>=1.30.0,<2.0, google-generativeai>=0.8.0,<1.0,
+# requests, numpy, pandas. Railway installs fresh from requirements.txt on every
+# deploy, so a redeploy could pull an unreviewed minor version with no diff, no
+# commit and no gate. Nothing was watching that surface at all: no Dependabot,
+# no CodeQL, no secret scanning.
+#
+# Deliberately additive — this changes NOTHING about what installs today. It
+# opens PRs proposing bumps and surfaces known CVEs; the ranges are untouched.
+# Tightening the pins is a separate, explicit decision (owner call, deferred
+# 2026-08-28).
+#
+# This pairs well with the repo's direct-push workflow rather than fighting it:
+# a Dependabot PR that edits requirements.txt matches the `pull_request` path
+# filter in .github/workflows/tests.yml, so the full pytest suite runs against
+# the proposed dependency set in a clean ubuntu environment BEFORE anything
+# merges. That is the one check the local pre-push hook structurally cannot do
+# (it runs against the local .venv, which is on a different streamlit version
+# than production). So these PRs are reviewed by the gate that matters most.
+
+updates:
+  # ── Python (prod + dev) ────────────────────────────────────────────────────
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "saturday"          # lands off-market, never mid-trading-week
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+    groups:
+      # One PR for the low-risk tail, so routine churn doesn't bury a real
+      # security bump in noise.
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # Pinned deliberately, not by neglect. streamlit is held at 1.57.0 to
+      # match what Railway deploys; the local .venv running 1.60.0 is a KNOWN
+      # open divergence tracked in CLAUDE.md's queue, and a Dependabot bump
+      # would silently resolve it in the wrong direction (moving prod, rather
+      # than the deliberate decision the queue item calls for).
+      - dependency-name: "streamlit"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  # ── GitHub Actions ─────────────────────────────────────────────────────────
+  # The three deterministic gates run on pinned action majors (checkout@v5,
+  # setup-python@v6). A stale action is a supply-chain surface too.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "ci"]
