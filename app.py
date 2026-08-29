@@ -12119,249 +12119,120 @@ elif page == "🧾 Summary":
         _sm_thesis_slot = st.empty()
         _sm_thesis_slot.caption("📋 Portfolio Thesis — composing…")
     with _sm_ptr_row1[0]:
-        # 🎯 Engine Track Record — hero card, top-left. Same data as
-        # 📜 Recommendations History "All time" New Position row; cached for
-        # the day so re-renders don't re-hit the DB.
+        # 🎯 Engine Track Record — compact two-facet card. Same `_etr_cache` data
+        # as before and the SAME band vocabulary; only the presentation changed
+        # (2026-08-28). The prior render was ~240 lines of prose with a hero
+        # number, and stood roughly 3x taller than the two cards beside it,
+        # which made the Horizon row read as one card with two afterthoughts.
+        #
+        # Never a second computation — this reads the headline dicts the
+        # 📜 Recommendations History page produces, cached for the day.
         _etr_band    = _etr_h["band"]
         _etr_alpha   = _etr_h["acted_alpha"]
         _etr_m_alpha = _etr_h["missed_alpha"]
         _etr_n       = _etr_h["n_acted_mature"]
         _etr_since   = _etr_h["since_date"]
+
+        # ── Offense facet: badge + one-line basis ─────────────────────────────
+        if _etr_band == "building":
+            _etr_need   = max(0, _etr_min_calls - _etr_n)
+            _etr_badge  = "BUILDING"
+            _etr_bcol   = "#8b94a7"
+            _etr_val    = "—"
+            _etr_vcol   = "#6b7280"
+            _etr_basis  = (f"needs {_etr_need} more matured BUY call(s)"
+                           if _etr_need else "maturing")
+        elif _etr_alpha is None:
+            _etr_badge, _etr_bcol = "NO DATA", "#8b94a7"
+            _etr_val,   _etr_vcol = "—", "#6b7280"
+            _etr_basis = "no matured calls yet"
+        else:
+            if _etr_band == "firm" and _etr_alpha > 0:
+                _etr_badge, _etr_bcol = "WORKING ✓", "#57d98a"
+            elif _etr_band == "firm":
+                _etr_badge, _etr_bcol = "LAGGING", "#f0c24b"
+            else:
+                _etr_badge, _etr_bcol = "EARLY READ", "#f0c24b"
+            _etr_val  = f"{_etr_alpha:+.1f}pp"
+            _etr_vcol = "#57d98a" if _etr_alpha > 0 else "#fca5a5"
+            _etr_basis = f"{_etr_n} matured · avg alpha vs SPY"
+
+        # ── Defense facet: same bands as before ──────────────────────────────
+        _etr_prot_band  = _etr_prot_h["band"]
+        _etr_prot_alpha = _etr_prot_h["protect_alpha"]
+        _etr_prot_n     = _etr_prot_h["n_mature"]
+        if _etr_prot_band == "building" or _etr_prot_alpha is None:
+            _etr_pneed  = max(0, _etr_prot_min_calls - _etr_prot_n)
+            _etr_pbadge = "BUILDING" if _etr_prot_band == "building" else "NO DATA"
+            _etr_pbcol  = "#8b94a7"
+            _etr_pval,  _etr_pvcol = "—", "#6b7280"
+            _etr_pbasis = (f"needs {_etr_pneed} more matured EXIT/TRIM call(s)"
+                           if _etr_pneed else "maturing")
+        else:
+            if _etr_prot_band == "firm" and _etr_prot_alpha > 0:
+                _etr_pbadge, _etr_pbcol = "VALIDATED ✓", "#57d98a"
+            elif _etr_prot_band == "firm":
+                _etr_pbadge, _etr_pbcol = "RAN EARLY", "#f0c24b"
+            else:
+                _etr_pbadge, _etr_pbcol = "EARLY READ", "#f0c24b"
+            _etr_pval  = f"{_etr_prot_alpha:+.1f}pp"
+            _etr_pvcol = "#57d98a" if _etr_prot_alpha > 0 else "#fca5a5"
+            _etr_pbasis = f"{_etr_prot_n} flagged · avg vs SPY after the warning"
+
+        def _etr_facet(title, badge, bcol, basis, val, vcol):
+            return (
+                f"<div style='display:flex;justify-content:space-between;"
+                f"align-items:center;margin-top:4px'>"
+                f"<span style='font-size:0.82rem;color:#c3c2b7'>{title}</span>"
+                f"<span style='font-size:0.62rem;font-weight:700;padding:2px 7px;"
+                f"border-radius:4px;color:{bcol};background:{bcol}22'>{badge}</span></div>"
+                f"<div style='display:flex;justify-content:space-between;"
+                f"align-items:center;margin-top:1px'>"
+                f"<span style='font-size:0.72rem;color:#6b7280'>{basis}</span>"
+                f"<span style='font-size:0.9rem;font-weight:700;color:{vcol}'>{val}</span></div>"
+            )
+
         with st.container(border=True, key="etr_hero"):
             st.markdown(
-                "<style>.st-key-etr_hero{"
-                "border-left:3px solid #22c55e !important;"
-                "background:rgba(34,197,94,.04)}"
-                ".st-key-etr_hero button{color:#6ea8fe !important}"
-                "</style>",
+                "<style>.st-key-etr_hero{background:#1b2130}"
+                ".st-key-etr_hero button{color:#6ea8fe !important}</style>",
                 unsafe_allow_html=True,
             )
-            if _etr_band == "building":
-                # No badge in building state — just the title
-                st.markdown(
-                    "<div style='font-weight:600;margin-bottom:6px'>"
-                    "🎯 Engine Track Record</div>",
-                    unsafe_allow_html=True,
-                )
-                _etr_need = max(0, _etr_min_calls - _etr_n)
-                st.markdown(
-                    f"<div style='color:#9ca3af;font-size:0.95em'>Building history</div>"
-                    f"<div style='color:#6b7280;font-size:0.82em;margin-top:3px'>"
-                    f"The App needs {_etr_need} more matured BUY call(s) before it can "
-                    f"report a track record.</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                # Alpha unknown — show neutral grey rather than asserting a
-                # performance verdict.  LAGGING would falsely claim underperformance
-                # when the truth is simply "not enough priced outcomes yet."
-                if _etr_alpha is None:
-                    _etr_badge        = "NO DATA"
-                    _etr_color        = "#6b7280"
-                    _etr_badge_color  = "#8b94a7"
-                    _etr_badge_bg     = "#232a38"
-                    _etr_badge_border = "#2a3140"
-                    _etr_verdict = (
-                        "Not enough priced data yet — outcomes will appear as calls mature."
-                    )
-                elif _etr_band == "firm" and _etr_alpha > 0:
-                    _etr_badge        = "WORKING"
-                    _etr_color        = "#22c55e"
-                    _etr_badge_color  = "#57d98a"
-                    _etr_badge_bg     = "rgba(34,197,94,.14)"
-                    _etr_badge_border = "rgba(34,197,94,.35)"
-                    _etr_verdict = (
-                        "Acting on the App's new-position calls has beaten the benchmark."
-                    )
-                elif _etr_band == "firm":
-                    _etr_badge        = "LAGGING"
-                    _etr_color        = "#f59e0b"
-                    _etr_badge_color  = "#f0c24b"
-                    _etr_badge_bg     = "rgba(240,180,41,.13)"
-                    _etr_badge_border = "rgba(240,180,41,.3)"
-                    _etr_verdict = (
-                        "Acting on the App's new-position calls hasn't beaten the "
-                        "benchmark over this sample."
-                    )
-                else:   # early, alpha is not None
-                    _etr_badge        = "EARLY READ"
-                    _etr_color        = "#f59e0b"
-                    _etr_badge_color  = "#f0c24b"
-                    _etr_badge_bg     = "rgba(240,180,41,.13)"
-                    _etr_badge_border = "rgba(240,180,41,.3)"
-                    _etr_verdict = (
-                        "Directionally positive but a thin sample — treat as a read."
-                        if _etr_alpha > 0
-                        else "Thin sample — more matured calls needed before a firm read."
-                    )
-                # Header row: title left, band badge right
-                st.markdown(
-                    f"<div style='display:flex;justify-content:space-between;"
-                    f"align-items:center;margin-bottom:6px'>"
-                    f"<span style='font-weight:600'>🎯 Engine Track Record</span>"
-                    f"<span style='font-size:0.7em;font-weight:600;padding:2px 8px;"
-                    f"border-radius:12px;background:{_etr_badge_bg};"
-                    f"color:{_etr_badge_color};border:1px solid {_etr_badge_border}'>"
-                    f"{_etr_badge}</span></div>",
-                    unsafe_allow_html=True,
-                )
-                _etr_hero = f"{_etr_alpha:+.1f} pp vs S&P" if _etr_alpha is not None else "—"
-                _etr_contrast_html = (
-                    f"<div style='color:#9ca3af;font-size:0.82em;margin-top:4px'>"
-                    f"The ones you skipped: {_etr_m_alpha:+.1f}pp</div>"
-                    if _etr_m_alpha is not None else ""
-                )
-                _etr_since_str = (
-                    _etr_since.strftime("%b %d, %Y") if _etr_since else ""
-                )
-                _etr_caption = (
-                    f"{_etr_n} matured call(s)"
-                    + (f" since {_etr_since_str}" if _etr_since_str else "")
-                    + " · measures calls surfaced to you, not every possible call."
-                )
-                # Hero number: large+bold numeric, small muted unit
-                _etr_num_html = (
-                    f"<span style='font-size:1.9em;font-weight:700;color:{_etr_color}'>"
-                    f"{_etr_alpha:+.1f}"
-                    f"<span style='font-size:0.6em;color:#8b94a7'> pp vs S&P</span>"
-                    f"</span>"
-                    if _etr_alpha is not None else
-                    f"<span style='font-size:1.9em;font-weight:700;color:{_etr_color}'>"
-                    f"—</span>"
-                )
-                st.markdown(
-                    f"<div>{_etr_num_html}</div>"
-                    f"<div style='color:#c7d2e2;font-size:0.85em;margin-top:2px'>"
-                    f"when you acted on the App's new-position calls</div>"
-                    f"<div style='color:#9ca3af;font-size:0.85em;margin-top:3px'>"
-                    f"{_etr_verdict}</div>"
-                    f"{_etr_contrast_html}"
-                    f"<div style='color:#6b7280;font-size:0.78em;margin-top:5px;"
-                    f"font-style:italic'>{_etr_caption}</div>",
-                    unsafe_allow_html=True,
-                )
-            if st.button(
-                "Full report card → 📜 Recommendations History",
-                key="sm_ptr_etr",
-                type="tertiary",
-            ):
-                st.session_state["_pending_page"] = "📜 Recommendations History"
-                st.rerun()
-
-            # ── 🛡️ Defense facet — protective (EXIT/TRIM) call track record.
-            # Folded into the SAME hero card as a second facet, per the locked
-            # decision (docs/plans/engine-track-record-meter.md Phase 2) — not
-            # a new sibling card. No link-through here: no detail page exists
-            # for this facet yet (unlike Offense's Recommendations History).
+            _etr_t, _etr_b = st.columns([3, 2], vertical_alignment="center")
+            with _etr_t:
+                st.markdown("**🎯 Engine Track Record**")
+            with _etr_b:
+                if st.button("→ Rec History", key="etr_hero_btn", type="tertiary"):
+                    st.session_state["_pending_page"] = "📜 Recommendations History"
+                    st.rerun()
             st.markdown(
-                "<div style='border-top:1px dashed #2a3140;margin:13px 0 12px'></div>",
+                _etr_facet("Offense (buy alpha)", _etr_badge, _etr_bcol,
+                           _etr_basis, _etr_val, _etr_vcol)
+                + "<hr style='border:none;border-top:1px solid #2d3048;margin:8px 0 4px'>"
+                + _etr_facet("Defense (exit alpha)", _etr_pbadge, _etr_pbcol,
+                             _etr_pbasis, _etr_pval, _etr_pvcol),
                 unsafe_allow_html=True,
             )
-            _etr_prot_band  = _etr_prot_h["band"]
-            _etr_prot_alpha = _etr_prot_h["protect_alpha"]
-            _etr_prot_n     = _etr_prot_h["n_mature"]
-            _etr_prot_since = _etr_prot_h["since_date"]
+            # Two things kept from the long form rather than dropped with it:
+            # (1) the skipped-call counterfactual — what the calls you did NOT
+            #     act on returned — which is the only guard against reading the
+            #     Offense number as pure skill rather than selection; and
+            # (2) the caveat that this is measured FORWARD from the warning, so
+            #     it is never a claim the App predicted the initial weakness.
+            # Both fit in one caption; neither justified its own row.
+            _etr_cap = []
+            if _etr_m_alpha is not None:
+                _etr_cap.append(f"Calls you skipped: {_etr_m_alpha:+.1f}pp")
+            if _etr_since:
+                # A date object, not a string — the long form called .strftime()
+                # on it. Guarded so a str from an older cache still renders.
+                _etr_cap.append(
+                    f"since {_etr_since.strftime('%b %d, %Y')}"
+                    if hasattr(_etr_since, "strftime") else f"since {_etr_since}"
+                )
+            _etr_cap.append("measured AFTER the warning, not a prediction of it")
+            st.caption(" · ".join(_etr_cap) + ". Defense has no detail page yet.")
 
-            # Badge colors reuse the SAME green/amber/grey tokens as Offense —
-            # only the label text differs, per the "distinct badge vocabulary,
-            # same visual language" rule (VALIDATED/RAN EARLY vs WORKING/LAGGING).
-            _etr_prot_color = "#6b7280"
-            if _etr_prot_band == "building" or _etr_prot_alpha is None:
-                _etr_prot_badge        = "BUILDING" if _etr_prot_band == "building" else "NO DATA"
-                _etr_prot_badge_color  = "#8b94a7"
-                _etr_prot_badge_bg     = "#232a38"
-                _etr_prot_badge_border = "#2a3140"
-            elif _etr_prot_band == "firm" and _etr_prot_alpha > 0:
-                _etr_prot_badge        = "VALIDATED"
-                _etr_prot_color        = "#22c55e"
-                _etr_prot_badge_color  = "#57d98a"
-                _etr_prot_badge_bg     = "rgba(34,197,94,.14)"
-                _etr_prot_badge_border = "rgba(34,197,94,.35)"
-            elif _etr_prot_band == "firm":
-                _etr_prot_badge        = "RAN EARLY"
-                _etr_prot_color        = "#f59e0b"
-                _etr_prot_badge_color  = "#f0c24b"
-                _etr_prot_badge_bg     = "rgba(240,180,41,.13)"
-                _etr_prot_badge_border = "rgba(240,180,41,.3)"
-            else:   # early, alpha is not None
-                _etr_prot_badge        = "EARLY READ"
-                _etr_prot_color        = "#f59e0b"
-                _etr_prot_badge_color  = "#f0c24b"
-                _etr_prot_badge_bg     = "rgba(240,180,41,.13)"
-                _etr_prot_badge_border = "rgba(240,180,41,.3)"
-
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;"
-                f"align-items:center;margin-bottom:6px'>"
-                f"<span style='font-size:0.78em;font-weight:700;letter-spacing:.03em;"
-                f"text-transform:uppercase;color:#8b94a7'>🛡️ Defense — protective calls</span>"
-                f"<span style='font-size:0.7em;font-weight:600;padding:2px 8px;"
-                f"border-radius:12px;background:{_etr_prot_badge_bg};"
-                f"color:{_etr_prot_badge_color};border:1px solid {_etr_prot_badge_border}'>"
-                f"{_etr_prot_badge}</span></div>",
-                unsafe_allow_html=True,
-            )
-
-            if _etr_prot_band == "building":
-                _etr_prot_need = max(0, _etr_prot_min_calls - _etr_prot_n)
-                st.markdown(
-                    f"<div style='color:#9ca3af;font-size:0.95em'>Building protective track record</div>"
-                    f"<div style='color:#6b7280;font-size:0.82em;margin-top:3px'>"
-                    f"The App needs {_etr_prot_need} more matured EXIT/TRIM call(s) before it "
-                    f"can report whether its warnings have been right.</div>",
-                    unsafe_allow_html=True,
-                )
-            elif _etr_prot_alpha is None:
-                # Sample floor cleared but nothing priced yet — neutral, not a
-                # verdict (mirrors Offense's own NO DATA edge case).
-                st.markdown(
-                    "<div style='color:#9ca3af;font-size:0.95em'>Not enough priced outcomes yet.</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                if _etr_prot_band == "firm" and _etr_prot_alpha > 0:
-                    _etr_prot_verdict = (
-                        "Flagged names lagged the S&P after the warning — the caution was right."
-                    )
-                elif _etr_prot_band == "firm":
-                    _etr_prot_verdict = (
-                        "Flagged names have mostly recovered — protective calls ran early vs the S&P."
-                    )
-                else:   # early
-                    _etr_prot_verdict = (
-                        "Directionally right but a thin sample — treat as a read."
-                        if _etr_prot_alpha > 0 else
-                        "Directionally early but a thin sample — treat as a read."
-                    )
-                _etr_prot_since_str = (
-                    _etr_prot_since.strftime("%b %d, %Y") if _etr_prot_since else ""
-                )
-                _etr_prot_caption = (
-                    f"{_etr_prot_n} flagged name(s)"
-                    + (f" since {_etr_prot_since_str}" if _etr_prot_since_str else "")
-                    + "."
-                )
-                st.markdown(
-                    f"<div><span style='font-size:1.3em;font-weight:700;color:{_etr_prot_color}'>"
-                    f"{_etr_prot_alpha:+.1f}"
-                    f"<span style='font-size:0.6em;color:#8b94a7'> pp vs S&P</span>"
-                    f"</span></div>"
-                    f"<div style='color:#9ca3af;font-size:0.85em;margin-top:3px'>"
-                    f"{_etr_prot_verdict}</div>"
-                    f"<div style='color:#6b7280;font-size:0.78em;margin-top:5px;"
-                    f"font-style:italic'>{_etr_prot_caption}</div>",
-                    unsafe_allow_html=True,
-                )
-
-            # ALWAYS — methodology caption, regardless of band: this is a
-            # forward-calibration measure (what happened AFTER the warning),
-            # never a claim the App predicted the initial weakness.
-            st.markdown(
-                "<div style='color:#5f6779;font-size:0.72em;font-style:italic;margin-top:4px'>"
-                "Measures what flagged names did AFTER the warning, not whether the App "
-                "predicted the initial weakness.</div>",
-                unsafe_allow_html=True,
-            )
     with _sm_ptr_row1[1]:
         # 🔔 Catalyst Watch — promoted into Row 1 beside the Engine Track Record
         # when Thesis Review moved to Portfolio Health. Reads the same cached
