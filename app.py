@@ -1333,55 +1333,6 @@ def _render_section_label(label: str, top_margin: int = 18) -> None:
     )
 
 
-def _render_simple_action_card(item: dict, urgent: bool = False) -> None:
-    """Lean Act-Today card for the Summary page: tier badge + ticker +
-    one-line rationale — matches the approved Option-A mockup. Deliberately
-    NOT the full-featured Home card (no Analyze button, Exit Red-Team debate,
-    journal context, or tax notes — those stay Home-only); this is a read-only
-    at-a-glance view. Handles both item shapes Home's decision_bucket produces
-    (plain dicts with `action`/`directive` text, and `_source == "review"`
-    dicts carrying a structured `action` dict for `_fmt_action`)."""
-    is_review = item.get("_source") == "review"
-    ticker = item.get("ticker") or item.get("event") or ""
-    icon = item.get("icon", "")
-    if is_review:
-        _color, _label, _text = _fmt_action(item.get("action", {}) or {})
-        if urgent:
-            _color = _HOME_URGENT
-        headline = item.get("headline", "")
-        text = _text + (f" {headline}" if headline and not _text.endswith(headline) else "")
-    else:
-        _is_crit = item.get("priority") == "critical"
-        _color = _HOME_URGENT if (urgent or _is_crit) else _HOME_ELEVATED
-        _label = str(item.get("action", "—"))
-        text = item.get("directive") or item.get("why") or item.get("reason") or "—"
-    # Pill badge (icon + label) + ticker on its own bold line below, matching
-    # the approved Option-A mockup's card anatomy — not inline text.
-    #
-    # `text` goes through _md_bold (escape first, THEN **x** -> <b>x</b>), not
-    # raw. The advisors emit markdown and know nothing about their renderer:
-    # risk_advisor bolds DOLLAR LOSS FIGURES on the very TRIM cards this lane
-    # carries (e.g. "**$1,240 of unnecessary extra loss**"), so interpolating
-    # raw here would print literal asterisks around the number that matters
-    # most. This is the class fixed at 9 other sites on 2026-08-28
-    # (feedback_streamlit_renderer_mismatch); this function was written for the
-    # Summary page, never wired up, and so never received that fix — it was
-    # dead code until F-204a. Ticker/label are escaped but not md-converted:
-    # they are algorithmic symbols, never prose.
-    st.markdown(
-        f"<div style='background:#15161a;border:1px solid rgba(255,255,255,0.10);"
-        f"border-left:3px solid {_color};border-radius:10px;padding:14px 16px;"
-        f"margin-bottom:14px;height:100%'>"
-        f"<span style='display:inline-flex;align-items:center;gap:6px;font-size:0.68rem;"
-        f"font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:3px 10px;"
-        f"border-radius:20px;margin-bottom:10px;color:{_color};background:{_color}22'>"
-        f"{_safe_html(icon)} {_safe_html(_label)}</span>"
-        f"<div style='font-family:\"JetBrains Mono\",ui-monospace,monospace;font-weight:700;"
-        f"font-size:1.02rem;margin:4px 0;color:#f9fafb'>{_safe_html(ticker)}</div>"
-        f"<div style='color:#c3c2b7;font-size:0.82rem;line-height:1.45'>{_md_bold(text)}</div>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
 
 
 def _render_stop_ladder(r: dict, holding: dict, price: float,
@@ -11482,7 +11433,7 @@ elif page == "🧾 Summary":
     # strip signals whether action is needed and links there. Reads the
     # IDENTICAL split_defensive() call via _home_synth_cache — same source,
     # same count, never under-reports. See docs/mockups/summary-page-restructure.html.
-    st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+    _render_section_label("Act Today")
     _sm_daily_brief = _sm_bundle.get("_daily_brief")
     # Hoisted so the Risk Posture fallback in Zone 4 can read it. `None` means
     # the Brief was never built this session — NOT "no protective items", and
@@ -11518,13 +11469,34 @@ elif page == "🧾 Summary":
             # matching split_defensive's act bucket exactly; the buy-side stream
             # is a different producer and deliberately does not appear here
             # (user decision 2026-08-28).
-            _sm_chips = bucket_act_by_type(_sm_act_bucket)["counts"]
-            _SM_CHIP_COLOR = {"EXIT": "#fca5a5", "TRIM": "#fbbf24", "WATCH": "#fcd34d"}
+            _sm_bk    = bucket_act_by_type(_sm_act_bucket)
+            _sm_chips = _sm_bk["counts"]
+            # Pill chips (bordered), matching the approved mock — a bare coloured
+            # word read as prose rather than as a count you can scan.
+            _SM_CHIP_COLOR = {"EXIT": "#ef4444", "TRIM": "#f59e0b", "WATCH": "#fbbf24"}
             _sm_chip_html = " ".join(
-                f"<span style='color:{_SM_CHIP_COLOR[_k]};font-weight:700'>"
-                f"{_sm_chips[_k]} {_k}</span>"
+                f"<span style='display:inline-block;font-size:0.68rem;font-weight:700;"
+                f"letter-spacing:0.04em;padding:2px 9px;border-radius:20px;margin-left:6px;"
+                f"color:{_SM_CHIP_COLOR[_k]};background:{_SM_CHIP_COLOR[_k]}22;"
+                f"border:1px solid {_SM_CHIP_COLOR[_k]}'>{_sm_chips[_k]} {_k}</span>"
                 for _k in ("EXIT", "TRIM", "WATCH") if _sm_chips[_k]
             )
+
+            # Composite score per ticker, read from port_df — NOT from the act
+            # item's own `momentum_score`. That field is misleadingly named: for
+            # HELD names it carries port_df["Score"] (= r["total"], the full
+            # 4-pillar composite), not a momentum reading, which is exactly the
+            # two-meaning-Score collision feedback_pillar_label_collision warns
+            # about. Only ONE of the five defensive item shapes carries an
+            # explicit `composite_score`. Reading port_df directly is
+            # unambiguous AND is the same source the Avg Score tile above uses,
+            # so the two cannot disagree on one screen.
+            _sm_scores: dict = {}
+            try:
+                for _, _sr in port_df.iterrows():
+                    _sm_scores[str(_sr["Ticker"]).strip().upper()] = float(_sr["Score"])
+            except Exception:
+                _sm_scores = {}
             with st.container(border=True, key="sm_act_urgent"):
                 st.markdown(
                     "<style>.st-key-sm_act_urgent{"
@@ -11538,15 +11510,17 @@ elif page == "🧾 Summary":
                 # dropping to an orphaned line below the strip.
                 _sm_act_col, _sm_act_btn_col = st.columns([5, 1], vertical_alignment="center")
                 with _sm_act_col:
+                    _sm_n_act = len(_sm_act_bucket)
                     st.markdown(
-                        f"🔴 <b style='color:#fca5a5'>Act Today ({len(_sm_act_bucket)})</b>"
-                        f"&nbsp; {_sm_chip_html}"
-                        f"<span style='color:#8b94a7;font-size:0.9em'>"
-                        f" — sizing + full context on Home</span>",
+                        f"<b style='font-size:0.98rem'>{_sm_n_act} item"
+                        f"{'s' if _sm_n_act != 1 else ''} need"
+                        f"{'' if _sm_n_act != 1 else 's'} attention</b>"
+                        f"{_sm_chip_html}",
                         unsafe_allow_html=True,
                     )
                 with _sm_act_btn_col:
-                    if st.button("→ Home", key="sm_act_home_btn", type="tertiary"):
+                    if st.button("→ Home", key="sm_act_home_btn", type="tertiary",
+                                 help="Full detail + position sizing"):
                         st.session_state["_pending_page"] = "🏠 Home"
                         st.rerun()
 
@@ -11554,15 +11528,69 @@ elif page == "🧾 Summary":
                 # a single derived line ("REDUCE — DETERIORATION EXIT APP" from
                 # the FIRST item plus "+N more"), which is a count with a label
                 # attached, not something you can triage: it named one ticker and
-                # silently hid the rest. `_render_simple_action_card` was written
-                # for exactly this page and this anatomy (badge + ticker +
-                # one-line rationale) and then never wired up — it had ZERO
-                # callers until now, which is also why it never received the
-                # 2026-08-28 markdown-escaping fix its siblings got.
+                # silently hid the rest.
+                #
+                # A first attempt wired up `_render_simple_action_card`, a
+                # long-dead helper whose docstring claimed this page — but its
+                # anatomy is a stacked CARD (badge line / ticker line / rationale
+                # line), ~3x taller per item, which defeats a cockpit at 4+
+                # items. Replaced by the row layout below and the helper deleted
+                # rather than left to invite a re-wire. Its one lasting
+                # contribution: proving these strings need `_md_bold`, since
+                # risk_advisor bolds dollar figures on exactly these cards.
                 # Deliberately still LEANER than Home: no Analyze button, no Exit
                 # Red-Team debate, no journal context, no tax notes.
-                for _sm_item in _sm_act_bucket:
-                    _render_simple_action_card(_sm_item, urgent=True)
+                # Rows, not stacked cards — the card anatomy (badge line, ticker
+                # line, rationale line) is ~3x taller per item, which defeats a
+                # cockpit page at 4+ items. Iterating the BUCKETS rather than the
+                # raw list also sorts by severity, so EXIT always leads.
+                _SM_ROW_C = {"EXIT": "#ef4444", "TRIM": "#f59e0b", "WATCH": "#fbbf24"}
+                _sm_row_html = []
+                for _bk in ("EXIT", "TRIM", "WATCH"):
+                    for _it in _sm_bk[_bk]:
+                        # Ticker: same fallback order decision_bucket._ticker uses
+                        # — a macro PROTECTIVE_TRIM card carries ticker=None with
+                        # its real subject in action.trim_ticker.
+                        _rt = _it.get("ticker") or ""
+                        _ra = _it.get("action")
+                        if not _rt and isinstance(_ra, dict):
+                            _rt = _ra.get("trim_ticker") or ""
+                        _rt = str(_rt).strip().upper()
+                        # Both item shapes: review-origin carries a structured
+                        # `action` dict, act-origin carries plain strings.
+                        if isinstance(_ra, dict):
+                            _l1 = _fmt_action(_ra)[2] or ""
+                            _l2 = str(_it.get("headline") or "")
+                        else:
+                            _l1 = str(_it.get("directive") or _it.get("why") or "")
+                            _l2 = str(_it.get("why") or "") if _it.get("directive") else ""
+                        if _l2 and _l2 == _l1:
+                            _l2 = ""
+                        _rs = _sm_scores.get(_rt)
+                        _rc = _SM_ROW_C[_bk]
+                        _sm_row_html.append(
+                            f"<div style='display:flex;gap:14px;align-items:flex-start;"
+                            f"padding:9px 14px;border-left:3px solid {_rc};"
+                            f"border-bottom:1px solid #22252f'>"
+                            f"<div style='width:64px;flex:none'>"
+                            f"<span style='font-size:0.64rem;font-weight:700;padding:2px 7px;"
+                            f"border-radius:3px;color:{_rc};background:{_rc}22'>{_bk}</span></div>"
+                            f"<div style='width:62px;flex:none;font-weight:700;"
+                            f"font-size:0.92rem'>{_safe_html(_rt) or '—'}</div>"
+                            f"<div style='flex:1;min-width:0'>"
+                            f"<div style='font-size:0.86rem;color:#e5e7eb'>{_md_bold(_l1)}</div>"
+                            + (f"<div style='font-size:0.78rem;color:#8b94a7;margin-top:2px'>"
+                               f"{_md_bold(_l2)}</div>" if _l2 else "")
+                            + f"</div>"
+                            + (f"<div style='width:74px;flex:none;text-align:right'>"
+                               f"<div style='font-weight:700;font-size:1.0rem;color:{_rc}'>"
+                               f"{_rs:.0f}</div>"
+                               f"<div style='font-size:0.66rem;color:#6b7280'>composite</div>"
+                               f"</div>" if _rs is not None else
+                               "<div style='width:74px;flex:none'></div>")
+                            + "</div>"
+                        )
+                st.markdown("".join(_sm_row_html), unsafe_allow_html=True)
 
     # ── Active protective vetoes ──────────────────────────────────────────────
     # `_reduce_calls` is consumed by 6 surfaces to SUPPRESS conflicting ADD
@@ -11591,14 +11619,20 @@ elif page == "🧾 Summary":
         # Explicit len() rather than truthiness: None / empty / non-empty are
         # three genuinely different states here (not checked / checked-and-none /
         # active), and a bare `elif _sm_reduce:` reads as if there were two.
-        # Ticker keys only — algorithmic symbols, no user free text. st.caption
-        # is a markdown sink (not an unsafe_allow_html one), so no HTML escaping
-        # applies here; escaping for the wrong sink is its own bug class.
+        # A visible BANNER, not a grey caption. CLAUDE.md: "For UI suppressions,
+        # render a visible banner explaining what was suppressed and why — never
+        # silently filter." This one says ADD suggestions are being withheld
+        # app-wide, which is a suppression the user cannot otherwise see.
         _sm_veto_names = " · ".join(sorted(_sm_reduce.keys()))
-        st.caption(
-            f"🚫 {len(_sm_reduce)} active reduce/exit call(s): "
-            f"{_sm_veto_names} — ADD suggestions on these names are "
-            f"suppressed app-wide. Open 🧑‍⚖️ The Judge to audit coherence."
+        st.markdown(
+            f"<div style='background:#251a40;border:1px solid #9b7ede;"
+            f"border-radius:8px;padding:9px 14px;margin-top:6px;font-size:0.84rem;"
+            f"color:#c9c4dd'>🚫 <b style='color:#c4b5fd'>{len(_sm_reduce)} active "
+            f"reduce/exit call(s):</b> "
+            f"<b style='color:#a78bfa'>{_safe_html(_sm_veto_names)}</b> — "
+            f"ADD suggestions on these names are suppressed app-wide. "
+            f"Open 🧑‍⚖️ The Judge to audit coherence.</div>",
+            unsafe_allow_html=True,
         )
 
     # ── 🧭 Elsewhere in DRISHTA — 2×2 pointer grid (plan:
