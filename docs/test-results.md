@@ -18,7 +18,44 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-27 (F-259 gate ledger, the UX review, and F-261 sizing)
+## 1. Latest run — 2026-08-29 (F-204a 🧾 Summary cockpit + its 13 follow-up fixes)
+
+**4665 passed, 0 failed, 0 skipped** (`python -m pytest -q`: 306.33s). Python
+(local `.venv`). Transcribed from the run, not recalled — and run **twice**,
+five minutes apart, returning the identical count both times.
+
+**+233 over the 4432 entry below.** Almost all of it is one new file,
+`tests/test_summary_view.py` (≈65 tests over the pure layer behind the Summary
+cockpit), plus additions to `tests/test_decision_bucket.py` (`bucket_act_by_type`
+and the `EXIT_KINDS`/`TRIM_KINDS` canon) and two registry guards in
+`tests/test_coord_freshness.py`.
+
+**What those tests are actually for, since the count alone understates it.**
+Every invariant pinned in `test_summary_view.py` is one whose failure mode is a
+CONFIDENT WRONG ANSWER rather than a crash, and three of them were written only
+after the defect had already shipped or been caught in review:
+
+- the Book Safety strip is **never green** on unmeasured, stale, or
+  unresolvable leverage (the `cash_seen` contract);
+- **only one** of `decide_drift_banner`'s five states is a red leg, and a
+  clean-but-dated check never reads as a current clean bill of health;
+- a ticker with no quote is **excluded and counted missing**, never rendered as
+  a flat 0%;
+- `movers_window()` never claims "today" before the session has begun — the
+  boundary that made a Saturday render label Friday's −10.3% as today's;
+- `score_tone()` maps to the app's existing rec bands rather than to display
+  cutoffs invented for the table.
+
+**Two caveats that outlive this entry.** (1) The `.venv` still runs **streamlit
+1.60.0** while production installs **1.57.0** from `requirements.txt`, so this
+suite continues to validate a version the app does not deploy — open and
+deliberate, recorded in CLAUDE.md's queue. It cost a real decision this session:
+`st.columns(border=…)` resolves locally and was rejected for `st.container`
+because local resolution proves nothing about the deploy. (2) **No coverage run
+this pass** — the figure below (78% at the 4317 entry) is the last measured one
+and should not be assumed to still hold across +348 tests.
+
+## 1a. Previous run — 2026-08-27 (F-259 gate ledger, the UX review, and F-261 sizing)
 
 **4432 passed, 0 failed, 0 skipped** (`python -m pytest -q`: 107.59s, final run
 of the day). Python (local `.venv`).
@@ -53,7 +90,7 @@ it reads as coverage.
 
 ---
 
-## 1a. Previous run — 2026-08-26 (zero-holdings port_df guard + doc-drift repair)
+## 1b. Earlier run — 2026-08-26 (zero-holdings port_df guard + doc-drift repair)
 
 **4317 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
 --cov-report=term -q`: 78.67s — TOTAL 18359 stmts, 4062 missed, **78%**
