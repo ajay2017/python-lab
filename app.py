@@ -11917,7 +11917,16 @@ elif page == "🧾 Summary":
     # the KPI row, and Active Vetoes is new — grouped because they answer one
     # question ("is the book sound?") rather than four unrelated ones.
     st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
-    st.markdown("**🩺 Portfolio Health**")
+    _render_section_label("Portfolio Health")
+    # Equal-height cards. The four have genuinely different content lengths
+    # (Thesis Integrity carries a ticker list; Diversification has no nav
+    # button by design), so without a floor the row renders ragged. One
+    # rule for all four rather than four inline copies.
+    st.markdown(
+        "<style>.st-key-sm_ph_risk,.st-key-sm_ph_thesis,"
+        ".st-key-sm_ph_div,.st-key-sm_ph_veto{min-height:190px}</style>",
+        unsafe_allow_html=True,
+    )
     _ph1, _ph2, _ph3, _ph4 = st.columns(4)
 
     with _ph1:
@@ -12203,7 +12212,7 @@ elif page == "🧾 Summary":
                 ".st-key-etr_hero button{color:#6ea8fe !important}</style>",
                 unsafe_allow_html=True,
             )
-            _etr_t, _etr_b = st.columns([3, 2], vertical_alignment="center")
+            _etr_t, _etr_b = st.columns([5, 3], vertical_alignment="center")
             with _etr_t:
                 st.markdown("**🎯 Engine Track Record**")
             with _etr_b:
@@ -12429,28 +12438,47 @@ elif page == "🧾 Summary":
                         if _pth_ledger else
                         "<span style='font-size:0.62rem;color:#6b7280'>FIRST VIEW</span>"
                     )
+                    # The badge shows the VALUE ONLY. Status is carried by colour
+                    # plus a trailing ↕ for a shift — deliberately NOT by a
+                    # "HELD"/"↑" word prefix, which produced phrases that read
+                    # as a single confused statement once real claim values
+                    # arrived: "HELD ACTION REQUIRED" looks like it is asserting
+                    # both. The mock's values were single words (ELEVATED,
+                    # STABLE) so a prefix worked there; the real vocabulary is
+                    # multi-word (concentrated_cluster, single_name_elevated).
+                    # Also no .upper(): uppercasing two- and three-word values
+                    # makes them wider and harder to read in a narrow card, and
+                    # the badge styling already signals "this is a status".
+                    _PTHC_STAT = {
+                        "shifted": ("#f59e0b", "#f59e0b22", " ↕"),
+                        "held":    ("#9ca3af", "#ffffff10", ""),
+                    }
                     _pthc_rows = []
                     for _ck in _pth.CLAIM_KEYS:
-                        _cv = _pth_disp(_pth_claims.get(_ck, "unavailable")).upper()
+                        _cv = _pth_disp(_pth_claims.get(_ck, "unavailable"))
+                        _cv = _cv[:1].upper() + _cv[1:] if _cv else "—"
                         _cstat = (_pth_ledger or {}).get(_ck, {}).get("status")
-                        if _cstat == "shifted":
-                            _cbadge = (f"<span style='font-size:0.6rem;font-weight:700;"
-                                       f"padding:1px 6px;border-radius:3px;color:#f59e0b;"
-                                       f"background:#f59e0b22'>↑ {_safe_html(_cv)}</span>")
-                        elif _cstat == "held":
-                            _cbadge = (f"<span style='font-size:0.6rem;font-weight:700;"
-                                       f"padding:1px 6px;border-radius:3px;color:#9ca3af;"
-                                       f"background:#ffffff10'>HELD {_safe_html(_cv)}</span>")
-                        else:
-                            _cbadge = (f"<span style='font-size:0.6rem;font-weight:700;"
-                                       f"padding:1px 6px;border-radius:3px;color:#6b7280;"
-                                       f"background:#ffffff08'>{_safe_html(_cv)}</span>")
+                        _ccol, _cbg, _cmark = _PTHC_STAT.get(
+                            _cstat, ("#6b7280", "#ffffff08", "")
+                        )
+                        _cbadge = (
+                            f"<span style='font-size:0.66rem;font-weight:600;"
+                            f"padding:2px 7px;border-radius:4px;color:{_ccol};"
+                            f"background:{_cbg};white-space:nowrap'>"
+                            f"{_safe_html(_cv)}{_cmark}</span>"
+                        )
+                        # The LABEL shrinks and ellipsises, never the badge —
+                        # "Correlation" truncating is survivable, the value it
+                        # carries is not. `min-width:0` is required for a flex
+                        # child to shrink below its content width at all.
                         _pthc_rows.append(
                             f"<div style='display:flex;justify-content:space-between;"
                             f"align-items:center;gap:8px;padding:5px 0;"
                             f"border-bottom:1px solid #22252f'>"
-                            f"<span style='font-size:0.78rem;color:#9ca3af'>"
-                            f"{_safe_html(_pth_labels.get(_ck, _ck))}</span>{_cbadge}</div>"
+                            f"<span style='font-size:0.78rem;color:#9ca3af;min-width:0;"
+                            f"overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>"
+                            f"{_safe_html(_pth_labels.get(_ck, _ck))}</span>"
+                            f"<span style='flex:none'>{_cbadge}</span></div>"
                         )
                     with _sm_thesis_slot.container(border=True):
                         st.markdown(
@@ -12598,7 +12626,7 @@ elif page == "🧾 Summary":
             f"<td style='{_td};text-align:right;"
             f"color:{_HOME_GAIN if _t6_tot >= 0 else _HOME_LOSS}'>{_t6_tot:+.1f}%</td>"
             f"<td style='{_td};text-align:right'>{_t6_val_txt}</td>"
-            f"<td style='{_td};width:150px'>"
+            f"<td style='{_td}'>"   # no width — set on the <th>, takes the slack
             f"<div style='display:flex;align-items:center;gap:7px'>"
             f"<div style='flex:1;height:4px;background:#2d3048;border-radius:2px;"
             f"overflow:hidden'><div style='width:{_t6_barpct:.0f}%;height:100%;"
@@ -12631,12 +12659,24 @@ elif page == "🧾 Summary":
         "font-family:'JetBrains Mono',ui-monospace,monospace;"
         "font-variant-numeric:tabular-nums;font-size:0.84rem\">"
         "<thead><tr>"
+        # Explicit widths on every column EXCEPT Weight. With width:100% and no
+        # widths at all, six columns fan out and leave large dead gaps between
+        # the numbers (live screenshot 2026-08-29). Weight is left unset so it
+        # absorbs the slack — it holds the bar, which is the one element that
+        # genuinely benefits from extra room.
         + "".join(
             f"<th style='text-align:{'left' if _lbl in ('Ticker', 'Weight') else 'right'};"
-            f"padding:9px 10px;font-family:Inter,system-ui,sans-serif;font-size:0.66rem;"
+            f"{_w}padding:9px 10px;font-family:Inter,system-ui,sans-serif;font-size:0.66rem;"
             f"font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#9ca3af;"
             f"background:#111827;border-bottom:1px solid #334155'>{_lbl}</th>"
-            for _lbl in ("Ticker", "Score", _sm_win_word, "Total", "Value", "Weight")
+            for _lbl, _w in (
+                ("Ticker",      "width:92px;"),
+                ("Score",       "width:58px;"),
+                (_sm_win_word,  "width:96px;"),
+                ("Total",       "width:88px;"),
+                ("Value",       "width:104px;"),
+                ("Weight",      ""),          # takes the remainder
+            )
         )
         + "</tr></thead><tbody>"
         + "".join(_sm_t6_rows)
