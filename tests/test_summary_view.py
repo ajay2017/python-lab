@@ -222,6 +222,54 @@ def test_drift_in_sync_is_reported_as_in_sync():
     assert out["level"] == "amber"   # levered but clean
 
 
+# ─── movers_window: "today" must not be claimed on a closed market ───────────
+# Found live on Saturday 2026-08-29: Today's P&L correctly read $0 while the
+# movers tile showed MRVL -10.3% and WDAY +5.8%. BOTH figures were right --
+# Tier-B measures from the last close (zero on a Saturday) while the providers'
+# change_pct still describes FRIDAY. Only the heading was wrong.
+
+def test_open_market_is_today():
+    assert summary_view.movers_window("Market Open") == "today"
+
+
+def test_after_hours_is_still_today():
+    # Today's session ran and closed; change_pct describes it.
+    assert summary_view.movers_window("After-Hours") == "today"
+
+
+def test_early_close_half_day_is_today():
+    # Traded this morning, then closed for the holiday.
+    assert summary_view.movers_window("Market Closed (Early Close)") == "today"
+
+
+def test_weekend_is_last_session_not_today():
+    assert summary_view.movers_window("Market Closed (Weekend)") == "last_session"
+
+
+def test_holiday_is_last_session_not_today():
+    assert summary_view.movers_window("Market Closed (Holiday)") == "last_session"
+
+
+def test_pre_market_is_last_session_not_today():
+    # THE case that makes this more than a weekend fix: before the open on a
+    # normal trading day, change_pct still describes yesterday.
+    assert summary_view.movers_window("Pre-Market") == "last_session"
+
+
+def test_ambiguous_closed_resolves_to_the_weaker_claim():
+    # market_status() emits a bare "Market Closed" both late on a trading
+    # evening (when the change IS today's) and pre-dawn (when it is not).
+    # Resolving to last_session can under-state but never over-state.
+    assert summary_view.movers_window("Market Closed") == "last_session"
+
+
+def test_unknown_label_does_not_claim_today():
+    # Fails safe: a label this function has never seen (a renamed phase, an
+    # empty string from a .get() miss) must not be read as "today".
+    for lbl in ("", "Something New", "market open"):   # note: case-sensitive
+        assert summary_view.movers_window(lbl) == "last_session"
+
+
 # ─── quote_change_pct: the single quote reader ───────────────────────────────
 # These exist because the PREFERENCE ORDER is the whole point of the function
 # and was otherwise unasserted — every other test here supplies prev_close, so

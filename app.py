@@ -11306,6 +11306,11 @@ elif page == "🧾 Summary":
     # 1.60.0 while production installs 1.57.0 from requirements.txt, so a kwarg
     # that resolves here proves nothing about the deploy. st.container's border is
     # long-established and already used throughout this file.
+    # Is the providers' change-vs-prev-close describing TODAY, or the last
+    # completed session? On a weekend/holiday, or before the open, it is the
+    # latter — and three surfaces on this page were calling it "today".
+    _sm_win = summary_view.movers_window(market_status().get("label", ""))
+    _sm_win_word = "Today" if _sm_win == "today" else "Last session"
     _render_section_label("Today")
     _s1, _s2, _s3, _s4, _s5 = st.columns(5)
     with _s1, st.container(border=True):
@@ -11382,7 +11387,7 @@ elif page == "🧾 Summary":
         # for the same reason — as visible caption lines they added two more rows
         # to the tallest tile in the row. Nothing is hidden, only relocated.
         _sm_mv_help = (
-            f"Biggest same-day moves in your book, either direction. "
+            f"Biggest moves in your book over the {_sm_win_word.lower()}, either direction. "
             f"All-time best: {_sm_best['Ticker']} {_sm_best['P&L (%)']:+.0f}%."
         )
         if _sm_movers["n_missing"]:
@@ -11391,15 +11396,15 @@ elif page == "🧾 Summary":
                 f"and are excluded — they are NOT counted as flat."
             )
         st.markdown(
-            "<div style='font-size:0.8rem;color:#a3a8b8;margin-bottom:2px'>"
-            "TODAY'S MOVERS</div>",
+            f"<div style='font-size:0.8rem;color:#a3a8b8;margin-bottom:2px'>"
+            f"{_sm_win_word.upper()}&rsquo;S MOVERS</div>",
             unsafe_allow_html=True,
         )
         if not _sm_movers["combined"]:
             if _sm_movers["n_missing"] and not _sm_movers["n_priced"]:
                 st.caption("No live quotes yet — visit 🏠 Home, or wait ~60s.")
             else:
-                st.caption("Nothing moved today.")
+                st.caption(f"Nothing moved {_sm_win_word.lower()}.")
         else:
             _sm_mv_rows = "".join(
                 f"<div style='margin:2px 0;font-size:0.92rem;"
@@ -12615,7 +12620,7 @@ elif page == "🧾 Summary":
         )
         if _sm_dirs["missing"]:
             _sm_dir_bits += f" · {_sm_dirs['missing']} no quote"
-        _sm_dir_bits += " today"
+        _sm_dir_bits += f" {_sm_win_word.lower()}"
     except Exception:
         _sm_dir_bits = ""
 
@@ -12631,7 +12636,7 @@ elif page == "🧾 Summary":
             f"padding:9px 10px;font-family:Inter,system-ui,sans-serif;font-size:0.66rem;"
             f"font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#9ca3af;"
             f"background:#111827;border-bottom:1px solid #334155'>{_lbl}</th>"
-            for _lbl in ("Ticker", "Score", "Today", "Total", "Value", "Weight")
+            for _lbl in ("Ticker", "Score", _sm_win_word, "Total", "Value", "Weight")
         )
         + "</tr></thead><tbody>"
         + "".join(_sm_t6_rows)

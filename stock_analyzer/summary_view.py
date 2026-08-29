@@ -252,6 +252,38 @@ def quote_change_pct(quote) -> float | None:
     return (price - prev_close) / prev_close * 100.0
 
 
+# Phases in which today's session has ACTUALLY begun, so a provider's
+# change-vs-previous-close is describing today. Sourced from the exact label
+# vocabulary data.market_status() emits — not invented here.
+_SESSION_UNDERWAY = frozenset({
+    "Market Open",
+    "After-Hours",              # today's session ran, then closed
+    "Market Closed (Early Close)",   # half-day: traded this morning
+})
+
+
+def movers_window(market_label: str) -> str:
+    """Does `change_pct` describe TODAY, or the last completed session?
+
+    Providers report change against the PREVIOUS close, which only means
+    "today" once today's session has begun. Before the open, and on any
+    weekend or holiday, that same field still describes the PREVIOUS session —
+    so a tile headed "TODAY'S MOVERS" is then labelling (say) Friday's −10.3%
+    as today's. Found live on Saturday 2026-08-29, where Today's P&L correctly
+    read $0 while the movers tile showed two double-digit moves: both figures
+    were right, only the heading was wrong.
+
+    Returns "today" | "last_session".
+
+    LIMIT, stated rather than hidden: market_status() emits a bare
+    "Market Closed" both late on a trading evening (when the change IS today's)
+    and in the small hours before the next open (when it is not). That bucket
+    resolves to "last_session" — deliberately the weaker claim, so this can
+    under-state but never over-state what the number covers.
+    """
+    return "today" if market_label in _SESSION_UNDERWAY else "last_session"
+
+
 def top_movers(
     port_df,
     live_prices: dict | None,
