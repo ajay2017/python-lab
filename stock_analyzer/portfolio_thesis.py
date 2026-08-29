@@ -118,11 +118,19 @@ def _build_prose(claims: dict, engine_trust, today: date) -> str:
     date_str = today.strftime("%b %d")
     parts: list[str] = []
 
+    # "alert level", not "risk posture". This claim is `rag_label` — a count of
+    # danger-level Active Alerts — while 🧾 Summary's Portfolio Health zone
+    # separately renders `exit_advisor.market_risk_posture()` under the name
+    # "Risk Posture". Both appear on one screen with different values, and the
+    # shared name made "Action Required" read as a contradiction of "nothing to
+    # act on today" rather than as a different measurement
+    # (feedback_pillar_label_collision). The claim KEY is unchanged, so
+    # persisted rows and the ledger's held/shifted grading are unaffected.
     risk = claims["risk_posture"]
     if risk == "unavailable":
-        parts.append(f"As of {date_str}, risk posture is unavailable this week.")
+        parts.append(f"As of {date_str}, alert level is unavailable this week.")
     else:
-        parts.append(f"As of {date_str}, your portfolio sits in {risk} posture.")
+        parts.append(f"As of {date_str}, your alert level is {risk}.")
 
     conc = claims["concentration"]
     if conc == "unavailable":

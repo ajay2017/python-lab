@@ -12424,18 +12424,28 @@ elif page == "🧾 Summary":
                     _pth_n_held    = sum(1 for v in _pth_ledger.values() if v["status"] == "held")
                     _pth_n_shifted = sum(1 for v in _pth_ledger.values() if v["status"] == "shifted")
                     _pth_headline = (
-                        f"📜 This week's standing view — {_pth_risk_disp} posture · "
+                        f"📜 This week's standing view — {_pth_risk_disp} alert level · "
                         f"{_pth_n_held} of {len(_pth.CLAIM_KEYS)} held"
                         + (f", {_pth_n_shifted} shift(s)" if _pth_n_shifted else "")
                     )
                 else:
                     _pth_headline = (
-                        f"📜 This week's standing view — {_pth_risk_disp} posture · "
+                        f"📜 This week's standing view — {_pth_risk_disp} alert level · "
                         f"first standing view of the record"
                     )
 
                 _pth_labels = {
-                    "risk_posture":          "Risk posture",
+                    # DISPLAY label only — the persisted claim key stays
+                    # `risk_posture`, so historical portfolio_thesis rows are
+                    # untouched. Renamed 2026-08-29 because this claim reads
+                    # `rag_label` (a count of danger-level Active Alerts), NOT
+                    # the market-regime dial that Portfolio Health already
+                    # calls "Risk Posture" 400px above. Two different things
+                    # under one name on one screen is the
+                    # feedback_pillar_label_collision class, and it is what made
+                    # "Action Required" read as a contradiction of "nothing to
+                    # act on today" rather than as a separate measurement.
+                    "risk_posture":          "Alert level",
                     "concentration":         "Concentration",
                     "correlation_structure": "Correlation",
                     "holdings_health":       "Holdings health",
