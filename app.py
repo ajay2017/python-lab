@@ -284,6 +284,7 @@ from stock_analyzer.util import safe_html as _safe_html
 from stock_analyzer.util import md_bold_to_html as _md_bold
 from stock_analyzer.util import factor_tilt_state as _factor_tilt_state
 from stock_analyzer.util import sizing_cap_lines as _sizing_cap_lines
+from stock_analyzer.util import sizing_unavailable_caption as _sizing_unavailable_caption
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -21925,28 +21926,11 @@ elif page == "📈 Analysis":
                             portfolio_value, price, r["stop"], SINGLE_NAME_CEILING,
                             net_capital=_f255_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
                         )
-                        if _sa_no_size_reason == "ceiling":
-                            st.caption(
-                                f"Position sizing unavailable — one share is "
-                                f"~{price / portfolio_value * 100:.0f}% of your portfolio, above the "
-                                f"{int(SINGLE_NAME_CEILING)}% single-name ceiling. The stop is fine; "
-                                f"this name is too large for this account at the current cap."
-                            )
-                        elif _sa_no_size_reason == "capital" and _f255_net_cap and _f255_net_cap > 0:
-                            st.caption(
-                                f"Position sizing unavailable — one share is "
-                                f"~{price / _f255_net_cap * 100:.0f}% of your net capital, above the "
-                                f"{int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap. This is separate from "
-                                "the single-name book cap."
-                            )
-                        elif _sa_no_size_reason == "portfolio":
-                            st.caption(
-                                "Position sizing unavailable — your portfolio value isn't loaded in this "
-                                "session, so any share count would be a guess. Open 🏠 Home to "
-                                "load it, then come back."
-                            )
-                        else:
-                            st.caption("Position sizing unavailable — stop price too close to entry or not set.")
+                        st.caption(_sizing_unavailable_caption(
+                            _sa_no_size_reason, price=price, portfolio_value=portfolio_value,
+                            net_capital=_f255_net_cap, single_ceiling_pct=SINGLE_NAME_CEILING,
+                            capital_cap_pct=NET_CAPITAL_POSITION_CAP_PCT,
+                        ))
 
                     if targets:
                         st.markdown("#### Price Scenarios")
@@ -23776,28 +23760,16 @@ elif page == "📋 Watchlist":
                         _pv_now, _price, _stop, SINGLE_NAME_CEILING,
                         net_capital=_f255_wl_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
                     )
-                    if _wl_no_size_reason == "ceiling" and _pv_now:
-                        st.caption(
-                            f"Position sizing unavailable — one share is "
-                            f"~{_price / _pv_now * 100:.0f}% of your portfolio, above the "
-                            f"{int(SINGLE_NAME_CEILING)}% single-name ceiling. The stop is fine; "
-                            f"this name is too large for this account at the current cap."
-                        )
-                    elif _wl_no_size_reason == "capital" and _f255_wl_net_cap and _f255_wl_net_cap > 0:
-                        st.caption(
-                            f"Position sizing unavailable — one share is "
-                            f"~{_price / _f255_wl_net_cap * 100:.0f}% of your net capital, above the "
-                            f"{int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap. This is separate from "
-                            "the single-name book cap."
-                        )
-                    elif _wl_no_size_reason == "portfolio":
-                        st.caption(
-                            "Position sizing unavailable — your portfolio value isn't loaded in this "
-                            "session, so any share count would be a guess. Open 🏠 Home to "
-                            "load it, then come back."
-                        )
-                    else:
-                        st.caption("Position sizing unavailable — stop price too close to entry or not set.")
+                    # The old "ceiling and _pv_now" guard here was dead: reason ==
+                    # "ceiling" can only ever be returned by sizing_unavailable_reason
+                    # for a positive portfolio_value (it returns "portfolio" first for
+                    # any pv <= 0), so dropping it changes nothing — pinned by
+                    # test_ceiling_unreachable_at_non_positive_portfolio_value.
+                    st.caption(_sizing_unavailable_caption(
+                        _wl_no_size_reason, price=_price, portfolio_value=_pv_now,
+                        net_capital=_f255_wl_net_cap, single_ceiling_pct=SINGLE_NAME_CEILING,
+                        capital_cap_pct=NET_CAPITAL_POSITION_CAP_PCT,
+                    ))
 
             # Detail recommendation.
             # The concrete pointer to the sizing panel lives HERE, not in the

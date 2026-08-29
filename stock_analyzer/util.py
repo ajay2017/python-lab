@@ -282,3 +282,63 @@ def sizing_cap_lines(ps: Any, net_capital_cap_pct: Any) -> list[str]:
 def _n_pct(value: Any) -> float:
     """Numeric coercion for a passed-in percentage; 0.0 rather than a crash."""
     return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+def sizing_unavailable_caption(
+    reason: str | None, *, price: float | None, portfolio_value: float | None,
+    net_capital: float | None, single_ceiling_pct: Any, capital_cap_pct: Any,
+) -> str:
+    """The fallback "why can't I size this?" caption for a
+    `risk.sizing_unavailable_reason()` verdict.
+
+    Extracted from two byte-identical inline copies (📈 Analysis, 📋
+    Watchlist) — Part 2 #3 of the 2026-08-26 app review, "F-255 capital-cap
+    wiring." Input-driven, not calling `sizing_unavailable_reason` itself, so
+    this stays a leaf function with no project-internal dependency and no
+    import-cycle risk — the caller has already computed `reason` and passes
+    the same price/portfolio_value/net_capital it computed it from.
+
+    Every numeric input is coerced defensively (non-numeric → treated as
+    absent) so a malformed caller degrades to the generic caption instead of
+    raising. The two current call sites pass genuine floats for `price` and
+    `portfolio_value`, and a float-OR-`None` `net_capital` — `None` is a
+    normal, expected value there (`margin.resolve_net_capital` returns it for
+    an unlevered/stale/no-record account), not malformed input; this
+    function's `net_capital` guards already treat it the same as any other
+    falsy value, so the coercion changes nothing for that legitimate case
+    either.
+
+    KNOWN, DELIBERATELY UNCHANGED latent gap: when the account is
+    margin-called, `resolve_net_capital` can return a non-positive
+    `net_capital`, so `reason == "capital"` falls through to the generic
+    "stop price too close" caption below rather than a capital-specific one
+    — the same misattribution class F-249/F-255 were built to fight,
+    reproduced here because this is a byte-identical refactor, not a fix.
+    Pinned by a test; fixing it is a separate, reviewed follow-up because it
+    would change rendered text.
+    """
+    price = price if isinstance(price, (int, float)) else None
+    portfolio_value = portfolio_value if isinstance(portfolio_value, (int, float)) else None
+    net_capital = net_capital if isinstance(net_capital, (int, float)) else None
+
+    if reason == "ceiling" and price and portfolio_value:
+        return (
+            f"Position sizing unavailable — one share is "
+            f"~{price / portfolio_value * 100:.0f}% of your portfolio, above the "
+            f"{int(_n_pct(single_ceiling_pct))}% single-name ceiling. The stop is fine; "
+            f"this name is too large for this account at the current cap."
+        )
+    if reason == "capital" and price and net_capital and net_capital > 0:
+        return (
+            f"Position sizing unavailable — one share is "
+            f"~{price / net_capital * 100:.0f}% of your net capital, above the "
+            f"{int(_n_pct(capital_cap_pct))}% net-capital cap. This is separate from "
+            "the single-name book cap."
+        )
+    if reason == "portfolio":
+        return (
+            "Position sizing unavailable — your portfolio value isn't loaded in this "
+            "session, so any share count would be a guess. Open 🏠 Home to "
+            "load it, then come back."
+        )
+    return "Position sizing unavailable — stop price too close to entry or not set."

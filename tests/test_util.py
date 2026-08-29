@@ -299,6 +299,94 @@ class TestSizingCapLines:
             assert "$" not in line
 
 
+class TestSizingUnavailableCaption:
+    """The fallback "why can't I size this?" caption — extracted from two
+    byte-identical inline copies (📈 Analysis, 📋 Watchlist), Part 2 #3 of the
+    2026-08-26 app review ("F-255 capital-cap wiring"). Every string here is
+    transcribed character-for-character from the pre-extraction app.py copies
+    — a changed word here is a rendered-copy regression, not a refactor."""
+
+    _KW = dict(price=100.0, portfolio_value=1000.0, net_capital=500.0,
+               single_ceiling_pct=15.0, capital_cap_pct=25.0)
+
+    def test_ceiling_caption(self):
+        kw = dict(self._KW, reason="ceiling")
+        line = util.sizing_unavailable_caption(**kw)
+        assert line == (
+            "Position sizing unavailable — one share is "
+            "~10% of your portfolio, above the "
+            "15% single-name ceiling. The stop is fine; "
+            "this name is too large for this account at the current cap."
+        )
+
+    def test_capital_caption_when_net_capital_positive(self):
+        kw = dict(self._KW, reason="capital")
+        line = util.sizing_unavailable_caption(**kw)
+        assert line == (
+            "Position sizing unavailable — one share is "
+            "~20% of your net capital, above the "
+            "25% net-capital cap. This is separate from "
+            "the single-name book cap."
+        )
+
+    def test_portfolio_caption(self):
+        kw = dict(self._KW, reason="portfolio")
+        line = util.sizing_unavailable_caption(**kw)
+        assert line == (
+            "Position sizing unavailable — your portfolio value isn't loaded in this "
+            "session, so any share count would be a guess. Open 🏠 Home to "
+            "load it, then come back."
+        )
+
+    def test_stop_reason_and_none_reason_both_get_the_generic_caption(self):
+        expected = "Position sizing unavailable — stop price too close to entry or not set."
+        assert util.sizing_unavailable_caption(**dict(self._KW, reason="stop")) == expected
+        assert util.sizing_unavailable_caption(**dict(self._KW, reason=None)) == expected
+
+    def test_margin_called_capital_reason_falls_through_to_generic_caption(self):
+        """KNOWN, DELIBERATELY UNCHANGED latent gap (not fixed here — see the
+        function's own docstring): a margin-called account can produce
+        reason == "capital" with a non-positive net_capital, and this pins
+        the current (mis-attributing) behaviour rather than silently
+        changing it under a "byte-identical refactor" banner."""
+        expected = "Position sizing unavailable — stop price too close to entry or not set."
+        assert util.sizing_unavailable_caption(
+            **dict(self._KW, reason="capital", net_capital=0.0)
+        ) == expected
+        assert util.sizing_unavailable_caption(
+            **dict(self._KW, reason="capital", net_capital=-500.0)
+        ) == expected
+        assert util.sizing_unavailable_caption(
+            **dict(self._KW, reason="capital", net_capital=None)
+        ) == expected
+
+    def test_ceiling_unreachable_at_non_positive_portfolio_value(self):
+        """Boundary proof for why the ceiling branch needs no separate
+        portfolio_value guard beyond truthiness: `sizing_unavailable_reason`
+        returns "portfolio" for any portfolio_value <= 0 BEFORE it can ever
+        return "ceiling", so reason == "ceiling" already implies a positive
+        portfolio_value at the only real caller."""
+        from stock_analyzer.risk import sizing_unavailable_reason
+        assert sizing_unavailable_reason(0, 100.0, 90.0, 15.0) == "portfolio"
+        assert sizing_unavailable_reason(-1, 100.0, 90.0, 15.0) == "portfolio"
+
+    def test_malformed_input_never_raises(self):
+        for reason in (None, "ceiling", "capital", "portfolio", "stop", "junk"):
+            util.sizing_unavailable_caption(
+                reason, price=None, portfolio_value=None, net_capital=None,
+                single_ceiling_pct=None, capital_cap_pct=None,
+            )
+        util.sizing_unavailable_caption(
+            "ceiling", price="x", portfolio_value="y", net_capital="z",
+            single_ceiling_pct="a", capital_cap_pct="b",
+        )
+
+    def test_no_markdown_bold_that_would_print_literally(self):
+        for reason in ("ceiling", "capital", "portfolio", "stop"):
+            line = util.sizing_unavailable_caption(**dict(self._KW, reason=reason))
+            assert "**" not in line
+
+
 class TestMdBoldToHtml:
     """Verified live from an owner screenshot 2026-08-28: 📋 Watchlist printed
     `**Open the position.**` with literal asterisks. Streamlit does not process
