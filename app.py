@@ -11924,7 +11924,7 @@ elif page == "🧾 Summary":
     # rule for all four rather than four inline copies.
     st.markdown(
         "<style>.st-key-sm_ph_risk,.st-key-sm_ph_thesis,"
-        ".st-key-sm_ph_div,.st-key-sm_ph_veto{min-height:190px}</style>",
+        ".st-key-sm_ph_div,.st-key-sm_ph_veto{height:100%}</style>",
         unsafe_allow_html=True,
     )
     _ph1, _ph2, _ph3, _ph4 = st.columns(4)
@@ -12051,7 +12051,8 @@ elif page == "🧾 Summary":
         # other structural readings rather than among the money figures.
         with st.container(border=True, key="sm_ph_div"):
             st.markdown(
-                "<style>.st-key-sm_ph_div{background:#1b2130}</style>",
+                "<style>.st-key-sm_ph_div{background:#1b2130}"
+                ".st-key-sm_ph_div button{color:#6ea8fe !important}</style>",
                 unsafe_allow_html=True,
             )
             st.markdown("**🧬 Diversification**")
@@ -12069,6 +12070,14 @@ elif page == "🧾 Summary":
                     unsafe_allow_html=True,
                 )
                 st.caption("Needs today's Brief — visit 🏠 Home.")
+            # Was the only one of the four with no nav link, which is both a
+            # missing affordance and why this card sat visibly shorter than its
+            # neighbours. Points at 🧩 Intelligence rather than 🔗 Risk Analysis
+            # (where Risk Posture already goes): the correlation CLUSTERS behind
+            # this score live there, so it is the page that explains the number.
+            if st.button("→ Intelligence", key="sm_ph_div_btn", type="tertiary"):
+                st.session_state["_pending_page"] = "🧩 Intelligence"
+                st.rerun()
 
     with _ph4:
         # 🚫 Active Vetoes — NEW. Reuses the `_sm_reduce` read from the Act Today
@@ -12212,7 +12221,7 @@ elif page == "🧾 Summary":
                 ".st-key-etr_hero button{color:#6ea8fe !important}</style>",
                 unsafe_allow_html=True,
             )
-            _etr_t, _etr_b = st.columns([5, 3], vertical_alignment="center")
+            _etr_t, _etr_b = st.columns([3, 1], vertical_alignment="center")
             with _etr_t:
                 st.markdown("**🎯 Engine Track Record**")
             with _etr_b:
@@ -12628,8 +12637,12 @@ elif page == "🧾 Summary":
             f"<td style='{_td};text-align:right'>{_t6_val_txt}</td>"
             f"<td style='{_td}'>"   # no width — set on the <th>, takes the slack
             f"<div style='display:flex;align-items:center;gap:7px'>"
-            f"<div style='flex:1;height:4px;background:#2d3048;border-radius:2px;"
-            f"overflow:hidden'><div style='width:{_t6_barpct:.0f}%;height:100%;"
+            # FIXED 92px, not flex:1. Weight is the slack-absorbing column, so a
+            # flexing bar stretched to ~1200px and shoved the % to the far right
+            # edge (live 2026-08-29) — worse than the gaps it was meant to fix.
+            f"<div style='width:92px;flex:none;height:4px;background:#2d3048;"
+            f"border-radius:2px;overflow:hidden'>"
+            f"<div style='width:{_t6_barpct:.0f}%;height:100%;"
             f"background:{_t6_bcol or '#4FC3F7'}'></div></div>"
             f"<span style='font-weight:600;white-space:nowrap'>{_t6_wt:.1f}%</span>"
             f"{_t6_badge_html}</div></td>"
