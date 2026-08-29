@@ -21,6 +21,9 @@ from stock_analyzer.constants import (
     FRAGILITY_PULLBACK_PCT,
     SINGLE_NAME_CEILING,
     COMPOSITE_BUY,
+    COMPOSITE_STRONG_BUY,
+    COMPOSITE_HOLD,
+    COMPOSITE_SELL,
 )
 
 
@@ -385,6 +388,51 @@ def test_empty_portfolio_is_safe():
 def test_none_portfolio_is_safe():
     out = summary_view.top_movers(None, {})
     assert out["n_priced"] == 0
+
+
+# ─── score_tone / weight_bar_pct (Top Positions display) ─────────────────────
+
+def _tone(score):
+    return summary_view.score_tone(
+        score, strong_buy=COMPOSITE_STRONG_BUY, buy=COMPOSITE_BUY,
+        hold=COMPOSITE_HOLD, sell=COMPOSITE_SELL,
+    )
+
+
+def test_score_tone_uses_the_apps_own_rec_bands_at_their_boundaries():
+    """Colour must key off scoring.py's EXISTING boundaries, not display cutoffs
+    invented for the table — otherwise the colour could contradict the Signal
+    label rendered from the same score, and picking fresh numbers would be
+    setting investment policy in a stylesheet (hard rule #1)."""
+    assert _tone(COMPOSITE_STRONG_BUY) == "strong"
+    assert _tone(COMPOSITE_STRONG_BUY - 0.1) == "good"
+    assert _tone(COMPOSITE_BUY) == "good"
+    assert _tone(COMPOSITE_BUY - 0.1) == "neutral"
+    assert _tone(COMPOSITE_HOLD) == "neutral"
+    assert _tone(COMPOSITE_HOLD - 0.1) == "weak"
+    assert _tone(COMPOSITE_SELL) == "weak"
+    assert _tone(COMPOSITE_SELL - 0.1) == "bad"
+
+
+def test_score_tone_covers_the_whole_range():
+    for s in (0, 25, 44, 65, 75, 100):
+        assert _tone(s) in {"strong", "good", "neutral", "weak", "bad"}
+
+
+def test_weight_bar_is_scaled_to_the_single_name_ceiling():
+    # Scaled to the CAP, not to the largest holding — a fixed reference that
+    # doesn't silently rescale when the biggest position changes.
+    assert summary_view.weight_bar_pct(SINGLE_NAME_CEILING / 2, SINGLE_NAME_CEILING) == pytest.approx(50.0)
+    assert summary_view.weight_bar_pct(SINGLE_NAME_CEILING, SINGLE_NAME_CEILING) == pytest.approx(100.0)
+
+
+def test_weight_bar_clamps_over_the_ceiling_rather_than_overflowing():
+    assert summary_view.weight_bar_pct(SINGLE_NAME_CEILING * 3, SINGLE_NAME_CEILING) == 100.0
+
+
+def test_weight_bar_is_safe_on_zero_and_degenerate_ceiling():
+    assert summary_view.weight_bar_pct(0.0, SINGLE_NAME_CEILING) == 0.0
+    assert summary_view.weight_bar_pct(5.0, 0.0) == 0.0
 
 
 # ─── position_status_badge ────────────────────────────────────────────────────

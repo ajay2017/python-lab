@@ -12654,13 +12654,8 @@ elif page == "🧾 Summary":
     # part the full table cannot show. The full table is still ONE CLICK away in
     # the expander below (same shared _render_holdings_table, byte-identical to
     # Home's) — nothing was removed, only re-ordered by prominence.
-    st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
+    _render_section_label("Top Positions")
     _sm_top6 = port_df.sort_values("Weight (%)", ascending=False).head(6)
-    # len(_sm_top6), not a hardcoded 6 — a 4-position book would otherwise read
-    # "6 of 4 by weight".
-    st.markdown(f"**💼 Top Positions** &nbsp;<span style='color:#6b7280;font-size:0.85em'>"
-                f"{len(_sm_top6)} of {len(port_df)} by weight</span>",
-                unsafe_allow_html=True)
     # `_sm_live_raw` keeps the None sentinel for day_direction_counts below
     # (which reports "no quote" separately from "flat"); `_sm_live_map` is the
     # lookup view. A per-row quote miss already renders "—" rather than 0.00%,
@@ -12668,12 +12663,18 @@ elif page == "🧾 Summary":
     _sm_live_raw = st.session_state.get("_live_prices")
     _sm_live_map: dict = {} if _sm_live_raw is None else _sm_live_raw
     _sm_t6_rows = []
+    _sm_shock = st.session_state.get("_day_shock_cache")      # None = NOT checked
+    _T6_TONE = {"strong": "#22c55e", "good": "#57d98a", "neutral": "#9ca3af",
+                "weak": "#f59e0b", "bad": "#ef4444"}
+    _T6_BADGE_COLOR = {"EXIT": "#ef4444", "TRIM": "#f59e0b",
+                       "WATCH": "#fbbf24", "CAP⚠": "#a78bfa"}
     for _, _t6 in _sm_top6.iterrows():
-        _t6_tk   = str(_t6["Ticker"])
+        _t6_tk  = str(_t6["Ticker"])
         # Same reader as the movers tile + the day-direction footer, so the
         # three cannot disagree about whether a name moved today.
-        _t6_day  = summary_view.quote_change_pct(_sm_live_map.get(_t6_tk))
-        _t6_wt   = float(_t6["Weight (%)"])
+        _t6_day = summary_view.quote_change_pct(_sm_live_map.get(_t6_tk))
+        _t6_wt  = float(_t6["Weight (%)"])
+        _t6_sc  = float(_t6["Score"])
         # Badge: reduce call outranks the concentration cap, and the
         # SINGLE_NAME_CEILING comparison happens inside summary_view — not here.
         _t6_badge = summary_view.position_status_badge(
@@ -12681,75 +12682,97 @@ elif page == "🧾 Summary":
             weight_pct=_t6_wt,
             single_name_ceiling=SINGLE_NAME_CEILING,
         )
-        _T6_BADGE_COLOR = {"EXIT": "#ef4444", "TRIM": "#f59e0b",
-                           "WATCH": "#fcd34d", "CAP⚠": "#a78bfa"}
+        # Score colour comes from the app's EXISTING rec bands, not from
+        # display cutoffs invented here — so it can never disagree with the
+        # Signal label rendered from the same score elsewhere.
+        _t6_tone = _T6_TONE[summary_view.score_tone(
+            _t6_sc, strong_buy=COMPOSITE_STRONG_BUY, buy=COMPOSITE_BUY,
+            hold=COMPOSITE_HOLD, sell=COMPOSITE_SELL,
+        )]
+        _t6_bcol = _T6_BADGE_COLOR[_t6_badge["label"]] if _t6_badge else None
+        # Ticker takes the badge's colour when one is flagged, else the score's
+        # — the mock's "the row tells you its own severity" behaviour.
+        _t6_tkcol = _t6_bcol or "#f9fafb"
         _t6_badge_html = (
-            f"<span style='background:{_T6_BADGE_COLOR[_t6_badge['label']]}22;"
-            f"color:{_T6_BADGE_COLOR[_t6_badge['label']]};font-size:0.68rem;"
+            f"<span style='background:{_t6_bcol}22;color:{_t6_bcol};font-size:0.6rem;"
             f"font-weight:700;padding:1px 5px;border-radius:3px;margin-left:6px'>"
             f"{_safe_html(_t6_badge['label'])}</span>"
         ) if _t6_badge else ""
-        # A missing quote renders "—", never a fabricated 0.00% — same contract
-        # _render_holdings_table already honours.
+        # ⚡ marks a same-day move at or beyond DAY_SHOCK_PCT. `_day_shock_cache`
+        # is None when Home never ran — that is NOT CHECKED, so no marker is
+        # shown rather than an implied "no shock today".
+        _t6_shock = "&nbsp;⚡" if (_sm_shock or {}).get(_t6_tk) else ""
+        # A missing quote renders "—", never a fabricated 0.00%.
         _t6_day_disp  = f"{_t6_day:+.2f}%" if _t6_day is not None else "—"
         _t6_day_color = (
             (_HOME_GAIN if _t6_day >= 0 else _HOME_LOSS) if _t6_day is not None else _HOME_CALM
         )
         _t6_tot = float(_t6["P&L (%)"])
-        # Precomputed so the row f-string below stays readable — nesting an
-        # f-string inside an f-string to format this is what produced an
-        # unreadable expression on the first attempt.
         _t6_val_txt = _m(f"${float(_t6['Market Value']):,.0f}")
+        _t6_barpct = summary_view.weight_bar_pct(_t6_wt, SINGLE_NAME_CEILING)
+        _td = "padding:8px 10px;border-top:1px solid #1f2937"
         _sm_t6_rows.append(
             f"<tr>"
-            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;font-weight:700'>"
-            f"{_safe_html(_t6_tk)}{_t6_badge_html}</td>"
-            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>"
-            f"{_t6['Score']:.0f}</td>"
-            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right;"
-            f"color:{_t6_day_color}'>{_t6_day_disp}</td>"
-            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right;"
+            f"<td style='{_td};font-weight:700;color:{_t6_tkcol};white-space:nowrap'>"
+            f"{_safe_html(_t6_tk)}</td>"
+            f"<td style='{_td};text-align:right;font-weight:700;color:{_t6_tone}'>"
+            f"{_t6_sc:.0f}</td>"
+            f"<td style='{_td};text-align:right;color:{_t6_day_color};white-space:nowrap'>"
+            f"{_t6_day_disp}{_t6_shock}</td>"
+            f"<td style='{_td};text-align:right;"
             f"color:{_HOME_GAIN if _t6_tot >= 0 else _HOME_LOSS}'>{_t6_tot:+.1f}%</td>"
-            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>"
-            f"{_t6_val_txt}</td>"
-            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>"
-            f"{_t6_wt:.1f}%</td>"
+            f"<td style='{_td};text-align:right'>{_t6_val_txt}</td>"
+            f"<td style='{_td};width:150px'>"
+            f"<div style='display:flex;align-items:center;gap:7px'>"
+            f"<div style='flex:1;height:4px;background:#2d3048;border-radius:2px;"
+            f"overflow:hidden'><div style='width:{_t6_barpct:.0f}%;height:100%;"
+            f"background:{_t6_bcol or '#4FC3F7'}'></div></div>"
+            f"<span style='font-weight:600;white-space:nowrap'>{_t6_wt:.1f}%</span>"
+            f"{_t6_badge_html}</div></td>"
             f"</tr>"
         )
+
+    # Footer lives INSIDE the table container (mock): scope on the left, the
+    # day-direction split on the right. "no quote" is counted separately from
+    # "unchanged", so a quiet data outage cannot read as a flat tape.
+    try:
+        _sm_dirs = summary_view.day_direction_counts(port_df, _sm_live_raw)
+        _sm_dir_bits = (
+            f"<span style='color:#57d98a'>↑ {_sm_dirs['up']} up</span> · "
+            f"<span style='color:#fca5a5'>↓ {_sm_dirs['down']} down</span> · "
+            f"{_sm_dirs['flat']} flat"
+        )
+        if _sm_dirs["missing"]:
+            _sm_dir_bits += f" · {_sm_dirs['missing']} no quote"
+        _sm_dir_bits += " today"
+    except Exception:
+        _sm_dir_bits = ""
+
     st.markdown(
         "<div style='overflow-x:auto'>"
         "<table style=\"width:100%;border-collapse:collapse;background:#0f172a;"
-        "border:1px solid #334155;border-radius:12px;font-family:'JetBrains Mono',ui-monospace,monospace;"
-        "font-variant-numeric:tabular-nums;font-size:0.86rem\">"
+        "border:1px solid #334155;border-radius:12px;"
+        "font-family:'JetBrains Mono',ui-monospace,monospace;"
+        "font-variant-numeric:tabular-nums;font-size:0.84rem\">"
         "<thead><tr>"
         + "".join(
-            f"<th style='text-align:{'left' if _lbl == 'Ticker' else 'right'};padding:10px 14px;"
-            f"font-family:Inter,system-ui,sans-serif;font-size:0.7rem;font-weight:700;"
-            f"letter-spacing:0.05em;text-transform:uppercase;color:#9ca3af;"
+            f"<th style='text-align:{'left' if _lbl in ('Ticker', 'Weight') else 'right'};"
+            f"padding:9px 10px;font-family:Inter,system-ui,sans-serif;font-size:0.66rem;"
+            f"font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#9ca3af;"
             f"background:#111827;border-bottom:1px solid #334155'>{_lbl}</th>"
-            for _lbl in ("Ticker", "Score", "Day Δ%", "Total Δ%", "Value", "Weight")
+            for _lbl in ("Ticker", "Score", "Today", "Total", "Value", "Weight")
         )
         + "</tr></thead><tbody>"
         + "".join(_sm_t6_rows)
-        + "</tbody></table></div>",
+        + "</tbody></table>"
+        + (f"<div style='display:flex;justify-content:space-between;align-items:center;"
+           f"padding:7px 12px;font-size:0.76rem;color:#6b7280;border:1px solid #334155;"
+           f"border-top:none;border-radius:0 0 12px 12px;background:#0d1420'>"
+           f"<span>Showing top {len(_sm_top6)} of {len(port_df)} positions by weight "
+           f"· full table below</span><span>{_sm_dir_bits}</span></div>")
+        + "</div>",
         unsafe_allow_html=True,
     )
-
-    # Day-direction footer — "no quote" is counted separately from "unchanged",
-    # so a quiet data outage cannot read as a flat tape. Wrapped because this is
-    # a convenience adornment: it must never be the reason the Full Holdings
-    # expander below fails to render (review finding — Zone 6 was the only zone
-    # with no guard, and it sits ABOVE the authoritative table).
-    try:
-        _sm_dirs = summary_view.day_direction_counts(port_df, _sm_live_raw)
-        _sm_dir_bits = [
-            f"↑ {_sm_dirs['up']} up", f"↓ {_sm_dirs['down']} down", f"{_sm_dirs['flat']} flat",
-        ]
-        if _sm_dirs["missing"]:
-            _sm_dir_bits.append(f"{_sm_dirs['missing']} no quote")
-        st.caption(" · ".join(_sm_dir_bits) + " today")
-    except Exception:
-        pass
 
     # ── Full Holdings — the same shared table Home renders, one click away.
     # OUTSIDE the guard above by design: this is the authoritative view, so if

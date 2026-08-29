@@ -333,6 +333,50 @@ def top_movers(
     }
 
 
+def score_tone(
+    score: float,
+    *,
+    strong_buy: float,
+    buy: float,
+    hold: float,
+    sell: float,
+) -> str:
+    """Map a composite score to the app's EXISTING rec band, for COLOUR only.
+
+    Deliberately reuses scoring.py's own boundaries (COMPOSITE_STRONG_BUY / BUY
+    / HOLD / SELL) rather than inventing display cutoffs. Colour-coding a score
+    is a judgement about what counts as good, and picking fresh numbers for it
+    would be setting investment policy in a stylesheet (hard rule #1) AND would
+    let the colour disagree with the Signal label rendered from the same score
+    elsewhere on the page.
+
+    Returns one of: "strong" | "good" | "neutral" | "weak" | "bad".
+    Carries no colour itself — the renderer owns the palette.
+    """
+    if score >= strong_buy:
+        return "strong"
+    if score >= buy:
+        return "good"
+    if score >= hold:
+        return "neutral"
+    if score >= sell:
+        return "weak"
+    return "bad"
+
+
+def weight_bar_pct(weight_pct: float, single_name_ceiling: float) -> float:
+    """Bar fill 0..100 for a position's weight, scaled to the single-name cap.
+
+    Scaled to the CEILING rather than to the largest holding, so the bar means
+    "how much of your allowed single-name room this uses" — a fixed reference
+    that doesn't silently rescale when the biggest position changes. A position
+    at or over the cap fills the bar completely.
+    """
+    if single_name_ceiling <= 0:
+        return 0.0
+    return max(0.0, min(100.0, (weight_pct / single_name_ceiling) * 100.0))
+
+
 def position_status_badge(
     *,
     reduce_call: dict | None,
