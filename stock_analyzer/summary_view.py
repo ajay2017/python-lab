@@ -42,7 +42,11 @@ def book_safety(
       call_distance_pct: float | None   — % decline before a margin call fires
                                           (negative = distance remaining)
       in_call          : bool | None
-      drift_state      : "in_sync" | "drift" | "not_checked"
+      drift_state      : "in_sync" | "drift" | "stale_clean" | "awaiting_sync"
+                         | "not_checked". Five states, because
+                         decide_drift_banner's "none" is overloaded ("no broker
+                         configured" AND "clean, fresh check") and its `reason`
+                         field is what separates them. Only "drift" is a red leg.
       reasons          : list[str]       — short human-readable reasons for red
 
     Design rules. The governing principle is that this function feeds a
@@ -84,21 +88,38 @@ def book_safety(
     }
 
     # ── Broker drift state ────────────────────────────────────────────────────
-    # TRAP, do not "complete" this mapping. broker_sync.decide_drift_banner
-    # emits none / unknown / stale_clean / drift. `"in_sync"` is NOT in that
-    # vocabulary — it is accepted here only so a future producer that adds an
-    # explicit positive state maps correctly. In particular `"none"` must stay
-    # on the not_checked branch: it means "no broker comparison was made" (no
-    # broker configured, nothing to compare), NOT "the app and broker agree".
-    # Mapping "none" → in_sync would launder an absent check into a clean bill
-    # of health, which is this module's whole reason for existing.
+    # `decide_drift_banner`'s `"none"` is OVERLOADED — its own docstring says
+    # "no broker configured, OR a clean, fresh check". That collapse is correct
+    # for its original consumer, Home's banner, which only needs to know whether
+    # to render: silence is right in both cases. It is NOT sufficient here,
+    # because this strip has a CELL that must say something, and "no broker" and
+    # "checked, agrees" are opposite facts.
+    #
+    # `reason` carries the distinction the state discards: the clean branch
+    # returns reason="clean", the nothing-to-compare branch reason="no_holdings".
+    # An earlier version of this mapping refused the whole "none" bucket as
+    # not_checked to avoid laundering an absent check into a clean bill of
+    # health. That instinct was right; applying it without reading the producer's
+    # actual returns was not — it under-reported a genuinely verified sync, and
+    # silently swallowed `stale_clean` and `awaiting_sync` too.
+    #
+    # Only "drift" is a RED leg. `stale_clean` is clean-but-dated and must never
+    # render as a clean bill of health; `awaiting_sync` means the differences are
+    # fully explained by trades logged since the snapshot — the user did nothing
+    # wrong, so it is informational, not a warning.
     if broker_drift is not None:
-        raw_state = str(broker_drift.get("state") or "unknown")
-        if raw_state == "in_sync":
-            base["drift_state"] = "in_sync"
-        elif raw_state == "drift":
+        raw_state  = str(broker_drift.get("state") or "unknown")
+        raw_reason = str(broker_drift.get("reason") or "")
+        if raw_state == "drift":
             base["drift_state"] = "drift"
+        elif raw_state == "in_sync" or (raw_state == "none" and raw_reason == "clean"):
+            base["drift_state"] = "in_sync"
+        elif raw_state == "stale_clean":
+            base["drift_state"] = "stale_clean"
+        elif raw_state == "awaiting_sync":
+            base["drift_state"] = "awaiting_sync"
         else:
+            # "unknown", "none"+no_holdings, and any state added later.
             base["drift_state"] = "not_checked"
 
     # ── Leverage unknown / not loaded ─────────────────────────────────────────

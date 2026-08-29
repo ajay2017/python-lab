@@ -11166,12 +11166,34 @@ elif page == "🧾 Summary":
             help=f"How far the book can fall before a margin call. Red below "
                  f"{abs(FRAGILITY_PULLBACK_PCT):.0f}% — the size of a routine correction.",
         )
+        # Five states, each with its own wording — the producer distinguishes
+        # them and collapsing any two here would restate a fact it took care to
+        # separate. `stale_clean` in particular must never read as a current
+        # clean bill of health: it is clean AS OF ITS DATE.
+        _SM_DRIFT_LABEL = {
+            "in_sync":       "✓ In sync",
+            "drift":         "⚠ Drift",
+            "stale_clean":   "✓ Clean, dated",
+            "awaiting_sync": "⏳ Trades pending",
+            "not_checked":   "— Not checked",
+        }
+        _SM_DRIFT_HELP = {
+            "in_sync":       "Checked against the broker — every position matches.",
+            "drift":         "The app's share counts disagree with the broker. Every "
+                             "weight, cushion and P&L figure on this page is computed "
+                             "from the app's book, so reconcile before trusting them.",
+            "stale_clean":   "No mismatch when last captured, but the snapshot is older "
+                             "than the freshness window (or an account didn't respond). "
+                             "Clean as of its date — NOT a current clean bill of health.",
+            "awaiting_sync": "Positions differ only on names you have traded since the "
+                             "last broker capture. Expected, not an error.",
+            "not_checked":   "No broker comparison was made. This is NOT the same as "
+                             "'in sync' — it means unknown.",
+        }
         _sf4.metric(
             "Broker drift",
-            {"in_sync": "✓ In sync", "drift": "⚠ Drift", "not_checked": "— Not checked"}
-            [_sm_safety["drift_state"]],
-            help="Whether the app's share counts match the broker's. "
-                 "'Not checked' is not the same as 'in sync'.",
+            _SM_DRIFT_LABEL[_sm_safety["drift_state"]],
+            help=_SM_DRIFT_HELP[_sm_safety["drift_state"]],
         )
         if _sm_safety["level"] == "unknown":
             st.caption(

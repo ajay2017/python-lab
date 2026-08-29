@@ -201,6 +201,60 @@ def test_drift_detected_forces_red_even_on_a_comfortable_cushion():
     assert out["level"] == "red"
 
 
+def test_clean_fresh_check_reads_as_in_sync_not_not_checked():
+    """decide_drift_banner's clean branch returns {"state":"none",
+    "reason":"clean", ...} -- its `state` is OVERLOADED with "no broker
+    configured", and `reason` is what separates them. An earlier mapping
+    refused the whole "none" bucket and under-reported a genuinely verified
+    sync as "not checked" (reported live 2026-08-29)."""
+    out = _safety(_lev(debit=6000, equity=10000, net_capital=4000),
+                  drift={"state": "none", "reason": "clean", "diff": {}})
+    assert out["drift_state"] == "in_sync"
+    assert out["level"] == "amber"      # levered, but clean — not red
+
+
+def test_none_without_a_clean_reason_is_still_not_checked():
+    """The other half of the overload: {"state":"none","reason":"no_holdings"}
+    means there was nothing to compare. It must NOT read as agreement."""
+    out = _safety(_lev(debit=6000, equity=10000, net_capital=4000),
+                  drift={"state": "none", "reason": "no_holdings"})
+    assert out["drift_state"] == "not_checked"
+
+
+def test_stale_clean_is_its_own_state_never_in_sync():
+    """Clean AS OF ITS DATE. The producer's docstring is explicit that this
+    must never render as a clean bill of health, and it is equally not
+    'unknown' -- a real check did pass, just not recently."""
+    out = _safety(_lev(debit=6000, equity=10000, net_capital=4000),
+                  drift={"state": "stale_clean", "diff": {}, "is_stale": True})
+    assert out["drift_state"] == "stale_clean"
+    assert out["level"] == "amber"      # dated cleanliness is not a red flag
+
+
+def test_awaiting_sync_is_informational_not_a_warning():
+    """Differences fully explained by trades logged since the snapshot. The
+    user did nothing wrong, so this must not colour the strip red."""
+    out = _safety(_lev(debit=6000, equity=10000, net_capital=4000),
+                  drift={"state": "awaiting_sync", "awaiting_sync": ["NVDA"]})
+    assert out["drift_state"] == "awaiting_sync"
+    assert out["level"] == "amber"
+
+
+def test_only_drift_is_a_red_leg():
+    """Of the five states, exactly one forces red."""
+    reds = []
+    for d in ({"state": "drift"},
+              {"state": "none", "reason": "clean"},
+              {"state": "none", "reason": "no_holdings"},
+              {"state": "stale_clean"},
+              {"state": "awaiting_sync"},
+              {"state": "unknown"}):
+        out = _safety(_lev(debit=6000, equity=10000, net_capital=4000), drift=d)
+        if out["level"] == "red":
+            reds.append(d["state"] + "/" + str(d.get("reason", "")))
+    assert reds == ["drift/"], reds
+
+
 def test_drift_unknown_does_not_read_as_drift():
     # "not checked" is not "clean" AND not "drift" — it must never manufacture
     # a red, nor be laundered into an in_sync claim.
