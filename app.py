@@ -12096,13 +12096,28 @@ elif page == "🧾 Summary":
                 st.rerun()
 
     # ══ ZONE 5 · HORIZON ══════════════════════════════════════════════════════
-    # What the engine thinks of itself, and what is coming. Risk Posture and
-    # Thesis Review used to live in this grid; they moved up to Portfolio Health,
-    # leaving this zone for the two forward/retrospective cards.
-    st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
-    st.markdown("**🧭 Elsewhere in DRISHTA**")
-    # ── Row 1: Engine Track Record (hero, top-left) · Thesis Review (top-right)
-    _sm_ptr_row1 = st.columns(2)
+    # What the engine thinks of itself, what is coming, and where the standing
+    # view has moved. Risk Posture and Thesis Review used to live in this grid;
+    # they moved up to Portfolio Health.
+    _render_section_label("Horizon")
+    # THREE columns: Engine Track Record · Catalyst Watch · Portfolio Thesis.
+    #
+    # The third is filled OUT OF ORDER. Its data (`_pth_ledger`/`_pth_claims`)
+    # is produced ~300 lines below, inside the State-of-the-Portfolio block —
+    # which also performs the once-per-ISO-week `db.save_portfolio_thesis()`
+    # write. Hoisting that whole block above this row to get a summary card
+    # would move a DB write for a layout reason, so instead we reserve the slot
+    # here and write into it once the data exists. st.columns returns real
+    # containers, so this is ordinary Streamlit, not a trick.
+    #
+    # The placeholder below is what renders if that block never reaches the fill
+    # (an exception, or no thesis composed yet) — the column must not sit empty
+    # and read as "nothing to report".
+    st.markdown("<div style='margin-bottom:2px'></div>", unsafe_allow_html=True)
+    _sm_ptr_row1 = st.columns(3)
+    with _sm_ptr_row1[2]:
+        _sm_thesis_slot = st.empty()
+        _sm_thesis_slot.caption("📋 Portfolio Thesis — composing…")
     with _sm_ptr_row1[0]:
         # 🎯 Engine Track Record — hero card, top-left. Same data as
         # 📜 Recommendations History "All time" New Position row; cached for
@@ -12516,6 +12531,63 @@ elif page == "🧾 Summary":
                         return f"{v.get('n_buy_plus')} Buy+ / {v.get('n_below')} below"
                     return str(v).replace("_", " ")
 
+
+                # ── Fill the Horizon slot reserved ~300 lines above ───────────
+                # A compact read of the SAME claims the expander below details.
+                # Not a duplicate of it: this is the current standing at a
+                # glance, the expander carries the week-over-week comparison and
+                # the prose. Nothing here is recomputed — same _pth_ledger and
+                # _pth_claims the expander renders, so the two cannot disagree.
+                try:
+                    _pthc_shift = sum(
+                        1 for v in (_pth_ledger or {}).values() if v["status"] == "shifted"
+                    )
+                    _pthc_tag = (
+                        f"<span style='font-size:0.62rem;font-weight:700;padding:2px 7px;"
+                        f"border-radius:4px;color:#f59e0b;background:#f59e0b22;"
+                        f"border:1px solid #f59e0b'>{_pthc_shift} SHIFTED ↕</span>"
+                        if _pthc_shift else
+                        "<span style='font-size:0.62rem;font-weight:700;padding:2px 7px;"
+                        "border-radius:4px;color:#22c55e;background:#22c55e22;"
+                        "border:1px solid #22c55e'>ALL HELD</span>"
+                        if _pth_ledger else
+                        "<span style='font-size:0.62rem;color:#6b7280'>FIRST VIEW</span>"
+                    )
+                    _pthc_rows = []
+                    for _ck in _pth.CLAIM_KEYS:
+                        _cv = _pth_disp(_pth_claims.get(_ck, "unavailable")).upper()
+                        _cstat = (_pth_ledger or {}).get(_ck, {}).get("status")
+                        if _cstat == "shifted":
+                            _cbadge = (f"<span style='font-size:0.6rem;font-weight:700;"
+                                       f"padding:1px 6px;border-radius:3px;color:#f59e0b;"
+                                       f"background:#f59e0b22'>↑ {_safe_html(_cv)}</span>")
+                        elif _cstat == "held":
+                            _cbadge = (f"<span style='font-size:0.6rem;font-weight:700;"
+                                       f"padding:1px 6px;border-radius:3px;color:#9ca3af;"
+                                       f"background:#ffffff10'>HELD {_safe_html(_cv)}</span>")
+                        else:
+                            _cbadge = (f"<span style='font-size:0.6rem;font-weight:700;"
+                                       f"padding:1px 6px;border-radius:3px;color:#6b7280;"
+                                       f"background:#ffffff08'>{_safe_html(_cv)}</span>")
+                        _pthc_rows.append(
+                            f"<div style='display:flex;justify-content:space-between;"
+                            f"align-items:center;gap:8px;padding:5px 0;"
+                            f"border-bottom:1px solid #22252f'>"
+                            f"<span style='font-size:0.78rem;color:#9ca3af'>"
+                            f"{_safe_html(_pth_labels.get(_ck, _ck))}</span>{_cbadge}</div>"
+                        )
+                    with _sm_thesis_slot.container(border=True):
+                        st.markdown(
+                            f"<div style='display:flex;justify-content:space-between;"
+                            f"align-items:center;margin-bottom:6px'>"
+                            f"<b style='font-size:0.86rem'>📋 Portfolio Thesis</b>"
+                            f"{_pthc_tag}</div>" + "".join(_pthc_rows),
+                            unsafe_allow_html=True,
+                        )
+                        st.caption("Full ledger + last week's comparison below.")
+                except Exception:
+                    # Slot keeps its placeholder — never a blank column.
+                    pass
                 # Cosmetic-only severity color for the VALUE line — reuses this
                 # app's existing green/amber/red vocabulary (same meaning as the
                 # RAG label / chip styling elsewhere) via Streamlit's NATIVE
