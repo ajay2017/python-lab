@@ -153,7 +153,6 @@ from stock_analyzer.constants import (
     DATA_LOAD_MAX_WORKERS,
     DATA_LOAD_STAGGER_SEC,
     BUNDLE_CACHE_MAX_AGE_DAYS,
-    GAP_TO_STOP_ROUND_DECIMALS,
     COMPOSITE_STRONG_BUY,
     COMPOSITE_SELL,
     COMPOSITE_WEIGHTS,
@@ -199,6 +198,7 @@ from stock_analyzer.constants import (
 )
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer import outage_gate as _outage_gate
+from stock_analyzer import act_today_precedence
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
     build_tax_analysis, _build_open_lots, holding_period_status, wash_sale_risk,
@@ -21599,9 +21599,12 @@ elif page == "📈 Analysis":
                     # only by the 60s live-price refresh (the strip fragment can advance
                     # `_live_prices` past the frozen synthesis snapshot; inherent to the
                     # fragment/synthesis split, self-heals, directionally fine for a live view).
-                    _stop_breached = bool(
-                        _sa_holding and price and _sa_stop and not _gap_missing
-                        and round((price - _sa_stop) / price * 100, GAP_TO_STOP_ROUND_DECIMALS) <= 0
+                    # Precedence (stop-breach > reduce-call > plain-held) lives in
+                    # stock_analyzer.act_today_precedence — a pure, unit-tested
+                    # module — not inline here (Part 2 #3 of the 2026-08-26 app
+                    # review; extracted the same way outage_gate.py was in `1b12779`).
+                    _stop_breached = bool(_sa_holding) and act_today_precedence.is_stop_breached(
+                        price, _sa_stop, gap_missing=_gap_missing
                     )
 
                     # Deterioration / reduce-call gate — sibling to the stop-breach
@@ -21611,9 +21614,12 @@ elif page == "📈 Analysis":
                     # setup); the exit discipline protects the POSITION. Consume the
                     # Brief's PUBLISHED reduce calls (same _is_reduce/_ticker canon
                     # as Opportunity Signals — no recompute drift) so the two
-                    # surfaces agree. Stop-breach (mechanical) still takes priority.
+                    # surfaces agree.
                     _rc = (st.session_state.get("_reduce_calls") or {}).get(str(ticker).upper())
-                    _under_reduce = bool(_sa_holding and _rc and not _stop_breached)
+                    _under_reduce = act_today_precedence.held_position_state(
+                        is_holding=bool(_sa_holding), stop_breached=_stop_breached,
+                        has_reduce_call=bool(_rc),
+                    ) == act_today_precedence.REDUCE_CALL
 
                     # Say so when the two checks above could not run at all. The
                     # mechanical stop-breach half is immune (it recomputes live),
