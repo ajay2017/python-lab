@@ -12,9 +12,15 @@ failure that was silently indistinguishable from them in the log.
 
 Both functions now return {"candidates": int, "saved": int, "error": str |
 None}: `error is None and candidates == 0` = nothing to do; `error is None
-and candidates == saved > 0` = normal success; `error is not None` = the
-write failed after candidates were computed (`saved == 0`, `candidates`
-preserved so the failure's size is still visible in the log)."""
+and candidates == saved > 0` = normal success; `error is not None` = a real
+failure, either a WRITE failure after candidates were computed (`saved == 0`,
+`candidates > 0` so the failure's size is still visible in the log) or, for
+`_mature_vol_predictions` only, a READ failure before any candidate could be
+computed (`candidates == 0`, `saved == 0` — its own input query returned
+`None`, e.g. db unreachable). The read-failure case used to collapse into
+the same shape as "genuinely nothing pending" (both `candidates == 0,
+error == None`), which is the read-side twin of the write-failure bug this
+file was originally written to guard against."""
 import datetime
 
 import numpy as np
@@ -100,10 +106,23 @@ def _history_spanning(made_date: datetime.date, end_date: datetime.date):
     return pd.DataFrame({"Close": prices}, index=idx)
 
 
-def test_mature_vol_predictions_nothing_pending_is_a_no_op_not_a_failure(monkeypatch):
-    monkeypatch.setattr(cr.db, "load_unmatured_model_predictions", lambda model_name=None: None)
+def test_mature_vol_predictions_genuinely_nothing_pending_is_a_no_op_not_a_failure(monkeypatch):
+    # An empty DataFrame = the query ran fine and found zero unmatured rows.
+    monkeypatch.setattr(cr.db, "load_unmatured_model_predictions",
+                         lambda model_name=None: pd.DataFrame())
     result = cr._mature_vol_predictions(datetime.datetime(2026, 2, 15))
     assert result == {"candidates": 0, "saved": 0, "error": None}
+
+
+def test_mature_vol_predictions_read_failure_is_not_a_no_op(monkeypatch):
+    # None = db unreachable / no creds / query raised — must NOT collapse
+    # into the same shape as "genuinely nothing pending" (the read-side
+    # twin of the write-failure guard below).
+    monkeypatch.setattr(cr.db, "load_unmatured_model_predictions", lambda model_name=None: None)
+    result = cr._mature_vol_predictions(datetime.datetime(2026, 2, 15))
+    assert result["candidates"] == 0
+    assert result["saved"] == 0
+    assert result["error"] is not None, "a read failure must not look like a no-op"
 
 
 def test_mature_vol_predictions_nothing_due_yet_is_a_no_op_not_a_failure(monkeypatch):

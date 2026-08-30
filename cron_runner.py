@@ -556,8 +556,8 @@ def _run_eod(now_et, force: bool) -> int:
             _mat_result["candidates"], _mat_result["saved"], _mat_result["error"],
         )
         if _mat_err is not None:
-            _log(f"model_predictions (maturation): WRITE FAILED after computing "
-                 f"{_mat_n} candidate row(s) — {_mat_err}.")
+            _log(f"model_predictions (maturation): FAILED "
+                 f"({_mat_n} candidate row(s) computed) — {_mat_err}.")
         elif _mat_n == 0:
             _log("model_predictions (maturation): 0 candidate row(s) due this run "
                  "— nothing to mature.")
@@ -710,15 +710,28 @@ def _mature_vol_predictions(now_et) -> dict:
     no-op (nothing pending, or nothing yet due/realizable: candidates == 0,
     error is None) is distinguished from a real write failure (updates were
     computed but db.mature_model_predictions_batch returned falsy:
-    candidates > 0, saved == 0, error set). Never raises; the caller wraps
-    this call in its own try/except for defense in depth."""
+    candidates > 0, saved == 0, error set) AND from a READ failure
+    (load_unmatured_model_predictions returned None — db unreachable, no
+    credentials, or a query error). The read-failure case used to collapse
+    into the same {"candidates": 0, "error": None} shape as "genuinely
+    nothing pending", so an outage during maturation logged identically to
+    a quiet day with nothing due — the read side of the same offline-
+    sentinel-collapse class the write side was already guarded against.
+    Never raises; the caller wraps this call in its own try/except for
+    defense in depth."""
     import pandas as pd
 
     from stock_analyzer import data as _data
     from stock_analyzer.vol_forecast import realized_vol
 
     pending = db.load_unmatured_model_predictions(model_name="vol_forecast_ewma")
-    if pending is None or pending.empty:
+    if pending is None:
+        return {
+            "candidates": 0, "saved": 0,
+            "error": "load_unmatured_model_predictions returned None "
+                     "(db unreachable, no credentials, or query error — see warnings log)",
+        }
+    if pending.empty:
         return {"candidates": 0, "saved": 0, "error": None}
 
     today = now_et.date()
