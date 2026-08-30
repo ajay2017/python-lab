@@ -20846,6 +20846,25 @@ elif page == "📈 Analysis":
             "session, so any share count would be a guess. Open 🏠 Home to load it, "
             "then come back."
         )
+    # Holdings context state BEFORE reading it (surface-proprioception F-260
+    # finding #2): with the cache absent, _sc_held stays None for every ticker,
+    # so a name you already hold renders as a fresh "suggested" entry with a
+    # fabricated share count and entry cost below. _last_held_tickers carve-out
+    # mirrors the Trade Plan tab's identical guard (_sa_port_state /
+    # _sa_definitely_flat, app.py ~21312/21652-21657) — an EMPTY list there
+    # means "definitively holds nothing", not "unchecked".
+    _sc_port_state = _coord_cache_state("_port_df_enriched")
+    _sc_held_known = st.session_state.get("_last_held_tickers")
+    _sc_definitely_flat = (
+        isinstance(_sc_held_known, (list, tuple, set)) and len(_sc_held_known) == 0
+    )
+    if _sc_port_state != "ready" and not _sc_definitely_flat:
+        st.warning(
+            "⚠ **Holdings context unavailable** — this session could not check which "
+            "of these tickers you already hold, so every row below shows a fresh "
+            "entry suggestion even for names you may already own. Open the 🏠 Home "
+            "page once to load your holdings, then re-check before acting."
+        )
     _sc_port = st.session_state.get("_port_df_enriched", pd.DataFrame())
     rows = []
     for ticker, r in results.items():
