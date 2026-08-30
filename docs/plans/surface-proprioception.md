@@ -1,5 +1,7 @@
 # Surface Proprioception (F-260) — audit first, then decide
 
+**Status: 5 MORE findings CLOSED 2026-08-30 (later session, commit `f707e31`), of the ~15 that were never individually itemized.** A fresh investigation (re-derived against current code, not assumed from the loose one-sentence description below) found the true remaining count in the 4 named areas was **5, not ~15** — several of the loosely-described items had already been closed by unrelated work (the `_acct_gate_cache` dead-branch fix, the coord_freshness banner rollout) without ever being checked off here. The 5: (1) 🔗 Risk Analysis's whole Portfolio Risk Dashboard vanishing with no `else` when `_port_risk_cache` is falsy; (2) the same page's leverage/margin warning never reading the producer's `cash_seen` field, so "never measured" rendered identically to "confirmed unlevered"; (3) 🥧 Portfolio Overview's News Intelligence tab and (4) its Rebalancer tab both feeding an unverified `_reduce_calls` into an existing suppression parameter without disclosing when the cross-check couldn't run; (5) 🔔 Catalyst Watch's 🔥 leading-sector flag going STALE (not absent) because the Daily-Brief-crash reset block nulled its siblings `_grow_today_sectors_cache`/`_reduce_calls` but never `_leading_sectors_cache`. All disclosure-only (no gate/threshold/recommendation change); Opus review SHIP, 0 blocking. Full per-finding detail and the reviewer's two non-blocking notes (a stale "sole writer" claim, and a separate pre-existing memo-hit-rebuild staleness gap on the same key family — not fixed, out of scope) in the commit body. **Did NOT re-audit** 📈 Analysis, 📒 Trade Journal, 🪞 Trade Review, 📅 Economic Calendar, 🎯 My Edge, 🧑‍⚖️ The Judge, or 📋 Watchlist (assumed covered by the closed top-10 + the coord_freshness rollout, per the investigation's own scope note) — a small remainder could still exist there.
+
 **Status: all 10 individually-ranked §10 findings CLOSED 2026-08-30.** Findings
 #1 and #3 were already fixed before this pass (the fabricated-$50k sizing fix and
 the Analysis `_reduce_calls` guard, both pre-existing). This session closed the
@@ -520,3 +522,90 @@ why it was correctly left out of the sizing fix rather than bundled.
 **One residual, future-callers only:** with a NaN book *and* a degenerate stop, the `"stop"` arm
 returns `portfolio_value: nan`, which would persist as NaN via `_rec_sizing_cols`. Unreachable
 from both current call sites.
+
+---
+
+## 14. Five more findings CLOSED 2026-08-30 (later session) — re-derived, not assumed
+
+§10's closing line grouped the remaining ~15 findings as one sentence: "🔗 Risk Analysis's whole
+risk dashboard vanishing with no `else`; 🥧 Portfolio Overview's two documented fail-opens; the
+awareness-only leverage/sector-chart surfaces going quiet; and annotation-level omissions." A
+fresh investigation re-verified each clause against CURRENT code rather than trusting that
+sentence — worthwhile, because two of the four turned out to be partly stale (the Portfolio
+Overview Sankey/sector-bar "fail-open" was already closed by findings #6/#9's dead-branch fix;
+several other candidate sites were already covered by the coord_freshness banner rollout that
+shipped between 2026-08-27 and 2026-08-30). **True remaining count in the 4 named areas: 5, not
+~15.**
+
+1. **🔗 Risk Analysis — Portfolio Risk Dashboard vanishes with no `else`.** `_port_risk_cache`'s
+   producer (app.py ~5240) publishes `None` on failure, never `{}` — "offline sentinel, not {},
+   matches sibling cache contract" — so a falsy read always means not-computed. The consumer
+   (`if _port_risk: <4 sections> ` through `st.divider()`) had no `else`, so a session that
+   reached the page via the Trade Journal republisher (which does not refresh
+   `_port_risk_cache`) without visiting Home saw the dashboard, the Market-Risk Posture gauge,
+   Cross-Asset Pulse, and the Beta Contribution chart all silently absent. **CLOSED** — added an
+   `else` using `_coord_cache_state("_port_risk_cache")` to disclose "missing" (never visited
+   Home) vs. "offline" (computation failed) with a specific `st.warning`.
+2. **🔗 Risk Analysis — leverage/margin warning also goes quiet.** The producer (app.py ~4754)
+   always publishes a dict with a `cash_seen: bool` field added in a prior session specifically
+   to distinguish "measured, no debt" from "never measured" (see the extensive in-code comments
+   at app.py ~4739-4785) — but this consumer only ever checked `levered`, never `cash_seen`, so
+   "never measured" and "confirmed unlevered" rendered identically (nothing). **CLOSED** —
+   reused the already-tested `summary_view.book_safety()` classifier (the same one 🧾 Summary's
+   Book Safety zone already calls for the identical cache) with `broker_drift=None` (deliberate:
+   keeps its drift-red leg from ever firing, since this block has never considered drift), added
+   as an `elif` after the existing `levered` branch — mutually exclusive by construction, per
+   `book_safety`'s own logic (verified by the reviewer).
+3. **🥧 Portfolio Overview — News Intelligence tab, `_reduce_calls` fail-open.**
+   `_opp_reduce_tickers = set((... .get("_reduce_calls") or {}).keys())` fed
+   `build_news_intelligence(reduce_tickers=...)`, whose job is to split a Reduce/Exit-flagged
+   ticker's positive news out of "opportunities" into "opportunities_suppressed". An
+   unverified/offline read silently produced an empty set — same shape as "genuinely nothing to
+   suppress" — so a name under an active Reduce/Exit call could show as a clean add-on-pullback
+   signal. **CLOSED** — mirrors the already-closed finding #8 (🎯 My Edge, same cache) exactly:
+   `_coord_cache_state("_reduce_calls") == "ready" and not _daily_brief_offline` (both checks
+   needed, since a crashed Brief fail-opens `_reduce_calls` to `{}` rather than `None` — the
+   exact gap #8's own first review pass missed). **Note: this is a disclosure add, not a
+   suppression-behavior change** — the offline/missing case already produced an empty set
+   either way; what was missing was telling the user the cross-check didn't run.
+4. **🥧 Portfolio Overview — Rebalancer tab, `_reduce_calls` fail-open.** Same cache, same page,
+   different tab. `_rb_reduce_set` fed `build_rebalance_plan(reduce_call_set=...)`, which
+   suppresses ADD actions on a Reduce/Exit-flagged ticker (checked BEFORE the risk-trim check,
+   per its own docstring) — an unverified empty set meant a drift-driven ADD could directly
+   contradict a same-day protective call. **CLOSED** — same verified-check pattern as #3,
+   placed to mirror an EXISTING disclosure already shipped for a sibling cache
+   (`_risk_advisor_recs_raw is None`) immediately above this block on the same page. Same
+   "disclosure add, not a behavior change" note applies.
+5. **🔔 Catalyst Watch — leading-sector 🔥 flag can go STALE, not just absent.** The
+   Daily-Brief-crash reset block (app.py ~5564) explicitly nulls `_grow_today_sectors_cache`
+   (to `None`) and `_reduce_calls` (to `{}`) on `_daily_brief is None`, but never touched its
+   sibling `_leading_sectors_cache` — published from the exact same `_gt_today` dict a few
+   lines below on the success path. So a Brief that crashed AFTER an earlier successful run in
+   the SAME session left the prior run's leading-sector list in place, read by Catalyst Watch as
+   current — the more severe of two possible failure modes (the other, a first-run crash, merely
+   collapsed to "no sector leading," which is low-stakes since it's a per-row 🔥 badge, not a
+   whole section). **CLOSED** — producer-side: added `_leading_sectors_cache = None` to the same
+   reset block. Consumer-side: Catalyst Watch now reads the raw value first and distinguishes
+   `None` from a genuinely-computed empty list, appending a short caption when the flag
+   couldn't be checked.
+
+**Opus review: SHIP, 0 blocking.** Two non-blocking notes, neither requiring a code change:
+- Finding 5's producer-reset block is not the *sole* writer of `_leading_sectors_cache` — it is
+  also written at app.py ~5101 (a memo-hit republish) and ~6029 (the bundle build). Both already
+  flow `None` through correctly; the fix is coherent, just don't describe the reset block as the
+  only writer if this is revisited.
+- The SAME memo-hit rebuild path (app.py ~5124-5163) recomputes `_daily_brief` but does **not**
+  re-derive `_leading_sectors_cache` or `_reduce_calls` — a separate, narrower, pre-existing
+  staleness window on the same key family. **Not fixed here, out of scope** — flagged for a
+  future pass, not a regression introduced by this commit.
+
+All 5 fixes are disclosure-only: no `constants.py` touch, no gate/threshold/recommendation/engine
+change. Full suite unchanged at 4782 (app.py has no self-coverage; the reused classifiers
+`_coord_cache_state`/`book_safety` are already unit-tested). Commit `f707e31`.
+
+**Genuinely still open:** 📈 Analysis, 📒 Trade Journal, 🪞 Trade Review, 📅 Economic Calendar,
+🎯 My Edge, 🧑‍⚖️ The Judge, and 📋 Watchlist were NOT re-audited this pass (assumed covered by
+the closed top-10 + the coord_freshness rollout) — a small remainder could still live there if
+ever revisited. Phase 3 (lifting Home's risk/fragility/correlation producer block into a pure
+module, per §11/§12 item 2's own text — "where this plan converges with §5's `N > 15` branch")
+also remains genuinely unstarted and needs its own `planner` pass.
