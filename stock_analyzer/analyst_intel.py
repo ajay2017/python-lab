@@ -348,6 +348,125 @@ def classify_call(row: dict, sell_date_after, today_et, fetch_window) -> dict:
     }
 
 
+def consensus_side(consensus_rating: str | None) -> str | None:
+    """Which side of a Buy/Sell disagreement matrix a saved `consensus_rating`
+    label falls on, or `None` when there is no rating to classify at all
+    (mirrors `classify_call`'s "no_consensus" status — a missing rating is
+    not an implicit anything).
+
+    Matches the LEADING label only, same reasoning as `classify_call`'s
+    `is_bullish` check: the parenthetical tally always contains the literal
+    word "Buy" regardless of which label actually won, so a bare substring
+    match would false-positive on every row.
+
+    "hold"/"mixed" (and anything else non-Buy/Sell) are genuine, real
+    consensus values — they get their own `"neutral"` bucket rather than
+    being forced onto the Buy or Sell axis. This is deliberately DIFFERENT
+    from `classify_call`'s `directional_hit`, which treats non-bullish as
+    pseudo-bearish for grading a single call's own direction — that
+    behavior does not belong in a matrix that places research on an axis.
+    """
+    label = (consensus_rating or "").strip().lower()
+    if not label:
+        return None
+    if label.startswith(("strong buy", "buy")):
+        return "buy"
+    if label.startswith("sell"):
+        return "sell"
+    return "neutral"
+
+
+def calibration_matrix(results: list[dict]) -> dict:
+    """Engine-vs-Analyst calibration 2×2 — Research Scorecard Phase 3.
+
+    Reads the SAME evaluated rows Blocks A–D already display (only
+    `status in ("hit", "miss")` — pending/no_anchor/no_price/no_consensus
+    rows carry no `directional_hit` to place). Rows whose `consensus_side()`
+    is `"neutral"` (Hold/Mixed) or whose `composite_score_at_save` is
+    missing are EXCLUDED from the 2×2 entirely rather than forced onto an
+    axis they don't belong on — silently filing a Hold row as "Sell" would
+    manufacture a wrong calibration verdict from correct data.
+
+    Display-only: never feeds `valuation_score`, scoring, or any gate.
+    `directional_hit` is reused verbatim from `classify_call` rather than
+    re-derived, so a row cannot read "Hit" in Block B and disagree with
+    itself here — safe specifically because Hold/Mixed rows (the only case
+    where `classify_call`'s internal `is_bullish` diverges from this
+    module's `consensus_side`) are excluded before reaching a cell.
+
+    Layout:
+                      Engine >= COMPOSITE_BUY   Engine < COMPOSITE_BUY
+      Analyst Buy      buy_agree                 buy_disagree
+      Analyst Sell     sell_disagree             sell_agree
+
+    Returns `{"cells": {...4 keys...}, "n_excluded_neutral",
+    "n_excluded_no_engine_score", "n_classifiable"}`. Each cell carries
+    `n` and `avg_ret_pct` (`None` when `n == 0`); the two disagreement
+    cells additionally carry `engine_right`, `analyst_right` (always
+    computed, `engine_right + analyst_right == n`) and `verdict_shown`
+    (`n >= ANALYST_CALIBRATION_MIN_CASES` — the caller must not render a
+    percentage from a handful of cases). Never raises on empty input.
+    """
+    from stock_analyzer.constants import ANALYST_CALIBRATION_MIN_CASES, COMPOSITE_BUY
+
+    cells: dict[str, dict] = {
+        "buy_agree":     {"n": 0, "_sum_ret": 0.0},
+        "buy_disagree":  {"n": 0, "_sum_ret": 0.0, "engine_right": 0, "analyst_right": 0},
+        "sell_agree":    {"n": 0, "_sum_ret": 0.0},
+        "sell_disagree": {"n": 0, "_sum_ret": 0.0, "engine_right": 0, "analyst_right": 0},
+    }
+    n_excluded_neutral = 0
+    n_excluded_no_engine_score = 0
+
+    for r in results or []:
+        if r.get("status") not in ("hit", "miss"):
+            continue
+        side = consensus_side(r.get("consensus_rating"))
+        if side is None or side == "neutral":
+            n_excluded_neutral += 1
+            continue
+        cs = r.get("composite_score_at_save")
+        try:
+            cs = float(cs)
+        except (TypeError, ValueError):
+            cs = None
+        if cs is None or cs != cs:  # NaN check — a Supabase NULL surfaces as np.nan via the DataFrame
+            n_excluded_no_engine_score += 1
+            continue
+
+        engine_bull = cs >= COMPOSITE_BUY
+        if side == "buy":
+            key = "buy_agree" if engine_bull else "buy_disagree"
+        else:
+            key = "sell_disagree" if engine_bull else "sell_agree"
+
+        cell = cells[key]
+        cell["n"] += 1
+        cell["_sum_ret"] += r.get("ret_pct") or 0.0
+        if "engine_right" in cell:
+            if r.get("directional_hit"):
+                cell["analyst_right"] += 1
+            else:
+                cell["engine_right"] += 1
+
+    out_cells: dict[str, dict] = {}
+    for key, cell in cells.items():
+        n = cell["n"]
+        entry = {"n": n, "avg_ret_pct": (cell["_sum_ret"] / n) if n else None}
+        if "engine_right" in cell:
+            entry["engine_right"] = cell["engine_right"]
+            entry["analyst_right"] = cell["analyst_right"]
+            entry["verdict_shown"] = n >= ANALYST_CALIBRATION_MIN_CASES
+        out_cells[key] = entry
+
+    return {
+        "cells": out_cells,
+        "n_excluded_neutral": n_excluded_neutral,
+        "n_excluded_no_engine_score": n_excluded_no_engine_score,
+        "n_classifiable": sum(c["n"] for c in cells.values()),
+    }
+
+
 def fetch_anchor_price(ticker: str, article_date) -> float | None:
     """Next-trading-day close for one analyst_coverage row's article_date —
     the same anchor-price logic used by scripts/backfill_analyst_prices.py,

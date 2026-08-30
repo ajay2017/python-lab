@@ -35250,6 +35250,7 @@ elif page == "🧠 AI Insights":
             ANALYST_ACCURACY_PT_HIT_PCT as _SC_PT_HIT_PCT,
             ANALYST_ACCURACY_LEADERBOARD_MIN_CALLS as _SC_LEADER_MIN,
             ANALYST_ACCURACY_HIGHLIGHTS_MIN_EVALUABLE as _SC_HILITE_MIN,
+            ANALYST_CALIBRATION_MIN_CASES as _SC_CAL_MIN,
         )
 
         _sc_df = _ai_db.load_analyst_coverage(limit=5000)
@@ -35341,6 +35342,7 @@ elif page == "🧠 AI Insights":
                 _sc_cls["avg_pt"]                 = _sc_row.get("avg_pt")
                 _sc_cls["price_at_article_date"]  = _sc_row.get("price_at_article_date")
                 _sc_cls["analysts"]               = _sc_row.get("analysts")
+                _sc_cls["composite_score_at_save"] = _sc_row.get("composite_score_at_save")
                 _sc_results.append(_sc_cls)
 
             _sc_evaluable = [r for r in _sc_results if r["status"] in ("hit", "miss")]
@@ -35511,6 +35513,67 @@ elif page == "🧠 AI Insights":
                     for r in _sc_worst:
                         _sc_d = r["article_date"].isoformat() if r.get("article_date") else "—"
                         st.markdown(f"🔴 **{r['ticker']}** {r['ret_pct']:+.1f}% ({_sc_d} · {r['window']})")
+
+            # ── Block E — Engine vs Analyst Calibration (2×2, Phase 3) ─────────
+            # Awareness only: reads the already-computed _sc_results, never
+            # feeds valuation_score/scoring/any gate. A row that reads "Hit"
+            # above cannot disagree with itself here — this reuses the same
+            # directional_hit rather than re-deriving a second verdict.
+            st.markdown("**⚖️ Engine vs Analyst Calibration**")
+            _sc_cal = _ai_intel.calibration_matrix(_sc_results)
+            if _sc_cal["n_classifiable"] == 0:
+                st.info(
+                    "Not enough saved research yet to build this matrix — it needs "
+                    "analyst_coverage rows with both a Buy/Sell consensus and a "
+                    "recorded engine composite score at save time."
+                )
+            else:
+                st.caption(
+                    "When saved analyst consensus and the engine composite agreed vs. "
+                    "disagreed at save time, who was right after the measurement "
+                    "window. Awareness only — never changes the engine's score or "
+                    "any gate."
+                )
+                _sc_cal_cells = _sc_cal["cells"]
+
+                def _sc_cal_agree_line(cell):
+                    if cell["n"] == 0:
+                        return "No cases yet."
+                    return f"**{cell['n']}** case(s) · avg return **{cell['avg_ret_pct']:+.1f}%**"
+
+                def _sc_cal_disagree_line(cell):
+                    if cell["n"] == 0:
+                        return "No cases yet."
+                    _base = f"**{cell['n']}** case(s) · avg return **{cell['avg_ret_pct']:+.1f}%**"
+                    if not cell["verdict_shown"]:
+                        return _base + f" — need ≥{_SC_CAL_MIN} cases before showing a verdict."
+                    return (_base + f" — engine right **{cell['engine_right']}**, "
+                            f"analyst right **{cell['analyst_right']}**")
+
+                _sc_cal_c1, _sc_cal_c2 = st.columns(2)
+                with _sc_cal_c1:
+                    st.markdown(f"✅ **Analyst Buy · Engine ≥ {int(COMPOSITE_BUY)}** (agree)")
+                    st.caption(_sc_cal_agree_line(_sc_cal_cells["buy_agree"]))
+                    st.markdown(f"⚡ **Analyst Sell · Engine ≥ {int(COMPOSITE_BUY)}** (disagree)")
+                    st.caption(_sc_cal_disagree_line(_sc_cal_cells["sell_disagree"]))
+                with _sc_cal_c2:
+                    st.markdown(f"⚡ **Analyst Buy · Engine < {int(COMPOSITE_BUY)}** (disagree)")
+                    st.caption(_sc_cal_disagree_line(_sc_cal_cells["buy_disagree"]))
+                    st.markdown(f"✅ **Analyst Sell · Engine < {int(COMPOSITE_BUY)}** (agree)")
+                    st.caption(_sc_cal_agree_line(_sc_cal_cells["sell_agree"]))
+
+                st.caption(
+                    f"{_sc_cal['n_excluded_neutral']} excluded (Hold/Mixed consensus — "
+                    f"no directional call to place) · {_sc_cal['n_excluded_no_engine_score']} "
+                    "excluded (no engine composite recorded at save time)."
+                )
+                st.caption(
+                    "⚠️ Selection bias: the engine composite is only captured for "
+                    "tickers you already held at save time — those had already "
+                    "cleared the entry gate — so this population skews toward "
+                    f"Engine ≥ {int(COMPOSITE_BUY)} and under-represents the 'engine "
+                    "skeptical' cases this matrix is most interested in."
+                )
 
     with _ai_tab_rt:
         # ── Thesis Red Team — Phase 1 (erosion score) + Phase 2 (Haiku bear

@@ -236,6 +236,7 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `ANALYST_ACCURACY_PT_HIT_PCT` | 0.75 | Research Scorecard: fraction of avg_pt that the window's intra-period **HIGH** must reach to count as a PT "hit" (not the endpoint close). Accounts for the short 30-day window; a genuine 75% touch is a real event, whereas a lucky endpoint price is noise-sensitive. Display-only |
 | `ANALYST_ACCURACY_LEADERBOARD_MIN_CALLS` | 2 | Research Scorecard: minimum calls per firm to appear on the Firm Leaderboard. Suppresses single-call noise |
 | `ANALYST_ACCURACY_HIGHLIGHTS_MIN_EVALUABLE` | 5 | Research Scorecard: minimum evaluable calls (status ∈ {hit, miss}) before showing the Best & Worst Calls highlight cards. Defers display until enough signal exists |
+| `ANALYST_CALIBRATION_MIN_CASES` | 5 | Research Scorecard Phase 3 (Engine vs Analyst Calibration 2×2): minimum cases in a disagreement cell (analyst/engine disagreed at save time) before showing an "engine right N / analyst right M" verdict — below it, the cell shows counts + avg return only. Display-only, never gates/scores |
 | `COMPOSITE_BUY` | 65 | Buy boundary — used for entry AND add-to-winner (aligned) |
 | `COMPOSITE_STRONG_BUY` | 75 | Strong Buy boundary |
 | `COMPOSITE_HOLD` | 44 | Hold floor; below this = "Sell zone" |

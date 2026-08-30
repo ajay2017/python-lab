@@ -17,6 +17,7 @@ import pytest
 from stock_analyzer import analyst_intel as ai
 from stock_analyzer.constants import (
     ANALYST_ACCURACY_DIRECTION_DAYS, ANALYST_ACCURACY_PT_HIT_PCT,
+    ANALYST_CALIBRATION_MIN_CASES, COMPOSITE_BUY,
 )
 
 
@@ -326,6 +327,170 @@ def test_classify_call_pt_proximity_can_exceed_100():
            "consensus_rating": "Buy (5/0/0)", "avg_pt": 100.0}
     result = ai.classify_call(row, None, date(2026, 7, 29), _fetch_window_ok(close=105.0, high=150.0))
     assert result["pt_proximity"] == pytest.approx(150.0)
+
+
+# ─── consensus_side ────────────────────────────────────────────────────────────
+
+def test_consensus_side_none_and_blank_return_none():
+    assert ai.consensus_side(None) is None
+    assert ai.consensus_side("") is None
+    assert ai.consensus_side("   ") is None
+
+
+def test_consensus_side_buy_labels():
+    assert ai.consensus_side("Buy (5/0/0)") == "buy"
+    assert ai.consensus_side("Strong Buy (5/0/0)") == "buy"
+
+
+def test_consensus_side_sell_label():
+    assert ai.consensus_side("Sell (0/0/5)") == "sell"
+
+
+def test_consensus_side_hold_and_mixed_are_neutral_not_forced_onto_an_axis():
+    assert ai.consensus_side("Hold (2/3/0)") == "neutral"
+    assert ai.consensus_side("Mixed (2/1/2)") == "neutral"
+
+
+def test_consensus_side_matches_leading_label_not_the_tally_substring():
+    # The parenthetical tally always contains the literal word "Buy" —
+    # a bare substring match would false-positive every Sell/Hold row.
+    assert ai.consensus_side("Sell (3 Buy / 0 Hold / 5 Sell)") == "sell"
+    assert ai.consensus_side("Hold (3 Buy / 2 Hold / 0 Sell)") == "neutral"
+
+
+# ─── calibration_matrix ─────────────────────────────────────────────────────────
+
+def _cal_row(consensus, composite, ret_pct=1.0, directional_hit=True, status="hit"):
+    return {
+        "status": status, "consensus_rating": consensus,
+        "composite_score_at_save": composite,
+        "ret_pct": ret_pct, "directional_hit": directional_hit,
+    }
+
+
+def test_calibration_matrix_empty_input_never_raises():
+    out = ai.calibration_matrix([])
+    assert out["n_classifiable"] == 0
+    for cell in out["cells"].values():
+        assert cell["n"] == 0
+        assert cell["avg_ret_pct"] is None
+    out_none = ai.calibration_matrix(None)
+    assert out_none["n_classifiable"] == 0
+
+
+def test_calibration_matrix_engine_axis_boundary_is_inclusive():
+    # composite_score_at_save == COMPOSITE_BUY classifies as engine-bullish
+    # (>=), matching the app's own entry-gate boundary convention.
+    at_boundary = ai.calibration_matrix([_cal_row("Buy (5/0/0)", COMPOSITE_BUY)])
+    assert at_boundary["cells"]["buy_agree"]["n"] == 1
+    assert at_boundary["cells"]["buy_disagree"]["n"] == 0
+
+    sell_at_boundary = ai.calibration_matrix([_cal_row("Sell (0/0/5)", COMPOSITE_BUY)])
+    assert sell_at_boundary["cells"]["sell_disagree"]["n"] == 1
+    assert sell_at_boundary["cells"]["sell_agree"]["n"] == 0
+
+
+def test_calibration_matrix_four_quadrant_placement():
+    out = ai.calibration_matrix([
+        _cal_row("Buy (5/0/0)", COMPOSITE_BUY + 5),   # buy_agree
+        _cal_row("Buy (5/0/0)", COMPOSITE_BUY - 5),   # buy_disagree
+        _cal_row("Sell (0/0/5)", COMPOSITE_BUY - 5),  # sell_agree
+        _cal_row("Sell (0/0/5)", COMPOSITE_BUY + 5),  # sell_disagree
+    ])
+    assert out["cells"]["buy_agree"]["n"] == 1
+    assert out["cells"]["buy_disagree"]["n"] == 1
+    assert out["cells"]["sell_agree"]["n"] == 1
+    assert out["cells"]["sell_disagree"]["n"] == 1
+    assert out["n_classifiable"] == 4
+
+
+def test_calibration_matrix_neutral_excluded_never_forced_onto_sell():
+    out = ai.calibration_matrix([
+        _cal_row("Hold (2/3/0)", COMPOSITE_BUY + 5),
+        _cal_row("Mixed (2/1/2)", COMPOSITE_BUY - 5),
+    ])
+    assert out["n_excluded_neutral"] == 2
+    assert out["n_classifiable"] == 0
+    for cell in out["cells"].values():
+        assert cell["n"] == 0
+
+
+def test_calibration_matrix_missing_engine_score_excluded_not_treated_as_below_gate():
+    out = ai.calibration_matrix([
+        _cal_row("Buy (5/0/0)", None),
+        _cal_row("Buy (5/0/0)", float("nan")),
+    ])
+    assert out["n_excluded_no_engine_score"] == 2
+    assert out["n_classifiable"] == 0
+
+
+def test_calibration_matrix_only_evaluable_rows_count():
+    out = ai.calibration_matrix([
+        _cal_row("Buy (5/0/0)", COMPOSITE_BUY + 5, status="pending"),
+        _cal_row("Buy (5/0/0)", COMPOSITE_BUY + 5, status="no_anchor"),
+        _cal_row("Buy (5/0/0)", COMPOSITE_BUY + 5, status="no_price"),
+        _cal_row("Buy (5/0/0)", COMPOSITE_BUY + 5, status="no_consensus"),
+    ])
+    assert out["n_classifiable"] == 0
+    assert out["n_excluded_neutral"] == 0
+    assert out["n_excluded_no_engine_score"] == 0
+
+
+def test_calibration_matrix_who_was_right_partition_invariant_buy_side():
+    out = ai.calibration_matrix([
+        _cal_row("Buy (5/0/0)", COMPOSITE_BUY - 5, directional_hit=True),   # analyst right
+        _cal_row("Buy (5/0/0)", COMPOSITE_BUY - 5, directional_hit=False),  # engine right
+        _cal_row("Buy (5/0/0)", COMPOSITE_BUY - 5, directional_hit=False),  # engine right
+    ])
+    cell = out["cells"]["buy_disagree"]
+    assert cell["n"] == 3
+    assert cell["analyst_right"] == 1
+    assert cell["engine_right"] == 2
+    assert cell["engine_right"] + cell["analyst_right"] == cell["n"]
+
+
+def test_calibration_matrix_who_was_right_partition_invariant_sell_side():
+    out = ai.calibration_matrix([
+        _cal_row("Sell (0/0/5)", COMPOSITE_BUY + 5, directional_hit=True),  # analyst right
+        _cal_row("Sell (0/0/5)", COMPOSITE_BUY + 5, directional_hit=False), # engine right
+    ])
+    cell = out["cells"]["sell_disagree"]
+    assert cell["n"] == 2
+    assert cell["analyst_right"] == 1
+    assert cell["engine_right"] == 1
+    assert cell["engine_right"] + cell["analyst_right"] == cell["n"]
+
+
+def test_calibration_matrix_min_cases_gate_on_disagreement_cells():
+    below = ai.calibration_matrix(
+        [_cal_row("Buy (5/0/0)", COMPOSITE_BUY - 5) for _ in range(ANALYST_CALIBRATION_MIN_CASES - 1)]
+    )
+    at_threshold = ai.calibration_matrix(
+        [_cal_row("Buy (5/0/0)", COMPOSITE_BUY - 5) for _ in range(ANALYST_CALIBRATION_MIN_CASES)]
+    )
+    assert below["cells"]["buy_disagree"]["verdict_shown"] is False
+    assert at_threshold["cells"]["buy_disagree"]["verdict_shown"] is True
+
+
+def test_calibration_matrix_agree_cells_have_no_min_cases_gate_key():
+    # Agree cells never disagree, so there is no "who was right" to gate —
+    # confirm the key simply isn't present rather than silently False.
+    out = ai.calibration_matrix([_cal_row("Buy (5/0/0)", COMPOSITE_BUY + 5)])
+    assert "verdict_shown" not in out["cells"]["buy_agree"]
+
+
+def test_calibration_matrix_never_reads_a_valuation_or_gate_module():
+    """Awareness-only invariant: this function must have no import-time or
+    call-time path into scoring/valuation/gate modules. Checked against the
+    compiled bytecode's referenced names (`co_names`), not raw source text —
+    a substring scan of the source would false-positive on this docstring's
+    own prose explaining the invariant."""
+    forbidden = ("valuation", "scoring", "risk_advisor", "watchlist_advisor")
+    names = ai.calibration_matrix.__code__.co_names
+    consts = ai.calibration_matrix.__code__.co_consts
+    for f in forbidden:
+        assert f not in names
+        assert not any(isinstance(c, str) and f in c for c in consts if c is not ai.calibration_matrix.__doc__)
 
 
 # ─── fetch_anchor_price ────────────────────────────────────────────────────────

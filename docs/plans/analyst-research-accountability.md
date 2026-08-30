@@ -4,7 +4,7 @@
 and whether price targets were hit — making the value (or noise) of the paid subscription
 measurable inside the app.
 
-**Status:** PLANNING — 2026-07-22. Not yet built.
+**Status:** SHIPPED — Phases 1–2 (F-154c Research Scorecard) shipped prior to this update; Phase 3 (Engine vs Analyst Calibration) shipped 2026-08-29 once its data trigger was measured met (26 of 547 `analyst_coverage` rows with `composite_score_at_save` populated, ≥20 required). This status line had drifted stale (still said "PLANNING... Not yet built" after Phases 1–2 had already shipped) — see `docs/requirements.md` F-154c for the current, accurate spec of all phases including Phase 3's corrected design (below).
 
 **Related:** [docs/plans/analyst-coverage.md](analyst-coverage.md) (Phase 1–3 already shipped),
 `stock_analyzer/analyst_intel.py`, `stock_analyzer/db.py`, `app.py` (AI Insights page).
@@ -280,15 +280,32 @@ Top 3 hits (highest return %) and bottom 3 misses (most negative return %), as c
 
 ---
 
-## Phase 3 — Engine vs Analyst Calibration (deferred)
+## Phase 3 — Engine vs Analyst Calibration (SHIPPED 2026-08-29)
 
-**Trigger to build:** when `composite_score_at_save IS NOT NULL` on ≥20 rows
-(approximately 4–6 weeks of new saves after Phase 1 ships).
+**Trigger — measured live, met:** `composite_score_at_save IS NOT NULL` on 26 of
+547 `analyst_coverage` rows (≥20 required).
 
-**The question:** When analyst consensus was Bullish and the engine score was below
-`COMPOSITE_BUY = 65` (skeptic disagreement), who was right 60 days later?
+**Corrected before build, per an Opus `planner` scoping pass** — this section
+originally said the wrong thing in three places; the build follows what's below,
+not the text above this note:
+1. **Window is 30 days, not 60.** The matrix reuses the SAME per-row measurement
+   window Blocks A–D already use (`ANALYST_ACCURACY_DIRECTION_DAYS = 30`, set by
+   the 2026-07-23 Phase 1e decision) rather than a separate 60-day horizon — so a
+   row can't read "Hit" in Block B and disagree with itself in this matrix. A
+   second, longer calibration-specific horizon was considered and rejected: it
+   would need a new constant, a second forward-price fetch per row, and would let
+   the same call be graded on two different windows in two sections of one page.
+2. **Not Buy/Sell-only.** Real `analyst_coverage` rows include Hold/Mixed
+   consensus labels, which carry no directional call to place on a Buy/Sell axis.
+   They are EXCLUDED from the 2×2 entirely (counted separately as
+   `n_excluded_neutral`), never silently forced onto "Sell" — doing so would
+   manufacture a wrong calibration verdict from correct data.
+3. **"Who was right" reuses `directional_hit`** (the same verdict Blocks A–D
+   already display), not a separately-derived alpha-vs-SPY metric — this matrix
+   reads the same rows the rest of the page grades, so using a different "right"
+   metric here would make one row disagree with itself across sections.
 
-**Display:** a 2×2 disagrement matrix:
+**Display:** a 2×2 disagreement matrix:
 
 ```
               Engine ≥ 65      Engine < 65
@@ -296,15 +313,27 @@ Analyst Buy     ✅ Agree         ⚡ Disagreement
 Analyst Sell    ⚡ Disagreement  ✅ Agree
 ```
 
-In the disagreement quadrants, show: how many cases, average subsequent return,
-how many the engine was right vs how many analyst was right.
+Every cell shows case count + average subsequent return. The two disagreement
+cells additionally show "engine right N / analyst right M" — but ONLY once the
+cell reaches `ANALYST_CALIBRATION_MIN_CASES` (5); below that, counts + return
+only, to avoid a percentage rendered from a handful of cases.
 
 This is the calibration signal for deciding how much to manually weight strong analyst
 consensus when the engine is cautious. It does NOT change the engine's behavior —
 awareness only, per the locked invariant.
 
-**Requires:** `composite_score_at_save` data from Phase 1 (not backfillable).
-**Deferred until:** enough data has accumulated. Do not build yet.
+**Disclosed selection bias (not fixed, structural):** `composite_score_at_save`
+is only captured for tickers held at save time (already past the entry gate), so
+the population skews toward Engine ≥ 65 and under-represents the "engine
+skeptical" disagreement cell this feature most wants to see. A visible caption
+on the matrix states this.
+
+**Implementation:** `analyst_intel.consensus_side()` (classification) +
+`analyst_intel.calibration_matrix()` (the decision, pure, unit-tested — 16 new
+tests including the engine-axis boundary, all four quadrant placements, the
+who-was-right partition invariant, and the min-cases gate). New constant
+`ANALYST_CALIBRATION_MIN_CASES = 5`. Opus reviewer pass required (touches
+`constants.py`). See `docs/requirements.md` F-154c for the shipped spec.
 
 ---
 
