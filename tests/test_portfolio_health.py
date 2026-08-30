@@ -247,10 +247,22 @@ def test_factor_exposure_score_clamped_to_zero_floor():
     assert result["score"] == 0.0  # 20 - 25 clamped at 0, not negative
 
 
-def test_factor_exposure_score_fragility_none_but_beta_present_uses_base_65():
+def test_factor_exposure_score_fragility_none_abstains_even_with_beta_present():
+    # Surface-proprioception F-260 finding #7: port_beta is display-only in
+    # `detail` and never feeds `base`/`hb_penalty` -- fragility=None means
+    # severity can't be known, so the score must abstain (None) rather than
+    # fabricate the neutral-65 default. A real number here would make
+    # compute_health_score's n_available count this dimension "available",
+    # suppressing the "some dimensions unavailable" banner precisely when
+    # this dimension is the one that couldn't be measured.
     result = ph._factor_exposure_score(None, hb_share=None, port_beta=1.2)
-    assert result["score"] == 65.0
-    assert result["detail"]["severity"] is None
+    assert result["score"] is None
+    assert result["detail"] == {}
+
+
+def test_factor_exposure_score_non_dict_fragility_abstains():
+    for bad in ["not a dict", 42, []]:
+        assert ph._factor_exposure_score(bad, hb_share=None, port_beta=1.0)["score"] is None
 
 
 # ── _signal_integrity_score ────────────────────────────────────────────────
@@ -400,6 +412,24 @@ def test_compute_health_score_averages_available_sub_scores():
     assert result["overall"] is not None
     assert result["grade"] in {"A", "B", "C", "D", "F"}
     assert len(result["improvements"]) <= 2
+
+
+def test_compute_health_score_fragility_offline_drops_n_available_to_4():
+    # Pins the F-260 finding #7 fix at the compute_health_score level: with
+    # fragility unavailable but port_beta present, factor_exposure must NOT
+    # count toward n_available -- otherwise app.py's `n_available < 5` banner
+    # ("Some dimensions are unavailable") never fires for exactly the session
+    # where a dimension genuinely couldn't be measured.
+    df = make_port_df([
+        {"ticker": "AAPL", "weight": 50.0, "sector": "Tech", "score": 70.0},
+        {"ticker": "XOM", "weight": 50.0, "sector": "Energy", "score": 70.0},
+    ])
+    result = ph.compute_health_score(
+        df, div_score_val=None, avg_corr=0.2, hb_share=10.0,
+        fragility=None, port_risk={"beta": 1.0},
+    )
+    assert result["n_available"] == 4
+    assert result["sub_scores"]["factor_exposure"]["score"] is None
 
 
 def test_compute_health_score_improvements_sorted_by_worst_first():

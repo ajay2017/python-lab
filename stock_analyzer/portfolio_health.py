@@ -192,10 +192,21 @@ def _factor_exposure_score(
     hb_share: float | None,
     port_beta: float | None,
 ) -> dict:
-    if fragility is None and port_beta is None:
+    # fragility is the score's actual driver (severity below); port_beta is
+    # display-only in `detail` and never feeds `base`/`hb_penalty`, so its
+    # absence alone must not fabricate a score. Surface-proprioception F-260
+    # finding #7: the old `fragility is None and port_beta is None` bail-out
+    # let a None fragility with a present port_beta fall through to
+    # `severity = None`, which `.get(severity, 65)` silently turned into a
+    # neutral 65 -- a real number `compute_health_score`'s n_available then
+    # counted as "available", suppressing the "some dimensions unavailable"
+    # banner precisely when this dimension was the one that couldn't be
+    # measured. isinstance guard (not just `is None`) matches this module's
+    # sibling classifiers' defensiveness.
+    if not isinstance(fragility, dict):
         return {"score": None, "detail": {}}
 
-    severity = (fragility or {}).get("severity")
+    severity = fragility.get("severity")
     base = {"calm": 85, "caution": 55, "fragile": 20}.get(severity, 65)
 
     hb_penalty = 0
