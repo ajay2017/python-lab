@@ -5563,6 +5563,14 @@ if page == "🏠 Home":
         # state to the user instead of silently disabling coordination gates.
         if _daily_brief is None:
             st.session_state["_grow_today_sectors_cache"] = None
+            # surface-proprioception F-260 finding: this reset block covers
+            # _grow_today_sectors_cache and _reduce_calls but historically
+            # missed this sibling key, published from the SAME _gt_today dict
+            # a few lines below on the success path — so a Brief that crashed
+            # AFTER an earlier successful run left the prior day's stale
+            # leading-sector list in place, read by 🔔 Catalyst Watch as
+            # current. None (not []) matches the sibling contract.
+            st.session_state["_leading_sectors_cache"]    = None
             st.session_state["_daily_brief_offline"]      = True
             # Provide a minimal empty dict so downstream code doesn't crash, but
             # session_state flag tells consumers to render the offline UI state.
@@ -13702,9 +13710,20 @@ elif page == "🔗 Risk Analysis":
         # balance can't force a trim. Renders only when the seeded cash shows a
         # real, fresh margin debit (see _leverage_cache). "$" escaped as "\$" —
         # Streamlit renders a $…$ pair as LaTeX.
-        _lev_c = st.session_state.get("_leverage_cache")
-        if _lev_c is None:
-            _lev_c = {}
+        _lev_c_raw = st.session_state.get("_leverage_cache")
+        # book_safety() is the single tested classifier for "is this leverage
+        # cache trustworthy" (None / stale / cash_seen=False all -> "unknown";
+        # see memory project_leverage_cache_false_green) — reused here ONLY to
+        # detect that unknown state, not for its drift/call-distance grading,
+        # which this awareness-only block doesn't need. broker_drift=None is
+        # deliberate: it keeps drift_state at "not_checked", so it can never
+        # influence the level returned here.
+        _lev_safety = summary_view.book_safety(
+            _lev_c_raw, None,
+            maintenance_rate=MARGIN_MAINTENANCE_RATE,
+            fragility_pullback_pct=FRAGILITY_PULLBACK_PCT,
+        )
+        _lev_c = _lev_c_raw or {}
         if _lev_c.get("levered"):
             _lv_ratio = _lev_c.get("ratio")
             _lv_eq    = _f(_lev_c.get("equity"), 0.0)
@@ -13747,6 +13766,14 @@ elif page == "🔗 Risk Analysis":
                 "worth monitoring. Concentration gates are judged on equity, so this never forces a trim.",
                 icon="⚖️",
             )
+        elif _lev_safety["level"] == "unknown":
+            # Never verified / stale / cash balance not on file — the leverage
+            # warning above CANNOT be trusted to have fired correctly, so say
+            # so instead of rendering nothing (the F-260 finding this closes:
+            # "levered" silently reading False for three different reasons —
+            # never measured, stale, or a thrown read — looked identical to a
+            # genuinely unlevered book).
+            st.caption(f"⚪ {_lev_safety['headline']} — leverage/margin status not verified this session.")
         # ── Portfolio Risk Dashboard ──────────────────────────────────────────
         if _port_risk:
             st.subheader("Portfolio Risk Dashboard")
@@ -14086,6 +14113,28 @@ elif page == "🔗 Risk Analysis":
                     )
 
             st.divider()
+        else:
+            # surface-proprioception F-260 finding: this whole section (the
+            # 7-metric dashboard, the Market-Risk Posture gauge, Cross-Asset
+            # Pulse, and the Beta Contribution chart) used to just not render
+            # when _port_risk_cache was falsy, with no indication anything was
+            # wrong — a session that reached this page via the Trade Journal
+            # republisher (which does not refresh _port_risk_cache) rather
+            # than a 🏠 Home visit saw a page that looked complete but was
+            # silently missing four sections. `_port_risk_cache`'s producer
+            # publishes None on failure, never {}, so falsy here always means
+            # "not computed", never "computed, nothing to show".
+            _pr_state = _coord_cache_state("_port_risk_cache")
+            st.warning(
+                "⚠ **Portfolio Risk Dashboard unavailable** — risk metrics "
+                "(beta, volatility, Sharpe/Sortino, VaR, drawdown), the "
+                "Market-Risk Posture gauge, Cross-Asset Pulse, and the Beta "
+                "Contribution chart could not be computed this session"
+                + (". Open the 🏠 Home page once to load them, then re-check."
+                   if _pr_state == "missing" else
+                   " — the last computation attempt failed. Re-check after "
+                   "revisiting 🏠 Home.")
+            )
 
         # ── Diversification & Correlation ─────────────────────────────────────
         # `is None` FIRST: _corr_df_cache can be absent when _last_held_data was
@@ -17012,10 +17061,24 @@ elif page == "🥧 Portfolio Overview":
         # ── News Intelligence ─────────────────────────────────────────────────
         st.divider()
         # Read the reduce-call set published by the Brief (CLAUDE.md coordination:
-        # downstream features read, don't recompute). _reduce_calls is set by the
-        # Brief builder above; {} when offline. Derives the same set as
+        # downstream features read, don't recompute). Derives the same set as
         # reduce_call_tickers() would but without a second split_defensive call.
-        _opp_reduce_tickers = set((st.session_state.get("_reduce_calls") or {}).keys())
+        # surface-proprioception F-260 finding: a bare `or {}` here when
+        # _reduce_calls is offline (never checked this session, or the Daily
+        # Brief crashed and fail-opened to {}) would silently publish an
+        # UNFILTERED opportunities list under a "cross-checked against active
+        # Reduce/Exit calls" implication — same bug class as already-closed
+        # finding #8 (My Edge), fixed the same way: _coord_cache_state alone
+        # is not enough since a crashed Brief fail-opens to {} rather than
+        # None, so _daily_brief_offline is also checked.
+        _opp_reduce_verified = (
+            _coord_cache_state("_reduce_calls") == "ready"
+            and not st.session_state.get("_daily_brief_offline", False)
+        )
+        _opp_reduce_tickers = (
+            set((st.session_state.get("_reduce_calls") or {}).keys())
+            if _opp_reduce_verified else set()
+        )
         _ni_data = build_news_intelligence(
             st.session_state.get("_sidebar_news", []), port_df,
             reduce_tickers=_opp_reduce_tickers,
@@ -17095,6 +17158,13 @@ elif page == "🥧 Portfolio Overview":
                         "Positive news on quality positions you already hold. "
                         "These may support adding on a pullback — not a signal to chase the gap."
                     )
+                    if not _opp_reduce_verified:
+                        st.caption(
+                            "⚪ Reduce/Exit cross-check unavailable this session — "
+                            "some names above may be under an active Reduce/Exit call "
+                            "that couldn't be verified. Check 🏠 Home or 🧾 Summary before treating "
+                            "any of these as a clean add signal."
+                        )
                 for _ni_oi, _op in enumerate(_ni_opps[:5]):
                     _op_link = _safe_link(_op.get("url", ""), _op.get("title", ""), max_len=90)
                     st.markdown(
@@ -17295,10 +17365,29 @@ elif page == "🥧 Portfolio Overview":
                     _rb_risk_trim_set.add(str(_tk).upper())
 
         # Read the reduce-call set published by the Brief (CLAUDE.md coordination:
-        # downstream features read, don't recompute). Fail-open idiom matching
-        # every other _reduce_calls consumer: Home may not have run yet this
-        # session, in which case this is {} — no gate, never a crash.
-        _rb_reduce_set = set((st.session_state.get("_reduce_calls") or {}).keys())
+        # downstream features read, don't recompute). surface-proprioception
+        # F-260 finding: a bare `or {}` here silently applies zero exclusions
+        # when _reduce_calls couldn't be verified — build_rebalance_plan
+        # suppresses ADD actions on a name under an active Reduce/Exit call
+        # (rebalancer.py's own docstring), so an unverified empty set would
+        # let a drift-driven ADD contradict a protective call. Mirrors the
+        # _risk_advisor_recs disclosure immediately above this block.
+        # _coord_cache_state alone is not enough since a crashed Daily Brief
+        # fail-opens _reduce_calls to {} rather than None (same reasoning as
+        # already-closed finding #8).
+        _rb_reduce_verified = (
+            _coord_cache_state("_reduce_calls") == "ready"
+            and not st.session_state.get("_daily_brief_offline", False)
+        )
+        if not _rb_reduce_verified:
+            st.caption(
+                "⚠️ Reduce/Exit cross-check unavailable this session — ADD "
+                "suggestions below aren't verified against active Reduce/Exit calls."
+            )
+        _rb_reduce_set = (
+            set((st.session_state.get("_reduce_calls") or {}).keys())
+            if _rb_reduce_verified else set()
+        )
 
         _rb_plan  = build_rebalance_plan(
             _drift_df, total_val,
@@ -31520,7 +31609,12 @@ elif page == "🔔 Catalyst Watch":
         for _t in _cw_held:
             _cw_secmap.setdefault(_t, TICKER_SECTORS.get(_t, ""))
         _cw_tracked = set(_cw_secmap) | _cw_held | _cw_watch
-        _cw_lead = set(st.session_state.get("_leading_sectors_cache", []) or [])
+        # surface-proprioception F-260 finding: distinguish None (Daily Brief
+        # never ran or crashed this session) from a genuinely-computed empty
+        # list (no sector currently leading) — the bare `or []` collapsed both
+        # into a silently-suppressed 🔥 leading-sector flag on every row.
+        _cw_lead_raw = st.session_state.get("_leading_sectors_cache")
+        _cw_lead = set(_cw_lead_raw or [])
 
         _cw_rc1, _cw_rc2 = st.columns([5, 1])
         with _cw_rc2:
@@ -31543,6 +31637,7 @@ elif page == "🔔 Catalyst Watch":
         st.caption(
             f"Watching {len(_cw_tracked - _cw_held)} watchlist/universe names · "
             f"{len(_cw_rows)} reporting in the next {CATALYST_WATCH_WINDOW_DAYS} days · updated daily."
+            + ("" if _cw_lead_raw is not None else " · ⚪ 🔥 leading-sector flag unavailable this session")
         )
 
         if not _cw_rows:
