@@ -2807,6 +2807,25 @@ def save_gate_suppressions(rows: list[dict]) -> dict:
         return {"attempted": len(payload), "saved": 0, "error": str(exc)[:200]}
 
 
+def load_gate_suppressions() -> list[dict] | None:
+    """Read every gate_suppressions row (no date filter — the readout module
+    filters/matures rows itself). Returns None on ANY failure (no
+    credentials, missing table, or a raised query exception) — an offline
+    sentinel, never collapsed into "genuinely no suppressions". This
+    feature's entire purpose is distinguishing "the ledger has nothing" from
+    "we couldn't check the ledger", so this loader has no lenient sibling —
+    it IS the `_or_none`-shaped one from day one (see
+    load_exit_signals_or_none for the same contract over a different table).
+    """
+    if not has_db():
+        return None
+    try:
+        rows = _client().table("gate_suppressions").select("*").execute().data
+        return rows if rows is not None else []
+    except Exception:
+        return None
+
+
 def load_recommendations(start_date=None, end_date=None) -> pd.DataFrame:
     """
     Read recommendation history. No date filter applied when start_date/

@@ -1186,6 +1186,30 @@ ENGINE_TRACK_FIRM_CALLS = 15  # at/above → "firm" band; 8–14 → "early" ban
 PROTECT_TRACK_MIN_CALLS = 8    # below → "building" band (no verdict shown)
 PROTECT_TRACK_FIRM_CALLS = 15  # at/above → "firm" band; 8–14 → "early" band
 
+# ── Gate Suppression Ledger readout (F-259, "🛑 The Road Not Taken") ─────────
+# DISPLAY-ONLY band thresholds + measurement horizon for the per-gate
+# suppression-alpha readout. Pre-registered with the user 2026-08-26 (before
+# any capture data existed — docs/plans/gate-suppression-ledger.md §5) and
+# promoted here now that the readout half is being built; the VALUES are not
+# new decisions, only their home is. Deliberately separate constants from
+# ENGINE_TRACK_*/PROTECT_TRACK_* (same MIN/FIRM values by coincidence, not by
+# reference) so a future engine-track tuning can never silently move this
+# feature's own pre-registered retirement criterion. These are NOT investment
+# decision gates — they never feed into risk_advisor, exit_advisor,
+# daily_briefing, scoring, or any sizing path (redline: this readout is a
+# retrospective measurement of the app's own past restraint, awareness only).
+# Safe to tune from observation, EXCEPT the horizon and ticker floor, which
+# are load-bearing to the pre-registered §5 retirement test and must not be
+# changed without re-deriving that test's validity.
+GATE_LEDGER_MIN_CALLS = 8              # below → "building" band (no verdict)
+GATE_LEDGER_FIRM_CALLS = 15            # at/above → "firm" band; 8–14 → "early"
+GATE_LEDGER_MIN_TICKERS = 5            # distinct-ticker floor (§5 "K") — a gate
+                                        # is evaluable only at MIN_CALLS rows
+                                        # AND MIN_TICKERS distinct tickers, so
+                                        # one ticker re-recorded daily can't
+                                        # fake evaluability
+GATE_LEDGER_HORIZON_TRADING_DAYS = 30  # forward-alpha measurement window (§5 "H")
+
 # ── Self Track Record ("is my own instinct good?", MEASUREMENT-ONLY) ─────────
 # Answers a DIFFERENT question than the Engine Track Record card above ("is
 # the engine good?") — this measures the user's own self-initiated BUYs

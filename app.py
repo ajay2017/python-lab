@@ -195,7 +195,13 @@ from stock_analyzer.constants import (
     COMPOSITE_FIRMNESS_MARGIN,
     MARGIN_MAINTENANCE_RATE,
     NET_CAPITAL_POSITION_CAP_PCT,
+    GATE_LEDGER_MIN_CALLS,
+    GATE_LEDGER_FIRM_CALLS,
+    GATE_LEDGER_MIN_TICKERS,
+    GATE_LEDGER_HORIZON_TRADING_DAYS,
 )
+from stock_analyzer import gate_registry
+from stock_analyzer import gate_ledger_readout
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer import outage_gate as _outage_gate
 from stock_analyzer import act_today_precedence
@@ -2831,6 +2837,7 @@ with st.sidebar:
             ("Macro",    "🌐 Macro",                    ":material/public:"),
             ("Predictive Analytics", "📊 Predictive Analytics", ":material/insights:"),
             ("Model Lab", "🔬 Model Lab",              ":material/experiment:"),
+            ("Road Not Taken", "🛑 The Road Not Taken", ":material/block:"),
             ("System Trust", "🩺 System Trust",        ":material/health_and_safety:"),
         ]),
         ("PORTFOLIO", [
@@ -2856,13 +2863,14 @@ with st.sidebar:
     # Owner-only nav entries — fully hidden (not just disabled-for-writes) from
     # a read-only viewer. 🔬 Model Lab (experimental measurement surface, F-234)
     # was the first; 🩺 System Trust (pipeline-health diagnostic, System
-    # Proprioception Phase 1) is the second — both are owner-only operational
-    # views, not shared portfolio views. Smallest-change approach: filter them
-    # out of the group list before any rendering happens below, rather than
-    # special-casing the button loop itself. Flagged here explicitly since every
-    # other `is_readonly()` use in this app only disables a write control, never
-    # removes a whole nav item.
-    _OWNER_ONLY_PAGES = ("🔬 Model Lab", "🩺 System Trust")
+    # Proprioception Phase 1) is the second; 🛑 The Road Not Taken (Gate
+    # Suppression Ledger readout, F-259 Phase 2) is the third — all three are
+    # owner-only operational/measurement views, not shared portfolio views.
+    # Smallest-change approach: filter them out of the group list before any
+    # rendering happens below, rather than special-casing the button loop
+    # itself. Flagged here explicitly since every other `is_readonly()` use in
+    # this app only disables a write control, never removes a whole nav item.
+    _OWNER_ONLY_PAGES = ("🔬 Model Lab", "🩺 System Trust", "🛑 The Road Not Taken")
     if db.is_readonly():
         _NAV_GROUPS = [
             (_g_label, [item for item in _g_items if item[1] not in _OWNER_ONLY_PAGES])
@@ -30392,6 +30400,129 @@ elif page == "🔬 Model Lab":
             "Baseline logged at prediction time (never recomputed at scoring). "
             "Realized computed from actual bars over the matured window. Regime tag "
             "stored at make-time. All out-of-sample."
+        )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE — THE ROAD NOT TAKEN (Gate Suppression Ledger readout — F-259 Phase 2)
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "🛑 The Road Not Taken":
+    st.title("🛑 The Road Not Taken")
+    st.caption("Owner-only · retrospective measurement · changes no gate, no recommendation, no composite")
+
+    if db.is_readonly():
+        # Defense in depth: the sidebar nav entry is already hidden for a
+        # read-only viewer (see the _OWNER_ONLY_PAGES filter above), but a
+        # stale nav_page from before a mid-session downgrade could still land
+        # here.
+        st.info("🔒 This page is owner-only and isn't available in read-only viewer mode.")
+        st.stop()
+
+    st.caption(
+        "Every gate the app's own rules used to hold back a pick or an add — "
+        "graded against what actually happened. Awareness only: this never "
+        "changes what the engine recommends."
+    )
+
+    _rnt_rows = db.load_gate_suppressions()
+    if _rnt_rows is None:
+        st.warning("⚪ Could not read the suppression ledger — the database may be unreachable.")
+    elif not _rnt_rows:
+        st.info(
+            "**No suppressions logged yet.** The ledger fills in going forward, one "
+            "row per gate-suppressed pick/add — nothing to grade until then."
+        )
+    else:
+        # SPY history + a cached historical-close fetcher, same pattern as
+        # 📊 Predictive Analytics / 🧑‍⚖️ The Judge — reuse the SAME _cached_spy /
+        # _cached_historical_close helpers, no new fetch path. "2y" (not "1y"
+        # like its Predictive Analytics sibling) deliberately: the pre-
+        # registered §5 retirement review is 12 months out, and the oldest
+        # rows at that point would otherwise sit right at a 1y window's edge —
+        # widened so a SPY-window truncation can never be confused with a
+        # genuine "no gate produced a verdict" retirement (Opus review note,
+        # 2026-08-30).
+        _rnt_spy_by_date: dict = {}
+        try:
+            _rnt_spy_hist = _cached_spy("2y")
+            if _rnt_spy_hist is not None and not _rnt_spy_hist.empty \
+                    and "Close" in _rnt_spy_hist.columns:
+                for _si, _sr in _rnt_spy_hist.iterrows():
+                    _sd = _si.date() if hasattr(_si, "date") else None
+                    try:
+                        _sc = float(_sr["Close"])
+                    except (TypeError, ValueError):
+                        _sc = None
+                    if _sd is not None and _sc and _sc > 0:
+                        _rnt_spy_by_date[_sd] = _sc
+        except Exception:
+            _rnt_spy_by_date = {}
+
+        _rnt_enriched = gate_ledger_readout.enrich_and_grade(
+            _rnt_rows,
+            today=_today_et(),
+            spy_close_by_date=_rnt_spy_by_date,
+            historical_close_fn=_cached_historical_close,
+            horizon_trading_days=GATE_LEDGER_HORIZON_TRADING_DAYS,
+            composite_buy=COMPOSITE_BUY,
+        )
+        _rnt_graded = gate_ledger_readout.grade_by_gate(
+            _rnt_enriched,
+            gate_ids=tuple(gate_registry.GATE_IDS.keys()),
+            min_calls=GATE_LEDGER_MIN_CALLS,
+            firm_calls=GATE_LEDGER_FIRM_CALLS,
+            min_tickers=GATE_LEDGER_MIN_TICKERS,
+        )
+
+        for _g in _rnt_graded:
+            with st.container(border=True):
+                st.markdown(f"**{_g['gate_id']}** — {_g.get('gate_description', '')}")
+                if _g.get("market_wide"):
+                    st.caption(
+                        "Market-wide restraint — no single ticker to evaluate; "
+                        "excluded from the evaluable tally by design."
+                    )
+                    for _fn in gate_ledger_readout.readout_footnotes(_g["gate_id"]):
+                        st.caption(f"ℹ️ {_fn}")
+                    continue
+
+                _band = _g["band"]
+                if _band == "building":
+                    st.caption(
+                        f"⚪ Building — {_g['n_matured_evaluable']}/{GATE_LEDGER_MIN_CALLS} matured calls, "
+                        f"{_g['n_distinct_tickers_evaluable']}/{GATE_LEDGER_MIN_TICKERS} distinct tickers. "
+                        f"{_g['n_not_matured']} still maturing."
+                    )
+                else:
+                    _alpha = _g.get("mean_alpha_pct")
+                    _tone = "restraint paid off" if (_alpha is not None and _alpha < 0) else "would have beaten SPY"
+                    st.metric(
+                        f"Mean forward alpha ({_band})",
+                        f"{_alpha:+.2f}%" if _alpha is not None else "—",
+                        help=(
+                            f"Over {_g['n_matured_evaluable']} matured, evaluable suppressions "
+                            f"({_g['n_distinct_tickers_evaluable']} distinct tickers). "
+                            f"Negative = blocked names lagged SPY = {_tone}."
+                        ),
+                    )
+                if _g.get("n_matured_unpriceable"):
+                    st.caption(
+                        f"⚪ {_g['n_matured_unpriceable']} matured row(s) could not be priced — "
+                        "excluded from the mean, not counted as a clean 'nothing happened'."
+                    )
+                if _g.get("n_excluded_null_composite"):
+                    st.caption(
+                        f"⚪ {_g['n_excluded_null_composite']} row(s) excluded: composite score "
+                        "never loaded before this gate fired."
+                    )
+                for _fn in gate_ledger_readout.readout_footnotes(_g["gate_id"]):
+                    st.caption(f"ℹ️ {_fn}")
+
+        st.caption(
+            "Retirement criterion (pre-registered before any data existed): if no "
+            "gate produces an evaluable verdict distinguishable from zero within 12 "
+            "months of the first row, this page is retired — that outcome is this "
+            "criterion's success condition, not a failure."
         )
 
 
