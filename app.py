@@ -16595,17 +16595,18 @@ elif page == "🥧 Portfolio Overview":
         sector_df = sector_exposure(port_df)
         if not sector_df.empty:
             st.subheader("Sector Exposure")
-            # When the account carries a margin debit, the concentration GATES
-            # measure each sector against NET CAPITAL (the smaller denominator),
-            # not gross equity holdings — so a sector reads much higher there and
-            # the 35% cap bites at a lower gross weight. Show BOTH bars so this
-            # chart can't visually contradict a Grow Today sector suppression.
-            # Consumes the published _acct_gate_cache (CLAUDE.md: one number for
-            # all consumers). Display-only — the gate math is unchanged.
-            _sx_gate   = st.session_state.get("_acct_gate_cache") or {}
-            _sx_denom  = _f(_sx_gate.get("denom"), 0.0)
-            _sx_lever  = bool(_sx_gate.get("basis") in ("account", "over-levered")
-                              and _sx_denom > 0)
+            # Concentration gates measure each sector on plain EQUITY weight
+            # (gate_basis() has returned basis="equity" unconditionally since
+            # the 2026-07-09 policy reversal — see stock_analyzer/portfolio.py
+            # gate_basis docstring) — so gross holdings IS the gate basis here,
+            # not an approximation of it. Separate net-capital/leverage-aware
+            # views now live on 💰 Account (F-253/255 cushion + over-cap
+            # checks) and 🔗 Risk Analysis's leverage banner
+            # (margin.capital_basis_weight()); this chart doesn't duplicate
+            # them (surface-proprioception F-260 finding #6 — a prior "levered"
+            # branch here checked _acct_gate_cache["basis"] for values
+            # ("account"/"over-levered") gate_basis() can no longer produce,
+            # so it was permanently dead code, not a live leverage view).
             sec_fig = go.Figure()
             sec_fig.add_trace(go.Bar(
                 x=sector_df["Sector"], y=sector_df["Pct"],
@@ -16614,37 +16615,16 @@ elif page == "🥧 Portfolio Overview":
                 text=[f"{v:.0f}%" for v in sector_df["Pct"]],
                 textposition="outside",
             ))
-            if _sx_lever:
-                _sx_acct = sector_df["Value"] / _sx_denom * 100
-                sec_fig.add_trace(go.Bar(
-                    x=sector_df["Sector"], y=_sx_acct,
-                    name="% of net capital (gated)",
-                    marker_color=["#ef4444" if p >= SECTOR_CEILING else "#f59e0b"
-                                  for p in _sx_acct],
-                    text=[f"{v:.0f}%" for v in _sx_acct],
-                    textposition="outside",
-                ))
             sec_fig.add_hline(y=SECTOR_CEILING, line_dash="dash", line_color="red",
                               annotation_text=f"{SECTOR_CEILING:.0f}% sector hard cap")
             sec_fig.update_layout(
-                template="plotly_dark", height=300 if _sx_lever else 260,
+                template="plotly_dark", height=260,
                 yaxis_title="% of Portfolio",
                 barmode="group",
-                showlegend=_sx_lever,
-                legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                            xanchor="right", x=1),
+                showlegend=False,
                 margin=dict(l=0, r=0, t=10, b=0),
             )
             st.plotly_chart(sec_fig, width="stretch")
-            if _sx_lever:
-                st.caption(
-                    f"You carry a margin debit, so your concentration gates measure each "
-                    f"sector against **net capital (${_sx_denom:,.0f})**, not gross holdings — "
-                    f"borrowed money amplifies exposure to the capital you actually own. The "
-                    f"**{SECTOR_CEILING:.0f}% cap applies to the net-capital bars** (amber, red "
-                    f"when over): a red bar's sector is blocked for new buys in Grow Today. "
-                    f"See 💰 Account for the full account-weight view."
-                )
 
         # ── Sector Gaps — awareness pointer only ──────────────────────────────
         # diversification_recommendations() (Diversification Advisor, 📡 Signals
@@ -16699,23 +16679,22 @@ elif page == "🥧 Portfolio Overview":
                 _cmp_nodes.append(str(_t))
 
             # Node colours: sector red if over the hard cap; ticker red if over the
-            # single-name ceiling; otherwise neutral palette. Concentration flags
-            # fire on the GATE basis: when the account is levered, net capital (the
-            # smaller denominator) is what the 35%/15% ceilings measure against, so
-            # flag red there — otherwise this Sankey would read green while Grow
-            # Today suppresses the same sector. Band widths stay gross (where the
-            # money actually sits). Consumes the published _acct_gate_cache.
-            _cmp_gate  = st.session_state.get("_acct_gate_cache") or {}
-            _cmp_denom = _f(_cmp_gate.get("denom"), 0.0)
-            _cmp_lever = bool(_cmp_gate.get("basis") in ("account", "over-levered")
-                              and _cmp_denom > 0)
-            _flag_base = _cmp_denom if _cmp_lever else _cmp_tot
+            # single-name ceiling; otherwise neutral palette. Concentration gates
+            # measure plain equity weight (gate_basis() has returned basis="equity"
+            # unconditionally since the 2026-07-09 policy reversal), so gross IS
+            # the gate basis — flagging on _cmp_tot matches the gate exactly.
+            # A prior version of this block read _acct_gate_cache for a "levered"
+            # branch checking basis values ("account"/"over-levered") gate_basis()
+            # can no longer produce, so that branch was permanently dead code
+            # (surface-proprioception F-260 finding #6). Net-capital/leverage
+            # awareness lives on 💰 Account (F-253/255) and 🔗 Risk Analysis's
+            # leverage banner (margin.capital_basis_weight()); not duplicated here.
             _cmp_ncolor = ["#60a5fa"]
             for _s, _sv in _cmp_sectors.items():
-                _spct = _sv / _flag_base * 100
+                _spct = _sv / _cmp_tot * 100
                 _cmp_ncolor.append("#ef4444" if _spct > SECTOR_CEILING else "#38bdf8")
             for _, _row in _cmp_df.iterrows():
-                _tpct = float(_row["Market Value"]) / _flag_base * 100
+                _tpct = float(_row["Market Value"]) / _cmp_tot * 100
                 _cmp_ncolor.append("#f87171" if _tpct > SINGLE_NAME_CEILING else "#94a3b8")
 
             _cmp_src, _cmp_tgt, _cmp_val, _cmp_lab = [], [], [], []
@@ -16757,11 +16736,9 @@ elif page == "🥧 Portfolio Overview":
             st.caption(
                 f"Band width = share of portfolio value. **Red** flags concentration: a "
                 f"sector over the **{SECTOR_CEILING:.0f}%** hard cap or a single name over the "
-                f"**{SINGLE_NAME_CEILING:.0f}%** ceiling"
-                + (" — measured against your **net capital** (you carry margin), the same "
-                   "basis the gates use, so a name can flag red here while its band (gross "
-                   "share) looks modest" if _cmp_lever else "")
-                + ". Reads where your capital actually sits and where it's bunched — in one view."
+                f"**{SINGLE_NAME_CEILING:.0f}%** ceiling — the same gross-equity basis the "
+                f"concentration gates use. Reads where your capital actually sits and where "
+                f"it's bunched — in one view. See 💰 Account for a margin/net-capital view."
             )
 
         # Position table
@@ -24395,9 +24372,13 @@ elif page == "📒 Trade Journal":
                 try:
                     _pb_cc_pdf    = st.session_state.get("_last_port_df")
                     _pb_cc_pv     = _f(st.session_state.get("_portfolio_value"), 0.0)
+                    # gate_basis() has returned basis="equity" unconditionally since the
+                    # 2026-07-09 policy reversal (stock_analyzer/portfolio.py docstring),
+                    # so a "basis in (account, over-levered)" check can never be true --
+                    # permanently dead code, same root cause as F-260 finding #6's Sankey
+                    # branch. Removed rather than gated on a cache-collapse disclosure.
                     _pb_cc_gate   = st.session_state.get("_acct_gate_cache") or {}
                     _pb_cc_denom  = _f(_pb_cc_gate.get("denom"), 0.0) or _pb_cc_pv
-                    _pb_cc_margin = _pb_cc_gate.get("basis") in ("account", "over-levered")
                     if _pb_cc_pdf is not None and not _pb_cc_pdf.empty and _pb_cc_pv > 0:
                         _pb_cc_match = _pb_cc_pdf[_pb_cc_pdf["Ticker"] == _pb_ticker]
                         _pb_cc_existing_mv = (
@@ -24460,9 +24441,6 @@ elif page == "📒 Trade Journal":
                                 st.warning(
                                     "⚠️ **Concentration check** — "
                                     + "  ".join(_pb_cc_msgs)
-                                    + ("\n\n⚖️ _Measured on your **net capital** (margin nets the "
-                                       "denominator down) — these weights run higher than the "
-                                       "equity-only view._" if _pb_cc_margin else "")
                                     + "\n\nNot blocked (this is a record of a real trade), but a "
                                     "concentrated position amplifies every loss. Consider trimming, "
                                     "or knowingly accept the higher single-name risk."

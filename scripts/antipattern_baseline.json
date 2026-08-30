@@ -94,7 +94,7 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001frt.get(\"by_weekday\", {}) or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001frt.get(\"stats\", {}) or {}": 2,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.secrets.get(\"anthropic\") or {}": 8,
-      "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_acct_gate_cache\") or {}": 3,
+      "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_acct_gate_cache\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_grow_composites\") or {}": 3,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_grow_composites\", {}) or {}": 4,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_grow_composites_coverage\") or {}": 2,
