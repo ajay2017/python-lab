@@ -31834,6 +31834,22 @@ elif page == "📅 Economic Calendar":
     # TAB 1 — CALENDAR  (two-column: upcoming left, completed right)
     # ══════════════════════════════════════════════════════════════════════════
     with _cal_tab:
+        # surface-proprioception F-260 finding #10: build_macro_calendar's
+        # per-event "affected_tickers" collapses "portfolio never loaded this
+        # session" and "loaded, genuinely zero exposure" into the same []
+        # (its port_df arg is called with a pd.DataFrame() default above),
+        # so every event below renders "*No direct holdings*" identically in
+        # both states -- high false-comfort volume on a check that never
+        # ran. One disclosure covers the whole tab rather than reworking
+        # affected_tickers' contract, which daily_briefing.py also consumes
+        # via `.get("affected_tickers", [])` (would need a defensive update
+        # there too -- out of scope for this low-stakes-per-event finding).
+        if _coord_cache_state("_port_df_enriched") != "ready":
+            st.caption(
+                "ℹ Holdings not loaded this session — every event below reads "
+                "*No direct holdings* whether or not you're actually exposed. "
+                "Visit 🏠 Home once to check real exposure."
+            )
         _ef1, _ef2 = st.columns([3, 4])
         with _ef1:
             _ec_impact_filter = st.radio(
