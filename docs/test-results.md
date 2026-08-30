@@ -18,7 +18,56 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-29 (F-204a 🧾 Summary cockpit + its 13 follow-up fixes)
+## 1. Latest run — 2026-08-29, continued (F-261 verification, venv/pin closed, Part 2 #3 ×2, W6 exit-ladder replay + Forward Simulator Phase 2 closure, Research Scorecard Phase 3)
+
+**4703 passed, 0 failed, 0 skipped** (`python -m pytest -q`). Python (local
+`.venv`, now realigned to **streamlit 1.57.0** — see below). Timing was noisy
+this pass (one run completed in ~170s, a later run took ~1423s under
+transient system load); the count itself was stable across runs.
+
+**+38 over the 4665 baseline this same calendar-day entry originally
+described** (F-204a's own work is unchanged, kept below). Breakdown: 14 new
+in `tests/test_act_today_precedence.py` (the held-position stop-breach/
+reduce-call precedence extracted out of `app.py` — Part 2 #3, first of two
+named targets), 8 new in `tests/test_util.py::TestSizingUnavailableCaption`
+(the sizing-fallback-caption extraction — Part 2 #3, second target), 16 new
+in `tests/test_analyst_intel.py` (`consensus_side` / `calibration_matrix` —
+Research Scorecard Phase 3, Engine vs Analyst Calibration). No new tests for
+`scripts/exit_ladder_replay.py` — a standalone diagnostic script outside
+`tests/`, smoke-tested manually against real INTC price history plus two
+synthetic crash/wick-day fixtures, then run for real against the owner's
+actual trades.
+
+**The venv/pin divergence flagged in the entry immediately below is now
+CLOSED**, decided with the user: realigned `.venv` DOWN to streamlit 1.57.0
+(matching production) rather than bumping the pin up, since production had
+been stable on 1.57.0 and the local venv's job is to validate what's actually
+deployed. Resolved clean, no dependency conflicts; full suite re-run
+immediately after with no regression. This is the first entry in this log
+where local test execution and production run the *same* streamlit version.
+
+**Three things shipped this session, in brief — full detail in
+`docs/shipped-log.md`:** (1) F-261's cold-path fix (a fabricated $50,000
+portfolio value no longer sizes trades) was **production-verified** via an
+owner screenshot on a cold session. (2) The Part 2 #3 app-review extraction —
+**both** named targets, each its own Opus-reviewed commit: the held-position
+banner precedence into `stock_analyzer/act_today_precedence.py`, and the
+duplicated sizing-fallback caption into `util.sizing_unavailable_caption`
+(which also surfaced, and deliberately did NOT fix, a pre-existing
+margin-called caption misattribution — pinned by a test naming it as
+deferred). (3) `scripts/exit_ladder_replay.py` ("W6") replays both the
+deterioration ladder and the `ATR_STOP_MULT` stop day-by-day against real
+closed losing round trips; run for real, it found only 24% of 54 evaluable
+losses got any protective signal before the actual sale (52% got none at
+all), converged across three independent methodology tightenings — which met
+the app review's own pre-registered falsifiable criterion and **closed out
+Forward Portfolio Simulator Phase 2**. (4) Research Scorecard Phase 3 (Engine
+vs Analyst Calibration 2×2) shipped and was production-verified same day —
+its data trigger (`composite_score_at_save` on ≥20 rows) was measured live
+and met (26 of 547), and a `planner` pass corrected three stale assumptions
+in the original plan doc before any code was written.
+
+## 1z. Earlier the same day — 2026-08-29 (F-204a 🧾 Summary cockpit + its 13 follow-up fixes)
 
 **4665 passed, 0 failed, 0 skipped** (`python -m pytest -q`: 306.33s). Python
 (local `.venv`). Transcribed from the run, not recalled — and run **twice**,

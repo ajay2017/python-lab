@@ -147,7 +147,7 @@ Pre-market and end-of-day, the **email cron** may have already sent you a protec
 
 ### Group: AI
 
-**🧠 AI Insights** — *The LLM advisory layer.* Seven tabs: 🩺 Positions (thesis review INTACT/WEAKENING/BROKEN, F-151; behavioral KPI strip F-166) | 📅 Debriefs (weekly F-152) | 🏦 Research (Ideas Inbox F-154) | 📊 Scorecard (analyst call accuracy F-154c) | ⚠️ Red Team (thesis counter-evidence, F-196) | ⚔️ Debate Log (multi-agent debate, F-197) | 💬 Ask (Portfolio Q&A, F-225). **Every surface here is advisory — it narrates and reflects, it never originates or gates.**
+**🧠 AI Insights** — *The LLM advisory layer.* Seven tabs: 🩺 Positions (thesis review INTACT/WEAKENING/BROKEN, F-151; behavioral KPI strip F-166) | 📅 Debriefs (weekly F-152) | 🏦 Research (Ideas Inbox F-154) | 📊 Scorecard (analyst call accuracy F-154c — KPI row, per-call table, firm leaderboard, best/worst calls, plus a **Phase 3 "⚖️ Engine vs Analyst Calibration" 2×2** showing whether saved analyst consensus or the engine composite called it right when the two disagreed at save time) | ⚠️ Red Team (thesis counter-evidence, F-196) | ⚔️ Debate Log (multi-agent debate, F-197) | 💬 Ask (Portfolio Q&A, F-225). **Every surface here is advisory — it narrates and reflects, it never originates or gates.**
 
 ---
 
