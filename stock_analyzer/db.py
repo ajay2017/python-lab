@@ -1360,6 +1360,36 @@ def load_daily_snapshots(start_date=None, end_date=None) -> "pd.DataFrame":
         return empty
 
 
+def load_daily_snapshots_or_none(start_date=None, end_date=None) -> "pd.DataFrame | None":
+    """
+    Same query as load_daily_snapshots(), but distinguishes a genuine
+    zero-row result (returns an empty DataFrame) from a failed load --
+    missing credentials or a raised exception during the query (returns
+    None). load_daily_snapshots() itself cannot make this distinction (its
+    except branch returns the same empty DataFrame either way), which is
+    fine for its existing consumers (judgment_grading, the F-247 Alpha
+    Attribution readiness panel, Self Track Record, Predictive Analytics,
+    structural trend analysis, Weekly Debrief -- all of which already
+    degrade gracefully to "no history yet") but unsafe for a consumer where
+    "load failed" must never be treated as "zero snapshots exist" -- the
+    offline-sentinel-collapse bug class.
+    """
+    import pandas as pd
+    empty = pd.DataFrame(columns=["snapshot_date", "ticker", "shares", "close_price"])
+    if not has_db():
+        return None
+    try:
+        q = _client().table("daily_snapshots").select("*")
+        if start_date is not None:
+            q = q.gte("snapshot_date", str(start_date)[:10])
+        if end_date is not None:
+            q = q.lte("snapshot_date", str(end_date)[:10])
+        rows = q.order("snapshot_date", desc=False).execute().data
+        return pd.DataFrame(rows) if rows else empty
+    except Exception:
+        return None
+
+
 def save_daily_snapshot(snapshot_date, rows: list[dict]) -> bool:
     """Upsert the snapshot for `snapshot_date` (today's held positions at the
     final, market-closed close price). Sweeps tickers no longer held for that
@@ -2019,6 +2049,49 @@ def load_analyst_coverage(
         return df
     except Exception:
         return empty
+
+
+def load_analyst_coverage_or_none(
+    ticker: str | None = None,
+    days: int | None = None,
+    limit: int = 100,
+) -> "pd.DataFrame | None":
+    """
+    Same query as load_analyst_coverage(), but distinguishes a genuine
+    zero-row result (returns an empty DataFrame) from a failed load --
+    missing credentials or a raised exception during the query (returns
+    None). load_analyst_coverage() itself cannot make this distinction (its
+    except branch returns the same empty DataFrame either way), which is
+    fine for its existing consumers (Ideas Inbox, Research Scorecard, My
+    Edge, Predictive Analytics, the analyst-vs-engine calibration matrix --
+    all of which already degrade gracefully to "no coverage yet") but unsafe
+    for a consumer where "load failed" must never be treated as "zero
+    coverage rows exist" -- the offline-sentinel-collapse bug class.
+    """
+    import pandas as pd
+    empty = pd.DataFrame(columns=_ANALYST_COVERAGE_COLS)
+    if not has_db():
+        return None
+    try:
+        q = _client().table("analyst_coverage").select("*")
+        if ticker:
+            q = q.eq("ticker", ticker.strip().upper())
+        if days:
+            from datetime import datetime, timedelta
+            import pytz
+            _et = pytz.timezone("America/New_York")
+            cutoff = (datetime.now(tz=_et) - timedelta(days=days)).date().isoformat()
+            q = q.gte("article_date", cutoff)
+        rows = q.order("article_date", desc=True).limit(limit).execute().data
+        if not rows:
+            return empty
+        df = pd.DataFrame(rows)
+        for col in _ANALYST_COVERAGE_COLS:
+            if col not in df.columns:
+                df[col] = None
+        return df
+    except Exception:
+        return None
 
 
 def delete_analyst_coverage(row_id) -> bool:
@@ -3215,6 +3288,42 @@ def load_portfolio_thesis(lookback_days: int) -> list[dict]:
         return rows or []
     except Exception:
         return []
+
+
+def load_portfolio_thesis_or_none(lookback_days: int) -> "list[dict] | None":
+    """
+    Same query as load_portfolio_thesis(), but distinguishes a genuine
+    zero-row result (returns an empty list) from a failed load -- missing
+    credentials or a raised exception during the query (returns None).
+    load_portfolio_thesis() itself cannot make this distinction (its except
+    branch returns the same empty list either way, by the same "ships inert
+    until DDL" contract as judgment_opinions/analyst_target_snapshots),
+    which is fine for its existing consumer (Summary's standing-thesis card,
+    which degrades gracefully either way) but unsafe for a consumer where
+    "load failed" must never be treated as "no thesis written this week" --
+    e.g. the F-232 weekly "already written this week" guard, which would
+    otherwise silently permit a duplicate weekly thesis on a transient
+    Supabase hiccup -- the offline-sentinel-collapse bug class.
+    """
+    if not has_db():
+        return None
+    try:
+        from datetime import timedelta
+
+        from stock_analyzer.market_time import today_et
+        cutoff = (today_et() - timedelta(days=lookback_days)).isoformat()
+        rows = (
+            _client()
+            .table("portfolio_thesis")
+            .select("*")
+            .gte("thesis_date", cutoff)
+            .order("thesis_date", desc=True)
+            .execute()
+            .data
+        )
+        return rows or []
+    except Exception:
+        return None
 
 
 # ── Price cross-check history (ticker × date) ────────────────────────────────
