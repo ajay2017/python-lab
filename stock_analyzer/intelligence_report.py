@@ -82,6 +82,30 @@ def _pct(v) -> str:
         return "—"
 
 
+def classify_recommendations_read(recs_or_none) -> str:
+    """Classify a recommendations read for the monthly-report generation gate.
+
+    Returns one of:
+      "outage" — the read itself failed (recs_or_none is None, e.g.
+                 db.load_recommendations_or_none() saw a DB outage or
+                 missing credentials). Must render distinctly from "empty" —
+                 collapsing the two tells the owner to wait for the Daily
+                 Brief to surface picks when the real problem is a live DB
+                 outage worth investigating now.
+      "empty"  — the read succeeded but no recommendations exist in the
+                 requested window (a genuine quiet period, not a failure).
+      "ready"  — recommendations exist; safe to build the report package.
+
+    Pure function — extracted so the interactive "Generate Monthly Report"
+    button in app.py (no test coverage of its own) is render-only wiring
+    around a decision that IS tested."""
+    if recs_or_none is None:
+        return "outage"
+    if recs_or_none.empty:
+        return "empty"
+    return "ready"
+
+
 def _band_line(row: dict) -> str:
     """One scorecard row → a compact prompt line. The band/verdict ALPHA reported here is
     `avg_alpha` — the engine's alpha across ALL graded names in the band (acted or not),

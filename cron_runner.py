@@ -353,15 +353,21 @@ def _run_premarket(now_et, force: bool) -> int:
             "rel_strength": c.get("rel_strength"),
         })
     if exit_signal_rows:
-        db.save_exit_signals_batch(exit_signal_rows)
-        _log(f"exit_signals captured ({len(exit_signal_rows)} rows, date={today_str}).")
+        if db.save_exit_signals_batch(exit_signal_rows):
+            _log(f"exit_signals captured ({len(exit_signal_rows)} rows, date={today_str}).")
+        else:
+            _log(f"exit_signals: WRITE FAILED for {len(exit_signal_rows)} row(s), "
+                 f"date={today_str} — see warnings log.")
 
     # Analyst-target consensus snapshot — log-only Phase 1, no alert wired yet.
     # Reuses the bundles already loaded for the checks above (zero extra API cost).
     target_rows = payload.get("analyst_target_snapshots", [])
     if target_rows:
-        db.save_analyst_target_snapshots_batch(target_rows)
-        _log(f"analyst_target_snapshots captured ({len(target_rows)} rows, date={today_str}).")
+        if db.save_analyst_target_snapshots_batch(target_rows):
+            _log(f"analyst_target_snapshots captured ({len(target_rows)} rows, date={today_str}).")
+        else:
+            _log(f"analyst_target_snapshots: WRITE FAILED for {len(target_rows)} row(s), "
+                 f"date={today_str} — see warnings log.")
 
     # Velocity check — detect WATCH tickers whose composite score is accelerating
     # toward TRIM. Silently skips when exit_signals has < 2 days of WATCH history
@@ -1261,6 +1267,7 @@ def _run_debrief(now_et, force: bool) -> int:
 
     from stock_analyzer import debrief_advisor as _da
     from stock_analyzer import notify as _notify
+    from stock_analyzer.constants import WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS
     from stock_analyzer.market_time import most_recent_sunday
 
     # Anchored to the most recent Sunday, not raw now_et.date() — a `force`
@@ -1269,11 +1276,19 @@ def _run_debrief(now_et, force: bool) -> int:
     week_ending = most_recent_sunday(now_et.date())
     week_start  = week_ending - __import__("datetime").timedelta(days=6)
 
-    # Load snapshot data for the week
+    # Load snapshot data for the week. The lenient loader (not _or_none) is
+    # intentional here — this lane's outage detection is the separate
+    # _db_unavailable_detail() probe below, not an _or_none None-check; the
+    # threshold comparison itself is delegated to classify_snapshot_read() so
+    # the comparison against WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS lives in
+    # stock_analyzer/, not here (this lane's own snapshots_df is never None,
+    # so "outage" never fires from this call — only "insufficient"/"ready").
     snapshots_df = db.load_daily_snapshots(start_date=week_start, end_date=week_ending)
-    days_available = len(snapshots_df["snapshot_date"].unique()) if not snapshots_df.empty else 0
+    _snap_status, days_available = _da.classify_snapshot_read(
+        snapshots_df, WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS
+    )
 
-    if days_available < 5:
+    if _snap_status == "insufficient":
         # days_available == 0 is indistinguishable from a DB outage without probing —
         # a genuine early-run has at least some snapshots; zero means nothing came back.
         # A partial shortfall (1–4 days) is a data-accumulation issue, not an outage.
@@ -1281,8 +1296,9 @@ def _run_debrief(now_et, force: bool) -> int:
             _detail = _db_unavailable_detail()
             if _detail:
                 return _handle_db_unavailable("debrief", now_et, _detail)
-        _log(f"debrief: only {days_available} snapshot day(s) available — need 5. "
-             f"Earliest full debrief after {week_start + __import__('datetime').timedelta(days=5 - days_available)}.")
+        _log(f"debrief: only {days_available} snapshot day(s) available — need "
+             f"{WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS}. Earliest full debrief after "
+             f"{week_start + __import__('datetime').timedelta(days=WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS - days_available)}.")
         return 0
 
     # Load recommendations and trades for the week
@@ -1421,8 +1437,12 @@ def _run_monthly_report(now_et, force: bool) -> int:
     trades_df = db.load_trades()
 
     if recs_df is None or recs_df.empty:
-        # recs_df is None on a DB read failure as well as on genuinely zero recs —
-        # probe so an outage doesn't silently masquerade as "nothing to report yet".
+        # load_recommendations() itself never actually returns None (a read
+        # failure degrades to the same empty DataFrame as genuinely zero
+        # recs) — the `is None` half of this check is defensive, not load-
+        # bearing. The real protection is the unconditional probe below:
+        # empty alone doesn't distinguish "nothing to report yet" from "the
+        # DB couldn't be read", so probe before concluding it's the former.
         _detail = _db_unavailable_detail()
         if _detail:
             return _handle_db_unavailable("monthly", now_et, _detail)

@@ -322,3 +322,31 @@ def test_generate_report_valid_response_round_trip():
     assert result["period_start"] == package["period_start"]
     assert result["period_end"] == package["period_end"]
     assert "generated_at" in result
+
+
+# ─── classify_recommendations_read ───────────────────────────────────────────
+# 2026-08-30: extracted from app.py's "Generate Monthly Report" button so the
+# outage-vs-empty-vs-ready decision is unit-tested rather than only reachable
+# via a screenshot (app.py has no test coverage of its own). Also closes a
+# latent app.py bug: the old inline check was `if _mr_recs is None or
+# _mr_recs.empty`, but load_recommendations() never actually returns None,
+# so that branch was dead code and a DB outage rendered identically to a
+# genuine "nothing recorded yet" quiet period.
+
+def test_classify_recommendations_read_outage_when_read_is_none():
+    assert ir.classify_recommendations_read(None) == "outage"
+
+
+def test_classify_recommendations_read_empty_when_genuinely_zero_rows():
+    assert ir.classify_recommendations_read(pd.DataFrame()) == "empty"
+
+
+def test_classify_recommendations_read_ready_when_rows_present():
+    df = pd.DataFrame({"ticker": ["AAPL"], "rec_date": ["2026-08-24"]})
+    assert ir.classify_recommendations_read(df) == "ready"
+
+
+def test_classify_recommendations_read_outage_never_confused_with_empty():
+    """The failure mode this function exists to close: None and a genuinely
+    empty DataFrame must classify DIFFERENTLY."""
+    assert ir.classify_recommendations_read(None) != ir.classify_recommendations_read(pd.DataFrame())

@@ -33957,6 +33957,7 @@ elif page == "🧠 AI Insights":
         if st.button("Generate Now", key="_wd_generate_btn", disabled=not _ai_api_key,
                      help="Generate a debrief for the trailing 7 days using current snapshot data."):
             with st.spinner("Assembling data and calling AI..."):
+                from stock_analyzer.constants import WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS
                 from stock_analyzer.market_time import today_et as _wd_today_et
                 from stock_analyzer.market_time import most_recent_sunday as _wd_most_recent_sunday
 
@@ -33967,11 +33968,23 @@ elif page == "🧠 AI Insights":
                 # market_time.most_recent_sunday docstring.
                 _wd_today      = _wd_most_recent_sunday(_wd_today_et())
                 _wd_week_start = _wd_today - timedelta(days=6)
-                _wd_snaps = _ai_db.load_daily_snapshots(start_date=_wd_week_start, end_date=_wd_today)
-                _wd_days  = len(_wd_snaps["snapshot_date"].unique()) if not _wd_snaps.empty else 0
-                if _wd_days < 5:
+                # _or_none (not the lenient loader) so classify_snapshot_read
+                # can tell a DB outage apart from a genuine early-run — the
+                # same silent-outage-collapse class the cron lane's own
+                # _db_unavailable_detail() probe already guards against.
+                _wd_snaps = _ai_db.load_daily_snapshots_or_none(start_date=_wd_week_start, end_date=_wd_today)
+                _wd_status, _wd_days = _dba.classify_snapshot_read(
+                    _wd_snaps, min_days=WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS
+                )
+                if _wd_status == "outage":
+                    st.error(
+                        "Could not read snapshot data — the database may be "
+                        "unreachable. Try again in a moment."
+                    )
+                elif _wd_status == "insufficient":
                     st.warning(
-                        f"Only {_wd_days} trading day(s) of snapshot data available — need 5. "
+                        f"Only {_wd_days} trading day(s) of snapshot data available — "
+                        f"need {WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS}. "
                         f"Check back after more days accumulate."
                     )
                 else:
@@ -34134,8 +34147,19 @@ elif page == "🧠 AI Insights":
                 # market_time.most_recent_sunday docstring.
                 _mr_end   = _mr_most_recent_sunday(_mr_today_et())
                 _mr_start = _mr_end - timedelta(days=28)
-                _mr_recs  = _ai_db.load_recommendations(start_date=_mr_start, end_date=_mr_end)
-                if _mr_recs is None or _mr_recs.empty:
+                # _or_none (not the lenient loader, whose "is None" branch
+                # below was dead code -- load_recommendations() never
+                # actually returns None) so classify_recommendations_read can
+                # tell a DB outage apart from a genuine "nothing recorded
+                # yet" — same class as the Weekly Debrief fix above.
+                _mr_recs  = _ai_db.load_recommendations_or_none(start_date=_mr_start, end_date=_mr_end)
+                _mr_status = _ir.classify_recommendations_read(_mr_recs)
+                if _mr_status == "outage":
+                    st.error(
+                        "Could not read recommendation history — the database "
+                        "may be unreachable. Try again in a moment."
+                    )
+                elif _mr_status == "empty":
                     st.warning(
                         "No recommendations recorded in the trailing 4 weeks yet. As Today's "
                         "Brief surfaces picks day after day, this report will fill in."

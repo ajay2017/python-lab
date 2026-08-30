@@ -2874,13 +2874,23 @@ _EXIT_SIGNAL_NULLABLE_COLS = (
 )
 
 
-def save_exit_signals_batch(signals: list[dict]) -> None:
+def save_exit_signals_batch(signals: list[dict]) -> bool:
     """Persist exit signals emitted by the Daily Brief for Behavioral Fingerprint
     exit-side analysis.
 
     Idempotent: upserts on (ticker, signal_date, signal_type) — repeated same-day
     Brief builds are no-ops.  Never raises — a capture failure must never break
     the Brief itself.
+
+    Returns True iff the upsert itself actually executed; False for readonly
+    mode, no signals, no db, or a raised exception during the upsert (the
+    pre-read merge below is best-effort and does NOT affect this return value
+    — its own failure only means the batch upserts as-is, not that the write
+    failed). Mirrors save_model_predictions_batch's contract: the cron
+    caller used to log "captured" unconditionally right after calling this,
+    which claimed success even when the upsert below silently failed via
+    warnings.warn() — the same log-collapses-failure-into-success shape as
+    the model_predictions maturation bug fixed the same week.
 
     Each dict in `signals` must have at minimum: ticker, signal_date, signal_type.
     All other columns (composite_score, price_at_signal, dd_from_peak_pct,
@@ -2899,11 +2909,11 @@ def save_exit_signals_batch(signals: list[dict]) -> None:
     possible clobber in that one failure case.
     """
     if is_readonly():
-        return
+        return False
     if not signals:
-        return
+        return False
     if not has_db():
-        return
+        return False
 
     try:
         tickers = sorted({str(s["ticker"]) for s in signals if s.get("ticker")})
@@ -2939,9 +2949,11 @@ def save_exit_signals_batch(signals: list[dict]) -> None:
             signals,
             on_conflict="ticker,signal_date,signal_type",
         ).execute()
+        return True
     except Exception as e:
         import warnings
         warnings.warn(f"save_exit_signals_batch: {e}")
+        return False
 
 
 def load_exit_signals(days_back: int = 365) -> pd.DataFrame:
@@ -3002,7 +3014,7 @@ def load_exit_signals_or_none(days_back: int = 365) -> pd.DataFrame | None:
         return None
 
 
-def save_analyst_target_snapshots_batch(snapshots: list[dict]) -> None:
+def save_analyst_target_snapshots_batch(snapshots: list[dict]) -> bool:
     """Persist a daily analyst-consensus-target snapshot per held ticker.
 
     Idempotent: upserts on (ticker, snapshot_date) — repeated same-day cron
@@ -3011,21 +3023,29 @@ def save_analyst_target_snapshots_batch(snapshots: list[dict]) -> None:
 
     Each dict in `snapshots` must have at minimum: ticker, snapshot_date.
     target_mean/num_analysts/info_source are nullable and may be omitted.
+
+    Returns True iff the upsert itself actually executed; False for readonly
+    mode, no snapshots, no db, or a raised exception — same contract as
+    save_exit_signals_batch/save_model_predictions_batch, so the cron caller
+    can distinguish a real capture from a write that silently failed via
+    warnings.warn() (previously logged as "captured" either way).
     """
     if is_readonly():
-        return
+        return False
     if not snapshots:
-        return
+        return False
     if not has_db():
-        return
+        return False
     try:
         _client().table("analyst_target_snapshots").upsert(
             snapshots,
             on_conflict="ticker,snapshot_date",
         ).execute()
+        return True
     except Exception as e:
         import warnings
         warnings.warn(f"save_analyst_target_snapshots_batch: {e}")
+        return False
 
 
 def load_analyst_target_snapshots(days_back: int = 365) -> pd.DataFrame:

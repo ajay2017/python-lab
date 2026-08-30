@@ -577,3 +577,52 @@ def test_generate_debrief_valid_response_round_trip():
     assert result["section_watchnext"] == "Watch text."
     assert result["email_sent"] is False
     assert "generated_at" in result
+
+
+# ─── classify_snapshot_read ──────────────────────────────────────────────────
+# 2026-08-30: extracted from app.py's "Generate Now" button so the outage-vs-
+# insufficient-vs-ready decision is unit-tested rather than only reachable
+# via a screenshot (app.py has no test coverage of its own).
+
+def test_classify_snapshot_read_outage_when_read_is_none():
+    status, days = da.classify_snapshot_read(None, min_days=5)
+    assert status == "outage"
+    assert days == 0
+
+
+def test_classify_snapshot_read_insufficient_when_genuinely_few_days():
+    df = pd.DataFrame({"snapshot_date": ["2026-08-24", "2026-08-25", "2026-08-26"]})
+    status, days = da.classify_snapshot_read(df, min_days=5)
+    assert status == "insufficient"
+    assert days == 3
+
+
+def test_classify_snapshot_read_insufficient_when_genuinely_empty():
+    status, days = da.classify_snapshot_read(pd.DataFrame(columns=["snapshot_date"]), min_days=5)
+    assert status == "insufficient"
+    assert days == 0
+
+
+def test_classify_snapshot_read_ready_when_enough_distinct_days():
+    df = pd.DataFrame({"snapshot_date": [
+        "2026-08-24", "2026-08-24", "2026-08-25", "2026-08-26",
+        "2026-08-27", "2026-08-28",
+    ]})
+    status, days = da.classify_snapshot_read(df, min_days=5)
+    assert status == "ready"
+    assert days == 5  # distinct dates, not row count
+
+
+def test_classify_snapshot_read_boundary_exactly_min_days_is_ready():
+    df = pd.DataFrame({"snapshot_date": [f"2026-08-{d:02d}" for d in range(24, 29)]})
+    status, days = da.classify_snapshot_read(df, min_days=5)
+    assert status == "ready"
+    assert days == 5
+
+
+def test_classify_snapshot_read_outage_never_confused_with_insufficient():
+    """The failure mode this function exists to close: None and a genuinely
+    empty DataFrame must classify DIFFERENTLY."""
+    outage_status, _ = da.classify_snapshot_read(None, min_days=5)
+    empty_status, _ = da.classify_snapshot_read(pd.DataFrame(columns=["snapshot_date"]), min_days=5)
+    assert outage_status != empty_status

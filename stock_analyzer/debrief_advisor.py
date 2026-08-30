@@ -75,6 +75,42 @@ def _pct(v: float | None) -> str:
     return f"{v:+.1f}%"
 
 
+def classify_snapshot_read(snapshots_or_none, min_days: int) -> tuple[str, int]:
+    """Classify a daily_snapshots read for the weekly-debrief generation gate.
+
+    Returns (status, days_available):
+      "outage"       — the read itself failed (snapshots_or_none is None,
+                        e.g. db.load_daily_snapshots_or_none() saw a DB
+                        outage or missing credentials). Must render as
+                        "could not check", never the same "not enough data
+                        yet" message a genuine early-run gets — the two look
+                        identical from days_available alone (both 0), and
+                        collapsing them tells the owner to wait for data
+                        accrual when the real problem is a live DB outage
+                        worth investigating now.
+      "insufficient" — the read succeeded but fewer than `min_days` trading
+                        days of snapshots exist yet (a genuine early-run or
+                        a partial-week shortfall, not a failure).
+      "ready"        — enough days exist; safe to build the debrief package.
+
+    Pure function — extracted so the interactive "Generate Now" button in
+    app.py (no test coverage of its own) is render-only wiring around a
+    decision that IS tested. Mirrors the cron lane's own outage-vs-empty
+    distinction in cron_runner.py::_run_debrief, which reaches the same
+    conclusion via a different mechanism (an unconditional db-health probe
+    when days_available == 0, rather than an _or_none read) because the
+    cron lane predates load_daily_snapshots_or_none()."""
+    if snapshots_or_none is None:
+        return "outage", 0
+    days = (
+        len(snapshots_or_none["snapshot_date"].unique())
+        if not snapshots_or_none.empty else 0
+    )
+    if days < min_days:
+        return "insufficient", days
+    return "ready", days
+
+
 # ── Data package builder ──────────────────────────────────────────────────────
 
 def build_debrief_package(

@@ -1148,6 +1148,16 @@ LLM_REQUEST_TIMEOUT_SEC = 30
 # only how long we wait before grading. Safe to tune from observation.
 REC_SCORE_MIN_DAYS = 5
 
+# Minimum trading days of daily_snapshots history before the Weekly Debrief
+# (F-3 / F-152) will generate — below this a week-over-week narrative would be
+# built off too thin a sample. Same "measurement floor, not a decision gate"
+# character as REC_SCORE_MIN_DAYS: it never affects what the engine recommends,
+# only whether there's enough history to narrate. Used by both the Sunday cron
+# lane (cron_runner.py::_run_debrief) and the interactive "Generate Now" button
+# (stock_analyzer.debrief_advisor.classify_snapshot_read) — centralized here
+# 2026-08-30 so the two call sites can't silently drift apart on the same value.
+WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS = 5
+
 # Minimum number of MATURED graded entries before the Monthly Intelligence Report
 # (F-4 / F-153) will narrate "entry quality" (question 0 — did the engine pick
 # well?). Below this the entry-quality section is suppressed with a "not enough

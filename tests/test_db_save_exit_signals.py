@@ -59,10 +59,16 @@ class _FakeUpsertBuilder:
         return _FakeExecResult([])
 
 
+class _FakeUpsertBuilderRaises:
+    def execute(self):
+        raise RuntimeError("relation \"exit_signals\" does not exist")
+
+
 class _FakeTable:
-    def __init__(self, store, raise_on_select=False):
+    def __init__(self, store, raise_on_select=False, raise_on_upsert=False):
         self._store = store
         self._raise_on_select = raise_on_select
+        self._raise_on_upsert = raise_on_upsert
 
     def select(self, cols):
         if self._raise_on_select:
@@ -70,17 +76,21 @@ class _FakeTable:
         return _FakeSelectBuilder(self._store)
 
     def upsert(self, records, on_conflict=None):
+        if self._raise_on_upsert:
+            return _FakeUpsertBuilderRaises()
         return _FakeUpsertBuilder(self._store, records)
 
 
 class _FakeClient:
-    def __init__(self, raise_on_select=False):
+    def __init__(self, raise_on_select=False, raise_on_upsert=False):
         self.store: dict[tuple, dict] = {}
         self._raise_on_select = raise_on_select
+        self._raise_on_upsert = raise_on_upsert
 
     def table(self, name):
         assert name == "exit_signals"
-        return _FakeTable(self.store, raise_on_select=self._raise_on_select)
+        return _FakeTable(self.store, raise_on_select=self._raise_on_select,
+                           raise_on_upsert=self._raise_on_upsert)
 
 
 def _sig(ticker="AAPL", signal_date="2026-08-05", signal_type="TRIM", **overrides):
@@ -240,5 +250,67 @@ def test_no_db_is_noop(monkeypatch):
     try:
         db.save_exit_signals_batch([_sig(price_at_signal=100)])
         assert fake.store == {}
+    finally:
+        _teardown()
+
+
+# ── Return-value contract (2026-08-30): the cron caller logs "captured"
+# only when this returns True, so a silently-failed write must not report
+# the same shape as success — mirrors save_model_predictions_batch. ────────
+
+def test_successful_upsert_returns_true():
+    fake = _FakeClient()
+    _install(fake)
+    try:
+        assert db.save_exit_signals_batch([_sig(price_at_signal=100)]) is True
+    finally:
+        _teardown()
+
+
+def test_upsert_exception_returns_false_not_true():
+    fake = _FakeClient(raise_on_upsert=True)
+    _install(fake)
+    try:
+        assert db.save_exit_signals_batch([_sig(price_at_signal=100)]) is False
+    finally:
+        _teardown()
+
+
+def test_preread_failure_alone_does_not_make_the_write_report_false():
+    # The pre-read merge failing is a DIFFERENT, best-effort failure mode —
+    # the upsert itself still runs and succeeds, so this must report True.
+    fake = _FakeClient(raise_on_select=True)
+    _install(fake)
+    try:
+        assert db.save_exit_signals_batch([_sig(price_at_signal=100)]) is True
+    finally:
+        _teardown()
+
+
+def test_readonly_reports_false(monkeypatch):
+    monkeypatch.setattr(db, "is_readonly", lambda: True)
+    fake = _FakeClient()
+    _install(fake)
+    try:
+        assert db.save_exit_signals_batch([_sig(price_at_signal=100)]) is False
+    finally:
+        _teardown()
+
+
+def test_empty_batch_reports_false():
+    fake = _FakeClient()
+    _install(fake)
+    try:
+        assert db.save_exit_signals_batch([]) is False
+    finally:
+        _teardown()
+
+
+def test_no_db_reports_false(monkeypatch):
+    monkeypatch.setattr(db, "has_db", lambda: False)
+    fake = _FakeClient()
+    _install(fake)
+    try:
+        assert db.save_exit_signals_batch([_sig(price_at_signal=100)]) is False
     finally:
         _teardown()
