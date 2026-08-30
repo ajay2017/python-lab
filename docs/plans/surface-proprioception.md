@@ -1,5 +1,17 @@
 # Surface Proprioception (F-260) — audit first, then decide
 
+**Status: all 10 individually-ranked §10 findings CLOSED 2026-08-30.** Findings
+#1 and #3 were already fixed before this pass (the fabricated-$50k sizing fix and
+the Analysis `_reduce_calls` guard, both pre-existing). This session closed the
+remaining 8 — #2, #4, #5, #6, #7, #8, #9, #10 — across 7 commits (some findings
+shared one root cause and landed together: #6/#9 turned out to be the SAME dead
+"levered" branch, not two separate cache-collapse bugs — see the #6 note below).
+Every fix went through Opus review before commit; one (#8) came back FIX-FIRST on
+the first pass and was revised and re-reviewed SHIP. **The remaining ~15 of the
+25 total CLAIM findings were never individually itemized in §10** (grouped there
+as "and annotation-level omissions") — closing them, if ever picked up, needs its
+own fresh pass rather than continuing this list. Full detail per finding below.
+
 **Status: CHUNK 1 COMPLETE 2026-08-27 — N = 25 CLAIM findings, which trips the
 pre-registered `N > 15` branch: THE COUNTER IS NOT BUILT.** The class is structural.
 Chunk 3 (the registry-aware gate) and the ranked fixes proceed; the instrumentation
@@ -352,29 +364,70 @@ either `is None`-checked, wrapped in `try/except`, or passed to a documented Non
 1. **`_portfolio_value` → a fabricated $50,000 book** (shared sidebar global + 📋 Watchlist ×2).
    Sizes every trade on 📈 Analysis and Watchlist and prints "Portfolio: $50,000" in the
    exportable brief, on a real book of ~$24,500. **Money-moving; fixed first, separately — see
-   §12.**
+   §12.** **CLOSED** (pre-existing fix, confirmed still in place 2026-08-30).
 2. **📈 Analysis Summary Scorecard** (`_port_df_enriched`) — a name you already own renders as a
-   fresh entry with a suggested share count.
+   fresh entry with a suggested share count. **CLOSED 2026-08-30** — `_coord_cache_state`
+   disclosure banner mirroring the sibling Trade Plan tab guard. Opus review SHIP, 0 blocking.
 3. **📈 Analysis `_reduce_calls`** — the "not a place to add" suppression vanishes, *and* the
    compensating warning provably cannot fire in that state because it keys on a different cache.
+   **CLOSED** (pre-existing fix, confirmed still in place 2026-08-30).
 4. **🪞 Trade Review `_last_port_df`** — *fabricates* a finding ("100% of your trades are in
    Other, above the 25% warn level") plus prescriptive advice. Invents advice rather than
-   omitting it.
+   omitting it. **CLOSED 2026-08-30** — `sector_mix()` gained a `data_available` kwarg that
+   abstains (n_sectors=0, `data_unavailable=True`) instead of letting every ticker fall through
+   to "Other"; both the `build_insights` finding and a separate standalone chart render site
+   fixed. Opus review SHIP, 0 blocking.
 5. **🧾 Summary `_structural_alert_cache`** — asserts a "diversified" correlation structure when
    the cluster scan never ran, and **persists it** to `portfolio_thesis`, where it becomes next
-   week's HELD/SHIFTED baseline. The only finding that poisons a durable record.
+   week's HELD/SHIFTED baseline. The only finding that poisons a durable record. **CLOSED
+   2026-08-30** — `_classify_correlation` now abstains to "unavailable" whenever
+   `structural_new_clusters` isn't a real list (matching this module's own sibling classifiers'
+   posture), instead of falling through to a div_label-only verdict. Pre-fix persisted rows are
+   unrecoverable but bounded/self-healing (awareness-only, ages out within the 14-day baseline
+   lookback) — fixed forward, no remediation built. Opus review SHIP, 0 blocking.
 6. **🥧 Sankey `_acct_gate_cache`** — an over-cap sector/name renders neutral blue instead of
-   red. A red flag turning green.
+   red. A red flag turning green. **CLOSED 2026-08-30, and the root cause was DIFFERENT from
+   what this line describes.** `gate_basis()` has returned `basis="equity"` unconditionally since
+   a 2026-07-09 policy reversal, so the "levered" branch this cache fed (`basis in ("account",
+   "over-levered")`) had been **permanently dead code** since that date — the collapse was real
+   but inert, since the branch it fed could never fire regardless of the cache's state. Removed
+   the dead branch (user-chosen option, over re-wiring to the newer `margin.capital_basis_weight()`
+   helper or leaving it with a disclosure) rather than patching a cache read that was never the
+   actual problem. Same root cause also covered finding #9's Trade Journal site — bundled into
+   one commit rather than two separate cache-collapse fixes. Opus review SHIP, 0 blocking.
 7. **🏆 Health `_fragility_cache` / `_highbeta_share`** — fabricates a neutral 65 and drops a
    25-point penalty into the headline A–F grade, while `n_available == 5` **suppresses** the
    "some dimensions unavailable" banner. Insidious: the disclosure mechanism exists and is
-   defeated.
+   defeated. **CLOSED 2026-08-30** — `_factor_exposure_score`'s bail-out now triggers on
+   `fragility` alone (`isinstance` guard), independent of `port_beta`'s presence, since
+   `port_beta` never fed the score in the first place — only `detail` display. Replaced an
+   existing test that had pinned the fabrication as if intentional; git blame confirmed it was a
+   characterization test from a coverage-backfill pass, not a designed choice. Opus review SHIP,
+   0 blocking.
 8. **🎯 My Edge `_reduce_calls` ×2** — republishes the BKNG "size up a name flagged to trim"
-   contradiction and propagates it to 📈 Analysis.
+   contradiction and propagates it to 📈 Analysis. **CLOSED 2026-08-30, two review passes.**
+   First fix gated on `_coord_cache_state("_reduce_calls") == "ready"` alone and was returned
+   FIX-FIRST: the cache's producer never writes `None` — a Daily Brief crash fail-opens it to
+   `{}` (the real "did this run" signal lives in a separate `_daily_brief_offline` flag), so
+   "ready" alone still misread a crashed Brief as verified-empty, leaving the false claim live in
+   exactly the state (a data outage) where a real reduce call would matter most. Revised to gate
+   on `_coord_cache_state(...) == "ready" AND NOT _daily_brief_offline`; re-reviewed SHIP, 0
+   blocking.
 9. **📒 Trade Journal `_acct_gate_cache`** — the post-buy concentration breach warning silently
-   does not fire at the moment of the trade, when it is most actionable.
+   does not fire at the moment of the trade, when it is most actionable. **CLOSED 2026-08-30 —
+   same dead-code root cause as #6** (see above): the `basis in ("account", "over-levered")`
+   check this cache fed had been unreachable since the 2026-07-09 `gate_basis()` policy reversal,
+   so the breach warning itself was never actually suppressed by a cache collapse — only the
+   *"measured on your net capital"* clarifying clause (also dead) was removed. The real
+   concentration check (`assess_add_concentration`, including the live F-255 net-capital cap)
+   was untouched and fires correctly regardless.
 10. **📅 Economic Calendar** — itemised *"No direct holdings"* on every macro event for a check
-    that never ran. High false-comfort volume, low stakes each.
+    that never ran. High false-comfort volume, low stakes each. **CLOSED 2026-08-30** — a single
+    `_coord_cache_state`-gated disclosure caption at the top of the Calendar tab, covering both
+    render sites. Did NOT touch `_affected_tickers()`'s own contract (would have rippled into
+    `daily_briefing.py`, a `_GATE_FILES` member, whose 3 consumers use `.get(key, [])` — a default
+    that doesn't protect against a stored `None`, so all 3 would raise `TypeError`) — judged
+    disproportionate to this finding's own "low stakes" ranking. Opus review SHIP, 0 blocking.
 11. Then: 🔗 Risk Analysis's whole risk dashboard vanishing with no `else`; 🥧 Portfolio
     Overview's two documented fail-opens; the awareness-only leverage/sector-chart surfaces
     going quiet; and annotation-level omissions.
@@ -439,7 +492,10 @@ should be designed (`planner`) before Part 2 #3 is opened.
 3. **Chunk 3, the registry-aware `check_antipatterns.py` rule** — stops regrowth, needs no
    runtime code, and is independent of the branch.
 4. **The remaining ranked findings**, highest-severity first, each with its own rationale in the
-   diff and a per-arm test at the boundary it claims.
+   diff and a per-arm test at the boundary it claims. **CLOSED 2026-08-30 — all 10 individually-
+   ranked §10 findings now fixed** (see the per-item CLOSED notes in §10 above). The remaining
+   ~15 of the 25 total CLAIM findings were never itemized individually and remain open as an
+   unranked group if ever picked up.
 
 
 ---
