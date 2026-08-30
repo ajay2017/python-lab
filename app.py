@@ -36338,11 +36338,30 @@ elif page == "🎯 My Edge":
             # published cache so the Analysis page's own Mirror banner (which
             # reads _mirror_orphans) can't ALSO contradict the "Under a Reduce/
             # Exit call" banner it already shows for the same ticker.
-            _mi_pub_orphans_ok, _ = suppress_orphans_under_reduce_call(
-                _mi_pub_align["orphan_convictions"],
-                st.session_state.get("_reduce_calls") or {},
+            # surface-proprioception F-260 finding #8: an `or {}` collapse here
+            # when _reduce_calls is offline (never checked this session) would
+            # silently publish the UNFILTERED orphan list under a "filtered"
+            # name -- reintroducing the exact BKNG contradiction this fix
+            # exists to prevent. Publish None (this cache's existing
+            # "unavailable" sentinel, per the branches below) instead of a
+            # list that was never actually cross-checked.
+            # _coord_cache_state alone is NOT enough: the Daily Brief crash
+            # path deliberately fail-opens _reduce_calls to {} (app.py ~5572)
+            # rather than None, with the real "did this run" signal living in
+            # _daily_brief_offline -- so "ready" alone would still read a
+            # crashed Brief as verified-empty. Reviewer-caught (Opus, FIX-FIRST).
+            _mi_reduce_verified = (
+                _coord_cache_state("_reduce_calls") == "ready"
+                and not st.session_state.get("_daily_brief_offline", False)
             )
-            st.session_state["_mirror_orphans"]   = _mi_pub_orphans_ok
+            if _mi_reduce_verified:
+                _mi_pub_orphans_ok, _ = suppress_orphans_under_reduce_call(
+                    _mi_pub_align["orphan_convictions"],
+                    st.session_state.get("_reduce_calls"),
+                )
+                st.session_state["_mirror_orphans"] = _mi_pub_orphans_ok
+            else:
+                st.session_state["_mirror_orphans"] = None
             st.session_state["_mirror_overexp"]   = _mi_pub_align["accidental_overexposures"]
             st.session_state["_mirror_overhangs"] = _mi_pub_align["legacy_overhangs"]
         else:
@@ -37957,9 +37976,23 @@ elif page == "🎯 My Edge":
                 # silently dropping them (2026-07-30 coordination-gap fix, the
                 # BKNG incident: buying on this cue pushed BKNG's weight over
                 # the earnings-overweight-trim threshold the same week).
+                # surface-proprioception F-260 finding #8: an `or {}` collapse
+                # here when _reduce_calls is offline would suppress nothing
+                # (an empty dict matches no ticker) while the copy below still
+                # claimed the exclusion ran — reintroducing the exact BKNG
+                # contradiction. _mi_reduce_verified gates that claim below;
+                # suppress_orphans_under_reduce_call is itself None-safe.
+                # _coord_cache_state alone is NOT enough: a crashed Daily Brief
+                # fail-opens _reduce_calls to {} (app.py ~5572), never None, so
+                # "ready" alone would misread a crashed Brief as verified-empty
+                # -- the real "did this run" signal is _daily_brief_offline.
+                _mi_reduce_verified = (
+                    _coord_cache_state("_reduce_calls") == "ready"
+                    and not st.session_state.get("_daily_brief_offline", False)
+                )
                 _mi_orphans, _mi_orphans_suppressed = suppress_orphans_under_reduce_call(
                     _mi_align["orphan_convictions"],
-                    st.session_state.get("_reduce_calls") or {},
+                    st.session_state.get("_reduce_calls"),
                 )
                 _mi_overexp  = _mi_align["accidental_overexposures"]
                 _mi_overhangs = _mi_align["legacy_overhangs"]
@@ -37988,9 +38021,14 @@ elif page == "🎯 My Edge":
                         _mi_orphan_body = (
                             "\n".join(_mi_ticker_line(_p) for _p in _mi_orphans)
                             + f"\n\n**→ Next step:** Open Analysis for {_tickers_str}. "
-                            "If gate checks pass, this is a sizing opportunity — add shares "
-                            "to align weight with your conviction. (Names under an active "
-                            "Act Today reduce call are excluded above.)"
+                            + (
+                                "If gate checks pass, this is a sizing opportunity — add "
+                                "shares to align weight with your conviction. (Names under "
+                                "an active Act Today reduce call are excluded above.)"
+                                if _mi_reduce_verified else
+                                "Reduce/Exit status is unverified this session (see warning "
+                                "below) — do not size up without checking Analysis first."
+                            )
                         )
                     elif _mi_orphans_suppressed:
                         _mi_orphan_body = "None currently actionable — see excluded names below."
@@ -38004,6 +38042,12 @@ elif page == "🎯 My Edge":
                         f"Score ≥ {COMPOSITE_STRONG_BUY}, weight below median — "
                         f"high conviction, undersized position.\n\n{_mi_orphan_body}"
                     )
+                    if not _mi_reduce_verified and _mi_orphans:
+                        st.warning(
+                            "⚠ **Reduce/Exit cross-check unavailable this session** — the "
+                            "names above have NOT been verified against active reduce/exit "
+                            "calls. Confirm on Analysis before sizing up any of them."
+                        )
                     for _p in _mi_orphans:
                         if st.button(
                             f"📈 Analyse {_p['Ticker']}",
