@@ -255,3 +255,13 @@ Opus review citation is mechanically required.** `gate_registry.py` and `gate_le
 
 **No new policy constants in the capture half.** The §5 anchors live in this document until the
 readout build; that is what keeps this chunk low-risk under Hard Rule #1.
+
+---
+
+## 7. Live data — validation from 2026-08-30 audit
+
+**`source='cron'` writes: CONFIRMED in production.** A SQL query of `gate_suppressions` (`group by gate_id, source, counterfactual`) found one `G-20`/`source='cron'`/`counterfactual=false` row, dated 2026-08-28 (1 ticker). A single row on a single date — the pre-pass fire path is confirmed working, but this is not yet a broad sample; do not read "confirmed" as "well-observed."
+
+**`G-20`'s `counterfactual=true` A2 in-place upgrade: STILL not observed.** The same query shows all `G-20` rows to date (`app` and `cron` sources combined) carry `counterfactual=false`. The highest-priority unvalidated scenario (a held WATCH name under an active protective call, composite ≥ 65, gap ≥ 8.0%, on a bull day) has not yet appeared in live data. Remains unproven in production despite unit test coverage.
+
+**New datapoint: a `G-01` / `source='app'` / `counterfactual=true` row appeared once, 2026-08-28 (1 ticker).** This is a DIFFERENT gate_id than the one this section otherwise tracks (`G-20`) — its own counterfactual semantics were never characterized in this document, and this note deliberately does NOT guess at what it means. Before drawing any conclusion from this row, check `gate_registry.py` and the actual suppression call site that wrote it (likely in `daily_briefing.py`, given `source='app'`).

@@ -18,7 +18,20 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-29, continued (F-261 verification, venv/pin closed, Part 2 #3 ×2, W6 exit-ladder replay + Forward Simulator Phase 2 closure, Research Scorecard Phase 3)
+## 1. Latest run — 2026-08-30 (data-integrity audit session: 1 real bug found, 1 missing table discovered, hardening batch shipped in 6 commits)
+
+**4750 passed, 0 failed, 13 warnings** (`python -m pytest -q`: 356.84s). Python
+(local `.venv`). Transcribed from the run, not recalled.
+
+**+47 over the 4703 baseline (2026-08-29):** of which **+39 are from the
+audit-session work** (`9832c44`, `2497cce`, `b02423b`, `fa9b8a5`, `db6c2e4`,
+`b473677` — six commits, all pushed same day); the remaining **+8 belong to a
+concurrent F-260 Surface Proprioception session** that ran in parallel. Both
+sessions' commits interleaved on `main` before this run. Full per-commit detail
+in `docs/shipped-log.md`'s entry immediately below (data-integrity audit
+series).
+
+## 1z. Earlier the same day — 2026-08-29, continued (F-261 verification, venv/pin closed, Part 2 #3 ×2, W6 exit-ladder replay + Forward Simulator Phase 2 closure, Research Scorecard Phase 3)
 
 **4703 passed, 0 failed, 0 skipped** (`python -m pytest -q`). Python (local
 `.venv`, now realigned to **streamlit 1.57.0** — see below). Timing was noisy
