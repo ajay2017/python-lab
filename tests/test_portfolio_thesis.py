@@ -226,6 +226,28 @@ def test_correlation_concentrated_cluster_overrides_when_new_cluster_formed():
     assert out["claims"]["correlation_structure"] == "concentrated_cluster"
 
 
+def test_correlation_unavailable_when_structural_clusters_none_even_with_valid_div_label():
+    # Surface-proprioception F-260 finding #5: structural_new_clusters=None means
+    # the cluster scan was offline this session -- must NOT fall through to a
+    # div_label-only "diversified" verdict just because div_label is valid.
+    # This is the only claim that gets persisted into a durable weekly ledger,
+    # so a fabricated "diversified" here would poison next week's grading baseline.
+    out = pth.compose_thesis(
+        _full_bundle(div_label="Well Diversified", structural_new_clusters=None),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+    assert out["claims"]["correlation_structure"] == "unavailable"
+
+
+def test_correlation_unavailable_when_structural_clusters_wrong_type():
+    for bad in ["not a list", 42, {}]:
+        out = pth.compose_thesis(
+            _full_bundle(div_label="Moderate", structural_new_clusters=bad),
+            _full_acct_gate(), {}, today=TODAY,
+        )
+        assert out["claims"]["correlation_structure"] == "unavailable"
+
+
 def test_holdings_health_counts_are_correct():
     scores = [COMPOSITE_BUY, COMPOSITE_BUY - 1, COMPOSITE_BUY + 10, 10]
     out = pth.compose_thesis(

@@ -74,8 +74,19 @@ def _classify_correlation(bundle: dict) -> str:
     div_label = bundle.get("div_label")
     if div_label not in _VALID_DIV_LABELS:
         return "unavailable"
+    # structural_new_clusters is None when the cluster scan itself was offline
+    # this session (surface-proprioception F-260 finding #5) -- distinct from
+    # `[]` (scan ran, nothing new). Falling through to a div_label-only verdict
+    # here would assert "diversified" for a check that never ran, and that
+    # verdict gets PERSISTED via save_portfolio_thesis, becoming next week's
+    # HELD/SHIFTED grading baseline -- the only claim in this module that can
+    # poison a durable record. Matches _classify_concentration/
+    # _classify_action_posture's own pattern: a missing required sub-input
+    # degrades the WHOLE claim to "unavailable", never a partial verdict.
     new_clusters = bundle.get("structural_new_clusters")
-    if isinstance(new_clusters, (list, tuple)) and len(new_clusters) > 0:
+    if not isinstance(new_clusters, (list, tuple)):
+        return "unavailable"
+    if len(new_clusters) > 0:
         return "concentrated_cluster"
     if div_label == "Well Diversified":
         return "diversified"
