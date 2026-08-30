@@ -1202,8 +1202,12 @@ def _run_debrief(now_et, force: bool) -> int:
 
     from stock_analyzer import debrief_advisor as _da
     from stock_analyzer import notify as _notify
+    from stock_analyzer.market_time import most_recent_sunday
 
-    week_ending = now_et.date()
+    # Anchored to the most recent Sunday, not raw now_et.date() — a `force`
+    # retry on a different calendar day must land on the SAME week_ending as
+    # the original run (see market_time.most_recent_sunday docstring).
+    week_ending = most_recent_sunday(now_et.date())
     week_start  = week_ending - __import__("datetime").timedelta(days=6)
 
     # Load snapshot data for the week
@@ -1346,8 +1350,12 @@ def _run_monthly_report(now_et, force: bool) -> int:
     from stock_analyzer import intelligence_report as _ir
     from stock_analyzer import notify as _notify
     from stock_analyzer.constants import MONTHLY_REPORT_MIN_GRADED
+    from stock_analyzer.market_time import most_recent_sunday
 
-    period_end   = now_et.date()
+    # Anchored to the most recent Sunday, not raw now_et.date() — a `force`
+    # retry on a different calendar day must land on the SAME period_end as
+    # the original run (see market_time.most_recent_sunday docstring).
+    period_end   = most_recent_sunday(now_et.date())
     period_start = period_end - _dt.timedelta(days=28)   # trailing ~4 weeks
 
     recs_df   = db.load_recommendations(start_date=period_start, end_date=period_end)

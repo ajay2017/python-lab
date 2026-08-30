@@ -3,7 +3,7 @@
   "instances": {
     "app.py": {
       "NAIVE_DATE_TODAY\u001f_dt.date.today()": 2,
-      "NAIVE_DATE_TODAY\u001fdate.today()": 8,
+      "NAIVE_DATE_TODAY\u001fdate.today()": 6,
       "OFFLINE_SENTINEL_COLLAPSE\u001f(_daily_brief or {}).get(\"act_today\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f(_daily_brief or {}).get(\"grow_today\") or {}": 2,
       "OFFLINE_SENTINEL_COLLAPSE\u001f(_daily_brief or {}).get(\"review_list\") or []": 1,
@@ -113,7 +113,7 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_mirror_overhangs\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_port_risk_cache\") or {}": 5,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_port_risk_cache\", {}) or {}": 1,
-      "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_reduce_calls\") or {}": 6,
+      "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_reduce_calls\") or {}": 4,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_risk_high_alerts_cache\", []) or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_risk_pairs_cache\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_scanner_results_meta\") or {}": 2,
@@ -194,9 +194,7 @@
       "POLICY_DECISION_IN_RENDER\u001fact[\"weight\"] > SINGLE_NAME_CEILING": 1,
       "POLICY_DECISION_IN_RENDER\u001fb[\"n\"] < PREDICTIVE_MIN_BAND_N": 1,
       "POLICY_DECISION_IN_RENDER\u001flen(_calls) >= _SC_LEADER_MIN": 1,
-      "POLICY_DECISION_IN_RENDER\u001fp >= SECTOR_CEILING": 1,
       "POLICY_DECISION_IN_RENDER\u001fprice_val < TRADE_PRICE_SANITY_FLOOR": 1,
-      "POLICY_DECISION_IN_RENDER\u001fround((price - _sa_stop) / price * 100, GAP_TO_STOP_ROUND_DECIMALS) <= 0": 1,
       "POLICY_DECISION_IN_RENDER\u001frr_val >= RR_ENTRY_MIN": 1,
       "POLICY_DECISION_IN_RENDER\u001frs_df[\"Alpha (%)\"] < PERF_ALPHA_BAND_PCT": 1,
       "POLICY_DECISION_IN_RENDER\u001frs_df[\"Alpha (%)\"] <= -PERF_ALPHA_BAND_PCT": 1,

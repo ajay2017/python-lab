@@ -33956,7 +33956,15 @@ elif page == "🧠 AI Insights":
         if st.button("Generate Now", key="_wd_generate_btn", disabled=not _ai_api_key,
                      help="Generate a debrief for the trailing 7 days using current snapshot data."):
             with st.spinner("Assembling data and calling AI..."):
-                _wd_today      = date.today()
+                from stock_analyzer.market_time import today_et as _wd_today_et
+                from stock_analyzer.market_time import most_recent_sunday as _wd_most_recent_sunday
+
+                # Anchored to the most recent Sunday, not the raw click date — a
+                # weekday click must land on the SAME week_ending the Sunday cron
+                # would compute, or the upsert (UNIQUE on week_ending) creates a
+                # one-day-off duplicate row instead of overwriting in place. See
+                # market_time.most_recent_sunday docstring.
+                _wd_today      = _wd_most_recent_sunday(_wd_today_et())
                 _wd_week_start = _wd_today - timedelta(days=6)
                 _wd_snaps = _ai_db.load_daily_snapshots(start_date=_wd_week_start, end_date=_wd_today)
                 _wd_days  = len(_wd_snaps["snapshot_date"].unique()) if not _wd_snaps.empty else 0
@@ -34115,7 +34123,15 @@ elif page == "🧠 AI Insights":
         if st.button("Generate Monthly Report", key="_mr_generate_btn", disabled=not _ai_api_key,
                      help="Generate an intelligence report for the trailing ~4 weeks from recommendation history."):
             with st.spinner("Assembling scorecard and calling AI..."):
-                _mr_end   = date.today()
+                from stock_analyzer.market_time import today_et as _mr_today_et
+                from stock_analyzer.market_time import most_recent_sunday as _mr_most_recent_sunday
+
+                # Anchored to the most recent Sunday, not the raw click date — a
+                # weekday click must land on the SAME period_end the Sunday cron
+                # would compute, or the upsert (UNIQUE on period_end) creates a
+                # one-day-off duplicate row instead of overwriting in place. See
+                # market_time.most_recent_sunday docstring.
+                _mr_end   = _mr_most_recent_sunday(_mr_today_et())
                 _mr_start = _mr_end - timedelta(days=28)
                 _mr_recs  = _ai_db.load_recommendations(start_date=_mr_start, end_date=_mr_end)
                 if _mr_recs is None or _mr_recs.empty:

@@ -15,7 +15,7 @@ deliberately dependency-light and does not duplicate them.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytz
 
@@ -41,6 +41,23 @@ def today_et() -> date:
     `trade_analytics.py`.
     """
     return now_et().date()
+
+
+def most_recent_sunday(d: date) -> date:
+    """Return the Sunday on or before date `d`.
+
+    Anchors `week_ending`/`period_end` for the weekly-debrief/monthly-report
+    tables, which are UNIQUE on that exact column: a genuine Sunday run, a
+    cron `force` retry on a later calendar day, and an interactive "Generate
+    Now" click on any weekday must all compute the IDENTICAL date so the
+    upsert overwrites in place instead of creating a one-day-off duplicate
+    row. `.weekday()` is Monday=0..Sunday=6, so the offset back to the prior
+    Sunday is `(weekday() + 1) % 7` (0 on a Sunday itself). Originally a
+    private `_most_recent_sunday` in `cron_runner.py`; centralized here so
+    app.py's interactive buttons anchor on the same formula rather than a
+    second, divergence-prone copy.
+    """
+    return d - timedelta(days=(d.weekday() + 1) % 7)
 
 
 def et_anchor_iso(day, hour: int | None = None) -> str:
