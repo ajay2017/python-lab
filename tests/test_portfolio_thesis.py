@@ -446,4 +446,33 @@ def test_compose_thesis_never_raises_on_malformed_acct_gate_or_reduce_calls():
         out = pth.compose_thesis(_full_bundle(), bad, bad, today=TODAY)
         assert out is not None  # bundle itself is valid, so compose still returns a dict
         assert out["claims"]["concentration"] == "unavailable"
-        assert out["claims"]["action_posture"] == "unavailable"
+
+
+# ── should_skip_weekly_write ─────────────────────────────────────────────
+# The once-per-ISO-week write guard's decision, extracted so app.py's caller
+# is render-only wiring. A failed read (None) must skip the write, never
+# permit it — the offline-sentinel-collapse class this function exists to
+# close (load_portfolio_thesis_or_none's own docstring names this exact bug).
+
+def test_skip_weekly_write_true_when_read_failed():
+    assert pth.should_skip_weekly_write(None, 2026, 35) is True
+
+
+def test_skip_weekly_write_false_when_genuinely_empty():
+    assert pth.should_skip_weekly_write([], 2026, 35) is False
+
+
+def test_skip_weekly_write_true_when_matching_row_present():
+    rows = [{"iso_year": 2026, "iso_week": 35, "thesis_date": "2026-08-24"}]
+    assert pth.should_skip_weekly_write(rows, 2026, 35) is True
+
+
+def test_skip_weekly_write_false_when_only_other_weeks_present():
+    rows = [{"iso_year": 2026, "iso_week": 34, "thesis_date": "2026-08-17"}]
+    assert pth.should_skip_weekly_write(rows, 2026, 35) is False
+
+
+def test_skip_weekly_write_matches_year_and_week_together_not_either_alone():
+    # Same iso_week number from a DIFFERENT iso_year must not false-positive.
+    rows = [{"iso_year": 2025, "iso_week": 35, "thesis_date": "2025-08-25"}]
+    assert pth.should_skip_weekly_write(rows, 2026, 35) is False

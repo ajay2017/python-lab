@@ -12384,11 +12384,12 @@ elif page == "🧾 Summary":
 
             # Once-per-ISO-week write guard — coarse app-side check only; the
             # real backstop is the DB's UNIQUE(iso_year, iso_week) + upsert
-            # (a same-week re-write overwrites, never duplicates).
-            _pth_recent = db.load_portfolio_thesis(lookback_days=1)
-            _pth_already_written_this_week = any(
-                r.get("iso_year") == _pth_iso_year and r.get("iso_week") == _pth_iso_week
-                for r in _pth_recent
+            # (a same-week re-write overwrites, never duplicates). Uses the
+            # _or_none loader (not load_portfolio_thesis) so a failed read
+            # skips the write rather than risking a duplicate row on an outage.
+            _pth_recent = db.load_portfolio_thesis_or_none(lookback_days=1)
+            _pth_already_written_this_week = _pth.should_skip_weekly_write(
+                _pth_recent, _pth_iso_year, _pth_iso_week
             )
             _pth_this_week = _pth.compose_thesis(
                 _pth_bundle, _pth_acct_gate, st.session_state.get("_reduce_calls"),

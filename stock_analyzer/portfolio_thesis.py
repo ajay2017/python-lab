@@ -300,3 +300,24 @@ def grade_prior(this_week: dict | None, prior_week: dict | None) -> dict | None:
         return ledger
     except Exception:
         return None
+
+
+def should_skip_weekly_write(recent_rows: "list[dict] | None", iso_year: int, iso_week: int) -> bool:
+    """True if this week's thesis write should be SKIPPED — either a row for
+    (iso_year, iso_week) already exists in `recent_rows`, or the duplicate-
+    guard read itself failed (`recent_rows is None`, e.g. a DB outage or
+    missing credentials).
+
+    A failed read must never be read as "no thesis written yet this week" —
+    that would risk a duplicate weekly row landing on a transient hiccup,
+    the exact offline-sentinel-collapse `load_portfolio_thesis_or_none()`
+    exists to prevent. Skipping is safe either way: a genuinely-still-needed
+    write simply lands on the next successful visit this week, and the DB's
+    own UNIQUE(iso_year, iso_week) + upsert is a second backstop against a
+    real duplicate row regardless."""
+    if recent_rows is None:
+        return True
+    return any(
+        r.get("iso_year") == iso_year and r.get("iso_week") == iso_week
+        for r in recent_rows
+    )
