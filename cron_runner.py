@@ -530,8 +530,18 @@ def _run_eod(now_et, force: bool) -> int:
     # whose bars are too thin/unavailable, rather than logging a guessed
     # forecast from a known-offline bundle (design doc §1.6b, mockup state 3).
     try:
-        _n_pred = _write_live_vol_predictions(now_et, payload, _regime_tag)
-        _log(f"model_predictions (live): {_n_pred} row(s) written.")
+        _pred_result = _write_live_vol_predictions(now_et, payload, _regime_tag)
+        _pred_n, _pred_saved, _pred_err = (
+            _pred_result["candidates"], _pred_result["saved"], _pred_result["error"],
+        )
+        if _pred_err is not None:
+            _log(f"model_predictions (live): WRITE FAILED after computing "
+                 f"{_pred_n} candidate row(s) — {_pred_err}.")
+        elif _pred_n == 0:
+            _log("model_predictions (live): 0 candidate row(s) this run "
+                 "(no held tickers with sufficient bars) — nothing to write.")
+        else:
+            _log(f"model_predictions (live): {_pred_saved} row(s) written.")
     except Exception as e:
         _log(f"model_predictions (live) FAILED — {str(e)[:120]} — continuing.")
 
@@ -541,8 +551,18 @@ def _run_eod(now_et, force: bool) -> int:
     # this step fetches its own targeted price history rather than reusing
     # payload["held_data"] (which only covers CURRENTLY held tickers).
     try:
-        _n_mat = _mature_vol_predictions(now_et)
-        _log(f"model_predictions (maturation): {_n_mat} row(s) matured.")
+        _mat_result = _mature_vol_predictions(now_et)
+        _mat_n, _mat_saved, _mat_err = (
+            _mat_result["candidates"], _mat_result["saved"], _mat_result["error"],
+        )
+        if _mat_err is not None:
+            _log(f"model_predictions (maturation): WRITE FAILED after computing "
+                 f"{_mat_n} candidate row(s) — {_mat_err}.")
+        elif _mat_n == 0:
+            _log("model_predictions (maturation): 0 candidate row(s) due this run "
+                 "— nothing to mature.")
+        else:
+            _log(f"model_predictions (maturation): {_mat_saved} row(s) matured.")
     except Exception as e:
         _log(f"model_predictions (maturation) FAILED — {str(e)[:120]} — continuing.")
 
@@ -550,13 +570,20 @@ def _run_eod(now_et, force: bool) -> int:
     return 0
 
 
-def _write_live_vol_predictions(now_et, payload: dict, regime_tag: str | None) -> int:
+def _write_live_vol_predictions(now_et, payload: dict, regime_tag: str | None) -> dict:
     """Compute + persist one 'live' model_predictions row per held ticker +
     the portfolio aggregate, from the bars already fetched by this EOD run's
-    _build_context (payload['held_data'][t]['df']) — NO new fetch. Returns the
-    count of rows written (0 on any structural miss — insufficient bars,
-    nothing held, etc — never raises; the caller already wraps this call in
-    its own try/except for defense in depth)."""
+    _build_context (payload['held_data'][t]['df']) — NO new fetch.
+
+    Returns {"candidates": int, "saved": int, "error": str | None} —
+    NOT a bare count — so the caller can distinguish a genuine no-op
+    (nothing held, or every held ticker's bars too thin for a forecast:
+    candidates == 0, error is None) from a real write failure (candidates
+    were computed but db.save_model_predictions_batch returned falsy:
+    candidates > 0, saved == 0, error set). A bare int made these two cases
+    log identically as "0 row(s) written", silently hiding a failed write
+    behind a legitimate no-op. Never raises; the caller already wraps this
+    call in its own try/except for defense in depth."""
     import pandas as pd
 
     from stock_analyzer.constants import VOL_FORECAST_EWMA_LAMBDA, VOL_FORECAST_HORIZON_DAYS
@@ -564,7 +591,7 @@ def _write_live_vol_predictions(now_et, payload: dict, regime_tag: str | None) -
 
     held_data = payload.get("held_data", {})
     if not held_data:
-        return 0
+        return {"candidates": 0, "saved": 0, "error": None}
 
     # Normalized to the ET *date* at midnight, NOT now_et.isoformat() (wall-
     # clock time) — the EOD lane is demonstrably re-entrant within a day (any
@@ -643,8 +670,14 @@ def _write_live_vol_predictions(now_et, payload: dict, regime_tag: str | None) -
                 })
 
     if not rows:
-        return 0
-    return len(rows) if db.save_model_predictions_batch(rows) else 0
+        return {"candidates": 0, "saved": 0, "error": None}
+    if db.save_model_predictions_batch(rows):
+        return {"candidates": len(rows), "saved": len(rows), "error": None}
+    return {
+        "candidates": len(rows), "saved": 0,
+        "error": "db.save_model_predictions_batch returned False "
+                 "(readonly, missing table, or query error — see warnings log)",
+    }
 
 
 def _trading_days_elapsed(start_date, end_date) -> int:
@@ -663,15 +696,22 @@ def _trading_days_elapsed(start_date, end_date) -> int:
     return n
 
 
-def _mature_vol_predictions(now_et) -> int:
+def _mature_vol_predictions(now_et) -> dict:
     """Find `model_predictions` rows whose horizon has fully elapsed
     (trading-day aware) and write their realized outcome. Fetches a fresh,
     targeted price history per maturing ticker — deliberately NOT this run's
     held-tickers bar context, since a maturing prediction's ticker may no
     longer be held. PORTFOLIO-scope rows are left unmatured for now (this
     cron does not reconstruct historical portfolio weights; same scoping
-    limit as the backfill script — design doc §1.6b). Never raises; the
-    caller wraps this call in its own try/except for defense in depth."""
+    limit as the backfill script — design doc §1.6b).
+
+    Returns {"candidates": int, "saved": int, "error": str | None} —
+    NOT a bare count — mirroring _write_live_vol_predictions: a genuine
+    no-op (nothing pending, or nothing yet due/realizable: candidates == 0,
+    error is None) is distinguished from a real write failure (updates were
+    computed but db.mature_model_predictions_batch returned falsy:
+    candidates > 0, saved == 0, error set). Never raises; the caller wraps
+    this call in its own try/except for defense in depth."""
     import pandas as pd
 
     from stock_analyzer import data as _data
@@ -679,7 +719,7 @@ def _mature_vol_predictions(now_et) -> int:
 
     pending = db.load_unmatured_model_predictions(model_name="vol_forecast_ewma")
     if pending is None or pending.empty:
-        return 0
+        return {"candidates": 0, "saved": 0, "error": None}
 
     today = now_et.date()
     updates: list[dict] = []
@@ -750,8 +790,14 @@ def _mature_vol_predictions(now_et) -> int:
         })
 
     if not updates:
-        return 0
-    return len(updates) if db.mature_model_predictions_batch(updates) else 0
+        return {"candidates": 0, "saved": 0, "error": None}
+    if db.mature_model_predictions_batch(updates):
+        return {"candidates": len(updates), "saved": len(updates), "error": None}
+    return {
+        "candidates": len(updates), "saved": 0,
+        "error": "db.mature_model_predictions_batch returned False "
+                 "(readonly, missing table, or query error — see warnings log)",
+    }
 
 
 def _daily_action_fingerprint(top_pick: dict, exit_alerts: list[dict]) -> str:
