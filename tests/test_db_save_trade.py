@@ -101,6 +101,61 @@ def test_save_trade_missing_idempotency_key_column_degrades_and_retries():
     assert "idempotency_key" not in fake.calls[1]  # dropped on retry
 
 
+def test_save_trade_missing_decision_context_column_degrades_and_retries():
+    """DDL not applied yet -- decision_context column doesn't exist. Same
+    strip-and-retry mechanism as idempotency_key above, but exercised via
+    decision_context specifically: the 2026-08-04 audit's optional-column
+    list treats it identically to every other optional column, even though
+    decision_context (Concept E's passive capture of macro regime, portfolio
+    beta, top sector and active-recs count AT TRADE TIME) is materially more
+    consequential to lose silently than most of that list -- flagged in the
+    2026-08-30 data-integrity audit as a real (if not currently manifesting)
+    risk for exactly that reason.
+
+    db.py's detection is a bare substring match: `c in _err_str` for each
+    name in `_optional` (db.py ~1765-1769). The simulated error text below
+    must actually contain the literal substring "decision_context" -- not
+    just resemble a real PostgREST error -- for the strip-and-retry branch
+    to trigger at all.
+    """
+    exc = Exception("Could not find the 'decision_context' column of 'trades' in the schema cache")
+    fake = _FakeClient(raise_exc=exc, raise_on_call=1)
+    import stock_analyzer.db as _db_mod
+    _db_mod._CLIENT = fake
+    record = {
+        "ticker": "AAPL",
+        "action": "BUY",
+        "decision_context": {
+            "macro_regime": "risk_on",
+            "portfolio_beta": 1.22,
+            "top_sector": "Technology",
+            "active_recs_count": 4,
+        },
+    }
+    try:
+        ok = db.save_trade(record)
+    finally:
+        _db_mod._CLIENT = None
+    # (1) the trade itself is not lost -- the retry succeeds.
+    assert ok is True
+    assert len(fake.calls) == 2
+    # (2) the retried/actually-persisted payload no longer carries
+    # decision_context -- confirming it was the column stripped.
+    assert "decision_context" not in fake.calls[1]
+    # sanity: the first (failed) attempt DID carry it, so the drop is
+    # attributable to the strip-and-retry path and not to the caller
+    # never having set it in the first place.
+    assert "decision_context" in fake.calls[0]
+    # (3) observability check: save_trade's return value is a bare bool.
+    # There is no structured return, no logged warning, and no session-
+    # state flag distinguishing "saved with decision_context intact" from
+    # "saved but decision_context was silently dropped" -- the caller
+    # (and therefore the user) has no way to tell the two apart from this
+    # call alone. This is CONFIRMED CURRENT BEHAVIOR, not a gap this test
+    # closes -- no production code was changed to produce this assertion.
+    assert ok is True and not isinstance(ok, tuple) and not isinstance(ok, dict)
+
+
 def test_save_trade_unrelated_unique_violation_not_swallowed(monkeypatch):
     """A unique violation on some OTHER constraint must still surface as a
     real failure -- only trades_idempotency_key_unique is treated as a
