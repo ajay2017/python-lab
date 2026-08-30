@@ -1,9 +1,8 @@
-# Gate Suppression Ledger — capture half
+# Gate Suppression Ledger — capture half + readout half
 
-**Status: CAPTURE HALF LIVE 2026-08-27** — built, Opus-reviewed (SHIP, 0 blocking), shipped, and its §4 DDL applied the same day, so it is ACTIVE and accruing. **Readout half NOT started and must not be bundled.** Design was the Opus `planner` pass 2026-08-26; the build overturned two of this document's own premises — see §5a.
+**Status: BOTH HALVES SHIPPED. Capture half LIVE 2026-08-27** — built, Opus-reviewed (SHIP, 0 blocking), shipped, and its §4 DDL applied the same day, so it is ACTIVE and accruing. Design was the Opus `planner` pass 2026-08-26; the build overturned two of this document's own premises — see §5a. **Readout half SHIPPED 2026-08-30** ("🛑 The Road Not Taken", commit `ddd7671`) — a fresh Opus `planner` PROCEED verdict, built by `implementer`, 2 Opus reviewer rounds (first FIX-FIRST/1 blocking — the import-isolation test missed `risk.py`, the live sizing engine; fixed, then SHIP/0 blocking). Full detail: `docs/requirements.md` F-259b; module doc: `docs/architecture.md`'s `stock_analyzer/gate_ledger_readout.py` section. **Expect "building" on every gate for ~2 months** — the ledger is only ~3 days old and the N=8/K=5 floors are far beyond current data; this is the designed primary state, not a bug to chase.
 
 Design source: [docs/reviews/2026-08-26-app-review.md](../reviews/2026-08-26-app-review.md) Part 2 #1.
-The readout is a separate, later build (that review's Innovation #1) and must not be bundled.
 
 ---
 

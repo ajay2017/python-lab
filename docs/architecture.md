@@ -2077,6 +2077,49 @@ bucket→gate 1:1 map would destroy that distinction. Both score columns are lik
 read from explicit `composite_score` / `momentum_score` keys set at the producer; the
 module does **not** infer which of the two a site's `score` field meant.
 
+### `stock_analyzer/gate_ledger_readout.py`
+
+The readout half (F-259b, 2026-08-30) — "🛑 The Road Not Taken". Pure: no DB, no
+Streamlit, no network I/O; all price/SPY history is dependency-injected by the caller
+(`app.py`'s `_cached_spy`/`_cached_historical_close`). Reuses
+`predictive_analytics.forward_alpha_at_horizon`/`_advance_trading_days` verbatim —
+writes no return/alpha arithmetic of its own beyond averaging already-computed alphas.
+
+`enrich_and_grade(rows, *, today, spy_close_by_date, historical_close_fn,
+horizon_trading_days, composite_buy)` tags every row with exactly one status, in this
+order (a row never gets more than one tag, and none is ever dropped from the output):
+market-wide (`ticker == "__MARKET__"` or `gate_id == "G-23"` — no per-ticker instrument,
+excluded regardless of any other field) → non-binding (`counterfactual is not True`) →
+G-01-over-non-app-source → new-pick-lane composite filter (`lane == "new_pick"`; NULL
+composite and sub-`composite_buy` composite are tallied in two SEPARATE counters, never
+folded together or silently dropped) → maturity (`_advance_trading_days(rec_date,
+horizon) > today`, checked **before** any price fetch so "not matured yet" is never
+confused with a fetch failure — mirrors `judgment_grading.grade_ticker_opinion`'s exact
+pattern) → priced (`forward_alpha_at_horizon` returning `None` means a genuine data gap,
+tagged `matured_unpriceable`, kept separate from "not yet matured").
+
+`grade_by_gate(enriched, *, gate_ids, min_calls, firm_calls, min_tickers)` aggregates
+per `gate_id` (iterated from `gate_registry.GATE_IDS`, never re-sorted). Banding mirrors
+`protective_track_record.protective_headline`'s exact structure with one addition: TWO
+floors gate the building→early transition (`n_matured_evaluable < min_calls OR
+n_distinct_tickers_evaluable < min_tickers` → stay "building") — the distinct-ticker
+floor is load-bearing, since one ticker re-recorded daily could otherwise reach the
+row-count floor on a single observation. `min_tickers` never re-enters the early→firm
+check. G-23 is handled as a special minimal case: no banding, no mean alpha, excluded
+from the "no gate produced a verdict" retirement tally by design.
+
+`readout_footnotes(gate_id)` returns the §5a per-gate caveats a screen must disclose
+alongside a bare count (G-20's binding count is a bull-day-only undercount; G-23 has no
+per-ticker instrument) — every other gate_id returns `[]`.
+
+**Redline, enforced by `tests/test_gate_ledger_readout.py`'s import-isolation test:**
+this module must never be imported by `risk_advisor.py`, `exit_advisor.py`,
+`daily_briefing.py`, `scoring.py`, `risk.py` (the live sizing engine —
+`position_sizing`/`sizing_unavailable_reason`), `portfolio.py`, `ranking.py`, or any
+`*sizing*.py`-named file. A first draft of this test (2026-08-30) named
+`risk_advisor.py` but not `risk.py`, leaving the actual sizing engine unchecked —
+caught by Opus review before ship.
+
 ### `stock_analyzer/system_health.py`
 
 Pure-ish diagnostic module for the owner-only 🩺 System Trust page (System
