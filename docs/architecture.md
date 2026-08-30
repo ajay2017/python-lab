@@ -1057,7 +1057,7 @@ CREATE TABLE alert_state (
 );
 ```
 
-**Headless-cron dedup state (system state, not user data).** Used ONLY by the email-alerts cron to (a) fire at most once per ET trading day and (b) skip an email whose protective set is unchanged since the last send (`last_fingerprint`). One row per cron lane (`id` 1 = pre-market protective, 2 = EOD pullback, 3 = morning buy-list, 4 = intraday pullback entry, **5 = DB-unreachable notice**, added 2026-08-16 for F-239) — independent dedup, no extra DDL; rows self-create on first upsert because `save_alert_state` supplies `id` explicitly with `on_conflict="id"`. Row 5's dedup is deliberately **fail-open**: you cannot dedup a database-outage alert *in the database*, so it suppresses a repeat only when the DB is well enough to answer (a partial outage → one email/day/lane) and sends regardless when it isn't (a total outage → one per lane invocation). More email means a worse outage, which is self-explaining. **Not `_READONLY`-gated** (the cron runs outside the app). Degrades to "always send" when the table is absent — the alerts work before the DDL, just without dedup. `db.load_alert_state(row_id)` / `save_alert_state(...)`. RLS: `FOR ALL TO service_role`.
+**Headless-cron dedup state (system state, not user data).** Used ONLY by the email-alerts cron to (a) fire at most once per ET trading day and (b) skip an email whose protective set is unchanged since the last send (`last_fingerprint`). One row per cron lane (`id` 1 = pre-market protective, 2 = EOD pullback, 3 = morning buy-list, 4 = intraday pullback entry, **5 = DB-unreachable notice** added 2026-08-16 for F-239, **6 = broker-lane failure-email dedup** added 2026-08-21) — independent dedup, no extra DDL; rows self-create on first upsert because `save_alert_state` supplies `id` explicitly with `on_conflict="id"`. Row 5's dedup is deliberately **fail-open**: you cannot dedup a database-outage alert *in the database*, so it suppresses a repeat only when the DB is well enough to answer (a partial outage → one email/day/lane) and sends regardless when it isn't (a total outage → one per lane invocation). More email means a worse outage, which is self-explaining. Row 6 dedup mirrors Row 5 structurally but guards broker-lane failures (SnapTrade outage) rather than database outages — shares the same "fail-open when DB unreachable" logic. **Not `_READONLY`-gated** (the cron runs outside the app). Degrades to "always send" when the table is absent — the alerts work before the DDL, just without dedup. `db.load_alert_state(row_id)` / `save_alert_state(...)`. RLS: `FOR ALL TO service_role`.
 
 ### 6.15 `analyst_coverage` table
 
@@ -1944,6 +1944,93 @@ the returned `error` string because the cron log is the only place it is visible
 
 Volume: ceiling ≈ 30 rows/day/source ≈ 7,600/year worst case, realistically 2,000–5,000.
 **Accrues indefinitely, no retention policy.**
+
+### 6.38 `fundamentals_cache` table
+
+```sql
+CREATE TABLE IF NOT EXISTS fundamentals_cache (
+    ticker      TEXT PRIMARY KEY,
+    financials  JSONB,
+    fetched_at  TEXT,
+    updated_at  TIMESTAMPTZ DEFAULT now()
+);
+```
+
+**Live-fetch fallback cache (read-only on outage).** Persists the last-known-good fundamental metrics (balance sheet, income statement ratios, etc.) for each ticker, populated on successful live fetch. Enables the fundamentals gate to remain viable even when the live data source is temporarily unreachable — reads `financials` dict plus `fetched_at` timestamp to assess freshness. Never cached on failure — a missing row means "no prior successful fetch was recorded", not "fetch failed today". Degrades gracefully when table is absent (returns `None`). Written by `db.save_fundamentals_cache(ticker, financials)` after every successful live fetch; read by `db.load_fundamentals_cache(ticker)` as the fallback before attempting live. Best-effort, never raises. RLS: `FOR ALL TO service_role`.
+
+### 6.39 `catalyst_stress_cache` table
+
+```sql
+CREATE TABLE IF NOT EXISTS catalyst_stress_cache (
+    scan_date                TEXT PRIMARY KEY,
+    narrative                TEXT,
+    ranked_snapshot          JSONB,
+    blast_radius_snapshot    JSONB,
+    clusters_snapshot        JSONB,
+    created_at               TIMESTAMPTZ DEFAULT now()
+);
+```
+
+**Daily portfolio-level catalyst-stress narrative** (Catalyst Stress Detector, D4). One row per `scan_date` (America/New_York ISO date via `_today_et()`). `narrative` is the Haiku-generated prose summary of elevated catalyst vulnerability; `ranked_snapshot` holds the top-N candidates sorted by stress magnitude; `blast_radius_snapshot` and `clusters_snapshot` capture supporting analytical state at generation time (auditable with the narrative). Row is only written when `narrative` is non-`None` (successful Haiku call) — a failed call is never cached, so transient LLM failures can be retried immediately rather than showing a stale verdict for the rest of the day. Written by `db.save_catalyst_stress_cache()` (interactive button-gated, not auto-computed — Streamlit executes tab body on every rerun regardless of tab selection, so auto-compute would fire the LLM far more than once/day); read by `db.load_catalyst_stress_cache(scan_date)`. **`_READONLY`-GATED as of 2026-08-28** — persists model-authored prose, not an auto-warmed harmless cache. RLS: `FOR ALL TO service_role`.
+
+### 6.40 `thesis_cluster_cache` table
+
+```sql
+CREATE TABLE IF NOT EXISTS thesis_cluster_cache (
+    scan_date        TEXT PRIMARY KEY,
+    clusters         JSONB,
+    thesis_snapshot  JSONB,
+    truncated        BOOLEAN,
+    created_at       TIMESTAMPTZ DEFAULT now()
+);
+```
+
+**Daily portfolio-level thesis-cluster classification** (Hidden Same-Bet Detector, D1). One row per `scan_date` (America/New_York ISO date). `clusters` is the list of detected shared assumptions across multiple positions; `thesis_snapshot` holds the thesis text window passed to the LLM (for audit); `truncated` is boolean indicating whether any thesis was trimmed for the prompt. Row is only written when the Haiku call succeeded (clusters is a list, possibly empty — "no shared assumption found" is a valid cacheable result) — a genuine failure (None) is never cached. Written by `db.save_thesis_cluster_cache()` (interactive button-gated); read by `db.load_thesis_cluster_cache(scan_date)`. **`_READONLY`-GATED as of 2026-08-28** — persists model-authored prose. RLS: `FOR ALL TO service_role`.
+
+### 6.41 `missed_opportunity_cache` table
+
+```sql
+CREATE TABLE IF NOT EXISTS missed_opportunity_cache (
+    scan_date         TEXT PRIMARY KEY,
+    patterns          JSONB,
+    missed_snapshot   JSONB,
+    created_at        TIMESTAMPTZ DEFAULT now()
+);
+```
+
+**Daily portfolio-level missed-opportunity pattern detection** (Missed-Opportunity Pattern Detector, O1). One row per `scan_date` (America/New_York ISO date). `patterns` is the list of detected behavioral/market patterns the portfolio failed to capitalize on; `missed_snapshot` holds supporting analytical state at generation time. Row is only written when the Haiku call succeeded (patterns is a list, possibly empty — "no coherent pattern found" is a valid cacheable result) — a genuine failure (None) is never cached. Written by `db.save_missed_opportunity_cache()` (interactive button-gated); read by `db.load_missed_opportunity_cache(scan_date)`. **`_READONLY`-GATED as of 2026-08-28** — persists model-authored prose. RLS: `FOR ALL TO service_role`.
+
+### 6.42 `sentiment_llm_cache` table
+
+```sql
+CREATE TABLE IF NOT EXISTS sentiment_llm_cache (
+    ticker       TEXT NOT NULL,
+    score_date   TEXT NOT NULL,
+    headlines    JSONB,
+    avg_sent     NUMERIC,
+    created_at   TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (ticker, score_date)
+);
+```
+
+**LLM-rescored sentiment day-cache** (ticker × date). Persists the Haiku-rescored headlines and their aggregate sentiment score so the Streamlit app and headless cron runner always read the same composite for a given ticker on a given UTC day. `headlines` is a list of text/score pairs after LLM reprocessing; `avg_sent` is the computed mean sentiment. One row per `(ticker, score_date)` unique pair (self-upserts on recompute same day). Enables coherence between interactive and cron paths. Written by `db.save_sentiment_llm_cache(ticker, score_date, headlines, avg_sent)` after successful LLM fetch; read by `db.load_sentiment_llm_cache(ticker, score_date)`. Best-effort, never raises. Degrades to per-request VADER on any write failure. **NOT `_READONLY`-gated** (mirrors `sector_cache` — a system cache warming path, not model-authored content). RLS: `FOR ALL TO service_role`.
+
+### 6.43 `portfolio_thesis` table
+
+```sql
+CREATE TABLE IF NOT EXISTS portfolio_thesis (
+    thesis_date     DATE NOT NULL,
+    iso_year        INTEGER NOT NULL,
+    iso_week        INTEGER NOT NULL,
+    schema_version  INTEGER NOT NULL,
+    claims          JSONB NOT NULL,
+    prose           TEXT NOT NULL,
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT portfolio_thesis_unique UNIQUE (iso_year, iso_week)
+);
+```
+
+**Weekly standing-thesis ledger** (Portfolio Thesis Stability Monitor, F-232). One row per ISO week (`iso_year`, `iso_week`), keyed on the unique constraint (once per ISO week enforced at the database layer). `thesis_date` is the America/New_York date the thesis was written; `schema_version` tracks evolution of the thesis format; `claims` is a JSONB structure of key portfolio positions and their underlying assumptions; `prose` is the human-readable summary written at the time. Written interactively by `db.save_portfolio_thesis(record)` (upsert on `(iso_year, iso_week)` — idempotent within a week, allows overwrite if rewritten same week); read by `db.load_portfolio_thesis(lookback_days)` (returns list, most-recent first) and `db.load_portfolio_thesis_or_none()` (distinguishes genuine zero rows from load failure). Degrades gracefully when table is absent — load returns empty list or `None`. Read-only viewer no-op (interactive capture only, not cron). RLS: `FOR ALL TO service_role`.
 
 ### `stock_analyzer/gate_registry.py`
 
