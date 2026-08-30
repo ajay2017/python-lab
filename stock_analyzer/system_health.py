@@ -123,6 +123,28 @@ _INVENTORY: tuple[_Store, ...] = (
     # says "not checked" forever — a feature that looks fine while doing
     # nothing. Registering it here is what makes that state visible.
     _Store("broker_position_snapshot",  "Broker position snapshot",      "broker",    "daily",   False),
+    # 2026-08-30 data-integrity audit: 7 tables that cron/the app actively
+    # write to had ZERO visibility here — any of them could silently stop
+    # being written with no signal anywhere in the app, not even "unknown".
+    # All existence-only, same rationale as the block above.
+    _Store("gate_suppressions",          "Gate suppression ledger",                   "scan",   "daily", False),
+    _Store("account_cash",               "Account cash balance",                      "broker", "daily", False),
+    _Store("account_flows",              "Account deposits/withdrawals",              "broker", "daily", False),
+    _Store("snaptrade_pending_imports",  "Broker transactions pending confirmation",  "broker", "daily", False),
+    _Store("snaptrade_income_events",    "Broker dividend/interest/fee events",       "broker", "daily", False),
+    _Store("snaptrade_config",           "Broker connection config",                  "broker", "daily", False),
+    # judgment_grades ("The Judge", F-227's grading harness) has NO cron lane —
+    # it is written ONLY via a manual "▶ Run grading" button in the app, same
+    # category as analyst_coverage's primary write path or thesis_erosion_cache.
+    # `lane` is a pure display/grouping label here (see `_probe_store` and
+    # `check_data_stores` below): it is never looked up against `_LANES` or
+    # `by_lane` (those only exist inside check_cron_liveness, keyed off
+    # cron_heartbeat rows, a completely separate structure), so an
+    # unrecognized value cannot break or silently no-op anything — "interactive"
+    # is simply the honest label, not a real lane. Confirmed MISSING from
+    # production entirely as of 2026-08-30 (`relation "judgment_grades" does
+    # not exist`) — registering it here is what finally makes that visible.
+    _Store("judgment_grades",            "Judge grading harness",                     "interactive", "daily", False),
 )
 
 

@@ -108,6 +108,51 @@ def test_unconditional_daily_missing_row_is_warn(monkeypatch):
     assert stores["exit_signals"]["severity"] == "unknown"
 
 
+# ── 2026-08-30 audit: 7 previously-unregistered data stores ───────────────────
+def test_new_inventory_entries_registered_existence_only():
+    """A data-integrity audit found 7 tables cron/the app actively write to
+    that `_INVENTORY` never checked — any could silently stop being written
+    with zero visibility anywhere, not even 'unknown'. Lock their registration:
+    existence-only (unconditional=False), daily cadence, correct writer lane."""
+    stores = {s.table: s for s in sh._INVENTORY}
+    expected_lanes = {
+        "gate_suppressions":         "scan",
+        "account_cash":              "broker",
+        "account_flows":             "broker",
+        "snaptrade_pending_imports": "broker",
+        "snaptrade_income_events":   "broker",
+        "snaptrade_config":          "broker",
+        "judgment_grades":           "interactive",  # no cron lane — manual button only
+    }
+    for table, lane in expected_lanes.items():
+        assert table in stores, f"{table} missing from _INVENTORY"
+        assert stores[table].lane == lane
+        assert stores[table].unconditional is False
+        assert stores[table].cadence == "daily"
+
+
+def test_judgment_grades_missing_table_reads_as_down(monkeypatch):
+    """judgment_grades ('The Judge' F-227 grading harness) was confirmed
+    MISSING from production entirely on 2026-08-30 — the exact DDL-not-applied
+    class this check exists to catch. It must read 'down'/'missing' in
+    isolation, without dragging a sibling existence-only store down with it."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    missing_exc = Exception('relation "public.judgment_grades" does not exist')
+
+    class _PerTableClient:
+        def table(self, name):
+            if name == "judgment_grades":
+                return _FakeQueryBuilder(exc=missing_exc)
+            return _FakeQueryBuilder(rows=[])
+
+    monkeypatch.setattr(db, "_client", lambda: _PerTableClient())
+    stores = {r["table"]: r for r in sh.check_data_stores()}
+    assert stores["judgment_grades"]["severity"] == "down"
+    assert stores["judgment_grades"]["state"] == "missing"
+    # a sibling existence-only store that's merely empty must not be affected
+    assert stores["exit_signals"]["severity"] == "unknown"
+
+
 # ── ① cron liveness ───────────────────────────────────────────────────────────
 def test_cron_liveness_none_heartbeats_is_unknown(monkeypatch):
     """Heartbeat store unavailable (offline or DDL unapplied) → all lanes unknown."""
