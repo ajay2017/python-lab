@@ -627,6 +627,52 @@ def test_sector_mix_top_sector_is_largest_share():
     assert out["top_sector_pct"] == pytest.approx(66.7, abs=0.1)
 
 
+def test_sector_mix_default_available_marks_normal_result_not_unavailable():
+    rows = [_t(id_=1, action="BUY", ticker="AAA", price=1.0, shares=1.0)]
+    out = tr.sector_mix(rows, {"AAA": "Tech"})
+    assert out["data_unavailable"] is False
+
+
+def test_sector_mix_zero_rows_default_available_not_flagged_unavailable():
+    # No BUY trades is a genuinely different state from "couldn't check" —
+    # both yield n_sectors == 0 but only the latter should read as an outage.
+    out = tr.sector_mix([], {})
+    assert out["data_unavailable"] is False
+
+
+def test_sector_mix_data_unavailable_abstains_instead_of_fabricating_other():
+    # Surface-proprioception F-260 finding #4: with neither holdings nor
+    # scanner cache published, every ticker would otherwise default to
+    # "Other" via the fallback below, fabricating a 100%-concentration
+    # finding for data that was never actually classified.
+    rows = [_t(id_=1, action="BUY", ticker="AAA", price=1.0, shares=1.0),
+            _t(id_=2, action="BUY", ticker="BBB", price=1.0, shares=1.0),
+            _t(id_=3, action="BUY", ticker="CCC", price=1.0, shares=1.0),
+            _t(id_=4, action="BUY", ticker="DDD", price=1.0, shares=1.0)]
+    out = tr.sector_mix(rows, {}, data_available=False)
+    assert out["sectors"] == []
+    assert out["n_sectors"] == 0
+    assert out["top_sector"] is None
+    assert out["top_sector_pct"] is None
+    assert out["data_unavailable"] is True
+
+
+def test_build_insights_sector_concentration_silent_when_data_unavailable():
+    # The unavailable result's n_sectors == 0 must suppress Finding 5 the same
+    # way the "no BUY trades" path does -- pinned so a future refactor can't
+    # reintroduce a fabricated concentration claim through this path.
+    sm = tr.sector_mix(
+        [_t(id_=1, action="BUY", ticker="AAA", price=1.0, shares=1.0),
+         _t(id_=2, action="BUY", ticker="BBB", price=1.0, shares=1.0),
+         _t(id_=3, action="BUY", ticker="CCC", price=1.0, shares=1.0),
+         _t(id_=4, action="BUY", ticker="DDD", price=1.0, shares=1.0)],
+        {}, data_available=False,
+    )
+    metrics = _metrics(ov={"n_judged": 0, "win_rate": None, "net_pnl": 0.0})
+    out = tr.build_insights(metrics, [], sector_mix_data=sm)
+    assert not any("concentration warn level" in f for f in out["findings"])
+
+
 # ─── Lens 3 diagnostics ───────────────────────────────────────────────────────
 
 # -- _diag_holding_period_imbalance --

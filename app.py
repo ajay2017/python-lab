@@ -27149,10 +27149,17 @@ elif page == "🪞 Trade Review":
 
         # Sector mix from a {ticker: sector} map assembled from any source the
         # app already has handy (port_df → scanner_results → fallback "Other").
+        # Track whether EITHER source actually published this session (surface-
+        # proprioception F-260 finding #4): if neither did, ticker_to_sector
+        # stays empty and every trade would silently default to "Other" via
+        # sector_mix's own fallback, fabricating a 100%-concentration finding
+        # for data that was never checked rather than genuinely classified.
         _tr_t2s: dict[str, str] = {}
+        _tr_sector_data_available = False
         try:
             _pf = st.session_state.get("_last_port_df")
             if _pf is not None and not _pf.empty and "Sector" in _pf.columns:
+                _tr_sector_data_available = True
                 for _, _r in _pf.iterrows():
                     _tr_t2s[str(_r["Ticker"]).upper()] = str(_r.get("Sector", "") or "Other")
         except Exception:
@@ -27160,13 +27167,14 @@ elif page == "🪞 Trade Review":
         try:
             _sr = st.session_state.get("scanner_results")
             if _sr is not None and not _sr.empty and "Sector" in _sr.columns:
+                _tr_sector_data_available = True
                 for _, _r in _sr.iterrows():
                     _tk = str(_r["Ticker"]).upper()
                     if _tk not in _tr_t2s:
                         _tr_t2s[_tk] = str(_r.get("Sector", "") or "Other")
         except Exception:
             pass
-        _tr_sec_mix = sector_mix(_tr_trades, _tr_t2s)
+        _tr_sec_mix = sector_mix(_tr_trades, _tr_t2s, data_available=_tr_sector_data_available)
 
         # ── 💡 What the Data Says — rule-based synthesis ──────────────────────
         # Turns the raw numbers into a verdict + concrete findings + one next
@@ -27401,7 +27409,14 @@ elif page == "🪞 Trade Review":
 
             st.markdown("---")
             st.markdown("**Sector concentration of trades**")
-            if _tr_sec_mix["n_sectors"] == 0:
+            if _tr_sec_mix.get("data_unavailable"):
+                st.info(
+                    "Sector data unavailable this session — neither your "
+                    "holdings nor the scanner cache has loaded, so sector "
+                    "concentration could not be checked. Open 🏠 Home or run "
+                    "🔍 Market Scanner once, then come back."
+                )
+            elif _tr_sec_mix["n_sectors"] == 0:
                 st.caption("No BUY trades to analyze sector concentration.")
             elif _tr_sec_mix["n_sectors"] == 1:
                 _s = _tr_sec_mix["sectors"][0]

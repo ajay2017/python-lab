@@ -490,11 +490,21 @@ def position_size_discipline(trades_with_outcome: list[dict],
 
 
 def sector_mix(trades_with_outcome: list[dict],
-               ticker_to_sector: dict[str, str]) -> dict:
+               ticker_to_sector: dict[str, str],
+               *, data_available: bool = True) -> dict:
     """
     Distribution of BUY trades by sector. Flags sectors taking more than
     SECTOR_ELEVATED (25%) of the trade activity — same threshold used for
     portfolio sector concentration warnings elsewhere in the app.
+
+    data_available=False means no sector-classification source (portfolio
+    holdings or scanner cache) was published this session at all — every
+    ticker would otherwise fall through ticker_to_sector's ``or "Other"``
+    default, fabricating a 100%-concentrated-in-Other finding rather than
+    reporting "sector data unavailable" (surface-proprioception F-260,
+    finding #4). Distinct from a real, populated ticker_to_sector that
+    simply has no entry for a specific ticker, which is a legitimate
+    "Other/unclassified" outcome, not a data outage.
 
     Returns:
       sectors            — list of {sector, n_trades, dollars, pct_of_trades, over_elevated}
@@ -502,7 +512,19 @@ def sector_mix(trades_with_outcome: list[dict],
       top_sector         — name of the largest-share sector
       top_sector_pct     — that sector's share of trades
       elevated_threshold — SECTOR_ELEVATED (25.0) for display
+      data_unavailable   — True iff data_available=False was passed; the caller
+                           should disclose "unable to check", not "no BUY trades"
     """
+    if not data_available:
+        return {
+            "sectors":            [],
+            "n_sectors":          0,
+            "top_sector":         None,
+            "top_sector_pct":     None,
+            "elevated_threshold": SECTOR_ELEVATED,
+            "data_unavailable":   True,
+        }
+
     sector_count:    dict[str, int]   = defaultdict(int)
     sector_dollars:  dict[str, float] = defaultdict(float)
     total_trades = 0
@@ -523,6 +545,7 @@ def sector_mix(trades_with_outcome: list[dict],
             "top_sector":         None,
             "top_sector_pct":     None,
             "elevated_threshold": SECTOR_ELEVATED,
+            "data_unavailable":   False,
         }
 
     sectors: list[dict] = []
@@ -543,6 +566,7 @@ def sector_mix(trades_with_outcome: list[dict],
         "top_sector":         sectors[0]["sector"],
         "top_sector_pct":     sectors[0]["pct_of_trades"],
         "elevated_threshold": SECTOR_ELEVATED,
+        "data_unavailable":   False,
     }
 
 
