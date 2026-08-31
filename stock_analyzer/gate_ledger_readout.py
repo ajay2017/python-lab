@@ -268,6 +268,9 @@ def grade_by_gate(
         n_excluded_counterfactual_false = sum(
             1 for r in gate_rows if r.get("status") == STATUS_EXCLUDED_COUNTERFACTUAL_FALSE
         )
+        n_excluded_source_mismatch = sum(
+            1 for r in gate_rows if r.get("status") == STATUS_EXCLUDED_SOURCE_MISMATCH
+        )
 
         # Two floors, both required to leave "building" (§5's N_min and K).
         if n_matured_evaluable < min_calls or n_distinct_tickers_evaluable < min_tickers:
@@ -296,6 +299,7 @@ def grade_by_gate(
             "n_excluded_null_composite": n_excluded_null_composite,
             "n_excluded_low_composite": n_excluded_low_composite,
             "n_excluded_counterfactual_false": n_excluded_counterfactual_false,
+            "n_excluded_source_mismatch": n_excluded_source_mismatch,
             "band": band,
             "mean_alpha_pct": mean_alpha_pct,
             "since_date": since_date,

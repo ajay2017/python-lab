@@ -348,6 +348,95 @@ def test_matured_row_with_missing_forward_close_is_unpriceable():
     assert out[0]["status"] == glr.STATUS_MATURED_UNPRICEABLE
 
 
+# ─── 8b. grade_by_gate must surface EVERY exclusion reason, not just some ──
+# Regression class caught from a live screenshot 2026-08-30: G-20 showed
+# "0 still maturing" on a real production pull with 5 real, recorded
+# suppressions -- all correctly non-binding (counterfactual=False), and
+# therefore correctly excluded from the evaluable tally, but with NO on-screen
+# trace that they existed at all. "Never fired" and "fired repeatedly, always
+# non-binding" rendered identically. grade_by_gate() computes these counts;
+# these tests pin that it actually returns them (app.py's render loop is what
+# was fixed to display them -- these tests protect the DATA side of that fix
+# from silently regressing again).
+
+def test_grade_by_gate_tallies_counterfactual_false_exclusions_separately():
+    enriched = [
+        _graded_row("AAA", status=glr.STATUS_EXCLUDED_COUNTERFACTUAL_FALSE),
+        _graded_row("BBB", status=glr.STATUS_EXCLUDED_COUNTERFACTUAL_FALSE),
+        _graded_row("CCC", status=glr.STATUS_MATURED_EVALUABLE),
+    ]
+    out = glr.grade_by_gate(
+        enriched, gate_ids=("G-04",), min_calls=GATE_LEDGER_MIN_CALLS,
+        firm_calls=GATE_LEDGER_FIRM_CALLS, min_tickers=GATE_LEDGER_MIN_TICKERS,
+    )
+    assert out[0]["n_excluded_counterfactual_false"] == 2
+    # The evaluable tally must NOT also count them -- they are reported
+    # separately, never folded into "still maturing" or "evaluable".
+    assert out[0]["n_matured_evaluable"] == 1
+    assert out[0]["n_not_matured"] == 0
+
+
+def test_a_gate_that_only_ever_fired_non_binding_is_distinguishable_from_never_fired():
+    """The exact production shape that motivated this fix: every row for a
+    gate is non-binding. Without n_excluded_counterfactual_false, this is
+    indistinguishable from a gate with zero rows at all."""
+    never_fired = glr.grade_by_gate(
+        [], gate_ids=("G-20",), min_calls=GATE_LEDGER_MIN_CALLS,
+        firm_calls=GATE_LEDGER_FIRM_CALLS, min_tickers=GATE_LEDGER_MIN_TICKERS,
+    )[0]
+    fired_but_all_non_binding = glr.grade_by_gate(
+        [_graded_row("LLY", gate_id="G-20", status=glr.STATUS_EXCLUDED_COUNTERFACTUAL_FALSE)],
+        gate_ids=("G-20",), min_calls=GATE_LEDGER_MIN_CALLS,
+        firm_calls=GATE_LEDGER_FIRM_CALLS, min_tickers=GATE_LEDGER_MIN_TICKERS,
+    )[0]
+    # Both show "building" with 0 evaluable/0 maturing -- that part is
+    # legitimately identical. The exclusion count is what must differ.
+    assert never_fired["n_excluded_counterfactual_false"] == 0
+    assert fired_but_all_non_binding["n_excluded_counterfactual_false"] == 1
+    assert never_fired != fired_but_all_non_binding
+
+
+def test_grade_by_gate_tallies_low_composite_exclusions_separately():
+    enriched = [
+        _graded_row("AAA", gate_id="G-07", status=glr.STATUS_EXCLUDED_LOW_COMPOSITE),
+        _graded_row("BBB", gate_id="G-07", status=glr.STATUS_MATURED_EVALUABLE),
+    ]
+    out = glr.grade_by_gate(
+        enriched, gate_ids=("G-07",), min_calls=GATE_LEDGER_MIN_CALLS,
+        firm_calls=GATE_LEDGER_FIRM_CALLS, min_tickers=GATE_LEDGER_MIN_TICKERS,
+    )
+    assert out[0]["n_excluded_low_composite"] == 1
+    assert out[0]["n_matured_evaluable"] == 1
+
+
+def test_grade_by_gate_tallies_source_mismatch_exclusions_separately():
+    enriched = [
+        _graded_row("AAA", gate_id="G-01", status=glr.STATUS_EXCLUDED_SOURCE_MISMATCH),
+    ]
+    out = glr.grade_by_gate(
+        enriched, gate_ids=("G-01",), min_calls=GATE_LEDGER_MIN_CALLS,
+        firm_calls=GATE_LEDGER_FIRM_CALLS, min_tickers=GATE_LEDGER_MIN_TICKERS,
+    )
+    assert out[0]["n_excluded_source_mismatch"] == 1
+
+
+def test_all_four_exclusion_reasons_are_present_keys_on_every_non_market_wide_gate():
+    """Every gate's output dict must carry all four exclusion-count keys,
+    even at zero -- app.py's render checks `.get(key)` truthiness, so a
+    MISSING key would silently render nothing (indistinguishable from a
+    present zero) rather than raising, which would hide a future regression
+    exactly like the one this test file section exists to catch."""
+    out = glr.grade_by_gate(
+        [], gate_ids=("G-04",), min_calls=GATE_LEDGER_MIN_CALLS,
+        firm_calls=GATE_LEDGER_FIRM_CALLS, min_tickers=GATE_LEDGER_MIN_TICKERS,
+    )[0]
+    for key in (
+        "n_excluded_null_composite", "n_excluded_low_composite",
+        "n_excluded_counterfactual_false", "n_excluded_source_mismatch",
+    ):
+        assert key in out
+
+
 # ─── 9. load_gate_suppressions() offline contract ──────────────────────────
 
 class _FakeExecResult:

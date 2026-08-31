@@ -30515,6 +30515,28 @@ elif page == "🛑 The Road Not Taken":
                         f"⚪ {_g['n_excluded_null_composite']} row(s) excluded: composite score "
                         "never loaded before this gate fired."
                     )
+                if _g.get("n_excluded_low_composite"):
+                    st.caption(
+                        f"⚪ {_g['n_excluded_low_composite']} row(s) excluded: composite score was "
+                        "below the buy threshold, so this pick would not have qualified regardless "
+                        "of this gate."
+                    )
+                if _g.get("n_excluded_counterfactual_false"):
+                    # This is the count a "0 still maturing" reading can otherwise hide entirely —
+                    # a gate can have fired repeatedly while still showing zero maturing/evaluable
+                    # rows, because every firing was correctly non-binding (context, not evidence,
+                    # per §5/F3). Without this line, "never fired" and "fired N times, always
+                    # non-binding" render identically. Caught from a live screenshot 2026-08-30.
+                    st.caption(
+                        f"⚪ {_g['n_excluded_counterfactual_false']} suppression(s) recorded but "
+                        "non-binding (context only, not evidence) — excluded from this gate's "
+                        "evaluable count, not a sign this gate has never fired."
+                    )
+                if _g.get("n_excluded_source_mismatch"):
+                    st.caption(
+                        f"⚪ {_g['n_excluded_source_mismatch']} row(s) excluded: recorded from a "
+                        "source that couldn't have evaluated this gate."
+                    )
                 for _fn in gate_ledger_readout.readout_footnotes(_g["gate_id"]):
                     st.caption(f"ℹ️ {_fn}")
 
