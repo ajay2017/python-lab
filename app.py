@@ -21567,8 +21567,32 @@ elif page == "📈 Analysis":
                             unsafe_allow_html=True,
                         )
                         if _hold_stop:  # skip when the engine reports "Stop Unavailable"
-                            _hold_rc = (st.session_state.get("_reduce_calls") or {}).get(str(ticker).upper())
+                            # surface-proprioception F-260 finding: a bare
+                            # `or {}` here would let an unverified _reduce_calls
+                            # read as "not under reduce", silently letting the
+                            # stop-ladder's "keep climbing" nudges through on a
+                            # position that IS under an active Reduce/Exit call
+                            # -- exactly what under_reduce exists to suppress
+                            # (see _render_stop_ladder's own docstring). Same
+                            # verified-check pattern as the closed My Edge/
+                            # Portfolio Overview findings: _coord_cache_state
+                            # alone is not enough since a crashed Daily Brief
+                            # fail-opens _reduce_calls to {} rather than None.
+                            _hold_reduce_verified = (
+                                _coord_cache_state("_reduce_calls") == "ready"
+                                and not st.session_state.get("_daily_brief_offline", False)
+                            )
+                            _hold_rc = (
+                                (st.session_state.get("_reduce_calls") or {}).get(str(ticker).upper())
+                                if _hold_reduce_verified else None
+                            )
                             _render_stop_ladder(r, _sa_holding, price, under_reduce=bool(_hold_rc))
+                            if not _hold_reduce_verified:
+                                st.caption(
+                                    "⚪ Reduce/Exit cross-check unavailable this session — the "
+                                    "stop-ladder above may show 'keep climbing' guidance even if "
+                                    "this position is under an active Reduce/Exit call."
+                                )
                     else:
                         c3.metric("Entry Zone",
                                   f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A")
@@ -23424,6 +23448,24 @@ elif page == "📋 Watchlist":
             )
         )
 
+    # surface-proprioception F-260 finding: _port_risk_cache has its OWN
+    # independent try/except (app.py ~5238, computing beta/vol/etc. from
+    # portfolio returns) that is NOT coupled to _daily_brief_offline — a risk-
+    # metrics-only failure (e.g. a thin/NaN return series) can leave this
+    # cache offline on a day the Brief itself computed fine, so this check
+    # must NOT be folded into _wl_brief_offline above. Without it,
+    # _wl_port_beta silently reads None and _portfolio_risk_gate()'s hard
+    # beta-ceiling downgrade + soft beta caution both skip with zero
+    # disclosure — an ENTER_NOW card renders clean, indistinguishable from
+    # "beta checked, all clear." Same cache, same wording as 🎯 My Edge's
+    # existing disclosure for this exact scenario (app.py ~36956).
+    if _coord_cache_state("_port_risk_cache") != "ready":
+        st.warning(
+            "⚠ **Portfolio beta unavailable this session** — the portfolio-beta "
+            "risk check on Ready-to-Enter recommendations (both the hard ceiling "
+            "downgrade and the soft caution) cannot run. Visit 🏠 Home to compute it."
+        )
+
     # STALE is a different claim from the OFFLINE banner above, and the two
     # cannot contradict each other — but NOT for the reason first written here.
     # The original comment said decide_stale_banner() is "silent on ABSENT by
@@ -24549,6 +24591,23 @@ elif page == "📒 Trade Journal":
                                     "concentrated position amplifies every loss. Consider trimming, "
                                     "or knowingly accept the higher single-name risk."
                                 )
+                    elif _pb_cc_pdf is None:
+                        # surface-proprioception F-260 finding: this whole
+                        # concentration check silently no-oped whenever
+                        # _last_port_df was absent (Home never visited this
+                        # session, or crashed before publishing it), with no
+                        # trace anywhere that the check didn't run. A
+                        # genuinely-empty portfolio (_pb_cc_pdf.empty) or a
+                        # non-positive book value are left OUT of this
+                        # disclosure deliberately -- those mean "nothing to
+                        # check against yet", a real answer, not an offline one.
+                        st.caption(
+                            "⚪ Concentration check unavailable this session — your "
+                            "portfolio snapshot wasn't loaded, so this new position "
+                            "wasn't checked against your single-name/sector/"
+                            "net-capital limits. Visit 🏠 Home, then re-check on the "
+                            "Portfolio pages."
+                        )
                 except Exception:
                     pass
                 _refresh_portfolio_cache_after_trade(_pb_h_df)
