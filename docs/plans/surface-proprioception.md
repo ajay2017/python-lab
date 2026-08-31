@@ -1,6 +1,8 @@
 # Surface Proprioception (F-260) — audit first, then decide
 
-**Status: the 7 previously-skipped pages are now audited — 4 clean, 3 more findings CLOSED 2026-08-31 (commit `7faf729`).** Both earlier rounds (10 ranked + 5 more) had explicitly assumed 📈 Analysis, 📒 Trade Journal, 🪞 Trade Review, 📅 Economic Calendar, 🎯 My Edge, 🧑‍⚖️ The Judge, and 📋 Watchlist were already covered, without independently re-verifying. A full re-audit of all 7 (every `elif page ==` block read top to bottom, not sampled) confirmed 🪞 Trade Review, 📅 Economic Calendar, 🎯 My Edge, and 🧑‍⚖️ The Judge are genuinely CLEAN, and found 3 real findings on the other 3: (1) 📋 Watchlist's portfolio-beta risk gate (both the hard ceiling downgrade and the soft caution on ENTER_NOW recs) silently disabled whenever `_port_risk_cache` went offline — confirmed LIVE, not theoretical, since that cache's producer has its own independent try/except uncoupled from `_daily_brief_offline`; (2) 📒 Trade Journal's post-BUY concentration check silently skipped with zero disclosure when the portfolio snapshot wasn't loaded; (3) 📈 Analysis's HOLD-tab stop-ladder could show "keep climbing" nudges on a position under an active Reduce/Exit call if that cache couldn't be verified. All disclosure-only, Opus review SHIP 0 blocking. **This closes the "7 unaudited pages" item — the only genuinely open F-260 work left is Phase 3** (§11/§12 item 2, lifting Home's risk/fragility/correlation producer block into a pure module), which needs its own `planner` pass and was never part of any of these audit rounds.
+**Status: F-260 IS FULLY CLOSED (2026-08-31, commits `02129d1`/`c560448`).** Phase 3 — lifting Home's risk/fragility/correlation producer orchestration into a pure module — is the last piece and now ships, in two sequenced commits per an Opus `planner` design pass: Unit A (correlation/diversification, no internal dependency) and Unit B (risk-metrics/fragility/high-beta/risk-advisor, which has a real dependency chain and the safety-critical 2026-08-04 branch). Both are byte-identical lifts into `stock_analyzer/home_risk_synthesis.py`, each with its own Opus reviewer pass (both SHIP; Unit B's review caught one real non-blocking deviation — a silently-narrowed exception scope around `_get_rfr()` — fixed before shipping). The new module joined `_GATE_FILES` (user-confirmed decision: more decision-bearing than the `coord_freshness.py`/`outage_gate.py` precedents kept out of that list, since it selects the offline sentinels a downstream gate keys on for safety). Full detail: §16. **Nothing remains open on F-260** — see §16's closing note for what was deliberately left as a separate, later decision (naming the bare 42/30 diversification-band literals as constants).
+
+**Status (superseded by the line above): the 7 previously-skipped pages are now audited — 4 clean, 3 more findings CLOSED 2026-08-31 (commit `7faf729`).** Both earlier rounds (10 ranked + 5 more) had explicitly assumed 📈 Analysis, 📒 Trade Journal, 🪞 Trade Review, 📅 Economic Calendar, 🎯 My Edge, 🧑‍⚖️ The Judge, and 📋 Watchlist were already covered, without independently re-verifying. A full re-audit of all 7 (every `elif page ==` block read top to bottom, not sampled) confirmed 🪞 Trade Review, 📅 Economic Calendar, 🎯 My Edge, and 🧑‍⚖️ The Judge are genuinely CLEAN, and found 3 real findings on the other 3: (1) 📋 Watchlist's portfolio-beta risk gate (both the hard ceiling downgrade and the soft caution on ENTER_NOW recs) silently disabled whenever `_port_risk_cache` went offline — confirmed LIVE, not theoretical, since that cache's producer has its own independent try/except uncoupled from `_daily_brief_offline`; (2) 📒 Trade Journal's post-BUY concentration check silently skipped with zero disclosure when the portfolio snapshot wasn't loaded; (3) 📈 Analysis's HOLD-tab stop-ladder could show "keep climbing" nudges on a position under an active Reduce/Exit call if that cache couldn't be verified. All disclosure-only, Opus review SHIP 0 blocking. **This closes the "7 unaudited pages" item — the only genuinely open F-260 work left is Phase 3** (§11/§12 item 2, lifting Home's risk/fragility/correlation producer block into a pure module), which needs its own `planner` pass and was never part of any of these audit rounds.
 
 **Status: 5 MORE findings CLOSED 2026-08-30 (later session, commit `f707e31`), of the ~15 that were never individually itemized.** A fresh investigation (re-derived against current code, not assumed from the loose one-sentence description below) found the true remaining count in the 4 named areas was **5, not ~15** — several of the loosely-described items had already been closed by unrelated work (the `_acct_gate_cache` dead-branch fix, the coord_freshness banner rollout) without ever being checked off here. The 5: (1) 🔗 Risk Analysis's whole Portfolio Risk Dashboard vanishing with no `else` when `_port_risk_cache` is falsy; (2) the same page's leverage/margin warning never reading the producer's `cash_seen` field, so "never measured" rendered identically to "confirmed unlevered"; (3) 🥧 Portfolio Overview's News Intelligence tab and (4) its Rebalancer tab both feeding an unverified `_reduce_calls` into an existing suppression parameter without disclosing when the cross-check couldn't run; (5) 🔔 Catalyst Watch's 🔥 leading-sector flag going STALE (not absent) because the Daily-Brief-crash reset block nulled its siblings `_grow_today_sectors_cache`/`_reduce_calls` but never `_leading_sectors_cache`. All disclosure-only (no gate/threshold/recommendation change); Opus review SHIP, 0 blocking. Full per-finding detail and the reviewer's two non-blocking notes (a stale "sole writer" claim, and a separate pre-existing memo-hit-rebuild staleness gap on the same key family — not fixed, out of scope) in the commit body. **Did NOT re-audit** 📈 Analysis, 📒 Trade Journal, 🪞 Trade Review, 📅 Economic Calendar, 🎯 My Edge, 🧑‍⚖️ The Judge, or 📋 Watchlist (assumed covered by the closed top-10 + the coord_freshness rollout, per the investigation's own scope note) — a small remainder could still exist there.
 
@@ -693,3 +695,68 @@ not this diff). Opus review SHIP, 0 blocking. Commit `7faf729`.
 **This closes the "7 unaudited pages" line item entirely.** The only genuinely open F-260 work
 remaining is Phase 3 (see above) — a structural extraction, not a bug-fix pass, needing its own
 `planner` design before any code.
+
+---
+
+## 16. Phase 3 SHIPPED 2026-08-31 — F-260 is now fully closed
+
+An Opus `planner` pass (design source: this document's own §11/§12 item 2, "lifting Home's
+risk/fragility/correlation producer block into a pure module") scoped this into two sequenced,
+individually-reviewed commits rather than one big migration — "**PROCEED WITH A NARROWER
+SCOPE**", specifically because the block splits at one real internal boundary: Unit A
+(correlation/diversification) has no dependency on Unit B (risk-metrics/fragility/high-beta/
+risk-advisor), but Unit B has a genuine `port_risk → fragility → advisor` chain that a
+single big-bang extraction would make harder to review safely.
+
+**Unit A** (commit `02129d1`) — `stock_analyzer/home_risk_synthesis.py::build_correlation_bundle
+(port_df, held_data, portfolio_value) -> dict`, a byte-identical lift of the correlation-matrix →
+diversification-score/label chain and the separate `diversification_recommendations` call. Opus
+review SHIP, 0 blocking. One non-blocking test-robustness note applied before shipping: the
+original correlation-chain-failure test patched the FIRST call in the chain
+(`correlation_matrix`), which couldn't detect a future narrowing of the try/except to wrap fewer
+calls — a second test patching a LATER call (`correlation_coverage`) was added to pin that the
+whole chain shares one try/except.
+
+**Unit B** (commit `c560448`) — `build_risk_bundle(port_df, held_data, h_rets, total_val,
+gate_denom, trades_df, spy_df, rfr, beta_elevated, beta_ceiling, fragility_pullback_pct) -> dict`,
+a byte-identical lift of four separate try/except blocks: portfolio risk metrics; the fragility
+gauge (which reads risk-metrics' beta from the SAME call, preserving the real dependency);
+high-beta cluster share (independent); and Risk Advisor recommendations, including the
+safety-critical **2026-08-04 branch** — when `port_risk` is `None`, the advisor is never called
+at all (not called-then-discarded), because calling it on an offline input can itself return a
+falsy `[]` that would get cached as "checked, no risk" instead of the honest "we never checked."
+Opus review SHIP, 0 blocking, with **one real, fixed-before-shipping finding**: the extraction
+had silently NARROWED the original exception scope. The inline code originally resolved
+`_get_rfr()` INSIDE the same try as `compute_portfolio_risk_metrics`, so an rfr-fetch exception
+degraded to `port_risk=None`; the first extraction draft resolved it unguarded at the app.py call
+site, so the same exception would have propagated and crashed Home's render instead. Currently
+inert (the sole rate-free provider already catches its own errors and falls back to a default)
+but a future provider change could make it live — exactly the class of risk this whole extraction
+exercise exists to guard against, so it was fixed in the same commit rather than left as a
+footnote: both `_cached_spy`/`_get_rfr()` calls are now wrapped in their own try/except at the
+app.py call site, falling back to `spy_df=None, rfr=None` — empirically verified (via a direct
+`python -c` probe, not just reasoning) to cascade correctly through `build_risk_bundle` to a
+fully-offline bundle, since `compute_portfolio_risk_metrics` genuinely raises on `rfr=None`
+rather than silently tolerating it. A new test (`TestSpyOrRfrIoFailureFallback`) pins this exact
+fallback shape against the real, un-mocked function.
+
+**Both units add `stock_analyzer/home_risk_synthesis.py` to `_GATE_FILES`** (hook +
+`CLAUDE.md` enumeration updated in the Unit A commit) — a user-confirmed decision made before
+build: this module is more decision-bearing than the `coord_freshness.py`/`outage_gate.py`
+precedents deliberately kept OUT of that list, because it selects the offline sentinels a
+downstream gate (Watchlist's ENTER_NOW beta check, itself a recent F-260 finding) keys on for
+safety.
+
+**Deliberately deferred, a separate later decision, not part of Phase 3:** the bare `42`/`30`
+diversification-label-band literals (duplicated independently in the label logic and the RAG
+status color elsewhere in `app.py`) were left as bare literals in the extracted code, byte-
+identical to the pre-extraction inline code. Naming them as real constants is a genuine
+investment-policy naming decision (changes no numbers, needs a `constants.py` commit + a
+Hard-Rule-#1 sign-off) that the user explicitly chose to defer rather than fold into a
+byte-identical migration, since mixing a threshold-naming change into a "prove nothing changed"
+review muddies exactly the thing that review is for.
+
+**F-260 is now fully closed.** 18 CLAIM findings fixed across 3 audit rounds (2026-08-30/31),
+plus this 2-commit structural extraction — the complete remedy the audit's own pre-registered
+`N > 15` decision branch called for back when the finding count came back structural rather than
+small. Full suite after both units: 4852 passed. Both deterministic gates green throughout.
