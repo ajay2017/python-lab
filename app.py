@@ -24366,6 +24366,12 @@ elif page == "📒 Trade Journal":
                 st.session_state.pop("_tj_override_sell", None)
                 st.session_state.pop("_tj_drift_checked", None)
                 st.session_state.pop("_tj_drift_state", None)
+                # Reset the date picker back to today (2026-08-30 reviewer
+                # finding, non-blocking): it lives outside st.form, so
+                # clear_on_submit doesn't touch it — without this pop, logging
+                # one backdated trade would leave the field sticky on that
+                # past date for the NEXT trade too.
+                st.session_state.pop("_tj_trade_date", None)
                 import time as _ps_time
                 st.session_state["_tj_last_submit_sig"] = (_ps_ticker, "SELL", _ps_shares)
                 st.session_state["_tj_last_submit_ts"]  = _ps_time.time()
@@ -24553,6 +24559,9 @@ elif page == "📒 Trade Journal":
                 st.session_state.pop("_tj_override_sell", None)
                 st.session_state.pop("_tj_drift_checked", None)
                 st.session_state.pop("_tj_drift_state",   None)
+                # See the matching SELL-confirm comment above — reset the
+                # date picker so it doesn't stay sticky on a past date.
+                st.session_state.pop("_tj_trade_date", None)
                 import time as _pb_time
                 st.session_state["_tj_last_submit_sig"] = (_pb_ticker, "BUY", _pb_shares)
                 st.session_state["_tj_last_submit_ts"]  = _pb_time.time()
@@ -24606,9 +24615,9 @@ elif page == "📒 Trade Journal":
                 st.session_state.pop("_tj_broker_prefill", None)
                 st.session_state.pop("_tj_pending_broker_id", None)
                 st.rerun()
-        # ── Action + Ticker live OUTSIDE the form so changes trigger a rerun
-        # and cost basis can be auto-looked-up before the form renders.
-        _tx_c1, _tx_c2 = st.columns([1, 2])
+        # ── Action + Ticker + Date live OUTSIDE the form so changes trigger a
+        # rerun and cost basis can be auto-looked-up before the form renders.
+        _tx_c1, _tx_c2, _tx_c3 = st.columns([1, 2, 1])
         with _tx_c1:
             st.radio(
                 "Action", ["BUY", "SELL"], horizontal=True,
@@ -24622,6 +24631,42 @@ elif page == "📒 Trade Journal":
                 key="_tj_ticker",
                 disabled=_is_broker_trade,
             )
+        with _tx_c3:
+            # Root-cause fix for the Pending Imports queue (F-244a follow-up,
+            # 2026-08-30): manual entries used to have NO way to record the
+            # real trade date, so traded_at always defaulted to the DB's
+            # now() — a manually-logged trade could then never exact-match
+            # the broker cron's classify_transactions() and permanently
+            # generated a pending-import row. Broker-sourced trades already
+            # carry a real date (_broker_prefill["trade_date"]) — shown here
+            # locked, matching the existing locked Action/Ticker/Shares/Price
+            # fields, rather than editable.
+            if _is_broker_trade:
+                _bp_raw_date = _broker_prefill.get("trade_date")
+                try:
+                    _tj_picked_date = date.fromisoformat(str(_bp_raw_date)[:10]) if _bp_raw_date else _today_et()
+                except (ValueError, TypeError):
+                    _tj_picked_date = _today_et()
+                st.date_input(
+                    "Trade date", value=_tj_picked_date,
+                    disabled=True, key="_tj_trade_date_locked",
+                )
+            else:
+                _tj_picked_date = st.date_input(
+                    "Trade date",
+                    value=st.session_state.get("_tj_trade_date", _today_et()),
+                    max_value=_today_et(),
+                    key="_tj_trade_date",
+                    help="Logging this after the fact? Pick the real trade "
+                         "date so it matches your broker record — otherwise "
+                         "this entry will keep showing up as an unmatched "
+                         "Robinhood transaction in 💰 Account → Broker Sync.",
+                )
+        # True only for a manual entry whose picked date isn't today — a
+        # broker-sourced trade is never "manual backdated" even though its
+        # own date is also in the past (it already gets Retrospective
+        # framing via `_is_broker_trade` below).
+        _is_manual_backdated = (not _is_broker_trade) and (_tj_picked_date != _today_et())
 
         # Reactive cost-basis lookup — runs on every rerun after ticker/action change
         _live_action = st.session_state.get("_tj_action", "BUY")
@@ -25075,13 +25120,20 @@ elif page == "📒 Trade Journal":
                 st.session_state.pop("_tj_premortem_commitment", None)
                 st.session_state["_tj_premortem_commitment_for"] = _pm_tk
 
-            if _is_broker_trade:
+            if _is_broker_trade or _is_manual_backdated:
+                # strftime output is alphanumeric-only, but escape anyway —
+                # this codebase's convention is to escape at the interpolation
+                # site regardless of whether a given value can be proven safe
+                # (matches _ps_ticker_esc's precedent a few hundred lines up).
+                _pmt_retro_source = _html.escape(
+                    "at your broker" if _is_broker_trade else f"on {_tj_picked_date.strftime('%b %d')}"
+                )
                 st.markdown(
                     "<div style='background:#241436;border:1px solid #a855f7;"
                     "border-left:4px solid #a855f7;border-radius:8px;"
                     "padding:10px 16px;margin:8px 0;color:#e9d5ff'>"
                     "🔮 <b>Retrospective Pre-Mortem</b> — this trade already "
-                    "happened at your broker. Write what would have made you "
+                    f"happened {_pmt_retro_source}. Write what would have made you "
                     "wrong <b>at the moment you decided</b> to buy, not what "
                     "you know now. Still required — the discipline is in "
                     "writing it down, whenever that happens."
@@ -25107,16 +25159,16 @@ elif page == "📒 Trade Journal":
                 ),
             )
 
-        # Warn when the user is logging a trade on a non-trading day. The form
-        # has no date field — traded_at defaults to now() — so anything logged
-        # today will carry today's (wrong) date in Trade Review, breaking the
-        # panic-window and vs-SPY benchmark for that row.
-        if not is_trading_day(_today_et()):
+        # Warn when the picked trade date isn't a trading day — Trade Review's
+        # panic-window and vs-SPY benchmark will be wrong for that row. Broker
+        # trades get their own equivalent check at confirm time (below, in the
+        # record-construction block) — skip here to avoid a duplicate warning.
+        if not _is_broker_trade and not is_trading_day(_tj_picked_date):
             st.warning(
-                f"Today ({_today_et().strftime('%A %b %d')}) is not a trading day. "
-                "Any trade logged now will be dated today — Trade Review's "
-                "panic-window and vs-SPY benchmark will be wrong for that row. "
-                "If you're recording a past trade, note the actual date in Notes."
+                f"{_tj_picked_date.strftime('%A %b %d')} is not a trading day. "
+                "Trade Review's panic-window and vs-SPY benchmark will be "
+                "wrong for this row — double-check the date if that wasn't "
+                "intentional."
             )
 
         # st.form prevents double-submission on rerun (shares / price / notes only)
@@ -25648,6 +25700,14 @@ elif page == "📒 Trade Journal":
                         except (ValueError, TypeError):
                             pass  # unparseable date — let the anchor step fail loudly
                         record["traded_at"] = _et_anchor_iso(_bp_date)
+                elif _is_manual_backdated:
+                    # Same anchor helper the broker path uses — a bare date
+                    # would cast to midnight UTC (the PRIOR EVENING in ET),
+                    # dating the trade a day early. When the picked date IS
+                    # today, deliberately emit no key at all so today's
+                    # trades keep the DB's now() default byte-for-byte
+                    # unchanged (same behavior as before this fix existed).
+                    record["traded_at"] = _et_anchor_iso(_tj_picked_date)
                 # ── SELL/BUY: hold for confirmation — don't write to DB yet ──
                 if action == "SELL":
                     st.session_state["_tj_pending_sell"] = record

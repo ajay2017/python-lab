@@ -473,3 +473,28 @@ def test_a_shim_failure_falls_back_to_the_raw_frame_not_the_offline_sentinel(mon
     assert out is not None, "a shim bug must not masquerade as an outage"
     assert len(out) == 1
     assert out["traded_at"].iloc[0] == "2026-07-16T00:00:00+00:00"
+
+
+# ─── the scenario the Log Trade date-picker fix (F-244a follow-up,
+#     2026-08-30) makes possible for the first time ──────────────────────────
+
+def test_backdated_manual_buy_logged_after_a_newer_sell_still_replays_first():
+    """Before this session's fix, a manual entry could never be backdated —
+    traded_at always equalled real logging time, so insertion (id) order and
+    chronological (traded_at) order were always the same thing. Once a user
+    can pick a past date, that stops being true: they could log today's SELL
+    first (id=1) and only afterward backfill an older BUY for the same
+    ticker (id=2). `_sort_ts` (from traded_at) must dominate the `id`
+    tiebreak in db.recalculate_from_trades' sort, so the BUY still replays
+    BEFORE the SELL despite its higher id, and no spurious 'no prior BUY'
+    warning fires."""
+    from stock_analyzer import db as _db
+    rows = [
+        _row(et_anchor_iso("2026-08-28"), action="SELL"),  # logged FIRST, LATER date
+        _row(et_anchor_iso("2026-08-20"), action="BUY"),   # logged SECOND, EARLIER date
+    ]
+    for i, r in enumerate(rows):
+        r["id"] = i + 1
+    result = _db.recalculate_from_trades(pd.DataFrame(rows))
+    assert result["warnings"] == []
+    assert result["holdings_df"].empty
