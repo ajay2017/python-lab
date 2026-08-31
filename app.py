@@ -14890,10 +14890,8 @@ elif page == "🔗 Risk Analysis":
             # KPI summary
             _s1, _s2, _s3, _s4 = st.columns(4)
             _s1.metric("SPY Shock",        f"{_sc_result['spy_move']:+.0f}%")
-            _s2.metric("Est. Portfolio Δ", f"{_est_move:+.1f}%",
-                       delta_color="inverse" if _est_pnl < 0 else "normal")
-            st.metric("Est. $ Impact",    _m(f"${_est_pnl:+,.0f}"),
-                       delta_color="inverse" if _est_pnl < 0 else "normal")
+            _s2.metric("Est. Portfolio Δ", f"{_est_move:+.1f}%")  # no delta passed, delta_color was dead
+            st.metric("Est. $ Impact",    _m(f"${_est_pnl:+,.0f}"))  # no delta passed, delta_color was dead
             _s4.metric("Post-Shock Value", _m(f"${_post_val:,.0f}"))
 
             # Position impact table
@@ -18470,8 +18468,7 @@ elif page == "🥧 Portfolio Overview":
 
             # KPI strip
             _pk1, _pk2, _pk3, _pk4, _pk5 = st.columns(5)
-            _pk1.metric("Total P&L",      _m(f"${_total_pnl:+,.0f}"),
-                        delta_color="normal" if _total_pnl >= 0 else "inverse")
+            _pk1.metric("Total P&L", _m(f"${_total_pnl:+,.0f}"))  # no delta passed, delta_color was dead
             _pk2.metric("Gross Gains",    _m(f"${_win_total:,.0f}"),
                         f"{len(_winners)} positions", delta_color="off")
             _pk3.metric("Gross Losses",   _m(f"${_loss_total:,.0f}"),
@@ -26328,13 +26325,11 @@ elif page == "📒 Trade Journal":
             _dj_k4.metric(
                 "P&L from following",
                 f"${_dj['followed_pnl']:+,.0f}",
-                delta_color="normal" if _dj["followed_pnl"] >= 0 else "inverse",
                 help="Total realized P&L on trades where you followed the signal",
             )
             _dj_k5.metric(
                 "P&L from overrides",
                 f"${_dj['ignored_pnl']:+,.0f}",
-                delta_color="normal" if _dj["ignored_pnl"] >= 0 else "inverse",
                 help="Total realized P&L on trades where you overrode the signal",
             )
 
@@ -31360,8 +31355,7 @@ elif page == "💰 Account":
         _gc1.metric("Net Contributed Capital", _m(f"${_g['ncc']:,.0f}"),
                     help="Baseline + deposits − withdrawals — what you've put in.")
         if _g["growth"] is not None:
-            _gc2.metric("Growth ($)", _m(f"${_g['growth']:+,.0f}"),
-                        delta_color="normal" if _g["growth"] >= 0 else "inverse")
+            _gc2.metric("Growth ($)", _m(f"${_g['growth']:+,.0f}"))  # no delta passed, delta_color was dead
         else:
             _gc2.metric("Growth ($)", "—",
                         help="Open 🏠 Home and set your cash balance so total account value can be computed.")
