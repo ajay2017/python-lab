@@ -4846,11 +4846,26 @@ if page == "🏠 Home":
         r["Ticker"] for _, r in port_df.iterrows()
         if not (r["Ticker"] in _lp_map and (_lp_map[r["Ticker"]].get("prev_close") or 0) > 0)
     ]
-    _today_priced_n = _today_total_n - len(_today_missing)
+    # Separate from _today_missing on purpose: a ticker here HAS a prev_close,
+    # it's just one the price cross-check has already flagged as disagreeing
+    # with the independent validator (2026-08-31: Finnhub's own prev_close
+    # lagged a session behind post-weekend, which would otherwise fold an
+    # earlier session's move into this KPI). Kept OUT of _today_missing
+    # deliberately — that list also gates Tier B below, and Tier B doesn't
+    # read prev_close at all (it marks off a stored snapshot baseline), so
+    # merging the two would needlessly downgrade the whole book off the
+    # better, unaffected Tier B just because one ticker's prev_close is
+    # suspect.
+    _today_xc_excluded = [
+        r["Ticker"] for _, r in port_df.iterrows()
+        if r["Ticker"] not in _today_missing and r["Ticker"] in _xc_bad_prev_tickers
+    ]
+    _today_priced_n = _today_total_n - len(_today_missing) - len(_today_xc_excluded)
     _today_pnl = sum(
         (_lp_map[r["Ticker"]]["price"] - _lp_map[r["Ticker"]]["prev_close"]) * r["Shares"]
         for _, r in port_df.iterrows()
         if r["Ticker"] in _lp_map and (_lp_map[r["Ticker"]].get("prev_close") or 0) > 0
+        and r["Ticker"] not in _xc_bad_prev_tickers
     )
     _today_pnl_pct = _today_pnl / total_val * 100 if total_val else 0
     _today_loaded  = bool(_lp_map)
@@ -6401,6 +6416,22 @@ if page == "🏠 Home":
         _dq_msgs.append(
             f"⚠️ Today's P&L (held) covers {_today_priced_n} of {_today_total_n} positions — "
             f"no live price for **{', '.join(_today_missing)}**, so it understates the rest."
+        )
+    # Distinct from the missing-price case above: these DID price, but their
+    # prior close is currently failing the price cross-check (see that banner
+    # further down) — included would risk folding an unverified/possibly
+    # stale prior-session move into this KPI. _today_xc_excluded deliberately
+    # does NOT gate Tier B (see its definition above), so Tier B can be ACTIVE
+    # while this list is non-empty — unlike _today_missing, whose non-empty
+    # state already implies Tier B is off. Gate on `_dpnl is None` (Tier A is
+    # actually the tile shown) so this never contradicts a Tier-B number that
+    # already counts the flagged ticker correctly via the snapshot baseline,
+    # not prev_close (Opus review finding, 2026-08-31).
+    if _today_loaded and _today_xc_excluded and _dpnl is None:
+        _dq_msgs.append(
+            f"⚠️ Today's P&L (held) excludes **{', '.join(_today_xc_excluded)}** — "
+            "prior-close data is currently failing the price cross-check, so "
+            "their contribution isn't counted until verified."
         )
     # Fail-loud: a baseline name with no current holding and no recorded exit
     # today is a journal gap that would distort the day P&L — surface it.
