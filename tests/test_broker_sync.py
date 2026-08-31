@@ -438,3 +438,65 @@ def test_a_clean_book_with_recent_trades_stays_silent():
         recent_trade_tickers=["NVDA"],
     )
     assert out["state"] == "none"
+
+
+# ─── annotate_pending_reconciliation ────────────────────────────────────────
+# Position Drift and Pending Imports check different things at different
+# granularities (net position vs. exact-key per-transaction match), so a
+# pending row can legitimately persist even when its ticker's drift is
+# clean. This function narrates that already-computed drift fact next to
+# the pending row — the load-bearing case is that "drift unavailable" must
+# never collapse into "reconciles".
+
+def _pending_row(ticker, **extra):
+    return {"id": 1, "ticker": ticker, "action": "BUY", "shares": 1.0,
+            "price": 100.0, "trade_date": "2026-08-20", **extra}
+
+
+def test_drift_none_flags_every_row_as_unknown():
+    out = bs.annotate_pending_reconciliation([_pending_row("AAA"), _pending_row("BBB")], None)
+    assert [r["likely_reconciled"] for r in out] == [None, None]
+
+
+def test_ticker_with_no_drift_bucket_membership_flags_true():
+    drift = {"rh_only": [], "app_only": [], "qty_mismatch": []}
+    out = bs.annotate_pending_reconciliation([_pending_row("AAA")], drift)
+    assert out[0]["likely_reconciled"] is True
+
+
+def test_ticker_present_in_rh_only_flags_false():
+    drift = {"rh_only": [{"ticker": "AAA", "shares": 5.0}], "app_only": [], "qty_mismatch": []}
+    out = bs.annotate_pending_reconciliation([_pending_row("AAA")], drift)
+    assert out[0]["likely_reconciled"] is False
+
+
+def test_ticker_present_in_app_only_flags_false():
+    drift = {"rh_only": [], "app_only": [{"ticker": "AAA", "shares": 5.0}], "qty_mismatch": []}
+    out = bs.annotate_pending_reconciliation([_pending_row("AAA")], drift)
+    assert out[0]["likely_reconciled"] is False
+
+
+def test_ticker_present_in_qty_mismatch_flags_false():
+    drift = {"rh_only": [], "app_only": [],
+             "qty_mismatch": [{"ticker": "AAA", "rh_shares": 5.0, "app_shares": 4.0, "diff": 1.0}]}
+    out = bs.annotate_pending_reconciliation([_pending_row("AAA")], drift)
+    assert out[0]["likely_reconciled"] is False
+
+
+def test_only_the_drifted_ticker_is_flagged_false_others_stay_true():
+    drift = {"rh_only": [{"ticker": "AAA", "shares": 5.0}], "app_only": [], "qty_mismatch": []}
+    out = bs.annotate_pending_reconciliation([_pending_row("AAA"), _pending_row("BBB")], drift)
+    flags = {r["ticker"]: r["likely_reconciled"] for r in out}
+    assert flags == {"AAA": False, "BBB": True}
+
+
+def test_empty_pending_returns_empty_list():
+    assert bs.annotate_pending_reconciliation([], None) == []
+    assert bs.annotate_pending_reconciliation([], {"rh_only": [], "app_only": [], "qty_mismatch": []}) == []
+
+
+def test_does_not_mutate_input_list_or_rows():
+    pending = [_pending_row("AAA")]
+    original = dict(pending[0])
+    bs.annotate_pending_reconciliation(pending, None)
+    assert pending == [original]

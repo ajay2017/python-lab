@@ -7,7 +7,7 @@ returns plain dicts/lists for the caller (the `broker` cron lane / app.py) to
 persist or render. See docs/plans/snaptrade-broker-integration.md for the
 full design and the reasoning behind each split below.
 
-Three pure functions:
+Four pure functions:
     diff_positions          — 3-bucket drift vs the live portfolio (never gates,
                                never writes; awareness only)
     map_balances_to_cash    — SnapTrade balance payload -> account_cash shape
@@ -15,6 +15,12 @@ Three pure functions:
                                income-event / cash-flow buckets, with the
                                two-tier (exact broker_txn_id, then content-match)
                                dedup against existing trades
+    annotate_pending_reconciliation — display-only cross-reference: flags a
+                               pending-import row as "likely already logged"
+                               when its ticker shows no live drift, so the
+                               Account page can explain why a clean drift
+                               check and a non-empty pending queue can both
+                               be true at once
 
 Modified Dietz integrity: only CONTRIBUTION/WITHDRAWAL activities are ever
 routed to `flows` (account_flows feeds net_contributed_capital in
@@ -417,6 +423,62 @@ def classify_transactions(rh_txns: list[dict] | None, existing_trades: pd.DataFr
         "flows": flows,
         "ignored": ignored,
     }
+
+
+# ── Pending-import / drift cross-reference (display only) ──────────────────
+#
+# Position Drift and Pending Imports answer different questions at different
+# granularities: drift is a live, NET-position check (forgiving — only the
+# end state matters), while a pending import is an exact-key, PER-TRANSACTION
+# match (unforgiving — a date/price that's off by anything fails to link).
+# A pending row can therefore persist even when the ticker's position nets
+# out perfectly (most commonly because the manual Log Trade form has no date
+# picker and stamps `traded_at` at confirm-click time, not the real trade
+# date). This function narrates that already-computed drift fact next to the
+# pending row it explains — it does not introduce any new inference.
+
+def annotate_pending_reconciliation(pending: list[dict], drift: dict | None) -> list[dict]:
+    """Attach `likely_reconciled: bool | None` to each pending-import row.
+
+    Parameters
+    ----------
+    pending : the app's current pending-import rows (each a dict with at
+        least a "ticker" key), e.g. `db.load_snaptrade_pending_imports()`.
+    drift : `diff_positions()`'s return value for this same render, or None.
+
+    Returns
+    -------
+    A NEW list of dicts (input is never mutated), each with one added key:
+        likely_reconciled = None  -> drift is None: the drift check was
+            unavailable this render, so whether this ticker reconciles is
+            genuinely unknown. Never assert "reconciles" from an unknown.
+        likely_reconciled = False -> the ticker appears in one of drift's
+            three buckets: real drift is live for it right now, so this
+            pending row is not "just" an already-logged duplicate.
+        likely_reconciled = True  -> the ticker appears in none of drift's
+            three buckets: the position nets out clean, so this leftover
+            pending row is very likely a transaction already logged with a
+            slightly different date or price.
+    """
+    if drift is None:
+        drifted_tickers: set[str] | None = None
+    else:
+        drifted_tickers = {
+            r["ticker"] for r in drift.get("rh_only", [])
+        } | {
+            r["ticker"] for r in drift.get("app_only", [])
+        } | {
+            r["ticker"] for r in drift.get("qty_mismatch", [])
+        }
+
+    out = []
+    for row in pending:
+        if drifted_tickers is None:
+            flag = None
+        else:
+            flag = row.get("ticker") not in drifted_tickers
+        out.append({**row, "likely_reconciled": flag})
+    return out
 
 
 # ── Drift banner decision (pure) ────────────────────────────────────────────

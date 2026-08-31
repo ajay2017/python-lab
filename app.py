@@ -31518,6 +31518,11 @@ elif page == "💰 Account":
 
         st.markdown("#### 🔍 Position Drift")
         _snap_accounts = _snap_cached_accounts()
+        # Defined in every branch below (None = unavailable/not computed this
+        # render) so the Pending Imports cross-reference further down can
+        # tell "checked, no drift" apart from "didn't check" — never treat
+        # the latter as the former (see annotate_pending_reconciliation).
+        _snap_drift = None
         if _snap_accounts is None:
             st.caption("⚠️ Drift check unavailable — SnapTrade unreachable this render.")
         elif not _snap_accounts:
@@ -31600,10 +31605,18 @@ elif page == "💰 Account":
 
         # ── Pending Imports — Option A: never auto-written to `trades` ───────
         st.markdown("#### 📥 Pending Imports")
+        st.caption(
+            "These are individual Robinhood transactions that couldn't be auto-"
+            "matched to a logged trade (the match requires an exact date and "
+            "price) — a separate, stricter check than Position Drift above, "
+            "which only looks at your current share count. A row can persist "
+            "here even when that ticker's drift is clean above."
+        )
         _snap_pending = db.load_snaptrade_pending_imports("pending")
         if not _snap_pending:
             st.caption("✓ No pending imports.")
         else:
+            _snap_pending = broker_sync.annotate_pending_reconciliation(_snap_pending, _snap_drift)
             for _pi in _snap_pending:
                 _pi_c1, _pi_c2, _pi_c3 = st.columns([4, 1, 1])
                 with _pi_c1:
@@ -31611,6 +31624,12 @@ elif page == "💰 Account":
                         f"⏳ **{_pi['action']} {_pi['shares']:g} {_pi['ticker']}** "
                         f"@ ${_pi['price']:,.2f} on {_pi['trade_date']}"
                     )
+                    if _pi.get("likely_reconciled") is True:
+                        st.caption(
+                            f"↳ Your {_pi['ticker']} position already reconciles with "
+                            "Robinhood — this is very likely a trade you already logged "
+                            "with a slightly different date or price."
+                        )
                 with _pi_c2:
                     if st.button("Log This Trade →", key=f"_snap_log_{_pi['id']}"):
                         st.session_state["_tj_broker_prefill"] = {
