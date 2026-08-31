@@ -83,7 +83,6 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001fgrow.get(\"sector_blocked_adds\", []) or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fgrow.get(\"sector_blocked_picks\", []) or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fheld_data.get(_bct) or {}": 1,
-      "OFFLINE_SENTINEL_COLLAPSE\u001fheld_data.get(_r[\"Ticker\"]) or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fheld_data.get(_t, {}).get(\"info\", {}) or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fport_df.attrs.get(\"dropped_holdings\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fr.get(\"analysts\") or []": 1,
@@ -588,6 +587,9 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001fgrow.get(\"macro_blocked_picks\", []) or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fgrow.get(\"new_picks\", []) or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fgrow.get(\"sector_blocked_picks\", []) or []": 1
+    },
+    "stock_analyzer/home_risk_synthesis.py": {
+      "OFFLINE_SENTINEL_COLLAPSE\u001fheld_data.get(_r[\"Ticker\"]) or {}": 1
     },
     "stock_analyzer/missed_opportunity.py": {
       "OFFLINE_SENTINEL_COLLAPSE\u001fby_ticker.get(t) or {}": 1,

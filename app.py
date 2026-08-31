@@ -63,15 +63,14 @@ from stock_analyzer.fundamentals import (
 )
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
-from stock_analyzer.risk import atr_stop_loss, position_sizing, sizing_unavailable_reason, compute_all_risk, compute_portfolio_risk_metrics, rate_sensitivity_per_ticker
-from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
+from stock_analyzer.risk import atr_stop_loss, position_sizing, sizing_unavailable_reason, compute_all_risk, rate_sensitivity_per_ticker
 from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations
 from stock_analyzer.earnings_advisor import build_earnings_playbook
 from stock_analyzer import earnings_intel as _earn_intel
 from stock_analyzer.watchlist_advisor import build_watchlist_recommendation, sort_key_for_action
 from stock_analyzer.trade_analytics import build_full_analytics
 from stock_analyzer.stress_test import (
-    SCENARIOS, run_scenario, run_all_scenarios, assess_fragility,
+    SCENARIOS, run_scenario, run_all_scenarios,
     HISTORICAL_WINDOWS, fetch_historical_drawdowns,
     fetch_stress_window_returns, validate_custom_stress_range, stress_cache_key,
     _EARLIEST_STRESS_START,
@@ -250,7 +249,7 @@ from stock_analyzer.portfolio import (
     trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
     classify_book_corr, CORR_MIN_OBS_TRUSTED,
 )
-from stock_analyzer.concentration import assess_add_concentration, high_beta_share
+from stock_analyzer.concentration import assess_add_concentration
 from stock_analyzer.scanner import (
     SECTOR_UNIVERSE, scan_sectors, scan_movers,
     _rsi_points as _scanner_rsi_points,
@@ -5215,96 +5214,43 @@ if page == "🏠 Home":
 
         h_rets = holding_returns(held_data)
 
-        # Portfolio-level risk metrics (Beta, Sharpe, Sortino, VaR, CVaR, Max Drawdown)
+        # Risk metrics + fragility + high-beta share + Risk Advisor recs —
+        # extracted to home_risk_synthesis.build_risk_bundle (F-260 Phase 3,
+        # Unit B). spy_df/rfr resolved here (I/O), same order as before the
+        # extraction; the pure module owns the four try/except blocks and the
+        # 2026-08-04 "never call the advisor on an offline port_risk" branch.
+        # Both I/O calls are wrapped here (review finding, 2026-08-31): the
+        # ORIGINAL inline code had both inside the SAME try as
+        # compute_portfolio_risk_metrics, so an rfr-fetch exception degraded
+        # to port_risk=None rather than crashing Home's render. Extracting
+        # compute_portfolio_risk_metrics's try into the pure module without
+        # also guarding these two upstream calls would have silently
+        # narrowed that exception scope — inert today (the only rate-free
+        # provider already catches its own errors and falls back to a
+        # default), but a future provider change could make it live.
         try:
             _spy_for_risk = _cached_spy("6mo")
-            _port_risk = compute_portfolio_risk_metrics(port_df, held_data, _spy_for_risk, _get_rfr())
+            _rfr_for_risk = _get_rfr()
         except Exception:
-            _port_risk = None  # offline sentinel, not {} — matches sibling cache contract
-        st.session_state["_port_risk_cache"] = _port_risk  # available to Analysis page
-
-        # Fragility gauge — how a ROUTINE pullback would hit THIS book. Pre-emptive
-        # exposure, NOT a forecast of when a pullback comes. Reuses the stress-test
-        # "Mild Correction" engine + cached portfolio beta; severity reuses the
-        # PORTFOLIO_BETA_ELEVATED / _CEILING policy bands. None on failure (not {})
-        # so the render can show "offline" rather than fabricate a calm reading.
-        try:
-            _frag_beta = _port_risk.get("beta") if _port_risk else None
-            if _frag_beta is not None and not port_df.empty:
-                _mild_sc  = next((s for s in SCENARIOS if s["id"] == "mild_correction"), None)
-                _mild_res = (
-                    run_scenario(_mild_sc, port_df, held_data, _frag_beta,
-                                 custom_spy_move=FRAGILITY_PULLBACK_PCT)
-                    if _mild_sc else {}
-                )
-                _fragility = assess_fragility(
-                    _mild_res, _frag_beta,
-                    PORTFOLIO_BETA_ELEVATED, PORTFOLIO_BETA_CEILING, FRAGILITY_PULLBACK_PCT,
-                )
-            else:
-                _fragility = None
-        except Exception:
-            _fragility = None
-        st.session_state["_fragility_cache"] = _fragility
-
-        # High-beta cluster share (Part 2b) — standing "correlated exposure" read:
-        # what % of the book sits in high-beta (β ≥ PORTFOLIO_BETA_ELEVATED) names.
-        # A cheap, honest proxy for the "ten tech names that all fall together"
-        # risk that per-name diversification hides. Computed here where port_df +
-        # per-name betas are both in scope; rendered under the fragility gauge.
-        try:
-            _hb_positions = [
-                (_f(_r.get("Weight (%)")),
-                 (held_data.get(_r["Ticker"]) or {}).get("risk_metrics", {}).get("beta"))
-                for _, _r in port_df.iterrows()
-            ]
-            st.session_state["_highbeta_share"] = high_beta_share(
-                _hb_positions, PORTFOLIO_BETA_ELEVATED
-            )
-        except Exception:
-            st.session_state["_highbeta_share"] = None
-
-        # Risk Advisor recommendations — generated from portfolio risk metrics.
-        # Cache HIGH-priority alert titles so other pages (e.g. Watchlist) can gate
-        # ENTER_NOW recommendations against active portfolio risk state. On a build
-        # failure publish None (offline sentinel), NOT [] — an empty list reads as
-        # "no active HIGH risks" and the Watchlist's risk-alert caution silently
-        # vanishes (fail-open). None trips the Watchlist's existing offline banner so
-        # the disabled gate is visible (house contract: producers fail to None).
-        try:
-            if _port_risk is None:
-                # _port_risk offline (insufficient data or a build failure) —
-                # propagate the offline sentinel rather than calling the
-                # advisor, which would otherwise return [] on a falsy
-                # port_risk and get cached as a false "checked, no risk"
-                # (2026-08-04 audit finding).
-                _risk_advisor_recs = None
-                st.session_state["_risk_high_alerts_cache"] = None
-                st.session_state["_risk_advisor_recs_cache"] = None
-            else:
-                _risk_advisor_recs = build_risk_advisor_recommendations(
-                    port_df, held_data, _port_risk, h_rets, total_val,
-                    gate_denom=_gate_denom,
-                    trades_df=st.session_state.get("trades_df"),
-                )
-                # build_risk_advisor_recommendations can itself return the
-                # offline sentinel (empty port_df / invalid portfolio_value,
-                # separate from the _port_risk-is-None case handled above) —
-                # must check before iterating, or a None result crashes here.
-                if _risk_advisor_recs is None:
-                    st.session_state["_risk_high_alerts_cache"] = None
-                    st.session_state["_risk_advisor_recs_cache"] = None
-                else:
-                    st.session_state["_risk_high_alerts_cache"] = [
-                        r.get("title", "") for r in _risk_advisor_recs if r.get("priority") == "HIGH"
-                    ]
-                    # Full recommendation list — published for the standalone Portfolio
-                    # Allocation page (which reads this instead of recomputing).
-                    st.session_state["_risk_advisor_recs_cache"] = _risk_advisor_recs
-        except Exception:
-            _risk_advisor_recs = None
-            st.session_state["_risk_high_alerts_cache"] = None
-            st.session_state["_risk_advisor_recs_cache"] = None
+            _spy_for_risk = None
+            _rfr_for_risk = None
+        _rb = home_risk_synthesis.build_risk_bundle(
+            port_df, held_data, h_rets, total_val, _gate_denom,
+            st.session_state.get("trades_df"),
+            _spy_for_risk, _rfr_for_risk,
+            PORTFOLIO_BETA_ELEVATED, PORTFOLIO_BETA_CEILING, FRAGILITY_PULLBACK_PCT,
+        )
+        _port_risk         = _rb["port_risk"]
+        _fragility         = _rb["fragility"]
+        _risk_advisor_recs = _rb["risk_advisor_recs"]
+        h_rets             = _rb["h_rets"]
+        st.session_state["_port_risk_cache"]         = _port_risk  # available to Analysis page
+        st.session_state["_fragility_cache"]         = _fragility
+        st.session_state["_highbeta_share"]          = _rb["highbeta_share"]
+        st.session_state["_risk_high_alerts_cache"]  = _rb["risk_high_alerts"]
+        # Full recommendation list — published for the standalone Portfolio
+        # Allocation page (which reads this instead of recomputing).
+        st.session_state["_risk_advisor_recs_cache"] = _risk_advisor_recs
 
 
         if n_danger > 0 or (div_score is not None and div_score < 30):
