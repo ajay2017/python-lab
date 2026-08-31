@@ -4286,10 +4286,21 @@ if page == "🏠 Home":
         st.session_state["_live_prices"] = live   # share with P&L table
         if not live:
             return
+        # Tickers currently failing the strict prev-close cross-check (computed
+        # a few sections below, shared via session_state — this fragment reruns
+        # on its own 60s schedule, independent of that compute). A flagged
+        # ticker's change_pct is built on a prev_close the app itself doesn't
+        # trust right now (2026-08-31: Finnhub's prev_close lagged a session
+        # behind post-weekend), so show an honest "unverified" instead of a
+        # specific number that may be misattributing an earlier session's move
+        # to today — same principle as the chg-is-None case just below.
+        _xc_bad_prev = st.session_state.get("_xc_bad_prev_tickers") or set()
         price_cols = st.columns(len(live))
         for col, (t, lp) in zip(price_cols, live.items()):
             chg   = lp.get("change_pct")
-            if chg is None:                          # prev close unknown (M2) → honest blank, no false 0.00%
+            if t in _xc_bad_prev:
+                clr, _chg_disp = "#f0ad4e", "⚠ unverified"
+            elif chg is None:                          # prev close unknown (M2) → honest blank, no false 0.00%
                 clr, _chg_disp = "#94a3b8", "—"
             else:
                 clr       = "#00C851" if chg >= 0 else "#ff4444"
@@ -4349,6 +4360,20 @@ if page == "🏠 Home":
     # caveats. Same declare-early/fill-late pattern as _alert_ph_structural.
     _alert_ph_drift      = st.empty()
 
+    # ── Price cross-check, computed early (2026-08-31) ────────────────────────
+    # Hoisted ahead of Day Shock / the price strip so both can exclude a ticker
+    # whose prev_close is CURRENTLY failing the strict cross-check below, instead
+    # of asserting a "today's move" built on a prev_close the app has already
+    # flagged as unreliable (2026-08-31: Finnhub's own prev_close lagged two
+    # sessions behind for several tickers post-weekend, and Day Shock faithfully
+    # reported Friday's already-happened move as if it were today's). Rendering
+    # is unchanged — this only moves WHEN the (5-min cached, so free to compute
+    # early) result is available, not what it says or where it's shown.
+    _xc_validator_down = crosscheck_validator_degraded()
+    _xc = _cached_price_xcheck(tuple(sorted(held_tickers))) if held_tickers else {}
+    _xc_bad_prev_tickers = {t for t, r in _xc.items() if r.get("prev_ok") is False}
+    st.session_state["_xc_bad_prev_tickers"] = _xc_bad_prev_tickers
+
     # ── Day Shock awareness banner — AWARENESS ONLY, never gates ──────────────
     # A single-day move can happen well above the 50-day trend line, where
     # classify_deterioration_tier's trend-break condition stays silent (see
@@ -4356,6 +4381,7 @@ if page == "🏠 Home":
     # the price strip's per-ticker badges don't call attention to on their own.
     _live_for_shock = st.session_state.get("_live_prices") or {}
     _day_shock_cache = {}
+    _day_shock_excluded = []
     for _t in held_tickers:
         _lp = _live_for_shock.get(_t)
         if not _lp:
@@ -4364,6 +4390,13 @@ if page == "🏠 Home":
         if _chg is None or _prev is None or _px is None:
             continue
         if abs(_chg) >= DAY_SHOCK_PCT:
+            if _t in _xc_bad_prev_tickers:
+                # prev_close just failed the strict cross-check below — this
+                # "move" may really be an earlier session's already-happened
+                # change misattributed to today (2026-08-31 incident). Exclude
+                # rather than assert a number the app itself doesn't trust.
+                _day_shock_excluded.append(_t)
+                continue
             _day_shock_cache[_t] = {"price": _px, "prev_close": _prev, "chg_pct": _chg}
     st.session_state["_day_shock_cache"] = _day_shock_cache
 
@@ -4392,6 +4425,13 @@ if page == "🏠 Home":
                     f"${_d['prev_close']:.2f} → ${_d['price']:.2f}</span></div>"
                 )
             st.markdown("".join(_shock_rows), unsafe_allow_html=True)
+        if _day_shock_excluded:
+            st.caption(
+                f"ℹ️ {len(_day_shock_excluded)} position"
+                f"{'s' if len(_day_shock_excluded) != 1 else ''} excluded from Day Shock "
+                f"({', '.join(sorted(_day_shock_excluded))}) — prior-close data currently "
+                "failing the price cross-check below; re-evaluated once verified."
+            )
 
     # ── Price cross-check guardrail (fail loud on source disagreement) ───────
     # The settled prev_close should match across independent sources; a breach
@@ -4400,16 +4440,15 @@ if page == "🏠 Home":
     # tolerated loosely (delayed validator vs real-time primary). Per the app's
     # "decides, fail loud" posture, a breach is surfaced as a red banner, not
     # buried — the user decides whether to trust the figure.
+    # _xc / _xc_validator_down are computed early, above Day Shock — see that
+    # hoist's comment. Validator health is LIVE; the cross-check result is
+    # 5-min cached. A disagreement computed while the validator was healthy
+    # can be served from cache for ≤5 min after it goes red — so the red
+    # banner can outlive the outage briefly. That's the SAFE direction (a real
+    # fault is never suppressed, only cleared slightly late); do NOT "fix" it
+    # by gating the banner on live health, which would mask genuine integrity
+    # faults.
     if held_tickers:
-        # Validator health is LIVE; the cross-check result is 5-min cached. A
-        # disagreement computed while the validator was healthy can be served from
-        # cache for ≤5 min after it goes red — so the red banner can outlive the
-        # outage briefly. That's the SAFE direction (a real fault is never
-        # suppressed, only cleared slightly late); do NOT "fix" it by gating the
-        # banner on live health, which would mask genuine integrity faults.
-        _xc_validator_down = crosscheck_validator_degraded()
-        _xc = _cached_price_xcheck(tuple(sorted(held_tickers)))
-
         _xc_today_str = str(_today_et())
         if st.session_state.get("_price_xcheck_logged_date") != _xc_today_str and _xc:
             _xc_rows = [
