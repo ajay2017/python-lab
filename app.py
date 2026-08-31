@@ -31617,6 +31617,13 @@ elif page == "💰 Account":
             st.caption("✓ No pending imports.")
         else:
             _snap_pending = broker_sync.annotate_pending_reconciliation(_snap_pending, _snap_drift)
+            # Date-tolerant per-transaction suggestion — a finer-grained
+            # sibling of the aggregate reconciliation flag above. Only
+            # rendered when that flag isn't already True, so a row never
+            # stacks two "this is probably already logged" messages.
+            _snap_pending_matches = broker_sync.find_pending_match_candidates(
+                _snap_pending, st.session_state.get("trades_df")
+            )
             for _pi in _snap_pending:
                 _pi_c1, _pi_c2, _pi_c3 = st.columns([4, 1, 1])
                 with _pi_c1:
@@ -31629,6 +31636,15 @@ elif page == "💰 Account":
                             f"↳ Your {_pi['ticker']} position already reconciles with "
                             "Robinhood — this is very likely a trade you already logged "
                             "with a slightly different date or price."
+                        )
+                    elif _pi["id"] in _snap_pending_matches:
+                        _pm = _snap_pending_matches[_pi["id"]]
+                        _pm_off = _pm["days_off"]
+                        st.caption(
+                            f"↳ Possible match: a trade you logged on {_pm['traded_at']} "
+                            f"({_pm_off} day{'s' if _pm_off != 1 else ''} off) with the same "
+                            "ticker, action, shares and price. If that's this transaction, "
+                            "use **Already logged** below."
                         )
                 with _pi_c2:
                     if st.button("Log This Trade →", key=f"_snap_log_{_pi['id']}"):

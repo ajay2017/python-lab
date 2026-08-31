@@ -7,7 +7,7 @@ returns plain dicts/lists for the caller (the `broker` cron lane / app.py) to
 persist or render. See docs/plans/snaptrade-broker-integration.md for the
 full design and the reasoning behind each split below.
 
-Four pure functions:
+Five pure functions:
     diff_positions          — 3-bucket drift vs the live portfolio (never gates,
                                never writes; awareness only)
     map_balances_to_cash    — SnapTrade balance payload -> account_cash shape
@@ -21,6 +21,11 @@ Four pure functions:
                                Account page can explain why a clean drift
                                check and a non-empty pending queue can both
                                be true at once
+    find_pending_match_candidates — display-only, date-TOLERANT sibling of
+                               classify_transactions' exact-date Tier-2 dedup:
+                               suggests a specific already-logged trade a
+                               pending row likely duplicates, within a small
+                               date window. Never backfills anything itself.
 
 Modified Dietz integrity: only CONTRIBUTION/WITHDRAWAL activities are ever
 routed to `flows` (account_flows feeds net_contributed_capital in
@@ -478,6 +483,95 @@ def annotate_pending_reconciliation(pending: list[dict], drift: dict | None) -> 
         else:
             flag = row.get("ticker") not in drifted_tickers
         out.append({**row, "likely_reconciled": flag})
+    return out
+
+
+def find_pending_match_candidates(
+    pending: list[dict], existing_trades: pd.DataFrame | None, window_days: int = 3
+) -> dict:
+    """For each pending-import row, look for the closest EXISTING trade that
+    content-matches on (ticker, action, shares, price) within `window_days`
+    of the pending row's trade_date, among trades not already linked via
+    `broker_txn_id`.
+
+    This is a wider, date-TOLERANT sibling of `classify_transactions`' own
+    Tier-2 dedup (which requires an exact date match) — read-only and
+    display-only. It never backfills `broker_txn_id` and never changes what
+    `classify_transactions` buckets a transaction into; it only helps the
+    user recognise a likely-already-logged trade with more confidence before
+    they click the existing "Already logged" dismiss button.
+
+    Returns
+    -------
+    {pending_row_id: {"trade_id", "traded_at", "days_off"}} — a pending id
+    with no candidate within the window is simply ABSENT from the dict (never
+    mapped to None), so callers can use a plain `.get(id)`.
+    """
+    out: dict = {}
+    if not pending or not isinstance(existing_trades, pd.DataFrame) or existing_trades.empty:
+        return out
+
+    candidates = existing_trades
+    if "broker_txn_id" in candidates.columns:
+        candidates = candidates[candidates["broker_txn_id"].isna()]
+    if candidates.empty:
+        return out
+
+    by_key: dict[tuple, list] = collections.defaultdict(list)
+    for _, row in candidates.iterrows():
+        action = str(row.get("action", "")).upper().strip()
+        if action not in _TRADE_TYPES:
+            continue
+        ticker = str(row.get("ticker", "")).upper().strip()
+        try:
+            shares = round(float(row.get("shares") or 0), 4)
+            price = round(float(row.get("price") or 0), 2)
+        except (TypeError, ValueError):
+            continue
+        traded_at = pd.to_datetime(row.get("traded_at"), utc=True, errors="coerce", format="ISO8601")
+        if pd.isnull(traded_at):
+            continue
+        by_key[(ticker, action, shares, price)].append(
+            {"trade_id": row.get("id"), "date": traded_at.date()}
+        )
+
+    for p in pending:
+        p_ticker = str(p.get("ticker", "")).upper().strip()
+        p_action = str(p.get("action", "")).upper().strip()
+        try:
+            p_shares = round(float(p.get("shares") or 0), 4)
+            p_price = round(float(p.get("price") or 0), 2)
+        except (TypeError, ValueError):
+            continue
+        p_dt = pd.to_datetime(p.get("trade_date"), errors="coerce")
+        if pd.isnull(p_dt):
+            continue
+        p_date = p_dt.date()
+
+        # Consume the chosen candidate (mirrors classify_transactions' own
+        # content_seen/content_counts consumption) so the SAME logged trade
+        # can never be suggested as a match for more than one pending row.
+        # Without this, N pending rows that all share one real logged trade
+        # (e.g. two DCA buys at the same round price/shares, only one of
+        # which was ever logged) would each get an "already logged" hint —
+        # false confidence that could lead to dismissing a real, distinct,
+        # never-logged trade via the permanent "Already logged" button
+        # (2026-08-30 reviewer finding, blocking).
+        bucket = by_key.get((p_ticker, p_action, p_shares, p_price), [])
+        best = None
+        best_idx = None
+        for idx, cand in enumerate(bucket):
+            days_off = abs((cand["date"] - p_date).days)
+            if days_off > window_days:
+                continue
+            if best is None or days_off < best["days_off"]:
+                best = {"trade_id": cand["trade_id"], "traded_at": cand["date"].isoformat(),
+                        "days_off": days_off}
+                best_idx = idx
+        if best is not None:
+            out[p["id"]] = best
+            bucket.pop(best_idx)
+
     return out
 
 

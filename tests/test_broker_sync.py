@@ -500,3 +500,95 @@ def test_does_not_mutate_input_list_or_rows():
     original = dict(pending[0])
     bs.annotate_pending_reconciliation(pending, None)
     assert pending == [original]
+
+
+# ─── find_pending_match_candidates ──────────────────────────────────────────
+# A date-TOLERANT sibling of classify_transactions' exact-date Tier-2 dedup —
+# read-only, display-only, never backfills anything. The load-bearing cases:
+# a match outside the window is not returned, a trade already linked via
+# broker_txn_id is excluded from candidacy, and no trades_df fails soft.
+
+def _trade_row(trade_id, ticker, action, shares, price, traded_at, broker_txn_id=None):
+    return {"id": trade_id, "ticker": ticker, "action": action, "shares": shares,
+            "price": price, "traded_at": traded_at, "broker_txn_id": broker_txn_id}
+
+
+def test_exact_day_match_is_found_with_zero_days_off():
+    trades = pd.DataFrame([_trade_row(1, "AAA", "BUY", 1.0, 100.0, "2026-08-20T10:00:00Z")])
+    out = bs.find_pending_match_candidates([_pending_row("AAA", trade_date="2026-08-20")], trades)
+    assert out[1] == {"trade_id": 1, "traded_at": "2026-08-20", "days_off": 0}
+
+
+def test_a_one_day_off_match_is_found_within_the_default_window():
+    trades = pd.DataFrame([_trade_row(1, "AAA", "BUY", 1.0, 100.0, "2026-08-21T10:00:00Z")])
+    out = bs.find_pending_match_candidates([_pending_row("AAA", trade_date="2026-08-20")], trades)
+    assert out[1]["days_off"] == 1
+
+
+def test_a_match_outside_the_window_is_not_returned():
+    trades = pd.DataFrame([_trade_row(1, "AAA", "BUY", 1.0, 100.0, "2026-08-25T10:00:00Z")])
+    out = bs.find_pending_match_candidates(
+        [_pending_row("AAA", trade_date="2026-08-20")], trades, window_days=3
+    )
+    assert out == {}
+
+
+def test_a_trade_already_linked_via_broker_txn_id_is_excluded():
+    trades = pd.DataFrame([_trade_row(1, "AAA", "BUY", 1.0, 100.0, "2026-08-20T10:00:00Z",
+                                       broker_txn_id="already-linked")])
+    out = bs.find_pending_match_candidates([_pending_row("AAA", trade_date="2026-08-20")], trades)
+    assert out == {}
+
+
+def test_multiple_candidates_picks_the_closest_by_date():
+    trades = pd.DataFrame([
+        _trade_row(1, "AAA", "BUY", 1.0, 100.0, "2026-08-22T10:00:00Z"),
+        _trade_row(2, "AAA", "BUY", 1.0, 100.0, "2026-08-20T10:00:00Z"),
+    ])
+    out = bs.find_pending_match_candidates([_pending_row("AAA", trade_date="2026-08-20")], trades)
+    assert out[1] == {"trade_id": 2, "traded_at": "2026-08-20", "days_off": 0}
+
+
+def test_no_trades_df_returns_empty_dict_without_raising():
+    assert bs.find_pending_match_candidates([_pending_row("AAA")], None) == {}
+
+
+def test_empty_trades_df_returns_empty_dict():
+    assert bs.find_pending_match_candidates([_pending_row("AAA")], pd.DataFrame()) == {}
+
+
+def test_empty_pending_returns_empty_dict():
+    trades = pd.DataFrame([_trade_row(1, "AAA", "BUY", 1.0, 100.0, "2026-08-20T10:00:00Z")])
+    assert bs.find_pending_match_candidates([], trades) == {}
+
+
+def test_mismatched_shares_does_not_match():
+    trades = pd.DataFrame([_trade_row(1, "AAA", "BUY", 2.0, 100.0, "2026-08-20T10:00:00Z")])
+    out = bs.find_pending_match_candidates([_pending_row("AAA", trade_date="2026-08-20")], trades)
+    assert out == {}
+
+
+def test_missing_broker_txn_id_column_is_treated_as_backward_compatible():
+    trades = pd.DataFrame([{"id": 1, "ticker": "AAA", "action": "BUY", "shares": 1.0,
+                             "price": 100.0, "traded_at": "2026-08-20T10:00:00Z"}])
+    out = bs.find_pending_match_candidates([_pending_row("AAA", trade_date="2026-08-20")], trades)
+    assert out[1]["trade_id"] == 1
+
+
+def test_one_logged_trade_is_never_suggested_to_two_pending_rows():
+    """THE LOAD-BEARING CASE (2026-08-30 reviewer finding). Two real DCA buys
+    at the same round price/shares, only one of which was ever logged: both
+    pending rows key-match the SAME single logged trade. Suggesting it to
+    both would give false confidence to dismiss a real, distinct, never-
+    logged trade via the permanent 'Already logged' button. Only ONE pending
+    row may claim the one available candidate."""
+    trades = pd.DataFrame([_trade_row(1, "AAA", "BUY", 1.0, 100.0, "2026-08-20T10:00:00Z")])
+    pending = [
+        {"id": 10, "ticker": "AAA", "action": "BUY", "shares": 1.0, "price": 100.0,
+         "trade_date": "2026-08-20"},
+        {"id": 11, "ticker": "AAA", "action": "BUY", "shares": 1.0, "price": 100.0,
+         "trade_date": "2026-08-21"},
+    ]
+    out = bs.find_pending_match_candidates(pending, trades)
+    assert len(out) == 1
+    assert set(out.keys()) <= {10, 11}
