@@ -17,7 +17,7 @@ import pandas as pd
 import pytz
 
 from stock_analyzer import api_health as _ah
-from stock_analyzer.constants import DATA_YF_REQUEST_TIMEOUT_SEC
+from stock_analyzer.constants import DATA_YF_REQUEST_TIMEOUT_SEC, NYSE_HOLIDAYS
 from stock_analyzer.providers._util import classify_error
 from stock_analyzer.providers.base import (
     DataProvider, ProviderUnavailable,
@@ -25,6 +25,15 @@ from stock_analyzer.providers.base import (
 )
 
 _ET = pytz.timezone("America/New_York")
+
+
+def _is_trading_day(d) -> bool:
+    """True if `d` is a regular NYSE session day. Duplicated from
+    `stock_analyzer.data.is_trading_day` rather than imported — `data.py`
+    imports THIS module, so importing `data` back here would cycle. Same
+    NYSE_HOLIDAYS source underneath, so the two can't drift on which days
+    count."""
+    return d.weekday() < 5 and d.isoformat() not in NYSE_HOLIDAYS
 
 _INDICES = [
     ("^DJI",  "DOW",     "Dow Jones"),
@@ -300,6 +309,22 @@ class YFinanceProvider(DataProvider):
                     # fabricated prev==price disarms the cross-check's strict
                     # settled-close leg and reports a false 0.0% day-change (M2).
                     prev  = float(col.iloc[-2]) if len(col) >= 2 else None
+                    # prev_close: also None when the batch's last bar is stale by a
+                    # full session on an actual trading day. yfinance's daily-bar
+                    # publish can lag Finnhub's real-time rollover right around the
+                    # open, so col still ends at yesterday's bar while Finnhub has
+                    # already moved "prior close" forward — col.iloc[-2] is then TWO
+                    # sessions back, not one, and the strict prev-close cross-check
+                    # misreads a real day-over-day move as sources disagreeing
+                    # (2026-08-31: APP/CRM/DELL/MSFT/NVDA/SHOP/UBER/WDAY all fired a
+                    # false "Price unverified" alarm this way). On a non-trading day
+                    # (weekend/holiday) the last bar legitimately IS the prior
+                    # session, so the guard only fires when today is itself a
+                    # trading day.
+                    if prev is not None:
+                        _today = datetime.now(_ET).date()
+                        if _is_trading_day(_today) and col.index[-1].date() < _today:
+                            prev = None
                     results[t] = {
                         "price":      round(price, 2),
                         "prev_close": round(prev, 2) if prev is not None else None,
