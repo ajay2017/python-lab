@@ -131,7 +131,7 @@ Pre-market and end-of-day, the **email cron** may have already sent you a protec
 
 **🧩 Intelligence** — *Structural portfolio intelligence.* Tabs: 🕸️ Correlation Clusters (F-189) | ⚖️ Risk Budget (F-190) | 📐 Factor Tilt (returns-based style analysis, F-191) | 🧬 Structural Scan (vulnerability scanner F-198; hidden same-bet detector F-199) | 🧭 Signal Coherence (F-202).
 
-**📒 Trade Journal** — *Log trades & learn from them.* Tabs: 📝 Log Trade (with Decision Context capture F-82, Pre-Mortem F-187, Lessons Learned library F-195) | 📊 Performance | 📋 History. Includes SELL integrity guard (F-81a), double-submit dedupe (F-81b), broker import (F-87), Opportunity Cost expander (F-164), Engine Trust by Band (F-165).
+**📒 Trade Journal** — *Log trades & learn from them.* Tabs: 📝 Log Trade (with a trade-date picker F-80a, Decision Context capture F-82, Pre-Mortem F-187, Lessons Learned library F-195) | 📊 Performance | 📋 History. Includes SELL integrity guard (F-81a), double-submit dedupe (F-81b), broker import (F-87), Opportunity Cost expander (F-164), Engine Trust by Band (F-165).
 
 **🪞 Trade Review** — *Retrospective behavioral lens.* Buckets your past trades (e.g. panic-day trades) to surface patterns and costly deviations (F-84/F-85).
 
