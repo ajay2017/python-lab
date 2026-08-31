@@ -79,7 +79,7 @@ from stock_analyzer import monte_carlo as _mc
 from stock_analyzer import forward_sim as _fsim
 from stock_analyzer import attribution_readiness as _attr_ready
 from stock_analyzer.personalized_discovery import build_winner_profile
-from stock_analyzer.daily_pnl import compute_positions_day_pnl
+from stock_analyzer.daily_pnl import compute_positions_day_pnl, today_trade_cash_delta
 # Module-level (not local at each site) because all three import writers need
 # it and app.py runs top-to-bottom — see feedback_module_def_order.
 from stock_analyzer.market_time import et_anchor_iso as _et_anchor_iso
@@ -30931,6 +30931,47 @@ elif page == "💰 Account":
                 f"Cash as of {str(_acct['updated_at'])[:10]}"
                 + (f" · {_acct['note']}" if _acct.get("note") else "")
             )
+            # This cash/margin figure is a periodic broker-cron snapshot, not a
+            # live read — a trade logged after it was captured won't show up
+            # here until the next sync. Same "trade since capture excuses the
+            # gap" reasoning as broker_sync.decide_drift_banner's position-drift
+            # check (Home), just applied to the cash figure instead of share
+            # counts, which had no equivalent disclosure (2026-08-31: a $2,031
+            # gap vs. Robinhood traced entirely to two same-day sells + a buy
+            # that hadn't been picked up by a new sync yet).
+            _acct_traded_since = broker_sync.tickers_traded_since(
+                st.session_state.get("trades_df"), _acct.get("updated_at")
+            )
+            if _acct_traded_since:
+                _acct_cash_delta_since = None
+                _tdf_acct = st.session_state.get("trades_df")
+                try:
+                    _ts_acct = pd.to_datetime(_tdf_acct["traded_at"], utc=True,
+                                               errors="coerce", format="ISO8601")
+                    _cap_acct = pd.to_datetime(_acct["updated_at"], utc=True,
+                                                errors="coerce", format="ISO8601")
+                    _rows_acct = _tdf_acct.loc[_ts_acct.notna() & (_ts_acct > _cap_acct)]
+                    _acct_cash_delta_since = today_trade_cash_delta([
+                        {"action": r.get("action"), "shares": r.get("shares"),
+                         "price": r.get("price")}
+                        for _, r in _rows_acct.iterrows()
+                    ])
+                except Exception:
+                    _acct_cash_delta_since = None
+                _acct_delta_clause = ""
+                if _acct_cash_delta_since:
+                    _acct_delta_word = "more cash (less margin debit)" if _acct_cash_delta_since > 0 \
+                        else "less cash (more margin debit)"
+                    _acct_delta_clause = (
+                        f" — roughly **${abs(_acct_cash_delta_since):,.0f} {_acct_delta_word}** than "
+                        "shown above, from those trades"
+                    )
+                st.caption(
+                    f"ℹ️ {len(_acct_traded_since)} ticker"
+                    f"{'s' if len(_acct_traded_since) != 1 else ''} traded since this sync "
+                    f"(**{', '.join(_acct_traded_since)}**)" + _acct_delta_clause
+                    + ". The figures above will catch up automatically at the next scheduled sync."
+                )
         if _levered:
             st.caption(
                 f"⚖️ **Margin debit ${abs(_cash):,.0f}** — you hold ${_equity:,.0f} of stock on "
