@@ -1277,11 +1277,17 @@ def _render_holdings_table(port_df) -> None:
     a fabricated 0.00%."""
     st.subheader(f"💼 Holdings ({len(port_df)})")
     _live_px = st.session_state.get("_live_prices") or {}
+    # Published by Home's price cross-check (see Day Shock's own hoisted
+    # compute) — a ticker here has a prev_close currently failing strict
+    # validation, so its change_pct may misattribute an earlier session's
+    # move to today. Absent (Home hasn't run this session) means no
+    # exclusion, matching every other reader of this same session_state key.
+    _hxc_bad = st.session_state.get("_xc_bad_prev_tickers") or set()
     _hold_rows = []
     for _, _hr in port_df.iterrows():
         _ht      = str(_hr["Ticker"])
         _hlive   = _live_px.get(_ht, {})
-        _hday    = _hlive.get("change_pct")
+        _hday    = None if _ht in _hxc_bad else _hlive.get("change_pct")
         _hprice  = _hlive.get("price", _hr["Price"])
         _htotal  = _hr["P&L (%)"]
         _hshares = _hr["Shares"]
@@ -1289,8 +1295,11 @@ def _render_holdings_table(port_df) -> None:
         _hweight = _hr["Weight (%)"]
         _hshares_txt = _m(f"{_hshares:,.0f}")
         _hval_txt    = _m(f"${_hval:,.0f}")
-        _hday_disp  = f"{_hday:+.2f}%" if _hday is not None else "—"
-        _hday_color = (_HOME_GAIN if _hday >= 0 else _HOME_LOSS) if _hday is not None else _HOME_CALM
+        if _ht in _hxc_bad:
+            _hday_disp, _hday_color = "⚠ unverified", "#f0ad4e"
+        else:
+            _hday_disp  = f"{_hday:+.2f}%" if _hday is not None else "—"
+            _hday_color = (_HOME_GAIN if _hday >= 0 else _HOME_LOSS) if _hday is not None else _HOME_CALM
         _htot_color = _HOME_GAIN if _htotal >= 0 else _HOME_LOSS
         _hold_rows.append(
             f"<tr>"
@@ -11226,13 +11235,24 @@ elif page == "🧾 Summary":
     # day regardless of today's tape. `_sm_worst` went with them.
     _sm_best  = port_df.loc[port_df["P&L (%)"].idxmax()]
 
+    # Excludes any ticker currently failing the strict price cross-check —
+    # its prev_close may misattribute an earlier session's move to today
+    # (2026-08-31 incident). Published by Home; empty/absent (Home hasn't run
+    # this session) means no exclusion, matching this page's existing "Home
+    # hasn't run yet" degradation elsewhere. Defined here (rather than lower,
+    # next to Today's P&L) so Today's Movers below can use it too.
+    _sm_xc_bad_prev = st.session_state.get("_xc_bad_prev_tickers") or set()
+
     # Today's Movers — biggest same-day moves in each direction. Passes the RAW
     # (deliberately un-collapsed) `_live_prices` read so summary_view can tell
     # "no quote" from "unchanged": a ticker with no prior close is counted
-    # missing, never rendered as a flat 0%.
-    _sm_movers = summary_view.top_movers(
-        port_df, st.session_state.get("_live_prices"), n=2,
-    )
+    # missing, never rendered as a flat 0%. A cross-check-failing ticker is
+    # dropped from the map first so it lands in n_missing, not a possibly-
+    # wrong up/down/biggest-mover ranking.
+    _sm_movers_live = st.session_state.get("_live_prices")
+    if _sm_movers_live is not None and _sm_xc_bad_prev:
+        _sm_movers_live = {t: v for t, v in _sm_movers_live.items() if t not in _sm_xc_bad_prev}
+    _sm_movers = summary_view.top_movers(port_df, _sm_movers_live, n=2)
 
     # Today's P&L — prefer Home's Tier-B "true" day P&L, published this
     # session to `_dpnl_cache` (dated, so a stale cross-day value is never
@@ -11249,11 +11269,20 @@ elif page == "🧾 Summary":
         _sm_dpnl_baseline_date = _sm_dpnl_pub.get("baseline_date")
         _sm_dpnl_is_current = _sm_dpnl_pub.get("is_current", False)
 
+    # _sm_xc_bad_prev is defined earlier, above Today's Movers. Reused here
+    # for this page's own Tier-A fallback calc (see Home's _today_xc_excluded
+    # — same fix, same reasoning).
     _sm_live = st.session_state.get("_live_prices") or {}
+    _sm_today_xc_excluded = [
+        r["Ticker"] for _, r in port_df.iterrows()
+        if r["Ticker"] in _sm_live and (_sm_live[r["Ticker"]].get("prev_close") or 0) > 0
+        and r["Ticker"] in _sm_xc_bad_prev
+    ]
     _sm_today_pnl = sum(
         (_sm_live[r["Ticker"]]["price"] - _sm_live[r["Ticker"]]["prev_close"]) * r["Shares"]
         for _, r in port_df.iterrows()
         if r["Ticker"] in _sm_live and (_sm_live[r["Ticker"]].get("prev_close") or 0) > 0
+        and r["Ticker"] not in _sm_xc_bad_prev
     ) if _sm_live else None
     _sm_today_pnl_pct = (
         _sm_today_pnl / _sm_total_val * 100
@@ -11396,6 +11425,12 @@ elif page == "🧾 Summary":
                 help="Held-position mark-to-market vs yesterday's close — excludes today's trades. "
                      "Visit 🏠 Home first this session for the fuller Tier-B figure.",
             )
+            if _sm_today_xc_excluded:
+                st.caption(
+                    f"⚠️ Excludes **{', '.join(_sm_today_xc_excluded)}** — prior-close data is "
+                    "currently failing the price cross-check, so its contribution isn't counted "
+                    "until verified."
+                )
         else:
             st.metric("Today's P&L", "Updating…",
                         help="Loads once live prices are cached — visit 🏠 Home, or wait ~60s.")
@@ -12618,6 +12653,9 @@ elif page == "🧾 Summary":
     _sm_live_map: dict = {} if _sm_live_raw is None else _sm_live_raw
     _sm_t6_rows = []
     _sm_shock = st.session_state.get("_day_shock_cache")      # None = NOT checked
+    # Same cross-check verdict Day Shock/Today's P&L above already defer to —
+    # a ticker here has a prev_close currently failing strict validation.
+    _t6_xc_bad = st.session_state.get("_xc_bad_prev_tickers") or set()
     _T6_TONE = {"strong": "#22c55e", "good": "#57d98a", "neutral": "#9ca3af",
                 "weak": "#f59e0b", "bad": "#ef4444"}
     _T6_BADGE_COLOR = {"EXIT": "#ef4444", "TRIM": "#f59e0b",
@@ -12625,8 +12663,12 @@ elif page == "🧾 Summary":
     for _, _t6 in _sm_top6.iterrows():
         _t6_tk  = str(_t6["Ticker"])
         # Same reader as the movers tile + the day-direction footer, so the
-        # three cannot disagree about whether a name moved today.
-        _t6_day = summary_view.quote_change_pct(_sm_live_map.get(_t6_tk))
+        # three cannot disagree about whether a name moved today. Excluded
+        # separately (not folded into the None-quote case) when the ticker's
+        # prev_close is currently failing the strict price cross-check —
+        # see Day Shock's own exclusion above for the full incident.
+        _t6_day = (None if _t6_tk in _t6_xc_bad
+                   else summary_view.quote_change_pct(_sm_live_map.get(_t6_tk)))
         _t6_wt  = float(_t6["Weight (%)"])
         _t6_sc  = float(_t6["Score"])
         # Badge: reduce call outranks the concentration cap, and the
@@ -12656,11 +12698,16 @@ elif page == "🧾 Summary":
         # is None when Home never ran — that is NOT CHECKED, so no marker is
         # shown rather than an implied "no shock today".
         _t6_shock = "&nbsp;⚡" if (_sm_shock or {}).get(_t6_tk) else ""
-        # A missing quote renders "—", never a fabricated 0.00%.
-        _t6_day_disp  = f"{_t6_day:+.2f}%" if _t6_day is not None else "—"
-        _t6_day_color = (
-            (_HOME_GAIN if _t6_day >= 0 else _HOME_LOSS) if _t6_day is not None else _HOME_CALM
-        )
+        # A missing quote renders "—", never a fabricated 0.00%. A cross-check-
+        # failing quote renders its own distinct marker rather than collapsing
+        # into the same "—" as genuinely no data.
+        if _t6_tk in _t6_xc_bad:
+            _t6_day_disp, _t6_day_color = "⚠ unverified", "#f0ad4e"
+        else:
+            _t6_day_disp  = f"{_t6_day:+.2f}%" if _t6_day is not None else "—"
+            _t6_day_color = (
+                (_HOME_GAIN if _t6_day >= 0 else _HOME_LOSS) if _t6_day is not None else _HOME_CALM
+            )
         _t6_tot = float(_t6["P&L (%)"])
         _t6_val_txt = _m(f"${float(_t6['Market Value']):,.0f}")
         _t6_barpct = summary_view.weight_bar_pct(_t6_wt, SINGLE_NAME_CEILING)
@@ -12694,7 +12741,15 @@ elif page == "🧾 Summary":
     # day-direction split on the right. "no quote" is counted separately from
     # "unchanged", so a quiet data outage cannot read as a flat tape.
     try:
-        _sm_dirs = summary_view.day_direction_counts(port_df, _sm_live_raw)
+        # Cross-check-failing tickers are dropped from the map passed in (not
+        # the pure function's own logic) so they land in day_direction_counts'
+        # existing "missing" bucket rather than a possibly-wrong up/down —
+        # same verdict Top Positions/Today's P&L above already defer to.
+        _sm_dirs_live = (
+            {t: v for t, v in _sm_live_raw.items() if t not in _t6_xc_bad}
+            if _sm_live_raw is not None else None
+        )
+        _sm_dirs = summary_view.day_direction_counts(port_df, _sm_dirs_live)
         _sm_dir_bits = (
             f"<span style='color:#57d98a'>↑ {_sm_dirs['up']} up</span> · "
             f"<span style='color:#fca5a5'>↓ {_sm_dirs['down']} down</span> · "
