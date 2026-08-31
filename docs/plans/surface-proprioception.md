@@ -1,5 +1,7 @@
 # Surface Proprioception (F-260) — audit first, then decide
 
+**Status: the 7 previously-skipped pages are now audited — 4 clean, 3 more findings CLOSED 2026-08-31 (commit `7faf729`).** Both earlier rounds (10 ranked + 5 more) had explicitly assumed 📈 Analysis, 📒 Trade Journal, 🪞 Trade Review, 📅 Economic Calendar, 🎯 My Edge, 🧑‍⚖️ The Judge, and 📋 Watchlist were already covered, without independently re-verifying. A full re-audit of all 7 (every `elif page ==` block read top to bottom, not sampled) confirmed 🪞 Trade Review, 📅 Economic Calendar, 🎯 My Edge, and 🧑‍⚖️ The Judge are genuinely CLEAN, and found 3 real findings on the other 3: (1) 📋 Watchlist's portfolio-beta risk gate (both the hard ceiling downgrade and the soft caution on ENTER_NOW recs) silently disabled whenever `_port_risk_cache` went offline — confirmed LIVE, not theoretical, since that cache's producer has its own independent try/except uncoupled from `_daily_brief_offline`; (2) 📒 Trade Journal's post-BUY concentration check silently skipped with zero disclosure when the portfolio snapshot wasn't loaded; (3) 📈 Analysis's HOLD-tab stop-ladder could show "keep climbing" nudges on a position under an active Reduce/Exit call if that cache couldn't be verified. All disclosure-only, Opus review SHIP 0 blocking. **This closes the "7 unaudited pages" item — the only genuinely open F-260 work left is Phase 3** (§11/§12 item 2, lifting Home's risk/fragility/correlation producer block into a pure module), which needs its own `planner` pass and was never part of any of these audit rounds.
+
 **Status: 5 MORE findings CLOSED 2026-08-30 (later session, commit `f707e31`), of the ~15 that were never individually itemized.** A fresh investigation (re-derived against current code, not assumed from the loose one-sentence description below) found the true remaining count in the 4 named areas was **5, not ~15** — several of the loosely-described items had already been closed by unrelated work (the `_acct_gate_cache` dead-branch fix, the coord_freshness banner rollout) without ever being checked off here. The 5: (1) 🔗 Risk Analysis's whole Portfolio Risk Dashboard vanishing with no `else` when `_port_risk_cache` is falsy; (2) the same page's leverage/margin warning never reading the producer's `cash_seen` field, so "never measured" rendered identically to "confirmed unlevered"; (3) 🥧 Portfolio Overview's News Intelligence tab and (4) its Rebalancer tab both feeding an unverified `_reduce_calls` into an existing suppression parameter without disclosing when the cross-check couldn't run; (5) 🔔 Catalyst Watch's 🔥 leading-sector flag going STALE (not absent) because the Daily-Brief-crash reset block nulled its siblings `_grow_today_sectors_cache`/`_reduce_calls` but never `_leading_sectors_cache`. All disclosure-only (no gate/threshold/recommendation change); Opus review SHIP, 0 blocking. Full per-finding detail and the reviewer's two non-blocking notes (a stale "sole writer" claim, and a separate pre-existing memo-hit-rebuild staleness gap on the same key family — not fixed, out of scope) in the commit body. **Did NOT re-audit** 📈 Analysis, 📒 Trade Journal, 🪞 Trade Review, 📅 Economic Calendar, 🎯 My Edge, 🧑‍⚖️ The Judge, or 📋 Watchlist (assumed covered by the closed top-10 + the coord_freshness rollout, per the investigation's own scope note) — a small remainder could still exist there.
 
 **Status: all 10 individually-ranked §10 findings CLOSED 2026-08-30.** Findings
@@ -603,9 +605,91 @@ All 5 fixes are disclosure-only: no `constants.py` touch, no gate/threshold/reco
 change. Full suite unchanged at 4782 (app.py has no self-coverage; the reused classifiers
 `_coord_cache_state`/`book_safety` are already unit-tested). Commit `f707e31`.
 
-**Genuinely still open:** 📈 Analysis, 📒 Trade Journal, 🪞 Trade Review, 📅 Economic Calendar,
-🎯 My Edge, 🧑‍⚖️ The Judge, and 📋 Watchlist were NOT re-audited this pass (assumed covered by
-the closed top-10 + the coord_freshness rollout) — a small remainder could still live there if
-ever revisited. Phase 3 (lifting Home's risk/fragility/correlation producer block into a pure
-module, per §11/§12 item 2's own text — "where this plan converges with §5's `N > 15` branch")
-also remains genuinely unstarted and needs its own `planner` pass.
+**Genuinely still open at the time of writing:** 📈 Analysis, 📒 Trade Journal, 🪞 Trade Review,
+📅 Economic Calendar, 🎯 My Edge, 🧑‍⚖️ The Judge, and 📋 Watchlist were NOT re-audited this
+pass — see §15, which closes this out. Phase 3 (lifting Home's risk/fragility/correlation
+producer block into a pure module, per §11/§12 item 2's own text — "where this plan converges
+with §5's `N > 15` branch") remains genuinely unstarted and needs its own `planner` pass.
+
+---
+
+## 15. The 7 previously-skipped pages, audited 2026-08-31 (commit `7faf729`)
+
+§14's own assumption ("assumed covered by the closed top-10 + the coord_freshness rollout")
+was never independently verified. A full re-audit read all 7 `elif page ==` blocks top to
+bottom (not sampled), cross-referenced every session-state read against
+`stock_analyzer/coord_freshness.py`'s registry, and traced consumer functions where the
+falsy-branch consequence wasn't obvious from `app.py` alone.
+
+**4 pages are genuinely CLEAN:**
+- **🧑‍⚖️ The Judge** — its two cross-page reads (`_judgment_opinions_today`, `_reduce_calls`
+  for the coherence audit) each already have an explicit `is None`/empty disclosure banner.
+- **🪞 Trade Review** — its one collapse (`_portfolio_value`) is safe because
+  `position_size_discipline()` already returns `n_trades=0` on a non-positive value, and the
+  page's own caption already names "requires a portfolio value" as a precondition. The
+  already-fixed finding #4 (`sector_mix`'s `data_available` kwarg) is present and correctly
+  wired. `coord_freshness.SURFACE_KEYS["tr"] = ()` is confirmed accurate — no other
+  coordination-cache reads exist on this page.
+- **📅 Economic Calendar** — the already-fixed finding #10 disclosure covers the Calendar
+  tab's collapse. The Pre-Event Playbook and Post-Event Results tabs both use a plain
+  `.empty` check on `_port_df_enriched` whose fallback message is accurate regardless of
+  whether the cause is "never loaded" or "genuinely empty" — no false claim either way.
+- **🎯 My Edge** — mostly a *producer* (of the `_mirror_*` keys, excluded from the inclusion
+  rule by definition). Everywhere it *consumes* a Home-produced cache, it already discloses
+  correctly: `_port_risk_cache` → an explicit "Portfolio beta not available this session"
+  caption (the exact wording reused for finding 1 below); `_last_port_df` → an explicit
+  basis-degradation caption; `_reduce_calls` → the already-fixed `_mi_reduce_verified` guard,
+  independently and correctly implemented at BOTH of its two read sites on this page;
+  `_last_held_tickers` → explicit three-state handling before `detect_missed_exits()`.
+
+**3 real findings, fixed, ranked by how badly a user could be misled:**
+
+1. **📋 Watchlist — portfolio-beta risk gate silently disabled.**
+   `_wl_port_risk = st.session_state.get("_port_risk_cache", {}) or {}` then
+   `_wl_port_beta = _wl_port_risk.get("beta")`, fed into every
+   `build_watchlist_recommendation()` call's `portfolio_ctx`. Consumed by
+   `stock_analyzer/watchlist_advisor.py::_portfolio_risk_gate()`: BOTH the hard breach
+   (`port_beta > PORTFOLIO_BETA_CEILING and ticker_beta > TICKER_BETA_CRITICAL` → downgrade
+   ENTER_NOW to NEAR_ENTRY) and the soft caution require `port_beta is not None` — a `None`
+   beta silently skips both, and an ENTER_NOW card renders with no beta-related caution,
+   indistinguishable from "beta checked, all clear." **Confirmed LIVE, not theoretical:**
+   `_port_risk_cache`'s producer has its OWN independent try/except (computing beta/vol from
+   portfolio returns) with NO coupling to `_daily_brief_offline` — unlike this same page's
+   sibling G-05 sector-ceiling check, whose coupling to `_daily_brief_offline` is documented in
+   the code's own comments as "incidental, not designed." So this cache can go offline on a day
+   the Daily Brief itself computes fine, and the page's existing `_wl_brief_offline` banner
+   never mentioned it. **CLOSED** — a standalone `if _coord_cache_state("_port_risk_cache") !=
+   "ready": st.warning(...)` check, deliberately NOT folded into `_wl_brief_offline` (the two
+   conditions aren't reliably coupled), reusing the exact wording 🎯 My Edge already ships for
+   this same cache. Two non-blocking reviewer notes, both left as consistency-preserving rather
+   than fixed: the warning gates on cache *state*, not on beta being present-but-unusable within
+   a ready cache (My Edge has the same property); and it can fire on an empty Watchlist with no
+   recs to gate (harmless, matches the existing banner's behavior).
+2. **📒 Trade Journal — post-BUY concentration check silently skipped.** The single-name/
+   sector/net-capital concentration check (`assess_add_concentration`) only ran inside
+   `if _pb_cc_pdf is not None and not _pb_cc_pdf.empty and _pb_cc_pv > 0:`, nested in a broad
+   `try/except: pass`. When `_pb_cc_pdf` (`_last_port_df`) was `None`, the ONE heads-up the app
+   gives about a newly-created concentration breach silently didn't run, with zero disclosure.
+   **CLOSED** — an `elif _pb_cc_pdf is None:` caption, deliberately scoped to only the `None`
+   case: a genuinely-empty frame (first-ever trade) or a non-positive book value fall through
+   to neither branch, since those are real "nothing to check yet" answers, not offline ones.
+3. **📈 Analysis — HOLD-tab stop-ladder could soften an unverified active Reduce/Exit call.**
+   `_hold_rc = (st.session_state.get("_reduce_calls") or {}).get(...)` then
+   `_render_stop_ladder(..., under_reduce=bool(_hold_rc))`. Per that function's own docstring,
+   `under_reduce` exists specifically to "suppress the 'keep climbing' nudges... so the
+   explainer never softens an active exit directive" — an unverified `_reduce_calls` silently
+   forced it `False`. The page's BUY-tab sibling branch already discloses a related, broader
+   scenario, but the HOLD-tab branch (reached only once a ticker is confirmed held) had no
+   equivalent. **CLOSED** — mirrors the exact dual-check pattern already shipped for the closed
+   My Edge finding #8 and this session's Portfolio Overview findings:
+   `_coord_cache_state("_reduce_calls") == "ready" and not _daily_brief_offline` (both needed,
+   since a crashed Daily Brief fail-opens `_reduce_calls` to `{}` rather than `None`), plus a
+   caption disclosing when the check couldn't be verified.
+
+All 3 disclosure-only: no `constants.py`/gate/threshold/recommendation/engine change. Full suite
+4835 passed (up from 4815 — the extra 20 are from an unrelated concurrent session's own commits,
+not this diff). Opus review SHIP, 0 blocking. Commit `7faf729`.
+
+**This closes the "7 unaudited pages" line item entirely.** The only genuinely open F-260 work
+remaining is Phase 3 (see above) — a structural extraction, not a bug-fix pass, needing its own
+`planner` design before any code.
