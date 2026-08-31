@@ -6356,7 +6356,13 @@ if page == "🏠 Home":
             "Today's P&L",
             _m(f"${_dp_val:+,.0f}"),
             f"{_dp_pct:+.2f}%{_dp_scope}",
-            delta_color="normal" if _dp_val >= 0 else "inverse",
+            # delta_color="normal" ALWAYS — it already colors green/red from the
+            # delta string's own sign. The old "normal if X>=0 else inverse"
+            # ternary looked deliberate but was backwards for a signed delta:
+            # inverse flips a NEGATIVE delta to GREEN, so it rendered green in
+            # BOTH branches (a real loss showed a green down-arrow). Caught via
+            # a user screenshot, 2026-08-31 — see feedback_streamlit_renderer_mismatch.
+            delta_color="normal",
             help=(
                 f"TRUE day P&L for your tracked positions, measured from the "
                 f"{_dpnl_baseline_date} close — held names + today's realized trades "
@@ -6370,7 +6376,7 @@ if page == "🏠 Home":
             "Today's P&L",
             _m(f"${_today_pnl:+,.0f}"),
             f"{_today_pnl_pct:+.2f}%",
-            delta_color="normal" if _today_pnl >= 0 else "inverse",
+            delta_color="normal",  # see the Tier-B branch above for why not a ternary
             help=(
                 "Held-position mark-to-market vs yesterday's close, updated every 60s. "
                 "Scope: currently-held positions only — excludes realized P&L from today's "
@@ -11404,7 +11410,10 @@ elif page == "🧾 Summary":
             st.metric(
                 "Today's P&L", _m(f"${_sm_dpnl['day_pnl']:+,.0f}"),
                 f"{_sm_dpnl['day_pnl_pct']:+.2f}%{_sm_dp_scope}",
-                delta_color="normal" if _sm_dpnl["day_pnl"] >= 0 else "inverse",
+                # Always "normal" — Streamlit already colors a signed delta by its
+                # own sign; the old ternary's "inverse" branch flipped a NEGATIVE
+                # delta to GREEN, so a real loss rendered a green down-arrow (2026-08-31).
+                delta_color="normal",
                 help=(
                     (f"Day P&L for tracked positions, measured from the "
                      f"{_sm_dpnl_baseline_date} close — held names + today's realized trades. "
@@ -11421,7 +11430,7 @@ elif page == "🧾 Summary":
         elif _sm_today_pnl is not None:
             st.metric(
                 "Today's P&L (held)", _m(f"${_sm_today_pnl:+,.0f}"), f"{_sm_today_pnl_pct:+.2f}%",
-                delta_color="normal" if _sm_today_pnl >= 0 else "inverse",
+                delta_color="normal",  # see the Tier-B branch above for why not a ternary
                 help="Held-position mark-to-market vs yesterday's close — excludes today's trades. "
                      "Visit 🏠 Home first this session for the fuller Tier-B figure.",
             )
@@ -18768,7 +18777,11 @@ elif page == "🥧 Portfolio Overview":
 
                 _hk1, _hk2, _hk3, _hk4 = st.columns(4)
                 _hk1.metric("Best Sector (3M)",  _best_sec["Sector"],  f"{_best_sec['3M %']:+.1f}%",  delta_color="normal")
-                _hk2.metric("Worst Sector (3M)", _worst_sec["Sector"], f"{_worst_sec['3M %']:+.1f}%", delta_color="inverse")
+                # "normal", matching Best Sector above — not "inverse": the delta is
+                # this sector's OWN signed 3M return, and inverse flips a NEGATIVE
+                # return (the common case for "worst") to GREEN, the same
+                # loss-shown-green defect fixed elsewhere today (2026-08-31).
+                _hk2.metric("Worst Sector (3M)", _worst_sec["Sector"], f"{_worst_sec['3M %']:+.1f}%", delta_color="normal")
                 _hk3.metric(
                     "Your Top Exposure",
                     _top_exp["Sector"] if _top_exp is not None else "—",
@@ -33055,7 +33068,7 @@ elif page == "📅 Economic Calendar":
                                 "Estimated portfolio impact",
                                 f"${_imp_sign}{_pea['total_impact']:,.0f}",
                                 delta=_imp_pct,
-                                delta_color="normal" if _pea["total_impact"] >= 0 else "inverse",
+                                delta_color="normal",  # see app.py:6359 for why not a ternary
                             )
 
                             # Position-level impact cards
