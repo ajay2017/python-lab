@@ -244,12 +244,11 @@ from stock_analyzer.portfolio import (
     gate_basis,
     refresh_outcome,
     build_portfolio_df, sector_exposure, alerts, rebalance_actions,
-    correlation_matrix, diversification_score, diversification_recommendations,
     annotate_add_candidates, resolve_sector, stop_ladder, protective_stop,
     manual_stop_wins, holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
     trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
-    classify_book_corr, correlation_coverage, CORR_MIN_OBS_TRUSTED,
+    classify_book_corr, CORR_MIN_OBS_TRUSTED,
 )
 from stock_analyzer.concentration import assess_add_concentration, high_beta_share
 from stock_analyzer.scanner import (
@@ -270,6 +269,7 @@ from stock_analyzer import decision_context as _dctx
 from stock_analyzer import premortem_advisor as _pm_advisor
 from stock_analyzer import regime_targets as _rgt_mod
 from stock_analyzer import coord_freshness
+from stock_analyzer import home_risk_synthesis
 from stock_analyzer import portfolio_intelligence
 from stock_analyzer import structural_scanner
 from stock_analyzer import regime_stress
@@ -5200,43 +5200,18 @@ if page == "🏠 Home":
         actions = rebalance_actions(port_df, deterioration=_det_signals)
         st.session_state["_actions_cache"] = actions
 
-        try:
-            corr_df      = correlation_matrix(held_data)
-            # F-246: computed HERE, beside the matrix and from the same
-            # held_data, then published/memoized alongside it. Computing it at
-            # render time instead would describe a DIFFERENT held_data whenever
-            # the synthesis memo serves a corr_df built on an earlier run (the
-            # memo signature keys on holdings/date, not on price histories), so
-            # a thin matrix whose histories have since recovered would render as
-            # "sample is fine" — the exact inverse of what this figure is for.
-            # Same producer-threaded shape F-230's `n_window_days` uses.
-            _corr_cov    = correlation_coverage(held_data)
-            _weights_map = dict(zip(port_df["Ticker"], port_df["Weight (%)"])) if not corr_df.empty else None
-            div          = diversification_score(corr_df, _weights_map)
-            div_score    = div["score"]
-            avg_corr     = div["avg_correlation"]
-            risk_pairs   = div["risk_pairs"]
-            _div_label   = ("Well Diversified" if div_score >= 42
-                            else "Moderate" if div_score >= 30 else "High Correlation Risk")
-        except Exception:
-            corr_df    = pd.DataFrame()
-            div        = {"score": None, "avg_correlation": None, "risk_pairs": []}
-            div_score  = avg_corr = None
-            risk_pairs = []
-            _div_label = "Unavailable"
-            _corr_cov  = None    # offline sentinel — never a fabricated count
+        _crb = home_risk_synthesis.build_correlation_bundle(port_df, held_data, portfolio_value)
+        corr_df, div, div_score, avg_corr, risk_pairs, _div_label, _corr_cov, div_recs = (
+            _crb["corr_df"], _crb["div"], _crb["div_score"], _crb["avg_corr"],
+            _crb["risk_pairs"], _crb["div_label"], _crb["corr_coverage"], _crb["div_recs"],
+        )
         st.session_state["_corr_df_cache"]       = corr_df
         st.session_state["_div_score_cache"]     = div_score
         st.session_state["_avg_corr_cache"]      = avg_corr
         st.session_state["_risk_pairs_cache"]    = risk_pairs
         st.session_state["_div_label_cache"]     = _div_label
         st.session_state["_corr_coverage_cache"] = _corr_cov
-
-        try:
-            div_recs = diversification_recommendations(port_df, corr_df, div, portfolio_value)
-        except Exception:
-            div_recs = None  # offline sentinel, not [] — matches sibling cache contract
-        st.session_state["_div_recs_cache"] = div_recs
+        st.session_state["_div_recs_cache"]      = div_recs
 
         h_rets = holding_returns(held_data)
 

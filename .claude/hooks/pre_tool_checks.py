@@ -293,6 +293,12 @@ _GATE_FILES = {
     "stock_analyzer/risk.py",           # portfolio risk metrics behind risk gates
     "stock_analyzer/bundle_loader.py",  # verdict assembly + availability gates
     "stock_analyzer/watchlist_advisor.py",  # emits REMOVE / ENTER_NOW verdicts
+    # F-260 Phase 3 (added 2026-08-31): Home's risk/fragility/correlation
+    # producer orchestration, extracted from app.py. More decision-bearing
+    # than coord_freshness.py/outage_gate.py (deliberately NOT gated) --
+    # this module SELECTS the offline sentinels a downstream gate (e.g.
+    # Watchlist's ENTER_NOW beta check) keys on for safety.
+    "stock_analyzer/home_risk_synthesis.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,
