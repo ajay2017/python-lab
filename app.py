@@ -30896,8 +30896,9 @@ elif page == "💰 Account":
     st.caption(
         "Your account-level view — cash, total value, and true (account-level) "
         "concentration. The rest of the app reasons about invested equity; setting your "
-        "cash balance here unlocks the whole-account picture. Entered manually for now — "
-        "the same field a future broker sync would auto-fill."
+        "cash balance here unlocks the whole-account picture. Auto-synced from your broker "
+        "(SnapTrade) when available — the \"Cash as of\" line below shows the source; you "
+        "can still override it manually further down if it ever looks wrong."
     )
 
     _acct = db.load_account_cash()
