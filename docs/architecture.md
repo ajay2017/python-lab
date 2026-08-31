@@ -2250,7 +2250,7 @@ after a live incident where the recorded source had no display surface at all).
 ### `stock_analyzer/broker_sync.py`
 
 Pure transform/decision logic (no I/O) sitting between `snaptrade_client.py`
-and the `broker` cron lane / `app.py` (F-244). Three functions:
+and the `broker` cron lane / `app.py` (F-244). Five functions:
 
 **`diff_positions(rh_positions, port_df)`** — three-bucket drift (rh_only /
 app_only / qty_mismatch, tolerance `BROKER_DRIFT_SHARE_TOL`) between live
@@ -2288,6 +2288,36 @@ are disjoint by construction; an unrecognized type falls to `ignored`, never
 round(shares,4), round(price,2))` content-match key F-87's CSV importer
 already uses, restricted to `trades` rows that don't yet carry a
 `broker_txn_id` (so an already-linked row can never be re-matched by Tier 2).
+
+**`annotate_pending_reconciliation(pending, drift)`** (2026-08-30) —
+display-only cross-reference closing a UX gap: Position Drift (live,
+net-current-holdings, forgiving) and Pending Imports (exact per-transaction
+date/price match, unforgiving) answer different questions, so a pending row
+can persist even when its ticker's drift is completely clean — most often
+because the manual Log Trade form has no date picker and stamps `traded_at`
+at confirm-click time, not the real trade date. Flags each pending row
+`likely_reconciled = True` (ticker in none of drift's three buckets) /
+`False` (ticker IS drifted — don't suggest it's already resolved) / `None`
+(drift unavailable this render — never assert reconciliation from an
+unknown). Never mutates its input; introduces no new inference, just
+narrates an already-computed fact.
+
+**`find_pending_match_candidates(pending, existing_trades, window_days=3)`**
+(2026-08-30) — a date-TOLERANT sibling of `classify_transactions`' own
+exact-date Tier 2: for each pending row, finds the closest existing trade
+(excluding rows already linked via `broker_txn_id`) matching on `(ticker,
+action, shares, price)` within `window_days`, so `app.py` can suggest
+"Possible match: a trade you logged on {date} ({N} days off)" next to a
+pending row. Display-only — never backfills `broker_txn_id`, never changes
+`classify_transactions`' actual bucketing. **Consumes each matched
+candidate on assignment** (pops it from its `by_key` bucket, mirroring
+`classify_transactions`' `content_seen`/`content_counts` pattern) so the
+same logged trade can never be suggested to more than one pending row — a
+2026-08-30 Opus review caught this as a blocking issue on the first pass:
+without the consume step, N pending rows sharing one real logged trade
+(e.g. two same-price DCA buys, only one logged) would each surface an
+"already logged" hint, risking a user dismissing a real, distinct,
+never-logged trade via the permanent "Already logged" button.
 
 ### `stock_analyzer/portfolio_health.py`
 
