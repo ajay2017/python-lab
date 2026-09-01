@@ -429,6 +429,54 @@ def test_discovery_mover_in_software_cloud_sectors_is_macro_blocked_not_new_pick
             f"{t} must not reach new_picks while its sector is macro-blocked")
 
 
+# ── Test 4d: Internet & Media bucket — 2 newly-mapped names across 2 curated
+# sectors, one representative ticker per sector (EBAY/Consumer Tech,
+# CMCSA/Communications). Both were, until 2026-09-01, absent from
+# TICKER_SECTORS and fell back to unmapped raw provider GICS strings. One CPI
+# Inflation HIGH event blocks both curated sectors at once (severities 2/2,
+# both >= the gate's min_severity=2). ─────────────────────────────────────────
+
+def test_discovery_mover_in_internet_media_sectors_is_macro_blocked_not_new_pick():
+    today = date(2026, 9, 1)
+    macro_events = [{
+        "date": "2026-09-01", "event": "CPI Inflation",
+        "category": "Inflation", "impact": "HIGH",
+    }]
+    _movers_spec = [
+        ("EBAY",  "Consumer Cyclical"),   # -> Consumer Tech
+        ("CMCSA", "Communication Services"),  # -> Communications
+    ]
+    movers = [{
+        "ticker": t, "price": 100.0, "sector": raw_sector,
+        "trend": "Up", "scanner_signal": "Buy", "score": COMPOSITE_BUY + 10,
+        "rsi": 60.0, "mom_1m": 5.0, "mom_3m": 8.0,
+        "composite_score": COMPOSITE_BUY + 10, "day_change": 2.0,
+    } for t, raw_sector in _movers_spec]
+    composites = {t: {
+        "total": COMPOSITE_BUY + 10, "rec": {"label": "Strong Buy"},
+        "stale_as_of": None, "fund_cache_age_days": None,
+        "fundamentals_available": True, "val_available": True,
+    } for t, _ in _movers_spec}
+
+    result = _grow_today(**_minimal_grow_today_kwargs(
+        movers=movers,
+        composites=composites,
+        macro_events=macro_events,
+        today=today,
+    ))
+
+    blocked_tickers  = {p.get("ticker") for p in (result.get("macro_blocked_picks") or [])}
+    new_pick_tickers = {p.get("ticker") for p in (result.get("new_picks") or [])}
+    for t, _ in _movers_spec:
+        assert t in blocked_tickers, (
+            f"{t} must be macro-blocked under a CPI Inflation HIGH event; "
+            f"got macro_blocked={result.get('macro_blocked_picks')}, "
+            f"new_picks={result.get('new_picks')}"
+        )
+        assert t not in new_pick_tickers, (
+            f"{t} must not reach new_picks while its sector is macro-blocked")
+
+
 # ── Test 5: bear early-return carries the key ─────────────────────────────────
 
 def test_bear_return_carries_macro_coverage_expired_key():

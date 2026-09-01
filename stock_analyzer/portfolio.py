@@ -98,6 +98,19 @@ TICKER_SECTORS = {
     # don't fall through to the "Other" catch-all and inflate a phantom breach.
     "PINS": "Consumer Tech", "SPOT": "Consumer Tech", "DASH": "Consumer Tech",
     "DIS": "Consumer Tech", "SNAP": "Consumer Tech",
+    # RBLX/ROKU/EBAY/SE/MELI/BABA/PDD/JD/WBD added 2026-09-01: all 9 are in
+    # the discovery_universe "Internet & Media" bucket (Movers scan net) with
+    # no entry here, same raw-GICS-shadow class as the Financials/
+    # Semiconductors/Software & Cloud fixes above. SE/MELI/BABA/PDD/JD are
+    # international e-commerce platforms grouped with AMZN/SHOP/EBAY rather
+    # than given separate country-risk treatment — conservative by
+    # construction, since it means MORE suppression under a US macro event,
+    # not less. WBD classified alongside DIS/NFLX (growth/content-driven
+    # media, no dividend) rather than Communications — confirmed with the
+    # user, distinct from CMCSA below.
+    "RBLX": "Consumer Tech", "ROKU": "Consumer Tech", "EBAY": "Consumer Tech",
+    "SE": "Consumer Tech", "MELI": "Consumer Tech", "BABA": "Consumer Tech",
+    "PDD": "Consumer Tech", "JD": "Consumer Tech", "WBD": "Consumer Tech",
     "LLY": "Healthcare", "NVO": "Healthcare", "ABBV": "Healthcare",
     "ISRG": "Healthcare", "MRNA": "Healthcare", "REGN": "Healthcare",
     "UNH": "Healthcare", "JNJ": "Healthcare", "PFE": "Healthcare",
@@ -131,6 +144,13 @@ TICKER_SECTORS = {
     "EOG": "Energy",
     "SPCX": "Communications",   # Specialty Telecom (Nasdaq classification)
     "T": "Communications", "VZ": "Communications", "TMUS": "Communications",
+    # CMCSA added 2026-09-01: in discovery_universe's "Internet & Media"
+    # bucket with no entry here, same raw-GICS-shadow class as the fixes
+    # above. Classified with T/VZ/TMUS (dividend-paying, rate-sensitive
+    # cable/broadband infrastructure economics) rather than Consumer Tech
+    # despite the DIS/NFLX media precedent there — confirmed with the user,
+    # distinct from WBD above.
+    "CMCSA": "Communications",
     "CAT": "Industrials", "GE": "Industrials", "GEV": "Industrials",
     # Staples/retail. Explicit entries matter because the held path resolves from
     # the provider's GICS string ("Consumer Defensive"/"Consumer Cyclical"), which
