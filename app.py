@@ -31272,7 +31272,7 @@ elif page == "⚙️ App Settings":
     )
     with st.expander("View change history", expanded=False):
         _as_hist_table = st.selectbox(
-            "Table", [k for k, _, _ in _AS_TABLES],
+            "Table", [k for k, _ in _AS_TABLES],
             format_func=lambda k: _AS_LABELS.get(k, k),
             key="_as_hist_select",
         )
