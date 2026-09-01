@@ -2503,6 +2503,8 @@ An exit = a breached stop OR an EXIT tier. A **TRIM is not liquidated** — its 
 
 **No new constants.** Reuses `DETERIORATION_TREND_MA`, `DETERIORATION_CONFIRM_DAYS`, `DETERIORATION_PEAK_FALLBACK_BARS`, `GAP_TO_STOP_ROUND_DECIMALS`. **Session state consumed (read-only):** `_fragility_cache`, `_corr_df_cache` (both via `app.py`, which passes them in — the module stays pure). Publishes nothing; nothing downstream consumes it.
 
+**`stock_analyzer/margin.py::shock_call_outcome()` (F-263, 2026-09-01)** composes this tab's shock replay with `margin.py`'s separately-existing, static-book-only `call_distance()` — added so the tab can answer "does this shock actually trigger a margin call," not just "does it breach my stops." Calls `call_distance()` twice rather than re-deriving its formula: first-order at the shocked price, second-order after netting a forced sale's proceeds (sourced from this module's own `_survivors(...)["proceeds"]`) against the debit. Forced selling can only help the cushion, never worsen it (`post_sale_cushion = shock_cushion + forced_sale_proceeds × rate` — equity is invariant to a sale that pays down the matching debit), a pinned test invariant, not just reasoning. Also returns `cushion_delta_from_now` (today's cushion minus the shocked cushion). Reuses `FRAGILITY_PULLBACK_PCT` (the warning band) and `MARGIN_MAINTENANCE_RATE` — no new constants. Resolves the debit via the same `margin.resolve_net_capital()` path F-255's sizing cap uses, so the two surfaces can't disagree on the starting book. Read-only awareness — never gates, never feeds `risk_advisor`/`exit_advisor`, touches no concentration denominator. Full detail: `docs/requirements.md` F-263.
+
 ---
 
 ## 7. Navigation and State Management

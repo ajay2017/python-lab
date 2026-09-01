@@ -34264,6 +34264,8 @@ The **🧯 After My Rules** tab (5th tab on 🔗 Risk Analysis) is the third sce
 **What it does NOT do:** it issues no recommendation, changes no score, and moves no gate. It doesn't model the day-by-day path (it's the trough, not the journey), TRIM sizing, taxes, or slippage. And it says nothing about **when to buy back in** — the app's de-risk rule is the exit half of a two-sided trend rule, and the re-entry half doesn't exist yet. Measuring whether that gap actually costs you anything is exactly what this tab is for.
 
 **One honesty point worth internalising:** a simulated stop-out is **not** a filled order. The app re-derives your ratchet stop from your current gain on every run — it has no memory and doesn't sit at the broker. So a breach here means "the stop the app would recommend today was crossed," not "a resting order executed." If a position shows **⚠️ no stop**, the exit counts are an *under*-statement, not a clean bill of health.
+
+**If you carry margin, this tab also shows whether the shock would trigger a call** — a section beneath the scenario results states how many of the modeled scenarios would cross your margin maintenance floor, and for the one you've selected, whether your own stops firing into the shock would sell enough to cover it. Read-only awareness, same as the rest of this tab — it never changes a gate or a recommendation. Your standing (unshocked) cushion always lives on 🧾 Summary and 💰 Account; this only models it under a chosen shock.
 """
             )
 
