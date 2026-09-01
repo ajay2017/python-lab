@@ -387,6 +387,42 @@ def test_scan_sectors_extra_ticker_already_in_sector_keeps_real_sector(monkeypat
     assert by_ticker[sector_tickers[0]] == "Defense & Aerospace"
 
 
+# ─── scan_sectors — App Settings (Commit 2): `universe` param, not the ──────
+# module-level default, must be what the real importer path actually reads.
+
+def test_scan_sectors_uses_explicit_universe_param_not_module_default(monkeypatch):
+    """A fake sector/ticker pair that does not exist anywhere in the real
+    SECTOR_UNIVERSE is the strongest possible proof that scan_sectors reads
+    the passed `universe` argument, not the module-level dict — this is
+    what every real caller (app.py, cron_runner.py) now relies on after
+    being rewired onto stock_analyzer.reference_data.resolve_universe."""
+    # Two fake tickers (not one) so the MultiIndex yf.download shape below
+    # matches the multi-ticker code path scan_sectors actually takes for a
+    # >1-ticker request (a single ticker hits a different raw-shape branch,
+    # unrelated to what this test is proving).
+    fake_universe = {"FakeSector": ["ZZZFAKE1", "ZZZFAKE2"]}
+    fake = _FakeYF(_fake_multi_download(["ZZZFAKE1", "ZZZFAKE2"]))
+    monkeypatch.setattr(scanner, "yf", fake)
+
+    result = scanner.scan_sectors(["FakeSector"], universe=fake_universe)
+    assert not result.empty
+    assert set(result["Ticker"]) == {"ZZZFAKE1", "ZZZFAKE2"}
+
+
+def test_scan_sectors_empty_universe_param_scans_nothing_no_fallback(monkeypatch):
+    """An explicit {} (the real caller's contract on a resolve_universe
+    failure — see reference_data's docstrings) must scan literally nothing.
+    It must NEVER silently fall back to the module-level SECTOR_UNIVERSE —
+    that would be the exact silent-stale-universe fallback the design doc
+    rejects (the 2026-07-14 INTC failure mode repeated on this surface)."""
+    fake = _FakeYF(_fake_multi_download(list(scanner.SECTOR_UNIVERSE["Defense & Aerospace"])))
+    monkeypatch.setattr(scanner, "yf", fake)
+
+    result = scanner.scan_sectors(["Defense & Aerospace"], universe={})
+    assert result.empty
+    assert fake.calls == 0, "yf.download must never be called with an empty resolved universe"
+
+
 # ─── scan_movers — empty ticker list skips the network call ─────────────────
 
 def test_scan_movers_default_threshold_matches_governed_constant():

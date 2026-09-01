@@ -251,7 +251,7 @@ from stock_analyzer.portfolio import (
 )
 from stock_analyzer.concentration import assess_add_concentration
 from stock_analyzer.scanner import (
-    SECTOR_UNIVERSE, scan_sectors, scan_movers,
+    scan_sectors, scan_movers,
     _rsi_points as _scanner_rsi_points,
     _trend_points as _scanner_trend_points,
     _momentum_1m_points as _scanner_mom_1m_points,
@@ -277,6 +277,9 @@ from stock_analyzer import thesis_cluster
 from stock_analyzer import missed_opportunity
 from stock_analyzer import broker_sync
 from stock_analyzer import snaptrade_client
+from stock_analyzer import reference_data
+from stock_analyzer import reference_shelf
+from stock_analyzer.reference_data import ReferenceDataUnavailable
 from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
     baseline_anchor, money_weighted_return, build_equity_timeseries,
@@ -2847,6 +2850,7 @@ with st.sidebar:
             ("Model Lab", "🔬 Model Lab",              ":material/experiment:"),
             ("Road Not Taken", "🛑 The Road Not Taken", ":material/block:"),
             ("System Trust", "🩺 System Trust",        ":material/health_and_safety:"),
+            ("App Settings", "⚙️ App Settings",        ":material/tune:"),
         ]),
         ("PORTFOLIO", [
             ("Overview", "🥧 Portfolio Overview", ":material/pie_chart:"),
@@ -2872,13 +2876,16 @@ with st.sidebar:
     # a read-only viewer. 🔬 Model Lab (experimental measurement surface, F-234)
     # was the first; 🩺 System Trust (pipeline-health diagnostic, System
     # Proprioception Phase 1) is the second; 🛑 The Road Not Taken (Gate
-    # Suppression Ledger readout, F-259 Phase 2) is the third — all three are
-    # owner-only operational/measurement views, not shared portfolio views.
-    # Smallest-change approach: filter them out of the group list before any
-    # rendering happens below, rather than special-casing the button loop
-    # itself. Flagged here explicitly since every other `is_readonly()` use in
-    # this app only disables a write control, never removes a whole nav item.
-    _OWNER_ONLY_PAGES = ("🔬 Model Lab", "🩺 System Trust", "🛑 The Road Not Taken")
+    # Suppression Ledger readout, F-259 Phase 2) is the third; ⚙️ App Settings
+    # (docs/plans/app-settings.md Commit 2 — edits the reference-table input
+    # sets, a write surface a read-only viewer must never even see) is the
+    # fourth — all four are owner-only operational/measurement views, not
+    # shared portfolio views. Smallest-change approach: filter them out of the
+    # group list before any rendering happens below, rather than
+    # special-casing the button loop itself. Flagged here explicitly since
+    # every other `is_readonly()` use in this app only disables a write
+    # control, never removes a whole nav item.
+    _OWNER_ONLY_PAGES = ("🔬 Model Lab", "🩺 System Trust", "🛑 The Road Not Taken", "⚙️ App Settings")
     if db.is_readonly():
         _NAV_GROUPS = [
             (_g_label, [item for item in _g_items if item[1] not in _OWNER_ONLY_PAGES])
@@ -3157,6 +3164,37 @@ elif _outage_verdict == "warn":
 @st.cache_data(ttl=86400)
 def _get_rfr() -> float:
     return fetch_risk_free_rate()
+
+
+# ── App Settings (docs/plans/app-settings.md Commit 2) — reference-table ────
+# resolution for the real importer surface. Every former direct read of
+# scanner.SECTOR_UNIVERSE / discovery_universe.DISCOVERY_UNIVERSE /
+# portfolio._SECTOR_CANDIDATES in this file now goes through this helper
+# instead, matching the resolver's own fail-loud, no-fallback design (a
+# silent stale universe is the 2026-07-14 INTC failure mode repeated here).
+def _resolve_ref_universe(name: str, label: str) -> dict:
+    """Resolve a DB-backed reference table for THIS render, rendering a
+    fail-loud st.error banner when unavailable rather than silently
+    degrading. Always returns a dict — `{}` on failure — so callers keep
+    using .get()/.values() exactly as they could against the old hardcoded
+    dicts, but only AFTER the banner has already told the user why it's
+    empty; this is a disclosed degradation, never a silent substitution
+    (see the design doc's "Never silently substitute different data").
+
+    Call ONCE per page render per table name and thread the returned dict
+    through to every read site on that page — calling this repeatedly for
+    the same table on the same page would repeat the banner.
+    """
+    payload, _as_of, err = reference_data.resolve_universe_or_none(name)
+    if err:
+        st.error(
+            f"⛔ **{label} unavailable** — {err}. No recommendations are "
+            "drawn from this input set this session; this is not \"nothing "
+            "to show\" — the read did not run. See ⚙️ App Settings or "
+            "🩺 System Trust."
+        )
+        return {}
+    return payload
 
 
 # ── SPY history (shared, cached) ─────────────────────────────────────────────
@@ -3514,15 +3552,24 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
     return load_bundle(ticker, period, spy_df=_spy, rfr=_get_rfr())
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def _cached_scan_movers(exclude_key: tuple, min_gain: float):
+def _cached_scan_movers(exclude_key: tuple, min_gain: float, universe_items: tuple):
     """Cached wrapper around scan_movers over the discovery universe.
 
     exclude_key is a sorted tuple (hashable for the cache) of tickers already
     covered elsewhere — the curated SECTOR_UNIVERSE plus held + watchlist.
     30-min TTL matches load_all so a session's first movers scan pays the
     ~200-ticker download once, then every rerun is a cache hit.
+
+    universe_items (App Settings, docs/plans/app-settings.md Commit 2): the
+    RESOLVED discovery_universe payload, flattened to a hashable sorted tuple
+    of (bucket, (ticker, ...)) pairs so it can be part of the cache key —
+    st.cache_data can't key on a plain dict. Including it in the key (rather
+    than reading DISCOVERY_UNIVERSE directly) means a reference-table edit
+    saved via ⚙️ App Settings busts this cache instead of silently serving a
+    scan built on the roster as it was 30 minutes ago.
     """
-    tickers = discovery_tickers(exclude=set(exclude_key))
+    universe = {bucket: list(tickers) for bucket, tickers in universe_items}
+    tickers = discovery_tickers(exclude=set(exclude_key), universe=universe)
     return scan_movers(tickers, min_day_gain_pct=min_gain)
 
 
@@ -4140,6 +4187,19 @@ if page == "🏠 Home":
                         st.rerun()
         except Exception:
             pass  # proprioception must never break the Home decision surface
+
+    # ── App Settings (docs/plans/app-settings.md Commit 2) — resolve the 3 ──
+    # DB-backed reference tables ONCE per Home render, near the top, so every
+    # downstream read in this page (Grow Today's scan, the Movers exclude set,
+    # the reach-funnel caption, the Diversification Advisor's redeploy pool)
+    # shares the SAME resolved payload rather than re-reading it (and
+    # re-rendering its own banner) at each of the ~8 read sites below. A
+    # failure renders ONE fail-loud banner here — never a silent fallback to
+    # a frozen list — and the resolved var degrades to `{}` for the rest of
+    # this render (see `_resolve_ref_universe`'s docstring).
+    _ru_sector_universe    = _resolve_ref_universe("sector_universe", "Grow Today scan universe")
+    _ru_discovery_universe = _resolve_ref_universe("discovery_universe", "Movers discovery universe")
+    _ru_sector_candidates  = _resolve_ref_universe("sector_candidates", "Diversification candidate roster")
 
     # Load data for all held tickers
     held_tickers = [
@@ -5262,7 +5322,11 @@ if page == "🏠 Home":
         actions = rebalance_actions(port_df, deterioration=_det_signals)
         st.session_state["_actions_cache"] = actions
 
-        _crb = home_risk_synthesis.build_correlation_bundle(port_df, held_data, portfolio_value)
+        _crb = home_risk_synthesis.build_correlation_bundle(
+            port_df, held_data, portfolio_value,
+            sector_candidates=_ru_sector_candidates,
+            discovery_universe=_ru_discovery_universe,
+        )
         corr_df, div, div_score, avg_corr, risk_pairs, _div_label, _corr_cov, div_recs = (
             _crb["corr_df"], _crb["div"], _crb["div_score"], _crb["avg_corr"],
             _crb["risk_pairs"], _crb["div_label"], _crb["corr_coverage"], _crb["div_recs"],
@@ -5455,11 +5519,16 @@ if page == "🏠 Home":
             _movers_candidates: list[dict] = []
             try:
                 _mv_exclude = (
-                    set().union(*SECTOR_UNIVERSE.values())
+                    set().union(*_ru_sector_universe.values())
                     | set(held_tickers)
                     | {str(t).upper() for t in (st.session_state.get("watchlist", []) or [])}
                 )
-                _movers_df = _cached_scan_movers(tuple(sorted(_mv_exclude)), MOVER_MIN_DAY_GAIN_PCT)
+                _mv_universe_items = tuple(sorted(
+                    (k, tuple(sorted(v))) for k, v in _ru_discovery_universe.items()
+                ))
+                _movers_df = _cached_scan_movers(
+                    tuple(sorted(_mv_exclude)), MOVER_MIN_DAY_GAIN_PCT, _mv_universe_items,
+                )
                 if _movers_df is not None and not _movers_df.empty:
                     for _, _mrow in _movers_df.head(MOVER_SHORTLIST_SIZE).iterrows():
                         _mt = str(_mrow["Ticker"]).upper()
@@ -6836,16 +6905,17 @@ if page == "🏠 Home":
         _refresh_gate_arm("data")
         st.cache_data.clear()
         _wl_for_scan        = st.session_state.get("watchlist", []) or []
-        _universe_tickers   = set().union(*SECTOR_UNIVERSE.values())
+        _universe_tickers   = set().union(*_ru_sector_universe.values())
         _wl_extras          = [t for t in _wl_for_scan if str(t).upper() not in _universe_tickers]
         _total_scan_tickers = len(_universe_tickers) + len(_wl_extras)
         with st.spinner(
             f"Fetching live prices and scanning {_total_scan_tickers} stocks — ~20 seconds…"
         ):
             _fresh_results = scan_sectors(
-                list(SECTOR_UNIVERSE.keys()),
+                list(_ru_sector_universe.keys()),
                 period="6mo",
                 extra_tickers=_wl_for_scan,
+                universe=_ru_sector_universe,
             )
         if not _fresh_results.empty:
             st.session_state.scanner_results = _fresh_results
@@ -7628,11 +7698,11 @@ if page == "🏠 Home":
         # ~70 curated names. Read-only; reflects what actually ran this session.
         _sr_reach = st.session_state.get("scanner_results")
         if _sr_reach is not None and not _sr_reach.empty:
-            _tracked_set = set().union(*SECTOR_UNIVERSE.values())
+            _tracked_set = set().union(*_ru_sector_universe.values())
             _tracked_n   = len(_tracked_set)
             _wl_reach    = st.session_state.get("watchlist", []) or []
             _wl_extra_n  = len([t for t in _wl_reach if str(t).upper() not in _tracked_set])
-            _disc_extra_n = len(discovery_tickers(exclude=_tracked_set))
+            _disc_extra_n = len(discovery_tickers(exclude=_tracked_set, universe=_ru_discovery_universe))
             _movers_ran  = "_movers_candidates" in st.session_state
             _cov         = st.session_state.get("_grow_composites_coverage") or {}
             _finalists_n = len(_cov.get("intended", []) or [])
@@ -9194,7 +9264,9 @@ if page == "🏠 Home":
                             for _sec in _redep_secs:
                                 _sec_name = _sec.get("sector")
                                 _pool = diversifying_candidate_pool(
-                                    _sec_name, _held_set, cap=DIVERSIFY_SCAN_CAP
+                                    _sec_name, _held_set, cap=DIVERSIFY_SCAN_CAP,
+                                    sector_candidates=_ru_sector_candidates,
+                                    discovery_universe=_ru_discovery_universe,
                                 )
                                 _quality: dict = {}
                                 _bundles: dict = {}
@@ -18947,16 +19019,21 @@ elif page == "🥧 Portfolio Overview":
             )
 
             if st.button("🔍 Scan full universe & rank my holdings", key="_rank_scan_btn"):
-                with st.spinner("Scanning universe…"):
-                    try:
-                        _full_scan = scan_sectors(
-                            list(SECTOR_UNIVERSE.keys()),
-                            extra_tickers=st.session_state.get("watchlist", []) or [],
-                        )
-                        st.session_state["_rank_scan_df"] = _full_scan
-                    except Exception as _e:
-                        st.error(f"Scan failed: {_e}")
-                        st.session_state["_rank_scan_df"] = pd.DataFrame()
+                _po_universe = _resolve_ref_universe("sector_universe", "Grow Today scan universe")
+                if not _po_universe:
+                    st.session_state["_rank_scan_df"] = pd.DataFrame()
+                else:
+                    with st.spinner("Scanning universe…"):
+                        try:
+                            _full_scan = scan_sectors(
+                                list(_po_universe.keys()),
+                                extra_tickers=st.session_state.get("watchlist", []) or [],
+                                universe=_po_universe,
+                            )
+                            st.session_state["_rank_scan_df"] = _full_scan
+                        except Exception as _e:
+                            st.error(f"Scan failed: {_e}")
+                            st.session_state["_rank_scan_df"] = pd.DataFrame()
 
             if st.session_state.get("_rank_scan_df") is not None and not st.session_state["_rank_scan_df"].empty:
                 _scan_df  = st.session_state["_rank_scan_df"]
@@ -20014,6 +20091,7 @@ elif page == "🔍 Market Scanner":
 
     st.title("🔍 Market Scanner")
     st.caption("Scans 88 stocks across 14 sectors to surface trending opportunities.")
+    _ms_universe = _resolve_ref_universe("sector_universe", "Grow Today scan universe")
     st.info(
         "**How to read this:** The scanner uses a **Momentum Score** (RSI + Trend + 1M/3M price momentum). "
         "It is a fast filter, not a buy signal. A high momentum score means the stock is moving — "
@@ -20030,8 +20108,8 @@ elif page == "🔍 Market Scanner":
     with sc1:
         selected_sectors = st.multiselect(
             "Sectors to scan",
-            options=list(SECTOR_UNIVERSE.keys()),
-            default=list(SECTOR_UNIVERSE.keys()),
+            options=list(_ms_universe.keys()),
+            default=list(_ms_universe.keys()),
         )
     with sc2:
         min_score = st.slider("Min score", 0, 100, 50)
@@ -20041,7 +20119,7 @@ elif page == "🔍 Market Scanner":
         run_scan = st.button("🔍 Scan Now", type="primary", width="stretch")
     with col_info:
         _ms_wl          = st.session_state.get("watchlist", []) or []
-        _ms_sector_set  = set().union(*[SECTOR_UNIVERSE.get(s, []) for s in selected_sectors])
+        _ms_sector_set  = set().union(*[_ms_universe.get(s, []) for s in selected_sectors])
         _ms_wl_extras   = [t for t in _ms_wl if str(t).upper() not in _ms_sector_set]
         total_tickers   = len(_ms_sector_set) + len(_ms_wl_extras)
         _wl_suffix      = (
@@ -20058,6 +20136,7 @@ elif page == "🔍 Market Scanner":
                 selected_sectors,
                 period="6mo",
                 extra_tickers=_ms_wl,
+                universe=_ms_universe,
             )
         if not results_df.empty:
             st.session_state.scanner_results = results_df
@@ -30942,6 +31021,279 @@ elif page == "🩺 System Trust":
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# PAGE — APP SETTINGS (UI-managed reference data — docs/plans/app-settings.md
+# Commit 2 of 3). Owner-only: edits the ENGINE'S INPUT SET (which names a rule
+# is applied to), never a decision rule (a threshold, a weight, a gate) — see
+# the design doc's "redline, agreed up front".
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "⚙️ App Settings":
+    st.title("⚙️ App Settings")
+    st.caption("Owner-only · edits the engine's INPUT SET, never a decision rule")
+
+    if db.is_readonly():
+        # Defense in depth: the sidebar nav entry is already hidden for a
+        # read-only viewer (see the _OWNER_ONLY_PAGES filter above), but a
+        # stale nav_page from before a mid-session downgrade could still land
+        # here — and this page has WRITE paths, unlike a pure diagnostic.
+        st.info("🔒 This page is owner-only and isn't available in read-only viewer mode.")
+        st.stop()
+
+    st.warning(
+        "**What is deliberately NOT on this page** — no gate, threshold, scoring "
+        "weight, or `COMPOSITE_BUY`. Those change the **decision rule** and stay "
+        "in code, where git is their audit trail — a UI edit would leave no "
+        "diff, no review, and no way to reconstruct what the engine believed "
+        "when it made a past call. This page only changes the **input set** "
+        "the rules are applied to."
+    )
+
+    _AS_TABLES = [
+        ("sector_universe",    "Grow Today scan universe",         "SECTOR_UNIVERSE"),
+        ("discovery_universe", "Movers discovery universe",        "DISCOVERY_UNIVERSE"),
+        ("sector_candidates",  "Diversification candidate roster", "_SECTOR_CANDIDATES"),
+    ]
+    _AS_LABELS = {k: lbl for k, lbl, _ in _AS_TABLES}
+
+    st.markdown("##### 📋 Reference tables")
+    st.caption(
+        "The curated lists the engine reads. Status mirrors 🩺 System Trust "
+        "check ⑤ — awareness only, degrades gracefully to the code-recorded "
+        "date when the DB can't be reached (see that check for why: a stale "
+        "chore reminder is not the same failure class as an unreadable save)."
+    )
+
+    _as_shelf_by_key = {r["key"]: r for r in reference_shelf.shelf_status()}
+    _as_edit_table = st.session_state.get("_as_edit_table")
+
+    for _as_key, _as_label, _as_codename in _AS_TABLES:
+        _as_row = _as_shelf_by_key.get(_as_key, {})
+        _as_sev = _as_row.get("severity", "unknown")
+        _as_dot = {"ok": "🟢", "warn": "🟡", "down": "🔴"}.get(_as_sev, "⚪")
+        _as_c1, _as_c2 = st.columns([5, 1])
+        with _as_c1:
+            st.markdown(
+                f"**{_as_label}** · `{_as_codename}`  \n"
+                f"{_as_dot} {_as_row.get('detail', 'status unknown')}"
+            )
+        with _as_c2:
+            if st.button(
+                "Editing…" if _as_edit_table == _as_key else "Edit",
+                key=f"_as_edit_btn_{_as_key}", width="stretch",
+                disabled=(_as_edit_table == _as_key),
+            ):
+                st.session_state["_as_edit_table"] = _as_key
+                st.rerun()
+        st.divider()
+
+    st.caption(
+        "The database is the **single source of truth** for these lists — "
+        "there is no code fallback. A one-time migration seeded them from the "
+        "code that used to define them; keeping that code as a \"fallback\" "
+        "is what would let a frozen list silently activate years later "
+        "(the 2026-07-14 stale-data incident this design exists to prevent)."
+    )
+
+    # ── Per-table editor — ONE at a time, per the resolved design's Q1/Q3 ──────
+    if _as_edit_table:
+        _as_label = _AS_LABELS.get(_as_edit_table, _as_edit_table)
+        st.markdown(f"### ✏️ Editing · {_as_label}")
+
+        try:
+            _as_current_payload, _as_current_asof = reference_data.resolve_universe(_as_edit_table)
+            _as_unavailable_err = None
+        except ReferenceDataUnavailable as _as_exc:
+            _as_current_payload, _as_current_asof = {}, None
+            _as_unavailable_err = str(_as_exc)
+
+        if _as_unavailable_err:
+            st.error(
+                f"⛔ **{_as_label} unavailable** — {_as_unavailable_err}. No "
+                "data is shown and nothing can be edited this session — this "
+                "is not \"an empty table\", the read did not succeed."
+            )
+            st.markdown(
+                "⛔ Supabase RLS may be blocking reads, or its one-time DDL "
+                "(`docs/sql/app_settings_ddl.sql`) hasn't been applied yet. "
+                "The `[supabase] key` secret must be the **service-role / "
+                "secret key** (starts with `sb_secret_` or is the legacy "
+                "service_role JWT) — not the publishable/anon key. Update "
+                "`SUPABASE_KEY` in Railway → Variables, then Redeploy — or "
+                "run `scripts/seed_reference_tables.py` if the table is just "
+                "unseeded."
+            )
+        else:
+            st.caption(
+                f"`{_as_current_asof.isoformat() if _as_current_asof else '?'}` "
+                "last curated · one row per bucket, comma-separated symbols. "
+                "Bucket structure is locked in v1 — only ticker membership is "
+                "editable (see the design doc's Q3)."
+            )
+            _as_rows = [
+                {"Bucket": _b, "Tickers": ", ".join(_ts), "Count": len(_ts)}
+                for _b, _ts in sorted(_as_current_payload.items())
+            ]
+            _as_df = pd.DataFrame(_as_rows, columns=["Bucket", "Tickers", "Count"])
+            _as_edited_df = st.data_editor(
+                _as_df,
+                column_config={
+                    "Bucket":  st.column_config.TextColumn("Bucket", disabled=True),
+                    "Tickers": st.column_config.TextColumn(
+                        "Tickers", help="Comma-separated symbols, e.g. MSFT, GOOGL, META"),
+                    "Count":   st.column_config.NumberColumn(
+                        "Count (before edit)", disabled=True,
+                        help="Read-only — the count BEFORE this edit. See the "
+                             "total below for the live post-edit count."),
+                },
+                num_rows="fixed", hide_index=True, width="stretch",
+                key=f"_as_editor_widget_{_as_edit_table}",
+            )
+
+            _as_new_payload: dict = {}
+            for _, _as_r in _as_edited_df.iterrows():
+                _as_bucket  = str(_as_r["Bucket"])
+                _as_tk_str  = str(_as_r["Tickers"]) if _as_r["Tickers"] is not None else ""
+                _as_new_payload[_as_bucket] = [
+                    _t.strip().upper() for _t in _as_tk_str.split(",") if _t.strip()
+                ]
+
+            _as_old_total = sum(len(_v) for _v in _as_current_payload.values())
+            _as_new_total = sum(len(_v) for _v in _as_new_payload.values())
+            st.caption(f"**{_as_old_total} → {_as_new_total}** tickers")
+
+            from stock_analyzer.constants import REFERENCE_TABLE_LARGE_DROP_CONFIRM_PCT
+
+            _as_drop = reference_data.decide_large_drop_confirmation(
+                _as_current_payload, _as_new_payload,
+                REFERENCE_TABLE_LARGE_DROP_CONFIRM_PCT,
+            )
+            _as_confirmed = True
+            if _as_drop["needs_confirmation"]:
+                st.warning(
+                    "⚠️ **This looks like a large change, not a small refresh — "
+                    "confirm before saving:**\n"
+                    + "\n".join(f"- {_r}" for _r in _as_drop["reasons"])
+                )
+                _as_confirmed = st.checkbox(
+                    "I understand — proceed anyway",
+                    key=f"_as_confirm_{_as_edit_table}",
+                )
+
+            _as_c_save, _as_c_discard, _ = st.columns([1, 1, 3])
+            with _as_c_save:
+                _as_save_clicked = st.button(
+                    "💾 Save changes", key=f"_as_save_btn_{_as_edit_table}",
+                    type="primary", width="stretch",
+                )
+            with _as_c_discard:
+                if st.button("Discard", key=f"_as_discard_btn_{_as_edit_table}", width="stretch"):
+                    st.session_state["_as_edit_table"] = None
+                    st.session_state.pop(f"_as_editor_widget_{_as_edit_table}", None)
+                    st.session_state.pop(f"_as_confirm_{_as_edit_table}", None)
+                    st.rerun()
+
+            if _as_save_clicked:
+                _as_struct_errors = reference_data.validate_payload(
+                    _as_edit_table, _as_new_payload,
+                    existing_bucket_keys=set(_as_current_payload.keys()),
+                )
+                _as_changed = reference_data.changed_tickers(_as_current_payload, _as_new_payload)
+                if _as_changed:
+                    try:
+                        _as_prices = fetch_live_prices(sorted(_as_changed))
+                    except Exception:
+                        _as_prices = None
+                    _as_health_red = _ah.overall_level()[0] == "red"
+                    _as_resolution = reference_data.classify_ticker_resolution(
+                        _as_changed, _as_prices, _as_health_red,
+                    )
+                else:
+                    _as_resolution = {"validator_offline": False, "unresolved": []}
+
+                _as_decision = reference_data.decide_save_action(
+                    structure_errors=_as_struct_errors,
+                    validator_offline=_as_resolution["validator_offline"],
+                    unresolved_tickers=_as_resolution["unresolved"],
+                    large_drop=_as_drop,
+                    confirmed=_as_confirmed,
+                )
+
+                if _as_decision["action"] == "blocked":
+                    for _as_reason in _as_decision["reasons"]:
+                        st.error(f"⛔ {_as_reason}")
+                elif _as_decision["action"] == "needs_confirmation":
+                    st.warning("☝️ Check the confirmation box above before saving.")
+                else:
+                    _as_result = db.save_reference_table(
+                        _as_edit_table, _as_new_payload, updated_by="app_settings_ui",
+                    )
+                    if _as_result["status"] == "saved":
+                        st.success(f"✅ Saved — `as_of` moved to {_as_result['as_of']}.")
+                        st.session_state["_as_edit_table"] = None
+                        st.session_state.pop(f"_as_editor_widget_{_as_edit_table}", None)
+                        st.session_state.pop(f"_as_confirm_{_as_edit_table}", None)
+                        st.rerun()
+                    elif _as_result["status"] == "no_change":
+                        st.info(
+                            "**No changes to save.** `as_of` does not move — "
+                            "there is no \"mark as reviewed\" control on this "
+                            "page, by design (see the trap this whole feature "
+                            "exists to avoid: a date that can move without the "
+                            "list changing stops being evidence)."
+                        )
+                    else:
+                        st.error(f"⛔ Save failed — {_as_result.get('detail', 'unknown error')}")
+
+    st.divider()
+
+    # ── History — append-only, per the resolved design's Q4 ────────────────────
+    st.markdown("##### 🕓 History")
+    st.caption(
+        "Append-only. The redline's justification for keeping investment "
+        "thresholds in code — \"you must be able to reconstruct what the "
+        "engine believed when it made a past call\" — applies verbatim to a "
+        "mutable scan universe, so every accepted edit is versioned here."
+    )
+    with st.expander("View change history", expanded=False):
+        _as_hist_table = st.selectbox(
+            "Table", [k for k, _, _ in _AS_TABLES],
+            format_func=lambda k: _AS_LABELS.get(k, k),
+            key="_as_hist_select",
+        )
+        _as_hist_rows = db.load_reference_table_history(_as_hist_table)
+        if _as_hist_rows is None:
+            st.warning("⚪ Could not read history — the database may be unreachable.")
+        elif not _as_hist_rows:
+            st.info("No history yet for this table — nothing has been edited through this page.")
+        else:
+            _as_hist_sorted = sorted(
+                _as_hist_rows, key=lambda r: str(r.get("created_at") or ""), reverse=True,
+            )
+            for _as_i, _as_hr in enumerate(_as_hist_sorted):
+                _as_older_payload = (
+                    _as_hist_sorted[_as_i + 1].get("payload")
+                    if _as_i + 1 < len(_as_hist_sorted) else None
+                )
+                _as_hr_payload = _as_hr.get("payload")
+                if _as_hr_payload is None:
+                    _as_hr_payload = {}
+                _as_delta = reference_data.history_delta(_as_hr_payload, _as_older_payload)
+                _as_when = str(_as_hr.get("as_of") or _as_hr.get("created_at") or "")[:10]
+                _as_who  = _as_hr.get("updated_by") or "?"
+                if _as_delta["initial"]:
+                    st.markdown(f"**{_as_when}** — Initial capture (by `{_as_who}`)")
+                else:
+                    _as_tags = (
+                        [f":green[+{_t}]" for _t in _as_delta["added"]]
+                        + [f":red[−{_t}]" for _t in _as_delta["removed"]]
+                    )
+                    st.markdown(
+                        f"**{_as_when}** — {' '.join(_as_tags) or '(reordering/recasing only)'} "
+                        + (f"· _{', '.join(_as_delta['buckets_touched'])}_ " if _as_delta["buckets_touched"] else "")
+                        + f"(by `{_as_who}`)"
+                    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # PAGE — ACCOUNT (account-baseline: equity + signed net cash)
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "💰 Account":
@@ -32004,8 +32356,9 @@ elif page == "🔔 Catalyst Watch":
             for _, r in st.session_state.get("holdings_df", pd.DataFrame()).iterrows()
             if str(r.get("Ticker", "")).strip()
         }
+        _cw_universe = _resolve_ref_universe("sector_universe", "Grow Today scan universe")
         _cw_secmap: dict = {}
-        for _sec, _tks in SECTOR_UNIVERSE.items():
+        for _sec, _tks in _cw_universe.items():
             for _tk in _tks:
                 _cw_secmap[_tk.upper()] = _sec
         for _t in _cw_held:
@@ -39025,7 +39378,8 @@ elif page == "🎯 My Edge":
                 # +15 names) therefore RETROACTIVELY reclassifies older buys from
                 # self_out_of_scope toward in-scope, shifting the alpha split. The
                 # watchlist_set argument already carried the same property.
-                _stv_universe  = set().union(*SECTOR_UNIVERSE.values())
+                _stv_ru_universe = _resolve_ref_universe("sector_universe", "Grow Today scan universe")
+                _stv_universe  = set().union(*_stv_ru_universe.values())
                 _stv_watchlist = set(st.session_state.get("watchlist", []))
 
                 _stv_classified = _stv.classify_buys(

@@ -123,8 +123,8 @@ def _run_lane(monkeypatch, *, analyst_raises=False, vol_raises=False):
     # Patch sweep sub-job ⓪ so it is deterministic and makes no network calls.
     monkeypatch.setattr(
         _tl, "sweep",
-        lambda: {"status": "ok", "health_pct": 100.0, "dead": [],
-                 "suspects_n": 0, "roster_n": 230},
+        lambda **_kw: {"status": "ok", "health_pct": 100.0, "dead": [],
+                       "suspects_n": 0, "roster_n": 230},
     )
     monkeypatch.setattr(_rs, "shelf_status", lambda **_kw: [])
 
@@ -189,8 +189,8 @@ def test_one_subjob_failure_does_not_suppress_the_other(monkeypatch):
     monkeypatch.setattr(cr, "_record_heartbeat", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         _tl, "sweep",
-        lambda: {"status": "ok", "health_pct": 100.0, "dead": [],
-                 "suspects_n": 0, "roster_n": 230},
+        lambda **_kw: {"status": "ok", "health_pct": 100.0, "dead": [],
+                       "suspects_n": 0, "roster_n": 230},
     )
     monkeypatch.setattr(_rs, "shelf_status", lambda **_kw: [])
 

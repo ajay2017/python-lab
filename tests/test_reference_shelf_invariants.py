@@ -126,7 +126,7 @@ def test_stale_reference_data_never_fails_the_maintenance_lane(monkeypatch):
     # severity="down" — reaches _send_email for real, so a machine with
     # RESEND_API_KEY set would send an actual email from pytest.
     import stock_analyzer.ticker_liveness as _tl
-    monkeypatch.setattr(_tl, "sweep", lambda: {
+    monkeypatch.setattr(_tl, "sweep", lambda **_kw: {
         "status": "ok", "health_pct": 100.0, "dead": [],
         "suspects_n": 0, "roster_n": 230,
     })

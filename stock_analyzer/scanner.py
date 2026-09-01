@@ -166,6 +166,7 @@ def scan_sectors(
     selected_sectors: list[str],
     period: str = "6mo",
     extra_tickers: list[str] | None = None,
+    universe: "dict[str, list[str]] | None" = None,
 ) -> pd.DataFrame:
     """
     Scan the requested sectors plus any extra tickers (e.g. user's watchlist).
@@ -175,10 +176,30 @@ def scan_sectors(
     sector keep their real sector classification — dedup is by ticker symbol,
     not by sector. This lets the user widen the scan universe beyond the
     hardcoded SECTOR_UNIVERSE without needing a code change for each name.
+
+    `universe` (App Settings, docs/plans/app-settings.md Commit 2): the
+    resolved `sector_universe` payload — bucket -> [tickers] — threaded in by
+    the caller (via `stock_analyzer.reference_data.resolve_universe`) so this
+    function stays pure/testable rather than reaching into the DB itself.
+
+    IMPORTANT — `None` is a unit-test convenience default ONLY (falls back to
+    the module-level `SECTOR_UNIVERSE`, or whatever a test has monkeypatched
+    onto this module), never an offline-sentinel value. Every REAL caller
+    (app.py, cron_runner.py) must always pass this explicitly: a resolved
+    payload on success, or an explicit `{}` — NOT a bare `None` — when
+    `resolve_universe` raised `ReferenceDataUnavailable`. Passing `None` on
+    an unavailable resolution would silently fall through to the hardcoded
+    dict one layer down, exactly the silent-stale-universe fallback the
+    design doc rejects (the 2026-07-14 INTC failure mode repeated on this
+    surface) — the caller must render its own fail-loud banner first, then
+    pass `{}` so the scan legitimately returns nothing rather than a
+    confident result built on frozen code.
     """
+    if universe is None:
+        universe = SECTOR_UNIVERSE
     all_tickers, ticker_sector = [], {}
     for sector in selected_sectors:
-        for t in SECTOR_UNIVERSE.get(sector, []):
+        for t in universe.get(sector, []):
             if t not in ticker_sector:
                 all_tickers.append(t)
                 ticker_sector[t] = sector

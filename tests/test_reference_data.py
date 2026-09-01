@@ -1,11 +1,20 @@
-"""Tests for the App Settings reference-data layer — Commit 1 of 3
-(docs/plans/app-settings.md): the pure `stock_analyzer.reference_data`
-module, the new `stock_analyzer.db` `reference_tables`/
-`reference_table_history` functions, and `reference_shelf`'s DB-first
-`as_of` fallback for the three migrated tables.
+"""Tests for the App Settings reference-data layer.
 
-Nothing exercised here is wired into any decision path yet -- `resolve_universe`
-has zero callers in this commit; that's Commit 2.
+Commit 1 of 3 (docs/plans/app-settings.md): the pure
+`stock_analyzer.reference_data` module, the new `stock_analyzer.db`
+`reference_tables`/`reference_table_history` functions, and
+`reference_shelf`'s DB-first `as_of` fallback for the three migrated tables.
+
+Commit 2 of 3: `resolve_universe` is now wired into every real importer
+(scanner.py/portfolio.py/ticker_liveness.py/cron_runner.py/app.py — see
+their own test files for the wiring-level proof); this file adds coverage
+for the additional pure decision helpers Commit 2 needed:
+`resolve_universe_or_none`, the TIGHTENED `sector_candidates` bucket-key-
+EQUALITY rule in `validate_payload` (a Commit-1 Opus review finding),
+`decide_large_drop_confirmation`, `decide_save_action`, `changed_tickers`,
+`classify_ticker_resolution`, and `history_delta` — the ⚙️ App Settings
+page's save/validate/confirm DECISION logic, extracted out of app.py per
+this project's "extract the DECISION, not just the helper" convention.
 """
 from __future__ import annotations
 
@@ -18,7 +27,13 @@ from stock_analyzer.constants import REFERENCE_SHELF_LIFE_DAYS
 from stock_analyzer.reference_data import (
     ReferenceDataUnavailable,
     canonicalize,
+    changed_tickers,
+    classify_ticker_resolution,
+    decide_large_drop_confirmation,
+    decide_save_action,
+    history_delta,
     resolve_universe,
+    resolve_universe_or_none,
     validate_payload,
 )
 
@@ -251,6 +266,49 @@ def test_validate_payload_sector_candidates_rule_is_scoped_to_that_table():
     assert errors == []
 
 
+# ── sector_candidates: TIGHTENED bucket-key EQUALITY rule (2026-09-01) ───────
+# A Commit-1 Opus review finding: the original check only confirmed *some*
+# TICKER_SECTORS entry existed, not that its VALUE equals the bucket key the
+# ticker is being placed under -- letting e.g. AAPL (a Consumer Tech name)
+# be added into a Healthcare bucket, the exact roster incoherence
+# tests/test_portfolio.py::test_roster_ticker_sector_matches_its_roster_key
+# forbids for the real _SECTOR_CANDIDATES dict.
+
+def test_validate_payload_rejects_ticker_placed_under_wrong_sector():
+    # AAPL's real TICKER_SECTORS value is "Consumer Tech", not "Healthcare".
+    errors = validate_payload(
+        "sector_candidates",
+        {"Healthcare": ["AAPL"]},
+        existing_bucket_keys=None,
+    )
+    assert errors
+    assert "AAPL" in errors[-1]
+    assert "Healthcare" in errors[-1] and "Consumer Tech" in errors[-1]
+
+
+def test_validate_payload_accepts_ticker_placed_under_its_curated_sector():
+    # NVDA's real TICKER_SECTORS value IS "Semiconductors" -- correct placement.
+    errors = validate_payload(
+        "sector_candidates",
+        {"Semiconductors": ["NVDA"]},
+        existing_bucket_keys=None,
+    )
+    assert errors == []
+
+
+def test_validate_payload_wrong_sector_and_unknown_ticker_both_reported():
+    # A mismatch and an unknown ticker are independent failure modes -- both
+    # must be reported, not just whichever the validator checks first.
+    errors = validate_payload(
+        "sector_candidates",
+        {"Healthcare": ["AAPL", "ZZZFAKE"]},
+        existing_bucket_keys=None,
+    )
+    assert len(errors) == 2
+    assert any("ZZZFAKE" in e for e in errors)
+    assert any("AAPL" in e for e in errors)
+
+
 # ── db.load_reference_table ───────────────────────────────────────────────────
 
 def test_load_reference_table_no_creds_returns_none(monkeypatch):
@@ -389,3 +447,260 @@ def test_reference_shelf_non_migrated_table_never_touches_db(monkeypatch):
     entry = next(e for e in reference_shelf._REFERENCE_TABLES if e.key == "sp500_sector_weights")
     reference_shelf._grade_as_of(entry, date(2026, 8, 31))
     assert calls == []
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Commit 2 — App Settings save-flow decision helpers
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ── resolve_universe_or_none ─────────────────────────────────────────────────
+
+def test_resolve_universe_or_none_success_returns_payload_and_as_of(monkeypatch):
+    monkeypatch.setattr(
+        db, "load_reference_table",
+        lambda name: {"payload": {"Tech": ["AAPL"]}, "as_of": "2026-08-15", "payload_hash": "x"},
+    )
+    payload, as_of, err = resolve_universe_or_none("sector_universe")
+    assert payload == {"Tech": ["AAPL"]}
+    assert as_of == date(2026, 8, 15)
+    assert err is None
+
+
+def test_resolve_universe_or_none_failure_returns_none_payload_and_error(monkeypatch):
+    monkeypatch.setattr(db, "load_reference_table", lambda name: None)
+    payload, as_of, err = resolve_universe_or_none("sector_universe")
+    assert payload is None
+    assert as_of is None
+    assert err  # non-empty error string, never a raised exception
+    assert "sector_universe" in err
+
+
+def test_resolve_universe_or_none_never_raises_on_empty_payload(monkeypatch):
+    monkeypatch.setattr(
+        db, "load_reference_table",
+        lambda name: {"payload": {}, "as_of": "2026-08-01", "payload_hash": "x"},
+    )
+    payload, as_of, err = resolve_universe_or_none("sector_universe")
+    assert payload is None and as_of is None and err
+
+
+# ── decide_large_drop_confirmation ───────────────────────────────────────────
+# Boundary is the "== is still normal" shape shared with
+# TICKER_LIVENESS_MIN_BATCH_HEALTH_PCT / reference_shelf's shelf-life grade:
+# a drop of EXACTLY the threshold does NOT trigger; only strictly MORE does.
+
+def test_large_drop_exactly_at_threshold_does_not_need_confirmation():
+    old = {"Tech": [f"T{i}" for i in range(10)]}   # 10 tickers
+    new = {"Tech": [f"T{i}" for i in range(7)]}    # 7 tickers -> 30% drop exactly
+    result = decide_large_drop_confirmation(old, new, threshold_pct=30.0)
+    assert result["needs_confirmation"] is False
+    assert result["reasons"] == []
+
+
+def test_large_drop_one_ticker_past_threshold_needs_confirmation():
+    old = {"Tech": [f"T{i}" for i in range(10)]}   # 10 tickers
+    new = {"Tech": [f"T{i}" for i in range(6)]}    # 6 tickers -> 40% drop, past 30%
+    result = decide_large_drop_confirmation(old, new, threshold_pct=30.0)
+    assert result["needs_confirmation"] is True
+    assert result["reasons"]
+    assert "40%" in result["reasons"][0]
+
+
+def test_large_drop_growth_never_needs_confirmation():
+    old = {"Tech": ["AAPL"]}
+    new = {"Tech": ["AAPL", "MSFT", "GOOGL"]}
+    result = decide_large_drop_confirmation(old, new, threshold_pct=30.0)
+    assert result["needs_confirmation"] is False
+
+
+def test_large_drop_old_total_zero_never_triggers_count_drop():
+    old = {"Tech": []}
+    new = {"Tech": []}
+    result = decide_large_drop_confirmation(old, new, threshold_pct=30.0)
+    assert result["needs_confirmation"] is False
+
+
+def test_large_drop_emptied_bucket_triggers_unconditionally_regardless_of_pct():
+    # A bucket going from 1 ticker to 0 is a 100% drop for THAT bucket, but
+    # a tiny drop overall -- must still trigger, independent of the overall
+    # percentage threshold.
+    old = {"Tech": [f"T{i}" for i in range(99)], "Health": ["LLY"]}
+    new = {"Tech": [f"T{i}" for i in range(99)], "Health": []}
+    result = decide_large_drop_confirmation(old, new, threshold_pct=30.0)
+    assert result["needs_confirmation"] is True
+    assert any("Health" in r for r in result["reasons"])
+
+
+def test_large_drop_reorder_and_recase_alone_never_triggers():
+    old = {"Tech": ["msft", "aapl"]}
+    new = {"Tech": ["AAPL", "MSFT"]}
+    result = decide_large_drop_confirmation(old, new, threshold_pct=30.0)
+    assert result["needs_confirmation"] is False
+
+
+# ── decide_save_action — precedence order ────────────────────────────────────
+
+def test_decide_save_action_structure_errors_block_regardless_of_everything_else():
+    decision = decide_save_action(
+        structure_errors=["bucket locked"],
+        validator_offline=True,
+        unresolved_tickers=["ZZZ"],
+        large_drop={"needs_confirmation": True, "reasons": ["big drop"]},
+        confirmed=True,
+    )
+    assert decision["action"] == "blocked"
+    assert decision["reasons"] == ["bucket locked"]
+
+
+def test_decide_save_action_validator_offline_blocks_before_unresolved():
+    decision = decide_save_action(
+        structure_errors=[], validator_offline=True,
+        unresolved_tickers=["ZZZ"], large_drop=None, confirmed=False,
+    )
+    assert decision["action"] == "blocked"
+    assert "provider" in decision["reasons"][0] or "validate" in decision["reasons"][0]
+
+
+def test_decide_save_action_unresolved_tickers_block():
+    decision = decide_save_action(
+        structure_errors=[], validator_offline=False,
+        unresolved_tickers=["ZZZFAKE"], large_drop=None, confirmed=False,
+    )
+    assert decision["action"] == "blocked"
+    assert "ZZZFAKE" in decision["reasons"][0]
+
+
+def test_decide_save_action_large_drop_without_confirmation_needs_confirmation():
+    decision = decide_save_action(
+        structure_errors=[], validator_offline=False, unresolved_tickers=[],
+        large_drop={"needs_confirmation": True, "reasons": ["big drop"]},
+        confirmed=False,
+    )
+    assert decision["action"] == "needs_confirmation"
+    assert decision["reasons"] == ["big drop"]
+
+
+def test_decide_save_action_large_drop_with_confirmation_proceeds():
+    decision = decide_save_action(
+        structure_errors=[], validator_offline=False, unresolved_tickers=[],
+        large_drop={"needs_confirmation": True, "reasons": ["big drop"]},
+        confirmed=True,
+    )
+    assert decision["action"] == "proceed"
+
+
+def test_decide_save_action_clean_path_proceeds():
+    decision = decide_save_action()
+    assert decision["action"] == "proceed"
+    assert decision["reasons"] == []
+
+
+# ── changed_tickers ───────────────────────────────────────────────────────────
+
+def test_changed_tickers_detects_addition():
+    old = {"Tech": ["AAPL"]}
+    new = {"Tech": ["AAPL", "MSFT"]}
+    assert changed_tickers(old, new) == {"MSFT"}
+
+
+def test_changed_tickers_ignores_removal():
+    # A removed ticker is not "changed" for validation purposes -- it needs
+    # no provider-existence check, only an addition/move does.
+    old = {"Tech": ["AAPL", "MSFT"]}
+    new = {"Tech": ["AAPL"]}
+    assert changed_tickers(old, new) == set()
+
+
+def test_changed_tickers_moved_bucket_counts_as_changed():
+    old = {"Tech": ["AAPL"], "Health": []}
+    new = {"Tech": [], "Health": ["AAPL"]}
+    assert changed_tickers(old, new) == {"AAPL"}
+
+
+def test_changed_tickers_reorder_and_recase_alone_is_not_a_change():
+    old = {"Tech": ["msft", "aapl"]}
+    new = {"Tech": ["AAPL", "MSFT"]}
+    assert changed_tickers(old, new) == set()
+
+
+def test_changed_tickers_no_changes_at_all():
+    same = {"Tech": ["AAPL", "MSFT"]}
+    assert changed_tickers(same, dict(same)) == set()
+
+
+# ── classify_ticker_resolution ───────────────────────────────────────────────
+
+def test_classify_ticker_resolution_empty_tickers_short_circuits():
+    result = classify_ticker_resolution(set(), prices={}, provider_health_red=False)
+    assert result == {"validator_offline": False, "unresolved": []}
+
+
+def test_classify_ticker_resolution_none_prices_means_validator_offline():
+    result = classify_ticker_resolution({"AAPL"}, prices=None, provider_health_red=False)
+    assert result["validator_offline"] is True
+    assert result["unresolved"] == []
+
+
+def test_classify_ticker_resolution_all_unresolved_and_health_red_means_offline():
+    result = classify_ticker_resolution(
+        {"ZZZ1", "ZZZ2"}, prices={}, provider_health_red=True,
+    )
+    assert result["validator_offline"] is True
+    assert result["unresolved"] == []
+
+
+def test_classify_ticker_resolution_all_unresolved_but_health_green_means_bad_tickers():
+    # Same empty {} result, but provider health is GREEN -- this must read
+    # as "these tickers genuinely don't exist", not "provider is down".
+    result = classify_ticker_resolution(
+        {"ZZZ1", "ZZZ2"}, prices={}, provider_health_red=False,
+    )
+    assert result["validator_offline"] is False
+    assert result["unresolved"] == ["ZZZ1", "ZZZ2"]
+
+
+def test_classify_ticker_resolution_partial_resolution_reports_only_unresolved():
+    result = classify_ticker_resolution(
+        {"AAPL", "ZZZFAKE"},
+        prices={"AAPL": {"price": 150.0}},
+        provider_health_red=True,  # even if red, a PARTIAL resolution is not "offline"
+    )
+    assert result["validator_offline"] is False
+    assert result["unresolved"] == ["ZZZFAKE"]
+
+
+def test_classify_ticker_resolution_zero_or_none_price_is_unresolved():
+    result = classify_ticker_resolution(
+        {"AAPL"}, prices={"AAPL": {"price": None}}, provider_health_red=False,
+    )
+    assert result["unresolved"] == ["AAPL"]
+
+
+# ── history_delta ─────────────────────────────────────────────────────────────
+
+def test_history_delta_oldest_row_is_initial_capture():
+    result = history_delta({"Tech": ["AAPL"]}, older_payload=None)
+    assert result == {"added": [], "removed": [], "buckets_touched": [], "initial": True}
+
+
+def test_history_delta_reports_added_and_removed():
+    older = {"Cybersecurity": ["PANW", "CRWD"], "Consumer Tech": ["AAPL", "SQ"]}
+    newer = {"Cybersecurity": ["PANW", "CRWD", "CYBR"], "Consumer Tech": ["AAPL"]}
+    result = history_delta(newer, older)
+    assert result["added"] == ["CYBR"]
+    assert result["removed"] == ["SQ"]
+    assert result["buckets_touched"] == ["Consumer Tech", "Cybersecurity"]
+    assert result["initial"] is False
+
+
+def test_history_delta_no_change_between_rows():
+    same = {"Tech": ["AAPL", "MSFT"]}
+    result = history_delta(same, dict(same))
+    assert result["added"] == [] and result["removed"] == [] and result["buckets_touched"] == []
+
+
+def test_history_delta_reorder_and_recase_alone_reports_no_delta():
+    older = {"Tech": ["msft", "aapl"]}
+    newer = {"Tech": ["AAPL", "MSFT"]}
+    result = history_delta(newer, older)
+    assert result["added"] == [] and result["removed"] == [] and result["buckets_touched"] == []

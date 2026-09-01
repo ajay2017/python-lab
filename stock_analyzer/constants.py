@@ -933,6 +933,38 @@ REFERENCE_HORIZON_MIN_DAYS = {
     "nyse_calendar":       365,    # extending 3 years of holidays is a rare chore
 }
 
+# ⚙️ App Settings (docs/plans/app-settings.md, Commit 2 of 3) — the large-drop /
+# newly-emptied-bucket confirmation gate on a reference-table save
+# (`reference_data.decide_large_drop_confirmation`).
+#
+# OBSERVABILITY KNOB — NOT an investment threshold. It gates whether the UI asks
+# for an extra confirmation click before a save proceeds, never whether a pick
+# is made, a gate fires, or a ticker is scored. The save is BLOCKED regardless
+# by validate_payload's structure lock and by provider-resolution validation
+# (Q2) before this gate is ever consulted — this constant only decides whether
+# an otherwise-valid, otherwise-resolvable edit needs one extra click.
+#
+# Why a threshold at all rather than confirming on any shrink: replace
+# semantics (Q8) mean every edit that removes a ticker is technically a
+# "drop" — requiring confirmation on every single deletion would make the
+# confirmation reflexive and trained-past, the same nag-fatigue failure mode
+# TICKER_LIVENESS_MIN_BATCH_HEALTH_PCT's docstring describes. 30% is a
+# deliberately generous margin: a normal refresh cycle (see 242d4a7 — 4
+# removals / 6 additions against a ~200-ticker roster, a ~2% single-table
+# shrink) sails through with no extra click; a truncated paste or an
+# accidental wholesale replacement — the failure mode Q8 was written to catch
+# — does not. Boundary is the same "== is still normal" shape as
+# TICKER_LIVENESS_MIN_BATCH_HEALTH_PCT and reference_shelf's shelf-life grade:
+# a drop of EXACTLY this percentage does NOT yet require confirmation; only
+# STRICTLY MORE does. Asserted exactly in tests.
+#
+# A bucket going from >=1 ticker to 0 always requires confirmation regardless
+# of this percentage — that trigger is unconditional (Q8: "emptying one to
+# zero should itself require confirmation, that sector stops being scanned/
+# considered"), since a single bucket's raw count is too small a sample for a
+# percentage floor to mean anything.
+REFERENCE_TABLE_LARGE_DROP_CONFIRM_PCT = 30.0
+
 # Minimum share of the reference rosters that must RESOLVE in the weekly liveness
 # sweep before its dead-ticker verdict is trusted at all (ticker_liveness.py, run
 # from the Saturday maintenance cron lane).

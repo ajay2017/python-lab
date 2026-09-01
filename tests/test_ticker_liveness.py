@@ -120,8 +120,13 @@ def _setup_maintenance_lane(monkeypatch, *,
     monkeypatch.setenv("ALERT_FORCE", "1")
     monkeypatch.delenv("ALERT_TEST_EMAIL", raising=False)
 
-    # Sweep sub-job ⓪
-    monkeypatch.setattr(_tl, "sweep", lambda: sweep_result)
+    # Sweep sub-job ⓪. Accepts **_kw (not a bare no-args lambda) because
+    # App Settings Commit 2 has cron_runner call sweep() with
+    # sector_universe=/discovery_universe=/sector_candidates= kwargs now —
+    # these tests aren't about that threading (see the dedicated
+    # test_maintenance_lane_* tests below for that), so the mock just
+    # ignores whatever roster kwargs it's handed.
+    monkeypatch.setattr(_tl, "sweep", lambda **_kw: sweep_result)
     monkeypatch.setattr(_rs, "shelf_status", lambda **_kw: shelf_result)
     # Patch the name BOUND IN cron_runner, not the one in notify: cron_runner
     # does `from stock_analyzer.notify import render_liveness_email` at module
@@ -471,6 +476,157 @@ def test_escalation_skipped_when_no_suspects(monkeypatch):
     assert called == [], "fetch_live must not be called when there are 0 suspects"
 
 
+# ── 3c. sweep() roster params — App Settings (Commit 2) ─────────────────────
+# `sector_universe`/`discovery_universe`/`sector_candidates` params, not the
+# module-level defaults, must be what a caller who passes them explicitly
+# actually gets swept.
+
+def test_sweep_uses_explicit_roster_params_not_module_defaults(monkeypatch):
+    fake_su = {"FakeSU": ["ZZZ1"]}
+    fake_du = {"FakeDU": ["ZZZ2"]}
+    fake_sc = {"FakeSC": ["ZZZ3"]}
+
+    result = sweep(
+        fetch_batch=lambda _ts: _make_df(alive=["ZZZ1", "ZZZ2", "ZZZ3"], dead=[]),
+        fetch_live=lambda ts: {},
+        sector_universe=fake_su,
+        discovery_universe=fake_du,
+        sector_candidates=fake_sc,
+    )
+    assert result is not None
+    assert result["roster_n"] == 3, "must sweep ONLY the passed fake rosters, not the real ~230-ticker set"
+
+
+def test_sweep_empty_roster_params_sweep_nothing_no_fallback(monkeypatch):
+    """Explicit {} on all three roster params (the real caller's contract on
+    a resolve_universe failure) must sweep literally nothing — never
+    silently fall back to the real scanner.SECTOR_UNIVERSE /
+    discovery_universe.DISCOVERY_UNIVERSE / portfolio._SECTOR_CANDIDATES."""
+    result = sweep(
+        fetch_batch=lambda _ts: pd.DataFrame(),
+        fetch_live=lambda ts: {},
+        sector_universe={}, discovery_universe={}, sector_candidates={},
+    )
+    assert result is not None
+    assert result["roster_n"] == 0
+
+
+# ── 3d. cron_runner._run_maintenance threads resolved rosters into sweep() ──
+# (App Settings Commit 2) — the liveness sub-job now resolves all three
+# rosters via reference_data.resolve_universe_or_none rather than letting
+# sweep() read the hardcoded dicts directly.
+
+def _maintenance_env(monkeypatch, cr):
+    monkeypatch.setenv("ALERT_RUN_MODE", "maintenance")
+    monkeypatch.setenv("ALERT_FORCE", "1")
+    monkeypatch.delenv("ALERT_TEST_EMAIL", raising=False)
+    monkeypatch.setattr(cr, "render_liveness_email", lambda **_kw: ("subj", "<html/>"))
+    monkeypatch.setattr(cr, "_send_email", lambda *_a, **_kw: False)
+    monkeypatch.setattr(cr, "_record_heartbeat", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cr, "_notify_failure", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cr.db, "has_db", lambda: True)
+    monkeypatch.setattr(cr.db, "load_holdings_or_none",
+                        lambda: pd.DataFrame({"Ticker": ["AAPL"]}))
+    import scripts.backfill_analyst_prices as bap
+    monkeypatch.setattr(bap, "run_backfill",
+                        lambda **_kw: {**_mk_backfill_ok(), "pending": 1})
+    monkeypatch.setattr(bvp, "run_backfill",
+                        lambda **_kw: {"rows": 0, "tickers": 0, "skipped": [], "already_done": []})
+
+
+def test_maintenance_lane_threads_resolved_rosters_into_sweep(monkeypatch):
+    """Fake, distinct rosters (not the real hardcoded dicts) prove the
+    maintenance lane's liveness sub-job reads through
+    reference_data.resolve_universe_or_none end-to-end."""
+    import cron_runner as cr
+    import stock_analyzer.reference_shelf as _rs
+    from stock_analyzer import reference_data as rd
+
+    fake_su = {"FakeSU": ["ZZZ1"]}
+    fake_du = {"FakeDU": ["ZZZ2"]}
+    fake_sc = {"FakeSC": ["ZZZ3"]}
+    _fakes = {
+        "sector_universe": (fake_su, None, None),
+        "discovery_universe": (fake_du, None, None),
+        "sector_candidates": (fake_sc, None, None),
+    }
+    monkeypatch.setattr(rd, "resolve_universe_or_none", lambda name: _fakes[name])
+
+    captured: dict = {}
+
+    def _spy_sweep(fetch_batch=None, fetch_live=None, sector_universe=None,
+                   discovery_universe=None, sector_candidates=None):
+        captured["sector_universe"] = sector_universe
+        captured["discovery_universe"] = discovery_universe
+        captured["sector_candidates"] = sector_candidates
+        return _clean_sweep()
+
+    monkeypatch.setattr(_tl, "sweep", _spy_sweep)
+    monkeypatch.setattr(_rs, "shelf_status", lambda **_kw: [])
+    _maintenance_env(monkeypatch, cr)
+
+    cr.main()
+
+    assert captured["sector_universe"] == fake_su
+    assert captured["discovery_universe"] == fake_du
+    assert captured["sector_candidates"] == fake_sc
+
+
+def test_maintenance_lane_unavailable_roster_degrades_to_empty_dict_not_fallback(monkeypatch):
+    """An unavailable roster resolution must pass {} into sweep(), never a
+    bare None — None is sweep()'s OWN unit-test-convenience default that
+    falls back to the real hardcoded dict, which would silently defeat the
+    whole point of this feature. Also must NOT abort the maintenance lane —
+    this is a chore/awareness check, not a decision path."""
+    import cron_runner as cr
+    import stock_analyzer.reference_shelf as _rs
+    from stock_analyzer import reference_data as rd
+
+    monkeypatch.setattr(rd, "resolve_universe_or_none", lambda name: (None, None, "boom"))
+
+    captured: dict = {}
+
+    def _spy_sweep(fetch_batch=None, fetch_live=None, sector_universe=None,
+                   discovery_universe=None, sector_candidates=None):
+        captured["sector_universe"] = sector_universe
+        captured["discovery_universe"] = discovery_universe
+        captured["sector_candidates"] = sector_candidates
+        return _clean_sweep()
+
+    monkeypatch.setattr(_tl, "sweep", _spy_sweep)
+    monkeypatch.setattr(_rs, "shelf_status", lambda **_kw: [])
+    _maintenance_env(monkeypatch, cr)
+
+    cr.main()
+
+    assert captured["sector_universe"] == {}
+    assert captured["discovery_universe"] == {}
+    assert captured["sector_candidates"] == {}
+    assert cr._LAST_LANE_FAILURE_DETAIL is None, (
+        "a roster-resolution failure for this chore must not be reported as "
+        "a maintenance lane failure"
+    )
+
+
+def test_run_maintenance_source_no_longer_reads_rosters_directly():
+    """Literal import-isolation check, complementing the behavioral proofs
+    above: asserts against the real source text of the real function that
+    the liveness sub-job no longer reads SECTOR_UNIVERSE/DISCOVERY_UNIVERSE/
+    _SECTOR_CANDIDATES directly — this is the exact class of mistake a prior
+    review caught elsewhere in this project (an import-isolation test missed
+    the real file/function)."""
+    import inspect
+    import cron_runner as cr
+
+    src = inspect.getsource(cr._run_maintenance)
+    for _name in ("SECTOR_UNIVERSE", "DISCOVERY_UNIVERSE", "_SECTOR_CANDIDATES"):
+        assert _name not in src, (
+            f"_run_maintenance must resolve rosters via "
+            f"reference_data.resolve_universe_or_none, never read {_name} directly"
+        )
+    assert "resolve_universe_or_none" in src
+
+
 # ── 4. Confirmed-dead path ────────────────────────────────────────────────────
 
 def test_confirmed_dead_emails_not_lane_failure(monkeypatch):
@@ -507,7 +663,7 @@ def test_sweep_runs_before_db_early_return(monkeypatch):
 
     called: list[str] = []
 
-    def _sweep_spy():
+    def _sweep_spy(**_kw):
         called.append("sweep")
         return _clean_sweep()
 
@@ -552,7 +708,7 @@ def test_sweep_exception_is_contained(monkeypatch):
 
     ran: list[str] = []
 
-    def _boom():
+    def _boom(**_kw):
         raise RuntimeError("simulated sweep failure")
 
     monkeypatch.setattr(_tl, "sweep", _boom)

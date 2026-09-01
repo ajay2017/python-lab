@@ -1328,6 +1328,8 @@ def diversifying_candidate_pool(
     sector: str,
     held_tickers,
     cap: int = DIVERSIFY_SCAN_CAP,
+    sector_candidates: "dict[str, list[str]] | None" = None,
+    discovery_universe: "dict[str, list[str]] | None" = None,
 ) -> list[str]:
     """Candidate pool for a diversification ADD, drawn from the broad universe.
 
@@ -1337,10 +1339,29 @@ def diversifying_candidate_pool(
     the caller's composite-scoring pass stays bounded. Falls back to the roster
     alone when the sector has no discovery bucket. Pure / no I/O — app.py scores
     the returned names and ranks them via `annotate_add_candidates`.
+
+    `sector_candidates` / `discovery_universe` (App Settings, docs/plans/
+    app-settings.md Commit 2): the resolved `sector_candidates` /
+    `discovery_universe` payloads, threaded in by the caller (via
+    `stock_analyzer.reference_data.resolve_universe`) so this function stays
+    pure/testable.
+
+    IMPORTANT — `None` is a unit-test convenience default ONLY (falls back to
+    the module-level `_SECTOR_CANDIDATES`/`DISCOVERY_UNIVERSE`), never an
+    offline-sentinel value. Every REAL caller must always pass these
+    explicitly: a resolved payload on success, or an explicit `{}` — NOT a
+    bare `None` — when `resolve_universe` raised
+    `ReferenceDataUnavailable`. See `scanner.scan_sectors`'s identical
+    `universe` param for the full reasoning (a bare `None` here would
+    silently fall through to the hardcoded dicts one layer down).
     """
+    if sector_candidates is None:
+        sector_candidates = _SECTOR_CANDIDATES
+    if discovery_universe is None:
+        discovery_universe = DISCOVERY_UNIVERSE
     held = {str(t).upper().strip() for t in (held_tickers or [])}
-    roster = _SECTOR_CANDIDATES.get(sector, [])
-    bucket = DISCOVERY_UNIVERSE.get(_DIVERSIFY_TO_DISCOVERY.get(sector, ""), [])
+    roster = sector_candidates.get(sector, [])
+    bucket = discovery_universe.get(_DIVERSIFY_TO_DISCOVERY.get(sector, ""), [])
     seen: set = set()
     pool: list[str] = []
     for t in [*roster, *bucket]:
@@ -1386,10 +1407,16 @@ def diversification_recommendations(
     corr_df: pd.DataFrame,
     div_result: dict,
     portfolio_value: float = 50_000.0,
+    sector_candidates: "dict[str, list[str]] | None" = None,
+    discovery_universe: "dict[str, list[str]] | None" = None,
 ) -> list[dict]:
     """
     Returns structured REDUCE, PAIR_RISK, and ADD recommendation dicts.
     Each dict carries all data needed to render an advisor card in app.py.
+
+    `sector_candidates` / `discovery_universe` (App Settings, Commit 2):
+    threaded straight through to `diversifying_candidate_pool` — see that
+    function's docstring for the resolved-payload-vs-test-default contract.
     """
     recs = []
     if port_df.empty:
@@ -1465,7 +1492,11 @@ def diversification_recommendations(
         current_pct = sector_pcts.get(sector, 0.0)
         if current_pct >= DIVERSIFY_ADD_SKIP_PCT:
             continue
-        candidates = diversifying_candidate_pool(sector, held_tickers)
+        candidates = diversifying_candidate_pool(
+            sector, held_tickers,
+            sector_candidates=sector_candidates,
+            discovery_universe=discovery_universe,
+        )
         if not candidates:
             continue
         profile    = _SECTOR_PROFILES.get(sector, {"corr": 0.30, "why": ""})

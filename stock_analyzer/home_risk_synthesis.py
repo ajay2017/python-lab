@@ -75,12 +75,33 @@ def _f(v, default=0.0):
         return default
 
 
-def build_correlation_bundle(port_df, held_data, portfolio_value) -> dict:
+def build_correlation_bundle(
+    port_df, held_data, portfolio_value,
+    sector_candidates: "dict | None" = None,
+    discovery_universe: "dict | None" = None,
+) -> dict:
     """Correlation matrix + diversification score/label/recs for Home.
 
     Returns a dict with keys `corr_df`, `div`, `div_score`, `avg_corr`,
     `risk_pairs`, `div_label`, `corr_coverage`, `div_recs` — the caller
     republishes these into the matching `_*_cache` session_state keys.
+
+    `sector_candidates` / `discovery_universe` (App Settings, docs/plans/
+    app-settings.md Commit 2): the resolved reference-table payloads for the
+    Diversification Advisor's ADD candidate pool, threaded straight through
+    to `diversification_recommendations`/`diversifying_candidate_pool`.
+
+    IMPORTANT — this is `None`-by-default for unit-test convenience only
+    (matching `diversifying_candidate_pool`'s own contract), NOT an
+    offline-sentinel parameter. The REAL Home caller must never pass a bare
+    `None` here on an unavailable `reference_data.resolve_universe` — that
+    would silently fall through to the hardcoded `_SECTOR_CANDIDATES`/
+    `DISCOVERY_UNIVERSE` module dicts one layer down, exactly the silent
+    code-fallback this whole feature exists to avoid. On unavailability the
+    caller must render its own fail-loud banner (this module has no
+    Streamlit access to do that itself) and pass an explicit `{}` — which
+    correctly starves `diversifying_candidate_pool`'s pool to empty without
+    ever reading the code dict.
     """
     try:
         corr_df      = correlation_matrix(held_data)
@@ -109,7 +130,11 @@ def build_correlation_bundle(port_df, held_data, portfolio_value) -> dict:
         _corr_cov  = None    # offline sentinel — never a fabricated count
 
     try:
-        div_recs = diversification_recommendations(port_df, corr_df, div, portfolio_value)
+        div_recs = diversification_recommendations(
+            port_df, corr_df, div, portfolio_value,
+            sector_candidates=sector_candidates,
+            discovery_universe=discovery_universe,
+        )
     except Exception:
         div_recs = None  # offline sentinel, not [] — matches sibling cache contract
 

@@ -545,6 +545,37 @@ def test_every_diversifying_sector_can_actually_produce_candidates():
     assert not empty, f"these sectors would silently render no ADD card: {empty}"
 
 
+# ─── diversifying_candidate_pool — App Settings (Commit 2): explicit ────────
+# sector_candidates/discovery_universe params, not the module-level default,
+# must be what the real importer path actually reads.
+
+def test_diversifying_candidate_pool_uses_explicit_params_not_module_default():
+    from stock_analyzer.portfolio import diversifying_candidate_pool
+    fake_candidates = {"Healthcare": ["ZZZFAKE1"]}
+    fake_discovery  = {"Healthcare & Biotech": ["ZZZFAKE2"]}
+    pool = diversifying_candidate_pool(
+        "Healthcare", set(), sector_candidates=fake_candidates, discovery_universe={},
+    )
+    assert pool == ["ZZZFAKE1"], "must read the passed roster, not _SECTOR_CANDIDATES"
+
+    pool2 = diversifying_candidate_pool(
+        "Healthcare", set(), sector_candidates={}, discovery_universe=fake_discovery,
+    )
+    # "Healthcare" -> "Healthcare & Biotech" via _DIVERSIFY_TO_DISCOVERY
+    assert pool2 == ["ZZZFAKE2"], "must read the passed discovery bucket, not DISCOVERY_UNIVERSE"
+
+
+def test_diversifying_candidate_pool_empty_params_produce_no_fallback():
+    from stock_analyzer.portfolio import diversifying_candidate_pool
+    pool = diversifying_candidate_pool(
+        "Healthcare", set(), sector_candidates={}, discovery_universe={},
+    )
+    assert pool == [], (
+        "an explicit {} on both params must never fall back to the real "
+        "_SECTOR_CANDIDATES/DISCOVERY_UNIVERSE dicts"
+    )
+
+
 # NOTE — a test asserting CEG/VST stay out of the Clean Energy pool was written
 # and then DELETED rather than shipped, because it did not guard what it
 # claimed. It checked pool POSITION, but both consuming surfaces re-rank by

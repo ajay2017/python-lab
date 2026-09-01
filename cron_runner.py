@@ -852,9 +852,22 @@ def _run_scan(now_et, force: bool) -> int:
         if now_et.hour < 9 or (now_et.hour == 9 and now_et.minute < 30):
             _log(f"scan: too early (ET {now_et.strftime('%H:%M')} — pre-open) — wait for post-open slot.")
             return 0
-    from stock_analyzer.scanner import scan_sectors, SECTOR_UNIVERSE
+    from stock_analyzer.scanner import scan_sectors
+    from stock_analyzer.reference_data import resolve_universe_or_none
+
+    # App Settings (docs/plans/app-settings.md Commit 2) — the scan universe
+    # now reads ONLY through the DB-backed resolver, never SECTOR_UNIVERSE
+    # directly. Unavailable routes through the SAME _handle_db_unavailable
+    # mechanism F-239 already uses for every other DB outage in this lane —
+    # not a second, bespoke path — so the owner gets one consistent "what
+    # didn't run and why" email regardless of which read failed.
+    _su_payload, _su_as_of, _su_err = resolve_universe_or_none("sector_universe")
+    if _su_err:
+        return _handle_db_unavailable("scan", now_et, f"sector_universe: {_su_err}")
     try:
-        results_df = scan_sectors(list(SECTOR_UNIVERSE.keys()), period="6mo")
+        results_df = scan_sectors(
+            list(_su_payload.keys()), period="6mo", universe=_su_payload,
+        )
     except Exception as e:
         _log(f"scan: scan_sectors error — {str(e)[:120]}")
         return 0
@@ -1649,7 +1662,14 @@ def _run_maintenance(now_et, force: bool) -> int:
     # (see lines below at "if summary.get('offline')" and the DB-probe fallback).
     # Placing the sweep after those paths would let a Supabase outage silently
     # starve the roster-rot check — exactly the silent-failure class F-239 fixed.
-    # This sweep needs no DB: it probes provider data sources directly.
+    # The LIVENESS PROBE itself needs no DB (it hits provider data sources
+    # directly) — but as of App Settings Commit 2, the THREE ROSTERS it
+    # sweeps are now DB-backed reference tables, so resolving them is a light
+    # single-row-per-table read. A resolution failure here must NOT abort
+    # sub-job ⓪ or cascade into sub-job ①'s own DB-outage handling — this is
+    # a chore/awareness check, not a decision path, so an unavailable roster
+    # degrades to an empty `{}` for THAT roster only (logged, not silent) and
+    # the sweep still runs on whatever resolved.
     try:
         # Imported inside the function for the same patchability reason as ① — the
         # name resolves from the module attribute at call time, letting tests patch
@@ -1657,8 +1677,25 @@ def _run_maintenance(now_et, force: bool) -> int:
         # `stock_analyzer.reference_shelf.shelf_status` without binding at import.
         from stock_analyzer import ticker_liveness as _tl
         from stock_analyzer import reference_shelf as _rs
+        from stock_analyzer.reference_data import resolve_universe_or_none
 
-        _sweep = _tl.sweep()
+        _ru_su, _, _ru_su_err = resolve_universe_or_none("sector_universe")
+        _ru_du, _, _ru_du_err = resolve_universe_or_none("discovery_universe")
+        _ru_sc, _, _ru_sc_err = resolve_universe_or_none("sector_candidates")
+        for _ru_name, _ru_err in (
+            ("sector_universe", _ru_su_err),
+            ("discovery_universe", _ru_du_err),
+            ("sector_candidates", _ru_sc_err),
+        ):
+            if _ru_err:
+                _log(f"maintenance/liveness: {_ru_name} unavailable this run "
+                     f"({_ru_err}) — swept with an empty roster for it")
+
+        _sweep = _tl.sweep(
+            sector_universe=_ru_su or {},
+            discovery_universe=_ru_du or {},
+            sector_candidates=_ru_sc or {},
+        )
         _shelf = _rs.shelf_status(today=now_et.date())
 
         _shelf_down = [r for r in _shelf if r.get("severity") == "down"]

@@ -72,7 +72,12 @@ _SWEEP_WALL_CLOCK_CAP_SEC = 180
 _SWEEP_ESCALATION_CAP_SEC = 180
 
 
-def sweep(fetch_batch=None, fetch_live=None) -> dict | None:
+def sweep(
+    fetch_batch=None, fetch_live=None,
+    sector_universe: "dict | None" = None,
+    discovery_universe: "dict | None" = None,
+    sector_candidates: "dict | None" = None,
+) -> dict | None:
     """Check all curated reference rosters for delisted / unknown tickers.
 
     Parameters
@@ -85,6 +90,24 @@ def sweep(fetch_batch=None, fetch_live=None) -> dict | None:
         DI seam for tests.  Signature:
         ``(tickers: list[str]) -> dict[str, dict]``.
         Default: ``stock_analyzer.data.fetch_live_prices``.
+    sector_universe / discovery_universe / sector_candidates : dict | None
+        App Settings (docs/plans/app-settings.md Commit 2) — the resolved
+        `sector_universe` / `discovery_universe` / `sector_candidates`
+        payloads, threaded in by the caller (via
+        `stock_analyzer.reference_data.resolve_universe`) so this function
+        stays pure/testable.  `None` is a unit-test convenience default ONLY
+        (falls back to reading `scanner.SECTOR_UNIVERSE` /
+        `discovery_universe.DISCOVERY_UNIVERSE` / `portfolio._SECTOR_CANDIDATES`
+        directly, or whatever a test has monkeypatched onto those modules) —
+        never an offline-sentinel value. The real caller
+        (`cron_runner._run_maintenance`) must pass an explicit `{}` for any
+        roster whose resolution failed, not a bare `None` — this sweep then
+        honestly treats that roster as contributing zero names for this run
+        rather than silently reading the frozen code dict. This is a CHORE/
+        awareness check, not a decision path, so a partially-unavailable
+        roster degrades the sweep's coverage for this run rather than
+        aborting it outright (unlike scan_sectors/diversifying_candidate_pool,
+        which are on a real decision path and must not run partially blind).
 
     Returns
     -------
@@ -128,25 +151,36 @@ def sweep(fetch_batch=None, fetch_live=None) -> dict | None:
         fetch_live = _flp
 
     # ── Build roster with per-ticker membership ───────────────────────────────
-    from stock_analyzer import scanner, portfolio
-    from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
+    # Each roster param falls back to the real module attribute ONLY when the
+    # caller didn't pass one at all (unit-test convenience — see the App
+    # Settings note in the docstring above); the real caller always passes an
+    # explicit dict, `{}` included, and never relies on this fallback.
+    if sector_universe is None:
+        from stock_analyzer import scanner
+        sector_universe = scanner.SECTOR_UNIVERSE
+    if discovery_universe is None:
+        from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
+        discovery_universe = DISCOVERY_UNIVERSE
+    if sector_candidates is None:
+        from stock_analyzer import portfolio
+        sector_candidates = portfolio._SECTOR_CANDIDATES
 
     membership: dict[str, set[str]] = {}
     for tk in (
         t.upper().strip()
-        for bucket in scanner.SECTOR_UNIVERSE.values()
+        for bucket in sector_universe.values()
         for t in bucket
     ):
         membership.setdefault(tk, set()).add("scanner.py SECTOR_UNIVERSE")
     for tk in (
         t.upper().strip()
-        for bucket in DISCOVERY_UNIVERSE.values()
+        for bucket in discovery_universe.values()
         for t in bucket
     ):
         membership.setdefault(tk, set()).add("discovery_universe.py DISCOVERY_UNIVERSE")
     for tk in (
         t.upper().strip()
-        for bucket in portfolio._SECTOR_CANDIDATES.values()
+        for bucket in sector_candidates.values()
         for t in bucket
     ):
         membership.setdefault(tk, set()).add("portfolio.py _SECTOR_CANDIDATES")

@@ -117,17 +117,31 @@ DISCOVERY_UNIVERSE: dict[str, list[str]] = {
 }
 
 
-def discovery_tickers(exclude: set[str] | None = None) -> list[str]:
+def discovery_tickers(
+    exclude: set[str] | None = None,
+    universe: "dict[str, list[str]] | None" = None,
+) -> list[str]:
     """Flatten the discovery universe into a deduped ticker list.
 
     exclude: tickers to drop (already-tracked SECTOR_UNIVERSE names, held
     positions, watchlist) — these are already scanned elsewhere, so the
     Movers pipeline shouldn't re-surface them. Comparison is case-insensitive.
+
+    `universe` (App Settings, docs/plans/app-settings.md Commit 2): the
+    resolved `discovery_universe` payload, threaded in by the caller (via
+    `stock_analyzer.reference_data.resolve_universe`) so this function stays
+    pure/testable. `None` is a unit-test convenience default ONLY (falls
+    back to the module-level `DISCOVERY_UNIVERSE`), never an
+    offline-sentinel value — the REAL caller must pass an explicit `{}`, not
+    a bare `None`, when the table is unavailable (see `scanner.scan_sectors`'s
+    identical `universe` param for the full reasoning).
     """
+    if universe is None:
+        universe = DISCOVERY_UNIVERSE
     excl = {str(t).upper().strip() for t in (exclude or set())}
     seen: set[str] = set()
     out: list[str] = []
-    for names in DISCOVERY_UNIVERSE.values():
+    for names in universe.values():
         for t in names:
             tu = t.upper().strip()
             if tu and tu not in excl and tu not in seen:

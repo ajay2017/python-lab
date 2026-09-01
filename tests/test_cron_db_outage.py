@@ -375,3 +375,94 @@ def test_probe_detects_an_unreadable_holdings_table(monkeypatch):
     monkeypatch.setattr(cr.db, "has_db", lambda: True)
     monkeypatch.setattr(cr.db, "load_holdings_or_none", lambda: None)
     assert "holdings" in (cr._db_unavailable_detail() or "")
+
+
+# ── App Settings (docs/plans/app-settings.md Commit 2) — the scan lane's ────
+# sector-universe read is now stock_analyzer.reference_data.resolve_universe,
+# not a direct `from stock_analyzer.scanner import SECTOR_UNIVERSE`. An
+# unavailable resolve must route through the SAME _handle_db_unavailable
+# mechanism F-239 already uses for every other DB outage in this lane — not
+# a second, bespoke "scan universe unavailable" path that could silently
+# diverge from it (send nothing, or word the email differently).
+
+def test_scan_lane_sector_universe_unavailable_routes_through_handle_db_unavailable(monkeypatch):
+    import cron_runner as cr
+    from stock_analyzer import reference_data as rd
+
+    monkeypatch.setattr(
+        rd, "resolve_universe_or_none",
+        lambda name: (None, None, "simulated DB outage"),
+    )
+    calls = []
+    monkeypatch.setattr(
+        cr, "_handle_db_unavailable",
+        lambda lane, now_et, detail: calls.append((lane, detail)) or 1,
+    )
+
+    rc = cr._run_scan(cr.datetime.now(cr._ET), force=True)
+
+    assert rc == 1
+    assert calls and calls[0][0] == "scan"
+    assert "sector_universe" in calls[0][1]
+    assert "simulated DB outage" in calls[0][1]
+
+
+def test_scan_lane_passes_resolved_universe_to_scan_sectors_not_hardcoded_dict(monkeypatch):
+    """A fake payload distinct from the real SECTOR_UNIVERSE, captured at the
+    scan_sectors call boundary, proves the lane reads through the resolver
+    end-to-end rather than falling back to the hardcoded dict anywhere along
+    the way."""
+    import cron_runner as cr
+    from datetime import date
+    from stock_analyzer import reference_data as rd
+    from stock_analyzer import scanner as real_scanner
+
+    fake_payload = {"FakeSector": ["ZZZFAKE"]}
+    monkeypatch.setattr(
+        rd, "resolve_universe_or_none",
+        lambda name: (fake_payload, date(2026, 9, 1), None),
+    )
+    captured = {}
+
+    def _fake_scan_sectors(sectors, **kwargs):
+        captured["sectors"] = list(sectors)
+        captured["universe"] = kwargs.get("universe")
+        return pd.DataFrame()  # empty -> _run_scan short-circuits cleanly at n==0
+
+    monkeypatch.setattr(real_scanner, "scan_sectors", _fake_scan_sectors)
+
+    rc = cr._run_scan(cr.datetime.now(cr._ET), force=True)
+
+    assert rc == 0
+    assert captured["sectors"] == ["FakeSector"]
+    assert captured["universe"] == fake_payload
+
+
+def test_run_scan_source_no_longer_imports_sector_universe_directly():
+    """Literal import-isolation check, complementing the behavioral proofs
+    above: the exact class of mistake a prior review caught elsewhere in
+    this project was a file the import-isolation check FORGOT to cover, not
+    a wrong assertion within a covered file — so this asserts against the
+    real AST of the real function, not a mock's behavior. AST (not a raw
+    substring search) deliberately, so an explanatory comment mentioning the
+    old pattern -- like the one right above this function's own definition
+    -- can't produce a false positive; only an actual import/name reference
+    counts."""
+    import ast
+    import inspect
+    import textwrap
+    import cron_runner as cr
+
+    src = inspect.getsource(cr._run_scan)
+    tree = ast.parse(textwrap.dedent(src))
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    imported = {
+        alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert "SECTOR_UNIVERSE" not in names and "SECTOR_UNIVERSE" not in imported, (
+        "_run_scan must resolve the scan universe via "
+        "reference_data.resolve_universe_or_none, never a direct "
+        "`from stock_analyzer.scanner import SECTOR_UNIVERSE`"
+    )
+    assert "resolve_universe_or_none" in imported

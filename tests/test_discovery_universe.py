@@ -68,6 +68,23 @@ def test_discovery_tickers_exclude_unrelated_ticker_changes_nothing():
     assert result == full
 
 
+# ─── discovery_tickers — App Settings (Commit 2): explicit `universe` ───────
+# param, not the module-level default, must be what the real importer path
+# actually reads.
+
+def test_discovery_tickers_uses_explicit_universe_param_not_module_default():
+    fake_universe = {"FakeSector": ["ZZZFAKE"]}
+    result = du.discovery_tickers(universe=fake_universe)
+    assert result == ["ZZZFAKE"]
+
+
+def test_discovery_tickers_empty_universe_param_returns_empty_no_fallback():
+    # An explicit {} (the real caller's contract on a resolve_universe
+    # failure) must never fall back to the real DISCOVERY_UNIVERSE dict.
+    result = du.discovery_tickers(universe={})
+    assert result == []
+
+
 # ─── 2026-09-01 roster refresh — pins the exact approved diff ──────────────
 # Removed: AI (C3.ai, $1.7B), LCID ($1.9B) — both sub-scale under this file's
 # own liquidity rule. Added: IBM/CSCO (Software & Cloud), EBAY/WBD (Internet
