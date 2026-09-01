@@ -11,6 +11,7 @@ import pandas as pd
 from unittest.mock import MagicMock
 
 from stock_analyzer import home_risk_synthesis as hrs
+from stock_analyzer.constants import DIVERSIFY_WELL_PCT, DIVERSIFY_MODERATE_PCT
 
 
 def _hist(n, start=100.0, step=1.0):
@@ -145,10 +146,11 @@ class TestDiversificationRecommendationsFailure:
 
 
 class TestDiversificationLabelBands:
-    """42/30 are bare literals in the extracted code by deliberate design
-    (naming them constants is a separate, later decision) — these boundary
-    tests pin the bands exactly as they exist today, byte-identical to the
-    inline app.py block this module replaced."""
+    """DIVERSIFY_WELL_PCT/DIVERSIFY_MODERATE_PCT (constants.py) are the
+    42/30 diversification-label bands, promoted from bare literals to named
+    constants 2026-09-01 (same values, not a policy change — audit Medium
+    finding) — these boundary tests pin the bands exactly as they exist
+    today, byte-identical to the inline app.py block this module replaced."""
 
     def _bundle_at_score(self, monkeypatch, score):
         monkeypatch.setattr(
@@ -159,21 +161,60 @@ class TestDiversificationLabelBands:
         )
         return hrs.build_correlation_bundle(_port_df(), _held_data(), 50_000.0)
 
-    def test_exactly_42_is_well_diversified(self, monkeypatch):
-        bundle = self._bundle_at_score(monkeypatch, 42)
+    def test_exactly_well_pct_is_well_diversified(self, monkeypatch):
+        bundle = self._bundle_at_score(monkeypatch, DIVERSIFY_WELL_PCT)
         assert bundle["div_label"] == "Well Diversified"
 
-    def test_just_under_42_is_moderate(self, monkeypatch):
-        bundle = self._bundle_at_score(monkeypatch, 41.99)
+    def test_just_under_well_pct_is_moderate(self, monkeypatch):
+        bundle = self._bundle_at_score(monkeypatch, DIVERSIFY_WELL_PCT - 0.01)
         assert bundle["div_label"] == "Moderate"
 
-    def test_exactly_30_is_moderate(self, monkeypatch):
-        bundle = self._bundle_at_score(monkeypatch, 30)
+    def test_exactly_moderate_pct_is_moderate(self, monkeypatch):
+        bundle = self._bundle_at_score(monkeypatch, DIVERSIFY_MODERATE_PCT)
         assert bundle["div_label"] == "Moderate"
 
-    def test_just_under_30_is_high_correlation_risk(self, monkeypatch):
-        bundle = self._bundle_at_score(monkeypatch, 29.99)
+    def test_just_under_moderate_pct_is_high_correlation_risk(self, monkeypatch):
+        bundle = self._bundle_at_score(monkeypatch, DIVERSIFY_MODERATE_PCT - 0.01)
         assert bundle["div_label"] == "High Correlation Risk"
+
+
+class TestClassifyRiskBanner:
+    """classify_risk_banner extracted from app.py's Home risk-banner RAG
+    classification (2026-09-01, a POLICY_DECISION_IN_RENDER antipattern-gate
+    finding — promoting the 42/30 bounds to named constants made the
+    comparison newly detectable as a policy decision living in render code).
+    Either signal (alert counts or div_score) can independently escalate."""
+
+    def test_any_danger_alert_is_action_required_regardless_of_div_score(self):
+        label, color = hrs.classify_risk_banner(1, 0, 99.0)
+        assert (label, color) == ("Action Required", "#ff4444")
+
+    def test_div_score_below_moderate_is_action_required_with_no_alerts(self):
+        label, _ = hrs.classify_risk_banner(0, 0, DIVERSIFY_MODERATE_PCT - 0.01)
+        assert label == "Action Required"
+
+    def test_any_warning_alert_is_monitor_regardless_of_div_score(self):
+        label, color = hrs.classify_risk_banner(0, 1, 99.0)
+        assert (label, color) == ("Monitor", "#ffbb33")
+
+    def test_div_score_between_moderate_and_well_is_monitor_with_no_alerts(self):
+        label, _ = hrs.classify_risk_banner(0, 0, DIVERSIFY_WELL_PCT - 0.01)
+        assert label == "Monitor"
+
+    def test_no_alerts_and_well_diversified_is_all_clear(self):
+        label, color = hrs.classify_risk_banner(0, 0, DIVERSIFY_WELL_PCT)
+        assert (label, color) == ("All Clear", "#00C851")
+
+    def test_none_div_score_with_no_alerts_is_all_clear(self):
+        # div_score can be the offline sentinel (corr matrix unavailable) —
+        # must not crash on a None comparison and must not fabricate a bad
+        # reading purely from a missing score.
+        label, color = hrs.classify_risk_banner(0, 0, None)
+        assert (label, color) == ("All Clear", "#00C851")
+
+    def test_danger_outranks_warning(self):
+        label, _ = hrs.classify_risk_banner(1, 5, 99.0)
+        assert label == "Action Required"
 
 
 # ---------------------------------------------------------------------------

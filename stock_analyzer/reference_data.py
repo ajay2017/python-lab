@@ -175,6 +175,7 @@ def validate_payload(
     name: str,
     payload: dict,
     existing_bucket_keys: "set[str] | None" = None,
+    old_payload: "dict | None" = None,
 ) -> "list[str]":
     """Return a list of validation error strings; an empty list means the
     payload is valid. Deliberately does NOT do provider/network
@@ -206,6 +207,36 @@ def validate_payload(
        test_roster_ticker_sector_matches_its_roster_key`) forbids. This is
        what lets the roster stay UI-editable without dragging that
        dangerous dict's own macro-coverage invariant along with it.
+
+    3. SECTOR_UNIVERSE / DISCOVERY_UNIVERSE — PRESENCE ONLY, not equality,
+       and scoped to NEWLY-ADDED tickers only (via `changed_tickers`), not
+       the whole payload. When `name` is `"sector_universe"` or
+       `"discovery_universe"`, a ticker being added or moved to a different
+       bucket (relative to `old_payload`) must have *some*
+       `TICKER_SECTORS` entry, but that entry's value need NOT equal the
+       bucket label. Both tables use their own bucket-label sets ("AI &
+       Cloud", "Healthcare & Biotech", "Financials & Fintech", ...) which
+       deliberately do not match `TICKER_SECTORS`' 13 curated labels 1:1
+       (see `portfolio._DIVERSIFY_TO_DISCOVERY`'s own comment on this
+       mismatch) — the equality rule above is `sector_candidates`-specific
+       for exactly that reason. Added 2026-09-01 per the audit finding that
+       these two tables, unlike `sector_candidates`, had NO
+       `TICKER_SECTORS`-coverage check at all: an unmapped ticker added via
+       the ⚙️ App Settings editor would silently bypass the macro-
+       suppression gate the five 2026-09-01 discovery-bucket fixes (46
+       tickers) just closed for every other entry point.
+
+       Scoped to the CHANGED set (mirroring the same `changed_tickers`
+       scoping the provider ticker-existence check already uses, per the
+       design doc's Q2) rather than the whole payload, per a same-day
+       reviewer finding: `discovery_universe`'s Healthcare & Biotech /
+       Industrials & Defense / Energy & Materials / Clean Energy &
+       Utilities buckets are NOT yet reconciled against `TICKER_SECTORS`
+       (only the 5 buckets the 2026-09-01 sweep touched are) — validating
+       the whole payload would hard-block the very next save of either
+       table on pre-existing, untouched tickers, not just new ones. When
+       `old_payload` is omitted, every ticker in `payload` counts as
+       "changed" (there is no prior state to grandfather against).
     """
     errors: list[str] = []
 
@@ -218,6 +249,19 @@ def validate_payload(
                 "bucket/sector structure is locked — cannot add, remove, or "
                 "rename buckets in this editor "
                 f"(missing: {missing}, unexpected: {unexpected})"
+            )
+
+    if name in ("sector_universe", "discovery_universe"):
+        from stock_analyzer.portfolio import TICKER_SECTORS
+
+        _new_or_moved = changed_tickers(old_payload or {}, payload)
+        unknown = {t for t in _new_or_moved if TICKER_SECTORS.get(t) is None}
+
+        if unknown:
+            errors.append(
+                "the following newly-added ticker(s) have no "
+                f"portfolio.TICKER_SECTORS entry and cannot be added to "
+                f"{name}: {', '.join(sorted(unknown))}"
             )
 
     if name == "sector_candidates":

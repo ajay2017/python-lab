@@ -124,6 +124,8 @@ from stock_analyzer.constants import (
     ACCOUNT_CASH_STALE_DAYS,
     DIVERSIFY_DISPLAY_TOP,
     DIVERSIFY_SCAN_CAP,
+    DIVERSIFY_WELL_PCT,
+    DIVERSIFY_MODERATE_PCT,
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
     PERF_ALPHA_BAND_PCT,
@@ -889,9 +891,9 @@ _TIPS = {
     "Diversification Score": (
         "Score 0–100 measuring how independently your portfolio positions move.\n\n"
         "Calibrated for equity portfolios (pure-equity correlations are always positive):\n"
-        "• ≥ 42 → Well Diversified (avg correlation ≤ 0.16 — positions move quite independently)\n"
-        "• 30–42 → Moderate (avg correlation 0.16–0.40 — normal for thematic/sector portfolios)\n"
-        "• < 30 → High Correlation Risk (avg correlation > 0.40 — positions cluster together)\n\n"
+        f"• ≥ {DIVERSIFY_WELL_PCT:.0f} → Well Diversified (avg correlation ≤ 0.16 — positions move quite independently)\n"
+        f"• {DIVERSIFY_MODERATE_PCT:.0f}–{DIVERSIFY_WELL_PCT:.0f} → Moderate (avg correlation 0.16–0.40 — normal for thematic/sector portfolios)\n"
+        f"• < {DIVERSIFY_MODERATE_PCT:.0f} → High Correlation Risk (avg correlation > 0.40 — positions cluster together)\n\n"
         "A portfolio of 8 semiconductor stocks will score much lower than a 3-stock "
         "portfolio spanning tech, healthcare, and energy — even though the larger one "
         "looks more diversified.\n\n"
@@ -5381,12 +5383,9 @@ if page == "🏠 Home":
         st.session_state["_risk_advisor_recs_cache"] = _risk_advisor_recs
 
 
-        if n_danger > 0 or (div_score is not None and div_score < 30):
-            _rag_label, _rag_color = "Action Required", "#ff4444"
-        elif n_warning > 0 or (div_score is not None and div_score < 42):
-            _rag_label, _rag_color = "Monitor", "#ffbb33"
-        else:
-            _rag_label, _rag_color = "All Clear", "#00C851"
+        _rag_label, _rag_color = home_risk_synthesis.classify_risk_banner(
+            n_danger, n_warning, div_score,
+        )
 
         # Load macro calendar (cached per ET date — FRED key optional but recommended)
         _mc_day_key = f"_macro_cal_{_today_et()}"
@@ -31245,7 +31244,12 @@ elif page == "⚙️ App Settings":
             if st.button(
                 "Editing…" if _as_edit_table == _as_key else "Edit",
                 key=f"_as_edit_btn_{_as_key}", width="stretch",
-                disabled=(_as_edit_table == _as_key),
+                # Disable ALL three buttons while any table is mid-edit, not
+                # just the one being edited — switching tables mid-edit used
+                # to silently orphan the first table's unsaved st.data_editor
+                # state, which could resurface as stale grid data on a later
+                # visit (2026-09-01 audit, High #1).
+                disabled=bool(_as_edit_table),
             ):
                 st.session_state["_as_edit_table"] = _as_key
                 st.rerun()
@@ -31364,6 +31368,7 @@ elif page == "⚙️ App Settings":
                 _as_struct_errors = reference_data.validate_payload(
                     _as_edit_table, _as_new_payload,
                     existing_bucket_keys=set(_as_current_payload.keys()),
+                    old_payload=_as_current_payload,
                 )
                 _as_changed = reference_data.changed_tickers(_as_current_payload, _as_new_payload)
                 if _as_changed:

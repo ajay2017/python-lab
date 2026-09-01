@@ -176,6 +176,18 @@ UNCLASSIFIED_SECTOR = "Other"
 DIVERSIFY_SCAN_CAP    = 10        # max names composite-scored per underweight sector
 DIVERSIFY_DISPLAY_TOP = 3         # ranked candidates shown per sector
 
+# Diversification Score (0-100) label bands — portfolio.diversification_score()'s
+# score feeds home_risk_synthesis._div_label ("Well Diversified" / "Moderate" /
+# "High Correlation Risk") and app.py's Home risk-banner RAG classification
+# (Action Required / Monitor / All Clear). Promoted from a hardcoded literal in
+# both sites (2026-09-01 audit Medium finding) — same values, not a policy
+# change: >= WELL is "Well Diversified" (avg pairwise correlation <= 0.16),
+# WELL > score >= MODERATE is "Moderate" (0.16-0.40), below MODERATE is "High
+# Correlation Risk" (> 0.40). div_label is persisted as next week's
+# portfolio_thesis stability-grading baseline — treat as decision-adjacent.
+DIVERSIFY_WELL_PCT     = 42.0
+DIVERSIFY_MODERATE_PCT = 30.0
+
 # ── Rebalance-plan correlation labels (DISPLAY CLASSIFICATION, NOT A GATE) ────
 # On the Hard-Cap-Breach rebalance card, each redeploy candidate is annotated
 # with its correlation to YOUR ACTUAL BOOK (portfolio.correlation_to_portfolio) —

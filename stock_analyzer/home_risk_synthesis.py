@@ -18,8 +18,11 @@ by a test instead of re-verified by eye every time the surrounding code shifts.
 
 `app.py` calls `build_correlation_bundle()` and republishes the returned dict
 into session_state; all decision logic — including the exact except-branch
-sentinel shapes and the 42/30 diversification-label bands — lives here now,
-unchanged from what it read the day this file was created.
+sentinel shapes and the `DIVERSIFY_WELL_PCT`/`DIVERSIFY_MODERATE_PCT`
+diversification-label bands (promoted from a hardcoded 42/30 literal to
+`constants.py`, 2026-09-01 audit Medium finding — same values, not a policy
+change) — lives here now, unchanged from what it read the day this file was
+created.
 
 One invariant worth calling out explicitly: `div_recs`'s failure sentinel is
 `None`, NOT `[]` — deliberately, matching every sibling cache's "`None` means
@@ -56,6 +59,7 @@ from stock_analyzer.portfolio import (
     diversification_score,
     diversification_recommendations,
 )
+from stock_analyzer.constants import DIVERSIFY_WELL_PCT, DIVERSIFY_MODERATE_PCT
 from stock_analyzer.risk import compute_portfolio_risk_metrics
 from stock_analyzer.stress_test import SCENARIOS, run_scenario, assess_fragility
 from stock_analyzer.concentration import high_beta_share
@@ -122,8 +126,9 @@ def build_correlation_bundle(
         div_score    = div["score"]
         avg_corr     = div["avg_correlation"]
         risk_pairs   = div["risk_pairs"]
-        _div_label   = ("Well Diversified" if div_score >= 42
-                        else "Moderate" if div_score >= 30 else "High Correlation Risk")
+        _div_label   = ("Well Diversified" if div_score >= DIVERSIFY_WELL_PCT
+                        else "Moderate" if div_score >= DIVERSIFY_MODERATE_PCT
+                        else "High Correlation Risk")
     except Exception:
         corr_df    = pd.DataFrame()
         div        = {"score": None, "avg_correlation": None, "risk_pairs": []}
@@ -267,3 +272,26 @@ def build_risk_bundle(
         "risk_high_alerts": _risk_high_alerts,
         "h_rets": h_rets,
     }
+
+
+def classify_risk_banner(
+    n_danger: int, n_warning: int, div_score: "float | None",
+) -> "tuple[str, str]":
+    """Home's top-of-page risk-banner RAG classification: (label, hex color).
+
+    `n_danger`/`n_warning` are alert-level counts from `alerts()`'s
+    independent bearish-signal heuristics; `div_score` is this module's own
+    `build_correlation_bundle()["div_score"]`. Either signal alone can
+    escalate the banner — a clean diversification score doesn't mask an
+    active danger alert, and a clean alert list doesn't mask a
+    correlation-risk book. Extracted from app.py 2026-09-01 (a
+    `POLICY_DECISION_IN_RENDER` antipattern-gate finding — promoting the
+    42/30 bounds to named constants made the comparison newly detectable as
+    a policy decision living in render code): same logic, byte-identical to
+    the inline block it replaced.
+    """
+    if n_danger > 0 or (div_score is not None and div_score < DIVERSIFY_MODERATE_PCT):
+        return "Action Required", "#ff4444"
+    if n_warning > 0 or (div_score is not None and div_score < DIVERSIFY_WELL_PCT):
+        return "Monitor", "#ffbb33"
+    return "All Clear", "#00C851"

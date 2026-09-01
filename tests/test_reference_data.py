@@ -255,15 +255,75 @@ def test_validate_payload_accepts_known_tickers_for_sector_candidates():
     assert errors == []
 
 
-def test_validate_payload_sector_candidates_rule_is_scoped_to_that_table():
-    """An unclassified ticker is fine for any OTHER table -- the
-    TICKER_SECTORS coverage rule applies only to sector_candidates."""
+def test_validate_payload_sector_candidates_equality_rule_is_scoped():
+    """The bucket-key EQUALITY half of the sector_candidates rule does not
+    apply to discovery_universe -- AAPL's real TICKER_SECTORS value
+    ("Consumer Tech") need not match the "Tech" bucket label here, only be
+    PRESENT (see test_validate_payload_rejects_unmapped_ticker_for_universe_tables
+    for the presence-only rule that DOES apply)."""
     errors = validate_payload(
         "discovery_universe",
-        {"Tech": ["ZZZFAKE"]},
+        {"Tech": ["AAPL"]},
         existing_bucket_keys=None,
     )
     assert errors == []
+
+
+def test_validate_payload_rejects_unmapped_ticker_for_universe_tables():
+    """2026-09-01 audit fix: sector_universe/discovery_universe now get the
+    same TICKER_SECTORS-presence check as sector_candidates (but NOT the
+    bucket-equality half -- these tables use their own label sets). With no
+    old_payload given, every ticker in the payload counts as "changed"."""
+    for _name in ("sector_universe", "discovery_universe"):
+        errors = validate_payload(
+            _name,
+            {"Tech": ["ZZZFAKE"]},
+            existing_bucket_keys=None,
+        )
+        assert errors, f"{_name} should reject an unmapped ticker"
+        assert "ZZZFAKE" in errors[0]
+
+
+def test_validate_payload_grandfathers_preexisting_unmapped_ticker():
+    """Same-day reviewer finding: discovery_universe's not-yet-reconciled
+    buckets (Healthcare & Biotech, Industrials & Defense, etc.) hold
+    tickers with no TICKER_SECTORS entry TODAY. Validating the whole
+    payload on every save would hard-block the very next edit to an
+    unrelated bucket. The check must scope to tickers NEW or MOVED
+    relative to old_payload -- a pre-existing unmapped ticker, left
+    untouched, must not fire."""
+    old = {"Healthcare & Biotech": ["ZZZFAKE"], "Financials": ["NVDA"]}
+    # Editing an unrelated bucket, ZZZFAKE stays put in its own bucket.
+    new = {"Healthcare & Biotech": ["ZZZFAKE"], "Financials": ["NVDA", "AMD"]}
+    errors = validate_payload(
+        "discovery_universe", new, existing_bucket_keys=set(old.keys()),
+        old_payload=old,
+    )
+    assert errors == []
+
+
+def test_validate_payload_still_rejects_newly_added_unmapped_ticker():
+    """The grandfather clause only protects UNTOUCHED tickers -- adding a
+    genuinely new unmapped ticker (even alongside old debt) still fires."""
+    old = {"Healthcare & Biotech": ["ZZZFAKE"]}
+    new = {"Healthcare & Biotech": ["ZZZFAKE", "ANOTHERFAKE"]}
+    errors = validate_payload(
+        "discovery_universe", new, existing_bucket_keys=set(old.keys()),
+        old_payload=old,
+    )
+    assert errors
+    assert "ANOTHERFAKE" in errors[0]
+    assert "ZZZFAKE" not in errors[0]
+
+
+def test_validate_payload_accepts_mapped_ticker_for_universe_tables():
+    for _name in ("sector_universe", "discovery_universe"):
+        errors = validate_payload(
+            _name,
+            {"Tech": ["NVDA"]},
+            existing_bucket_keys=None,
+        )
+        assert errors == [], f"{_name} should accept a mapped ticker"
 
 
 # ── sector_candidates: TIGHTENED bucket-key EQUALITY rule (2026-09-01) ───────
