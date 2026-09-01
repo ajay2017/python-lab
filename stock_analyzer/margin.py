@@ -139,6 +139,150 @@ def resolve_net_capital(
     return net, "called"
 
 
+def shock_call_outcome(
+    *,
+    stock_value_now: float,
+    shocked_stock_value: float,
+    margin_debit: float,
+    rate: float,
+    forced_sale_proceeds: float = 0.0,
+    warn_band_pct: float | None = None,
+) -> dict | None:
+    """Distance to a margin call under a hypothetical price shock, plus the
+    forced-sale cascade — composes `call_distance` with a forward_sim
+    scenario (2026-09-01, leverage-aware shock modeling).
+
+    This never re-derives the call-distance formula: it calls the existing
+    `call_distance` twice (once at the shocked price alone, once again after
+    netting a forced sale's proceeds against the debit) so the awareness
+    panel (call_distance today) and this scenario replay can never drift
+    apart from each other.
+
+    Parameters
+    ----------
+    stock_value_now : today's UNSHOCKED gross book value. Used to compute
+        `cushion_delta_from_now` (today's cushion, via `call_distance` again
+        at `stock_value_now` / `stock_value_now - margin_debit`, minus
+        `shock_cushion`) — the shocked calculation itself does not need it,
+        since `shocked_stock_value` already IS the post-shock state that
+        formula needs.
+    shocked_stock_value : gross book value AFTER the shock (e.g.
+        stress_test.run_scenario's `post_shock_value`).
+    margin_debit : today's broker loan (positive number) — held fixed
+        through the first-order shock; a price move doesn't change what's
+        owed.
+    rate : maintenance rate as a decimal, e.g. 0.25. Pass
+        constants.MARGIN_MAINTENANCE_RATE.
+    forced_sale_proceeds : dollars of the shocked book already sold off by
+        the app's OWN mechanical rules in the scenario being modelled (e.g.
+        forward_sim's `survivors[tier]["proceeds"]`) and used to pay down
+        the debit. Defaults to 0.0 (no cascade modelled).
+    warn_band_pct : the same yardstick `summary_view.book_safety` compares
+        against (pass constants.FRAGILITY_PULLBACK_PCT) — inclusive, same
+        `<=` convention. None disables the "warn" tier entirely; it must
+        never be invented here.
+
+    Returns None when: `margin_debit <= 0`, `shocked_stock_value <= 0`, or
+    `rate >= 1` — the same "not applicable" guard as `call_distance` — a
+    book with no margin debit has nothing to model here.
+
+    Returns a dict:
+      shock_cushion           : $ cushion at the shocked price, no sales
+      shock_call_distance_pct : % further decline from the SHOCK to the call
+                                (call_distance's own sign convention —
+                                negative = distance remaining, positive =
+                                already breached)
+      shock_in_call           : bool — cushion <= 0 (inclusive)
+      shock_tier              : "call" | "warn" | "clear"
+      post_sale_cushion       : $ cushion AFTER netting forced_sale_proceeds
+                                against the debit. Always >= shock_cushion
+                                for 0 <= proceeds <= margin_debit — forced
+                                selling can only help the cushion, never
+                                worsen it (post_sale_cushion = shock_cushion
+                                + forced_sale_proceeds * rate).
+      post_sale_in_call       : bool — in-call state after the sale
+      call_covered_by_sales   : bool — True only if the shock alone would
+                                have triggered a call AND the forced sale
+                                fixes it
+      debit_after_sales       : max(0, margin_debit - forced_sale_proceeds)
+      cushion_delta_from_now  : $ cushion LOST versus today, unshocked
+                                (today's cushion, via `call_distance` at
+                                `stock_value_now` / `stock_value_now -
+                                margin_debit`, minus `shock_cushion`) — a
+                                positive number is cushion given up by this
+                                shock, a negative number means the shock
+                                would (unusually) leave MORE cushion than
+                                today. None when `stock_value_now` itself
+                                doesn't resolve a cushion (e.g. <= 0).
+    """
+    if margin_debit <= 0 or shocked_stock_value <= 0 or rate >= 1:
+        return None
+
+    shocked_equity = shocked_stock_value - margin_debit
+    first = call_distance(shocked_stock_value, shocked_equity, margin_debit, rate)
+    if first is None:
+        return None
+    shock_cushion = first["cushion"]
+    shock_call_distance_pct = first["call_distance_pct"]
+    shock_in_call = first["in_call"]
+
+    if shock_in_call:
+        shock_tier = "call"
+    elif warn_band_pct is not None and abs(shock_call_distance_pct) <= abs(warn_band_pct):
+        shock_tier = "warn"
+    else:
+        shock_tier = "clear"
+
+    debit_after_sales = max(0.0, margin_debit - forced_sale_proceeds)
+    if debit_after_sales <= 0:
+        # The loan is fully repaid by the sale. Equity is invariant to a
+        # sale (selling an asset and using the proceeds to pay down the
+        # matching debit moves stock_value and debit by the same amount),
+        # so the closed form below is exact — and `call_distance` would
+        # reject a non-positive debit anyway, so this is handled explicitly
+        # rather than letting that guard fire unexpectedly.
+        post_sale_cushion = shock_cushion + forced_sale_proceeds * rate
+        post_sale_in_call = False
+        call_covered_by_sales = shock_in_call
+    else:
+        # Maintenance requirement is rate x REMAINING stock value, so the
+        # sold-off proceeds must come out of stock_value too, not just the
+        # debit -- equity (shocked_equity) itself does not change.
+        second = call_distance(
+            shocked_stock_value - forced_sale_proceeds, shocked_equity,
+            debit_after_sales, rate,
+        )
+        if second is None:
+            # Degenerate post-sale state (e.g. proceeds exceeding the
+            # shocked book itself) -- fall back to the first-order reading
+            # rather than fabricate a number call_distance itself refused.
+            post_sale_cushion = shock_cushion
+            post_sale_in_call = shock_in_call
+        else:
+            post_sale_cushion = second["cushion"]
+            post_sale_in_call = second["in_call"]
+        call_covered_by_sales = shock_in_call and not post_sale_in_call
+
+    today = call_distance(
+        stock_value_now, stock_value_now - margin_debit, margin_debit, rate,
+    )
+    cushion_delta_from_now = (
+        today["cushion"] - shock_cushion if today is not None else None
+    )
+
+    return {
+        "shock_cushion": shock_cushion,
+        "shock_call_distance_pct": shock_call_distance_pct,
+        "shock_in_call": shock_in_call,
+        "shock_tier": shock_tier,
+        "post_sale_cushion": post_sale_cushion,
+        "post_sale_in_call": post_sale_in_call,
+        "call_covered_by_sales": call_covered_by_sales,
+        "debit_after_sales": debit_after_sales,
+        "cushion_delta_from_now": cushion_delta_from_now,
+    }
+
+
 def held_over_capital_cap(port_df, net_capital: float | None, cap_pct: float) -> list | None:
     """Held positions whose capital-basis weight exceeds `cap_pct`, or None.
 

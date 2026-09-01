@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 from stock_analyzer.margin import (
     call_distance, capital_basis_weight, resolve_net_capital, held_over_capital_cap,
+    shock_call_outcome,
 )
 from stock_analyzer.constants import (
     FRAGILITY_PULLBACK_PCT, MARGIN_MAINTENANCE_RATE, ACCOUNT_CASH_STALE_DAYS,
@@ -330,3 +331,266 @@ def test_margin_module_not_imported_by_any_gate_module(mod_name):
         "would be broken by this import existing at all, regardless of "
         "which name or alias it's bound to"
     )
+
+
+# ── shock_call_outcome (leverage-aware shock modeling, 2026-09-01) ─────────────
+# Real-book-shaped inputs, same founding measurement as the top of this file:
+# $24,503 gross book, $16,701 margin debit, 0.25 maintenance rate.
+_SHOCK_STOCK_VALUE_NOW = 24503.0
+_SHOCK_DEBIT = 16701.0
+_SHOCK_RATE = 0.25
+
+
+def test_shock_call_outcome_zero_shock_identity():
+    """No shock, no forced sale -> byte-matches calling call_distance()
+    directly on today's numbers. This is what guarantees the feature can
+    never disagree with summary_view.book_safety's existing static reading."""
+    direct = call_distance(
+        _SHOCK_STOCK_VALUE_NOW,
+        _SHOCK_STOCK_VALUE_NOW - _SHOCK_DEBIT,
+        _SHOCK_DEBIT,
+        _SHOCK_RATE,
+    )
+    result = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=_SHOCK_STOCK_VALUE_NOW,
+        margin_debit=_SHOCK_DEBIT,
+        rate=_SHOCK_RATE,
+        forced_sale_proceeds=0.0,
+    )
+    assert result is not None
+    assert result["shock_cushion"] == direct["cushion"]
+    assert result["shock_call_distance_pct"] == direct["call_distance_pct"]
+    assert result["shock_in_call"] == direct["in_call"]
+
+
+def test_shock_call_outcome_in_call_boundary_inclusive():
+    """Construct a shocked stock value where the shocked cushion is exactly
+    0 -> shock_in_call is True (inclusive), matching call_distance's own
+    inclusive convention."""
+    rate = 0.25
+    margin_debit = 8000.0
+    # cushion = equity - stock_value*rate = 0
+    # equity = stock_value - margin_debit
+    # => stock_value - margin_debit - stock_value*rate = 0
+    # => stock_value*(1-rate) = margin_debit => stock_value = debit/(1-rate)
+    shocked_stock_value = margin_debit / (1 - rate)
+    result = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=shocked_stock_value,
+        margin_debit=margin_debit,
+        rate=rate,
+    )
+    assert result is not None
+    assert abs(result["shock_cushion"]) < 0.01
+    assert result["shock_in_call"] is True
+
+
+@pytest.mark.parametrize("proceeds_frac", [0.0, 0.25, 0.5, 0.75, 1.0])
+def test_shock_call_outcome_sale_helps_invariant(proceeds_frac):
+    """For 0 <= forced_sale_proceeds <= margin_debit, post_sale_cushion is
+    ALWAYS >= shock_cushion, and the gap is exactly proceeds * rate — forced
+    selling can only help the cushion, never worsen it."""
+    shocked_stock_value = 20000.0
+    forced_sale_proceeds = _SHOCK_DEBIT * proceeds_frac
+    result = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=shocked_stock_value,
+        margin_debit=_SHOCK_DEBIT,
+        rate=_SHOCK_RATE,
+        forced_sale_proceeds=forced_sale_proceeds,
+    )
+    assert result is not None
+    gap = result["post_sale_cushion"] - result["shock_cushion"]
+    assert gap >= -1e-6
+    assert abs(gap - forced_sale_proceeds * _SHOCK_RATE) < 1e-6
+
+
+def test_shock_call_outcome_full_repay_edge():
+    """forced_sale_proceeds >= margin_debit -> post_sale_in_call is False, no
+    exception, and call_covered_by_sales correctly reflects whether the
+    shock alone had already triggered a call."""
+    # A shock deep enough to trigger the call on its own.
+    shocked_stock_value = _SHOCK_DEBIT / (1 - _SHOCK_RATE) - 1.0  # just past the floor
+    result = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=shocked_stock_value,
+        margin_debit=_SHOCK_DEBIT,
+        rate=_SHOCK_RATE,
+        forced_sale_proceeds=_SHOCK_DEBIT,  # exactly full repay
+    )
+    assert result is not None
+    assert result["shock_in_call"] is True
+    assert result["post_sale_in_call"] is False
+    assert result["debit_after_sales"] == 0.0
+    assert result["call_covered_by_sales"] is True
+
+    # Over-repay (proceeds > debit) — same guarantees, no exception.
+    result2 = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=shocked_stock_value,
+        margin_debit=_SHOCK_DEBIT,
+        rate=_SHOCK_RATE,
+        forced_sale_proceeds=_SHOCK_DEBIT + 5000.0,
+    )
+    assert result2 is not None
+    assert result2["post_sale_in_call"] is False
+    assert result2["debit_after_sales"] == 0.0
+
+    # A shock that does NOT trigger a call: proceeds cannot manufacture
+    # coverage of a call that never happened.
+    result3 = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=_SHOCK_STOCK_VALUE_NOW,   # no shock at all
+        margin_debit=_SHOCK_DEBIT,
+        rate=_SHOCK_RATE,
+        forced_sale_proceeds=_SHOCK_DEBIT,
+    )
+    assert result3 is not None
+    assert result3["shock_in_call"] is False
+    assert result3["call_covered_by_sales"] is False
+
+
+@pytest.mark.parametrize("shocked_stock_value,margin_debit,proceeds", [
+    (20000.0, 10000.0, 0.0),
+    (20000.0, 10000.0, 5000.0),
+    (20000.0, 10000.0, 10000.0),
+    (_SHOCK_STOCK_VALUE_NOW, _SHOCK_DEBIT, _SHOCK_DEBIT / 2),
+    (10000.0, 8500.0, 8500.0),
+])
+def test_shock_call_outcome_covered_implies_triggered(shocked_stock_value, margin_debit, proceeds):
+    """Whenever call_covered_by_sales is True, shock_in_call must also be
+    True — coverage can only ever apply to a call that actually fired."""
+    result = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=shocked_stock_value,
+        margin_debit=margin_debit,
+        rate=_SHOCK_RATE,
+        forced_sale_proceeds=proceeds,
+    )
+    assert result is not None
+    if result["call_covered_by_sales"]:
+        assert result["shock_in_call"] is True
+
+
+def test_shock_call_outcome_warn_band_boundary_inclusive():
+    """abs(shock_call_distance_pct) == warn_band_pct -> tier is 'warn'
+    (inclusive), matching summary_view.book_safety's own <= comparison."""
+    # Build a shock whose call_distance_pct lands at a known negative value,
+    # then set warn_band_pct to exactly that magnitude.
+    rate = 0.25
+    margin_debit = 8000.0
+    shocked_stock_value = 12000.0
+    probe = call_distance(
+        shocked_stock_value, shocked_stock_value - margin_debit, margin_debit, rate,
+    )
+    assert probe is not None and probe["in_call"] is False
+    warn_band = abs(probe["call_distance_pct"])
+
+    result = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=shocked_stock_value,
+        margin_debit=margin_debit,
+        rate=rate,
+        warn_band_pct=warn_band,
+    )
+    assert result is not None
+    assert result["shock_tier"] == "warn"
+
+
+def test_shock_call_outcome_warn_band_none_never_warns():
+    """warn_band_pct=None -> tier is never 'warn', regardless of how close
+    the distance is (a near-zero cushion still resolves 'clear', not 'warn',
+    when no yardstick was supplied)."""
+    rate = 0.25
+    margin_debit = 8000.0
+    # Very close to the call, but not past it.
+    shocked_stock_value = margin_debit / (1 - rate) + 1.0
+    result = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=shocked_stock_value,
+        margin_debit=margin_debit,
+        rate=rate,
+        warn_band_pct=None,
+    )
+    assert result is not None
+    assert result["shock_in_call"] is False
+    assert result["shock_tier"] != "warn"
+    assert result["shock_tier"] == "clear"
+
+
+@pytest.mark.parametrize("kwargs", [
+    dict(margin_debit=0.0),
+    dict(margin_debit=-100.0),
+    dict(shocked_stock_value=0.0),
+    dict(shocked_stock_value=-1.0),
+    dict(rate=1.0),
+    dict(rate=1.5),
+])
+def test_shock_call_outcome_inapplicable_inputs_return_none(kwargs):
+    """margin_debit<=0, shocked_stock_value<=0, and rate>=1 each
+    independently return None -- never a dict with zeroed/nonsensical
+    fields."""
+    base = dict(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=20000.0,
+        margin_debit=_SHOCK_DEBIT,
+        rate=_SHOCK_RATE,
+    )
+    base.update(kwargs)
+    assert shock_call_outcome(**base) is None
+
+
+# ── cushion_delta_from_now (2026-09-01 non-blocking follow-up) ────────────────
+# Uses stock_value_now for something real: today's cushion (recomputed via
+# call_distance, never re-derived) minus the shocked cushion.
+
+def test_shock_call_outcome_cushion_delta_from_now_zero_shock_is_zero():
+    """No shock at all -> today's cushion equals the shocked cushion exactly,
+    so the delta is 0.0 -- same identity guarantee as the zero-shock test
+    above, extended to the new field."""
+    result = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=_SHOCK_STOCK_VALUE_NOW,
+        margin_debit=_SHOCK_DEBIT,
+        rate=_SHOCK_RATE,
+    )
+    assert result is not None
+    assert result["cushion_delta_from_now"] == 0.0
+
+
+def test_shock_call_outcome_cushion_delta_from_now_matches_manual_call_distance():
+    """cushion_delta_from_now must equal a caller's own independent
+    call_distance(stock_value_now, ...) cushion minus shock_cushion -- this
+    is the exact computation promised in the docstring, not an approximation."""
+    shocked_stock_value = 18000.0
+    result = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=shocked_stock_value,
+        margin_debit=_SHOCK_DEBIT,
+        rate=_SHOCK_RATE,
+    )
+    assert result is not None
+    today = call_distance(
+        _SHOCK_STOCK_VALUE_NOW, _SHOCK_STOCK_VALUE_NOW - _SHOCK_DEBIT,
+        _SHOCK_DEBIT, _SHOCK_RATE,
+    )
+    expected = today["cushion"] - result["shock_cushion"]
+    assert abs(result["cushion_delta_from_now"] - expected) < 1e-9
+    # A decline scenario costs cushion, never manufactures it.
+    assert result["cushion_delta_from_now"] > 0
+
+
+def test_shock_call_outcome_cushion_delta_from_now_none_when_stock_value_now_invalid():
+    """stock_value_now <= 0 does not fail the whole call (the shocked-side
+    guards are independent) -- it degrades only cushion_delta_from_now to
+    None, same 'unknown, not zero' posture as every other None in this
+    module."""
+    result = shock_call_outcome(
+        stock_value_now=0.0,
+        shocked_stock_value=20000.0,
+        margin_debit=_SHOCK_DEBIT,
+        rate=_SHOCK_RATE,
+    )
+    assert result is not None
+    assert result["cushion_delta_from_now"] is None

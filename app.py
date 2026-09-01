@@ -15882,6 +15882,158 @@ elif page == "🔗 Risk Analysis":
                     f"any individual name."
                 )
 
+            # ── Leverage-aware shock modeling (margin x forward_sim, 2026-09-01) ──
+            # Composes margin.py's static distance-to-a-call with THIS tab's own
+            # rule replay -- the two existing, already-correct pure functions
+            # never talked to each other before this. Read-only, same posture as
+            # the rest of this tab: never calls risk_advisor/exit_advisor, never
+            # writes a session_state key any gate reads, touches no constant
+            # (reuses FRAGILITY_PULLBACK_PCT / MARGIN_MAINTENANCE_RATE as-is).
+            # Guarded like the block above it -- an unhandled exception here must
+            # not take out the rest of the (already-rendered) tab.
+            try:
+                st.divider()
+                st.markdown("##### 📐 What a shock would do to your margin cushion")
+                _mg_acct = db.load_account_cash()
+                _mg_net_cap, _mg_basis = _margin_mod.resolve_net_capital(
+                    total_val, _mg_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
+                )
+                if _mg_basis == "unlevered":
+                    st.caption(
+                        "📐 No margin debit on file — this scenario replay has "
+                        "nothing to model here; a price shock can't trigger a call "
+                        "you don't have."
+                    )
+                elif _mg_basis == "stale":
+                    st.caption(
+                        "📐 Margin Call Distance withheld — your account's cash "
+                        f"balance is stale (> {ACCOUNT_CASH_STALE_DAYS}d old)."
+                    )
+                elif _mg_basis == "called":
+                    st.caption(
+                        "📐 Your CURRENT (unshocked) book is already at or past the "
+                        "call floor today — see 💰 Account, not a hypothetical shock."
+                    )
+                else:  # "levered"
+                    _mg_debit = total_val - _mg_net_cap
+                    _mg_today = _margin_mod.call_distance(
+                        total_val, _mg_net_cap, _mg_debit, MARGIN_MAINTENANCE_RATE
+                    )
+                    if _mg_today is not None and _mg_today["in_call"]:
+                        # resolve_net_capital's "called" state only fires once
+                        # equity is fully wiped (net_capital <= 0). call_distance's
+                        # own in_call trips much earlier -- cushion <= 0, i.e.
+                        # net_capital <= gross_book * MARGIN_MAINTENANCE_RATE -- so
+                        # a book that's net-positive but already past the
+                        # maintenance floor TODAY lands here, in "levered", not
+                        # "called". A hypothetical further shock is moot once
+                        # already breached, so mirror the "called" branch's own
+                        # wording/tone above and skip the sweep/cascade entirely.
+                        st.caption(
+                            "📐 Your CURRENT (unshocked) book is already at or past "
+                            "the call floor today — see 💰 Account, not a "
+                            "hypothetical shock."
+                        )
+                    else:
+                        # ── Cheap first-order sweep across EVERY scenario, not
+                        # just the one selected above ───────────────────────────
+                        _mg_all_shocks = run_all_scenarios(port_df, held_data, _fs_beta)
+                        _mg_sweep_hits, _mg_sweep_total = 0, 0
+                        for _mg_shock in _mg_all_shocks:
+                            _mg_out = _margin_mod.shock_call_outcome(
+                                stock_value_now=total_val,
+                                shocked_stock_value=_mg_shock.get("post_shock_value"),
+                                margin_debit=_mg_debit,
+                                rate=MARGIN_MAINTENANCE_RATE,
+                                forced_sale_proceeds=0.0,
+                                warn_band_pct=FRAGILITY_PULLBACK_PCT,
+                            )
+                            if _mg_out is None:
+                                continue
+                            _mg_sweep_total += 1
+                            if _mg_out["shock_in_call"]:
+                                _mg_sweep_hits += 1
+
+                        if _mg_sweep_total and _mg_today is not None:
+                            st.info(
+                                f"📐 **{_mg_sweep_hits} of {_mg_sweep_total}** modeled "
+                                "downside scenarios would trigger a margin call at "
+                                "your current leverage "
+                                f"({_mg_today['call_distance_pct']:+.1f}% distance "
+                                "to call today)."
+                            )
+                        else:
+                            st.caption(
+                                "📐 The scenario sweep could not be modeled for margin "
+                                "this session."
+                            )
+
+                        # ── Full cascade for the SCENARIO SELECTED ABOVE ────────
+                        _mg_sel_proceeds = _fs_svc["proceeds"]
+                        _mg_sel_out = _margin_mod.shock_call_outcome(
+                            stock_value_now=total_val,
+                            shocked_stock_value=_fs_out["post_shock_value"],
+                            margin_debit=_mg_debit,
+                            rate=MARGIN_MAINTENANCE_RATE,
+                            forced_sale_proceeds=_mg_sel_proceeds,
+                            warn_band_pct=FRAGILITY_PULLBACK_PCT,
+                        )
+                        if _mg_sel_out is None:
+                            st.caption(
+                                f"📐 The **{_fs_choice}** scenario could not be "
+                                "modeled for margin — the shocked book value is "
+                                "unavailable this session."
+                            )
+                        else:
+                            _mg_tier_word = {
+                                "call":  "🔴 **would trigger** a margin call",
+                                "warn":  "🟡 within the fragility warning band, but "
+                                         "would not by itself trigger a call",
+                                "clear": "🟢 clear of a margin call",
+                            }[_mg_sel_out["shock_tier"]]
+                            st.caption(
+                                f"Under **{_fs_choice}**, before any forced selling: "
+                                f"{_mg_tier_word}."
+                            )
+                            if _mg_sel_out["cushion_delta_from_now"] is not None:
+                                _mg_delta = _mg_sel_out["cushion_delta_from_now"]
+                                st.caption(
+                                    f"{_m(f'${abs(_mg_delta):,.0f}')} of cushion "
+                                    + ("given up" if _mg_delta >= 0 else "gained")
+                                    + " versus today, unshocked."
+                                )
+                            if _mg_sel_out["shock_in_call"]:
+                                _mg_proceeds_str = _m(f"${_mg_sel_proceeds:,.0f}")
+                                if _mg_sel_out["call_covered_by_sales"]:
+                                    st.caption(
+                                        "Once the app's own mechanical exits raise "
+                                        f"{_mg_proceeds_str} in this scenario (trend-"
+                                        "confirmed column) and that is used to pay "
+                                        "down the loan, the call would be "
+                                        "**covered** — **best case, before "
+                                        "slippage**: a modeled stop-out is not a "
+                                        "filled order."
+                                    )
+                                else:
+                                    st.caption(
+                                        "Even after the app's own mechanical exits "
+                                        f"raise {_mg_proceeds_str} in this scenario "
+                                        "and that is used to pay down the loan, the "
+                                        "call would **still** fire — **best case, "
+                                        "before slippage**: a modeled stop-out is "
+                                        "not a filled order."
+                                    )
+
+                st.caption(
+                    "Your standing margin cushion (today, unshocked) is on 🧾 Summary "
+                    "and 💰 Account — this models it under a chosen shock."
+                )
+            except Exception as _mg_e:      # noqa: BLE001 — never break the page
+                st.caption(
+                    f"📐 The margin-shock overlay could not run this session ({_mg_e}). "
+                    "Nothing above is affected."
+                )
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE — PORTFOLIO INTELLIGENCE
