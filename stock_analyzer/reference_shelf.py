@@ -313,18 +313,58 @@ _REFERENCE_TABLES: tuple[_RefTable, ...] = (
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
+# App Settings (docs/plans/app-settings.md) Commit 1 of 3 — the three tables
+# now backed by stock_analyzer/db.py's reference_tables. NOT the other three
+# (sp500_sector_weights, macro_event_calendar, nyse_calendar), which stay
+# pure code-date registrations for now. Grading tries the DB row's as_of
+# first and falls back to the hardcoded date below when the DB has no row
+# for the name yet (pre-DDL, offline, or not-yet-seeded) — an un-migrated
+# read keeps telling the truth exactly as it does today. Nothing in this
+# commit reads or writes the underlying rosters themselves (SECTOR_UNIVERSE
+# etc.) via the DB — that's Commit 2/3; this only changes which as_of date
+# check ⑤ reports once a table has actually been edited through the app.
+_DB_BACKED_KEYS = {"sector_universe", "discovery_universe", "sector_candidates"}
+
+
 def _today() -> date:
     from stock_analyzer.market_time import today_et
     return today_et()
 
 
+def _db_as_of(key: str) -> "date | None":
+    """Current `as_of` from the DB-backed `reference_tables` row for `key`,
+    or `None` if there is no row yet (pre-DDL, DB offline, or never seeded).
+    Never raises — a broken/absent DB read here must degrade to the
+    hardcoded fallback, never crash the shelf-life check that reports on it.
+    """
+    try:
+        from stock_analyzer import db
+        row = db.load_reference_table(key)
+    except Exception:
+        return None
+    if not row:
+        return None
+    as_of_raw = row.get("as_of")
+    if as_of_raw is None:
+        return None
+    if isinstance(as_of_raw, date):
+        return as_of_raw
+    try:
+        return date.fromisoformat(str(as_of_raw)[:10])
+    except Exception:
+        return None
+
+
 def _grade_as_of(entry: _RefTable, today: date) -> tuple[str, str]:
     from stock_analyzer.constants import REFERENCE_SHELF_LIFE_DAYS
     shelf = REFERENCE_SHELF_LIFE_DAYS.get(entry.key)
-    if entry.as_of is None or shelf is None:
+    as_of = entry.as_of
+    if entry.key in _DB_BACKED_KEYS:
+        as_of = _db_as_of(entry.key) or entry.as_of
+    if as_of is None or shelf is None:
         return "unknown", "no recorded refresh date or shelf life"
-    age = (today - entry.as_of).days
-    detail = f"last refreshed {entry.as_of.isoformat()} — {age}d ago (refresh every {shelf}d)"
+    age = (today - as_of).days
+    detail = f"last refreshed {as_of.isoformat()} — {age}d ago (refresh every {shelf}d)"
     # Boundary is INCLUSIVE of the shelf life: age == shelf is still ok, and the
     # warning starts the day after. Asserted exactly in tests rather than
     # reasoned about — the 2026-08-04 Critical was an off-by-one of this shape.

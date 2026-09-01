@@ -5025,3 +5025,124 @@ def save_broker_position_snapshot(positions: dict, account_ids=None,
     except Exception as e:
         _record_db_error(str(e)[:120])
         return False
+
+
+# ── App Settings — reference_tables / reference_table_history (Commit 1 of ──
+# 3, 2026-09-01, data layer only). Ships INERT until the DDL in
+# docs/sql/app_settings_ddl.sql is applied by hand — same "ships inert"
+# convention as model_predictions/analyst_target_snapshots. The consumer,
+# stock_analyzer.reference_data.resolve_universe(), is not wired into any
+# decision path in this commit — nothing calls these functions yet. See
+# docs/plans/app-settings.md for the full design and the content-hash
+# "snooze-button" mechanism save_reference_table() implements below.
+
+def load_reference_table(name: str) -> "dict | None":
+    """Read the current row for `name` from `reference_tables`.
+
+    Returns `None` (the offline sentinel) on ANY failure — no credentials,
+    the table not yet existing (pre-DDL), RLS misconfigured, or a raised
+    query exception — matching every other `load_*` function in this file
+    (see `load_model_predictions`). A found row is a dict with at least
+    `payload`, `as_of`, `payload_hash`, `updated_by`.
+    """
+    if not name or not has_db():
+        return None
+    try:
+        rows = (
+            _client()
+            .table("reference_tables")
+            .select("*")
+            .eq("name", name)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def load_reference_table_history(name: str, limit: int = 50) -> "list[dict] | None":
+    """Read up to `limit` history rows for `name`, newest first.
+
+    Returns `None` (offline sentinel) on ANY failure and `[]` on a genuine
+    zero-row result — a table that has never been edited yet is a real,
+    different state from "couldn't check", same distinction as
+    `load_portfolio_thesis_or_none`.
+    """
+    if not name or not has_db():
+        return None
+    try:
+        rows = (
+            _client()
+            .table("reference_table_history")
+            .select("*")
+            .eq("name", name)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+            .data
+        )
+        return rows or []
+    except Exception:
+        return None
+
+
+def save_reference_table(name: str, payload: dict, updated_by: str) -> dict:
+    """Upsert `name`'s current row in `reference_tables`, implementing the
+    content-hash "snooze-button" mechanism from docs/plans/app-settings.md:
+    `as_of` moves ONLY when the canonicalized payload actually differs from
+    what's already stored — a save with an unchanged payload is a no-op
+    that leaves `as_of` alone. Canonicalization (sorted buckets, sorted +
+    upper-cased tickers) is delegated to
+    `stock_analyzer.reference_data.canonicalize` so reordering tickers is
+    never mistaken for a real edit.
+
+    Never raises — any DB failure during the write is reported via the
+    return value, matching `save_model_predictions_batch`'s try/except
+    shape. Returns exactly one of:
+      {"status": "no_change"}
+      {"status": "saved", "as_of": "<ISO date>"}
+      {"status": "error", "detail": "<str(exception) or a guard reason>"}
+    """
+    if is_readonly():
+        return {"status": "error", "detail": "read-only session"}
+    if not name:
+        return {"status": "error", "detail": "no table name given"}
+    if not has_db():
+        return {"status": "error", "detail": "no database connection"}
+    try:
+        import hashlib
+        import json
+
+        from stock_analyzer.market_time import today_et
+        from stock_analyzer.reference_data import canonicalize
+
+        normalized = canonicalize(payload)
+        new_hash = hashlib.sha256(
+            json.dumps(normalized, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
+        existing = load_reference_table(name)
+        if existing is not None and existing.get("payload_hash") == new_hash:
+            return {"status": "no_change"}
+
+        as_of = today_et().isoformat()
+        row = {
+            "name":         name,
+            "payload":      normalized,
+            "payload_hash": new_hash,
+            "as_of":        as_of,
+            "updated_by":   updated_by,
+        }
+        _client().table("reference_tables").upsert(row, on_conflict="name").execute()
+        _client().table("reference_table_history").insert({
+            "name":         name,
+            "payload":      normalized,
+            "payload_hash": new_hash,
+            "as_of":        as_of,
+            "updated_by":   updated_by,
+        }).execute()
+        return {"status": "saved", "as_of": as_of}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
