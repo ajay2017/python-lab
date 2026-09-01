@@ -84,6 +84,19 @@ TICKER_SECTORS = {
     "BX": "Financials", "BAC": "Financials", "WFC": "Financials",
     "C": "Financials", "MS": "Financials", "SCHW": "Financials", "BLK": "Financials",
     "COF": "Financials", "HOOD": "Financials",
+    # AXP/SPGI/CME/ICE/PNC/USB/KKR/APO added 2026-09-01: all 8 are in the
+    # discovery_universe "Financials" bucket (the Movers scan net, now
+    # DB-backed via App Settings/reference_data.resolve_universe as of Commit
+    # 3) alongside JPM/BAC/WFC/etc. above, but had no entry here, so a
+    # Movers-sourced pick in any of them fell back to the raw provider GICS
+    # string (commonly "Financial Services") — unknown to
+    # _SECTOR_IMPACT/RATE_SENSITIVITY, so a Financials-blocking macro event
+    # (NFP/CPI/Fed) could never suppress it via the Movers path even though a
+    # curated name like JPM correctly would be. Same class as the BA (F-240),
+    # F/GM (F-242) and Semiconductors (2026-09-01, 6a7ef61) gaps above.
+    "AXP": "Financials", "SPGI": "Financials", "CME": "Financials",
+    "ICE": "Financials", "PNC": "Financials", "USB": "Financials",
+    "KKR": "Financials", "APO": "Financials",
     # BA was omitted here until 2026-08-16, so it fell back to the SECTOR_UNIVERSE
     # bucket label "Defense & Aerospace" — a label _SECTOR_IMPACT doesn't know —
     # and was silently exempt from the macro gate while LMT/RTX/NOC/GD were not.

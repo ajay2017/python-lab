@@ -333,6 +333,52 @@ def test_discovery_mover_in_curated_sector_is_macro_blocked_not_new_pick():
         "ARM must not reach new_picks while its sector is macro-blocked")
 
 
+def test_discovery_mover_in_financials_sector_is_macro_blocked_not_new_pick():
+    """AXP is Movers-sourced (discovery_universe's DB-backed "Financials"
+    bucket, App Settings Commit 3) and was, until 2026-09-01, absent from
+    portfolio.TICKER_SECTORS — resolve_sector() fell back to the raw provider
+    GICS string ("Financial Services" here), unknown to _SECTOR_IMPACT, so an
+    Employment HIGH event blocking Financials (severity 3) could never
+    suppress it. Same class as the ARM/Semiconductors test above. Proves the
+    fixed reachability: even though the movers row still carries the raw
+    provider sector string, the curated TICKER_SECTORS entry wins and AXP
+    lands in macro_blocked_picks, not new_picks.
+    """
+    today = date(2026, 9, 1)
+    macro_events = [{
+        "date": "2026-09-01", "event": "Non-Farm Payrolls",
+        "category": "Employment", "impact": "HIGH",
+    }]
+    movers = [{
+        "ticker": "AXP", "price": 300.0, "sector": "Financial Services",
+        "trend": "Up", "scanner_signal": "Buy", "score": COMPOSITE_BUY + 10,
+        "rsi": 60.0, "mom_1m": 5.0, "mom_3m": 8.0,
+        "composite_score": COMPOSITE_BUY + 10, "day_change": 2.0,
+    }]
+    composites = {"AXP": {
+        "total": COMPOSITE_BUY + 10, "rec": {"label": "Strong Buy"},
+        "stale_as_of": None, "fund_cache_age_days": None,
+        "fundamentals_available": True, "val_available": True,
+    }}
+
+    result = _grow_today(**_minimal_grow_today_kwargs(
+        movers=movers,
+        composites=composites,
+        macro_events=macro_events,
+        today=today,
+    ))
+
+    blocked_tickers   = {p.get("ticker") for p in (result.get("macro_blocked_picks") or [])}
+    new_pick_tickers  = {p.get("ticker") for p in (result.get("new_picks") or [])}
+    assert "AXP" in blocked_tickers, (
+        f"AXP must be macro-blocked (Financials, Employment severity 3 >= 2); "
+        f"got macro_blocked={result.get('macro_blocked_picks')}, "
+        f"new_picks={result.get('new_picks')}"
+    )
+    assert "AXP" not in new_pick_tickers, (
+        "AXP must not reach new_picks while its sector is macro-blocked")
+
+
 # ── Test 5: bear early-return carries the key ─────────────────────────────────
 
 def test_bear_return_carries_macro_coverage_expired_key():
