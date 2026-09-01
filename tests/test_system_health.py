@@ -232,6 +232,67 @@ def test_caches_none_is_unknown_value_is_ok():
     assert caches["_risk_advisor_recs_cache"]["severity"] == "unknown"
 
 
+# ── ⑥ write outcomes ─────────────────────────────────────────────────────────
+def test_write_outcome_absent_key_is_unknown():
+    """Key never written this session (Grow Today hasn't built yet) → 'unknown',
+    NEVER 'ok' — absence must not be mistaken for a confirmed-clean run."""
+    outcomes = {r["key"]: r for r in sh.check_write_outcomes({})}
+    assert outcomes["_rec_log_save_result"]["severity"] == "unknown"
+    assert outcomes["_gate_ledger_save_result"]["severity"] == "unknown"
+
+
+def test_write_outcome_error_is_down():
+    """A caught exception string in `error` → 'down', and the detail carries
+    the actual error text (not just a generic failure label)."""
+    container = {"_rec_log_save_result": {"attempted": 3, "saved": 0,
+                                           "error": "duplicate key value violates constraint"}}
+    outcomes = {r["key"]: r for r in sh.check_write_outcomes(container)}
+    row = outcomes["_rec_log_save_result"]
+    assert row["severity"] == "down"
+    assert "duplicate key value violates constraint" in row["detail"]
+
+
+def test_write_outcome_partial_save_is_warn():
+    """error is None but saved < attempted → 'warn' (partial upsert; some rows
+    silently dropped without raising)."""
+    container = {"_gate_ledger_save_result": {"attempted": 5, "saved": 2, "error": None}}
+    outcomes = {r["key"]: r for r in sh.check_write_outcomes(container)}
+    assert outcomes["_gate_ledger_save_result"]["severity"] == "warn"
+
+
+def test_write_outcome_full_save_is_ok():
+    """error is None, saved == attempted > 0 → clean confirmed save → 'ok'."""
+    container = {"_gate_ledger_save_result": {"attempted": 4, "saved": 4, "error": None}}
+    outcomes = {r["key"]: r for r in sh.check_write_outcomes(container)}
+    assert outcomes["_gate_ledger_save_result"]["severity"] == "ok"
+
+
+def test_write_outcome_nothing_to_record_is_ok_but_distinct_from_absent():
+    """attempted == 0, saved == 0, error is None → 'ok', 'nothing to record' —
+    a CONFIRMED-clean run. This must be distinguishable from the absent-key
+    'unknown' case above (same severity is not enough; the WHOLE point of this
+    check is that a clean no-op and a swallowed failure must never look alike,
+    and by extension a clean no-op and 'never even attempted' must not either)."""
+    container = {"_rec_log_save_result": {"attempted": 0, "saved": 0, "error": None}}
+    present = {r["key"]: r for r in sh.check_write_outcomes(container)}
+    absent = {r["key"]: r for r in sh.check_write_outcomes({})}
+    assert present["_rec_log_save_result"]["severity"] == "ok"
+    assert absent["_rec_log_save_result"]["severity"] == "unknown"
+    assert present["_rec_log_save_result"]["detail"] != absent["_rec_log_save_result"]["detail"]
+
+
+def test_write_outcome_malformed_container_never_raises():
+    """A container whose .get() raises must degrade gracefully to 'unknown',
+    never propagate — matching this module's never-raises contract."""
+    class _BoomContainer:
+        def get(self, *_a, **_kw):
+            raise RuntimeError("boom")
+
+    outcomes = sh.check_write_outcomes(_BoomContainer())
+    assert outcomes
+    assert all(r["severity"] == "unknown" for r in outcomes)
+
+
 # ── freshness "due" gating (DST-blindness regression) ─────────────────────────
 def test_freshness_does_not_expect_todays_row_before_lane_due_hour(monkeypatch):
     """The blocking bug the Opus review caught: `expected_hour_et` must gate
@@ -445,5 +506,24 @@ def test_compute_health_never_raises_and_has_keys(monkeypatch):
     monkeypatch.setattr(db, "has_db", _boom)
     monkeypatch.setattr(db, "load_cron_heartbeats", _boom)
     health = sh.compute_health(session_state={})
-    for key in ("lanes", "stores", "providers", "caches", "chip_severity", "n_down", "n_warn"):
+    for key in ("lanes", "stores", "providers", "caches", "writes", "chip_severity", "n_down", "n_warn"):
         assert key in health
+
+
+# ── ⑥ write outcomes DO drive the chip (opposite of ④/⑤'s exclusion) ──────────
+def test_write_outcome_failure_escalates_chip_to_down(monkeypatch):
+    """Positive-inclusion test: unlike check ④ (caches) and ⑤ (reference data),
+    which are deliberately excluded from the chip rollup, a swallowed write
+    failure surfaced by check ⑥ MUST escalate chip_severity to 'down' — that
+    is the entire point of this check existing. Quiet every other check so
+    only the write-outcome failure can be driving the result."""
+    monkeypatch.setattr(sh, "check_cron_liveness", lambda: [])
+    monkeypatch.setattr(sh, "check_data_stores", lambda: [])
+    monkeypatch.setattr(sh, "check_providers", lambda: [])
+    monkeypatch.setattr(sh, "check_caches", lambda _s=None: [])
+    monkeypatch.setattr(sh, "check_reference_data", lambda: [])
+
+    container = {"_gate_ledger_save_result": {"attempted": 3, "saved": 0, "error": "boom"}}
+    health = sh.compute_health(session_state=container)
+    assert health["chip_severity"] == "down"
+    assert health["n_down"] == 1

@@ -2128,14 +2128,28 @@ caught by Opus review before ship.
 Pure-ish diagnostic module for the owner-only 🩺 System Trust page (System
 Proprioception Phase 1). **INFORMS ONLY — every function is read-only and feeds
 no gate, recommendation, composite, or threshold.** Pull-based / render-time:
-nothing depends on its own background job. FIVE never-raising checks — ① cron
+nothing depends on its own background job. SIX never-raising checks — ① cron
 liveness (`cron_heartbeat`), ② data-store existence + freshness (the "DDL-catcher":
 a provably-missing table reads red/"down"; the inventory maps each cron lane to
 the stores it writes and whether the write is unconditional-daily or conditional),
-③ provider health (`api_health`), ④ in-session `session_state` producer caches —
-rolled up by `compute_health()` into a `chip_severity` (worst of ①②③ only; ④ is
-excluded so a cold Home run, before Home populates its caches, can't false-positive
-the chip). `get_health()` memoizes in `st.session_state["_system_health_cache"]`
+③ provider health (`api_health`), ④ in-session `session_state` producer caches,
+⑤ reference-data shelf life (thin adapter over `reference_shelf.py`, see below),
+⑥ **interactive write outcomes (added 2026-09-01)** — grades `check_write_outcomes()`
+against two dead-diagnostic dicts app.py already wrote to `session_state` but never
+rendered, `_rec_log_save_result`/`_gate_ledger_save_result` (each shaped
+`{"attempted", "saved", "error"}`, written on the interactive Grow Today build path
+only — the cron lane's equivalent writes have no session to publish into and stay
+console-logged). Before this, a caught write exception (`error` set) rendered
+identically to a healthy no-op (`attempted=0`) — the absent-key case (`unknown`,
+"not attempted this session") is kept distinct from the present-but-clean-zero case
+(`ok`, "nothing to record") specifically so a never-attempted write can't be
+misread as a confirmed-clean one. Rolled up by `compute_health()` into a
+`chip_severity` (worst of **①②③⑥**; ④ and ⑤ are excluded — ④ so a cold Home run,
+before Home populates its caches, can't false-positive the chip, ⑤ because it's a
+standing chore rather than a transient fault; ⑥ is deliberately INCLUDED despite
+being new, because a swallowed write failure is exactly the same-session pass/fail
+signal the chip exists to surface, unlike ④'s cold-load caches or ⑤'s standing
+condition). `get_health()` memoizes in `st.session_state["_system_health_cache"]`
 (~5-min TTL). The recency windows (`_DAILY_LANE_OK_HOURS` etc.) are **observability
 thresholds, not investment policy** — deliberately local to this module, not in
 `constants.py`. `check_providers()` re-grades a "down" `api_health` read to "warn"

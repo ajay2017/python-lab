@@ -4153,13 +4153,14 @@ if page == "🏠 Home":
     # ── System Trust chip (System Proprioception Phase 1) — owner-only, degraded-
     # only. One line at the top of Home ONLY when a pipeline check is amber/red,
     # linking to the 🩺 System Trust page. INFORMS ONLY — suppresses nothing.
-    # Rolls up checks ①②③ (cron liveness / data-store existence+freshness /
-    # provider health), deliberately NOT ④ (session caches are legitimately unset
-    # this early in a cold Home run, so gating on them would false-positive every
-    # cold load) and NOT ⑤ (reference-data shelf life is a STANDING condition
-    # that stays amber for weeks until a human refreshes a list — a permanent
-    # amber here would train the user to ignore the chip that also reports a
-    # dead cron lane). Memoized ~5min. Wrapped so proprioception can never break Home.
+    # Rolls up checks ①②③⑥ (cron liveness / data-store existence+freshness /
+    # provider health / interactive write outcomes), deliberately NOT ④ (session
+    # caches are legitimately unset this early in a cold Home run, so gating on
+    # them would false-positive every cold load) and NOT ⑤ (reference-data shelf
+    # life is a STANDING condition that stays amber for weeks until a human
+    # refreshes a list — a permanent amber here would train the user to ignore
+    # the chip that also reports a dead cron lane). Memoized ~5min. Wrapped so
+    # proprioception can never break Home.
     if not db.is_readonly():
         try:
             from stock_analyzer import system_health as _sysh_home
@@ -31008,15 +31009,28 @@ elif page == "🩺 System Trust":
         "be trusted. No email means it checked and everything resolved."
     )
 
+    _sysh_section(
+        "##### ⑥ Interactive write outcomes — did today's ledger writes actually save?",
+        _health.get("writes", []), noun="write paths",
+        all_ok_text="Saved cleanly — no swallowed failures this session",
+        partial_text="{n_ok}/{n} confirmed saved cleanly, rest not attempted yet this session",
+        none_confirmed_text="nothing was verified this run — most often means "
+                            "Grow Today (🏠 Home) hasn't been built yet this session",
+        tech_key="key",
+    )
+
     _sysh_ca = _health.get("computed_at")
     if _sysh_ca:
         st.caption(f"Computed {str(_sysh_ca)[:19].replace('T', ' ')} ET · cached ~5 min · Refresh to re-probe.")
     st.caption(
         "🔴 red = a data store is provably missing (its one-time DDL may be unapplied), a "
-        "lane ran and failed, or a provider is still actively erroring right now — the app may "
-        "be deciding on incomplete data. 🟡 amber = degraded but inputs present (includes a "
-        "provider that hit errors earlier this session but has since recovered). ⚪ = not "
-        "observed yet this session (not a fault). This page reports only; it changes nothing."
+        "lane ran and failed, a provider is still actively erroring right now, or an "
+        "interactive ledger write (⑥) silently failed — the app may be deciding on "
+        "incomplete data. 🟡 amber = degraded but inputs present (includes a provider "
+        "that hit errors earlier this session but has since recovered). ⚪ = not "
+        "observed yet this session (not a fault — on ⑥ specifically, it means the write "
+        "wasn't attempted this session, most often because Grow Today hasn't run yet)."
+        " This page reports only; it changes nothing."
     )
 
 
@@ -33967,7 +33981,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY** (high-conviction name with tailwind), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer testing whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. Feeds **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. The skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated. Predicts risk (volatility), never a stock-level direction/return call.
-- **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Five checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), and **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.**
+- **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Six checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh), and **⑥ Write outcomes** (did today's interactive ledger writes — the buy recommendations log, the gate suppression ledger — actually save, or did a swallowed failure look identical to a healthy "nothing to record"?). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Check ⑥, unlike ④/⑤, DOES feed the Home banner — it is a same-session pass/fail signal, not a standing condition or a cold-load cache. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.**
 - **🛑 The Road Not Taken** — owner-only, not shown in read-only viewer mode. Grades the app's own restraint: every time a gate (macro/sector filters, single-name ceiling, drift conflict, cooldown, early-deterioration WATCH, bear-day tone) held back a pick or an add, this page shows what the forward return vs SPY over the following ~30 trading days would have been — did the app's caution help or hurt? Per gate, not aggregate, and a gate shows no verdict at all ("building") until enough matured, priced, distinct-ticker calls have accrued — expect every gate to read "building" for the first couple of months. **A pure retrospective measurement — it never changes what the engine recommends, gates, or sizes**, today or in the future.
 - **⚙️ App Settings** — owner-only, not shown in read-only viewer mode. Lets you curate the three ticker-roster lists the engine reads — the Grow Today scan universe, the Movers discovery net, and the Diversification candidate roster — from inside the app instead of by editing code. **Edits the engine's INPUT SET, never a decision rule**: no gate, threshold, scoring weight, or `COMPOSITE_BUY` lives here or is ever editable through this page. The database is the single source of truth for these lists — if it's unreachable, the affected page shows "unavailable" rather than silently falling back to a frozen list. Every save is validated (a typo'd symbol blocks the save, never saves with a warning) and versioned in an append-only history, the same way git records why an investment threshold changed.
 

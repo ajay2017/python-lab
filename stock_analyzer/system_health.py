@@ -10,11 +10,13 @@ run (the "who watches the watcher" constraint from
 docs/plans/system-proprioception.md). Every value is read live at call time from
 a store that already exists.
 
-Four checks:
+Six checks:
   ① cron liveness      — reads `cron_heartbeat` (written by each cron_runner lane)
   ② data-store health  — existence (a missing table = the DDL-catcher) + freshness
   ③ provider health    — reads `api_health` (session-scoped provider call stats)
   ④ in-session caches   — which session_state producer caches populated this run
+  ⑤ reference shelf life — is any hand-maintained reference table overdue for refresh
+  ⑥ write outcomes      — did today's interactive ledger writes actually save
 
 Severity vocabulary:
   "ok"      (🟢) — healthy / fresh.
@@ -254,6 +256,18 @@ _CACHES: tuple[tuple[str, str], ...] = (
     ("_corr_df_cache",             "Correlation analysis"),
     ("_actions_cache",             "Act-Today actions"),
     ("_div_recs_cache",            "Diversification advice"),
+)
+
+
+# ── Interactive write-outcome diagnostics (check ⑥) ────────────────────────────
+# Both dicts are shaped {"attempted": int, "saved": int, "error": str | None},
+# written only on the APP-interactive path (Grow Today build in app.py) inside
+# their own try/except. The cron lane's equivalent writes (cron_runner.py) have
+# no Streamlit session to publish into — their outcome is console-logged only,
+# not surfaced here.
+_WRITE_OUTCOMES: tuple[tuple[str, str], ...] = (
+    ("_rec_log_save_result",     "Buy recommendations log"),
+    ("_gate_ledger_save_result", "Gate suppression ledger"),
 )
 
 
@@ -666,6 +680,64 @@ def check_caches(session_state: Any = None) -> list[dict]:
     return out
 
 
+# ── ⑥ interactive write-outcome diagnostics ────────────────────────────────────
+def check_write_outcomes(session_state: Any = None) -> list[dict]:
+    """Grade the outcome of writes the app ATTEMPTS on the current interactive
+    render (Grow Today build) — distinct from check ② (does a table exist and
+    look fresh at all) because this answers "did TODAY's attempt actually
+    succeed", closing the gap where a silently swallowed write failure was
+    indistinguishable from a healthy no-op.
+
+    Severity:
+      key ABSENT from session_state -> 'unknown' (not attempted this session —
+        Grow Today hasn't built yet, a Locked Setup guard skipped the write, or
+        a read-only session where the write is never attempted). Must NEVER
+        read as "no gate fired" / "nothing to record" — that is a materially
+        different, ATTEMPTED-and-confirmed-clean state (see below).
+      key present, error truthy -> 'down' (attempted and failed — exactly the
+        class this check exists to surface).
+      key present, error falsy, saved < attempted -> 'warn' (partial upsert;
+        some rows silently dropped).
+      key present, error falsy, attempted > 0, saved >= attempted -> 'ok'.
+      key present, error falsy, attempted == 0 -> 'ok', "nothing to record" —
+        an attempted, CONFIRMED-clean run, not the same as unknown/absent.
+    Never raises."""
+    container: Any = session_state
+    if container is None:
+        try:
+            import streamlit as st
+            container = st.session_state
+        except Exception:
+            container = {}
+
+    out: list[dict] = []
+    for key, label in _WRITE_OUTCOMES:
+        try:
+            result = container.get(key) if hasattr(container, "get") else None
+        except Exception:
+            result = None
+        try:
+            if result is None:
+                out.append({"key": key, "label": label, "severity": "unknown",
+                            "detail": "not attempted this session"})
+                continue
+            attempted = int(result.get("attempted") or 0)
+            saved = int(result.get("saved") or 0)
+            error = result.get("error")
+            if error:
+                severity, detail = "down", f"write failed — {str(error)[:120]}"
+            elif attempted and saved < attempted:
+                severity, detail = "warn", f"partial write — saved {saved}/{attempted}"
+            elif attempted:
+                severity, detail = "ok", f"saved {saved}/{attempted}"
+            else:
+                severity, detail = "ok", "nothing to record this run"
+        except Exception as exc:
+            severity, detail = "unknown", f"could not grade — {str(exc)[:120]}"
+        out.append({"key": key, "label": label, "severity": severity, "detail": detail})
+    return out
+
+
 # ── rollup ────────────────────────────────────────────────────────────────────
 _SEVERITY_RANK = {"ok": 0, "unknown": 0, "warn": 1, "down": 2}
 
@@ -712,11 +784,11 @@ def check_reference_data() -> list[dict]:
 
 
 def compute_health(session_state: Any = None) -> dict:
-    """Run all five checks and roll up a chip severity. Never raises.
+    """Run all six checks and roll up a chip severity. Never raises.
 
-    `chip_severity` is the worst of checks ①②③ ONLY (cron / data stores /
-    providers). Two checks are reported on the page but deliberately EXCLUDED
-    from the chip:
+    `chip_severity` is the worst of checks ①②③⑥ (cron / data stores /
+    providers / write outcomes). Two checks are reported on the page but
+    deliberately EXCLUDED from the chip:
 
       ④ session caches — excluded to avoid cold-load false positives.
       ⑤ reference-data shelf life — excluded because it is a STANDING
@@ -747,13 +819,21 @@ def compute_health(session_state: Any = None) -> dict:
     providers = _safe(check_providers)
     caches = _safe(check_caches, session_state)
     reference = _safe(check_reference_data)
+    writes = _safe(check_write_outcomes, session_state)
 
-    # NB: `reference` is deliberately absent from `pipeline` — see the docstring.
-    # A test asserts chip_severity/n_warn/n_down are byte-identical with every
-    # reference table forced maximally overdue, so this can't regress quietly.
+    # NB: `reference` and `caches` are deliberately absent from `pipeline` —
+    # see the docstring. The guarantee is structural, not merely test-asserted:
+    # neither list is ever appended below, so no severity either produces can
+    # reach chip_severity/n_warn/n_down regardless of how degraded it reads.
+    # `writes` is, by contrast, DELIBERATELY
+    # INCLUDED: unlike ④/⑤ it is a same-session pass/fail signal, not a
+    # cold-load cache (④) or a standing chore (⑤) — it can legitimately emit
+    # warn/down for a real swallowed write failure, which is precisely the
+    # class of problem the Home chip exists to surface.
     pipeline = [x["severity"] for x in lanes] + \
                [x["severity"] for x in stores] + \
-               [x["severity"] for x in providers]
+               [x["severity"] for x in providers] + \
+               [x["severity"] for x in writes]
     chip = _worst(*pipeline) if pipeline else "ok"
 
     n_down = sum(1 for s in pipeline if s == "down")
@@ -765,6 +845,7 @@ def compute_health(session_state: Any = None) -> dict:
         "providers": providers,
         "caches": caches,
         "reference": reference,
+        "writes": writes,
         "chip_severity": chip,
         "n_down": n_down,
         "n_warn": n_warn,
