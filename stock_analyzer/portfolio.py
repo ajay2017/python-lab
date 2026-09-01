@@ -63,12 +63,37 @@ TICKER_SECTORS = {
     "ZS": "Cybersecurity", "FTNT": "Cybersecurity", "OKTA": "Cybersecurity", "S": "Cybersecurity",
     "DELL": "Enterprise Tech", "ORCL": "Enterprise Tech", "IBM": "Enterprise Tech",
     "HPE": "Enterprise Tech", "SAP": "Enterprise Tech",
+    # WDAY/ZM/DOCU/DBX/INTU/BILL added 2026-09-01: all 6 are in the
+    # discovery_universe "Software & Cloud" bucket (Movers scan net) with no
+    # entry here, same raw-GICS-shadow class as the Financials/Semiconductors
+    # fixes above. Classified as mature enterprise-SaaS utilities alongside
+    # ORCL/SAP/IBM (not the higher-growth AI & Cloud cluster below).
+    # INTU/BILL specifically: software vendors serving financial workflows,
+    # not financial institutions themselves — classified by what they ARE,
+    # not who they serve (confirmed with the user, distinct from the
+    # payments/crypto XYZ/COIN -> Financials precedent).
+    "WDAY": "Enterprise Tech", "ZM": "Enterprise Tech", "DOCU": "Enterprise Tech",
+    "DBX": "Enterprise Tech", "INTU": "Enterprise Tech", "BILL": "Enterprise Tech",
     "PLTR": "AI & Data", "AI": "AI & Data", "MDB": "AI & Data", "SNOW": "AI & Data",
     "PATH": "AI & Data", "IONQ": "AI & Data",
     # Data / observability / search infra — same correlated cluster as SNOW/MDB.
     "ESTC": "AI & Data", "GTLB": "AI & Data",   # CFLT removed 2026-08-16 (delisted)
+    # U/APP added 2026-09-01, same Software & Cloud gap as above. Both
+    # classified AI & Data rather than Enterprise Tech/Consumer Tech: each
+    # company's own investment thesis is its AI/data engine specifically
+    # (Unity's ad-monetization ML stack; AppLovin's AXON ad-optimization
+    # engine), not the underlying game-engine/ad-network business itself —
+    # confirmed with the user.
+    "U": "AI & Data", "APP": "AI & Data",
     "MSFT": "AI & Cloud", "GOOGL": "AI & Cloud", "META": "AI & Cloud",
     "CRM": "AI & Cloud", "NOW": "AI & Cloud", "DDOG": "AI & Cloud",
+    # ADBE/TEAM/HUBS/TWLO added 2026-09-01, same Software & Cloud gap as
+    # above. Classified alongside CRM/NOW/DDOG as higher-growth cloud
+    # platforms with a real AI narrative (Adobe Firefly, Atlassian
+    # Intelligence, HubSpot Breeze, Twilio's AI-driven CPaaS) rather than the
+    # mature Enterprise Tech utilities above — confirmed with the user.
+    "ADBE": "AI & Cloud", "TEAM": "AI & Cloud", "HUBS": "AI & Cloud",
+    "TWLO": "AI & Cloud",
     # Consumer-internet / social-advertising names — map to Consumer Tech so they
     # don't fall through to the "Other" catch-all and inflate a phantom breach.
     "PINS": "Consumer Tech", "SPOT": "Consumer Tech", "DASH": "Consumer Tech",
