@@ -2176,6 +2176,68 @@ human reconsidered the membership, not that it changed, and any other reading
 makes CHURNING a roster the only way to clear the warning, which would degrade
 the very tables the check protects. The bar is evidence, not outcome.
 
+**DB-first `as_of`, added 2026-09-01 (F-262, App Settings Commit 1).** For the
+three tables migrated to the `reference_tables` DB layer
+(`sector_universe`/`discovery_universe`/`sector_candidates`), `shelf_status()`
+now tries `db.load_reference_table(name)` first and reads its `as_of` when
+present, falling back to the hardcoded code-recorded date only when the DB has
+no row yet (pre-DDL, or offline) — so an un-migrated or not-yet-seeded table
+keeps telling the truth exactly as before. The other three registry entries
+(`sp500_sector_weights`, `macro_event_calendar`, `nyse_calendar`) are untouched
+and never call the DB, asserted by a dedicated test.
+
+### `stock_analyzer/reference_data.py`
+
+Pure decision layer for App Settings (F-262, 2026-09-01) — the UI-managed
+version of the three ticker-roster reference tables above. Owns three things,
+deliberately kept out of `app.py` and out of `db.py` (which stays I/O-only):
+
+- **`canonicalize(payload)`** — the deterministic normal form (sort bucket
+  keys, sort + upper-case every ticker) a payload is reduced to before its
+  content hash is compared. This is the entire mechanism that makes a save's
+  `as_of` a side effect of a REAL delta rather than an independently settable
+  date — reordering or re-casing a roster is never mistaken for a refresh.
+- **`resolve_universe(name)`** — single-source, NO-FALLBACK read: raises
+  `ReferenceDataUnavailable` when `db.load_reference_table` returns `None`
+  (DB unreachable / pre-DDL / RLS misconfigured) OR when the payload is empty
+  (every bucket has zero tickers) — an empty roster is deliberately never
+  treated as "a legitimately empty universe," since "scanned nothing, found
+  nothing" is indistinguishable from a clean bill of health, the single most
+  dangerous output this feature could produce. Payload and `as_of` are always
+  returned together from the same read, so no caller can ever have them
+  disagree. `resolve_universe_or_none()` is the non-raising counterpart every
+  real caller actually uses, to render its own fail-loud banner or cron
+  handler rather than catching an exception at each call site.
+- **`validate_payload(name, payload, existing_bucket_keys)`** — the structural
+  rules a proposed edit must pass before a save: the v1 **bucket/sector
+  structure lock** (the payload's key set must exactly match the current one
+  — protects `portfolio._DIVERSIFY_TO_DISCOVERY`'s cross-table key coupling
+  without needing a live rename-orphan guard), and, for `sector_candidates`
+  specifically, that every ticker's `portfolio.TICKER_SECTORS` value equals
+  the bucket key it's being placed under (bucket-key EQUALITY, not mere
+  presence — tightened after a Commit-1 review found presence-only checking
+  would let a ticker be UI-placed into the wrong sector bucket, silently
+  breaking the same invariant `tests/test_portfolio.py` enforces in CI).
+  Provider/network ticker-EXISTENCE validation is NOT here — that belongs to
+  the editing page, which needs the offline-blocks-the-save UX this module
+  doesn't own.
+
+**Redline (unchanged from the design doc, `docs/plans/app-settings.md`): this
+module and everything it resolves is INPUT-SET data — which names a rule is
+applied to — never a decision rule itself.** No threshold, weight, or gate
+lives here or is ever editable through the page this module backs.
+
+**As of Commit 2 (`63c5bc8`), every real reader of `SECTOR_UNIVERSE`/
+`DISCOVERY_UNIVERSE`/`_SECTOR_CANDIDATES` goes through this module** —
+`scanner.scan_sectors`, `portfolio.diversifying_candidate_pool`/
+`diversification_recommendations`, `home_risk_synthesis.build_correlation_bundle`,
+`discovery_universe.discovery_tickers`, `ticker_liveness.sweep`, the `scan`
+cron lane, and ~11 `app.py` sites. The three hardcoded dicts still exist in
+their source files as source-of-truth-until-cutover (a staged, deliberately
+separate Commit 3 deletes them once the DB seed is verified in production) —
+every function that reads them gained an optional parameter whose `None`
+default is a unit-test convenience ONLY, never hit by a real caller.
+
 ### `stock_analyzer/ticker_liveness.py`
 
 Weekly liveness sweep over the three curated rosters (`SECTOR_UNIVERSE` ∪

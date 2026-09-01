@@ -1,7 +1,16 @@
 # App Settings — UI-managed reference data
 
-**Status: DESIGN FULLY RESOLVED, still no code written, as of 2026-09-01. User explicitly
-chose to HOLD rather than build now — see "Trigger to build" at the bottom.**
+**Status: COMMITS 1+2 SHIPPED AND PRODUCTION-VERIFIED, 2026-09-01 (F-262, commits
+`1fe309b`/`63c5bc8`). Commit 3 (the staged cutover deleting the hardcoded fallback
+lists) is the only remaining, deliberately-not-yet-built piece — see "Trigger to
+build" at the bottom for what gates starting it.**
+
+Data layer, resolver, and every real call-site rewiring are live: `SECTOR_UNIVERSE`/
+`DISCOVERY_UNIVERSE`/`_SECTOR_CANDIDATES` are seeded into `reference_tables` and every
+real reader goes through `reference_data.resolve_universe`. The owner confirmed on the
+live Railway deploy that all 3 tables read green/dated 2026-09-01 and Grow Today/
+Watchlist continued rendering normally. Full spec: `docs/requirements.md` F-262;
+memory `project_app_settings_design`.
 
 **Design state:** the architecture is settled (DB as single source of truth, fail loud on
 unavailable, no code fallback — see the DELETE/fail-loud resolution below, which replaces
@@ -457,11 +466,13 @@ accepted delta; the large-drop confirmation fires exactly at its constant's boun
 - 🟢 **doc-writer (Haiku)** — architecture DDL row + requirements F-row, after facts pinned
   by the build (not before — don't let doc-writer invent DDL ahead of the real schema).
 
-## Trigger to build
+## Trigger to build (Commit 3 only — Commits 1+2 are SHIPPED, see status line at top)
 
-**Design is fully resolved and ready. User explicitly chose to HOLD rather than start
-building, 2026-09-01** — the friction trigger (real refresh cycles: `242d4a7`, `6a7ef61`)
-has technically fired, but there's no urgency to act on it immediately. Revisit whenever a
-session is allocated to it; nothing further needs to be decided first. Check ⑤ continues
-to tell you when a table is due in the meantime, so the manual-edit workflow this feature
-would replace remains fully functional while this sits parked.
+Commit 3 (delete `SECTOR_UNIVERSE`/`DISCOVERY_UNIVERSE`/`_SECTOR_CANDIDATES` from their
+source files, flip the resolver to DB-only with zero code fallback) was deliberately staged
+separately so it could wait for real-world confidence in Commits 1+2 rather than shipping
+all three at once. **Trigger: whenever there's been enough live time on the seeded DB to be
+comfortable the code lists are genuinely redundant** — no fixed day count was set; this is
+a judgment call for whoever picks it up next, informed by whether ⚙️ App Settings edits and
+the resolver have been trouble-free in practice. Nothing else needs to be decided first —
+the design doc's own build plan (three phases, tests, review routing) already covers it.
