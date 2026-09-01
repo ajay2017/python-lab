@@ -507,9 +507,9 @@ def compute_portfolio_dynamics(
         n_positions     int
         has_tenure_data bool        — True if at least one first-buy date resolved
     """
-    import datetime
+    from stock_analyzer.market_time import today_et
 
-    today = datetime.date.today()
+    today = today_et()
 
     # Map ticker → days held for the oldest OPEN lot (FIFO-aware).
     # Using dates.min() across all historical BUYs was wrong: a re-entered

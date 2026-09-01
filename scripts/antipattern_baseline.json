@@ -611,7 +611,6 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001fquality.get(t) or {}": 1
     },
     "stock_analyzer/portfolio_health.py": {
-      "NAIVE_DATE_TODAY\u001fdatetime.date.today()": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fdetail.get(\"sector_weights\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fsub_scores[key].get(\"detail\") or {}": 1
     },
