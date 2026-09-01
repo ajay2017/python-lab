@@ -111,6 +111,12 @@ TICKER_SECTORS = {
     "RBLX": "Consumer Tech", "ROKU": "Consumer Tech", "EBAY": "Consumer Tech",
     "SE": "Consumer Tech", "MELI": "Consumer Tech", "BABA": "Consumer Tech",
     "PDD": "Consumer Tech", "JD": "Consumer Tech", "WBD": "Consumer Tech",
+    # MAR/DKNG added 2026-09-01, same Consumer & Retail discovery gap closed
+    # below — but classified here, not there: MAR (Marriott) is a hotel/
+    # travel-hospitality service alongside BKNG, not a store chain; DKNG
+    # (DraftKings) is an internet-native betting platform alongside RBLX, not
+    # a physical retailer — confirmed with the user.
+    "MAR": "Consumer Tech", "DKNG": "Consumer Tech",
     "LLY": "Healthcare", "NVO": "Healthcare", "ABBV": "Healthcare",
     "ISRG": "Healthcare", "MRNA": "Healthcare", "REGN": "Healthcare",
     "UNH": "Healthcare", "JNJ": "Healthcare", "PFE": "Healthcare",
@@ -160,6 +166,19 @@ TICKER_SECTORS = {
     "NKE": "Consumer Staples & Retail", "HD": "Consumer Staples & Retail",
     # Fintech/EV names that previously fell through to their bucket labels.
     "PYPL": "Financials", "RIVN": "EV & Auto",
+    # LOW/SBUX/MCD/CMG/LULU/ROST/DG/DLTR/ULTA/KR/ORLY added 2026-09-01: all 11
+    # are in the discovery_universe "Consumer & Retail" bucket (Movers scan
+    # net) with no entry here, same raw-GICS-shadow class as the Financials/
+    # Semiconductors/Software & Cloud/Internet & Media fixes above.
+    # SBUX/MCD/CMG (restaurant chains) grouped here rather than Consumer Tech
+    # since they're physical consumer retail, not tech/platform businesses —
+    # no better existing fit despite not being grocery/apparel "staples."
+    "LOW": "Consumer Staples & Retail", "SBUX": "Consumer Staples & Retail",
+    "MCD": "Consumer Staples & Retail", "CMG": "Consumer Staples & Retail",
+    "LULU": "Consumer Staples & Retail", "ROST": "Consumer Staples & Retail",
+    "DG": "Consumer Staples & Retail", "DLTR": "Consumer Staples & Retail",
+    "ULTA": "Consumer Staples & Retail", "KR": "Consumer Staples & Retail",
+    "ORLY": "Consumer Staples & Retail",
 }
 
 
