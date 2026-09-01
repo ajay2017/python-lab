@@ -32,23 +32,48 @@ DISCOVERY_UNIVERSE: dict[str, list[str]] = {
         "KLAC", "MRVL", "NXPI", "MCHP", "ON", "TER", "SWKS", "MPWR", "ARM",
         "SMCI", "WOLF",
     ],
+    # AI (C3.ai, $1.7B) removed 2026-09-01 — this file's own stated liquidity
+    # rule ("keep names liquid — avoid thin micro-caps where a 10% move is
+    # noise, not signal"), same rule already applied to SEDG/RUN/PLUG above.
+    # IBM and CSCO added 2026-09-01 — both already resolve via the existing
+    # portfolio.TICKER_SECTORS "Enterprise Tech" key alongside ORCL/SAP, so
+    # this is zero new taxonomy work.
     "Software & Cloud": [
         "CRM", "ORCL", "ADBE", "NOW", "INTU", "SAP", "WDAY", "TEAM", "DDOG",
         "SNOW", "MDB", "NET", "ZS", "CRWD", "PANW", "FTNT", "OKTA", "PLTR",
         # CFLT removed 2026-08-16 — delisted; Yahoo returns 404 "Quote not found"
         # and zero rows at period="max" across every provider.
         "HUBS", "ZM", "DOCU", "TWLO", "DBX", "GTLB", "S", "ESTC",
-        "PATH", "AI", "U", "BILL", "APP",
+        "PATH", "U", "BILL", "APP", "IBM", "CSCO",
     ],
+    # EBAY ($46.1B) and WBD ($71.5B) added 2026-09-01 — EBAY is the only major
+    # US online-marketplace name missing (SE/MELI/BABA/PDD/JD here are all
+    # non-US); WBD is a traditional media conglomerate, distinct from the
+    # DIS/CMCSA/NFLX streaming mix already in this bucket. Neither has a
+    # portfolio.TICKER_SECTORS entry yet (their raw provider GICS sector
+    # doesn't match any macro-gate-known key) — but this bucket already
+    # carries the same unmapped-sector gap on several existing members at
+    # comparable or larger scale, so this isn't a new class of debt; it's
+    # tracked separately (see the CLAUDE.md "What's queued" item on the
+    # raw-GICS-vs-curated-sector shadow defect), not fixed in this commit.
     "Internet & Media": [
         "NFLX", "DIS", "CMCSA", "SHOP", "UBER", "ABNB", "DASH", "SPOT", "PINS",
         "SNAP", "RBLX", "ROKU", "PYPL", "XYZ", "COIN", "HOOD", "SE", "MELI",
-        "BABA", "PDD", "JD",
+        "BABA", "PDD", "JD", "EBAY", "WBD",
     ],
+    # LCID ($1.9B) removed 2026-09-01 — same sub-scale liquidity rule as AI
+    # above. KR ($35.3B) and ORLY ($71.8B) added 2026-09-01 — KR is grocery
+    # retail, a genuine gap next to the warehouse/big-box names already here;
+    # ORLY is auto-parts retail, distinct from the auto manufacturers F/GM/
+    # RIVN already in this bucket. Neither KR nor ORLY has a
+    # portfolio.TICKER_SECTORS entry yet (same raw-GICS-vs-curated gap as
+    # EBAY/WBD above) — this bucket already carries that same gap on several
+    # existing members at comparable or larger scale, so it isn't a new class
+    # of debt; tracked separately, not fixed in this commit.
     "Consumer & Retail": [
         "WMT", "COST", "HD", "LOW", "TGT", "NKE", "SBUX", "MCD", "CMG", "LULU",
         "TJX", "ROST", "DG", "DLTR", "ULTA", "BKNG", "MAR", "F", "GM", "RIVN",
-        "LCID", "DKNG",
+        "DKNG", "KR", "ORLY",
     ],
     "Healthcare & Biotech": [
         "LLY", "UNH", "JNJ", "MRK", "ABBV", "PFE", "TMO", "ABT", "DHR", "AMGN",

@@ -257,7 +257,13 @@ _REFERENCE_TABLES: tuple[_RefTable, ...] = (
         label="Movers discovery universe",
         location="stock_analyzer/discovery_universe.py — DISCOVERY_UNIVERSE",
         kind=KIND_AS_OF,
-        as_of=date(2026, 5, 29),
+        # 2026-09-01: full market-cap/liquidity sweep of the whole universe
+        # via scripts/roster_coverage_report.py --roster discovery --caps —
+        # no delistings found. 4 removals / 6 additions across 3 of 4 buckets
+        # on market-cap/liquidity/sector-coverage grounds (AI, LCID out;
+        # IBM, CSCO, EBAY, WBD, KR, ORLY in); Mega-cap Tech reviewed and
+        # left unchanged.
+        as_of=date(2026, 9, 1),
         consequence="the wider breakout net narrows — a genuine mover in an "
                     "untracked name stays invisible",
     ),

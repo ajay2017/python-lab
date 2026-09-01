@@ -3501,8 +3501,8 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
     once per 30-min TTL per ticker. Logic lives in stock_analyzer/bundle_loader.py
     so the app and the cron never drift.
 
-    max_entries=300: the curated + discovery universe is ~275 tickers
-    (SECTOR_UNIVERSE 88 + DISCOVERY_UNIVERSE 201); this covers that whole
+    max_entries=300: the curated + discovery universe is ~290 tickers
+    (SECTOR_UNIVERSE 88 + DISCOVERY_UNIVERSE 202); this covers that whole
     known universe plus headroom for held/watchlist names and one-off
     "analyze any ticker" (F-40) lookups, while still bounding the worst case —
     each entry is the heaviest cached object in the app (full history + info +

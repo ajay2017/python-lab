@@ -66,3 +66,26 @@ def test_discovery_tickers_exclude_unrelated_ticker_changes_nothing():
     full = du.discovery_tickers()
     result = du.discovery_tickers(exclude={"ZZZZZ_NOT_A_REAL_TICKER"})
     assert result == full
+
+
+# ─── 2026-09-01 roster refresh — pins the exact approved diff ──────────────
+# Removed: AI (C3.ai, $1.7B), LCID ($1.9B) — both sub-scale under this file's
+# own liquidity rule. Added: IBM/CSCO (Software & Cloud), EBAY/WBD (Internet
+# & Media), KR/ORLY (Consumer & Retail). Asserts the specific, deliberate
+# diff — not a full-roster snapshot — so nothing silently rides along or
+# regresses on the next refresh.
+
+def test_discovery_2026_09_01_refresh_removals_and_additions():
+    software = set(du.DISCOVERY_UNIVERSE["Software & Cloud"])
+    internet = set(du.DISCOVERY_UNIVERSE["Internet & Media"])
+    consumer = set(du.DISCOVERY_UNIVERSE["Consumer & Retail"])
+
+    assert "AI" not in software, "C3.ai ($1.7B) should be removed as sub-scale"
+    assert "LCID" not in consumer, "Lucid ($1.9B) should be removed as sub-scale"
+
+    for added in ("IBM", "CSCO"):
+        assert added in software, f"{added} should be a Software & Cloud candidate"
+    for added in ("EBAY", "WBD"):
+        assert added in internet, f"{added} should be an Internet & Media candidate"
+    for added in ("KR", "ORLY"):
+        assert added in consumer, f"{added} should be a Consumer & Retail candidate"
