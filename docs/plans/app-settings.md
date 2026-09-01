@@ -1,16 +1,23 @@
 # App Settings — UI-managed reference data
 
-**Status: COMMITS 1+2 SHIPPED AND PRODUCTION-VERIFIED, 2026-09-01 (F-262, commits
-`1fe309b`/`63c5bc8`). Commit 3 (the staged cutover deleting the hardcoded fallback
-lists) is the only remaining, deliberately-not-yet-built piece — see "Trigger to
-build" at the bottom for what gates starting it.**
+**Status: FEATURE COMPLETE — ALL 3 COMMITS SHIPPED AND PRODUCTION-VERIFIED, 2026-09-01
+(F-262, commits `1fe309b`/`63c5bc8`/`a91c963`). Nothing left to build on this feature.**
 
-Data layer, resolver, and every real call-site rewiring are live: `SECTOR_UNIVERSE`/
-`DISCOVERY_UNIVERSE`/`_SECTOR_CANDIDATES` are seeded into `reference_tables` and every
-real reader goes through `reference_data.resolve_universe`. The owner confirmed on the
-live Railway deploy that all 3 tables read green/dated 2026-09-01 and Grow Today/
-Watchlist continued rendering normally. Full spec: `docs/requirements.md` F-262;
-memory `project_app_settings_design`.
+Data layer, resolver, every real call-site rewiring, and the staged cutover are all
+live: `SECTOR_UNIVERSE`/`DISCOVERY_UNIVERSE`/`_SECTOR_CANDIDATES` no longer exist as
+code — `reference_tables` is the sole source of truth, and every real reader goes
+through `reference_data.resolve_universe` with no fallback anywhere. The owner
+confirmed on the live Railway deploy that all 3 tables read green/dated 2026-09-01 and
+Grow Today/Watchlist continued rendering normally (checked after Commits 1+2; Commit 3
+changed no runtime behavior, only deleted now-dead code). Full spec: `docs/requirements.md`
+F-262; memory `project_app_settings_design`.
+
+**One non-blocking follow-up queued, not part of this feature's own scope:**
+`validate_payload`'s `TICKER_SECTORS`-coverage check only covers `sector_candidates` —
+`sector_universe`/`discovery_universe` have no equivalent save-time guard, so a future
+UI edit could reintroduce the raw-GICS-vs-curated-sector shadow defect (F-240/F-242's
+class) on those two tables. See CLAUDE.md's queue for the tracked item and its
+bucket-by-bucket fix plan.
 
 **Design state:** the architecture is settled (DB as single source of truth, fail loud on
 unavailable, no code fallback — see the DELETE/fail-loud resolution below, which replaces
@@ -466,13 +473,11 @@ accepted delta; the large-drop confirmation fires exactly at its constant's boun
 - 🟢 **doc-writer (Haiku)** — architecture DDL row + requirements F-row, after facts pinned
   by the build (not before — don't let doc-writer invent DDL ahead of the real schema).
 
-## Trigger to build (Commit 3 only — Commits 1+2 are SHIPPED, see status line at top)
+## Trigger to build — N/A, all 3 commits shipped 2026-09-01
 
-Commit 3 (delete `SECTOR_UNIVERSE`/`DISCOVERY_UNIVERSE`/`_SECTOR_CANDIDATES` from their
-source files, flip the resolver to DB-only with zero code fallback) was deliberately staged
-separately so it could wait for real-world confidence in Commits 1+2 rather than shipping
-all three at once. **Trigger: whenever there's been enough live time on the seeded DB to be
-comfortable the code lists are genuinely redundant** — no fixed day count was set; this is
-a judgment call for whoever picks it up next, informed by whether ⚙️ App Settings edits and
-the resolver have been trouble-free in practice. Nothing else needs to be decided first —
-the design doc's own build plan (three phases, tests, review routing) already covers it.
+Historical note only: Commit 3 was deliberately staged separately from Commits 1+2 so it
+could wait for real-world confidence before removing the code fallback for good. In
+practice it was built the same day, since the risk in Commit 3 turned out to be low
+(pure deletion + test cleanup, no new behavior — the real cutover already happened in
+Commit 2) and the reviewer confirmed every real caller was already correctly wired.
+Nothing left to trigger on this feature.
