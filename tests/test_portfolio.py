@@ -573,6 +573,55 @@ def test_ticker_sectors_values_are_rate_known_or_a_documented_gap():
     assert not unknown, f"new sector labels with no rate-sensitivity score: {unknown}"
 
 
+# ─── Discovery-universe macro-gate coverage (2026-09-01) ────────────────────
+# Movers-sourced picks reach daily_briefing's macro gate via the SAME
+# resolve_sector() -> TICKER_SECTORS path as the roster names above. 11 of 20
+# names in DISCOVERY_UNIVERSE["Semiconductors"] had no TICKER_SECTORS entry
+# (ADI, KLAC, NXPI, MCHP, ON, TER, SWKS, MPWR, ARM, SMCI, WOLF) and fell back
+# to the raw provider GICS string, invisible to the macro gate — same class as
+# BA (F-240) and F/GM (F-242). Scoped to ONLY the Semiconductors bucket: the
+# "Clean Energy & Utilities" bucket has a separate, deliberately-unfixed gap
+# (DUK/SO/D/AEP/EXC have no safe taxonomy home; VST/CEG are an accepted
+# 2026-08-17 pool gap — see CLAUDE.md's "What's queued") owned elsewhere.
+
+def test_every_discovery_semiconductor_ticker_has_a_curated_sector():
+    # FAILED ON HEAD before 2026-09-01: 11 names (see comment above) had no
+    # entry and fell back to a raw GICS string invisible to the macro gate.
+    from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
+    from stock_analyzer.portfolio import TICKER_SECTORS
+    bucket = set(DISCOVERY_UNIVERSE["Semiconductors"])
+    missing = sorted(bucket - set(TICKER_SECTORS))
+    assert not missing, (
+        f"Movers-sourced semiconductor tickers with no curated sector: {missing}")
+
+
+def test_discovery_semiconductor_sector_values_are_macro_and_rate_known():
+    # Companion to the curated-sector test above: having an entry isn't enough
+    # if the value it maps to isn't itself known to the macro gate or the
+    # rate-sensitivity table (mirrors test_scanner.py's
+    # test_every_curated_ticker_sector_value_is_macro_known, scoped here to
+    # just this one bucket).
+    from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
+    from stock_analyzer.macro import RATE_SENSITIVITY
+    from stock_analyzer.macro_calendar import _SECTOR_IMPACT
+    from stock_analyzer.portfolio import TICKER_SECTORS
+
+    macro_known = set()
+    for mapping in _SECTOR_IMPACT.values():
+        macro_known |= {k for k in mapping if k != "__ALL__"}
+
+    bucket = set(DISCOVERY_UNIVERSE["Semiconductors"])
+    unknown = {
+        t: TICKER_SECTORS[t]
+        for t in bucket
+        if t in TICKER_SECTORS
+        and (TICKER_SECTORS[t] not in macro_known
+             or TICKER_SECTORS[t] not in RATE_SENSITIVITY)
+    }
+    assert not unknown, (
+        f"semiconductor tickers whose curated sector isn't macro/rate-known: {unknown}")
+
+
 def test_discovery_clean_energy_removals_and_retentions():
     # Proves the Movers net changed only as intended: three micro-caps out,
     # everything else — including BE and the renewables that merely left the

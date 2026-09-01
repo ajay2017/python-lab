@@ -29,6 +29,18 @@ TICKER_SECTORS = {
     # scanner.SECTOR_UNIVERSE (that would re-add semiconductor concentration);
     # being held and being scanned are separate questions.
     "LRCX": "Semiconductors", "MRVL": "Semiconductors",
+    # ADI/KLAC/NXPI/MCHP/ON/TER/SWKS/MPWR/ARM/SMCI/WOLF added 2026-09-01: all
+    # 11 are in discovery_universe.DISCOVERY_UNIVERSE["Semiconductors"] (the
+    # Movers scan universe) and had no entry here, so a Movers-sourced pick in
+    # any of them fell back to the raw provider GICS string (commonly
+    # "Technology") — unknown to _SECTOR_IMPACT/RATE_SENSITIVITY, so a
+    # semis-blocking macro event (CPI/NFP/Fed) could never suppress it via the
+    # Movers path even though a curated name like AMD correctly would be. Same
+    # class as the BA (F-240) and F/GM (F-242) gaps above.
+    "ADI": "Semiconductors", "KLAC": "Semiconductors", "NXPI": "Semiconductors",
+    "MCHP": "Semiconductors", "ON": "Semiconductors", "TER": "Semiconductors",
+    "SWKS": "Semiconductors", "MPWR": "Semiconductors", "ARM": "Semiconductors",
+    "SMCI": "Semiconductors", "WOLF": "Semiconductors",
     "AAPL": "Consumer Tech", "AMZN": "Consumer Tech", "NFLX": "Consumer Tech",
     "SHOP": "Consumer Tech", "UBER": "Consumer Tech", "ABNB": "Consumer Tech",
     "BKNG": "Consumer Tech",

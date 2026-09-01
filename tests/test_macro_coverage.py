@@ -285,6 +285,54 @@ def test_expired_static_does_not_change_new_picks_or_macro_blocked(monkeypatch):
     )
 
 
+# ── Test 4b: discovery-sourced mover reaches the macro gate via TICKER_SECTORS ─
+
+def test_discovery_mover_in_curated_sector_is_macro_blocked_not_new_pick():
+    """ARM is Movers-sourced (discovery_universe.DISCOVERY_UNIVERSE
+    ["Semiconductors"]) and was, until 2026-09-01, absent from
+    portfolio.TICKER_SECTORS — resolve_sector() fell back to the raw provider
+    GICS string ("Technology" here), unknown to _SECTOR_IMPACT, so an
+    Inflation HIGH event blocking Semiconductors (severity 3) could never
+    suppress it. This proves the fixed reachability: even though the movers
+    row still carries the raw provider sector string, the curated
+    TICKER_SECTORS entry wins and ARM lands in macro_blocked_picks, not
+    new_picks.
+    """
+    today = date(2026, 9, 1)
+    macro_events = [{
+        "date": "2026-09-01", "event": "CPI Inflation",
+        "category": "Inflation", "impact": "HIGH",
+    }]
+    movers = [{
+        "ticker": "ARM", "price": 150.0, "sector": "Technology",
+        "trend": "Up", "scanner_signal": "Buy", "score": COMPOSITE_BUY + 10,
+        "rsi": 60.0, "mom_1m": 5.0, "mom_3m": 8.0,
+        "composite_score": COMPOSITE_BUY + 10, "day_change": 3.0,
+    }]
+    composites = {"ARM": {
+        "total": COMPOSITE_BUY + 10, "rec": {"label": "Strong Buy"},
+        "stale_as_of": None, "fund_cache_age_days": None,
+        "fundamentals_available": True, "val_available": True,
+    }}
+
+    result = _grow_today(**_minimal_grow_today_kwargs(
+        movers=movers,
+        composites=composites,
+        macro_events=macro_events,
+        today=today,
+    ))
+
+    blocked_tickers   = {p.get("ticker") for p in (result.get("macro_blocked_picks") or [])}
+    new_pick_tickers  = {p.get("ticker") for p in (result.get("new_picks") or [])}
+    assert "ARM" in blocked_tickers, (
+        f"ARM must be macro-blocked (Semiconductors, Inflation severity 3 >= 2); "
+        f"got macro_blocked={result.get('macro_blocked_picks')}, "
+        f"new_picks={result.get('new_picks')}"
+    )
+    assert "ARM" not in new_pick_tickers, (
+        "ARM must not reach new_picks while its sector is macro-blocked")
+
+
 # ── Test 5: bear early-return carries the key ─────────────────────────────────
 
 def test_bear_return_carries_macro_coverage_expired_key():
