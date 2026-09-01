@@ -18,7 +18,15 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-30 (data-integrity audit session: 1 real bug found, 1 missing table discovered, hardening batch shipped in 6 commits)
+## 1. Latest run — 2026-08-31 (prev_close staleness incident — 2 chapters, 8 read sites — + a P&L delta_color sign bug across 6 tiles)
+
+**4861 passed, 0 failed, 16 warnings** (`python -m pytest -q`: consistently ~220-370s across several runs this session — timing noisy under load, count stable every time). Python (local `.venv`). Transcribed from the run, not recalled — same figure observed after every commit in this session (`ec47d52` through `b682532`), since only the first added new tests.
+
+**+111 over the 4750 baseline (2026-08-30) below.** Only **+9** are directly attributable to work visible in this session — `tests/test_yfinance_provider.py` (new file, this provider's first direct test coverage: `_is_trading_day` boundaries + `live_prices()`'s staleness guard for a batch window that hasn't rolled forward on a trading day, commit `ec47d52`). The remaining **+102** accrued from F-260 Phase 3's structural extraction (`home_risk_synthesis.py`) and the Gate Suppression Ledger readout (F-259b) — both completed earlier the same continuous work-set, before this log entry, full detail in `docs/shipped-log.md`. No new tests from the six `app.py`-only commits after `ec47d52` (`f2c2446`, `6a29855`, `1c1e634`, `1c5aed1`, `b2e4cd8`, `84e86bf`, `b682532`) — `app.py` has zero test coverage of its own (per CLAUDE.md, screenshot is the only check for its decision/render logic), so none of that work could add a test regardless of how much app.py changed.
+
+**Two real, user-reported bugs found and fixed this session, both invisible to this suite by construction.** (1) A two-chapter price-data-integrity incident: yfinance's 2-day batch window lagging Yahoo's rollover (fixed at the source, the one piece THIS suite could cover — the 9 tests above), then Finnhub's own `prev_close` independently stale post-weekend, feeding false Day Shock alerts and a wrong Today's P&L on both Home and Summary (fixed by having 8 total read sites defer to the existing price cross-check's verdict — `app.py`-only, so no test exists or could exist for the fix itself; verified via live screenshots instead, memory `project_yfinance_prevclose_staleness`). (2) `st.metric`'s `delta_color="normal" if X>=0 else "inverse"` collapsing to always-green regardless of gain/loss on 6 P&L tiles — same "app.py-only, screenshot is the only check" story, memory `feedback_metric_delta_color_sign_trap`.
+
+## 1a. Previous run — 2026-08-30 (data-integrity audit session: 1 real bug found, 1 missing table discovered, hardening batch shipped in 6 commits)
 
 **4750 passed, 0 failed, 13 warnings** (`python -m pytest -q`: 356.84s). Python
 (local `.venv`). Transcribed from the run, not recalled.
@@ -117,7 +125,7 @@ because local resolution proves nothing about the deploy. (2) **No coverage run
 this pass** — the figure below (78% at the 4317 entry) is the last measured one
 and should not be assumed to still hold across +348 tests.
 
-## 1a. Previous run — 2026-08-27 (F-259 gate ledger, the UX review, and F-261 sizing)
+## 1b. Earlier run — 2026-08-27 (F-259 gate ledger, the UX review, and F-261 sizing)
 
 **4432 passed, 0 failed, 0 skipped** (`python -m pytest -q`: 107.59s, final run
 of the day). Python (local `.venv`).
@@ -152,7 +160,7 @@ it reads as coverage.
 
 ---
 
-## 1b. Earlier run — 2026-08-26 (zero-holdings port_df guard + doc-drift repair)
+## 1c. Earlier run — 2026-08-26 (zero-holdings port_df guard + doc-drift repair)
 
 **4317 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
 --cov-report=term -q`: 78.67s — TOTAL 18359 stmts, 4062 missed, **78%**
