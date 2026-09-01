@@ -270,9 +270,12 @@ def test_validate_payload_sector_candidates_rule_is_scoped_to_that_table():
 # A Commit-1 Opus review finding: the original check only confirmed *some*
 # TICKER_SECTORS entry existed, not that its VALUE equals the bucket key the
 # ticker is being placed under -- letting e.g. AAPL (a Consumer Tech name)
-# be added into a Healthcare bucket, the exact roster incoherence
-# tests/test_portfolio.py::test_roster_ticker_sector_matches_its_roster_key
-# forbids for the real _SECTOR_CANDIDATES dict.
+# be added into a Healthcare bucket. This is the roster incoherence that
+# `validate_payload` now enforces at SAVE time for every sector_candidates
+# edit -- the code-level `_SECTOR_CANDIDATES` dict this rule used to also be
+# pinned against (tests/test_portfolio.py) was deleted by App Settings
+# Commit 3, so this validator is now the ONLY place the invariant is
+# checked.
 
 def test_validate_payload_rejects_ticker_placed_under_wrong_sector():
     # AAPL's real TICKER_SECTORS value is "Consumer Tech", not "Healthcare".

@@ -362,13 +362,24 @@ class _FakeYF:
         return self._df
 
 
+# Minimal fixture universe for the dedup/tagging tests below — App Settings
+# (docs/plans/app-settings.md) Commit 3 deleted the module-level
+# SECTOR_UNIVERSE dict these tests used to read directly for fixture tickers;
+# these tests are about scan_sectors's OWN dedup/tagging logic, not real
+# roster content, so a small local fixture is the right (and now required)
+# shape rather than a loss of coverage.
+_FIXTURE_SECTOR_UNIVERSE = {"Defense & Aerospace": ["LMT", "RTX", "NOC", "GD", "BA"]}
+
+
 def test_scan_sectors_extra_ticker_not_in_selected_sector_tagged_watchlist(monkeypatch):
-    sector_tickers = scanner.SECTOR_UNIVERSE["Defense & Aerospace"]
+    sector_tickers = _FIXTURE_SECTOR_UNIVERSE["Defense & Aerospace"]
     all_tickers = sector_tickers + ["NVDA"]
     fake = _FakeYF(_fake_multi_download(all_tickers))
     monkeypatch.setattr(scanner, "yf", fake)
 
-    result = scanner.scan_sectors(["Defense & Aerospace"], extra_tickers=["NVDA"])
+    result = scanner.scan_sectors(
+        ["Defense & Aerospace"], universe=_FIXTURE_SECTOR_UNIVERSE, extra_tickers=["NVDA"],
+    )
     assert not result.empty
     by_ticker = dict(zip(result["Ticker"], result["Sector"]))
     assert by_ticker["NVDA"] == "Watchlist"
@@ -378,24 +389,25 @@ def test_scan_sectors_extra_ticker_not_in_selected_sector_tagged_watchlist(monke
 def test_scan_sectors_extra_ticker_already_in_sector_keeps_real_sector(monkeypatch):
     # Dedup is by ticker symbol: an extra_ticker that's already part of a
     # selected sector must NOT be re-tagged "Watchlist".
-    sector_tickers = scanner.SECTOR_UNIVERSE["Defense & Aerospace"]
+    sector_tickers = _FIXTURE_SECTOR_UNIVERSE["Defense & Aerospace"]
     fake = _FakeYF(_fake_multi_download(sector_tickers))
     monkeypatch.setattr(scanner, "yf", fake)
 
-    result = scanner.scan_sectors(["Defense & Aerospace"], extra_tickers=[sector_tickers[0]])
+    result = scanner.scan_sectors(
+        ["Defense & Aerospace"], universe=_FIXTURE_SECTOR_UNIVERSE,
+        extra_tickers=[sector_tickers[0]],
+    )
     by_ticker = dict(zip(result["Ticker"], result["Sector"]))
     assert by_ticker[sector_tickers[0]] == "Defense & Aerospace"
 
 
-# ─── scan_sectors — App Settings (Commit 2): `universe` param, not the ──────
-# module-level default, must be what the real importer path actually reads.
+# ─── scan_sectors — `universe` is REQUIRED, no fallback (App Settings) ─────
 
-def test_scan_sectors_uses_explicit_universe_param_not_module_default(monkeypatch):
-    """A fake sector/ticker pair that does not exist anywhere in the real
-    SECTOR_UNIVERSE is the strongest possible proof that scan_sectors reads
-    the passed `universe` argument, not the module-level dict — this is
-    what every real caller (app.py, cron_runner.py) now relies on after
-    being rewired onto stock_analyzer.reference_data.resolve_universe."""
+def test_scan_sectors_uses_explicit_universe_param(monkeypatch):
+    """A fake sector/ticker pair proves scan_sectors reads whatever `universe`
+    payload it's handed — this is what every real caller (app.py,
+    cron_runner.py) relies on after being rewired onto
+    stock_analyzer.reference_data.resolve_universe."""
     # Two fake tickers (not one) so the MultiIndex yf.download shape below
     # matches the multi-ticker code path scan_sectors actually takes for a
     # >1-ticker request (a single ticker hits a different raw-shape branch,
@@ -412,10 +424,10 @@ def test_scan_sectors_uses_explicit_universe_param_not_module_default(monkeypatc
 def test_scan_sectors_empty_universe_param_scans_nothing_no_fallback(monkeypatch):
     """An explicit {} (the real caller's contract on a resolve_universe
     failure — see reference_data's docstrings) must scan literally nothing.
-    It must NEVER silently fall back to the module-level SECTOR_UNIVERSE —
-    that would be the exact silent-stale-universe fallback the design doc
-    rejects (the 2026-07-14 INTC failure mode repeated on this surface)."""
-    fake = _FakeYF(_fake_multi_download(list(scanner.SECTOR_UNIVERSE["Defense & Aerospace"])))
+    There is no module-level dict left to fall back to — the exact
+    silent-stale-universe fallback the design doc rejects (the 2026-07-14
+    INTC failure mode) is designed out, not merely guarded against."""
+    fake = _FakeYF(_fake_multi_download(_FIXTURE_SECTOR_UNIVERSE["Defense & Aerospace"]))
     monkeypatch.setattr(scanner, "yf", fake)
 
     result = scanner.scan_sectors(["Defense & Aerospace"], universe={})
@@ -446,7 +458,7 @@ def test_scan_movers_empty_ticker_list_skips_network_call(monkeypatch):
 
 # ─── Macro-gate coverage invariant ──────────────────────────────────────────
 # The bug this guards (found 2026-08-16): daily_briefing's macro gate resolves a
-# candidate's sector via portfolio.resolve_sector(ticker, <SECTOR_UNIVERSE bucket
+# candidate's sector via portfolio.resolve_sector(ticker, <sector-universe bucket
 # label>) and then tests `sector in _macro_blocked_sectors`. A resolved sector
 # absent from macro_calendar._SECTOR_IMPACT can NEVER be suppressed — it fails
 # OPEN, silently, with no banner. 13 of 73 scan-universe names were in that hole
@@ -461,6 +473,39 @@ def _macro_known_sectors() -> set:
     return known
 
 
+# App Settings (docs/plans/app-settings.md) Commit 3 deleted the module-level
+# SECTOR_UNIVERSE dict this test walks ticker-by-ticker. Frozen VERBATIM
+# snapshot of its last real content (as of the Commit-3 deletion) — NOT just
+# the bucket label set: a per-ticker walk is load-bearing here, because most
+# tickers resolve through a curated `TICKER_SECTORS` override rather than
+# their raw bucket label (`resolve_sector` is `TICKER_SECTORS.get(ticker) or
+# bucket`), so checking labels alone is a STRICTER, DIFFERENT invariant that
+# fails on labels no live ticker ever actually resolves through (proven when
+# first tried here). Ticker MEMBERSHIP is UI-editable via ⚙️ App Settings
+# going forward, so this snapshot no longer tracks live roster edits — it
+# preserves the regression-guard value of the 2026-08-16 fix for the roster
+# as it stood at cutover, which is what this test has always been able to
+# prove from inside a unit test.
+_SECTOR_UNIVERSE_SNAPSHOT = {
+    "AI & Cloud": ["MSFT", "GOOGL", "META", "AMZN", "CRM", "NOW", "DDOG", "WDAY"],
+    "Cybersecurity": ["PANW", "CRWD", "ZS", "NET", "FTNT", "OKTA", "S"],
+    "Semiconductors": ["NVDA", "AMD", "AVGO", "MU", "QCOM", "AMAT", "ASML", "INTC"],
+    "Consumer Tech": ["AAPL", "NFLX", "SHOP", "UBER", "ABNB"],
+    "AI & Data Platforms": ["PLTR", "AI", "MDB", "SNOW", "PATH", "IONQ"],
+    "EV & Clean Energy": ["TSLA", "ENPH", "FSLR", "NEE", "RIVN"],
+    "Healthcare & Biotech": ["LLY", "NVO", "ABBV", "ISRG", "MRNA", "REGN", "AMGN",
+                             "JNJ", "UNH", "MRK", "TMO"],
+    "Financials & Fintech": ["JPM", "V", "MA", "GS", "XYZ", "COIN", "PYPL",
+                             "BAC", "WFC", "MS", "SCHW"],
+    "Enterprise Tech": ["DELL", "ORCL", "IBM", "HPE", "SAP"],
+    "Defense & Aerospace": ["LMT", "RTX", "NOC", "GD", "BA"],
+    "Industrials": ["CAT", "GE", "GEV"],
+    "Communications": ["T", "VZ", "TMUS"],
+    "Energy": ["XOM", "CVX", "OXY", "COP", "SLB"],
+    "Consumer Staples & Retail": ["COST", "NKE", "TJX", "WMT", "TGT", "HD"],
+}
+
+
 def test_every_scan_universe_ticker_resolves_to_a_macro_known_sector():
     # Allowlist is deliberately EMPTY: the hole was fully closed, and an empty
     # allowlist is what makes this fail the moment a new one is opened. If a
@@ -472,7 +517,7 @@ def test_every_scan_universe_ticker_resolves_to_a_macro_known_sector():
 
     unblockable = {
         t: resolve_sector(t, bucket)
-        for bucket, tickers in scanner.SECTOR_UNIVERSE.items()
+        for bucket, tickers in _SECTOR_UNIVERSE_SNAPSHOT.items()
         for t in tickers
         if resolve_sector(t, bucket) not in known and t not in allowed_holes
     }
@@ -559,10 +604,21 @@ def test_every_keyed_macro_category_covers_the_same_sector_set():
         f"allowlist lists gaps that no longer exist — tighten it: {stale}")
 
 
-def test_goog_absent_while_googl_present():
-    # Regression guard: scan_sectors dedups by SYMBOL, not issuer, so adding the
-    # second Alphabet share class would spend two of the twelve finalist slots on
-    # one company and double-count it in any future sector-weight math.
-    flat = {t for names in scanner.SECTOR_UNIVERSE.values() for t in names}
-    assert "GOOGL" in flat
-    assert "GOOG" not in flat
+def test_scan_sectors_dedups_by_symbol_not_issuer(monkeypatch):
+    # Regression guard: scan_sectors dedups by SYMBOL, not issuer. A roster
+    # carrying both Alphabet share classes (GOOG/GOOGL) would spend two
+    # finalist slots on one company and double-count it in any future
+    # sector-weight math — this exercises the actual scan_sectors code path
+    # with a fixture universe rather than checking real roster curation
+    # discipline (which used to live in scanner.SECTOR_UNIVERSE, deleted by
+    # App Settings Commit 3; that curation call now belongs to whoever edits
+    # the ⚙️ App Settings roster, not to a unit test).
+    fake_universe = {"FakeSector": ["GOOG", "GOOGL"]}
+    fake = _FakeYF(_fake_multi_download(["GOOG", "GOOGL"]))
+    monkeypatch.setattr(scanner, "yf", fake)
+
+    result = scanner.scan_sectors(["FakeSector"], universe=fake_universe)
+    assert set(result["Ticker"]) == {"GOOG", "GOOGL"}, (
+        "scan_sectors must treat GOOG and GOOGL as two distinct symbols, "
+        "neither silently dropped nor merged"
+    )

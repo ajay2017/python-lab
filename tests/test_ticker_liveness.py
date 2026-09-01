@@ -47,25 +47,29 @@ def _make_df(alive: list[str], dead: list[str]) -> pd.DataFrame:
     return df
 
 
-def _patch_rosters(monkeypatch, *, tickers: list[str]) -> None:
-    """Replace all three roster sources with a controlled ticker set.
+def _make_rosters(*, tickers: list[str]) -> dict:
+    """Build fixture roster kwargs for `sweep()`'s three (now REQUIRED)
+    roster params, distributing tickers across the three sources so
+    membership tracking is exercised (each ticker appears in exactly one
+    roster).
 
-    Distributes tickers across the three sources so membership tracking is
-    tested (each ticker appears in exactly one roster).
+    App Settings (docs/plans/app-settings.md) Commit 3 deleted the
+    module-level SECTOR_UNIVERSE/_SECTOR_CANDIDATES/DISCOVERY_UNIVERSE dicts
+    this helper used to monkeypatch — `sweep()` now takes these as required
+    arguments with no fallback, so this returns a dict meant to be splatted
+    into a `sweep(**_make_rosters(...), ...)` call instead.
     """
-    import stock_analyzer.scanner as sc
-    import stock_analyzer.portfolio as po
-    import stock_analyzer.discovery_universe as du
-
     n = len(tickers)
     third = max(n // 3, 1)
     s = tickers[:third]
     p = tickers[third: 2 * third]
     d = tickers[2 * third:]
 
-    monkeypatch.setattr(sc, "SECTOR_UNIVERSE", {"A": s} if s else {})
-    monkeypatch.setattr(po, "_SECTOR_CANDIDATES", {"B": p} if p else {})
-    monkeypatch.setattr(du, "DISCOVERY_UNIVERSE", {"C": d} if d else {})
+    return {
+        "sector_universe":    {"A": s} if s else {},
+        "sector_candidates":  {"B": p} if p else {},
+        "discovery_universe": {"C": d} if d else {},
+    }
 
 
 def _clean_sweep():
@@ -181,7 +185,7 @@ def test_health_at_threshold_is_conclusive(monkeypatch):
     The inclusivity is load-bearing: == threshold IS conclusive (not inconclusive).
     """
     tickers = [f"T{i}" for i in range(1, 11)]  # T1 … T10
-    _patch_rosters(monkeypatch, tickers=tickers)
+    rosters = _make_rosters(tickers=tickers)
 
     suspect = tickers[-1]  # T10
     alive = [t for t in tickers if t != suspect]
@@ -190,6 +194,7 @@ def test_health_at_threshold_is_conclusive(monkeypatch):
         "pre-condition: 9/10 = 90.0 must equal the threshold")
 
     result = sweep(
+        **rosters,
         fetch_batch=lambda _ts: _make_df(alive=alive, dead=[suspect]),
         fetch_live=lambda ts: {},   # dead ticker confirmed by all providers
     )
@@ -207,7 +212,7 @@ def test_health_below_threshold_is_inconclusive(monkeypatch):
     One discrete step below the boundary is sufficient to assert < (not <=).
     """
     tickers = [f"T{i}" for i in range(1, 11)]
-    _patch_rosters(monkeypatch, tickers=tickers)
+    rosters = _make_rosters(tickers=tickers)
 
     suspects = tickers[-2:]   # T9, T10
     alive = [t for t in tickers if t not in suspects]
@@ -216,6 +221,7 @@ def test_health_below_threshold_is_inconclusive(monkeypatch):
         "pre-condition: 8/10 = 80.0 must be below the threshold")
 
     result = sweep(
+        **rosters,
         fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
         fetch_live=lambda ts: {},
     )
@@ -254,7 +260,7 @@ def test_rate_limit_50pct_missing_is_inconclusive_not_dead(monkeypatch):
 def test_multi_source_rescue_not_dead(monkeypatch):
     """A ticker absent from the batch but returned by fetch_live is NOT dead."""
     tickers = [f"T{i}" for i in range(1, 11)]
-    _patch_rosters(monkeypatch, tickers=tickers)
+    rosters = _make_rosters(tickers=tickers)
     suspect = tickers[-1]
     alive = [t for t in tickers if t != suspect]
 
@@ -264,6 +270,7 @@ def test_multi_source_rescue_not_dead(monkeypatch):
                         "fetched_at": "2026-08-16T10:00:00"}}
 
     result = sweep(
+        **rosters,
         fetch_batch=lambda _ts: _make_df(alive=alive, dead=[suspect]),
         fetch_live=_live,
     )
@@ -281,21 +288,21 @@ def test_multi_source_rescue_not_dead(monkeypatch):
 # determines the exact suspects list/order handed to fetch_live, and these
 # tests need to predict it exactly.
 
-def _escalation_fixture(monkeypatch, n_suspects: int = 3, n_total: int = 30):
+def _escalation_fixture(n_suspects: int = 3, n_total: int = 30):
     """Build a 30-ticker roster with the LAST `n_suspects` tickers dead in the
     batch download (30 total / 3 suspects = 90.0% health == threshold, the
     inclusive boundary — so the batch-health gate lets escalation run)."""
     tickers = [f"T{i:02d}" for i in range(1, n_total + 1)]
-    _patch_rosters(monkeypatch, tickers=tickers)
+    rosters = _make_rosters(tickers=tickers)
     suspects = tickers[-n_suspects:]
     alive = [t for t in tickers if t not in suspects]
-    return tickers, suspects, alive
+    return tickers, suspects, alive, rosters
 
 
 def test_escalation_is_one_batched_call_not_n(monkeypatch):
     """3 suspects → fetch_live called exactly ONCE with the full length-3
     list, not 3 times with a length-1 list each."""
-    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+    _tickers, suspects, alive, rosters = _escalation_fixture()
 
     calls: list[list[str]] = []
 
@@ -304,6 +311,7 @@ def test_escalation_is_one_batched_call_not_n(monkeypatch):
         return {t: {"price": 1.0} for t in ts}  # rescue all
 
     result = sweep(
+        **rosters,
         fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
         fetch_live=_live,
     )
@@ -325,9 +333,10 @@ def test_escalation_empty_dict_means_all_dead(monkeypatch):
     distinguishes the genuine all-dead result (`{}`) from the offline/timeout
     sentinel (`None`).
     """
-    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+    _tickers, suspects, alive, rosters = _escalation_fixture()
 
     result = sweep(
+        **rosters,
         fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
         fetch_live=lambda ts: {},
     )
@@ -342,7 +351,7 @@ def test_escalation_empty_dict_means_all_dead(monkeypatch):
 def test_escalation_mixed_rescue(monkeypatch):
     """One batched response can rescue some suspects and confirm others dead
     in the SAME call — only the omitted/nulled ones land in `dead`."""
-    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+    _tickers, suspects, alive, rosters = _escalation_fixture()
     rescued, nulled, missing = suspects
 
     def _live(ts):
@@ -353,6 +362,7 @@ def test_escalation_mixed_rescue(monkeypatch):
         }
 
     result = sweep(
+        **rosters,
         fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
         fetch_live=_live,
     )
@@ -376,7 +386,7 @@ def test_escalation_timeout_breach_is_bounded_and_fails_safe(monkeypatch):
     import time
 
     monkeypatch.setattr(_tl, "_SWEEP_ESCALATION_CAP_SEC", 0.05)
-    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+    _tickers, suspects, alive, rosters = _escalation_fixture()
 
     def _slow_live(ts):
         time.sleep(0.5)  # well past the 0.05s cap
@@ -384,6 +394,7 @@ def test_escalation_timeout_breach_is_bounded_and_fails_safe(monkeypatch):
 
     _t0 = time.monotonic()
     result = sweep(
+        **rosters,
         fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
         fetch_live=_slow_live,
     )
@@ -402,9 +413,10 @@ def test_escalation_layer_offline_returns_none_no_false_dead(monkeypatch):
     """fetch_live returning None (whole layer offline) → dead == [], and the
     top-level sweep() result stays the normal 'ok' dict — NOT the None
     offline sentinel, which is reserved for a BATCH-DOWNLOAD failure only."""
-    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+    _tickers, suspects, alive, rosters = _escalation_fixture()
 
     result = sweep(
+        **rosters,
         fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
         fetch_live=lambda ts: None,
     )
@@ -419,12 +431,13 @@ def test_escalation_layer_offline_returns_none_no_false_dead(monkeypatch):
 def test_escalation_fetch_live_raises_is_contained(monkeypatch):
     """fetch_live raising an exception is contained — dead == [], and the
     overall sweep() result is still the normal 'ok' dict shape, not None."""
-    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+    _tickers, suspects, alive, rosters = _escalation_fixture()
 
     def _boom(ts):
         raise RuntimeError("provider exploded")
 
     result = sweep(
+        **rosters,
         fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
         fetch_live=_boom,
     )
@@ -437,13 +450,14 @@ def test_escalation_fetch_live_raises_is_contained(monkeypatch):
 def test_escalation_malformed_payload_does_not_abort_others(monkeypatch):
     """A malformed value for ONE suspect (non-dict) must not abort
     classification of the other suspects in the same batched response."""
-    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+    _tickers, suspects, alive, rosters = _escalation_fixture()
     t1, t2, t3 = suspects  # t1: malformed, t2: explicit-None price, t3: real price
 
     def _live(ts):
         return {t1: "not-a-dict", t2: {"price": None}, t3: {"price": 123.45}}
 
     result = sweep(
+        **rosters,
         fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
         fetch_live=_live,
     )
@@ -458,7 +472,7 @@ def test_escalation_skipped_when_no_suspects(monkeypatch):
     """0 suspects (all names have price history) → fetch_live is never called
     at all, and dead == []."""
     tickers = [f"T{i:02d}" for i in range(1, 31)]
-    _patch_rosters(monkeypatch, tickers=tickers)
+    rosters = _make_rosters(tickers=tickers)
 
     called: list[list[str]] = []
 
@@ -467,6 +481,7 @@ def test_escalation_skipped_when_no_suspects(monkeypatch):
         return {}
 
     result = sweep(
+        **rosters,
         fetch_batch=lambda _ts: _make_df(alive=tickers, dead=[]),
         fetch_live=_live,
     )
@@ -476,12 +491,12 @@ def test_escalation_skipped_when_no_suspects(monkeypatch):
     assert called == [], "fetch_live must not be called when there are 0 suspects"
 
 
-# ── 3c. sweep() roster params — App Settings (Commit 2) ─────────────────────
-# `sector_universe`/`discovery_universe`/`sector_candidates` params, not the
-# module-level defaults, must be what a caller who passes them explicitly
-# actually gets swept.
+# ── 3c. sweep() roster params — App Settings ─────────────────────────────
+# `sector_universe`/`discovery_universe`/`sector_candidates` are REQUIRED
+# (Commit 3 removed the module-level fallback default entirely) — this pins
+# that the passed dicts are what actually gets swept.
 
-def test_sweep_uses_explicit_roster_params_not_module_defaults(monkeypatch):
+def test_sweep_uses_explicit_roster_params(monkeypatch):
     fake_su = {"FakeSU": ["ZZZ1"]}
     fake_du = {"FakeDU": ["ZZZ2"]}
     fake_sc = {"FakeSC": ["ZZZ3"]}
@@ -499,9 +514,8 @@ def test_sweep_uses_explicit_roster_params_not_module_defaults(monkeypatch):
 
 def test_sweep_empty_roster_params_sweep_nothing_no_fallback(monkeypatch):
     """Explicit {} on all three roster params (the real caller's contract on
-    a resolve_universe failure) must sweep literally nothing — never
-    silently fall back to the real scanner.SECTOR_UNIVERSE /
-    discovery_universe.DISCOVERY_UNIVERSE / portfolio._SECTOR_CANDIDATES."""
+    a resolve_universe failure) must sweep literally nothing — there is no
+    module-level dict left to fall back to."""
     result = sweep(
         fetch_batch=lambda _ts: pd.DataFrame(),
         fetch_live=lambda ts: {},
@@ -574,10 +588,11 @@ def test_maintenance_lane_threads_resolved_rosters_into_sweep(monkeypatch):
 
 def test_maintenance_lane_unavailable_roster_degrades_to_empty_dict_not_fallback(monkeypatch):
     """An unavailable roster resolution must pass {} into sweep(), never a
-    bare None — None is sweep()'s OWN unit-test-convenience default that
-    falls back to the real hardcoded dict, which would silently defeat the
-    whole point of this feature. Also must NOT abort the maintenance lane —
-    this is a chore/awareness check, not a decision path."""
+    bare None — sweep()'s roster params are required with no fallback at
+    all, so passing None through would raise inside sweep() rather than
+    honestly sweeping zero names for that roster. Also must NOT abort the
+    maintenance lane — this is a chore/awareness check, not a decision
+    path."""
     import cron_runner as cr
     import stock_analyzer.reference_shelf as _rs
     from stock_analyzer import reference_data as rd

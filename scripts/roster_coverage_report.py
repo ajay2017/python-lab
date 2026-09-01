@@ -1,28 +1,39 @@
 #!/usr/bin/env python3
-"""Refresh aid for the three hand-maintained ticker rosters.
+"""Refresh aid for the three App-Settings-managed ticker rosters.
 
 Turns the ad-hoc querying that the 2026-08-16 SECTOR_UNIVERSE refresh needed
 (market caps, coverage gaps, liveness) into one repeatable command, so the next
 refresh spends its time on the JUDGMENT and not on re-deriving the facts.
 
-Rosters covered:
-  scanner.SECTOR_UNIVERSE          the daily Grow Today scan net
-  discovery_universe.DISCOVERY_UNIVERSE  the wider Movers net
-  portfolio._SECTOR_CANDIDATES     Diversification Advisor ADD suggestions
+Rosters covered (DB-backed since F-262 Commit 3 — the hardcoded
+scanner.SECTOR_UNIVERSE / discovery_universe.DISCOVERY_UNIVERSE /
+portfolio._SECTOR_CANDIDATES dicts this script used to read directly were
+deleted once every real caller was cut over to the resolver):
+  sector_universe       the daily Grow Today scan net
+  discovery_universe    the wider Movers net
+  sector_candidates     Diversification Advisor ADD suggestions
 
-REPORTING ONLY — reads nothing from the DB, writes nothing, and is imported by
-nothing. It never decides which names belong; it lays out the evidence a human
-uses to decide. Deliberately NOT wired into CI: "this roster could be better"
-is a judgment call, not a pass/fail condition, and the two mechanical questions
-that ARE pass/fail already have owners — staleness via reference_shelf.py's
-🩺 System Trust check ⑤, and ticker rot via the weekly ticker_liveness sweep.
+REPORTING ONLY — writes nothing, and is imported by nothing. It never decides
+which names belong; it lays out the evidence a human uses to decide.
+Deliberately NOT wired into CI: "this roster could be better" is a judgment
+call, not a pass/fail condition, and the two mechanical questions that ARE
+pass/fail already have owners — staleness via reference_shelf.py's 🩺 System
+Trust check ⑤, and ticker rot via the weekly ticker_liveness sweep.
+
+NEEDS LIVE SUPABASE CREDENTIALS as of Commit 3 (SUPABASE_URL/SUPABASE_KEY env
+vars, or a real st.secrets) — the rosters now live only in the DB, so reading
+current membership means reading the DB. This is a real change from before
+Commit 3, when this script read the hardcoded dicts directly and needed no
+credentials at all; there is no going back to that, since the dicts no longer
+exist anywhere.
 
 Usage:
   python scripts/roster_coverage_report.py              # all rosters
   python scripts/roster_coverage_report.py --caps       # + market caps (slow: one call per ticker)
   python scripts/roster_coverage_report.py --roster candidates
 
-Needs network (yfinance). Not part of the test suite and not run by any hook.
+Needs network (yfinance) for --caps, and Supabase credentials always. Not
+part of the test suite and not run by any hook.
 """
 from __future__ import annotations
 
@@ -43,15 +54,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 _THIN_CAP_B = 60.0
 
 
+_DB_NAMES = {
+    "scan":       "sector_universe",
+    "discovery":  "discovery_universe",
+    "candidates": "sector_candidates",
+}
+
+
 def _rosters() -> dict[str, dict[str, list[str]]]:
-    from stock_analyzer.scanner import SECTOR_UNIVERSE
-    from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
-    from stock_analyzer.portfolio import _SECTOR_CANDIDATES
-    return {
-        "scan":       SECTOR_UNIVERSE,
-        "discovery":  DISCOVERY_UNIVERSE,
-        "candidates": _SECTOR_CANDIDATES,
-    }
+    """Reads all three rosters from the DB via the same resolver every real
+    caller uses (stock_analyzer.reference_data.resolve_universe) — the
+    hardcoded dicts this used to read directly no longer exist (F-262 Commit
+    3). Needs live SUPABASE_URL/SUPABASE_KEY; exits with a clear message
+    rather than a raw traceback if a table can't be read."""
+    from stock_analyzer.reference_data import ReferenceDataUnavailable, resolve_universe
+
+    out: dict[str, dict[str, list[str]]] = {}
+    for short_name, db_name in _DB_NAMES.items():
+        try:
+            payload, _as_of = resolve_universe(db_name)
+        except ReferenceDataUnavailable as exc:
+            print(f"ERROR: couldn't read '{db_name}' from the DB — {exc}")
+            print("Set SUPABASE_URL/SUPABASE_KEY (real credentials) and retry.")
+            sys.exit(1)
+        out[short_name] = payload
+    return out
 
 
 def _flat(roster: dict[str, list[str]]) -> list[str]:

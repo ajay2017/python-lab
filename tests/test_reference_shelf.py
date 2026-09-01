@@ -256,14 +256,36 @@ def test_today_resolves_via_market_time_not_naive_date_today(monkeypatch):
 
 def test_diversify_map_keys_and_values_resolve():
     """`_DIVERSIFY_TO_DISCOVERY` is keyed on BOTH universes' bucket labels, so a
-    rename during the refresh this feature exists to prompt would silently
-    degrade diversification suggestions to roster-only. Cheap guard."""
-    from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
-    from stock_analyzer.portfolio import _DIVERSIFY_TO_DISCOVERY, _SECTOR_CANDIDATES
+    rename during a refresh would silently degrade diversification
+    suggestions to roster-only. Cheap guard.
+
+    App Settings (docs/plans/app-settings.md) Commit 3 deleted the
+    module-level `DISCOVERY_UNIVERSE`/`_SECTOR_CANDIDATES` dicts this test
+    used to import directly. The frozen label sets below stand in for them
+    PERMANENTLY, not just as a stopgap: the bucket/sector STRUCTURE (the
+    label set) is locked in the ⚙️ App Settings v1 editor — only ticker
+    membership is UI-editable (design doc Q3) — so these labels cannot
+    silently drift out from under `_DIVERSIFY_TO_DISCOVERY` the way ticker
+    membership can. A genuinely new/renamed bucket stays a reviewed code
+    change, which is exactly when this fixture must be updated too.
+    """
+    from stock_analyzer.portfolio import _DIVERSIFY_TO_DISCOVERY
+
+    sector_candidates_keys = {
+        "Healthcare", "Energy", "Defense", "Financials", "Clean Energy",
+        "Consumer Tech", "AI & Cloud", "AI & Data", "Cybersecurity",
+        "Semiconductors", "Communications", "EV & Auto", "Enterprise Tech",
+    }
+    discovery_universe_keys = {
+        "Mega-cap Tech", "Semiconductors", "Software & Cloud",
+        "Internet & Media", "Consumer & Retail", "Healthcare & Biotech",
+        "Financials", "Industrials & Defense", "Energy & Materials",
+        "Clean Energy & Utilities", "Communications & Telecom",
+    }
 
     for sector, buckets in _DIVERSIFY_TO_DISCOVERY.items():
-        assert sector in _SECTOR_CANDIDATES, f"{sector!r} is not a _SECTOR_CANDIDATES key"
+        assert sector in sector_candidates_keys, f"{sector!r} is not a sector_candidates key"
         for bucket in (buckets if isinstance(buckets, (list, tuple, set)) else [buckets]):
-            assert bucket in DISCOVERY_UNIVERSE, (
-                f"{sector!r} maps to DISCOVERY_UNIVERSE bucket {bucket!r}, which no longer exists"
+            assert bucket in discovery_universe_keys, (
+                f"{sector!r} maps to discovery_universe bucket {bucket!r}, which no longer exists"
             )

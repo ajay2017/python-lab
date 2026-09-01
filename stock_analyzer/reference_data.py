@@ -1,6 +1,10 @@
 """
-App Settings — the reference-data layer (Commit 1 of 3, 2026-09-01) and the
-save/validate/confirm decision helpers Commit 2 of 3 added the same day.
+App Settings — the reference-data layer (Commit 1 of 3, 2026-09-01), the
+save/validate/confirm decision helpers Commit 2 of 3 added the same day, and
+the staged cutover Commit 3 completed (same day): the module-level
+SECTOR_UNIVERSE/DISCOVERY_UNIVERSE/_SECTOR_CANDIDATES dicts these tables were
+originally seeded FROM are now deleted from scanner.py/discovery_universe.py/
+portfolio.py — the DB is the sole source, no code fallback anywhere.
 
 Pure logic only. Nothing in this module touches the database or the network
 — see `stock_analyzer/db.py::load_reference_table` / `save_reference_table`
@@ -19,16 +23,12 @@ for the Supabase-backed half. This module owns three decisions:
                        the design doc's "Resolution" section — because a
                        silent fallback to a frozen list is exactly the 2026-
                        07-14 INTC stale-data incident repeated on this
-                       surface. As of Commit 2, every real importer
-                       (scanner.py/portfolio.py/ticker_liveness.py/
-                       cron_runner.py/app.py) reads through this function —
-                       the module-level SECTOR_UNIVERSE/DISCOVERY_UNIVERSE/
-                       _SECTOR_CANDIDATES dicts still exist as the source
-                       code seeded FROM, and as a unit-test-convenience
-                       default on the now-optional parameters those
-                       functions gained, but no real caller relies on that
-                       default (Commit 3 deletes the dicts once the DB seed
-                       is verified in production).
+                       surface. Every real importer (scanner.py/portfolio.py/
+                       ticker_liveness.py/cron_runner.py/app.py) reads
+                       through this function, and (as of Commit 3) their own
+                       `universe`/`sector_candidates`/`discovery_universe`
+                       parameters are REQUIRED with no default at all — there
+                       is no module-level dict left anywhere to fall back to.
   validate_payload  — the two structural rules a proposed edit must pass
                        BEFORE it is ever saved (the UI's provider/network
                        ticker-existence validation is Commit 2's job, per the

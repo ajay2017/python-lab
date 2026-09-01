@@ -1,78 +1,88 @@
-"""Tests for stock_analyzer/discovery_universe.py — the broad Movers-scan
-ticker net (`discovery_tickers`) and the static `DISCOVERY_UNIVERSE` data
-structure it flattens. Pure list/set logic, no I/O. Previously zero test
-coverage.
+"""Tests for stock_analyzer/discovery_universe.py — `discovery_tickers`'s
+flatten/dedup/exclude logic. Pure list/set logic, no I/O.
+
+App Settings (docs/plans/app-settings.md) Commit 3, 2026-09-01 — the
+module-level `DISCOVERY_UNIVERSE` dict this file used to test directly was
+deleted; the roster now lives DB-backed in Supabase `reference_tables` and is
+edited through the ⚙️ App Settings UI, which has its own validation and
+history trail. These tests exercise `discovery_tickers`'s OWN behaviour
+(dedup, exclude, case-insensitivity) against a small local fixture universe
+rather than depending on real production roster contents — a deliberate
+test-hygiene improvement this cutover forces, not a loss of coverage: the
+function's logic is identical regardless of which payload it's handed.
 """
 from stock_analyzer import discovery_universe as du
 
-
-# ─── DISCOVERY_UNIVERSE — well-formed data sanity check ─────────────────────
-
-def test_discovery_universe_is_a_non_empty_dict_of_str_to_list_of_str():
-    assert isinstance(du.DISCOVERY_UNIVERSE, dict)
-    assert len(du.DISCOVERY_UNIVERSE) > 0
-    for sector, tickers in du.DISCOVERY_UNIVERSE.items():
-        assert isinstance(sector, str) and sector
-        assert isinstance(tickers, list) and len(tickers) > 0
-        assert all(isinstance(t, str) and t for t in tickers)
+# Minimal fixture universe: two buckets, one ticker (BBB1) duplicated across
+# both so tests can exercise cross-bucket dedup, not just within-bucket dedup.
+_FIXTURE_UNIVERSE = {
+    "Sector A": ["AAA1", "AAA2", "BBB1"],
+    "Sector B": ["BBB1", "CCC1"],
+}
 
 
 # ─── discovery_tickers — no exclude: full deduped flattened list ────────────
 
 def test_discovery_tickers_no_exclude_returns_full_deduped_list():
-    all_flat = [t.upper().strip() for lst in du.DISCOVERY_UNIVERSE.values() for t in lst]
+    all_flat = [t.upper().strip() for lst in _FIXTURE_UNIVERSE.values() for t in lst]
     unique_count = len(set(all_flat))
-    result = du.discovery_tickers()
+    result = du.discovery_tickers(universe=_FIXTURE_UNIVERSE)
     assert len(result) == unique_count
     assert len(result) == len(set(result))  # no duplicates in the output itself
     assert set(result) == set(all_flat)
 
 
 def test_discovery_tickers_none_exclude_same_as_no_exclude():
-    assert du.discovery_tickers(exclude=None) == du.discovery_tickers()
+    assert (
+        du.discovery_tickers(exclude=None, universe=_FIXTURE_UNIVERSE)
+        == du.discovery_tickers(universe=_FIXTURE_UNIVERSE)
+    )
 
 
 def test_discovery_tickers_empty_exclude_set_same_as_no_exclude():
-    assert du.discovery_tickers(exclude=set()) == du.discovery_tickers()
+    assert (
+        du.discovery_tickers(exclude=set(), universe=_FIXTURE_UNIVERSE)
+        == du.discovery_tickers(universe=_FIXTURE_UNIVERSE)
+    )
 
 
 # ─── discovery_tickers — exclude removes matches, case-insensitively ───────
 
 def test_discovery_tickers_exclude_removes_exact_match():
-    full = du.discovery_tickers()
+    full = du.discovery_tickers(universe=_FIXTURE_UNIVERSE)
     ticker = full[0]
-    result = du.discovery_tickers(exclude={ticker})
+    result = du.discovery_tickers(exclude={ticker}, universe=_FIXTURE_UNIVERSE)
     assert ticker not in result
     assert len(result) == len(full) - 1
 
 
 def test_discovery_tickers_exclude_is_case_insensitive():
-    full = du.discovery_tickers()
+    full = du.discovery_tickers(universe=_FIXTURE_UNIVERSE)
     ticker = full[0]
-    result = du.discovery_tickers(exclude={ticker.lower()})
+    result = du.discovery_tickers(exclude={ticker.lower()}, universe=_FIXTURE_UNIVERSE)
     assert ticker not in result
     assert len(result) == len(full) - 1
 
 
 def test_discovery_tickers_exclude_mixed_case_still_matches():
-    full = du.discovery_tickers()
+    full = du.discovery_tickers(universe=_FIXTURE_UNIVERSE)
     ticker = full[0]
     mixed = ticker[0].lower() + ticker[1:].upper()
-    result = du.discovery_tickers(exclude={mixed})
+    result = du.discovery_tickers(exclude={mixed}, universe=_FIXTURE_UNIVERSE)
     assert ticker not in result
 
 
 def test_discovery_tickers_exclude_unrelated_ticker_changes_nothing():
-    full = du.discovery_tickers()
-    result = du.discovery_tickers(exclude={"ZZZZZ_NOT_A_REAL_TICKER"})
+    full = du.discovery_tickers(universe=_FIXTURE_UNIVERSE)
+    result = du.discovery_tickers(
+        exclude={"ZZZZZ_NOT_A_REAL_TICKER"}, universe=_FIXTURE_UNIVERSE,
+    )
     assert result == full
 
 
-# ─── discovery_tickers — App Settings (Commit 2): explicit `universe` ───────
-# param, not the module-level default, must be what the real importer path
-# actually reads.
+# ─── discovery_tickers — `universe` is required, no fallback ───────────────
 
-def test_discovery_tickers_uses_explicit_universe_param_not_module_default():
+def test_discovery_tickers_uses_explicit_universe_param():
     fake_universe = {"FakeSector": ["ZZZFAKE"]}
     result = du.discovery_tickers(universe=fake_universe)
     assert result == ["ZZZFAKE"]
@@ -80,29 +90,7 @@ def test_discovery_tickers_uses_explicit_universe_param_not_module_default():
 
 def test_discovery_tickers_empty_universe_param_returns_empty_no_fallback():
     # An explicit {} (the real caller's contract on a resolve_universe
-    # failure) must never fall back to the real DISCOVERY_UNIVERSE dict.
+    # failure) must return nothing — there is no module-level dict left to
+    # fall back to.
     result = du.discovery_tickers(universe={})
     assert result == []
-
-
-# ─── 2026-09-01 roster refresh — pins the exact approved diff ──────────────
-# Removed: AI (C3.ai, $1.7B), LCID ($1.9B) — both sub-scale under this file's
-# own liquidity rule. Added: IBM/CSCO (Software & Cloud), EBAY/WBD (Internet
-# & Media), KR/ORLY (Consumer & Retail). Asserts the specific, deliberate
-# diff — not a full-roster snapshot — so nothing silently rides along or
-# regresses on the next refresh.
-
-def test_discovery_2026_09_01_refresh_removals_and_additions():
-    software = set(du.DISCOVERY_UNIVERSE["Software & Cloud"])
-    internet = set(du.DISCOVERY_UNIVERSE["Internet & Media"])
-    consumer = set(du.DISCOVERY_UNIVERSE["Consumer & Retail"])
-
-    assert "AI" not in software, "C3.ai ($1.7B) should be removed as sub-scale"
-    assert "LCID" not in consumer, "Lucid ($1.9B) should be removed as sub-scale"
-
-    for added in ("IBM", "CSCO"):
-        assert added in software, f"{added} should be a Software & Cloud candidate"
-    for added in ("EBAY", "WBD"):
-        assert added in internet, f"{added} should be an Internet & Media candidate"
-    for added in ("KR", "ORLY"):
-        assert added in consumer, f"{added} should be a Consumer & Retail candidate"

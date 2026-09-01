@@ -244,7 +244,8 @@ _REFERENCE_TABLES: tuple[_RefTable, ...] = (
     _RefTable(
         key="sector_universe",
         label="Grow Today scan universe",
-        location="stock_analyzer/scanner.py — SECTOR_UNIVERSE",
+        location="Supabase reference_tables['sector_universe'] (App Settings; "
+                 "the code dict this was seeded from was deleted in Commit 3)",
         kind=KIND_AS_OF,
         # 2026-08-16: full curation — all 73 verified alive, 15 large-caps added
         # to close a 53%-tech skew, 2 new buckets (Industrials, Communications).
@@ -255,7 +256,9 @@ _REFERENCE_TABLES: tuple[_RefTable, ...] = (
     _RefTable(
         key="discovery_universe",
         label="Movers discovery universe",
-        location="stock_analyzer/discovery_universe.py — DISCOVERY_UNIVERSE",
+        location="Supabase reference_tables['discovery_universe'] (App "
+                 "Settings; the code dict this was seeded from was deleted "
+                 "in Commit 3)",
         kind=KIND_AS_OF,
         # 2026-09-01: full market-cap/liquidity sweep of the whole universe
         # via scripts/roster_coverage_report.py --roster discovery --caps —
@@ -279,7 +282,9 @@ _REFERENCE_TABLES: tuple[_RefTable, ...] = (
     _RefTable(
         key="sector_candidates",
         label="Diversification candidate roster",
-        location="stock_analyzer/portfolio.py — _SECTOR_CANDIDATES",
+        location="Supabase reference_tables['sector_candidates'] (App "
+                 "Settings; the code dict this was seeded from was deleted "
+                 "in Commit 3)",
         kind=KIND_AS_OF,
         # 2026-08-17: full re-seed. All 56 names were alive, so this was a
         # FITNESS refresh, not rot — three sectors were seeding a de-risking
@@ -313,16 +318,18 @@ _REFERENCE_TABLES: tuple[_RefTable, ...] = (
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-# App Settings (docs/plans/app-settings.md) Commit 1 of 3 — the three tables
-# now backed by stock_analyzer/db.py's reference_tables. NOT the other three
-# (sp500_sector_weights, macro_event_calendar, nyse_calendar), which stay
-# pure code-date registrations for now. Grading tries the DB row's as_of
-# first and falls back to the hardcoded date below when the DB has no row
-# for the name yet (pre-DDL, offline, or not-yet-seeded) — an un-migrated
-# read keeps telling the truth exactly as it does today. Nothing in this
-# commit reads or writes the underlying rosters themselves (SECTOR_UNIVERSE
-# etc.) via the DB — that's Commit 2/3; this only changes which as_of date
-# check ⑤ reports once a table has actually been edited through the app.
+# App Settings (docs/plans/app-settings.md), all 3 commits shipped — the
+# three tables below are backed by stock_analyzer/db.py's reference_tables
+# and, as of Commit 3, are the ONLY source (the code dicts they were seeded
+# from are deleted). NOT the other three (sp500_sector_weights,
+# macro_event_calendar, nyse_calendar), which stay pure code-date
+# registrations. Grading tries the DB row's as_of first and falls back to
+# the hardcoded date below when the DB has no row for the name yet (offline
+# or RLS-misconfigured) — this fallback is about THIS REGISTRY's own as_of
+# display continuing to tell the truth on a DB hiccup, not about the
+# underlying roster payload, which every real reader (scanner.py/
+# portfolio.py/ticker_liveness.py/cron_runner.py/app.py) resolves solely via
+# `reference_data.resolve_universe`.
 _DB_BACKED_KEYS = {"sector_universe", "discovery_universe", "sector_candidates"}
 
 

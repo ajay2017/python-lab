@@ -12,11 +12,14 @@
 -- sentinel (`None`) if this DDL has not been applied yet, so applying it is
 -- safe at any time and does not require a coordinated deploy.
 --
--- After applying, run `python scripts/seed_reference_tables.py` ONCE (by
--- hand, from a shell with the app's Supabase env vars set) to seed the three
--- v1 tables (sector_universe, discovery_universe, sector_candidates) from
--- their current hardcoded code lists. Nothing in the running app reads from
--- these tables yet in this commit — that is Commit 2.
+-- HISTORICAL NOTE (all 3 commits shipped 2026-09-01): this DDL was applied,
+-- then seeded ONCE via a since-retired migration script
+-- (scripts/seed_reference_tables.py read the hardcoded code lists that
+-- existed at the time; both the script and the code lists were deleted in
+-- Commit 3 once every real caller was cut over to the DB-only resolver). All
+-- three tables are live and are the sole source of truth — there is no code
+-- fallback left to seed from. If a table is ever missing again, that's a
+-- genuine anomaly to investigate directly in Supabase, not a re-seed.
 
 -- ── reference_tables: one CURRENT row per named table ───────────────────────
 -- `payload_hash` is the sha256 of the canonicalized payload

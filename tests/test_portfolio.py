@@ -470,99 +470,42 @@ def test_alerts_non_string_earnings_value_does_not_crash():
     assert [a for a in result if a["category"] == "earnings"] == []
 
 
-# ─── Diversification roster invariants (2026-08-17 re-seed) ──────────────────
-# The roster names tickers the app SUGGESTS YOU BUY to reduce concentration.
-# That purpose is what these tests protect: a suggested buy is a prospective
-# holding, and a de-risking suggestion must not itself add idiosyncratic risk.
+# ─── Diversification roster invariants — RETIRED 2026-09-01 ──────────────────
+# App Settings (docs/plans/app-settings.md) Commit 3 deleted the module-level
+# `_SECTOR_CANDIDATES`/`DISCOVERY_UNIVERSE` dicts these tests used to read
+# directly (roster-ticker-has-a-curated-sector, roster-key-matches-
+# TICKER_SECTORS, no-sector-thin, clean-energy-pool-excludes-sub-scale-tail,
+# every-diversifying-sector-can-produce-candidates, and the discovery-universe
+# semiconductor/clean-energy content checks below). The roster now lives
+# DB-backed in Supabase `reference_tables`, edited through the ⚙️ App
+# Settings UI — `reference_data.validate_payload`'s sector_candidates rule
+# (every ticker must have a matching TICKER_SECTORS entry, bucket-key
+# EQUALITY not mere presence) enforces the "roster ticker has a curated,
+# matching sector" invariant at SAVE time now, which is where a roster edit
+# actually happens; a unit test reading a frozen code dict can no longer see
+# what an editor actually saved. Coverage for `diversifying_candidate_pool`'s
+# OWN behaviour (dedup, cap, param precedence, no-fallback) is retained below
+# against small local fixtures, which is the part of this file's job that is
+# still testable in code.
 
-def _roster_tickers() -> set:
-    from stock_analyzer.portfolio import _SECTOR_CANDIDATES
-    return {t for names in _SECTOR_CANDIDATES.values() for t in names}
+# ─── diversifying_candidate_pool — App Settings: explicit sector_candidates/
+# discovery_universe params are REQUIRED (Commit 3 removed the module-level
+# fallback default entirely).
 
-
-def test_every_roster_ticker_has_a_curated_sector():
-    # FAILED ON HEAD before 2026-08-17: F, GM and LCID had no entry. A bought
-    # suggestion would resolve to the raw provider GICS string, which is unknown
-    # to macro_calendar._SECTOR_IMPACT and macro.RATE_SENSITIVITY — invisible to
-    # the held-side macro exposure math. Same class as the BA/MRVL gaps.
-    from stock_analyzer.portfolio import TICKER_SECTORS
-    missing = sorted(_roster_tickers() - set(TICKER_SECTORS))
-    assert not missing, (
-        f"roster names the app can suggest buying, with no curated sector: {missing}")
-
-
-def test_roster_ticker_sector_matches_its_roster_key():
-    # Buying a suggestion made under "Clean Energy" must not classify the
-    # position as something else — that incoherence doesn't exist today and
-    # this stops it starting.
-    from stock_analyzer.portfolio import _SECTOR_CANDIDATES, TICKER_SECTORS
-    mismatched = {
-        t: (sector, TICKER_SECTORS[t])
-        for sector, names in _SECTOR_CANDIDATES.items()
-        for t in names
-        if t in TICKER_SECTORS and TICKER_SECTORS[t] != sector
-    }
-    assert not mismatched, f"roster key vs TICKER_SECTORS disagreement: {mismatched}"
-
-
-def test_no_sector_roster_is_empty_or_near_empty():
-    # Margin on top of test_every_diversifying_sector_can_actually_produce_
-    # candidates below. Six sectors have no discovery-bucket mapping, so for
-    # them the roster IS the whole pool and held-name exclusion shrinks it
-    # further at runtime.
-    from stock_analyzer.portfolio import _SECTOR_CANDIDATES
-    thin = {s: names for s, names in _SECTOR_CANDIDATES.items() if len(names) < 3}
-    assert not thin, f"roster too thin to populate a candidate pool: {thin}"
-
-
-def test_clean_energy_pool_excludes_the_sub_scale_tail():
-    # The defect that motivated the re-seed: the pool — not just the roster —
-    # carried SEDG ($2.0B), RUN ($2.4B) and PLUG ($3.2B), because the roster
-    # fills only the first slots and the discovery bucket filled the rest in
-    # renewables-first order. Naming a $2B name as concentration relief is the
-    # opposite of this feature's purpose. BE ($67.7B) is deliberately NOT in
-    # this list — it is not sub-scale and was kept.
-    from stock_analyzer.portfolio import diversifying_candidate_pool
-    pool = set(diversifying_candidate_pool("Clean Energy", set()))
-    banned = {"SEDG", "RUN", "PLUG"}
-    assert not (pool & banned), (
-        f"sub-scale names back in the de-risking pool: {sorted(pool & banned)} — "
-        "they were removed 2026-08-17 because a diversification suggestion must "
-        "not add idiosyncratic risk; re-adding needs that reasoning engaged")
-
-
-def test_every_diversifying_sector_can_actually_produce_candidates():
-    # Stronger than asserting roster LENGTH: portfolio.py's ADD loop does
-    # `if not candidates: continue`, so an empty POOL silently suppresses that
-    # sector's card. Tests the thing that matters, not a proxy for it.
-    #
-    # Residual this cannot cover: every roster name already held. That case
-    # co-occurs with current_pct >= DIVERSIFY_ADD_SKIP_PCT, so the suppression
-    # is legitimate rather than silent.
-    from stock_analyzer.portfolio import _DIVERSIFYING_SECTORS, diversifying_candidate_pool
-    empty = [s for s in _DIVERSIFYING_SECTORS
-             if not diversifying_candidate_pool(s, set())]
-    assert not empty, f"these sectors would silently render no ADD card: {empty}"
-
-
-# ─── diversifying_candidate_pool — App Settings (Commit 2): explicit ────────
-# sector_candidates/discovery_universe params, not the module-level default,
-# must be what the real importer path actually reads.
-
-def test_diversifying_candidate_pool_uses_explicit_params_not_module_default():
+def test_diversifying_candidate_pool_uses_explicit_params():
     from stock_analyzer.portfolio import diversifying_candidate_pool
     fake_candidates = {"Healthcare": ["ZZZFAKE1"]}
     fake_discovery  = {"Healthcare & Biotech": ["ZZZFAKE2"]}
     pool = diversifying_candidate_pool(
         "Healthcare", set(), sector_candidates=fake_candidates, discovery_universe={},
     )
-    assert pool == ["ZZZFAKE1"], "must read the passed roster, not _SECTOR_CANDIDATES"
+    assert pool == ["ZZZFAKE1"], "must read the passed roster"
 
     pool2 = diversifying_candidate_pool(
         "Healthcare", set(), sector_candidates={}, discovery_universe=fake_discovery,
     )
     # "Healthcare" -> "Healthcare & Biotech" via _DIVERSIFY_TO_DISCOVERY
-    assert pool2 == ["ZZZFAKE2"], "must read the passed discovery bucket, not DISCOVERY_UNIVERSE"
+    assert pool2 == ["ZZZFAKE2"], "must read the passed discovery bucket"
 
 
 def test_diversifying_candidate_pool_empty_params_produce_no_fallback():
@@ -571,9 +514,33 @@ def test_diversifying_candidate_pool_empty_params_produce_no_fallback():
         "Healthcare", set(), sector_candidates={}, discovery_universe={},
     )
     assert pool == [], (
-        "an explicit {} on both params must never fall back to the real "
-        "_SECTOR_CANDIDATES/DISCOVERY_UNIVERSE dicts"
+        "an explicit {} on both params must produce an empty pool — there is "
+        "no module-level dict left to fall back to"
     )
+
+
+def test_diversifying_candidate_pool_dedupes_case_insensitive_and_excludes_held():
+    from stock_analyzer.portfolio import diversifying_candidate_pool
+    sector_candidates  = {"Healthcare": ["aaa1", "AAA2"]}
+    discovery_universe = {"Healthcare & Biotech": ["aaa1", "BBB1"]}  # aaa1 dup across sources
+    pool = diversifying_candidate_pool(
+        "Healthcare", {"AAA2"},  # AAA2 held -> excluded
+        sector_candidates=sector_candidates, discovery_universe=discovery_universe,
+    )
+    assert pool == ["AAA1", "BBB1"], (
+        "must dedupe the cross-source duplicate case-insensitively, preserve "
+        "roster-then-discovery order, and drop the already-held ticker"
+    )
+
+
+def test_diversifying_candidate_pool_respects_cap():
+    from stock_analyzer.portfolio import diversifying_candidate_pool
+    sector_candidates = {"Healthcare": ["A", "B", "C", "D"]}
+    pool = diversifying_candidate_pool(
+        "Healthcare", set(), sector_candidates=sector_candidates,
+        discovery_universe={}, cap=2,
+    )
+    assert pool == ["A", "B"]
 
 
 # NOTE — a test asserting CEG/VST stay out of the Clean Energy pool was written
@@ -604,65 +571,16 @@ def test_ticker_sectors_values_are_rate_known_or_a_documented_gap():
     assert not unknown, f"new sector labels with no rate-sensitivity score: {unknown}"
 
 
-# ─── Discovery-universe macro-gate coverage (2026-09-01) ────────────────────
-# Movers-sourced picks reach daily_briefing's macro gate via the SAME
-# resolve_sector() -> TICKER_SECTORS path as the roster names above. 11 of 20
-# names in DISCOVERY_UNIVERSE["Semiconductors"] had no TICKER_SECTORS entry
-# (ADI, KLAC, NXPI, MCHP, ON, TER, SWKS, MPWR, ARM, SMCI, WOLF) and fell back
-# to the raw provider GICS string, invisible to the macro gate — same class as
-# BA (F-240) and F/GM (F-242). Scoped to ONLY the Semiconductors bucket: the
-# "Clean Energy & Utilities" bucket has a separate, deliberately-unfixed gap
-# (DUK/SO/D/AEP/EXC have no safe taxonomy home; VST/CEG are an accepted
-# 2026-08-17 pool gap — see CLAUDE.md's "What's queued") owned elsewhere.
-
-def test_every_discovery_semiconductor_ticker_has_a_curated_sector():
-    # FAILED ON HEAD before 2026-09-01: 11 names (see comment above) had no
-    # entry and fell back to a raw GICS string invisible to the macro gate.
-    from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
-    from stock_analyzer.portfolio import TICKER_SECTORS
-    bucket = set(DISCOVERY_UNIVERSE["Semiconductors"])
-    missing = sorted(bucket - set(TICKER_SECTORS))
-    assert not missing, (
-        f"Movers-sourced semiconductor tickers with no curated sector: {missing}")
-
-
-def test_discovery_semiconductor_sector_values_are_macro_and_rate_known():
-    # Companion to the curated-sector test above: having an entry isn't enough
-    # if the value it maps to isn't itself known to the macro gate or the
-    # rate-sensitivity table (mirrors test_scanner.py's
-    # test_every_curated_ticker_sector_value_is_macro_known, scoped here to
-    # just this one bucket).
-    from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
-    from stock_analyzer.macro import RATE_SENSITIVITY
-    from stock_analyzer.macro_calendar import _SECTOR_IMPACT
-    from stock_analyzer.portfolio import TICKER_SECTORS
-
-    macro_known = set()
-    for mapping in _SECTOR_IMPACT.values():
-        macro_known |= {k for k in mapping if k != "__ALL__"}
-
-    bucket = set(DISCOVERY_UNIVERSE["Semiconductors"])
-    unknown = {
-        t: TICKER_SECTORS[t]
-        for t in bucket
-        if t in TICKER_SECTORS
-        and (TICKER_SECTORS[t] not in macro_known
-             or TICKER_SECTORS[t] not in RATE_SENSITIVITY)
-    }
-    assert not unknown, (
-        f"semiconductor tickers whose curated sector isn't macro/rate-known: {unknown}")
-
-
-def test_discovery_clean_energy_removals_and_retentions():
-    # Proves the Movers net changed only as intended: three micro-caps out,
-    # everything else — including BE and the renewables that merely left the
-    # diversification ROSTER — still discoverable.
-    from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
-    bucket = set(DISCOVERY_UNIVERSE["Clean Energy & Utilities"])
-    assert not (bucket & {"SEDG", "RUN", "PLUG"})
-    for kept in ("NEE", "DUK", "SO", "D", "AEP", "BE", "VST", "CEG", "EXC",
-                 "FSLR", "ENPH"):
-        assert kept in bucket, f"{kept} should still be a Movers candidate"
+# ─── Discovery-universe macro-gate coverage — RETIRED 2026-09-01 ────────────
+# `DISCOVERY_UNIVERSE`, the module-level dict these content checks (curated-
+# sector coverage / macro-rate-known values / the specific removals-and-
+# retentions diff) used to read directly, was deleted by App Settings
+# Commit 3. The underlying invariant (a Movers-sourced pick must resolve to a
+# curated, macro/rate-known TICKER_SECTORS sector) is unchanged in principle,
+# but there is no longer a code-level artifact for a unit test to check it
+# against — the roster is now DB-backed and edited through ⚙️ App Settings.
+# See the identical retirement note above `diversifying_candidate_pool`'s
+# tests for the same reasoning.
 
 
 # ── classify_book_corr ────────────────────────────────────────────────────────
@@ -753,6 +671,23 @@ def test_industrials_and_communications_have_a_sector_etf():
     assert SECTOR_ETF.get("Communications") == "XLC"
 
 
+# Frozen snapshot of scanner's former module-level SECTOR_UNIVERSE bucket
+# LABEL set — App Settings (docs/plans/app-settings.md) Commit 3 deleted that
+# dict; the scan universe is now DB-backed. The bucket/label STRUCTURE is
+# locked in the ⚙️ App Settings v1 editor (only ticker membership is
+# UI-editable — design doc Q3), so this label set stays a valid, permanent
+# fixture until a reviewed code+DB change adds a new bucket — unlike ticker
+# membership, which the UI can freely change and which this file no longer
+# tests directly (see the retirement note above the diversification-roster
+# tests for the identical reasoning).
+_SECTOR_UNIVERSE_BUCKET_LABELS = {
+    "AI & Cloud", "Cybersecurity", "Semiconductors", "Consumer Tech",
+    "AI & Data Platforms", "EV & Clean Energy", "Healthcare & Biotech",
+    "Financials & Fintech", "Enterprise Tech", "Defense & Aerospace",
+    "Industrials", "Communications", "Energy", "Consumer Staples & Retail",
+}
+
+
 def test_every_scanner_sector_universe_bucket_has_a_sector_etf():
     """`_sector_bonus` (daily_briefing.py) matches a candidate's sector against
     EVERY alias a leading ETF represents (not just a first-key-wins display
@@ -767,20 +702,18 @@ def test_every_scanner_sector_universe_bucket_has_a_sector_etf():
     check all aliases, not just one. A new `"Consumer Staples & Retail": "XRT"`
     SECTOR_ETF entry closed the third gap (no key at all was a substring
     before). All three previously-allowlisted gaps are now closed — this test
-    asserts every SECTOR_UNIVERSE bucket has SOME SECTOR_ETF key (checking
+    asserts every sector-universe bucket has SOME SECTOR_ETF key (checking
     the FULL key set, not deduped per unique ETF value, since every key is
     now individually reachable via the aliases mechanism) as a substring.
 
     If this test ever fails again, that's a genuinely new, real gap needing
     its own SECTOR_ETF entry — not a reason to bring the allowlist back."""
-    from stock_analyzer.scanner import SECTOR_UNIVERSE
-
     missing = [
-        sec for sec in SECTOR_UNIVERSE
+        sec for sec in _SECTOR_UNIVERSE_BUCKET_LABELS
         if not any(name in sec for name in SECTOR_ETF)
     ]
     assert not missing, (
-        f"SECTOR_UNIVERSE bucket(s) with no SECTOR_ETF key as a substring — "
+        f"sector-universe bucket(s) with no SECTOR_ETF key as a substring — "
         f"these can never register as a 'leading sector' or get the +5 "
         f"ranking bonus: {missing}"
     )

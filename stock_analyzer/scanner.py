@@ -3,35 +3,15 @@ import pandas as pd
 from stock_analyzer.indicators import sma, rsi as calc_rsi
 from stock_analyzer.constants import MOVER_MIN_DAY_GAIN_PCT
 
-# Shelf life: registered in stock_analyzer/reference_shelf.py — update its as_of date when you refresh this list.
-#
-# BUCKET LABELS ARE LOAD-BEARING, not just display. daily_briefing.py's macro
-# gate resolves a candidate's sector via portfolio.resolve_sector(ticker, <this
-# bucket label>) and then tests `sector in _macro_blocked_sectors`. A label that
-# macro_calendar._SECTOR_IMPACT doesn't know can NEVER be macro-suppressed — it
-# fails OPEN, silently, with no banner. So when adding a bucket, either name it
-# exactly as an existing _SECTOR_IMPACT key or add a row there in the same
-# commit, and give each ticker a portfolio.TICKER_SECTORS entry so the pick path
-# and the held path (which resolves from the provider's GICS string) agree.
-# tests/test_scanner.py asserts this invariant with an explicit allowlist.
-SECTOR_UNIVERSE = {
-    "AI & Cloud": ["MSFT", "GOOGL", "META", "AMZN", "CRM", "NOW", "DDOG", "WDAY"],
-    "Cybersecurity": ["PANW", "CRWD", "ZS", "NET", "FTNT", "OKTA", "S"],
-    "Semiconductors": ["NVDA", "AMD", "AVGO", "MU", "QCOM", "AMAT", "ASML", "INTC"],
-    "Consumer Tech": ["AAPL", "NFLX", "SHOP", "UBER", "ABNB"],
-    "AI & Data Platforms": ["PLTR", "AI", "MDB", "SNOW", "PATH", "IONQ"],
-    "EV & Clean Energy": ["TSLA", "ENPH", "FSLR", "NEE", "RIVN"],
-    "Healthcare & Biotech": ["LLY", "NVO", "ABBV", "ISRG", "MRNA", "REGN", "AMGN",
-                             "JNJ", "UNH", "MRK", "TMO"],
-    "Financials & Fintech": ["JPM", "V", "MA", "GS", "XYZ", "COIN", "PYPL",
-                             "BAC", "WFC", "MS", "SCHW"],
-    "Enterprise Tech": ["DELL", "ORCL", "IBM", "HPE", "SAP"],
-    "Defense & Aerospace": ["LMT", "RTX", "NOC", "GD", "BA"],
-    "Industrials": ["CAT", "GE", "GEV"],
-    "Communications": ["T", "VZ", "TMUS"],
-    "Energy": ["XOM", "CVX", "OXY", "COP", "SLB"],
-    "Consumer Staples & Retail": ["COST", "NKE", "TJX", "WMT", "TGT", "HD"],
-}
+# App Settings (docs/plans/app-settings.md) Commit 3, 2026-09-01 — the
+# module-level SECTOR_UNIVERSE dict that used to live here was deleted; the
+# scan universe is now DB-backed (Supabase `reference_tables`, key
+# 'sector_universe') and reached exclusively via
+# `stock_analyzer.reference_data.resolve_universe` / `resolve_universe_or_none`.
+# Every caller of `scan_sectors` below now passes the resolved payload in via
+# its required `universe` parameter — see that function's docstring for the
+# BUCKET-LABELS-ARE-LOAD-BEARING invariant (macro-gate coverage), which still
+# applies to whatever payload is threaded in.
 
 
 # ── Score-component point buckets ────────────────────────────────────────────
@@ -164,9 +144,9 @@ def _quick_score(ticker: str, df: pd.DataFrame) -> dict | None:
 
 def scan_sectors(
     selected_sectors: list[str],
+    universe: "dict[str, list[str]]",
     period: str = "6mo",
     extra_tickers: list[str] | None = None,
-    universe: "dict[str, list[str]] | None" = None,
 ) -> pd.DataFrame:
     """
     Scan the requested sectors plus any extra tickers (e.g. user's watchlist).
@@ -175,28 +155,28 @@ def scan_sectors(
     results with a recognisable label. Tickers already present in a selected
     sector keep their real sector classification — dedup is by ticker symbol,
     not by sector. This lets the user widen the scan universe beyond the
-    hardcoded SECTOR_UNIVERSE without needing a code change for each name.
+    curated `universe` payload without needing a code change for each name.
 
-    `universe` (App Settings, docs/plans/app-settings.md Commit 2): the
-    resolved `sector_universe` payload — bucket -> [tickers] — threaded in by
-    the caller (via `stock_analyzer.reference_data.resolve_universe`) so this
+    `universe` (App Settings, docs/plans/app-settings.md): the resolved
+    `sector_universe` payload — bucket -> [tickers] — threaded in by the
+    caller (via `stock_analyzer.reference_data.resolve_universe`) so this
     function stays pure/testable rather than reaching into the DB itself.
+    REQUIRED, no default — Commit 3 deleted the module-level `SECTOR_UNIVERSE`
+    dict this used to fall back to. Every real caller (app.py, cron_runner.py)
+    must pass a resolved payload on success, or an explicit `{}` — never a
+    bare `None` — when `resolve_universe` raised `ReferenceDataUnavailable`,
+    so the scan legitimately returns nothing rather than fabricating a result.
 
-    IMPORTANT — `None` is a unit-test convenience default ONLY (falls back to
-    the module-level `SECTOR_UNIVERSE`, or whatever a test has monkeypatched
-    onto this module), never an offline-sentinel value. Every REAL caller
-    (app.py, cron_runner.py) must always pass this explicitly: a resolved
-    payload on success, or an explicit `{}` — NOT a bare `None` — when
-    `resolve_universe` raised `ReferenceDataUnavailable`. Passing `None` on
-    an unavailable resolution would silently fall through to the hardcoded
-    dict one layer down, exactly the silent-stale-universe fallback the
-    design doc rejects (the 2026-07-14 INTC failure mode repeated on this
-    surface) — the caller must render its own fail-loud banner first, then
-    pass `{}` so the scan legitimately returns nothing rather than a
-    confident result built on frozen code.
+    BUCKET LABELS ARE LOAD-BEARING, not just display. daily_briefing.py's
+    macro gate resolves a candidate's sector via
+    portfolio.resolve_sector(ticker, <this bucket label>) and then tests
+    `sector in _macro_blocked_sectors`. A label that macro_calendar._SECTOR_
+    IMPACT doesn't know can NEVER be macro-suppressed — it fails OPEN,
+    silently, with no banner. Bucket/label structure is locked in the ⚙️ App
+    Settings editor (only ticker membership is UI-editable) specifically so
+    this invariant can't be broken from the UI; a genuinely new bucket is
+    still a reviewed code + DB change.
     """
-    if universe is None:
-        universe = SECTOR_UNIVERSE
     all_tickers, ticker_sector = [], {}
     for sector in selected_sectors:
         for t in universe.get(sector, []):

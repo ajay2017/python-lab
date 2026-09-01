@@ -31062,11 +31062,11 @@ elif page == "⚙️ App Settings":
     )
 
     _AS_TABLES = [
-        ("sector_universe",    "Grow Today scan universe",         "SECTOR_UNIVERSE"),
-        ("discovery_universe", "Movers discovery universe",        "DISCOVERY_UNIVERSE"),
-        ("sector_candidates",  "Diversification candidate roster", "_SECTOR_CANDIDATES"),
+        ("sector_universe",    "Grow Today scan universe"),
+        ("discovery_universe", "Movers discovery universe"),
+        ("sector_candidates",  "Diversification candidate roster"),
     ]
-    _AS_LABELS = {k: lbl for k, lbl, _ in _AS_TABLES}
+    _AS_LABELS = {k: lbl for k, lbl in _AS_TABLES}
 
     st.markdown("##### 📋 Reference tables")
     st.caption(
@@ -31079,14 +31079,14 @@ elif page == "⚙️ App Settings":
     _as_shelf_by_key = {r["key"]: r for r in reference_shelf.shelf_status()}
     _as_edit_table = st.session_state.get("_as_edit_table")
 
-    for _as_key, _as_label, _as_codename in _AS_TABLES:
+    for _as_key, _as_label in _AS_TABLES:
         _as_row = _as_shelf_by_key.get(_as_key, {})
         _as_sev = _as_row.get("severity", "unknown")
         _as_dot = {"ok": "🟢", "warn": "🟡", "down": "🔴"}.get(_as_sev, "⚪")
         _as_c1, _as_c2 = st.columns([5, 1])
         with _as_c1:
             st.markdown(
-                f"**{_as_label}** · `{_as_codename}`  \n"
+                f"**{_as_label}** · `{_as_key}`  \n"
                 f"{_as_dot} {_as_row.get('detail', 'status unknown')}"
             )
         with _as_c2:
@@ -31131,9 +31131,12 @@ elif page == "⚙️ App Settings":
                 "The `[supabase] key` secret must be the **service-role / "
                 "secret key** (starts with `sb_secret_` or is the legacy "
                 "service_role JWT) — not the publishable/anon key. Update "
-                "`SUPABASE_KEY` in Railway → Variables, then Redeploy — or "
-                "run `scripts/seed_reference_tables.py` if the table is just "
-                "unseeded."
+                "`SUPABASE_KEY` in Railway → Variables, then Redeploy. If the "
+                "DDL is applied and this row is still genuinely missing (not "
+                "just a permissions issue), that's an anomaly to investigate "
+                "directly in Supabase — the one-time seed migration this "
+                "table needed has already run and its script has since been "
+                "retired."
             )
         else:
             st.caption(

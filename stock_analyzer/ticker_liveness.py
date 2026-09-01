@@ -3,9 +3,11 @@ Weekly ticker-liveness sweep for hand-maintained reference rosters.
 
 AWARENESS / CHORE ONLY.  Never gates a recommendation, never suppresses a
 pick, never changes a score.  Answers exactly one question: which tickers in
-the curated rosters (scanner.SECTOR_UNIVERSE, discovery_universe.DISCOVERY_UNIVERSE,
-portfolio._SECTOR_CANDIDATES) have stopped trading since the last human
-curation pass?
+the curated rosters (DB-backed via Supabase `reference_tables`, keys
+'sector_universe', 'discovery_universe', 'sector_candidates' — App Settings,
+docs/plans/app-settings.md; the module-level dicts these used to be are
+deleted as of Commit 3) have stopped trading since the last human curation
+pass?
 
 Runs from the Saturday maintenance cron lane (cron_runner._run_maintenance).
 Requires no database access — intentionally placed before the DB sub-jobs so
@@ -73,15 +75,32 @@ _SWEEP_ESCALATION_CAP_SEC = 180
 
 
 def sweep(
+    sector_universe: "dict",
+    discovery_universe: "dict",
+    sector_candidates: "dict",
     fetch_batch=None, fetch_live=None,
-    sector_universe: "dict | None" = None,
-    discovery_universe: "dict | None" = None,
-    sector_candidates: "dict | None" = None,
 ) -> dict | None:
     """Check all curated reference rosters for delisted / unknown tickers.
 
     Parameters
     ----------
+    sector_universe / discovery_universe / sector_candidates : dict
+        App Settings (docs/plans/app-settings.md) — the resolved
+        `sector_universe` / `discovery_universe` / `sector_candidates`
+        payloads, threaded in by the caller (via
+        `stock_analyzer.reference_data.resolve_universe`) so this function
+        stays pure/testable. REQUIRED, no default — Commit 3 deleted the
+        module-level `scanner.SECTOR_UNIVERSE` /
+        `discovery_universe.DISCOVERY_UNIVERSE` / `portfolio._SECTOR_CANDIDATES`
+        dicts these used to fall back to. The real caller
+        (`cron_runner._run_maintenance`) must pass an explicit `{}` for any
+        roster whose resolution failed — this sweep then honestly treats
+        that roster as contributing zero names for this run. This is a
+        CHORE/awareness check, not a decision path, so a partially-
+        unavailable roster degrades the sweep's coverage for this run rather
+        than aborting it outright (unlike scan_sectors/
+        diversifying_candidate_pool, which are on a real decision path and
+        must not run partially blind).
     fetch_batch : callable | None
         DI seam for tests.  Signature: ``(tickers: list[str]) -> pd.DataFrame``.
         Default: ``yf.download(tickers, period="5d", auto_adjust=True,
@@ -90,24 +109,6 @@ def sweep(
         DI seam for tests.  Signature:
         ``(tickers: list[str]) -> dict[str, dict]``.
         Default: ``stock_analyzer.data.fetch_live_prices``.
-    sector_universe / discovery_universe / sector_candidates : dict | None
-        App Settings (docs/plans/app-settings.md Commit 2) — the resolved
-        `sector_universe` / `discovery_universe` / `sector_candidates`
-        payloads, threaded in by the caller (via
-        `stock_analyzer.reference_data.resolve_universe`) so this function
-        stays pure/testable.  `None` is a unit-test convenience default ONLY
-        (falls back to reading `scanner.SECTOR_UNIVERSE` /
-        `discovery_universe.DISCOVERY_UNIVERSE` / `portfolio._SECTOR_CANDIDATES`
-        directly, or whatever a test has monkeypatched onto those modules) —
-        never an offline-sentinel value. The real caller
-        (`cron_runner._run_maintenance`) must pass an explicit `{}` for any
-        roster whose resolution failed, not a bare `None` — this sweep then
-        honestly treats that roster as contributing zero names for this run
-        rather than silently reading the frozen code dict. This is a CHORE/
-        awareness check, not a decision path, so a partially-unavailable
-        roster degrades the sweep's coverage for this run rather than
-        aborting it outright (unlike scan_sectors/diversifying_candidate_pool,
-        which are on a real decision path and must not run partially blind).
 
     Returns
     -------
@@ -151,20 +152,6 @@ def sweep(
         fetch_live = _flp
 
     # ── Build roster with per-ticker membership ───────────────────────────────
-    # Each roster param falls back to the real module attribute ONLY when the
-    # caller didn't pass one at all (unit-test convenience — see the App
-    # Settings note in the docstring above); the real caller always passes an
-    # explicit dict, `{}` included, and never relies on this fallback.
-    if sector_universe is None:
-        from stock_analyzer import scanner
-        sector_universe = scanner.SECTOR_UNIVERSE
-    if discovery_universe is None:
-        from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
-        discovery_universe = DISCOVERY_UNIVERSE
-    if sector_candidates is None:
-        from stock_analyzer import portfolio
-        sector_candidates = portfolio._SECTOR_CANDIDATES
-
     membership: dict[str, set[str]] = {}
     for tk in (
         t.upper().strip()

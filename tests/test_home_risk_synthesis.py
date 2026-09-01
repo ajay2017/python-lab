@@ -44,7 +44,16 @@ class TestHappyPath:
     def test_bundle_shape_when_computation_succeeds(self):
         held = _held_data()
         port_df = _port_df()
-        bundle = hrs.build_correlation_bundle(port_df, held, 50_000.0)
+        # Explicit (empty is fine) sector_candidates/discovery_universe — App
+        # Settings Commit 3 made diversifying_candidate_pool's own params
+        # required, so leaving these at build_correlation_bundle's own None
+        # default would now raise inside the pool call (caught two frames up
+        # as the div_recs=None offline sentinel) instead of exercising the
+        # real "computed successfully" path this test is named for.
+        bundle = hrs.build_correlation_bundle(
+            port_df, held, 50_000.0,
+            sector_candidates={}, discovery_universe={},
+        )
 
         assert set(bundle) == {
             "corr_df", "div", "div_score", "avg_corr", "risk_pairs",

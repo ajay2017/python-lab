@@ -87,21 +87,24 @@ def build_correlation_bundle(
     republishes these into the matching `_*_cache` session_state keys.
 
     `sector_candidates` / `discovery_universe` (App Settings, docs/plans/
-    app-settings.md Commit 2): the resolved reference-table payloads for the
+    app-settings.md): the resolved reference-table payloads for the
     Diversification Advisor's ADD candidate pool, threaded straight through
     to `diversification_recommendations`/`diversifying_candidate_pool`.
 
-    IMPORTANT — this is `None`-by-default for unit-test convenience only
-    (matching `diversifying_candidate_pool`'s own contract), NOT an
-    offline-sentinel parameter. The REAL Home caller must never pass a bare
-    `None` here on an unavailable `reference_data.resolve_universe` — that
-    would silently fall through to the hardcoded `_SECTOR_CANDIDATES`/
-    `DISCOVERY_UNIVERSE` module dicts one layer down, exactly the silent
-    code-fallback this whole feature exists to avoid. On unavailability the
-    caller must render its own fail-loud banner (this module has no
-    Streamlit access to do that itself) and pass an explicit `{}` — which
-    correctly starves `diversifying_candidate_pool`'s pool to empty without
-    ever reading the code dict.
+    IMPORTANT — kept `None`-by-default here for unit-test convenience only;
+    NOT an offline-sentinel parameter. As of App Settings Commit 3,
+    `diversifying_candidate_pool`'s own `sector_candidates`/
+    `discovery_universe` parameters are REQUIRED (the module-level
+    `_SECTOR_CANDIDATES`/`DISCOVERY_UNIVERSE` dicts they used to fall back to
+    were deleted) — so passing a bare `None` through from here no longer
+    silently serves stale code data; it raises an `AttributeError` two calls
+    down, which is caught by this function's own try/except and surfaces as
+    the `div_recs = None` offline sentinel. The REAL Home caller must still
+    never rely on that path: on an unavailable `reference_data.resolve_universe`
+    it must render its own fail-loud banner (this module has no Streamlit
+    access to do that itself) and pass an explicit `{}`, which correctly
+    starves `diversifying_candidate_pool`'s pool to empty rather than
+    tripping the exception path.
     """
     try:
         corr_df      = correlation_matrix(held_data)
@@ -131,9 +134,10 @@ def build_correlation_bundle(
 
     try:
         div_recs = diversification_recommendations(
-            port_df, corr_df, div, portfolio_value,
+            port_df, corr_df, div,
             sector_candidates=sector_candidates,
             discovery_universe=discovery_universe,
+            portfolio_value=portfolio_value,
         )
     except Exception:
         div_recs = None  # offline sentinel, not [] — matches sibling cache contract

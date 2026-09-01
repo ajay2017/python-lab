@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 
 from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_UNDERSIZED_PCT, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS, EARNINGS_IMMINENT_DAYS, EARNINGS_CRITICAL_DAYS, REDEPLOY_CORR_DIVERSIFIER_MAX, REDEPLOY_CORR_CORRELATED_MIN
-from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 from stock_analyzer.earnings_advisor import _today_et
 
 
@@ -1243,72 +1242,29 @@ def diversification_score(corr_df: pd.DataFrame, weights: dict | None = None) ->
 
 # ── Diversification Advisor ────────────────────────────────────────────────────
 
-# Curated fallback roster per sector. Kept as the seed of the candidate pool
-# (always unioned in FIRST so well-known names are never dropped by the scan
-# cap), and as the sole source if the discovery-universe bucket is unavailable.
-# Shelf life: registered in stock_analyzer/reference_shelf.py — update its as_of date when you refresh this list.
-# These are the names the app ASSERTS as a sector's representatives when it
-# suggests an ADD to reduce concentration. Membership is earned by being a
-# large, liquid, representative expression of the sector's macro driver —
-# NEVER by trailing momentum, and never by "it's down so it's cheap". A
-# de-risking suggestion that names a sub-scale, single-technology or
-# pre-revenue company works against the only reason this table exists.
-#
-# Re-seeded 2026-08-17 (roster was 104d stale; all 56 names were alive, so this
-# was a fitness problem, not rot). Every ticker here must also have a
-# TICKER_SECTORS entry whose value equals its key — a suggested buy is a
-# prospective holding, and a holding with no curated sector is invisible to the
-# macro exposure math. Both invariants are asserted in tests/test_portfolio.py.
-_SECTOR_CANDIDATES = {
-    "Healthcare":      ["LLY", "NVO", "ABBV", "ISRG", "REGN"],
-    "Energy":          ["XOM", "CVX", "COP", "OXY"],
-    "Defense":         ["LMT", "RTX", "NOC", "GD"],
-    "Financials":      ["JPM", "V", "MA", "GS"],
-    # Dropped ENPH ($5.3B) and BEP ($10.4B) as sub-scale for a suggestion whose
-    # job is REDUCING risk; both stay reachable via the discovery bucket, they
-    # just stop being ASSERTED as the sector's representatives. Median cap
-    # $17.3B → ~$68B.
-    #
-    # This sector KEEPS MEANING RENEWABLES. A first attempt re-seeded it to
-    # regulated utilities (DUK/SO/D/AEP) and was reverted before shipping: the
-    # string "Clean Energy" is a KEY in three other tables, so re-pointing it
-    # silently mis-routed them — earnings_advisor._SECTOR_WATCH would have told
-    # you to watch "module costs / IRA subsidy commentary" before Duke Energy's
-    # print, SECTOR_ETF would have benchmarked a utility against ICLN, and
-    # stress_test._SECTOR_SHOCKS would have shocked it -70% in the 2008
-    # scenario. Utilities need their OWN sector (~13 policy values), not a
-    # relabel. Don't retry the relabel.
-    "Clean Energy":    ["NEE", "FSLR", "BE"],
-    "Consumer Tech":   ["AAPL", "AMZN", "NFLX", "SHOP", "BKNG", "UBER"],
-    "AI & Cloud":      ["MSFT", "GOOGL", "META", "CRM", "NOW"],
-    # IONQ ($18.7B, pre-revenue quantum hardware) dropped — strictly
-    # risk-increasing as a redeploy target for concentration relief. NOT
-    # replaced: the large-cap data-platform universe outside PLTR/SNOW/MDB is
-    # genuinely thin, and inventing a fourth name to hit a count is how a
-    # roster starts asserting things it can't support.
-    "AI & Data":       ["PLTR", "SNOW", "MDB"],
-    "Cybersecurity":   ["CRWD", "PANW", "NET", "ZS", "FTNT"],
-    "Semiconductors":  ["NVDA", "AVGO", "AMD", "MU", "QCOM"],
-    "Communications":  ["T", "VZ", "TMUS"],
-    # TSLA dropped 2026-08-17: it trades on the AI/robotaxi narrative, not the
-    # auto cycle, so its real correlation to a growth-tech book is far above
-    # this sector's stated 0.40 — you cannot de-risk a tech book by buying it.
-    # It stays in scanner.SECTOR_UNIVERSE, DISCOVERY_UNIVERSE and
-    # TICKER_SECTORS, so it remains fully discoverable and correctly
-    # classified when held; it just stops being offered AS A DIVERSIFIER.
-    # RIVN ($22.2B) and LCID ($2.5B) dropped as cash-burning single-product
-    # manufacturers. TM/RACE added because this sector has no discovery bucket
-    # (see _DIVERSIFY_TO_DISCOVERY), so the roster IS the whole pool.
-    "EV & Auto":       ["GM", "F", "TM", "RACE"],
-    "Enterprise Tech": ["DELL", "ORCL", "IBM", "HPE", "SAP", "CSCO", "ACN"],
-}
+# App Settings (docs/plans/app-settings.md) Commit 3, 2026-09-01 — the
+# module-level `_SECTOR_CANDIDATES` dict that used to live here was deleted;
+# the diversification candidate roster is now DB-backed (Supabase
+# `reference_tables`, key 'sector_candidates') and reached exclusively via
+# `stock_analyzer.reference_data.resolve_universe` / `resolve_universe_or_none`.
+# These are still the names the app ASSERTS as a sector's representatives when
+# it suggests an ADD to reduce concentration — membership is earned by being a
+# large, liquid, representative expression of the sector's macro driver, never
+# trailing momentum — but that policy now lives in the editorial discipline of
+# the ⚙️ App Settings UI (and its `validate_payload` TICKER_SECTORS-match
+# check), not in this file. Every ticker in the roster must still have a
+# TICKER_SECTORS entry whose value equals the bucket it's placed under; that
+# invariant is enforced at save time by `reference_data.validate_payload`.
 
 # Maps a Diversification-Advisor sector to the broad discovery-universe bucket
-# (discovery_universe.py uses slightly different bucket labels). This widens the
-# candidate pool from the fixed roster (~4) to the curated universe slice (~20)
-# so the ADD card can surface a better entry the roster doesn't list — without
-# the runtime risk of a live market scrape (the universe is curated, refreshed
-# quarterly). A sector with no mapping falls back to its roster only.
+# (the DB-backed discovery_universe table uses slightly different bucket
+# labels). This widens the candidate pool from the fixed roster (~4) to the
+# curated universe slice (~20) so the ADD card can surface a better entry the
+# roster doesn't list. A sector with no mapping falls back to its roster only.
+# Both bucket-label sets this dict is keyed/valued on are LOCKED in the ⚙️ App
+# Settings v1 editor (only ticker membership is UI-editable — see the design
+# doc's Q3 resolution), so a UI edit can never orphan a key here; a renamed or
+# removed bucket stays a reviewed code change.
 _DIVERSIFY_TO_DISCOVERY = {
     "Healthcare":     "Healthcare & Biotech",
     "Energy":         "Energy & Materials",
@@ -1327,9 +1283,9 @@ _DIVERSIFY_TO_DISCOVERY = {
 def diversifying_candidate_pool(
     sector: str,
     held_tickers,
+    sector_candidates: "dict[str, list[str]]",
+    discovery_universe: "dict[str, list[str]]",
     cap: int = DIVERSIFY_SCAN_CAP,
-    sector_candidates: "dict[str, list[str]] | None" = None,
-    discovery_universe: "dict[str, list[str]] | None" = None,
 ) -> list[str]:
     """Candidate pool for a diversification ADD, drawn from the broad universe.
 
@@ -1341,24 +1297,16 @@ def diversifying_candidate_pool(
     the returned names and ranks them via `annotate_add_candidates`.
 
     `sector_candidates` / `discovery_universe` (App Settings, docs/plans/
-    app-settings.md Commit 2): the resolved `sector_candidates` /
-    `discovery_universe` payloads, threaded in by the caller (via
+    app-settings.md): the resolved `sector_candidates` / `discovery_universe`
+    payloads, threaded in by the caller (via
     `stock_analyzer.reference_data.resolve_universe`) so this function stays
-    pure/testable.
-
-    IMPORTANT — `None` is a unit-test convenience default ONLY (falls back to
-    the module-level `_SECTOR_CANDIDATES`/`DISCOVERY_UNIVERSE`), never an
-    offline-sentinel value. Every REAL caller must always pass these
-    explicitly: a resolved payload on success, or an explicit `{}` — NOT a
-    bare `None` — when `resolve_universe` raised
-    `ReferenceDataUnavailable`. See `scanner.scan_sectors`'s identical
-    `universe` param for the full reasoning (a bare `None` here would
-    silently fall through to the hardcoded dicts one layer down).
+    pure/testable. REQUIRED, no default — Commit 3 deleted the module-level
+    `_SECTOR_CANDIDATES`/`DISCOVERY_UNIVERSE` dicts these used to fall back
+    to. Every real caller must pass a resolved payload on success, or an
+    explicit `{}` — never a bare `None` — when `resolve_universe` raised
+    `ReferenceDataUnavailable`, so the pool legitimately starves to empty
+    rather than fabricating candidates from frozen code.
     """
-    if sector_candidates is None:
-        sector_candidates = _SECTOR_CANDIDATES
-    if discovery_universe is None:
-        discovery_universe = DISCOVERY_UNIVERSE
     held = {str(t).upper().strip() for t in (held_tickers or [])}
     roster = sector_candidates.get(sector, [])
     bucket = discovery_universe.get(_DIVERSIFY_TO_DISCOVERY.get(sector, ""), [])
@@ -1406,17 +1354,19 @@ def diversification_recommendations(
     port_df: pd.DataFrame,
     corr_df: pd.DataFrame,
     div_result: dict,
+    sector_candidates: "dict[str, list[str]]",
+    discovery_universe: "dict[str, list[str]]",
     portfolio_value: float = 50_000.0,
-    sector_candidates: "dict[str, list[str]] | None" = None,
-    discovery_universe: "dict[str, list[str]] | None" = None,
 ) -> list[dict]:
     """
     Returns structured REDUCE, PAIR_RISK, and ADD recommendation dicts.
     Each dict carries all data needed to render an advisor card in app.py.
 
-    `sector_candidates` / `discovery_universe` (App Settings, Commit 2):
-    threaded straight through to `diversifying_candidate_pool` — see that
-    function's docstring for the resolved-payload-vs-test-default contract.
+    `sector_candidates` / `discovery_universe` (App Settings, docs/plans/
+    app-settings.md): REQUIRED, no default — threaded straight through to
+    `diversifying_candidate_pool`, see that function's docstring for the
+    resolved-payload contract (a resolved payload on success, or an explicit
+    `{}` on an unavailable resolution — never a bare `None`).
     """
     recs = []
     if port_df.empty:
