@@ -1369,6 +1369,12 @@ _DIVERSIFY_TO_DISCOVERY = {
     "Clean Energy":   "Clean Energy & Utilities",
     "Semiconductors": "Semiconductors",
     "Communications": "Communications & Telecom",
+    # Added 2026-09-02 (F-240 follow-up, user-confirmed) — intentional reuse
+    # of the SAME bucket Defense already maps to, not a typo; Industrials and
+    # Defense share one discovery-universe bucket, same many-to-one pattern
+    # as SECTOR_ETF's existing IGV triple-mapping across AI & Cloud/AI & Data/
+    # Enterprise Tech.
+    "Industrials":    "Industrials & Defense",
     # EV & Auto and Enterprise Tech have no clean 1:1 discovery-universe bucket
     # (EV names are split across Mega-cap Tech/Consumer & Retail; Enterprise
     # Tech only partially overlaps Software & Cloud) — roster-only is fine,
@@ -1423,6 +1429,11 @@ _SECTOR_PROFILES = {
     "Communications":  {"corr": 0.20, "why": "rate-sensitive, dividend-defensive telecom — closer to utilities than growth tech"},
     "Financials":      {"corr": 0.35, "why": "benefits when rates rise — inverse to your growth-tech book"},
     "EV & Auto":       {"corr": 0.40, "why": "rate- and commodity-cycle driven, consumer-discretionary — distinct from the software/AI cycle"},
+    # Added 2026-09-02 (F-240 follow-up, user-confirmed) — already had full
+    # SECTOR_ETF/_SECTOR_IMPACT/TICKER_SECTORS support from 2026-08-21; this
+    # entry plus the _DIVERSIFYING_SECTORS addition below make it a genuine
+    # ADD recommendation, not silent dead plumbing.
+    "Industrials":     {"corr": 0.35, "why": "capex/backlog cyclical — tracks broader economic growth similar to Financials/EV & Auto, a real diversifier from the AI/semis-specific cycle though not a defensive one"},
     "Enterprise Tech": {"corr": 0.45, "why": "legacy enterprise IT/capex cycle — more value-oriented than AI/Cloud growth names"},
     # corr and `why` both UNCHANGED by the 2026-08-17 roster re-seed, which
     # dropped two sub-scale names but kept the sector meaning renewables — so
@@ -1440,8 +1451,7 @@ _SECTOR_PROFILES = {
     # _DIVERSIFYING_SECTORS below — that's a separate, not-yet-made policy
     # call on whether the app actively recommends these as ADD suggestions,
     # same deliberate not-yet-recommended state as Semiconductors/
-    # Cybersecurity/Consumer Tech/AI & Cloud/AI & Data/Enterprise Tech/
-    # EV & Auto/Financials/Clean Energy above.
+    # Cybersecurity/Consumer Tech/AI & Cloud/AI & Data above.
     "Materials":       {"corr": 0.30, "why": "commodity/industrial-input driven — tracks global growth cyclicals, a genuine but moderate diversifier from the AI/semis cycle"},
     "Utilities":       {"corr": 0.15, "why": "regulated, rate-sensitive bond-proxy — defensive and counter-cyclical like Healthcare, decoupled from the growth-tech cycle"},
     "Real Estate":     {"corr": 0.22, "why": "rate-sensitive income real estate — shares Utilities' duration risk but a distinct property cycle, a real diversifier from tech"},
@@ -1453,6 +1463,11 @@ _SECTOR_PROFILES = {
 _DIVERSIFYING_SECTORS = [
     "Healthcare", "Energy", "Defense", "Communications",
     "Financials", "EV & Auto", "Enterprise Tech", "Clean Energy",
+    # Added 2026-09-02 (F-240 follow-up, user-confirmed) — already has full
+    # SECTOR_ETF/_SECTOR_IMPACT/TICKER_SECTORS support from 2026-08-21, and
+    # now has a sector_candidates roster too, so it's ready to be a genuine
+    # ADD recommendation rather than silent dead plumbing.
+    "Industrials",
 ]
 
 

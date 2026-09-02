@@ -275,6 +275,7 @@ def test_diversify_map_keys_and_values_resolve():
         "Healthcare", "Energy", "Defense", "Financials", "Clean Energy",
         "Consumer Tech", "AI & Cloud", "AI & Data", "Cybersecurity",
         "Semiconductors", "Communications", "EV & Auto", "Enterprise Tech",
+        "Industrials",
     }
     discovery_universe_keys = {
         "Mega-cap Tech", "Semiconductors", "Software & Cloud",
