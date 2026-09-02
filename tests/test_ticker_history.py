@@ -13,7 +13,9 @@ from datetime import date, timedelta
 import pandas as pd
 import pytest
 
-from stock_analyzer.ticker_history import build_ticker_history, build_pnl_series
+from stock_analyzer.ticker_history import (
+    build_ticker_history, build_pnl_series, trades_fingerprint, chart_start_gap,
+)
 
 
 # ─── builders ────────────────────────────────────────────────────────────────
@@ -991,3 +993,68 @@ def test_realized_pct_none_when_no_sells():
     result = build_ticker_history(_df(rows), "AAA",
                                   today=date(2026, 3, 1))
     assert result["episodes"][0]["realized_pct"] is None
+
+
+# ─── trades_fingerprint (2026-09-02 Prior Trades recompute-cost follow-up) ────
+
+def test_trades_fingerprint_none_or_empty_df_returns_empty_tuple():
+    assert trades_fingerprint(None, "AAA") == ()
+    assert trades_fingerprint(_df([]), "AAA") == ()
+
+
+def test_trades_fingerprint_no_rows_for_ticker_returns_empty_tuple():
+    rows = [_trade_row(ticker="BBB", id_=1)]
+    assert trades_fingerprint(_df(rows), "AAA") == ()
+
+
+def test_trades_fingerprint_is_case_insensitive_on_ticker():
+    rows = [_trade_row(ticker="aaa", id_=1)]
+    assert trades_fingerprint(_df(rows), "AAA") != ()
+    assert trades_fingerprint(_df(rows), "AAA") == trades_fingerprint(_df(rows), "aaa")
+
+
+def test_trades_fingerprint_changes_when_a_row_is_added():
+    base = [_trade_row(ticker="AAA", id_=1, action="BUY", shares=10.0, price=100.0)]
+    added = base + [_trade_row(ticker="AAA", id_=2, action="SELL", shares=10.0, price=110.0)]
+    assert trades_fingerprint(_df(base), "AAA") != trades_fingerprint(_df(added), "AAA")
+
+
+def test_trades_fingerprint_changes_when_shares_or_price_is_edited():
+    original = [_trade_row(ticker="AAA", id_=1, shares=10.0, price=100.0)]
+    edited   = [_trade_row(ticker="AAA", id_=1, shares=15.0, price=100.0)]
+    assert trades_fingerprint(_df(original), "AAA") != trades_fingerprint(_df(edited), "AAA")
+
+
+def test_trades_fingerprint_unchanged_when_only_free_text_fields_differ():
+    """Notes/lesson/thesis don't feed the PnL/chart math, so editing them
+    must NOT invalidate a cache keyed on this fingerprint."""
+    original = [_trade_row(ticker="AAA", id_=1, notes="first take", lesson=None)]
+    edited   = [_trade_row(ticker="AAA", id_=1, notes="revised note", lesson="learned something")]
+    assert trades_fingerprint(_df(original), "AAA") == trades_fingerprint(_df(edited), "AAA")
+
+
+def test_trades_fingerprint_unaffected_by_other_tickers():
+    rows_a = [_trade_row(ticker="AAA", id_=1)]
+    rows_b = rows_a + [_trade_row(ticker="BBB", id_=2, shares=999.0)]
+    assert trades_fingerprint(_df(rows_a), "AAA") == trades_fingerprint(_df(rows_b), "AAA")
+
+
+def test_trades_fingerprint_missing_ticker_column_returns_empty_tuple():
+    assert trades_fingerprint(pd.DataFrame({"foo": [1, 2]}), "AAA") == ()
+
+
+# ─── chart_start_gap (2026-09-02 Prior Trades cropped-chart follow-up) ────────
+
+def test_chart_start_gap_true_when_px_starts_after_first_entry():
+    assert chart_start_gap(date(2026, 1, 1), date(2026, 3, 1)) is True
+
+
+def test_chart_start_gap_false_when_px_reaches_first_entry_or_earlier():
+    assert chart_start_gap(date(2026, 1, 1), date(2026, 1, 1)) is False
+    assert chart_start_gap(date(2026, 3, 1), date(2026, 1, 1)) is False
+
+
+def test_chart_start_gap_false_when_either_boundary_is_unknown():
+    assert chart_start_gap(None, date(2026, 1, 1)) is False
+    assert chart_start_gap(date(2026, 1, 1), None) is False
+    assert chart_start_gap(None, None) is False

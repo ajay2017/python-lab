@@ -2,7 +2,9 @@
 
 **Status:** ✅ **PHASE 1 + PHASE 2 SHIPPED 2026-08-14** (tab, journey chart, Trade Plan
 pointer F-237c, vs-SPY window guard F-237d). ✅ **F-237e (situational-category tag)
-SHIPPED 2026-08-25** — see §7. Design questions resolved with the user 2026-08-14 (see §0).
+SHIPPED 2026-08-25** — see §7. ✅ **The two remaining §7 carry-overs (cropped-chart
+caption, per-rerun recompute cost) both CLOSED 2026-09-02** — nothing outstanding on
+this feature. Design questions resolved with the user 2026-08-14 (see §0).
 **Proposed F-ID:** F-237
 **Mockup:** [docs/mockups/prior-trades-tab.html](../mockups/prior-trades-tab.html)
 **Originating ask (2026-08-14):** DELL surfaced under New Positions to initiate; the
@@ -229,10 +231,14 @@ Per `feedback_phased_ux_rollout_cadence` — one phase per deploy, pause for liv
      all-or-nothing app-side skip originally sketched here. Was the only remaining path
      by which `vs_spy_pct` could be *wrong* rather than absent, so it was pulled forward
      to ship alongside the pointer that makes that number more prominent.
-  2. **Cropped-chart caption.** §4a requires that when the price fetch degrades to
-     `r["df"]`'s window, the UI names which trips fall outside it. The degrade works;
-     the caption is missing (the only caption fires when the figure is `None`, not when
-     it's cropped).
+  2. ~~**Cropped-chart caption.**~~ — ✅ **DONE 2026-09-02.** New pure
+     `ticker_history.chart_start_gap(first_entry_date, px_start_date)` decides whether
+     the widen attempt in §4a actually reached back far enough; when it didn't, the
+     existing span caption now reads "chart may be missing older round trips — price
+     history couldn't be widened back to your first entry" instead of the previously
+     unconditional (and, in this case, wrong) "chart shows a wider price window for
+     context". No `unsafe_allow_html`, no gate/score touch — `app.py` is not a
+     `_GATE_FILES` member and Prior Trades is awareness-only, so no reviewer required.
   3. ~~**`_m()` privacy mask**~~ — ✅ **DONE 2026-08-25.** `decision_context.
      portfolio_value` in the conditions-at-entry line now wraps through `_m()`,
      matching the same figure's masking on Home/Summary. Scoped deliberately narrow:
@@ -242,11 +248,16 @@ Per `feedback_phased_ux_rollout_cadence` — one phase per deploy, pause for liv
      Widening the mask to the round-trip figures themselves would be a real UX
      decision (arguably counter to "your own history in this name" tone), not a bug
      fix, and was not made here.
-  4. **Per-rerun recompute cost.** Streamlit renders inactive tab content, so the SPY
-     fetch, rebuild, `build_pnl_series` and figure construction run for every analysed
-     ticker on every rerun. I/O is cached; the pandas/plotly work isn't. Relevant to
-     `project_perf_cache_bounding` — a session-state memo keyed on
-     `(ticker, trades signature)` would close it.
+  4. ~~**Per-rerun recompute cost.**~~ — ✅ **DONE 2026-09-02.** New pure
+     `ticker_history.trades_fingerprint(trades_df, ticker)` — a cheap, order-stable
+     fingerprint of one ticker's trade rows (excludes free-text fields like notes/
+     lesson/thesis, which don't feed the PnL/chart math) — keys a single-slot
+     `st.session_state["_prior_trades_render_cache"]` memo (not a growing per-ticker
+     dict, per `project_perf_cache_bounding`'s bounding discipline) covering the
+     widen/SPY-rebuild/`build_pnl_series`/figure-construction chain. Keyed on
+     `(ticker, trades_fingerprint, price)` — live price is included deliberately, so
+     unrealized figures on an open position still update when the price cache
+     refreshes, rather than freezing for the rest of the session.
 - **Two NEW defects found live 2026-08-25, neither part of the original 4 above — both
   FIXED same day.** Found via two real screenshots (CRWD, MRVL) showing the
   "What you wrote at the time" expander missing content that should have been there:

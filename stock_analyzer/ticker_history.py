@@ -847,3 +847,42 @@ def build_pnl_series(
         })
 
     return result
+
+
+def trades_fingerprint(trades_df, ticker: str) -> tuple:
+    """Cheap, order-stable fingerprint of one ticker's rows in the trades
+    journal. Changes iff a trade affecting `ticker` was added, edited, or
+    removed — lets a caller memoize `build_ticker_history`/`build_pnl_series`
+    output across Streamlit reruns that didn't touch this ticker's history
+    (2026-09-02 follow-up, F-237: the Prior Trades tab previously redid this
+    pandas/plotly work on every rerun, including reruns triggered by an
+    unrelated widget elsewhere on the page, since Streamlit still builds
+    inactive tab content).
+
+    Deliberately omits free-text fields (notes/lesson/user_thesis/etc.) —
+    they render elsewhere on the page but don't feed the PnL/chart math, so
+    including them would invalidate the cache on edits that can't actually
+    change the result.
+    """
+    if trades_df is None or trades_df.empty or "ticker" not in trades_df.columns:
+        return ()
+    sub = trades_df[trades_df["ticker"].astype(str).str.upper() == str(ticker).upper()]
+    if sub.empty:
+        return ()
+    cols = [c for c in ("id", "action", "shares", "price", "realized_pnl", "traded_at")
+            if c in sub.columns]
+    return tuple(tuple(row.get(c) for c in cols) for row in sub[cols].to_dict("records"))
+
+
+def chart_start_gap(first_entry_date, px_start_date) -> bool:
+    """True when the plotted price series starts AFTER the trade history's
+    first entry — meaning round trips before `px_start_date` have no price
+    data to plot against and are silently absent from the chart, not merely
+    shown under a wider unqualified window (the normal, harmless case).
+
+    Both arguments are plain `date` objects (or `None`, which always
+    returns `False` — an unknown boundary is not evidence of a gap).
+    """
+    if first_entry_date is None or px_start_date is None:
+        return False
+    return px_start_date > first_entry_date

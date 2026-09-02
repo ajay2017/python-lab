@@ -23073,57 +23073,116 @@ elif page == "📈 Analysis":
                 else:
                     _pt_tot   = _ph_hist["totals"]
                     _pt_first = _pt_tot.get("first_entry_date")
-
-                    # Span the chart across the WHOLE history in this name. The
-                    # sidebar's "History period" (default 6mo) routinely stops
-                    # short of the first entry, which would silently crop older
-                    # round trips out of the chart — so resolve our own span and
-                    # only pay for a fetch when the loaded bundle can't reach.
                     _pt_age = (_today_et() - _pt_first).days if _pt_first else 0
-                    _pt_per = ("6mo" if _pt_age <= 150 else
-                               "1y"  if _pt_age <= 330 else
-                               "2y"  if _pt_age <= 700 else "5y")
-                    _pt_px = r["df"]
-                    try:
-                        _pt_have = _pt_px.index[0]
-                        _pt_have = (_pt_have.date() if hasattr(_pt_have, "date")
-                                    else _pt_have)
-                        _pt_short = _pt_first is not None and _pt_have > _pt_first
-                    except Exception:
-                        _pt_short = True
-                    if _pt_short:
-                        _pt_alt = _cached_ticker_history_px(ticker, _pt_per)
-                        if _pt_alt is not None and not getattr(_pt_alt, "empty", True):
-                            _pt_px = _pt_alt
 
-                    # vs-SPY over each episode's own window. Rebuild once with
-                    # SPY attached (the pre-tab build runs without it, since the
-                    # tab label only needs the episode count).
-                    _pt_spy = None
-                    try:
-                        _pt_spy = _cached_spy(_pt_per)
-                    except Exception:
-                        _pt_spy = None
-                    if _pt_spy is not None:
+                    # Memoize the expensive rebuild/PnL-series/figure work
+                    # below across reruns (F-237 follow-up, 2026-09-02):
+                    # Streamlit still builds this tab's content even when
+                    # it isn't the active one, so an unrelated widget
+                    # interaction elsewhere on the page previously redid
+                    # all of it every time. Keyed on this ticker's own
+                    # trades content + live price — a single slot, not a
+                    # growing per-ticker dict, so switching tickers just
+                    # overwrites it rather than accumulating (see
+                    # project_perf_cache_bounding).
+                    _pt_memo_key = (
+                        ticker,
+                        _ticker_history.trades_fingerprint(
+                            st.session_state.get("trades_df"), ticker
+                        ),
+                        price,
+                    )
+                    _pt_cache = st.session_state.get("_prior_trades_render_cache")
+                    if _pt_cache is not None and _pt_cache.get("key") == _pt_memo_key:
+                        _pt_px      = _pt_cache["px"]
+                        _ph_hist    = _pt_cache["hist"]
+                        _pt_tot     = _ph_hist["totals"]
+                        _pt_series  = _pt_cache["series"]
+                        _pt_fig     = _pt_cache["fig"]
+                        _pt_cropped = _pt_cache["cropped"]
+                    else:
+                        # Span the chart across the WHOLE history in this name.
+                        # The sidebar's "History period" (default 6mo) routinely
+                        # stops short of the first entry, which would silently
+                        # crop older round trips out of the chart — so resolve
+                        # our own span and only pay for a fetch when the loaded
+                        # bundle can't reach.
+                        _pt_per = ("6mo" if _pt_age <= 150 else
+                                   "1y"  if _pt_age <= 330 else
+                                   "2y"  if _pt_age <= 700 else "5y")
+                        _pt_px = r["df"]
                         try:
-                            _pt_re = _ticker_history.build_ticker_history(
-                                st.session_state.get("trades_df"), ticker,
-                                current_price=price, spy_history_df=_pt_spy,
-                                today=_today_et(),
-                            )
-                            if _pt_re is not None:
-                                _ph_hist = _pt_re
-                                _pt_tot  = _ph_hist["totals"]
+                            _pt_have = _pt_px.index[0]
+                            _pt_have = (_pt_have.date() if hasattr(_pt_have, "date")
+                                        else _pt_have)
+                            _pt_short = _pt_first is not None and _pt_have > _pt_first
                         except Exception:
-                            pass
+                            _pt_short = True
+                        if _pt_short:
+                            _pt_alt = _cached_ticker_history_px(ticker, _pt_per)
+                            if _pt_alt is not None and not getattr(_pt_alt, "empty", True):
+                                _pt_px = _pt_alt
 
-                    _pt_series: list = []
-                    try:
-                        _pt_series = _ticker_history.build_pnl_series(
-                            _ph_hist["episodes"], _pt_px
+                        # vs-SPY over each episode's own window. Rebuild once with
+                        # SPY attached (the pre-tab build runs without it, since the
+                        # tab label only needs the episode count).
+                        _pt_spy = None
+                        try:
+                            _pt_spy = _cached_spy(_pt_per)
+                        except Exception:
+                            _pt_spy = None
+                        if _pt_spy is not None:
+                            try:
+                                _pt_re = _ticker_history.build_ticker_history(
+                                    st.session_state.get("trades_df"), ticker,
+                                    current_price=price, spy_history_df=_pt_spy,
+                                    today=_today_et(),
+                                )
+                                if _pt_re is not None:
+                                    _ph_hist = _pt_re
+                                    _pt_tot  = _ph_hist["totals"]
+                            except Exception:
+                                pass
+
+                        _pt_series: list = []
+                        try:
+                            _pt_series = _ticker_history.build_pnl_series(
+                                _ph_hist["episodes"], _pt_px
+                            )
+                        except Exception:
+                            _pt_series = []
+
+                        # Cropped-chart disclosure: if the widen attempt above
+                        # didn't reach back far enough (or failed outright),
+                        # round trips before the plotted series' start date have
+                        # no price to draw against and silently vanish from the
+                        # chart — distinct from the normal case where the chart
+                        # merely shows MORE than the trade span.
+                        _pt_px_start = None
+                        try:
+                            _pt_px_start = _pt_px.index[0]
+                            _pt_px_start = (_pt_px_start.date()
+                                            if hasattr(_pt_px_start, "date")
+                                            else _pt_px_start)
+                        except Exception:
+                            _pt_px_start = None
+                        _pt_cropped = _ticker_history.chart_start_gap(
+                            _pt_first, _pt_px_start
                         )
-                    except Exception:
-                        _pt_series = []
+
+                        _pt_fig = None
+                        try:
+                            _pt_fig = _prior_trades_figure(
+                                _ph_hist, _pt_px, _pt_series
+                            )
+                        except Exception:
+                            _pt_fig = None
+
+                        st.session_state["_prior_trades_render_cache"] = {
+                            "key": _pt_memo_key, "px": _pt_px, "hist": _ph_hist,
+                            "series": _pt_series, "fig": _pt_fig,
+                            "cropped": _pt_cropped,
+                        }
 
                     _pt_n_rt = _pt_tot.get("n_round_trips", 0)
                     _pt_n_op = _pt_tot.get("n_open", 0)
@@ -23154,7 +23213,11 @@ elif page == "📈 Analysis":
                         if _pt_span:
                             st.caption(
                                 " · ".join(_pt_span)
-                                + "  ·  chart shows a wider price window for context"
+                                + ("  ·  ⚠️ chart may be missing older round "
+                                   "trips — price history couldn't be widened "
+                                   "back to your first entry"
+                                   if _pt_cropped else
+                                   "  ·  chart shows a wider price window for context")
                             )
 
                         _pt_rt_txt = str(_pt_n_rt)
@@ -23186,13 +23249,6 @@ elif page == "📈 Analysis":
                             + ":gray[avg hold]"
                         )
 
-                        _pt_fig = None
-                        try:
-                            _pt_fig = _prior_trades_figure(
-                                _ph_hist, _pt_px, _pt_series
-                            )
-                        except Exception:
-                            _pt_fig = None
                         if _pt_fig is not None:
                             st.plotly_chart(
                                 _pt_fig, width="stretch",
