@@ -18,7 +18,15 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-31 (prev_close staleness incident — 2 chapters, 8 read sites — + a P&L delta_color sign bug across 6 tiles)
+## 1. Latest run — 2026-09-02 (doc-integrity full sweep session: outage-gate + correlation-caption fixes, no test-suite-affecting code changes beyond those)
+
+**4981 passed, 0 failed, 16 warnings** (`python -m pytest -q`: 259-310s). Python (local `.venv`). Transcribed from the run, not recalled.
+
+**Coverage: 79%** (`pytest --cov=stock_analyzer --cov-report=term -q`: 19548 statements, 4044 missed) — up from 78% at the 2026-08-26 baseline (18359 statements then). This log had gone 7 days without a coverage figure (every entry since 2026-08-26 recorded "no coverage run this pass").
+
+**+120 over the 4861 baseline (2026-08-31) below.** This session's own code changes (outage-gate cosmetic fixes + correlation-caption text, `tests/test_db_outage_gate.py`: 2 changed, 2 new) account for only 2 of the +120 net. The remaining +118 accrued from same-day work done EARLIER on 2026-09-01/09-02 that this log never got updated for: F-262 App Settings commits 2-3, F-263 leverage-shock modeling, `system_health.check_write_outcomes` (System Trust check ⑥), the macro-gate-hole and reference-table validation fixes from the 2026-09-01 incremental audit, and others — full per-commit detail in `docs/shipped-log.md`. This gap (a log going stale across several real shipped commits before the next run) is itself the finding a 2026-09-02 doc-integrity sweep was checking for across the whole doc set, not specific to this file.
+
+## 1a. Previous run — 2026-08-31 (prev_close staleness incident — 2 chapters, 8 read sites — + a P&L delta_color sign bug across 6 tiles)
 
 **4861 passed, 0 failed, 16 warnings** (`python -m pytest -q`: consistently ~220-370s across several runs this session — timing noisy under load, count stable every time). Python (local `.venv`). Transcribed from the run, not recalled — same figure observed after every commit in this session (`ec47d52` through `b682532`), since only the first added new tests.
 
@@ -26,7 +34,7 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 **Two real, user-reported bugs found and fixed this session, both invisible to this suite by construction.** (1) A two-chapter price-data-integrity incident: yfinance's 2-day batch window lagging Yahoo's rollover (fixed at the source, the one piece THIS suite could cover — the 9 tests above), then Finnhub's own `prev_close` independently stale post-weekend, feeding false Day Shock alerts and a wrong Today's P&L on both Home and Summary (fixed by having 8 total read sites defer to the existing price cross-check's verdict — `app.py`-only, so no test exists or could exist for the fix itself; verified via live screenshots instead, memory `project_yfinance_prevclose_staleness`). (2) `st.metric`'s `delta_color="normal" if X>=0 else "inverse"` collapsing to always-green regardless of gain/loss on 6 P&L tiles — same "app.py-only, screenshot is the only check" story, memory `feedback_metric_delta_color_sign_trap`.
 
-## 1a. Previous run — 2026-08-30 (data-integrity audit session: 1 real bug found, 1 missing table discovered, hardening batch shipped in 6 commits)
+## 1b. Previous run — 2026-08-30 (data-integrity audit session: 1 real bug found, 1 missing table discovered, hardening batch shipped in 6 commits)
 
 **4750 passed, 0 failed, 13 warnings** (`python -m pytest -q`: 356.84s). Python
 (local `.venv`). Transcribed from the run, not recalled.
@@ -125,7 +133,7 @@ because local resolution proves nothing about the deploy. (2) **No coverage run
 this pass** — the figure below (78% at the 4317 entry) is the last measured one
 and should not be assumed to still hold across +348 tests.
 
-## 1b. Earlier run — 2026-08-27 (F-259 gate ledger, the UX review, and F-261 sizing)
+## 1c. Earlier run — 2026-08-27 (F-259 gate ledger, the UX review, and F-261 sizing)
 
 **4432 passed, 0 failed, 0 skipped** (`python -m pytest -q`: 107.59s, final run
 of the day). Python (local `.venv`).
@@ -160,7 +168,7 @@ it reads as coverage.
 
 ---
 
-## 1c. Earlier run — 2026-08-26 (zero-holdings port_df guard + doc-drift repair)
+## 1d. Earlier run — 2026-08-26 (zero-holdings port_df guard + doc-drift repair)
 
 **4317 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
 --cov-report=term -q`: 78.67s — TOTAL 18359 stmts, 4062 missed, **78%**

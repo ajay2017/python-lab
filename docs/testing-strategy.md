@@ -39,9 +39,9 @@ all.
 
 ## 2. Automated coverage (pytest)
 
-185 tests across 6 modules, added 2026-07-27 in one session (`docs/plans/test-automation.md`
+**This section describes the FOUNDING batch only — 185 tests across 6 modules, added 2026-07-27 in one session** (`docs/plans/test-automation.md`
 has the full batch-by-batch history, design principles, and one real
-architectural finding it surfaced and fixed):
+architectural finding it surfaced and fixed). **The suite has since grown roughly 27×** — see [docs/test-results.md](test-results.md) for the current real count (4981 passed as of 2026-09-02, ~79% coverage across ~140 test files covering nearly all of `stock_analyzer/`'s 116 modules). Corrected 2026-09-02: this table below was previously read as if it described current scope; it only describes where the suite started.
 
 | Module | What's covered |
 |---|---|
