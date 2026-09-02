@@ -90,7 +90,7 @@ When adding a new advisor or recommendation feature, **always** check whether it
 
 - **Threshold/gate changes** (`stock_analyzer/constants.py`) are investment-policy decisions — call them out in the body and name the constant + old→new value.
 - **Feature commits must sync the docs that describe behaviour:** a user-facing feature or gate touches `docs/requirements.md` (the functional spec), not just `docs/architecture.md`. requirements.md silently drifted ~3 weeks once because per-feature docs commits hit architecture but skipped requirements — don't repeat that.
-- **Claude-authored commits** end with the trailer `Co-Authored-By: Ajay with <model> <ajay.x.ku@accenture.com>`, written via `.git/COMMIT_MSG.txt` + `git commit -F` (dodges PowerShell here-string mangling). Use the **actual model name from the session context** (e.g. `Claude Sonnet 4.6`, `Claude Opus 4.8`, `Claude Haiku 4.5`) — never hardcode a model name.
+- **Claude-authored commits** end with the trailer `Co-Authored-By: Ajay with <model>` — **no email address** (changed 2026-09-02; the email previously here made GitHub link it as a structured co-author, which was more than intended for a personal solo repo — plain attribution text is enough). Written via `.git/COMMIT_MSG.txt` + `git commit -F` (dodges PowerShell here-string mangling). Use the **actual model name and version from the session context** (e.g. `Claude Sonnet 5`, `Claude Opus 4.8`, `Claude Haiku 4.5`) — never hardcode a model name or drop the version. **Not retroactive** — commits before 2026-09-02 keep the old `<model> <email>` trailer; only new commits use this format.
 
 ## Documentation integrity (zero-hallucination)
 

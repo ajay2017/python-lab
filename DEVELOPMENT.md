@@ -209,7 +209,7 @@ Refs #123                   # if applicable
 - **scope** (optional): the area — e.g. `pnl`, `brief`, `risk`, `db`, `constants`, `scanner`, `ui`
 - **summary**: imperative mood, lowercase, ≤72 chars, no trailing period
 - **Threshold/gate changes** (`stock_analyzer/constants.py`) are investment-policy decisions — say so in the body and name the constant + old→new value
-- Claude-authored commits end with: `Co-Authored-By: Ajay with <model> <ajay.x.ku@accenture.com>` — use the actual model name from the session context (e.g. `Claude Sonnet 4.6`, `Claude Opus 4.8`)
+- Claude-authored commits end with: `Co-Authored-By: Ajay with <model>` — no email (changed 2026-09-02, not retroactive; see CLAUDE.md) — use the actual model name and version from the session context (e.g. `Claude Sonnet 5`, `Claude Opus 4.8`)
 
 One-time setup per clone (wires the editor to pre-fill the format from `.gitmessage.txt`):
 

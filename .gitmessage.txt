@@ -14,9 +14,9 @@
 # ── DRISHTA rules ──────────────────────────────────────────────────────────
 #   • Threshold/gate changes (stock_analyzer/constants.py) are investment-policy
 #     decisions — name the constant + old→new value in the body.
-#   • Claude-authored commits end with:
-#       Co-Authored-By: Ajay with <claude model> <ajay.x.ku@accenture.com>
-#     (use the actual model from the session — Sonnet 5, Opus 4.8, etc.)
+#   • Claude-authored commits end with (no email, changed 2026-09-02):
+#       Co-Authored-By: Ajay with <claude model>
+#     (use the actual model + version from the session — Sonnet 5, Opus 4.8, etc.)
 #
 # ── Enforced by .claude/hooks/pre_tool_checks.py (it will BLOCK the commit) ──
 #   • Touching constants / a gate / a scoring formula / a DB-write path
