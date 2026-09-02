@@ -3148,7 +3148,15 @@ with st.sidebar:
 # non-blocking finding) so the allowlist/scope branching is unit-testable;
 # this block is render-only.
 _db_fail = st.session_state.get("_db_load_failure")
-_outage_verdict, _outage_msg = _outage_gate.decide(_db_fail, page, DB_OUTAGE_SAFE_PAGES)
+# Scope safe_pages to what THIS viewer can actually reach before handing it to
+# decide() — the "still available" text in a stop banner is built directly
+# from this tuple, and naming 🩺 System Trust to a read-only viewer (whose nav
+# already hides that page, see _OWNER_ONLY_PAGES above) would be a dead
+# pointer. 📖 User Guide is reachable by everyone, so it's never filtered.
+_viewer_safe_pages = tuple(
+    p for p in DB_OUTAGE_SAFE_PAGES if not (db.is_readonly() and p in _OWNER_ONLY_PAGES)
+)
+_outage_verdict, _outage_msg = _outage_gate.decide(_db_fail, page, _viewer_safe_pages)
 if _outage_verdict == "stop":
     st.error(_outage_msg)
     if st.button("🔄 Retry connection", type="primary"):
@@ -3161,6 +3169,8 @@ if _outage_verdict == "stop":
     st.stop()
 elif _outage_verdict == "warn":
     st.warning(_outage_msg)
+elif _outage_verdict == "info":
+    st.info(_outage_msg)
 
 # ── Risk-free rate (13-week T-bill, refreshed daily) ─────────────────────────
 @st.cache_data(ttl=86400)
@@ -14285,7 +14295,7 @@ elif page == "🔗 Risk Analysis":
                        help=_tip("Portfolio Correlation"))
             dc3.metric("High-Correlation Pairs", len(risk_pairs),
                        help=f"Pairs with correlation ≥ {CORR_HIGH_PAIRS_THRESHOLD}")
-            st.caption(f"Classification: **{_div_label}** — weighted avg pairwise 6-month return correlation")
+            st.caption(f"Classification: **{_div_label}** — weighted avg pairwise return correlation (actual sample window shown below)")
 
             # ── How much data is actually behind that number ──────────────────
             # correlation_matrix() drops rows LISTWISE across every ticker, so

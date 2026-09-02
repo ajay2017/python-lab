@@ -1210,15 +1210,23 @@ def classify_load_result(h, w, t, now: float) -> "dict | None":
 
     - `h is None` (holdings unreadable): the book itself may be misrepresented
       — HARD scope. `w`/`t` are irrelevant here (the caller never attempts
-      them when holdings fails, same as before this extraction).
+      them when holdings fails, same as before this extraction). The detail
+      string is built from a cheap `has_db()` check only — NOT `unavailable_
+      detail()`, which would re-read holdings a second time purely to word
+      the message, even though the caller's own read (that produced this
+      `h is None`) already confirmed the failure. Fixed 2026-09-01 (F-243
+      cosmetic follow-up): this used to call `unavailable_detail()` here,
+      silently violating this docstring's own "no I/O of its own" claim and
+      costing one extra Supabase read per failed-load retry cycle.
     - `w is None or t is None` with `h` present: the book is correct, only
       history/watchlist surfaces would look emptier than they are — SOFT
       ("partial") scope.
     - All three present: no failure, return None.
     """
     if h is None:
-        return {"at": now, "detail": unavailable_detail() or "Supabase could not be read",
-                "scope": "holdings"}
+        detail = ("no Supabase credentials (SUPABASE_URL / SUPABASE_KEY not set)"
+                  if not has_db() else "holdings table could not be read from Supabase")
+        return {"at": now, "detail": detail, "scope": "holdings"}
     missing = [name for name, v in (("watchlist", w), ("trade history", t)) if v is None]
     if missing:
         return {"at": now, "detail": f"could not read: {', '.join(missing)}", "scope": "partial"}

@@ -182,11 +182,41 @@ def test_store_checks_stay_unknown_while_provider_row_goes_down(monkeypatch):
 
 # ─── classify_load_result — the load-scope decision, extracted from app.py ──
 
-def test_classify_holdings_unreadable_is_hard_scope_regardless_of_w_t():
+def test_classify_holdings_unreadable_is_hard_scope_regardless_of_w_t(monkeypatch):
+    monkeypatch.setattr(db, "has_db", lambda: False)
     now = 1_000_000.0
     rec = db.classify_load_result(None, None, None, now)
-    assert rec == {"at": now, "detail": db.unavailable_detail() or "Supabase could not be read",
-                    "scope": "holdings"}
+    assert rec == {
+        "at": now,
+        "detail": "no Supabase credentials (SUPABASE_URL / SUPABASE_KEY not set)",
+        "scope": "holdings",
+    }
+
+
+def test_classify_holdings_unreadable_with_credentials_present_names_the_table():
+    """h is already None -- the caller's own read just failed -- so this must
+    not re-read holdings a second time to explain why; has_db() alone (no
+    network I/O) is enough to distinguish 'no credentials' from 'read failed'."""
+    now = 1_000_000.0
+    rec = db.classify_load_result(None, None, None, now)
+    assert rec["scope"] == "holdings"
+    assert rec["detail"] in (
+        "no Supabase credentials (SUPABASE_URL / SUPABASE_KEY not set)",
+        "holdings table could not be read from Supabase",
+    )
+
+
+def test_classify_load_result_does_no_io_of_its_own(monkeypatch):
+    """Pins the docstring's own claim. Before the 2026-09-01 fix, the h-is-None
+    branch called unavailable_detail(), which re-reads holdings a second time
+    even though the caller's own read already confirmed the failure."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+
+    def _boom():
+        raise AssertionError("classify_load_result must not re-read holdings")
+    monkeypatch.setattr(db, "load_holdings_or_none", _boom)
+    rec = db.classify_load_result(None, None, None, 1_000_000.0)
+    assert rec["detail"] == "holdings table could not be read from Supabase"
 
 
 def test_classify_trades_unreadable_alone_is_partial_not_holdings():
@@ -249,11 +279,15 @@ def test_decide_holdings_scope_stops_an_unsafe_page():
 
 
 def test_decide_holdings_scope_still_renders_the_safe_pages():
+    """Safe pages stay reachable during a holdings outage, but (2026-09-01
+    fix) this is no longer indistinguishable from a healthy session: the
+    verdict is 'info' with an explanatory message, not a bare 'none'."""
     for safe_page in DB_OUTAGE_SAFE_PAGES:
         verdict, msg = outage_gate.decide(
             {"scope": "holdings", "detail": "kaboom"}, safe_page, DB_OUTAGE_SAFE_PAGES
         )
-        assert (verdict, msg) == ("none", None), f"{safe_page} must stay reachable during an outage"
+        assert verdict == "info", f"{safe_page} must stay reachable during an outage"
+        assert "unreachable" in msg
 
 
 def test_decide_partial_scope_warns_but_never_stops_any_page():

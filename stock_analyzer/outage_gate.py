@@ -15,7 +15,16 @@ def decide(fail_rec: "dict | None", page: str,
     `db.classify_load_result()` record (or None = no outage).
 
     Returns `(verdict, message)`:
-      - `("none", None)`  — render `page` normally.
+      - `("none", None)`  — no outage active; render `page` normally with no
+                             mention of the database at all.
+      - `("info", msg)`    — `page` is in `safe_pages` and doesn't depend on
+                             holdings, so it renders normally, but a holdings
+                             outage IS active elsewhere in the app right now.
+                             Added 2026-09-01 (F-243 cosmetic follow-up): before
+                             this, a safe page during a real outage looked
+                             identical in the main body to a healthy session —
+                             the sidebar dot was the only signal, easy to miss
+                             on a page like 📖 User Guide.
       - `("warn", msg)`    — render `page`, but show `msg` as a soft warning
                              first (holdings are correct; other surfaces may
                              look emptier than they are).
@@ -26,6 +35,11 @@ def decide(fail_rec: "dict | None", page: str,
     `page in safe_pages` always renders normally regardless of scope — those
     pages (System Trust, User Guide) must stay reachable so the outage has a
     diagnostic route and the app never strands the user on a blank screen.
+    Callers should pass a `safe_pages` tuple already scoped to what the
+    CURRENT viewer can actually reach (e.g. excluding an owner-only page for
+    a read-only viewer) — the "still available" text in the stop message is
+    built directly from this tuple, and naming an unreachable page would be a
+    dead pointer.
 
     An unrecognized `scope` (should not occur; defensive only) falls through
     to `("none", None)` rather than either extreme — same posture as the
@@ -36,7 +50,12 @@ def decide(fail_rec: "dict | None", page: str,
     scope = fail_rec.get("scope")
     if scope == "holdings":
         if page in safe_pages:
-            return ("none", None)
+            return ("info", (
+                "ℹ️ The database is currently unreachable, so pages showing "
+                "your portfolio are temporarily blocked elsewhere in the app. "
+                "This page doesn't depend on your holdings, so it renders "
+                "normally."
+            ))
         return ("stop", (
             "⛔ **Cannot reach the database — your portfolio is NOT shown below.**\n\n"
             f"Reason: {fail_rec.get('detail', 'unknown')}\n\n"
