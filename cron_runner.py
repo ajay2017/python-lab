@@ -1408,7 +1408,7 @@ def _run_debrief(now_et, force: bool) -> int:
         if ok:
             try:
                 db._client().table("weekly_debriefs").update(
-                    {"email_sent": True, "email_sent_at": __import__("datetime").datetime.utcnow().isoformat()}
+                    {"email_sent": True, "email_sent_at": now_et.isoformat()}
                 ).eq("week_ending", str(result["week_ending"])).execute()
             except Exception:
                 pass
@@ -1536,7 +1536,7 @@ def _run_monthly_report(now_et, force: bool) -> int:
         if ok:
             try:
                 db._client().table("monthly_reports").update(
-                    {"email_sent": True, "email_sent_at": _dt.datetime.utcnow().isoformat()}
+                    {"email_sent": True, "email_sent_at": now_et.isoformat()}
                 ).eq("period_end", str(result["period_end"])).execute()
             except Exception:
                 pass

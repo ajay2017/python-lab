@@ -485,8 +485,6 @@
       "UNSAFE_HTML_DYNAMIC\u001fst.markdown(f\"<small style='color:#ff8800'>\u25bc **{k}**: {v}</small>\", unsafe_allow_html=True)": 1
     },
     "cron_runner.py": {
-      "NAIVE_UTCNOW\u001f__import__(\"datetime\").datetime.utcnow()": 1,
-      "NAIVE_UTCNOW\u001f_dt.datetime.utcnow()": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f(p.get(\"xref\") or {}).get(\"verdict_reconciled\") or {}": 2,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_sb.get(\"headlines\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fp.get(\"xref\") or {}": 2,
@@ -546,7 +544,6 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001fr.get(\"news_raw\") or []": 1
     },
     "stock_analyzer/db.py": {
-      "NAIVE_DATE_TODAY\u001fdate.today()": 5,
       "OFFLINE_SENTINEL_COLLAPSE\u001fbundle.get(\"info\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001frow.get(\"info\") or {}": 1
     },

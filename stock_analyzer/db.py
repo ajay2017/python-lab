@@ -1462,14 +1462,15 @@ def load_daily_regime(days_back: int = 90) -> "pd.DataFrame":
     Returns DataFrame with columns: regime_date, regime, label, confidence,
     fed_trend, cpi_yoy, source. Empty DataFrame on failure/absence."""
     import pandas as pd
-    from datetime import date, timedelta
+    from datetime import timedelta
+    from stock_analyzer.market_time import today_et
     empty = pd.DataFrame(columns=[
         "regime_date", "regime", "label", "confidence", "fed_trend", "cpi_yoy", "source",
     ])
     if not has_db():
         return empty
     try:
-        start = (date.today() - timedelta(days=days_back)).isoformat()
+        start = (today_et() - timedelta(days=days_back)).isoformat()
         rows = (
             _client().table("daily_regime").select("*")
             .gte("regime_date", start)
@@ -2985,8 +2986,9 @@ def load_exit_signals(days_back: int = 365) -> pd.DataFrame:
     if not has_db():
         return pd.DataFrame()
     try:
-        from datetime import date, timedelta
-        cutoff = (date.today() - timedelta(days=days_back)).isoformat()
+        from datetime import timedelta
+        from stock_analyzer.market_time import today_et
+        cutoff = (today_et() - timedelta(days=days_back)).isoformat()
         rows = (
             _client()
             .table("exit_signals")
@@ -3074,8 +3076,9 @@ def load_analyst_target_snapshots(days_back: int = 365) -> pd.DataFrame:
     table, snake_case) on success, or an empty DataFrame on any exception.
     """
     try:
-        from datetime import date, timedelta
-        cutoff = (date.today() - timedelta(days=days_back)).isoformat()
+        from datetime import timedelta
+        from stock_analyzer.market_time import today_et
+        cutoff = (today_et() - timedelta(days=days_back)).isoformat()
         rows = (
             _client()
             .table("analyst_target_snapshots")
@@ -3154,8 +3157,9 @@ def load_judgment_opinions(days_back: int = 365) -> pd.DataFrame:
     history to read once it's built.
     """
     try:
-        from datetime import date, timedelta
-        cutoff = (date.today() - timedelta(days=days_back)).isoformat()
+        from datetime import timedelta
+        from stock_analyzer.market_time import today_et
+        cutoff = (today_et() - timedelta(days=days_back)).isoformat()
         rows = (
             _client()
             .table("judgment_opinions")
@@ -3225,8 +3229,9 @@ def load_judgment_grades(days_back: int = 365) -> pd.DataFrame:
     evidence-based weighting.
     """
     try:
-        from datetime import date, timedelta
-        cutoff = (date.today() - timedelta(days=days_back)).isoformat()
+        from datetime import timedelta
+        from stock_analyzer.market_time import today_et
+        cutoff = (today_et() - timedelta(days=days_back)).isoformat()
         rows = (
             _client()
             .table("judgment_grades")
