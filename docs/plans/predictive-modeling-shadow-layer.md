@@ -3,8 +3,8 @@
 **Date:** 2026-08-06
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 4.8 (1M context)
-**Status:** DESIGN — approved direction, pre-build. Nothing built or wired as of this doc. This is the design pass; the build is Phase 1 below.
-**Reserved F-ID:** F-234 (assign at build, not before — nothing user-facing has shipped yet).
+**Status (updated 2026-09-02 — this line had drifted since ship day):** Phase 1 SHIPPED and LIVE since 2026-08-06 as **F-234** — `vol_forecast.py`, `prediction_scoring.py`, the `model_predictions` table (DDL applied same day), and the owner-only 🔬 Model Lab page are all in production, accruing real predictions daily via the EOD cron. This doc's own header was never updated past its original pre-build draft. Checked 2026-09-02: the live-prediction 20-trading-day maturation window (accrual began 2026-08-06) crosses its threshold **today**, so the paused Phase 2 checkpoint is now due — see CLAUDE.md's queue entry and memory `project_predictive_shadow_modeling` for the live `n_matured_live` count before deciding anything. Phase 2/3 scope below is otherwise unchanged and still not started.
+**F-ID:** F-234 (assigned at build, per the original reservation note below — no longer "not shipped").
 
 ---
 

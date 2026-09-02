@@ -1,6 +1,6 @@
 # Plan: Forward Portfolio Simulator (E1) — Phase 1 Diagnostic
 
-**Status: Phase 1 SHIPPED 2026-08-21 as F-245 (`stock_analyzer/forward_sim.py` + the 🧯 After My Rules tab on 🔗 Risk Analysis; 64 tests). Two Opus review passes: FIX-FIRST (5 blocking) → FIX-FIRST (1 blocking) → SHIP. Phase 2 (re-entry discipline) NOT started and deliberately gated — see below.**
+**Status: Phase 1 SHIPPED 2026-08-21 as F-245 (`stock_analyzer/forward_sim.py` + the 🧯 After My Rules tab on 🔗 Risk Analysis; 64 tests). Two Opus review passes: FIX-FIRST (5 blocking) → FIX-FIRST (1 blocking) → SHIP. Phase 2 CLOSED 2026-08-29 per its own pre-registered falsifiable criterion below (this line was never updated past the original "NOT started and deliberately gated" wording — corrected 2026-09-02). `scripts/exit_ladder_replay.py` (the W6 measurement) found only 24% of the owner's real closed losing round trips got ANY protective signal before the actual sale, across three independent methodology tightenings converging within 22-24% — the criterion's own bar for closing rather than waiting. Full reasoning: CLAUDE.md's queue entry and memory `project_forward_portfolio_simulator`. Do not re-propose without new evidence.**
 **Author:** Ajay Kumar
 **Date:** 2026-08-21
 **Design model:** Claude Opus 5 (lead)
@@ -171,13 +171,20 @@ deviation from the spec above rather than silently.
 
 ---
 
-## Phase 2 — NOT approved, NOT scoped for build
+## Phase 2 — CLOSED 2026-08-29, per its own pre-registered falsifiable criterion (was: NOT approved, NOT scoped for build)
 
-A re-entry / redeployment discipline closing the Faber asymmetry. This is a **new user-facing
-decision surface with new policy constants**, so it requires: a `planner` (Opus) design pass, the
-threshold values set explicitly with the user, and a `reviewer` (Opus) pass — CLAUDE.md hard rules
-#1 and #4. **Gate: do not scope it until Phase 1 shows the pathology is real in the actual book.**
-Designing a fix for a measured-nowhere problem is how a policy change gets rubber-stamped.
+A re-entry / redeployment discipline closing the Faber asymmetry. This was a **new user-facing
+decision surface with new policy constants**, so it would have required: a `planner` (Opus) design
+pass, the threshold values set explicitly with the user, and a `reviewer` (Opus) pass — CLAUDE.md
+hard rules #1 and #4. **The gate below — "do not scope it until Phase 1 shows the pathology is real
+in the actual book" — is exactly what got tested, and it came back negative for the premise this
+phase would have addressed:** the W6 exit-ladder replay found real exits are frequently late or
+absent (only 24% of closed losing round trips got any protective signal before the actual sale),
+not early — the opposite emphasis from Phase 1's original worry that the app de-risks too
+aggressively and would need a re-entry counterpart. Building Phase 2 to aid re-entry after an
+over-eager exit would solve a problem this measurement doesn't support. **Closed per the
+criterion's own pre-registered rule, not a judgment call made after seeing the number.** Don't
+re-propose without new evidence — memory `project_forward_portfolio_simulator` has full detail.
 
 ---
 
