@@ -123,7 +123,9 @@ BASELINE = ROOT / "scripts" / "antipattern_baseline.json"
 # _holdings_sig_at_home_build (scalars, not offline sentinels), the dynamic
 # _rh_prices_cache_* family (name is not a literal), and _daily_brief_offline --
 # which must NEVER be added, because it is a plain bool whose falsy state is
-# meaningful and `if _x:` is the CORRECT idiom for it (app.py:9732, 22327).
+# meaningful and `if _x:` is the CORRECT idiom for it (app.py:10184, 17361 —
+# re-verified 2026-09-01; app.py line numbers drift fast, don't trust these
+# without a fresh grep).
 _SENTINEL_KEYS = frozenset({
     "_last_port_df", "_port_df_enriched", "_last_held_data", "_last_held_tickers",
     "_port_risk_cache", "_fragility_cache", "_highbeta_share",
@@ -234,15 +236,24 @@ def _is_dynamic_html(node: ast.AST, escapers: frozenset = frozenset()) -> bool:
     negative costs an XSS hole. Left flagged deliberately, recorded so it reads
     as a decision rather than an oversight.
 
-    Measured against THIS rule, not the broader one first sketched: of 296
-    baselined instances, 4 are all-wrapped and 6 are f-strings with NO
-    interpolation at all (a plain literal the rule was simply wrong about);
-    214 unwrapped and 4 partial ones keep firing. The first draft of this note
-    said 5 / 209 / 8, taken under a definition that also credited the attribute
-    form `_html.escape(...)` — which the shipped `ast.Name`-only rule does not.
-    Corrected because the figures reconcile exactly (209+4+1=214, 4+4=8, 4+1=5),
-    so a future reviewer re-deriving them would find 4 partial against a
-    documented 8 and reasonably suspect four sites had been silently exempted.
+    Measured against THIS rule, not the broader one first sketched: as of the
+    figures below, of 296 baselined instances, 4 are all-wrapped and 6 are
+    f-strings with NO interpolation at all (a plain literal the rule was simply
+    wrong about); 214 unwrapped and 4 partial ones keep firing. The first draft
+    of this note said 5 / 209 / 8, taken under a definition that also credited
+    the attribute form `_html.escape(...)` — which the shipped `ast.Name`-only
+    rule does not. Corrected because the figures reconcile exactly
+    (209+4+1=214, 4+4=8, 4+1=5), so a future reviewer re-deriving them would
+    find 4 partial against a documented 8 and reasonably suspect four sites had
+    been silently exempted.
+
+    **Stale as of 2026-09-01 (audit finding): the TOTAL has since drifted from
+    296 to 293** (more sites picked up `safe_html`/`md_bold_to_html` wrapping,
+    each one earning the 2026-08-28 exemption above and dropping out of the
+    baseline) — the four-way breakdown was NOT re-derived, since that requires
+    re-classifying all 293 flagged sites by hand, not just re-running the
+    count. Don't trust the 296/4/6/214/4 figures without re-deriving them
+    first; app.py's high edit velocity means this note will drift again.
     """
     if isinstance(node, ast.JoinedStr):  # f-string
         formatted = [v for v in node.values if isinstance(v, ast.FormattedValue)]
@@ -356,15 +367,18 @@ class _Visitor(ast.NodeVisitor):
         """POLICY_DECISION_IN_RENDER — a threshold comparison in the untested
         entrypoints.
 
-        Not a bug per se: every one of the 95 baselined instances (90
-        distinct segments; 5 comparisons are written twice) may be
-        perfectly correct today. It is a RATCHET. Each such comparison is an
-        investment-policy decision (a breach, a tone classification, a
-        staleness call) evaluated where nothing can unit-test it, so the only
-        verification it ever gets is a screenshot. Baselined at the current
-        count so nothing must be fixed now; a NEW one fails, which makes
-        "extract the decision into a pure function in stock_analyzer/ and test
-        it there" the path of least resistance rather than a good intention.
+        Not a bug per se: every one of the baselined instances (93 total / 88
+        distinct segments as of 2026-09-01 — re-verify before quoting, this
+        count net-decreases as extractions land, e.g. this same audit pass
+        pulled the Home risk-banner RAG comparison out into
+        `home_risk_synthesis.classify_risk_banner`) may be perfectly correct
+        today. It is a RATCHET. Each such comparison is an investment-policy
+        decision (a breach, a tone classification, a staleness call) evaluated
+        where nothing can unit-test it, so the only verification it ever gets
+        is a screenshot. Baselined at the current count so nothing must be
+        fixed now; a NEW one fails, which makes "extract the decision into a
+        pure function in stock_analyzer/ and test it there" the path of least
+        resistance rather than a good intention.
         """
         if self.rel in _RENDER_LAYER and self.policy_consts:
             names = {x.id for x in ast.walk(node) if isinstance(x, ast.Name)}

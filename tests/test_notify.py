@@ -339,6 +339,16 @@ def test_email_md_inline_no_markdown_passthrough():
     assert notify._email_md_inline("plain text") == "plain text"
 
 
+def test_email_md_inline_escapes_html_metacharacters():
+    # 2026-09-01 audit finding: this used to interpolate raw text with no
+    # escaping. P/E comparisons ("<", ">") and tickers like "AT&T" must not
+    # be interpreted as HTML.
+    result = notify._email_md_inline("P/E < 15 & **AT&T** rated Buy")
+    assert "<strong>" in result and "</strong>" in result  # markdown still converts
+    assert "P/E &lt; 15 &amp; " in result
+    assert result.count("<strong>AT&amp;T</strong>") == 1
+
+
 # ─── _email_section ───────────────────────────────────────────────────────────
 
 def test_email_section_falsy_content_returns_empty_string():

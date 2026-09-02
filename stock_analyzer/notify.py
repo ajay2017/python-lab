@@ -791,7 +791,12 @@ def render_intraday_entry_email(
 
 
 def _email_md_inline(text: str) -> str:
-    """Convert **bold** and *italic* markdown to inline HTML."""
+    """Escape for HTML, then convert **bold** and *italic* markdown to inline
+    HTML. Order is load-bearing (matches util.md_bold_to_html): escape FIRST
+    so `**`/`*` markers (no HTML metacharacters) survive intact, then convert
+    — converting first would let the escape mangle the tags just produced.
+    2026-09-01 audit finding: this ran on raw `text` with no escaping."""
+    text = _html.escape(text, quote=True)
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"\*([^*\s][^*]*?)\*",  r"<em>\1</em>",      text)
     return text

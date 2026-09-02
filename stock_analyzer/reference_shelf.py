@@ -409,11 +409,16 @@ def _grade_horizon(entry: _RefTable, today: date) -> tuple[str, str]:
 def shelf_status(today: date | None = None) -> list[dict]:
     """One row per registered reference table.
 
-    Pure — no I/O, no network, no DB. Returns a list (never `None`): this is not
-    a provider that can be "offline", so the offline-sentinel contract applies
-    PER ROW instead — an entry whose source can't be read is graded `"unknown"`
-    and still rendered, never dropped and never silently `"ok"`. Silence is not
-    health.
+    NOT pure (corrected 2026-09-01 audit finding — this used to claim "no
+    I/O, no network, no DB"): the 3 `_DB_BACKED_KEYS` entries issue a real
+    `db.load_reference_table` read via `_db_as_of`. Safe regardless — that
+    read is wrapped in its own try/except and degrades to the hardcoded
+    `entry.as_of` fallback on any failure, so a DB hiccup here can only
+    demote one row to `"unknown"`, never crash the call or fabricate a date.
+    Returns a list (never `None`): this is not a provider that can be
+    "offline", so the offline-sentinel contract applies PER ROW instead — an
+    entry whose source can't be read is graded `"unknown"` and still
+    rendered, never dropped and never silently `"ok"`. Silence is not health.
 
     Never raises. A broken registry entry degrades that one row.
     """
