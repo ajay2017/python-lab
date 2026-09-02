@@ -179,6 +179,17 @@ TICKER_SECTORS = {
     "DG": "Consumer Staples & Retail", "DLTR": "Consumer Staples & Retail",
     "ULTA": "Consumer Staples & Retail", "KR": "Consumer Staples & Retail",
     "ORLY": "Consumer Staples & Retail",
+    # LIN/DOW/APD/FCX/NUE, DUK/SO/D/AEP/EXC, AMT/PLD/EQIX/O/SPG added
+    # 2026-09-02: Materials/Utilities/Real Estate had NO taxonomy coverage
+    # anywhere in the app until this session — a ticker in any of them fell
+    # back to the raw provider GICS string (e.g. "Basic Materials", "Utilities",
+    # "Real Estate"), unknown to _SECTOR_IMPACT/RATE_SENSITIVITY/SECTOR_ETF/
+    # _SECTOR_PROFILES, same class as the MRVL/BA/F/GM gaps above. User-
+    # confirmed sector, ETF and correlation values (see macro_calendar.py
+    # _SECTOR_IMPACT and this file's SECTOR_ETF/_SECTOR_PROFILES).
+    "LIN": "Materials", "DOW": "Materials", "APD": "Materials", "FCX": "Materials", "NUE": "Materials",
+    "DUK": "Utilities", "SO": "Utilities", "D": "Utilities", "AEP": "Utilities", "EXC": "Utilities",
+    "AMT": "Real Estate", "PLD": "Real Estate", "EQIX": "Real Estate", "O": "Real Estate", "SPG": "Real Estate",
 }
 
 
@@ -808,6 +819,14 @@ SECTOR_ETF = {
     # recreate a same-ETF collision with an existing bucket, so XRT (SPDR S&P
     # Retail ETF) was chosen as a distinct proxy that doesn't overlap either.
     "Consumer Staples & Retail": "XRT",
+    # Added 2026-09-02 (F-240 follow-up, user-confirmed) — Materials/Utilities/
+    # Real Estate had no sector representation at all; without an ETF
+    # benchmark these three can never register in daily_briefing's
+    # leading-sector ranking bonus or the Relative Strength / Sector Rotation
+    # tabs.
+    "Materials":       "XLB",
+    "Utilities":       "XLU",
+    "Real Estate":     "XLRE",
     "Other":           "SPY",
 }
 
@@ -1416,6 +1435,16 @@ _SECTOR_PROFILES = {
     "Cybersecurity":   {"corr": 0.65, "why": "SaaS/enterprise-software spend cycle — correlated with the AI & Cloud / AI & Data cluster"},
     "AI & Cloud":      {"corr": 0.72, "why": "highly correlated to existing tech — limited diversification benefit"},
     "AI & Data":       {"corr": 0.68, "why": "correlated to AI/semiconductor cycle — limited benefit if already tech-heavy"},
+    # Added 2026-09-02 (F-240 follow-up, user-confirmed) — Materials/Utilities/
+    # Real Estate had no sector representation at all. NOT added to
+    # _DIVERSIFYING_SECTORS below — that's a separate, not-yet-made policy
+    # call on whether the app actively recommends these as ADD suggestions,
+    # same deliberate not-yet-recommended state as Semiconductors/
+    # Cybersecurity/Consumer Tech/AI & Cloud/AI & Data/Enterprise Tech/
+    # EV & Auto/Financials/Clean Energy above.
+    "Materials":       {"corr": 0.30, "why": "commodity/industrial-input driven — tracks global growth cyclicals, a genuine but moderate diversifier from the AI/semis cycle"},
+    "Utilities":       {"corr": 0.15, "why": "regulated, rate-sensitive bond-proxy — defensive and counter-cyclical like Healthcare, decoupled from the growth-tech cycle"},
+    "Real Estate":     {"corr": 0.22, "why": "rate-sensitive income real estate — shares Utilities' duration risk but a distinct property cycle, a real diversifier from tech"},
 }
 
 # Sectors that genuinely diversify a tech-heavy portfolio, in priority order.

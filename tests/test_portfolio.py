@@ -561,12 +561,18 @@ def test_diversifying_candidate_pool_respects_cap():
 
 def test_ticker_sectors_values_are_rate_known_or_a_documented_gap():
     # Companion to the _SECTOR_IMPACT invariant in tests/test_scanner.py.
-    # These three curated labels have no RATE_SENSITIVITY key; since 2026-08-16
+    # These curated labels have no RATE_SENSITIVITY key; since 2026-08-16
     # they degrade honestly to None -> "Unknown" rather than a fabricated
     # "+0.00". Pinned so a NEW gap can't appear silently.
     from stock_analyzer.macro import RATE_SENSITIVITY
     from stock_analyzer.portfolio import TICKER_SECTORS
-    known_gap = {"Industrials", "Communications", "Consumer Staples & Retail"}
+    known_gap = {
+        "Industrials", "Communications", "Consumer Staples & Retail",
+        # Added 2026-09-02 (F-240 follow-up) — Materials/Utilities/Real Estate
+        # were deliberately scoped to _SECTOR_IMPACT/SECTOR_ETF/_SECTOR_PROFILES
+        # only; RATE_SENSITIVITY is a separate, not-yet-made policy call.
+        "Materials", "Utilities", "Real Estate",
+    }
     unknown = sorted({v for v in TICKER_SECTORS.values()} - set(RATE_SENSITIVITY) - known_gap)
     assert not unknown, f"new sector labels with no rate-sensitivity score: {unknown}"
 

@@ -236,6 +236,14 @@ _STATIC: list[tuple] = [
 # entries in portfolio.py close it. tests/test_scanner.py now asserts it.
 # Note "Fed Policy" and "Growth" use __ALL__, so those two event types always
 # suppressed correctly; the hole only ever affected the four keyed categories.
+#
+# On 2026-09-02, Materials/Utilities/Real Estate were added to the four keyed
+# categories below (Inflation/Employment/Consumer/Activity) — the F-240
+# scan-universe refresh's deferred gap: these three GICS sectors had NO
+# taxonomy coverage anywhere in the app (see portfolio.py's TICKER_SECTORS/
+# SECTOR_ETF/_SECTOR_PROFILES for the matching additions), so a scanned or
+# held name in them fell back to the raw provider label and was invisible to
+# this gate. Severities user-confirmed, not derived.
 _SECTOR_IMPACT: dict[str, dict[str, int]] = {
     "Fed Policy": {
         "__ALL__": 3,
@@ -256,6 +264,21 @@ _SECTOR_IMPACT: dict[str, dict[str, int]] = {
         "Communications": 2,
         "Consumer Staples & Retail": 2,
         "Enterprise Tech":           2,
+        # Materials: commodity/input-cost sensitivity drives Inflation (3);
+        # ISM/PMI is as direct a read on materials producers as it is on
+        # Industrials (Activity 3); no direct consumer revenue since miners/
+        # chemicals sell to industry, not households (Consumer 1, Employment 2).
+        "Materials":      3,
+        # Utilities: regulated bond-proxy duration risk makes this the most
+        # rate/inflation-sensitive sector in the map (Inflation 3); demand is
+        # inelastic so Employment/Consumer/Activity are all 1 — defensive by
+        # construction.
+        "Utilities":      3,
+        # Real Estate: discount-rate/10yr-yield sensitivity dominates any
+        # rent-escalation offset (Inflation 3); office/retail occupancy and
+        # industrial/warehouse REITs give moderate Employment/Consumer/Activity
+        # reads (2 each).
+        "Real Estate":    3,
     },
     "Employment": {
         "Consumer Tech":  3,
@@ -282,6 +305,9 @@ _SECTOR_IMPACT: dict[str, dict[str, int]] = {
         "Communications": 1,
         "Consumer Staples & Retail": 2,
         "Enterprise Tech":           2,
+        "Materials":      2,
+        "Utilities":      1,
+        "Real Estate":    2,
     },
     "Growth": {
         "__ALL__": 2,
@@ -303,6 +329,9 @@ _SECTOR_IMPACT: dict[str, dict[str, int]] = {
         "Consumer Staples & Retail": 3,
         # 1: enterprise IT has no direct consumer revenue.
         "Enterprise Tech":           1,
+        "Materials":      1,
+        "Utilities":      1,
+        "Real Estate":    2,
     },
     "Activity": {
         "Semiconductors": 3,
@@ -319,6 +348,9 @@ _SECTOR_IMPACT: dict[str, dict[str, int]] = {
         "Consumer Staples & Retail": 1,
         # 2: IT capex tracks PMI with a lag.
         "Enterprise Tech":           2,
+        "Materials":      3,
+        "Utilities":      1,
+        "Real Estate":    2,
     },
 }
 

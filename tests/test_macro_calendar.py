@@ -108,12 +108,19 @@ def test_affected_sectors_inflation_at_min_severity_2_matches_real_table():
         # _SECTOR_IMPACT, so their names could never be macro-suppressed.
         "Industrials", "Communications", "Consumer Staples & Retail",
         "Enterprise Tech",
+        # Added 2026-09-02 (F-240 follow-up) — Materials/Utilities/Real Estate,
+        # all Inflation severity 3.
+        "Materials", "Utilities", "Real Estate",
     }
     assert mc.affected_sectors("Inflation", min_severity=2) == expected
 
 
 def test_affected_sectors_inflation_at_min_severity_3_is_smaller_subset():
-    expected_3 = {"AI & Data", "AI & Cloud", "Semiconductors", "Clean Energy"}
+    expected_3 = {
+        "AI & Data", "AI & Cloud", "Semiconductors", "Clean Energy",
+        # Added 2026-09-02 (F-240 follow-up) — all three land at severity 3.
+        "Materials", "Utilities", "Real Estate",
+    }
     result = mc.affected_sectors("Inflation", min_severity=3)
     assert result == expected_3
     assert result < mc.affected_sectors("Inflation", min_severity=2)
