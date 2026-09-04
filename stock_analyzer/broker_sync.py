@@ -144,6 +144,27 @@ def normalize_positions(rh_positions: list[dict] | None) -> dict | None:
     return rh_shares
 
 
+def ticker_share_counts(rh_shares: dict | None, port_df) -> tuple[dict, dict] | tuple[None, None]:
+    """Return (rh_shares_map, app_shares_map) as `{TICKER: float}` dicts.
+
+    Extracted from `diff_position_map` so callers can look up per-ticker counts
+    without recomputing them, e.g. to annotate pending-import rows with concrete
+    share numbers instead of a vague "likely reconciled" flag.
+
+    Returns (None, None) when `rh_shares` is None (broker unavailable).
+    """
+    if rh_shares is None:
+        return None, None
+    app: dict[str, float] = {}
+    if port_df is not None and not port_df.empty:
+        for _, row in port_df.iterrows():
+            ticker = str(row.get("Ticker", "")).strip().upper()
+            if not ticker:
+                continue
+            app[ticker] = app.get(ticker, 0.0) + float(row.get("Shares") or 0)
+    return rh_shares, app
+
+
 def diff_position_map(rh_shares: dict | None, port_df) -> dict | None:
     """Diff an already-normalized `{TICKER: shares}` broker map against the book.
 
@@ -442,28 +463,37 @@ def classify_transactions(rh_txns: list[dict] | None, existing_trades: pd.DataFr
 # date). This function narrates that already-computed drift fact next to the
 # pending row it explains — it does not introduce any new inference.
 
-def annotate_pending_reconciliation(pending: list[dict], drift: dict | None) -> list[dict]:
-    """Attach `likely_reconciled: bool | None` to each pending-import row.
+def annotate_pending_reconciliation(
+    pending: list[dict],
+    drift: dict | None,
+    rh_shares: dict | None = None,
+    app_shares: dict | None = None,
+) -> list[dict]:
+    """Attach reconciliation context to each pending-import row.
 
     Parameters
     ----------
     pending : the app's current pending-import rows (each a dict with at
         least a "ticker" key), e.g. `db.load_snaptrade_pending_imports()`.
     drift : `diff_positions()`'s return value for this same render, or None.
+    rh_shares : optional `{TICKER: float}` map from `ticker_share_counts()` —
+        when provided, concrete Robinhood share counts are attached to each row
+        so the UI can show "App: 1 sh · Robinhood: 1 sh" instead of a vague flag.
+    app_shares : partner dict from `ticker_share_counts()`.
 
     Returns
     -------
-    A NEW list of dicts (input is never mutated), each with one added key:
-        likely_reconciled = None  -> drift is None: the drift check was
-            unavailable this render, so whether this ticker reconciles is
-            genuinely unknown. Never assert "reconciles" from an unknown.
-        likely_reconciled = False -> the ticker appears in one of drift's
-            three buckets: real drift is live for it right now, so this
-            pending row is not "just" an already-logged duplicate.
-        likely_reconciled = True  -> the ticker appears in none of drift's
-            three buckets: the position nets out clean, so this leftover
-            pending row is very likely a transaction already logged with a
-            slightly different date or price.
+    A NEW list of dicts (input is never mutated), each with added keys:
+        likely_reconciled : bool | None
+            None  -> drift check unavailable; never assert "reconciles".
+            False -> ticker has live drift — not just a date/price mismatch.
+            True  -> position nets clean; very likely already logged.
+        app_qty  : float | None  — app's logged share count for this ticker,
+                   or None when share-count maps are unavailable.
+        rh_qty   : float | None  — Robinhood's share count for this ticker,
+                   0.0 when the ticker is absent from RH (not None), so callers
+                   can distinguish "not held at broker" from "data unavailable".
+                   None when share-count maps are unavailable.
     """
     if drift is None:
         drifted_tickers: set[str] | None = None
@@ -476,13 +506,22 @@ def annotate_pending_reconciliation(pending: list[dict], drift: dict | None) -> 
             r["ticker"] for r in drift.get("qty_mismatch", [])
         }
 
+    have_counts = rh_shares is not None and app_shares is not None
+
     out = []
     for row in pending:
+        ticker = row.get("ticker", "").upper().strip()
         if drifted_tickers is None:
             flag = None
         else:
-            flag = row.get("ticker") not in drifted_tickers
-        out.append({**row, "likely_reconciled": flag})
+            flag = ticker not in drifted_tickers
+        if have_counts:
+            a_qty = app_shares.get(ticker)
+            r_qty = rh_shares.get(ticker, 0.0)
+        else:
+            a_qty = None
+            r_qty = None
+        out.append({**row, "likely_reconciled": flag, "app_qty": a_qty, "rh_qty": r_qty})
     return out
 
 
