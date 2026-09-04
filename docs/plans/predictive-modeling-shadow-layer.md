@@ -3,7 +3,7 @@
 **Date:** 2026-08-06
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 4.8 (1M context)
-**Status (updated 2026-09-02 — this line had drifted since ship day):** Phase 1 SHIPPED and LIVE since 2026-08-06 as **F-234** — `vol_forecast.py`, `prediction_scoring.py`, the `model_predictions` table (DDL applied same day), and the owner-only 🔬 Model Lab page are all in production, accruing real predictions daily via the EOD cron. This doc's own header was never updated past its original pre-build draft. Checked 2026-09-02: the live-prediction 20-trading-day maturation window (accrual began 2026-08-06) crosses its threshold **today**, so the paused Phase 2 checkpoint is now due — see CLAUDE.md's queue entry and memory `project_predictive_shadow_modeling` for the live `n_matured_live` count before deciding anything. Phase 2/3 scope below is otherwise unchanged and still not started.
+**Status (updated 2026-09-04):** Phase 1 SHIPPED and LIVE since 2026-08-06 as **F-234**, accruing real predictions daily via the EOD cron. **Checkpoint reached 2026-09-04:** a real bug was found and fixed first (commit `f0eac96` — `db.load_model_predictions()` was silently truncated by PostgREST's 1000-row cap, undercounting live-matured rows; a follow-up commit `5ef6f72` fixed the resulting MAE-precision display bug and added plain-English captions to the Model Lab page). Once trustworthy, the page showed the **first live-only skill reading: +1.6%, n=28** — crosses the `PREDICTION_MIN_MATURED_N`≈20 floor for the first time, meeting Phase 2's trigger ("Phase 1 has real matured rows"). **Phase 2 is now DESIGNED (below, §Phase 2 design — earnings-move magnitude) but deliberately NOT STARTED — the user chose to document it and pick it up later, no trigger date set.** Phase 3 scope is unchanged and untouched.
 **F-ID:** F-234 (assigned at build, per the original reservation note below — no longer "not shipped").
 
 ---
@@ -140,7 +140,7 @@ DRISHTA itself is ~3 months old, but that does **not** bound how far back this l
 ## Roadmap
 
 - **Phase 1 (this design):** ledger + vol model + maturation cron + scorer + Model Lab. Quarantined. Touches no decision path.
-- **Phase 2 (after Phase 1 has real matured rows):** a second, orthogonal target — **drawdown probability** (finally builds Pass #1 E3) or earnings-move magnitude — plus probabilistic scoring (Brier / reliability). Still quarantined.
+- **Phase 2 (after Phase 1 has real matured rows):** trigger MET 2026-09-04 (live-only skill +1.6%, n=28). Target decided 2026-09-04 — **earnings-move magnitude**, scoped to ledger + baseline only (no new model; see full design below in §Phase 2 design). Drawdown probability (Pass #1 E3) remains a candidate for a LATER pass if this one is picked back up and another target is wanted. Still quarantined.
 - **Phase 3 (gated; months out; full `planner` + `reviewer`):** **only if** skill score > 0 across a real window that includes **≥1 stress episode** and `n_matured ≥` a to-be-set floor → propose wiring **one** validated risk signal into **one** existing protective gate as a **tightening-only** input. Never loosens a gate; never manufactures a buy. This is where §5.8 and the whole redline get re-litigated with fresh explicit approval — not an implied green light from Phase 1.
 
 ---
@@ -157,6 +157,77 @@ DRISHTA itself is ~3 months old, but that does **not** bound how far back this l
 
 1. **Opening target — 20-day forward volatility.** ✅ Confirmed. (Cleanest to score, most protective, §5.8-safe.) Drawdown-probability and correlation-regime remain the Phase-2 candidate pool.
 2. **Surface — full quarantine in owner-only `🔬 Model Lab`.** ✅ Confirmed. A live "predicted range" annotation near existing analytics was explicitly declined on anchoring-risk grounds — stay quarantined until the skill score earns otherwise.
+
+---
+
+## Phase 2 design — earnings-move magnitude (DESIGNED 2026-09-04, NOT STARTED)
+
+**Author of this design pass:** `planner` (Opus 4.8, 1M context), run 2026-09-04 after the Phase 1 checkpoint. Verdict: **PROCEED — conditionally**, with the model-vs-baseline differentiator problem below flagged as the load-bearing risk. The user reviewed the design, made three scoping decisions (all below), then chose to **document and defer** rather than build now — this section exists so a future session can pick this up without re-deriving any of it.
+
+### Target definition
+
+Predict the **absolute, unsigned, single-session close-to-close price move across the earnings print, in percent**:
+
+```
+realized_value = | close_after_print / close_before_print − 1 | × 100
+```
+
+`close_before_print` / `close_after_print` are the split-adjusted closes of the sessions immediately bracketing the report, chosen per BMO ("before open," so `close_before` = D−1, `close_after` = D) vs AMC ("after close," so `close_before` = D, `close_after` = D+1). Chosen over "max intraday move" (needs intraday bars the app's data layer doesn't carry) and "realized vol over [print, print+N]" (that's just the vol model again with an event-anchored window, not an orthogonal second target). **§5.8-safe by construction** — unsigned magnitude only, never a directional price call, same category as the Phase 1 vol forecast.
+
+### Scope decision (user, 2026-09-04): ledger + baseline only — no new "model" yet
+
+The vol model's persistence baseline ("assume next 20 days ≈ last 20") has no clean daily analogue for a quarterly event, and a naive "average of recent prints" baseline plus a v1 model that is *also* just averaging recent prints would make skill ≈ 0 by construction — measuring nothing. The app also has no options-implied-vol feed, which would have been the honest real differentiator. Rather than invent a placeholder model, the scoped-down plan **reuses the app's own existing `earnings_advisor._estimate_move` heuristic (VaR95×3, sector-adjusted, already live on the Earnings Playbook and already driving real pre-earnings trim recommendations) as `predicted_value`**, and a **trailing-K historical average of the ticker's own past realized earnings moves as `baseline_value`**. This reframing turns Phase 2 into a genuinely useful, non-degenerate measurement — *"does the heuristic the app already uses to recommend trims actually beat a naive 'assume it moves like it usually has' guess?"* — validating an existing live feature instead of measuring a strawman model. **No new forecasting model is designed or built in this scope.**
+
+Parameters (defaults proposed by `planner`, not yet finalized against code — confirm at build time):
+- **K = 6** prior prints, using the **median** (not mean — more robust to one blow-out quarter).
+- **`EARNINGS_MOVE_LEAD_DAYS` = 3** trading days before the scheduled print — when a prediction row is written.
+
+### Two more scope decisions (user, 2026-09-04)
+
+- **Live-only — no backfill.** Historical earnings-date accuracy (yfinance's historical earnings dates are approximate/gappy for older prints) makes backfill a real risk of poisoning the ledger with mis-dated windows, not a free cushion the way 5-year vol backfill was (that only needed price bars, which are reliable for years; this needs *earnings dates*, which aren't). Accepted tradeoff: ~4-6 months minimum before crossing the live-only reporting floor (vs. vol's ~4 weeks), because live accrual is only ~52-68 events/year across held tickers (quarterly, not daily) — seasonally clustered around earnings months, not smooth.
+- **Fully retrospective — no "upcoming, not yet matured" live preview.** A preview like *"NVDA earnings in 12 days — predicted move: X%"* was considered (it would leverage Catalyst Watch's existing earnings-date tracking) but declined because it re-opens the exact anchoring-risk redline Fork 2 (below) already closed for the vol model — a live forecast on screen before the outcome is known, even on this quarantined page. Model Lab's earnings-move section shows **matured, scored predictions only**, same posture as the vol model.
+
+### Schema fit — no DDL change required
+
+Every existing `model_predictions` column maps cleanly: `predicted_value` → the `_estimate_move` heuristic's output at make-time; `baseline_value` → the trailing-K median; `realized_value` → the actual move; `features_snapshot` (jsonb) → holds `event_date`, `bmo_amc`, `days_until_at_make`, and the K historical moves the baseline was computed from. `horizon_days` becomes advisory-display only (a nominal trading-day count to the expected print) — **the real maturation trigger is event-driven, not `made_at + horizon_days`**, so the maturation cron branches by `model_name`: the existing `made_at + horizon_days ≤ today` rule stays the *vol* path; a new event-date-driven rule is the earnings path. This is a `cron_runner.py` logic branch, not a schema change. (A first-class `event_date DATE` column would make "find overdue events" a cheap indexed query instead of a jsonb reach — deliberately deferred; revisit only if that scan becomes a real cost at this table's tiny scale.)
+
+### Leakage guards specific to this target (in addition to every Phase 1 guard, §1.6)
+
+1. **The post-print bar is the answer, never a feature** — `features_snapshot` must only contain bars strictly before `close_before_print`.
+2. **Frozen event date** — the scheduled `event_date` used at make-time is frozen in `features_snapshot`. A later reschedule must **invalidate/withdraw** the row, never silently re-key it to the new date using knowledge that only exists after make-time.
+3. **Split-across-print** — both `close_before` and `close_after` must be on a consistent split-adjusted basis (`project_split_recalc_deferred`); a split announced *at* earnings must not register as a spurious ~50% "move."
+4. **Baseline excludes the scored print** — the trailing-K window is strictly prints *before* `made_at`, never inclusive of the event being measured.
+5. **Survivorship** — a ticker with fewer than K historical prints (recent IPO, spinoff, newly-added holding) is **excluded**, never defaulted to a sector constant that would silently inflate apparent coverage.
+
+### Visualization — second section on the same 🔬 Model Lab page
+
+Not a new tab or page. A second collapsible section below the existing Forward Volatility Forecaster, reusing the skill banner / regime breakdown / live-only-skill caption / offline-vs-warming-vs-populated three-state scaffolding verbatim (`load_model_predictions("earnings_move_v1")` alongside the existing `"vol_forecast_ewma"` call). What's different:
+- **Chart:** replace the predicted-vs-realized scatter (too sparse at ~50 events/year) with a **per-event ordered dot/bar plot** — three marks per matured print (predicted / baseline / realized), ordered by date, so a per-event win/loss is visible at low n instead of hidden in an aggregate.
+- **"Recently matured" table** gains a `model_beat_baseline?` ✓/✗ column (`abs_error < baseline_abs_error` per row) — at low n, a visible per-event tally is more honest than a single skill %.
+- No "upcoming" preview section (see scope decision above).
+
+### Relationship to `earnings_advisor._estimate_move`
+
+Under this scoped-down design, the relationship is closer than a mere side-by-side comparator: **`_estimate_move`'s live output literally becomes the thing being measured** (`predicted_value`). This is deliberate and safe because Phase 2 stays read-only/quarantined — it observes and scores an already-shipped heuristic's real-world calibration without touching it. **Never wire this back** — whether a validated result should ever change `_estimate_move`'s formula is a Phase 3 question (full `planner` + `reviewer`, fresh explicit approval), not implied by measuring it here.
+
+### Ordered build chunks (for whenever this is picked up)
+
+1. Add constants (`EARNINGS_MOVE_LEAD_DAYS`, `EARNINGS_MOVE_BASELINE_K`, a `target_metric` string, reusing `PREDICTION_MIN_MATURED_N` — do not fork it) — `stock_analyzer/constants.py` + `docs/architecture.md` constants table. Trips the commit hook's Opus-citation requirement.
+2. New pure module (e.g. `stock_analyzer/earnings_move_forecast.py`) — trailing-K median baseline computation, the split-safe close-to-close realized-move calc, all pure and unit-tested at the boundaries listed below.
+3. Extend `cron_runner.py`'s maturation path with the event-driven branch (frozen event date, BMO/AMC window selection, survivorship exclusion) — **DB-write/data-integrity → mandatory Opus `reviewer` pass**, same as Phase 1.
+4. Generalize `prediction_scoring.py`'s `effective_n_note` so the overlap discount (tuned for daily, 20-day-overlapping vol predictions) doesn't spuriously deflate n for non-overlapping quarterly events (`prediction_scoring.py` is DB-integrity-adjacent → reviewer).
+5. Add the second Model Lab section (`app.py`, reuse scaffolding + new per-event chart + new table column).
+6. Docs sync in the same session, all 7 Definition-of-Done steps (requirements.md F-ID, architecture.md module + constants rows, shipped-log, this doc's own Status line, memory).
+
+### Tests the build must include (invariants this design asserts)
+
+- No post-print leakage into `features_snapshot`/baseline inputs.
+- A rescheduled print does not silently re-key to the new date.
+- BMO vs AMC close-before/close-after session selection is correct at the boundary.
+- A split between make-time and maturation does not register as a spurious move.
+- The baseline excludes the scored print itself, and excludes tickers with < K prior prints (dropped, never defaulted).
+- The `None` (not 0) "withheld below floor" contract holds for `earnings_move_v1` exactly as it does for `vol_forecast_ewma`.
+- `effective_n_note` for non-overlapping events reads close to raw n (the overlap discount must not misfire on a quarterly-not-daily cadence).
 
 ---
 
