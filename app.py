@@ -30790,6 +30790,13 @@ elif page == "🔬 Model Lab":
                 st.success(f"● BEATS BASELINE — skill {_skill * 100:+.1f}%")
             elif _skill is not None:
                 st.warning(f"● DOES NOT BEAT BASELINE — skill {_skill * 100:+.1f}%")
+            st.caption(
+                "**Baseline** = assuming the next 20 trading days look like the "
+                "last 20 (no model at all). **Skill** = how much smaller the "
+                "model's average miss is than that naive guess — above 0% means "
+                "the model adds real information beyond a naive guess; at or "
+                "below 0% means it doesn't, yet."
+            )
             _c1, _c2, _c3 = st.columns(3)
             _c1.metric("Skill vs baseline",
                        f"{_skill * 100:+.1f}%" if _skill is not None else "—",
@@ -30798,13 +30805,25 @@ elif page == "🔬 Model Lab":
             _mae_baseline = _ml_score["mae_baseline"]
             _c2.metric(
                 "Mean abs error (model vs baseline)",
-                f"{_mae_model:.1f} vs {_mae_baseline:.1f}"
+                f"{_mae_model:.3f} vs {_mae_baseline:.3f}"
                 if _mae_model is not None and _mae_baseline is not None else "—",
+                help="Average size of the miss, in annualized-volatility units "
+                     "(e.g. 0.10 = 10 percentage points of annualized vol) — "
+                     "lower is better. Shown to 3 decimals because the skill % "
+                     "above is a ratio of these two numbers — rounding both to "
+                     "1 decimal can make genuinely different values look equal.",
             )
             _c3.metric("Matured predictions", f"{_ml_score['n_matured']}")
             st.caption(
                 f"Live: {_ml_score['n_matured_live']} · backfilled: "
                 f"{_ml_score['n_matured_backfill']} · {_ml_score['effective_n_note']}"
+            )
+            st.caption(
+                "**Live** rows are scored against volatility that actually "
+                "happened after the forecast was made — the only rows that say "
+                "anything about real-world performance. **Backfilled** rows run "
+                "the same model retroactively over historical prices for a "
+                "bigger sample, but can't stand in for live proof."
             )
 
             _live_skill = _ml_score["skill_score_live_only"]
@@ -30830,6 +30849,13 @@ elif page == "🔬 Model Lab":
                     _rs = _rd.get("skill_score")
                     _rs_txt = f"{_rs * 100:+.1f}%" if _rs is not None else "—"
                     st.markdown(f"- **{_rg}** — skill {_rs_txt} · n={_rd.get('n')}")
+                st.caption(
+                    "A regime with a small n is a thin sample — read its skill "
+                    "number as provisional, not a verdict. Cross-reference "
+                    "against the Live-only skill above, which is the same "
+                    "real-time-only cut this edge needs to prove before it "
+                    "means anything."
+                )
 
             st.markdown("###### Predicted vs. realized (each matured forecast)")
             _pv_fig = go.Figure()
@@ -30855,6 +30881,13 @@ elif page == "🔬 Model Lab":
                 showlegend=False, margin=dict(l=10, r=10, t=10, b=10),
             )
             st.plotly_chart(_pv_fig, width="stretch")
+            st.caption(
+                "Each dot is one matured forecast — x-axis is what the model "
+                "predicted, y-axis is what volatility actually happened. A dot "
+                "on the dashed line is a perfect call; below the line means the "
+                "model over-predicted risk that quarter, above means it "
+                "under-predicted."
+            )
 
             st.markdown("###### Recently matured")
             _sort_col = "scored_at" if "scored_at" in _ml_matured.columns else "made_at"
