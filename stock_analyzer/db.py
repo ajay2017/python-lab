@@ -3450,6 +3450,11 @@ _MODEL_PREDICTIONS_COLS = [
     "source", "created_at",
 ]
 
+# PostgREST's own server-side default row cap on an unpaginated `.select()`.
+# `load_model_predictions` pages in chunks of this size via `.range()` rather
+# than relying on a single call, which silently truncates past this ceiling.
+_MODEL_PREDICTIONS_PAGE_SIZE = 1000
+
 
 def save_model_predictions_batch(rows: list[dict]) -> bool:
     """Upsert new prediction rows into `model_predictions`. Idempotent on
@@ -3485,7 +3490,17 @@ def load_model_predictions(model_name: str | None = None, days_back: int = 400) 
     rows exist yet). The 🔬 Model Lab page's own offline-state banner
     depends on this distinction: `None` renders "producer offline" (mockup
     state 3), an empty-but-real DataFrame renders "warming up" (mockup
-    state 2) via `prediction_scoring.score_predictions()`'s own n=0 read."""
+    state 2) via `prediction_scoring.score_predictions()`'s own n=0 read.
+
+    Paginates in `_MODEL_PREDICTIONS_PAGE_SIZE`-row pages (`.range()`, ordered
+    by `id` for a stable, non-overlapping cursor) rather than one unbounded
+    `.select("*")` — PostgREST silently caps an unpaginated select at its
+    server-side default row limit (1000), and this table's 5-year-per-ticker
+    backfill plus daily live accrual passed that ceiling within a month of
+    shipping (confirmed live 2026-09-04: 1524 rows for one `model_name`
+    within the 400-day window, while the page reported only ~1000 of them —
+    silently WRONG skill/matured-count numbers on the one page whose entire
+    purpose is honest measurement, not a crash to notice)."""
     if not has_db():
         return None
     try:
@@ -3493,11 +3508,21 @@ def load_model_predictions(model_name: str | None = None, days_back: int = 400) 
 
         from stock_analyzer.market_time import today_et
         cutoff = (today_et() - timedelta(days=days_back)).isoformat()
-        q = _client().table("model_predictions").select("*").gte("made_at", cutoff)
-        if model_name:
-            q = q.eq("model_name", model_name)
-        rows = q.execute().data
-        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=_MODEL_PREDICTIONS_COLS)
+        page_size = _MODEL_PREDICTIONS_PAGE_SIZE
+        all_rows: list = []
+        start = 0
+        while True:
+            q = _client().table("model_predictions").select("*").gte("made_at", cutoff)
+            if model_name:
+                q = q.eq("model_name", model_name)
+            page = q.order("id").range(start, start + page_size - 1).execute().data
+            if not page:
+                break
+            all_rows.extend(page)
+            if len(page) < page_size:
+                break
+            start += page_size
+        return pd.DataFrame(all_rows) if all_rows else pd.DataFrame(columns=_MODEL_PREDICTIONS_COLS)
     except Exception:
         return None
 

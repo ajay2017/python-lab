@@ -18,6 +18,7 @@ class _FakeQueryBuilder:
     def __init__(self, rows=None, raise_on_execute=False):
         self._rows = rows or []
         self._raise = raise_on_execute
+        self._range = None
 
     def select(self, *_a, **_kw):
         return self
@@ -29,6 +30,13 @@ class _FakeQueryBuilder:
         return self
 
     def is_(self, *_a, **_kw):
+        return self
+
+    def order(self, *_a, **_kw):
+        return self
+
+    def range(self, start, end):
+        self._range = (start, end)
         return self
 
     def update(self, *_a, **_kw):
@@ -43,6 +51,9 @@ class _FakeQueryBuilder:
     def execute(self):
         if self._raise:
             raise RuntimeError("simulated relation does not exist / transient failure")
+        if self._range is not None:
+            start, end = self._range
+            return _FakeExecResult(self._rows[start:end + 1])
         return _FakeExecResult(self._rows)
 
 
@@ -85,6 +96,21 @@ def test_load_model_predictions_real_rows(monkeypatch):
     monkeypatch.setattr(db, "_client", lambda: _FakeClient(rows=rows))
     out = db.load_model_predictions()
     assert list(out["ticker"]) == ["AAPL"]
+
+
+def test_load_model_predictions_paginates_past_page_size(monkeypatch):
+    """2026-09-04 live incident: PostgREST silently caps an unpaginated
+    `.select("*")` at its server-side default row limit, so a result set
+    bigger than one page must still come back whole via `.range()` looping —
+    confirmed live when the 08-06 cohort's true 13 matured tickers reported
+    as only 9 once the table passed 1000 rows for one model_name."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_MODEL_PREDICTIONS_PAGE_SIZE", 2)
+    rows = [{"ticker": f"T{i}"} for i in range(5)]
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(rows=rows))
+    out = db.load_model_predictions()
+    assert len(out) == 5
+    assert list(out["ticker"]) == [f"T{i}" for i in range(5)]
 
 
 # ── load_unmatured_model_predictions ─────────────────────────────────────────
