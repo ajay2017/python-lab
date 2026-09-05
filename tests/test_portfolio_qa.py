@@ -836,6 +836,28 @@ def test_facts_to_text_rec_outcome_not_found_states_reason():
     assert "no recommendation on record" in text
 
 
+def test_facts_to_text_rec_outcome_price_at_horizon_without_pct_move_does_not_crash():
+    # Regression, confirmed live 2026-09-05 (MU): price_at_horizon can be
+    # computed while price_at_surface/pct_move stay None (an older
+    # recommendation row with no price_at_surface on record) — the two
+    # don't always travel together. An f-string ":+.1f" spec applied
+    # directly to a None pct_move used to raise "unsupported format
+    # string passed to NoneType.__format__", crashing the whole answer.
+    facts = {
+        "found": True, "ticker": "MU", "rec_date": "2026-06-26", "rec_type": "buy_candidate",
+        "composite_score": 66.3, "conviction": "medium", "thesis": None,
+        "t_score": None, "bq_score": None, "val_score": None,
+        "price_at_surface": None, "horizon_days": 5,
+        "price_at_horizon": 984.75, "pct_move": None,
+        "acted_on": False, "trade_notes": None, "trade_lesson": None,
+        "user_thesis": None, "premortem_case_against": None, "premortem_commitment": None,
+    }
+    text = facts_to_text("rec_outcome", facts)  # must not raise
+    assert "984.75" in text
+    assert "not recorded" in text
+    assert "percent move not available" in text
+
+
 def _rec_outcome_facts(**overrides):
     base = {
         "found": True, "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",

@@ -826,10 +826,20 @@ def facts_to_text(intent: str, facts) -> str:
             v = facts.get(key)
             lines.append(f"{label}: {v if v is not None else 'not recorded for this recommendation'}")
         if facts.get("price_at_horizon") is not None:
+            # price_at_surface/pct_move can each independently be None even
+            # when price_at_horizon computed fine (e.g. an older recommendation
+            # row with no price_at_surface on record) — format each
+            # defensively rather than assuming they travel together. Confirmed
+            # live 2026-09-05: an f-string ":+.1f" spec applied to a None
+            # pct_move raised "unsupported format string passed to
+            # NoneType.__format__", crashing the whole answer.
+            pas = facts.get("price_at_surface")
+            pct = facts.get("pct_move")
+            pas_str = f"${pas}" if pas is not None else "not recorded"
+            pct_str = f" ({pct:+.1f}%)" if pct is not None else " (percent move not available — no starting price on record)"
             lines.append(
-                f"Price at surfacing: ${facts.get('price_at_surface')}; "
-                f"price {facts['horizon_days']} trading days later: ${facts['price_at_horizon']} "
-                f"({facts['pct_move']:+.1f}%)"
+                f"Price at surfacing: {pas_str}; "
+                f"price {facts['horizon_days']} trading days later: ${facts['price_at_horizon']}{pct_str}"
             )
         else:
             lines.append("Not enough forward price history yet to compute the outcome move.")
