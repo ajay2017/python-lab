@@ -4,7 +4,7 @@
 **Author:** Ajay Kumar
 **Analysis/build model:** Claude Sonnet 5
 **Opus review:** Round 1 — FIX-FIRST (1 blocking: `save_recommendations`'s optional-column retry stripped ALL optional columns, incl. the already-working `s_score`/`avg_sent`, on any column-missing error — would have silently stopped sentiment persistence during the window before the pillar-score DDL is applied; fixed via a two-generation strip order in `_with_retry`). 3 non-blocking (unwired `QA_MAX_RANGE_DAYS`, BUY full-lot-mark ambiguity, fixed `period="1y"` misreporting on old recs) — all fixed same session. Round 2 (verification) — SHIP, 0 blocking (1 trivial non-blocking: hoist a `330`-day literal to a named constant — done).
-**Status:** SHIPPED 2026-08-01.
+**Status:** Tier 1 usability pass SHIPPED 2026-09-05 — three new snapshot intents (`holding_lookup`, `portfolio_summary`, `sector_composition`), read-only over the already-computed `port_df`, no gate/threshold/DB change. `portfolio_summary` was deliberately scoped to a snapshot of right now, not a time-boxed return (a specific-past-period question routes to `unsupported` rather than reinventing the app's existing Modified-Dietz period-return methodology under the same name). Full detail in `docs/requirements.md` F-225. Original v1/v1.1/v2/v2.1 SHIPPED 2026-08-01/2026-08-02 below.
 
 > **One-line spec:** A retrospective natural-language Q&A tab over trade history and
 > past recommendations — NOT a live `session_state` reader — that answers two

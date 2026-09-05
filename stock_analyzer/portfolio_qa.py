@@ -34,7 +34,11 @@ from stock_analyzer.investor_mirror import build_closed_lots
 
 _MODEL = "claude-haiku-4-5-20251001"
 
-_VALID_INTENTS = ("trades_in_range", "rec_outcome", "trade_lookup", "unsupported")
+_VALID_INTENTS = (
+    "trades_in_range", "rec_outcome", "trade_lookup",
+    "holding_lookup", "portfolio_summary", "sector_composition",
+    "unsupported",
+)
 
 _REASON_NO_DATE_RANGE = (
     "That sounds like a question about a range of trades, but I need both "
@@ -45,6 +49,10 @@ _REASON_NO_TICKER = (
     "naming the exact symbol (e.g. \"HOOD\") or the company's full name."
 )
 _REASON_GENERIC = "That doesn't match a question I can answer yet."
+_REASON_NOT_HELD = (
+    "You don't currently hold that ticker — I can only answer this for a "
+    "position you're holding right now."
+)
 
 
 def _f(val, default: float = 0.0) -> float:
@@ -65,7 +73,8 @@ _PARSE_SYSTEM_PROMPT_TEMPLATE = (
     "\"5 trading days ago\") against this date, never your own guess of the "
     "current date.\n\n"
     "Respond with ONLY a JSON object, no other text before or after:\n"
-    '{"intent": "trades_in_range" | "rec_outcome" | "trade_lookup" | "unsupported", '
+    '{"intent": "trades_in_range" | "rec_outcome" | "trade_lookup" | '
+    '"holding_lookup" | "portfolio_summary" | "sector_composition" | "unsupported", '
     '"ticker": "<UPPERCASE TICKER>" or null, '
     '"start_date": "YYYY-MM-DD" or null, '
     '"end_date": "YYYY-MM-DD" or null, '
@@ -83,11 +92,37 @@ _PARSE_SYSTEM_PROMPT_TEMPLATE = (
     "recommendation was made if given, else null; horizon_days is the "
     "number of trading days after that the user is asking about, if given, "
     "else null.\n"
+    "- \"holding_lookup\" = a question about the user's CURRENT position in "
+    "one specific ticker — shares held, cost basis, current unrealized "
+    "P&L, weight, composite score. E.g. \"what's my position in DELL\", "
+    "\"how many shares of AAPL do I own\", \"am I up or down on MSFT right "
+    "now\". Requires ticker; leave start_date/end_date/horizon_days null. "
+    "Distinguish clearly from \"trade_lookup\": trade_lookup is about past "
+    "TRANSACTIONS/trade history (\"what was my trade on X\", \"how did my X "
+    "trade go\"); holding_lookup is about the CURRENT position snapshot "
+    "right now.\n"
+    "- \"portfolio_summary\" = a question about the portfolio's current "
+    "AGGREGATE state across all holdings — total value, total unrealized "
+    "P&L, number of positions, biggest winner/loser by P&L%. E.g. \"how is "
+    "my portfolio doing\", \"what's my total unrealized P&L\", \"what's my "
+    "biggest winner\". No ticker/date needed — leave all of ticker/"
+    "start_date/end_date/horizon_days null. IMPORTANT scope boundary: if "
+    "the question asks about performance over a SPECIFIC PAST PERIOD (e.g. "
+    "\"how did I do last month\", \"what was my return this quarter\"), "
+    "that is NOT portfolio_summary — return intent \"unsupported\" with "
+    "reason \"I can tell you your current total P&L, but not performance "
+    "over a specific past period yet.\" portfolio_summary is a snapshot of "
+    "right now, never a time-boxed return calculation — do not conflate "
+    "the two.\n"
+    "- \"sector_composition\" = a question about how the portfolio is split "
+    "across sectors — e.g. \"what sector am I heaviest in\", \"how is my "
+    "portfolio diversified by sector\", \"what's my exposure by sector\". "
+    "No ticker/date needed.\n"
     "- Only extract a ticker if one is explicitly named as a stock symbol or "
     "an unambiguous company name — never guess one. If the name in the "
     "question doesn't map to a specific ticker with confidence, leave "
     "ticker null.\n"
-    "- If the question doesn't fit any of the three shapes above, or needs "
+    "- If the question doesn't fit any of the shapes above, or needs "
     "a ticker/date that isn't given, return intent \"unsupported\" with "
     "every other field null EXCEPT reason: a short (under 20 words), "
     "specific, plain-English explanation of what's missing or unclear — "
@@ -214,7 +249,7 @@ def parse_parsed_query(text) -> dict | None:
 
     if intent == "trades_in_range" and not (start_date and end_date):
         return _unsupported(_REASON_NO_DATE_RANGE)
-    if intent in ("rec_outcome", "trade_lookup") and not ticker:
+    if intent in ("rec_outcome", "trade_lookup", "holding_lookup") and not ticker:
         return _unsupported(_REASON_NO_TICKER)
     if intent == "unsupported":
         return _unsupported(model_reason or _REASON_GENERIC)
@@ -626,6 +661,85 @@ def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None
     return result
 
 
+def current_holding(port_df, ticker: str) -> dict:
+    """Current position snapshot for `ticker` from the session's already-
+    enriched port_df — never fetches. Returns found=False with reason
+    "portfolio_not_loaded" when port_df is None/empty/missing columns
+    (portfolio isn't loaded this session — distinct from genuinely not
+    holding the ticker, mirrors F-261's cold-path distinction), or reason
+    "not_held" when port_df is loaded but the ticker isn't a current row."""
+    ticker = str(ticker).upper().strip()
+    if port_df is None or port_df.empty or "Ticker" not in port_df.columns:
+        return {"found": False, "reason": "portfolio_not_loaded"}
+    match = port_df[port_df["Ticker"].astype(str).str.upper() == ticker]
+    if match.empty:
+        return {"found": False, "reason": "not_held"}
+    row = match.iloc[0]
+    shares = _f(row.get("Shares"))
+    avg_cost = _f(row.get("Avg Cost"))
+    mval = _f(row.get("Market Value"))
+    current_price = (mval / shares) if shares else None
+    return {
+        "found": True,
+        "ticker": ticker,
+        "shares": shares,
+        "avg_cost": round(avg_cost, 2) if avg_cost else None,
+        "current_price": round(current_price, 2) if current_price else None,
+        "market_value": round(mval, 2),
+        "pnl_dollar": round(_f(row.get("P&L ($)")), 2),
+        "pnl_pct": round(_f(row.get("P&L (%)")), 2),
+        "weight_pct": round(_f(row.get("Weight (%)")), 2) if "Weight (%)" in port_df.columns else None,
+        "composite_score": row.get("Score"),
+        "sector": row.get("Sector"),
+    }
+
+
+def portfolio_summary(port_df) -> dict:
+    """Current aggregate snapshot across all held positions — total value,
+    total unrealized P&L, position count, best/worst performer by P&L%.
+    This is a SNAPSHOT of right now, NOT a time-period return calculation —
+    the app's Modified-Dietz-based period returns live elsewhere (SnapTrade
+    account_flows) and are deliberately not reused/reinvented here; a
+    period-scoped question is routed to "unsupported" at parse time instead
+    of answered with a different, less rigorous methodology under the same
+    name. See docs/plans/portfolio-qa.md."""
+    if port_df is None or port_df.empty:
+        return {"found": False, "reason": "portfolio_not_loaded"}
+    total_value = round(float(port_df["Market Value"].sum()), 2)
+    total_cost = round(float((port_df["Shares"] * port_df["Avg Cost"]).sum()), 2)
+    total_pnl_dollar = round(total_value - total_cost, 2)
+    total_pnl_pct = round((total_pnl_dollar / total_cost * 100), 2) if total_cost else None
+    best = port_df.loc[port_df["P&L (%)"].idxmax()]
+    worst = port_df.loc[port_df["P&L (%)"].idxmin()]
+    return {
+        "found": True,
+        "position_count": int(len(port_df)),
+        "total_value": total_value,
+        "total_pnl_dollar": total_pnl_dollar,
+        "total_pnl_pct": total_pnl_pct,
+        "best_ticker": str(best["Ticker"]),
+        "best_pnl_pct": round(_f(best["P&L (%)"]), 2),
+        "worst_ticker": str(worst["Ticker"]),
+        "worst_pnl_pct": round(_f(worst["P&L (%)"]), 2),
+    }
+
+
+def sector_composition(port_df) -> list[dict]:
+    """Sector weight breakdown, reusing portfolio.sector_exposure() unchanged
+    — same numbers Portfolio Overview's own sector chart shows, so this
+    answer can never disagree with that page."""
+    if port_df is None or port_df.empty:
+        return []
+    from stock_analyzer.portfolio import sector_exposure
+    exp = sector_exposure(port_df)
+    if exp.empty:
+        return []
+    return [
+        {"sector": r["Sector"], "value": round(float(r["Value"]), 2), "pct": round(float(r["Pct"]), 1)}
+        for _, r in exp.sort_values("Pct", ascending=False).iterrows()
+    ]
+
+
 # ─── Step 3: narrate the facts in plain English ─────────────────────────────
 
 _NARRATE_SYSTEM_PROMPT = (
@@ -706,6 +820,48 @@ def facts_to_text(intent: str, facts) -> str:
         elif facts.get("acted_on") is False:
             lines.append("No matching BUY trade on record for this recommendation — it doesn't look like it was acted on.")
 
+        return "\n".join(lines)
+
+    if intent == "holding_lookup":
+        if not facts.get("found"):
+            if facts.get("reason") == "portfolio_not_loaded":
+                return "Portfolio isn't loaded this session."
+            return "You don't currently hold that ticker."
+        lines = [
+            f"Ticker: {facts['ticker']}",
+            f"Shares held: {facts['shares']:g}",
+            f"Average cost: ${facts.get('avg_cost')}" if facts.get('avg_cost') is not None else "Average cost: not recorded",
+            f"Current price: ${facts.get('current_price')}" if facts.get('current_price') is not None else "Current price: not available",
+            f"Market value: ${facts['market_value']}",
+            f"Unrealized P&L: ${facts['pnl_dollar']:+.2f} ({facts['pnl_pct']:+.1f}%)",
+        ]
+        if facts.get("weight_pct") is not None:
+            lines.append(f"Portfolio weight: {facts['weight_pct']}%")
+        if facts.get("composite_score") is not None:
+            lines.append(f"Composite score: {facts['composite_score']}")
+        if facts.get("sector"):
+            lines.append(f"Sector: {facts['sector']}")
+        return "\n".join(lines)
+
+    if intent == "portfolio_summary":
+        if not facts.get("found"):
+            return "Portfolio isn't loaded this session."
+        lines = [
+            f"Number of positions: {facts['position_count']}",
+            f"Total market value: ${facts['total_value']}",
+            f"Total unrealized P&L: ${facts['total_pnl_dollar']:+.2f}" +
+            (f" ({facts['total_pnl_pct']:+.1f}%)" if facts.get('total_pnl_pct') is not None else ""),
+            f"Biggest winner: {facts['best_ticker']} ({facts['best_pnl_pct']:+.1f}%)",
+            f"Biggest loser: {facts['worst_ticker']} ({facts['worst_pnl_pct']:+.1f}%)",
+        ]
+        return "\n".join(lines)
+
+    if intent == "sector_composition":
+        if not facts:
+            return "Portfolio isn't loaded this session, or has no sector data."
+        lines = ["Sector breakdown by market value:"]
+        for s in facts:
+            lines.append(f"- {s['sector']}: {s['pct']}% (${s['value']})")
         return "\n".join(lines)
 
     return "Unsupported question."

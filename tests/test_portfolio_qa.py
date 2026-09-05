@@ -24,6 +24,11 @@ from stock_analyzer.portfolio_qa import (
     facts_to_text,
     parse_question,
     narrate_answer,
+    current_holding,
+    portfolio_summary,
+    sector_composition,
+    _VALID_INTENTS,
+    _REASON_NO_TICKER,
 )
 
 
@@ -1003,3 +1008,187 @@ def test_parse_question_no_history_matches_prior_behavior():
     }))
     result = parse_question("how much did I lose on HOOD trade?", "fake-key", "2026-08-02")
     assert result["ticker"] == "HOOD"
+
+
+# ─── new intents (holding_lookup / portfolio_summary / sector_composition) ──
+
+def test_valid_intents_include_the_three_new_intents():
+    assert "holding_lookup" in _VALID_INTENTS
+    assert "portfolio_summary" in _VALID_INTENTS
+    assert "sector_composition" in _VALID_INTENTS
+
+
+def test_parse_parsed_query_holding_lookup_missing_ticker_becomes_unsupported():
+    raw = json.dumps({
+        "intent": "holding_lookup", "ticker": None,
+        "start_date": None, "end_date": None, "horizon_days": None,
+    })
+    result = parse_parsed_query(raw)
+    assert result["intent"] == "unsupported"
+    assert result["reason"] == _REASON_NO_TICKER
+
+
+def test_parse_parsed_query_valid_holding_lookup():
+    raw = json.dumps({
+        "intent": "holding_lookup", "ticker": "dell",
+        "start_date": None, "end_date": None, "horizon_days": None,
+    })
+    result = parse_parsed_query(raw)
+    assert result["intent"] == "holding_lookup"
+    assert result["ticker"] == "DELL"
+
+
+def test_parse_parsed_query_valid_portfolio_summary():
+    raw = json.dumps({
+        "intent": "portfolio_summary", "ticker": None,
+        "start_date": None, "end_date": None, "horizon_days": None,
+    })
+    result = parse_parsed_query(raw)
+    assert result["intent"] == "portfolio_summary"
+
+
+def test_parse_parsed_query_valid_sector_composition():
+    raw = json.dumps({
+        "intent": "sector_composition", "ticker": None,
+        "start_date": None, "end_date": None, "horizon_days": None,
+    })
+    result = parse_parsed_query(raw)
+    assert result["intent"] == "sector_composition"
+
+
+def _port_df():
+    return pd.DataFrame([
+        {"Ticker": "AAPL", "Sector": "Technology", "Shares": 10.0, "Avg Cost": 150.0,
+         "Market Value": 2000.0, "P&L ($)": 500.0, "P&L (%)": 33.3, "Score": 72,
+         "Weight (%)": 40.0},
+        {"Ticker": "DUK", "Sector": "Utilities", "Shares": 20.0, "Avg Cost": 90.0,
+         "Market Value": 1800.0, "P&L ($)": 0.0, "P&L (%)": 0.0, "Score": 55,
+         "Weight (%)": 36.0},
+        {"Ticker": "HOOD", "Sector": "Financials", "Shares": 5.0, "Avg Cost": 100.0,
+         "Market Value": 1200.0, "P&L ($)": -300.0, "P&L (%)": -20.0, "Score": 44,
+         "Weight (%)": 24.0},
+    ])
+
+
+# ─── current_holding ─────────────────────────────────────────────────────────
+
+def test_current_holding_found_populates_all_fields():
+    result = current_holding(_port_df(), "aapl")
+    assert result["found"] is True
+    assert result["ticker"] == "AAPL"
+    assert result["shares"] == 10.0
+    assert result["avg_cost"] == 150.0
+    assert result["current_price"] == pytest.approx(200.0)  # 2000/10
+    assert result["market_value"] == 2000.0
+    assert result["pnl_dollar"] == 500.0
+    assert result["pnl_pct"] == 33.3
+    assert result["weight_pct"] == 40.0
+    assert result["composite_score"] == 72
+    assert result["sector"] == "Technology"
+
+
+def test_current_holding_not_held_ticker():
+    result = current_holding(_port_df(), "MSFT")
+    assert result["found"] is False
+    assert result["reason"] == "not_held"
+
+
+def test_current_holding_none_port_df():
+    result = current_holding(None, "AAPL")
+    assert result["found"] is False
+    assert result["reason"] == "portfolio_not_loaded"
+
+
+def test_current_holding_empty_port_df():
+    result = current_holding(pd.DataFrame(), "AAPL")
+    assert result["found"] is False
+    assert result["reason"] == "portfolio_not_loaded"
+
+
+# ─── portfolio_summary ───────────────────────────────────────────────────────
+
+def test_portfolio_summary_computes_totals_and_best_worst():
+    result = portfolio_summary(_port_df())
+    assert result["found"] is True
+    assert result["position_count"] == 3
+    assert result["total_value"] == pytest.approx(5000.0)
+    # total cost = 10*150 + 20*90 + 5*100 = 1500+1800+500 = 3800; pnl = 1200
+    assert result["total_pnl_dollar"] == pytest.approx(1200.0)
+    assert result["best_ticker"] == "AAPL"
+    assert result["best_pnl_pct"] == 33.3
+    assert result["worst_ticker"] == "HOOD"
+    assert result["worst_pnl_pct"] == -20.0
+
+
+def test_portfolio_summary_none_port_df():
+    result = portfolio_summary(None)
+    assert result["found"] is False
+    assert result["reason"] == "portfolio_not_loaded"
+
+
+def test_portfolio_summary_empty_port_df():
+    result = portfolio_summary(pd.DataFrame())
+    assert result["found"] is False
+    assert result["reason"] == "portfolio_not_loaded"
+
+
+# ─── sector_composition ──────────────────────────────────────────────────────
+
+def test_sector_composition_multi_sector_sorted_descending():
+    result = sector_composition(_port_df())
+    assert [r["sector"] for r in result] == ["Technology", "Utilities", "Financials"]
+    tech = result[0]
+    assert tech["value"] == 2000.0
+    assert tech["pct"] == pytest.approx(40.0, abs=0.1)
+
+
+def test_sector_composition_none_port_df_returns_empty_list():
+    assert sector_composition(None) == []
+
+
+def test_sector_composition_empty_port_df_returns_empty_list():
+    assert sector_composition(pd.DataFrame()) == []
+
+
+# ─── facts_to_text — new intents ─────────────────────────────────────────────
+
+def test_facts_to_text_holding_lookup_not_loaded():
+    text = facts_to_text("holding_lookup", {"found": False, "reason": "portfolio_not_loaded"})
+    assert "isn't loaded" in text
+
+
+def test_facts_to_text_holding_lookup_not_held():
+    text = facts_to_text("holding_lookup", {"found": False, "reason": "not_held"})
+    assert "don't currently hold" in text
+
+
+def test_facts_to_text_holding_lookup_found():
+    facts = current_holding(_port_df(), "AAPL")
+    text = facts_to_text("holding_lookup", facts)
+    assert "AAPL" in text
+    assert "Shares held: 10" in text
+
+
+def test_facts_to_text_portfolio_summary_not_loaded():
+    text = facts_to_text("portfolio_summary", {"found": False, "reason": "portfolio_not_loaded"})
+    assert "isn't loaded" in text
+
+
+def test_facts_to_text_portfolio_summary_found():
+    facts = portfolio_summary(_port_df())
+    text = facts_to_text("portfolio_summary", facts)
+    assert "Number of positions: 3" in text
+    assert "AAPL" in text
+    assert "HOOD" in text
+
+
+def test_facts_to_text_sector_composition_empty_says_not_loaded():
+    text = facts_to_text("sector_composition", [])
+    assert "isn't loaded" in text or "no sector data" in text
+
+
+def test_facts_to_text_sector_composition_found():
+    facts = sector_composition(_port_df())
+    text = facts_to_text("sector_composition", facts)
+    assert "Technology" in text
+    assert "Utilities" in text
