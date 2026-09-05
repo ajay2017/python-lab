@@ -697,6 +697,25 @@ def test_recommendation_outcome_computes_price_move_when_history_given():
     assert result["pct_move"] == pytest.approx(-10.0)
 
 
+def test_recommendation_outcome_computes_price_move_with_tz_aware_history():
+    # Regression: fetch_price_history returns a tz-aware (America/New_York)
+    # index in production (confirmed live 2026-09-05 against MU) — comparing
+    # it directly against the tz-naive rd_ts raised a TypeError, silently
+    # caught by the function's own except-return-result, so every
+    # rec_outcome query always reported "not enough forward history"
+    # regardless of real data availability. This must compute a real move,
+    # not silently degrade to None.
+    recs = _recs_df([{
+        "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "price_at_surface": 200.0,
+    }])
+    dates = pd.date_range("2026-07-20", periods=10, freq="D", tz="America/New_York")
+    hist = pd.DataFrame({"Close": [200, 198, 195, 190, 185, 180, 178, 176, 174, 172]}, index=dates)
+    result = recommendation_outcome("AAPL", "2026-07-20", recs, price_history_df=hist, horizon_days=5)
+    assert result["price_at_horizon"] == 180.0
+    assert result["pct_move"] == pytest.approx(-10.0)
+
+
 def test_recommendation_outcome_not_enough_forward_history_leaves_move_none():
     recs = _recs_df([{
         "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",

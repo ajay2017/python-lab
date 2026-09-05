@@ -641,6 +641,16 @@ def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None
     try:
         hist = price_history_df.copy()
         hist.index = pd.to_datetime(hist.index)
+        # fetch_price_history returns a tz-aware (America/New_York) index —
+        # confirmed live 2026-09-05, comparing it directly against the
+        # tz-naive rd_ts below raises "Invalid comparison between
+        # dtype=datetime64[ns, America/New_York] and Timestamp", silently
+        # caught by this function's own except-return-result, so EVERY
+        # rec_outcome query (not just old ones) always reported "not enough
+        # forward history" regardless of real data availability. Same
+        # tz-strip pattern as portfolio.py's _to_tz_naive().
+        if isinstance(hist.index, pd.DatetimeIndex) and hist.index.tz is not None:
+            hist.index = hist.index.tz_localize(None)
         rd_ts = pd.Timestamp(rd_str)
         on_or_after = hist[hist.index.normalize() >= rd_ts]
         if len(on_or_after) <= horizon_days:
@@ -750,6 +760,23 @@ _NARRATE_SYSTEM_PROMPT = (
     "rather than guessing why. Do not recommend any future action and do "
     "not restate a threshold — just explain what already happened. Keep it "
     "to 2-4 short sentences.\n\n"
+    "Never add up, average, or otherwise combine two or more of the given "
+    "numbers into a NEW total that isn't itself one of the given facts — "
+    "state each fact's own number individually. Never rescale or abbreviate "
+    "a dollar figure (e.g. turning $14,860 into '$14.9M' or '$14.9K') — "
+    "write it exactly as given, in its own units and magnitude. (Confirmed "
+    "live: a sector-breakdown answer once summed several given dollar "
+    "figures and mislabeled the result three orders of magnitude too "
+    "large — this instruction exists because that happened, not as a "
+    "hypothetical.)\n\n"
+    "Never characterize how recent, old, or long ago a given date is (e.g. "
+    "'recent', 'a while ago', 'just happened') — you are not reliably told "
+    "today's actual date, so any such claim would be a guess dressed up as "
+    "a fact. State the date itself; let the reader judge how long ago it was.\n\n"
+    "Use the exact same word the facts use for what's being measured — a "
+    "sector is a SECTOR, not a 'position' or 'holding'; a ticker/holding is "
+    "not a 'sector'. Don't substitute a different term for the thing being "
+    "described.\n\n"
     "If a Pre-Mortem risk case or exit commitment is present in the facts, "
     "assess RETROSPECTIVELY whether the actual price/outcome data shows it "
     "materializing — say 'unclear' if the facts don't clearly show it either "
