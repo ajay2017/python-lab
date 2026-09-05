@@ -553,7 +553,8 @@ def _find_buy_trade_for_rec(trades_df, ticker: str, rec_date, window_days: int) 
 
 
 def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None,
-                            horizon_days: int | None = None, trades_df=None) -> dict:
+                            horizon_days: int | None = None, trades_df=None,
+                            port_df=None) -> dict:
     """
     Look up the recommendation surfaced for `ticker` on `rec_date` (exact-date
     match — no "nearest recommendation" guessing) and, if given a price
@@ -572,6 +573,16 @@ def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None
     and None for all of these (not False) when trades_df isn't supplied at
     all, so the caller/narration can tell "not checked" apart from "checked,
     nothing found."
+    port_df: optional, caller-supplied session's already-enriched port_df
+    (same source current_holding() reads). Adds "currently_held" (bool) and
+    "current_shares" (float|None) — None for both when port_df isn't
+    supplied, so "not checked" is distinguishable from "checked, not held."
+    Deliberately a SEPARATE fact from "acted_on": acted_on only looks for a
+    BUY within QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS of THIS recommendation,
+    so a position bought well outside that window (or via an unrelated
+    earlier purchase) would show acted_on=False while still being held
+    today — confirmed live 2026-09-05: a user's real MU position wasn't
+    mentioned at all because the two facts were conflated into one check.
 
     Returns {"found": False, "reason": str} when no matching recommendation
     exists — never guesses. On a match, t_score/bq_score/val_score are None
@@ -617,7 +628,15 @@ def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None
         "user_thesis": None,
         "premortem_case_against": None,
         "premortem_commitment": None,
+        "currently_held": None,
+        "current_shares": None,
     }
+
+    if port_df is not None and not port_df.empty and "Ticker" in port_df.columns:
+        held_match = port_df[port_df["Ticker"].astype(str).str.upper() == ticker]
+        result["currently_held"] = not held_match.empty
+        if not held_match.empty:
+            result["current_shares"] = _f(held_match.iloc[0].get("Shares"))
 
     if trades_df is not None:
         buy_trade = _find_buy_trade_for_rec(trades_df, ticker, rd_str, QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS)
@@ -843,6 +862,17 @@ def facts_to_text(intent: str, facts) -> str:
             )
         else:
             lines.append("Not enough forward price history yet to compute the outcome move.")
+
+        # Separate from "acted_on" below — acted_on only checks for a BUY
+        # within the Pre-Mortem match window of THIS recommendation, so a
+        # position bought outside that window (or via an unrelated earlier
+        # purchase) would show acted_on=False while still being genuinely
+        # held today. Confirmed live 2026-09-05: a real held position wasn't
+        # mentioned at all because the two checks were conflated.
+        if facts.get("currently_held") is True:
+            shares = facts.get("current_shares")
+            if shares:
+                lines.append(f"Currently held: {shares:g} share(s) of {facts['ticker']}.")
 
         if facts.get("acted_on") is True:
             if facts.get("user_thesis"):

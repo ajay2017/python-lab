@@ -697,6 +697,49 @@ def test_recommendation_outcome_computes_price_move_when_history_given():
     assert result["pct_move"] == pytest.approx(-10.0)
 
 
+def test_recommendation_outcome_currently_held_true_with_shares():
+    # Regression, confirmed live 2026-09-05: currently_held is a SEPARATE
+    # fact from acted_on — a position can be held today even when no BUY
+    # fell inside the Pre-Mortem match window for THIS recommendation.
+    recs = _recs_df([{
+        "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "price_at_surface": 200.0,
+    }])
+    result = recommendation_outcome("AAPL", "2026-07-20", recs, port_df=_port_df())
+    assert result["currently_held"] is True
+    assert result["current_shares"] == 10.0
+
+
+def test_recommendation_outcome_currently_held_false_when_not_in_port_df():
+    recs = _recs_df([{
+        "ticker": "TSLA", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "price_at_surface": 200.0,
+    }])
+    result = recommendation_outcome("TSLA", "2026-07-20", recs, port_df=_port_df())
+    assert result["currently_held"] is False
+    assert result["current_shares"] is None
+
+
+def test_recommendation_outcome_currently_held_none_when_port_df_not_supplied():
+    recs = _recs_df([{
+        "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "price_at_surface": 200.0,
+    }])
+    result = recommendation_outcome("AAPL", "2026-07-20", recs)
+    assert result["currently_held"] is None
+    assert result["current_shares"] is None
+
+
+def test_facts_to_text_rec_outcome_mentions_currently_held():
+    text = facts_to_text("rec_outcome", _rec_outcome_facts(currently_held=True, current_shares=1.0))
+    assert "Currently held: 1 share(s) of AAPL." in text
+
+
+def test_facts_to_text_rec_outcome_silent_when_not_currently_held():
+    text = facts_to_text("rec_outcome", _rec_outcome_facts(currently_held=False, current_shares=None))
+    assert "Currently held" not in text
+
+
 def test_recommendation_outcome_computes_price_move_with_tz_aware_history():
     # Regression: fetch_price_history returns a tz-aware (America/New_York)
     # index in production (confirmed live 2026-09-05 against MU) — comparing

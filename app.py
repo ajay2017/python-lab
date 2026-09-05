@@ -37527,8 +37527,10 @@ elif page == "🧠 AI Insights":
                         _qa_days_since_rec = (_qa_today - pd.Timestamp(_qa_rec_date).date()).days
                         _qa_period = "2y" if _qa_days_since_rec > QA_REC_OUTCOME_WIDE_FETCH_DAYS else "1y"
                         _qa_hist  = fetch_price_history(_qa_tk, period=_qa_period)
+                        _qa_pdf   = st.session_state.get("_port_df_enriched")
                         _qa_facts = _qa.recommendation_outcome(
-                            _qa_tk, _qa_rec_date, _qa_recs_df, _qa_hist, _qa_horizon, _qa_trades_df
+                            _qa_tk, _qa_rec_date, _qa_recs_df, _qa_hist, _qa_horizon, _qa_trades_df,
+                            port_df=_qa_pdf,
                         )
 
                     with st.spinner("Answering…"):
