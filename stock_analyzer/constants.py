@@ -1474,6 +1474,7 @@ QA_MAX_RANGE_DAYS                   = 365   # widest date range a "trades in ran
 QA_REC_OUTCOME_WIDE_FETCH_DAYS      = 330   # rec age (calendar days) past which the price-history fetch widens from 1y to 2y, so an old recommendation gets an honest outcome instead of misreporting "not enough forward history" when the real cause was a too-short fetch window
 QA_HISTORY_TURNS                    = 3     # most-recent Q&A exchanges fed back into the parser as conversation context, so a referential follow-up ("what about MSFT?") can resolve — bounded to keep prompt size/cost predictable
 QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS = 3    # window (calendar days on/after a recommendation's surface date) to search for the BUY trade it was acted on by, for the Pre-Mortem cross-reference in rec_outcome answers — narrow and explicit rather than guessing across a wider span
+QA_ANALYST_COVERAGE_WINDOW_DAYS      = 30   # window (calendar days, EITHER side of a recommendation's surface date) to search analyst_coverage for the single closest row, for the "what was Wall Street saying" cross-reference in rec_outcome answers — deliberately a separate constant from ANALYST_COVERAGE_FRESH_DAYS/WORKFLOW_ANALYST_LOOKBACK_DAYS (same order of magnitude, different anchor date and consumer) so retuning either of those can't silently move this one
 
 # ── Personalized Discovery (personalized_discovery.py, Grow Today + Behavioral
 # Fingerprint) ────────────────────────────────────────────────────────────────

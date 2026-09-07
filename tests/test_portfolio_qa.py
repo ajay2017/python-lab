@@ -30,6 +30,7 @@ from stock_analyzer.portfolio_qa import (
     _VALID_INTENTS,
     _REASON_NO_TICKER,
     _resolve_company_alias,
+    _nearest_analyst_coverage,
 )
 
 
@@ -815,6 +816,127 @@ def test_facts_to_text_rec_outcome_mentions_currently_held():
 def test_facts_to_text_rec_outcome_silent_when_not_currently_held():
     text = facts_to_text("rec_outcome", _rec_outcome_facts(currently_held=False, current_shares=None))
     assert "Currently held" not in text
+
+
+# ─── _nearest_analyst_coverage / rec_outcome analyst cross-reference (Tier 2) ─
+
+def _coverage_df(rows):
+    return pd.DataFrame(rows)
+
+
+def test_nearest_analyst_coverage_finds_closest_row_within_window():
+    coverage = _coverage_df([
+        {"ticker": "AAPL", "article_date": "2026-07-15", "consensus_rating": "Buy", "avg_pt": 220.0, "report_type": "reiteration"},
+        {"ticker": "AAPL", "article_date": "2026-07-18", "consensus_rating": "Strong Buy", "avg_pt": 230.0, "report_type": "upgrade"},
+    ])
+    result = _nearest_analyst_coverage(coverage, "aapl", "2026-07-20", window_days=30)
+    assert result is not None
+    assert result["article_date"] == "2026-07-18"  # closer to 07-20 than 07-15
+    assert result["days_from_rec"] == -2
+    assert result["consensus_rating"] == "Strong Buy"
+    assert result["avg_pt"] == 230.0
+
+
+def test_nearest_analyst_coverage_prefers_closer_row_after_rec_date():
+    coverage = _coverage_df([
+        {"ticker": "AAPL", "article_date": "2026-07-01", "consensus_rating": "Hold", "avg_pt": 200.0, "report_type": "reiteration"},
+        {"ticker": "AAPL", "article_date": "2026-07-22", "consensus_rating": "Buy", "avg_pt": 215.0, "report_type": "pt_change"},
+    ])
+    result = _nearest_analyst_coverage(coverage, "AAPL", "2026-07-20", window_days=30)
+    assert result["article_date"] == "2026-07-22"
+    assert result["days_from_rec"] == 2
+
+
+def test_nearest_analyst_coverage_outside_window_returns_none():
+    coverage = _coverage_df([
+        {"ticker": "AAPL", "article_date": "2026-04-01", "consensus_rating": "Buy", "avg_pt": 200.0, "report_type": "initiation"},
+    ])
+    result = _nearest_analyst_coverage(coverage, "AAPL", "2026-07-20", window_days=30)
+    assert result is None
+
+
+def test_nearest_analyst_coverage_different_ticker_returns_none():
+    coverage = _coverage_df([
+        {"ticker": "MSFT", "article_date": "2026-07-18", "consensus_rating": "Buy", "avg_pt": 400.0, "report_type": "reiteration"},
+    ])
+    result = _nearest_analyst_coverage(coverage, "AAPL", "2026-07-20", window_days=30)
+    assert result is None
+
+
+def test_nearest_analyst_coverage_empty_or_none_df_returns_none():
+    assert _nearest_analyst_coverage(pd.DataFrame(), "AAPL", "2026-07-20", window_days=30) is None
+    assert _nearest_analyst_coverage(None, "AAPL", "2026-07-20", window_days=30) is None
+
+
+def test_recommendation_outcome_analyst_checked_true_with_match():
+    recs = _recs_df([{
+        "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "price_at_surface": 200.0,
+    }])
+    coverage = _coverage_df([
+        {"ticker": "AAPL", "article_date": "2026-07-18", "consensus_rating": "Strong Buy", "avg_pt": 230.0, "report_type": "upgrade"},
+    ])
+    result = recommendation_outcome("AAPL", "2026-07-20", recs, coverage_df=coverage)
+    assert result["analyst_checked"] is True
+    assert result["analyst_article_date"] == "2026-07-18"
+    assert result["analyst_days_from_rec"] == -2
+    assert result["analyst_consensus"] == "Strong Buy"
+    assert result["analyst_avg_pt"] == 230.0
+
+
+def test_recommendation_outcome_analyst_checked_false_when_no_match_in_window():
+    recs = _recs_df([{
+        "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "price_at_surface": 200.0,
+    }])
+    coverage = _coverage_df([
+        {"ticker": "AAPL", "article_date": "2026-01-01", "consensus_rating": "Hold", "avg_pt": 190.0, "report_type": "reiteration"},
+    ])
+    result = recommendation_outcome("AAPL", "2026-07-20", recs, coverage_df=coverage)
+    assert result["analyst_checked"] is False
+    assert result["analyst_article_date"] is None
+
+
+def test_recommendation_outcome_analyst_checked_none_when_coverage_df_not_supplied():
+    recs = _recs_df([{
+        "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "price_at_surface": 200.0,
+    }])
+    result = recommendation_outcome("AAPL", "2026-07-20", recs)
+    assert result["analyst_checked"] is None
+
+
+def test_facts_to_text_rec_outcome_mentions_analyst_coverage():
+    text = facts_to_text("rec_outcome", _rec_outcome_facts(
+        analyst_checked=True, analyst_article_date="2026-07-18",
+        analyst_days_from_rec=-2, analyst_consensus="Strong Buy", analyst_avg_pt=230.0,
+    ))
+    assert "2026-07-18" in text
+    assert "2 day(s) before the recommendation" in text
+    assert "Strong Buy" in text
+    assert "$230.00" in text
+
+
+def test_facts_to_text_rec_outcome_silent_when_analyst_not_checked_or_not_found():
+    text_not_checked = facts_to_text("rec_outcome", _rec_outcome_facts(analyst_checked=None))
+    assert "analyst coverage" not in text_not_checked.lower()
+    text_checked_false = facts_to_text("rec_outcome", _rec_outcome_facts(analyst_checked=False))
+    assert "analyst coverage" not in text_checked_false.lower()
+
+
+def test_facts_to_text_rec_outcome_analyst_nan_pt_omits_price_target_clause():
+    # Regression (Opus review finding, 2026-09-07): analyst_avg_pt is a raw
+    # DataFrame cell (float64 column) -- a genuinely unrecorded PT can
+    # arrive as numpy NaN rather than Python None, and NaN passes a bare
+    # "is not None" check, which would have rendered the nonsensical
+    # "average price target $0.00" instead of omitting the clause entirely.
+    text = facts_to_text("rec_outcome", _rec_outcome_facts(
+        analyst_checked=True, analyst_article_date="2026-07-18",
+        analyst_days_from_rec=-2, analyst_consensus="Hold", analyst_avg_pt=float("nan"),
+    ))
+    assert "price target" not in text
+    assert "$0.00" not in text
+    assert "Hold" in text
 
 
 def test_recommendation_outcome_computes_price_move_with_tz_aware_history():

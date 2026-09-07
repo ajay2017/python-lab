@@ -37528,9 +37528,15 @@ elif page == "🧠 AI Insights":
                         _qa_period = "2y" if _qa_days_since_rec > QA_REC_OUTCOME_WIDE_FETCH_DAYS else "1y"
                         _qa_hist  = fetch_price_history(_qa_tk, period=_qa_period)
                         _qa_pdf   = st.session_state.get("_port_df_enriched")
+                        # _or_none, not the plain loader — that one collapses
+                        # "genuinely zero coverage rows" and "load failed"
+                        # into the same empty DataFrame, which would make
+                        # analyst_checked read "checked, none found" on a
+                        # DB outage instead of "not checked".
+                        _qa_cov_df = db.load_analyst_coverage_or_none(ticker=_qa_tk)
                         _qa_facts = _qa.recommendation_outcome(
                             _qa_tk, _qa_rec_date, _qa_recs_df, _qa_hist, _qa_horizon, _qa_trades_df,
-                            port_df=_qa_pdf,
+                            port_df=_qa_pdf, coverage_df=_qa_cov_df,
                         )
 
                     with st.spinner("Answering…"):

@@ -30,6 +30,7 @@ from stock_analyzer.constants import (
     QA_MAX_RANGE_DAYS,
     QA_HISTORY_TURNS,
     QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS,
+    QA_ANALYST_COVERAGE_WINDOW_DAYS,
 )
 from stock_analyzer.broker_screenshot import _LOW_CONF_NAMES, _TICKER_MAP
 from stock_analyzer.investor_mirror import build_closed_lots
@@ -594,9 +595,51 @@ def _find_buy_trade_for_rec(trades_df, ticker: str, rec_date, window_days: int) 
     return df.sort_values("traded_at").iloc[0].to_dict()
 
 
+def _nearest_analyst_coverage(coverage_df, ticker: str, rec_date, window_days: int) -> dict | None:
+    """Find the single analyst_coverage row closest to `rec_date` (EITHER
+    direction — before or after), within `window_days` calendar days, or
+    None if nothing falls in that window. Distinct from
+    decision_quality.py's WORKFLOW_ANALYST_LOOKBACK_DAYS check, which is a
+    before-only binary flag anchored on a TRADE date for decision-quality
+    grading — this picks the closest row in either direction anchored on
+    the RECOMMENDATION date and reports how many days away it actually
+    was (signed: negative = before, positive = after), so the caller/
+    narration can judge relevance itself rather than have "near" asserted
+    silently. Never guesses across tickers or picks a stale, far-off row
+    just because it's the only one on record."""
+    ticker = str(ticker).upper().strip()
+    if coverage_df is None or coverage_df.empty or "ticker" not in coverage_df.columns or not ticker:
+        return None
+
+    df = coverage_df[coverage_df["ticker"].astype(str).str.upper() == ticker]
+    if df.empty:
+        return None
+
+    try:
+        rd_ts = pd.Timestamp(str(rec_date)[:10])
+    except Exception:
+        return None
+
+    dates = pd.to_datetime(df["article_date"], errors="coerce")
+    deltas_days = (dates - rd_ts).dt.days
+    within = deltas_days[deltas_days.abs() <= window_days]
+    if within.empty:
+        return None
+
+    closest_idx = within.abs().idxmin()
+    row = df.loc[closest_idx]
+    return {
+        "article_date": str(row.get("article_date"))[:10],
+        "days_from_rec": int(within.loc[closest_idx]),
+        "consensus_rating": row.get("consensus_rating"),
+        "avg_pt": row.get("avg_pt"),
+        "report_type": row.get("report_type"),
+    }
+
+
 def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None,
                             horizon_days: int | None = None, trades_df=None,
-                            port_df=None) -> dict:
+                            port_df=None, coverage_df=None) -> dict:
     """
     Look up the recommendation surfaced for `ticker` on `rec_date` (exact-date
     match — no "nearest recommendation" guessing) and, if given a price
@@ -625,6 +668,18 @@ def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None
     earlier purchase) would show acted_on=False while still being held
     today — confirmed live 2026-09-05: a user's real MU position wasn't
     mentioned at all because the two facts were conflated into one check.
+    coverage_df: optional, caller-loaded via
+    db.load_analyst_coverage_or_none(ticker=) — the _or_none variant
+    specifically, so a genuine DB load failure (None) can't collide with
+    "checked, zero coverage rows exist" (an empty DataFrame); passing the
+    plain load_analyst_coverage() here would silently defeat that
+    distinction. When given, looks up the single analyst_coverage row
+    closest to rec_date within QA_ANALYST_COVERAGE_WINDOW_DAYS (see
+    _nearest_analyst_coverage) and adds "analyst_checked" (bool) plus
+    "analyst_article_date"/"analyst_days_from_rec"/"analyst_consensus"/
+    "analyst_avg_pt"/"analyst_report_type" — None for all of these when
+    coverage_df isn't supplied at all, so "not checked" is distinguishable
+    from "checked, nothing within the window."
 
     Returns {"found": False, "reason": str} when no matching recommendation
     exists — never guesses. On a match, t_score/bq_score/val_score are None
@@ -672,6 +727,16 @@ def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None
         "premortem_commitment": None,
         "currently_held": None,
         "current_shares": None,
+        # Analyst-coverage cross-reference (Tier 2, 2026-09-07) — None for
+        # all of these when coverage_df isn't supplied at all, so "not
+        # checked" is distinguishable from "checked, nothing within the
+        # window" (analyst_checked=False).
+        "analyst_checked": None,
+        "analyst_article_date": None,
+        "analyst_days_from_rec": None,
+        "analyst_consensus": None,
+        "analyst_avg_pt": None,
+        "analyst_report_type": None,
     }
 
     if port_df is not None and not port_df.empty and "Ticker" in port_df.columns:
@@ -695,6 +760,16 @@ def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None
             pca = buy_trade.get("premortem_case_against")
             result["premortem_case_against"] = pca if isinstance(pca, list) and pca else None
             result["premortem_commitment"] = _nonempty(buy_trade.get("premortem_commitment"))
+
+    if coverage_df is not None:
+        nearest = _nearest_analyst_coverage(coverage_df, ticker, rd_str, QA_ANALYST_COVERAGE_WINDOW_DAYS)
+        result["analyst_checked"] = nearest is not None
+        if nearest is not None:
+            result["analyst_article_date"] = nearest["article_date"]
+            result["analyst_days_from_rec"] = nearest["days_from_rec"]
+            result["analyst_consensus"] = nearest["consensus_rating"]
+            result["analyst_avg_pt"] = nearest["avg_pt"]
+            result["analyst_report_type"] = nearest["report_type"]
 
     if price_history_df is None or price_history_df.empty or "Close" not in price_history_df.columns:
         return result
@@ -931,6 +1006,27 @@ def facts_to_text(intent: str, facts) -> str:
                 lines.append(f"Lesson recorded on this trade: {facts['trade_lesson']}")
         elif facts.get("acted_on") is False:
             lines.append("No matching BUY trade on record for this recommendation — it doesn't look like it was acted on.")
+
+        if facts.get("analyst_checked") is True:
+            days = facts.get("analyst_days_from_rec")
+            if days is not None and days != 0:
+                when = f"{abs(days)} day(s) {'before' if days < 0 else 'after'} the recommendation"
+            else:
+                when = "on the recommendation date"
+            consensus = facts.get("analyst_consensus") or "not recorded"
+            pt = facts.get("analyst_avg_pt")
+            # pd.notna (not "is not None") -- avg_pt is a raw DataFrame cell
+            # (float64 column), so a genuinely unrecorded value can arrive
+            # as numpy NaN rather than Python None; NaN passes "is not None"
+            # and would otherwise render "average price target $0.00"
+            # instead of omitting the clause. _f() on top so a formatting
+            # spec can never crash on an unexpected raw DB type — same
+            # defensive posture as price_at_surface above.
+            pt_str = f", average price target ${_f(pt):.2f}" if pd.notna(pt) else ""
+            lines.append(
+                f"Nearest analyst coverage on record: {facts.get('analyst_article_date')} "
+                f"({when}) — consensus {consensus}{pt_str}."
+            )
 
         return "\n".join(lines)
 
