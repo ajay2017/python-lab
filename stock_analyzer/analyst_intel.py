@@ -253,6 +253,72 @@ def derive_consensus(analysts: list[dict]) -> dict:
     }
 
 
+def trustworthy_composite(bundle: dict | None) -> float | None:
+    """
+    Extract the composite total from a scored bundle (the shape returned by
+    `stock_analyzer.bundle_loader.load_bundle`), or return None when the
+    bundle is absent, unscored, stale, or was computed on a FABRICATED
+    neutral pillar leg.
+
+    Used to decide whether a composite is trustworthy enough to RECORD as
+    `composite_score_at_save` on an `analyst_coverage` row. Returning None
+    is always preferred over recording a fabricated score, because a wrong
+    score would silently corrupt the Engine-vs-Analyst calibration matrix
+    (`calibration_matrix()` above) with a number that never actually
+    reflected real fundamentals/valuation data.
+
+    This mirrors ALL THREE trust legs `stock_analyzer/daily_briefing.py`
+    (~lines 1087-1119) applies before trusting a bundle's `total` for a new-
+    position recommendation — not just the fundamentals/valuation leg this
+    docstring previously (incorrectly) claimed was the full parity:
+      1. `stale_as_of is not None` — the bundle was served from the
+         Supabase last-known-good cache fallback (`bundle_loader.py`
+         serves this whenever the live provider chain fails), so `total`
+         can reflect data up to `BUNDLE_CACHE_MAX_AGE_DAYS` old. Recording a
+         days-old composite as "at save" is the exact INTC 2026-07-14
+         failure daily_briefing.py's own comment documents.
+      2. `fund_cache_age_days` over `GROW_TODAY_MAX_FUND_AGE_DAYS` — stale
+         fundamentals can distort the composite enough to flip a Sell
+         ticker to a Buy. `None` means a fresh fetch was used and always
+         passes.
+      3. `fundamentals_available` / `val_available` falsy — the bundle was
+         scored on a fabricated neutral-50 pillar leg (no real data from
+         any source) rather than a real measurement. Both default to True
+         so a legacy bundle lacking either flag is not rejected.
+
+    Also rejects a `total` outside the valid 0-100 composite range — this is
+    a data-sanity/plausibility bound (the composite is defined as a bounded
+    0-100 score), not a policy threshold, and closes `float('inf')`, which
+    passes the NaN check but is obviously not a real score.
+
+    Never raises — any malformed input yields None.
+    """
+    # isinstance FIRST: `not bundle` on a DataFrame/ndarray raises
+    # "truth value of an array is ambiguous", which would break the
+    # "never raises" guarantee this docstring makes.
+    if not isinstance(bundle, dict) or not bundle:
+        return None
+    try:
+        v = float(bundle.get("total"))
+    except (TypeError, ValueError):
+        return None
+    if v != v:  # NaN check (NaN != NaN)
+        return None
+    if not (0 <= v <= 100):   # plausibility bound: a composite is a bounded 0-100 score
+        return None
+    if bundle.get("stale_as_of") is not None:
+        return None
+    from stock_analyzer.constants import GROW_TODAY_MAX_FUND_AGE_DAYS
+    _fund_age = bundle.get("fund_cache_age_days")
+    if _fund_age is not None and _fund_age > GROW_TODAY_MAX_FUND_AGE_DAYS:
+        return None
+    if not bundle.get("fundamentals_available", True):
+        return None
+    if not bundle.get("val_available", True):
+        return None
+    return v
+
+
 # ── Research Scorecard — accuracy classification (Phase 2, display-only) ──────
 
 def classify_call(row: dict, sell_date_after, today_et, fetch_window) -> dict:

@@ -295,6 +295,7 @@ from stock_analyzer.util import md_bold_to_html as _md_bold
 from stock_analyzer.util import factor_tilt_state as _factor_tilt_state
 from stock_analyzer.util import sizing_cap_lines as _sizing_cap_lines
 from stock_analyzer.util import sizing_unavailable_caption as _sizing_unavailable_caption
+from stock_analyzer.util import get_or_offline as _get_or_offline
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -34884,6 +34885,21 @@ elif page == "🧠 AI Insights":
     _ac_df = _ai_db.load_analyst_coverage(days=_AC_FRESH_DAYS)
     _ac_df_all = _ai_db.load_analyst_coverage()   # total count for status header
 
+    # Flash slot: the Ideas Inbox save handler below stashes this list right
+    # before an st.rerun() (which discards any un-rerun delta, including a
+    # st.caption() rendered in the same run) so the disclosure survives to the
+    # NEXT run instead of being silently thrown away. Render-and-pop here,
+    # independent of whichever inbox mode/preview is showing, so it shows
+    # exactly once regardless of what else is on the page this run.
+    _ac_no_score_flash = st.session_state.pop("_ac_no_score_flash", None)
+    if _ac_no_score_flash:
+        st.caption(
+            "⚠️ Engine composite score could not be resolved for "
+            f"{', '.join(_ac_no_score_flash)} — saved without it, and "
+            "these will not appear in the Engine-vs-Analyst calibration "
+            "on the Research Scorecard."
+        )
+
     # ── At-a-glance status header ──────────────────────────────────────────────────────────
     _hdr_attn_count = sum(
         1 for _ht in _open_tickers
@@ -36253,16 +36269,31 @@ elif page == "🧠 AI Insights":
                 return None
 
             def _ac_resolve_score_at_save(ticker: str) -> float | None:
-                """Engine composite score at save time — None for watchlist/unknown
-                tickers not currently held (no live score available)."""
-                _pdf = st.session_state.get("_port_df_enriched")
-                if _pdf is not None and not _pdf.empty and "Ticker" in _pdf.columns:
-                    _match = _pdf[_pdf["Ticker"] == ticker]
-                    if not _match.empty:
-                        try:
-                            return float(_match.iloc[0]["Score"])
-                        except (TypeError, ValueError):
-                            pass
+                """Engine composite score at save time — one free (no-I/O) tier,
+                since this runs on EVERY rerun for every previewed card: a
+                validated read of the held bundle in `_last_held_data`, the SAME
+                object `_port_df_enriched`'s own `Score` column was computed
+                from (`portfolio.py` sets `"Score": r["total"]` from that
+                bundle's `total` — unvalidated). Going through
+                `analyst_intel.trustworthy_composite` instead of reading `Score`
+                straight off the DataFrame catches a held bundle carrying
+                `fundamentals_available=False` / `val_available=False` /
+                `stale_as_of` — a real, live condition `float(nan)` would
+                otherwise pass straight into `db.save_analyst_coverage`.
+                A second, on-demand `load_all()` fetch is deliberately deferred
+                to the Save button handler below rather than done here, because a
+                network call must not run on every widget rerun. (A former
+                tier-2 read of `_grow_composites` was removed — it had no age
+                bound of its own and could record a several-hours-stale
+                composite as "at save"; `load_all`'s 30-min `cache_data` TTL
+                already makes the Save-time fetch a free cache hit for
+                anything Home fetched recently, so nothing is lost.)"""
+                _held = _get_or_offline(st.session_state, "_last_held_data")
+                if _held is None:
+                    return None      # not loaded this session — the Save-time fetch answers
+                _sc = _ai_intel.trustworthy_composite(_held.get(ticker))
+                if _sc is not None:
+                    return _sc
                 return None
 
             _ac_rtype_opts  = ["initiation", "upgrade", "downgrade", "reiteration", "pt_change", "other"]
@@ -36449,6 +36480,42 @@ elif page == "🧠 AI Insights":
                             "and ensure dates are valid."
                         )
                     else:
+                        # Deferred on-demand backfill, click-only (never per-rerun):
+                        # for any record the free tier in _ac_resolve_score_at_save
+                        # couldn't resolve, fetch the bundle once now rather than
+                        # save a permanent None when a real score was reachable.
+                        # Failures leave composite_score_at_save as None — never a
+                        # fallback number — so a bad fetch can't corrupt the
+                        # Engine-vs-Analyst calibration matrix with a wrong score.
+                        # Spinner (not silent): a multi-stock "top picks" article can
+                        # need one cold provider-chain fetch per ticker, so this loop
+                        # is the slowest thing behind this click. Matches the sibling
+                        # multi-ticker fetch spinner in the Earnings Recap block above.
+                        _ac_bf_pending = [
+                            _r for _r in _ac_collected
+                            if _r.get("composite_score_at_save") is None and _r.get("ticker")
+                        ]
+                        if _ac_bf_pending:
+                            with st.spinner(
+                                f"Resolving engine composite for {len(_ac_bf_pending)} ticker(s)…"
+                            ):
+                                # Fanned out via _parallel_load_all (thread pool, per-
+                                # ticker errors already swallowed to None) rather than
+                                # a serial loop — a 10-name "top picks" roundup was 10
+                                # cold provider chains, run one after another, behind
+                                # this one click.
+                                _ac_bf_tickers = list({_r["ticker"] for _r in _ac_bf_pending})
+                                try:
+                                    _ac_bf_bundles = _parallel_load_all(_ac_bf_tickers, period="6mo")
+                                except Exception:
+                                    _ac_bf_bundles = {}
+                                for _ac_bf_rec in _ac_bf_pending:
+                                    _ac_bf_sc = _ai_intel.trustworthy_composite(
+                                        _ac_bf_bundles.get(_ac_bf_rec["ticker"])
+                                    )
+                                    if _ac_bf_sc is not None:
+                                        _ac_bf_rec["composite_score_at_save"] = _ac_bf_sc
+
                         _ac_saved_recs  = []
                         _ac_failed_recs = []
                         for _ac_rec_to_save in _ac_collected:
@@ -36456,6 +36523,22 @@ elif page == "🧠 AI Insights":
                                 _ac_saved_recs.append(_ac_rec_to_save)
                             else:
                                 _ac_failed_recs.append(_ac_rec_to_save)
+                        # Disclose, never silently drop, any saved record still lacking a
+                        # resolved engine score — it won't appear in the Research
+                        # Scorecard's Engine-vs-Analyst calibration matrix.
+                        _ac_no_score_tickers = [
+                            str(_r.get("ticker") or "?").upper()
+                            for _r in _ac_saved_recs
+                            if _r.get("composite_score_at_save") is None
+                        ]
+                        # st.rerun() below aborts this run and discards any deltas
+                        # rendered before it (including a st.caption() call) — the
+                        # row is already saved by this point, so there is no second
+                        # chance to show this disclosure. Stash it and render it
+                        # after the rerun instead (see the flash-slot pop near the
+                        # top of this page's block).
+                        if _ac_no_score_tickers:
+                            st.session_state["_ac_no_score_flash"] = _ac_no_score_tickers
                         if not _ac_failed_recs and _ac_saved_recs:
                             # Full success — clear the preview and refresh.
                             st.success(f"Saved {len(_ac_saved_recs)} stock(s) to the Ideas Inbox.")
@@ -36987,11 +37070,14 @@ elif page == "🧠 AI Insights":
                     "excluded (no engine composite recorded at save time)."
                 )
                 st.caption(
-                    "⚠️ Selection bias: the engine composite is only captured for "
-                    "tickers you already held at save time — those had already "
-                    "cleared the entry gate — so this population skews toward "
-                    f"Engine ≥ {int(COMPOSITE_BUY)} and under-represents the 'engine "
-                    "skeptical' cases this matrix is most interested in."
+                    "⚠️ Historical selection bias: rows saved earlier only captured "
+                    "an engine composite for tickers already held at save time — "
+                    "those had already cleared the entry gate — so the existing "
+                    f"population still skews toward Engine ≥ {int(COMPOSITE_BUY)} "
+                    "and under-represents the 'engine skeptical' cases this matrix "
+                    "is most interested in. Newly saved research captures a "
+                    "composite for any ticker (held or not), so this skew fades as "
+                    "more research is saved going forward."
                 )
 
     with _ai_tab_rt:

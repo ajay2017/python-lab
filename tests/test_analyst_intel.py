@@ -217,6 +217,107 @@ def test_derive_consensus_no_valid_targets_all_none():
     assert result["low_pt"] is None
 
 
+# ─── trustworthy_composite ──────────────────────────────────────────────────
+
+def test_trustworthy_composite_none_bundle_returns_none():
+    assert ai.trustworthy_composite(None) is None
+
+
+def test_trustworthy_composite_non_dict_bundle_returns_none():
+    assert ai.trustworthy_composite("not-a-dict") is None
+
+
+def test_trustworthy_composite_empty_dict_returns_none():
+    assert ai.trustworthy_composite({}) is None
+
+
+def test_trustworthy_composite_missing_total_returns_none():
+    assert ai.trustworthy_composite({"fundamentals_available": True, "val_available": True}) is None
+
+
+def test_trustworthy_composite_non_numeric_total_returns_none():
+    assert ai.trustworthy_composite({"total": "not-a-number"}) is None
+
+
+def test_trustworthy_composite_nan_total_returns_none():
+    assert ai.trustworthy_composite({"total": float("nan")}) is None
+
+
+def test_trustworthy_composite_fundamentals_unavailable_rejected():
+    bundle = {"total": 72.0, "fundamentals_available": False, "val_available": True}
+    assert ai.trustworthy_composite(bundle) is None
+
+
+def test_trustworthy_composite_val_unavailable_rejected():
+    bundle = {"total": 72.0, "fundamentals_available": True, "val_available": False}
+    assert ai.trustworthy_composite(bundle) is None
+
+
+def test_trustworthy_composite_legacy_bundle_missing_both_flags_accepted():
+    # Neither flag present — defaults to True (not rejected) so a legacy bundle
+    # from before the flags existed is not silently discarded.
+    assert ai.trustworthy_composite({"total": 68.0}) == 68.0
+
+
+def test_trustworthy_composite_happy_path_returns_float():
+    bundle = {"total": 81.5, "fundamentals_available": True, "val_available": True}
+    assert ai.trustworthy_composite(bundle) == 81.5
+
+
+def test_trustworthy_composite_int_total_returns_float():
+    bundle = {"total": 70, "fundamentals_available": True, "val_available": True}
+    result = ai.trustworthy_composite(bundle)
+    assert result == 70.0
+    assert isinstance(result, float)
+
+
+def test_trustworthy_composite_stale_as_of_set_rejected():
+    bundle = {"total": 72.0, "stale_as_of": "2026-07-10"}
+    assert ai.trustworthy_composite(bundle) is None
+
+
+def test_trustworthy_composite_stale_as_of_none_accepted():
+    bundle = {"total": 72.0, "stale_as_of": None}
+    assert ai.trustworthy_composite(bundle) == 72.0
+
+
+def test_trustworthy_composite_fund_cache_age_over_limit_rejected():
+    from stock_analyzer.constants import GROW_TODAY_MAX_FUND_AGE_DAYS
+    bundle = {"total": 72.0, "fund_cache_age_days": GROW_TODAY_MAX_FUND_AGE_DAYS + 1}
+    assert ai.trustworthy_composite(bundle) is None
+
+
+def test_trustworthy_composite_fund_cache_age_at_limit_accepted():
+    from stock_analyzer.constants import GROW_TODAY_MAX_FUND_AGE_DAYS
+    bundle = {"total": 72.0, "fund_cache_age_days": GROW_TODAY_MAX_FUND_AGE_DAYS}
+    assert ai.trustworthy_composite(bundle) == 72.0
+
+
+def test_trustworthy_composite_fund_cache_age_none_accepted():
+    bundle = {"total": 72.0, "fund_cache_age_days": None}
+    assert ai.trustworthy_composite(bundle) == 72.0
+
+
+def test_trustworthy_composite_inf_total_rejected():
+    assert ai.trustworthy_composite({"total": float("inf")}) is None
+
+
+def test_trustworthy_composite_negative_total_rejected():
+    assert ai.trustworthy_composite({"total": -1.0}) is None
+
+
+def test_trustworthy_composite_over_100_total_rejected():
+    assert ai.trustworthy_composite({"total": 100.1}) is None
+
+
+def test_trustworthy_composite_zero_total_accepted():
+    assert ai.trustworthy_composite({"total": 0.0}) == 0.0
+
+
+def test_trustworthy_composite_100_total_accepted():
+    assert ai.trustworthy_composite({"total": 100.0}) == 100.0
+
+
 # ─── classify_call ─────────────────────────────────────────────────────────────
 
 def _fetch_window_ok(close=110.0, high=120.0):
