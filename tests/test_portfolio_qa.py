@@ -29,6 +29,7 @@ from stock_analyzer.portfolio_qa import (
     sector_composition,
     _VALID_INTENTS,
     _REASON_NO_TICKER,
+    _resolve_company_alias,
 )
 
 
@@ -114,6 +115,82 @@ def test_parse_parsed_query_rec_outcome_missing_ticker_becomes_unsupported():
     result = parse_parsed_query(raw)
     assert result["intent"] == "unsupported"
     assert "ticker" in result["reason"].lower()
+
+
+# ─── _resolve_company_alias / company-name fallback (Tier 2) ────────────────
+
+def test_resolve_company_alias_matches_known_company_name():
+    assert _resolve_company_alias("what's my position in Apple") == "AAPL"
+
+
+def test_resolve_company_alias_case_insensitive():
+    assert _resolve_company_alias("HOW DID MY NVIDIA TRADE GO") == "NVDA"
+
+
+def test_resolve_company_alias_no_match_returns_none():
+    assert _resolve_company_alias("how much did I lose on HOOD trade?") is None
+
+
+def test_resolve_company_alias_empty_question_returns_none():
+    assert _resolve_company_alias("") is None
+    assert _resolve_company_alias(None) is None
+
+
+def test_resolve_company_alias_word_boundary_no_false_positive():
+    # "meta" must not fire inside an unrelated word like "metadata"
+    assert _resolve_company_alias("what does this metadata field mean") is None
+
+
+def test_resolve_company_alias_prefers_longer_alias_over_substring():
+    # "amazon.com" and "amazon" both map to AMZN here, but this pins that the
+    # longer-first ordering doesn't break matching on the shorter form alone.
+    assert _resolve_company_alias("how is my amazon position doing") == "AMZN"
+    assert _resolve_company_alias("how is my amazon.com position doing") == "AMZN"
+
+
+def test_resolve_company_alias_excludes_low_confidence_names():
+    # spacex has no real tradeable ticker (private company placeholder) —
+    # must never be returned as a resolvable symbol.
+    assert _resolve_company_alias("did I ever buy spacex") is None
+
+
+def test_parse_parsed_query_resolves_company_alias_when_model_ticker_is_null():
+    raw = json.dumps({
+        "intent": "holding_lookup", "ticker": None,
+        "start_date": None, "end_date": None, "horizon_days": None,
+    })
+    result = parse_parsed_query(raw, question="what's my position in Apple")
+    assert result["intent"] == "holding_lookup"
+    assert result["ticker"] == "AAPL"
+
+
+def test_parse_parsed_query_alias_fallback_does_not_override_model_ticker():
+    raw = json.dumps({
+        "intent": "holding_lookup", "ticker": "MSFT",
+        "start_date": None, "end_date": None, "horizon_days": None,
+    })
+    result = parse_parsed_query(raw, question="what's my position in Apple")
+    assert result["ticker"] == "MSFT"
+
+
+def test_parse_parsed_query_no_question_and_no_ticker_still_unsupported():
+    raw = json.dumps({
+        "intent": "holding_lookup", "ticker": None,
+        "start_date": None, "end_date": None, "horizon_days": None,
+    })
+    result = parse_parsed_query(raw)  # no question passed at all
+    assert result["intent"] == "unsupported"
+    assert result["reason"] == _REASON_NO_TICKER
+
+
+def test_parse_question_resolves_company_alias_end_to_end():
+    _install_fake_anthropic(json.dumps({
+        "intent": "holding_lookup", "ticker": None,
+        "start_date": None, "end_date": None, "horizon_days": None,
+    }))
+    result = parse_question("what's my position in Apple", "fake-key", "2026-09-07")
+    assert result["intent"] == "holding_lookup"
+    assert result["ticker"] == "AAPL"
 
 
 def test_parse_parsed_query_valid_trade_lookup():

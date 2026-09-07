@@ -20,6 +20,7 @@ Pure logic — no Streamlit imports, no app.py imports.
 """
 
 import json
+import re
 
 import pandas as pd
 
@@ -30,6 +31,7 @@ from stock_analyzer.constants import (
     QA_HISTORY_TURNS,
     QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS,
 )
+from stock_analyzer.broker_screenshot import _LOW_CONF_NAMES, _TICKER_MAP
 from stock_analyzer.investor_mirror import build_closed_lots
 
 _MODEL = "claude-haiku-4-5-20251001"
@@ -193,9 +195,45 @@ def _extract_json_object(s: str) -> str | None:
     return None
 
 
-def parse_parsed_query(text) -> dict | None:
+def _resolve_company_alias(question: str | None) -> str | None:
+    """Deterministic company-name -> ticker fallback for when the parse
+    model leaves ticker null on a question that names a company rather than
+    a symbol (e.g. "what's my position in Apple"). Reuses
+    broker_screenshot.py's existing _TICKER_MAP rather than growing a second,
+    independently-drifting alias list for the same real-world fact.
+
+    Longest alias checked first so a longer, more specific name (e.g.
+    "capital one financial") can't be pre-empted by a shorter substring
+    ("capital one") when both happen to map to the same ticker anyway, and
+    matches are word-bounded so "meta" doesn't fire inside an unrelated word
+    like "metadata". _LOW_CONF_NAMES (private-company placeholders like
+    "spacex" with no real tradeable ticker) are excluded — this function may
+    only return a symbol a real portfolio could actually hold.
+
+    Returns None on no match — never guesses a partial or fuzzy spelling,
+    matching the parse prompt's own "never guess one" posture."""
+    if not question:
+        return None
+    q = question.lower()
+    for alias in sorted(_TICKER_MAP, key=len, reverse=True):
+        if alias in _LOW_CONF_NAMES:
+            continue
+        if re.search(rf"\b{re.escape(alias)}\b", q):
+            return _TICKER_MAP[alias]
+    return None
+
+
+def parse_parsed_query(text, question: str | None = None) -> dict | None:
     """Validate a raw Haiku response into the structured query dict, or None
-    on any failure. Never raises."""
+    on any failure. Never raises.
+
+    question: the original raw question text, optional. When the model
+    leaves ticker null, this is used for a deterministic company-name
+    fallback (_resolve_company_alias) BEFORE the ticker-required check below
+    — so "what's my position in Apple" resolves to AAPL instead of
+    collapsing to "unsupported" purely because the model didn't confidently
+    map the company name itself. Only fires when the model's own ticker is
+    null; never overrides a ticker the model did extract."""
     if not text:
         return None
     cleaned = text.strip()
@@ -217,6 +255,8 @@ def parse_parsed_query(text) -> dict | None:
 
     ticker = parsed.get("ticker")
     ticker = str(ticker).strip().upper() if ticker else None
+    if ticker is None:
+        ticker = _resolve_company_alias(question)
 
     def _valid_date(v):
         if v is None:
@@ -287,7 +327,9 @@ def parse_question(question: str, api_key: str, today_et, history=None,
     caption instead of a mute failure.
 
     history: optional list of prior {"question","answer"} pairs (most-recent
-    last) for multi-turn follow-up resolution — see build_parse_prompt."""
+    last) for multi-turn follow-up resolution — see build_parse_prompt.
+    question is also passed to parse_parsed_query for its company-name
+    alias fallback (see _resolve_company_alias)."""
     global LAST_PARSE_ERROR
     LAST_PARSE_ERROR = None
     if not api_key or not question or not str(question).strip():
@@ -305,7 +347,7 @@ def parse_question(question: str, api_key: str, today_et, history=None,
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
         text = response.content[0].text.strip() if response.content else ""
-        result = parse_parsed_query(text)
+        result = parse_parsed_query(text, question=question)
         if result is None:
             LAST_PARSE_ERROR = f"model returned an unparseable response: {text[:200]!r}"
         return result
