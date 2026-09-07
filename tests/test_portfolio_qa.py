@@ -951,6 +951,22 @@ def test_facts_to_text_rec_outcome_states_missing_pillars_plainly():
     assert "not recorded for this recommendation" in text
 
 
+def test_facts_to_text_rec_outcome_formats_prices_with_two_decimals():
+    # Same formatting bug class as holding_lookup/portfolio_summary/
+    # sector_composition — a whole-dollar price_at_surface/price_at_horizon
+    # must render as "$200.00"/"$210.00", not "$200.0"/"$210.0".
+    facts = {
+        "found": True, "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "conviction": "high", "thesis": None,
+        "t_score": None, "bq_score": None, "val_score": None,
+        "price_at_surface": 200.0, "horizon_days": 5,
+        "price_at_horizon": 210.0, "pct_move": 5.0,
+    }
+    text = facts_to_text("rec_outcome", facts)
+    assert "$200.00" in text
+    assert "$210.00" in text
+
+
 def test_facts_to_text_rec_outcome_not_found_states_reason():
     text = facts_to_text("rec_outcome", {"found": False, "reason": "no recommendation on record for that ticker/date"})
     assert "no recommendation on record" in text
@@ -1330,6 +1346,20 @@ def test_facts_to_text_holding_lookup_found():
     assert "Shares held: 10" in text
 
 
+def test_facts_to_text_holding_lookup_formats_dollar_figures_with_two_decimals():
+    # Regression, confirmed live 2026-09-07: whole-dollar figures (e.g. avg
+    # cost $210.0) were interpolated bare, so the narrator faithfully echoed
+    # "$210.0"/"$1152.0" instead of "$210.00"/"$1152.00" — a real formatting
+    # bug, not a narrator hallucination (the narrator is instructed to write
+    # a given figure exactly as given, which it did; the bug was upstream).
+    facts = current_holding(_port_df(), "AAPL")  # Avg Cost 150.0, Market Value 2000.0
+    text = facts_to_text("holding_lookup", facts)
+    assert "$150.00" in text
+    assert "$150.0 " not in text and not text.rstrip().endswith("$150.0")
+    assert "$2000.00" in text
+    assert "$200.00" in text  # current_price = 2000.0 / 10 shares
+
+
 def test_facts_to_text_portfolio_summary_not_loaded():
     text = facts_to_text("portfolio_summary", {"found": False, "reason": "portfolio_not_loaded"})
     assert "isn't loaded" in text
@@ -1343,6 +1373,12 @@ def test_facts_to_text_portfolio_summary_found():
     assert "HOOD" in text
 
 
+def test_facts_to_text_portfolio_summary_formats_total_value_with_two_decimals():
+    facts = portfolio_summary(_port_df())  # total market value 5000.0
+    text = facts_to_text("portfolio_summary", facts)
+    assert "$5000.00" in text
+
+
 def test_facts_to_text_sector_composition_empty_says_not_loaded():
     text = facts_to_text("sector_composition", [])
     assert "isn't loaded" in text or "no sector data" in text
@@ -1353,3 +1389,9 @@ def test_facts_to_text_sector_composition_found():
     text = facts_to_text("sector_composition", facts)
     assert "Technology" in text
     assert "Utilities" in text
+
+
+def test_facts_to_text_sector_composition_formats_value_with_two_decimals():
+    facts = sector_composition(_port_df())  # Technology sector value 2000.0
+    text = facts_to_text("sector_composition", facts)
+    assert "$2000.00" in text

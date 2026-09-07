@@ -896,11 +896,14 @@ def facts_to_text(intent: str, facts) -> str:
             # NoneType.__format__", crashing the whole answer.
             pas = facts.get("price_at_surface")
             pct = facts.get("pct_move")
-            pas_str = f"${pas}" if pas is not None else "not recorded"
+            # pas is the raw recs_df value (unlike price_at_horizon, never
+            # passed through float()/round() upstream) -- _f() so a
+            # formatting spec can never crash on an unexpected type.
+            pas_str = f"${_f(pas):.2f}" if pas is not None else "not recorded"
             pct_str = f" ({pct:+.1f}%)" if pct is not None else " (percent move not available — no starting price on record)"
             lines.append(
                 f"Price at surfacing: {pas_str}; "
-                f"price {facts['horizon_days']} trading days later: ${facts['price_at_horizon']}{pct_str}"
+                f"price {facts['horizon_days']} trading days later: ${facts['price_at_horizon']:.2f}{pct_str}"
             )
         else:
             lines.append("Not enough forward price history yet to compute the outcome move.")
@@ -939,9 +942,9 @@ def facts_to_text(intent: str, facts) -> str:
         lines = [
             f"Ticker: {facts['ticker']}",
             f"Shares held: {facts['shares']:g}",
-            f"Average cost: ${facts.get('avg_cost')}" if facts.get('avg_cost') is not None else "Average cost: not recorded",
-            f"Current price: ${facts.get('current_price')}" if facts.get('current_price') is not None else "Current price: not available",
-            f"Market value: ${facts['market_value']}",
+            f"Average cost: ${facts['avg_cost']:.2f}" if facts.get('avg_cost') is not None else "Average cost: not recorded",
+            f"Current price: ${facts['current_price']:.2f}" if facts.get('current_price') is not None else "Current price: not available",
+            f"Market value: ${facts['market_value']:.2f}",
             f"Unrealized P&L: ${facts['pnl_dollar']:+.2f} ({facts['pnl_pct']:+.1f}%)",
         ]
         if facts.get("weight_pct") is not None:
@@ -957,7 +960,7 @@ def facts_to_text(intent: str, facts) -> str:
             return "Portfolio isn't loaded this session."
         lines = [
             f"Number of positions: {facts['position_count']}",
-            f"Total market value: ${facts['total_value']}",
+            f"Total market value: ${facts['total_value']:.2f}",
             f"Total unrealized P&L: ${facts['total_pnl_dollar']:+.2f}" +
             (f" ({facts['total_pnl_pct']:+.1f}%)" if facts.get('total_pnl_pct') is not None else ""),
             f"Biggest winner: {facts['best_ticker']} ({facts['best_pnl_pct']:+.1f}%)",
@@ -970,7 +973,7 @@ def facts_to_text(intent: str, facts) -> str:
             return "Portfolio isn't loaded this session, or has no sector data."
         lines = ["Sector breakdown by market value:"]
         for s in facts:
-            lines.append(f"- {s['sector']}: {s['pct']}% (${s['value']})")
+            lines.append(f"- {s['sector']}: {s['pct']}% (${s['value']:.2f})")
         return "\n".join(lines)
 
     return "Unsupported question."
