@@ -113,6 +113,18 @@ def _effective_n_note(d: pd.DataFrame) -> str:
     )
 
 
+def below_min_matured_floor(n_matured: int) -> bool:
+    """True if `n_matured` is below `PREDICTION_MIN_MATURED_N` — the shared
+    "not yet meaningful" floor check every 🔬 Model Lab section (Phase 1 vol
+    forecast, Phase 2 earnings-move) uses to decide whether to withhold its
+    skill-score readout. Extracted so the comparison lives here, in
+    `stock_analyzer/`, rather than as an inline threshold comparison in
+    `app.py` (`check_antipatterns.py`'s `POLICY_DECISION_IN_RENDER` ratchet —
+    a comparison here is unit-testable at its boundary; the same comparison
+    in a render entrypoint is not)."""
+    return n_matured < PREDICTION_MIN_MATURED_N
+
+
 def score_predictions(df: pd.DataFrame) -> dict:
     """Score a `model_predictions`-shaped DataFrame of ALREADY-MATURED rows
     (i.e. the caller has filtered to `realized_value` not null — rows with no

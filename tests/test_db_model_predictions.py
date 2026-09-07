@@ -234,3 +234,88 @@ def test_has_backfilled_predictions_queries_model_predictions(monkeypatch):
     monkeypatch.setattr(db, "_client", lambda: fake)
     db.has_backfilled_predictions("vol_forecast_ewma", "v1", "AAPL")
     assert fake.calls == ["model_predictions"]
+
+
+# ── withdraw_unmatured_model_prediction ──────────────────────────────────────
+# Phase 2 (F-234, earnings-move magnitude) — deletes ONE model_predictions row
+# by id, but ONLY while still unmatured (realized_value IS NULL). Used to
+# withdraw a prediction whose frozen earnings event_date was rescheduled.
+
+class _FakeDeleteQueryBuilder(_FakeQueryBuilder):
+    """Extends the shared fake query builder to record the exact filter
+    chain a `.delete()` call applies, so a test can confirm the
+    `.eq("id", ...).is_("realized_value", "null")` shape is actually sent,
+    not just that SOME delete happened."""
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.delete_calls: list[tuple] = []
+
+    def delete(self, *_a, **_kw):
+        self._is_delete = True
+        return self
+
+    def eq(self, col, val):
+        if getattr(self, "_is_delete", False):
+            self.delete_calls.append(("eq", col, val))
+        return self
+
+    def is_(self, col, val):
+        if getattr(self, "_is_delete", False):
+            self.delete_calls.append(("is_", col, val))
+        return self
+
+
+class _FakeDeleteClient:
+    def __init__(self, raise_on_execute=False):
+        self._raise = raise_on_execute
+        self.builder = None
+
+    def table(self, name):
+        self.builder = _FakeDeleteQueryBuilder(raise_on_execute=self._raise)
+        return self.builder
+
+
+def test_withdraw_unmatured_model_prediction_readonly_noop(monkeypatch):
+    monkeypatch.setattr(db, "is_readonly", lambda: True)
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    assert db.withdraw_unmatured_model_prediction(1) is False
+
+
+def test_withdraw_unmatured_model_prediction_no_db_noop(monkeypatch):
+    monkeypatch.setattr(db, "is_readonly", lambda: False)
+    monkeypatch.setattr(db, "has_db", lambda: False)
+    assert db.withdraw_unmatured_model_prediction(1) is False
+
+
+def test_withdraw_unmatured_model_prediction_none_id_noop(monkeypatch):
+    monkeypatch.setattr(db, "is_readonly", lambda: False)
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    assert db.withdraw_unmatured_model_prediction(None) is False
+
+
+def test_withdraw_unmatured_model_prediction_never_raises_on_failure(monkeypatch):
+    monkeypatch.setattr(db, "is_readonly", lambda: False)
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client", lambda: _FakeDeleteClient(raise_on_execute=True))
+    assert db.withdraw_unmatured_model_prediction(1) is False  # no raise
+
+
+def test_withdraw_unmatured_model_prediction_success_returns_true(monkeypatch):
+    monkeypatch.setattr(db, "is_readonly", lambda: False)
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    fake = _FakeDeleteClient()
+    monkeypatch.setattr(db, "_client", lambda: fake)
+    assert db.withdraw_unmatured_model_prediction(7) is True
+
+
+def test_withdraw_unmatured_model_prediction_sends_the_right_filter_shape(monkeypatch):
+    """Confirms the delete is actually filtered by id AND realized_value IS
+    NULL -- not a bare unconditional delete -- so a race with the
+    maturation cron can never erase a scored outcome."""
+    monkeypatch.setattr(db, "is_readonly", lambda: False)
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    fake = _FakeDeleteClient()
+    monkeypatch.setattr(db, "_client", lambda: fake)
+    db.withdraw_unmatured_model_prediction(7)
+    assert ("eq", "id", 7) in fake.builder.delete_calls
+    assert ("is_", "realized_value", "null") in fake.builder.delete_calls

@@ -1643,6 +1643,35 @@ PREDICTION_MIN_MATURED_N = 20
 # carries no in-sample leakage risk the way a fitted model would.
 PREDICTION_BACKFILL_PERIOD = "5y"
 
+# ── Predictive Modeling Shadow Layer — Phase 2 (F-234, earnings-move ─────────
+# magnitude, MEASUREMENT-ONLY). Same non-gating status as the Phase 1 block
+# above — model/scoring PARAMETERS for the quarantined 🔬 Model Lab page, not
+# investment-decision gates. See docs/plans/predictive-modeling-shadow-layer.md
+# §Phase 2 design.
+
+# Trading-day WINDOW (upper bound) before a scheduled earnings print in which
+# a model_predictions row may be written. Also the lower bound is 1 trading
+# day (never write on the print day itself or after) — see
+# earnings_move_forecast.is_write_eligible.
+EARNINGS_MOVE_LEAD_DAYS = 3
+
+# Trailing prior prints used to compute the baseline_value (median, not mean
+# — robust to one blow-out quarter). A ticker with fewer than this many
+# already-matured earnings_move_v1 rows is excluded (survivorship), never
+# defaulted to a sector constant.
+EARNINGS_MOVE_BASELINE_K = 6
+
+# Maturation-time reschedule-vs-genuine-next-print separator, in CALENDAR
+# days. A real next quarterly print sits ~90 days out from the frozen
+# event_date; anything closer than this after maturation is due means the
+# frozen date was a postponement, not a real print, and the pending row is
+# withdrawn rather than silently re-keyed or scored against the wrong date.
+EARNINGS_MOVE_MIN_NEXT_GAP_DAYS = 45
+
+# target_metric column value for Phase 2 rows — distinguishes this target
+# from any future v2 redefinition of "earnings move".
+EARNINGS_MOVE_TARGET_METRIC = "earnings_move_pct_v1"
+
 # ── SnapTrade broker integration (Robinhood sync) ─────────────────────────
 # See docs/plans/snaptrade-broker-integration.md for full design. Position
 # drift, balance sync and transaction import all read these; none of them

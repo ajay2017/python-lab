@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from stock_analyzer.constants import PREDICTION_MIN_MATURED_N
-from stock_analyzer.prediction_scoring import score_predictions
+from stock_analyzer.prediction_scoring import below_min_matured_floor, score_predictions
 
 
 def _rows(n, predicted_offset, baseline_offset, source="live", regime=None,
@@ -210,3 +210,43 @@ def test_effective_n_note_handles_single_observation_per_ticker():
     out = score_predictions(_df(rows))
     assert isinstance(out["effective_n_note"], str)
     assert out["skill_score"] == pytest.approx(0.75)  # unaffected by the note
+
+
+def test_effective_n_note_non_overlapping_quarterly_cadence_barely_discounts_n():
+    """F-234 Phase 2 (earnings-move) confirming test — the overlap discount
+    was tuned for Phase 1's daily, 20-trading-day-overlapping vol-forecast
+    cadence. Phase 2's earnings_move_v1 rows are the opposite shape: made_at
+    strides ~90 calendar days apart (quarterly) against a tiny advisory
+    horizon_days (~3, the days-until-print at write time) -- stride >>
+    horizon, so the existing `max(1.0, horizon/stride)` floor should already
+    read as ~no overlap without any code change. Written FIRST per the build
+    spec: only patch `_effective_n_note` if this fails."""
+    n = PREDICTION_MIN_MATURED_N + 4
+    rows = _rows(n, predicted_offset=1, baseline_offset=2, horizon=3, ticker="AAPL")
+    # _rows() default made_at stride is 5 calendar days -- override to a
+    # genuine ~90-day quarterly stride for this cadence-specific check.
+    base = pd.Timestamp("2020-01-01")
+    for i, r in enumerate(rows):
+        r["made_at"] = (base + pd.Timedelta(days=90 * i)).isoformat()
+    out = score_predictions(_df(rows))
+    assert out["n_matured"] == n
+    note = out["effective_n_note"]
+    assert isinstance(note, str)
+    # Effective n must come out close to raw n (no meaningful discount) --
+    # NOT deflated the way a daily/20-day-horizon series would be.
+    assert f"~{n} effective" in note or f"~{n - 1} effective" in note or f"~{n + 1} effective" in note
+
+
+# ── below_min_matured_floor ───────────────────────────────────────────────────
+# Extracted (2026-09-07, F-234 Phase 2) so app.py's Model Lab sections compare
+# against the floor via a pure, testable function instead of an inline
+# threshold comparison (check_antipatterns.py POLICY_DECISION_IN_RENDER).
+
+def test_below_min_matured_floor_boundaries():
+    assert below_min_matured_floor(PREDICTION_MIN_MATURED_N - 1) is True
+    assert below_min_matured_floor(PREDICTION_MIN_MATURED_N) is False
+    assert below_min_matured_floor(PREDICTION_MIN_MATURED_N + 1) is False
+
+
+def test_below_min_matured_floor_zero():
+    assert below_min_matured_floor(0) is True

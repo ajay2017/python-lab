@@ -3618,6 +3618,30 @@ def mature_model_predictions_batch(updates: list[dict]) -> bool:
         return False
 
 
+def withdraw_unmatured_model_prediction(row_id: int) -> bool:
+    """Delete ONE `model_predictions` row by id, but ONLY while it is still
+    unmatured (`realized_value IS NULL`). Used to withdraw a Phase 2
+    (earnings-move) prediction whose frozen earnings `event_date` was
+    rescheduled (leakage guard, design doc §Phase 2 — a reschedule must
+    invalidate the row, never silently re-key it) — never to remove a
+    matured/scored row. The `realized_value IS NULL` filter makes the
+    delete race-safe against the maturation cron: if maturation happened to
+    land first, this no-ops (0 rows) instead of erasing a scored outcome.
+
+    Readonly-guarded, has_db-guarded, never raises; returns True on a
+    successful delete call (including a 0-row no-op), False on failure."""
+    if is_readonly() or not has_db() or row_id is None:
+        return False
+    try:
+        _client().table("model_predictions").delete() \
+            .eq("id", row_id).is_("realized_value", "null").execute()
+        return True
+    except Exception as e:
+        import warnings
+        warnings.warn(f"withdraw_unmatured_model_prediction: {e}")
+        return False
+
+
 # ── Cron heartbeat (System Proprioception Phase 1 — pipeline liveness) ─────────
 # One row per cron lane, upserted at the END of every lane invocation by
 # cron_runner.main(). OBSERVABILITY ONLY — nothing reads this for a decision,

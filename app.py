@@ -315,7 +315,10 @@ from stock_analyzer.decision_journal import compute_patterns
 from stock_analyzer import broker_import as _bimp
 from stock_analyzer import broker_screenshot as _bscr
 from stock_analyzer import debate_agent
-from stock_analyzer.prediction_scoring import score_predictions as _model_lab_score
+from stock_analyzer.prediction_scoring import (
+    score_predictions as _model_lab_score,
+    below_min_matured_floor as _model_lab_below_floor,
+)
 
 # Brand: DRISHTA (Sanskrit for "vision/insight") — "Beyond Noise".
 # page_icon falls back to an emoji if the logo file isn't deployed yet so
@@ -30905,6 +30908,166 @@ elif page == "🔬 Model Lab":
             "stored at make-time. All out-of-sample."
         )
 
+    # ── Second section: Earnings-Move Magnitude (Phase 2, F-234) ────────────
+    _em_df = db.load_model_predictions(model_name="earnings_move_v1")
+
+    st.markdown("---")
+    st.markdown("##### 📅 Earnings-Move Magnitude")
+    st.caption(
+        "Target: **unsigned close-to-close move across the earnings print** (%) · "
+        "Predicted: the app's own live pre-earnings heuristic "
+        "(`earnings_advisor._estimate_move`, already driving real trim "
+        "recommendations) · Baseline: trailing-median of the ticker's own past "
+        "realized earnings moves"
+    )
+
+    if _em_df is None:
+        st.info(
+            "**Producer offline — nothing written.** Either the `model_predictions` "
+            "table hasn't been created yet, or the database is unreachable this "
+            "session. No forecast is fabricated when the inputs are offline."
+        )
+    elif _em_df.empty:
+        st.info(
+            "**No predictions logged yet.** The daily cron writes a row whenever a "
+            "held ticker's earnings print falls within the lead window — quarterly "
+            "cadence, live-only (no backfill), so this fills in slowly."
+        )
+    else:
+        _em_matured = (
+            _em_df[_em_df["realized_value"].notna()].copy()
+            if "realized_value" in _em_df.columns else _em_df.iloc[0:0].copy()
+        )
+        _em_pending = len(_em_df) - len(_em_matured)
+        _em_score = _model_lab_score(_em_matured)
+
+        if _model_lab_below_floor(_em_score["n_matured"]):
+            _ec1, _ec2, _ec3 = st.columns(3)
+            _ec1.metric("Skill vs baseline", "—",
+                        help=f"Withheld until n ≥ {PREDICTION_MIN_MATURED_N}")
+            _ec2.metric("Matured predictions",
+                        f"{_em_score['n_matured']} / {PREDICTION_MIN_MATURED_N} needed")
+            _ec3.metric("Pending (not yet matured)", f"{_em_pending}")
+            st.info(
+                f"A skill score on {_em_score['n_matured']} outcome(s) would be noise "
+                "dressed as a verdict — withheld on purpose. Live-only accrual at "
+                "quarterly cadence means this takes months to fill, not weeks. "
+                "Nothing here is actionable regardless; this page never touches a "
+                "decision."
+            )
+        else:
+            _em_skill = _em_score["skill_score"]
+            if _em_skill is not None and _em_skill > 0:
+                st.success(f"● BEATS BASELINE — skill {_em_skill * 100:+.1f}%")
+            elif _em_skill is not None:
+                st.warning(f"● DOES NOT BEAT BASELINE — skill {_em_skill * 100:+.1f}%")
+            st.caption(
+                "**Baseline** = the ticker's own trailing-median historical earnings "
+                "move (no model at all). **Skill** = how much smaller the heuristic's "
+                "average miss is than that naive guess — above 0% means the heuristic "
+                "adds real information beyond the ticker's own history; at or below 0% "
+                "means it doesn't, yet."
+            )
+            _ec1, _ec2, _ec3 = st.columns(3)
+            _ec1.metric("Skill vs baseline",
+                        f"{_em_skill * 100:+.1f}%" if _em_skill is not None else "—",
+                        help="1 − MAE(model) / MAE(trailing-median baseline)")
+            _em_mae_model = _em_score["mae_model"]
+            _em_mae_baseline = _em_score["mae_baseline"]
+            _ec2.metric(
+                "Mean abs error (model vs baseline)",
+                f"{_em_mae_model:.2f} vs {_em_mae_baseline:.2f}"
+                if _em_mae_model is not None and _em_mae_baseline is not None else "—",
+                help="Average size of the miss, in percentage points of the "
+                     "earnings-day move — lower is better.",
+            )
+            _ec3.metric("Matured predictions", f"{_em_score['n_matured']}")
+            st.caption(
+                f"Live: {_em_score['n_matured_live']} · backfilled: "
+                f"{_em_score['n_matured_backfill']} (none by design — live-only) · "
+                f"{_em_score['effective_n_note']}"
+            )
+
+            _em_live_skill = _em_score["skill_score_live_only"]
+            if _em_live_skill is not None:
+                st.caption(
+                    f"**Live-only skill (excludes backfill):** {_em_live_skill * 100:+.1f}% "
+                    f"· n={_em_score['n_matured_live']}"
+                )
+            else:
+                st.caption(
+                    f"Live-only skill: withheld — fewer than {PREDICTION_MIN_MATURED_N} "
+                    f"matured LIVE rows so far ({_em_score['n_matured_live']})."
+                )
+
+            st.markdown("###### By regime — is the edge real, or just calm-weather?")
+            _em_regime_bd = _em_score.get("regime_breakdown", {})
+            if not _em_regime_bd:
+                st.caption("No regime tag recorded on matured rows yet.")
+            else:
+                for _erg in sorted(_em_regime_bd.keys()):
+                    _erd = _em_regime_bd[_erg]
+                    _ers = _erd.get("skill_score")
+                    _ers_txt = f"{_ers * 100:+.1f}%" if _ers is not None else "—"
+                    st.markdown(f"- **{_erg}** — skill {_ers_txt} · n={_erd.get('n')}")
+
+            st.markdown("###### Predicted / baseline / realized (each matured print, ordered by date)")
+            _em_sorted = _em_matured.sort_values("made_at") if "made_at" in _em_matured.columns else _em_matured
+            _em_x = (
+                _em_sorted["ticker"].astype(str) + " · " +
+                pd.to_datetime(_em_sorted["made_at"], errors="coerce").dt.strftime("%Y-%m-%d")
+            ) if "ticker" in _em_sorted.columns and "made_at" in _em_sorted.columns else _em_sorted.index.astype(str)
+            _em_fig = go.Figure()
+            _em_fig.add_trace(go.Scatter(
+                x=_em_x, y=_em_sorted["predicted_value"], mode="markers",
+                marker=dict(color="#6ea8fe", size=9, symbol="diamond"), name="predicted",
+            ))
+            _em_fig.add_trace(go.Scatter(
+                x=_em_x, y=_em_sorted["baseline_value"], mode="markers",
+                marker=dict(color="#f4a261", size=9, symbol="square"), name="baseline",
+            ))
+            _em_fig.add_trace(go.Scatter(
+                x=_em_x, y=_em_sorted["realized_value"], mode="markers",
+                marker=dict(color="#5fd38d", size=11, symbol="circle"), name="realized",
+            ))
+            _em_fig.update_layout(
+                height=380, xaxis_title="ticker · print date", yaxis_title="move (%)",
+                margin=dict(l=10, r=10, t=10, b=10),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            st.plotly_chart(_em_fig, width="stretch")
+            st.caption(
+                "Each print shows three marks: what the heuristic predicted (◆), "
+                "what the ticker's own trailing history implied (■), and what "
+                "actually happened (●). A per-event view rather than a scatter — "
+                "too sparse at ~50 events/year to read as one."
+            )
+
+            st.markdown("###### Recently matured")
+            _em_sort_col = "scored_at" if "scored_at" in _em_matured.columns else "made_at"
+            _em_recent = _em_matured.sort_values(_em_sort_col, ascending=False).head(15).copy()
+            if "abs_error" in _em_recent.columns and "baseline_abs_error" in _em_recent.columns:
+                _em_recent["model_beat_baseline?"] = _em_recent.apply(
+                    lambda r: "✓" if pd.notna(r["abs_error"]) and pd.notna(r["baseline_abs_error"])
+                    and r["abs_error"] < r["baseline_abs_error"] else "✗",
+                    axis=1,
+                )
+            _em_disp_cols = [
+                c for c in ["ticker", "made_at", "scored_at", "predicted_value",
+                            "baseline_value", "realized_value", "abs_error",
+                            "model_beat_baseline?", "source"]
+                if c in _em_recent.columns
+            ]
+            st.dataframe(_em_recent[_em_disp_cols], width="stretch", hide_index=True)
+
+        st.caption(
+            "Live-only, no backfill (historical earnings-date accuracy is too "
+            "unreliable to backdate safely). A rescheduled print withdraws its "
+            "pending row rather than silently re-keying to the new date. Never "
+            "shown before the outcome is known — no 'upcoming, predicted move' "
+            "preview anywhere on this page."
+        )
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE — THE ROAD NOT TAKEN (Gate Suppression Ledger readout — F-259 Phase 2)
@@ -34299,7 +34462,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🧭 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
 - **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY** (high-conviction name with tailwind), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
-- **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer testing whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. Feeds **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. The skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated. Predicts risk (volatility), never a stock-level direction/return call.
+- **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer with two independent sections. **Forward Volatility Forecaster** (Phase 1) tests whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. **Earnings-Move Magnitude** (Phase 2) tests whether the app's own already-live pre-earnings sizing heuristic beats a naive "assume it moves like its own past prints" baseline, per held ticker around its scheduled print — unsigned magnitude only, never a directional call, and no "upcoming, not yet matured" preview (an outcome is only ever shown after it's known). Both sections feed **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. Each section's skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated.
 - **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Six checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh), and **⑥ Write outcomes** (did today's interactive ledger writes — the buy recommendations log, the gate suppression ledger — actually save, or did a swallowed failure look identical to a healthy "nothing to record"?). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Check ⑥, unlike ④/⑤, DOES feed the Home banner — it is a same-session pass/fail signal, not a standing condition or a cold-load cache. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.**
 - **🛑 The Road Not Taken** — owner-only, not shown in read-only viewer mode. Grades the app's own restraint: every time a gate (macro/sector filters, single-name ceiling, drift conflict, cooldown, early-deterioration WATCH, bear-day tone) held back a pick or an add, this page shows what the forward return vs SPY over the following ~30 trading days would have been — did the app's caution help or hurt? Per gate, not aggregate, and a gate shows no verdict at all ("building") until enough matured, priced, distinct-ticker calls have accrued — expect every gate to read "building" for the first couple of months. **A pure retrospective measurement — it never changes what the engine recommends, gates, or sizes**, today or in the future.
 - **⚙️ App Settings** — owner-only, not shown in read-only viewer mode. Lets you curate the three ticker-roster lists the engine reads — the Grow Today scan universe, the Movers discovery net, and the Diversification candidate roster — from inside the app instead of by editing code. **Edits the engine's INPUT SET, never a decision rule**: no gate, threshold, scoring weight, or `COMPOSITE_BUY` lives here or is ever editable through this page. The database is the single source of truth for these lists — if it's unreachable, the affected page shows "unavailable" rather than silently falling back to a frozen list. Every save is validated (a typo'd symbol blocks the save, never saves with a warning) and versioned in an append-only history, the same way git records why an investment threshold changed.

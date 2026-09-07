@@ -95,6 +95,8 @@ _INTRADAY_ROW = 4     # alert_state lane: intraday pullback entry dedup
 _DB_OUTAGE_ROW = 5    # alert_state lane: DB-unreachable notice dedup (self-creates on upsert)
 _BROKER_FAILURE_ROW = 6  # alert_state lane: broker-lane failure-email dedup (self-creates on upsert)
 
+_EARNINGS_MOVE_RESCHEDULE_LOOKOUT_DAYS = 120  # _mature_earnings_predictions' reschedule-backstop fetch window (F-234 Phase 2) -- wide enough to see the ~90-day-out genuine next print, so it's never mistaken for EARNINGS_MOVE_MIN_NEXT_GAP_DAYS's postponement signal; a fetch-window size, not an investment-policy value, hence local here rather than in constants.py
+
 # Plain-language lane names + what a DB outage actually cost, for the outage
 # email. Kept here rather than in each lane so the wording can't drift.
 _LANE_OUTAGE_TEXT: dict[str, tuple[str, str]] = {
@@ -572,6 +574,57 @@ def _run_eod(now_et, force: bool) -> int:
     except Exception as e:
         _log(f"model_predictions (maturation) FAILED — {str(e)[:120]} — continuing.")
 
+    # 7. Predictive Modeling Shadow Layer — Phase 2 (F-234) — LIVE earnings-move
+    # prediction. MEASUREMENT-ONLY, same quarantine as steps 5/6: writes ONE
+    # model_predictions row (model_name="earnings_move_v1") for a held ticker
+    # once its scheduled print falls inside EARNINGS_MOVE_LEAD_DAYS, reusing
+    # `_estimate_move`'s already-live heuristic as predicted_value and a
+    # trailing-K median of this ledger's OWN past matured rows as
+    # baseline_value. Independent of steps 5/6 (a different model_name, a
+    # different table scope) — its own try/except so a failure here can
+    # never break the vol path above or the buy-list email.
+    try:
+        _emp_result = _write_live_earnings_predictions(now_et, payload, _regime_tag)
+        _emp_n, _emp_saved, _emp_err = (
+            _emp_result["candidates"], _emp_result["saved"], _emp_result["error"],
+        )
+        if _emp_err is not None:
+            _log(f"model_predictions (earnings, live): WRITE FAILED after computing "
+                 f"{_emp_n} candidate row(s) — {_emp_err}.")
+        elif _emp_n == 0:
+            _log("model_predictions (earnings, live): 0 candidate row(s) this run "
+                 f"(skip_unknown_timing={_emp_result.get('skip_unknown_timing', 0)}, "
+                 f"skip_survivorship={_emp_result.get('skip_survivorship', 0)}) — nothing to write.")
+        else:
+            _log(f"model_predictions (earnings, live): {_emp_saved} row(s) written "
+                 f"(skip_unknown_timing={_emp_result.get('skip_unknown_timing', 0)}, "
+                 f"skip_survivorship={_emp_result.get('skip_survivorship', 0)}).")
+    except Exception as e:
+        _log(f"model_predictions (earnings, live) FAILED — {str(e)[:120]} — continuing.")
+
+    # 8. Predictive Modeling Shadow Layer — Phase 2 maturation. Independent of
+    # step 7 (a PRIOR day's live prediction can mature today even if today's
+    # live write above failed). Also runs the reschedule backstop: a frozen
+    # event_date whose real next-earnings date has since moved gets its
+    # pending row withdrawn rather than silently scored against a stale date.
+    try:
+        _emm_result = _mature_earnings_predictions(now_et)
+        _emm_n, _emm_saved, _emm_wd, _emm_err = (
+            _emm_result["candidates"], _emm_result["matured"],
+            _emm_result["withdrawn"], _emm_result["error"],
+        )
+        if _emm_err is not None:
+            _log(f"model_predictions (earnings, maturation): FAILED "
+                 f"({_emm_n} candidate row(s) computed) — {_emm_err}.")
+        elif _emm_n == 0 and _emm_wd == 0:
+            _log("model_predictions (earnings, maturation): 0 candidate row(s) due "
+                 "this run — nothing to mature or withdraw.")
+        else:
+            _log(f"model_predictions (earnings, maturation): {_emm_saved} row(s) "
+                 f"matured, {_emm_wd} withdrawn (reschedule).")
+    except Exception as e:
+        _log(f"model_predictions (earnings, maturation) FAILED — {str(e)[:120]} — continuing.")
+
     _log(f"eod done · snapshot={bool(rows)} · sentiment={bool(_snap_sentiment_rows)} · pullback_sent={sent}")
     return 0
 
@@ -814,6 +867,305 @@ def _mature_vol_predictions(now_et) -> dict:
         return {"candidates": len(updates), "saved": len(updates), "error": None}
     return {
         "candidates": len(updates), "saved": 0,
+        "error": "db.mature_model_predictions_batch returned False "
+                 "(readonly, missing table, or query error — see warnings log)",
+    }
+
+
+def _parse_features_snapshot(raw) -> dict:
+    """`features_snapshot` arrives from Supabase as either a dict (already
+    JSON-decoded by supabase-py) or a raw JSON string, depending on client
+    version/config — parse defensively either way. Never raises; a
+    malformed/unrecognized value degrades to `{}` rather than blowing up
+    the earnings-move write/maturation loops."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw:
+        try:
+            import json
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _write_live_earnings_predictions(now_et, payload: dict, regime_tag: str | None) -> dict:
+    """Compute + persist one 'live' `model_predictions` row (model_name=
+    'earnings_move_v1') per held ticker whose scheduled earnings print falls
+    inside `EARNINGS_MOVE_LEAD_DAYS`, reusing `earnings_advisor._estimate_move`
+    (already live on the Earnings Playbook) as `predicted_value` and a
+    trailing-`EARNINGS_MOVE_BASELINE_K` median of this ledger's OWN past
+    matured rows for the same ticker as `baseline_value`.
+
+    Returns {"candidates": int, "saved": int, "error": str | None,
+    "skip_unknown_timing": int, "skip_survivorship": int} — the base
+    {"candidates","saved","error"} shape other tests key on, extended with
+    two observability counters (not yet rendered anywhere, but never
+    silently lost). Never raises; the caller already wraps this call in its
+    own try/except for defense in depth."""
+    from datetime import date as _date
+
+    from stock_analyzer.constants import (
+        EARNINGS_MOVE_BASELINE_K, EARNINGS_MOVE_LEAD_DAYS, EARNINGS_MOVE_TARGET_METRIC,
+    )
+    from stock_analyzer import earnings_move_forecast as _emf
+    from stock_analyzer.earnings_advisor import _estimate_move
+    from stock_analyzer.portfolio import resolve_sector
+
+    held_data = payload.get("held_data", {})
+    base_result = {"candidates": 0, "saved": 0, "error": None,
+                   "skip_unknown_timing": 0, "skip_survivorship": 0}
+    if not held_data:
+        return base_result
+
+    today = now_et.date()
+    made_at = datetime.combine(now_et.date(), datetime.min.time(), tzinfo=now_et.tzinfo).isoformat()
+
+    # ONE read for the existence/reschedule check across ALL held tickers —
+    # not per ticker.
+    pending = db.load_unmatured_model_predictions(model_name="earnings_move_v1")
+    if pending is None:
+        return {
+            **base_result,
+            "error": "load_unmatured_model_predictions returned None "
+                     "(db unreachable, no credentials, or query error — see warnings log)",
+        }
+    pending_by_ticker: dict[str, dict] = {}
+    if not pending.empty:
+        for _, prow in pending.iterrows():
+            ptk = str(prow.get("ticker") or "").upper()
+            if not ptk:
+                continue
+            snap = _parse_features_snapshot(prow.get("features_snapshot"))
+            frozen_event_date = snap.get("event_date")
+            # Only a still-upcoming frozen event counts for dedup — a stale
+            # pending row whose event already passed is a maturation-lane
+            # concern, not a reason to block a genuinely new event here.
+            if frozen_event_date and str(frozen_event_date) > today.isoformat():
+                pending_by_ticker[ptk] = {
+                    "id": prow.get("id"), "event_date": str(frozen_event_date),
+                }
+
+    # ONE read of this ledger's OWN past matured rows, for the trailing-K
+    # baseline — also across ALL held tickers, not per ticker. A wide
+    # days_back keeps this valid even after a couple of years of live-only
+    # accrual (quarterly cadence, so K=6 needs ~1.5+ years at steady state).
+    matured = db.load_model_predictions(model_name="earnings_move_v1", days_back=3650)
+    if matured is None:
+        return {
+            **base_result,
+            "error": "load_model_predictions returned None "
+                     "(db unreachable, no credentials, or query error — see warnings log)",
+        }
+    matured_by_ticker: dict[str, list] = {}
+    if not matured.empty and "realized_value" in matured.columns:
+        m = matured[matured["realized_value"].notna()].copy()
+        if not m.empty and "made_at" in m.columns:
+            m = m.sort_values("made_at")
+        for _, mrow in m.iterrows():
+            mtk = str(mrow.get("ticker") or "").upper()
+            rv = mrow.get("realized_value")
+            if not mtk or rv is None:
+                continue
+            try:
+                matured_by_ticker.setdefault(mtk, []).append(float(rv))
+            except (TypeError, ValueError):
+                continue
+
+    rows: list[dict] = []
+    skip_unknown_timing = 0
+    skip_survivorship = 0
+
+    for raw_t, bundle in held_data.items():
+        t = str(raw_t).upper()
+        if not isinstance(bundle, dict):
+            continue
+
+        try:
+            event_date, when = _emf.resolve_upcoming_earnings(t, today, EARNINGS_MOVE_LEAD_DAYS)
+        except Exception:
+            continue
+        if event_date is None:
+            continue
+
+        try:
+            event_d = _date.fromisoformat(event_date)
+        except Exception:
+            continue
+        days_until = _trading_days_elapsed(today, event_d)
+
+        existing = pending_by_ticker.get(t)
+        if existing is not None:
+            if existing["event_date"] == event_date:
+                continue  # same event already has a pending row -- no duplicate write
+            # Rescheduled: withdraw the stale pending row, then fall through
+            # to (re-)evaluate write-eligibility for the fresh date.
+            db.withdraw_unmatured_model_prediction(existing["id"])
+
+        if not _emf.is_write_eligible(days_until, EARNINGS_MOVE_LEAD_DAYS):
+            continue
+
+        if when not in ("bmo", "amc"):
+            skip_unknown_timing += 1
+            continue
+
+        past_moves = matured_by_ticker.get(t, [])
+        baseline = _emf.baseline_from_history(past_moves, EARNINGS_MOVE_BASELINE_K)
+        if baseline is None:
+            skip_survivorship += 1
+            continue
+
+        rm = bundle.get("risk_metrics")
+        if rm is None:
+            rm = {}
+        sector = resolve_sector(t, bundle.get("sector"))
+        try:
+            predicted = _estimate_move(rm, sector)
+        except Exception:
+            continue
+
+        baseline_moves_used = past_moves[-EARNINGS_MOVE_BASELINE_K:]
+        rows.append({
+            "model_name":      "earnings_move_v1",
+            "model_version":   "v1",
+            "scope":           "ticker",
+            "ticker":          t,
+            "made_at":         made_at,
+            "horizon_days":    days_until,
+            "target_metric":   EARNINGS_MOVE_TARGET_METRIC,
+            "predicted_value": predicted,
+            "baseline_value":  baseline,
+            "regime_at_make":  regime_tag,
+            "features_snapshot": {
+                "event_date": event_date, "bmo_amc": when,
+                "days_until_at_make": days_until,
+                "baseline_moves": baseline_moves_used,
+            },
+            "source": "live",
+        })
+
+    if not rows:
+        return {"candidates": 0, "saved": 0, "error": None,
+                "skip_unknown_timing": skip_unknown_timing,
+                "skip_survivorship": skip_survivorship}
+    if db.save_model_predictions_batch(rows):
+        return {"candidates": len(rows), "saved": len(rows), "error": None,
+                "skip_unknown_timing": skip_unknown_timing,
+                "skip_survivorship": skip_survivorship}
+    return {
+        "candidates": len(rows), "saved": 0,
+        "error": "db.save_model_predictions_batch returned False "
+                 "(readonly, missing table, or query error — see warnings log)",
+        "skip_unknown_timing": skip_unknown_timing,
+        "skip_survivorship": skip_survivorship,
+    }
+
+
+def _mature_earnings_predictions(now_et) -> dict:
+    """Find `earnings_move_v1` `model_predictions` rows that are due to
+    mature (their frozen `event_date` is at least 1 trading day in the
+    past) and write their realized outcome. Also runs the reschedule
+    backstop: a fresh `resolve_upcoming_earnings` lookup that finds a next
+    print materially sooner than the frozen date means that date was a
+    postponement, not a real print — the row is withdrawn, never matured
+    against the wrong date.
+
+    Returns {"candidates": int, "matured": int, "withdrawn": int, "error":
+    str | None} — mirrors `_mature_vol_predictions`'s shape (a read
+    failure is distinguished from genuinely nothing pending). Never
+    raises; the caller wraps this call in its own try/except for defense
+    in depth."""
+    from stock_analyzer import data as _data
+    from stock_analyzer import earnings_move_forecast as _emf
+    from stock_analyzer.constants import EARNINGS_MOVE_MIN_NEXT_GAP_DAYS
+
+    pending = db.load_unmatured_model_predictions(model_name="earnings_move_v1")
+    if pending is None:
+        return {
+            "candidates": 0, "matured": 0, "withdrawn": 0,
+            "error": "load_unmatured_model_predictions returned None "
+                     "(db unreachable, no credentials, or query error — see warnings log)",
+        }
+    if pending.empty:
+        return {"candidates": 0, "matured": 0, "withdrawn": 0, "error": None}
+
+    today = now_et.date()
+    updates: list[dict] = []
+    withdrawn = 0
+
+    for _, row in pending.iterrows():
+        ticker = str(row.get("ticker") or "").upper()
+        if not ticker or ticker == "PORTFOLIO":
+            continue
+
+        snap = _parse_features_snapshot(row.get("features_snapshot"))
+        frozen_event_date = snap.get("event_date")
+        frozen_when = str(snap.get("bmo_amc") or "")
+        if not frozen_event_date:
+            continue  # malformed row -- nothing safe to do with it
+
+        try:
+            event_d = datetime.strptime(str(frozen_event_date)[:10], "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if _trading_days_elapsed(event_d, today) < 1:
+            # Not yet due to mature -- the print is still upcoming (or today).
+            # The reschedule backstop below MUST NOT run yet: for a
+            # still-upcoming row, a fresh resolve_upcoming_earnings() lookup
+            # legitimately returns THIS SAME frozen date (gap_days == 0),
+            # which is_reschedule would misread as "rescheduled" and withdraw
+            # -- destroying the row before it ever has a chance to mature.
+            # Confirmed live via direct reproduction (Opus review, 2026-09-07):
+            # every pending row was withdrawn the same run it was written,
+            # every day, keeping the ledger permanently empty. Only once the
+            # print date is in the past can a fresh lookup no longer return
+            # the frozen date itself, so the reschedule check is safe only
+            # here, after this gate.
+            continue
+
+        try:
+            fresh_next, _fresh_when = _emf.resolve_upcoming_earnings(
+                ticker, today, _EARNINGS_MOVE_RESCHEDULE_LOOKOUT_DAYS)
+        except Exception:
+            fresh_next = None
+
+        if _emf.is_reschedule(str(frozen_event_date), fresh_next, EARNINGS_MOVE_MIN_NEXT_GAP_DAYS):
+            row_id = row.get("id")
+            if row_id is not None and db.withdraw_unmatured_model_prediction(row_id):
+                withdrawn += 1
+            continue  # never mature a rescheduled row
+
+        try:
+            hist = _data.fetch_price_history(ticker, period="3mo")
+        except Exception:
+            hist = None
+        try:
+            realized = _emf.realized_move(hist, str(frozen_event_date)[:10], frozen_when)
+        except Exception:
+            realized = None
+        if realized is None:
+            continue  # post-print bar not yet available, or bad timing -- retry later
+
+        predicted = row.get("predicted_value")
+        baseline = row.get("baseline_value")
+        abs_error = abs(float(predicted) - realized) if predicted is not None else None
+        baseline_abs_error = abs(float(baseline) - realized) if baseline is not None else None
+        updates.append({
+            "id":                 row.get("id"),
+            "realized_value":     realized,
+            "scored_at":          now_et.isoformat(),
+            "abs_error":          abs_error,
+            "baseline_abs_error": baseline_abs_error,
+        })
+
+    if not updates:
+        return {"candidates": 0, "matured": 0, "withdrawn": withdrawn, "error": None}
+    if db.mature_model_predictions_batch(updates):
+        return {"candidates": len(updates), "matured": len(updates),
+                "withdrawn": withdrawn, "error": None}
+    return {
+        "candidates": len(updates), "matured": 0, "withdrawn": withdrawn,
         "error": "db.mature_model_predictions_batch returned False "
                  "(readonly, missing table, or query error — see warnings log)",
     }

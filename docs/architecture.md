@@ -193,6 +193,7 @@ python-lab/
     ├── catalyst_stress.py          Catalyst-Specific Stress (D4) — event-driven scenario synthesis (macro + earnings), awareness-only
     ├── monte_carlo.py              Portfolio Outcome-Range Simulator — historical block-bootstrap percentile bands (diagnostic, not probabilistic)
     ├── vol_forecast.py             Predictive Modeling Phase 1 volatility model (20-day EWMA); quarantined to 🔬 Model Lab
+    ├── earnings_move_forecast.py   Predictive Modeling Phase 2 earnings-move-magnitude helpers (F-234) — resolve_upcoming_earnings, trailing-K median baseline, split-safe realized-move calc, write-eligibility + reschedule detection; quarantined to 🔬 Model Lab
     ├── prediction_scoring.py       Predictive Modeling harness (F-234) — model vs persistence baseline, honest signal grading
     ├── benchmark_mirror.py         Benchmark Mirror shadow portfolio (SPY/QQQ comparison) — money-weighted fair active-vs-passive compare
     ├── portfolio_qa.py             Portfolio Q&A retrospective Q&A over trade history (💬 Ask tab); parse_question + lookup + narrate_answer
@@ -519,6 +520,10 @@ before tuning. See §6.29 (`judgment_opinions` table) and
 | `VOL_FORECAST_EWMA_LAMBDA` | 0.94 | Predictive Modeling Shadow Layer — RiskMetrics' fixed EWMA decay factor for the v1 volatility forecaster (`vol_forecast.forecast_vol_ewma`). NOT fitted to this app's data — a classical constant, so v1 carries no backtest-leakage risk the way a fitted model (GARCH-MLE, gradient-boosted trees) would if it were ever backfilled. Model parameter, not a gate. |
 | `PREDICTION_MIN_MATURED_N` | 20 | Predictive Modeling Shadow Layer — minimum matured (`realized_value` populated) `model_predictions` rows before `prediction_scoring.score_predictions()` reports a real `skill_score` number; below this, skill is withheld (`None`), same "not yet meaningful" discipline as `ENGINE_TRACK_MIN_CALLS`/`BEHAVIORAL_MIN_SAMPLE_N` elsewhere. Also reused (deliberately, not a parallel constant) as the floor for `skill_score_live_only`, so a headline skill number can't be inflated by a handful of live rows behind a mostly-backfilled sample. Measurement floor only — never a decision gate. |
 | `PREDICTION_BACKFILL_PERIOD` | "5y" | Predictive Modeling Shadow Layer — depth of `scripts/backfill_vol_predictions.py`'s price-history fetch, per-ticker scope only (PORTFOLIO-scope backfill needs actual historical weights, bounded to known `trades` history, not 5 years — deliberately not built). Matches the existing `MC_HISTORY_PERIOD` constant/fetch-path precedent (Outcome Range simulator) rather than inventing a new one. |
+| `EARNINGS_MOVE_LEAD_DAYS` | 3 | Predictive Modeling Shadow Layer, Phase 2 (F-234, earnings-move magnitude, MEASUREMENT-ONLY) — trading-day window (upper bound; lower bound is a fixed 1 trading day) before a scheduled earnings print in which a `model_predictions` row (`model_name="earnings_move_v1"`) may be written. Model parameter, NOT a decision gate — see `docs/plans/predictive-modeling-shadow-layer.md` §Phase 2 design. |
+| `EARNINGS_MOVE_BASELINE_K` | 6 | Predictive Modeling Shadow Layer, Phase 2 — trailing prior earnings prints used to compute `baseline_value` (median, not mean — robust to one blow-out quarter), drawn from this ledger's OWN previously-matured `earnings_move_v1` rows for the same ticker (live-only, no backfill). A ticker with fewer than K matured prior rows is excluded (survivorship), never defaulted to a sector constant. |
+| `EARNINGS_MOVE_MIN_NEXT_GAP_DAYS` | 45 | Predictive Modeling Shadow Layer, Phase 2 — maturation-time reschedule-vs-genuine-next-print separator, in calendar days. A real next quarterly print sits ~90 days out from the frozen `event_date`; a fresh next-earnings lookup finding one CLOSER than this means the frozen date was a postponement, not a real print, and the pending row is withdrawn (`db.withdraw_unmatured_model_prediction`) rather than silently re-keyed or scored against the wrong date. |
+| `EARNINGS_MOVE_TARGET_METRIC` | "earnings_move_pct_v1" | Predictive Modeling Shadow Layer, Phase 2 — `target_metric` column value for earnings-move rows, distinguishing this target from any future v2 redefinition. Display/schema label, not a gate. |
 | `IMPORTED_TRADE_ANCHOR_ET_HOUR` | 16 | Assumed ET fill time for an **imported** trade that carries a date but no time (broker sync / CSV / RH-text). Those writers sent a bare date, Postgres cast it to **midnight UTC** in the `timestamptz` column, and midnight UTC is the **prior evening in ET** — so every `tz_convert("America/New_York")` reader dated the trade a day early. Two live defects came from this: Today's P&L dropped a trade imported the same day (its cash leg never entered the delta), and `risk_advisor`'s buy/trim whiplash suppression **failed open**. `market_time.et_anchor_iso` stops new rows being written that way; `trade_time.normalize_traded_at` repairs existing ones at load. **The value is CONSTRAINED, not free: must be ≥ 0 and < 19.** At 19:00+ ET the anchor rolls into the next **UTC** day, which would silently re-date every UTC-date reader — including `tax_advisor`'s lot dates (a wash-sale or LTCG boundary can turn on one day) and `broker_sync`'s dedup key (re-importing every trade). 16:00 = market close: honest for an unknown fill time, and it sorts imports *after* the regular session, which also fixes a latent FIFO-replay bug. `tests/test_trade_time.py` pins the safe band so an edit past it fails loudly. Data-integrity constant, not an investment threshold. |
 | `BROKER_DRIFT_SHARE_TOL` | 0.001 | Share-count tolerance below which a held ticker counts as matching rather than a real quantity mismatch, absorbing fractional-share rounding noise. Data-integrity tuning, not an investment threshold. **TWO consumers share this one number** — deliberately, because it is a single question ("is this share difference real or float noise") rather than two policies: **(1)** SnapTrade broker integration (`stock_analyzer/broker_sync.py`, `docs/plans/snaptrade-broker-integration.md`) — `diff_positions()` comparing the live broker feed against the app's `trades`-derived shares; **(2)** F-250 day-P&L integrity (`stock_analyzer/daily_pnl.py`) — `reconcile_baseline()` comparing the prior-close snapshot baseline against current holdings. Retuning this for the broker feed also moves the day-P&L guard; if the two ever need to diverge, split them rather than compromising on one value. |
 | `QTY_DRIFT_TRUNCATION_AMBIGUITY_SHARES` | 1.0 | 2026-08-24. A DIFFERENT question from `BROKER_DRIFT_SHARE_TOL` above (that one absorbs float rounding noise; this one absorbs `int()` truncation ambiguity, ~1000x larger). `stock_analyzer/daily_pnl.py`'s `reconcile_baseline()` `qty_drift` unit guard: held/baseline shares are `int()`-truncated (`portfolio.build_portfolio_df`) while today's trade deltas are raw to 4dp, so a fractional fill can make a truncated share count look "off" by less than a share when it isn't a real drift. **Mathematically derived, not a judgment call**: truncation error per side is provably in `[0, 1)`, so the true drift can differ from the observed one by at most just under 1.0 share — any observed residual `>= 1.0` cannot be truncation noise and is always reported. Replaced an earlier all-or-nothing version of this guard that skipped the WHOLE check on any fractional-fill day regardless of the residual's size, which silently swallowed a 9.5-share drift in the test that exposed it (`tests/test_daily_pnl.py::test_qty_drift_guard_catches_a_large_drift_despite_a_same_day_fractional_fill`). Only a genuinely sub-1.0-share residual on a fractional-fill day is still suppressed now — that narrower blind spot is the mathematical floor, not a policy choice. See `project_today_pnl_scope` memory. |
@@ -1732,6 +1737,28 @@ write-disabled) is the only renderer. Model v1 (`vol_forecast_ewma`) is a
 fixed-λ RiskMetrics EWMA forecaster (`stock_analyzer/vol_forecast.py`) with
 no fitted parameters, so backfilled rows carry no in-sample/backtest-leakage
 risk the way a fitted model would.
+
+**Phase 2 (F-234, earnings-move magnitude) reuses this same table — no DDL
+change.** A second `model_name` (`earnings_move_v1`) is written by
+`cron_runner.py`'s `_write_live_earnings_predictions` (one row per held
+ticker whose scheduled print falls inside `EARNINGS_MOVE_LEAD_DAYS`,
+`scope="ticker"` only — no portfolio aggregate for this target) and matured
+by `_mature_earnings_predictions`, both reusing
+`stock_analyzer/earnings_move_forecast.py`'s pure helpers.
+`predicted_value` is the app's own already-live `earnings_advisor.
+_estimate_move` heuristic verbatim (no new model); `baseline_value` is a
+trailing-`EARNINGS_MOVE_BASELINE_K` median of THIS ledger's own past
+matured rows for the same ticker (live-only, no backfill — a ticker with
+fewer than K matured prior rows is excluded, never defaulted).
+`features_snapshot` carries the frozen `event_date`/`bmo_amc`/
+`days_until_at_make`/`baseline_moves` — the frozen `event_date` is the
+leakage guard: a later reschedule is detected at maturation time
+(`earnings_move_forecast.is_reschedule`, `EARNINGS_MOVE_MIN_NEXT_GAP_DAYS`)
+and the pending row is deleted via `db.withdraw_unmatured_model_prediction`
+(delete-if-still-unmatured, race-safe against the maturation cron) rather
+than silently re-keyed or scored against the wrong date. Same quarantine as
+Phase 1: feeds no gate/recommendation/composite, rendered in a second
+collapsible section on the same 🔬 Model Lab page.
 
 ### 6.32 `cron_heartbeat` table
 
