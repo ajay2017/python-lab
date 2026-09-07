@@ -902,8 +902,9 @@ def relative_strength_table(
 # TICKER_SECTORS by resolve_sector() — reused here for free, zero new fetches.
 
 # S&P 500 GICS sector weights. Source: English Wikipedia, "S&P 500" article,
-# GICS sector weighting table, as of 2026-07-01. Static reference data (no
-# live benchmark-weight source exists in the provider layer) — refresh
+# GICS sector weighting table, as of 2026-08-12 (refreshed 2026-09-07;
+# prior snapshot was 2026-07-01). Static reference data (no live
+# benchmark-weight source exists in the provider layer) — refresh
 # periodically (every 6-12 months) since it will silently drift stale
 # otherwise. NOT a decision threshold (never gates), so it stays here next to
 # SECTOR_ETF rather than in constants.py, matching the _SECTOR_PROFILES
@@ -911,18 +912,16 @@ def relative_strength_table(
 # Shelf life: registered in stock_analyzer/reference_shelf.py — update its as_of date when you refresh this list.
 SP500_SECTOR_WEIGHTS = {
     "Information Technology":  37.4,
-    "Financials":              12.0,
-    "Communication Services":   9.96,
-    "Consumer Discretionary":   9.41,
-    "Health Care":              8.96,
-    "Industrials":              8.86,
-    "Consumer Staples":         4.57,
-    "Energy":                   2.97,
-    "Utilities":                2.17,
-    "Materials":                1.84,
-    "Real Estate":              1.84,
-    # Materials == Real Estate is not a transcription error — independently
-    # re-verified against the same source with a second, targeted fetch.
+    "Financials":              12.2,
+    "Communication Services":   9.67,
+    "Consumer Discretionary":   9.34,
+    "Health Care":              9.09,
+    "Industrials":              8.68,
+    "Consumer Staples":         4.49,
+    "Energy":                   3.27,
+    "Utilities":                2.01,
+    "Materials":                1.82,
+    "Real Estate":              1.79,
 }
 
 # Normalizes a provider's raw .info["sector"] string (Yahoo/Morningstar-style

@@ -19158,7 +19158,7 @@ elif page == "🥧 Portfolio Overview":
                 st.caption(
                     "🟢 Green = overweight this real sector vs. the S&P 500  |  "
                     "🔴 Red = underweight  |  "
-                    "S&P 500 GICS weights: Wikipedia \"S&P 500\" article, as of 2026-07-01 "
+                    "S&P 500 GICS weights: Wikipedia \"S&P 500\" article, as of 2026-08-12 "
                     "(static reference — refresh periodically)."
                 )
                 st.dataframe(
