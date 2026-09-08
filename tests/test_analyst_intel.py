@@ -602,3 +602,88 @@ def test_fetch_anchor_price_none_ticker_returns_none():
 
 def test_fetch_anchor_price_none_article_date_returns_none():
     assert ai.fetch_anchor_price("AAPL", None) is None
+
+
+# ─── valid_anchor_price ────────────────────────────────────────────────────────
+# The NaN case is the whole point of this validator: `float(float('nan'))`
+# SUCCEEDS, so the bare `try: float(v) except (TypeError, ValueError)` this
+# replaced let NaN through into price_at_article_date — the denominator of
+# every Scorecard ret_pct, and invalid JSON on the Supabase write. A missing
+# price read out of a pandas column arrives as NaN, not None.
+
+def test_valid_anchor_price_none_returns_none():
+    assert ai.valid_anchor_price(None) is None
+
+
+def test_valid_anchor_price_nan_returns_none():
+    assert ai.valid_anchor_price(float("nan")) is None
+
+
+def test_valid_anchor_price_numpy_nan_returns_none():
+    np = pytest.importorskip("numpy")
+    assert ai.valid_anchor_price(np.nan) is None
+
+
+def test_valid_anchor_price_nan_from_pandas_column_returns_none():
+    """The real arrival path: a missing value in a DataFrame column is NaN."""
+    pd = pytest.importorskip("pandas")
+    df = pd.DataFrame({"Ticker": ["AAPL"], "Price": [None]})
+    assert ai.valid_anchor_price(df.iloc[0]["Price"]) is None
+
+
+def test_valid_anchor_price_positive_infinity_returns_none():
+    assert ai.valid_anchor_price(float("inf")) is None
+
+
+def test_valid_anchor_price_negative_infinity_returns_none():
+    assert ai.valid_anchor_price(float("-inf")) is None
+
+
+def test_valid_anchor_price_zero_returns_none():
+    assert ai.valid_anchor_price(0) is None
+
+
+def test_valid_anchor_price_negative_returns_none():
+    assert ai.valid_anchor_price(-12.5) is None
+
+
+def test_valid_anchor_price_non_numeric_string_returns_none():
+    assert ai.valid_anchor_price("not-a-price") is None
+
+
+def test_valid_anchor_price_numeric_string_is_coerced():
+    assert ai.valid_anchor_price("143.25") == pytest.approx(143.25)
+
+
+def test_valid_anchor_price_int_returns_float():
+    out = ai.valid_anchor_price(60)
+    assert out == pytest.approx(60.0)
+    assert isinstance(out, float)
+
+
+def test_valid_anchor_price_passes_a_real_price_through_unchanged():
+    assert ai.valid_anchor_price(935.39) == pytest.approx(935.39)
+
+
+def test_valid_anchor_price_smallest_positive_price_is_accepted():
+    """Sub-penny prices are real (delisted/OTC names) — only <= 0 is rejected."""
+    assert ai.valid_anchor_price(0.0001) == pytest.approx(0.0001)
+
+
+def test_fetch_anchor_price_shares_the_validator_so_the_paths_cannot_drift():
+    """fetch_anchor_price must route through valid_anchor_price, not re-implement
+    the rule — the two are written to the same DB column from different entry
+    points (save-time resolver vs. the Fetch button / weekly backfill)."""
+    import inspect
+    assert "valid_anchor_price" in inspect.getsource(ai.fetch_anchor_price)
+
+
+def test_valid_anchor_price_huge_int_does_not_raise():
+    """float() raises OverflowError (not ValueError) on an arbitrary-precision
+    int above ~1e308; the app-side call site has no try/except, so the
+    "never raises" guarantee has to hold here."""
+    assert ai.valid_anchor_price(10 ** 400) is None
+
+
+def test_trustworthy_composite_huge_int_total_does_not_raise():
+    assert ai.trustworthy_composite({"total": 10 ** 400}) is None

@@ -36249,23 +36249,29 @@ elif page == "🧠 AI Insights":
                 (reuses data already fetched for Home). Held ticker's live Price
                 from the enriched port_df first, then the held_data bundle's
                 current_price; None (silent) if neither is available — the
-                backfill script fills it in later."""
+                Scorecard's own "fetch now" button and the weekly maintenance
+                backfill both fill it in later, date-correctly.
+
+                Both tiers go through `analyst_intel.valid_anchor_price` — the
+                SAME validator `fetch_anchor_price` uses — rather than a bare
+                `float()`: a missing price in a pandas column surfaces as NaN,
+                not None, and `float(nan)` SUCCEEDS, so a bare float() cast
+                would send NaN into `price_at_article_date` (the denominator of
+                every Scorecard `ret_pct`, and invalid JSON on the DB write).
+                Each tier FALLS THROUGH on rejection instead of returning, so a
+                NaN in port_df cannot preempt a usable held_data price."""
                 _pdf = st.session_state.get("_port_df_enriched")
                 if _pdf is not None and not _pdf.empty and "Ticker" in _pdf.columns:
                     _match = _pdf[_pdf["Ticker"] == ticker]
                     if not _match.empty:
-                        try:
-                            return float(_match.iloc[0]["Price"])
-                        except (TypeError, ValueError):
-                            pass
-                _hd  = st.session_state.get("_last_held_data") or {}
-                _fin = _hd.get(ticker) or {}
-                _cp  = _fin.get("current_price")
-                if _cp is not None:
-                    try:
-                        return float(_cp)
-                    except (TypeError, ValueError):
-                        pass
+                        _p = _ai_intel.valid_anchor_price(_match.iloc[0]["Price"])
+                        if _p is not None:
+                            return _p
+                _hd = _get_or_offline(st.session_state, "_last_held_data")
+                if _hd is not None:
+                    _p = _ai_intel.valid_anchor_price((_hd.get(ticker) or {}).get("current_price"))
+                    if _p is not None:
+                        return _p
                 return None
 
             def _ac_resolve_score_at_save(ticker: str) -> float | None:

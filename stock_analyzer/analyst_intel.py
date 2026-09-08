@@ -300,7 +300,7 @@ def trustworthy_composite(bundle: dict | None) -> float | None:
         return None
     try:
         v = float(bundle.get("total"))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if v != v:  # NaN check (NaN != NaN)
         return None
@@ -533,6 +533,53 @@ def calibration_matrix(results: list[dict]) -> dict:
     }
 
 
+def valid_anchor_price(value) -> float | None:
+    """
+    Coerce one candidate anchor price to a usable float, or None.
+
+    `price_at_article_date` is the DENOMINATOR of every `ret_pct` the Research
+    Scorecard reports (Blocks A-D, the firm leaderboard, best/worst calls) and
+    of `pt_proximity`. Be accurate about what this fixes, so a future reader
+    doesn't delete one guard believing the other doesn't exist: the READ side
+    is already defended — `classify_call` below returns `no_anchor` on
+    `not (price_at_article > 0)`, which rejects NaN and non-positive alike —
+    so this is defense-in-depth *there*. The genuine live consequence is on
+    the WRITE side: `NaN` is not valid JSON, so it can fail the row's Supabase
+    insert outright and surface to the user as a generic "failed (database
+    error)" rather than as a data problem.
+
+    Rejects: None, a non-numeric value, NaN, +/-inf, and anything <= 0. The
+    NaN case is the one worth naming, because it is NOT caught by the obvious
+    guard: `float(float('nan'))` succeeds, so a bare
+    `try: return float(v) except (TypeError, ValueError)` lets NaN straight
+    through. A pandas column read (`port_df["Price"]`) is exactly where a NaN
+    arrives, since a missing price surfaces as NaN, not None
+    (see [[feedback_none_sentinel_meets_pandas]] for this class).
+
+    This is the SINGLE definition of "usable anchor price" — `fetch_anchor_price`
+    below and the app's save-time resolver both call it, for the same reason
+    `fetch_anchor_price` itself is shared with `scripts/backfill_analyst_prices.py`:
+    so the paths cannot drift apart on what counts as valid.
+
+    Never raises.
+    """
+    import math
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: float() raises it on an arbitrary-precision int above
+        # ~1e308. The app-side call site has no try/except of its own, so this
+        # must be caught here for the "never raises" guarantee to hold.
+        return None
+    if not math.isfinite(v):   # NaN and +/-inf — note float(nan) passes float()
+        return None
+    if v <= 0:                 # a traded price is strictly positive
+        return None
+    return v
+
+
 def fetch_anchor_price(ticker: str, article_date) -> float | None:
     """Next-trading-day close for one analyst_coverage row's article_date —
     the same anchor-price logic used by scripts/backfill_analyst_prices.py,
@@ -559,9 +606,8 @@ def fetch_anchor_price(ticker: str, article_date) -> float | None:
         price = get_historical_close(ticker, article_date, article_date + _td(days=7))
         if price is None:
             return None
-        price = float(price)
-        if price != price or price <= 0:   # NaN guard (NaN != NaN) + sanity floor
-            return None
-        return price
+        # Same validator the save-time resolver uses, so the two paths cannot
+        # disagree on what counts as a usable anchor (also rejects +/-inf).
+        return valid_anchor_price(price)
     except Exception:
         return None
