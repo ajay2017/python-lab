@@ -451,6 +451,75 @@ def test_shock_call_outcome_full_repay_edge():
     assert result3["call_covered_by_sales"] is False
 
 
+def test_shock_call_outcome_post_sale_cushion_continuous_across_full_repay():
+    """post_sale_cushion must be the analytic continuation of the SAME
+    closed form across the forced_sale_proceeds == margin_debit branch
+    split, with equal slope (rate) on both sides — not two different models
+    that merely happen to agree at one point. A 2026-09-01 audit flagged the
+    >=debit branch as possibly overstated and proposed capping the notional
+    reduction at margin_debit; a 2026-09-09 planner review proved that
+    "fix" is wrong (it flattens the slope past this boundary, breaking
+    continuity with the <debit branch's real call_distance() call) and the
+    current formula is exact. This test pins the property so a future
+    well-meaning edit can't silently reintroduce that discontinuity."""
+    shocked_stock_value = 20000.0
+    eps = 1.0
+    below = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=shocked_stock_value,
+        margin_debit=_SHOCK_DEBIT,
+        rate=_SHOCK_RATE,
+        forced_sale_proceeds=_SHOCK_DEBIT - eps,
+    )
+    at = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=shocked_stock_value,
+        margin_debit=_SHOCK_DEBIT,
+        rate=_SHOCK_RATE,
+        forced_sale_proceeds=_SHOCK_DEBIT,
+    )
+    above = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=shocked_stock_value,
+        margin_debit=_SHOCK_DEBIT,
+        rate=_SHOCK_RATE,
+        forced_sale_proceeds=_SHOCK_DEBIT + eps,
+    )
+    assert below is not None and at is not None and above is not None
+    # Same slope (rate) approaching the boundary from below (the `else`
+    # branch, a real call_distance() call) and past it (this branch's
+    # closed form) -- a capped-notional variant would flatten to slope 0
+    # past the boundary and fail the second assertion.
+    assert abs((at["post_sale_cushion"] - below["post_sale_cushion"]) - eps * _SHOCK_RATE) < 1e-6
+    assert abs((above["post_sale_cushion"] - at["post_sale_cushion"]) - eps * _SHOCK_RATE) < 1e-6
+
+
+@pytest.mark.parametrize("proceeds_over_debit", [0.0, 500.0, 5000.0])
+def test_shock_call_outcome_branches_agree_closed_form(proceeds_over_debit):
+    """For forced_sale_proceeds >= margin_debit, post_sale_cushion equals
+    the exact same closed form call_distance() would produce (owner_equity
+    invariant, stock_held reduced by the FULL proceeds regardless of how
+    much of it repaid the debit) -- proving the >=debit branch is the
+    analytic continuation of the <debit branch, not a coincidentally-
+    matching separate formula. Uses a vanishingly small residual debit
+    (0.01) purely to satisfy call_distance's own applicability guard --
+    debit never enters its cushion arithmetic, only that guard."""
+    shocked_stock_value = 30000.0  # headroom so proceeds never exceeds stock held
+    proceeds = _SHOCK_DEBIT + proceeds_over_debit
+    equity = shocked_stock_value - _SHOCK_DEBIT
+    result = shock_call_outcome(
+        stock_value_now=_SHOCK_STOCK_VALUE_NOW,
+        shocked_stock_value=shocked_stock_value,
+        margin_debit=_SHOCK_DEBIT,
+        rate=_SHOCK_RATE,
+        forced_sale_proceeds=proceeds,
+    )
+    assert result is not None
+    direct = call_distance(shocked_stock_value - proceeds, equity, 0.01, _SHOCK_RATE)
+    assert direct is not None
+    assert abs(result["post_sale_cushion"] - direct["cushion"]) < 1e-6
+
+
 @pytest.mark.parametrize("shocked_stock_value,margin_debit,proceeds", [
     (20000.0, 10000.0, 0.0),
     (20000.0, 10000.0, 5000.0),

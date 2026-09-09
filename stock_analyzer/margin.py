@@ -241,6 +241,22 @@ def shock_call_outcome(
         # so the closed form below is exact — and `call_distance` would
         # reject a non-positive debit anyway, so this is handled explicitly
         # rather than letting that guard fire unexpectedly.
+        #
+        # 2026-09-09 planner review confirmed this is exact, not an
+        # approximation: `call_distance`'s cushion is a function of
+        # (owner_equity, stock_held, rate) only — margin_debit never enters
+        # its arithmetic, only its applicability guard. Any excess proceeds
+        # beyond the debit become idle cash, which correctly contributes
+        # nothing extra here (cash isn't rate-charged, and it's already
+        # inside the invariant equity). That means this branch is the exact
+        # analytic continuation of the `else` branch's real call_distance()
+        # call across the debit<=0 guard boundary, not a separate model that
+        # merely happens to meet it at one point — do NOT change this to cap
+        # the notional reduction at margin_debit; that was tried, and it
+        # introduces a slope discontinuity at this exact boundary instead of
+        # fixing one. See tests/test_margin.py's
+        # test_shock_call_outcome_post_sale_cushion_continuous_across_full_repay
+        # and test_shock_call_outcome_branches_agree_closed_form.
         post_sale_cushion = shock_cushion + forced_sale_proceeds * rate
         post_sale_in_call = False
         call_covered_by_sales = shock_in_call
