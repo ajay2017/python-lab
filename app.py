@@ -36244,7 +36244,7 @@ elif page == "🧠 AI Insights":
             def _ac_split_lines(text: str) -> list[str]:
                 return [l.strip() for l in text.splitlines() if l.strip()]
 
-            def _ac_resolve_price_at_save(ticker: str) -> float | None:
+            def _ac_resolve_price_at_save(ticker: str, article_date: str) -> float | None:
                 """Anchor price for the Research Scorecard — zero extra API cost
                 (reuses data already fetched for Home). Held ticker's live Price
                 from the enriched port_df first, then the held_data bundle's
@@ -36259,7 +36259,20 @@ elif page == "🧠 AI Insights":
                 would send NaN into `price_at_article_date` (the denominator of
                 every Scorecard `ret_pct`, and invalid JSON on the DB write).
                 Each tier FALLS THROUGH on rejection instead of returning, so a
-                NaN in port_df cannot preempt a usable held_data price."""
+                NaN in port_df cannot preempt a usable held_data price.
+
+                Only valid when `article_date` IS today — this shortcut reads
+                TODAY's live price, not a historical close. A back-dated paste
+                (a Monday catch-up on a Friday article) must not stamp today's
+                price as the anchor for a days-old article: unlike a NaN, a
+                wrong-but-present anchor is never revisited by
+                scripts/backfill_analyst_prices.py (it only targets `isna()`
+                rows), so the error would be permanent. Returns None for any
+                other date, deferring to the Scorecard's date-correct "Fetch"
+                button (`analyst_intel.fetch_anchor_price`) or the backfill
+                script instead."""
+                if article_date != _today_et().isoformat():
+                    return None
                 _pdf = st.session_state.get("_port_df_enriched")
                 if _pdf is not None and not _pdf.empty and "Ticker" in _pdf.columns:
                     _match = _pdf[_pdf["Ticker"] == ticker]
@@ -36464,7 +36477,7 @@ elif page == "🧠 AI Insights":
                                 "risks":            _ac_split_lines(_ac_risks_i),
                                 "raw_text":         st.session_state.get("_ac_raw_text", ""),
                                 "source":           "cnbc_pro",
-                                "price_at_article_date":   _ac_resolve_price_at_save(_ac_ticker_i),
+                                "price_at_article_date":   _ac_resolve_price_at_save(_ac_ticker_i, _ac_save_date_i),
                                 "composite_score_at_save": _ac_resolve_score_at_save(_ac_ticker_i),
                             })
 
