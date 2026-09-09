@@ -332,6 +332,20 @@ _SECTOR_IMPACT: dict[str, dict[str, int]] = {
         "Materials":      1,
         "Utilities":      1,
         "Real Estate":    2,
+        # Added 2026-09-09 (severities set with the user — closes a coverage
+        # gap flagged 2026-08-16; both were inert until now since Consumer's
+        # own _STATIC event is MEDIUM and both gate sites filter to HIGH, but
+        # a fail-open trap was already found once in this table — see the
+        # Employment/Cybersecurity comment below — so these are filled ahead
+        # of the trigger, not after it fires).
+        # 2: mirrors AI & Data — these two sectors carry identical severity
+        # everywhere else in this table (Inflation, Employment); ad-spend and
+        # consumer-app monetization give moderate indirect exposure to a
+        # retail-sales print.
+        "AI & Cloud":     2,
+        # 1: same reasoning as Enterprise Tech above — security budgets are
+        # enterprise contracts, disconnected from consumer spending.
+        "Cybersecurity":  1,
     },
     "Activity": {
         "Semiconductors": 3,
@@ -351,6 +365,23 @@ _SECTOR_IMPACT: dict[str, dict[str, int]] = {
         "Materials":      3,
         "Utilities":      1,
         "Real Estate":    2,
+        # Added 2026-09-09 (severities set with the user — closes a coverage
+        # gap flagged 2026-08-16; inert until now since Activity carries no
+        # _STATIC rows at all today, so nothing yet reads these cells live).
+        # 2: mirrors AI & Data — cloud infra capex tracks business-investment
+        # cycles similarly to the AI & Data cluster peer.
+        "AI & Cloud":     2,
+        # 1: mirrors Consumer Staples & Retail's own reasoning above — Consumer
+        # Tech revenue is discretionary-demand-driven, not industrial-capex-
+        # driven, so ISM/PMI barely touches it.
+        "Consumer Tech":  1,
+        # 2: mirrors Enterprise Tech above — security spend is a subset of
+        # enterprise IT capex, tracking PMI with the same lag.
+        "Cybersecurity":  2,
+        # 1: Healthcare is LOW (1) everywhere else in this table (Inflation,
+        # Employment, Consumer) — defensive, non-cyclical, uncorrelated with
+        # the manufacturing/services print.
+        "Healthcare":     1,
     },
 }
 

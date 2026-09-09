@@ -559,30 +559,36 @@ def test_every_keyed_macro_category_covers_the_same_sector_set():
     # map: before 2026-08-16, "Consumer" was missing Cybersecurity/AI & Cloud
     # and "Activity" was missing those plus Consumer Tech/Healthcare.
     #
-    # Inert today — both categories are MEDIUM-only in _STATIC and both gate
-    # sites filter to HIGH — but promoting one Retail Sales or ISM row to HIGH
-    # would silently reopen exactly the fail-open just fixed. Per-category
-    # coverage is the invariant that actually holds the gate closed.
-    # KNOWN DEBT, pinned rather than silently tolerated — but ONLY for the
-    # categories that provably cannot gate today. The distinction is the whole
-    # point, and getting it wrong once already nearly shipped a live hole:
+    # Was inert while the gap existed — both categories were MEDIUM-only in
+    # _STATIC / had no _STATIC rows at all, and both gate sites filter to
+    # HIGH — but promoting one Retail Sales or ISM row to HIGH would have
+    # silently reopened exactly the fail-open already found once elsewhere in
+    # this table (Employment/Cybersecurity, fixed 2026-08-16, see below).
+    # Per-category coverage is the invariant that actually holds the gate
+    # closed, so this test pins it directly rather than trusting each
+    # category to stay inert forever.
     #
     #   Inflation   CPI HIGH ×24   → gates. Complete, no gaps.
     #   Employment  NFP HIGH ×24   → gates. Was missing Cybersecurity, which
     #                                left all 7 cyber names unsuppressible ahead
     #                                of every payrolls print. FIXED 2026-08-16,
     #                                NOT allowlisted.
-    #   Consumer    Retail MEDIUM  → both gate sites filter to HIGH, so inert.
-    #   Activity    no _STATIC rows at all → inert.
+    #   Consumer    Retail MEDIUM  → gate sites still filter to HIGH, so still
+    #                                inert today — but the AI & Cloud (2) /
+    #                                Cybersecurity (1) severities were set
+    #                                with the user 2026-09-09 ahead of the
+    #                                trigger, not after it fires.
+    #   Activity    no _STATIC rows at all → still inert today — AI & Cloud
+    #                                (2) / Consumer Tech (1) / Cybersecurity
+    #                                (2) / Healthcare (1) set with the user
+    #                                2026-09-09, same reasoning.
     #
-    # Allowlisting is therefore legitimate for Consumer/Activity and would NOT
-    # have been for Employment. If either ever gains a HIGH row, delete its
-    # entry here and set the severities with the user first.
-    known_gaps = {
-        "Consumer":   {"AI & Cloud", "Cybersecurity"},
-        "Activity":   {"AI & Cloud", "Consumer Tech", "Cybersecurity",
-                       "Healthcare"},
-    }
+    # No allowlist needed anymore — both categories now cover every known
+    # sector, same as Inflation/Employment. If a NEW sector is ever added to
+    # the map, it must land in every category (this test enforces that), and
+    # any future gap should get its severities set with the user rather than
+    # allowlisted, per the Employment/Cybersecurity lesson above.
+    known_gaps: dict[str, set[str]] = {}
     from stock_analyzer.macro_calendar import _SECTOR_IMPACT
     keyed = {cat: set(m) for cat, m in _SECTOR_IMPACT.items()
              if "__ALL__" not in m}
