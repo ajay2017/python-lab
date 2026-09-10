@@ -32562,6 +32562,19 @@ elif page == "💰 Account":
             return "—"
         return "••••••" if _cvm_priv else f"${v:,.0f}"
 
+    def _cvm_dm(v):
+        # Markdown-safe variant of _cvm_d for any st.markdown/caption/error/
+        # warning/info/help text (never st.metric's value= param, which is
+        # plain text, not markdown-parsed). A bare "$" is a LaTeX math
+        # delimiter to Streamlit's markdown renderer -- two or more literal
+        # "$" in the same rendered string get silently interpreted as a math
+        # span instead of two dollar figures, garbling the whole line. Escape
+        # every "$" here so a sentence combining multiple dollar figures
+        # (e.g. "reconstructed $X vs. recorded $Y") renders as plain text.
+        if v is None:
+            return "—"
+        return "••••••" if _cvm_priv else f"\\${v:,.0f}"
+
     _cvm_trades = db.load_trades()
     _cvm_income = db.load_snaptrade_income_events()
     _cvm_snaps = db.load_daily_snapshots()
@@ -32627,9 +32640,9 @@ elif page == "💰 Account":
             if _cvm_worst:
                 _cvm_worst_txt = (
                     f" Worst on **{_cvm_worst['date']}**: reconstructed "
-                    f"{_cvm_d(_cvm_worst['reconstructed'])} vs. recorded "
-                    f"{_cvm_d(_cvm_worst['recorded'])} "
-                    f"({_cvm_d(abs(_cvm_worst['drift']))} drift)."
+                    f"{_cvm_dm(_cvm_worst['reconstructed'])} vs. recorded "
+                    f"{_cvm_dm(_cvm_worst['recorded'])} "
+                    f"({_cvm_dm(abs(_cvm_worst['drift']))} drift)."
                 )
             st.error(
                 "⚠️ **Reconstruction self-check failed** — the backward roll "
@@ -32643,7 +32656,7 @@ elif page == "💰 Account":
             st.caption(
                 f"✅ Reconstruction self-check passed — {_cvm_validation['overlap_days']} "
                 "day(s) of overlap with your recorded history, all within tolerance "
-                f"(max drift {_cvm_d(_cvm_validation.get('max_drift', 0.0))})."
+                f"(max drift {_cvm_dm(_cvm_validation.get('max_drift', 0.0))})."
             )
         else:
             st.caption(
@@ -32656,8 +32669,8 @@ elif page == "💰 Account":
         _cvm_part = capital_vs_margin.interest_partition(_cvm_income)
         _cvm_int = capital_vs_margin.resolve_interest_charged(_cvm_part, None)
         st.markdown(
-            f"💰 Interest since go-live: **{_cvm_d(_cvm_int['charged'])}** "
-            f"(candidate *charged*) vs. **{_cvm_d(_cvm_int['earned'])}** "
+            f"💰 Interest since go-live: **{_cvm_dm(_cvm_int['charged'])}** "
+            f"(candidate *charged*) vs. **{_cvm_dm(_cvm_int['earned'])}** "
             "(candidate *earned*) — never netted."
         )
         st.caption(
@@ -32819,7 +32832,7 @@ elif page == "💰 Account":
                     "Projected Annual Interest", _cvm_d(
                         capital_vs_margin.projected_annual_interest(_cvm_current_debit, _cvm_eff_rate)
                     ),
-                    help=f"At today's {_cvm_d(_cvm_current_debit)} debit and the "
+                    help=f"At today's {_cvm_dm(_cvm_current_debit)} debit and the "
                          "realized rate above, extrapolated forward — not a "
                          "forecast of future debit changes.",
                 )
@@ -32841,14 +32854,14 @@ elif page == "💰 Account":
             _cvm_up, _cvm_down = _cvm_regime["up"], _cvm_regime["down"]
             _cvm_rs1, _cvm_rs2 = st.columns(2)
             _cvm_rs1.markdown(
-                f"**📈 Up weeks ({_cvm_up['weeks']}):** net {_cvm_d(_cvm_up['net'])} "
-                f"(exposure {_cvm_d(_cvm_up['extra_exposure_pnl'])} − "
-                f"interest {_cvm_d(_cvm_up['interest'])})"
+                f"**📈 Up weeks ({_cvm_up['weeks']}):** net {_cvm_dm(_cvm_up['net'])} "
+                f"(exposure {_cvm_dm(_cvm_up['extra_exposure_pnl'])} − "
+                f"interest {_cvm_dm(_cvm_up['interest'])})"
             )
             _cvm_rs2.markdown(
-                f"**📉 Down weeks ({_cvm_down['weeks']}):** net {_cvm_d(_cvm_down['net'])} "
-                f"(exposure {_cvm_d(_cvm_down['extra_exposure_pnl'])} − "
-                f"interest {_cvm_d(_cvm_down['interest'])})"
+                f"**📉 Down weeks ({_cvm_down['weeks']}):** net {_cvm_dm(_cvm_down['net'])} "
+                f"(exposure {_cvm_dm(_cvm_down['extra_exposure_pnl'])} − "
+                f"interest {_cvm_dm(_cvm_down['interest'])})"
             )
 
             # ── Drawdown decomposition ───────────────────────────────────────
@@ -32869,7 +32882,7 @@ elif page == "💰 Account":
                 _cvm_dd3.metric("Amplification Portion", _cvm_d(_cvm_dd["amplification_portion"]))
                 if _cvm_dd["interest_in_episode"]:
                     st.caption(
-                        f"Plus {_cvm_d(_cvm_dd['interest_in_episode'])} interest charged "
+                        f"Plus {_cvm_dm(_cvm_dd['interest_in_episode'])} interest charged "
                         "during this episode (candidate, unverified sign)."
                     )
 
@@ -32897,7 +32910,7 @@ elif page == "💰 Account":
                 _cvm_dl3, _cvm_dl4, _cvm_dl5 = st.columns(3)
                 _cvm_dl3.metric(
                     "Interest Saved (annualized)", _cvm_d(_cvm_dls["interest_saved"]),
-                    help=f"{_cvm_d(_cvm_dls['interest_now'])} → {_cvm_d(_cvm_dls['interest_after'])}",
+                    help=f"{_cvm_dm(_cvm_dls['interest_now'])} → {_cvm_dm(_cvm_dls['interest_after'])}",
                 )
                 _cvm_call_now_txt = (
                     f"{_cvm_dls['call_now']['call_distance_pct']:.1f}%"
@@ -32912,16 +32925,16 @@ elif page == "💰 Account":
                 if _cvm_dls["shock_now"] and _cvm_dls["shock_after"]:
                     st.caption(
                         f"A {_cvm_shock_input:.0f}% shock today: cushion "
-                        f"{_cvm_d(_cvm_dls['shock_now']['shock_cushion'])} "
+                        f"{_cvm_dm(_cvm_dls['shock_now']['shock_cushion'])} "
                         f"({'in call' if _cvm_dls['shock_now']['shock_in_call'] else 'clear'}). "
                         f"After this paydown: cushion "
-                        f"{_cvm_d(_cvm_dls['shock_after']['shock_cushion'])} "
+                        f"{_cvm_dm(_cvm_dls['shock_after']['shock_cushion'])} "
                         f"({'in call' if _cvm_dls['shock_after']['shock_in_call'] else 'clear'})."
                     )
                 elif _cvm_dls["shock_now"] and not _cvm_dls["shock_after"]:
                     st.caption(
                         f"A {_cvm_shock_input:.0f}% shock today: cushion "
-                        f"{_cvm_d(_cvm_dls['shock_now']['shock_cushion'])} "
+                        f"{_cvm_dm(_cvm_dls['shock_now']['shock_cushion'])} "
                         f"({'in call' if _cvm_dls['shock_now']['shock_in_call'] else 'clear'}). "
                         "After this paydown, the debit is fully repaid — no margin "
                         "call is possible regardless of the shock."
