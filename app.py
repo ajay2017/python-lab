@@ -204,6 +204,7 @@ from stock_analyzer.constants import (
 from stock_analyzer import gate_registry
 from stock_analyzer import gate_ledger_readout
 from stock_analyzer import margin as _margin_mod
+from stock_analyzer import capital_vs_margin
 from stock_analyzer import outage_gate as _outage_gate
 from stock_analyzer import act_today_precedence
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
@@ -32526,6 +32527,412 @@ elif page == "💰 Account":
                 "chart entirely rather than shown as a break, so the line may look "
                 "continuous across it — never filled in as zero either way."
             )
+
+    # ── 💳 Capital vs Margin ─────────────────────────────────────────────────
+    # docs/plans/capital-vs-margin-analysis.md — "was trading on margin
+    # actually worth it?" Reconstructs the account's net-equity/leverage
+    # trajectory BACKWARD to broker-integration go-live, joined with F-266's
+    # forward-recorded account_daily_snapshots (_lev_hist, loaded above), and
+    # computes interest paid + the derived verdicts. NO NEW TABLE — computed
+    # live from trades/flows/income-events/daily_snapshots and memoized only
+    # in session_state, keyed on a data fingerprint (a cache TABLE would risk
+    # staleness against the broker feed, which syncs 2x/day, and new trades).
+    # Awareness-only — no gate, no policy constant. All pure logic lives in
+    # stock_analyzer/capital_vs_margin.py; this block is render/wiring only.
+    st.markdown("---")
+    st.markdown("### 💳 Capital vs Margin")
+    st.caption(
+        "Was trading on margin actually worth it? Reconstructs your account's "
+        "value back to when broker sync went live, alongside a synthetic "
+        "capital-only curve anchored at the SAME starting equity — the gap "
+        "between the two is purely margin's effect. **Counterfactual model:** "
+        "margin is modeled as a scale on your ACTUAL positions, never a guess "
+        "at what smaller/different trades you might have made instead."
+    )
+
+    _cvm_view = st.radio(
+        "Granularity", ["Weekly", "Monthly", "All data"],
+        horizontal=True, key="_capmargin_view",
+    )
+
+    _cvm_priv = st.session_state.get("_privacy", True)
+
+    def _cvm_d(v):
+        if v is None:
+            return "—"
+        return "••••••" if _cvm_priv else f"${v:,.0f}"
+
+    _cvm_trades = db.load_trades()
+    _cvm_income = db.load_snaptrade_income_events()
+    _cvm_snaps = db.load_daily_snapshots()
+
+    _cvm_anchor = capital_vs_margin.resolve_anchor(
+        _acct, _lev_hist, ACCOUNT_CASH_STALE_DAYS, _now_et()
+    )
+    _cvm_golive = (
+        capital_vs_margin.golive_floor(_cvm_trades, _flows, _cvm_income, _cvm_snaps)
+        if _cvm_anchor is not None else None
+    )
+
+    if _cvm_anchor is None:
+        st.info(
+            "💳 Can't reconstruct — no fresh account cash on file (set it "
+            "above) and no recorded account snapshot history yet."
+        )
+    elif _cvm_golive is None:
+        st.info(
+            "💳 Can't determine a broker go-live date — no broker-synced "
+            "trades/income events yet, or `daily_snapshots` doesn't reach "
+            "back to them."
+        )
+    else:
+        _cvm_fingerprint = (
+            round(_cvm_anchor["cash"], 2), str(_cvm_anchor["date"]),
+            len(_cvm_trades), len(_flows), len(_cvm_income),
+            (len(_lev_hist) if _lev_hist is not None else 0),
+        )
+        if st.session_state.get("_cvm_fingerprint") != _cvm_fingerprint:
+            _cvm_daily_cash = capital_vs_margin.reconstruct_daily_cash(
+                _cvm_anchor, _cvm_golive, _cvm_trades, _flows, _cvm_income,
+            )
+            _cvm_gross_by_date = capital_vs_margin.gross_book_by_date(_cvm_snaps)
+            _cvm_book_returns_calc = capital_vs_margin.book_daily_returns(_cvm_snaps)
+            _cvm_series_calc = capital_vs_margin.build_account_series(
+                _cvm_daily_cash, _cvm_gross_by_date, _lev_hist, MARGIN_MAINTENANCE_RATE,
+            )
+            _cvm_validation_calc = capital_vs_margin.validate_reconstruction(
+                _cvm_series_calc, _lev_hist
+            )
+            st.session_state["_cvm_fingerprint"] = _cvm_fingerprint
+            st.session_state["_cvm_cache"] = {
+                "series": _cvm_series_calc,
+                "book_returns": _cvm_book_returns_calc,
+                "validation": _cvm_validation_calc,
+            }
+
+        _cvm_cache = st.session_state.get("_cvm_cache")
+        _cvm_cache = _cvm_cache if _cvm_cache is not None else {}
+        _cvm_series = _cvm_cache.get("series")
+        _cvm_series = _cvm_series if _cvm_series is not None else []
+        _cvm_book_returns = _cvm_cache.get("book_returns")
+        _cvm_book_returns = _cvm_book_returns if _cvm_book_returns is not None else {}
+        _cvm_validation = _cvm_cache.get("validation")
+        if _cvm_validation is None:
+            _cvm_validation = {"ok": True, "mismatches": [], "overlap_days": 0, "max_drift": 0.0}
+        _cvm_gate = capital_vs_margin.render_gate(_cvm_validation)
+
+        if not _cvm_gate["show_spanning_verdicts"]:
+            _cvm_worst = _cvm_gate.get("worst_mismatch")
+            _cvm_worst_txt = ""
+            if _cvm_worst:
+                _cvm_worst_txt = (
+                    f" Worst on **{_cvm_worst['date']}**: reconstructed "
+                    f"{_cvm_d(_cvm_worst['reconstructed'])} vs. recorded "
+                    f"{_cvm_d(_cvm_worst['recorded'])} "
+                    f"({_cvm_d(abs(_cvm_worst['drift']))} drift)."
+                )
+            st.error(
+                "⚠️ **Reconstruction self-check failed** — the backward roll "
+                "disagrees with your own recorded account history by more "
+                "than the tolerance." + _cvm_worst_txt + " Every verdict "
+                "below that SPANS the reconstructed window is withheld "
+                "until this is investigated — only the raw interest split "
+                "below is unaffected (it never touches the reconstruction)."
+            )
+        elif _cvm_validation.get("overlap_days", 0) > 0:
+            st.caption(
+                f"✅ Reconstruction self-check passed — {_cvm_validation['overlap_days']} "
+                "day(s) of overlap with your recorded history, all within tolerance "
+                f"(max drift {_cvm_d(_cvm_validation.get('max_drift', 0.0))})."
+            )
+        else:
+            st.caption(
+                "⚠️ Reconstruction not yet cross-checked — no overlap with recorded "
+                "F-266 history exists yet to validate against. Treat the figures "
+                "below as unverified until some recorded days accumulate."
+            )
+
+        # ── Interest paid — always shown, never touches the reconstruction ──
+        _cvm_part = capital_vs_margin.interest_partition(_cvm_income)
+        _cvm_int = capital_vs_margin.resolve_interest_charged(_cvm_part, None)
+        st.markdown(
+            f"💰 Interest since go-live: **{_cvm_d(_cvm_int['charged'])}** "
+            f"(candidate *charged*) vs. **{_cvm_d(_cvm_int['earned'])}** "
+            "(candidate *earned*) — never netted."
+        )
+        st.caption(
+            "⚠️ **Unverified**: SnapTrade files margin interest charged and "
+            "cash interest earned under the same event type, distinguished "
+            "only by sign — which sign this account's charges use has not "
+            "yet been confirmed against real synced data. The split above "
+            "is shown, not netted, until that's confirmed; every verdict "
+            "below that depends on a total interest figure uses the "
+            "'charged' candidate and inherits the same caveat."
+        )
+
+        if not _cvm_gate["show_spanning_verdicts"] or len(_cvm_series) < 2:
+            if _cvm_gate["show_spanning_verdicts"]:
+                st.info("Not enough reconstructed history yet for the full breakdown.")
+        else:
+            _cvm_curves = capital_vs_margin.equity_curves(_cvm_series, _cvm_book_returns)
+            _cvm_mc = capital_vs_margin.margin_contribution(
+                _cvm_series, _cvm_book_returns, _cvm_int["charged"]
+            )
+
+            # ── Verdict tiles ────────────────────────────────────────────────
+            _cvm_t1, _cvm_t2, _cvm_t3 = st.columns(3)
+            _cvm_t1.metric(
+                "Net Value Margin Added", _cvm_d(_cvm_mc["net_value"]),
+                help="Extra-exposure P&L minus interest paid — positive means "
+                     "margin has been worth its cost so far; negative means it "
+                     "hasn't. Unverified interest sign, see caveat above.",
+            )
+            _cvm_t2.metric(
+                "Extra-Exposure P&L", _cvm_d(_cvm_mc["extra_exposure_pnl"]),
+                help="What the borrowed exposure itself earned/cost, before interest.",
+            )
+            _cvm_t3.metric(
+                "Interest Paid", _cvm_d(_cvm_mc["interest_paid"]),
+                help="Candidate charged-interest total (unverified sign convention).",
+            )
+
+            # ── Equity curves chart ─────────────────────────────────────────
+            if len(_cvm_curves["dates"]) >= 2:
+                import plotly.graph_objects as _cvm_pgo
+
+                _cvm_cdf = pd.DataFrame({
+                    "date": pd.to_datetime(_cvm_curves["dates"]),
+                    "levered": _cvm_curves["levered"],
+                    "unlevered": _cvm_curves["unlevered"],
+                }).set_index("date").sort_index()
+
+                if _cvm_view == "Weekly":
+                    _cvm_plot = _cvm_cdf.resample("W-FRI").last()
+                elif _cvm_view == "Monthly":
+                    _cvm_plot = _cvm_cdf.resample("ME").last()
+                else:
+                    _cvm_plot = _cvm_cdf.copy()
+                _cvm_plot = _cvm_plot.dropna(how="all")
+                if _cvm_plot.empty:
+                    _cvm_plot = _cvm_cdf.copy()
+
+                _cvm_recorded_dates = [
+                    d for d, s in zip(_cvm_curves["dates"], _cvm_curves["source"])
+                    if s == "recorded"
+                ]
+                _cvm_boundary = pd.Timestamp(min(_cvm_recorded_dates)) if _cvm_recorded_dates else None
+
+                _cvm_fig = _cvm_pgo.Figure()
+                for _cvm_col, _cvm_name, _cvm_color in (
+                    ("levered", "Actual (levered)", "#f59e0b"),
+                    ("unlevered", "Capital-only (unlevered)", "#38bdf8"),
+                ):
+                    if _cvm_boundary is not None and _cvm_boundary > _cvm_plot.index.min():
+                        _recon_idx = _cvm_plot.index[_cvm_plot.index <= _cvm_boundary]
+                        _rec_idx = _cvm_plot.index[_cvm_plot.index >= _cvm_boundary]
+                        _cvm_fig.add_trace(_cvm_pgo.Scatter(
+                            x=_recon_idx, y=_cvm_plot.loc[_recon_idx, _cvm_col],
+                            name=_cvm_name, legendgroup=_cvm_col,
+                            mode="lines", line=dict(color=_cvm_color, width=2, dash="dot"),
+                            connectgaps=False,
+                            hovertemplate=(
+                                f"{_cvm_name} (reconstructed): ••••••<extra></extra>" if _cvm_priv
+                                else f"{_cvm_name} (reconstructed): $%{{y:,.0f}}<extra></extra>"
+                            ),
+                        ))
+                        _cvm_fig.add_trace(_cvm_pgo.Scatter(
+                            x=_rec_idx, y=_cvm_plot.loc[_rec_idx, _cvm_col],
+                            name=_cvm_name, legendgroup=_cvm_col, showlegend=False,
+                            mode="lines", line=dict(color=_cvm_color, width=2, dash="solid"),
+                            connectgaps=False,
+                            hovertemplate=(
+                                f"{_cvm_name} (recorded): ••••••<extra></extra>" if _cvm_priv
+                                else f"{_cvm_name} (recorded): $%{{y:,.0f}}<extra></extra>"
+                            ),
+                        ))
+                    else:
+                        _cvm_fig.add_trace(_cvm_pgo.Scatter(
+                            x=_cvm_plot.index, y=_cvm_plot[_cvm_col],
+                            name=_cvm_name, mode="lines",
+                            line=dict(color=_cvm_color, width=2, dash="solid"),
+                            connectgaps=False,
+                            hovertemplate=(
+                                f"{_cvm_name}: ••••••<extra></extra>" if _cvm_priv
+                                else f"{_cvm_name}: $%{{y:,.0f}}<extra></extra>"
+                            ),
+                        ))
+                if _cvm_boundary is not None and _cvm_boundary > _cvm_plot.index.min():
+                    _cvm_fig.add_vrect(
+                        x0=_cvm_plot.index.min(), x1=_cvm_boundary,
+                        fillcolor="rgba(148,163,184,0.10)", line_width=0,
+                        annotation_text="reconstructed", annotation_position="top left",
+                    )
+                _cvm_fig.update_layout(
+                    margin=dict(l=0, r=0, t=28, b=0),
+                    height=320,
+                    legend=dict(orientation="h", y=1.12, x=0),
+                    xaxis=dict(showgrid=False),
+                    yaxis=dict(
+                        showticklabels=not _cvm_priv,
+                        tickprefix="$", tickformat=",.0f",
+                        gridcolor="rgba(128,128,128,0.15)",
+                    ),
+                    hovermode="x unified",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(_cvm_fig, width="stretch")
+                st.caption(
+                    "Dotted line + shaded band = reconstructed (before F-266 started "
+                    "recording 2026-09-10). Solid = recorded from real daily snapshots."
+                )
+
+            # ── Break-even rate + projected annual interest ─────────────────
+            _cvm_debits = [p["margin_debit"] for p in _cvm_series if p.get("margin_debit") is not None]
+            _cvm_avg_debit = (sum(_cvm_debits) / len(_cvm_debits)) if _cvm_debits else 0.0
+            _cvm_days = (_cvm_series[-1]["date"] - _cvm_series[0]["date"]).days
+            _cvm_eff_rate = capital_vs_margin.break_even_rate(
+                _cvm_int["charged"], _cvm_avg_debit, _cvm_days
+            )
+            # Latest NON-None point per field, not strictly series[-1] -- today's
+            # row can be a daily_snapshots gap (EOD hasn't written yet) while
+            # margin_debit/gross_book are both real and known as of a prior day;
+            # collapsing that gap to 0.0 would misreport "no debit" mid-session.
+            _cvm_current_debit = next(
+                (p["margin_debit"] for p in reversed(_cvm_series) if p.get("margin_debit") is not None),
+                0.0,
+            )
+            _cvm_current_gross = next(
+                (p["gross_book"] for p in reversed(_cvm_series) if p.get("gross_book") is not None),
+                0.0,
+            )
+
+            _cvm_be1, _cvm_be2 = st.columns(2)
+            if _cvm_eff_rate is not None:
+                _cvm_be1.metric(
+                    "Break-Even Book Return", f"{_cvm_eff_rate * 100:.1f}%/yr",
+                    help="Annualized book return needed just to cover the average "
+                         "interest paid over this window — also, by the same math, "
+                         "your empirically realized annualized interest rate.",
+                )
+                _cvm_be2.metric(
+                    "Projected Annual Interest", _cvm_d(
+                        capital_vs_margin.projected_annual_interest(_cvm_current_debit, _cvm_eff_rate)
+                    ),
+                    help=f"At today's {_cvm_d(_cvm_current_debit)} debit and the "
+                         "realized rate above, extrapolated forward — not a "
+                         "forecast of future debit changes.",
+                )
+            else:
+                st.caption("No margin debit in this window — break-even rate not applicable.")
+                _cvm_eff_rate = 0.0
+
+            # ── Regime split ─────────────────────────────────────────────────
+            _cvm_weekly_returns = capital_vs_margin.weekly_compounded_returns(_cvm_book_returns)
+            _cvm_weekly_interest = capital_vs_margin.weekly_interest_charged(_cvm_income, None)
+            _cvm_regime = capital_vs_margin.regime_split(
+                _cvm_series, _cvm_weekly_returns, _cvm_weekly_interest
+            )
+            st.markdown("#### Up-Weeks vs. Down-Weeks")
+            st.caption(
+                "A blended total can hide 'great in rallies, brutal in selloffs.' "
+                "Split by ISO week on the book's own realized return."
+            )
+            _cvm_up, _cvm_down = _cvm_regime["up"], _cvm_regime["down"]
+            _cvm_rs1, _cvm_rs2 = st.columns(2)
+            _cvm_rs1.markdown(
+                f"**📈 Up weeks ({_cvm_up['weeks']}):** net {_cvm_d(_cvm_up['net'])} "
+                f"(exposure {_cvm_d(_cvm_up['extra_exposure_pnl'])} − "
+                f"interest {_cvm_d(_cvm_up['interest'])})"
+            )
+            _cvm_rs2.markdown(
+                f"**📉 Down weeks ({_cvm_down['weeks']}):** net {_cvm_d(_cvm_down['net'])} "
+                f"(exposure {_cvm_d(_cvm_down['extra_exposure_pnl'])} − "
+                f"interest {_cvm_d(_cvm_down['interest'])})"
+            )
+
+            # ── Drawdown decomposition ───────────────────────────────────────
+            st.markdown("#### Drawdown Decomposition")
+            _cvm_worst_dd = capital_vs_margin.worst_drawdown_window(_cvm_series)
+            if _cvm_worst_dd is None:
+                st.caption("Not enough history yet to identify a drawdown.")
+            else:
+                _cvm_pk_date, _cvm_tr_date, _cvm_pk_val, _cvm_tr_val = _cvm_worst_dd
+                _cvm_dd = capital_vs_margin.drawdown_decomposition(
+                    _cvm_series, _cvm_book_returns, _cvm_pk_date, _cvm_tr_date,
+                    income_events=_cvm_income,
+                )
+                st.caption(f"Worst peak-to-trough: **{_cvm_pk_date}** → **{_cvm_tr_date}**")
+                _cvm_dd1, _cvm_dd2, _cvm_dd3 = st.columns(3)
+                _cvm_dd1.metric("Actual Change", _cvm_d(_cvm_dd["actual_change"]))
+                _cvm_dd2.metric("Would Have Lost Unlevered", _cvm_d(_cvm_dd["unlevered_change"]))
+                _cvm_dd3.metric("Amplification Portion", _cvm_d(_cvm_dd["amplification_portion"]))
+                if _cvm_dd["interest_in_episode"]:
+                    st.caption(
+                        f"Plus {_cvm_d(_cvm_dd['interest_in_episode'])} interest charged "
+                        "during this episode (candidate, unverified sign)."
+                    )
+
+            # ── Deleverage scenario ───────────────────────────────────────────
+            st.markdown("#### If You Paid Down Debt")
+            if _cvm_current_debit <= 0:
+                st.caption("No current margin debit — nothing to model here.")
+            else:
+                _cvm_dl1, _cvm_dl2 = st.columns(2)
+                _cvm_paydown = _cvm_dl1.slider(
+                    "Paydown amount ($)", min_value=0.0,
+                    max_value=round(_cvm_current_debit, 2),
+                    value=round(_cvm_current_debit * 0.5, 2), step=100.0,
+                    key="_cvm_paydown_slider",
+                )
+                _cvm_shock_input = _cvm_dl2.number_input(
+                    "Shock size (% decline)", min_value=0.0, max_value=99.0,
+                    value=abs(FRAGILITY_PULLBACK_PCT), step=1.0,
+                    key="_cvm_shock_input",
+                )
+                _cvm_dls = capital_vs_margin.deleverage_scenario(
+                    _cvm_current_gross, _cvm_current_debit, _cvm_paydown,
+                    MARGIN_MAINTENANCE_RATE, _cvm_eff_rate, -abs(_cvm_shock_input),
+                )
+                _cvm_dl3, _cvm_dl4, _cvm_dl5 = st.columns(3)
+                _cvm_dl3.metric(
+                    "Interest Saved (annualized)", _cvm_d(_cvm_dls["interest_saved"]),
+                    help=f"{_cvm_d(_cvm_dls['interest_now'])} → {_cvm_d(_cvm_dls['interest_after'])}",
+                )
+                _cvm_call_now_txt = (
+                    f"{_cvm_dls['call_now']['call_distance_pct']:.1f}%"
+                    if _cvm_dls["call_now"] else "—"
+                )
+                _cvm_call_after_txt = (
+                    f"{_cvm_dls['call_after']['call_distance_pct']:.1f}%"
+                    if _cvm_dls["call_after"] else "no debit — N/A"
+                )
+                _cvm_dl4.metric("Call Distance Now", _cvm_call_now_txt)
+                _cvm_dl5.metric("Call Distance After Paydown", _cvm_call_after_txt)
+                if _cvm_dls["shock_now"] and _cvm_dls["shock_after"]:
+                    st.caption(
+                        f"A {_cvm_shock_input:.0f}% shock today: cushion "
+                        f"{_cvm_d(_cvm_dls['shock_now']['shock_cushion'])} "
+                        f"({'in call' if _cvm_dls['shock_now']['shock_in_call'] else 'clear'}). "
+                        f"After this paydown: cushion "
+                        f"{_cvm_d(_cvm_dls['shock_after']['shock_cushion'])} "
+                        f"({'in call' if _cvm_dls['shock_after']['shock_in_call'] else 'clear'})."
+                    )
+                elif _cvm_dls["shock_now"] and not _cvm_dls["shock_after"]:
+                    st.caption(
+                        f"A {_cvm_shock_input:.0f}% shock today: cushion "
+                        f"{_cvm_d(_cvm_dls['shock_now']['shock_cushion'])} "
+                        f"({'in call' if _cvm_dls['shock_now']['shock_in_call'] else 'clear'}). "
+                        "After this paydown, the debit is fully repaid — no margin "
+                        "call is possible regardless of the shock."
+                    )
+
+        st.caption(
+            "See 📐 Margin Call Distance above for today's live cushion, and "
+            "🔗 Risk Analysis's shock-modeling sweep (F-263) for scenario-by-"
+            "scenario call risk — this section doesn't duplicate either, it "
+            "answers whether the leverage has been worth it SO FAR."
+        )
 
     # ── ⚡ Broker Sync (SnapTrade — Robinhood) ───────────────────────────────
     # docs/plans/snaptrade-broker-integration.md. Three capabilities:
