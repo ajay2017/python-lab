@@ -99,6 +99,7 @@ python-lab/
     ├── portfolio.py                Portfolio DataFrame construction; stop integrity gate
     ├── account.py                  Account-level pure calc (net contributed capital, growth, money-weighted/Modified-Dietz return); signed net cash nets margin; daily snapshots compute (F-266) + leverage chart resample (leverage_series_for_chart, compute_account_snapshot)
     ├── margin.py                   Margin maintenance awareness (call distance, capital-basis weight); feeds sizing cap F-255
+    ├── capital_vs_margin.py        Capital vs. Margin Analysis (F-267): backward account-value reconstruction from broker go-live + margin cost/benefit verdicts — interest sign-isolation · cash reconstruction · gross-book/daily-returns · self-validation · dual equity curves · margin contribution · break-even rate · drawdown decomposition · projected interest · deleverage scenario · regime split; 20 pure functions (36 tests), zero I/O, zero policy thresholds
     ├── daily_pnl.py                Positions-scope day-over-day P&L (Tier B): broker-style equity-delta vs persisted daily_snapshots baseline + the day's trades
     ├── risk.py                     ATR stop loss, position sizing, risk metrics
     ├── targets.py                  Price targets, support/resistance, entry zones
