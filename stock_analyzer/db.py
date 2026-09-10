@@ -180,7 +180,7 @@ history over time):
         id               bigint primary key generated always as identity,
         ticker           text not null,
         rec_date         date not null,
-        rec_type         text not null,          -- 'new_pick' | 'add_winner' | 'buy_candidate'
+        rec_type         text not null,          -- 'new_pick' | 'add_winner' | 'buy_candidate' | 'enter_now'
         surfaced_at      timestamptz default now(),
         price_at_surface numeric,                -- price snapshot at first-surface (for would-have-gained math)
         composite_score  numeric,
@@ -246,6 +246,21 @@ pillar scores above. Semantics worth knowing when querying:
     ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS rec_stop            numeric;
     ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS rec_portfolio_value numeric;
     ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS rec_sizing_version  integer;
+
+Watchlist ENTER_NOW capture (added 2026-09-09 — grades 📋 Watchlist's
+ENTER_NOW verdict through this same Recommendations History pipeline, closing
+the gap where it was the only rec_type never persisted/measured). Fresh
+entries and add-to-existing calls are both captured (a deliberate decision —
+match_recs_to_trades/compute_outcomes already grade an add-to-existing
+correctly off the matched trade's own fill price/shares, never the position's
+blended cost basis), so `already_held` records WHICH case a given row was —
+whether the ticker was already a holding at the moment the ENTER_NOW card was
+captured — for provenance only, not to change how the row is graded. NULL for
+every existing row and every other rec_type (this column is only ever set by
+the enter_now capture path). Optional/inert until applied, exactly like the
+pillar-score and sizing columns above.
+
+    ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS already_held boolean;
 
 Manual stops (added 2026-05-29 — user-set stop overrides recorded when
 the Brief's "raise stop" recommendation is actioned. Without this the
@@ -2533,6 +2548,12 @@ def save_recommendations(records: list[dict]) -> dict:
         except (TypeError, ValueError):
             return None
 
+    def _bool_or_none(x):
+        try:
+            return bool(x) if x is not None else None
+        except (TypeError, ValueError):
+            return None
+
     payload = []
     for r in records:
         tk = str(r.get("ticker", "")).strip().upper()
@@ -2574,6 +2595,10 @@ def save_recommendations(records: list[dict]) -> dict:
             "rec_stop":            _pos_num(r.get("rec_stop")),
             "rec_portfolio_value": _pos_num(r.get("rec_portfolio_value")),
             "rec_sizing_version":  _int_or_none(r.get("rec_sizing_version")),
+            # Watchlist ENTER_NOW capture (2026-09-09). Provenance only — never
+            # None-coalesced to False, so "not recorded" stays distinguishable
+            # from "recorded, not held" once the column exists.
+            "already_held":        _bool_or_none(r.get("already_held")),
         })
     if not payload:
         return {"attempted": 0, "saved": 0, "error": None}
@@ -2586,16 +2611,17 @@ def save_recommendations(records: list[dict]) -> dict:
     # stop persisting sentiment (already-working, unrelated data) for the
     # entire window until the pillar-score DDL is applied, with no error
     # surfaced (saved=N, error=None) to reveal the loss.
+    _ENTER_NOW_COLS = frozenset(("already_held",))
     _F249_SIZING_COLS = frozenset(("rec_shares", "rec_stop",
                                    "rec_portfolio_value", "rec_sizing_version"))
     _QA_PILLAR_COLS = frozenset(("t_score", "bq_score", "val_score"))
     _F179_COLS      = frozenset(("s_score", "avg_sent"))
-    _OPTIONAL_COLS  = _F249_SIZING_COLS | _QA_PILLAR_COLS | _F179_COLS
+    _OPTIONAL_COLS  = _ENTER_NOW_COLS | _F249_SIZING_COLS | _QA_PILLAR_COLS | _F179_COLS
     # NEWEST GENERATION FIRST. The strip cascade peels one generation at a time
     # in this order, so a "rec_shares is missing" error cannot also discard the
     # pillar scores and sentiment that are already working in production. Append
     # new generations to the FRONT, never extend an existing frozenset.
-    _COL_GENERATIONS = (_F249_SIZING_COLS, _QA_PILLAR_COLS, _F179_COLS)
+    _COL_GENERATIONS = (_ENTER_NOW_COLS, _F249_SIZING_COLS, _QA_PILLAR_COLS, _F179_COLS)
 
     def _upsert(rows):
         try:

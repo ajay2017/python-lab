@@ -1064,7 +1064,7 @@ CREATE TABLE recommendations (
     id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     ticker           TEXT NOT NULL,
     rec_date         DATE NOT NULL,
-    rec_type         TEXT NOT NULL,            -- 'new_pick' | 'add_winner' | 'buy_candidate'
+    rec_type         TEXT NOT NULL,            -- 'new_pick' | 'add_winner' | 'buy_candidate' | 'enter_now'
     price_at_surface NUMERIC,                  -- first-seen price (NULL when ≤ 0 / unknown, or — for buy_candidate rows before 2026-07-26 commit 51b2441 — never captured; see §10 Known Behaviours)
     composite_score  NUMERIC,
     momentum_score   NUMERIC,
@@ -1077,9 +1077,9 @@ CREATE TABLE recommendations (
 );
 ```
 
-**The recommendation audit log (scorecard substrate).** Every pick Today's Brief surfaces is logged once per `(ticker, rec_date, rec_type)` — `save_recommendations` upserts with `ignore_duplicates`, so the first-seen row (and its `surfaced_at` + `price_at_surface`) is authoritative and never overwritten. `rec_type` separates the **actionable** `new_pick` / `add_winner` from the awareness-only `buy_candidate` feed. Read by `recommendations_history.py` (the scorecard) and the F-4 monthly report. `db.save_recommendations()` (read-only-viewer no-op) / `load_recommendations(start_date, end_date)`. Optional — inert until the DDL is applied. RLS: `FOR ALL TO service_role`.
+**The recommendation audit log (scorecard substrate).** Every pick Today's Brief surfaces is logged once per `(ticker, rec_date, rec_type)` — `save_recommendations` upserts with `ignore_duplicates`, so the first-seen row (and its `surfaced_at` + `price_at_surface`) is authoritative and never overwritten. `rec_type` separates the **actionable** `new_pick` / `add_winner` / `enter_now` (Watchlist's fully-cleared entry verdict, captured since 2026-09-09 — F-264) from the awareness-only `buy_candidate` feed. Read by `recommendations_history.py` (the scorecard) and the F-4 monthly report. `db.save_recommendations()` (read-only-viewer no-op) / `load_recommendations(start_date, end_date)`. Optional — inert until the DDL is applied. RLS: `FOR ALL TO service_role`.
 
-**Optional columns beyond the original `CREATE TABLE` above** (each additive, each dropped-and-retried by `save_recommendations` until its DDL is applied — see `db.py`'s header docstring for the exact `ALTER TABLE` statements): `s_score`, `avg_sent` (sentiment, feeds the composite); added 2026-08-01 for F-225 Portfolio Q&A, `t_score`, `bq_score`, `val_score` (the 4-pillar breakdown, forward-only — rows saved before this date have these `NULL`); and added 2026-08-23 for **F-249 Phase 2 sizing capture**, `rec_shares`, `rec_stop`, `rec_portfolio_value` (all `NUMERIC`) plus `rec_sizing_version` (`INTEGER`).
+**Optional columns beyond the original `CREATE TABLE` above** (each additive, each dropped-and-retried by `save_recommendations` until its DDL is applied — see `db.py`'s header docstring for the exact `ALTER TABLE` statements): `s_score`, `avg_sent` (sentiment, feeds the composite); added 2026-08-01 for F-225 Portfolio Q&A, `t_score`, `bq_score`, `val_score` (the 4-pillar breakdown, forward-only — rows saved before this date have these `NULL`); added 2026-08-23 for **F-249 Phase 2 sizing capture**, `rec_shares`, `rec_stop`, `rec_portfolio_value` (all `NUMERIC`) plus `rec_sizing_version` (`INTEGER`); and added 2026-09-09 for **F-264 Watchlist ENTER_NOW capture**, `already_held` (`BOOLEAN`) — nullable, `NULL` for every existing row and every other `rec_type`, records whether an `enter_now` row's ticker was already held at capture time (fresh entry vs. add-to-existing provenance only; never changes how the row is graded).
 
 **Sizing-capture semantics (F-249 Phase 2) — three distinguishable states, and the distinction is the point.** The suggested share count was previously computed at render time and discarded, so Phase 3's take-rate metric (actual shares bought ÷ suggested shares) had no substrate. These columns create it, forward-only:
 
@@ -2257,12 +2257,15 @@ a provably-missing table reads red/"down"; the inventory maps each cron lane to
 the stores it writes and whether the write is unconditional-daily or conditional),
 ③ provider health (`api_health`), ④ in-session `session_state` producer caches,
 ⑤ reference-data shelf life (thin adapter over `reference_shelf.py`, see below),
-⑥ **interactive write outcomes (added 2026-09-01)** — grades `check_write_outcomes()`
-against two dead-diagnostic dicts app.py already wrote to `session_state` but never
-rendered, `_rec_log_save_result`/`_gate_ledger_save_result` (each shaped
-`{"attempted", "saved", "error"}`, written on the interactive Grow Today build path
-only — the cron lane's equivalent writes have no session to publish into and stay
-console-logged). Before this, a caught write exception (`error` set) rendered
+⑥ **interactive write outcomes (added 2026-09-01, extended 2026-09-09)** — grades
+`check_write_outcomes()` against dead-diagnostic dicts app.py already wrote to
+`session_state` but never rendered: `_rec_log_save_result`/`_gate_ledger_save_result`
+(each shaped `{"attempted", "saved", "error"}`, written on the interactive Grow Today
+build path) plus `_wl_rec_save_result` (same shape, written on the 📋 Watchlist page
+by the F-264 ENTER_NOW capture — "unknown" here is the expected common case on any
+session that hasn't visited Watchlist yet, not a defect). The cron lane's equivalent
+writes have no session to publish into and stay console-logged. Before this, a caught
+write exception (`error` set) rendered
 identically to a healthy no-op (`attempted=0`) — the absent-key case (`unknown`,
 "not attempted this session") is kept distinct from the present-but-clean-zero case
 (`ok`, "nothing to record") specifically so a never-attempted write can't be

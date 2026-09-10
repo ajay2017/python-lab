@@ -1340,3 +1340,120 @@ def test_engine_trust_headline_acted_unpriced_excluded_from_n_acted_mature():
     assert out["n_acted_mature"] == 10
     # Alpha computed only over the 10 priced rows
     assert out["acted_alpha"] == pytest.approx(4.0)
+
+
+# ─── build_enter_now_rows ───────────────────────────────────────────────────
+# Watchlist ENTER_NOW capture (2026-09-09) — grades the one Watchlist verdict
+# that was never persisted/measured, through this same pipeline. D1 (locked):
+# already-held tickers are INCLUDED, not excluded — see the attribution-
+# invariant test below, which is the load-bearing proof that decision is safe.
+
+def _wl_card(ticker="AAA", action="ENTER_NOW", score=70.0, price=50.0):
+    return {"ticker": ticker, "action": action, "score": score, "price": price}
+
+
+def test_build_enter_now_rows_only_enter_now_action_produces_rows():
+    cards = [
+        _wl_card(ticker="AAA", action="ENTER_NOW"),
+        _wl_card(ticker="BBB", action="NEAR_ENTRY"),
+        _wl_card(ticker="CCC", action="WAIT_ENTRY"),
+        _wl_card(ticker="DDD", action="WAIT_CATALYST"),
+        _wl_card(ticker="EEE", action="REMOVE"),
+        _wl_card(ticker="FFF", action="HOLD_OFF_EARNINGS"),
+        _wl_card(ticker="GGG", action="DATA_UNAVAILABLE"),
+    ]
+    rows = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {})
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "AAA"
+
+
+def test_build_enter_now_rows_held_flag_true_and_false_case_insensitive():
+    cards = [_wl_card(ticker="AAPL"), _wl_card(ticker="MSFT")]
+    rows = rh.build_enter_now_rows(cards, {"aapl"}, date(2026, 1, 15), {})
+    by_tk = {r["ticker"]: r for r in rows}
+    assert by_tk["AAPL"]["already_held"] is True
+    assert by_tk["MSFT"]["already_held"] is False
+
+
+def test_build_enter_now_rows_field_mapping():
+    cards = [_wl_card(ticker="AAA", score=72.5, price=123.45)]
+    rows = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {"AAA": "Technology"})
+    r = rows[0]
+    assert r["rec_type"] == "enter_now"
+    assert r["rec_date"] == date(2026, 1, 15)
+    assert r["composite_score"] == 72.5
+    assert r["price_at_surface"] == 123.45
+    assert r["momentum_score"] is None
+    assert r["conviction"] == ""
+    assert r["verdict"] == ""
+    assert r["thesis"] == ""
+    assert r["sector"] == "Technology"
+
+
+def test_build_enter_now_rows_sector_absent_from_map_is_blank_not_a_crash():
+    cards = [_wl_card(ticker="ZZZ")]
+    rows = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {})
+    assert rows[0]["sector"] == ""
+
+
+def test_build_enter_now_rows_empty_input_returns_empty_list():
+    assert rh.build_enter_now_rows([], set(), date(2026, 1, 15), {}) == []
+    assert rh.build_enter_now_rows(None, set(), date(2026, 1, 15), {}) == []
+
+
+def test_build_enter_now_rows_no_enter_now_cards_returns_empty_list():
+    cards = [_wl_card(ticker="AAA", action="NEAR_ENTRY"), _wl_card(ticker="BBB", action="REMOVE")]
+    assert rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {}) == []
+
+
+def test_enter_now_outcome_derives_purely_from_matched_trade_not_cost_basis():
+    """THE load-bearing proof that D1 (include already-held tickers) is safe.
+
+    compute_outcomes has no rec_type branching at all — an acted BUY's outcome
+    is always (cur - trade.price)/trade.price and (cur - trade.price)*shares,
+    off the MATCHED TRADE's own fill price/shares, never any pre-existing
+    position/cost-basis for that ticker. An add-to-existing enter_now call is
+    therefore graded identically to a fresh one.
+    """
+    P, S = 42.0, 15.0
+    cur = 50.0
+    m = [_matched(ticker="AAA", rec_type="enter_now", acted_on=True,
+                  acted_trade=_trade(action="BUY", price=P, shares=S))]
+    out = rh.compute_outcomes(m, {"AAA": cur}, date(2026, 1, 15))
+    r = out[0]
+    assert r["outcome_pct"] == pytest.approx((cur - P) / P * 100.0)
+    assert r["outcome_dollars"] == pytest.approx((cur - P) * S)
+
+
+def test_by_rec_type_includes_enter_now_group_correctly_counted():
+    rows = [
+        _erow(ticker="AAA", rec_type="new_pick", acted_on=True, outcome_pct=5.0, outcome_label="win"),
+        _erow(ticker="BBB", rec_type="enter_now", acted_on=False, outcome_pct=-2.0, outcome_label="loss"),
+        _erow(ticker="CCC", rec_type="enter_now", acted_on=True, outcome_pct=3.0, outcome_label="win"),
+    ]
+    out = rh.by_rec_type(rows)
+    assert "enter_now" in out
+    assert out["enter_now"]["n_total"] == 2
+    assert out["enter_now"]["n_acted"] == 1
+
+
+def test_default_rec_types_scope_excludes_enter_now_rows_from_new_pick_surfaces():
+    """Guards a silent future regression: enter_now must NOT silently widen into
+    Engine Track Record's Q0/Q1 narrative or the Monthly Report Sankey, both of
+    which default rec_types to ("new_pick",) — a watchlist-timing call is not
+    the same decision as "New Positions to Initiate" cleared every gate."""
+    rows = [
+        _erow(ticker="AAA", rec_type="new_pick", acted_on=True, outcome_pct=5.0,
+              outcome_label="win", rec_date=date(2026, 1, 1)),
+        _erow(ticker="BBB", rec_type="enter_now", acted_on=False, outcome_pct=-5.0,
+              outcome_label="loss", rec_date=date(2026, 1, 1)),
+    ]
+    flow = rh.signal_flow(rows)  # default rec_types=("new_pick",)
+    assert flow["n_total"] == 1  # BBB (enter_now) excluded
+
+    missed = rh.distinct_missed(rows)  # default rec_types=("new_pick",)
+    assert all(r["ticker"] != "BBB" for r in missed)
+
+    viz = rh.report_viz_snapshot(rows)  # default rec_types=("new_pick",)
+    assert viz["flow"]["n_total"] == 1
+    assert all(m["ticker"] != "BBB" for m in viz["missed"])

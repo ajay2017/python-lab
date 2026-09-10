@@ -242,6 +242,31 @@ def test_write_outcome_absent_key_is_unknown():
     outcomes = {r["key"]: r for r in sh.check_write_outcomes({})}
     assert outcomes["_rec_log_save_result"]["severity"] == "unknown"
     assert outcomes["_gate_ledger_save_result"]["severity"] == "unknown"
+    # _wl_rec_save_result is written on 📋 Watchlist, not Grow Today — "unknown"
+    # here is the EXPECTED common case on any session that hasn't visited it yet.
+    assert outcomes["_wl_rec_save_result"]["severity"] == "unknown"
+
+
+def test_write_outcome_watchlist_enter_now_error_is_down():
+    """Same grading contract as the other two write-outcome keys, applied to
+    the new Watchlist ENTER_NOW capture (2026-09-09)."""
+    container = {"_wl_rec_save_result": {"attempted": 2, "saved": 0, "error": "boom"}}
+    outcomes = {r["key"]: r for r in sh.check_write_outcomes(container)}
+    assert outcomes["_wl_rec_save_result"]["severity"] == "down"
+
+
+def test_write_outcome_watchlist_enter_now_full_save_is_ok():
+    container = {"_wl_rec_save_result": {"attempted": 3, "saved": 3, "error": None}}
+    outcomes = {r["key"]: r for r in sh.check_write_outcomes(container)}
+    assert outcomes["_wl_rec_save_result"]["severity"] == "ok"
+
+
+def test_write_outcome_watchlist_enter_now_nothing_to_record_is_ok():
+    """No ENTER_NOW cards this session (attempted=0) → 'ok', distinct from the
+    absent-key 'unknown' case — Watchlist ran and confirmed nothing to log."""
+    container = {"_wl_rec_save_result": {"attempted": 0, "saved": 0, "error": None}}
+    outcomes = {r["key"]: r for r in sh.check_write_outcomes(container)}
+    assert outcomes["_wl_rec_save_result"]["severity"] == "ok"
 
 
 def test_write_outcome_error_is_down():

@@ -268,6 +268,9 @@ _CACHES: tuple[tuple[str, str], ...] = (
 _WRITE_OUTCOMES: tuple[tuple[str, str], ...] = (
     ("_rec_log_save_result",     "Buy recommendations log"),
     ("_gate_ledger_save_result", "Gate suppression ledger"),
+    # Written on the Watchlist page, not Grow Today — "unknown" here is the
+    # expected common case on any session that hasn't visited 📋 Watchlist yet.
+    ("_wl_rec_save_result",      "Watchlist Ready-to-Enter log"),
 )
 
 

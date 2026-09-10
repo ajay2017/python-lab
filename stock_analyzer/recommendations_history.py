@@ -70,6 +70,65 @@ def _spy_return_pct(spy_close_by_date: dict | None, start_d: date | None,
     return (p1 - p0) / p0 * 100.0
 
 
+# ── Capture (Watchlist ENTER_NOW rows) ──────────────────────────────────────
+
+def build_enter_now_rows(recs: list[dict], held_tickers: set, rec_date,
+                         sector_by_ticker: dict) -> list[dict]:
+    """
+    Build `recommendations`-table rows for every ENTER_NOW card surfaced by
+    📋 Watchlist this session, so that verdict gets graded through this same
+    Recommendations History pipeline as new_pick/add_winner/buy_candidate —
+    previously the one Watchlist action never persisted or measured.
+
+    Filters to `action == "ENTER_NOW"` only. Every other action (NEAR_ENTRY,
+    WAIT_ENTRY, WAIT_CATALYST, REMOVE, HOLD_OFF_EARNINGS, DATA_UNAVAILABLE)
+    produces zero rows — only a fully-cleared entry call is worth grading.
+
+    D1 (locked, not re-litigated here): already-held tickers are INCLUDED, not
+    excluded. `match_recs_to_trades` already uses a uniform same-day
+    RECOMMENDATION-trade match for every rec_type, and `compute_outcomes`
+    derives alpha from the matched trade's own fill price/share count, never
+    the position's blended cost basis — so an add-to-existing call is graded
+    correctly with zero changes to either function. The only real gap is that
+    fresh vs. add-to-existing calls would be indistinguishable in the pool, so
+    `already_held` records which case this was, computed HERE from the
+    caller's own held-ticker set (the reliable source at capture time) —
+    never reconstructed later from trade history.
+
+    `held_tickers` is matched case-insensitively. `sector_by_ticker` is looked
+    up by the ticker's upper-cased form (the caller is expected to key it that
+    way); an unmapped ticker resolves to "".
+
+    Blank-provenance fields (`conviction`, `verdict`, `thesis`) match the
+    `buy_candidate` capture convention in app.py — the Watchlist card's prose
+    lives in `summary`/`detail`, deliberately not truncated into these columns.
+
+    Never raises; empty input or no ENTER_NOW cards returns [].
+    """
+    held_upper = {str(t).strip().upper() for t in (held_tickers or set())}
+    sector_map = sector_by_ticker or {}
+    rows: list[dict] = []
+    for card in (recs or []):
+        if not isinstance(card, dict) or card.get("action") != "ENTER_NOW":
+            continue
+        tk = card.get("ticker")
+        tk_upper = str(tk).strip().upper()
+        rows.append({
+            "ticker":           tk,
+            "rec_date":         rec_date,
+            "rec_type":         "enter_now",
+            "price_at_surface": card.get("price"),
+            "composite_score":  card.get("score"),
+            "momentum_score":   None,
+            "sector":           sector_map.get(tk_upper, ""),
+            "conviction":       "",
+            "verdict":          "",
+            "thesis":           "",
+            "already_held":     tk_upper in held_upper,
+        })
+    return rows
+
+
 # ── Match recs to trades ────────────────────────────────────────────────────
 
 def match_recs_to_trades(recs_df, trades_df) -> list[dict]:

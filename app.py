@@ -23840,11 +23840,16 @@ elif page == "📋 Watchlist":
 
     # ── Build recommendations ─────────────────────────────────────────────────
     _wl_recs: list[dict] = []
+    # {TICKER (upper): sector} — captured alongside _wl_recs so the ENTER_NOW
+    # recommendation-log rows below can resolve a sector without a second pass
+    # over _wl_data (F-1xx Watchlist ENTER_NOW capture, 2026-09-09).
+    _wl_sector_map: dict = {}
     for _wt, _wd in _wl_data.items():
         if _wd is None:
             continue
         # Per-ticker portfolio fit: this ticker's sector weight in the book
         _wl_sector = str(_wd.get("sector", "")) if isinstance(_wd, dict) else ""
+        _wl_sector_map[str(_wt).upper()] = _wl_sector
         _wl_sec_wt = 0.0
         if _wl_sector and not _wl_port_df.empty and "Sector" in _wl_port_df.columns:
             # Concentration gate basis (equity, 2026-07-09 — reqs G-19): sum the
@@ -23870,6 +23875,26 @@ elif page == "📋 Watchlist":
     # Sort: ENTER_NOW → NEAR_ENTRY → REMOVE → HOLD_OFF_EARNINGS → WAIT_ENTRY → WAIT_CATALYST
     # (actionable opportunities first — see sort_key_for_action for rationale)
     _wl_recs.sort(key=lambda x: sort_key_for_action(x["action"]))
+
+    # ── Recommendations-log capture: ENTER_NOW (2026-09-09) ───────────────────
+    # Grades the one Watchlist verdict that was never persisted/measured,
+    # through the same Recommendations History pipeline new_pick/add_winner/
+    # buy_candidate already use. Pure measurement — never changes what verdict
+    # is shown above. Same triple guard as the Grow Today rec-log capture
+    # (app.py ~5832): only write when the DB is reachable and this isn't a
+    # read-only viewer session.
+    if db.has_db() and not st.session_state.get("_readonly", False):
+        try:
+            from stock_analyzer.recommendations_history import build_enter_now_rows
+            _enter_now_rows = build_enter_now_rows(_wl_recs, _wl_held, _today_et(), _wl_sector_map)
+            if _enter_now_rows:
+                _wl_rec_save_result = db.save_recommendations(_enter_now_rows)
+            else:
+                _wl_rec_save_result = {"attempted": 0, "saved": 0, "error": None}
+        except Exception as _wl_rec_save_err:
+            _wl_rec_save_result = {"attempted": 0, "saved": 0,
+                                    "error": str(_wl_rec_save_err)[:200]}
+        st.session_state["_wl_rec_save_result"] = _wl_rec_save_result
 
     # ── KPI summary strip ─────────────────────────────────────────────────────
     _wl_enter    = sum(1 for r in _wl_recs if r["action"] == "ENTER_NOW")
@@ -28557,6 +28582,7 @@ elif page == "📜 Recommendations History":
         "new_pick": "New Position",
         "add_winner": "Add to Winner",
         "buy_candidate": "Opportunity Watch",
+        "enter_now": "Ready-to-Enter",
     }
     _rh_c1, _rh_c2, _rh_c3 = st.columns([1.4, 1.2, 1.2])
     with _rh_c1:
@@ -28589,8 +28615,8 @@ elif page == "📜 Recommendations History":
     with _rh_c2:
         _rh_type_filter = st.multiselect(
             "Recommendation type",
-            ["new_pick", "add_winner", "buy_candidate"],
-            default=["new_pick", "add_winner"],
+            ["new_pick", "add_winner", "buy_candidate", "enter_now"],
+            default=["new_pick", "add_winner", "enter_now"],
             format_func=lambda v: _REC_TYPE_LABELS.get(v, v),
             key="_rh_type_filter",
         )
@@ -34464,7 +34490,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY** (high-conviction name with tailwind), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer with two independent sections. **Forward Volatility Forecaster** (Phase 1) tests whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. **Earnings-Move Magnitude** (Phase 2) tests whether the app's own already-live pre-earnings sizing heuristic beats a naive "assume it moves like its own past prints" baseline, per held ticker around its scheduled print — unsigned magnitude only, never a directional call, and no "upcoming, not yet matured" preview (an outcome is only ever shown after it's known). Both sections feed **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. Each section's skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated.
-- **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Six checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh), and **⑥ Write outcomes** (did today's interactive ledger writes — the buy recommendations log, the gate suppression ledger — actually save, or did a swallowed failure look identical to a healthy "nothing to record"?). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Check ⑥, unlike ④/⑤, DOES feed the Home banner — it is a same-session pass/fail signal, not a standing condition or a cold-load cache. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.**
+- **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Six checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh), and **⑥ Write outcomes** (did today's interactive ledger writes — the buy recommendations log, the gate suppression ledger, the Watchlist Ready-to-Enter log — actually save, or did a swallowed failure look identical to a healthy "nothing to record"?). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Check ⑥, unlike ④/⑤, DOES feed the Home banner — it is a same-session pass/fail signal, not a standing condition or a cold-load cache. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.**
 - **🛑 The Road Not Taken** — owner-only, not shown in read-only viewer mode. Grades the app's own restraint: every time a gate (macro/sector filters, single-name ceiling, drift conflict, cooldown, early-deterioration WATCH, bear-day tone) held back a pick or an add, this page shows what the forward return vs SPY over the following ~30 trading days would have been — did the app's caution help or hurt? Per gate, not aggregate, and a gate shows no verdict at all ("building") until enough matured, priced, distinct-ticker calls have accrued — expect every gate to read "building" for the first couple of months. **A pure retrospective measurement — it never changes what the engine recommends, gates, or sizes**, today or in the future.
 - **⚙️ App Settings** — owner-only, not shown in read-only viewer mode. Lets you curate the three ticker-roster lists the engine reads — the Grow Today scan universe, the Movers discovery net, and the Diversification candidate roster — from inside the app instead of by editing code. **Edits the engine's INPUT SET, never a decision rule**: no gate, threshold, scoring weight, or `COMPOSITE_BUY` lives here or is ever editable through this page. The database is the single source of truth for these lists — if it's unreachable, the affected page shows "unavailable" rather than silently falling back to a frozen list. Every save is validated (a typo'd symbol blocks the save, never saves with a warning) and versioned in an append-only history, the same way git records why an investment threshold changed.
 
