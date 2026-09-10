@@ -7195,9 +7195,10 @@ if page == "🏠 Home":
                     st.markdown(
                         "<div style='color:#6b7280;font-size:0.72em;font-weight:600;"
                         "letter-spacing:0.06em;margin-top:10px;margin-bottom:4px'>"
-                        "⚡ PRE-MARKET MOVERS (YOUR STOCKS)</div>",
+                        "⚡ PRE-MARKET MOVERS (HELD + WATCHLIST)</div>",
                         unsafe_allow_html=True,
                     )
+                    st.caption("🔵 held = in your portfolio · unmarked = watchlist only")
                     _pm_unverified_ct = sum(
                         1 for _mv in _pm["movers"][:8] if _mv.get("xcheck_ok") is False
                     )
