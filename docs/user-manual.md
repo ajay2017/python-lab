@@ -83,7 +83,7 @@ A normal day is short:
 4. **Review Before Close** — non-urgent housekeeping/awareness (approaching stops, weak large positions).
 5. Drill into anything via the **Analyze** buttons → `📈 Analysis`, or open a specialized page (Risk, Macro, My Edge) only when you want depth.
 
-Pre-market and end-of-day, the **email cron** may have already sent you a protective alert or a morning buy-list — the app and the emails share one engine, so they never contradict.
+Pre-market and end-of-day, the **email cron** may have already sent you a protective alert, a morning buy-list, or a watchlist entry alert — the app and the emails share one engine, so they never contradict.
 
 ## I.3 Page-by-page tour
 
@@ -270,7 +270,7 @@ Headless runs (`cron_runner.py`, shares the app's exact data + credential path).
 |---|---|
 | `_run_premarket` | Pre-market protective alert email (exit-discipline Phase 3, F-140) |
 | `_run_eod` | End-of-day snapshot + reactive pullback email (F-141/F-142); writes `daily_snapshots` + `sentiment_history` |
-| `_run_scan` | Mid-morning scan → morning buy-list email ("offense," F-146/F-147); persists `new_pick` recs even with no interactive session |
+| `_run_scan` | Mid-morning scan → morning buy-list email ("offense," F-146/F-147); persists `new_pick` recs even with no interactive session; also emails a "Watchlist — Ready to Enter" alert (F-265) for any watchlist name newly hitting ENTER_NOW that day — not-held only, transition-gated (silent while a name persists in that state) |
 | `_run_intraday` | Intraday pullback-entry alert lane (Phase 3) |
 | `_run_thesis` | Weekly thesis review (INTACT/WEAKENING/BROKEN, F-151) |
 | `_run_debrief` | Weekly Portfolio Debrief email (F-152) |
