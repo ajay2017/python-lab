@@ -20,6 +20,8 @@ from stock_analyzer.constants import (
     CROSS_ASSET_DXY_ROC_DAYS,
 )
 
+pytestmark = pytest.mark.fast
+
 _DXY_N = max(CROSS_ASSET_DXY_TREND_DAYS, CROSS_ASSET_DXY_ROC_DAYS + 1)
 
 

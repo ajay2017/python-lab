@@ -9,6 +9,8 @@ import pytest
 
 from stock_analyzer import trades as tr
 
+pytestmark = pytest.mark.fast
+
 
 # ─── builders ───────────────────────────────────────────────────────────────
 

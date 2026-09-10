@@ -10,6 +10,8 @@ import pytest
 from stock_analyzer import regime_targets as rt
 from stock_analyzer.constants import REGIME_BETA_CEILING, REGIME_CASH_FLOOR_PCT
 
+pytestmark = pytest.mark.fast
+
 
 # ─── regime id lookup / fallback ────────────────────────────────────────────
 

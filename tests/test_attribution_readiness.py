@@ -18,6 +18,8 @@ import pytest
 from stock_analyzer import attribution_readiness as ar
 from stock_analyzer.data import is_trading_day
 
+pytestmark = pytest.mark.fast
+
 
 def _snaps(rows):
     """rows = [(date, ticker, shares, close_price), ...]"""

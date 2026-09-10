@@ -20,6 +20,8 @@ import requests
 
 from stock_analyzer import earnings_intel as ei
 
+pytestmark = pytest.mark.fast
+
 
 # ─── fake anthropic module helper ────────────────────────────────────────────
 

@@ -19,6 +19,8 @@ from stock_analyzer.earnings_move_forecast import (
     resolve_upcoming_earnings,
 )
 
+pytestmark = pytest.mark.fast
+
 
 # ── resolve_upcoming_earnings ────────────────────────────────────────────────
 

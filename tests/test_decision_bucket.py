@@ -16,6 +16,9 @@ from stock_analyzer.decision_bucket import (
     TRIM_KINDS,
     _REDUCE_ACT_KINDS,
 )
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── classify_bucket ──────────────────────────────────────────────────────────

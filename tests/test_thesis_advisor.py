@@ -22,6 +22,8 @@ import pytest
 
 from stock_analyzer import thesis_advisor as ta
 
+pytestmark = pytest.mark.fast
+
 
 # ─── fake anthropic module helper ────────────────────────────────────────────
 

@@ -17,6 +17,8 @@ from stock_analyzer.ticker_history import (
     build_ticker_history, build_pnl_series, trades_fingerprint, chart_start_gap,
 )
 
+pytestmark = pytest.mark.fast
+
 
 # ─── builders ────────────────────────────────────────────────────────────────
 

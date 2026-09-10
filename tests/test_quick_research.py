@@ -10,6 +10,8 @@ import pytest
 
 from stock_analyzer import quick_research as qr
 
+pytestmark = pytest.mark.fast
+
 
 # ─── _entry_timing — high_risk_avoid tier, each trigger independently ────────
 

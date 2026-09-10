@@ -249,6 +249,9 @@ def test_detect_new_clusters_never_raises_on_malformed_input():
 
 
 from stock_analyzer.util import factor_tilt_evidence_line  # noqa: E402
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 class TestFactorTiltAlwaysDisclosedInNarrativeInputs:

@@ -8,6 +8,9 @@ NEWS_SENTIMENT_SHIFT_ALERT_BULLISH=0.40, NEWS_SENTIMENT_SHIFT_BUZZ_MIN=1.0.
 Previously zero test coverage.
 """
 from stock_analyzer import news_sentiment as ns
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── fetch_sentiment_for_tickers — provider not configured ──────────────────

@@ -24,6 +24,8 @@ from stock_analyzer.constants import (
     SINGLE_NAME_CEILING,
 )
 
+pytestmark = pytest.mark.fast
+
 TODAY = date(2026, 8, 6)  # a Thursday — ISO week 32 of 2026
 
 

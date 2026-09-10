@@ -25,6 +25,8 @@ from stock_analyzer.constants import (
     WORKFLOW_MIN_THESIS_LENGTH,
 )
 
+pytestmark = pytest.mark.fast
+
 TODAY = date(2026, 7, 28)
 
 

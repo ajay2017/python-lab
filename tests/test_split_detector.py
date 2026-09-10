@@ -16,6 +16,8 @@ import pytest
 
 from stock_analyzer import split_detector as sd
 
+pytestmark = pytest.mark.fast
+
 
 # ─── cumulative_ratio ────────────────────────────────────────────────────────
 

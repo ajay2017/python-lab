@@ -20,6 +20,9 @@ from datetime import date
 
 from stock_analyzer import reference_shelf as rs
 from stock_analyzer import system_health
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 def _all_reference_maximally_overdue(monkeypatch):

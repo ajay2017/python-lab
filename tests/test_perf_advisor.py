@@ -8,6 +8,9 @@ import pandas as pd
 
 from stock_analyzer import perf_advisor as pa
 from stock_analyzer.constants import COMPOSITE_HOLD
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ── _f ───────────────────────────────────────────────────────────────────

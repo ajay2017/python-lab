@@ -42,6 +42,8 @@ from stock_analyzer.daily_briefing import (
 )
 from stock_analyzer.risk import position_sizing, sizing_unavailable_reason
 
+pytestmark = pytest.mark.fast
+
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
 _TODAY = date(2026, 8, 22)

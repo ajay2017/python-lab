@@ -49,6 +49,8 @@ from stock_analyzer.daily_briefing import (
 from stock_analyzer.signal_reconciliation import effective_verdict_bucket
 from tests.conftest import find_item, make_port_df
 
+pytestmark = pytest.mark.fast
+
 _TODAY = date(2026, 7, 27)
 
 

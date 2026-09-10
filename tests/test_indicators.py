@@ -9,6 +9,8 @@ import pytest
 
 from stock_analyzer import indicators as ind
 
+pytestmark = pytest.mark.fast
+
 
 # ─── builders ───────────────────────────────────────────────────────────────
 

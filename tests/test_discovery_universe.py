@@ -12,6 +12,9 @@ test-hygiene improvement this cutover forces, not a loss of coverage: the
 function's logic is identical regardless of which payload it's handed.
 """
 from stock_analyzer import discovery_universe as du
+import pytest
+
+pytestmark = pytest.mark.fast
 
 # Minimal fixture universe: two buckets, one ticker (BBB1) duplicated across
 # both so tests can exercise cross-bucket dedup, not just within-bucket dedup.

@@ -13,6 +13,8 @@ import pytest
 
 from stock_analyzer import api_health
 
+pytestmark = pytest.mark.fast
+
 
 @pytest.fixture(autouse=True)
 def _reset_stats():

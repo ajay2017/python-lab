@@ -16,6 +16,8 @@ from stock_analyzer.constants import COMPOSITE_BUY, MACRO_IMMINENT_DAYS
 from stock_analyzer.daily_briefing import _expired_macro_series, _grow_today
 from stock_analyzer.notify import _macro_coverage_banner
 
+pytestmark = pytest.mark.fast
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

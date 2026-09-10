@@ -20,6 +20,8 @@ import pytest
 import stock_analyzer.recommendations_history as rh
 from stock_analyzer import intelligence_report as ir
 
+pytestmark = pytest.mark.fast
+
 
 # ─── fake anthropic module helper ────────────────────────────────────────────
 

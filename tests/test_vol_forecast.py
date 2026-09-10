@@ -9,6 +9,8 @@ import pytest
 
 from stock_analyzer.vol_forecast import forecast_vol_ewma, realized_vol
 
+pytestmark = pytest.mark.fast
+
 
 def _returns(seed: int, n: int, scale: float = 0.01) -> pd.Series:
     rng = np.random.default_rng(seed)

@@ -10,6 +10,8 @@ import pytest
 from stock_analyzer import comparison as cmp
 from stock_analyzer.constants import SECTOR_CEILING, SECTOR_ELEVATED
 
+pytestmark = pytest.mark.fast
+
 
 # ── _f ────────────────────────────────────────────────────────────────────
 

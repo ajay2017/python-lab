@@ -20,6 +20,8 @@ import pytest
 
 from stock_analyzer import protective_track_record as ptr
 
+pytestmark = pytest.mark.fast
+
 
 # ─── builders ───────────────────────────────────────────────────────────────
 

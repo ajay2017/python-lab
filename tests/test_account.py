@@ -5,6 +5,9 @@ annualized money-weighted return (short window and/or a levered account) can
 look far more dramatic than the underlying period return warrants.
 """
 from stock_analyzer.account import annualization_caveat, _ANNUALIZE_CAVEAT_MAX_DAYS
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 def test_none_days_returns_none():

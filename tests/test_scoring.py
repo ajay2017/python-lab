@@ -15,6 +15,9 @@ from stock_analyzer.constants import (
     COMPOSITE_SELL,
     COMPOSITE_WEIGHTS,
 )
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 def test_composite_weights_sum_to_one():

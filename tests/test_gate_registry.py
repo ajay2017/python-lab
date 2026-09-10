@@ -19,6 +19,8 @@ import pytest
 
 from stock_analyzer.gate_registry import GATE_IDS
 
+pytestmark = pytest.mark.fast
+
 
 def _parse_gate_ids_from_requirements() -> set[str]:
     """Return the set of gate IDs (G-NN) listed in the §2A.3 table."""

@@ -11,6 +11,8 @@ import pytest
 
 from stock_analyzer import benchmark_mirror as bm
 
+pytestmark = pytest.mark.fast
+
 
 # ─── price_on_or_before ───────────────────────────────────────────────────────
 

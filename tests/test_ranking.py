@@ -7,6 +7,9 @@ precision matters here. Pure pandas, no I/O.
 import pandas as pd
 
 from stock_analyzer import ranking
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── tier_label — boundary pairs at 90 / 75 / 50 / 25 / 10 ─────────────────

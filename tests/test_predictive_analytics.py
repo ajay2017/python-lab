@@ -21,6 +21,8 @@ import pytest
 from stock_analyzer import predictive_analytics as pa
 from stock_analyzer.constants import NYSE_HOLIDAYS
 
+pytestmark = pytest.mark.fast
+
 
 # ─── builders ───────────────────────────────────────────────────────────────
 

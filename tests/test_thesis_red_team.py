@@ -21,6 +21,8 @@ from stock_analyzer.thesis_red_team import (
     pt_points_from_signal,
 )
 
+pytestmark = pytest.mark.fast
+
 
 # ─── Phase 1: compute_erosion_score ──────────────────────────────────────────
 

@@ -34,6 +34,8 @@ from stock_analyzer.portfolio import (
     trim_allocation,
 )
 
+pytestmark = pytest.mark.fast
+
 
 # ── protective_stop ───────────────────────────────────────────────────────────
 

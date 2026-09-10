@@ -30,6 +30,8 @@ from stock_analyzer.constants import (
     REGIME_VIX_ELEVATED, REGIME_VIX_CALM, REGIME_WINNING_SCORE_MIN,
 )
 
+pytestmark = pytest.mark.fast
+
 
 # ─── _days_label ──────────────────────────────────────────────────────────────
 

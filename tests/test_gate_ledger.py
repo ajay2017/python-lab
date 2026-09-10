@@ -19,6 +19,8 @@ import pytest
 from stock_analyzer.gate_ledger import build_suppression_rows
 from stock_analyzer.constants import MARKET_TONE_BEAR_PCT
 
+pytestmark = pytest.mark.fast
+
 
 REC_DATE = datetime.date(2026, 8, 27)
 SOURCE = "app"

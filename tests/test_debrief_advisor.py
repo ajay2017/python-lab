@@ -20,6 +20,8 @@ import pytest
 
 from stock_analyzer import debrief_advisor as da
 
+pytestmark = pytest.mark.fast
+
 
 # ─── fake anthropic module helper ────────────────────────────────────────────
 

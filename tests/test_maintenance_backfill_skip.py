@@ -15,6 +15,9 @@ The tri-state from `db.has_backfilled_predictions` is the whole point:
            whereas wrongly skipping leaves a permanent hole in the ledger.
 """
 import scripts.backfill_vol_predictions as bvp
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 def _stub(monkeypatch, *, held, backfilled_state, rows_written=3):

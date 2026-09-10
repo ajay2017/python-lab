@@ -12,6 +12,8 @@ import pytest
 from stock_analyzer import portfolio_health as ph
 from tests.conftest import make_port_df
 
+pytestmark = pytest.mark.fast
+
 
 # ── grade_colors / _grade / score_color ──────────────────────────────────
 

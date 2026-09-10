@@ -21,6 +21,8 @@ import pytest
 from stock_analyzer import recommendations_history as rh
 from stock_analyzer.constants import COMPOSITE_STRONG_BUY, COMPOSITE_BUY, COMPOSITE_HOLD
 
+pytestmark = pytest.mark.fast
+
 
 # ─── builders ───────────────────────────────────────────────────────────────
 

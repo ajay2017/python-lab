@@ -20,6 +20,8 @@ import pytest
 from stock_analyzer import db, outage_gate, system_health
 from stock_analyzer.constants import DB_OUTAGE_SAFE_PAGES, DB_RELOAD_RETRY_SEC
 
+pytestmark = pytest.mark.fast
+
 
 # ─── The fabricated watchlist — the sharpest defect of the two ───────────────
 

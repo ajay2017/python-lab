@@ -37,6 +37,8 @@ from stock_analyzer.reference_data import (
     validate_payload,
 )
 
+pytestmark = pytest.mark.fast
+
 
 # ── Fakes, mirroring tests/test_db_model_predictions.py's style, extended ───
 # with a shared mutable per-table store so a test can save then load and see

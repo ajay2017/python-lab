@@ -8,6 +8,9 @@ import numpy as np
 import pandas as pd
 
 from stock_analyzer.decision_context import SCHEMA_VERSION, build_snapshot
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── all-defaults call: full documented shape, no exception ────────────────

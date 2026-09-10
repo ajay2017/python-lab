@@ -11,6 +11,8 @@ import pytest
 from stock_analyzer.providers import orchestrator
 from stock_analyzer.providers.base import ProviderUnavailable
 
+pytestmark = pytest.mark.fast
+
 
 class _BrokenProvider:
     name = "broken"

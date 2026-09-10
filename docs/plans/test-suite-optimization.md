@@ -1,12 +1,12 @@
 # Test Suite Optimization Plan
 
-**Status:** Queued (prioritization pending) | **Baseline Collection Time:** ~120 seconds
+**Status:** Tier 1 (1.1 + 1.2) SHIPPED 2026-09-09 — 1.3 deliberately deferred (see checklist). Tier 2/3 still Queued. | **Baseline Collection Time:** ~120 seconds as measured 2026-08-17 — **superseded 2026-09-09, see note below.**
 
----
+**2026-09-09 remeasurement note (suite has grown 3,674 → 5,139 tests since the 120s figure was recorded):** a fresh `pytest --collect-only -q` on this machine now runs in **~7-28s** (28.17s cold, 7.08-7.58s on repeated warm runs) — collection itself is no longer the bottleneck the 120s figure described; something about the original measurement's environment (cold disk cache, a slower box, a different Python/pytest version) no longer applies here, and it isn't worth re-deriving which. **More important, and worth being honest about:** the `pytest -m fast` marker shipped by Work Item 1.1 does **not** meaningfully speed up either phase in practice, for two measured reasons. First, `-m fast` does not skip pytest's collection phase — collection imports every test file's top-level code regardless of marker; the marker only deselects items *after* collection. Second, of 5,139 total tests, only 127 (spread across 8 files) transitively import `stock_analyzer.bundle_loader` and get excluded — a clean, uncontended `pytest -m fast -q` ran 5,012 tests in 376.45s, and a clean, uncontended full `pytest tests/ -q` ran all 5,139 in 378.82s. That's a ~2.4s difference, not the "30s vs 120s" this plan originally targeted. The dependency-graph analysis behind this (Work Item 1.2) is still real and useful — it just found that `bundle_loader` reachability, as literally specified, isn't where this suite's wall-clock time actually goes; most of the ~378s is per-test execution cost (pandas/numpy work, mocked-DB round trips, simulations) spread fairly evenly across almost every file, not import-time fan-out concentrated in a small "heavy" set. Tier 2/3 (structural extraction, lazy-loading) were not evaluated against this finding and remain out of scope for this pass.
 
 ## Problem Statement
 
-Small bug fixes trigger full pytest collection of 3,674 tests (~120s overhead). Root cause: Python's atomic module imports + pytest's mandatory collection phase force the entire codebase to load even for scoped test runs. No architectural defects; normal scaling challenge for ~90-module codebases.
+Small bug fixes trigger full pytest collection of 3,674 tests (~120s overhead) — **as measured 2026-08-17; see the status line above for a 2026-09-09 remeasurement that no longer reproduces the 120s figure.** Root cause: Python's atomic module imports + pytest's mandatory collection phase force the entire codebase to load even for scoped test runs. No architectural defects; normal scaling challenge for ~90-module codebases.
 
 **Full analysis:** [docs/test-architecture-analysis.md](../test-architecture-analysis.md)
 
@@ -199,19 +199,19 @@ pytest -m risk_analysis  # Loads only risk feature + its deps
 
 ### Tier 1 (This Week)
 
-- [ ] **1.1 Mark fast tests**
-  - [ ] Identify ~25-30 fast test functions
-  - [ ] Add `@pytest.mark.fast` markers
-  - [ ] Update `DEVELOPMENT.md` with usage
-  - [ ] Verify `pytest -m fast` runs in ~30s
-  - [ ] Add to `.pytest.ini` / `pyproject.toml`
+- [x] **1.1 Mark fast tests** — SHIPPED 2026-09-09, built from 1.2's real graph, not a guess.
+  - [x] Identify fast-eligible test FILES: 134 of 142 (via `scripts/analyze_test_deps.py`'s transitive `bundle_loader`-reachability check) — far more than the stale "~25-30 tests" estimate below, because the codebase and its import graph moved on since 2026-08-17.
+  - [x] Add `pytestmark = pytest.mark.fast` (module-level, matches this codebase's existing "no per-function marker noise" convention) to all 134 files
+  - [x] Update `DEVELOPMENT.md` with usage
+  - [x] Verify `pytest -m fast` runs — **measured 376.45s (5,012 passed, 127 deselected), not ~30s.** See the 2026-09-09 remeasurement note above the Problem Statement for why the original 30s target doesn't hold today.
+  - [x] Add to `pytest.ini` (this repo's existing mechanism — no `conftest.py` `pytest_configure` hook existed, so no second config mechanism was introduced)
 
-- [ ] **1.2 Analyze bottlenecks**
-  - [ ] Create `scripts/analyze_test_deps.py`
-  - [ ] Run and save to `docs/test-dependency-graph.md`
-  - [ ] Document in CLAUDE.md for reference
+- [x] **1.2 Analyze bottlenecks** — SHIPPED 2026-09-09.
+  - [x] Create `scripts/analyze_test_deps.py` (static `ast` parsing only, no imports/execution)
+  - [x] Run and save to `docs/test-dependency-graph.md`
+  - [ ] Document in CLAUDE.md for reference — **not done this pass**, out of scope per this work's own instructions (CLAUDE.md is curated separately; this plan doc + DEVELOPMENT.md are the sanctioned sync points for this change).
 
-- [ ] **1.3 Add pytest markers**
+- [ ] **1.3 Add pytest markers to all tests — deliberately deferred, not started.** Per this item's own note below ("Still imports all files in collection phase"), it provides zero collection-time benefit and is a large mechanical sweep across ~142 test files for a benefit that, per the 2026-09-09 remeasurement, wasn't real to begin with (collection is already ~7-28s here, not 120s). Revisit only if collection time itself regresses to something worth chasing.
   - [ ] Update `tests/conftest.py` with marker registration
   - [ ] Mark all test functions by module
   - [ ] Verify markers in test output

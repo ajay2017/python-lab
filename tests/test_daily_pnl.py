@@ -6,6 +6,9 @@ Pure dict/list math, no I/O. Previously zero test coverage.
 import math
 
 from stock_analyzer import daily_pnl as dp
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── _num — NaN/None/junk coercion ────────────────────────────────────────────

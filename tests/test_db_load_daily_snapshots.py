@@ -15,6 +15,9 @@ pattern exactly.
 import pandas as pd
 
 from stock_analyzer import db
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 class _FakeExecResult:

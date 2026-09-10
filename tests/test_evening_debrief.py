@@ -11,6 +11,8 @@ import pytest
 
 from stock_analyzer import evening_debrief as ed
 
+pytestmark = pytest.mark.fast
+
 
 # ─── _trades_today — builders ────────────────────────────────────────────────
 

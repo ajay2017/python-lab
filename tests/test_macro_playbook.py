@@ -27,6 +27,9 @@ from stock_analyzer.macro_playbook import (
     build_post_event_analysis,
     get_scenario_conditions,
 )
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 def _row(**overrides):

@@ -12,6 +12,8 @@ import pytest
 
 from stock_analyzer import premarket
 
+pytestmark = pytest.mark.fast
+
 
 # ─── is_premarket — structural only (real wall-clock time) ──────────────────
 

@@ -9,6 +9,8 @@ import pytest
 
 from stock_analyzer import decision_journal as dj
 
+pytestmark = pytest.mark.fast
+
 
 def _row(ticker="AAPL", action="SELL", realized_pnl=None, followed_signal=None,
          signal_seen="", deviation_reason="", lesson="", lesson_category="",

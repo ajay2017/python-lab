@@ -14,6 +14,8 @@ from stock_analyzer import trade_time as tt
 from stock_analyzer.constants import IMPORTED_TRADE_ANCHOR_ET_HOUR
 from stock_analyzer.market_time import et_anchor_iso
 
+pytestmark = pytest.mark.fast
+
 
 def _row(traded_at, notes=None, broker_txn_id=None, ticker="AAA", action="BUY"):
     return {"ticker": ticker, "action": action, "shares": 10.0, "price": 100.0,

@@ -10,6 +10,8 @@ import pytest
 
 from stock_analyzer import personalized_discovery as pd_mod
 
+pytestmark = pytest.mark.fast
+
 
 def _lot(ticker, buy_date, sell_date=None, is_gain=True, pnl_pct=10.0, shares=10.0):
     return {

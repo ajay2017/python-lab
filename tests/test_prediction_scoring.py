@@ -10,6 +10,8 @@ import pytest
 from stock_analyzer.constants import PREDICTION_MIN_MATURED_N
 from stock_analyzer.prediction_scoring import below_min_matured_floor, score_predictions
 
+pytestmark = pytest.mark.fast
+
 
 def _rows(n, predicted_offset, baseline_offset, source="live", regime=None,
           ticker="AAA", start_day=1, horizon=20, realized_base=50.0):

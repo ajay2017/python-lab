@@ -24,6 +24,8 @@ from stock_analyzer.constants import (
     SENTIMENT_LLM_MAX_SWING,
 )
 
+pytestmark = pytest.mark.fast
+
 
 # ── fake anthropic module helper ───────────────────────────────────────────
 

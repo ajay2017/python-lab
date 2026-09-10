@@ -11,6 +11,8 @@ import pytest
 from stock_analyzer.grow_dropoff import derive_dropoffs, firmness, tier_floor_for
 from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_FIRMNESS_MARGIN, COMPOSITE_STRONG_BUY
 
+pytestmark = pytest.mark.fast
+
 
 # ── firmness() ────────────────────────────────────────────────────────────────
 

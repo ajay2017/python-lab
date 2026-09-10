@@ -17,6 +17,8 @@ import pytest
 
 from stock_analyzer import broker_sync, db
 
+pytestmark = pytest.mark.fast
+
 
 # ── broker_sync.classify_transactions threads the id through `flows` ────────
 

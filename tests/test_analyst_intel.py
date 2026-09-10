@@ -20,6 +20,8 @@ from stock_analyzer.constants import (
     ANALYST_CALIBRATION_MIN_CASES, COMPOSITE_BUY,
 )
 
+pytestmark = pytest.mark.fast
+
 
 # ─── fake anthropic module helper ────────────────────────────────────────────
 

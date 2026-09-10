@@ -6,6 +6,9 @@ import pandas as pd
 
 from stock_analyzer import analyst_targets as at
 from stock_analyzer.constants import PT_TARGET_LOOKBACK_DAYS
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── builders ───────────────────────────────────────────────────────────────

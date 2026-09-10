@@ -18,6 +18,9 @@ from stock_analyzer.constants import (
     TARGETS_BEAR_SUPPORT_CUSHION_MULT,
     TARGETS_BEAR_52W_LOW_CUSHION_MULT,
 )
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── builders ───────────────────────────────────────────────────────────────

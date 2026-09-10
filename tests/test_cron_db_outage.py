@@ -16,6 +16,9 @@ The two invariants worth more than the feature:
 import pandas as pd
 
 from stock_analyzer import db
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ── the source fix: distinguishing unreadable from empty ──────────────────────

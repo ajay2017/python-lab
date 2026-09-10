@@ -13,6 +13,9 @@ don't need to chase an exact boundary value. Previously zero test coverage.
 import pandas as pd
 
 from stock_analyzer import sentiment_velocity as sv
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── builders ───────────────────────────────────────────────────────────────

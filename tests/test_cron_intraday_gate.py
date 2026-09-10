@@ -15,6 +15,8 @@ import pytest
 
 from stock_analyzer.constants import CRON_INTRADAY_START_HOUR_ET
 
+pytestmark = pytest.mark.fast
+
 
 def test_cron_intraday_start_hour_is_eleven():
     """The decided value — a policy constant, not to be changed casually."""

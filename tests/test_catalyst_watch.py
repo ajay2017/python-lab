@@ -6,6 +6,9 @@ coverage.
 from datetime import date
 
 from stock_analyzer import catalyst_watch as cw
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── _parse_date ─────────────────────────────────────────────────────────────

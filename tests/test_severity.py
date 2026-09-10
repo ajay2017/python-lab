@@ -17,6 +17,8 @@ from stock_analyzer.severity import (
     style,
 )
 
+pytestmark = pytest.mark.fast
+
 
 def test_severity_style_has_exactly_four_tiers():
     assert set(SEVERITY_STYLE.keys()) == {ACT_NOW, ELEVATED, WATCH, STEADY}

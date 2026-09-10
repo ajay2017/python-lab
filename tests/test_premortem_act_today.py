@@ -12,6 +12,9 @@ from datetime import date
 from stock_analyzer import decision_bucket as db
 from stock_analyzer.daily_briefing import _act_today, _consolidate_act_today
 from tests.conftest import find_item, make_port_df
+import pytest
+
+pytestmark = pytest.mark.fast
 
 TODAY = date(2024, 1, 15)
 

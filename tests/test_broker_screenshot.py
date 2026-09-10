@@ -17,6 +17,8 @@ import pytest
 
 from stock_analyzer import broker_screenshot as bs
 
+pytestmark = pytest.mark.fast
+
 
 # ─── fake anthropic module helper ────────────────────────────────────────────
 

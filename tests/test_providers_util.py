@@ -12,6 +12,8 @@ import requests
 
 from stock_analyzer.providers._util import http_get_json, _redact_url
 
+pytestmark = pytest.mark.fast
+
 
 def test_redact_url_strips_apikey_param():
     url = "https://finnhub.io/api/v1/quote?symbol=AAPL&token=SECRET123"

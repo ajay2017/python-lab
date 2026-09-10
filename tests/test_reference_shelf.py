@@ -15,6 +15,9 @@ from stock_analyzer.constants import (
     REFERENCE_HORIZON_MIN_DAYS,
     REFERENCE_SHELF_LIFE_DAYS,
 )
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ── ① registry/constants key-set sync, BOTH directions ────────────────────────

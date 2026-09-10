@@ -16,6 +16,9 @@ from stock_analyzer.act_today_precedence import (
     held_position_state,
     is_stop_breached,
 )
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── gap_to_stop_pct ──────────────────────────────────────────────────────────

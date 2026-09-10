@@ -259,6 +259,9 @@ class TestSurfaceNarrowing:
 
 import importlib.util as _ilu
 import pathlib as _pl
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 def _sentinel_keys():

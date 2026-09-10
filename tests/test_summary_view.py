@@ -26,6 +26,8 @@ from stock_analyzer.constants import (
     COMPOSITE_SELL,
 )
 
+pytestmark = pytest.mark.fast
+
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
 

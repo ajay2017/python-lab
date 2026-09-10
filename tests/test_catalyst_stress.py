@@ -17,6 +17,8 @@ import pytest
 
 from stock_analyzer import catalyst_stress as cs
 
+pytestmark = pytest.mark.fast
+
 
 # ─── fake anthropic module helper ────────────────────────────────────────────
 

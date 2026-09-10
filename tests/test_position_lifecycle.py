@@ -13,6 +13,8 @@ from stock_analyzer.constants import (
     POSITION_WINNING_PNL_PCT,
 )
 
+pytestmark = pytest.mark.fast
+
 
 # ── classify_position_state — precedence order ─────────────────────────────
 

@@ -10,6 +10,9 @@ from datetime import date, datetime
 import pandas as pd
 
 from stock_analyzer.providers import yfinance_provider as yfp
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 def _raw(dates: list[str], closes: dict[str, list[float]]) -> pd.DataFrame:

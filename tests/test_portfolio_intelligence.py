@@ -13,6 +13,8 @@ from stock_analyzer import portfolio_intelligence as pi
 from stock_analyzer.constants import CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD
 from stock_analyzer.stress_test import _MIN_STRESS_WINDOW_DAYS
 
+pytestmark = pytest.mark.fast
+
 
 # ─── correlation_clusters — builders ─────────────────────────────────────────
 

@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.fast
+
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "check_antipatterns.py"
 _spec = importlib.util.spec_from_file_location("check_antipatterns", _SCRIPT)
 ca = importlib.util.module_from_spec(_spec)

@@ -5,6 +5,8 @@ import pytest
 
 from stock_analyzer import fundamentals as fnd
 
+pytestmark = pytest.mark.fast
+
 
 # ─── count_core_metrics ───────────────────────────────────────────────────────
 

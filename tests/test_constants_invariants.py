@@ -8,6 +8,9 @@ would not raise an ImportError anywhere; it would just quietly make a tier
 unreachable or a gate fire backwards.
 """
 from stock_analyzer import constants as c
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 def test_composite_score_boundaries_are_strictly_ordered():

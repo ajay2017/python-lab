@@ -28,6 +28,8 @@ from stock_analyzer import ticker_liveness as _tl
 from stock_analyzer.constants import TICKER_LIVENESS_MIN_BATCH_HEALTH_PCT
 from stock_analyzer.ticker_liveness import sweep
 
+pytestmark = pytest.mark.fast
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 

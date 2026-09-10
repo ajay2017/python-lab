@@ -15,6 +15,8 @@ import pytest
 
 from stock_analyzer import monte_carlo as mc
 
+pytestmark = pytest.mark.fast
+
 
 # ─── _f / _weight_fraction ──────────────────────────────────────────────────
 

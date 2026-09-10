@@ -25,6 +25,8 @@ from stock_analyzer.constants import (
 )
 from stock_analyzer.exit_advisor import EXIT, TRIM, WATCH, TIER_RANK, assess_holding
 
+pytestmark = pytest.mark.fast
+
 _MA = f"SMA_{DETERIORATION_TREND_MA}"
 
 

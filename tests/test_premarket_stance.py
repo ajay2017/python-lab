@@ -11,6 +11,8 @@ import pytest
 
 from stock_analyzer import premarket_stance as ps
 
+pytestmark = pytest.mark.fast
+
 
 # ─── assemble_inputs — all-empty default shape ──────────────────────────────
 

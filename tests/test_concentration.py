@@ -10,6 +10,9 @@ from stock_analyzer.concentration import assess_add_concentration, gating_denomi
 from stock_analyzer.constants import (
     SECTOR_CEILING, SECTOR_ELEVATED, SINGLE_NAME_CEILING, NET_CAPITAL_POSITION_CAP_PCT,
 )
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ── gating_denominator ───────────────────────────────────────────────────────

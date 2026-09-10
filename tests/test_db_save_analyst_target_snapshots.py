@@ -13,6 +13,8 @@ import pytest
 
 from stock_analyzer import db
 
+pytestmark = pytest.mark.fast
+
 
 class _FakeExecResult:
     def __init__(self, data):

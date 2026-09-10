@@ -4,6 +4,9 @@ composite scoring pillars, previously with zero test coverage despite
 directly feeding the engine's Buy/Sell recommendations.
 """
 from stock_analyzer.valuation import valuation_score
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 def test_no_data_at_all_defaults_to_neutral_50():

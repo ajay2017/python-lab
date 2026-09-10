@@ -15,6 +15,9 @@ from stock_analyzer.predictive_analytics import (
     forward_alpha_at_horizon,
     synthesize_directives,
 )
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 def _rec(ticker, d, rec_type="new_pick", composite=70.0, momentum=95.0, **extra):

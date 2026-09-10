@@ -27,6 +27,8 @@ from stock_analyzer.constants import (
 )
 from stock_analyzer.decision_journal import SITUATIONAL_CATEGORIES
 
+pytestmark = pytest.mark.fast
+
 
 # ─── builders ───────────────────────────────────────────────────────────────
 

@@ -11,6 +11,8 @@ import pytest
 
 from stock_analyzer import investor_mirror as im
 
+pytestmark = pytest.mark.fast
+
 
 # ─── build_closed_lots — builders ────────────────────────────────────────────
 

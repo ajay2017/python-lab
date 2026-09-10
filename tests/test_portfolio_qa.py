@@ -33,6 +33,8 @@ from stock_analyzer.portfolio_qa import (
     _nearest_analyst_coverage,
 )
 
+pytestmark = pytest.mark.fast
+
 
 # ── fake anthropic module helper (mirrors test_news_intelligence.py) ────────
 

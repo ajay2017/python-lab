@@ -17,6 +17,8 @@ import yfinance
 
 from stock_analyzer import stress_test as st
 
+pytestmark = pytest.mark.fast
+
 
 # ─── _f ────────────────────────────────────────────────────────────────────────
 

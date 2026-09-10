@@ -244,6 +244,25 @@ Log the outcome in [docs/test-results.md](docs/test-results.md) if it's worth
 tracking (a new batch, a failure, a coverage shift) — that file is the running
 history of pass/fail counts and coverage, not a one-time snapshot.
 
+**Fast iteration during development** (Tier 1 of
+[docs/plans/test-suite-optimization.md](docs/plans/test-suite-optimization.md),
+shipped 2026-09-09): pure-logic test files that never transitively import
+`stock_analyzer.bundle_loader` are marked `pytestmark = pytest.mark.fast`.
+```
+pytest -m fast    # pure logic tests only, no bundle_loader
+pytest            # full suite (run before commit)
+```
+See [docs/test-dependency-graph.md](docs/test-dependency-graph.md) (built by
+`scripts/analyze_test_deps.py`) for exactly which 134 of 142 test files that
+covers and why. **Caveat, measured, not assumed:** `pytest -m fast` does not
+skip pytest's collection phase — collection still imports every test file
+regardless of marker, so the saving is in execution time (skipping the ~127
+tests that only the 8 `bundle_loader`-reaching files contain), not import
+time. On this machine, fresh `--collect-only` now runs in ~7-28s (not the
+~120s this plan's baseline cited 23 days earlier) — see the plan doc's
+"Baseline Collection Time" line for the corrected figure and why the marker's
+real benefit is smaller than originally assumed.
+
 **As of 2026-07-27 this is also mechanically enforced**, not just documented:
 `.claude/hooks/pre_tool_checks.py` blocks a `git commit` touching
 `stock_analyzer/`/`tests/` (and always blocks `git push`) if `pytest tests/`

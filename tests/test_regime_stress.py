@@ -230,6 +230,9 @@ def test_generate_regime_scenario_no_api_key_returns_none():
 
 
 from stock_analyzer.util import factor_tilt_evidence_line  # noqa: E402
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 class TestFactorTiltAlwaysDisclosedInEvidence:

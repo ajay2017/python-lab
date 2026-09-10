@@ -6,6 +6,9 @@ for pure-logic passes). compute_intraday_entries carries real decision
 logic (a fail-safe SPY suppression gate) and gets the most rigorous coverage.
 """
 from stock_analyzer import intraday_entry as ie
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── _safe_float ─────────────────────────────────────────────────────────────

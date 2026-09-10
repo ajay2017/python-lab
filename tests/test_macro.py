@@ -14,6 +14,9 @@ from stock_analyzer.constants import (
     RISK_OFF_VIX_LEVEL,
     RISK_ON_VIX_LEVEL,
 )
+import pytest
+
+pytestmark = pytest.mark.fast
 
 # A "neutral" VIX reading that trips neither risk_off nor risk_on, used to
 # isolate the rate_env signal in combined/label precedence tests.

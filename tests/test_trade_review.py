@@ -21,6 +21,8 @@ import pytest
 from stock_analyzer import trade_review as tr
 from stock_analyzer.constants import SECTOR_ELEVATED, SINGLE_NAME_CEILING
 
+pytestmark = pytest.mark.fast
+
 
 # ─── builders ───────────────────────────────────────────────────────────────
 

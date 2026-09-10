@@ -20,6 +20,8 @@ from stock_analyzer.constants import (
     TAX_WASH_SALE_DAYS,
 )
 
+pytestmark = pytest.mark.fast
+
 TODAY = date(2026, 7, 28)
 
 

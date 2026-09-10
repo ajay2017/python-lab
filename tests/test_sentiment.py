@@ -6,6 +6,9 @@ vaderSentiment library (a deterministic local NLP scorer, not a network call)
 side of the label boundary rather than mocked. Previously zero test coverage.
 """
 from stock_analyzer import sentiment as sm
+import pytest
+
+pytestmark = pytest.mark.fast
 
 # Verified via direct polarity_scores() calls against the real analyzer:
 # compound ≈ +0.44 (clearly >= 0.05) and ≈ -0.54 (clearly <= -0.05).

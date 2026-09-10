@@ -37,6 +37,9 @@ from stock_analyzer.constants import (
 from stock_analyzer.earnings_advisor import _today_et
 from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
 from tests.conftest import find_rec, make_risk_advisor_inputs
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 _ONE_ROW = [{"ticker": "AAA", "weight": 20.0, "market_value": 20_000.0, "beta": 1.0}]

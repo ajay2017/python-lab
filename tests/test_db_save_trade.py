@@ -12,6 +12,8 @@ import pytest
 
 from stock_analyzer import db
 
+pytestmark = pytest.mark.fast
+
 
 class _FakeExecuteResult:
     pass

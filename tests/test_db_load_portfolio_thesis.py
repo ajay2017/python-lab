@@ -14,6 +14,9 @@ zero-row result. Mirrors test_db_load_exit_signals.py's pattern exactly,
 adapted for a list[dict] return type instead of a DataFrame.
 """
 from stock_analyzer import db
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 class _FakeExecResult:

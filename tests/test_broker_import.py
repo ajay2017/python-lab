@@ -8,6 +8,9 @@ import io
 import pandas as pd
 
 from stock_analyzer import broker_import as bi
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 _HEADER = "Activity Date,Instrument,Trans Code,Quantity,Price,Description\n"

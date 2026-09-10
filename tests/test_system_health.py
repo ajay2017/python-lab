@@ -12,6 +12,9 @@ from datetime import timedelta
 
 from stock_analyzer import system_health as sh
 from stock_analyzer import db, api_health, market_time
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ── fakes (mirror test_db_model_predictions.py style) ─────────────────────────

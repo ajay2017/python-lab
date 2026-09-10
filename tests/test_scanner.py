@@ -26,6 +26,8 @@ import pytest
 
 from stock_analyzer import scanner
 
+pytestmark = pytest.mark.fast
+
 
 # ─── builders ───────────────────────────────────────────────────────────────
 

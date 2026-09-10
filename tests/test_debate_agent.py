@@ -20,6 +20,8 @@ import pytest
 
 from stock_analyzer import debate_agent as da
 
+pytestmark = pytest.mark.fast
+
 
 # ─── fake anthropic module helper ────────────────────────────────────────────
 

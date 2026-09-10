@@ -14,6 +14,9 @@ import pandas as pd
 
 from stock_analyzer import broker_sync as bs
 from stock_analyzer.constants import BROKER_DRIFT_SHARE_TOL
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 def _pos(ticker, units, kind="stock"):

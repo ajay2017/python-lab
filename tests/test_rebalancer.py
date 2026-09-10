@@ -10,6 +10,8 @@ import pytest
 from stock_analyzer import rebalancer as reb
 from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_HOLD
 
+pytestmark = pytest.mark.fast
+
 
 # ── _f ────────────────────────────────────────────────────────────────────
 

@@ -24,6 +24,8 @@ from stock_analyzer.risk import (
 )
 from stock_analyzer.constants import ATR_STOP_MULT
 
+pytestmark = pytest.mark.fast
+
 
 def _flat_range_df(close: float, half_range: float, n: int = 30) -> pd.DataFrame:
     """Constant daily High-Low range around a constant Close -> ATR converges

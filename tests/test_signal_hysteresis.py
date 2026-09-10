@@ -8,6 +8,8 @@ import pytest
 from stock_analyzer import signal_hysteresis as sh
 from stock_analyzer.constants import HYSTERESIS_COMPOSITE_DELTA
 
+pytestmark = pytest.mark.fast
+
 
 # ── _pick_composite ────────────────────────────────────────────────────────
 

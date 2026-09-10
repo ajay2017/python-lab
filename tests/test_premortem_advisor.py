@@ -15,6 +15,8 @@ import pytest
 
 from stock_analyzer import premortem_advisor as pa
 
+pytestmark = pytest.mark.fast
+
 
 # ─── fake anthropic module helper ────────────────────────────────────────────
 

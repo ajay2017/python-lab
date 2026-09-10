@@ -12,6 +12,9 @@ from unittest.mock import MagicMock
 
 from stock_analyzer import home_risk_synthesis as hrs
 from stock_analyzer.constants import DIVERSIFY_WELL_PCT, DIVERSIFY_MODERATE_PCT
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 def _hist(n, start=100.0, step=1.0):

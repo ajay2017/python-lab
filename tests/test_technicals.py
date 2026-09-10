@@ -8,6 +8,9 @@ import pandas as pd
 
 from stock_analyzer.technicals import compute_indicators, technical_score
 from stock_analyzer.indicators import rsi as _rsi_fn
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── technical_score — empty DataFrame guard (2026-08-04 audit) ─────────────

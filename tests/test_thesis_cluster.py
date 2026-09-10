@@ -10,6 +10,9 @@ exercised directly via `_parse_cluster_response`.
 import pandas as pd
 
 from stock_analyzer import thesis_cluster as tc
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── build_thesis_corpus ──────────────────────────────────────────────────────

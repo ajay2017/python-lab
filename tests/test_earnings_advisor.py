@@ -23,6 +23,8 @@ from stock_analyzer.constants import (
     SINGLE_NAME_TRIM_TRIGGER,
 )
 
+pytestmark = pytest.mark.fast
+
 TODAY = date(2026, 7, 28)
 
 

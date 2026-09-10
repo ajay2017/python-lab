@@ -15,6 +15,9 @@ from stock_analyzer.util import (
     safe_html,
     stop_recovery_state,
 )
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 class TestGetOrOffline:

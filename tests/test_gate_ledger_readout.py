@@ -37,6 +37,8 @@ from stock_analyzer.constants import (
 )
 from stock_analyzer.predictive_analytics import _advance_trading_days
 
+pytestmark = pytest.mark.fast
+
 REC_DATE = date(2026, 1, 5)
 HORIZON = 30
 TARGET_DATE = _advance_trading_days(REC_DATE, HORIZON)

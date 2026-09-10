@@ -17,6 +17,9 @@ from stock_analyzer.watchlist_advisor import (
     build_watchlist_recommendation,
     sort_key_for_action,
 )
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── Small helpers ────────────────────────────────────────────────────────────

@@ -12,6 +12,8 @@ import pytest
 
 from stock_analyzer import notify
 
+pytestmark = pytest.mark.fast
+
 
 # ─── _sizing_cap_note (F-255 net-capital cap wiring, 2026-08-25) ────────────
 

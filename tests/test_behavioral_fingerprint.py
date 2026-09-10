@@ -10,6 +10,8 @@ import pytest
 
 from stock_analyzer import behavioral_fingerprint as bf
 
+pytestmark = pytest.mark.fast
+
 
 # ─── momentum_recency_pattern — builders ─────────────────────────────────────
 

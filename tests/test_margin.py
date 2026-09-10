@@ -15,6 +15,8 @@ from stock_analyzer.constants import (
     NET_CAPITAL_POSITION_CAP_PCT,
 )
 
+pytestmark = pytest.mark.fast
+
 
 # ── Founding-measurement test ─────────────────────────────────────────────────
 

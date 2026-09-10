@@ -16,6 +16,8 @@ import pytest
 
 from stock_analyzer import db
 
+pytestmark = pytest.mark.fast
+
 
 class _FakeSessionState(dict):
     """Minimal stand-in for st.session_state — dict-like, supports `in`."""

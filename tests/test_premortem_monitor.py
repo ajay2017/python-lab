@@ -16,6 +16,8 @@ import pytest
 
 from stock_analyzer import premortem_monitor as pm
 
+pytestmark = pytest.mark.fast
+
 
 # ── fake anthropic module helper (mirrors test_news_intelligence.py) ────────
 

@@ -11,6 +11,9 @@ where this exact PostgREST wording was already proven, just not carried
 over to this second, separately-implemented _col_missing()).
 """
 from stock_analyzer import db
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 class _FakeUpsertBuilder:

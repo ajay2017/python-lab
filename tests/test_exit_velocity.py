@@ -6,6 +6,9 @@ threshold is crossed. Pure pandas, no I/O.
 import pandas as pd
 
 from stock_analyzer import exit_velocity as ev
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 # ─── builders ───────────────────────────────────────────────────────────────

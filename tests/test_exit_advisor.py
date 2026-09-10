@@ -25,6 +25,9 @@ from stock_analyzer.exit_advisor import (
     market_risk_posture,
     risk_off_regime,
 )
+import pytest
+
+pytestmark = pytest.mark.fast
 
 
 def _classify(

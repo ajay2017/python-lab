@@ -16,6 +16,8 @@ import pytz
 
 from stock_analyzer import trade_analytics as ta
 
+pytestmark = pytest.mark.fast
+
 _ET = pytz.timezone("America/New_York")
 
 

@@ -240,6 +240,8 @@ def test_effective_bucket_defaults_to_unverified_on_empty_xref():
 
 import pytest
 
+pytestmark = pytest.mark.fast
+
 
 _INVARIANCE_CASES = [
     pytest.param(
