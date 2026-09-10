@@ -31781,1563 +31781,1566 @@ elif page == "💰 Account":
         "can still override it manually further down if it ever looks wrong."
     )
 
-    _acct = db.load_account_cash()
-    _cash = float(_acct["cash_balance"]) if _acct else None
-    _acc_pdf = st.session_state.get("_last_port_df")
-    _have_pf = _acc_pdf is not None and hasattr(_acc_pdf, "empty") and not _acc_pdf.empty
-    _equity = float(_acc_pdf["Market Value"].sum()) if _have_pf else None
+    _acct_tab_main, _acct_tab_broker = st.tabs(["💰 Account", "🔌 Brokerage Trend"])
+    with _acct_tab_main:
+        _acct = db.load_account_cash()
+        _cash = float(_acct["cash_balance"]) if _acct else None
+        _acc_pdf = st.session_state.get("_last_port_df")
+        _have_pf = _acc_pdf is not None and hasattr(_acc_pdf, "empty") and not _acc_pdf.empty
+        _equity = float(_acc_pdf["Market Value"].sum()) if _have_pf else None
 
-    if _cash is not None and _have_pf:
-        _render_portfolio_stale_banner(key_suffix="acct")
-        _total_acct = _equity + _cash
-        _cash_pct = (_cash / _total_acct * 100) if _total_acct > 0 else 0.0
-        _levered = _cash < 0   # negative net cash = a margin debit (borrowed)
-        _ac1, _ac2, _ac3, _ac4 = st.columns(4)
-        _ac1.metric("Total Account Value", _m(f"${_total_acct:,.0f}"),
-                    help="Invested equity + net cash (cash − any margin debit) = your net worth in the account.")
-        _ac2.metric("Invested Equity", _m(f"${_equity:,.0f}"),
-                    help=(
-                        "Market value of all your holdings, including any shares bought on margin. This is\n"
-                        "larger than Total Account Value whenever you carry a margin debit, because the debit\n"
-                        "is money you owe: it counts against the account total but not against how much is\n"
-                        "invested."
-                    ))
-        _ac3.metric("Net Cash" if _levered else "Cash", _m(f"${_cash:,.0f}"),
-                    help="Uninvested cash you own; NEGATIVE = a margin debit (you've borrowed to hold more stock than your cash covers).")
-        _ac4.metric("Cash % of Account", f"{_cash_pct:.1f}%",
-                    help="Negative = you're net-levered (carrying a margin debit).")
-        if _acct.get("updated_at"):
-            st.caption(
-                f"Cash as of {str(_acct['updated_at'])[:10]}"
-                + (f" · {_acct['note']}" if _acct.get("note") else "")
-            )
-            # This cash/margin figure is a periodic broker-cron snapshot, not a
-            # live read — a trade logged after it was captured won't show up
-            # here until the next sync. Same "trade since capture excuses the
-            # gap" reasoning as broker_sync.decide_drift_banner's position-drift
-            # check (Home), just applied to the cash figure instead of share
-            # counts, which had no equivalent disclosure (2026-08-31: a $2,031
-            # gap vs. Robinhood traced entirely to two same-day sells + a buy
-            # that hadn't been picked up by a new sync yet).
-            _acct_traded_since = broker_sync.tickers_traded_since(
-                st.session_state.get("trades_df"), _acct.get("updated_at")
-            )
-            if _acct_traded_since:
-                _acct_cash_delta_since = None
-                _tdf_acct = st.session_state.get("trades_df")
-                try:
-                    _ts_acct = pd.to_datetime(_tdf_acct["traded_at"], utc=True,
-                                               errors="coerce", format="ISO8601")
-                    _cap_acct = pd.to_datetime(_acct["updated_at"], utc=True,
-                                                errors="coerce", format="ISO8601")
-                    _rows_acct = _tdf_acct.loc[_ts_acct.notna() & (_ts_acct > _cap_acct)]
-                    _acct_cash_delta_since = today_trade_cash_delta([
-                        {"action": r.get("action"), "shares": r.get("shares"),
-                         "price": r.get("price")}
-                        for _, r in _rows_acct.iterrows()
-                    ])
-                except Exception:
-                    _acct_cash_delta_since = None
-                _acct_delta_clause = ""
-                if _acct_cash_delta_since:
-                    _acct_delta_word = "more cash (less margin debit)" if _acct_cash_delta_since > 0 \
-                        else "less cash (more margin debit)"
-                    _acct_delta_clause = (
-                        f" — roughly **${abs(_acct_cash_delta_since):,.0f} {_acct_delta_word}** than "
-                        "shown above, from those trades"
-                    )
-                st.caption(
-                    f"ℹ️ {len(_acct_traded_since)} ticker"
-                    f"{'s' if len(_acct_traded_since) != 1 else ''} traded since this sync "
-                    f"(**{', '.join(_acct_traded_since)}**)" + _acct_delta_clause
-                    + ". The figures above will catch up automatically at the next scheduled sync."
-                )
-        if _levered:
-            st.caption(
-                f"⚖️ **Margin debit ${abs(_cash):,.0f}** — you hold ${_equity:,.0f} of stock on "
-                f"${_total_acct:,.0f} of your own money. Total value & growth correctly net out the "
-                "loan; account-level concentration below runs HIGHER than equity weight because "
-                "leverage amplifies exposure relative to your own capital."
-            )
-            # ── Margin call-distance awareness panel ──────────────────────────
-            # Computed inline from this page's own fresh _cash/_equity/_total_acct
-            # (NOT from _leverage_cache, which is populated only by 🏠 Home's
-            # render path) — a session opening 💰 Account before Home would
-            # otherwise see this panel silently vanish with no explanation,
-            # directly under a caption that just said "you're levered"
-            # (2026-08-24 review finding).
-            _cash_stale = False
+        if _cash is not None and _have_pf:
+            _render_portfolio_stale_banner(key_suffix="acct")
+            _total_acct = _equity + _cash
+            _cash_pct = (_cash / _total_acct * 100) if _total_acct > 0 else 0.0
+            _levered = _cash < 0   # negative net cash = a margin debit (borrowed)
+            _ac1, _ac2, _ac3, _ac4 = st.columns(4)
+            _ac1.metric("Total Account Value", _m(f"${_total_acct:,.0f}"),
+                        help="Invested equity + net cash (cash − any margin debit) = your net worth in the account.")
+            _ac2.metric("Invested Equity", _m(f"${_equity:,.0f}"),
+                        help=(
+                            "Market value of all your holdings, including any shares bought on margin. This is\n"
+                            "larger than Total Account Value whenever you carry a margin debit, because the debit\n"
+                            "is money you owe: it counts against the account total but not against how much is\n"
+                            "invested."
+                        ))
+            _ac3.metric("Net Cash" if _levered else "Cash", _m(f"${_cash:,.0f}"),
+                        help="Uninvested cash you own; NEGATIVE = a margin debit (you've borrowed to hold more stock than your cash covers).")
+            _ac4.metric("Cash % of Account", f"{_cash_pct:.1f}%",
+                        help="Negative = you're net-levered (carrying a margin debit).")
             if _acct.get("updated_at"):
-                _cash_age_days = (pd.Timestamp.now(tz="UTC")
-                                  - pd.to_datetime(_acct["updated_at"], utc=True)).days
-                _cash_stale = _cash_age_days > ACCOUNT_CASH_STALE_DAYS
-            if _cash_stale:
                 st.caption(
-                    "📐 Margin Call Distance withheld — the cash balance above "
-                    f"is stale (> {ACCOUNT_CASH_STALE_DAYS}d old)."
+                    f"Cash as of {str(_acct['updated_at'])[:10]}"
+                    + (f" · {_acct['note']}" if _acct.get("note") else "")
                 )
-            else:
-                _lev_ratio = (_equity / _total_acct) if _total_acct > 0 else None
-                _md = _margin_mod.call_distance(
-                    stock_value=_equity,       # total market value of holdings
-                    owner_equity=_total_acct,  # capital the owner actually holds
-                    margin_debit=abs(_cash),
-                    rate=MARGIN_MAINTENANCE_RATE,
+                # This cash/margin figure is a periodic broker-cron snapshot, not a
+                # live read — a trade logged after it was captured won't show up
+                # here until the next sync. Same "trade since capture excuses the
+                # gap" reasoning as broker_sync.decide_drift_banner's position-drift
+                # check (Home), just applied to the cash figure instead of share
+                # counts, which had no equivalent disclosure (2026-08-31: a $2,031
+                # gap vs. Robinhood traced entirely to two same-day sells + a buy
+                # that hadn't been picked up by a new sync yet).
+                _acct_traded_since = broker_sync.tickers_traded_since(
+                    st.session_state.get("trades_df"), _acct.get("updated_at")
                 )
-                if _md is not None:
-                    st.markdown("#### 📐 Margin Call Distance")
-                    _mg1, _mg2, _mg3 = st.columns(3)
-                    _mg1.metric(
-                        "Margin Cushion",
-                        _m(f"${_md['cushion']:,.0f}"),
-                        help="Equity above the estimated maintenance floor. Reaches $0 at the call.",
-                    )
-                    _mg2.metric(
-                        "Call Triggers At",
-                        f"{_md['call_distance_pct']:.1f}%",
-                        help=f"Estimated book decline that would trigger a margin call at the standard {MARGIN_MAINTENANCE_RATE*100:.0f}% maintenance rate.",
-                    )
-                    _mg3.metric(
-                        "Leverage",
-                        f"{_lev_ratio:.2f}×" if _lev_ratio is not None else "—",
-                        help="Total holdings ÷ owner equity.",
-                    )
-                    if _md["in_call"]:
-                        st.error(
-                            "⚠️ You are at or past the estimated maintenance floor. "
-                            "Check Robinhood immediately."
-                        )
-                    else:
-                        # Horizontal distance-to-call bar
-                        import plotly.graph_objects as _go_mg
-                        _frag = abs(FRAGILITY_PULLBACK_PCT)
-                        _call = abs(_md["call_distance_pct"])
-                        _axis_max = round(max(_frag, _call) * 1.35)
-                        _fig_mg = _go_mg.Figure()
-                        # Green zone — cushion
-                        _fig_mg.add_trace(_go_mg.Bar(
-                            x=[_call], y=[""], orientation="h",
-                            marker_color="#2ecc71", name="Cushion",
-                            showlegend=False,
-                        ))
-                        # Red zone — past the call
-                        _fig_mg.add_trace(_go_mg.Bar(
-                            x=[_axis_max - _call], y=[""], orientation="h",
-                            marker_color="#e74c3c", name="Call zone",
-                            showlegend=False,
-                        ))
-                        # Fragility scenario marker
-                        _fig_mg.add_vline(
-                            x=_frag,
-                            line_dash="dash", line_color="#ffffff", line_width=2,
-                            annotation_text=f"−{_frag:.0f}% fragility scenario",
-                            annotation_position="top right",
-                            annotation_font_color="#ffffff",
-                            annotation_bgcolor="rgba(0,0,0,0.45)",
-                        )
-                        # "Now" marker — current position at 0% decline
-                        _fig_mg.add_annotation(
-                            x=0, y=0, xref="x", yref="paper",
-                            text="▶ Now",
-                            showarrow=False,
-                            xanchor="left", yanchor="middle",
-                            font=dict(color="#ffffff", size=11),
-                            bgcolor="rgba(0,0,0,0.5)",
-                        )
-                        _fig_mg.update_layout(
-                            barmode="stack",
-                            xaxis=dict(
-                                title="Book decline (%)",
-                                range=[0, _axis_max],
-                                ticksuffix="%",
-                            ),
-                            yaxis=dict(visible=False),
-                            height=120,
-                            margin=dict(l=0, r=10, t=10, b=30),
-                            paper_bgcolor="rgba(0,0,0,0)",
-                            plot_bgcolor="rgba(0,0,0,0)",
-                            font_color="#ccc",
-                        )
-                        st.plotly_chart(_fig_mg, width="stretch")
-                        st.caption(
-                            "**How to read:** You are at ▶ Now (0% decline). "
-                            "The green zone is your runway — how far the book can fall before a call. "
-                            "The red zone is past the call floor. "
-                            "The dashed line is the app's standard −10% fragility scenario; "
-                            "when it sits in red, that pullback would breach your threshold before it bottoms."
+                if _acct_traded_since:
+                    _acct_cash_delta_since = None
+                    _tdf_acct = st.session_state.get("trades_df")
+                    try:
+                        _ts_acct = pd.to_datetime(_tdf_acct["traded_at"], utc=True,
+                                                   errors="coerce", format="ISO8601")
+                        _cap_acct = pd.to_datetime(_acct["updated_at"], utc=True,
+                                                    errors="coerce", format="ISO8601")
+                        _rows_acct = _tdf_acct.loc[_ts_acct.notna() & (_ts_acct > _cap_acct)]
+                        _acct_cash_delta_since = today_trade_cash_delta([
+                            {"action": r.get("action"), "shares": r.get("shares"),
+                             "price": r.get("price")}
+                            for _, r in _rows_acct.iterrows()
+                        ])
+                    except Exception:
+                        _acct_cash_delta_since = None
+                    _acct_delta_clause = ""
+                    if _acct_cash_delta_since:
+                        _acct_delta_word = "more cash (less margin debit)" if _acct_cash_delta_since > 0 \
+                            else "less cash (more margin debit)"
+                        _acct_delta_clause = (
+                            f" — roughly **${abs(_acct_cash_delta_since):,.0f} {_acct_delta_word}** than "
+                            "shown above, from those trades"
                         )
                     st.caption(
-                        f"Estimated at the standard {MARGIN_MAINTENANCE_RATE*100:.0f}% maintenance rate — "
-                        "Robinhood raises this on volatile or concentrated names, so your actual "
-                        "call threshold may be closer than shown. Awareness only — never blocks a trade."
+                        f"ℹ️ {len(_acct_traded_since)} ticker"
+                        f"{'s' if len(_acct_traded_since) != 1 else ''} traded since this sync "
+                        f"(**{', '.join(_acct_traded_since)}**)" + _acct_delta_clause
+                        + ". The figures above will catch up automatically at the next scheduled sync."
+                    )
+            if _levered:
+                st.caption(
+                    f"⚖️ **Margin debit ${abs(_cash):,.0f}** — you hold ${_equity:,.0f} of stock on "
+                    f"${_total_acct:,.0f} of your own money. Total value & growth correctly net out the "
+                    "loan; account-level concentration below runs HIGHER than equity weight because "
+                    "leverage amplifies exposure relative to your own capital."
+                )
+                # ── Margin call-distance awareness panel ──────────────────────────
+                # Computed inline from this page's own fresh _cash/_equity/_total_acct
+                # (NOT from _leverage_cache, which is populated only by 🏠 Home's
+                # render path) — a session opening 💰 Account before Home would
+                # otherwise see this panel silently vanish with no explanation,
+                # directly under a caption that just said "you're levered"
+                # (2026-08-24 review finding).
+                _cash_stale = False
+                if _acct.get("updated_at"):
+                    _cash_age_days = (pd.Timestamp.now(tz="UTC")
+                                      - pd.to_datetime(_acct["updated_at"], utc=True)).days
+                    _cash_stale = _cash_age_days > ACCOUNT_CASH_STALE_DAYS
+                if _cash_stale:
+                    st.caption(
+                        "📐 Margin Call Distance withheld — the cash balance above "
+                        f"is stale (> {ACCOUNT_CASH_STALE_DAYS}d old)."
+                    )
+                else:
+                    _lev_ratio = (_equity / _total_acct) if _total_acct > 0 else None
+                    _md = _margin_mod.call_distance(
+                        stock_value=_equity,       # total market value of holdings
+                        owner_equity=_total_acct,  # capital the owner actually holds
+                        margin_debit=abs(_cash),
+                        rate=MARGIN_MAINTENANCE_RATE,
+                    )
+                    if _md is not None:
+                        st.markdown("#### 📐 Margin Call Distance")
+                        _mg1, _mg2, _mg3 = st.columns(3)
+                        _mg1.metric(
+                            "Margin Cushion",
+                            _m(f"${_md['cushion']:,.0f}"),
+                            help="Equity above the estimated maintenance floor. Reaches $0 at the call.",
+                        )
+                        _mg2.metric(
+                            "Call Triggers At",
+                            f"{_md['call_distance_pct']:.1f}%",
+                            help=f"Estimated book decline that would trigger a margin call at the standard {MARGIN_MAINTENANCE_RATE*100:.0f}% maintenance rate.",
+                        )
+                        _mg3.metric(
+                            "Leverage",
+                            f"{_lev_ratio:.2f}×" if _lev_ratio is not None else "—",
+                            help="Total holdings ÷ owner equity.",
+                        )
+                        if _md["in_call"]:
+                            st.error(
+                                "⚠️ You are at or past the estimated maintenance floor. "
+                                "Check Robinhood immediately."
+                            )
+                        else:
+                            # Horizontal distance-to-call bar
+                            import plotly.graph_objects as _go_mg
+                            _frag = abs(FRAGILITY_PULLBACK_PCT)
+                            _call = abs(_md["call_distance_pct"])
+                            _axis_max = round(max(_frag, _call) * 1.35)
+                            _fig_mg = _go_mg.Figure()
+                            # Green zone — cushion
+                            _fig_mg.add_trace(_go_mg.Bar(
+                                x=[_call], y=[""], orientation="h",
+                                marker_color="#2ecc71", name="Cushion",
+                                showlegend=False,
+                            ))
+                            # Red zone — past the call
+                            _fig_mg.add_trace(_go_mg.Bar(
+                                x=[_axis_max - _call], y=[""], orientation="h",
+                                marker_color="#e74c3c", name="Call zone",
+                                showlegend=False,
+                            ))
+                            # Fragility scenario marker
+                            _fig_mg.add_vline(
+                                x=_frag,
+                                line_dash="dash", line_color="#ffffff", line_width=2,
+                                annotation_text=f"−{_frag:.0f}% fragility scenario",
+                                annotation_position="top right",
+                                annotation_font_color="#ffffff",
+                                annotation_bgcolor="rgba(0,0,0,0.45)",
+                            )
+                            # "Now" marker — current position at 0% decline
+                            _fig_mg.add_annotation(
+                                x=0, y=0, xref="x", yref="paper",
+                                text="▶ Now",
+                                showarrow=False,
+                                xanchor="left", yanchor="middle",
+                                font=dict(color="#ffffff", size=11),
+                                bgcolor="rgba(0,0,0,0.5)",
+                            )
+                            _fig_mg.update_layout(
+                                barmode="stack",
+                                xaxis=dict(
+                                    title="Book decline (%)",
+                                    range=[0, _axis_max],
+                                    ticksuffix="%",
+                                ),
+                                yaxis=dict(visible=False),
+                                height=120,
+                                margin=dict(l=0, r=10, t=10, b=30),
+                                paper_bgcolor="rgba(0,0,0,0)",
+                                plot_bgcolor="rgba(0,0,0,0)",
+                                font_color="#ccc",
+                            )
+                            st.plotly_chart(_fig_mg, width="stretch")
+                            st.caption(
+                                "**How to read:** You are at ▶ Now (0% decline). "
+                                "The green zone is your runway — how far the book can fall before a call. "
+                                "The red zone is past the call floor. "
+                                "The dashed line is the app's standard −10% fragility scenario; "
+                                "when it sits in red, that pullback would breach your threshold before it bottoms."
+                            )
+                        st.caption(
+                            f"Estimated at the standard {MARGIN_MAINTENANCE_RATE*100:.0f}% maintenance rate — "
+                            "Robinhood raises this on volatile or concentrated names, so your actual "
+                            "call threshold may be closer than shown. Awareness only — never blocks a trade."
+                        )
+
+            # F-255: held positions already over the SEPARATE net-capital cap —
+            # awareness only, never feeds risk_advisor/exit_advisor or any
+            # session_state publish. Existing holdings predate the cap and are not
+            # flagged for any forced trim/exit; short-circuits to None (banner
+            # hidden) whenever unlevered or cash is stale, since `_cash_stale` is
+            # only ever assigned inside the `if _levered:` block above.
+            _f255_net_cap_for_holdings = _total_acct if (_levered and not _cash_stale) else None
+            _f255_over_cap = _margin_mod.held_over_capital_cap(
+                _acc_pdf, _f255_net_cap_for_holdings, NET_CAPITAL_POSITION_CAP_PCT
+            )
+            if _f255_over_cap:
+                st.markdown("#### 📐 Positions Over Your Net-Capital Cap")
+                st.caption(
+                    f"Awareness only — these positions were sized before this "
+                    f"{int(NET_CAPITAL_POSITION_CAP_PCT)}%-of-capital cap existed and are not "
+                    "flagged for any forced action. New/added sizing now respects the cap; existing "
+                    "holdings are left to your own judgment and the Exit Advisor's own signals."
+                )
+                for _f255_row in _f255_over_cap:
+                    _f255_mv_str = _m(f"${_f255_row['market_value']:,.0f}")
+                    st.caption(
+                        f"• **{_f255_row['ticker']}** — {_f255_mv_str} ≈ "
+                        f"{_f255_row['capital_pct']:.0f}% of your net capital"
                     )
 
-        # F-255: held positions already over the SEPARATE net-capital cap —
-        # awareness only, never feeds risk_advisor/exit_advisor or any
-        # session_state publish. Existing holdings predate the cap and are not
-        # flagged for any forced trim/exit; short-circuits to None (banner
-        # hidden) whenever unlevered or cash is stale, since `_cash_stale` is
-        # only ever assigned inside the `if _levered:` block above.
-        _f255_net_cap_for_holdings = _total_acct if (_levered and not _cash_stale) else None
-        _f255_over_cap = _margin_mod.held_over_capital_cap(
-            _acc_pdf, _f255_net_cap_for_holdings, NET_CAPITAL_POSITION_CAP_PCT
-        )
-        if _f255_over_cap:
-            st.markdown("#### 📐 Positions Over Your Net-Capital Cap")
-            st.caption(
-                f"Awareness only — these positions were sized before this "
-                f"{int(NET_CAPITAL_POSITION_CAP_PCT)}%-of-capital cap existed and are not "
-                "flagged for any forced action. New/added sizing now respects the cap; existing "
-                "holdings are left to your own judgment and the Exit Advisor's own signals."
-            )
-            for _f255_row in _f255_over_cap:
-                _f255_mv_str = _m(f"${_f255_row['market_value']:,.0f}")
-                st.caption(
-                    f"• **{_f255_row['ticker']}** — {_f255_mv_str} ≈ "
-                    f"{_f255_row['capital_pct']:.0f}% of your net capital"
+            if _total_acct > 0:
+                _conc = _acc_pdf[["Ticker", "Market Value", "Weight (%)"]].copy()
+                _conc["Account Wt (%)"] = (_conc["Market Value"] / _total_acct * 100).round(1)
+                _conc = (
+                    _conc.rename(columns={"Weight (%)": "Holdings Wt (%)"})
+                    .sort_values("Account Wt (%)", ascending=False)
                 )
-
-        if _total_acct > 0:
-            _conc = _acc_pdf[["Ticker", "Market Value", "Weight (%)"]].copy()
-            _conc["Account Wt (%)"] = (_conc["Market Value"] / _total_acct * 100).round(1)
-            _conc = (
-                _conc.rename(columns={"Weight (%)": "Holdings Wt (%)"})
-                .sort_values("Account Wt (%)", ascending=False)
-            )
-            with st.expander("Per-position concentration breakdown", expanded=False):
-                st.caption(
-                    "True concentration — each position measured two ways: as % of your "
-                    "**whole account** (holdings + net cash, so a margin debit reduces it), "
-                    "and as % of your **holdings alone**. The second is what the "
-                    "concentration **gates measure** — % of total holdings at market value, "
-                    "margin-bought shares included, cash and margin debit excluded"
-                    " — and that basis is deliberate "
-                    "policy, not a hedge against day-to-day cash noise, so a **structural** "
-                    "margin debit (like yours) means the gate number and the account number "
-                    "diverge persistently, not just transiently. Leverage/margin risk is "
-                    "surfaced separately as an **awareness** signal (🔗 Risk Analysis), never a gate."
-                )
-                st.dataframe(
-                    _conc[["Ticker", "Holdings Wt (%)", "Account Wt (%)"]],
-                    hide_index=True, width='stretch',
-                )
-                if "Sector" in _acc_pdf.columns:
-                    _sec_conc = (
-                        _acc_pdf.groupby("Sector")["Market Value"].sum()
-                        .sort_values(ascending=False).reset_index()
+                with st.expander("Per-position concentration breakdown", expanded=False):
+                    st.caption(
+                        "True concentration — each position measured two ways: as % of your "
+                        "**whole account** (holdings + net cash, so a margin debit reduces it), "
+                        "and as % of your **holdings alone**. The second is what the "
+                        "concentration **gates measure** — % of total holdings at market value, "
+                        "margin-bought shares included, cash and margin debit excluded"
+                        " — and that basis is deliberate "
+                        "policy, not a hedge against day-to-day cash noise, so a **structural** "
+                        "margin debit (like yours) means the gate number and the account number "
+                        "diverge persistently, not just transiently. Leverage/margin risk is "
+                        "surfaced separately as an **awareness** signal (🔗 Risk Analysis), never a gate."
                     )
-                    _sec_conc["Holdings Wt (%)"] = (
-                        _sec_conc["Market Value"] / _equity * 100
-                    ).round(1) if _equity > 0 else None
-                    _sec_conc["Account Wt (%)"] = (
-                        _sec_conc["Market Value"] / _total_acct * 100
-                    ).round(1)
-                    st.caption("Sector-level, same two bases — this is the basis the 35% sector cap reads (Holdings Wt):")
                     st.dataframe(
-                        _sec_conc[["Sector", "Holdings Wt (%)", "Account Wt (%)"]],
+                        _conc[["Ticker", "Holdings Wt (%)", "Account Wt (%)"]],
                         hide_index=True, width='stretch',
                     )
-    elif _cash is not None and not _have_pf:
-        st.metric("Net Cash" if _cash < 0 else "Cash", _m(f"${_cash:,.0f}"),
-                  help="Negative = a margin debit (borrowed).")
-        if _acct.get("updated_at"):
-            st.caption(
-                f"Cash as of {str(_acct['updated_at'])[:10]}"
-                + (f" · {_acct['note']}" if _acct.get("note") else "")
-            )
-        _render_portfolio_not_loaded(show_home_button=True, key_suffix="acct")
-    else:
-        st.info(
-            "💡 Set your uninvested **cash balance** below to unlock total-account value, "
-            "cash %, and true (account-level) concentration. Until then, every figure in "
-            "the app is **invested-equity only** (it excludes cash it can't see)."
-        )
-        if not _have_pf:
-            _render_portfolio_not_loaded(show_home_button=True, key_suffix="acct_nocash")
-
-    # Cash entry — always available; data-sanity validated; read-only-viewer aware.
-    if not db.is_readonly():
-        st.divider()
-        with st.form("_account_cash_form", clear_on_submit=False):
-            # No min_value: negative = a margin debit. This lets Total / Growth /
-            # Return / account-concentration all net out the loan correctly (they
-            # derive from total = equity + cash). Tip in the help reconciles it.
-            _new_cash = st.number_input(
-                "Net cash / margin ($)",
-                value=float(_cash or 0.0), step=100.0, format="%.2f",
-                help=(
-                    "Uninvested cash you own. NEGATIVE = a margin debit (borrowed to hold more "
-                    "stock than your cash covers). Tip: enter Robinhood's Total portfolio value "
-                    "− your stock holdings value — that nets out any margin loan and keeps the "
-                    "app reconciled. "
-                    + (f"Your invested equity is ${_equity:,.0f}." if _have_pf
-                       else "Open Home to load your equity as a reference.")
-                ),
-            )
-            _new_note = st.text_input(
-                "Note (optional)", value=(_acct.get("note") if _acct else "") or ""
-            )
-            _cash_submit = st.form_submit_button("Save cash balance")
-        if _cash_submit:
-            _cash_implausible = False
-            if _have_pf and _new_cash > max(_equity * 10.0, 1_000_000.0):
-                st.warning(
-                    f"⚠️ ${_new_cash:,.0f} is far larger than your ${_equity:,.0f} invested "
-                    "equity — double-check this before relying on account figures."
+                    if "Sector" in _acc_pdf.columns:
+                        _sec_conc = (
+                            _acc_pdf.groupby("Sector")["Market Value"].sum()
+                            .sort_values(ascending=False).reset_index()
+                        )
+                        _sec_conc["Holdings Wt (%)"] = (
+                            _sec_conc["Market Value"] / _equity * 100
+                        ).round(1) if _equity > 0 else None
+                        _sec_conc["Account Wt (%)"] = (
+                            _sec_conc["Market Value"] / _total_acct * 100
+                        ).round(1)
+                        st.caption("Sector-level, same two bases — this is the basis the 35% sector cap reads (Holdings Wt):")
+                        st.dataframe(
+                            _sec_conc[["Sector", "Holdings Wt (%)", "Account Wt (%)"]],
+                            hide_index=True, width='stretch',
+                        )
+        elif _cash is not None and not _have_pf:
+            st.metric("Net Cash" if _cash < 0 else "Cash", _m(f"${_cash:,.0f}"),
+                      help="Negative = a margin debit (borrowed).")
+            if _acct.get("updated_at"):
+                st.caption(
+                    f"Cash as of {str(_acct['updated_at'])[:10]}"
+                    + (f" · {_acct['note']}" if _acct.get("note") else "")
                 )
-                _cash_implausible = True
-            if _have_pf and _new_cash < 0 and abs(_new_cash) > _equity:
-                st.warning(
-                    f"⚠️ A margin debit of ${abs(_new_cash):,.0f} exceeds your ${_equity:,.0f} "
-                    "equity — that implies negative net worth. Double-check the sign/amount."
-                )
-                _cash_implausible = True
-            if _cash_implausible:
-                st.session_state["_acct_implausible_pending"] = (_new_cash, _new_note or None)
-            else:
-                if db.save_account_cash(_new_cash, _new_note or None):
-                    st.success("Saved.")
-                    st.rerun()
-                else:
-                    st.error("Couldn't save — database offline or read-only.")
-
-        _pend_cash_data = st.session_state.get("_acct_implausible_pending")
-        if _pend_cash_data is not None:
-            _conf_col, _cancel_col = st.columns(2)
-            if _conf_col.button("Save anyway", type="primary", key="_acct_cash_confirm"):
-                _pc, _pn = _pend_cash_data
-                st.session_state.pop("_acct_implausible_pending", None)
-                if db.save_account_cash(_pc, _pn):
-                    st.success("Saved.")
-                    st.rerun()
-                else:
-                    st.error("Couldn't save — database offline or read-only.")
-            if _cancel_col.button("Cancel", key="_acct_cash_cancel"):
-                st.session_state.pop("_acct_implausible_pending", None)
-                st.rerun()
-    else:
-        st.caption("🔒 Read-only viewer — cash balance is view-only.")
-
-    # ── Growth & Contributions (account-baseline v2) ────────────────────────────
-    # Separate money DEPOSITED from money the market MADE you: growth = total
-    # account value − net contributed capital (baseline + deposits − withdrawals).
-    # Pure calc in stock_analyzer/account.py; display-only (feeds no gate).
-    st.divider()
-    st.markdown("### 📈 Growth & Contributions")
-    st.caption(
-        "Separates money you **deposited** from money the market **made you**. "
-        "Growth = total account value − net contributed capital (baseline + deposits − withdrawals)."
-    )
-    _flows = db.load_account_flows()
-    _total_value = (_equity + _cash) if (_have_pf and _cash is not None) else None
-    _ncc = net_contributed_capital(_flows)
-    _g = account_growth(_total_value, _ncc)
-    _has_base = has_baseline(_flows)
-
-    if not _has_base:
-        st.info(
-            "Set a starting **baseline** (your contributed capital) to begin tracking growth. "
-            "Default = your current total account value (growth from today); or enter your lifetime "
-            "net deposits (deposits − withdrawals) if you know them — then it reads as all-time gain."
-        )
-        if not db.is_readonly():
-            with st.form("_account_baseline_form", clear_on_submit=False):
-                _bdate = st.date_input("Baseline as of", value=date.today(), key="_acct_bdate")
-                _bamt = st.number_input(
-                    "Contributed capital ($)", min_value=0.0,
-                    value=float(_total_value or 0.0), step=100.0, format="%.2f",
-                    help="Default = current total account value. Or enter lifetime net deposits for all-time gain.",
-                )
-                _bsub = st.form_submit_button("Set baseline")
-            if _bsub:
-                if _bamt <= 0:
-                    st.warning("Enter your contributed capital (greater than 0).")
-                elif db.add_account_flow(_bdate.isoformat(), "baseline", _bamt, "Baseline"):
-                    st.success("Baseline set.")
-                    st.rerun()
-                else:
-                    st.error("Couldn't save — database offline or read-only.")
-    else:
-        # v3: money-weighted (Modified Dietz) return — corrects for deposit/withdrawal
-        # timing, the distortion v2's naive gain/NCC ignores. Equals simple growth%
-        # when there are no mid-period flows. Pure calc in account.py; display-only.
-        _base = baseline_anchor(_flows)
-        _mdr = None
-        if _base is not None and _total_value is not None:
-            _mdr = money_weighted_return(
-                _base["value"], _base["date"], _total_value, _today_et().isoformat(),
-                [f for f in _flows if str(f.get("flow_type", "")).lower() != "baseline"],
-            )
-        _gc1, _gc2, _gc3, _gc4 = st.columns(4)
-        _gc1.metric("Net Contributed Capital", _m(f"${_g['ncc']:,.0f}"),
-                    help="Baseline + deposits − withdrawals — what you've put in.")
-        if _g["growth"] is not None:
-            _gc2.metric("Growth ($)", _m(f"${_g['growth']:+,.0f}"))  # no delta passed, delta_color was dead
+            _render_portfolio_not_loaded(show_home_button=True, key_suffix="acct")
         else:
-            _gc2.metric("Growth ($)", "—",
-                        help="Open 🏠 Home and set your cash balance so total account value can be computed.")
-        if _mdr is not None:
-            _mdr_since = str(_base["date"])[:10] if _base else "baseline"
-            _gc3.metric(f"Return since {_mdr_since}", f"{_mdr['period_return_pct']:+.1f}%",
-                        help=(f"Money-weighted return (Modified Dietz) from {_mdr_since} to today "
-                              f"— {_mdr['days']} day(s). Corrects for the timing of deposits/withdrawals. "
-                              "This is your all-time investment return, not a weekly figure. "
-                              "The Sunday debrief email shows a separate weekly equity-position change."))
-            _gc4.metric(
-                "Annualized",
-                f"{_mdr['annualized_pct']:+.1f}%" if _mdr["annualized_pct"] is not None else "—",
-                help=(f"Annualized money-weighted return — populates once the tracking period ≥ 30 days "
-                      f"(currently {_mdr['days']}d, too short to annualize meaningfully)."),
+            st.info(
+                "💡 Set your uninvested **cash balance** below to unlock total-account value, "
+                "cash %, and true (account-level) concentration. Until then, every figure in "
+                "the app is **invested-equity only** (it excludes cash it can't see)."
             )
-            if _mdr["annualized_pct"] is not None:
-                _mdr_caveat = annualization_caveat(_mdr["days"], is_levered=_levered)
-                if _mdr_caveat:
-                    st.caption(_mdr_caveat)
-        else:
-            _gc3.metric("Return (money-weighted)", "—",
-                        help="Needs a baseline + a loaded portfolio (open 🏠 Home and set your cash).")
-            _gc4.metric("Annualized", "—")
+            if not _have_pf:
+                _render_portfolio_not_loaded(show_home_button=True, key_suffix="acct_nocash")
 
-        # Cash-flow ledger (with delete) + add a deposit/withdrawal.
-        if _flows:
-            st.markdown("**Cash-flow ledger**")
-            for _fi, _fl in enumerate(_flows):
-                _fc1, _fc2, _fc3, _fc4, _fc5 = st.columns([2, 2, 2, 4, 1])
-                _fc1.write(str(_fl.get("flow_date") or "—"))
-                _fc2.write(str(_fl.get("flow_type", "")).title())
-                _sign = "−" if _fl.get("flow_type") == "withdrawal" else "+"
-                _fc3.write(f"{_sign}${_fl.get('amount', 0):,.2f}")
-                _fc4.write(_fl.get("note") or "")
-                if not db.is_readonly():
-                    _fid = _fl.get("id")
-                    _fdel_key = f"_flow_del_confirm_{_fi}_{_fid}"
-                    if not st.session_state.get(_fdel_key):
-                        if _fc5.button("🗑", key=f"_flow_del_{_fi}_{_fid}", help="Delete this flow"):
-                            st.session_state[_fdel_key] = True
-                            st.rerun()
-                    else:
-                        st.warning(f"Delete this {_fl.get('flow_type', 'entry').title()} entry?")
-                        _fdy, _fdn = st.columns(2)
-                        with _fdy:
-                            if st.button("Yes, delete", key=f"_flow_del_yes_{_fi}_{_fid}", type="primary"):
-                                st.session_state.pop(_fdel_key, None)
-                                db.delete_account_flow(_fid)
-                                st.rerun()
-                        with _fdn:
-                            if st.button("Cancel", key=f"_flow_del_no_{_fi}_{_fid}"):
-                                st.session_state.pop(_fdel_key, None)
-                                st.rerun()
-
+        # Cash entry — always available; data-sanity validated; read-only-viewer aware.
         if not db.is_readonly():
-            with st.expander("➕ Log a deposit or withdrawal", expanded=False):
-                with st.form("_account_flow_form", clear_on_submit=True):
-                    _ftype = st.selectbox("Type", ["deposit", "withdrawal"])
-                    _fdate = st.date_input("Date", value=date.today(), key="_acct_fdate")
-                    _famt = st.number_input("Amount ($)", min_value=0.0, value=0.0,
-                                            step=100.0, format="%.2f")
-                    _fnote = st.text_input("Note (optional)")
-                    _fsub = st.form_submit_button("Add")
-                if _fsub:
-                    if _famt <= 0:
-                        st.warning("Enter an amount greater than 0.")
-                    elif db.add_account_flow(_fdate.isoformat(), _ftype, _famt, _fnote or None):
-                        st.success(f"{_ftype.title()} logged.")
+            st.divider()
+            with st.form("_account_cash_form", clear_on_submit=False):
+                # No min_value: negative = a margin debit. This lets Total / Growth /
+                # Return / account-concentration all net out the loan correctly (they
+                # derive from total = equity + cash). Tip in the help reconciles it.
+                _new_cash = st.number_input(
+                    "Net cash / margin ($)",
+                    value=float(_cash or 0.0), step=100.0, format="%.2f",
+                    help=(
+                        "Uninvested cash you own. NEGATIVE = a margin debit (borrowed to hold more "
+                        "stock than your cash covers). Tip: enter Robinhood's Total portfolio value "
+                        "− your stock holdings value — that nets out any margin loan and keeps the "
+                        "app reconciled. "
+                        + (f"Your invested equity is ${_equity:,.0f}." if _have_pf
+                           else "Open Home to load your equity as a reference.")
+                    ),
+                )
+                _new_note = st.text_input(
+                    "Note (optional)", value=(_acct.get("note") if _acct else "") or ""
+                )
+                _cash_submit = st.form_submit_button("Save cash balance")
+            if _cash_submit:
+                _cash_implausible = False
+                if _have_pf and _new_cash > max(_equity * 10.0, 1_000_000.0):
+                    st.warning(
+                        f"⚠️ ${_new_cash:,.0f} is far larger than your ${_equity:,.0f} invested "
+                        "equity — double-check this before relying on account figures."
+                    )
+                    _cash_implausible = True
+                if _have_pf and _new_cash < 0 and abs(_new_cash) > _equity:
+                    st.warning(
+                        f"⚠️ A margin debit of ${abs(_new_cash):,.0f} exceeds your ${_equity:,.0f} "
+                        "equity — that implies negative net worth. Double-check the sign/amount."
+                    )
+                    _cash_implausible = True
+                if _cash_implausible:
+                    st.session_state["_acct_implausible_pending"] = (_new_cash, _new_note or None)
+                else:
+                    if db.save_account_cash(_new_cash, _new_note or None):
+                        st.success("Saved.")
                         st.rerun()
                     else:
                         st.error("Couldn't save — database offline or read-only.")
-                st.caption(
-                    "After a deposit/withdrawal, also update your **cash balance** above and log any "
-                    "resulting buy/sell in the Trade Journal, so total account value stays current. "
-                    "(A deposit raises contributed capital, so it never shows up as growth.)"
-                )
 
-    # ── Capital Trend ──────────────────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown("### 📈 Capital Trend")
-    st.caption(
-        "Equity position value vs net contributed capital over time. "
-        "**Equity positions only** — cash balance and margin are excluded from the line. "
-        "Net account value (equity + cash) is shown as a separate marker."
-    )
-
-    _trend_snap = None
-    try:
-        _trend_snap = db.load_daily_snapshots()
-    except Exception:
-        pass
-
-    _trend_ts = build_equity_timeseries(_trend_snap, _flows) if _trend_snap is not None else None
-
-    if _trend_ts is None or len(_trend_ts["dates"]) < 3:
-        st.info(
-            "Not enough snapshot data yet — revisit once a few weeks of daily "
-            "snapshots have accumulated (Home must be visited each trading day)."
-        )
-    else:
-        import plotly.graph_objects as _pgo_trend
-
-        _chart_priv = st.session_state.get("_privacy", True)
-
-        _trend_view = st.radio(
-            "Granularity",
-            ["Weekly", "Monthly", "All data"],
-            horizontal=True,
-            key="_cap_trend_view",
-        )
-
-        import pandas as _pd_trend
-        _tdf = _pd_trend.DataFrame({
-            "date":   _pd_trend.to_datetime(_trend_ts["dates"]),
-            "equity": _trend_ts["equity_values"],
-            "ncc":    _trend_ts["ncc_values"],
-        }).set_index("date").sort_index()
-
-        try:
-            if _trend_view == "Weekly":
-                _plot_tdf = _tdf.resample("W-FRI").last().dropna()
-            elif _trend_view == "Monthly":
-                _plot_tdf = _tdf.resample("ME").last().dropna()
-            else:
-                _plot_tdf = _tdf.copy()
-        except Exception:
-            _plot_tdf = _tdf.copy()
-
-        if _plot_tdf.empty:
-            _plot_tdf = _tdf.copy()
-
-        _t_last_eq  = float(_plot_tdf["equity"].iloc[-1])
-        _t_last_ncc = float(_plot_tdf["ncc"].iloc[-1])
-        _t_above    = _t_last_eq >= _t_last_ncc
-        _t_eq_color = "#22c55e" if _t_above else "#ef4444"
-        _t_fill     = "rgba(34,197,94,0.12)" if _t_above else "rgba(239,68,68,0.12)"
-
-        _t_fig = _pgo_trend.Figure()
-        # NCC reference line (dotted grey — the "what you put in" floor)
-        _t_fig.add_trace(_pgo_trend.Scatter(
-            x=_plot_tdf.index, y=_plot_tdf["ncc"],
-            name="Contributed capital",
-            line=dict(color="#9ca3af", width=1.5, dash="dot"),
-            hovertemplate=(
-                "Contributed: ••••••<extra></extra>" if _chart_priv
-                else "Contributed: $%{y:,.0f}<extra></extra>"
-            ),
-            mode="lines",
-        ))
-        # Equity filled area — fills to the NCC trace above/below it
-        _t_fig.add_trace(_pgo_trend.Scatter(
-            x=_plot_tdf.index, y=_plot_tdf["equity"],
-            name="Portfolio equity (positions only)",
-            fill="tonexty",
-            fillcolor=_t_fill,
-            line=dict(color=_t_eq_color, width=2),
-            hovertemplate=(
-                "Equity positions: ••••••<extra></extra>" if _chart_priv
-                else "Equity positions: $%{y:,.0f}<extra></extra>"
-            ),
-            mode="lines",
-        ))
-        # Net account value marker — equity + cash (may be negative = margin debit).
-        # A single point at the latest date so the -7.4% return story is visible
-        # in the same frame as the equity line.
-        if _total_value is not None:
-            _t_net_color = "#22c55e" if _total_value >= _t_last_ncc else "#f59e0b"
-            _t_fig.add_trace(_pgo_trend.Scatter(
-                x=[_tdf.index[-1]],
-                y=[_total_value],
-                name="Net account value (equity + cash)",
-                mode="markers+text",
-                marker=dict(size=12, color=_t_net_color, symbol="diamond",
-                            line=dict(color="white", width=1.5)),
-                text=["  Net: ••••••"] if _chart_priv else [f"  Net: ${_total_value:,.0f}"],
-                textposition="middle right",
-                textfont=dict(size=11, color=_t_net_color),
-                hovertemplate=(
-                    "Net account value: ••••••<extra></extra>" if _chart_priv
-                    else "Net account value: $%{y:,.0f}<extra></extra>"
-                ),
-            ))
-        _t_fig.update_layout(
-            margin=dict(l=0, r=0, t=28, b=0),
-            height=300,
-            legend=dict(orientation="h", y=1.12, x=0),
-            xaxis=dict(showgrid=False),
-            yaxis=dict(
-                showticklabels=not _chart_priv,
-                tickprefix="$", tickformat=",.0f",
-                gridcolor="rgba(128,128,128,0.15)",
-            ),
-            hovermode="x unified",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-        )
-        st.plotly_chart(_t_fig, width="stretch")
-
-        # Auto-narration — computed, no LLM call
-        _t_first_eq  = float(_tdf["equity"].iloc[0])
-        _t_full_eq   = float(_tdf["equity"].iloc[-1])
-        _t_full_ncc  = float(_tdf["ncc"].iloc[-1])
-        _t_gap       = _t_full_eq - _t_full_ncc
-        _t_gap_pct   = abs(_t_gap) / _t_full_ncc * 100 if _t_full_ncc > 0 else 0
-        _t_direction = "above" if _t_gap >= 0 else "below"
-        _t_sign      = "+" if _t_gap >= 0 else "−"
-        _t_first_dt  = _tdf.index[0].strftime("%b %d, %Y")
-        _t_last_dt   = _tdf.index[-1].strftime("%b %d, %Y")
-        _t_n_days    = (_tdf.index[-1] - _tdf.index[0]).days
-        _t_peak_eq   = float(_tdf["equity"].max())
-        _t_peak_dt   = _tdf["equity"].idxmax().strftime("%b %d")
-
-        # Narration — use \$ to escape dollar signs from Streamlit's KaTeX parser.
-        # Bare $ in markdown triggers inline LaTeX mode, consuming the sign and
-        # mangling adjacent text. \$ renders as a literal dollar sign.
-        # When privacy mode is on, mask dollar values to match the KPI tiles above.
-        def _d(v: float) -> str:
-            return "••••••" if _chart_priv else f"\\${v:,.0f}"
-
-        _t_narr = (
-            f"Since **{_t_first_dt}**, equity positions moved from "
-            f"{_d(_t_first_eq)} to {_d(_t_full_eq)} ({_t_n_days} days) — "
-            f"**{_t_sign}{_t_gap_pct:.1f}%** ({_t_sign}{_d(abs(_t_gap))}) "
-            f"**{_t_direction}** the {_d(_t_full_ncc)} contributed."
-        )
-        if _t_peak_eq > _t_full_eq * 1.05:
-            _t_narr += f" Peaked at {_d(_t_peak_eq)} around {_t_peak_dt}."
-
-        # Bridge to the net account value / return story
-        if _total_value is not None and _cash is not None:
-            _t_net_gap  = _total_value - _t_full_ncc
-            _t_net_sign = "+" if _t_net_gap >= 0 else "−"
-            _t_net_pct  = abs(_t_net_gap) / _t_full_ncc * 100 if _t_full_ncc > 0 else 0
-            _t_net_dir  = "above" if _t_net_gap >= 0 else "below"
-            if _cash < 0:
-                _t_narr += (
-                    f"\n\n**Net account value: {_d(_total_value)}** "
-                    f"(equity {_d(_t_full_eq)} minus {_d(abs(_cash))} margin balance). "
-                    f"Against {_d(_t_full_ncc)} contributed, net is "
-                    f"**{_t_net_sign}{_t_net_pct:.1f}%** ({_t_net_sign}{_d(abs(_t_net_gap))}) "
-                    f"**{_t_net_dir}** baseline — this is the return in Growth & Contributions above. "
-                    f"The gap between the equity line and the diamond marker is your current leverage."
-                )
-            else:
-                _t_narr += (
-                    f"\n\n**Net account value: {_d(_total_value)}** "
-                    f"(equity {_d(_t_full_eq)} plus {_d(_cash)} cash). "
-                    f"Against {_d(_t_full_ncc)} contributed, net is "
-                    f"**{_t_net_sign}{_t_net_pct:.1f}%** ({_t_net_sign}{_d(abs(_t_net_gap))}) "
-                    f"**{_t_net_dir}** baseline."
-                )
-        st.markdown(_t_narr)
-
-    # ── 🛡️ Leverage & Margin Cushion ────────────────────────────────────────
-    # account_daily_snapshots history (added alongside this chart) — the live
-    # panel above (📐 Margin Call Distance) recomputes fresh every render and
-    # has never been persisted; this is the first day-over-day view of it.
-    st.markdown("---")
-    st.markdown("### 🛡️ Leverage & Margin Cushion")
-    st.caption(
-        "Leverage (total holdings ÷ your equity) and the estimated book decline "
-        "that would trigger a margin call, from settled end-of-day figures. "
-        "**History starts from ship date forward only** — daily cash/margin "
-        "values were never recorded before this chart existed, so there's no "
-        "way to backfill earlier days. This EOD series will differ from the "
-        "live 📐 Margin Call Distance panel above (settled prior close vs "
-        "today's intraday price)."
-    )
-
-    _lev_hist = None
-    try:
-        _lev_hist = db.load_account_daily_snapshots()
-    except Exception:
-        pass
-
-    if _lev_hist is None or len(_lev_hist) < 3:
-        st.info(
-            "Not enough snapshot history yet — revisit once a few weeks of "
-            "daily account snapshots have accumulated (the EOD cron writes "
-            "one per trading day)."
-        )
-    else:
-        import plotly.graph_objects as _pgo_lev
-        from plotly.subplots import make_subplots as _make_subplots_lev
-
-        _lev_view = st.radio(
-            "Granularity",
-            ["Weekly", "Monthly", "All data"],
-            horizontal=True,
-            key="_lev_trend_view",
-        )
-
-        _lev_df = _lev_hist.copy()
-        _lev_df["snapshot_date"] = pd.to_datetime(_lev_df["snapshot_date"])
-        _lev_df = _lev_df.set_index("snapshot_date")
-        for _col in ("leverage", "call_distance_pct"):
-            if _col in _lev_df.columns:
-                _lev_df[_col] = pd.to_numeric(_lev_df[_col], errors="coerce")
-
-        _lev_plot = leverage_series_for_chart(_lev_df, _lev_view)
-
-        if _lev_plot.empty:
-            st.info("Not enough snapshot history yet at this granularity.")
+            _pend_cash_data = st.session_state.get("_acct_implausible_pending")
+            if _pend_cash_data is not None:
+                _conf_col, _cancel_col = st.columns(2)
+                if _conf_col.button("Save anyway", type="primary", key="_acct_cash_confirm"):
+                    _pc, _pn = _pend_cash_data
+                    st.session_state.pop("_acct_implausible_pending", None)
+                    if db.save_account_cash(_pc, _pn):
+                        st.success("Saved.")
+                        st.rerun()
+                    else:
+                        st.error("Couldn't save — database offline or read-only.")
+                if _cancel_col.button("Cancel", key="_acct_cash_cancel"):
+                    st.session_state.pop("_acct_implausible_pending", None)
+                    st.rerun()
         else:
-            _lev_call_at = 1.0 / MARGIN_MAINTENANCE_RATE  # leverage level a call fires at
+            st.caption("🔒 Read-only viewer — cash balance is view-only.")
 
-            _lev_fig = _make_subplots_lev(specs=[[{"secondary_y": True}]])
-            _lev_fig.add_trace(_pgo_lev.Scatter(
-                x=_lev_plot.index, y=_lev_plot["leverage"],
-                name="Leverage (×)",
-                mode="lines+markers",
-                line=dict(color="#f59e0b", width=2),
-                connectgaps=False,  # a stale-cash gap must stay a visible gap
-                hovertemplate="Leverage: %{y:.2f}×<extra></extra>",
-            ), secondary_y=False)
-            _lev_fig.add_trace(_pgo_lev.Scatter(
-                x=_lev_plot.index, y=_lev_plot["call_distance_pct"],
-                name="Call triggers at (% book decline)",
-                mode="lines+markers",
-                line=dict(color="#ef4444", width=2, dash="dot"),
-                connectgaps=False,
-                hovertemplate="Call triggers at: %{y:.1f}%<extra></extra>",
-            ), secondary_y=True)
-            _lev_fig.add_hline(
-                y=_lev_call_at, secondary_y=False,
-                line_dash="dash", line_color="#ffffff",
-                annotation_text=f"{_lev_call_at:.1f}× — call fires at this leverage",
-                annotation_position="top left",
-                annotation_font_color="#ffffff",
-                annotation_bgcolor="rgba(0,0,0,0.45)",
+        # ── Growth & Contributions (account-baseline v2) ────────────────────────────
+        # Separate money DEPOSITED from money the market MADE you: growth = total
+        # account value − net contributed capital (baseline + deposits − withdrawals).
+        # Pure calc in stock_analyzer/account.py; display-only (feeds no gate).
+        st.divider()
+        st.markdown("### 📈 Growth & Contributions")
+        st.caption(
+            "Separates money you **deposited** from money the market **made you**. "
+            "Growth = total account value − net contributed capital (baseline + deposits − withdrawals)."
+        )
+        _flows = db.load_account_flows()
+        _total_value = (_equity + _cash) if (_have_pf and _cash is not None) else None
+        _ncc = net_contributed_capital(_flows)
+        _g = account_growth(_total_value, _ncc)
+        _has_base = has_baseline(_flows)
+
+        if not _has_base:
+            st.info(
+                "Set a starting **baseline** (your contributed capital) to begin tracking growth. "
+                "Default = your current total account value (growth from today); or enter your lifetime "
+                "net deposits (deposits − withdrawals) if you know them — then it reads as all-time gain."
             )
-            _lev_fig.update_layout(
+            if not db.is_readonly():
+                with st.form("_account_baseline_form", clear_on_submit=False):
+                    _bdate = st.date_input("Baseline as of", value=date.today(), key="_acct_bdate")
+                    _bamt = st.number_input(
+                        "Contributed capital ($)", min_value=0.0,
+                        value=float(_total_value or 0.0), step=100.0, format="%.2f",
+                        help="Default = current total account value. Or enter lifetime net deposits for all-time gain.",
+                    )
+                    _bsub = st.form_submit_button("Set baseline")
+                if _bsub:
+                    if _bamt <= 0:
+                        st.warning("Enter your contributed capital (greater than 0).")
+                    elif db.add_account_flow(_bdate.isoformat(), "baseline", _bamt, "Baseline"):
+                        st.success("Baseline set.")
+                        st.rerun()
+                    else:
+                        st.error("Couldn't save — database offline or read-only.")
+        else:
+            # v3: money-weighted (Modified Dietz) return — corrects for deposit/withdrawal
+            # timing, the distortion v2's naive gain/NCC ignores. Equals simple growth%
+            # when there are no mid-period flows. Pure calc in account.py; display-only.
+            _base = baseline_anchor(_flows)
+            _mdr = None
+            if _base is not None and _total_value is not None:
+                _mdr = money_weighted_return(
+                    _base["value"], _base["date"], _total_value, _today_et().isoformat(),
+                    [f for f in _flows if str(f.get("flow_type", "")).lower() != "baseline"],
+                )
+            _gc1, _gc2, _gc3, _gc4 = st.columns(4)
+            _gc1.metric("Net Contributed Capital", _m(f"${_g['ncc']:,.0f}"),
+                        help="Baseline + deposits − withdrawals — what you've put in.")
+            if _g["growth"] is not None:
+                _gc2.metric("Growth ($)", _m(f"${_g['growth']:+,.0f}"))  # no delta passed, delta_color was dead
+            else:
+                _gc2.metric("Growth ($)", "—",
+                            help="Open 🏠 Home and set your cash balance so total account value can be computed.")
+            if _mdr is not None:
+                _mdr_since = str(_base["date"])[:10] if _base else "baseline"
+                _gc3.metric(f"Return since {_mdr_since}", f"{_mdr['period_return_pct']:+.1f}%",
+                            help=(f"Money-weighted return (Modified Dietz) from {_mdr_since} to today "
+                                  f"— {_mdr['days']} day(s). Corrects for the timing of deposits/withdrawals. "
+                                  "This is your all-time investment return, not a weekly figure. "
+                                  "The Sunday debrief email shows a separate weekly equity-position change."))
+                _gc4.metric(
+                    "Annualized",
+                    f"{_mdr['annualized_pct']:+.1f}%" if _mdr["annualized_pct"] is not None else "—",
+                    help=(f"Annualized money-weighted return — populates once the tracking period ≥ 30 days "
+                          f"(currently {_mdr['days']}d, too short to annualize meaningfully)."),
+                )
+                if _mdr["annualized_pct"] is not None:
+                    _mdr_caveat = annualization_caveat(_mdr["days"], is_levered=_levered)
+                    if _mdr_caveat:
+                        st.caption(_mdr_caveat)
+            else:
+                _gc3.metric("Return (money-weighted)", "—",
+                            help="Needs a baseline + a loaded portfolio (open 🏠 Home and set your cash).")
+                _gc4.metric("Annualized", "—")
+
+            # Cash-flow ledger (with delete) + add a deposit/withdrawal.
+            if _flows:
+                st.markdown("**Cash-flow ledger**")
+                for _fi, _fl in enumerate(_flows):
+                    _fc1, _fc2, _fc3, _fc4, _fc5 = st.columns([2, 2, 2, 4, 1])
+                    _fc1.write(str(_fl.get("flow_date") or "—"))
+                    _fc2.write(str(_fl.get("flow_type", "")).title())
+                    _sign = "−" if _fl.get("flow_type") == "withdrawal" else "+"
+                    _fc3.write(f"{_sign}${_fl.get('amount', 0):,.2f}")
+                    _fc4.write(_fl.get("note") or "")
+                    if not db.is_readonly():
+                        _fid = _fl.get("id")
+                        _fdel_key = f"_flow_del_confirm_{_fi}_{_fid}"
+                        if not st.session_state.get(_fdel_key):
+                            if _fc5.button("🗑", key=f"_flow_del_{_fi}_{_fid}", help="Delete this flow"):
+                                st.session_state[_fdel_key] = True
+                                st.rerun()
+                        else:
+                            st.warning(f"Delete this {_fl.get('flow_type', 'entry').title()} entry?")
+                            _fdy, _fdn = st.columns(2)
+                            with _fdy:
+                                if st.button("Yes, delete", key=f"_flow_del_yes_{_fi}_{_fid}", type="primary"):
+                                    st.session_state.pop(_fdel_key, None)
+                                    db.delete_account_flow(_fid)
+                                    st.rerun()
+                            with _fdn:
+                                if st.button("Cancel", key=f"_flow_del_no_{_fi}_{_fid}"):
+                                    st.session_state.pop(_fdel_key, None)
+                                    st.rerun()
+
+            if not db.is_readonly():
+                with st.expander("➕ Log a deposit or withdrawal", expanded=False):
+                    with st.form("_account_flow_form", clear_on_submit=True):
+                        _ftype = st.selectbox("Type", ["deposit", "withdrawal"])
+                        _fdate = st.date_input("Date", value=date.today(), key="_acct_fdate")
+                        _famt = st.number_input("Amount ($)", min_value=0.0, value=0.0,
+                                                step=100.0, format="%.2f")
+                        _fnote = st.text_input("Note (optional)")
+                        _fsub = st.form_submit_button("Add")
+                    if _fsub:
+                        if _famt <= 0:
+                            st.warning("Enter an amount greater than 0.")
+                        elif db.add_account_flow(_fdate.isoformat(), _ftype, _famt, _fnote or None):
+                            st.success(f"{_ftype.title()} logged.")
+                            st.rerun()
+                        else:
+                            st.error("Couldn't save — database offline or read-only.")
+                    st.caption(
+                        "After a deposit/withdrawal, also update your **cash balance** above and log any "
+                        "resulting buy/sell in the Trade Journal, so total account value stays current. "
+                        "(A deposit raises contributed capital, so it never shows up as growth.)"
+                    )
+
+        # ── Capital Trend ──────────────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 📈 Capital Trend")
+        st.caption(
+            "Equity position value vs net contributed capital over time. "
+            "**Equity positions only** — cash balance and margin are excluded from the line. "
+            "Net account value (equity + cash) is shown as a separate marker."
+        )
+
+        _trend_snap = None
+        try:
+            _trend_snap = db.load_daily_snapshots()
+        except Exception:
+            pass
+
+        _trend_ts = build_equity_timeseries(_trend_snap, _flows) if _trend_snap is not None else None
+
+        if _trend_ts is None or len(_trend_ts["dates"]) < 3:
+            st.info(
+                "Not enough snapshot data yet — revisit once a few weeks of daily "
+                "snapshots have accumulated (Home must be visited each trading day)."
+            )
+        else:
+            import plotly.graph_objects as _pgo_trend
+
+            _chart_priv = st.session_state.get("_privacy", True)
+
+            _trend_view = st.radio(
+                "Granularity",
+                ["Weekly", "Monthly", "All data"],
+                horizontal=True,
+                key="_cap_trend_view",
+            )
+
+            import pandas as _pd_trend
+            _tdf = _pd_trend.DataFrame({
+                "date":   _pd_trend.to_datetime(_trend_ts["dates"]),
+                "equity": _trend_ts["equity_values"],
+                "ncc":    _trend_ts["ncc_values"],
+            }).set_index("date").sort_index()
+
+            try:
+                if _trend_view == "Weekly":
+                    _plot_tdf = _tdf.resample("W-FRI").last().dropna()
+                elif _trend_view == "Monthly":
+                    _plot_tdf = _tdf.resample("ME").last().dropna()
+                else:
+                    _plot_tdf = _tdf.copy()
+            except Exception:
+                _plot_tdf = _tdf.copy()
+
+            if _plot_tdf.empty:
+                _plot_tdf = _tdf.copy()
+
+            _t_last_eq  = float(_plot_tdf["equity"].iloc[-1])
+            _t_last_ncc = float(_plot_tdf["ncc"].iloc[-1])
+            _t_above    = _t_last_eq >= _t_last_ncc
+            _t_eq_color = "#22c55e" if _t_above else "#ef4444"
+            _t_fill     = "rgba(34,197,94,0.12)" if _t_above else "rgba(239,68,68,0.12)"
+
+            _t_fig = _pgo_trend.Figure()
+            # NCC reference line (dotted grey — the "what you put in" floor)
+            _t_fig.add_trace(_pgo_trend.Scatter(
+                x=_plot_tdf.index, y=_plot_tdf["ncc"],
+                name="Contributed capital",
+                line=dict(color="#9ca3af", width=1.5, dash="dot"),
+                hovertemplate=(
+                    "Contributed: ••••••<extra></extra>" if _chart_priv
+                    else "Contributed: $%{y:,.0f}<extra></extra>"
+                ),
+                mode="lines",
+            ))
+            # Equity filled area — fills to the NCC trace above/below it
+            _t_fig.add_trace(_pgo_trend.Scatter(
+                x=_plot_tdf.index, y=_plot_tdf["equity"],
+                name="Portfolio equity (positions only)",
+                fill="tonexty",
+                fillcolor=_t_fill,
+                line=dict(color=_t_eq_color, width=2),
+                hovertemplate=(
+                    "Equity positions: ••••••<extra></extra>" if _chart_priv
+                    else "Equity positions: $%{y:,.0f}<extra></extra>"
+                ),
+                mode="lines",
+            ))
+            # Net account value marker — equity + cash (may be negative = margin debit).
+            # A single point at the latest date so the -7.4% return story is visible
+            # in the same frame as the equity line.
+            if _total_value is not None:
+                _t_net_color = "#22c55e" if _total_value >= _t_last_ncc else "#f59e0b"
+                _t_fig.add_trace(_pgo_trend.Scatter(
+                    x=[_tdf.index[-1]],
+                    y=[_total_value],
+                    name="Net account value (equity + cash)",
+                    mode="markers+text",
+                    marker=dict(size=12, color=_t_net_color, symbol="diamond",
+                                line=dict(color="white", width=1.5)),
+                    text=["  Net: ••••••"] if _chart_priv else [f"  Net: ${_total_value:,.0f}"],
+                    textposition="middle right",
+                    textfont=dict(size=11, color=_t_net_color),
+                    hovertemplate=(
+                        "Net account value: ••••••<extra></extra>" if _chart_priv
+                        else "Net account value: $%{y:,.0f}<extra></extra>"
+                    ),
+                ))
+            _t_fig.update_layout(
                 margin=dict(l=0, r=0, t=28, b=0),
                 height=300,
                 legend=dict(orientation="h", y=1.12, x=0),
                 xaxis=dict(showgrid=False),
+                yaxis=dict(
+                    showticklabels=not _chart_priv,
+                    tickprefix="$", tickformat=",.0f",
+                    gridcolor="rgba(128,128,128,0.15)",
+                ),
                 hovermode="x unified",
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
             )
-            _lev_fig.update_yaxes(title_text="Leverage (×)", secondary_y=False,
-                                   gridcolor="rgba(128,128,128,0.15)")
-            _lev_fig.update_yaxes(title_text="Call triggers at (%)", secondary_y=True,
-                                   showgrid=False)
-            st.plotly_chart(_lev_fig, width="stretch")
-            st.caption(
-                "A gap in the red line only (leverage still shown) means no margin "
-                "debit that day — fully unlevered, not stale data. A day where the "
-                "account cash balance was too stale "
-                f"(> {ACCOUNT_CASH_STALE_DAYS}d old) or unset is dropped from this "
-                "chart entirely rather than shown as a break, so the line may look "
-                "continuous across it — never filled in as zero either way."
+            st.plotly_chart(_t_fig, width="stretch")
+
+            # Auto-narration — computed, no LLM call
+            _t_first_eq  = float(_tdf["equity"].iloc[0])
+            _t_full_eq   = float(_tdf["equity"].iloc[-1])
+            _t_full_ncc  = float(_tdf["ncc"].iloc[-1])
+            _t_gap       = _t_full_eq - _t_full_ncc
+            _t_gap_pct   = abs(_t_gap) / _t_full_ncc * 100 if _t_full_ncc > 0 else 0
+            _t_direction = "above" if _t_gap >= 0 else "below"
+            _t_sign      = "+" if _t_gap >= 0 else "−"
+            _t_first_dt  = _tdf.index[0].strftime("%b %d, %Y")
+            _t_last_dt   = _tdf.index[-1].strftime("%b %d, %Y")
+            _t_n_days    = (_tdf.index[-1] - _tdf.index[0]).days
+            _t_peak_eq   = float(_tdf["equity"].max())
+            _t_peak_dt   = _tdf["equity"].idxmax().strftime("%b %d")
+
+            # Narration — use \$ to escape dollar signs from Streamlit's KaTeX parser.
+            # Bare $ in markdown triggers inline LaTeX mode, consuming the sign and
+            # mangling adjacent text. \$ renders as a literal dollar sign.
+            # When privacy mode is on, mask dollar values to match the KPI tiles above.
+            def _d(v: float) -> str:
+                return "••••••" if _chart_priv else f"\\${v:,.0f}"
+
+            _t_narr = (
+                f"Since **{_t_first_dt}**, equity positions moved from "
+                f"{_d(_t_first_eq)} to {_d(_t_full_eq)} ({_t_n_days} days) — "
+                f"**{_t_sign}{_t_gap_pct:.1f}%** ({_t_sign}{_d(abs(_t_gap))}) "
+                f"**{_t_direction}** the {_d(_t_full_ncc)} contributed."
             )
+            if _t_peak_eq > _t_full_eq * 1.05:
+                _t_narr += f" Peaked at {_d(_t_peak_eq)} around {_t_peak_dt}."
 
-    # ── 💳 Capital vs Margin ─────────────────────────────────────────────────
-    # docs/plans/capital-vs-margin-analysis.md — "was trading on margin
-    # actually worth it?" Reconstructs the account's net-equity/leverage
-    # trajectory BACKWARD to broker-integration go-live, joined with F-266's
-    # forward-recorded account_daily_snapshots (_lev_hist, loaded above), and
-    # computes interest paid + the derived verdicts. NO NEW TABLE — computed
-    # live from trades/flows/income-events/daily_snapshots and memoized only
-    # in session_state, keyed on a data fingerprint (a cache TABLE would risk
-    # staleness against the broker feed, which syncs 2x/day, and new trades).
-    # Awareness-only — no gate, no policy constant. All pure logic lives in
-    # stock_analyzer/capital_vs_margin.py; this block is render/wiring only.
-    st.markdown("---")
-    st.markdown("### 💳 Capital vs Margin")
-    st.caption(
-        "Was trading on margin actually worth it? Reconstructs your account's "
-        "value back to when broker sync went live, alongside a synthetic "
-        "capital-only curve anchored at the SAME starting equity — the gap "
-        "between the two is purely margin's effect. **Counterfactual model:** "
-        "margin is modeled as a scale on your ACTUAL positions, never a guess "
-        "at what smaller/different trades you might have made instead."
-    )
-
-    _cvm_view = st.radio(
-        "Granularity", ["Weekly", "Monthly", "All data"],
-        horizontal=True, key="_capmargin_view",
-    )
-
-    _cvm_priv = st.session_state.get("_privacy", True)
-
-    def _cvm_d(v):
-        if v is None:
-            return "—"
-        return "••••••" if _cvm_priv else f"${v:,.0f}"
-
-    def _cvm_dm(v):
-        # Markdown-safe variant of _cvm_d for any st.markdown/caption/error/
-        # warning/info/help text (never st.metric's value= param, which is
-        # plain text, not markdown-parsed). A bare "$" is a LaTeX math
-        # delimiter to Streamlit's markdown renderer -- two or more literal
-        # "$" in the same rendered string get silently interpreted as a math
-        # span instead of two dollar figures, garbling the whole line. Escape
-        # every "$" here so a sentence combining multiple dollar figures
-        # (e.g. "reconstructed $X vs. recorded $Y") renders as plain text.
-        if v is None:
-            return "—"
-        return "••••••" if _cvm_priv else f"\\${v:,.0f}"
-
-    _cvm_trades = db.load_trades()
-    _cvm_income = db.load_snaptrade_income_events()
-    _cvm_snaps = db.load_daily_snapshots()
-
-    _cvm_anchor = capital_vs_margin.resolve_anchor(
-        _acct, _lev_hist, ACCOUNT_CASH_STALE_DAYS, _now_et()
-    )
-    _cvm_golive = (
-        capital_vs_margin.golive_floor(_cvm_trades, _flows, _cvm_income, _cvm_snaps)
-        if _cvm_anchor is not None else None
-    )
-
-    if _cvm_anchor is None:
-        st.info(
-            "💳 Can't reconstruct — no fresh account cash on file (set it "
-            "above) and no recorded account snapshot history yet."
-        )
-    elif _cvm_golive is None:
-        st.info(
-            "💳 Can't determine a broker go-live date — no broker-synced "
-            "trades/income events yet, or `daily_snapshots` doesn't reach "
-            "back to them."
-        )
-    else:
-        _cvm_fingerprint = (
-            round(_cvm_anchor["cash"], 2), str(_cvm_anchor["date"]),
-            len(_cvm_trades), len(_flows), len(_cvm_income),
-            (len(_lev_hist) if _lev_hist is not None else 0),
-        )
-        if st.session_state.get("_cvm_fingerprint") != _cvm_fingerprint:
-            _cvm_daily_cash = capital_vs_margin.reconstruct_daily_cash(
-                _cvm_anchor, _cvm_golive, _cvm_trades, _flows, _cvm_income,
-            )
-            _cvm_gross_by_date = capital_vs_margin.gross_book_by_date(_cvm_snaps)
-            _cvm_book_returns_calc = capital_vs_margin.book_daily_returns(_cvm_snaps)
-            _cvm_series_calc = capital_vs_margin.build_account_series(
-                _cvm_daily_cash, _cvm_gross_by_date, _lev_hist, MARGIN_MAINTENANCE_RATE,
-            )
-            _cvm_validation_calc = capital_vs_margin.validate_reconstruction(
-                _cvm_series_calc, _lev_hist
-            )
-            st.session_state["_cvm_fingerprint"] = _cvm_fingerprint
-            st.session_state["_cvm_cache"] = {
-                "series": _cvm_series_calc,
-                "book_returns": _cvm_book_returns_calc,
-                "validation": _cvm_validation_calc,
-            }
-
-        _cvm_cache = st.session_state.get("_cvm_cache")
-        _cvm_cache = _cvm_cache if _cvm_cache is not None else {}
-        _cvm_series = _cvm_cache.get("series")
-        _cvm_series = _cvm_series if _cvm_series is not None else []
-        _cvm_book_returns = _cvm_cache.get("book_returns")
-        _cvm_book_returns = _cvm_book_returns if _cvm_book_returns is not None else {}
-        _cvm_validation = _cvm_cache.get("validation")
-        if _cvm_validation is None:
-            _cvm_validation = {"ok": True, "mismatches": [], "overlap_days": 0, "max_drift": 0.0}
-        _cvm_gate = capital_vs_margin.render_gate(_cvm_validation)
-
-        if not _cvm_gate["show_spanning_verdicts"]:
-            _cvm_worst = _cvm_gate.get("worst_mismatch")
-            _cvm_worst_txt = ""
-            if _cvm_worst:
-                _cvm_worst_txt = (
-                    f" Worst on **{_cvm_worst['date']}**: reconstructed "
-                    f"{_cvm_dm(_cvm_worst['reconstructed'])} vs. recorded "
-                    f"{_cvm_dm(_cvm_worst['recorded'])} "
-                    f"({_cvm_dm(abs(_cvm_worst['drift']))} drift)."
-                )
-            st.error(
-                "⚠️ **Reconstruction self-check failed** — the backward roll "
-                "disagrees with your own recorded account history by more "
-                "than the tolerance." + _cvm_worst_txt + " Every verdict "
-                "below that SPANS the reconstructed window is withheld "
-                "until this is investigated — only the raw interest split "
-                "below is unaffected (it never touches the reconstruction)."
-            )
-        elif _cvm_validation.get("overlap_days", 0) > 0:
-            st.caption(
-                f"✅ Reconstruction self-check passed — {_cvm_validation['overlap_days']} "
-                "day(s) of overlap with your recorded history, all within tolerance "
-                f"(max drift {_cvm_dm(_cvm_validation.get('max_drift', 0.0))})."
-            )
-        else:
-            st.caption(
-                "⚠️ Reconstruction not yet cross-checked — no overlap with recorded "
-                "F-266 history exists yet to validate against. Treat the figures "
-                "below as unverified until some recorded days accumulate."
-            )
-
-        # ── Interest paid — always shown, never touches the reconstruction ──
-        _cvm_part = capital_vs_margin.interest_partition(_cvm_income)
-        _cvm_int = capital_vs_margin.resolve_interest_charged(_cvm_part, None)
-        st.markdown(
-            f"💰 Interest since go-live: **{_cvm_dm(_cvm_int['charged'])}** "
-            f"(candidate *charged*) vs. **{_cvm_dm(_cvm_int['earned'])}** "
-            "(candidate *earned*) — never netted."
-        )
-        st.caption(
-            "⚠️ **Unverified**: SnapTrade files margin interest charged and "
-            "cash interest earned under the same event type, distinguished "
-            "only by sign — which sign this account's charges use has not "
-            "yet been confirmed against real synced data. The split above "
-            "is shown, not netted, until that's confirmed; every verdict "
-            "below that depends on a total interest figure uses the "
-            "'charged' candidate and inherits the same caveat."
-        )
-
-        if not _cvm_gate["show_spanning_verdicts"] or len(_cvm_series) < 2:
-            if _cvm_gate["show_spanning_verdicts"]:
-                st.info("Not enough reconstructed history yet for the full breakdown.")
-        else:
-            _cvm_curves = capital_vs_margin.equity_curves(_cvm_series, _cvm_book_returns)
-            _cvm_mc = capital_vs_margin.margin_contribution(
-                _cvm_series, _cvm_book_returns, _cvm_int["charged"]
-            )
-
-            # ── Verdict tiles ────────────────────────────────────────────────
-            _cvm_t1, _cvm_t2, _cvm_t3 = st.columns(3)
-            _cvm_t1.metric(
-                "Net Value Margin Added", _cvm_d(_cvm_mc["net_value"]),
-                help="Extra-exposure P&L minus interest paid — positive means "
-                     "margin has been worth its cost so far; negative means it "
-                     "hasn't. Unverified interest sign, see caveat above.",
-            )
-            _cvm_t2.metric(
-                "Extra-Exposure P&L", _cvm_d(_cvm_mc["extra_exposure_pnl"]),
-                help="What the borrowed exposure itself earned/cost, before interest.",
-            )
-            _cvm_t3.metric(
-                "Interest Paid", _cvm_d(_cvm_mc["interest_paid"]),
-                help="Candidate charged-interest total (unverified sign convention).",
-            )
-
-            # ── Equity curves chart ─────────────────────────────────────────
-            if len(_cvm_curves["dates"]) >= 2:
-                import plotly.graph_objects as _cvm_pgo
-
-                _cvm_cdf = pd.DataFrame({
-                    "date": pd.to_datetime(_cvm_curves["dates"]),
-                    "levered": _cvm_curves["levered"],
-                    "unlevered": _cvm_curves["unlevered"],
-                }).set_index("date").sort_index()
-
-                if _cvm_view == "Weekly":
-                    _cvm_plot = _cvm_cdf.resample("W-FRI").last()
-                elif _cvm_view == "Monthly":
-                    _cvm_plot = _cvm_cdf.resample("ME").last()
-                else:
-                    _cvm_plot = _cvm_cdf.copy()
-                _cvm_plot = _cvm_plot.dropna(how="all")
-                if _cvm_plot.empty:
-                    _cvm_plot = _cvm_cdf.copy()
-
-                _cvm_recorded_dates = [
-                    d for d, s in zip(_cvm_curves["dates"], _cvm_curves["source"])
-                    if s == "recorded"
-                ]
-                _cvm_boundary = pd.Timestamp(min(_cvm_recorded_dates)) if _cvm_recorded_dates else None
-
-                _cvm_fig = _cvm_pgo.Figure()
-                for _cvm_col, _cvm_name, _cvm_color in (
-                    ("levered", "Actual (levered)", "#f59e0b"),
-                    ("unlevered", "Capital-only (unlevered)", "#38bdf8"),
-                ):
-                    if _cvm_boundary is not None and _cvm_boundary > _cvm_plot.index.min():
-                        _recon_idx = _cvm_plot.index[_cvm_plot.index <= _cvm_boundary]
-                        _rec_idx = _cvm_plot.index[_cvm_plot.index >= _cvm_boundary]
-                        _cvm_fig.add_trace(_cvm_pgo.Scatter(
-                            x=_recon_idx, y=_cvm_plot.loc[_recon_idx, _cvm_col],
-                            name=_cvm_name, legendgroup=_cvm_col,
-                            mode="lines", line=dict(color=_cvm_color, width=2, dash="dot"),
-                            connectgaps=False,
-                            hovertemplate=(
-                                f"{_cvm_name} (reconstructed): ••••••<extra></extra>" if _cvm_priv
-                                else f"{_cvm_name} (reconstructed): $%{{y:,.0f}}<extra></extra>"
-                            ),
-                        ))
-                        _cvm_fig.add_trace(_cvm_pgo.Scatter(
-                            x=_rec_idx, y=_cvm_plot.loc[_rec_idx, _cvm_col],
-                            name=_cvm_name, legendgroup=_cvm_col, showlegend=False,
-                            mode="lines", line=dict(color=_cvm_color, width=2, dash="solid"),
-                            connectgaps=False,
-                            hovertemplate=(
-                                f"{_cvm_name} (recorded): ••••••<extra></extra>" if _cvm_priv
-                                else f"{_cvm_name} (recorded): $%{{y:,.0f}}<extra></extra>"
-                            ),
-                        ))
-                    else:
-                        _cvm_fig.add_trace(_cvm_pgo.Scatter(
-                            x=_cvm_plot.index, y=_cvm_plot[_cvm_col],
-                            name=_cvm_name, mode="lines",
-                            line=dict(color=_cvm_color, width=2, dash="solid"),
-                            connectgaps=False,
-                            hovertemplate=(
-                                f"{_cvm_name}: ••••••<extra></extra>" if _cvm_priv
-                                else f"{_cvm_name}: $%{{y:,.0f}}<extra></extra>"
-                            ),
-                        ))
-                if _cvm_boundary is not None and _cvm_boundary > _cvm_plot.index.min():
-                    _cvm_fig.add_vrect(
-                        x0=_cvm_plot.index.min(), x1=_cvm_boundary,
-                        fillcolor="rgba(148,163,184,0.10)", line_width=0,
-                        annotation_text="reconstructed", annotation_position="top left",
+            # Bridge to the net account value / return story
+            if _total_value is not None and _cash is not None:
+                _t_net_gap  = _total_value - _t_full_ncc
+                _t_net_sign = "+" if _t_net_gap >= 0 else "−"
+                _t_net_pct  = abs(_t_net_gap) / _t_full_ncc * 100 if _t_full_ncc > 0 else 0
+                _t_net_dir  = "above" if _t_net_gap >= 0 else "below"
+                if _cash < 0:
+                    _t_narr += (
+                        f"\n\n**Net account value: {_d(_total_value)}** "
+                        f"(equity {_d(_t_full_eq)} minus {_d(abs(_cash))} margin balance). "
+                        f"Against {_d(_t_full_ncc)} contributed, net is "
+                        f"**{_t_net_sign}{_t_net_pct:.1f}%** ({_t_net_sign}{_d(abs(_t_net_gap))}) "
+                        f"**{_t_net_dir}** baseline — this is the return in Growth & Contributions above. "
+                        f"The gap between the equity line and the diamond marker is your current leverage."
                     )
-                _cvm_fig.update_layout(
+                else:
+                    _t_narr += (
+                        f"\n\n**Net account value: {_d(_total_value)}** "
+                        f"(equity {_d(_t_full_eq)} plus {_d(_cash)} cash). "
+                        f"Against {_d(_t_full_ncc)} contributed, net is "
+                        f"**{_t_net_sign}{_t_net_pct:.1f}%** ({_t_net_sign}{_d(abs(_t_net_gap))}) "
+                        f"**{_t_net_dir}** baseline."
+                    )
+            st.markdown(_t_narr)
+
+        # ── 🛡️ Leverage & Margin Cushion ────────────────────────────────────────
+        # account_daily_snapshots history (added alongside this chart) — the live
+        # panel above (📐 Margin Call Distance) recomputes fresh every render and
+        # has never been persisted; this is the first day-over-day view of it.
+        st.markdown("---")
+        st.markdown("### 🛡️ Leverage & Margin Cushion")
+        st.caption(
+            "Leverage (total holdings ÷ your equity) and the estimated book decline "
+            "that would trigger a margin call, from settled end-of-day figures. "
+            "**History starts from ship date forward only** — daily cash/margin "
+            "values were never recorded before this chart existed, so there's no "
+            "way to backfill earlier days. This EOD series will differ from the "
+            "live 📐 Margin Call Distance panel above (settled prior close vs "
+            "today's intraday price)."
+        )
+
+        _lev_hist = None
+        try:
+            _lev_hist = db.load_account_daily_snapshots()
+        except Exception:
+            pass
+
+        if _lev_hist is None or len(_lev_hist) < 3:
+            st.info(
+                "Not enough snapshot history yet — revisit once a few weeks of "
+                "daily account snapshots have accumulated (the EOD cron writes "
+                "one per trading day)."
+            )
+        else:
+            import plotly.graph_objects as _pgo_lev
+            from plotly.subplots import make_subplots as _make_subplots_lev
+
+            _lev_view = st.radio(
+                "Granularity",
+                ["Weekly", "Monthly", "All data"],
+                horizontal=True,
+                key="_lev_trend_view",
+            )
+
+            _lev_df = _lev_hist.copy()
+            _lev_df["snapshot_date"] = pd.to_datetime(_lev_df["snapshot_date"])
+            _lev_df = _lev_df.set_index("snapshot_date")
+            for _col in ("leverage", "call_distance_pct"):
+                if _col in _lev_df.columns:
+                    _lev_df[_col] = pd.to_numeric(_lev_df[_col], errors="coerce")
+
+            _lev_plot = leverage_series_for_chart(_lev_df, _lev_view)
+
+            if _lev_plot.empty:
+                st.info("Not enough snapshot history yet at this granularity.")
+            else:
+                _lev_call_at = 1.0 / MARGIN_MAINTENANCE_RATE  # leverage level a call fires at
+
+                _lev_fig = _make_subplots_lev(specs=[[{"secondary_y": True}]])
+                _lev_fig.add_trace(_pgo_lev.Scatter(
+                    x=_lev_plot.index, y=_lev_plot["leverage"],
+                    name="Leverage (×)",
+                    mode="lines+markers",
+                    line=dict(color="#f59e0b", width=2),
+                    connectgaps=False,  # a stale-cash gap must stay a visible gap
+                    hovertemplate="Leverage: %{y:.2f}×<extra></extra>",
+                ), secondary_y=False)
+                _lev_fig.add_trace(_pgo_lev.Scatter(
+                    x=_lev_plot.index, y=_lev_plot["call_distance_pct"],
+                    name="Call triggers at (% book decline)",
+                    mode="lines+markers",
+                    line=dict(color="#ef4444", width=2, dash="dot"),
+                    connectgaps=False,
+                    hovertemplate="Call triggers at: %{y:.1f}%<extra></extra>",
+                ), secondary_y=True)
+                _lev_fig.add_hline(
+                    y=_lev_call_at, secondary_y=False,
+                    line_dash="dash", line_color="#ffffff",
+                    annotation_text=f"{_lev_call_at:.1f}× — call fires at this leverage",
+                    annotation_position="top left",
+                    annotation_font_color="#ffffff",
+                    annotation_bgcolor="rgba(0,0,0,0.45)",
+                )
+                _lev_fig.update_layout(
                     margin=dict(l=0, r=0, t=28, b=0),
-                    height=320,
+                    height=300,
                     legend=dict(orientation="h", y=1.12, x=0),
                     xaxis=dict(showgrid=False),
-                    yaxis=dict(
-                        showticklabels=not _cvm_priv,
-                        tickprefix="$", tickformat=",.0f",
-                        gridcolor="rgba(128,128,128,0.15)",
-                    ),
                     hovermode="x unified",
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
                 )
-                st.plotly_chart(_cvm_fig, width="stretch")
+                _lev_fig.update_yaxes(title_text="Leverage (×)", secondary_y=False,
+                                       gridcolor="rgba(128,128,128,0.15)")
+                _lev_fig.update_yaxes(title_text="Call triggers at (%)", secondary_y=True,
+                                       showgrid=False)
+                st.plotly_chart(_lev_fig, width="stretch")
                 st.caption(
-                    "Dotted line + shaded band = reconstructed (before F-266 started "
-                    "recording 2026-09-10). Solid = recorded from real daily snapshots."
+                    "A gap in the red line only (leverage still shown) means no margin "
+                    "debit that day — fully unlevered, not stale data. A day where the "
+                    "account cash balance was too stale "
+                    f"(> {ACCOUNT_CASH_STALE_DAYS}d old) or unset is dropped from this "
+                    "chart entirely rather than shown as a break, so the line may look "
+                    "continuous across it — never filled in as zero either way."
                 )
 
-            # ── Break-even rate + projected annual interest ─────────────────
-            _cvm_debits = [p["margin_debit"] for p in _cvm_series if p.get("margin_debit") is not None]
-            _cvm_avg_debit = (sum(_cvm_debits) / len(_cvm_debits)) if _cvm_debits else 0.0
-            _cvm_days = (_cvm_series[-1]["date"] - _cvm_series[0]["date"]).days
-            _cvm_eff_rate = capital_vs_margin.break_even_rate(
-                _cvm_int["charged"], _cvm_avg_debit, _cvm_days
-            )
-            # Latest NON-None point per field, not strictly series[-1] -- today's
-            # row can be a daily_snapshots gap (EOD hasn't written yet) while
-            # margin_debit/gross_book are both real and known as of a prior day;
-            # collapsing that gap to 0.0 would misreport "no debit" mid-session.
-            _cvm_current_debit = next(
-                (p["margin_debit"] for p in reversed(_cvm_series) if p.get("margin_debit") is not None),
-                0.0,
-            )
-            _cvm_current_gross = next(
-                (p["gross_book"] for p in reversed(_cvm_series) if p.get("gross_book") is not None),
-                0.0,
-            )
-
-            _cvm_be1, _cvm_be2 = st.columns(2)
-            if _cvm_eff_rate is not None:
-                _cvm_be1.metric(
-                    "Break-Even Book Return", f"{_cvm_eff_rate * 100:.1f}%/yr",
-                    help="Annualized book return needed just to cover the average "
-                         "interest paid over this window — also, by the same math, "
-                         "your empirically realized annualized interest rate.",
-                )
-                _cvm_be2.metric(
-                    "Projected Annual Interest", _cvm_d(
-                        capital_vs_margin.projected_annual_interest(_cvm_current_debit, _cvm_eff_rate)
-                    ),
-                    help=f"At today's {_cvm_dm(_cvm_current_debit)} debit and the "
-                         "realized rate above, extrapolated forward — not a "
-                         "forecast of future debit changes.",
-                )
-            else:
-                st.caption("No margin debit in this window — break-even rate not applicable.")
-                _cvm_eff_rate = 0.0
-
-            # ── Regime split ─────────────────────────────────────────────────
-            _cvm_weekly_returns = capital_vs_margin.weekly_compounded_returns(_cvm_book_returns)
-            _cvm_weekly_interest = capital_vs_margin.weekly_interest_charged(_cvm_income, None)
-            _cvm_regime = capital_vs_margin.regime_split(
-                _cvm_series, _cvm_weekly_returns, _cvm_weekly_interest
-            )
-            st.markdown("#### Up-Weeks vs. Down-Weeks")
-            st.caption(
-                "A blended total can hide 'great in rallies, brutal in selloffs.' "
-                "Split by ISO week on the book's own realized return."
-            )
-            _cvm_up, _cvm_down = _cvm_regime["up"], _cvm_regime["down"]
-            _cvm_rs1, _cvm_rs2 = st.columns(2)
-            _cvm_rs1.markdown(
-                f"**📈 Up weeks ({_cvm_up['weeks']}):** net {_cvm_dm(_cvm_up['net'])} "
-                f"(exposure {_cvm_dm(_cvm_up['extra_exposure_pnl'])} − "
-                f"interest {_cvm_dm(_cvm_up['interest'])})"
-            )
-            _cvm_rs2.markdown(
-                f"**📉 Down weeks ({_cvm_down['weeks']}):** net {_cvm_dm(_cvm_down['net'])} "
-                f"(exposure {_cvm_dm(_cvm_down['extra_exposure_pnl'])} − "
-                f"interest {_cvm_dm(_cvm_down['interest'])})"
-            )
-
-            # ── Drawdown decomposition ───────────────────────────────────────
-            st.markdown("#### Drawdown Decomposition")
-            _cvm_worst_dd = capital_vs_margin.worst_drawdown_window(_cvm_series)
-            if _cvm_worst_dd is None:
-                st.caption("Not enough history yet to identify a drawdown.")
-            else:
-                _cvm_pk_date, _cvm_tr_date, _cvm_pk_val, _cvm_tr_val = _cvm_worst_dd
-                _cvm_dd = capital_vs_margin.drawdown_decomposition(
-                    _cvm_series, _cvm_book_returns, _cvm_pk_date, _cvm_tr_date,
-                    income_events=_cvm_income,
-                )
-                st.caption(f"Worst peak-to-trough: **{_cvm_pk_date}** → **{_cvm_tr_date}**")
-                _cvm_dd1, _cvm_dd2, _cvm_dd3 = st.columns(3)
-                _cvm_dd1.metric("Actual Change", _cvm_d(_cvm_dd["actual_change"]))
-                _cvm_dd2.metric("Would Have Lost Unlevered", _cvm_d(_cvm_dd["unlevered_change"]))
-                _cvm_dd3.metric("Amplification Portion", _cvm_d(_cvm_dd["amplification_portion"]))
-                if _cvm_dd["interest_in_episode"]:
-                    st.caption(
-                        f"Plus {_cvm_dm(_cvm_dd['interest_in_episode'])} interest charged "
-                        "during this episode (candidate, unverified sign)."
-                    )
-
-            # ── Deleverage scenario ───────────────────────────────────────────
-            st.markdown("#### If You Paid Down Debt")
-            if _cvm_current_debit <= 0:
-                st.caption("No current margin debit — nothing to model here.")
-            else:
-                _cvm_dl1, _cvm_dl2 = st.columns(2)
-                _cvm_paydown = _cvm_dl1.slider(
-                    "Paydown amount ($)", min_value=0.0,
-                    max_value=round(_cvm_current_debit, 2),
-                    value=round(_cvm_current_debit * 0.5, 2), step=100.0,
-                    key="_cvm_paydown_slider",
-                )
-                _cvm_shock_input = _cvm_dl2.number_input(
-                    "Shock size (% decline)", min_value=0.0, max_value=99.0,
-                    value=abs(FRAGILITY_PULLBACK_PCT), step=1.0,
-                    key="_cvm_shock_input",
-                )
-                _cvm_dls = capital_vs_margin.deleverage_scenario(
-                    _cvm_current_gross, _cvm_current_debit, _cvm_paydown,
-                    MARGIN_MAINTENANCE_RATE, _cvm_eff_rate, -abs(_cvm_shock_input),
-                )
-                _cvm_dl3, _cvm_dl4, _cvm_dl5 = st.columns(3)
-                _cvm_dl3.metric(
-                    "Interest Saved (annualized)", _cvm_d(_cvm_dls["interest_saved"]),
-                    help=f"{_cvm_dm(_cvm_dls['interest_now'])} → {_cvm_dm(_cvm_dls['interest_after'])}",
-                )
-                _cvm_call_now_txt = (
-                    f"{_cvm_dls['call_now']['call_distance_pct']:.1f}%"
-                    if _cvm_dls["call_now"] else "—"
-                )
-                _cvm_call_after_txt = (
-                    f"{_cvm_dls['call_after']['call_distance_pct']:.1f}%"
-                    if _cvm_dls["call_after"] else "no debit — N/A"
-                )
-                _cvm_dl4.metric("Call Distance Now", _cvm_call_now_txt)
-                _cvm_dl5.metric("Call Distance After Paydown", _cvm_call_after_txt)
-                if _cvm_dls["shock_now"] and _cvm_dls["shock_after"]:
-                    st.caption(
-                        f"A {_cvm_shock_input:.0f}% shock today: cushion "
-                        f"{_cvm_dm(_cvm_dls['shock_now']['shock_cushion'])} "
-                        f"({'in call' if _cvm_dls['shock_now']['shock_in_call'] else 'clear'}). "
-                        f"After this paydown: cushion "
-                        f"{_cvm_dm(_cvm_dls['shock_after']['shock_cushion'])} "
-                        f"({'in call' if _cvm_dls['shock_after']['shock_in_call'] else 'clear'})."
-                    )
-                elif _cvm_dls["shock_now"] and not _cvm_dls["shock_after"]:
-                    st.caption(
-                        f"A {_cvm_shock_input:.0f}% shock today: cushion "
-                        f"{_cvm_dm(_cvm_dls['shock_now']['shock_cushion'])} "
-                        f"({'in call' if _cvm_dls['shock_now']['shock_in_call'] else 'clear'}). "
-                        "After this paydown, the debit is fully repaid — no margin "
-                        "call is possible regardless of the shock."
-                    )
-
+        # ── 💳 Capital vs Margin ─────────────────────────────────────────────────
+        # docs/plans/capital-vs-margin-analysis.md — "was trading on margin
+        # actually worth it?" Reconstructs the account's net-equity/leverage
+        # trajectory BACKWARD to broker-integration go-live, joined with F-266's
+        # forward-recorded account_daily_snapshots (_lev_hist, loaded above), and
+        # computes interest paid + the derived verdicts. NO NEW TABLE — computed
+        # live from trades/flows/income-events/daily_snapshots and memoized only
+        # in session_state, keyed on a data fingerprint (a cache TABLE would risk
+        # staleness against the broker feed, which syncs 2x/day, and new trades).
+        # Awareness-only — no gate, no policy constant. All pure logic lives in
+        # stock_analyzer/capital_vs_margin.py; this block is render/wiring only.
+        st.markdown("---")
+        st.markdown("### 💳 Capital vs Margin")
         st.caption(
-            "See 📐 Margin Call Distance above for today's live cushion, and "
-            "🔗 Risk Analysis's shock-modeling sweep (F-263) for scenario-by-"
-            "scenario call risk — this section doesn't duplicate either, it "
-            "answers whether the leverage has been worth it SO FAR."
+            "Was trading on margin actually worth it? Reconstructs your account's "
+            "value back to when broker sync went live, alongside a synthetic "
+            "capital-only curve anchored at the SAME starting equity — the gap "
+            "between the two is purely margin's effect. **Counterfactual model:** "
+            "margin is modeled as a scale on your ACTUAL positions, never a guess "
+            "at what smaller/different trades you might have made instead."
         )
 
-    # ── ⚡ Broker Sync (SnapTrade — Robinhood) ───────────────────────────────
-    # docs/plans/snaptrade-broker-integration.md. Three capabilities:
-    # (1) balance sync writes account_cash via the `broker` cron lane — the
-    #     figures at the TOP of this page already reflect it once synced;
-    #     nothing new to render for the number itself here, just connection
-    #     state; (2) position drift is LIVE-computed right here on every
-    #     render (never cached/cron-written — that's the deliberate design,
-    #     not a gap), awareness only, never gates, never auto-corrects
-    #     `trades`; (3) transaction import is a review queue
-    #     (snaptrade_pending_imports) — Option A: never auto-written to
-    #     `trades`, only pre-fills the Trade Journal's Log Trade form (see
-    #     that page's `_tj_broker_prefill` handling).
-    st.markdown("---")
-    st.markdown("### ⚡ Broker Sync")
-    st.caption(
-        "Robinhood synced via SnapTrade — balance, position drift, and pending "
-        "trade imports. Supplements (doesn't replace) manual Trade Journal entry "
-        "and the 📋 Paste history CSV import."
-    )
-
-    _snap_config = db.load_snaptrade_config()
-    _snap_status = (_snap_config or {}).get("status", "disconnected")
-    _snap_has_creds = snaptrade_client.has_snaptrade()
-    _snap_connected = _snap_has_creds and _snap_status == "connected"
-
-    if not _snap_connected:
-        st.info(
-            "🔌 **Not connected.** SnapTrade bridges Robinhood to this app for "
-            "automated balance sync and transaction import — using a "
-            "**Personal SnapTrade API key** (free, single-account; unlike a "
-            "Commercial integration, there's no separate per-user registration "
-            "step or second credential pair — confirmed 2026-08-18 against "
-            "SnapTrade's own Dashboard after the original build wrongly "
-            "assumed the Commercial multi-tenant model).\n\n"
-            "**One-time setup** (credentials live as a Railway environment "
-            "variable, never in this app's database):\n\n"
-            "1. In your SnapTrade Dashboard → API Keys → **Personal API Key**, "
-            "copy the `Client ID` / `Consumer Key` shown there into Railway → "
-            "Variables as `SNAPTRADE_CLIENT_ID` / `SNAPTRADE_CONSUMER_KEY`, "
-            "then redeploy.\n"
-            "2. Come back here after the redeploy and click **Connect "
-            "Robinhood** below to get your SnapTrade connection link.\n"
-            "3. Open that link to log into Robinhood via SnapTrade's portal. "
-            "Sync starts on the next `broker` cron run."
+        _cvm_view = st.radio(
+            "Granularity", ["Weekly", "Monthly", "All data"],
+            horizontal=True, key="_capmargin_view",
         )
-        if not db.is_readonly() and _snap_has_creds:
-            if st.button("Connect Robinhood", key="_snap_connect_btn"):
-                _snap_portal_url = snaptrade_client.get_connection_portal_url()
-                if _snap_portal_url is None:
-                    # Surface the actual captured exception inline — the
-                    # generic banner alone sent a user to re-check already-
-                    # correct Railway variables with no way to see the real
-                    # cause (2026-08-17 live incident: the SDK call swallows
-                    # the exception into api_health, which had no display
-                    # surface at all before this fix).
-                    from stock_analyzer import api_health as _snap_ah
-                    _snap_last_err = (_snap_ah.get_health("snaptrade").get("last_error") or "").replace("`", "'")
-                    st.error(
-                        "⛔ Couldn't reach SnapTrade — check `SNAPTRADE_CLIENT_ID` / "
-                        "`SNAPTRADE_CONSUMER_KEY` are set in Railway → Variables."
-                        + (f"\n\n**Captured error:** `{_snap_last_err}`" if _snap_last_err else "")
+
+        _cvm_priv = st.session_state.get("_privacy", True)
+
+        def _cvm_d(v):
+            if v is None:
+                return "—"
+            return "••••••" if _cvm_priv else f"${v:,.0f}"
+
+        def _cvm_dm(v):
+            # Markdown-safe variant of _cvm_d for any st.markdown/caption/error/
+            # warning/info/help text (never st.metric's value= param, which is
+            # plain text, not markdown-parsed). A bare "$" is a LaTeX math
+            # delimiter to Streamlit's markdown renderer -- two or more literal
+            # "$" in the same rendered string get silently interpreted as a math
+            # span instead of two dollar figures, garbling the whole line. Escape
+            # every "$" here so a sentence combining multiple dollar figures
+            # (e.g. "reconstructed $X vs. recorded $Y") renders as plain text.
+            if v is None:
+                return "—"
+            return "••••••" if _cvm_priv else f"\\${v:,.0f}"
+
+        _cvm_trades = db.load_trades()
+        _cvm_income = db.load_snaptrade_income_events()
+        _cvm_snaps = db.load_daily_snapshots()
+
+        _cvm_anchor = capital_vs_margin.resolve_anchor(
+            _acct, _lev_hist, ACCOUNT_CASH_STALE_DAYS, _now_et()
+        )
+        _cvm_golive = (
+            capital_vs_margin.golive_floor(_cvm_trades, _flows, _cvm_income, _cvm_snaps)
+            if _cvm_anchor is not None else None
+        )
+
+        if _cvm_anchor is None:
+            st.info(
+                "💳 Can't reconstruct — no fresh account cash on file (set it "
+                "above) and no recorded account snapshot history yet."
+            )
+        elif _cvm_golive is None:
+            st.info(
+                "💳 Can't determine a broker go-live date — no broker-synced "
+                "trades/income events yet, or `daily_snapshots` doesn't reach "
+                "back to them."
+            )
+        else:
+            _cvm_fingerprint = (
+                round(_cvm_anchor["cash"], 2), str(_cvm_anchor["date"]),
+                len(_cvm_trades), len(_flows), len(_cvm_income),
+                (len(_lev_hist) if _lev_hist is not None else 0),
+            )
+            if st.session_state.get("_cvm_fingerprint") != _cvm_fingerprint:
+                _cvm_daily_cash = capital_vs_margin.reconstruct_daily_cash(
+                    _cvm_anchor, _cvm_golive, _cvm_trades, _flows, _cvm_income,
+                )
+                _cvm_gross_by_date = capital_vs_margin.gross_book_by_date(_cvm_snaps)
+                _cvm_book_returns_calc = capital_vs_margin.book_daily_returns(_cvm_snaps)
+                _cvm_series_calc = capital_vs_margin.build_account_series(
+                    _cvm_daily_cash, _cvm_gross_by_date, _lev_hist, MARGIN_MAINTENANCE_RATE,
+                )
+                _cvm_validation_calc = capital_vs_margin.validate_reconstruction(
+                    _cvm_series_calc, _lev_hist
+                )
+                st.session_state["_cvm_fingerprint"] = _cvm_fingerprint
+                st.session_state["_cvm_cache"] = {
+                    "series": _cvm_series_calc,
+                    "book_returns": _cvm_book_returns_calc,
+                    "validation": _cvm_validation_calc,
+                }
+
+            _cvm_cache = st.session_state.get("_cvm_cache")
+            _cvm_cache = _cvm_cache if _cvm_cache is not None else {}
+            _cvm_series = _cvm_cache.get("series")
+            _cvm_series = _cvm_series if _cvm_series is not None else []
+            _cvm_book_returns = _cvm_cache.get("book_returns")
+            _cvm_book_returns = _cvm_book_returns if _cvm_book_returns is not None else {}
+            _cvm_validation = _cvm_cache.get("validation")
+            if _cvm_validation is None:
+                _cvm_validation = {"ok": True, "mismatches": [], "overlap_days": 0, "max_drift": 0.0}
+            _cvm_gate = capital_vs_margin.render_gate(_cvm_validation)
+
+            if not _cvm_gate["show_spanning_verdicts"]:
+                _cvm_worst = _cvm_gate.get("worst_mismatch")
+                _cvm_worst_txt = ""
+                if _cvm_worst:
+                    _cvm_worst_txt = (
+                        f" Worst on **{_cvm_worst['date']}**: reconstructed "
+                        f"{_cvm_dm(_cvm_worst['reconstructed'])} vs. recorded "
+                        f"{_cvm_dm(_cvm_worst['recorded'])} "
+                        f"({_cvm_dm(abs(_cvm_worst['drift']))} drift)."
+                    )
+                st.error(
+                    "⚠️ **Reconstruction self-check failed** — the backward roll "
+                    "disagrees with your own recorded account history by more "
+                    "than the tolerance." + _cvm_worst_txt + " Every verdict "
+                    "below that SPANS the reconstructed window is withheld "
+                    "until this is investigated — only the raw interest split "
+                    "below is unaffected (it never touches the reconstruction)."
+                )
+            elif _cvm_validation.get("overlap_days", 0) > 0:
+                st.caption(
+                    f"✅ Reconstruction self-check passed — {_cvm_validation['overlap_days']} "
+                    "day(s) of overlap with your recorded history, all within tolerance "
+                    f"(max drift {_cvm_dm(_cvm_validation.get('max_drift', 0.0))})."
+                )
+            else:
+                st.caption(
+                    "⚠️ Reconstruction not yet cross-checked — no overlap with recorded "
+                    "F-266 history exists yet to validate against. Treat the figures "
+                    "below as unverified until some recorded days accumulate."
+                )
+
+            # ── Interest paid — always shown, never touches the reconstruction ──
+            _cvm_part = capital_vs_margin.interest_partition(_cvm_income)
+            _cvm_int = capital_vs_margin.resolve_interest_charged(_cvm_part, None)
+            st.markdown(
+                f"💰 Interest since go-live: **{_cvm_dm(_cvm_int['charged'])}** "
+                f"(candidate *charged*) vs. **{_cvm_dm(_cvm_int['earned'])}** "
+                "(candidate *earned*) — never netted."
+            )
+            st.caption(
+                "⚠️ **Unverified**: SnapTrade files margin interest charged and "
+                "cash interest earned under the same event type, distinguished "
+                "only by sign — which sign this account's charges use has not "
+                "yet been confirmed against real synced data. The split above "
+                "is shown, not netted, until that's confirmed; every verdict "
+                "below that depends on a total interest figure uses the "
+                "'charged' candidate and inherits the same caveat."
+            )
+
+            if not _cvm_gate["show_spanning_verdicts"] or len(_cvm_series) < 2:
+                if _cvm_gate["show_spanning_verdicts"]:
+                    st.info("Not enough reconstructed history yet for the full breakdown.")
+            else:
+                _cvm_curves = capital_vs_margin.equity_curves(_cvm_series, _cvm_book_returns)
+                _cvm_mc = capital_vs_margin.margin_contribution(
+                    _cvm_series, _cvm_book_returns, _cvm_int["charged"]
+                )
+
+                # ── Verdict tiles ────────────────────────────────────────────────
+                _cvm_t1, _cvm_t2, _cvm_t3 = st.columns(3)
+                _cvm_t1.metric(
+                    "Net Value Margin Added", _cvm_d(_cvm_mc["net_value"]),
+                    help="Extra-exposure P&L minus interest paid — positive means "
+                         "margin has been worth its cost so far; negative means it "
+                         "hasn't. Unverified interest sign, see caveat above.",
+                )
+                _cvm_t2.metric(
+                    "Extra-Exposure P&L", _cvm_d(_cvm_mc["extra_exposure_pnl"]),
+                    help="What the borrowed exposure itself earned/cost, before interest.",
+                )
+                _cvm_t3.metric(
+                    "Interest Paid", _cvm_d(_cvm_mc["interest_paid"]),
+                    help="Candidate charged-interest total (unverified sign convention).",
+                )
+
+                # ── Equity curves chart ─────────────────────────────────────────
+                if len(_cvm_curves["dates"]) >= 2:
+                    import plotly.graph_objects as _cvm_pgo
+
+                    _cvm_cdf = pd.DataFrame({
+                        "date": pd.to_datetime(_cvm_curves["dates"]),
+                        "levered": _cvm_curves["levered"],
+                        "unlevered": _cvm_curves["unlevered"],
+                    }).set_index("date").sort_index()
+
+                    if _cvm_view == "Weekly":
+                        _cvm_plot = _cvm_cdf.resample("W-FRI").last()
+                    elif _cvm_view == "Monthly":
+                        _cvm_plot = _cvm_cdf.resample("ME").last()
+                    else:
+                        _cvm_plot = _cvm_cdf.copy()
+                    _cvm_plot = _cvm_plot.dropna(how="all")
+                    if _cvm_plot.empty:
+                        _cvm_plot = _cvm_cdf.copy()
+
+                    _cvm_recorded_dates = [
+                        d for d, s in zip(_cvm_curves["dates"], _cvm_curves["source"])
+                        if s == "recorded"
+                    ]
+                    _cvm_boundary = pd.Timestamp(min(_cvm_recorded_dates)) if _cvm_recorded_dates else None
+
+                    _cvm_fig = _cvm_pgo.Figure()
+                    for _cvm_col, _cvm_name, _cvm_color in (
+                        ("levered", "Actual (levered)", "#f59e0b"),
+                        ("unlevered", "Capital-only (unlevered)", "#38bdf8"),
+                    ):
+                        if _cvm_boundary is not None and _cvm_boundary > _cvm_plot.index.min():
+                            _recon_idx = _cvm_plot.index[_cvm_plot.index <= _cvm_boundary]
+                            _rec_idx = _cvm_plot.index[_cvm_plot.index >= _cvm_boundary]
+                            _cvm_fig.add_trace(_cvm_pgo.Scatter(
+                                x=_recon_idx, y=_cvm_plot.loc[_recon_idx, _cvm_col],
+                                name=_cvm_name, legendgroup=_cvm_col,
+                                mode="lines", line=dict(color=_cvm_color, width=2, dash="dot"),
+                                connectgaps=False,
+                                hovertemplate=(
+                                    f"{_cvm_name} (reconstructed): ••••••<extra></extra>" if _cvm_priv
+                                    else f"{_cvm_name} (reconstructed): $%{{y:,.0f}}<extra></extra>"
+                                ),
+                            ))
+                            _cvm_fig.add_trace(_cvm_pgo.Scatter(
+                                x=_rec_idx, y=_cvm_plot.loc[_rec_idx, _cvm_col],
+                                name=_cvm_name, legendgroup=_cvm_col, showlegend=False,
+                                mode="lines", line=dict(color=_cvm_color, width=2, dash="solid"),
+                                connectgaps=False,
+                                hovertemplate=(
+                                    f"{_cvm_name} (recorded): ••••••<extra></extra>" if _cvm_priv
+                                    else f"{_cvm_name} (recorded): $%{{y:,.0f}}<extra></extra>"
+                                ),
+                            ))
+                        else:
+                            _cvm_fig.add_trace(_cvm_pgo.Scatter(
+                                x=_cvm_plot.index, y=_cvm_plot[_cvm_col],
+                                name=_cvm_name, mode="lines",
+                                line=dict(color=_cvm_color, width=2, dash="solid"),
+                                connectgaps=False,
+                                hovertemplate=(
+                                    f"{_cvm_name}: ••••••<extra></extra>" if _cvm_priv
+                                    else f"{_cvm_name}: $%{{y:,.0f}}<extra></extra>"
+                                ),
+                            ))
+                    if _cvm_boundary is not None and _cvm_boundary > _cvm_plot.index.min():
+                        _cvm_fig.add_vrect(
+                            x0=_cvm_plot.index.min(), x1=_cvm_boundary,
+                            fillcolor="rgba(148,163,184,0.10)", line_width=0,
+                            annotation_text="reconstructed", annotation_position="top left",
+                        )
+                    _cvm_fig.update_layout(
+                        margin=dict(l=0, r=0, t=28, b=0),
+                        height=320,
+                        legend=dict(orientation="h", y=1.12, x=0),
+                        xaxis=dict(showgrid=False),
+                        yaxis=dict(
+                            showticklabels=not _cvm_priv,
+                            tickprefix="$", tickformat=",.0f",
+                            gridcolor="rgba(128,128,128,0.15)",
+                        ),
+                        hovermode="x unified",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(_cvm_fig, width="stretch")
+                    st.caption(
+                        "Dotted line + shaded band = reconstructed (before F-266 started "
+                        "recording 2026-09-10). Solid = recorded from real daily snapshots."
+                    )
+
+                # ── Break-even rate + projected annual interest ─────────────────
+                _cvm_debits = [p["margin_debit"] for p in _cvm_series if p.get("margin_debit") is not None]
+                _cvm_avg_debit = (sum(_cvm_debits) / len(_cvm_debits)) if _cvm_debits else 0.0
+                _cvm_days = (_cvm_series[-1]["date"] - _cvm_series[0]["date"]).days
+                _cvm_eff_rate = capital_vs_margin.break_even_rate(
+                    _cvm_int["charged"], _cvm_avg_debit, _cvm_days
+                )
+                # Latest NON-None point per field, not strictly series[-1] -- today's
+                # row can be a daily_snapshots gap (EOD hasn't written yet) while
+                # margin_debit/gross_book are both real and known as of a prior day;
+                # collapsing that gap to 0.0 would misreport "no debit" mid-session.
+                _cvm_current_debit = next(
+                    (p["margin_debit"] for p in reversed(_cvm_series) if p.get("margin_debit") is not None),
+                    0.0,
+                )
+                _cvm_current_gross = next(
+                    (p["gross_book"] for p in reversed(_cvm_series) if p.get("gross_book") is not None),
+                    0.0,
+                )
+
+                _cvm_be1, _cvm_be2 = st.columns(2)
+                if _cvm_eff_rate is not None:
+                    _cvm_be1.metric(
+                        "Break-Even Book Return", f"{_cvm_eff_rate * 100:.1f}%/yr",
+                        help="Annualized book return needed just to cover the average "
+                             "interest paid over this window — also, by the same math, "
+                             "your empirically realized annualized interest rate.",
+                    )
+                    _cvm_be2.metric(
+                        "Projected Annual Interest", _cvm_d(
+                            capital_vs_margin.projected_annual_interest(_cvm_current_debit, _cvm_eff_rate)
+                        ),
+                        help=f"At today's {_cvm_dm(_cvm_current_debit)} debit and the "
+                             "realized rate above, extrapolated forward — not a "
+                             "forecast of future debit changes.",
                     )
                 else:
-                    st.session_state["_snap_portal_url"] = _snap_portal_url
-                    db.save_snaptrade_config(status="pending_connection")
-                    st.rerun()
-        elif not _snap_has_creds:
-            st.caption(
-                "Add `SNAPTRADE_CLIENT_ID` / `SNAPTRADE_CONSUMER_KEY` to "
-                "Railway → Variables and redeploy to unlock the Connect button."
-            )
-        _snap_portal_url_cached = st.session_state.get("_snap_portal_url")
-        if _snap_portal_url_cached:
-            st.link_button("🔗 Connect Robinhood via SnapTrade", _snap_portal_url_cached)
-            st.caption(
-                "Sync starts on the next `broker` cron run once Robinhood is connected. "
-                "This link expires after a while — if it doesn't work, click **Connect "
-                "Robinhood** above again for a fresh one."
-            )
-    else:
-        _snap_last_sync = (_snap_config or {}).get("last_full_sync_at")
-        st.success(
-            "✅ **Connected to Robinhood via SnapTrade.**"
-            + (f"  Last synced: {str(_snap_last_sync)[:16].replace('T', ' ')} UTC"
-               if _snap_last_sync else "  Waiting for the first `broker` cron sync.")
-        )
-        if _cash is not None and _acct and _acct.get("updated_at"):
-            try:
-                from stock_analyzer.market_time import now_et as _snap_now_et
-                from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
-                import pytz as _snap_pytz
-                _snap_updated = datetime.fromisoformat(str(_acct["updated_at"]).replace("Z", "+00:00"))
-                if _snap_updated.tzinfo is None:
-                    _snap_updated = _snap_pytz.utc.localize(_snap_updated)
-                _snap_age_hrs = (_snap_now_et().astimezone(_snap_pytz.utc) - _snap_updated).total_seconds() / 3600.0
-                if _snap_age_hrs > SNAPTRADE_BALANCE_STALE_HOURS:
-                    st.warning(
-                        f"🟡 Balance is {_snap_age_hrs/24:.1f} day(s) stale — the `broker` "
-                        "cron lane may be behind. Check 🩺 System Trust."
-                    )
-            except Exception:
-                pass
+                    st.caption("No margin debit in this window — break-even rate not applicable.")
+                    _cvm_eff_rate = 0.0
 
-        # ── Position drift — LIVE compute, awareness only ────────────────────
-        # Short TTL cache (not a long-lived staleness like account_cash) —
-        # cheap insurance against a slow/rate-limited SnapTrade call stalling
-        # every single Account-page rerun (2026-08-17 review, non-blocking).
-        @st.cache_data(ttl=60, show_spinner=False)
-        def _snap_cached_accounts():
-            return snaptrade_client.list_accounts()
-
-        @st.cache_data(ttl=60, show_spinner=False)
-        def _snap_cached_positions(account_id: str):
-            # No leading underscore — account_id IS part of the cache key so
-            # each of the user's linked accounts gets its own 60s slot
-            # (2026-08-18 fix: user has 5 accounts; original _account_id with
-            # leading underscore was excluded from the cache key, causing all
-            # 5 calls to return the first account's result).
-            return snaptrade_client.get_account_positions(account_id)
-
-        st.markdown("#### 🔍 Position Drift")
-        _snap_accounts = _snap_cached_accounts()
-        # Defined in every branch below (None = unavailable/not computed this
-        # render) so the Pending Imports cross-reference further down can
-        # tell "checked, no drift" apart from "didn't check" — never treat
-        # the latter as the former (see annotate_pending_reconciliation).
-        _snap_drift = None
-        if _snap_accounts is None:
-            st.caption("⚠️ Drift check unavailable — SnapTrade unreachable this render.")
-        elif not _snap_accounts:
-            st.caption("No Robinhood account linked yet.")
-        elif not _have_pf:
-            # An empty stub here would make every RH position surface as
-            # "Robinhood-only" — false drift, not a real signal. Skip the
-            # check entirely rather than diff against an unloaded portfolio
-            # (2026-08-17 review finding).
-            st.caption("⚠️ Drift check unavailable — portfolio not loaded (open 🏠 Home first).")
-        else:
-            # Aggregate positions from ALL linked accounts — SnapTrade links
-            # auxiliary accounts (credit card, crypto, IRA, managed) alongside
-            # the main brokerage account; confirmed 2026-08-18 that this user's
-            # 15 equity positions are in accounts[4] ("Robinhood Individual"),
-            # not accounts[0] ("Robinhood Credit Card"). Pass None to
-            # diff_positions only when every account call failed (signals
-            # "unavailable"), not when all legitimately returned 0 positions.
-            _all_snap_positions: list = []
-            _any_pos_failure = False
-            for _sa in _snap_accounts:
-                _sa_pos = _snap_cached_positions(_sa.get("id", ""))
-                if _sa_pos is None:
-                    _any_pos_failure = True
-                elif _sa_pos:
-                    _all_snap_positions.extend(_sa_pos)
-            # ANY unreadable account ⇒ unavailable, full stop. The older rule
-            # (`_any_pos_failure and not _all_snap_positions`) rendered a
-            # partial diff whenever some other account returned positions —
-            # which fabricates `app_only` drift for everything in the account
-            # that failed. Today's topology (auxiliaries empty) hid that, but
-            # it is the same fault the cron's write invariant refuses, and two
-            # surfaces answering one question by different rules is how they
-            # end up contradicting each other.
-            _drift_input = None if _any_pos_failure else _all_snap_positions
-            # Diff against RAW holdings (st.session_state.holdings_df), NOT
-            # the enriched _acc_pdf — build_portfolio_df stores "Shares" as
-            # int(shares) for display, so a fractional Robinhood holding
-            # (e.g. 10.5 shares) would show a permanent phantom qty_mismatch
-            # against the truncated value (2026-08-17 review finding: this
-            # is exactly the case BROKER_DRIFT_SHARE_TOL exists to absorb,
-            # but truncation is orders of magnitude larger than the tolerance).
-            _snap_holdings_raw = st.session_state.get("holdings_df")
-            _snap_drift = broker_sync.diff_positions(_drift_input, _snap_holdings_raw)
-            if _snap_drift is None:
-                st.caption("⚠️ Drift check unavailable — SnapTrade unreachable this render.")
-            else:
-                if _any_pos_failure:
-                    st.caption(
-                        "⚠️ One or more linked accounts couldn't be read this render — "
-                        "the check below only covers the accounts that responded, so a "
-                        "clean result doesn't rule out drift in the missing account."
-                    )
-                _sd1, _sd2, _sd3 = st.columns(3)
-                with _sd1:
-                    st.markdown("**Robinhood-only** (missing BUY?)")
-                    if _snap_drift["rh_only"]:
-                        for _r in _snap_drift["rh_only"]:
-                            st.caption(f"• {_r['ticker']} — {_r['shares']:g} sh")
-                    else:
-                        st.caption("✓ none")
-                with _sd2:
-                    st.markdown("**App-only** (missing SELL?)")
-                    if _snap_drift["app_only"]:
-                        for _r in _snap_drift["app_only"]:
-                            st.caption(f"• {_r['ticker']} — {_r['shares']:g} sh")
-                    else:
-                        st.caption("✓ none")
-                with _sd3:
-                    st.markdown("**Qty mismatch**")
-                    if _snap_drift["qty_mismatch"]:
-                        for _r in _snap_drift["qty_mismatch"]:
-                            st.caption(f"• {_r['ticker']} — RH {_r['rh_shares']:g} vs app {_r['app_shares']:g}")
-                    else:
-                        st.caption("✓ none")
+                # ── Regime split ─────────────────────────────────────────────────
+                _cvm_weekly_returns = capital_vs_margin.weekly_compounded_returns(_cvm_book_returns)
+                _cvm_weekly_interest = capital_vs_margin.weekly_interest_charged(_cvm_income, None)
+                _cvm_regime = capital_vs_margin.regime_split(
+                    _cvm_series, _cvm_weekly_returns, _cvm_weekly_interest
+                )
+                st.markdown("#### Up-Weeks vs. Down-Weeks")
                 st.caption(
-                    "Awareness only — drift is never auto-corrected. Reconcile via the "
-                    "Trade Journal (missing trade) or the Portfolio page (share-count fix)."
+                    "A blended total can hide 'great in rallies, brutal in selloffs.' "
+                    "Split by ISO week on the book's own realized return."
+                )
+                _cvm_up, _cvm_down = _cvm_regime["up"], _cvm_regime["down"]
+                _cvm_rs1, _cvm_rs2 = st.columns(2)
+                _cvm_rs1.markdown(
+                    f"**📈 Up weeks ({_cvm_up['weeks']}):** net {_cvm_dm(_cvm_up['net'])} "
+                    f"(exposure {_cvm_dm(_cvm_up['extra_exposure_pnl'])} − "
+                    f"interest {_cvm_dm(_cvm_up['interest'])})"
+                )
+                _cvm_rs2.markdown(
+                    f"**📉 Down weeks ({_cvm_down['weeks']}):** net {_cvm_dm(_cvm_down['net'])} "
+                    f"(exposure {_cvm_dm(_cvm_down['extra_exposure_pnl'])} − "
+                    f"interest {_cvm_dm(_cvm_down['interest'])})"
                 )
 
-        # ── Pending Imports — Option A: never auto-written to `trades` ───────
-        st.markdown("#### 📥 Pending Imports")
-        st.caption(
-            "These are individual Robinhood transactions that couldn't be auto-"
-            "matched to a logged trade (the match requires an exact date and "
-            "price) — a separate, stricter check than Position Drift above, "
-            "which only looks at your current share count. A row can persist "
-            "here even when that ticker's drift is clean above."
-        )
-        _snap_pending = db.load_snaptrade_pending_imports("pending")
-        if not _snap_pending:
-            st.caption("✓ No pending imports.")
-        else:
-            # Build per-ticker share-count maps so each pending row can show
-            # concrete "App: X sh · Robinhood: Y sh" numbers instead of a vague
-            # flag. Uses the same SnapTrade positions already fetched for drift.
-            # _snap_drift is None when the drift check was unavailable this
-            # render — propagated as (None, None) so annotate never fabricates.
-            _snap_holdings_for_counts = st.session_state.get("holdings_df")
-            if _snap_drift is not None:
-                # Re-use the already-normalized RH positions map from drift
-                # (they're the same per-ticker share totals drift computed).
-                _snap_rh_map, _snap_app_map = broker_sync.ticker_share_counts(
-                    broker_sync.normalize_positions(
-                        [pos for _sa2 in (_snap_accounts or [])
-                         for pos in (_snap_cached_positions(_sa2.get("id", "")) or [])]
-                    ),
-                    _snap_holdings_for_counts,
-                )
-            else:
-                _snap_rh_map, _snap_app_map = None, None
-            _snap_pending = broker_sync.annotate_pending_reconciliation(
-                _snap_pending, _snap_drift, _snap_rh_map, _snap_app_map
-            )
-            # Date-tolerant per-transaction suggestion — a finer-grained
-            # sibling of the aggregate reconciliation flag above. Only
-            # rendered when that flag isn't already True, so a row never
-            # stacks two "this is probably already logged" messages.
-            _snap_pending_matches = broker_sync.find_pending_match_candidates(
-                _snap_pending, st.session_state.get("trades_df")
-            )
-            for _pi in _snap_pending:
-                _pi_c1, _pi_c2, _pi_c3 = st.columns([4, 1, 1])
-                with _pi_c1:
-                    st.write(
-                        f"⏳ **{_pi['action']} {_pi['shares']:g} {_pi['ticker']}** "
-                        f"@ ${_pi['price']:,.2f} on {_pi['trade_date']}"
+                # ── Drawdown decomposition ───────────────────────────────────────
+                st.markdown("#### Drawdown Decomposition")
+                _cvm_worst_dd = capital_vs_margin.worst_drawdown_window(_cvm_series)
+                if _cvm_worst_dd is None:
+                    st.caption("Not enough history yet to identify a drawdown.")
+                else:
+                    _cvm_pk_date, _cvm_tr_date, _cvm_pk_val, _cvm_tr_val = _cvm_worst_dd
+                    _cvm_dd = capital_vs_margin.drawdown_decomposition(
+                        _cvm_series, _cvm_book_returns, _cvm_pk_date, _cvm_tr_date,
+                        income_events=_cvm_income,
                     )
-                    _pi_app_qty = _pi.get("app_qty")
-                    _pi_rh_qty = _pi.get("rh_qty")
-                    _pi_ticker = _pi["ticker"]
-                    if _pi_app_qty is not None and _pi_rh_qty is not None:
-                        # Show concrete share counts — same ticker-level aggregate
-                        # on every row for this ticker (drift is net, not per-txn).
-                        _pi_app_str = f"{_pi_app_qty:g}" if _pi_app_qty != int(_pi_app_qty) else f"{int(_pi_app_qty)}"
-                        _pi_rh_str = f"{_pi_rh_qty:g}" if _pi_rh_qty != int(_pi_rh_qty) else f"{int(_pi_rh_qty)}"
-                        if _pi.get("likely_reconciled") is True:
-                            st.caption(
-                                f"↳ App: **{_pi_app_str} sh {_pi_ticker}** logged · "
-                                f"Robinhood: **{_pi_rh_str} sh {_pi_ticker}** held → "
-                                "counts match. Very likely a trade already logged with a "
-                                "slightly different date or price — use **Already logged**."
-                            )
-                        elif _pi.get("likely_reconciled") is False:
-                            st.caption(
-                                f"↳ App: **{_pi_app_str} sh {_pi_ticker}** logged · "
-                                f"Robinhood: **{_pi_rh_str} sh {_pi_ticker}** held → "
-                                "counts differ. This may be a real missing trade — "
-                                "use **Log This Trade** if it's not yet in your journal."
-                            )
-                        elif _pi["id"] in _snap_pending_matches:
-                            _pm = _snap_pending_matches[_pi["id"]]
-                            _pm_off = _pm["days_off"]
-                            st.caption(
-                                f"↳ App: **{_pi_app_str} sh {_pi_ticker}** logged · "
-                                f"Robinhood: **{_pi_rh_str} sh {_pi_ticker}** held. "
-                                f"Possible match: a trade you logged on {_pm['traded_at']} "
-                                f"({_pm_off} day{'s' if _pm_off != 1 else ''} off) with the "
-                                "same ticker, action, shares and price. If that's this "
-                                "transaction, use **Already logged** below."
-                            )
-                    else:
-                        # Drift check was unavailable — fall back to non-numeric hints
-                        if _pi.get("likely_reconciled") is True:
-                            st.caption(
-                                f"↳ Your {_pi_ticker} position already reconciles with "
-                                "Robinhood — this is very likely a trade you already logged "
-                                "with a slightly different date or price."
-                            )
-                        elif _pi["id"] in _snap_pending_matches:
-                            _pm = _snap_pending_matches[_pi["id"]]
-                            _pm_off = _pm["days_off"]
-                            st.caption(
-                                f"↳ Possible match: a trade you logged on {_pm['traded_at']} "
-                                f"({_pm_off} day{'s' if _pm_off != 1 else ''} off) with the same "
-                                "ticker, action, shares and price. If that's this transaction, "
-                                "use **Already logged** below."
-                            )
-                        elif _pi.get("likely_reconciled") is None:
-                            st.caption(
-                                "↳ Drift check unavailable this render — share counts "
-                                "can't be confirmed. Open 🏠 Home first if you need counts."
-                            )
-                with _pi_c2:
-                    if st.button("Log This Trade →", key=f"_snap_log_{_pi['id']}"):
-                        st.session_state["_tj_broker_prefill"] = {
-                            "ticker": _pi["ticker"],
-                            "action": _pi["action"],
-                            "shares": _pi["shares"],
-                            "price": _pi["price"],
-                            "trade_date": _pi["trade_date"],
-                            "snaptrade_txn_id": _pi["snaptrade_txn_id"],
-                            "pending_id": _pi["id"],
-                        }
-                        st.session_state["_pending_page"] = "📒 Trade Journal"
-                        st.rerun()
-                with _pi_c3:
-                    if db.is_readonly():
-                        st.caption("🔒 view-only")
-                    elif st.button("Already logged", key=f"_snap_dismiss_{_pi['id']}",
-                                 help="Use this when you've already logged this trade "
-                                      "manually and the price/date didn't exactly match "
-                                      "for auto-linking (e.g. a 1-cent settlement "
-                                      "difference). Never logs or edits a trade — just "
-                                      "clears this pending-import flag."):
-                        if db.dismiss_snaptrade_pending_import(_pi["id"]):
-                            st.rerun()
-                        else:
-                            st.toast("Couldn't dismiss — try again.", icon="⚠️")
+                    st.caption(f"Worst peak-to-trough: **{_cvm_pk_date}** → **{_cvm_tr_date}**")
+                    _cvm_dd1, _cvm_dd2, _cvm_dd3 = st.columns(3)
+                    _cvm_dd1.metric("Actual Change", _cvm_d(_cvm_dd["actual_change"]))
+                    _cvm_dd2.metric("Would Have Lost Unlevered", _cvm_d(_cvm_dd["unlevered_change"]))
+                    _cvm_dd3.metric("Amplification Portion", _cvm_d(_cvm_dd["amplification_portion"]))
+                    if _cvm_dd["interest_in_episode"]:
+                        st.caption(
+                            f"Plus {_cvm_dm(_cvm_dd['interest_in_episode'])} interest charged "
+                            "during this episode (candidate, unverified sign)."
+                        )
 
-        # ── Cash Activity — income events trend (display/trend ONLY; never
-        #    feeds account_flows / Modified Dietz — see plan doc) ────────────
-        st.markdown("#### 💵 Cash Activity")
-        _snap_income_since = (_today_et() - timedelta(days=270)).isoformat()
-        _snap_income = db.load_snaptrade_income_events(since_date=_snap_income_since)
-        if not _snap_income:
-            st.caption("No dividend/interest/fee events synced yet.")
-        else:
-            _sii_chart_priv = st.session_state.get("_privacy", True)
-            _sii_df = pd.DataFrame(_snap_income)
-            _sii_df["event_date"] = pd.to_datetime(_sii_df["event_date"])
-            _sii_df["month"] = _sii_df["event_date"].dt.to_period("M").dt.to_timestamp()
-            _sii_piv = (
-                _sii_df.groupby(["month", "event_type"])["amount"]
-                .sum().unstack(fill_value=0.0)
-            )
-            import plotly.graph_objects as _sii_pgo
-            _sii_colors = {"dividend": "#22c55e", "interest": "#3b82f6", "fee": "#ef4444"}
-            _sii_fig = _sii_pgo.Figure()
-            for _et in ("dividend", "interest", "fee"):
-                if _et in _sii_piv.columns:
-                    _sii_vals = _sii_piv[_et].abs()
-                    _sii_fig.add_trace(_sii_pgo.Bar(
-                        x=_sii_piv.index, y=_sii_vals,
-                        name=_et.title(), marker_color=_sii_colors[_et],
-                        text=(
-                            ["••••••" if v >= 2 else "" for v in _sii_vals]
-                            if _sii_chart_priv
-                            else [f"${v:.2f}" if v >= 2 else "" for v in _sii_vals]
-                        ),
-                        textposition="inside",
-                        insidetextanchor="middle",
-                        textfont=dict(size=11, color="white"),
-                    ))
-            _sii_fig.update_layout(
-                barmode="stack", height=260,
-                margin=dict(l=0, r=0, t=20, b=0),
-                legend=dict(orientation="h", y=1.15, x=0),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                yaxis=dict(
-                    showticklabels=not _sii_chart_priv,
-                    tickprefix="$", gridcolor="rgba(128,128,128,0.15)",
-                ),
-            )
-            st.plotly_chart(_sii_fig, width="stretch")
-            _sii_ytd = _sii_df[_sii_df["event_date"].dt.year == _today_et().year]
-            _sii_div_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "dividend", "amount"].sum()
-            _sii_int_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "interest", "amount"].sum()
-            _sii_fee_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "fee", "amount"].sum()
+                # ── Deleverage scenario ───────────────────────────────────────────
+                st.markdown("#### If You Paid Down Debt")
+                if _cvm_current_debit <= 0:
+                    st.caption("No current margin debit — nothing to model here.")
+                else:
+                    _cvm_dl1, _cvm_dl2 = st.columns(2)
+                    _cvm_paydown = _cvm_dl1.slider(
+                        "Paydown amount ($)", min_value=0.0,
+                        max_value=round(_cvm_current_debit, 2),
+                        value=round(_cvm_current_debit * 0.5, 2), step=100.0,
+                        key="_cvm_paydown_slider",
+                    )
+                    _cvm_shock_input = _cvm_dl2.number_input(
+                        "Shock size (% decline)", min_value=0.0, max_value=99.0,
+                        value=abs(FRAGILITY_PULLBACK_PCT), step=1.0,
+                        key="_cvm_shock_input",
+                    )
+                    _cvm_dls = capital_vs_margin.deleverage_scenario(
+                        _cvm_current_gross, _cvm_current_debit, _cvm_paydown,
+                        MARGIN_MAINTENANCE_RATE, _cvm_eff_rate, -abs(_cvm_shock_input),
+                    )
+                    _cvm_dl3, _cvm_dl4, _cvm_dl5 = st.columns(3)
+                    _cvm_dl3.metric(
+                        "Interest Saved (annualized)", _cvm_d(_cvm_dls["interest_saved"]),
+                        help=f"{_cvm_dm(_cvm_dls['interest_now'])} → {_cvm_dm(_cvm_dls['interest_after'])}",
+                    )
+                    _cvm_call_now_txt = (
+                        f"{_cvm_dls['call_now']['call_distance_pct']:.1f}%"
+                        if _cvm_dls["call_now"] else "—"
+                    )
+                    _cvm_call_after_txt = (
+                        f"{_cvm_dls['call_after']['call_distance_pct']:.1f}%"
+                        if _cvm_dls["call_after"] else "no debit — N/A"
+                    )
+                    _cvm_dl4.metric("Call Distance Now", _cvm_call_now_txt)
+                    _cvm_dl5.metric("Call Distance After Paydown", _cvm_call_after_txt)
+                    if _cvm_dls["shock_now"] and _cvm_dls["shock_after"]:
+                        st.caption(
+                            f"A {_cvm_shock_input:.0f}% shock today: cushion "
+                            f"{_cvm_dm(_cvm_dls['shock_now']['shock_cushion'])} "
+                            f"({'in call' if _cvm_dls['shock_now']['shock_in_call'] else 'clear'}). "
+                            f"After this paydown: cushion "
+                            f"{_cvm_dm(_cvm_dls['shock_after']['shock_cushion'])} "
+                            f"({'in call' if _cvm_dls['shock_after']['shock_in_call'] else 'clear'})."
+                        )
+                    elif _cvm_dls["shock_now"] and not _cvm_dls["shock_after"]:
+                        st.caption(
+                            f"A {_cvm_shock_input:.0f}% shock today: cushion "
+                            f"{_cvm_dm(_cvm_dls['shock_now']['shock_cushion'])} "
+                            f"({'in call' if _cvm_dls['shock_now']['shock_in_call'] else 'clear'}). "
+                            "After this paydown, the debit is fully repaid — no margin "
+                            "call is possible regardless of the shock."
+                        )
+
             st.caption(
-                f"YTD: **+{_m(f'${_sii_div_ytd:,.2f}')}** dividends · "
-                f"**+{_m(f'${_sii_int_ytd:,.2f}')}** interest · "
-                f"**-{_m(f'${abs(_sii_fee_ytd):,.2f}')}** fees"
+                "See 📐 Margin Call Distance above for today's live cushion, and "
+                "🔗 Risk Analysis's shock-modeling sweep (F-263) for scenario-by-"
+                "scenario call risk — this section doesn't duplicate either, it "
+                "answers whether the leverage has been worth it SO FAR."
             )
+
+    with _acct_tab_broker:
+        # ── ⚡ Broker Sync (SnapTrade — Robinhood) ───────────────────────────────
+        # docs/plans/snaptrade-broker-integration.md. Three capabilities:
+        # (1) balance sync writes account_cash via the `broker` cron lane — the
+        #     figures at the TOP of this page already reflect it once synced;
+        #     nothing new to render for the number itself here, just connection
+        #     state; (2) position drift is LIVE-computed right here on every
+        #     render (never cached/cron-written — that's the deliberate design,
+        #     not a gap), awareness only, never gates, never auto-corrects
+        #     `trades`; (3) transaction import is a review queue
+        #     (snaptrade_pending_imports) — Option A: never auto-written to
+        #     `trades`, only pre-fills the Trade Journal's Log Trade form (see
+        #     that page's `_tj_broker_prefill` handling).
+        st.markdown("---")
+        st.markdown("### ⚡ Broker Sync")
+        st.caption(
+            "Robinhood synced via SnapTrade — balance, position drift, and pending "
+            "trade imports. Supplements (doesn't replace) manual Trade Journal entry "
+            "and the 📋 Paste history CSV import."
+        )
+
+        _snap_config = db.load_snaptrade_config()
+        _snap_status = (_snap_config or {}).get("status", "disconnected")
+        _snap_has_creds = snaptrade_client.has_snaptrade()
+        _snap_connected = _snap_has_creds and _snap_status == "connected"
+
+        if not _snap_connected:
+            st.info(
+                "🔌 **Not connected.** SnapTrade bridges Robinhood to this app for "
+                "automated balance sync and transaction import — using a "
+                "**Personal SnapTrade API key** (free, single-account; unlike a "
+                "Commercial integration, there's no separate per-user registration "
+                "step or second credential pair — confirmed 2026-08-18 against "
+                "SnapTrade's own Dashboard after the original build wrongly "
+                "assumed the Commercial multi-tenant model).\n\n"
+                "**One-time setup** (credentials live as a Railway environment "
+                "variable, never in this app's database):\n\n"
+                "1. In your SnapTrade Dashboard → API Keys → **Personal API Key**, "
+                "copy the `Client ID` / `Consumer Key` shown there into Railway → "
+                "Variables as `SNAPTRADE_CLIENT_ID` / `SNAPTRADE_CONSUMER_KEY`, "
+                "then redeploy.\n"
+                "2. Come back here after the redeploy and click **Connect "
+                "Robinhood** below to get your SnapTrade connection link.\n"
+                "3. Open that link to log into Robinhood via SnapTrade's portal. "
+                "Sync starts on the next `broker` cron run."
+            )
+            if not db.is_readonly() and _snap_has_creds:
+                if st.button("Connect Robinhood", key="_snap_connect_btn"):
+                    _snap_portal_url = snaptrade_client.get_connection_portal_url()
+                    if _snap_portal_url is None:
+                        # Surface the actual captured exception inline — the
+                        # generic banner alone sent a user to re-check already-
+                        # correct Railway variables with no way to see the real
+                        # cause (2026-08-17 live incident: the SDK call swallows
+                        # the exception into api_health, which had no display
+                        # surface at all before this fix).
+                        from stock_analyzer import api_health as _snap_ah
+                        _snap_last_err = (_snap_ah.get_health("snaptrade").get("last_error") or "").replace("`", "'")
+                        st.error(
+                            "⛔ Couldn't reach SnapTrade — check `SNAPTRADE_CLIENT_ID` / "
+                            "`SNAPTRADE_CONSUMER_KEY` are set in Railway → Variables."
+                            + (f"\n\n**Captured error:** `{_snap_last_err}`" if _snap_last_err else "")
+                        )
+                    else:
+                        st.session_state["_snap_portal_url"] = _snap_portal_url
+                        db.save_snaptrade_config(status="pending_connection")
+                        st.rerun()
+            elif not _snap_has_creds:
+                st.caption(
+                    "Add `SNAPTRADE_CLIENT_ID` / `SNAPTRADE_CONSUMER_KEY` to "
+                    "Railway → Variables and redeploy to unlock the Connect button."
+                )
+            _snap_portal_url_cached = st.session_state.get("_snap_portal_url")
+            if _snap_portal_url_cached:
+                st.link_button("🔗 Connect Robinhood via SnapTrade", _snap_portal_url_cached)
+                st.caption(
+                    "Sync starts on the next `broker` cron run once Robinhood is connected. "
+                    "This link expires after a while — if it doesn't work, click **Connect "
+                    "Robinhood** above again for a fresh one."
+                )
+        else:
+            _snap_last_sync = (_snap_config or {}).get("last_full_sync_at")
+            st.success(
+                "✅ **Connected to Robinhood via SnapTrade.**"
+                + (f"  Last synced: {str(_snap_last_sync)[:16].replace('T', ' ')} UTC"
+                   if _snap_last_sync else "  Waiting for the first `broker` cron sync.")
+            )
+            if _cash is not None and _acct and _acct.get("updated_at"):
+                try:
+                    from stock_analyzer.market_time import now_et as _snap_now_et
+                    from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
+                    import pytz as _snap_pytz
+                    _snap_updated = datetime.fromisoformat(str(_acct["updated_at"]).replace("Z", "+00:00"))
+                    if _snap_updated.tzinfo is None:
+                        _snap_updated = _snap_pytz.utc.localize(_snap_updated)
+                    _snap_age_hrs = (_snap_now_et().astimezone(_snap_pytz.utc) - _snap_updated).total_seconds() / 3600.0
+                    if _snap_age_hrs > SNAPTRADE_BALANCE_STALE_HOURS:
+                        st.warning(
+                            f"🟡 Balance is {_snap_age_hrs/24:.1f} day(s) stale — the `broker` "
+                            "cron lane may be behind. Check 🩺 System Trust."
+                        )
+                except Exception:
+                    pass
+
+            # ── Position drift — LIVE compute, awareness only ────────────────────
+            # Short TTL cache (not a long-lived staleness like account_cash) —
+            # cheap insurance against a slow/rate-limited SnapTrade call stalling
+            # every single Account-page rerun (2026-08-17 review, non-blocking).
+            @st.cache_data(ttl=60, show_spinner=False)
+            def _snap_cached_accounts():
+                return snaptrade_client.list_accounts()
+
+            @st.cache_data(ttl=60, show_spinner=False)
+            def _snap_cached_positions(account_id: str):
+                # No leading underscore — account_id IS part of the cache key so
+                # each of the user's linked accounts gets its own 60s slot
+                # (2026-08-18 fix: user has 5 accounts; original _account_id with
+                # leading underscore was excluded from the cache key, causing all
+                # 5 calls to return the first account's result).
+                return snaptrade_client.get_account_positions(account_id)
+
+            st.markdown("#### 🔍 Position Drift")
+            _snap_accounts = _snap_cached_accounts()
+            # Defined in every branch below (None = unavailable/not computed this
+            # render) so the Pending Imports cross-reference further down can
+            # tell "checked, no drift" apart from "didn't check" — never treat
+            # the latter as the former (see annotate_pending_reconciliation).
+            _snap_drift = None
+            if _snap_accounts is None:
+                st.caption("⚠️ Drift check unavailable — SnapTrade unreachable this render.")
+            elif not _snap_accounts:
+                st.caption("No Robinhood account linked yet.")
+            elif not _have_pf:
+                # An empty stub here would make every RH position surface as
+                # "Robinhood-only" — false drift, not a real signal. Skip the
+                # check entirely rather than diff against an unloaded portfolio
+                # (2026-08-17 review finding).
+                st.caption("⚠️ Drift check unavailable — portfolio not loaded (open 🏠 Home first).")
+            else:
+                # Aggregate positions from ALL linked accounts — SnapTrade links
+                # auxiliary accounts (credit card, crypto, IRA, managed) alongside
+                # the main brokerage account; confirmed 2026-08-18 that this user's
+                # 15 equity positions are in accounts[4] ("Robinhood Individual"),
+                # not accounts[0] ("Robinhood Credit Card"). Pass None to
+                # diff_positions only when every account call failed (signals
+                # "unavailable"), not when all legitimately returned 0 positions.
+                _all_snap_positions: list = []
+                _any_pos_failure = False
+                for _sa in _snap_accounts:
+                    _sa_pos = _snap_cached_positions(_sa.get("id", ""))
+                    if _sa_pos is None:
+                        _any_pos_failure = True
+                    elif _sa_pos:
+                        _all_snap_positions.extend(_sa_pos)
+                # ANY unreadable account ⇒ unavailable, full stop. The older rule
+                # (`_any_pos_failure and not _all_snap_positions`) rendered a
+                # partial diff whenever some other account returned positions —
+                # which fabricates `app_only` drift for everything in the account
+                # that failed. Today's topology (auxiliaries empty) hid that, but
+                # it is the same fault the cron's write invariant refuses, and two
+                # surfaces answering one question by different rules is how they
+                # end up contradicting each other.
+                _drift_input = None if _any_pos_failure else _all_snap_positions
+                # Diff against RAW holdings (st.session_state.holdings_df), NOT
+                # the enriched _acc_pdf — build_portfolio_df stores "Shares" as
+                # int(shares) for display, so a fractional Robinhood holding
+                # (e.g. 10.5 shares) would show a permanent phantom qty_mismatch
+                # against the truncated value (2026-08-17 review finding: this
+                # is exactly the case BROKER_DRIFT_SHARE_TOL exists to absorb,
+                # but truncation is orders of magnitude larger than the tolerance).
+                _snap_holdings_raw = st.session_state.get("holdings_df")
+                _snap_drift = broker_sync.diff_positions(_drift_input, _snap_holdings_raw)
+                if _snap_drift is None:
+                    st.caption("⚠️ Drift check unavailable — SnapTrade unreachable this render.")
+                else:
+                    if _any_pos_failure:
+                        st.caption(
+                            "⚠️ One or more linked accounts couldn't be read this render — "
+                            "the check below only covers the accounts that responded, so a "
+                            "clean result doesn't rule out drift in the missing account."
+                        )
+                    _sd1, _sd2, _sd3 = st.columns(3)
+                    with _sd1:
+                        st.markdown("**Robinhood-only** (missing BUY?)")
+                        if _snap_drift["rh_only"]:
+                            for _r in _snap_drift["rh_only"]:
+                                st.caption(f"• {_r['ticker']} — {_r['shares']:g} sh")
+                        else:
+                            st.caption("✓ none")
+                    with _sd2:
+                        st.markdown("**App-only** (missing SELL?)")
+                        if _snap_drift["app_only"]:
+                            for _r in _snap_drift["app_only"]:
+                                st.caption(f"• {_r['ticker']} — {_r['shares']:g} sh")
+                        else:
+                            st.caption("✓ none")
+                    with _sd3:
+                        st.markdown("**Qty mismatch**")
+                        if _snap_drift["qty_mismatch"]:
+                            for _r in _snap_drift["qty_mismatch"]:
+                                st.caption(f"• {_r['ticker']} — RH {_r['rh_shares']:g} vs app {_r['app_shares']:g}")
+                        else:
+                            st.caption("✓ none")
+                    st.caption(
+                        "Awareness only — drift is never auto-corrected. Reconcile via the "
+                        "Trade Journal (missing trade) or the Portfolio page (share-count fix)."
+                    )
+
+            # ── Pending Imports — Option A: never auto-written to `trades` ───────
+            st.markdown("#### 📥 Pending Imports")
+            st.caption(
+                "These are individual Robinhood transactions that couldn't be auto-"
+                "matched to a logged trade (the match requires an exact date and "
+                "price) — a separate, stricter check than Position Drift above, "
+                "which only looks at your current share count. A row can persist "
+                "here even when that ticker's drift is clean above."
+            )
+            _snap_pending = db.load_snaptrade_pending_imports("pending")
+            if not _snap_pending:
+                st.caption("✓ No pending imports.")
+            else:
+                # Build per-ticker share-count maps so each pending row can show
+                # concrete "App: X sh · Robinhood: Y sh" numbers instead of a vague
+                # flag. Uses the same SnapTrade positions already fetched for drift.
+                # _snap_drift is None when the drift check was unavailable this
+                # render — propagated as (None, None) so annotate never fabricates.
+                _snap_holdings_for_counts = st.session_state.get("holdings_df")
+                if _snap_drift is not None:
+                    # Re-use the already-normalized RH positions map from drift
+                    # (they're the same per-ticker share totals drift computed).
+                    _snap_rh_map, _snap_app_map = broker_sync.ticker_share_counts(
+                        broker_sync.normalize_positions(
+                            [pos for _sa2 in (_snap_accounts or [])
+                             for pos in (_snap_cached_positions(_sa2.get("id", "")) or [])]
+                        ),
+                        _snap_holdings_for_counts,
+                    )
+                else:
+                    _snap_rh_map, _snap_app_map = None, None
+                _snap_pending = broker_sync.annotate_pending_reconciliation(
+                    _snap_pending, _snap_drift, _snap_rh_map, _snap_app_map
+                )
+                # Date-tolerant per-transaction suggestion — a finer-grained
+                # sibling of the aggregate reconciliation flag above. Only
+                # rendered when that flag isn't already True, so a row never
+                # stacks two "this is probably already logged" messages.
+                _snap_pending_matches = broker_sync.find_pending_match_candidates(
+                    _snap_pending, st.session_state.get("trades_df")
+                )
+                for _pi in _snap_pending:
+                    _pi_c1, _pi_c2, _pi_c3 = st.columns([4, 1, 1])
+                    with _pi_c1:
+                        st.write(
+                            f"⏳ **{_pi['action']} {_pi['shares']:g} {_pi['ticker']}** "
+                            f"@ ${_pi['price']:,.2f} on {_pi['trade_date']}"
+                        )
+                        _pi_app_qty = _pi.get("app_qty")
+                        _pi_rh_qty = _pi.get("rh_qty")
+                        _pi_ticker = _pi["ticker"]
+                        if _pi_app_qty is not None and _pi_rh_qty is not None:
+                            # Show concrete share counts — same ticker-level aggregate
+                            # on every row for this ticker (drift is net, not per-txn).
+                            _pi_app_str = f"{_pi_app_qty:g}" if _pi_app_qty != int(_pi_app_qty) else f"{int(_pi_app_qty)}"
+                            _pi_rh_str = f"{_pi_rh_qty:g}" if _pi_rh_qty != int(_pi_rh_qty) else f"{int(_pi_rh_qty)}"
+                            if _pi.get("likely_reconciled") is True:
+                                st.caption(
+                                    f"↳ App: **{_pi_app_str} sh {_pi_ticker}** logged · "
+                                    f"Robinhood: **{_pi_rh_str} sh {_pi_ticker}** held → "
+                                    "counts match. Very likely a trade already logged with a "
+                                    "slightly different date or price — use **Already logged**."
+                                )
+                            elif _pi.get("likely_reconciled") is False:
+                                st.caption(
+                                    f"↳ App: **{_pi_app_str} sh {_pi_ticker}** logged · "
+                                    f"Robinhood: **{_pi_rh_str} sh {_pi_ticker}** held → "
+                                    "counts differ. This may be a real missing trade — "
+                                    "use **Log This Trade** if it's not yet in your journal."
+                                )
+                            elif _pi["id"] in _snap_pending_matches:
+                                _pm = _snap_pending_matches[_pi["id"]]
+                                _pm_off = _pm["days_off"]
+                                st.caption(
+                                    f"↳ App: **{_pi_app_str} sh {_pi_ticker}** logged · "
+                                    f"Robinhood: **{_pi_rh_str} sh {_pi_ticker}** held. "
+                                    f"Possible match: a trade you logged on {_pm['traded_at']} "
+                                    f"({_pm_off} day{'s' if _pm_off != 1 else ''} off) with the "
+                                    "same ticker, action, shares and price. If that's this "
+                                    "transaction, use **Already logged** below."
+                                )
+                        else:
+                            # Drift check was unavailable — fall back to non-numeric hints
+                            if _pi.get("likely_reconciled") is True:
+                                st.caption(
+                                    f"↳ Your {_pi_ticker} position already reconciles with "
+                                    "Robinhood — this is very likely a trade you already logged "
+                                    "with a slightly different date or price."
+                                )
+                            elif _pi["id"] in _snap_pending_matches:
+                                _pm = _snap_pending_matches[_pi["id"]]
+                                _pm_off = _pm["days_off"]
+                                st.caption(
+                                    f"↳ Possible match: a trade you logged on {_pm['traded_at']} "
+                                    f"({_pm_off} day{'s' if _pm_off != 1 else ''} off) with the same "
+                                    "ticker, action, shares and price. If that's this transaction, "
+                                    "use **Already logged** below."
+                                )
+                            elif _pi.get("likely_reconciled") is None:
+                                st.caption(
+                                    "↳ Drift check unavailable this render — share counts "
+                                    "can't be confirmed. Open 🏠 Home first if you need counts."
+                                )
+                    with _pi_c2:
+                        if st.button("Log This Trade →", key=f"_snap_log_{_pi['id']}"):
+                            st.session_state["_tj_broker_prefill"] = {
+                                "ticker": _pi["ticker"],
+                                "action": _pi["action"],
+                                "shares": _pi["shares"],
+                                "price": _pi["price"],
+                                "trade_date": _pi["trade_date"],
+                                "snaptrade_txn_id": _pi["snaptrade_txn_id"],
+                                "pending_id": _pi["id"],
+                            }
+                            st.session_state["_pending_page"] = "📒 Trade Journal"
+                            st.rerun()
+                    with _pi_c3:
+                        if db.is_readonly():
+                            st.caption("🔒 view-only")
+                        elif st.button("Already logged", key=f"_snap_dismiss_{_pi['id']}",
+                                     help="Use this when you've already logged this trade "
+                                          "manually and the price/date didn't exactly match "
+                                          "for auto-linking (e.g. a 1-cent settlement "
+                                          "difference). Never logs or edits a trade — just "
+                                          "clears this pending-import flag."):
+                            if db.dismiss_snaptrade_pending_import(_pi["id"]):
+                                st.rerun()
+                            else:
+                                st.toast("Couldn't dismiss — try again.", icon="⚠️")
+
+            # ── Cash Activity — income events trend (display/trend ONLY; never
+            #    feeds account_flows / Modified Dietz — see plan doc) ────────────
+            st.markdown("#### 💵 Cash Activity")
+            _snap_income_since = (_today_et() - timedelta(days=270)).isoformat()
+            _snap_income = db.load_snaptrade_income_events(since_date=_snap_income_since)
+            if not _snap_income:
+                st.caption("No dividend/interest/fee events synced yet.")
+            else:
+                _sii_chart_priv = st.session_state.get("_privacy", True)
+                _sii_df = pd.DataFrame(_snap_income)
+                _sii_df["event_date"] = pd.to_datetime(_sii_df["event_date"])
+                _sii_df["month"] = _sii_df["event_date"].dt.to_period("M").dt.to_timestamp()
+                _sii_piv = (
+                    _sii_df.groupby(["month", "event_type"])["amount"]
+                    .sum().unstack(fill_value=0.0)
+                )
+                import plotly.graph_objects as _sii_pgo
+                _sii_colors = {"dividend": "#22c55e", "interest": "#3b82f6", "fee": "#ef4444"}
+                _sii_fig = _sii_pgo.Figure()
+                for _et in ("dividend", "interest", "fee"):
+                    if _et in _sii_piv.columns:
+                        _sii_vals = _sii_piv[_et].abs()
+                        _sii_fig.add_trace(_sii_pgo.Bar(
+                            x=_sii_piv.index, y=_sii_vals,
+                            name=_et.title(), marker_color=_sii_colors[_et],
+                            text=(
+                                ["••••••" if v >= 2 else "" for v in _sii_vals]
+                                if _sii_chart_priv
+                                else [f"${v:.2f}" if v >= 2 else "" for v in _sii_vals]
+                            ),
+                            textposition="inside",
+                            insidetextanchor="middle",
+                            textfont=dict(size=11, color="white"),
+                        ))
+                _sii_fig.update_layout(
+                    barmode="stack", height=260,
+                    margin=dict(l=0, r=0, t=20, b=0),
+                    legend=dict(orientation="h", y=1.15, x=0),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    yaxis=dict(
+                        showticklabels=not _sii_chart_priv,
+                        tickprefix="$", gridcolor="rgba(128,128,128,0.15)",
+                    ),
+                )
+                st.plotly_chart(_sii_fig, width="stretch")
+                _sii_ytd = _sii_df[_sii_df["event_date"].dt.year == _today_et().year]
+                _sii_div_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "dividend", "amount"].sum()
+                _sii_int_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "interest", "amount"].sum()
+                _sii_fee_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "fee", "amount"].sum()
+                st.caption(
+                    f"YTD: **+{_m(f'${_sii_div_ytd:,.2f}')}** dividends · "
+                    f"**+{_m(f'${_sii_int_ytd:,.2f}')}** interest · "
+                    f"**-{_m(f'${abs(_sii_fee_ytd):,.2f}')}** fees"
+                )
 
 elif page == "🔔 Catalyst Watch":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
