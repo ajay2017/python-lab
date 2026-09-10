@@ -285,7 +285,7 @@ from stock_analyzer.reference_data import ReferenceDataUnavailable
 from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
     baseline_anchor, money_weighted_return, build_equity_timeseries,
-    annualization_caveat,
+    annualization_caveat, leverage_series_for_chart,
 )
 from stock_analyzer import api_health as _ah
 from stock_analyzer import grow_dropoff as _grow_dropoff
@@ -32425,6 +32425,107 @@ elif page == "💰 Account":
                     f"**{_t_net_dir}** baseline."
                 )
         st.markdown(_t_narr)
+
+    # ── 🛡️ Leverage & Margin Cushion ────────────────────────────────────────
+    # account_daily_snapshots history (added alongside this chart) — the live
+    # panel above (📐 Margin Call Distance) recomputes fresh every render and
+    # has never been persisted; this is the first day-over-day view of it.
+    st.markdown("---")
+    st.markdown("### 🛡️ Leverage & Margin Cushion")
+    st.caption(
+        "Leverage (total holdings ÷ your equity) and the estimated book decline "
+        "that would trigger a margin call, from settled end-of-day figures. "
+        "**History starts from ship date forward only** — daily cash/margin "
+        "values were never recorded before this chart existed, so there's no "
+        "way to backfill earlier days. This EOD series will differ from the "
+        "live 📐 Margin Call Distance panel above (settled prior close vs "
+        "today's intraday price)."
+    )
+
+    _lev_hist = None
+    try:
+        _lev_hist = db.load_account_daily_snapshots()
+    except Exception:
+        pass
+
+    if _lev_hist is None or len(_lev_hist) < 3:
+        st.info(
+            "Not enough snapshot history yet — revisit once a few weeks of "
+            "daily account snapshots have accumulated (the EOD cron writes "
+            "one per trading day)."
+        )
+    else:
+        import plotly.graph_objects as _pgo_lev
+        from plotly.subplots import make_subplots as _make_subplots_lev
+
+        _lev_view = st.radio(
+            "Granularity",
+            ["Weekly", "Monthly", "All data"],
+            horizontal=True,
+            key="_lev_trend_view",
+        )
+
+        _lev_df = _lev_hist.copy()
+        _lev_df["snapshot_date"] = pd.to_datetime(_lev_df["snapshot_date"])
+        _lev_df = _lev_df.set_index("snapshot_date")
+        for _col in ("leverage", "call_distance_pct"):
+            if _col in _lev_df.columns:
+                _lev_df[_col] = pd.to_numeric(_lev_df[_col], errors="coerce")
+
+        _lev_plot = leverage_series_for_chart(_lev_df, _lev_view)
+
+        if _lev_plot.empty:
+            st.info("Not enough snapshot history yet at this granularity.")
+        else:
+            _lev_call_at = 1.0 / MARGIN_MAINTENANCE_RATE  # leverage level a call fires at
+
+            _lev_fig = _make_subplots_lev(specs=[[{"secondary_y": True}]])
+            _lev_fig.add_trace(_pgo_lev.Scatter(
+                x=_lev_plot.index, y=_lev_plot["leverage"],
+                name="Leverage (×)",
+                mode="lines+markers",
+                line=dict(color="#f59e0b", width=2),
+                connectgaps=False,  # a stale-cash gap must stay a visible gap
+                hovertemplate="Leverage: %{y:.2f}×<extra></extra>",
+            ), secondary_y=False)
+            _lev_fig.add_trace(_pgo_lev.Scatter(
+                x=_lev_plot.index, y=_lev_plot["call_distance_pct"],
+                name="Call triggers at (% book decline)",
+                mode="lines+markers",
+                line=dict(color="#ef4444", width=2, dash="dot"),
+                connectgaps=False,
+                hovertemplate="Call triggers at: %{y:.1f}%<extra></extra>",
+            ), secondary_y=True)
+            _lev_fig.add_hline(
+                y=_lev_call_at, secondary_y=False,
+                line_dash="dash", line_color="#ffffff",
+                annotation_text=f"{_lev_call_at:.1f}× — call fires at this leverage",
+                annotation_position="top left",
+                annotation_font_color="#ffffff",
+                annotation_bgcolor="rgba(0,0,0,0.45)",
+            )
+            _lev_fig.update_layout(
+                margin=dict(l=0, r=0, t=28, b=0),
+                height=300,
+                legend=dict(orientation="h", y=1.12, x=0),
+                xaxis=dict(showgrid=False),
+                hovermode="x unified",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+            )
+            _lev_fig.update_yaxes(title_text="Leverage (×)", secondary_y=False,
+                                   gridcolor="rgba(128,128,128,0.15)")
+            _lev_fig.update_yaxes(title_text="Call triggers at (%)", secondary_y=True,
+                                   showgrid=False)
+            st.plotly_chart(_lev_fig, width="stretch")
+            st.caption(
+                "A gap in the red line only (leverage still shown) means no margin "
+                "debit that day — fully unlevered, not stale data. A day where the "
+                "account cash balance was too stale "
+                f"(> {ACCOUNT_CASH_STALE_DAYS}d old) or unset is dropped from this "
+                "chart entirely rather than shown as a break, so the line may look "
+                "continuous across it — never filled in as zero either way."
+            )
 
     # ── ⚡ Broker Sync (SnapTrade — Robinhood) ───────────────────────────────
     # docs/plans/snaptrade-broker-integration.md. Three capabilities:

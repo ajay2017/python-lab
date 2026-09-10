@@ -73,9 +73,10 @@ import pytz
 from stock_analyzer import broker_sync
 from stock_analyzer import db
 from stock_analyzer import snaptrade_client
+from stock_analyzer.account import compute_account_snapshot
 from stock_analyzer.constants import (
     ALERT_EMAIL_HOUR_ET, ALERT_EOD_HOUR_ET, SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS,
-    CRON_INTRADAY_START_HOUR_ET,
+    CRON_INTRADAY_START_HOUR_ET, MARGIN_MAINTENANCE_RATE, ACCOUNT_CASH_STALE_DAYS,
 )
 from stock_analyzer.data import is_trading_day
 from stock_analyzer.headless_alert_engine import (
@@ -460,6 +461,26 @@ def _run_eod(now_et, force: bool) -> int:
         _log(f"daily_snapshot written ({len(rows)} positions, date={today_str}).")
     else:
         _log(f"daily_snapshot NOT written ({len(rows)} rows; DB offline / table missing / empty).")
+
+    # 1b. Account-level leverage/margin-cushion history — reuses the SAME
+    # `rows` (snapshot_rows) just written above, no second fetch. Feeds the
+    # Account page's "Leverage & Margin Cushion" chart. Never gates anything
+    # — history/awareness only. A failed write is logged distinctly from a
+    # successful one so a silent DB-offline day doesn't read like a normal
+    # no-op (see model_predictions steps below for the same convention).
+    try:
+        _acct_cash_rec = db.load_account_cash()
+        _acct_row = compute_account_snapshot(
+            now_et.date(), rows, _acct_cash_rec,
+            MARGIN_MAINTENANCE_RATE, ACCOUNT_CASH_STALE_DAYS, now_et,
+        )
+        if db.save_account_daily_snapshot(_acct_row):
+            _log(f"account_daily_snapshot written (gross_book=${_acct_row['gross_book']:,.0f}, "
+                 f"leverage={_acct_row['leverage']}, date={today_str}).")
+        else:
+            _log(f"account_daily_snapshot NOT written (DB offline / table missing, date={today_str}).")
+    except Exception as e:
+        _log(f"account_daily_snapshot FAILED — {str(e)[:120]} — continuing.")
 
     # 2. Sentiment snapshot: persist VADER + Finnhub readings for all held tickers
     # so Tier 3 sentiment-vs-price-move analysis has a growing daily series.

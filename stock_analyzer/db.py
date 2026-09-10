@@ -403,6 +403,40 @@ the user acted on it):
     create policy "Allow all (service role)" on public.account_flows
         for all to service_role using (true) with check (true);
 
+    -- account_daily_snapshots: ONE row per calendar day of account-level
+    -- leverage/margin-cushion history (the daily_snapshots table has real
+    -- per-ticker history; the live leverage/call-distance readout on the
+    -- Account page has never persisted anything until this table). Written
+    -- once per trading day by the EOD cron, reusing that SAME run's
+    -- daily_snapshots rows — never a second fetch. cash_balance/net_equity/
+    -- leverage/cushion/call_distance_pct are all NULL when the account_cash
+    -- record is missing or stale (> ACCOUNT_CASH_STALE_DAYS old) at write
+    -- time — staleness must be VISIBLE as a gap in this history, never
+    -- backfilled with a guess. gross_book and maintenance_rate are always
+    -- populated (they don't depend on cash at all). No backfill is possible
+    -- once this ships — the daily cash/margin figures were never recorded
+    -- before now, so this history starts from ship date forward only.
+    -- Optional: until created, load returns None / save no-ops, so the EOD
+    -- cron step degrades to a logged no-op and the Account page's new
+    -- Leverage & Margin Cushion chart shows its "not enough data yet" state,
+    -- exactly like Capital Trend does before daily_snapshots accumulates.
+    create table if not exists public.account_daily_snapshots (
+        snapshot_date     date    not null primary key,
+        gross_book        numeric not null check (gross_book >= 0),
+        cash_balance      numeric,          -- signed; negative = margin debit; NULL = cash unknown/stale at write
+        net_equity        numeric,          -- gross_book + cash_balance; NULL unless cash fresh
+        leverage          numeric,          -- gross_book / net_equity when net_equity > 0; else NULL
+        cushion           numeric,          -- $ cushion, verbatim from margin.call_distance(); NULL when no debit / cash unknown / stale
+        call_distance_pct numeric,          -- % decline to a call (call_distance sign convention); NULL same rule as cushion
+        maintenance_rate  numeric not null, -- constants.MARGIN_MAINTENANCE_RATE frozen at write time
+        cash_as_of        timestamptz,      -- the account_cash.updated_at the cash came from; NULL when no record
+        created_at        timestamptz default now()
+    );
+    alter table public.account_daily_snapshots enable row level security;
+    drop policy if exists "Allow all (service role)" on public.account_daily_snapshots;
+    create policy "Allow all (service role)" on public.account_daily_snapshots
+        for all to service_role using (true) with check (true);
+
     -- analyst_coverage: Ideas Inbox — one row per analyst research article
     -- (Phase 1: capture + review; awareness context only, never a gate).
     -- Ships INERT until this DDL is applied; load returns empty DataFrame.
@@ -4212,6 +4246,62 @@ def save_account_cash(cash_balance: float, note: str | None = None) -> bool:
         return True
     except Exception:
         return False
+
+
+# ── Account daily snapshots (leverage/margin-cushion history) ─────────────────
+# Optional table. Written once/day by the EOD cron via
+# stock_analyzer.account.compute_account_snapshot(); until created, load
+# returns None and save no-ops, so the app behaves exactly as before (the
+# live-only leverage readout, no history chart). See DDL at module top.
+
+def save_account_daily_snapshot(row: dict) -> bool:
+    """Upsert one account_daily_snapshots row, keyed on `snapshot_date`
+    (idempotent — a same-day re-run of the EOD lane, e.g. via `force`,
+    overwrites rather than duplicates). USER data → honours the read-only
+    viewer guard. Never raises: a pre-DDL "relation does not exist" error is
+    caught identically to any other failure — reported via the return value
+    only, matching save_model_predictions_batch's contract shape."""
+    if is_readonly(): return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    if not row or not row.get("snapshot_date"):
+        return False
+    try:
+        _client().table("account_daily_snapshots").upsert(
+            row, on_conflict="snapshot_date",
+        ).execute()
+        return True
+    except Exception as e:
+        import warnings
+        warnings.warn(f"save_account_daily_snapshot: {e}")
+        return False
+
+
+def load_account_daily_snapshots(start_date=None, end_date=None) -> "pd.DataFrame | None":
+    """Load account_daily_snapshots for an optional date range, oldest-first.
+
+    Returns None (the offline sentinel) on ANY failure — no credentials, a
+    pre-DDL missing table, or a raised query exception — kept distinct from a
+    genuine empty DataFrame (the query succeeded, zero rows exist yet).
+    Mirrors load_daily_snapshots_or_none()'s None-vs-empty distinction
+    exactly, for the same reason: a consumer here (the Leverage & Margin
+    Cushion chart) must never mistake "load failed" for "no history yet"."""
+    if not has_db():
+        return None
+    try:
+        q = _client().table("account_daily_snapshots").select("*")
+        if start_date is not None:
+            q = q.gte("snapshot_date", str(start_date)[:10])
+        if end_date is not None:
+            q = q.lte("snapshot_date", str(end_date)[:10])
+        rows = q.order("snapshot_date", desc=False).execute().data
+        return pd.DataFrame(rows) if rows else pd.DataFrame(
+            columns=["snapshot_date", "gross_book", "cash_balance", "net_equity",
+                     "leverage", "cushion", "call_distance_pct", "maintenance_rate",
+                     "cash_as_of", "created_at"]
+        )
+    except Exception:
+        return None
 
 
 def load_account_flows() -> list[dict]:

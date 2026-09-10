@@ -21,6 +21,125 @@ _CONTRIB_TYPES = ("baseline", "deposit")
 _WITHDRAW_TYPES = ("withdrawal",)
 
 
+def _gross_book_from_rows(snapshot_rows: list[dict]) -> float:
+    """Sum of shares * close_price across daily_snapshots-shaped rows."""
+    total = 0.0
+    for r in snapshot_rows or []:
+        try:
+            sh = float(r.get("shares") or 0.0)
+            px = float(r.get("close_price") or 0.0)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        total += sh * px
+    return round(total, 2)
+
+
+def compute_account_snapshot(
+    snapshot_date,
+    snapshot_rows: list[dict],
+    account_cash_rec: dict | None,
+    rate: float,
+    stale_days_limit: int,
+    now,
+) -> dict:
+    """One day's account-level leverage/margin-cushion snapshot — pure, no I/O.
+
+    `snapshot_rows` is daily_snapshots-shaped: [{ticker, shares, close_price}, ...]
+    (the SAME rows the EOD cron already builds for the Today's-P&L baseline —
+    this function never refetches). `account_cash_rec` is the shape
+    db.load_account_cash() returns: {"cash_balance", "note", "updated_at"} or
+    None. `rate` is constants.MARGIN_MAINTENANCE_RATE, `stale_days_limit` is
+    constants.ACCOUNT_CASH_STALE_DAYS — both passed in so this stays pure and
+    never imports constants itself. `now` is a tz-aware "current time" the
+    caller reads via market_time.now_et() — this function does no clock read.
+
+    gross_book and maintenance_rate are ALWAYS returned (they don't depend on
+    cash). The cash-derived fields (cash_balance, net_equity, leverage,
+    cushion, call_distance_pct) are all None unless a cash record exists AND
+    carries a non-None cash_balance AND is fresh
+    (`(now - updated_at).days <= stale_days_limit` — inclusive, matching
+    margin.resolve_net_capital's own `> stale_days_limit` staleness boundary).
+    cash_as_of is set to the record's updated_at whenever a record exists —
+    even a STALE one — so staleness is visible in the history rather than
+    silently blanked alongside the other fields.
+
+    cushion/call_distance_pct are copied VERBATIM from margin.call_distance()'s
+    own return dict, never re-derived here — call_distance returns None when
+    there's no margin debit (cash_balance >= 0, i.e. unlevered), in which case
+    both stay None even though cash is fresh and leverage is still computed.
+    """
+    from . import margin as _margin
+
+    gross_book = _gross_book_from_rows(snapshot_rows)
+
+    cash_balance = None
+    net_equity = None
+    leverage = None
+    cushion = None
+    call_distance_pct = None
+    cash_as_of = None
+
+    if account_cash_rec and account_cash_rec.get("updated_at"):
+        cash_as_of = account_cash_rec.get("updated_at")
+        rec_cash_balance = account_cash_rec.get("cash_balance")
+        if rec_cash_balance is not None:
+            import pandas as _pd
+            age_days = (now - _pd.to_datetime(cash_as_of, utc=True)).days
+            if age_days <= stale_days_limit:
+                # Fresh — compute the cash-derived fields.
+                cash_balance = float(rec_cash_balance)
+                net_equity = gross_book + cash_balance
+                leverage = (gross_book / net_equity) if net_equity > 0 else None
+                margin_debit = -cash_balance if cash_balance < 0 else 0.0
+                cd = _margin.call_distance(gross_book, net_equity, margin_debit, rate)
+                if cd is not None:
+                    cushion = cd["cushion"]
+                    call_distance_pct = cd["call_distance_pct"]
+
+    return {
+        "snapshot_date":     str(snapshot_date),
+        "gross_book":        gross_book,
+        "cash_balance":      cash_balance,
+        "net_equity":        net_equity,
+        "leverage":          leverage,
+        "cushion":           cushion,
+        "call_distance_pct": call_distance_pct,
+        "maintenance_rate":  rate,
+        "cash_as_of":        cash_as_of,
+    }
+
+
+def leverage_series_for_chart(df, granularity: str) -> "pd.DataFrame":
+    """Resample account_daily_snapshots for the Leverage & Margin Cushion
+    chart, WITHOUT blanket-dropping stale-cash days.
+
+    `df` must have a DatetimeIndex and "leverage"/"call_distance_pct"
+    columns (plus any others, carried through unchanged). `granularity` is
+    one of "Weekly" / "Monthly" / "All data" (same vocabulary as the
+    existing Capital Trend radio) — "Weekly"/"Monthly" resample via
+    `.last()`; "All data" returns df unchanged (sorted).
+
+    A naive `.resample(...).last().dropna()` would silently erase every
+    bucket where cash was stale that day (leverage/call_distance_pct both
+    None), even though gross_book/maintenance_rate are still real. This
+    drops a resampled row ONLY when EVERY plotted column
+    (leverage, call_distance_pct) is null for that bucket — never on a
+    partial null, so a stale-cash day still shows up (as a gap in the
+    cash-derived lines, not a missing gross_book).
+    """
+    out = df.sort_index()
+    if granularity == "Weekly":
+        out = out.resample("W-FRI").last()
+    elif granularity == "Monthly":
+        out = out.resample("ME").last()
+    # "All data" (or anything else): no resampling.
+
+    plotted = [c for c in ("leverage", "call_distance_pct") if c in out.columns]
+    if plotted:
+        out = out.dropna(how="all", subset=plotted)
+    return out
+
+
 def _parse_date(d):
     """Coerce a date / datetime / 'YYYY-MM-DD' string to a date; None if unparseable."""
     if isinstance(d, _datetime):
