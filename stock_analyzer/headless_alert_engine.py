@@ -17,7 +17,7 @@ not "reach me now" decisions. Inputs come from Supabase (holdings/trades/stops)
 from __future__ import annotations
 
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytz
 
@@ -26,12 +26,14 @@ from stock_analyzer import broker_sync
 from stock_analyzer import exit_advisor
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer.bundle_loader import load_bundle
-from stock_analyzer.data import fetch_spy, fetch_vix, fetch_risk_free_rate
+from stock_analyzer.data import fetch_spy, fetch_vix, fetch_risk_free_rate, is_trading_day
 from stock_analyzer.portfolio import build_portfolio_df
 from stock_analyzer.risk import compute_portfolio_risk_metrics
 from stock_analyzer.stress_test import SCENARIOS, run_scenario, assess_fragility
 from stock_analyzer.tax_advisor import _build_open_lots
 from stock_analyzer.daily_briefing import deterioration_signals, build_daily_briefing
+from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
+from stock_analyzer.recommendations_history import build_enter_now_rows
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_ELEVATED,
     PORTFOLIO_BETA_CEILING,
@@ -191,7 +193,15 @@ def _build_context(today: date) -> dict:
             # port_df (build_portfolio_df truncates to int(shares), and diffing
             # a truncated frame fabricates a permanent phantom drift on any
             # fractional broker lot).
-            "holdings_df": holdings_df, "trades_df": trades_df}
+            "holdings_df": holdings_df, "trades_df": trades_df,
+            # Additive (2026-09-10) — the already-computed risk-metrics dict
+            # (beta, etc.), previously discarded after `fragility` was derived
+            # from it. compute_watchlist_entries needs `beta` for its portfolio-
+            # fit gate and would otherwise have to recompute compute_all_risk a
+            # second time. `None` when the risk computation itself failed above
+            # (caller must treat a missing/None beta as "couldn't be built",
+            # never as "beta is zero").
+            "port_risk": port_risk}
 
 
 def compute_protective_alerts(today: date | None = None) -> dict:
@@ -521,6 +531,277 @@ def compute_morning_picks(today: date | None = None, scanner_results=None) -> di
             # suppression buckets from here (W5 capture half). Additive; existing
             # callers that ignore this key are unaffected.
             "grow": grow}
+
+
+def _prior_trading_day(d: date) -> date:
+    """Most recent NYSE trading day strictly before `d` — NYSE-calendar aware
+    (via data.is_trading_day), not naive weekday-1 math. Used only for the
+    enter_now day-over-day transition diff in compute_watchlist_entries (D-B).
+    Bounded to 10 calendar days back; NYSE has never closed that long."""
+    cur = d - timedelta(days=1)
+    for _ in range(10):
+        if is_trading_day(cur):
+            return cur
+        cur -= timedelta(days=1)
+    return cur
+
+
+def compute_watchlist_entries(
+    today: date | None = None,
+    watchlist: "list[str] | None" = None,
+    scanner_go_tickers=None,
+) -> dict:
+    """Return {"entries": [...] | None, "built_at": <ET iso>, "errors": [...],
+    "reason": str | None, "gate_degraded": bool}.
+
+    The PROACTIVE counterpart to opening 📋 Watchlist: recomputes each
+    watchlist ticker's verdict via the SAME `build_watchlist_recommendation`
+    the interactive page calls (unchanged, no logic drift). CAPTURE and
+    ANNOUNCE are deliberately different scopes (coordinator decision,
+    2026-09-10) — same distinction the interactive page already draws (it
+    captures a held ENTER_NOW for grading with already_held=True, but only
+    turns it into a render-time caution, never a capture-time exclusion):
+
+      capture — EVERY ENTER_NOW ticker, held or not, is written as today's
+             `enter_now` baseline via the same `build_enter_now_rows` +
+             `db.save_recommendations` the interactive page uses. Matches the
+             interactive page's own D1 capture scope exactly, so grading
+             coverage doesn't silently undercount held tickers on a cron-only
+             day versus a day someone opens Watchlist.
+      D-C  — held tickers are excluded from the EMAIL-ELIGIBLE set only (a
+             held ENTER_NOW is already suppressed into a caution on the
+             interactive page; this mirrors that outcome for what gets
+             emailed, never for what gets captured above).
+      dedup — `scanner_go_tickers` (today's high-conviction scan picks) and
+             today's EXIT/TRIM/RISK_OFF `exit_signals` tickers are excluded
+             from the email-eligible set so the same name never gets two
+             independent buy announcements, or a buy announcement while under
+             an active protective call.
+      D-B  — of the email-eligible set, only tickers NEWLY qualifying versus
+             the prior trading day's recorded `enter_now` set are emailed. A
+             ticker persisting from yesterday is silent (but was still
+             captured above, so tomorrow's diff has today's baseline
+             regardless of what's emailed today).
+
+    Offline contract: `entries` is `None` ONLY when the watchlist or holdings
+    read itself fails (`reason="db_unavailable"`) — a genuine producer
+    failure. `entries == []` means checked and genuinely nothing new
+    transitioned (including the case where a same-day prior-day lookup
+    failure makes the transition unverifiable — see below).
+
+    D-D: the portfolio-fit gate (sector weight from port_df + portfolio beta)
+    is best-effort. Sector/concentration reliably runs off port_df; beta is
+    the leg genuinely at risk of not being buildable headlessly (a fragility/
+    risk-metrics computation failure, or no portfolio context at all) —
+    tracked via `gate_degraded`, never silently dropped. An otherwise-
+    qualifying name is still included when degraded, never withheld.
+
+    Never raises; faults are collected in `errors`.
+    """
+    today = today or datetime.now(_ET).date()
+    built_at = datetime.now(_ET).isoformat()
+    errors: list[str] = []
+    scanner_go = {str(t).strip().upper() for t in (scanner_go_tickers or []) if str(t).strip()}
+
+    if watchlist is None:
+        try:
+            watchlist = db.load_watchlist_or_none()
+        except Exception as e:
+            watchlist = None
+            errors.append(f"load_watchlist failed: {e}")
+    if watchlist is None:
+        return {"entries": None, "built_at": built_at,
+                "errors": errors or ["watchlist could not be read from Supabase"],
+                "reason": "db_unavailable", "gate_degraded": False}
+    watchlist = [str(t).strip().upper() for t in watchlist if str(t).strip()]
+    if not watchlist:
+        return {"entries": [], "built_at": built_at, "errors": [], "reason": None,
+                "gate_degraded": False}
+
+    # Held-ticker set — read directly, decoupled from the heavier bundle/
+    # port_df build below. D-C's held-exclusion is a hard invariant (a wrong
+    # inclusion here would announce "buy" on a name already owned), not a
+    # degradable gate like beta — so THIS read fails CLOSED (entries=None,
+    # same "db_unavailable" reason as the watchlist read above) rather than
+    # proceeding on a guess.
+    try:
+        holdings_df = db.load_holdings_or_none()
+    except Exception as e:
+        holdings_df = None
+        errors.append(f"load_holdings failed: {e}")
+    if holdings_df is None:
+        return {"entries": None, "built_at": built_at, "errors": errors,
+                "reason": "db_unavailable", "gate_degraded": False}
+    held_set = (
+        {str(t).strip().upper() for t in holdings_df["Ticker"].tolist() if str(t).strip()}
+        if not holdings_df.empty and "Ticker" in holdings_df.columns else set()
+    )
+
+    # Portfolio-fit context (sector weight + beta) for the gate — best-effort.
+    # Reuses the SAME _build_context prep every other headless computation
+    # uses, so sector weights/beta tie out with the protective/offense lanes.
+    ctx = _build_context(today)
+    gate_degraded = False
+    port_df = None
+    portfolio_beta = None
+    spy_for_bundles = None
+    if ctx.get("ok"):
+        port_df = ctx["port_df"]
+        spy_for_bundles = ctx.get("spy_6mo")
+        port_risk = ctx.get("port_risk")
+        portfolio_beta = _f(port_risk.get("beta")) if port_risk else None
+        if portfolio_beta is None:
+            gate_degraded = True
+    else:
+        # _build_context always sets "errors" to a list on both its ok and
+        # not-ok branches (never omits or nulls it) — direct index, not
+        # `.get(...) or []`, matching compute_protective_alerts/
+        # compute_morning_picks's own convention for this same ctx dict.
+        _ctx_errors = ctx["errors"] if "errors" in ctx else []
+        errors.extend(_ctx_errors)
+        gate_degraded = True
+        try:
+            spy_for_bundles = fetch_spy("6mo")
+        except Exception:
+            spy_for_bundles = None
+
+    try:
+        rfr = fetch_risk_free_rate()
+    except Exception:
+        rfr = 0.045
+
+    # ── Per-ticker: bundle load → portfolio_ctx → build_watchlist_recommendation ──
+    qualifying: list[dict] = []
+    sector_map: dict = {}
+    for t in watchlist:
+        try:
+            data = load_bundle(t, "6mo", spy_df=spy_for_bundles, rfr=rfr)
+        except Exception as e:
+            errors.append(f"{t}: bundle load failed ({e})")
+            continue
+        sector = str(data.get("sector") or "") if isinstance(data, dict) else ""
+        sector_map[t] = sector
+        sec_wt = 0.0
+        if sector and port_df is not None and not port_df.empty and "Sector" in port_df.columns:
+            gcol = "Gate Weight (%)" if "Gate Weight (%)" in port_df.columns else "Weight (%)"
+            try:
+                sec_wt = float(port_df[port_df["Sector"] == sector][gcol].sum())
+            except Exception:
+                sec_wt = 0.0
+        pctx = {
+            "sector_of_ticker":  sector,
+            "sector_weight_pct": sec_wt,
+            "portfolio_beta":    portfolio_beta,
+            # NOT replicated headlessly — these are session-only Risk Advisor /
+            # Grow Today state, not part of any headless computation. Omitting
+            # them only weakens the SOFT-caution legs of _portfolio_risk_gate;
+            # the HARD sector/beta breach checks (the ones that can downgrade
+            # ENTER_NOW to NEAR_ENTRY) are unaffected.
+            "active_high_risk_alerts": [],
+            "grow_today_sectors":      set(),
+        }
+        try:
+            card = build_watchlist_recommendation(t, data, portfolio_ctx=pctx)
+        except Exception as e:
+            errors.append(f"{t}: recommendation build failed ({e})")
+            continue
+        if card.get("action") == "ENTER_NOW":
+            qualifying.append(card)
+
+    # ── Capture scope vs. announce scope — deliberately DIFFERENT (coordinator
+    # decision, 2026-09-10) ──────────────────────────────────────────────────
+    # `qualifying` above is the RAW ENTER_NOW set — every ticker, held or not,
+    # before any exclusion — and stays that way through the rec-log capture
+    # below. This matches the interactive page's own D1 capture scope exactly
+    # (build_enter_now_rows/app.py ~23886: held tickers are INCLUDED, marked
+    # already_held=True, not capture-time excluded — the interactive page only
+    # turns a held ENTER_NOW into a caution at RENDER time, app.py ~24042).
+    # Capture (grading coverage) and announce (what gets emailed) are
+    # different concerns: if cron-only days captured zero enter_now rows for
+    # held tickers while interactive-visit days captured them, held tickers
+    # would be systematically undercounted in the enter_now dataset specifically
+    # on days nobody opens Watchlist — undermining the exact "grading coverage
+    # doesn't depend on a Watchlist visit" goal this function exists for.
+    # A SEPARATE, narrower `eligible` set (below) is derived only for the D-B
+    # transition diff and the final `entries` — never for the capture above.
+
+    # Today's EXIT/TRIM/RISK_OFF protective-call tickers — never announce a BUY
+    # on a name simultaneously under an active protective call. Same
+    # non-distinguishing offline behaviour as the scan lane's own existing
+    # exit_alerts read (load_exit_signals collapses "outage" and "empty" to
+    # the same empty frame) — mirrored, not a new risk.
+    protective_tickers: set = set()
+    try:
+        sig_df = db.load_exit_signals(days_back=1)
+        if sig_df is not None and not sig_df.empty and "signal_date" in sig_df.columns:
+            today_str = today.isoformat()
+            _rows = sig_df[
+                (sig_df["signal_date"].astype(str) == today_str)
+                & (sig_df["signal_type"].isin(["EXIT", "TRIM", "RISK_OFF"]))
+            ]
+            protective_tickers = {
+                str(t).strip().upper() for t in _rows["ticker"].tolist() if str(t).strip()
+            }
+    except Exception as e:
+        errors.append(f"exit_signals lookup failed: {e}")
+
+    # D-C (held) + scanner-Go dedup + protective-call exclusion — applied ONLY
+    # to derive the email-eligible set, never to the capture above.
+    eligible = [
+        c for c in qualifying
+        if str(c.get("ticker", "")).upper() not in held_set
+        and str(c.get("ticker", "")).upper() not in scanner_go
+        and str(c.get("ticker", "")).upper() not in protective_tickers
+    ]
+
+    # enter_now recommendation-log capture — the FULL RAW qualifying set
+    # (every ENTER_NOW ticker, held or not — see the capture-vs-announce note
+    # above), so grading coverage doesn't depend on a Watchlist visit on
+    # cron-only days, and tomorrow's transition diff always has today's
+    # baseline regardless of what's emailed today.
+    try:
+        _rows = build_enter_now_rows(qualifying, held_set, today, sector_map)
+        if _rows:
+            _save_result = db.save_recommendations(_rows)
+            if _save_result.get("error"):
+                errors.append(f"enter_now rec-log save error: {_save_result['error']}")
+    except Exception as e:
+        errors.append(f"enter_now rec-log capture failed: {e}")
+
+    # D-B: transition-only — diff the EMAIL-ELIGIBLE set (not the raw capture
+    # set) against the prior trading day's recorded enter_now set. A failed
+    # prior-day lookup means the transition can't be verified this run:
+    # suppress rather than risk re-announcing an already-seen name (CLAUDE.md
+    # operating posture — recommend nothing rather than recommend wrongly).
+    # `None` (not `set()`) distinguishes "couldn't check" from "checked,
+    # nothing recorded yesterday".
+    prior_tickers: "set | None" = set()
+    try:
+        prior_date = _prior_trading_day(today)
+        prior_df = db.load_recommendations_or_none(start_date=prior_date, end_date=prior_date)
+        if prior_df is None:
+            prior_tickers = None
+            errors.append("prior-day enter_now lookup unavailable — cannot verify transitions "
+                          "this run, suppressing all entries")
+        elif not prior_df.empty and "rec_type" in prior_df.columns:
+            prior_tickers = {
+                str(t).strip().upper()
+                for t in prior_df[prior_df["rec_type"] == "enter_now"]["ticker"].tolist()
+                if str(t).strip()
+            }
+    except Exception as e:
+        prior_tickers = None
+        errors.append(f"prior enter_now lookup failed: {e}")
+
+    new_entries = (
+        [] if prior_tickers is None else
+        [c for c in eligible if str(c.get("ticker", "")).upper() not in prior_tickers]
+    )
+
+    return {
+        "entries": new_entries, "built_at": built_at, "errors": errors,
+        "reason": None, "gate_degraded": gate_degraded,
+    }
 
 
 def _assess_pullback(spy_6mo, fragility, threshold: float) -> dict | None:

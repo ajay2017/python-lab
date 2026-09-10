@@ -841,6 +841,100 @@ def _email_section(title: str, content: str, section_colours: dict) -> str:
     )
 
 
+def render_watchlist_entries_email(
+    entries: list[dict], built_at: str, gate_degraded: bool = False,
+) -> tuple[str, str]:
+    """Return (subject, html_body) for the Watchlist "Ready to Enter" proactive
+    email — the headless counterpart to opening 📋 Watchlist and seeing an
+    ENTER_NOW card (D-A: a separate, dedicated email, not folded into the
+    morning buy-list).
+
+    `entries` are ENTER_NOW cards from
+    headless_alert_engine.compute_watchlist_entries() — already filtered to
+    NEWLY-transitioning, not-held, not-otherwise-announced names (D-B/D-C).
+    Non-empty guaranteed by caller. `gate_degraded` (D-D): the portfolio-beta
+    fit leg couldn't be computed headlessly this run — disclosed, never
+    withheld; the concentration/sector leg still ran off port_df.
+
+    Mirrors render_buy_picks_email's structure/style: dark cards, subject
+    convention, footer disclaimer. The card's own `summary` prose is advisor
+    text and may carry markdown bold, so it's routed through
+    `_email_md_inline` (escape-then-bold) — never raw-interpolated, per the
+    **bold**-leaks-literally class (2026-08-28 audit finding)."""
+    n = len(entries)
+    tickers = ", ".join(
+        dict.fromkeys(str(e.get("ticker") or "") for e in entries if e.get("ticker"))
+    )
+    subject = (
+        f"DRISHTA · Watchlist Ready to Enter — {tickers}" if n == 1 else
+        f"DRISHTA · {n} watchlist names newly Ready to Enter — {tickers}"
+    )
+
+    degraded_html = ""
+    if gate_degraded:
+        degraded_html = (
+            '<div style="border-left:4px solid #f59e0b;background:#1c1710;border-radius:0 6px 6px 0;'
+            'padding:10px 16px;margin:0 0 12px 0;font-family:Arial,Helvetica,sans-serif">'
+            '<div style="color:#f59e0b;font-weight:700;font-size:12px">'
+            '⚠️ Portfolio-beta fit check unavailable this run</div>'
+            '<div style="color:#cbd5e1;font-size:12px;margin-top:3px">'
+            'The concentration/sector check below still applied — only the portfolio-beta '
+            'leg could not be computed headlessly this run.</div>'
+            '</div>'
+        )
+
+    cards = []
+    for e in entries:
+        ticker  = _html.escape(str(e.get("ticker") or ""))
+        score   = e.get("score")
+        rr      = e.get("rr")
+        stop    = e.get("stop")
+        lo, hi  = e.get("entry_lo"), e.get("entry_hi")
+        summary = _email_md_inline(str(e.get("summary") or ""))
+
+        zone_bits = []
+        if lo is not None and hi is not None:
+            zone_bits.append(f"entry ${float(lo):.2f}–${float(hi):.2f}")
+        if rr is not None:
+            zone_bits.append(f"R:R {float(rr):.1f}:1")
+        if stop is not None:
+            zone_bits.append(f"stop ${float(stop):.2f}")
+        zone_str = "  ·  ".join(zone_bits)
+
+        cards.append(f"""
+        <div style="border-left:4px solid #22c55e;background:#1c1917;border-radius:0 6px 6px 0;
+                    padding:12px 16px;margin:0 0 10px 0;font-family:Arial,Helvetica,sans-serif">
+          <div style="color:#22c55e;font-weight:700;font-size:13px;letter-spacing:.3px">
+            ✅ READY TO ENTER &nbsp;·&nbsp; <span style="color:#e5e7eb">{ticker}</span>
+            {f'<span style="color:#9ca3af;font-weight:400">&nbsp;·&nbsp;composite {float(score):.0f}/100</span>' if score is not None else ''}
+          </div>
+          {f'<div style="color:#cbd5e1;font-size:12px;margin-top:5px">{zone_str}</div>' if zone_str else ''}
+          {f'<div style="color:#a8a29e;font-size:12px;margin-top:4px">{summary}</div>' if summary else ''}
+        </div>""")
+
+    body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
+      <div style="max-width:640px;margin:0 auto">
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#f9fafb;font-size:18px;font-weight:700;margin-bottom:4px">
+          DRISHTA · Watchlist Ready to Enter
+        </div>
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#9ca3af;font-size:12px;margin-bottom:16px">
+          {n} watchlist name{'s' if n != 1 else ''} newly cleared ENTER NOW · {_html.escape(str(built_at))[:19]} ET
+        </div>
+        {degraded_html}
+        {''.join(cards)}
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;margin-top:18px;
+                    border-top:1px solid #292524;padding-top:10px">
+          These watchlist names newly cleared the same ENTER NOW checks 📋 Watchlist applies
+          interactively (score, entry zone, risk/reward, portfolio fit). You already hold none of
+          them, and none is on today's high-conviction scan or under an active protective call
+          today. Sent once per name, the day it first clears — it will not repeat while the call
+          persists. Advisory only — verify price is still near this level before acting.
+        </div>
+      </div>
+    </body></html>"""
+    return subject, body
+
+
 def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: dict | None = None) -> str:
     """Render the weekly portfolio debrief as a professional HTML email (light-mode-first).
 

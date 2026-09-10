@@ -80,11 +80,12 @@ from stock_analyzer.constants import (
 from stock_analyzer.data import is_trading_day
 from stock_analyzer.headless_alert_engine import (
     compute_protective_alerts, compute_eod, compute_morning_picks,
+    compute_watchlist_entries,
 )
 from stock_analyzer.notify import (
     render_alert_email, render_test_email, render_pullback_email,
     render_daily_action_email, render_intraday_entry_email, send_email_resend,
-    render_db_outage_email, render_liveness_email,
+    render_db_outage_email, render_liveness_email, render_watchlist_entries_email,
 )
 
 _ET = pytz.timezone("America/New_York")
@@ -94,6 +95,7 @@ _BUY_ROW = 3          # alert_state lane: morning buy-list dedup
 _INTRADAY_ROW = 4     # alert_state lane: intraday pullback entry dedup
 _DB_OUTAGE_ROW = 5    # alert_state lane: DB-unreachable notice dedup (self-creates on upsert)
 _BROKER_FAILURE_ROW = 6  # alert_state lane: broker-lane failure-email dedup (self-creates on upsert)
+_WATCHLIST_ENTRIES_ROW = 7  # alert_state lane: Watchlist "Ready to Enter" proactive-email dedup
 
 _EARNINGS_MOVE_RESCHEDULE_LOOKOUT_DAYS = 120  # _mature_earnings_predictions' reschedule-backstop fetch window (F-234 Phase 2) -- wide enough to see the ~90-day-out genuine next print, so it's never mistaken for EARNINGS_MOVE_MIN_NEXT_GAP_DAYS's postponement signal; a fetch-window size, not an investment-policy value, hence local here rather than in constants.py
 
@@ -118,6 +120,8 @@ _LANE_OUTAGE_TEXT: dict[str, tuple[str, str]] = {
                     "The weekly reference-data backfills did NOT run."),
     "broker":      ("SnapTrade broker sync",
                     "The Robinhood balance/transaction sync did NOT run."),
+    "watchlist-entries": ("Watchlist Ready-to-Enter email",
+                    "The proactive Watchlist ENTER_NOW email did NOT run."),
 }
 
 
@@ -1190,9 +1194,12 @@ def _run_scan(now_et, force: bool) -> int:
     scanner_cache so the Home buy-candidate / Grow-Today lists populate on a COLD
     load without the user running the ~20s scanner; (2) email the high-conviction
     "New Positions to Initiate" (Go — composite confirms) so the user can act from
-    mobile. Post-open gated (today's price action must be real). Persist is inert
-    until the scanner_cache table exists; the email is inert without RESEND_API_KEY.
-    Exits 0 except when Supabase is unreadable (see _handle_db_unavailable)."""
+    mobile; (3) email any watchlist ticker newly clearing ENTER_NOW (a separate,
+    dedicated "Watchlist Ready to Enter" email — otherwise only discoverable by
+    opening 📋 Watchlist). Post-open gated (today's price action must be real).
+    Persist is inert until the scanner_cache table exists; both emails are inert
+    without RESEND_API_KEY. Exits 0 except when Supabase is unreadable (see
+    _handle_db_unavailable)."""
     today_str = now_et.date().isoformat()
     if not force:
         if not is_trading_day(now_et.date()):
@@ -1379,7 +1386,65 @@ def _run_scan(now_et, force: bool) -> int:
                 _log(f"action state saved (row={_BUY_ROW}, date={today_str}, fp={fp}).")
             elif not sent:
                 _log("action email not sent (inert/failed) — state NOT saved (later slot may retry).")
-    _log(f"scan done · persisted={n} · buy_sent={sent}")
+
+    # ── Watchlist "Ready to Enter" proactive email ──────────────────────────
+    # ENTER_NOW verdicts are otherwise only discoverable by opening 📋 Watchlist
+    # manually. Isolated in its own try/except, run AFTER the buy-list section
+    # has already sent/dedup-skipped, so a fault here can never affect it —
+    # same isolation posture as the rec-log/gate-ledger blocks above.
+    _wle_sent = False
+    try:
+        _wle_scanner_go = {
+            str(p.get("ticker")).strip().upper() for p in hi if p.get("ticker")
+        }
+        _wle_payload = compute_watchlist_entries(
+            today=now_et.date(), scanner_go_tickers=_wle_scanner_go,
+        )
+        if _wle_payload.get("reason") == "db_unavailable":
+            return _handle_db_unavailable(
+                "watchlist-entries", now_et,
+                "; ".join(_wle_payload.get("errors", [])) or "watchlist/holdings unreadable")
+        for e in _wle_payload.get("errors", []):
+            _log(f"watchlist-entries engine note: {e}")
+        # Already ruled out `entries is None` (the db_unavailable branch above
+        # returns before this point) — explicit `is None` check rather than
+        # `or []` so a genuine offline sentinel could never be silently
+        # collapsed into "checked, nothing new" if that branch ever changed.
+        _wle_entries = _wle_payload.get("entries")
+        if _wle_entries is None:
+            _wle_entries = []
+        if not _wle_entries:
+            _log("watchlist-entries: nothing newly actionable — no email.")
+        else:
+            _wle_tickers = sorted(str(c.get("ticker", "")).upper() for c in _wle_entries)
+            _wle_fp = hashlib.sha1(
+                f"{today_str}|{'|'.join(_wle_tickers)}".encode("utf-8")
+            ).hexdigest()[:16]
+            _wle_state = db.load_alert_state(_WATCHLIST_ENTRIES_ROW) or {}
+            if (_wle_state.get("last_emailed_date") == today_str
+                    and _wle_state.get("last_fingerprint") == _wle_fp and not force):
+                _log(f"watchlist-entries: same set already sent today (fp={_wle_fp}) — skip.")
+            else:
+                _wle_subject, _wle_html = render_watchlist_entries_email(
+                    entries=_wle_entries,
+                    built_at=_wle_payload.get("built_at", today_str),
+                    gate_degraded=_wle_payload.get("gate_degraded", False),
+                )
+                _wle_sent = _send_email("watchlist-entries", _wle_subject, _wle_html)
+                # Save dedup state ONLY on a real send — a transient Resend
+                # failure is retried by the later DST slot rather than
+                # silently suppressed, same pattern as _BUY_ROW above.
+                if _wle_sent and db.save_alert_state(today_str, _wle_fp, _WATCHLIST_ENTRIES_ROW):
+                    _log(f"watchlist-entries state saved (row={_WATCHLIST_ENTRIES_ROW}, "
+                         f"date={today_str}, fp={_wle_fp}).")
+                elif not _wle_sent:
+                    _log("watchlist-entries email not sent (inert/failed) — state NOT saved "
+                         "(later slot may retry).")
+    except Exception as _wle_err:
+        _log(f"watchlist-entries: FAILED — {str(_wle_err)[:120]} — continuing "
+             "(buy-list email unaffected).")
+
+    _log(f"scan done · persisted={n} · buy_sent={sent} · watchlist_entries_sent={_wle_sent}")
     return 0
 
 
