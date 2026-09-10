@@ -97,7 +97,7 @@ python-lab/
     ├── scoring.py                  Composite score weights and recommendation tiers
     ├── signal_reconciliation.py    Central authority resolving scanner vs. composite vs. context into one buy/skip verdict (reconcile_signals) — every recommendation surface calls it. Also exposes classify_composite_direction() (F-202, D3): a public wrapper over the private _composite_class(), for callers on held positions where Score/Signal IS the composite (no separate momentum score to reconcile against)
     ├── portfolio.py                Portfolio DataFrame construction; stop integrity gate
-    ├── account.py                  Account-level pure calc (net contributed capital, growth, money-weighted/Modified-Dietz return); signed net cash nets margin
+    ├── account.py                  Account-level pure calc (net contributed capital, growth, money-weighted/Modified-Dietz return); signed net cash nets margin; daily snapshots compute (F-266) + leverage chart resample (leverage_series_for_chart, compute_account_snapshot)
     ├── margin.py                   Margin maintenance awareness (call distance, capital-basis weight); feeds sizing cap F-255
     ├── daily_pnl.py                Positions-scope day-over-day P&L (Tier B): broker-style equity-delta vs persisted daily_snapshots baseline + the day's trades
     ├── risk.py                     ATR stop loss, position sizing, risk metrics
@@ -2630,6 +2630,29 @@ An exit = a breached stop OR an EXIT tier. A **TRIM is not liquidated** — its 
 **No new constants.** Reuses `DETERIORATION_TREND_MA`, `DETERIORATION_CONFIRM_DAYS`, `DETERIORATION_PEAK_FALLBACK_BARS`, `GAP_TO_STOP_ROUND_DECIMALS`. **Session state consumed (read-only):** `_fragility_cache`, `_corr_df_cache` (both via `app.py`, which passes them in — the module stays pure). Publishes nothing; nothing downstream consumes it.
 
 **`stock_analyzer/margin.py::shock_call_outcome()` (F-263, 2026-09-01)** composes this tab's shock replay with `margin.py`'s separately-existing, static-book-only `call_distance()` — added so the tab can answer "does this shock actually trigger a margin call," not just "does it breach my stops." Calls `call_distance()` twice rather than re-deriving its formula: first-order at the shocked price, second-order after netting a forced sale's proceeds (sourced from this module's own `_survivors(...)["proceeds"]`) against the debit. Forced selling can only help the cushion, never worsen it (`post_sale_cushion = shock_cushion + forced_sale_proceeds × rate` — equity is invariant to a sale that pays down the matching debit), a pinned test invariant, not just reasoning. Also returns `cushion_delta_from_now` (today's cushion minus the shocked cushion). Reuses `FRAGILITY_PULLBACK_PCT` (the warning band) and `MARGIN_MAINTENANCE_RATE` — no new constants. Resolves the debit via the same `margin.resolve_net_capital()` path F-255's sizing cap uses, so the two surfaces can't disagree on the starting book. Read-only awareness — never gates, never feeds `risk_advisor`/`exit_advisor`, touches no concentration denominator. Full detail: `docs/requirements.md` F-263.
+
+### 6.46 `account_daily_snapshots` table
+
+```sql
+create table if not exists public.account_daily_snapshots (
+    snapshot_date     date    not null primary key,
+    gross_book        numeric not null check (gross_book >= 0),
+    cash_balance      numeric,          -- signed; negative = margin debit; NULL = cash unknown/stale at write
+    net_equity        numeric,          -- gross_book + cash_balance; NULL unless cash fresh
+    leverage          numeric,          -- gross_book / net_equity when net_equity > 0; else NULL
+    cushion           numeric,          -- $ cushion, verbatim from margin.call_distance(); NULL when no debit / cash unknown / stale
+    call_distance_pct numeric,          -- % decline to a call (call_distance sign convention); NULL same rule as cushion
+    maintenance_rate  numeric not null, -- constants.MARGIN_MAINTENANCE_RATE frozen at write time
+    cash_as_of        timestamptz,      -- the account_cash.updated_at the cash came from; NULL when no record
+    created_at        timestamptz default now()
+);
+alter table public.account_daily_snapshots enable row level security;
+drop policy if exists "Allow all (service role)" on public.account_daily_snapshots;
+create policy "Allow all (service role)" on public.account_daily_snapshots
+    for all to service_role using (true) with check (true);
+```
+
+Historical daily leverage and margin-cushion tracking, forward-only from ship date (2026-09-10). One row per trading day, written at EOD by the cron `eod` lane, reusing that SAME run's `daily_snapshots` rows (never a second fetch), via `stock_analyzer/db.py::save_account_daily_snapshot()`. Upserts on `snapshot_date` (idempotent if called twice same day). Fails silently (returns `False`) if the table doesn't exist (DDL not yet applied) or on any other error — a failure to persist this data cannot block the primary snapshots or any cron lane. `cushion` (a **dollar** figure) and `call_distance_pct` (a **percentage** — the two are call_distance()'s two distinct outputs, not the same metric at a different scale) are both filled verbatim from `stock_analyzer/margin.py::call_distance()`, reused from the live 💰 Account panel, never re-derived. All cash-derived fields (`cash_balance, net_equity, leverage, cushion, call_distance_pct`) are written as `NULL` when the `account_cash` record is missing, stale (older than `ACCOUNT_CASH_STALE_DAYS`), or has no cash value — never fabricated; `gross_book` and `maintenance_rate` are always populated regardless, since neither depends on cash. `maintenance_rate` is frozen at write time (not recomputed from `constants.py` on read) so a future change to that constant never retroactively alters old rows. Consumed by the new 💰 Account **"🛡️ Leverage & Margin Cushion"** chart (F-266) via `stock_analyzer/db.py::load_account_daily_snapshots(start_date, end_date)`, which returns `None` on any failure (offline contract, same as other loaders). RLS matches existing tables exactly (`"Allow all (service role)"`, `for all to service_role`).
 
 ---
 
