@@ -1080,7 +1080,7 @@ def _render_broker_drift(placeholder, verdict) -> None:
             _dir = "extra in app" if _r["shares"] > 0 else "missing from app"
             _lines.append(
                 f"- **{_r['ticker']}** — {abs(_r['shares']):g} sh {_dir} "
-                f"({_m(f'${abs(_r['dollars']):,.0f}')})"
+                f"({_m(f'\\${abs(_r['dollars']):,.0f}')})"
             )
         for _r in _imp.get("unpriced", []):
             _lines.append(
@@ -1097,7 +1097,7 @@ def _render_broker_drift(placeholder, verdict) -> None:
         # branches warn and no gate moves either way.
         if abs(_over) >= 1:
             _word = "overstated" if _over > 0 else "understated"
-            _head = f"Portfolio Value may be **{_word} by ~{_m(f'${abs(_over):,.0f}')}**"
+            _head = f"Portfolio Value may be **{_word} by ~{_m(f'\\${abs(_over):,.0f}')}**"
         else:
             _head = "Your holdings don't match your broker"
 
@@ -4036,9 +4036,9 @@ def _render_holdings_earnings(port_df, held_data):
                     st.markdown("**Analyst Expectations**")
                     _ae_lines = []
                     if _pb["fwd_eps"] is not None:
-                        _ae_lines.append(f"- **Fwd EPS:** ${_pb['fwd_eps']:.2f}")
+                        _ae_lines.append(f"- **Fwd EPS:** \\${_pb['fwd_eps']:.2f}")
                     if _pb["trail_eps"] is not None:
-                        _ae_lines.append(f"- **Trail EPS:** ${_pb['trail_eps']:.2f}")
+                        _ae_lines.append(f"- **Trail EPS:** \\${_pb['trail_eps']:.2f}")
                     if _pb["fwd_pe"] is not None:
                         _ae_lines.append(f"- **Fwd P/E:** {_pb['fwd_pe']:.1f}×")
                     if _pb["rev_growth"] is not None:
@@ -4586,7 +4586,7 @@ if page == "🏠 Home":
 
                     _xc_lines.append(
                         f"- **{t}**: {r.get('primary_source')} vs {r.get('validator', 'independent source')} "
-                        f"(${r.get('other_price')}) — {', '.join(_bits) or 'disagree'}"
+                        f"(\\${r.get('other_price')}) — {', '.join(_bits) or 'disagree'}"
                     )
                 st.error(
                     "⚠️ **Price unverified — sources disagree.** The primary price feed "
@@ -13475,18 +13475,18 @@ elif page == "📡 Signals & Advice":
                             if _rbc_bq < COMPOSITE_HOLD:
                                 action_text = (
                                     f"**Business quality weakness — act with urgency.**  \n"
-                                    f"Sell **{half} shares** (~${half_val:,.0f}) at market now to bank the "
+                                    f"Sell **{half} shares** (~\\${half_val:,.0f}) at market now to bank the "
                                     f"{act['pnl']:.0f}% gain on half the position.  \n"
                                     f"Hold remaining {act['shares'] - half} shares with stop at "
-                                    f"**${act['stop']:.2f}** ({act['stop_type']}).  \n"
+                                    f"**\\${act['stop']:.2f}** ({act['stop_type']}).  \n"
                                     f"Revisit full exit if stop is breached or next earnings disappoint."
                                 )
                             else:
                                 action_text = (
                                     f"**Technical-only weakness — fundamentals are intact.**  \n"
-                                    f"Option A (conservative): Let the ratchet stop at **${act['stop']:.2f}** "
+                                    f"Option A (conservative): Let the ratchet stop at **\\${act['stop']:.2f}** "
                                     f"do the work — it already locks in a portion of your gain.  \n"
-                                    f"Option B (active): Sell **{half} shares** (~${half_val:,.0f}) to reduce "
+                                    f"Option B (active): Sell **{half} shares** (~\\${half_val:,.0f}) to reduce "
                                     f"exposure, trail remainder with the existing stop.  \n"
                                     f"Do NOT sell all {act['shares']} shares on a technical signal alone "
                                     f"when fundamentals are solid."
@@ -13495,8 +13495,8 @@ elif page == "📡 Signals & Advice":
                                     action_text += f"  \n⚠️ Earnings proximity tips toward Option B — reduce before the report."
                         else:
                             action_text = (
-                                f"Sell **{half} shares** (~${half_val:,.0f}) to bank gain on half the position.  \n"
-                                f"Hold remainder with stop at **${act['stop']:.2f}**."
+                                f"Sell **{half} shares** (~\\${half_val:,.0f}) to bank gain on half the position.  \n"
+                                f"Hold remainder with stop at **\\${act['stop']:.2f}**."
                             )
                         st.markdown(action_text)
 
@@ -22935,15 +22935,15 @@ elif page == "📈 Analysis":
                             _cov_det.append(f"Consensus: **{_cov_crat}**")
                         if _cov_a_pt is not None:
                             try:
-                                _pt_str = f"Avg PT: ${float(_cov_a_pt):.2f}"
+                                _pt_str = f"Avg PT: \\${float(_cov_a_pt):.2f}"
                                 if (
                                     _cov_l_pt is not None
                                     and _cov_h_pt is not None
                                     and float(_cov_l_pt) != float(_cov_h_pt)
                                 ):
                                     _pt_str += (
-                                        f" (${float(_cov_l_pt):.2f}"
-                                        f"–${float(_cov_h_pt):.2f})"
+                                        f" (\\${float(_cov_l_pt):.2f}"
+                                        f"–\\${float(_cov_h_pt):.2f})"
                                     )
                                 _cov_det.append(_pt_str)
                             except (TypeError, ValueError):
@@ -23615,7 +23615,7 @@ elif page == "📈 Analysis":
     # Analysis summary
     with st.expander("📋 Analysis Summary"):
         today_str = _today_et().strftime("%B %d, %Y")
-        _brief_pv_str = (f"${portfolio_value:,.0f}" if portfolio_value > 0
+        _brief_pv_str = (f"\\${portfolio_value:,.0f}" if portfolio_value > 0
                          else "not loaded this session")
         lines = [f"# Investment Brief — {today_str}",
                  f"Portfolio: {_brief_pv_str} · Moderate Risk\n\n---"]
@@ -23631,13 +23631,13 @@ elif page == "📈 Analysis":
             rm = r["risk_metrics"]
             lines += [
                 f"### {ticker} — {r['rec']['icon']} {r['rec']['label']} ({r['total']}/100)",
-                f"**Price**: ${price:.2f}" if price else "",
-                (f"**Trade**: Buy {ps['shares']} @ ${r['entry_lo']:.2f}–${r['entry_hi']:.2f} · "
-                 f"Stop ${r['stop']:.2f} · Target ${targets['base']:.2f} · R:R {rr_v:.1f}:1"
+                f"**Price**: \\${price:.2f}" if price else "",
+                (f"**Trade**: Buy {ps['shares']} @ \\${r['entry_lo']:.2f}–\\${r['entry_hi']:.2f} · "
+                 f"Stop \\${r['stop']:.2f} · Target \\${targets['base']:.2f} · R:R {rr_v:.1f}:1"
                  if ps and rr_v and rr_v > 0 else ""),
-                (f"**Scenarios**: Bull ${targets['bull']:.2f} ({targets['bull_pct']:+.1f}%) · "
-                 f"Base ${targets['base']:.2f} ({targets['base_pct']:+.1f}%) · "
-                 f"Bear ${targets['bear']:.2f} ({targets['bear_pct']:+.1f}%)" if targets else ""),
+                (f"**Scenarios**: Bull \\${targets['bull']:.2f} ({targets['bull_pct']:+.1f}%) · "
+                 f"Base \\${targets['base']:.2f} ({targets['base_pct']:+.1f}%) · "
+                 f"Bear \\${targets['bear']:.2f} ({targets['bear_pct']:+.1f}%)" if targets else ""),
                 (f"**Risk**: Sharpe {rm['sharpe']:.2f} · Sortino {rm['sortino']:.2f} · "
                  f"Max DD {rm['max_drawdown']:.1f}% · Beta {rm['beta']:.2f}"
                  if rm.get("beta") else
@@ -36989,9 +36989,9 @@ elif page == "🧠 AI Insights":
                         _ac_cons_parts_i.append(f"Consensus: **{_ac_cr_i}**")
                     if _ac_apt_i is not None:
                         _ac_cons_parts_i.append(
-                            f"Avg PT: ${_ac_apt_i:.2f}"
+                            f"Avg PT: \\${_ac_apt_i:.2f}"
                             + (
-                                f" (range ${_ac_lpt_i:.2f}–${_ac_hpt_i:.2f})"
+                                f" (range \\${_ac_lpt_i:.2f}–\\${_ac_hpt_i:.2f})"
                                 if _ac_lpt_i != _ac_hpt_i else ""
                             )
                         )
@@ -37206,9 +37206,9 @@ elif page == "🧠 AI Insights":
                         _ac_detail_parts.append(f"Consensus: **{_ac_crat}**")
                     if _ac_a_pt is not None:
                         try:
-                            _pt_str = f"Avg PT: ${float(_ac_a_pt):.2f}"
+                            _pt_str = f"Avg PT: \\${float(_ac_a_pt):.2f}"
                             if _ac_l_pt is not None and _ac_h_pt is not None and float(_ac_l_pt) != float(_ac_h_pt):
-                                _pt_str += f" (${float(_ac_l_pt):.2f}–${float(_ac_h_pt):.2f})"
+                                _pt_str += f" (\\${float(_ac_l_pt):.2f}–\\${float(_ac_h_pt):.2f})"
                             _ac_detail_parts.append(_pt_str)
                         except (TypeError, ValueError):
                             pass
