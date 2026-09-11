@@ -33414,15 +33414,26 @@ elif page == "💰 Account":
                             textfont=dict(size=11, color="white"),
                             hovertemplate=f"{_sii_hover_labels[_et]}: $%{{y:,.2f}}<extra></extra>",
                         ), secondary_y=False)
+                _sii_pnl_text = [
+                    (
+                        "••••••" if _sii_chart_priv
+                        else (f"-${abs(v):,.2f}" if v < 0 else f"+${v:,.2f}")
+                    ) if abs(v) >= 2 else ""
+                    for v in _sii_pnl_series
+                ]
+                _sii_pnl_textpos = ["bottom center" if v < 0 else "top center" for v in _sii_pnl_series]
                 _sii_fig.add_trace(_sii_pgo.Scatter(
                     x=_sii_piv.index, y=_sii_pnl_series,
                     name="Realized P&L (trades)",
-                    mode="lines+markers",
+                    mode="lines+markers+text",
                     line=dict(color="#a78bfa", width=2),
                     marker=dict(
                         color=["#22c55e" if v >= 0 else "#ef4444" for v in _sii_pnl_series],
                         size=7,
                     ),
+                    text=_sii_pnl_text,
+                    textposition=_sii_pnl_textpos,
+                    textfont=dict(size=10, color="#a78bfa"),
                     customdata=_sii_pnl_trades,
                     hovertemplate="Realized P&L: $%{y:,.2f} (%{customdata} trade(s) closed)<extra></extra>",
                 ), secondary_y=True)
