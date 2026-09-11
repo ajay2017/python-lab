@@ -46,6 +46,7 @@ statement) and set `charged_sign` at the call site. Do NOT guess.
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
 
 import pandas as pd
@@ -63,6 +64,16 @@ from stock_analyzer import margin as _margin
 # non-policy constant living beside the pure logic it guards.
 _RECON_ABS_TOL = 1.00     # dollars — rounding/timing noise floor
 _RECON_REL_TOL = 0.005    # 0.5% of the recorded value, for large balances
+# Gross-book drift tolerance — SEPARATE from the cash tolerances above and
+# deliberately looser (2% vs 0.5%). Same non-policy, data-integrity-noise-
+# floor precedent: reconstructed gross book is a legitimate valuation that
+# can differ from F-266's recorded figure for benign reasons (price
+# timing/source — carry-forward vs. a fresh snapshot, BUY-fill vs. a real
+# close), so it is advisory-only (see `validate_reconstruction` /
+# `render_gate` — gross drift never feeds `show_spanning_verdicts`, only the
+# cash check does). Owner decision, locked 2026-09-11: a mismatch here is a
+# caption, never a hard gate.
+_RECON_GROSS_REL_TOL = 0.02   # 2% of the recorded value
 
 
 # ── Date coercion helpers ───────────────────────────────────────────────────
@@ -360,27 +371,294 @@ def reconstruct_daily_cash(anchor: dict, golive: "_date", trades_df, flows_df: l
     return out
 
 
-# ── 3. Book price-return + gross-book series ────────────────────────────────
+# ── 3. Holdings replay + price resolution + gross-book series ──────────────
+#
+# THE BUG THIS SECTION FIXES (confirmed via live use + a real trade-log
+# cross-check, 2026-09-11): the old `gross_book_by_date(daily_snapshots_df)`
+# sourced gross book ONLY from `daily_snapshots`, which lags a real BUY by
+# days whenever the trade executes after that day's EOD cron, or a
+# broker-imported trade's `traded_at` predates when the app actually learned
+# about it. Meanwhile `reconstruct_daily_cash` reduces cash on the trade
+# DATE itself. Different sources, different timing -> an artificial
+# multi-thousand-dollar V-shaped dip in net_equity through every such BUY,
+# and a corrupted "worst drawdown" selection.
+#
+# THE FIX (owner-confirmed, locked 2026-09-11): reconstruct HOLDINGS
+# directly from `trades_df` (this can never lag — a BUY is knowledge the
+# instant it's in the ledger), then price each held position with a
+# fallback chain that ends in the position's own BUY fill price when no
+# snapshot exists yet (Decision 1) — no new I/O, and net_equity is exactly
+# continuous through the purchase by construction (cash drops by
+# shares*fill, gross rises by shares*fill). A resulting gross-book/F-266
+# drift is advisory-only, never a hard gate (Decision 2) — see
+# `validate_reconstruction`/`render_gate`.
 
-def gross_book_by_date(daily_snapshots_df) -> dict:
-    """{date: sum(shares*close_price)} from `daily_snapshots`-shaped rows.
+def holdings_by_date(trades_df, start: "_date", end: "_date") -> dict:
+    """Forward-replay `trades_df` into a per-calendar-date holdings
+    snapshot covering every date in `[start, end]` inclusive:
+    `{date: {ticker: shares}}`.
 
-    A date absent from `daily_snapshots_df` is simply absent from the
-    result — never zero-filled (a day the ledger has no snapshot for is a
-    genuine gap, not "no holdings").
+    Mirrors `db.recalculate_from_trades`'s BUY/SELL/SPLIT transition logic
+    EXACTLY (read there first) rather than re-deriving it independently:
+      - BUY   adds `shares` to the ticker's running total.
+      - SELL  subtracts `shares`; an oversell (result < -1e-6) is clamped
+        to 0 rather than driving the running total negative (same
+        inconsistent-history tolerance `recalculate_from_trades` applies —
+        this function just has no side channel to report a warning
+        through).
+      - SPLIT OVERWRITES the ticker's running total to the row's `shares`
+        value (the POST-SPLIT total, never a delta — confirmed in
+        `db.py`'s own SPLIT branch, ~line 2397).
+      A ticker whose running total drops to <= 1e-6 is DROPPED from the
+      day's map entirely (matches `recalculate_from_trades`'s `del
+      holdings[ticker]`), never kept at ~0.
+      Rows with an empty ticker, non-numeric shares/price, or
+      shares<=0 / price<=0 are skipped — the same input guard
+      `recalculate_from_trades` applies to every action including SPLIT.
+      Any action string that isn't BUY/SELL/SPLIT is silently skipped (no
+      cash-movement analog needed here).
+
+    The replay starts from the EARLIEST trade in `trades_df`, not from
+    `start` — so the holdings map for `start` itself already reflects all
+    prior history, never an artificially-empty starting point.
+
+    Returns `{}` if `trades_df` is None/empty. Otherwise one entry per
+    calendar date in `[start, end]` inclusive — a no-trade day carries the
+    prior day's map forward UNCHANGED (a fresh `dict` copy per date, so a
+    caller mutating one date's map can never corrupt another's).
     """
-    out: dict[_date, float] = {}
-    if daily_snapshots_df is None or daily_snapshots_df.empty:
-        return out
-    df = daily_snapshots_df.copy()
-    df["_d"] = df["snapshot_date"].apply(_parse_date)
+    if trades_df is None or trades_df.empty or "traded_at" not in trades_df.columns:
+        return {}
+
+    df = trades_df.copy()
+    df["_d"] = df["traded_at"].apply(_to_et_date)
     df = df[df["_d"].notna()]
-    df["shares"] = pd.to_numeric(df["shares"], errors="coerce")
-    df["close_price"] = pd.to_numeric(df["close_price"], errors="coerce")
-    df = df.dropna(subset=["shares", "close_price"])
-    df["_val"] = df["shares"] * df["close_price"]
-    for d, v in df.groupby("_d")["_val"].sum().items():
-        out[d] = float(v)
+    if df.empty:
+        return {}
+    df["_sort_ts"] = pd.to_datetime(df["traded_at"], errors="coerce", utc=True, format="ISO8601")
+    sort_cols = ["_sort_ts"] + (["id"] if "id" in df.columns else [])
+    df = df.sort_values(sort_cols, ascending=True, na_position="last")
+
+    holdings: dict[str, float] = {}
+    # date -> holdings snapshot AFTER every trade filed that date
+    snapshots: dict[_date, dict] = {}
+
+    for _, row in df.iterrows():
+        ticker = str(row.get("ticker", "")).upper().strip()
+        action = str(row.get("action", "")).upper()
+        try:
+            shares = float(row.get("shares") or 0)
+            price = float(row.get("price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not ticker or shares <= 0 or price <= 0:
+            continue
+        d = row["_d"]
+
+        if "SPLIT" in action:
+            holdings[ticker] = shares
+        elif "BUY" in action:
+            holdings[ticker] = holdings.get(ticker, 0.0) + shares
+        elif "SELL" in action:
+            new_shares = holdings.get(ticker, 0.0) - shares
+            if new_shares < -1e-6:
+                new_shares = 0.0
+            if new_shares <= 1e-6:
+                holdings.pop(ticker, None)
+            else:
+                holdings[ticker] = new_shares
+        else:
+            continue
+
+        snapshots[d] = dict(holdings)
+
+    out: dict[_date, dict] = {}
+    snap_dates = sorted(snapshots.keys())
+    idx = 0
+    cur: dict = {}
+    d = start
+    while d <= end:
+        while idx < len(snap_dates) and snap_dates[idx] <= d:
+            cur = snapshots[snap_dates[idx]]
+            idx += 1
+        out[d] = dict(cur)
+        d = d + _timedelta(days=1)
+    return out
+
+
+def split_window_tickers(trades_df, start: "_date", end: "_date") -> set:
+    """Tickers with a SPLIT-action trade row landing inside `[start, end]`
+    (inclusive, by ET trade date). Feeds `gross_book_by_date`'s and
+    `low_confidence_dates`'s split-boundary guard (Decision 2): a
+    carry-forward price applied against POST-SPLIT share counts would
+    silently double- or half-count the position.
+
+    Returns an empty set when `trades_df` is None/empty or has no SPLIT
+    rows in the window — never fabricates a ticker.
+    """
+    out: set = set()
+    if trades_df is None or trades_df.empty or "traded_at" not in trades_df.columns:
+        return out
+    for _, row in trades_df.iterrows():
+        action = str(row.get("action", "")).upper()
+        if "SPLIT" not in action:
+            continue
+        d = _to_et_date(row.get("traded_at"))
+        if d is None or not (start <= d <= end):
+            continue
+        ticker = str(row.get("ticker", "")).upper().strip()
+        if ticker:
+            out.add(ticker)
+    return out
+
+
+def build_price_lookup(holdings_map: dict, daily_snapshots_df, trades_df) -> dict:
+    """Resolve a price for every `(ticker, date)` pair actually HELD in
+    `holdings_map`, under this fallback priority (Decision 1's fix is
+    tier "buy_fill"):
+      (a) EXACT `daily_snapshots` close for that `(ticker, date)`.
+      (b) CARRY-FORWARD — that ticker's most recent `daily_snapshots`
+          close ON OR BEFORE `date`.
+      (c) BUY-FILL — that ticker's most recent BUY fill `price` from
+          `trades_df` on or before `date` (the never-yet-snapshotted new
+          position case — no fetched historical price, no new I/O; this
+          is exactly what makes net_equity continuous through a purchase).
+    A `(ticker, date)` pair with none of the three resolvable is simply
+    ABSENT from the result — never fabricated as 0.
+
+    Returns `{(ticker, date): (price, tier)}` — `tier` in
+    `{"exact", "carry", "buy_fill"}`. The tier travels WITH the price
+    (rather than a bare float) because `gross_book_by_date` needs to
+    distinguish tier "exact" from tier "carry" for tickers flagged in its
+    `low_conf_tickers` argument.
+    """
+    out: dict = {}
+    if not holdings_map:
+        return out
+
+    needed: dict[str, set] = {}
+    for d, hmap in holdings_map.items():
+        for t, sh in (hmap or {}).items():
+            if sh is not None and sh > 1e-9:
+                needed.setdefault(t, set()).add(d)
+    if not needed:
+        return out
+
+    exact: dict[tuple, float] = {}
+    snap_dates_by_ticker: dict[str, list] = {}
+    if daily_snapshots_df is not None and not daily_snapshots_df.empty:
+        sdf = daily_snapshots_df.copy()
+        sdf["_d"] = sdf["snapshot_date"].apply(_parse_date)
+        sdf = sdf[sdf["_d"].notna()]
+        sdf["ticker"] = sdf["ticker"].astype(str).str.upper().str.strip()
+        sdf["close_price"] = pd.to_numeric(sdf["close_price"], errors="coerce")
+        sdf = sdf.dropna(subset=["close_price"])
+        for _, row in sdf.iterrows():
+            exact[(row["ticker"], row["_d"])] = float(row["close_price"])
+        for t, grp in sdf.groupby("ticker"):
+            snap_dates_by_ticker[t] = sorted(grp["_d"].tolist())
+
+    buy_fills_by_ticker: dict[str, list] = {}
+    if trades_df is not None and not trades_df.empty and "traded_at" in trades_df.columns:
+        tdf = trades_df.copy()
+        tdf["_d"] = tdf["traded_at"].apply(_to_et_date)
+        tdf = tdf[tdf["_d"].notna()]
+        tdf["ticker"] = tdf["ticker"].astype(str).str.upper().str.strip()
+        tdf["action"] = tdf["action"].astype(str).str.upper()
+        tdf = tdf[tdf["action"].str.contains("BUY", na=False)]
+        tdf["price"] = pd.to_numeric(tdf["price"], errors="coerce")
+        tdf = tdf.dropna(subset=["price"])
+        tdf = tdf[tdf["price"] > 0]
+        for t, grp in tdf.groupby("ticker"):
+            buy_fills_by_ticker[t] = sorted(zip(grp["_d"], grp["price"]), key=lambda x: x[0])
+
+    for t, dates in needed.items():
+        snap_dates = snap_dates_by_ticker.get(t, [])
+        fills = buy_fills_by_ticker.get(t, [])
+        fill_dates = [f[0] for f in fills]
+        for d in dates:
+            key = (t, d)
+            if key in exact:
+                out[key] = (exact[key], "exact")
+                continue
+            if snap_dates:
+                idx = bisect_right(snap_dates, d) - 1
+                if idx >= 0:
+                    cand = snap_dates[idx]
+                    out[key] = (exact[(t, cand)], "carry")
+                    continue
+            if fill_dates:
+                idx = bisect_right(fill_dates, d) - 1
+                if idx >= 0:
+                    out[key] = (fills[idx][1], "buy_fill")
+                    continue
+            # None of (a)/(b)/(c) resolvable -- absent, never fabricated.
+    return out
+
+
+def gross_book_by_date(holdings_map: dict, price_lookup: dict,
+                        low_conf_tickers: "set | None" = None) -> dict:
+    """`{date: sum(shares*price)}` over every date in `holdings_map`,
+    priced via `price_lookup` (`build_price_lookup`'s output).
+
+    A date is ABSENT from the result (never zero-filled) when:
+      (a) any ticker held that date has no resolvable price in
+          `price_lookup`, or
+      (b) a ticker in `low_conf_tickers` is held that date and its
+          resolved price came from CARRY-FORWARD (tier `"carry"`), not an
+          exact snapshot match (tier `"exact"`) — Decision 2's
+          split-boundary guard: a pre-split carry-forward price applied
+          against POST-SPLIT share counts would silently double- or
+          half-count the position's value.
+
+    A date with an EMPTY holdings map (the trade ledger confirms nothing
+    is held) correctly returns `0.0` — a genuine "no holdings" fact, not a
+    pricing gap. This differs deliberately from the snapshot-only function
+    this replaces, which had no independent way to know "confirmed zero
+    holdings" from "no snapshot row yet".
+    """
+    low_conf_tickers = low_conf_tickers or set()
+    out: dict = {}
+    for d, hmap in (holdings_map or {}).items():
+        total = 0.0
+        blocked = False
+        for t, shares in (hmap or {}).items():
+            if shares is None or shares <= 1e-9:
+                continue
+            entry = price_lookup.get((t, d))
+            if entry is None:
+                blocked = True
+                break
+            price, tier = entry
+            if t in low_conf_tickers and tier != "exact":
+                blocked = True
+                break
+            total += shares * price
+        if blocked:
+            continue
+        out[d] = total
+    return out
+
+
+def low_confidence_dates(holdings_map: dict, low_conf_tickers: set) -> set:
+    """Every date in `holdings_map` where a ticker in `low_conf_tickers`
+    is held — the render layer's disclosure of which dates fall inside a
+    split-boundary confidence question for a held ticker, independent of
+    whether `gross_book_by_date` actually had to blank that specific date
+    (an exact snapshot match on the SAME date is still disclosed here,
+    since the ticker legitimately crosses a split boundary somewhere in
+    this window).
+
+    Returns an empty set when `low_conf_tickers` is empty/falsy.
+    """
+    out: set = set()
+    if not low_conf_tickers:
+        return out
+    for d, hmap in (holdings_map or {}).items():
+        for t, shares in (hmap or {}).items():
+            if t in low_conf_tickers and shares is not None and shares > 1e-9:
+                out.add(d)
+                break
     return out
 
 
@@ -512,51 +790,92 @@ def build_account_series(daily_cash: list[dict], gross_by_date: dict, recorded_d
 def validate_reconstruction(series: list[dict], recorded_df) -> dict:
     """Compare the reconstructed `cash_balance` against F-266's own RECORDED
     `cash_balance` on every overlap date — the reconstruction's only
-    independent check. A mismatch means the backward roll drifted (a missed
-    trade/flow/income row, a mis-signed delta, a golive-floor picked wrong)
-    and must be surfaced, never hidden — the render layer withholds every
-    money verdict spanning the reconstructed window when this fails (see
-    app.py's fail-safe wiring).
+    independent check on the CASH side. A mismatch means the backward roll
+    drifted (a missed trade/flow/income row, a mis-signed delta, a
+    golive-floor picked wrong) and must be surfaced, never hidden — the
+    render layer withholds every money verdict spanning the reconstructed
+    window when this fails (see app.py's fail-safe wiring / `render_gate`).
 
     Match iff `abs(drift) <= max(_RECON_ABS_TOL, _RECON_REL_TOL * abs(recorded))`.
     Overlap dates where the recorded row's `cash_balance` is None (F-266
     itself couldn't fill it that day, e.g. stale cash) are skipped — not
     evaluated, not counted as either a pass or a mismatch.
 
-    Returns {"ok": bool, "overlap_days": int, "mismatches": [...], "max_drift": float}.
+    ALSO computes an independent, ADVISORY-ONLY comparison on `gross_book`
+    (Decision 2, owner-locked 2026-09-11): reconstructed gross book is a
+    legitimate valuation that can differ from F-266's own recorded figure
+    for benign reasons (carry-forward vs. a fresh snapshot, a BUY-fill
+    price vs. a real close), so a gross mismatch is deliberately held to a
+    LOOSER tolerance (`_RECON_GROSS_REL_TOL`, 2% vs. cash's 0.5%) and must
+    NEVER affect `ok`/`mismatches`/`max_drift` above, nor `render_gate`'s
+    cash-driven `show_spanning_verdicts` decision — it is informational
+    only, surfaced as a caption, never a hard gate. An overlap date where
+    either side's gross book is None (a `daily_snapshots` gap on the
+    recorded side, or a reconstruction gap from an unresolvable price) is
+    skipped from the gross comparison entirely, same "skip, don't guess"
+    convention as the cash side's null-recorded-cash skip.
+
+    Returns {"ok": bool, "overlap_days": int, "mismatches": [...],
+    "max_drift": float, "gross_overlap_days": int,
+    "gross_mismatches": [...], "max_gross_drift": float}.
     `ok=True` with `overlap_days=0` is the correct (if uninformative) answer
     when the two windows never overlap — there's nothing to contradict.
     """
     recorded_cash: dict[_date, float] = {}
+    recorded_gross: dict[_date, float] = {}
     if recorded_df is not None and not recorded_df.empty and "snapshot_date" in recorded_df.columns:
         df = recorded_df.copy()
         df["_d"] = df["snapshot_date"].apply(_parse_date)
         df["_cb"] = pd.to_numeric(df.get("cash_balance"), errors="coerce")
+        df["_gb"] = pd.to_numeric(df.get("gross_book"), errors="coerce")
         for _, row in df.iterrows():
-            if row["_d"] is not None and pd.notna(row["_cb"]):
+            if row["_d"] is None:
+                continue
+            if pd.notna(row["_cb"]):
                 recorded_cash[row["_d"]] = float(row["_cb"])
+            if pd.notna(row["_gb"]):
+                recorded_gross[row["_d"]] = float(row["_gb"])
 
     mismatches = []
     max_drift = 0.0
     overlap_days = 0
+    gross_mismatches = []
+    max_gross_drift = 0.0
+    gross_overlap_days = 0
     for point in series:
         d = point["date"]
-        if d not in recorded_cash:
-            continue
-        overlap_days += 1
-        recon = point["cash_balance"]
-        rec = recorded_cash[d]
-        drift = recon - rec
-        tol = max(_RECON_ABS_TOL, _RECON_REL_TOL * abs(rec))
-        if abs(drift) > tol:
-            mismatches.append({"date": d, "reconstructed": recon, "recorded": rec, "drift": drift})
-        max_drift = max(max_drift, abs(drift))
+        if d in recorded_cash:
+            overlap_days += 1
+            recon = point["cash_balance"]
+            rec = recorded_cash[d]
+            drift = recon - rec
+            tol = max(_RECON_ABS_TOL, _RECON_REL_TOL * abs(rec))
+            if abs(drift) > tol:
+                mismatches.append({"date": d, "reconstructed": recon, "recorded": rec, "drift": drift})
+            max_drift = max(max_drift, abs(drift))
+
+        if d in recorded_gross:
+            recon_gross = point.get("gross_book")
+            if recon_gross is not None:
+                gross_overlap_days += 1
+                rec_gross = recorded_gross[d]
+                gdrift = recon_gross - rec_gross
+                gtol = max(_RECON_ABS_TOL, _RECON_GROSS_REL_TOL * abs(rec_gross))
+                if abs(gdrift) > gtol:
+                    gross_mismatches.append({
+                        "date": d, "reconstructed": recon_gross,
+                        "recorded": rec_gross, "drift": gdrift,
+                    })
+                max_gross_drift = max(max_gross_drift, abs(gdrift))
 
     return {
         "ok": len(mismatches) == 0,
         "overlap_days": overlap_days,
         "mismatches": mismatches,
         "max_drift": max_drift,
+        "gross_overlap_days": gross_overlap_days,
+        "gross_mismatches": gross_mismatches,
+        "max_gross_drift": max_gross_drift,
     }
 
 
@@ -574,6 +893,13 @@ def render_gate(validation: dict) -> dict:
     any number built on a mismatched reconstruction could be wrong by an
     unknown amount. Only the raw interest partition (which never touches the
     reconstruction) and any purely-recorded-window figures survive.
+
+    `ok` is driven ONLY by the CASH check — `validation`'s
+    `gross_overlap_days`/`gross_mismatches`/`max_gross_drift` fields are
+    deliberately never read here (Decision 2, owner-locked 2026-09-11): a
+    gross-book drift is advisory, surfaced by the render layer as a
+    separate caption, and must never withhold a verdict the way a cash
+    mismatch does.
 
     Returns {"show_spanning_verdicts": bool, "worst_mismatch": dict|None} —
     `worst_mismatch` is the single largest-|drift| entry from

@@ -32610,7 +32610,27 @@ elif page == "💰 Account":
                 _cvm_daily_cash = capital_vs_margin.reconstruct_daily_cash(
                     _cvm_anchor, _cvm_golive, _cvm_trades, _flows, _cvm_income,
                 )
-                _cvm_gross_by_date = capital_vs_margin.gross_book_by_date(_cvm_snaps)
+                # Gross book is reconstructed from HOLDINGS (the trades
+                # ledger), never from daily_snapshots alone — see the "THE
+                # BUG THIS SECTION FIXES" comment above
+                # capital_vs_margin.holdings_by_date for why: a snapshot-only
+                # gross book lags a same-day BUY, which produced a real
+                # artificial ~$9,500 V-shaped dip on this exact chart.
+                _cvm_holdings = capital_vs_margin.holdings_by_date(
+                    _cvm_trades, _cvm_golive, _cvm_anchor["date"],
+                )
+                _cvm_split_tk = capital_vs_margin.split_window_tickers(
+                    _cvm_trades, _cvm_golive, _cvm_anchor["date"],
+                )
+                _cvm_price_lookup = capital_vs_margin.build_price_lookup(
+                    _cvm_holdings, _cvm_snaps, _cvm_trades,
+                )
+                _cvm_gross_by_date = capital_vs_margin.gross_book_by_date(
+                    _cvm_holdings, _cvm_price_lookup, _cvm_split_tk,
+                )
+                _cvm_low_conf_dates_calc = capital_vs_margin.low_confidence_dates(
+                    _cvm_holdings, _cvm_split_tk,
+                )
                 _cvm_book_returns_calc = capital_vs_margin.book_daily_returns(_cvm_snaps)
                 _cvm_series_calc = capital_vs_margin.build_account_series(
                     _cvm_daily_cash, _cvm_gross_by_date, _lev_hist, MARGIN_MAINTENANCE_RATE,
@@ -32623,6 +32643,7 @@ elif page == "💰 Account":
                     "series": _cvm_series_calc,
                     "book_returns": _cvm_book_returns_calc,
                     "validation": _cvm_validation_calc,
+                    "low_conf_dates": _cvm_low_conf_dates_calc,
                 }
 
             _cvm_cache = st.session_state.get("_cvm_cache")
@@ -32633,7 +32654,12 @@ elif page == "💰 Account":
             _cvm_book_returns = _cvm_book_returns if _cvm_book_returns is not None else {}
             _cvm_validation = _cvm_cache.get("validation")
             if _cvm_validation is None:
-                _cvm_validation = {"ok": True, "mismatches": [], "overlap_days": 0, "max_drift": 0.0}
+                _cvm_validation = {
+                    "ok": True, "mismatches": [], "overlap_days": 0, "max_drift": 0.0,
+                    "gross_overlap_days": 0, "gross_mismatches": [], "max_gross_drift": 0.0,
+                }
+            _cvm_low_conf_dates = _cvm_cache.get("low_conf_dates")
+            _cvm_low_conf_dates = _cvm_low_conf_dates if _cvm_low_conf_dates is not None else set()
             _cvm_gate = capital_vs_margin.render_gate(_cvm_validation)
 
             if not _cvm_gate["show_spanning_verdicts"]:
@@ -32665,6 +32691,42 @@ elif page == "💰 Account":
                     "⚠️ Reconstruction not yet cross-checked — no overlap with recorded "
                     "F-266 history exists yet to validate against. Treat the figures "
                     "below as unverified until some recorded days accumulate."
+                )
+
+            # ── Gross-book advisories — informational only, NEVER a gate ──────
+            # Decision 2 (owner-locked 2026-09-11): unlike the cash self-check
+            # above, neither of these two notices can withhold a verdict —
+            # deliberately softer styling (st.caption, not st.error) so they
+            # don't read as the same class of problem as a cash mismatch.
+            if _cvm_low_conf_dates:
+                # low_confidence_dates() flags every day a split-window ticker is
+                # held, regardless of whether that day's price actually resolved
+                # via carry-forward — most such days have an exact snapshot match
+                # and are priced normally, not blanked. Count only the dates that
+                # were ACTUALLY blanked (gross_book is None) so this caption never
+                # overstates the real gap count to the owner.
+                _cvm_true_gaps = sum(
+                    1 for _r in _cvm_series
+                    if _r.get("date") in _cvm_low_conf_dates and _r.get("gross_book") is None
+                )
+                if _cvm_true_gaps:
+                    st.caption(
+                        f"ℹ️ {_cvm_true_gaps} day(s) in this window fall inside a "
+                        "stock split for a held ticker, where a carry-forward price "
+                        "can't be trusted against the post-split share count — those "
+                        "days are gaps in the gross-book series (never zero-filled or "
+                        "guessed), not an error. Other days near the split with an "
+                        "exact recorded price are priced normally."
+                    )
+            _cvm_gross_overlap = _cvm_validation.get("gross_overlap_days", 0)
+            if _cvm_gross_overlap:
+                st.caption(
+                    f"ℹ️ Gross-book advisory (informational — never withholds a verdict): "
+                    "reconstructed gross book vs. your recorded history differs by up to "
+                    f"{_cvm_dm(_cvm_validation.get('max_gross_drift', 0.0))} across "
+                    f"{_cvm_gross_overlap} overlap day(s). Some drift is expected — "
+                    "price timing/source can differ benignly — only the cash self-check "
+                    "above can withhold a verdict."
                 )
 
             # ── Interest paid — always shown, never touches the reconstruction ──

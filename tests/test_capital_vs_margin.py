@@ -194,16 +194,37 @@ def _snap_row(d, ticker, shares, close):
     return {"snapshot_date": d, "ticker": ticker, "shares": shares, "close_price": close}
 
 
-def test_gross_book_by_date_sums_and_never_zero_fills_gaps():
-    snaps = pd.DataFrame([
-        _snap_row("2026-08-18", "AAPL", 10, 100.0),
-        _snap_row("2026-08-18", "MSFT", 5, 200.0),
-        _snap_row("2026-08-19", "AAPL", 10, 110.0),
-    ])
-    out = cvm.gross_book_by_date(snaps)
-    assert out[date(2026, 8, 18)] == pytest.approx(1000.0 + 1000.0)
-    assert out[date(2026, 8, 19)] == pytest.approx(1100.0)
-    assert date(2026, 8, 20) not in out  # a gap day, never zero
+def test_gross_book_by_date_sums_and_never_zero_fills_unresolvable_price():
+    """`gross_book_by_date` now takes (holdings_map, price_lookup,
+    low_conf_tickers) — see the F-267 gross-book-recon fix. A date is a
+    genuine GAP only when a held ticker's price can't be resolved at all,
+    never when the date is simply "not in the snapshots" (that concept no
+    longer applies now that holdings come from the trade ledger)."""
+    d18, d19, d20 = date(2026, 8, 18), date(2026, 8, 19), date(2026, 8, 20)
+    holdings_map = {
+        d18: {"AAPL": 10.0, "MSFT": 5.0},
+        d19: {"AAPL": 10.0},
+        d20: {"AAPL": 10.0},   # AAPL price unresolvable this date -> gap
+    }
+    price_lookup = {
+        ("AAPL", d18): (100.0, "exact"),
+        ("MSFT", d18): (200.0, "exact"),
+        ("AAPL", d19): (110.0, "exact"),
+        # deliberately no ("AAPL", d20) entry
+    }
+    out = cvm.gross_book_by_date(holdings_map, price_lookup)
+    assert out[d18] == pytest.approx(1000.0 + 1000.0)
+    assert out[d19] == pytest.approx(1100.0)
+    assert d20 not in out  # unresolvable price -> a gap, never zero
+
+
+def test_gross_book_by_date_empty_holdings_is_a_genuine_zero():
+    """Unlike the old snapshot-only function, a date with a CONFIRMED-EMPTY
+    holdings map (the trade ledger says nothing is held) is a real 0.0, not
+    a gap -- the trade ledger is authoritative on what's held."""
+    d = date(2026, 8, 18)
+    out = cvm.gross_book_by_date({d: {}}, {})
+    assert out[d] == 0.0
 
 
 def test_book_daily_returns_fixed_weight_and_gap_never_zero():
