@@ -33365,9 +33365,39 @@ elif page == "💰 Account":
                     _sii_df.groupby(["month", "event_type"])["amount"]
                     .sum().unstack(fill_value=0.0)
                 )
+
+                # Monthly realized trading P&L, overlaid on the same month axis
+                # as the income events above. Reuses Trade Journal's own
+                # avg-cost monthly aggregation (trade_analytics.build_monthly_trend
+                # over trades.realized_pnl) so this number can never disagree
+                # with what Trade Journal already shows for the same month —
+                # the FIFO-lot P&L in investor_mirror.build_closed_lots is a
+                # different, incompatible convention and is deliberately not
+                # used here.
+                from stock_analyzer.trade_analytics import compute_extended_stats as _sii_ext_fn
+                from stock_analyzer.trade_analytics import build_monthly_trend as _sii_trend_fn
+                _sii_trades_df = st.session_state.get("trades_df")
+                if _sii_trades_df is None:
+                    _sii_trades_df = db.load_trades()
+                _sii_ext = _sii_ext_fn(_sii_trades_df)
+                _sii_monthly_pnl = _sii_trend_fn(_sii_ext) if not _sii_ext.empty else pd.DataFrame()
+                if not _sii_monthly_pnl.empty:
+                    _sii_pnl_idx = pd.to_datetime(_sii_monthly_pnl["month_str"])
+                    _sii_pnl_series = pd.Series(
+                        _sii_monthly_pnl["pnl"].values, index=_sii_pnl_idx
+                    ).reindex(_sii_piv.index, fill_value=0.0)
+                    _sii_pnl_trades = pd.Series(
+                        _sii_monthly_pnl["trade_count"].values, index=_sii_pnl_idx
+                    ).reindex(_sii_piv.index, fill_value=0)
+                else:
+                    _sii_pnl_series = pd.Series(0.0, index=_sii_piv.index)
+                    _sii_pnl_trades = pd.Series(0, index=_sii_piv.index)
+
                 import plotly.graph_objects as _sii_pgo
+                from plotly.subplots import make_subplots as _sii_subplots
                 _sii_colors = {"dividend": "#22c55e", "interest": "#3b82f6", "fee": "#ef4444"}
-                _sii_fig = _sii_pgo.Figure()
+                _sii_hover_labels = {"dividend": "Dividend", "interest": "Interest", "fee": "Fee"}
+                _sii_fig = _sii_subplots(specs=[[{"secondary_y": True}]])
                 for _et in ("dividend", "interest", "fee"):
                     if _et in _sii_piv.columns:
                         _sii_vals = _sii_piv[_et].abs()
@@ -33382,30 +33412,55 @@ elif page == "💰 Account":
                             textposition="inside",
                             insidetextanchor="middle",
                             textfont=dict(size=11, color="white"),
-                        ))
+                            hovertemplate=f"{_sii_hover_labels[_et]}: $%{{y:,.2f}}<extra></extra>",
+                        ), secondary_y=False)
+                _sii_fig.add_trace(_sii_pgo.Scatter(
+                    x=_sii_piv.index, y=_sii_pnl_series,
+                    name="Realized P&L (trades)",
+                    mode="lines+markers",
+                    line=dict(color="#a78bfa", width=2),
+                    marker=dict(
+                        color=["#22c55e" if v >= 0 else "#ef4444" for v in _sii_pnl_series],
+                        size=7,
+                    ),
+                    customdata=_sii_pnl_trades,
+                    hovertemplate="Realized P&L: $%{y:,.2f} (%{customdata} trade(s) closed)<extra></extra>",
+                ), secondary_y=True)
                 _sii_fig.update_layout(
                     barmode="stack", height=260,
                     margin=dict(l=0, r=0, t=20, b=0),
                     legend=dict(orientation="h", y=1.15, x=0),
+                    hovermode="x unified",
                     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    yaxis=dict(
-                        showticklabels=not _sii_chart_priv,
-                        tickprefix="$", gridcolor="rgba(128,128,128,0.15)",
-                    ),
+                )
+                _sii_fig.update_yaxes(
+                    showticklabels=not _sii_chart_priv,
+                    tickprefix="$", gridcolor="rgba(128,128,128,0.15)",
+                    secondary_y=False,
+                )
+                _sii_fig.update_yaxes(
+                    showticklabels=not _sii_chart_priv,
+                    tickprefix="$", showgrid=False,
+                    secondary_y=True,
                 )
                 st.plotly_chart(_sii_fig, width="stretch")
                 _sii_ytd = _sii_df[_sii_df["event_date"].dt.year == _today_et().year]
                 _sii_div_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "dividend", "amount"].sum()
                 _sii_int_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "interest", "amount"].sum()
                 _sii_fee_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "fee", "amount"].sum()
-                # Escape "$" -- three dollar figures in one caption is exactly
+                _sii_pnl_ytd = (
+                    _sii_ext.loc[_sii_ext["_dt"].dt.year == _today_et().year, "realized_pnl"].sum()
+                    if not _sii_ext.empty else 0.0
+                )
+                # Escape "$" -- four dollar figures in one caption is exactly
                 # the trigger for Streamlit's markdown renderer to misparse the
                 # pair as a LaTeX math delimiter instead of plain text (same
                 # class as feedback_streamlit_renderer_mismatch).
                 st.caption(
                     f"YTD: **+{_m(f'\\${_sii_div_ytd:,.2f}')}** dividends · "
                     f"**+{_m(f'\\${abs(_sii_int_ytd):,.2f}')}** interest · "
-                    f"**-{_m(f'\\${abs(_sii_fee_ytd):,.2f}')}** fees"
+                    f"**-{_m(f'\\${abs(_sii_fee_ytd):,.2f}')}** fees · "
+                    f"**{'+' if _sii_pnl_ytd >= 0 else '-'}{_m(f'\\${abs(_sii_pnl_ytd):,.2f}')}** realized P&L"
                 )
 
                 if not db.is_readonly():
@@ -35110,7 +35165,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 **7. ⚡ Broker Sync (optional) — automates the two manual habits above for Robinhood.** Open the 💰 Account page's **"🔌 Brokerage Trend"** tab for the "⚡ Broker Sync" section, which connects Robinhood via **SnapTrade** (a middleman service — the app never sees your Robinhood login). Once connected, a background job keeps your **cash balance** current automatically (the "Cash as of" line at the top of the Account page shows when it last synced), and shows:
 - **Position drift** — a live comparison of what Robinhood actually holds vs. what's logged in this app (three buckets: Robinhood-only, App-only, quantity mismatches). Awareness only — it never edits your trades or holdings for you; you reconcile it yourself the same way you always have.
 - **Pending trade imports** — buy/sell activity Robinhood reports that couldn't be auto-matched to a trade you already logged (the match requires an exact date and price, so a manually-logged trade with a slightly different date often lands here even though nothing's actually missing). This is a **different, stricter check than Position Drift above** — a row can appear here even when that ticker's drift is completely clean, and the page will tell you so. Each pending row now shows **"App: X sh logged · Robinhood: Y sh held"** directly beneath the transaction so you can tally without visiting the Portfolio page: matching counts confirm it's likely already logged with a slightly different date or price; differing counts flag it as a real gap. Nothing is written automatically: each row has a **"Log This Trade →"** button that opens the Trade Journal with ticker/shares/price/date already locked in from the real fill — you still choose a trigger reason and write the required pre-mortem (labeled "Retrospective" since the trade already happened), same as any other Buy. A ✗ button lets you back out of a locked import at any point without logging it. If it's already logged, use **"Already logged"** instead to clear the row without touching your trades.
-- **Cash Activity** — a monthly trend of dividends, interest, and fees, purely for visibility (it never feeds your Growth/Return numbers above — those stay driven by the deposits/withdrawals you log). The 💵 Cash Activity chart pulls from your **SnapTrade broker sync** when available; if SnapTrade doesn't receive dividend/interest/fee details from your broker (a known gap with Robinhood), you can **manually upload your Robinhood statement** via the "📥 Import from Robinhood Statement" expander below the chart — download a CSV from your broker's Statements page and paste it to backfill the months that were missed.
+- **Cash Activity** — a monthly trend of dividends, interest, and fees, purely for visibility (it never feeds your Growth/Return numbers above — those stay driven by the deposits/withdrawals you log). The 💵 Cash Activity chart pulls from your **SnapTrade broker sync** when available; if SnapTrade doesn't receive dividend/interest/fee details from your broker (a known gap with Robinhood), you can **manually upload your Robinhood statement** via the "📥 Import from Robinhood Statement" expander below the chart — download a CSV from your broker's Statements page and paste it to backfill the months that were missed. A **Realized P&L (trades)** line is overlaid on the same chart, showing how much your closed trades actually made or lost each month — the same avg-cost figure your 📒 Trade Journal's Monthly Realized P&L Trend already shows, so the two never disagree. Hover any month to see dividends, interest, fees, and realized P&L together in one tooltip.
 
 Setup is a one-time, three-step process shown on the page itself (it needs a free SnapTrade Personal API Key and one Railway environment variable pair — not something done from inside the app in one click). Broker Sync **supplements** the manual habits above — you can still enter cash by hand and log trades manually any time, connected or not.
 """
