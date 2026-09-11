@@ -4621,7 +4621,7 @@ def load_snaptrade_income_events(since_date: str | None = None) -> list[dict]:
     try:
         q = (
             _client().table("snaptrade_income_events")
-            .select("id,event_type,ticker,amount,event_date,fetched_at")
+            .select("id,snaptrade_txn_id,event_type,ticker,amount,event_date,fetched_at")
         )
         if since_date:
             q = q.gte("event_date", since_date)
@@ -4662,12 +4662,48 @@ def save_snaptrade_income_events(rows: list[dict]) -> int:
         ]
         if not records:
             return 0
-        _client().table("snaptrade_income_events").upsert(
+        resp = _client().table("snaptrade_income_events").upsert(
             records,
             on_conflict="snaptrade_txn_id",
             ignore_duplicates=True,
         ).execute()
         return len(records)
+    except Exception:
+        return 0
+
+
+def save_income_events_from_csv(rows: list[dict]) -> int:
+    """Upsert CSV-sourced income-event rows into snaptrade_income_events and
+    return the count of rows that were NEW (not already present).
+
+    All rows from broker_sync.parse_robinhood_csv_income() carry a synthetic
+    snaptrade_txn_id (prefix `csv:`), so unlike save_snaptrade_income_events
+    there is no id-less row to drop — every row is dedup-safe to upsert.
+
+    Uses ON CONFLICT DO NOTHING (ignore_duplicates=True); Supabase returns
+    only the actually-inserted rows in resp.data, so len(resp.data) is the
+    count of new rows (not dupes). Returns 0 on any failure or empty input.
+    This table is DISPLAY/TREND ONLY — never a gate or return calculation."""
+    if is_readonly(): return 0
+    if not has_db() or not rows:
+        return 0
+    try:
+        records = [
+            {
+                "snaptrade_txn_id": r["snaptrade_txn_id"],
+                "event_type":       r["event_type"],
+                "ticker":           r.get("ticker"),
+                "amount":           r["amount"],
+                "event_date":       r["event_date"],
+            }
+            for r in rows
+        ]
+        resp = _client().table("snaptrade_income_events").upsert(
+            records,
+            on_conflict="snaptrade_txn_id",
+            ignore_duplicates=True,
+        ).execute()
+        return len(resp.data) if resp.data else 0
     except Exception:
         return 0
 

@@ -37,6 +37,9 @@ contribution, and must never land there). Dividends/interest/fees go to
 from __future__ import annotations
 
 import collections
+import csv
+import io
+import math
 
 import pandas as pd
 
@@ -829,3 +832,88 @@ def _is_stale(captured_at, now_et, stale_hours) -> bool:
         return (now - ts).total_seconds() > float(stale_hours) * 3600.0
     except (TypeError, ValueError):
         return True
+
+
+# ---------------------------------------------------------------------------
+# Robinhood CSV income parser
+# ---------------------------------------------------------------------------
+
+_RH_INCOME_CODES: dict[str, str] = {
+    "CDIV": "dividend",
+    "MDIV": "dividend",
+    "INT":  "interest",
+    "GMPC": "interest",
+    "MINT": "fee",
+    "GOLD": "fee",
+}
+
+_RH_FEE_CODES = {"MINT", "GOLD"}
+
+
+def parse_robinhood_csv_income(csv_text: str) -> list[dict]:
+    """Parse a Robinhood account-statement CSV and return income-event rows.
+
+    Filters to the six Robinhood transaction codes that map to
+    dividend/interest/fee income (CDIV, MDIV, INT, GMPC, MINT, GOLD).
+    Returns a list of dicts ready for db.save_income_events_from_csv();
+    returns [] on any parse failure — never raises.
+
+    Each returned dict has:
+        snaptrade_txn_id  str   deterministic dedup key: csv:{date}:{code}:{ticker}:{cents}
+        event_type        str   "dividend" | "interest" | "fee"
+        ticker            str | None
+        amount            float  negative for fee rows (MINT, GOLD)
+        event_date        str   ISO date (YYYY-MM-DD)
+    """
+    try:
+        rows = []
+        reader = csv.DictReader(io.StringIO(csv_text))
+        for row in reader:
+            code = (row.get("Trans Code") or "").strip().upper()
+            if code not in _RH_INCOME_CODES:
+                continue
+
+            # --- date ---
+            raw_date = (row.get("Activity Date") or "").strip()
+            try:
+                from datetime import datetime as _dt
+                event_date = _dt.strptime(raw_date, "%m/%d/%Y").date().isoformat()
+            except ValueError:
+                continue  # unparseable date — skip row
+
+            # --- amount ---
+            raw_amount = (row.get("Amount") or "").strip()
+            raw_amount = raw_amount.replace("$", "").replace(",", "")
+            # Robinhood wraps negatives in parentheses: (36.59)
+            if raw_amount.startswith("(") and raw_amount.endswith(")"):
+                raw_amount = "-" + raw_amount[1:-1]
+            try:
+                amount = float(raw_amount)
+            except ValueError:
+                continue
+            if not math.isfinite(amount):
+                continue
+
+            # Fees are stored as negative so the chart can style them correctly
+            if code in _RH_FEE_CODES and amount > 0:
+                amount = -amount
+
+            # --- ticker ---
+            ticker = (row.get("Instrument") or "").strip() or None
+
+            # --- dedup key: use signed cents so a same-day CDIV reversal
+            # (opposite sign, same magnitude) gets a distinct key ---
+            cents = round(amount * 100)
+            ticker_part = ticker or ""
+            snaptrade_txn_id = f"csv:{event_date}:{code}:{ticker_part}:{cents}"
+
+            rows.append({
+                "snaptrade_txn_id": snaptrade_txn_id,
+                "event_type": _RH_INCOME_CODES[code],
+                "ticker": ticker,
+                "amount": amount,
+                "event_date": event_date,
+            })
+        return rows
+    except Exception:
+        return []

@@ -222,12 +222,13 @@ def golive_floor(trades_df, flows_df, income_events: list[dict], daily_snapshots
       - `trades_df`: rows carrying a non-null `broker_txn_id`
         (SnapTrade-imported; `db.load_trades()`/`load_trades_or_none()`
         `select("*")`, so the column is present whenever the DDL has it).
-      - `income_events`: EVERY row is broker-synced by construction —
-        `db.save_snaptrade_income_events` only ever upserts rows carrying a
-        `snaptrade_txn_id` (id-less rows are dropped before saving, and
-        `load_snaptrade_income_events` doesn't even select that column back)
-        — so a loaded income event is never a manual entry, and its
-        `event_date` is usable directly.
+      - `income_events`: only rows whose `snaptrade_txn_id` does NOT start
+        with `csv:` are broker-synced. CSV-imported rows (prefix `csv:`)
+        are manual uploads and may span dates before broker go-live —
+        using them for floor detection would pull `ledger_floor` earlier
+        than the actual broker-sync start date. `load_snaptrade_income_events`
+        now selects `snaptrade_txn_id`; rows missing the field or prefixed
+        `csv:` are excluded from floor candidates (see filter below).
       - `flows_df`: `db.load_account_flows()` selects only
         `id,flow_date,flow_type,amount,note` — no sync-id column is exposed
         by that loader — so `flows_df` is NOT used for floor DETECTION here
@@ -249,7 +250,11 @@ def golive_floor(trades_df, flows_df, income_events: list[dict], daily_snapshots
                 candidates.append(min(dates))
 
     if income_events:
-        dates = [_parse_date(e.get("event_date")) for e in income_events]
+        broker_events = [
+            e for e in income_events
+            if not str(e.get("snaptrade_txn_id") or "").startswith("csv:")
+        ]
+        dates = [_parse_date(e.get("event_date")) for e in broker_events]
         dates = [d for d in dates if d is not None]
         if dates:
             candidates.append(min(dates))
