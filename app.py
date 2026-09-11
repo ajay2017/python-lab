@@ -33362,29 +33362,31 @@ elif page == "💰 Account":
                             key="rh_income_csv_uploader",
                         )
                         if _sii_csv_file is not None:
-                            from stock_analyzer import broker_sync as _bsync
-                            _sii_csv_text = _sii_csv_file.read().decode("utf-8", errors="replace")
-                            _sii_parsed = _bsync.parse_robinhood_csv_income(_sii_csv_text)
-                            if not _sii_parsed:
-                                st.warning(
-                                    "No income events found in the uploaded file. "
-                                    "Make sure you're uploading a Robinhood account "
-                                    "statement CSV (not a trade confirmation or tax doc)."
-                                )
-                            else:
-                                _sii_n_new = db.save_income_events_from_csv(_sii_parsed)
-                                if _sii_n_new > 0:
-                                    st.success(
-                                        f"{_sii_n_new} new income event"
-                                        f"{'s' if _sii_n_new != 1 else ''} imported. "
-                                        "The chart above will refresh now."
+                            _sii_import_done_key = f"_rh_import_done_{_sii_csv_file.file_id}"
+                            if not st.session_state.get(_sii_import_done_key):
+                                from stock_analyzer import broker_sync as _bsync
+                                _sii_csv_text = _sii_csv_file.read().decode("utf-8", errors="replace")
+                                _sii_parsed = _bsync.parse_robinhood_csv_income(_sii_csv_text)
+                                if not _sii_parsed:
+                                    st.warning(
+                                        "No income events found in the uploaded file. "
+                                        "Make sure you're uploading a Robinhood account "
+                                        "statement CSV (not a trade confirmation or tax doc)."
                                     )
-                                    st.rerun()
                                 else:
-                                    st.info(
-                                        f"All {len(_sii_parsed)} rows already recorded "
-                                        "— nothing new to import."
-                                    )
+                                    _sii_n_new = db.save_income_events_from_csv(_sii_parsed)
+                                    st.session_state[_sii_import_done_key] = True
+                                    if _sii_n_new > 0:
+                                        st.success(
+                                            f"{_sii_n_new} new income event"
+                                            f"{'s' if _sii_n_new != 1 else ''} imported — "
+                                            "scroll up to see the updated chart."
+                                        )
+                                    else:
+                                        st.info(
+                                            f"All {len(_sii_parsed)} rows already recorded "
+                                            "— nothing new to import."
+                                        )
 
 elif page == "🔔 Catalyst Watch":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
