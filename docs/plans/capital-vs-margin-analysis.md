@@ -151,3 +151,45 @@ to the latest non-None point instead of blindly trusting `series[-1]`
 (same gap-day root cause); added an explicit "not yet cross-checked" caption
 for the `overlap_days == 0` case (previously silent — absence of both the
 pass and fail captions read as "fine" when it actually meant "unvalidated").
+
+## 2026-09-11 — real defect found via live use, fixed (commit `02e6591`)
+
+Live use surfaced a genuine accuracy bug the initial ship missed: `cash_balance`
+(reconstructed from `trades`, dated to trade date) and `gross_book` (originally
+sourced ONLY from `daily_snapshots`) had different timing. A cluster of real
+BUYs — some after that day's EOD cron, some backdated broker imports the app
+didn't learn about for days — produced a real ~$9,500 artificial V-shaped dip
+on the live chart, confirmed by cross-referencing the owner's actual Trade
+History (not inferred). This also corrupted the "worst drawdown" episode
+selection, attributing a fake loss to margin amplification that never happened.
+
+**Fix (second `planner`+`implementer`+`reviewer` pass, both owner decisions
+confirmed 2026-09-11):** reconstruct HOLDINGS forward from `trades`
+(`holdings_by_date`, mirroring `db.recalculate_from_trades`'s existing
+transition logic verbatim) instead of depending solely on `daily_snapshots`
+coverage. Forward replay was chosen over backward specifically because it
+treats a SPLIT row as an absolute overwrite — a backward roll would need to
+*undo* a split ratio that isn't stored anywhere numeric, reintroducing the
+exact hard problem this plan's original Decision #2 worried about. Price each
+holding via `build_price_lookup`'s fallback chain: exact snapshot → carry-
+forward from a prior snapshot → the position's own BUY fill price for a
+never-yet-snapshotted new position (Decision 1: pricing at fill makes
+net_equity exactly continuous through a purchase by construction, no new I/O
+added to this pure module). A stock-split window is blanked, never guessed,
+for any date priced by carry-forward against post-split share counts.
+`validate_reconstruction` gained an advisory-only gross-book drift check
+(Decision 2: never a hard gate — only the pre-existing cash mismatch
+continues to withhold spanning verdicts, since a gross valuation difference
+can be legitimate). `reviewer`: SHIP, 0 blocking; 1 non-blocking (split-window
+caption overstated its gap count) fixed pre-commit. 22 new tests including
+regression tests reproducing both real patterns and a parity test against
+`db.recalculate_from_trades`. `book_daily_returns` confirmed unaffected,
+untouched. Full detail: `docs/shipped-log.md`, `docs/requirements.md` F-267.
+
+**Coordination note:** found while a peer session was independently fixing a
+different bug (F-268, Cash Activity never receiving real SnapTrade income
+events) touching the same input tables. Confirmed via direct peer-to-peer
+cross-session message that the two defects have independent root causes —
+the income-events table was completely empty, so it structurally could not
+have caused this V-shaped dip (a missing-income-baseline would be uniformly
+lower, not a sharp V). See memory `project_capital_vs_margin_analysis`.
