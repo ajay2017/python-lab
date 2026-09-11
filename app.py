@@ -33336,10 +33336,14 @@ elif page == "💰 Account":
                 _sii_div_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "dividend", "amount"].sum()
                 _sii_int_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "interest", "amount"].sum()
                 _sii_fee_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "fee", "amount"].sum()
+                # Escape "$" -- three dollar figures in one caption is exactly
+                # the trigger for Streamlit's markdown renderer to misparse the
+                # pair as a LaTeX math delimiter instead of plain text (same
+                # class as feedback_streamlit_renderer_mismatch).
                 st.caption(
-                    f"YTD: **+{_m(f'${_sii_div_ytd:,.2f}')}** dividends · "
-                    f"**+{_m(f'${_sii_int_ytd:,.2f}')}** interest · "
-                    f"**-{_m(f'${abs(_sii_fee_ytd):,.2f}')}** fees"
+                    f"YTD: **+{_m(f'\\${_sii_div_ytd:,.2f}')}** dividends · "
+                    f"**+{_m(f'\\${_sii_int_ytd:,.2f}')}** interest · "
+                    f"**-{_m(f'\\${abs(_sii_fee_ytd):,.2f}')}** fees"
                 )
 
 elif page == "🔔 Catalyst Watch":
