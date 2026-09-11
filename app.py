@@ -33448,8 +33448,16 @@ elif page == "💰 Account":
                 _sii_div_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "dividend", "amount"].sum()
                 _sii_int_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "interest", "amount"].sum()
                 _sii_fee_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "fee", "amount"].sum()
+                # _sii_ext["_dt"] can hold a MIX of tz-aware and tz-naive
+                # Timestamp objects (trades.traded_at has inconsistent ISO
+                # offsets across rows -- feedback_pandas_mixed_tz_parsing),
+                # which leaves the column object-dtype: neither `.dt.year`
+                # nor a blanket pd.to_datetime(...) tolerates that mix
+                # (both raise). Per-element .year sidesteps it entirely,
+                # since it works identically on aware and naive Timestamps.
+                _sii_pnl_years = _sii_ext["_dt"].apply(lambda d: d.year if pd.notna(d) else None)
                 _sii_pnl_ytd = (
-                    _sii_ext.loc[_sii_ext["_dt"].dt.year == _today_et().year, "realized_pnl"].sum()
+                    _sii_ext.loc[_sii_pnl_years == _today_et().year, "realized_pnl"].sum()
                     if not _sii_ext.empty else 0.0
                 )
                 # Escape "$" -- four dollar figures in one caption is exactly
