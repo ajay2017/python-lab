@@ -33364,29 +33364,42 @@ elif page == "💰 Account":
                         if _sii_csv_file is not None:
                             _sii_import_done_key = f"_rh_import_done_{_sii_csv_file.file_id}"
                             if not st.session_state.get(_sii_import_done_key):
+                                st.session_state[_sii_import_done_key] = True
                                 from stock_analyzer import broker_sync as _bsync
                                 _sii_csv_text = _sii_csv_file.read().decode("utf-8", errors="replace")
                                 _sii_parsed = _bsync.parse_robinhood_csv_income(_sii_csv_text)
                                 if not _sii_parsed:
-                                    st.warning(
+                                    st.session_state["_sii_import_msg"] = (
+                                        "warning",
                                         "No income events found in the uploaded file. "
                                         "Make sure you're uploading a Robinhood account "
                                         "statement CSV (not a trade confirmation or tax doc)."
                                     )
                                 else:
                                     _sii_n_new = db.save_income_events_from_csv(_sii_parsed)
-                                    st.session_state[_sii_import_done_key] = True
                                     if _sii_n_new > 0:
-                                        st.success(
+                                        st.session_state["_sii_import_msg"] = (
+                                            "success",
                                             f"{_sii_n_new} new income event"
-                                            f"{'s' if _sii_n_new != 1 else ''} imported — "
-                                            "scroll up to see the updated chart."
+                                            f"{'s' if _sii_n_new != 1 else ''} imported."
                                         )
                                     else:
-                                        st.info(
+                                        st.session_state["_sii_import_msg"] = (
+                                            "info",
                                             f"All {len(_sii_parsed)} rows already recorded "
                                             "— nothing new to import."
                                         )
+                                # Rerun so the chart above (rendered earlier in this
+                                # same script pass, before the write above happened)
+                                # re-reads the DB and reflects the new data. Safe from
+                                # the double-run bug: _sii_import_done_key is already
+                                # set, so the rerun's pass through this block no-ops.
+                                st.rerun()
+
+                        _sii_pending_msg = st.session_state.pop("_sii_import_msg", None)
+                        if _sii_pending_msg:
+                            _sii_msg_kind, _sii_msg_text = _sii_pending_msg
+                            getattr(st, _sii_msg_kind)(_sii_msg_text)
 
 elif page == "🔔 Catalyst Watch":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
