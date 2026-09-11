@@ -188,6 +188,218 @@ def test_golive_floor_none_when_no_daily_snapshots_coverage():
     assert cvm.golive_floor(trades, [], [], pd.DataFrame()) is None
 
 
+# ── 2b. Late-trade anchor adjustment (F-267 3rd fix, 2026-09-11) ────────────
+
+def test_adjust_anchor_for_late_trades_real_example_roundtrip_zero_drift():
+    """The exact real bug: BUY 15 ON @ $74.00 = $1,110.00 filed at
+    2026-09-11 17:07 ET, AFTER the last account_cash sync that day. Before
+    this fix, reconstruct_daily_cash's backward step un-does that trade
+    against an anchor that never actually counted it, producing a
+    self-check drift of EXACTLY $1,110.00 (confirmed live). This proves the
+    round-trip closes to exactly zero, not merely that the adjustment
+    function returns a plausible number."""
+    d_anchor = date(2026, 9, 11)
+    golive = date(2026, 9, 10)
+    original_live_cash = -12424.0  # the raw (pre-bug) live-sync figure
+
+    trades = _trades_df([
+        {"traded_at": "2026-09-11T17:07:00-04:00", "action": "BUY", "shares": 15,
+         "price": 74.0, "broker_txn_id": "t1", "traded_at_time_known": True},
+    ])
+    account_cash_rec = {"cash_balance": original_live_cash,
+                         "updated_at": "2026-09-11T14:00:00-04:00"}
+    anchor = {"cash": original_live_cash, "date": d_anchor, "src": "live"}
+
+    adjusted = cvm.adjust_anchor_for_late_trades(anchor, account_cash_rec, trades)
+    assert adjusted["cash"] == pytest.approx(original_live_cash + (15 * -74.0))
+    assert adjusted["cash"] == pytest.approx(-13534.0)
+    assert adjusted["late_trade_adjustment"] == pytest.approx(-1110.0)
+    assert adjusted["late_trade_count"] == 1
+
+    series = cvm.reconstruct_daily_cash(adjusted, golive, trades, [], [])
+    by_date = {r["date"]: r["cash_balance"] for r in series}
+    # The PRIOR day's reconstructed cash must land EXACTLY on the original
+    # (pre-adjustment) live-sync figure -- zero drift.
+    assert by_date[date(2026, 9, 10)] == pytest.approx(original_live_cash, abs=1e-9)
+
+
+def test_adjust_anchor_for_late_trades_strict_after_boundary():
+    """A trade timestamped EXACTLY at the sync time does not qualify (tied
+    -- treated as already-reflected, the conservative choice against
+    double-counting); one second later does."""
+    d_anchor = date(2026, 9, 11)
+    account_cash_rec = {"cash_balance": -1000.0, "updated_at": "2026-09-11T14:00:00-04:00"}
+    anchor = {"cash": -1000.0, "date": d_anchor, "src": "live"}
+
+    tie_trades = _trades_df([
+        {"traded_at": "2026-09-11T14:00:00-04:00", "action": "BUY", "shares": 1,
+         "price": 50.0, "broker_txn_id": "t1", "traded_at_time_known": True},
+    ])
+    result_tie = cvm.adjust_anchor_for_late_trades(anchor, account_cash_rec, tie_trades)
+    assert result_tie == anchor
+    assert "late_trade_adjustment" not in result_tie
+
+    after_trades = _trades_df([
+        {"traded_at": "2026-09-11T14:00:01-04:00", "action": "BUY", "shares": 1,
+         "price": 50.0, "broker_txn_id": "t2", "traded_at_time_known": True},
+    ])
+    result_after = cvm.adjust_anchor_for_late_trades(anchor, account_cash_rec, after_trades)
+    assert result_after["cash"] == pytest.approx(-1050.0)
+    assert result_after["late_trade_count"] == 1
+
+
+def test_adjust_anchor_for_late_trades_before_sync_same_day_no_adjustment():
+    anchor = {"cash": -1000.0, "date": date(2026, 9, 11), "src": "live"}
+    account_cash_rec = {"cash_balance": -1000.0, "updated_at": "2026-09-11T14:00:00-04:00"}
+    trades = _trades_df([
+        {"traded_at": "2026-09-11T09:00:00-04:00", "action": "BUY", "shares": 1,
+         "price": 50.0, "broker_txn_id": "t1", "traded_at_time_known": True},   # before the sync -- already reflected
+    ])
+    result = cvm.adjust_anchor_for_late_trades(anchor, account_cash_rec, trades)
+    assert result == anchor
+
+
+def test_adjust_anchor_for_late_trades_different_day_no_adjustment():
+    """Later in absolute time, but a DIFFERENT ET calendar date than the
+    anchor's own date -- outside the backward-reconstruction window this
+    anchor governs."""
+    anchor = {"cash": -1000.0, "date": date(2026, 9, 11), "src": "live"}
+    account_cash_rec = {"cash_balance": -1000.0, "updated_at": "2026-09-11T14:00:00-04:00"}
+    trades = _trades_df([
+        {"traded_at": "2026-09-12T09:00:00-04:00", "action": "BUY", "shares": 1,
+         "price": 50.0, "broker_txn_id": "t1", "traded_at_time_known": True},
+    ])
+    result = cvm.adjust_anchor_for_late_trades(anchor, account_cash_rec, trades)
+    assert result == anchor
+
+
+def test_adjust_anchor_for_late_trades_recorded_src_returned_unchanged():
+    """A 'recorded' anchor is a complete historical EOD snapshot -- no
+    intraday-sync concept applies, even with a same-day-after-sync-looking
+    trade in the ledger."""
+    anchor = {"cash": -1000.0, "date": date(2026, 9, 11), "src": "recorded"}
+    account_cash_rec = {"cash_balance": -1000.0, "updated_at": "2026-09-11T14:00:00-04:00"}
+    trades = _trades_df([
+        {"traded_at": "2026-09-11T17:07:00-04:00", "action": "BUY", "shares": 15,
+         "price": 74.0, "broker_txn_id": "t1", "traded_at_time_known": True},
+    ])
+    result = cvm.adjust_anchor_for_late_trades(anchor, account_cash_rec, trades)
+    assert result == anchor
+    assert "late_trade_adjustment" not in result
+
+
+def test_adjust_anchor_for_late_trades_none_anchor_returns_none():
+    assert cvm.adjust_anchor_for_late_trades(None, {"updated_at": "2026-09-11T14:00:00-04:00"}, None) is None
+
+
+def test_adjust_anchor_for_late_trades_missing_or_bad_updated_at_fails_safe():
+    anchor = {"cash": -1000.0, "date": date(2026, 9, 11), "src": "live"}
+    trades = _trades_df([
+        {"traded_at": "2026-09-11T17:07:00-04:00", "action": "BUY", "shares": 15,
+         "price": 74.0, "broker_txn_id": "t1", "traded_at_time_known": True},
+    ])
+    assert cvm.adjust_anchor_for_late_trades(anchor, None, trades) == anchor
+    assert cvm.adjust_anchor_for_late_trades(anchor, {}, trades) == anchor
+    assert cvm.adjust_anchor_for_late_trades(
+        anchor, {"updated_at": "not-a-timestamp"}, trades
+    ) == anchor
+
+
+def test_adjust_anchor_for_late_trades_sell_split_and_multiple_summed():
+    """A SELL late trade increases cash; a SPLIT row on the same day after
+    the sync contributes exactly zero (already handled inside
+    `daily_pnl.today_trade_cash_delta`); multiple qualifying late trades on
+    the same day are summed correctly."""
+    anchor = {"cash": -1000.0, "date": date(2026, 9, 11), "src": "live"}
+    account_cash_rec = {"cash_balance": -1000.0, "updated_at": "2026-09-11T14:00:00-04:00"}
+    trades = _trades_df([
+        {"traded_at": "2026-09-11T15:00:00-04:00", "action": "SELL", "shares": 10,
+         "price": 20.0, "broker_txn_id": "t1", "traded_at_time_known": True},      # +200
+        {"traded_at": "2026-09-11T16:00:00-04:00", "action": "SPLIT", "shares": 40,
+         "price": 10.0, "broker_txn_id": "t2", "traded_at_time_known": True},      # contributes 0
+        {"traded_at": "2026-09-11T17:00:00-04:00", "action": "BUY", "shares": 5,
+         "price": 50.0, "broker_txn_id": "t3", "traded_at_time_known": True},      # -250
+    ])
+    result = cvm.adjust_anchor_for_late_trades(anchor, account_cash_rec, trades)
+    # +200 (SELL) + 0 (SPLIT) - 250 (BUY) = -50
+    assert result["cash"] == pytest.approx(-1050.0)
+    assert result["late_trade_adjustment"] == pytest.approx(-50.0)
+    assert result["late_trade_count"] == 3
+
+
+def test_adjust_anchor_for_late_trades_fallback_integrity_still_flags_genuine_problem():
+    """LOAD-BEARING: after correctly adjusting for a genuine late trade
+    (which eliminates that SPECIFIC false-positive drift), a SEPARATE,
+    unrelated, genuine data problem on a different date must still be
+    caught by validate_reconstruction/render_gate -- this fix must not
+    weaken the safety net for real problems."""
+    d_anchor = date(2026, 9, 11)
+    golive = date(2026, 9, 8)
+
+    trades = _trades_df([
+        {"traded_at": "2026-09-08T16:00:00-04:00", "action": "BUY", "shares": 10,
+         "price": 100.0, "broker_txn_id": "t1", "traded_at_time_known": True},
+        {"traded_at": "2026-09-11T17:07:00-04:00", "action": "BUY", "shares": 15,
+         "price": 74.0, "broker_txn_id": "t2", "traded_at_time_known": True},   # the late trade
+    ])
+    account_cash_rec = {"cash_balance": -12424.0, "updated_at": "2026-09-11T14:00:00-04:00"}
+    anchor = {"cash": -12424.0, "date": d_anchor, "src": "live"}
+
+    adjusted = cvm.adjust_anchor_for_late_trades(anchor, account_cash_rec, trades)
+    assert adjusted["cash"] == pytest.approx(-13534.0)
+
+    # A SEPARATE genuine problem: a real $500 dividend on 9/10 that this
+    # reconstruction's income_events list is (deliberately, for this test)
+    # missing -- simulating a dropped ledger row, an unrelated data gap.
+    series = cvm.reconstruct_daily_cash(adjusted, golive, trades, [], [])
+    recorded_df = pd.DataFrame([
+        {"snapshot_date": "2026-09-09", "cash_balance": -12924.0},
+    ])
+    validation = cvm.validate_reconstruction(series, recorded_df)
+    assert validation["ok"] is False
+    assert len(validation["mismatches"]) == 1
+    gate = cvm.render_gate(validation)
+    assert gate["show_spanning_verdicts"] is False
+
+
+def test_adjust_anchor_for_late_trades_broker_synced_stamp_not_adjusted():
+    """THE BUG THIS TEST GUARDS AGAINST: a broker-synced trade carries NO
+    real fill time -- `trade_time.normalize_traded_at` re-anchors it to a
+    FABRICATED 16:00 ET stamp and flags it `traded_at_time_known=False`
+    for exactly this reason (so a consumer needing a real time can exclude
+    it). Even though that fabricated 16:00 stamp falls AFTER this test's
+    sync time -- exactly the shape that would previously have been
+    wrongly adjusted -- it must NOT be treated as a genuine late trade:
+    comparing an invented time against a real sync time is a coin flip,
+    not evidence. Confirms the fix."""
+    anchor = {"cash": -1000.0, "date": date(2026, 9, 11), "src": "live"}
+    account_cash_rec = {"cash_balance": -1000.0, "updated_at": "2026-09-11T14:00:00-04:00"}
+    trades = _trades_df([
+        {"traded_at": "2026-09-11T16:00:00-04:00", "action": "BUY", "shares": 15,
+         "price": 74.0, "broker_txn_id": "t1", "traded_at_time_known": False},
+    ])
+    result = cvm.adjust_anchor_for_late_trades(anchor, account_cash_rec, trades)
+    assert result == anchor
+    assert "late_trade_adjustment" not in result
+
+
+def test_adjust_anchor_for_late_trades_manually_logged_confirmed_time_still_adjusted():
+    """Confirms the fix does NOT overcorrect: a manually-logged trade with
+    `traded_at_time_known=True` (a confirmed real fill time) still gets
+    adjusted -- this is the actual reported scenario, BUY 15 ON @ $74.00
+    filed at 2026-09-11 17:07 ET, AFTER the last sync."""
+    anchor = {"cash": -12424.0, "date": date(2026, 9, 11), "src": "live"}
+    account_cash_rec = {"cash_balance": -12424.0, "updated_at": "2026-09-11T14:00:00-04:00"}
+    trades = _trades_df([
+        {"traded_at": "2026-09-11T17:07:00-04:00", "action": "BUY", "shares": 15,
+         "price": 74.0, "broker_txn_id": "t1", "traded_at_time_known": True},
+    ])
+    result = cvm.adjust_anchor_for_late_trades(anchor, account_cash_rec, trades)
+    assert result["cash"] == pytest.approx(-13534.0)
+    assert result["late_trade_adjustment"] == pytest.approx(-1110.0)
+    assert result["late_trade_count"] == 1
+
+
 # ── 3. Book price-return + gross-book series ────────────────────────────────
 
 def _snap_row(d, ticker, shares, close):

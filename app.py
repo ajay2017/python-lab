@@ -32584,6 +32584,21 @@ elif page == "💰 Account":
         _cvm_anchor = capital_vs_margin.resolve_anchor(
             _acct, _lev_hist, ACCOUNT_CASH_STALE_DAYS, _now_et()
         )
+        # A live anchor can be labeled with today's date while the broker's
+        # last account_cash sync predates a trade the owner placed later
+        # that same day -- fold that trade's cash effect in now so the
+        # backward walk below doesn't "un-do" a trade the anchor never
+        # actually counted. See capital_vs_margin.adjust_anchor_for_late_
+        # trades' docstring for the confirmed real-world $1,110 example.
+        _cvm_anchor = capital_vs_margin.adjust_anchor_for_late_trades(
+            _cvm_anchor, _acct, _cvm_trades
+        )
+        if _cvm_anchor is not None and _cvm_anchor.get("late_trade_adjustment"):
+            st.caption(
+                f"ℹ️ Anchor adjusted by {_cvm_dm(abs(_cvm_anchor['late_trade_adjustment']))} "
+                f"for {_cvm_anchor['late_trade_count']} trade(s) logged since the last "
+                "broker sync, so today's figures already reflect them."
+            )
         _cvm_golive = (
             capital_vs_margin.golive_floor(_cvm_trades, _flows, _cvm_income, _cvm_snaps)
             if _cvm_anchor is not None else None
