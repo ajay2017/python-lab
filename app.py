@@ -33481,6 +33481,22 @@ elif page == "💰 Account":
                     f"**-{_m(f'\\${abs(_sii_fee_ytd):,.2f}')}** fees · "
                     f"**{'+' if _sii_pnl_ytd >= 0 else '-'}{_m(f'\\${abs(_sii_pnl_ytd):,.2f}')}** realized P&L"
                 )
+                # "Interest" nets earned (cash interest + Gold credit) against
+                # charged (margin interest) into one figure -- reuses the same
+                # capital_vs_margin.interest_partition/resolve_interest_charged
+                # pair the Capital vs Margin card already uses (confirmed sign
+                # convention, 2026-09-11) so this can never disagree with that
+                # card's own earned/charged split.
+                _sii_int_part = capital_vs_margin.interest_partition(_sii_ytd.to_dict("records"))
+                _sii_int_resolved = capital_vs_margin.resolve_interest_charged(_sii_int_part, "negative")
+                _sii_int_earned = _sii_int_resolved["earned"]
+                _sii_int_charged = _sii_int_resolved["charged"]
+                st.caption(
+                    f"↳ of which interest: **+{_m(f'\\${_sii_int_earned:,.2f}')}** earned "
+                    "(cash interest + Gold Plan Credit) vs. "
+                    f"**-{_m(f'\\${_sii_int_charged:,.2f}')}** charged (margin interest) "
+                    "— shown separately, never netted, so a credit can't mask a charge."
+                )
 
                 if not db.is_readonly():
                     with st.expander("📥 Import from Robinhood Statement"):
