@@ -32,17 +32,19 @@ caller passes `now`/dates in, same convention as `account.py`). Formulas
 that already exist in `margin.py` (`call_distance`, `shock_call_outcome`)
 are reused VERBATIM, never re-derived.
 
-INTEREST SIGN CONVENTION — UNCONFIRMED as of this build (2026-09-10).
-SnapTrade files interest earned on cash and margin interest charged under
-the same `event_type='interest'`; sign is the only distinguishing signal,
-and which sign this account's margin charges use has not yet been verified
-against real synced data (no interest events had landed as of this build).
-`interest_partition`/`resolve_interest_charged` below isolate the two
-magnitudes WITHOUT netting them, and every caller in this module passes
-`charged_sign=None` — ship as unconfirmed/disclosed. A future session must
-confirm the real convention (once real interest events exist, cross-check
-against the known margin_debit x rate x days magnitude, or a broker
-statement) and set `charged_sign` at the call site. Do NOT guess.
+INTEREST SIGN CONVENTION — CONFIRMED 2026-09-11 against the owner's real
+Robinhood statement CSV. Negative-signed `interest`-type rows are margin
+interest CHARGED; positive-signed rows are interest/credits EARNED. Proven
+via the `MINT` transaction code ("Aggregated Margin Rate" per the
+statement's own Description column — real margin interest, always
+negative-signed, 8 rows Jan-Aug 2026 totaling exactly $277.11, an exact
+match to an independent pivot-table cross-check) versus `GMPC`/`INT`
+("Gold Plan Credit"/"Brokerage-held Cash Interest Payment", both
+positive-signed credits). Every caller now passes `charged_sign="negative"`.
+`interest_partition`/`resolve_interest_charged` still isolate the two
+magnitudes WITHOUT netting them (never collapse to one number even though
+the convention is confirmed — the split itself is still the right display,
+just no longer disclosed as unverified).
 """
 from __future__ import annotations
 
@@ -158,13 +160,13 @@ def resolve_interest_charged(part: dict, charged_sign: str | None) -> dict:
     (`interest_partition`'s output), given which raw sign SnapTrade uses for
     a charge — `charged_sign` in {"negative", "positive", None}.
 
-    `charged_sign=None` (the current, unconfirmed state — see module
-    docstring): NEVER guessed. `confirmed=False` is returned, and the two
-    magnitudes are assigned to "charged"/"earned" using the negative leg as
-    the charged candidate — an arbitrary-but-documented display convention
-    (negative-signed = "money left the account" is the more common
-    bookkeeping convention) — the caller MUST disclose `confirmed=False`
-    rather than presenting the split as fact.
+    Every caller in this module now passes `charged_sign="negative"` — see
+    the module docstring's 2026-09-11 confirmation (the `MINT` transaction
+    code's real statement text proved negative-signed `interest` rows are
+    genuine margin interest charged). `charged_sign=None` remains supported
+    (returns `confirmed=False`, the negative leg as an unconfirmed display
+    candidate) for a future account where this hasn't been independently
+    verified — never pass it here as a guess once it IS known.
     """
     sum_neg = part.get("sum_neg_magnitude", 0.0)
     sum_pos = part.get("sum_pos_magnitude", 0.0)
@@ -1041,7 +1043,8 @@ def worst_drawdown_window(series: list[dict]) -> "tuple | None":
 
 
 def drawdown_decomposition(series: list[dict], book_returns: dict, start: "_date", end: "_date",
-                            income_events: "list[dict] | None" = None) -> dict:
+                            income_events: "list[dict] | None" = None,
+                            charged_sign: "str | None" = None) -> dict:
     """Decompose the ACTUAL change in levered `net_equity` between `start`
     and `end` (both must be present in `series` with a non-None
     `net_equity`) into what margin amplified vs. what would have happened
@@ -1094,7 +1097,7 @@ def drawdown_decomposition(series: list[dict], book_returns: dict, start: "_date
         d = _parse_date(e.get("event_date"))
         if d is not None and start < d <= end:
             windowed.append(e)
-    interest_in_episode = resolve_interest_charged(interest_partition(windowed), None)["charged"]
+    interest_in_episode = resolve_interest_charged(interest_partition(windowed), charged_sign)["charged"]
 
     return {
         "actual_change": actual_change,
@@ -1247,9 +1250,10 @@ def weekly_compounded_returns(daily_returns: dict) -> dict:
 def weekly_interest_charged(income_events: list[dict], charged_sign: "str | None" = None) -> dict:
     """Sum interest CHARGED per ISO week, from raw `snaptrade_income_events`
     rows — reuses `interest_partition`/`resolve_interest_charged` per week so
-    this can never drift from the top-level total's own (still-unconfirmed,
-    see module docstring) sign convention. `charged_sign` defaults to None
-    (unconfirmed), matching every other call site in this module.
+    this can never drift from the top-level total's own (confirmed, see
+    module docstring) sign convention. Callers now pass `charged_sign=
+    "negative"`; the `None` default remains only for a caller that hasn't
+    independently verified its own account's convention.
 
     Returns {(iso_year, iso_week): charged_magnitude}. A week with no
     interest events never appears."""

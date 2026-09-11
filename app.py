@@ -32731,20 +32731,20 @@ elif page == "💰 Account":
 
             # ── Interest paid — always shown, never touches the reconstruction ──
             _cvm_part = capital_vs_margin.interest_partition(_cvm_income)
-            _cvm_int = capital_vs_margin.resolve_interest_charged(_cvm_part, None)
+            _cvm_int = capital_vs_margin.resolve_interest_charged(_cvm_part, "negative")
             st.markdown(
                 f"💰 Interest since go-live: **{_cvm_dm(_cvm_int['charged'])}** "
-                f"(candidate *charged*) vs. **{_cvm_dm(_cvm_int['earned'])}** "
-                "(candidate *earned*) — never netted."
+                f"*charged* vs. **{_cvm_dm(_cvm_int['earned'])}** "
+                "*earned* — never netted."
             )
             st.caption(
-                "⚠️ **Unverified**: SnapTrade files margin interest charged and "
-                "cash interest earned under the same event type, distinguished "
-                "only by sign — which sign this account's charges use has not "
-                "yet been confirmed against real synced data. The split above "
-                "is shown, not netted, until that's confirmed; every verdict "
-                "below that depends on a total interest figure uses the "
-                "'charged' candidate and inherits the same caveat."
+                "✅ Sign convention confirmed 2026-09-11 against a real Robinhood "
+                "statement: negative-signed interest events are margin interest "
+                "charged (the `MINT` code — \"Aggregated Margin Rate\"), positive-"
+                "signed are credits earned. The split above is still shown, not "
+                "netted, so a charge and a credit in the same period never mask "
+                "each other; every verdict below that depends on a total interest "
+                "figure uses the confirmed 'charged' side."
             )
 
             if not _cvm_gate["show_spanning_verdicts"] or len(_cvm_series) < 2:
@@ -32762,7 +32762,7 @@ elif page == "💰 Account":
                     "Net Value Margin Added", _cvm_d(_cvm_mc["net_value"]),
                     help="Extra-exposure P&L minus interest paid — positive means "
                          "margin has been worth its cost so far; negative means it "
-                         "hasn't. Unverified interest sign, see caveat above.",
+                         "hasn't.",
                 )
                 _cvm_t2.metric(
                     "Extra-Exposure P&L", _cvm_d(_cvm_mc["extra_exposure_pnl"]),
@@ -32770,7 +32770,7 @@ elif page == "💰 Account":
                 )
                 _cvm_t3.metric(
                     "Interest Paid", _cvm_d(_cvm_mc["interest_paid"]),
-                    help="Candidate charged-interest total (unverified sign convention).",
+                    help="Confirmed charged-interest total (negative-signed events).",
                 )
 
                 # ── Equity curves chart ─────────────────────────────────────────
@@ -32906,7 +32906,7 @@ elif page == "💰 Account":
 
                 # ── Regime split ─────────────────────────────────────────────────
                 _cvm_weekly_returns = capital_vs_margin.weekly_compounded_returns(_cvm_book_returns)
-                _cvm_weekly_interest = capital_vs_margin.weekly_interest_charged(_cvm_income, None)
+                _cvm_weekly_interest = capital_vs_margin.weekly_interest_charged(_cvm_income, "negative")
                 _cvm_regime = capital_vs_margin.regime_split(
                     _cvm_series, _cvm_weekly_returns, _cvm_weekly_interest
                 )
@@ -32937,7 +32937,7 @@ elif page == "💰 Account":
                     _cvm_pk_date, _cvm_tr_date, _cvm_pk_val, _cvm_tr_val = _cvm_worst_dd
                     _cvm_dd = capital_vs_margin.drawdown_decomposition(
                         _cvm_series, _cvm_book_returns, _cvm_pk_date, _cvm_tr_date,
-                        income_events=_cvm_income,
+                        income_events=_cvm_income, charged_sign="negative",
                     )
                     st.caption(f"Worst peak-to-trough: **{_cvm_pk_date}** → **{_cvm_tr_date}**")
                     _cvm_dd1, _cvm_dd2, _cvm_dd3 = st.columns(3)
@@ -32947,7 +32947,7 @@ elif page == "💰 Account":
                     if _cvm_dd["interest_in_episode"]:
                         st.caption(
                             f"Plus {_cvm_dm(_cvm_dd['interest_in_episode'])} interest charged "
-                            "during this episode (candidate, unverified sign)."
+                            "during this episode."
                         )
 
                 # ── Deleverage scenario ───────────────────────────────────────────
