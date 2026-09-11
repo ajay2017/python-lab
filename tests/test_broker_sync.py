@@ -595,3 +595,58 @@ def test_one_logged_trade_is_never_suggested_to_two_pending_rows():
     out = bs.find_pending_match_candidates(pending, trades)
     assert len(out) == 1
     assert set(out.keys()) <= {10, 11}
+
+
+# ─── parse_robinhood_csv_income — MINT reclassification (2026-09-11) ───────
+# MINT's Description on the owner's real RH statement is "Aggregated Margin
+# Rate" — real margin interest charged, not a brokerage fee. It was misfiled
+# as "fee" until this date, which fed a false $0 into capital_vs_margin.py's
+# Interest Paid figure. GOLD/GMPC are pinned below as regression guards so
+# this fix cannot accidentally touch either (GMPC is separately flagged as
+# possibly also miscategorized but is NOT confirmed and is explicitly out of
+# scope).
+
+def _income_csv(code, amount_str, activity_date="01/15/2026", instrument=""):
+    return (
+        "Activity Date,Instrument,Trans Code,Amount\n"
+        f"{activity_date},{instrument},{code},{amount_str}\n"
+    )
+
+
+def test_mint_maps_to_interest_not_fee():
+    rows = bs.parse_robinhood_csv_income(_income_csv("MINT", "($36.59)"))
+    assert len(rows) == 1
+    assert rows[0]["event_type"] == "interest"
+    assert rows[0]["amount"] == -36.59
+
+
+def test_mint_amount_stays_negative_as_charged_on_real_statement_rows():
+    """MINT is no longer in _RH_FEE_CODES, so the sign is NOT force-flipped —
+    it is taken as-is, matching the real statement (already negative)."""
+    rows = bs.parse_robinhood_csv_income(_income_csv("MINT", "(12.34)"))
+    assert rows[0]["amount"] == -12.34
+
+
+def test_mint_dedup_key_matches_the_csv_prefix_format():
+    """Pins the exact snaptrade_txn_id shape the one-time production backfill
+    SQL's LIKE pattern depends on: csv:{date}:{code}:{ticker}:{cents}."""
+    rows = bs.parse_robinhood_csv_income(
+        _income_csv("MINT", "($36.59)", activity_date="01/15/2026")
+    )
+    assert rows[0]["snaptrade_txn_id"] == "csv:2026-01-15:MINT::-3659"
+
+
+def test_gold_still_maps_to_fee_regression_guard():
+    """This fix must not touch GOLD ('Gold Subscription Fee') — confirmed
+    correctly categorized already."""
+    rows = bs.parse_robinhood_csv_income(_income_csv("GOLD", "5.99"))
+    assert rows[0]["event_type"] == "fee"
+    assert rows[0]["amount"] == -5.99  # still fee-coded, still force-negated
+
+
+def test_gmpc_still_maps_to_interest_regression_guard():
+    """This fix must not touch GMPC ('Gold Plan Credit') — flagged as
+    possibly also miscategorized but explicitly out of scope for this fix."""
+    rows = bs.parse_robinhood_csv_income(_income_csv("GMPC", "2.00"))
+    assert rows[0]["event_type"] == "interest"
+    assert rows[0]["amount"] == 2.00  # never fee-coded — sign untouched

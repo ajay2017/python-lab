@@ -843,11 +843,16 @@ _RH_INCOME_CODES: dict[str, str] = {
     "MDIV": "dividend",
     "INT":  "interest",
     "GMPC": "interest",
-    "MINT": "fee",
+    "MINT": "interest",  # "Aggregated Margin Rate" — real margin interest
+                          # charged, not a brokerage fee. Confirmed against
+                          # the owner's actual RH statement (8 real rows,
+                          # Jan-Aug 2026, $277.11 total) — was misfiled as
+                          # "fee" until 2026-09-11, which fed a false $0
+                          # into capital_vs_margin.py's Interest Paid figure.
     "GOLD": "fee",
 }
 
-_RH_FEE_CODES = {"MINT", "GOLD"}
+_RH_FEE_CODES = {"GOLD"}
 
 
 def parse_robinhood_csv_income(csv_text: str) -> list[dict]:
@@ -862,7 +867,8 @@ def parse_robinhood_csv_income(csv_text: str) -> list[dict]:
         snaptrade_txn_id  str   deterministic dedup key: csv:{date}:{code}:{ticker}:{cents}
         event_type        str   "dividend" | "interest" | "fee"
         ticker            str | None
-        amount            float  negative for fee rows (MINT, GOLD)
+        amount            float  negative for fee (GOLD) and margin-interest
+                                  charge (MINT) rows
         event_date        str   ISO date (YYYY-MM-DD)
     """
     try:

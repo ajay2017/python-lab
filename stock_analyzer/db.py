@@ -839,6 +839,24 @@ the user acted on it):
     CREATE UNIQUE INDEX IF NOT EXISTS account_flows_txn_id_unique
         ON public.account_flows (snaptrade_txn_id)
         WHERE snaptrade_txn_id IS NOT NULL;
+
+    -- snaptrade_income_events MINT reclassification (one-time data fix,
+    -- 2026-09-11): broker_sync._RH_INCOME_CODES["MINT"] was "fee" and is now
+    -- "interest" — MINT's real Description on the owner's RH statement is
+    -- "Aggregated Margin Rate" (real margin interest charged), confirmed
+    -- against 8 real rows Jan-Aug 2026 totaling $277.11. The code fix only
+    -- affects rows imported AFTER this change; the 8 rows already imported
+    -- under the old "fee" mapping need this one-time UPDATE. The WHERE
+    -- clause matches on the dedup key's own :MINT: segment
+    -- (csv:{event_date}:{trans_code}:{ticker_or_empty}:{signed_cents}, e.g.
+    -- "csv:2026-01-15:MINT::-3659") rather than event_type='fee' alone, so it
+    -- cannot touch a GOLD row that happens to already be event_type='fee'.
+    -- Does NOT touch GMPC — that code is separately flagged as possibly also
+    -- miscategorized but unconfirmed, and is explicitly out of scope here.
+    UPDATE public.snaptrade_income_events
+    SET event_type = 'interest'
+    WHERE event_type = 'fee'
+      AND snaptrade_txn_id LIKE 'csv:%:MINT:%';
 """
 
 import os
