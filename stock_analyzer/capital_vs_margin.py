@@ -56,6 +56,7 @@ import pandas as pd
 from stock_analyzer.daily_pnl import today_trade_cash_delta as _trade_cash_delta
 from stock_analyzer.market_time import ET as _ET_TZ
 from stock_analyzer import margin as _margin
+from stock_analyzer.broker_sync import dedupe_income_events as _dedupe_income_events
 
 
 # ── Self-validation tolerance ──────────────────────────────────────────────
@@ -476,6 +477,14 @@ def reconstruct_daily_cash(anchor: dict, golive: "_date", trades_df, flows_df: l
             continue
         delta = amt if ftype == "deposit" else -amt
         flow_deltas[d] = flow_deltas.get(d, 0.0) + delta
+
+    # Read-side defense (F-268 cross-path dedup follow-on, 2026-09-11): a
+    # manual CSV statement import and the live SnapTrade cron can both have
+    # captured the SAME real dividend/interest/fee event under independent
+    # ids, so the raw list can carry a genuine duplicate — collapse those
+    # before summing per-day deltas, or a duplicated income event would
+    # fabricate a cash move on that day that never actually happened.
+    income_events = _dedupe_income_events(income_events or [])
 
     income_deltas: dict[_date, float] = {}
     for e in income_events or []:

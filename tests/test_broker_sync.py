@@ -13,7 +13,7 @@ diff of exactly BROKER_DRIFT_SHARE_TOL is NOT drift).
 import pandas as pd
 
 from stock_analyzer import broker_sync as bs
-from stock_analyzer.constants import BROKER_DRIFT_SHARE_TOL
+from stock_analyzer.constants import BROKER_DRIFT_SHARE_TOL, INCOME_EVENT_DEDUP_DATE_TOL_DAYS
 import pytest
 
 pytestmark = pytest.mark.fast
@@ -650,3 +650,206 @@ def test_gmpc_still_maps_to_interest_regression_guard():
     rows = bs.parse_robinhood_csv_income(_income_csv("GMPC", "2.00"))
     assert rows[0]["event_type"] == "interest"
     assert rows[0]["amount"] == 2.00  # never fee-coded — sign untouched
+
+
+def test_csv_income_rows_now_carry_raw_code():
+    """F-268 follow-on: raw_code feeds income_event_subtype's cross-path
+    match — every CSV row must carry the original Trans Code."""
+    rows = bs.parse_robinhood_csv_income(_income_csv("CDIV", "5.00"))
+    assert rows[0]["raw_code"] == "CDIV"
+
+
+# ─── income_event_subtype — the cross-path canonical mapping (2026-09-11) ──
+# The CSV path (Robinhood Trans Code) and the live SnapTrade path (`type`)
+# use two disjoint vocabularies for describing the same real-world events.
+# Matching on the raw string would never match across paths at all — these
+# tests pin the merge/no-merge decisions the whole dedup depends on.
+
+def test_cdiv_and_dividend_both_map_to_cash_dividend():
+    """Proves the merge works: CSV's CDIV and SnapTrade's DIVIDEND are the
+    SAME real event (a regular cash dividend) in two different vocabularies."""
+    assert bs.income_event_subtype("CDIV", "dividend") == "cash_dividend"
+    assert bs.income_event_subtype("DIVIDEND", "dividend") == "cash_dividend"
+
+
+def test_mdiv_and_substitute_dividend_both_map_to_manufactured_dividend():
+    assert bs.income_event_subtype("MDIV", "dividend") == "manufactured_dividend"
+    assert bs.income_event_subtype("SUBSTITUTE_DIVIDEND", "dividend") == "manufactured_dividend"
+
+
+def test_cdiv_and_mdiv_are_DIFFERENT_subtypes():
+    """Proves no false merge: a regular cash dividend and a manufactured/
+    substitute dividend are genuinely different real-world events and must
+    never collapse into one subtype, even though both share event_type=
+    "dividend" in the DB today."""
+    assert bs.income_event_subtype("CDIV", "dividend") != bs.income_event_subtype("MDIV", "dividend")
+
+
+def test_mint_is_its_own_subtype_not_plain_interest():
+    """MINT (confirmed real margin interest) is deliberately NOT merged into
+    plain "interest" — whether SnapTrade's live INTEREST type ever represents
+    the same underlying charge is unconfirmed."""
+    mint_subtype = bs.income_event_subtype("MINT", "interest")
+    assert mint_subtype == "margin_interest"
+    assert mint_subtype != bs.income_event_subtype("INT", "interest")
+    assert mint_subtype != bs.income_event_subtype("INTEREST", "interest")
+
+
+def test_unrecognized_raw_code_falls_back_to_event_type():
+    assert bs.income_event_subtype("SOME_FUTURE_CODE", "fee") == "fee"
+
+
+def test_none_raw_code_falls_back_to_event_type():
+    """Legacy rows persisted before the raw_code column existed."""
+    assert bs.income_event_subtype(None, "interest") == "interest"
+
+
+# ─── dedupe_income_events — read-side cross-path duplicate collapse ────────
+
+def _ev(ticker, event_type, raw_code, amount, event_date, txn_id):
+    return {
+        "snaptrade_txn_id": txn_id,
+        "event_type": event_type,
+        "raw_code": raw_code,
+        "ticker": ticker,
+        "amount": amount,
+        "event_date": event_date,
+    }
+
+
+def test_empty_and_none_input_returns_empty_list():
+    assert bs.dedupe_income_events([]) == []
+
+
+def test_no_duplicates_returns_all_rows_unchanged():
+    events = [
+        _ev("AAPL", "dividend", "CDIV", 5.00, "2026-06-01", "csv:1"),
+        _ev("MSFT", "dividend", "CDIV", 3.00, "2026-06-01", "csv:2"),
+    ]
+    out = bs.dedupe_income_events(events)
+    assert len(out) == 2
+
+
+def test_cross_vocabulary_duplicate_is_collapsed_csv_wins():
+    """The load-bearing case: a CDIV CSV row and a DIVIDEND live-sync row for
+    the SAME real event (same ticker, same signed amount, dates within
+    tolerance) must collapse to ONE row, and the CSV-sourced one must survive
+    per the user's own stated tie-break preference."""
+    csv_row = _ev("AAPL", "dividend", "CDIV", 12.34, "2026-06-01", "csv:2026-06-01:CDIV:AAPL:1234")
+    live_row = _ev("AAPL", "dividend", "DIVIDEND", 12.34, "2026-06-02", "live-uuid-1")
+    out = bs.dedupe_income_events([live_row, csv_row])
+    assert len(out) == 1
+    assert out[0]["snaptrade_txn_id"] == "csv:2026-06-01:CDIV:AAPL:1234"
+
+
+def test_opposite_sign_same_magnitude_is_NOT_collapsed():
+    """A real dividend and a same-day reversal/correction share magnitude but
+    opposite sign — these are two distinct real cash movements, not a
+    duplicate pair."""
+    charge = _ev(None, "fee", "GOLD", -5.99, "2026-06-01", "csv:a")
+    reversal = _ev(None, "fee", "GOLD", 5.99, "2026-06-01", "csv:b")
+    out = bs.dedupe_income_events([charge, reversal])
+    assert len(out) == 2
+
+
+def test_date_within_tolerance_is_collapsed():
+    a = _ev("AAPL", "dividend", "CDIV", 10.00, "2026-06-01", "csv:a")
+    b = _ev("AAPL", "dividend", "DIVIDEND", 10.00,
+            (pd.Timestamp("2026-06-01") + pd.Timedelta(days=INCOME_EVENT_DEDUP_DATE_TOL_DAYS)).date().isoformat(),
+            "live:b")
+    out = bs.dedupe_income_events([a, b])
+    assert len(out) == 1
+
+
+def test_date_just_past_tolerance_is_NOT_collapsed():
+    a = _ev("AAPL", "dividend", "CDIV", 10.00, "2026-06-01", "csv:a")
+    b = _ev("AAPL", "dividend", "DIVIDEND", 10.00,
+            (pd.Timestamp("2026-06-01") + pd.Timedelta(days=INCOME_EVENT_DEDUP_DATE_TOL_DAYS + 1)).date().isoformat(),
+            "live:b")
+    out = bs.dedupe_income_events([a, b])
+    assert len(out) == 2
+
+
+def test_mint_and_int_are_never_collapsed_together():
+    """MINT (margin_interest) and INT (interest) are different subtypes even
+    at the same ticker/amount/date — the non-merge decision must hold in the
+    actual dedup pass, not just in income_event_subtype's mapping."""
+    mint_row = _ev(None, "interest", "MINT", -36.59, "2026-06-01", "csv:mint")
+    int_row = _ev(None, "interest", "INT", -36.59, "2026-06-01", "csv:int")
+    out = bs.dedupe_income_events([mint_row, int_row])
+    assert len(out) == 2
+
+
+def test_legacy_rows_with_no_raw_code_still_dedup_via_event_type_fallback():
+    """Two legacy rows (raw_code=None) sharing ticker/event_type/amount/date
+    still collapse, using event_type as the fallback subtype."""
+    a = _ev("AAPL", "dividend", None, 10.00, "2026-06-01", "csv:a")
+    b = _ev("AAPL", "dividend", None, 10.00, "2026-06-01", "live:b")
+    out = bs.dedupe_income_events([a, b])
+    assert len(out) == 1
+
+
+def test_does_not_mutate_input_income_events():
+    events = [_ev("AAPL", "dividend", "CDIV", 5.00, "2026-06-01", "csv:a")]
+    before = [dict(e) for e in events]
+    bs.dedupe_income_events(events)
+    assert events == before
+
+
+# ─── classify_transactions' write-time income dedup (existing_income_events) ─
+
+def _txn(ttype, amount, trade_date="2026-06-01", ticker=None, txn_id="live-1"):
+    t = {"type": ttype, "amount": amount, "trade_date": trade_date, "id": txn_id}
+    if ticker is not None:
+        t["symbol"] = ticker
+    return t
+
+
+def test_no_existing_income_events_param_is_backward_compatible():
+    """Omitting existing_income_events (the default) must not change
+    behaviour for callers that haven't been updated yet."""
+    out = bs.classify_transactions([_txn("DIVIDEND", 5.00, ticker="AAPL")], pd.DataFrame())
+    assert len(out["income_events"]) == 1
+
+
+def test_a_live_activity_matching_an_existing_csv_row_is_suppressed():
+    existing = [_ev("AAPL", "dividend", "CDIV", 5.00, "2026-06-01", "csv:2026-06-01:CDIV:AAPL:500")]
+    out = bs.classify_transactions(
+        [_txn("DIVIDEND", 5.00, trade_date="2026-06-01", ticker="AAPL")],
+        pd.DataFrame(),
+        existing_income_events=existing,
+    )
+    assert out["income_events"] == []
+    assert out["ignored"].get("DIVIDEND (cross-path duplicate)") == 1
+
+
+def test_a_non_matching_live_activity_is_not_suppressed():
+    existing = [_ev("AAPL", "dividend", "CDIV", 5.00, "2026-06-01", "csv:2026-06-01:CDIV:AAPL:500")]
+    out = bs.classify_transactions(
+        [_txn("DIVIDEND", 9.99, trade_date="2026-06-01", ticker="AAPL")],
+        pd.DataFrame(),
+        existing_income_events=existing,
+    )
+    assert len(out["income_events"]) == 1
+
+
+def test_new_income_events_carry_raw_code():
+    out = bs.classify_transactions([_txn("INTEREST", -1.23, ticker=None)], pd.DataFrame())
+    assert out["income_events"][0]["raw_code"] == "INTEREST"
+
+
+def test_one_existing_row_cannot_suppress_two_new_activities():
+    """The 'consume on match' guard: one existing CSV row must not explain
+    away two distinct new live activities in the same batch."""
+    existing = [_ev("AAPL", "dividend", "CDIV", 5.00, "2026-06-01", "csv:2026-06-01:CDIV:AAPL:500")]
+    out = bs.classify_transactions(
+        [
+            _txn("DIVIDEND", 5.00, trade_date="2026-06-01", ticker="AAPL", txn_id="live-a"),
+            _txn("DIVIDEND", 5.00, trade_date="2026-06-01", ticker="AAPL", txn_id="live-b"),
+        ],
+        pd.DataFrame(),
+        existing_income_events=existing,
+    )
+    # First one matches and is suppressed; the second (no more existing rows
+    # left in that bucket) is genuinely new and must pass through.
+    assert len(out["income_events"]) == 1

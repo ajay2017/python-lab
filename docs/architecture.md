@@ -531,6 +531,7 @@ before tuning. See §6.29 (`judgment_opinions` table) and
 | `SNAPTRADE_BALANCE_STALE_HOURS` | 25 | SnapTrade broker integration — max age of the last successful SnapTrade balance sync before the 💰 Account page shows a stale-data banner rather than trusting an old `account_cash` row. 25h (not 24h) mirrors the existing daily-cron-lane staleness convention elsewhere, absorbing normal cron-fire jitter past a strict 24h cycle. Display-only staleness gate. |
 | `SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS` | 90 | SnapTrade broker integration — bounds the `broker` cron lane's transaction-history fetch window (days back from now). Prevents an unbounded historical pull on first connect or after a long SnapTrade/cron outage; anything older is expected to already be in `trades` via manual/CSV entry. Data-integrity/operational bound, not an investment threshold. |
 | `SNAPTRADE_REQUEST_TIMEOUT_SEC` | 15 | SnapTrade broker integration — per-call wall-clock timeout for `stock_analyzer/snaptrade_client.py`. Same operational-cap convention as `DATA_YF_REQUEST_TIMEOUT_SEC` — bounds a single hung SnapTrade call so the `broker` cron lane fails loud instead of blocking the job budget. |
+| `INCOME_EVENT_DEDUP_DATE_TOL_DAYS` | 3 | 2026-09-11, F-268 cross-path income-event dedup follow-on. A manual CSV statement import and the live SnapTrade broker-sync cron can both capture the SAME real dividend/interest/fee event under independent ids (found: 12 duplicate rows in production). `stock_analyzer/broker_sync.py`'s `income_event_subtype()` maps BOTH vocabularies (Robinhood `Trans Code` and SnapTrade `type`) into one canonical subtype, and a match requires the same (ticker, canonical subtype) + SIGNED amount to the cent, within this many days — absorbing the CSV statement date vs. SnapTrade activity date sometimes differing by a day or two for the identical event. Used by `classify_transactions()`'s write-time defense (`existing_income_events` param) and the read-side backstop `dedupe_income_events()` (applied in 🧾 Cash Activity and `capital_vs_margin.reconstruct_daily_cash()`). Data-integrity dedup tolerance, not an investment threshold — chosen well below the shortest realistic gap between two genuinely distinct recurring events of the same subtype/amount/ticker (e.g. monthly dividends ~30 days apart), so it cannot collapse two real, distinct payments. |
 
 ### 4.0.2 Cross-feature coordination caches
 
@@ -2475,17 +2476,29 @@ convention (negative = margin debit, the existing account-baseline v4 rule).
 `None` in → `None` out; an empty list or a missing `cash` field also returns
 `None` rather than fabricating a zero balance.
 
-**`classify_transactions(rh_txns, existing_trades)`** — classifies raw
-SnapTrade activities into `new_pending` (BUY/SELL candidates for
-`snaptrade_pending_imports`), `backfill_broker_txn_id` (a content-matched
+**`classify_transactions(rh_txns, existing_trades, existing_income_events=None)`**
+— classifies raw SnapTrade activities into `new_pending` (BUY/SELL candidates
+for `snaptrade_pending_imports`), `backfill_broker_txn_id` (a content-matched
 existing `trades` row — e.g. previously CSV-imported — that should have this
 transaction's id attached instead of becoming a duplicate pending import),
 `income_events` (dividend/interest/fee — **display/trend only**), `flows`
 (CONTRIBUTION/WITHDRAWAL only — the sole category allowed to reach
 `account_flows`), and `ignored` (a `{type: count}` transparency dict for
-everything else, e.g. TRANSFER/OPTIONEXPIRATION). **The Modified-Dietz
-invariant this function exists to protect:** `account.py`'s
-`net_contributed_capital` reads `account_flows`, and a dividend/interest
+everything else, e.g. TRANSFER/OPTIONEXPIRATION). **`income_events` cross-path
+dedup (2026-09-11, F-268 follow-on):** the optional `existing_income_events`
+param (the app's currently-persisted rows, `db.load_snaptrade_income_events()`)
+lets this function suppress a new SnapTrade activity that content-matches an
+event ALREADY captured via the other ingestion path (typically a manual CSV
+statement import) — matching on canonical subtype (`income_event_subtype()`,
+which maps both the Robinhood `Trans Code` and SnapTrade `type` vocabularies
+into one shared set) + signed amount + a date within `INCOME_EVENT_DEDUP_
+DATE_TOL_DAYS`. A suppressed duplicate is counted under `ignored` as `"<TYPE>
+(cross-path duplicate)"` rather than silently dropped. `dedupe_income_events()`
+is the read-side sibling backstop (applied in 🧾 Cash Activity and
+`capital_vs_margin.reconstruct_daily_cash()`) for rows duplicated before this
+existed. **The Modified-Dietz invariant this function exists to protect:**
+`account.py`'s `net_contributed_capital` reads `account_flows`, and a
+dividend/interest
 credit is performance, not a contribution — routing it there would silently
 inflate NCC and suppress reported growth%. `_FLOW_TYPES` and `_INCOME_TYPES`
 are disjoint by construction; an unrecognized type falls to `ignored`, never

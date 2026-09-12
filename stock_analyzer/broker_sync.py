@@ -27,6 +27,23 @@ Five pure functions:
                                pending row likely duplicates, within a small
                                date window. Never backfills anything itself.
 
+Two more pure functions close the income-event cross-path duplication gap
+(2026-09-11, F-268 follow-on — a manual CSV statement import and the live
+SnapTrade cron write independent ids for the SAME real dividend/interest/fee,
+so nothing at the DB layer ever collides them):
+    income_event_subtype   — canonicalizes a raw code from EITHER vocabulary
+                               (Robinhood CSV `Trans Code` or SnapTrade `type`)
+                               into one shared subtype string, so cross-path
+                               matching is possible at all.
+    dedupe_income_events    — read-side backstop: collapses residual
+                               duplicates already sitting in a loaded list,
+                               CSV-sourced row wins on conflict. classify_
+                               transactions' own `existing_income_events` param
+                               is the write-side defense that stops NEW
+                               duplicates from being persisted in the first
+                               place; this and that share one match rule
+                               (`_income_is_duplicate`) so they can't drift.
+
 Modified Dietz integrity: only CONTRIBUTION/WITHDRAWAL activities are ever
 routed to `flows` (account_flows feeds net_contributed_capital in
 stock_analyzer/account.py — a dividend/interest credit is performance, not a
@@ -43,7 +60,7 @@ import math
 
 import pandas as pd
 
-from stock_analyzer.constants import BROKER_DRIFT_SHARE_TOL
+from stock_analyzer.constants import BROKER_DRIFT_SHARE_TOL, INCOME_EVENT_DEDUP_DATE_TOL_DAYS
 
 # SnapTrade `type` values that add/remove cash-basis capital — the ONLY types
 # allowed to become an account_flows row. Everything else that touches cash
@@ -270,7 +287,11 @@ def _activity_date(txn: dict):
     return None if pd.isnull(ts) else ts.date()
 
 
-def classify_transactions(rh_txns: list[dict] | None, existing_trades: pd.DataFrame) -> dict | None:
+def classify_transactions(
+    rh_txns: list[dict] | None,
+    existing_trades: pd.DataFrame,
+    existing_income_events: "list[dict] | None" = None,
+) -> dict | None:
     """Classify raw SnapTrade activities into pending-import / income-event /
     cash-flow buckets, applying the two-tier dedup against `existing_trades`.
 
@@ -283,6 +304,12 @@ def classify_transactions(rh_txns: list[dict] | None, existing_trades: pd.DataFr
         The app's current trades (db.load_trades()), used only for BUY/SELL
         dedup — column `broker_txn_id` may or may not be present yet
         (backward-compatible: absence is treated as "no exact matches").
+    existing_income_events : list[dict] | None
+        The app's currently-persisted income events (db.load_snaptrade_
+        income_events()), used ONLY for the cross-path income dedup below.
+        Optional and backward-compatible: omitting it (None, the default)
+        disables that dedup rather than raising — callers that haven't been
+        updated to pass it yet keep working exactly as before.
 
     Returns
     -------
@@ -297,9 +324,20 @@ def classify_transactions(rh_txns: list[dict] | None, existing_trades: pd.DataFr
                                    (e.g. previously CSV-imported) — the caller
                                    should backfill the id onto that row rather
                                    than creating a duplicate pending import.
-        income_events           : [{event_type, ticker, amount, event_date}, ...]
-                                   dividend/interest/fee — display/trend only,
-                                   NEVER read by account.py's return math.
+        income_events           : [{event_type, raw_code, ticker, amount,
+                                     event_date}, ...] dividend/interest/fee —
+                                   display/trend only, NEVER read by account.py's
+                                   return math. `raw_code` is SnapTrade's own
+                                   `type` string, persisted so a later CSV
+                                   import of the SAME real event (different
+                                   vocabulary) can still be matched via
+                                   `income_event_subtype()`. Excludes any
+                                   activity that content-matches an entry in
+                                   `existing_income_events` per
+                                   `_income_is_duplicate` — those are counted
+                                   under `ignored` as "<TYPE> (cross-path
+                                   duplicate)" instead, so a duplicate suppressed
+                                   here is still visible in the cron log.
         flows                   : [{snaptrade_txn_id, flow_type, amount, flow_date}, ...]
                                    CONTRIBUTION/WITHDRAWAL only — the sole
                                    category allowed to touch net_contributed_capital.
@@ -313,6 +351,15 @@ def classify_transactions(rh_txns: list[dict] | None, existing_trades: pd.DataFr
     """
     if rh_txns is None:
         return None
+
+    # Cross-path income dedup: bucket the app's already-persisted income
+    # events by (ticker, canonical subtype) so each new SnapTrade activity can
+    # be checked against them in O(bucket size). A matched existing row is
+    # popped from its bucket so it can't also "explain away" a second,
+    # genuinely distinct new activity in the same batch.
+    existing_income_by_key: "dict[tuple, list[dict]]" = collections.defaultdict(list)
+    for _ev in (existing_income_events or []):
+        existing_income_by_key[_income_dedup_bucket_key(_ev)].append(_ev)
 
     has_broker_col = (
         existing_trades is not None
@@ -421,13 +468,31 @@ def classify_transactions(rh_txns: list[dict] | None, existing_trades: pd.DataFr
             if amount is None or event_date is None:
                 ignored[ttype] = ignored.get(ttype, 0) + 1
                 continue
-            income_events.append({
+            candidate = {
                 "snaptrade_txn_id": str(txn_id) if txn_id is not None else None,
                 "event_type": _INCOME_TYPES[ttype],
+                "raw_code": ttype,
                 "ticker": _activity_ticker(txn) or None,
                 "amount": float(amount),
                 "event_date": event_date.isoformat(),
-            })
+            }
+            _bucket = existing_income_by_key.get(_income_dedup_bucket_key(candidate), [])
+            _dup_idx = next(
+                (i for i, _existing in enumerate(_bucket)
+                 if _income_is_duplicate(candidate, _existing, INCOME_EVENT_DEDUP_DATE_TOL_DAYS)),
+                None,
+            )
+            if _dup_idx is not None:
+                # Already captured via the other ingestion path (e.g. a CSV
+                # statement import) — persisting this would be the exact
+                # cross-path duplication this dedup exists to stop. Consume
+                # the matched existing row so it can't also match a second
+                # new activity this same batch.
+                _bucket.pop(_dup_idx)
+                _ignored_key = f"{ttype} (cross-path duplicate)"
+                ignored[_ignored_key] = ignored.get(_ignored_key, 0) + 1
+                continue
+            income_events.append(candidate)
 
         elif ttype in _FLOW_TYPES:
             amount = txn.get("amount")
@@ -855,6 +920,179 @@ _RH_INCOME_CODES: dict[str, str] = {
 _RH_FEE_CODES = {"GOLD"}
 
 
+# ---------------------------------------------------------------------------
+# Canonical income-event subtype — the cross-path matching layer
+# ---------------------------------------------------------------------------
+#
+# The CSV path (Robinhood `Trans Code`, e.g. "CDIV") and the live SnapTrade
+# path (`type`, e.g. "DIVIDEND") use two completely disjoint vocabularies for
+# describing the SAME kinds of real-world events. Matching on the raw code
+# string would never match anything across paths — that would silently fail
+# to fix the duplication bug it exists to close. Every raw code from EITHER
+# vocabulary maps into one shared canonical subtype below.
+#
+# Merge decisions (deliberate, not exhaustive coverage — see docstring):
+#   CDIV + DIVIDEND            -> "cash_dividend"        (same real event)
+#   MDIV + SUBSTITUTE_DIVIDEND -> "manufactured_dividend" (same real event —
+#       a manufactured/substitute payment from a short-against-the-box or
+#       fully-paid lending program, genuinely DIFFERENT from a regular cash
+#       dividend and deliberately NOT merged into cash_dividend even though
+#       both currently share event_type="dividend" in the DB — merging them
+#       would risk a false match dropping a real distinct event whenever the
+#       amounts happen to coincide on the same ticker/date)
+#   REI                        -> "reinvested_dividend"  (kept separate; no
+#       confirmed CSV-path equivalent code, so today this can only match
+#       within the live-sync path — that's fine, it's still correct)
+#   STOCK_DIVIDEND             -> "stock_dividend"        (kept separate)
+#   INT + GMPC + INTEREST      -> "interest"
+#   MINT                       -> "margin_interest"       (its OWN subtype,
+#       NOT merged into "interest" — MINT is confirmed real margin interest
+#       against the owner's actual RH statement, but whether SnapTrade's live
+#       INTEREST type ever represents the same underlying charge is UNKNOWN
+#       — no live SnapTrade payload has been observed to confirm it. A CSV
+#       MINT row and a live-sync equivalent, if one exists, will therefore
+#       NOT dedup against each other until that's confirmed. Acceptable:
+#       MINT had zero cross-path collision before this fix, so this is a
+#       known gap, not a regression.)
+#   GOLD + FEE + TAX           -> "fee" (TAX merged into fee as the default
+#       choice — no evidence in this codebase that a brokerage-reported TAX
+#       line needs to be tracked separately from a FEE; revisit if that
+#       changes)
+_INCOME_SUBTYPE_MAP: dict[str, str] = {
+    # Robinhood CSV `Trans Code` vocabulary
+    "CDIV": "cash_dividend",
+    "MDIV": "manufactured_dividend",
+    "INT": "interest",
+    "GMPC": "interest",
+    "MINT": "margin_interest",
+    "GOLD": "fee",
+    # SnapTrade live-sync `type` vocabulary
+    "DIVIDEND": "cash_dividend",
+    "SUBSTITUTE_DIVIDEND": "manufactured_dividend",
+    "REI": "reinvested_dividend",
+    "STOCK_DIVIDEND": "stock_dividend",
+    "INTEREST": "interest",
+    "FEE": "fee",
+    "TAX": "fee",
+}
+
+
+def income_event_subtype(raw_code: "str | None", event_type: str) -> str:
+    """Canonical subtype for an income event, resolving across BOTH the CSV
+    and live-sync vocabularies so the two paths can be cross-matched at all.
+
+    `raw_code` is the original code as recorded at ingestion time (Robinhood's
+    `Trans Code` e.g. "CDIV", or SnapTrade's `type` e.g. "DIVIDEND") — `None`
+    for legacy rows persisted before the `raw_code` column existed. `event_type`
+    is the coarse DB-stored bucket ("dividend" | "interest" | "fee").
+
+    Falls back to `event_type` itself when `raw_code` is `None` or not a
+    recognized code — legacy rows still get SOME subtype (just a coarser one)
+    rather than being unmatchable forever. See `_INCOME_SUBTYPE_MAP` above for
+    the full merge/no-merge rationale (CDIV/MDIV deliberately NOT merged;
+    MINT deliberately kept out of "interest").
+    """
+    if raw_code:
+        key = str(raw_code).strip().upper()
+        if key in _INCOME_SUBTYPE_MAP:
+            return _INCOME_SUBTYPE_MAP[key]
+    return event_type
+
+
+def _income_dedup_bucket_key(ev: dict) -> tuple:
+    """(ticker, canonical subtype) grouping key shared by the write-time
+    defense (`classify_transactions`) and the read-time backstop
+    (`dedupe_income_events`)."""
+    ticker = str(ev.get("ticker") or "").strip().upper()
+    return ticker, income_event_subtype(ev.get("raw_code"), ev.get("event_type"))
+
+
+def _income_signed_cents(ev: dict) -> "int | None":
+    """Signed cents for an income event's amount, or None if unparseable.
+    SIGNED, not absolute — a real dividend and a same-day reversal/correction
+    share magnitude but opposite sign and must never be treated as duplicates
+    of each other. Mirrors `parse_robinhood_csv_income`'s own dedup-id
+    convention (`csv:{date}:{code}:{ticker}:{signed_cents}`)."""
+    try:
+        return round(float(ev.get("amount") or 0.0) * 100)
+    except (TypeError, ValueError):
+        return None
+
+
+def _income_parse_date(s):
+    ts = pd.to_datetime(s, errors="coerce")
+    return None if pd.isna(ts) else ts.date()
+
+
+def _income_is_duplicate(a: dict, b: dict, tol_days: int) -> bool:
+    """True when income events `a` and `b` are the SAME real-world event:
+    same (ticker, canonical subtype) bucket, same SIGNED amount to the cent,
+    and event dates within `tol_days` of each other. The single match rule
+    shared by `classify_transactions`' write-time defense and
+    `dedupe_income_events`' read-time backstop, so the two can't drift apart."""
+    if _income_dedup_bucket_key(a) != _income_dedup_bucket_key(b):
+        return False
+    cents_a, cents_b = _income_signed_cents(a), _income_signed_cents(b)
+    if cents_a is None or cents_b is None or cents_a != cents_b:
+        return False
+    date_a, date_b = _income_parse_date(a.get("event_date")), _income_parse_date(b.get("event_date"))
+    if date_a is None or date_b is None:
+        return False
+    return abs((date_a - date_b).days) <= tol_days
+
+
+def dedupe_income_events(events: list[dict]) -> list[dict]:
+    """Collapse income-event rows that are the SAME real-world dividend/
+    interest/fee event, already captured by BOTH ingestion paths (a manual
+    CSV statement import and the live SnapTrade broker-sync cron — each
+    writes its own independent id, so nothing at the DB layer ever collides
+    them; see module docstring).
+
+    Read-side backstop only — does not delete anything from the DB. Callers
+    apply this to an already-loaded list before display/reconstruction. The
+    write-time defense is `classify_transactions(..., existing_income_events=
+    ...)`, which stops NEW duplicates from being persisted in the first
+    place; this closes the same gap for rows already duplicated before that
+    shipped (or from any path that bypasses it).
+
+    Tie-break when two rows match: the CSV-sourced row wins (its
+    `snaptrade_txn_id` starts with "csv:") — CSV imports are the user's own
+    manually-verified statement (2026-09-11 user sign-off: "the 3-day
+    tolerance and csv win tie break").
+
+    Pure; never raises. Preserves the relative order of surviving rows.
+    """
+    if not events:
+        return []
+
+    buckets: "dict[tuple, list[int]]" = collections.defaultdict(list)
+    for i, ev in enumerate(events):
+        buckets[_income_dedup_bucket_key(ev)].append(i)
+
+    dropped: set = set()
+    for idxs in buckets.values():
+        if len(idxs) < 2:
+            continue
+        kept: list[int] = []
+        for i in idxs:
+            match = next(
+                (j for j in kept if _income_is_duplicate(events[i], events[j], INCOME_EVENT_DEDUP_DATE_TOL_DAYS)),
+                None,
+            )
+            if match is None:
+                kept.append(i)
+                continue
+            i_is_csv = str(events[i].get("snaptrade_txn_id") or "").startswith("csv:")
+            j_is_csv = str(events[match].get("snaptrade_txn_id") or "").startswith("csv:")
+            if i_is_csv and not j_is_csv:
+                dropped.add(match)
+                kept[kept.index(match)] = i
+            else:
+                dropped.add(i)
+
+    return [ev for i, ev in enumerate(events) if i not in dropped]
+
+
 def parse_robinhood_csv_income(csv_text: str) -> list[dict]:
     """Parse a Robinhood account-statement CSV and return income-event rows.
 
@@ -866,6 +1104,11 @@ def parse_robinhood_csv_income(csv_text: str) -> list[dict]:
     Each returned dict has:
         snaptrade_txn_id  str   deterministic dedup key: csv:{date}:{code}:{ticker}:{cents}
         event_type        str   "dividend" | "interest" | "fee"
+        raw_code          str   the original Robinhood Trans Code (e.g. "CDIV") —
+                                  feeds `income_event_subtype()` so this row can be
+                                  cross-matched against a live-sync duplicate that
+                                  uses SnapTrade's different vocabulary for the
+                                  same real event.
         ticker            str | None
         amount            float  negative for fee (GOLD) and margin-interest
                                   charge (MINT) rows
@@ -916,6 +1159,7 @@ def parse_robinhood_csv_income(csv_text: str) -> list[dict]:
             rows.append({
                 "snaptrade_txn_id": snaptrade_txn_id,
                 "event_type": _RH_INCOME_CODES[code],
+                "raw_code": code,
                 "ticker": ticker,
                 "amount": amount,
                 "event_date": event_date,

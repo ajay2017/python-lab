@@ -857,6 +857,34 @@ the user acted on it):
     SET event_type = 'interest'
     WHERE event_type = 'fee'
       AND snaptrade_txn_id LIKE 'csv:%:MINT:%';
+
+    -- snaptrade_income_events.raw_code (2026-09-11, F-268 cross-path dedup
+    -- follow-on): the original code as recorded at ingestion time — the
+    -- Robinhood CSV `Trans Code` (e.g. "CDIV") or the SnapTrade live-sync
+    -- `type` (e.g. "DIVIDEND"). event_type alone collapses both vocabularies
+    -- into one of three coarse buckets, which is not enough to tell a real
+    -- cash dividend apart from a manufactured/substitute dividend, or plain
+    -- interest apart from margin interest -- see broker_sync.
+    -- income_event_subtype() for the canonical mapping this feeds.
+    -- Backward-compatible: legacy rows load with raw_code = NULL, and
+    -- income_event_subtype() falls back to event_type for those.
+    ALTER TABLE public.snaptrade_income_events
+        ADD COLUMN IF NOT EXISTS raw_code text;
+
+    -- Backfill CSV-sourced rows only -- their raw code is already embedded
+    -- in the deterministic id (csv:{event_date}:{code}:{ticker}:{cents}), so
+    -- this is a pure re-derivation, not a guess. Live-sync rows (real
+    -- SnapTrade UUIDs, no code embedded) are left raw_code IS NULL
+    -- permanently -- that's fine, see the fallback above.
+    UPDATE public.snaptrade_income_events
+    SET raw_code = split_part(snaptrade_txn_id, ':', 3)
+    WHERE raw_code IS NULL AND snaptrade_txn_id LIKE 'csv:%';
+
+    -- MANUAL FOLLOW-UP after applying the above (handled separately, not by
+    -- this commit): existing duplicate income-event rows already in the
+    -- table (12 found 2026-09-11 -- see project_snaptrade_broker_integration
+    -- memory) are NOT retroactively collapsed by this migration. That is a
+    -- one-time cleanup query, run once by hand after raw_code is backfilled.
 """
 
 import os
@@ -4637,10 +4665,13 @@ def load_snaptrade_income_events(since_date: str | None = None) -> list[dict]:
     if not has_db():
         return []
     try:
-        q = (
-            _client().table("snaptrade_income_events")
-            .select("id,snaptrade_txn_id,event_type,ticker,amount,event_date,fetched_at")
-        )
+        # select("*") rather than a named column list: `raw_code` is a new,
+        # optional column (2026-09-11) that may not exist yet in a session
+        # running against a DB the manual ALTER hasn't been applied to. An
+        # explicit list naming a not-yet-existing column would 500 on every
+        # call until the migration runs; select("*") degrades gracefully
+        # instead — rows simply omit the key, and callers use `.get("raw_code")`.
+        q = _client().table("snaptrade_income_events").select("*")
         if since_date:
             q = q.gte("event_date", since_date)
         rows = q.order("event_date", desc=False).execute().data
@@ -4672,6 +4703,7 @@ def save_snaptrade_income_events(rows: list[dict]) -> int:
             {
                 "snaptrade_txn_id": r["snaptrade_txn_id"],
                 "event_type":       r["event_type"],
+                "raw_code":         r.get("raw_code"),
                 "ticker":           r.get("ticker"),
                 "amount":           r["amount"],
                 "event_date":       r["event_date"],
@@ -4680,11 +4712,25 @@ def save_snaptrade_income_events(rows: list[dict]) -> int:
         ]
         if not records:
             return 0
-        resp = _client().table("snaptrade_income_events").upsert(
-            records,
-            on_conflict="snaptrade_txn_id",
-            ignore_duplicates=True,
-        ).execute()
+        try:
+            resp = _client().table("snaptrade_income_events").upsert(
+                records,
+                on_conflict="snaptrade_txn_id",
+                ignore_duplicates=True,
+            ).execute()
+        except Exception as e:
+            # Graceful degradation: `raw_code` (2026-09-11) is an additive
+            # optional column that may not exist yet (manual ALTER pending).
+            # Drop it and retry once, same convention as save_trade's
+            # optional-column backstop — never lose the whole write over one
+            # not-yet-migrated column.
+            if "raw_code" not in str(e):
+                raise
+            resp = _client().table("snaptrade_income_events").upsert(
+                [{k: v for k, v in r.items() if k != "raw_code"} for r in records],
+                on_conflict="snaptrade_txn_id",
+                ignore_duplicates=True,
+            ).execute()
         return len(records)
     except Exception:
         return 0
@@ -4710,17 +4756,30 @@ def save_income_events_from_csv(rows: list[dict]) -> int:
             {
                 "snaptrade_txn_id": r["snaptrade_txn_id"],
                 "event_type":       r["event_type"],
+                "raw_code":         r.get("raw_code"),
                 "ticker":           r.get("ticker"),
                 "amount":           r["amount"],
                 "event_date":       r["event_date"],
             }
             for r in rows
         ]
-        resp = _client().table("snaptrade_income_events").upsert(
-            records,
-            on_conflict="snaptrade_txn_id",
-            ignore_duplicates=True,
-        ).execute()
+        try:
+            resp = _client().table("snaptrade_income_events").upsert(
+                records,
+                on_conflict="snaptrade_txn_id",
+                ignore_duplicates=True,
+            ).execute()
+        except Exception as e:
+            # Graceful degradation: same optional-column backstop as
+            # save_snaptrade_income_events above — `raw_code` may not exist
+            # yet (manual ALTER pending).
+            if "raw_code" not in str(e):
+                raise
+            resp = _client().table("snaptrade_income_events").upsert(
+                [{k: v for k, v in r.items() if k != "raw_code"} for r in records],
+                on_conflict="snaptrade_txn_id",
+                ignore_duplicates=True,
+            ).execute()
         return len(resp.data) if resp.data else 0
     except Exception:
         return 0

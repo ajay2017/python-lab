@@ -32603,6 +32603,17 @@ elif page == "💰 Account":
             capital_vs_margin.golive_floor(_cvm_trades, _flows, _cvm_income, _cvm_snaps)
             if _cvm_anchor is not None else None
         )
+        # Dedupe ONCE here, immediately after golive_floor -- every downstream
+        # consumer on this page (reconstruct_daily_cash, interest_partition,
+        # weekly_interest_charged, drawdown_decomposition) sums income events,
+        # so a residual cross-path duplicate (live-sync + CSV re-import of the
+        # same real-world event) would silently double-count straight into the
+        # headline "Net Value Margin Added" verdict. golive_floor above MUST
+        # see the RAW list -- it excludes csv:-prefixed rows from go-live
+        # floor detection, so deduping first (which keeps the CSV row and
+        # drops its live-sync twin) could remove the only broker-synced-dated
+        # candidate for that event and silently shift the go-live date.
+        _cvm_income = broker_sync.dedupe_income_events(_cvm_income)
 
         if _cvm_anchor is None:
             st.info(
@@ -33369,6 +33380,13 @@ elif page == "💰 Account":
             st.markdown("#### 💵 Cash Activity")
             _snap_income_since = (_today_et() - timedelta(days=270)).isoformat()
             _snap_income = db.load_snaptrade_income_events(since_date=_snap_income_since)
+            # Read-side defense (F-268 cross-path dedup follow-on, 2026-09-11):
+            # a manual CSV statement import and the live SnapTrade cron can
+            # both have captured the SAME real dividend/interest/fee event
+            # under independent ids before the write-time defense shipped (or
+            # for any gap it doesn't close) — collapse those before charting
+            # so this trend never double-counts a real event.
+            _snap_income = broker_sync.dedupe_income_events(_snap_income)
             if not _snap_income:
                 st.caption("No dividend/interest/fee events synced yet.")
             else:

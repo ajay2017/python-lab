@@ -2485,7 +2485,10 @@ def _run_broker(now_et, force: bool) -> int:
             account_id, SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS
         )
         existing_trades = db.load_trades()
-        classified = broker_sync.classify_transactions(raw_txns, existing_trades)
+        existing_income_events = db.load_snaptrade_income_events()
+        classified = broker_sync.classify_transactions(
+            raw_txns, existing_trades, existing_income_events=existing_income_events
+        )
         if classified is None:
             failures.append("transactions: SnapTrade activities unavailable")
             rc = 1

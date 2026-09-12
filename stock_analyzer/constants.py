@@ -1743,6 +1743,22 @@ SNAPTRADE_BALANCE_STALE_HOURS = 25
 # is expected to already be in trades via manual/CSV entry.
 SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS = 90
 
+# Date tolerance (days) for broker_sync's income-event cross-path dedup —
+# the same real dividend/interest/fee can be captured by BOTH a manual CSV
+# statement import and the live SnapTrade broker-sync cron, each stamping
+# its own independent id, so nothing at the DB layer collides them. A match
+# requires the SAME ticker + canonical subtype (`broker_sync.income_event_
+# subtype`) + SIGNED amount to the cent, within this many days — the
+# tolerance absorbs the CSV statement date vs. the SnapTrade-reported
+# activity date sometimes differing by a day or two for the identical real
+# event. 3 days is generously below the shortest realistic gap between two
+# genuinely DIFFERENT recurring events of the same subtype/amount on the
+# same ticker (e.g. monthly dividends are ~30 days apart), so it cannot
+# collapse two real, distinct payments. 2026-09-11, F-268 follow-on — see
+# project_snaptrade_broker_integration memory for the 12-duplicate-row find
+# that prompted this.
+INCOME_EVENT_DEDUP_DATE_TOL_DAYS = 3
+
 # Per-call wall-clock timeout for the SnapTrade client wrapper. Same
 # operational-cap convention as DATA_YF_REQUEST_TIMEOUT_SEC — bounds a
 # single hung call so the broker cron lane can fail loud instead of
