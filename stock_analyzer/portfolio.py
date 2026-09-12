@@ -1397,6 +1397,25 @@ def diversifying_candidate_pool(
     alone when the sector has no discovery bucket. Pure / no I/O — app.py scores
     the returned names and ranks them via `annotate_add_candidates`.
 
+    **Discovery-bucket names are filtered to `TICKER_SECTORS[ticker] == sector`
+    (2026-09-12 fix)** — several `_DIVERSIFY_TO_DISCOVERY` entries deliberately
+    reuse the SAME discovery bucket for more than one sector (Industrials and
+    Defense both map to "Industrials & Defense"), so without this filter the
+    same non-held name (e.g. RTX/GD/CAT) could surface under BOTH sectors'
+    ADD cards on the same day, and a Defense-classified ticker could appear
+    mislabeled under the Industrials card (or vice versa). Since
+    `TICKER_SECTORS` assigns each ticker exactly ONE canonical sector, this
+    filter both fixes the mislabeling AND naturally deduplicates across cards
+    sharing a bucket — a ticker can only pass the filter for the one sector it
+    actually belongs to. The ROSTER portion is NOT re-filtered here: it's
+    already sector-scoped by construction and `reference_data.validate_payload`
+    already enforces `TICKER_SECTORS` agreement on it at save time — this
+    filter only closes the gap on the discovery bucket, which has no
+    equivalent enforcement. A ticker with no `TICKER_SECTORS` entry at all is
+    excluded from every sector's bucket slice rather than included in all of
+    them — the safe direction (never shown under a wrong label) at the cost of
+    not being shown until it's mapped.
+
     `sector_candidates` / `discovery_universe` (App Settings, docs/plans/
     app-settings.md): the resolved `sector_candidates` / `discovery_universe`
     payloads, threaded in by the caller (via
@@ -1413,9 +1432,14 @@ def diversifying_candidate_pool(
     bucket = discovery_universe.get(_DIVERSIFY_TO_DISCOVERY.get(sector, ""), [])
     seen: set = set()
     pool: list[str] = []
-    for t in [*roster, *bucket]:
+    for t in roster:
         tu = str(t).upper().strip()
         if tu and tu not in held and tu not in seen:
+            seen.add(tu)
+            pool.append(tu)
+    for t in bucket:
+        tu = str(t).upper().strip()
+        if tu and tu not in held and tu not in seen and TICKER_SECTORS.get(tu) == sector:
             seen.add(tu)
             pool.append(tu)
     return pool[:max(0, cap)]

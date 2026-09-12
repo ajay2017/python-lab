@@ -494,16 +494,21 @@ def test_alerts_non_string_earnings_value_does_not_crash():
 # discovery_universe params are REQUIRED (Commit 3 removed the module-level
 # fallback default entirely).
 
-def test_diversifying_candidate_pool_uses_explicit_params():
-    from stock_analyzer.portfolio import diversifying_candidate_pool
+def test_diversifying_candidate_pool_uses_explicit_params(monkeypatch):
+    import stock_analyzer.portfolio as p
     fake_candidates = {"Healthcare": ["ZZZFAKE1"]}
     fake_discovery  = {"Healthcare & Biotech": ["ZZZFAKE2"]}
-    pool = diversifying_candidate_pool(
+    # 2026-09-12 fix: the discovery-bucket slice is now filtered to
+    # TICKER_SECTORS[ticker] == sector, so a fake bucket ticker needs a
+    # matching fake TICKER_SECTORS entry to survive the filter — the roster
+    # slice is untouched by the filter (see the fix's own docstring note).
+    monkeypatch.setattr(p, "TICKER_SECTORS", {"ZZZFAKE2": "Healthcare"})
+    pool = p.diversifying_candidate_pool(
         "Healthcare", set(), sector_candidates=fake_candidates, discovery_universe={},
     )
     assert pool == ["ZZZFAKE1"], "must read the passed roster"
 
-    pool2 = diversifying_candidate_pool(
+    pool2 = p.diversifying_candidate_pool(
         "Healthcare", set(), sector_candidates={}, discovery_universe=fake_discovery,
     )
     # "Healthcare" -> "Healthcare & Biotech" via _DIVERSIFY_TO_DISCOVERY
@@ -521,11 +526,15 @@ def test_diversifying_candidate_pool_empty_params_produce_no_fallback():
     )
 
 
-def test_diversifying_candidate_pool_dedupes_case_insensitive_and_excludes_held():
-    from stock_analyzer.portfolio import diversifying_candidate_pool
+def test_diversifying_candidate_pool_dedupes_case_insensitive_and_excludes_held(monkeypatch):
+    import stock_analyzer.portfolio as p
     sector_candidates  = {"Healthcare": ["aaa1", "AAA2"]}
     discovery_universe = {"Healthcare & Biotech": ["aaa1", "BBB1"]}  # aaa1 dup across sources
-    pool = diversifying_candidate_pool(
+    # BBB1 is bucket-only (not in the roster), so it needs a matching
+    # TICKER_SECTORS entry to survive the 2026-09-12 filter; AAA1 reaches the
+    # pool via the roster, which the filter does not touch.
+    monkeypatch.setattr(p, "TICKER_SECTORS", {"BBB1": "Healthcare"})
+    pool = p.diversifying_candidate_pool(
         "Healthcare", {"AAA2"},  # AAA2 held -> excluded
         sector_candidates=sector_candidates, discovery_universe=discovery_universe,
     )
@@ -533,6 +542,90 @@ def test_diversifying_candidate_pool_dedupes_case_insensitive_and_excludes_held(
         "must dedupe the cross-source duplicate case-insensitively, preserve "
         "roster-then-discovery order, and drop the already-held ticker"
     )
+
+
+def test_diversifying_candidate_pool_discovery_bucket_filtered_to_own_sector(monkeypatch):
+    """The 2026-09-12 fix's load-bearing case: Industrials and Defense share
+    one discovery bucket ("Industrials & Defense" via _DIVERSIFY_TO_DISCOVERY).
+    A Defense-classified ticker in that shared bucket must NOT appear in the
+    Industrials pool, and vice versa — same shared-bucket shape as the real
+    RTX/GD/CAT finding, using fake tickers to stay isolated from real data."""
+    import stock_analyzer.portfolio as p
+    monkeypatch.setattr(p, "TICKER_SECTORS", {"ZZZDEF1": "Defense", "ZZZIND1": "Industrials"})
+    shared_bucket = {"Industrials & Defense": ["ZZZDEF1", "ZZZIND1"]}
+
+    defense_pool = p.diversifying_candidate_pool(
+        "Defense", set(), sector_candidates={}, discovery_universe=shared_bucket,
+    )
+    industrials_pool = p.diversifying_candidate_pool(
+        "Industrials", set(), sector_candidates={}, discovery_universe=shared_bucket,
+    )
+    assert defense_pool == ["ZZZDEF1"], "Defense pool must exclude the Industrials-classified ticker"
+    assert industrials_pool == ["ZZZIND1"], "Industrials pool must exclude the Defense-classified ticker"
+    # The cross-card dedup guarantee: no ticker in one sector's pool also
+    # appears in the other's, even though both draw from the same bucket.
+    assert not (set(defense_pool) & set(industrials_pool))
+
+
+def test_diversifying_candidate_pool_unmapped_bucket_ticker_excluded_from_all(monkeypatch):
+    """A bucket ticker with no TICKER_SECTORS entry at all is excluded from
+    every sector's pool rather than included in all of them sharing that
+    bucket — the safe direction (never mislabeled) at the cost of not being
+    shown until it's mapped."""
+    import stock_analyzer.portfolio as p
+    monkeypatch.setattr(p, "TICKER_SECTORS", {})  # ZZZUNMAPPED has no entry
+    shared_bucket = {"Industrials & Defense": ["ZZZUNMAPPED"]}
+    defense_pool = p.diversifying_candidate_pool(
+        "Defense", set(), sector_candidates={}, discovery_universe=shared_bucket,
+    )
+    industrials_pool = p.diversifying_candidate_pool(
+        "Industrials", set(), sector_candidates={}, discovery_universe=shared_bucket,
+    )
+    assert defense_pool == []
+    assert industrials_pool == []
+
+
+def test_diversifying_candidate_pool_roster_not_refiltered_by_ticker_sectors(monkeypatch):
+    """The roster portion is trusted as-is (already sector-scoped by
+    App Settings' own save-time validate_payload check) -- the 2026-09-12
+    filter only applies to the discovery-bucket portion. A roster ticker with
+    no TICKER_SECTORS entry (or a mismatched one) must still surface."""
+    import stock_analyzer.portfolio as p
+    monkeypatch.setattr(p, "TICKER_SECTORS", {})  # no entries at all
+    pool = p.diversifying_candidate_pool(
+        "Defense", set(), sector_candidates={"Defense": ["ZZZROSTER1"]}, discovery_universe={},
+    )
+    assert pool == ["ZZZROSTER1"]
+
+
+def test_diversification_recommendations_never_repeats_a_ticker_across_shared_bucket_sectors(monkeypatch):
+    """End-to-end reproduction of the real finding: with Industrials and
+    Defense both underweight and drawing from the same shared discovery
+    bucket, no non-held ticker may appear in BOTH sectors' ADD card
+    candidate lists on the same call."""
+    import pandas as pd
+    import stock_analyzer.portfolio as p
+
+    monkeypatch.setattr(p, "TICKER_SECTORS", {"ZZZDEF1": "Defense", "ZZZIND1": "Industrials"})
+    port_df = pd.DataFrame({
+        "Ticker": ["AAPL"], "Sector": ["Enterprise Tech"], "Score": [70.0],
+        "Signal": ["Hold"], "P&L (%)": [5.0], "Weight (%)": [100.0],
+        "Market Value": [50_000.0],
+    })
+    discovery_universe = {"Industrials & Defense": ["ZZZDEF1", "ZZZIND1"]}
+    recs = p.diversification_recommendations(
+        port_df, pd.DataFrame(), {"risk_pairs": []},
+        sector_candidates={}, discovery_universe=discovery_universe,
+    )
+    add_recs = {r["sector"]: set(r["candidates"]) for r in recs if r["type"] == "ADD"}
+    defense_candidates = add_recs.get("Defense", set())
+    industrials_candidates = add_recs.get("Industrials", set())
+    assert not (defense_candidates & industrials_candidates), (
+        "the same ticker must never surface under both the Defense and "
+        "Industrials ADD cards on the same call"
+    )
+    assert "ZZZDEF1" in defense_candidates
+    assert "ZZZIND1" in industrials_candidates
 
 
 def test_diversifying_candidate_pool_respects_cap():
