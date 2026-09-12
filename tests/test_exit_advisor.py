@@ -13,6 +13,8 @@ from stock_analyzer.constants import (
     DETERIORATION_TRIM_DD_CEILING,
     DETERIORATION_EXIT_DD_CEILING,
     DETERIORATION_WATCH_DD_PCT,
+    DETERIORATION_PEAK_FALLBACK_BARS,
+    DETERIORATION_TREND_MA,
 )
 from stock_analyzer.exit_advisor import (
     EXIT,
@@ -20,7 +22,10 @@ from stock_analyzer.exit_advisor import (
     WATCH,
     _exit_floor,
     _trim_floor,
+    _peak_window_bars,
+    assess_holding,
     assess_risk_off_derisk,
+    candidate_deterioration_flag,
     classify_deterioration_tier,
     market_risk_posture,
     risk_off_regime,
@@ -324,3 +329,146 @@ def test_risk_off_card_price_none_when_non_positive():
     cards = _risk_off_call(port_df, held_data)
     assert len(cards) == 1
     assert cards[0]["price"] is None
+
+
+# ── _peak_window_bars boundary (2026-09-11 ON incident) ──────────────────────
+# A brand-new same-day buy (age_days=0) was previously routed into the
+# `window is None`-only fallback (window > 0 was the old guard, and 0 fails
+# that), so its "peak" was measured against a pre-entry high the position
+# never lived through — manufacturing a 42% "drawdown" on ON while the
+# position was actually up 2.9%. age_days=0 is a KNOWN age (not "unknown"),
+# so it must use the 2-bar floor like any other small known window.
+
+_MA = f"SMA_{DETERIORATION_TREND_MA}"
+
+
+def _frame(closes):
+    """Indicator frame with the Close + trend-MA columns the engine reads."""
+    close = pd.Series([float(c) for c in closes])
+    return pd.DataFrame({"Close": close, _MA: close.rolling(DETERIORATION_TREND_MA).mean()})
+
+
+def test_peak_window_bars_age_zero_floors_to_two():
+    assert _peak_window_bars(0) == 2
+
+
+def test_peak_window_bars_age_one_unchanged():
+    # Regression guard — must NOT move as a side effect of the age-0 fix.
+    assert _peak_window_bars(1) == 3
+
+
+def test_peak_window_bars_none_uses_fallback():
+    assert _peak_window_bars(None) == DETERIORATION_PEAK_FALLBACK_BARS
+
+
+def test_peak_window_bars_negative_floors_to_two_not_fallback():
+    # Not reachable today (trade dates are capped at today) but handled
+    # safely: a negative age must floor to 2, NOT reopen the fallback branch
+    # (a shorter window can only shrink a measured drawdown, never fabricate one).
+    assert _peak_window_bars(-5) == 2
+
+
+def _on_incident_frame():
+    """A same-day-buy fixture shaped like the actual ON incident: a high far
+    in the past (60 bars back), a long decline, then the last 2 bars
+    flat/mildly up near the current (profitable) price.
+    """
+    pre = [100.0] * 20                                 # padding before the peak
+    peak = [150.0]                                     # bar 20 — the old high
+    decline = [148.0 - 0.75 * i for i in range(57)]     # bars 21..77 — sliding to ~106
+    tail = [106.0, 106.5]                               # bars 78-79 — last 2 bars, flat/mildly up
+    return _frame(pre + peak + decline + tail)
+
+
+def test_same_day_buy_no_longer_manufactures_a_false_exit():
+    """The actual ON incident, end to end — not just the boundary function in
+    isolation. Proves the DELTA: the same fixture/price, scored under the OLD
+    peak-window math (the unscaled DETERIORATION_PEAK_FALLBACK_BARS constant,
+    which is exactly what the pre-fix `window > 0` guard produced for
+    window=0), manufactures an EXIT — while the FIXED behavior (a known
+    age_days=0 using the 2-bar floor) does not.
+    """
+    df = _on_incident_frame()
+    price = float(df["Close"].iloc[-1])
+    avg_cost = price * 0.971   # ~+2.9% unrealized, matching the real incident
+
+    # FIXED: age_days=0 is a KNOWN age -> the 2-bar floor. The pre-entry high
+    # 60 bars back is outside the window entirely, so no false drawdown.
+    fixed = assess_holding(
+        "ON", df, None, price=price, atr=1.0, avg_cost=avg_cost,
+        shares=10.0, age_days=0,
+    )
+    assert fixed is None or fixed["tier"] != EXIT
+
+    # PROVE THE DELTA: reproduce the OLD peak-window math by hand against the
+    # SAME fixture/price/MA — the old `_peak_window_bars` guard (`window > 0`)
+    # sent window=0 straight to the unscaled DETERIORATION_PEAK_FALLBACK_BARS
+    # constant (63), not through the round(w*5/7)+2 formula a real window uses.
+    close = df["Close"]
+    old_peak = float(close.tail(DETERIORATION_PEAK_FALLBACK_BARS).max())
+    old_dd = max(0.0, (old_peak - price) / old_peak * 100.0)
+    sma_now = float(df[_MA].iloc[-1])
+    old_trend_broken = price < sma_now
+    old_tier = classify_deterioration_tier(
+        dd_from_peak_pct=old_dd,
+        atr_pct=(1.0 / price * 100.0),
+        trend_broken_now=old_trend_broken,
+        below_ma_count=0,
+        rel_strength=0.0,
+        price=price,
+        avg_cost=avg_cost,
+        dollar_pnl=(price - avg_cost) * 10.0,
+        age_days=0,
+    )
+    assert old_tier == EXIT
+
+
+# ── candidate_deterioration_flag — warn-only pre-purchase check ─────────────
+# A NOT-YET-OWNED buy candidate's own chart, scored with synthetic holding
+# inputs (avg_cost=price, shares=0) so the P&L-based escalation legs stay
+# inert — the candidate can never appear "underwater" or carry a $ loss when
+# there is no position at all.
+
+def _declining_candidate_frame(n=80, peak=150.0, trough=100.0):
+    """Flat at `peak` for a stretch, then a steady decline to `trough`,
+    ending below the trend MA — a genuine downtrend for a candidate.
+    """
+    head = [peak] * 20
+    decline = [peak - (peak - trough) * i / (n - 21) for i in range(n - 20)]
+    return _frame(head + decline)
+
+
+def test_candidate_deterioration_flag_fires_on_genuine_downtrend():
+    df = _declining_candidate_frame()
+    price = float(df["Close"].iloc[-1])
+    result = candidate_deterioration_flag("XYZ", df, None, price=price, atr=1.0)
+    assert result is not None
+    assert result["tier"] in (WATCH, TRIM, EXIT)
+
+
+def test_candidate_deterioration_flag_none_when_sma_missing():
+    df = pd.DataFrame({"Close": [100.0] * 60})   # no SMA_50 column at all
+    assert candidate_deterioration_flag("XYZ", df, None, price=100.0, atr=1.0) is None
+
+
+def test_candidate_deterioration_flag_none_when_df_missing():
+    assert candidate_deterioration_flag("XYZ", None, None, price=100.0, atr=1.0) is None
+
+
+def test_candidate_deterioration_flag_none_when_price_non_positive():
+    df = _declining_candidate_frame()
+    assert candidate_deterioration_flag("XYZ", df, None, price=0.0, atr=1.0) is None
+
+
+def test_candidate_deterioration_flag_no_false_underwater_escalation():
+    """avg_cost=price / shares=0 must keep the P&L escalation legs inert — a
+    candidate that is post-peak-but-only-mildly-down (below every TRIM/EXIT
+    floor) must classify as None, not escalate via a fabricated $ loss.
+    """
+    # Flat for a long stretch, then a shallow (2%) dip — below every drawdown
+    # floor (WATCH_DD_PCT=6.0 and up), so this must NOT fire at all.
+    closes = [100.0] * 70 + [99.0, 98.5, 98.0, 98.2, 98.0]
+    df = _frame(closes)
+    price = float(df["Close"].iloc[-1])
+    result = candidate_deterioration_flag("XYZ", df, None, price=price, atr=0.5)
+    assert result is None

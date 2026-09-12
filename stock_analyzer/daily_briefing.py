@@ -715,7 +715,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 deterioration: list | None = None,
                 winner_profile: dict | None = None,
                 net_capital: float | None = None,
-                sold_today: set | None = None) -> dict:
+                sold_today: set | None = None,
+                spy_df=None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -756,6 +757,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                  add-to-winner sizing both respect the SEPARATE net-capital cap.
                  None (the default, and every caller before F-255) leaves sizing
                  byte-identical to the pre-F-255 output.
+    spy_df      : optional benchmark history, threaded into
+                 exit_advisor.candidate_deterioration_flag() so the warn-only
+                 pre-purchase deterioration check on new_picks can classify
+                 TRIM-tier (which requires rel_strength < 0 vs the benchmark).
+                 None (the default) is a fail-safe UNDER-warn, not a crash — RS
+                 defaults to 0.0 inside assess_holding, so only WATCH/EXIT can
+                 fire, never TRIM.
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -1219,6 +1227,33 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 if price > 0 and portfolio_value > 0 else {}
             )
 
+            # Pre-purchase deterioration warning (2026-09-11 ON incident
+            # follow-up) — warn-only, never suppresses or reorders the pick.
+            # Describes the CANDIDATE STOCK's own chart, not a position (the
+            # user doesn't own it yet), so this is a genuinely different,
+            # correct use of the ~3-month fallback window than the age_days=0
+            # bug fixed in exit_advisor._peak_window_bars above (a candidate
+            # has no entry date at all, vs. that fix's known-age-zero case).
+            _cand_det = exit_advisor.candidate_deterioration_flag(
+                ticker, _comp_data.get("df"), spy_df, price=price, atr=_pick_atr,
+            )
+            _cand_det_warning = None
+            if _cand_det:
+                _tier_phrase = {
+                    exit_advisor.WATCH: "early technical weakness",
+                    exit_advisor.TRIM:  "a weakening trend",
+                    exit_advisor.EXIT:  "a broken trend / deep drawdown",
+                }.get(_cand_det["tier"], "technical weakness")
+                _cand_det_warning = (
+                    f"📉 {ticker}'s own recent price action shows {_tier_phrase} — "
+                    f"down {_cand_det['dd_from_peak_pct']:.1f}% from its ~3-month "
+                    f"high and recently below its {_cand_det['trend_ma']}-day trend "
+                    "line. This describes the stock's chart, not a position (you "
+                    "don't own it yet); the composite still rates it a buy. Shown "
+                    "so you enter with eyes open. Awareness only — doesn't change "
+                    "this recommendation."
+                )
+
             pick = {
                 "ticker":          ticker,
                 "score":           _f(row.get("Score", 0)),    # momentum / scanner score
@@ -1246,6 +1281,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "Risk Advisor already has flagged for trim."
                     if sector in _elevated_sectors else None
                 ),
+                "deterioration_warning": _cand_det_warning,
             }
             if is_mover:
                 _mover_picks.append(pick)
@@ -2920,7 +2956,8 @@ def build_daily_briefing(
                          movers=movers,
                          winner_profile=winner_profile,
                          net_capital=net_capital,
-                         sold_today=_sold_today)
+                         sold_today=_sold_today,
+                         spy_df=spy_df)
     # Tune-up beta/sharpe cards restate a trim; if that name is already carrying
     # an Act Today card (incl. the risk-off TRIM appended above) or a Review
     # card, drop the redundant restatement (2026-08-04 audit — same broad

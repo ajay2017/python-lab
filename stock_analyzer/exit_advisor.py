@@ -217,16 +217,19 @@ def _series_close(df):
 def _peak_window_bars(window: int | None) -> int:
     """Bars to look back for the high-water mark.
 
-    Calendar days → approx trading bars (5/7), +2 cushion, floor of 2. A missing
-    or non-positive window falls back to ~3 trading months so an old pre-entry
-    high can't fabricate a huge drawdown.
-
-    Extracted so `forward_sim.replay_position` (which must re-derive the peak at
-    a SHOCKED price and therefore cannot call `assess_holding`) shares this math
-    rather than duplicating it — a silent divergence there would make the
-    simulator report a book the engine would never produce.
+    Calendar days → approx trading bars (5/7), +2 cushion, floor of 2. The
+    fallback (~3 trading months) applies ONLY when `window` is None — i.e. age
+    is genuinely unknown (no trade journal). A KNOWN age of 0 (a same-day buy)
+    is a real, known window and must floor to 2 bars, NOT fall back to ~3
+    months — routing age_days=0 into the fallback was the 2026-09-11 ON
+    incident: a brand-new position's "peak" was measured against a pre-entry
+    high the position never lived through, manufacturing a 42% drawdown on a
+    name that was actually up 2.9%. A negative window (not currently reachable
+    — trade dates are capped at today) is handled the same safe way as 0: it
+    floors to 2 bars rather than falling back, since a shorter window can only
+    shrink a measured drawdown, never fabricate one.
     """
-    if window is not None and window > 0:
+    if window is not None:
         return max(2, int(round(window * 5.0 / 7.0)) + 2)
     return DETERIORATION_PEAK_FALLBACK_BARS
 
@@ -344,6 +347,39 @@ def assess_holding(
         "shares": int(shares),
         "dollar_risk": round(float(price) * shares, 0),   # position size — Act-Today sort tiebreak
     }
+
+
+def candidate_deterioration_flag(ticker, df, spy_df=None, *, price, atr=None) -> dict | None:
+    """Warn-only deterioration read on a NOT-YET-OWNED buy candidate's own chart.
+
+    Reuses `assess_holding`'s tier classification with deliberately synthetic
+    holding inputs, since a candidate has no position to describe:
+      - avg_cost=price  → the candidate can never appear "underwater" — there is
+        no cost basis (we don't own it), so the underwater-vs-cost escalation
+        leg must be inert rather than fabricate a loss out of nothing.
+      - shares=0.0      → the dollar-loss escalation leg is likewise inert (no
+        shares means no dollar P&L to speak of).
+      - age_days=None   → deliberately uses the ~3-month fallback window. This
+        is NOT the age-0 bug the peak-window fix above closes — it's a
+        genuinely different, correct use of the same fallback: a candidate has
+        no entry date at all, so "age is unknown" is simply true here, and the
+        question being asked is "has this stock's own chart been deteriorating
+        over the last ~3 months," not "is a position we hold underwater."
+
+    Fails closed to None on missing SMA_50 / no df / price <= 0 — inherits
+    `assess_holding`'s own guards rather than duplicating them.
+    """
+    return assess_holding(
+        ticker,
+        df,
+        spy_df,
+        price=price,
+        atr=atr,
+        avg_cost=price,
+        shares=0.0,
+        age_days=None,
+        peak_window_days=None,
+    )
 
 
 # ── Risk-off protective de-risk (Phase 2) ─────────────────────────────────────

@@ -22,6 +22,7 @@ from stock_analyzer.constants import (
     ADD_WINNER_COOLDOWN_DAYS,
     ADD_WINNER_MIN_GAP_PCT,
     COMPOSITE_BUY,
+    DETERIORATION_TREND_MA,
     EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT,
     EARNINGS_OVERWEIGHT_TRIM_PCT,
     LARGE_POSITION_WEIGHT_PCT,
@@ -1661,3 +1662,114 @@ def test_position_size_for_render_zero_price_still_returns_empty():
         entry_lo=None, entry_hi=None,
     )
     assert sz == {}
+
+
+# ── _grow_today: pre-purchase deterioration warning (2026-09-11 ON incident) ─
+# A new_pick's OWN chart can be deteriorating even though the composite still
+# rates it a buy. This is warn-only — the pick must never be suppressed or
+# reordered — and needs spy_df threaded through for the TRIM tier (which
+# requires rel_strength < 0) to ever be reachable.
+
+_DET_MA = f"SMA_{DETERIORATION_TREND_MA}"
+
+
+def _det_frame(closes):
+    """Indicator frame with Close + the trend-MA column assess_holding reads."""
+    import pandas as pd
+    close = pd.Series([float(c) for c in closes])
+    return pd.DataFrame({"Close": close, _DET_MA: close.rolling(DETERIORATION_TREND_MA).mean()})
+
+
+def _det_candidate_df():
+    """80-bar flat-then-decline: last close is 10% off a still-in-window peak
+    and below its trend MA for the last 3 sessions — TRIM-floor territory
+    (not deep enough to trip the EXIT shortcut on its own).
+    """
+    head = [100.0] * 80
+    tail = [95.0, 93.0, 91.0, 90.0, 90.0, 90.0, 90.0, 90.0, 90.0, 90.0]
+    return _det_frame(head + tail)
+
+
+def _det_spy_df():
+    """SPY drifting up ~4.75% over the relative-strength lookback while the
+    candidate above fell 10% over the same window — a genuine weak-vs-SPY read.
+    """
+    import pandas as pd
+    closes = [200.0] * 70 + [200.0 + 0.5 * i for i in range(20)]
+    return pd.DataFrame({"Close": pd.Series([float(c) for c in closes])})
+
+
+def test_grow_today_new_pick_gets_deterioration_warning_not_suppressed():
+    """A deteriorating candidate must still appear in new_picks, annotated —
+    never suppressed or removed. Same-count regression guard: with the
+    feature exercised, the pick count must equal the no-signal case.
+    """
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "price": 90.0}])
+    composites = {
+        "NEW": {
+            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+            "fundamentals_available": True, "df": _det_candidate_df(),
+        },
+    }
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       composites=composites, spy_df=_det_spy_df())
+    pick = find_item(grow["new_picks"], "NEW")
+    assert pick is not None
+    assert pick["deterioration_warning"] is not None
+    assert "NEW" in pick["deterioration_warning"]
+    assert "own recent price action" in pick["deterioration_warning"]
+
+    # Same ticker, no deteriorating history (no "df") -> no warning, but the
+    # pick still appears — proves the count is unaffected either way.
+    composites_clean = {
+        "NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True},
+    }
+    grow_clean = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                             composites=composites_clean, spy_df=_det_spy_df())
+    pick_clean = find_item(grow_clean["new_picks"], "NEW")
+    assert pick_clean is not None
+    assert pick_clean["deterioration_warning"] is None
+    assert len(grow["new_picks"]) == len(grow_clean["new_picks"])
+
+
+def test_grow_today_deterioration_warning_fails_safe_to_watch_without_spy_df():
+    """Without spy_df, rel_strength defaults to 0.0 inside assess_holding, so
+    the TRIM tier (rel_strength < 0) can never fire — a fail-safe UNDER-warn,
+    not a crash. The same candidate must NOT be flagged TRIM here.
+    """
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "price": 90.0}])
+    composites = {
+        "NEW": {
+            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+            "fundamentals_available": True, "df": _det_candidate_df(),
+        },
+    }
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       composites=composites)   # spy_df not passed -> None
+    pick = find_item(grow["new_picks"], "NEW")
+    assert pick is not None
+    if pick["deterioration_warning"] is not None:
+        assert "a weakening trend" not in pick["deterioration_warning"]  # TRIM phrase
+
+
+def test_grow_today_deterioration_warning_flags_trim_with_real_spy_df():
+    """With a real weak-vs-SPY benchmark supplied, the SAME candidate DOES get
+    flagged — proves the spy_df plumbing works end to end, not just that the
+    None case fails safe.
+    """
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "price": 90.0}])
+    composites = {
+        "NEW": {
+            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+            "fundamentals_available": True, "df": _det_candidate_df(),
+        },
+    }
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       composites=composites, spy_df=_det_spy_df())
+    pick = find_item(grow["new_picks"], "NEW")
+    assert pick is not None
+    assert pick["deterioration_warning"] is not None
+    assert "a weakening trend" in pick["deterioration_warning"]  # TRIM tier phrase

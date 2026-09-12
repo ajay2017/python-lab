@@ -8277,6 +8277,8 @@ if page == "🏠 Home":
             if _gp.get("sector_elevated_warning"):
                 st.caption(f"⚠️ {_gp['sector_elevated_warning']}")
 
+            if _gp.get("deterioration_warning"): st.caption(_gp["deterioration_warning"])
+
             if st.button(f"▶ Analyze {_gp['ticker']}", key=f"_db_grow_{_gp['ticker']}"):
                 st.session_state["_pending_page"]    = "📈 Analysis"
                 st.session_state["_analysis_ticker"] = _gp["ticker"]
@@ -34893,6 +34895,8 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 **Data freshness gate:** candidates require fresh fundamentals (≤ 2 calendar days old) and data not served from a cache fallback. If data is stale, the signal is held back and shown as **"Pending Verification"** with a **Refresh** button instead — once you refresh and it clears the composite gate (≥ 65), it surfaces.
 
 **Two entry triggers in "New Positions to Initiate":** curated scanner picks that passed the momentum gate show **"Momentum X/100"** in the header, while movers surfaced from the discovery universe show **"Breakout today"** with the day-change badge (e.g. "+7.6% today"). Both types pass the same portfolio-level gates (composite ≥ 65, sector diversity, concentration limits, macro event check).
+
+**A "📉 …" caption on a New Position pick discloses the stock's own recent technical weakness** (down materially from a recent high, below its 50-day trend) — this describes the stock's chart, not a position you hold, since you don't own it yet. It never suppresses the pick — the composite still rates it a buy — it's shown so you can enter with full context rather than being surprised hours later if the same weakness triggers a loss-protection card once you do own it.
 
 **⏱️ Entry Timing caution.** A card may show a small caption when momentum is running well ahead of the composite score for that specific pick — in your own history, similar cases have often looked calm in the first few days but underperformed by the time the position matured. This never changes the recommendation or blocks anything; it's the same pattern the 📊 Predictive Analytics → ⏱️ Entry Timing tab tracks in full, with current numbers.
 
