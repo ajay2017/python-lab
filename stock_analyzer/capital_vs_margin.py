@@ -178,6 +178,45 @@ def resolve_interest_charged(part: dict, charged_sign: str | None) -> dict:
     return {"charged": sum_neg, "earned": sum_pos, "confirmed": False}
 
 
+def window_income_events(income_events: "list[dict]", golive: "_date | None", end: "_date | None") -> "list[dict]":
+    """Filter income events to `[golive, end]` inclusive, dropping any row
+    whose `event_date` is unparseable.
+
+    THE BUG THIS FIXES (F-267, confirmed 2026-09-11): `interest_partition`
+    was being summed over the ENTIRE loaded event history with no date
+    filter, while everything it feeds — `margin_contribution`'s
+    `extra_exposure_pnl`/`net_value`, `break_even_rate`,
+    `projected_annual_interest`, and the deleverage scenario's
+    `interest_saved` — is scoped to the reconstruction window
+    `[golive, end]`. An interest charge from months before go-live (e.g. a
+    January MINT margin-interest row) inflated the "Interest since
+    go-live" headline even though it predates the window the rest of the
+    page measures. Filtering the shared `income_events` input ONCE, at the
+    render layer's single call site, fixes every one of those downstream
+    figures together rather than patching each formula independently.
+
+    `golive is None` means the window itself is undefined (the caller
+    couldn't establish a go-live floor) — returns the events UNCHANGED
+    rather than guessing, matching this module's "gap, never zero-fill/
+    guess" convention elsewhere; silently treating "no window" as "drop
+    everything" would fabricate a $0 total. `end is None` applies only the
+    lower bound. Never mutates `income_events`.
+    """
+    if golive is None:
+        return list(income_events or [])
+    out = []
+    for e in income_events or []:
+        d = _parse_date(e.get("event_date"))
+        if d is None:
+            continue
+        if d < golive:
+            continue
+        if end is not None and d > end:
+            continue
+        out.append(e)
+    return out
+
+
 # ── 2. Anchor selection + backward cash reconstruction ─────────────────────
 
 def resolve_anchor(account_cash_rec: dict | None, recorded_df, stale_days_limit: int, now) -> "dict | None":

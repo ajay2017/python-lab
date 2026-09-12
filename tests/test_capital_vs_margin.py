@@ -747,3 +747,127 @@ def test_weekly_interest_charged_uses_same_unconfirmed_convention():
     week_b = date(2026, 8, 24).isocalendar()[:2]
     assert out[week_a] == pytest.approx(5.0)  # unconfirmed convention -> negative leg
     assert out[week_b] == pytest.approx(1.0)
+
+
+# ── window_income_events (F-267) ────────────────────────────────────────────
+
+def test_window_income_events_boundaries_inclusive_both_ends():
+    golive = date(2026, 6, 14)
+    end = date(2026, 9, 10)
+    events = [
+        {"event_type": "interest", "amount": -1.0, "event_date": "2026-06-14"},  # == golive, kept
+        {"event_type": "interest", "amount": -2.0, "event_date": "2026-09-10"},  # == end, kept
+        {"event_type": "interest", "amount": -3.0, "event_date": "2026-06-13"},  # golive - 1, dropped
+        {"event_type": "interest", "amount": -4.0, "event_date": "2026-09-11"},  # end + 1, dropped
+    ]
+    out = cvm.window_income_events(events, golive, end)
+    dates_kept = {e["event_date"] for e in out}
+    assert dates_kept == {"2026-06-14", "2026-09-10"}
+
+
+def test_window_income_events_golive_none_returns_unchanged():
+    events = [
+        {"event_type": "interest", "amount": -1.0, "event_date": "2026-01-15"},
+        {"event_type": "interest", "amount": -2.0, "event_date": "2026-09-10"},
+    ]
+    original = [dict(e) for e in events]
+    out = cvm.window_income_events(events, None, date(2026, 9, 10))
+    assert out == original
+    assert events == original  # never mutated
+
+
+def test_window_income_events_end_none_applies_only_lower_bound():
+    golive = date(2026, 6, 14)
+    events = [
+        {"event_type": "interest", "amount": -1.0, "event_date": "2026-06-13"},  # dropped
+        {"event_type": "interest", "amount": -2.0, "event_date": "2026-06-14"},  # kept
+        {"event_type": "interest", "amount": -3.0, "event_date": "2030-01-01"},  # far future, still kept
+    ]
+    out = cvm.window_income_events(events, golive, None)
+    dates_kept = {e["event_date"] for e in out}
+    assert dates_kept == {"2026-06-14", "2030-01-01"}
+
+
+def test_window_income_events_drops_unparseable_date():
+    golive = date(2026, 6, 14)
+    end = date(2026, 9, 10)
+    events = [
+        {"event_type": "interest", "amount": -1.0, "event_date": "not-a-date"},
+        {"event_type": "interest", "amount": -2.0, "event_date": None},
+        {"event_type": "interest", "amount": -3.0, "event_date": "2026-07-01"},
+    ]
+    out = cvm.window_income_events(events, golive, end)
+    assert len(out) == 1
+    assert out[0]["amount"] == -3.0
+
+
+def test_window_income_events_fixes_the_actual_bug_january_mint_excluded():
+    """Regression test for F-267: a January MINT margin-interest charge
+    dated before go-live must not inflate the 'Interest since go-live'
+    total once the shared income list is windowed."""
+    golive = date(2026, 6, 14)
+    end = date(2026, 9, 10)
+    events = [
+        {"event_type": "interest", "amount": -171.0, "event_date": "2026-01-15"},  # pre-golive MINT charge
+        {"event_type": "interest", "amount": -50.0, "event_date": "2026-07-01"},   # in-window
+        {"event_type": "interest", "amount": -56.0, "event_date": "2026-08-15"},   # in-window
+    ]
+    windowed = cvm.window_income_events(events, golive, end)
+    charged_windowed = cvm.interest_partition(windowed)["sum_neg_magnitude"]
+    charged_unwindowed = cvm.interest_partition(events)["sum_neg_magnitude"]
+
+    assert charged_windowed == pytest.approx(106.0)  # only the two in-window charges
+    assert charged_windowed < charged_unwindowed
+    assert charged_unwindowed == pytest.approx(277.0)
+
+
+def test_window_income_events_reconstruct_daily_cash_unaffected():
+    """`reconstruct_daily_cash` never references an event outside
+    [golive, anchor_date] anyway (its backward walk only looks up deltas by
+    date within that range) -- confirm receiving the pre-filtered list
+    produces an IDENTICAL result to receiving the raw list, on a fixture
+    with events on both sides of both boundaries."""
+    trades = _trades_df([
+        {"traded_at": "2026-06-14T16:00:00-04:00", "action": "BUY", "shares": 10,
+         "price": 100, "broker_txn_id": "t1"},
+    ])
+    flows = [{"flow_date": "2026-06-14", "flow_type": "baseline", "amount": 5000.0}]
+    income = [
+        {"event_type": "interest", "amount": -171.0, "event_date": "2026-01-15"},  # before golive
+        {"event_type": "interest", "amount": -3.0, "event_date": "2026-06-15"},    # in window
+        {"event_type": "interest", "amount": -9.0, "event_date": "2026-09-15"},    # after anchor date
+    ]
+    anchor = {"cash": 1000.0, "date": date(2026, 6, 16), "src": "live"}
+    golive = date(2026, 6, 14)
+
+    windowed = cvm.window_income_events(income, golive, anchor["date"])
+    series_raw = cvm.reconstruct_daily_cash(anchor, golive, trades, flows, income)
+    series_windowed = cvm.reconstruct_daily_cash(anchor, golive, trades, flows, windowed)
+    assert series_raw == series_windowed
+
+
+def test_window_income_events_coherence_with_margin_contribution_net_value():
+    """Both terms of net_value = extra_exposure_pnl - interest_charged must
+    now share the SAME [golive, end] window: extra_exposure_pnl is
+    structurally confined to `series`'s own date range, so windowing
+    income_events to that identical range before computing interest_charged
+    means neither term can see data outside it."""
+    series, book_returns = _synthetic_series_3day()
+    golive, end = series[0]["date"], series[-1]["date"]
+    events = [
+        {"event_type": "interest", "amount": -100.0, "event_date": "2026-08-01"},  # before golive
+        {"event_type": "interest", "amount": -4.0, "event_date": "2026-08-19"},    # inside window
+        {"event_type": "interest", "amount": -9.0, "event_date": "2026-09-01"},    # after end
+    ]
+    windowed = cvm.window_income_events(events, golive, end)
+    charged = cvm.resolve_interest_charged(cvm.interest_partition(windowed), "negative")["charged"]
+    assert charged == pytest.approx(4.0)  # only the in-window charge
+
+    mc = cvm.margin_contribution(series, book_returns, interest_charged=charged)
+    assert mc["net_value"] == pytest.approx(mc["extra_exposure_pnl"] - 4.0)
+
+    # Without windowing, pre-golive/post-end noise would have leaked into
+    # the same figure -- proving the fix actually changes the number.
+    charged_unwindowed = cvm.resolve_interest_charged(cvm.interest_partition(events), "negative")["charged"]
+    assert charged_unwindowed == pytest.approx(113.0)
+    assert charged_unwindowed != charged

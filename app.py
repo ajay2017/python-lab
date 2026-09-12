@@ -32614,6 +32614,18 @@ elif page == "💰 Account":
         # drops its live-sync twin) could remove the only broker-synced-dated
         # candidate for that event and silently shift the go-live date.
         _cvm_income = broker_sync.dedupe_income_events(_cvm_income)
+        # F-267: window to [golive, anchor date] BEFORE any downstream sum
+        # (interest_partition, weekly_interest_charged, drawdown_decomposition,
+        # and the fingerprint's len() below) — the reconstruction window is
+        # [golive, anchor["date"]], and an interest charge from before golive
+        # was previously counted in the "Interest since go-live" headline
+        # despite predating the window entirely. `_cvm_anchor` can be None
+        # here (golive is then also None per the assignment above, and
+        # `window_income_events` returns the list unchanged in that case) —
+        # guard the `["date"]` lookup so this never raises on that path.
+        _cvm_income = capital_vs_margin.window_income_events(
+            _cvm_income, _cvm_golive, _cvm_anchor["date"] if _cvm_anchor is not None else None
+        )
 
         if _cvm_anchor is None:
             st.info(
