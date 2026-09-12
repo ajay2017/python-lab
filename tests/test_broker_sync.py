@@ -919,3 +919,128 @@ def test_one_existing_row_cannot_suppress_two_new_activities():
     # First one matches and is suppressed; the second (no more existing rows
     # left in that bucket) is genuinely new and must pass through.
     assert len(out["income_events"]) == 1
+
+
+# ─── find_unreconciled_near_duplicates — the 2026-09-12 forward-looking check ─
+# All three real cross-path dedup bugs (transaction-id format, dividend
+# subtype, fee/margin-interest subtype) were found only by a human manually
+# diffing a chart total against a real statement. This diagnostic is the
+# automated version of that same check: same ticker/signed-cents/date-window
+# match as the real dedup, but flags pairs that DON'T share a dedup bucket
+# instead of merging pairs that do.
+
+def test_near_dup_empty_input_returns_empty_list():
+    assert bs.find_unreconciled_near_duplicates([]) == []
+
+
+def test_near_dup_finds_a_bucket_mismatch_pair():
+    """The general shape of all three real bugs: same ticker/cents/date,
+    different canonical bucket (here: a hypothetical still-unfixed vocabulary
+    gap, MINT vs plain INTEREST, deliberately never aliased since it's
+    unconfirmed) — must be flagged as a near-duplicate."""
+    csv_mint = _ev(None, "interest", "MINT", -10.00, "2026-06-01", "csv:2026-06-01:MINT::-1000")
+    live_interest = _ev(None, "interest", "INTEREST", -10.00, "2026-06-01", "live-uuid-1")
+    out = bs.find_unreconciled_near_duplicates([csv_mint, live_interest])
+    assert len(out) == 1
+    assert out[0]["csv_event"] == csv_mint
+    assert out[0]["live_event"] == live_interest
+
+
+def test_near_dup_does_not_flag_an_already_reconciled_pair():
+    """A pair the strict dedup ALREADY recognizes (e.g. the fixed dividend
+    case, CDIV vs DIVIDEND) is a properly-handled duplicate, not a near-miss
+    — must not double-report what dedupe_income_events already resolves."""
+    csv_row = _ev("AAPL", "dividend", "CDIV", 5.00, "2026-06-01", "csv:2026-06-01:CDIV:AAPL:500")
+    live_row = _ev("AAPL", "dividend", "DIVIDEND", 5.00, "2026-06-01", "live-uuid-2")
+    assert bs.find_unreconciled_near_duplicates([csv_row, live_row]) == []
+
+
+def test_near_dup_ignores_within_path_pairs():
+    """Only CSV-vs-live pairs are compared — two independent CSV rows (or
+    two independent live rows) sharing ticker/cents/date aren't the risk
+    this exists to catch."""
+    csv_a = _ev("AAPL", "dividend", "CDIV", 5.00, "2026-06-01", "csv:a")
+    csv_b = _ev("AAPL", "dividend", "MDIV", 5.00, "2026-06-01", "csv:b")
+    assert bs.find_unreconciled_near_duplicates([csv_a, csv_b]) == []
+
+
+def test_near_dup_requires_matching_ticker():
+    csv_row = _ev("AAPL", "dividend", "CDIV", 5.00, "2026-06-01", "csv:a")
+    live_row = _ev("MSFT", "dividend", "DIVIDEND", 5.00, "2026-06-01", "live-uuid")
+    assert bs.find_unreconciled_near_duplicates([csv_row, live_row]) == []
+
+
+def test_near_dup_requires_exact_signed_cents():
+    csv_row = _ev("AAPL", "dividend", "CDIV", 5.00, "2026-06-01", "csv:a")
+    live_row = _ev("AAPL", "dividend", "DIVIDEND", 5.01, "2026-06-01", "live-uuid")
+    assert bs.find_unreconciled_near_duplicates([csv_row, live_row]) == []
+
+
+def test_near_dup_respects_date_tolerance_boundary():
+    csv_row = _ev(None, "interest", "MINT", -10.00, "2026-06-01", "csv:a")
+    within = _ev(
+        None, "interest", "INTEREST", -10.00,
+        (pd.Timestamp("2026-06-01") + pd.Timedelta(days=INCOME_EVENT_DEDUP_DATE_TOL_DAYS)).date().isoformat(),
+        "live-within",
+    )
+    outside = _ev(
+        None, "interest", "INTEREST", -10.00,
+        (pd.Timestamp("2026-06-01") + pd.Timedelta(days=INCOME_EVENT_DEDUP_DATE_TOL_DAYS + 1)).date().isoformat(),
+        "live-outside",
+    )
+    assert len(bs.find_unreconciled_near_duplicates([csv_row, within])) == 1
+    assert bs.find_unreconciled_near_duplicates([csv_row, outside]) == []
+
+
+def test_near_dup_does_not_mutate_input():
+    events = [
+        _ev(None, "interest", "MINT", -10.00, "2026-06-01", "csv:a"),
+        _ev(None, "interest", "INTEREST", -10.00, "2026-06-01", "live-b"),
+    ]
+    before = [dict(e) for e in events]
+    bs.find_unreconciled_near_duplicates(events)
+    assert events == before
+
+
+# ─── reconciliation_freshness — last-import date + unreconciled live count ──
+
+def test_freshness_none_events_returns_none():
+    assert bs.reconciliation_freshness([]) is None
+
+
+def test_freshness_no_csv_rows_reports_no_import():
+    live_only = [_ev(None, "fee", "FEE", -5.00, "2026-06-01", "live-uuid")]
+    out = bs.reconciliation_freshness(live_only)
+    assert out["last_csv_import"] is None
+    assert out["unreconciled_live_count"] == 1
+
+
+def test_freshness_reports_most_recent_csv_fetched_at():
+    older = {**_ev(None, "interest", "MINT", -10.00, "2026-06-01", "csv:a"), "fetched_at": "2026-09-01T00:00:00+00:00"}
+    newer = {**_ev(None, "interest", "MINT", -20.00, "2026-07-01", "csv:b"), "fetched_at": "2026-09-11T12:00:00+00:00"}
+    out = bs.reconciliation_freshness([older, newer])
+    assert out["last_csv_import"] == "2026-09-11"
+
+
+def test_freshness_reconciled_live_row_not_counted_as_unreconciled():
+    csv_row = {**_ev("AAPL", "dividend", "CDIV", 5.00, "2026-06-01", "csv:a"), "fetched_at": "2026-09-01T00:00:00+00:00"}
+    live_row = _ev("AAPL", "dividend", "DIVIDEND", 5.00, "2026-06-01", "live-b")
+    out = bs.reconciliation_freshness([csv_row, live_row])
+    assert out["unreconciled_live_count"] == 0
+
+
+def test_freshness_unmatched_live_row_counted_as_unreconciled():
+    csv_row = {**_ev("AAPL", "dividend", "CDIV", 5.00, "2026-06-01", "csv:a"), "fetched_at": "2026-09-01T00:00:00+00:00"}
+    live_row = _ev("MSFT", "dividend", "DIVIDEND", 9.00, "2026-06-05", "live-b")
+    out = bs.reconciliation_freshness([csv_row, live_row])
+    assert out["unreconciled_live_count"] == 1
+
+
+def test_freshness_does_not_mutate_input():
+    events = [
+        {**_ev(None, "interest", "MINT", -10.00, "2026-06-01", "csv:a"), "fetched_at": "2026-09-01T00:00:00+00:00"},
+        _ev(None, "fee", "FEE", -5.00, "2026-06-01", "live-b"),
+    ]
+    before = [dict(e) for e in events]
+    bs.reconciliation_freshness(events)
+    assert events == before

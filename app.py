@@ -33400,6 +33400,12 @@ elif page == "💰 Account":
             # under independent ids before the write-time defense shipped (or
             # for any gap it doesn't close) — collapse those before charting
             # so this trend never double-counts a real event.
+            # Raw (pre-dedup) copy kept for the reconciliation diagnostics
+            # below -- both need to see rows the strict dedup DIDN'T merge
+            # (that's the point of find_unreconciled_near_duplicates), and
+            # reconciliation_freshness computes its own match logic
+            # independent of what dedupe_income_events already did.
+            _snap_income_raw = list(_snap_income)
             _snap_income = broker_sync.dedupe_income_events(_snap_income)
             if not _snap_income:
                 st.caption("No dividend/interest/fee events synced yet.")
@@ -33544,6 +33550,58 @@ elif page == "💰 Account":
                     f"**-{_m(f'\\${_sii_int_charged:,.2f}')}** charged (margin interest) "
                     "— shown separately, never netted, so a credit can't mask a charge."
                 )
+
+                # Reconciliation awareness (2026-09-12 follow-on to F-268):
+                # three real cross-path dedup bugs in a row were each found
+                # only by manually diffing a chart total against a real
+                # statement -- no cron log ever flagged them, since each was
+                # a SUCCESSFUL write with the WRONG classification. These two
+                # diagnostics are the automated version of that same check,
+                # surfaced here so a future recurrence shows up before it
+                # silently inflates a total again. Both read-only/awareness
+                # -- never merge, drop, or gate anything.
+                _sii_freshness = broker_sync.reconciliation_freshness(_snap_income_raw)
+                if _sii_freshness is not None:
+                    _sii_last_import = _sii_freshness["last_csv_import"]
+                    _sii_unrecon = _sii_freshness["unreconciled_live_count"]
+                    if _sii_last_import:
+                        _sii_fresh_txt = f"📋 Last statement import: **{_sii_last_import}**"
+                        if _sii_unrecon:
+                            _sii_fresh_txt += (
+                                f" · {_sii_unrecon} broker-synced event(s) "
+                                "not yet cross-checked against a statement."
+                            )
+                        else:
+                            _sii_fresh_txt += " · every broker-synced event has a matching statement row."
+                        st.caption(_sii_fresh_txt)
+                    else:
+                        st.caption(
+                            "📋 No statement import yet — the figures above are broker-sync "
+                            "only, not yet cross-checked against a real Robinhood statement."
+                        )
+
+                _sii_near_dups = broker_sync.find_unreconciled_near_duplicates(_snap_income_raw)
+                if _sii_near_dups:
+                    with st.expander(
+                        f"⚠️ {len(_sii_near_dups)} possible unreconciled duplicate(s) — worth a manual check"
+                    ):
+                        st.caption(
+                            "Each pair below shares the same ticker, exact signed amount, and a "
+                            "nearby date, but wasn't automatically recognized as the same event — "
+                            "the exact shape of three real bugs found and fixed on 2026-09-11/12. "
+                            "This does **not** mean today's totals are wrong (each side is still "
+                            "counted correctly on its own); it means the pair is worth a manual "
+                            "look against your statement, the same way those three were found."
+                        )
+                        for _sii_pair in _sii_near_dups:
+                            _sii_c, _sii_l = _sii_pair["csv_event"], _sii_pair["live_event"]
+                            _sii_c_amt = _m(f"\\${abs(float(_sii_c.get('amount') or 0)):,.2f}")
+                            _sii_l_amt = _m(f"\\${abs(float(_sii_l.get('amount') or 0)):,.2f}")
+                            st.caption(
+                                f"- **{_sii_c.get('ticker') or '—'}** — statement: "
+                                f"{_sii_c.get('event_date')} `{_sii_c.get('raw_code')}` {_sii_c_amt} "
+                                f"vs. broker sync: {_sii_l.get('event_date')} `{_sii_l.get('raw_code')}` {_sii_l_amt}"
+                            )
 
                 if not db.is_readonly():
                     with st.expander("📥 Import from Robinhood Statement"):

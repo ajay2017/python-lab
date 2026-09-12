@@ -1140,6 +1140,117 @@ def dedupe_income_events(events: list[dict]) -> list[dict]:
     return [ev for i, ev in enumerate(events) if i not in dropped]
 
 
+def _is_csv_sourced(ev: dict) -> bool:
+    """True when an income event originated from the manual CSV statement
+    import, identified by its deterministic `csv:{date}:{code}:{ticker}:
+    {cents}` id — matches the same tie-break test `dedupe_income_events`
+    already uses inline."""
+    return str(ev.get("snaptrade_txn_id") or "").startswith("csv:")
+
+
+def find_unreconciled_near_duplicates(events: "list[dict]") -> "list[dict]":
+    """Find CSV/live-sync income-event pairs that plausibly describe the
+    SAME real-world event (same ticker, same SIGNED amount to the cent,
+    event dates within `INCOME_EVENT_DEDUP_DATE_TOL_DAYS`) but were NOT
+    recognized as duplicates by the strict canonical-subtype dedup bucket —
+    i.e. exactly the shape of every cross-path dedup bug found 2026-09-11/12
+    (a transaction-id format mismatch, a dividend subtype mismatch, a fee/
+    margin-interest subtype mismatch). Each of those was found only by a
+    human manually comparing a chart total against a real statement; this
+    is the automated version of that same check, run BEFORE it silently
+    inflates a total rather than after.
+
+    Advisory only — never merges, drops, or reorders anything. A returned
+    pair means "these look like the same event but weren't recognized as
+    one — worth a manual check," not a confirmed duplicate; a NEW,
+    genuinely different code/vocabulary showing up here is the expected way
+    a fourth instance of this bug class would first become visible.
+
+    Only compares a CSV-sourced row against a live-sync-sourced row —
+    within-path coincidences (e.g. two independent CSV rows) are not the
+    risk this exists to catch, and comparing every row against every other
+    row would just add noise.
+
+    Returns a list of `{"csv_event": ..., "live_event": ...}` dicts, `[]`
+    when none are found (a real, positive "checked, nothing found" result,
+    never an unknown). Pure; never raises; does not mutate input.
+    """
+    if not events:
+        return []
+
+    csv_rows = [ev for ev in events if _is_csv_sourced(ev)]
+    live_rows = [ev for ev in events if not _is_csv_sourced(ev)]
+    pairs: "list[dict]" = []
+    for csv_ev in csv_rows:
+        csv_cents = _income_signed_cents(csv_ev)
+        csv_date = _income_parse_date(csv_ev.get("event_date"))
+        csv_ticker = str(csv_ev.get("ticker") or "").strip().upper()
+        if csv_cents is None or csv_date is None:
+            continue
+        for live_ev in live_rows:
+            live_cents = _income_signed_cents(live_ev)
+            live_date = _income_parse_date(live_ev.get("event_date"))
+            live_ticker = str(live_ev.get("ticker") or "").strip().upper()
+            if live_cents is None or live_date is None:
+                continue
+            if csv_ticker != live_ticker or csv_cents != live_cents:
+                continue
+            if abs((csv_date - live_date).days) > INCOME_EVENT_DEDUP_DATE_TOL_DAYS:
+                continue
+            if _income_dedup_bucket_key(csv_ev) == _income_dedup_bucket_key(live_ev):
+                continue  # already correctly recognized as the same event
+            pairs.append({"csv_event": csv_ev, "live_event": live_ev})
+    return pairs
+
+
+def reconciliation_freshness(events: "list[dict]") -> "dict | None":
+    """How current is the CSV-vs-live-sync reconciliation for this income
+    event list? Returns `None` only when there are no events at all —
+    otherwise always a dict, even when there's never been a CSV import.
+
+    `{"last_csv_import": ISO date str | None, "unreconciled_live_count": int}`
+
+    `last_csv_import` is the most recent `fetched_at` among CSV-sourced
+    rows — `None` if no CSV row has ever been imported. `unreconciled_
+    live_count` counts live-sync rows that have NO matching CSV row under
+    the strict dedup bucket match — i.e. events whose classification has
+    never been cross-checked against an actual statement. A live-sync row
+    can be correctly classified and still count here; this is a freshness
+    signal, not an error signal (that's `find_unreconciled_near_duplicates`).
+
+    Pure; never raises; does not mutate input.
+    """
+    if not events:
+        return None
+
+    csv_rows = [ev for ev in events if _is_csv_sourced(ev)]
+    live_rows = [ev for ev in events if not _is_csv_sourced(ev)]
+
+    last_import = None
+    for ev in csv_rows:
+        ts = pd.to_datetime(ev.get("fetched_at"), errors="coerce", utc=True)
+        if pd.isna(ts):
+            continue
+        if last_import is None or ts > last_import:
+            last_import = ts
+
+    unreconciled = 0
+    for live_ev in live_rows:
+        key = _income_dedup_bucket_key(live_ev)
+        matched = any(
+            _income_dedup_bucket_key(csv_ev) == key
+            and _income_is_duplicate(live_ev, csv_ev, INCOME_EVENT_DEDUP_DATE_TOL_DAYS)
+            for csv_ev in csv_rows
+        )
+        if not matched:
+            unreconciled += 1
+
+    return {
+        "last_csv_import": last_import.date().isoformat() if last_import is not None else None,
+        "unreconciled_live_count": unreconciled,
+    }
+
+
 def parse_robinhood_csv_income(csv_text: str) -> list[dict]:
     """Parse a Robinhood account-statement CSV and return income-event rows.
 
