@@ -960,14 +960,14 @@ _RH_FEE_CODES = {"GOLD"}
 #   STOCK_DIVIDEND             -> "stock_dividend"        (kept separate)
 #   INT + GMPC + INTEREST      -> "interest"
 #   MINT                       -> "margin_interest"       (its OWN subtype,
-#       NOT merged into "interest" — MINT is confirmed real margin interest
-#       against the owner's actual RH statement, but whether SnapTrade's live
-#       INTEREST type ever represents the same underlying charge is UNKNOWN
-#       — no live SnapTrade payload has been observed to confirm it. A CSV
-#       MINT row and a live-sync equivalent, if one exists, will therefore
-#       NOT dedup against each other until that's confirmed. Acceptable:
-#       MINT had zero cross-path collision before this fix, so this is a
-#       known gap, not a regression.)
+#       NOT merged into plain "interest" — MINT is confirmed real margin
+#       interest against the owner's actual RH statement. Whether SnapTrade's
+#       live INTEREST type ever represents the same underlying charge is
+#       still UNKNOWN — no live payload has confirmed it, so a CSV MINT row
+#       and a live INTEREST-typed row will NOT dedup against each other.
+#       BUT confirmed 2026-09-12: this account's SnapTrade connector reports
+#       margin interest under live type="FEE", not "INTEREST" — see the
+#       raw-code override below.)
 #   GOLD + FEE + TAX           -> "fee" (TAX merged into fee as the default
 #       choice — no evidence in this codebase that a brokerage-reported TAX
 #       line needs to be tracked separately from a FEE; revisit if that
@@ -1020,17 +1020,37 @@ _DEDUP_BUCKET_ALIASES: dict[str, str] = {
     "manufactured_dividend": "cash_dividend",
 }
 
+# Raw-code-specific override, applied AFTER _DEDUP_BUCKET_ALIASES and keyed
+# on the raw code itself rather than the resolved subtype -- "fee" also
+# covers GOLD and TAX, which are NOT part of this ambiguity and must stay
+# out of the override. Confirmed 2026-09-12, 3-for-3 against the CSV's
+# correctly-tagged MINT rows for the exact same real events (06-26 -$36.59,
+# 07-27 -$29.83, 08-25 -$39.69, all matching to the cent): this account's
+# SnapTrade connector reports "Aggregated Margin Rate" (margin interest)
+# charges under the generic live type="FEE", not "INTEREST" or anything
+# MINT-like. This only changes which bucket a raw_code="FEE" row is CHECKED
+# against for a duplicate -- a standalone live FEE row with no matching CSV
+# MINT row is unaffected: it still stores event_type="fee" and displays as
+# a fee, since dedup only drops a row when it actually finds a match.
+_DEDUP_RAW_CODE_BUCKET_OVERRIDE: dict[str, str] = {
+    "FEE": "margin_interest",
+}
+
 
 def _income_dedup_bucket_key(ev: dict) -> tuple:
     """(ticker, canonical subtype) grouping key shared by the write-time
     defense (`classify_transactions`) and the read-time backstop
-    (`dedupe_income_events`). Applies `_DEDUP_BUCKET_ALIASES` on top of
-    `income_event_subtype()` so cash and manufactured dividends match as the
-    same bucket here even though the subtype function itself keeps them
-    distinct."""
+    (`dedupe_income_events`). Applies `_DEDUP_BUCKET_ALIASES` (subtype-level)
+    and then `_DEDUP_RAW_CODE_BUCKET_OVERRIDE` (raw-code-level, takes
+    precedence) on top of `income_event_subtype()` — so cash and
+    manufactured dividends match as the same bucket, and a live raw_code=
+    "FEE" row is checked against margin_interest, even though
+    `income_event_subtype()` itself keeps all of these distinct."""
     ticker = str(ev.get("ticker") or "").strip().upper()
     subtype = income_event_subtype(ev.get("raw_code"), ev.get("event_type"))
     subtype = _DEDUP_BUCKET_ALIASES.get(subtype, subtype)
+    raw_code = str(ev.get("raw_code") or "").strip().upper()
+    subtype = _DEDUP_RAW_CODE_BUCKET_OVERRIDE.get(raw_code, subtype)
     return ticker, subtype
 
 

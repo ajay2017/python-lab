@@ -810,6 +810,42 @@ def test_mint_and_int_are_never_collapsed_together():
     assert len(out) == 2
 
 
+def test_live_fee_typed_margin_interest_now_collapses_against_csv_mint():
+    """The 2026-09-12 second-day recurrence: this account's SnapTrade
+    connector reports 'Aggregated Margin Rate' (real margin interest)
+    charges under the generic live type="FEE", not "INTEREST" or anything
+    MINT-like -- confirmed 3-for-3 against real production rows. These are
+    the exact 06-26 ($36.59) and 08-25 ($39.69) production pairs (same-day,
+    unlike the 1-3-day-offset dividend pairs): the CSV's correctly-tagged
+    MINT row must survive and the live FEE-typed row must be dropped."""
+    csv_mint = _ev(None, "interest", "MINT", -36.59, "2026-06-26", "csv:2026-06-26:MINT::-3659")
+    live_fee = _ev(None, "fee", "FEE", -36.59, "2026-06-26", "72ebdf97-1aad-421f-9cb9-af933f3de9d9")
+    out = bs.dedupe_income_events([live_fee, csv_mint])
+    assert len(out) == 1
+    assert out[0]["snaptrade_txn_id"] == "csv:2026-06-26:MINT::-3659"
+
+
+def test_gold_subscription_fee_bucket_unaffected_by_fee_raw_code_override():
+    """GOLD (a real, distinct subscription fee) must NOT get swept into the
+    margin_interest bucket just because it shares event_type="fee" with the
+    SnapTrade live "FEE" code -- the override is keyed on the raw code
+    itself, not the coarse subtype, specifically to keep GOLD/TAX out of it."""
+    gold = _ev(None, "fee", "GOLD", -50.00, "2026-01-05", "csv:2026-01-05:GOLD::-5000")
+    mint = _ev(None, "interest", "MINT", -50.00, "2026-01-05", "csv:2026-01-05:MINT::-5000")
+    out = bs.dedupe_income_events([gold, mint])
+    assert len(out) == 2
+
+
+def test_standalone_live_fee_with_no_matching_csv_row_stays_a_fee():
+    """A live FEE-typed row with nothing to match against is left completely
+    alone -- the override only changes what a row is CHECKED against, never
+    reclassifies event_type or drops an unmatched row."""
+    live_fee = _ev(None, "fee", "FEE", -12.34, "2026-03-01", "some-uuid")
+    out = bs.dedupe_income_events([live_fee])
+    assert len(out) == 1
+    assert out[0]["event_type"] == "fee"
+
+
 def test_legacy_rows_with_no_raw_code_still_dedup_via_event_type_fallback():
     """Two legacy rows (raw_code=None) sharing ticker/event_type/amount/date
     still collapse, using event_type as the fallback subtype."""
