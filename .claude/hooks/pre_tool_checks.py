@@ -309,6 +309,13 @@ _GATE_FILES = {
     "stock_analyzer/db.py",             # every persisted write goes through here
     "cron_runner.py",                   # unattended scheduled writer + email
     "stock_analyzer/system_health.py",  # the surface that proves the pipeline ran
+    # Added 2026-09-12: three real data-integrity bugs in this one file in
+    # 24 hours (373b267, c0d03ae, 2295b95 -- cross-path income-event
+    # dedup), each a genuine root cause, not a variant of the same bug.
+    # Classifies/dedupes every SnapTrade transaction before it reaches
+    # db.py's writers -- squarely "DB-write / data-integrity" per CLAUDE.md's
+    # prose policy, which the mechanical list had never actually caught.
+    "stock_analyzer/broker_sync.py",
 }
 
 
