@@ -770,6 +770,36 @@ def test_date_just_past_tolerance_is_NOT_collapsed():
     assert len(out) == 2
 
 
+def test_manufactured_dividend_csv_and_live_dividend_type_now_collapse():
+    """The 2026-09-12 regression: SnapTrade's live-sync feed reported three
+    real manufactured dividends (GD, EOG, COP) under the plain
+    type="DIVIDEND" rather than "SUBSTITUTE_DIVIDEND", so they matched
+    nothing in the CSV-vs-live subtype comparison and double-counted the
+    YTD dividend total by $21.45. This is the GD pair verbatim (both real
+    rows pulled from production): CSV's MDIV row must survive and the live
+    DIVIDEND row must be dropped."""
+    live_row = _ev("GD", "dividend", "DIVIDEND", 7.95, "2026-07-06",
+                    "e174ebc4-6d01-4044-b997-e9cf79e42de4")
+    csv_row = _ev("GD", "dividend", "MDIV", 7.95, "2026-07-07",
+                   "csv:2026-07-07:MDIV:GD:795")
+    out = bs.dedupe_income_events([live_row, csv_row])
+    assert len(out) == 1
+    assert out[0]["snaptrade_txn_id"] == "csv:2026-07-07:MDIV:GD:795"
+
+
+def test_cash_and_manufactured_dividend_now_share_dedup_bucket_by_design():
+    """Documents the accepted trade-off from the fix above: a genuine CDIV
+    and a genuine MDIV landing on the same ticker/day/cents now collapse
+    too, even though income_event_subtype() itself still calls them
+    different subtypes. See the _DEDUP_BUCKET_ALIASES comment in
+    broker_sync.py for why this is judged safer than the alternative."""
+    cash = _ev("AAPL", "dividend", "CDIV", 5.00, "2026-06-01", "csv:cash")
+    manufactured = _ev("AAPL", "dividend", "MDIV", 5.00, "2026-06-01", "csv:manu")
+    assert bs.income_event_subtype("CDIV", "dividend") != bs.income_event_subtype("MDIV", "dividend")
+    out = bs.dedupe_income_events([cash, manufactured])
+    assert len(out) == 1
+
+
 def test_mint_and_int_are_never_collapsed_together():
     """MINT (margin_interest) and INT (interest) are different subtypes even
     at the same ticker/amount/date — the non-merge decision must hold in the

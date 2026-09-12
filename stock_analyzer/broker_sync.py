@@ -935,11 +935,25 @@ _RH_FEE_CODES = {"GOLD"}
 #   CDIV + DIVIDEND            -> "cash_dividend"        (same real event)
 #   MDIV + SUBSTITUTE_DIVIDEND -> "manufactured_dividend" (same real event —
 #       a manufactured/substitute payment from a short-against-the-box or
-#       fully-paid lending program, genuinely DIFFERENT from a regular cash
-#       dividend and deliberately NOT merged into cash_dividend even though
-#       both currently share event_type="dividend" in the DB — merging them
-#       would risk a false match dropping a real distinct event whenever the
-#       amounts happen to coincide on the same ticker/date)
+#       fully-paid lending program, genuinely a DIFFERENT real event from a
+#       regular cash dividend. income_event_subtype() itself keeps these
+#       distinct — e.g. for any future subtype-aware display.
+#
+#       BUT for cross-path DEDUP MATCHING specifically, the two ARE folded
+#       together (see _DEDUP_BUCKET_ALIASES below), reversing the original
+#       2026-09-11 no-merge call. Confirmed 2026-09-12: SnapTrade's live-sync
+#       feed reported three real manufactured dividends (GD $7.95, EOG $5.10,
+#       COP $8.40 — each matching a CSV-confirmed MDIV row on ticker/cents,
+#       dates one day apart) all under the plain `type="DIVIDEND"`, never
+#       `SUBSTITUTE_DIVIDEND` — this account's SnapTrade connector cannot
+#       make the distinction at all, so the original "don't merge, might
+#       false-match a coincidental same-day/same-amount pair" caution was
+#       actively causing a confirmed, repeatable double-count (all 3 pairs
+#       inflated the Cash Activity dividend total by $21.45) instead of
+#       guarding a hypothetical one. Accepted trade-off: a genuine CDIV and
+#       a genuine MDIV landing on the same ticker, same day, same cents
+#       would now incorrectly merge — judged far less likely than the
+#       confirmed failure mode it replaces.)
 #   REI                        -> "reinvested_dividend"  (kept separate; no
 #       confirmed CSV-path equivalent code, so today this can only match
 #       within the live-sync path — that's fine, it's still correct)
@@ -999,12 +1013,25 @@ def income_event_subtype(raw_code: "str | None", event_type: str) -> str:
     return event_type
 
 
+# Folded together for DEDUP MATCHING only (see the "manufactured_dividend"
+# merge-decision note above) — income_event_subtype() itself is unchanged
+# and still returns the distinct subtype for any other caller.
+_DEDUP_BUCKET_ALIASES: dict[str, str] = {
+    "manufactured_dividend": "cash_dividend",
+}
+
+
 def _income_dedup_bucket_key(ev: dict) -> tuple:
     """(ticker, canonical subtype) grouping key shared by the write-time
     defense (`classify_transactions`) and the read-time backstop
-    (`dedupe_income_events`)."""
+    (`dedupe_income_events`). Applies `_DEDUP_BUCKET_ALIASES` on top of
+    `income_event_subtype()` so cash and manufactured dividends match as the
+    same bucket here even though the subtype function itself keeps them
+    distinct."""
     ticker = str(ev.get("ticker") or "").strip().upper()
-    return ticker, income_event_subtype(ev.get("raw_code"), ev.get("event_type"))
+    subtype = income_event_subtype(ev.get("raw_code"), ev.get("event_type"))
+    subtype = _DEDUP_BUCKET_ALIASES.get(subtype, subtype)
+    return ticker, subtype
 
 
 def _income_signed_cents(ev: dict) -> "int | None":
