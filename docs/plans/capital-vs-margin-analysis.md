@@ -119,6 +119,44 @@ Established basis (verified in code):
 
 ## Status
 
+**2026-09-11 — FOUR real bugs found and fixed live, same day, via actual owner
+use of the shipped feature. Both build-time-flagged verifications below are
+now CLOSED. Fully doc-synced; nothing left open on this feature.**
+
+1. **Gross-book timing** — holdings were read only from `daily_snapshots`
+   (lags a same-day cron BUY/backdated import by days), producing a real
+   ~$9,500 artificial V-shaped dip and corrupting drawdown-episode selection.
+   Fixed by reconstructing holdings FORWARD from `trades` instead.
+2. **MINT sign convention** — resolved the "still genuinely open" item #1
+   below via the owner's real Robinhood statement (MINT = "Aggregated Margin
+   Rate", genuine margin interest). All call sites now pass
+   `charged_sign="negative"` explicitly; the split is shown, never netted,
+   no longer disclosed as unverified.
+3. **Anchor late-trade staleness** — a same-day trade logged after the last
+   broker sync wasn't reflected in the anchor cash figure, causing the
+   backward reconstruction to "undo" a trade it never actually included.
+   Fixed via `adjust_anchor_for_late_trades()`.
+4. **Interest date-range mismatch** — `interest_partition(_cvm_income)` had
+   no date filter, summing every interest event ever loaded (including
+   pre-go-live MINT charges from January) instead of scoping to
+   `[golive, anchor_date]` — inflating "Interest since go-live" ($277 vs.
+   the correct $106) and understating "Net Value Margin Added" by the
+   difference. Fixed via new `window_income_events()`, wired once at the
+   shared render-block load site.
+
+Also integrated the same day: F-268's cross-path income-event dedup
+(`broker_sync.dedupe_income_events`) now runs on this feature's income-event
+list too, immediately before the new date-window filter, so every summing
+consumer here is protected against both duplicate rows AND out-of-window
+rows. Every fix went through `reviewer` (several also `planner`); all SHIP,
+0 blocking on final pass. Full detail: memory `project_capital_vs_margin_analysis`,
+`docs/requirements.md` F-267.
+
+**Build-time verification #2 below (SnapTrade balance-history endpoint)
+remains genuinely open** — not resolved by any of today's fixes.
+
+---
+
 **2026-09-10 — SHIPPED. `planner` PROCEED WITH CHANGES → `implementer` built →
 `reviewer` SHIP (0 blocking, 3 non-blocking, all three fixed pre-ship).**
 No new DDL/table — `planner` confirmed everything is derivable live from
