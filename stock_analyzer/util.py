@@ -134,6 +134,39 @@ def sentiment_value_or_none(value: Any, bundle: dict | None) -> Any:
     return value if available else None
 
 
+def xcheck_is_alarm_worthy(result: dict, market_is_open: bool) -> bool:
+    """Whether one price cross-check result should trigger the loud "sources
+    disagree" banner, vs staying quiet (finding D23).
+
+    A settled prev-close disagreement is ALWAYS alarm-worthy — a real,
+    settled value diverging across independent sources is a genuine
+    data-integrity fault (missed split, wrong-symbol mapping, a poisoned
+    feed) regardless of the hour.
+
+    A LIVE-price-only disagreement is different. Outside regular trading
+    hours the two sources may legitimately be quoting DIFFERENT THINGS — a
+    real-time pre/post-market tick from one venue vs a delayed or stale
+    last-regular-session read from the other — so a gap there is an
+    artifact of comparing non-comparable reads, not a fault. Measured live
+    (`docs/plans/data-integrity.md` D23): of the first 5 live-leg breaches
+    recorded, 4 fired outside 09:30-16:00 ET (three at ~08:41 ET premarket,
+    one at ~17:35 ET after-hours); the one that fired inside regular hours
+    (09:42 ET) is exactly the case this still alarms on below, since a
+    stale/wrong intraday price during the session is precisely what
+    `DATA_XCHECK_LIVE_TOL_PCT` exists to catch.
+
+    Display decision only — never changes what gets WRITTEN.
+    `price_xcheck_history.ok` is persisted exactly as measured regardless of
+    market hours, so the audit trail and any future health-check statistics
+    stay interpretable on the real, un-suppressed signal.
+    """
+    if result.get("prev_ok") is False:
+        return True
+    if result.get("live_ok") is False:
+        return bool(market_is_open)
+    return False
+
+
 def pillar_tile(
     name: str,
     score: Any,

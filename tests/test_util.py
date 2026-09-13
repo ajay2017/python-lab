@@ -17,6 +17,7 @@ from stock_analyzer.util import (
     pillar_tile,
     sentiment_value_or_none,
     val_score_or_none,
+    xcheck_is_alarm_worthy,
     safe_html,
     stop_recovery_state,
 )
@@ -201,6 +202,54 @@ class TestSentimentValueOrNone:
     def test_a_genuine_measured_50_with_real_headlines_still_survives(self):
         b = {"headlines": [{"headline": "x", "score": 0.0}]}
         assert sentiment_value_or_none(50.0, b) == 50.0
+
+
+class TestXcheckIsAlarmWorthy:
+    """D23: a settled prev-close disagreement is always a fault; a live-only
+    gap outside regular trading hours usually isn't — two sources may
+    legitimately be quoting different things (a pre/post-market tick vs a
+    stale close)."""
+
+    def test_prev_close_breach_alarms_regardless_of_market_hours(self):
+        r = {"prev_ok": False}
+        assert xcheck_is_alarm_worthy(r, market_is_open=True) is True
+        assert xcheck_is_alarm_worthy(r, market_is_open=False) is True
+
+    def test_prev_close_breach_alarms_even_alongside_a_live_pass(self):
+        r = {"prev_ok": False, "live_ok": True}
+        assert xcheck_is_alarm_worthy(r, market_is_open=False) is True
+
+    def test_live_only_breach_alarms_during_regular_hours(self):
+        # The whole reason DATA_XCHECK_LIVE_TOL_PCT exists: a stale/wrong
+        # intraday price DURING the session is a real signal.
+        r = {"live_ok": False}
+        assert xcheck_is_alarm_worthy(r, market_is_open=True) is True
+
+    def test_live_only_breach_stays_quiet_outside_regular_hours(self):
+        r = {"live_ok": False}
+        assert xcheck_is_alarm_worthy(r, market_is_open=False) is False
+
+    def test_prev_close_absent_and_live_ok_never_alarms(self):
+        # prev_ok not False (True or absent) and live_ok True -> nothing to
+        # report at all.
+        assert xcheck_is_alarm_worthy({"live_ok": True}, market_is_open=True) is False
+        assert xcheck_is_alarm_worthy({}, market_is_open=True) is False
+
+    def test_prev_close_true_with_live_breach_still_follows_the_live_rule(self):
+        r = {"prev_ok": True, "live_ok": False}
+        assert xcheck_is_alarm_worthy(r, market_is_open=True) is True
+        assert xcheck_is_alarm_worthy(r, market_is_open=False) is False
+
+    def test_prev_close_breach_dominates_a_simultaneous_quiet_live_breach(self):
+        # Both legs failing, market closed: the live leg alone would stay
+        # quiet, but the prev-close leg's unconditional alarm must still win.
+        r = {"prev_ok": False, "live_ok": False}
+        assert xcheck_is_alarm_worthy(r, market_is_open=False) is True
+
+    def test_never_mutates_the_input(self):
+        r = {"prev_ok": False, "live_ok": False}
+        xcheck_is_alarm_worthy(r, market_is_open=False)
+        assert r == {"prev_ok": False, "live_ok": False}
 
 
 class TestPillarTile:

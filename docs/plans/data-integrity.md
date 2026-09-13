@@ -257,8 +257,9 @@ product of Step 0 and should drive execution order.
 ### Band A — FIRING NOW. Fix these.
 
 **Shipped 2026-09-13** — `81c45d4` D20 · `47c4a54` D17 · `a4e2e41` D19 (2 of 4 tiles) ·
-`f1ecc85` D8 (`enter_now`, both writers) · D24 (pending commit, this pass). Full suite
-5431 passing throughout.
+`f1ecc85` D8 (`enter_now`, both writers) · `5943a1c` D24 (all 4 rec_type writers) · D23
+(pending commit, this pass). Full suite 5431 passing throughout; D23's addition brings it
+to 5432.
 
 | ID | Finding | P | Effort | State |
 |---|---|---|---|---|
@@ -266,8 +267,8 @@ product of Step 0 and should drive execution order.
 | ~~**D17**~~ | §6.38 misdocumented `fundamentals_cache` | P2 | XS | **DONE** `47c4a54` |
 | **D19** | 4 pillar tiles render possibly-fabricated `N/100` under an asserting caption | P1 | S | **HALF** `a4e2e41` — BQ + Valuation done; Technical + Sentiment **blocked on D3** |
 | **D8** | Pillar columns on `recommendations` rows | P2 | M | **HALF** `f1ecc85` — `enter_now` done; `new_pick` 25% **reclassified, needs `planner`** |
-| ~~**D24**~~ | A fabricated neutral pillar persists into `recommendations` as if measured | P2 | S | **DONE** — all 4 rec_type writers, one commit |
-| **D23** | Live-leg cross-check fires outside regular trading hours → alarm fatigue | P2 | S | **OPEN** |
+| ~~**D24**~~ | A fabricated neutral pillar persists into `recommendations` as if measured | P2 | S | **DONE** `5943a1c` — all 4 rec_type writers, one commit |
+| ~~**D23**~~ | Live-leg cross-check fires outside regular trading hours → alarm fatigue | P2 | S | **DONE** — both consumer sites, one commit |
 | — | **Backfill**: 32 `exit_signals` rows unpriced 07-18→08-04 | P2 | S | **OPEN** — unblocks Protective Track Record |
 
 ### Band B — real in code, measured NOT firing. Fix on consequence, not urgency.
@@ -369,8 +370,45 @@ proving it.
 | ~~**D10**~~ | **CLOSED** — no `account_flows` duplicates. Annotate the stale manual-follow-up note at `db.py:827-836`. |
 | ~~**D14**~~ | **CLOSED** — zero orphans in `manual_stops` and `exit_signals`. No FKs, but no drift. |
 | ~~**D15**~~ | **CLOSED** — DDL forbids it; 256 trades, zero violations. |
-| **D11** | **Informational** — 7 failures / 783 checks / 51 days; 2 genuine prev-close breaches. Gate-wiring is marginal at that rate; D23 outranks it. |
+| **D11** | **Informational** — 7 failures / 783 checks / 51 days; 2 genuine prev-close breaches. Gate-wiring is marginal at that rate. **D23 (below) fixed the display-side symptom this reading exposed**; wiring the check into an actual gate remains a separate, larger, undecided step. |
 | **D18** | **Informational** — per-row `consensus_rating` is sometimes single-firm. Scoring pools correctly. Phase B decision D4 accepted it. |
+
+### D23 · Live-leg cross-check fired outside regular trading hours — FIXED
+**Anchor:** `app.py`'s two cross-check consumer sites (🏠 Home's `_alert_ph_xcheck` block;
+📈 Analysis's per-analysed-ticker block), both grouping ANY `not ok` result — prev-close
+*or* live-leg — into the same loud `st.error`/`st.warning` "sources disagree" banner.
+
+Of 5 live-leg-only breaches recorded in the first 51 days (Step 0, Q5b), **4 fired outside
+09:30-16:00 ET** — three at ~08:41 ET premarket, one at ~17:35 ET after-hours. Outside
+regular hours two independent price sources can legitimately quote different things (a
+real-time pre/post-market tick from one venue vs a delayed or stale last-regular-session
+read from the other), so a live-leg-only gap there is an artifact of comparing
+non-comparable reads, not a genuine fault — but it triggered the identical severe banner as
+a settled prev-close disagreement, which *is* always a real fault. Net effect: alarm
+fatigue on the one banner in the app that exists to say "don't trust this price."
+
+**FIXED 2026-09-13.** New pure `stock_analyzer/util.py::xcheck_is_alarm_worthy(result,
+market_is_open)`: a prev-close breach always alarms, any hour; a live-leg-only breach
+alarms only when `market_is_open`, else renders as a quiet disclosure instead of being
+dropped. `market_is_open` comes from the **existing** `data.market_status()["is_open"]` —
+the app's one NYSE-hours boundary, holiday/early-close/weekend-aware — so this introduces
+**no new threshold or constant**. Applied at both consumer sites, which turned out to share
+near-identical logic; the Analysis page's positive "✓ agree within tolerance" caption was
+also corrected to gate on *both* the alarm and quiet buckets being empty — previously a
+ticker with a real quiet-only gap was told it agreed within tolerance, an accidental
+false-clean the restructuring closes as a side effect.
+
+**Explicitly unchanged:** the write to `price_xcheck_history` (`ok`) is untouched — this is
+a display-only decision, so the audit trail Q5/Q5b read from stays interpretable exactly as
+measured. `_xc_bad_prev_tickers` (Day Shock exclusion + 8 other display sites) was already
+scoped to `prev_ok is False` only, so it was never affected by this class of false alarm.
+
+Opus review: **SHIP, 0 blocking.** Confirmed the one direction that must never happen is
+structurally impossible — a prev-close fault can't be quieted (unconditional first branch),
+and a live fault during regular hours can't be quieted either; only the exact artifact class
+this finding targets is softened, and even that is disclosed, never dropped. Also confirmed
+`market_status()`'s calendar-staleness edge (past `MARKET_CALENDAR_LAST_YEAR`) fails toward
+`is_open=True` — the safe, over-alarming direction. 15 new tests.
 
 ### D19 · All four pillar tiles render fabricated scores as measured
 **Anchors:** `app.py:22659` (Technical), `:22677` (Business Quality), `:22701` (Valuation),

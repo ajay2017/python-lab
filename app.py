@@ -302,6 +302,7 @@ from stock_analyzer.util import pillar_tile as _pillar_tile
 from stock_analyzer.util import bq_score_or_none as _bq_or_none
 from stock_analyzer.util import val_score_or_none as _val_or_none
 from stock_analyzer.util import sentiment_value_or_none as _sentiment_or_none
+from stock_analyzer.util import xcheck_is_alarm_worthy as _xcheck_is_alarm_worthy
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -4558,7 +4559,21 @@ if page == "🏠 Home":
             db.save_price_xcheck_history_batch(_xc_rows)
             st.session_state["_price_xcheck_logged_date"] = _xc_today_str
 
-        _xc_bad = {t: r for t, r in _xc.items() if not r.get("ok", True)}
+        # D23: split by ALARM-WORTHINESS, not just "ok". A settled prev-close
+        # disagreement is always a real fault; a LIVE-price-only gap outside
+        # regular trading hours is usually two sources quoting different
+        # things (a pre/post-market tick vs a stale close), not a fault — so
+        # it stays disclosed, but quietly, rather than the loud red banner.
+        # Never affects what was WRITTEN above (`ok` is persisted as-measured).
+        _xc_market_open = bool(market_status().get("is_open"))
+        _xc_bad = {
+            t: r for t, r in _xc.items()
+            if not r.get("ok", True) and _xcheck_is_alarm_worthy(r, _xc_market_open)
+        }
+        _xc_quiet = {
+            t: r for t, r in _xc.items()
+            if not r.get("ok", True) and not _xcheck_is_alarm_worthy(r, _xc_market_open)
+        }
         with _alert_ph_xcheck.container():
             if _xc_bad:
                 _xc_lines = []
@@ -4599,7 +4614,23 @@ if page == "🏠 Home":
                     + "\n".join(_xc_lines)
                     + "\n\nTreat stops / P&L for these names with caution and verify against your broker."
                 )
-            elif _xc_validator_down:
+            if _xc_quiet:
+                # D23: disclosed, not alarmed. Live-only gap, outside regular
+                # trading hours — two sources plausibly quoting different
+                # things (a pre/post-market tick vs a stale close), not
+                # necessarily a fault. Independent of the loud banner above:
+                # a render can have both alarm-worthy AND quiet-only names.
+                _xc_qlines = [
+                    f"{t} ({r.get('live_gap_pct')}%)" for t, r in _xc_quiet.items()
+                ]
+                st.caption(
+                    "ℹ️ Live-price gap outside tolerance, but outside regular trading "
+                    "hours, for " + ", ".join(_xc_qlines) + " — two sources can "
+                    "legitimately quote different things (a live pre/post-market tick "
+                    "vs a stale close) when the market isn't open. Not treated as a "
+                    "data fault; re-checked once the market opens."
+                )
+            if not _xc_bad and not _xc_quiet and _xc_validator_down:
                 # Cross-check skipped because its validator is the degraded source —
                 # surface why (don't silently drop the integrity readout). Clears on recovery.
                 st.caption(
@@ -21381,7 +21412,19 @@ elif page == "📈 Analysis":
     _an_validator_down = crosscheck_validator_degraded()
     _an_xc = _cached_price_xcheck(tuple(sorted(results.keys())))
     if _an_xc:
-        _an_bad = {t: r for t, r in _an_xc.items() if not r.get("ok", True)}
+        # D23: same alarm-worthiness split as the Home banner — a settled
+        # prev-close disagreement is always a real fault; a live-only gap
+        # outside regular trading hours is usually two sources quoting
+        # different things, not a fault, so it stays disclosed but quiet.
+        _an_market_open = bool(market_status().get("is_open"))
+        _an_bad = {
+            t: r for t, r in _an_xc.items()
+            if not r.get("ok", True) and _xcheck_is_alarm_worthy(r, _an_market_open)
+        }
+        _an_quiet = {
+            t: r for t, r in _an_xc.items()
+            if not r.get("ok", True) and not _xcheck_is_alarm_worthy(r, _an_market_open)
+        }
         if _an_bad:
             _an_lines = []
             for t, r in _an_bad.items():
@@ -21395,7 +21438,14 @@ elif page == "📈 Analysis":
                 + ", ".join(_an_lines)
                 + ". Verify against your broker before acting on price-sensitive levels."
             )
-        else:
+        if _an_quiet:
+            _an_qlines = [f"{t} ({r.get('live_gap_pct')}%)" for t, r in _an_quiet.items()]
+            st.caption(
+                "ℹ️ Live-price gap outside tolerance, but outside regular trading hours, "
+                "for " + ", ".join(_an_qlines) + " — not treated as a data fault; "
+                "re-checked once the market opens."
+            )
+        if not _an_bad and not _an_quiet:
             _an_one = next(iter(_an_xc.values()), {})
             st.caption(
                 f"✓ Price cross-checked — {_an_one.get('primary_source', '—')} vs "
