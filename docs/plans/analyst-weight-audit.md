@@ -1,18 +1,23 @@
 # Analyst Weight Audit — is sell-side consensus earning its share of the composite?
 
-**Status: Items 1 and 2 SHIPPED 2026-09-12 (not yet committed — pending user sign-off on
-this session's diff).** Phase A (the free measurement) is **DONE**, recorded in §2 — it did
-**not** meet its own pre-registered close condition, which justified the build. **Item 1c
-was SCOPED BUT NOT BUILT** — while implementing, found its own design bucketed by
-`window_end - article_date`, which is fixed at exactly 30 days for ~95% of rows (only
-"sold" rows vary, a small and differently-biased subset), so it would have rendered a fake
-gradient on almost no real variation; testing genuine decay needs new price fetches per
-row (31-60d, 61-90d windows), contradicting the "no new fetch" premise — a bigger, deferred
-piece of work, not built. Item 1b remains analysis/record only (no build), per §7. Two
-`limit=100` loader defects from §9 were fixed in the same pass (see §9 for detail — both
-now `limit=5000`, matching the Scorecard's own existing convention). All three deterministic
-gates green: full `pytest` (5231 passed), `check_antipatterns.py`, `check_constants_documented.py`
-(no-op — no new constant). Extends **F-154c** (Research Scorecard) — no new F-ID.
+**Status: Items 1 and 2 SHIPPED 2026-09-12, committed and pushed directly to `main`**
+(commit `966a24a` — this repo is single-branch, direct-to-`main`, no feature branches).
+Phase A (the free measurement) is **DONE**, recorded in §2 — it did **not** meet its own
+pre-registered close condition, which justified the build. **Item 1c was SCOPED BUT NOT
+BUILT** — while implementing, found its own design bucketed by `window_end - article_date`,
+which is fixed at exactly 30 days for ~95% of rows (only "sold" rows vary, a small and
+differently-biased subset), so it would have rendered a fake gradient on almost no real
+variation; testing genuine decay needs new price fetches per row (31-60d, 61-90d windows),
+contradicting the "no new fetch" premise — a bigger, deferred piece of work, not built. Item
+1b remains analysis/record only (no build), per §7. Two `limit=100` loader defects from §9
+were fixed in the same commit (both now `limit=5000`, matching the Scorecard's own existing
+convention). All three deterministic gates green: full `pytest` (5231 passed),
+`check_antipatterns.py`, `check_constants_documented.py` (no-op — no new constant). Extends
+**F-154c** (Research Scorecard) — no new F-ID. **First live production reading, 2026-09-13
+(§8a): confirms n=0 for the "Buy" tier is a genuine, verified data-pattern fact, not a bug
+— traced to a deterministic proof, an exhaustive grep, and a live on-screen sort check —
+and shows the return ordering is INVERTED at the extremes (Sell +4.2% beats Strong Buy
++1.8%, on n=22/n=395, not tiny samples), sharper evidence than Phase A's flat 48%.**
 Phase B (§8, any weight/window change) remains fully undecided.
 
 ---
@@ -351,7 +356,100 @@ pre-commit to any of these.
 
 ---
 
+## 8a. Consensus-Ladder Performance — first live production reading (2026-09-13)
+
+Measured directly on the deployed `drishta.up.railway.app` render, the day after Items 1/2
+shipped, via screenshots + hover tooltips (raw text quoted verbatim from the `help=` string
+each `st.metric` call renders):
+
+| Tier | Points paid | n | % positive | avg forward return |
+|---|---|---|---|---|
+| Strong Buy | 30 | **395** | 45% | **+1.8%** |
+| Buy | 24 | **0** | — | — |
+| Hold | 15 | **38** | 53% | **−0.8%** |
+| Mixed | 9 | <5 (below floor) | — | — |
+| Sell | 0 | **22** | 64% | **+4.2%** |
+
+(Sum of tiers ≈ 455, vs. the "442 of 653" total quoted in §2 — expected drift, not an
+inconsistency: a full day passed between the two reads, and calls mature out of "pending"
+once they cross the 30-day window, often in small same-day batches.)
+
+### Finding 1 — the "Buy" tier is structurally dead on this data, confirmed not a bug
+
+`n=0` for Buy was investigated end-to-end before accepting it, not assumed:
+
+1. **Deterministic proof, not a hypothesis.** Traced every branch of
+   `derive_consensus()` (`analyst_intel.py:224-242`): for a single-firm row (`n_rated=1`,
+   the dominant shape — one analyst quoted in one pasted article), `bull_frac` can only be
+   `0.0` or `1.0`. `1.0` clears `ANALYST_CONSENSUS_STRONG_BUY_FRAC` (0.80) → **Strong Buy**;
+   `0.0` falls through to the bear-fraction check → **Sell** or **Hold**. **"Buy" and
+   "Mixed" are only reachable when `n_rated >= 2` and the split lands in the narrow
+   50%–79.9% bullish band** — genuine multi-firm disagreement on one saved record.
+2. **No alternate code path could produce a different string shape.** Grepped the whole
+   package: `derive_consensus()` (`analyst_intel.py:242`) is the **only** site that ever
+   constructs a `consensus_rating` value. No legacy format, no second writer — so
+   `consensus_tier()`'s string matching cannot be missing an alternate shape.
+3. **Live-verified on the real table, not just derived.** Block B's per-call table (built
+   from the FULL 653-row `_sc_results`, not just the evaluable subset — confirmed at
+   `app.py:37857-37866`, no filter) was sorted ascending by Consensus. The first row after
+   the last "—" (no-rating) row was `Hold (0 Buy / 1 Hold / 0 Sell)` — if any bare `Buy (`
+   row existed anywhere in the 653, it would sort alphabetically before `Hold` and would
+   have to appear at exactly that boundary. It didn't. **Confirmed zero `Buy (` rows exist
+   in the full saved-research library**, not just among evaluable ones.
+4. **A live example of why:** the project's own first proof of this feature (2026-07-04,
+   INIO) was a genuine 5-firm multi-analyst case — and all 5 were Buy, landing in Strong Buy
+   (100% bullish), not the middle band. Even real multi-firm coverage in this app's actual
+   usage tends toward near-unanimity (CNBC-style "top picks" roundups are a curated-agreement
+   article genre, not a random cross-section of sell-side opinion).
+
+**Conclusion: the composite's 24-point "Buy" tier is not measurement-thin, it is
+structurally unreachable given how this feature is actually used** (paste one article,
+extract per-firm ratings). Any future Phase B redesign should treat `VALUATION_CONSENSUS_PTS`
+as an **effective 3-tier ladder** (Strong Buy / Hold / Sell) on this data, not a genuine
+5-tier one — a design defect independent of whatever the return-ordering question below
+decides.
+
+**One side-observation from the same investigation, not yet acted on:** several rows with a
+real `Avg PT` (QCOM, DELL, SNDK, 6082-HK) still showed "No rating data." `derive_consensus`
+excludes a firm from the bull/neutral/bear tally when its rating text doesn't match any
+recognized word (`BULLISH_RATINGS`/`BEARISH_RATINGS`/the neutral set), so a PT can be
+captured while `n_rated` stays 0. Minor, worth a future look at what wording is slipping
+through unrecognized — not scoped here.
+
+### Finding 2 — the return ordering is inverted at the extremes, on real sample sizes
+
+Sell (0 points, **n=22**) beat Strong Buy (30 points, **n=395**): **+4.2% vs +1.8%**. Hold
+(15 points, **n=38**) was negative. This is sharper than §2's "no measurable edge" — it's
+not flat, it runs **opposite** to what the point ladder assumes, and n=22/n=38 clear the
+`ANALYST_CALIBRATION_MIN_CASES` floor by a comfortable margin, not by 1 or 2.
+
+**Two honest caveats, not resolved, do not drop them if this is cited later:**
+- **Absolute return, not SPY-relative.** All three figures sit inside whatever the market
+  did over their own measurement windows; this alone doesn't prove alpha in either
+  direction.
+- **Selection effect on Sell specifically.** These 22 Sell-rated calls are not a random
+  sample of every Sell rating in the market — they're the ones the owner specifically chose
+  to paste. Pasting a bearish note often reflects curiosity about whether the bears are
+  *wrong*, which could bias this specific sample toward Sell-rated names that outperformed,
+  in a way that wouldn't generalize. Strong Buy (≈90% of the whole library) is far less
+  subject to this same cherry-picking, since there's no reason to think only weak Strong-Buy
+  calls get pasted.
+
+**Combined effect on Phase B:** strengthens (b) over (a) specifically — the plan's original
+framing of (b) was "Strong Buy is ubiquitous and uninformative"; this reading says it's
+worse than uninformative, it's currently the tier Sell beats. Finding 1 (Buy is dead) is
+independent evidence for restructuring regardless of what any accuracy number says. Neither
+finding authorizes touching `constants.py` — still full `planner` + mandatory `reviewer` +
+the owner's explicit sign-off, unchanged from §8's requirement.
+
+---
+
 ## 9. Found in passing — NOT part of this change
+
+**Both `limit=100` items below were FIXED in the same commit as Items 1/2 (2026-09-12,
+`966a24a`)** — left described here in the original past tense as a record of what was found,
+but see the top `**Status:**` line for the current state; don't read this section as still
+open.
 
 - **Two `limit=100` loader defects.** `db.load_analyst_coverage` defaults to `limit=100`
   (`db.py:2123`). Two callers take the default:
