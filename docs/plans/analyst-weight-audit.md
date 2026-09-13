@@ -22,10 +22,12 @@ and shows the return ordering is INVERTED at the extremes (Sell +4.2% beats Stro
 caveat (absolute return, not SPY-relative) by adding a per-tier `avg_alpha_pct`/`n_alpha`/
 `alpha_verdict_shown` to `ladder_performance()`, rendered as each tile's `st.metric` delta.
 One SPY history fetch total (not per-row), 15 new tests, full suite 5241 passed, gates
-green, no new constant. **Not yet read live** — §8a's numbers predate this capability;
-whether the inversion survives SPY-benchmarking is still open, see §8b's closing note.
-Phase B (§8, any weight/window change) remains fully undecided; the `planner` design pass
-should wait for the alpha-adjusted reading before starting.
+green, no new constant. **Read live same day (§8b's closing subsection): the inversion
+SURVIVES and slightly WIDENS on alpha** — Strong Buy −0.3% vs SPY, Hold −2.1%, Sell +3.5%
+(Sell-vs-Strong-Buy gap: 2.9pp raw → 3.8pp on alpha). Not a market-regime artifact. Evidence
+package is now complete; the Sell-selection-bias caveat remains and must travel into the
+`planner` brief. **Commissioning the Opus `planner` design pass for Phase B now** — see the
+task notification / this file's next update for the verdict.
 
 ---
 
@@ -498,12 +500,41 @@ non-default `delta_color` would be needed for (see memory
 new `ladder_performance` alpha fields, plus fixture updates). Full suite 5241 passed;
 antipattern + constants-doc gates green; no new constant.
 
-**Not yet read live — this is the honest state as of committing this section.** §8a's
-Strong Buy/Hold/Sell numbers above were measured BEFORE this capability existed, so they
-carry no alpha figures. The next live check of this page will show whether the inversion
-(Sell beating Strong Buy) survives being benchmarked against SPY, shrinks, or reverses —
-record that result here, in this section, before treating §8a's absolute-return reading as
-the final word for the `planner` brief.
+### Live reading, 2026-09-13 (later same day) — the inversion SURVIVES, and slightly widens
+
+Read directly off `drishta.up.railway.app` via screenshot immediately after this shipped:
+
+| Tier | Raw return | Alpha vs SPY |
+|---|---|---|
+| Strong Buy (30 pts) | +1.5% | **−0.3%** |
+| Buy (24 pts) | — | — |
+| Hold (15 pts) | −0.9% | **−2.1%** |
+| Mixed (9 pts) | — | — |
+| Sell (0 pts) | +4.4% | **+3.5%** |
+
+(Raw numbers drifted slightly from §8a's +1.8%/−0.8%/+4.2% — expected, a day passed and
+more calls matured, same explanation as the earlier n-drift.)
+
+**Sanity check on the benchmark itself:** the implied SPY return behind each tier
+(raw − alpha) comes out to roughly +1.8%, +1.2%, +0.9% across the three tiers — a narrow,
+consistent band. Had these implied differed wildly per tier, that would have cast doubt on
+the benchmarking mechanism itself; a tight band is exactly what a working implementation
+should produce.
+
+**The result: this was NOT a market-regime artifact.** The gap between Sell and Strong Buy
+is 2.9 points on raw return (+4.4% − +1.5%) but **3.8 points on alpha** (+3.5% − (−0.3%)) —
+wider, not narrower, once the market's own move is stripped out. Strong Buy (the composite's
+most expensive tier, 30 points) is a market-*matching* holding at best; Sell (0 points) is
+the one tier that actually produced alpha. Hold is worst on both bases.
+
+**What remains open, and cannot be closed by more measurement:** the Sell-selection-bias
+caveat from §8a Finding 2 — these 22 names are research the owner specifically chose to
+paste, not a random draw of every Sell rating in the market. This has to travel into the
+`planner` brief as an acknowledged limit, not something resolved by this alpha check.
+
+**This closes the evidence-gathering phase.** Commissioning the Opus `planner` design pass
+for Phase B next, per the sequence agreed with the owner (build alpha → read live → THEN
+commission planner — not before).
 
 ---
 
