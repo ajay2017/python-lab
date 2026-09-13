@@ -673,51 +673,69 @@ Fires precisely on degraded-data days, i.e. correlated with D3.
 
 ---
 
-## Execution order
+## Execution order (reprioritized 2026-09-13, after Band A closed)
 
-1. **Step 0** — SQL pack. Re-ranks D3, D7, D8, D9, D14, D15.
-2. **Batch A** (no DB needed, ships immediately): D2, D4, D5, D12, plus the trivial dead
-   `technical_score` import at `app.py:58`.
-3. **D1 design pass** — `planner`, in parallel with Batch A.
-4. **D3 — the provenance spine.** Six commits, 1–5 with zero user-visible change, each
-   independently revertible. Design validated by an Opus `planner` pass (verdict: PROCEED):
-   - `technical_score_detail(df) -> dict` widening that keeps the public 2-tuple signature
-     (one production caller, `bundle_loader.py:84`; ~50 tests keep passing unchanged).
-     `available = max_pts > 0` is structural — **no minimum-signals floor**, since a thin
-     real measurement is categorically different from a fabrication.
-   - `bool(headlines)` for sentiment, computed immediately before `bundle_loader.py:185` —
-     after the LLM-rescore block, the one point where the headline set that produced
-     `avg_sent` is final.
-   - New pure `stock_analyzer/score_provenance.py` with **four** states —
-     `MEASURED` / `ASSUMED` / `DEGRADED` / `UNUSABLE`. `ASSUMED` exists because today's
-     default-`True` on absent flags *is* the collapse of "never checked" into "checked and
-     clean".
-   - `analyst_intel.trustworthy_composite` reduced to a thin wrapper. **Acceptance
-     criterion: its ~20 existing tests pass with ZERO edits.**
-   - Carry as **two new columns inside `build_portfolio_df`'s row literal** — not `.attrs`
-     (pandas drops attrs silently through `groupby`/`merge`, and both existing `.attrs`
-     reads are already baselined as `OFFLINE_SENTINEL_COLLAPSE`). A *string* state, so an
-     absent column yields `None` and cannot masquerade as "measured".
-   - **No new constant in this phase.**
-5. **BUY-side withholding** — the owner's chosen destination, with one measurement in front
-   of it: suppression needs a new policy constant (proposed `COMPOSITE_MAX_FABRICATED_WEIGHT`)
-   whose value cannot be chosen responsibly before Q1 shows how often `DEGRADED` occurs.
-   Entry gates only; **protective EXIT/TRIM/WATCH paths explicitly untouched.** Two further
-   policy calls are the owner's here: whether Grow Today's gate
-   (`daily_briefing.py:1125-1128`) extends to the new flags, and whether `ASSUMED` keeps
-   counting as a pass (it does today, implicitly).
-6. **P2 cleanup** — driven by the Step 0 results.
-7. **🩺 System Trust check ⑦, "Decision Data Quality"** — the standing surface. Unlike ①–⑥
-   it grades the payload: of N holdings scored this session, how many on measured data, how
-   many on a stale bundle, how many with a fabricated pillar, named by ticker; the age of
-   the oldest bundle actually used in a decision; and whether the cross-check ran. Follows
-   `system_health.py`'s existing contract (owner-only, read-only, never raises,
-   `unknown ≠ degraded`). **Open question for the reviewer:** whether ⑦ joins the Home chip
-   rollup or is excluded like ④/⑤ — ⑤ was excluded to stop a permanent amber desensitising
-   the chip, and ⑦ should not repeat that if it turns out to be chronically amber.
-8. **D11, D16** last.
+The original numbered plan below this line predates Step 0 and is stale — item 2's own
+"Batch A" (D2, D4, D5, D12) was **never actually built**; the session's effort instead went
+to the items Step 0 *promoted* to Band A (D20, D17, D19, D8, D24, D23, the backfill), which
+are now done. Superseded by the ranked list immediately below. Left the old numbered list
+underneath, struck through in spirit, so the reasoning that produced it isn't lost.
+
+**Ranked by urgency × impact, not by P-band alone — a P0 with zero live trigger and a P2
+with a common one can trade places.**
+
+1. **D2 — holdings save reports success before the write.** Cheap (move a message, branch
+   on a return value, matches the `refresh_outcome` extraction pattern already used
+   elsewhere this session), and its trigger — any transient write failure — is far more
+   probable than D1's (a corporate action). If this fires, every gate/stop/sizing
+   computation runs on a book the app silently failed to update. **Highest impact-per-hour
+   left in the register.** Anchor drifted from the register's cited `app.py:24886-24890` to
+   `~24980-24991` after this session's edits — re-locate by content, not the old line
+   number, when picked up.
+2. **D4 — a silently-dropped holding inflates every remaining weight.** Also cheap (append
+   to the existing `dropped` list one line above the bug, mirroring the bad-shares case
+   right next to it). Direct breach of the house "never silently filter" rule. Correlated
+   with D3 (both fire on degraded-data days, both currently quiet) but doesn't need D3 to
+   fix — it's a one-line append regardless of pillar provenance.
+3. **D1 — split detection absent from the protective-alert cron lane. Design pass, not
+   code, starts here.** The single worst *outcome* in this entire register — the cron lane
+   emails an EXIT on a healthy position with no human check, on a data-integrity failure
+   the owner never sees — even though the trigger (an unaccounted forward/reverse split on
+   a currently-held name) has never once fired (zero `SPLIT` rows exist in `trades`, Q8b).
+   Ranked above D3/D8 despite low observed frequency because **the design conversation
+   itself is cheap to start** (a `planner` pass, not a code commit) and this is the one
+   item where a wrong call moves real money in a single tail event. Sequencing this ahead
+   of the provenance spine is a deliberate bet on consequence over frequency — flag if that
+   trade-off reads differently once the `planner` scopes it.
+4. **D3 — the provenance spine.** Not urgent (Step 0 measured it clean on the live book —
+   no evidence of the fabricated-pillar path firing), but the highest strategic value left:
+   it's what unblocks D19's Technical/Sentiment tiles, gives real substance to D8's
+   `new_pick` question, and is the actual answer to "can the app tell me when it's making
+   things up." Six commits, full design already validated by an Opus `planner` pass
+   (verdict: PROCEED) — see the retained plan below for the exact shape. Do this once D1's
+   design conversation is in motion, not blocking on it.
+5. **D8's `new_pick` reclassification.** A `planner`-scoped research question ("what was a
+   thinly-loaded pick actually based on"), not a bug fix — natural to fold into the same
+   sitting as D3's design work, since D3's provenance columns are what would make this
+   answerable going forward rather than just diagnosable retroactively.
+6. **D25 — `signal_date` weekend guard.** One line (`skip when not is_trading_day`),
+   confirmed still live and reachable, but low consequence (one historical-analysis column,
+   no gate). Pick up whenever `app.py`'s exit_signals capture is next touched for any
+   other reason — not worth its own standalone session.
+7. **D12 — price cross-check test coverage.** Tests-only, no live risk, but it's the one
+   active data-integrity check in the app and it's currently unverified. Cheap; do
+   whenever there's a quiet moment.
+8. **D16 — cross-surface value agreement.** Real gap (still a manual screenshot check per
+   F-204a), medium effort (a comparator across the few doubly-rendered facts), no proven
+   current defect. Lowest priority of the "real" items — do after D3, which may make part
+   of it moot per the original scoping note.
+9. **D5, D6, D13 — pure hygiene.** All three are real in code, all three measured with zero
+   evidence of ever firing (Step 0). Fix opportunistically, next time each file is touched
+   for another reason — never worth a dedicated pass.
 
 ---
+
+## Original execution order (stale, predates Step 0 — kept for its reasoning, not its sequence)
 
 ## Verification
 
