@@ -12,6 +12,7 @@ from stock_analyzer.util import (
     factor_tilt_state,
     get_or_offline,
     md_bold_to_html,
+    numeric_or,
     safe_html,
     stop_recovery_state,
 )
@@ -48,6 +49,81 @@ class TestGetOrOffline:
         assert offline is None
         assert empty == []
         assert offline is not empty
+
+
+class TestNumericOr:
+    """`x or default` cannot distinguish absent from measured-zero. For a 0-100
+    pillar score those are opposite claims, so this is the numeric sibling of
+    the offline-sentinel collapse TestGetOrOffline covers."""
+
+    def test_legitimate_zero_survives(self):
+        # THE bug this exists for: `0.0 or 50` == 50, inverting the most
+        # bearish possible pillar reading into a neutral one.
+        assert numeric_or(0.0, 50) == 0.0
+
+    def test_legitimate_int_zero_survives(self):
+        assert numeric_or(0, 50) == 0.0
+
+    def test_none_falls_back(self):
+        assert numeric_or(None, 50) == 50.0
+
+    def test_missing_dict_read_falls_back(self):
+        assert numeric_or({}.get("t_score"), 50) == 50.0
+
+    def test_nan_falls_back(self):
+        # `or` cannot do this: float('nan') is truthy, so it passes straight
+        # through and renders as "nan".
+        assert numeric_or(float("nan"), 50) == 50.0
+
+    def test_positive_infinity_falls_back(self):
+        assert numeric_or(float("inf"), 50) == 50.0
+
+    def test_negative_infinity_falls_back(self):
+        assert numeric_or(float("-inf"), 50) == 50.0
+
+    def test_non_numeric_falls_back(self):
+        assert numeric_or("65", 50) == 50.0
+        assert numeric_or([], 50) == 50.0
+        assert numeric_or({"a": 1}, 50) == 50.0
+
+    def test_bool_is_not_a_number_here(self):
+        # bool subclasses int, so True would otherwise become 1.0 — a score of
+        # 1/100, silently. Deliberately rejected.
+        assert numeric_or(True, 50) == 50.0
+        assert numeric_or(False, 50) == 50.0
+
+    def test_real_values_pass_through_as_float(self):
+        assert numeric_or(72.4, 50) == 72.4
+        assert numeric_or(65, 50) == 65.0
+        assert isinstance(numeric_or(65, 50), float)
+
+    def test_negative_values_pass_through(self):
+        # Not every caller is a 0-100 score; a negative P&L% is legitimate.
+        assert numeric_or(-10.59, 0) == -10.59
+
+    def test_distinguishes_zero_from_absent(self):
+        # The whole point, stated as one assertion.
+        assert numeric_or(0.0, 50) != numeric_or(None, 50)
+
+    def test_upgrade_trigger_arithmetic_is_not_corrupted(self):
+        """Regression for the app.py "What would change this signal?" block.
+
+        It derives the other pillars' contribution by subtracting
+        `pillar * weight` from the REAL composite. A fabricated 50 understates
+        that term and overstates the required target by exactly 50.
+        """
+        composite, weight, threshold = 60.0, 0.25, 65.0
+        true_technical = 0.0
+
+        scored = numeric_or(true_technical, 50)
+        others = composite - scored * weight
+        needed = (threshold - others) / weight
+        assert needed == 20.0          # correct advice: 0 -> 20
+
+        collapsed = true_technical or 50        # the old idiom
+        bad_others = composite - collapsed * weight
+        bad_needed = (threshold - bad_others) / weight
+        assert bad_needed == 70.0      # what the user was actually shown
 
 
 class TestSafeHtml:

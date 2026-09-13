@@ -42,6 +42,39 @@ def get_or_offline(container: dict | None, key: str) -> Any:
     return container.get(key)
 
 
+def numeric_or(value: Any, default: float) -> float:
+    """Numeric read that preserves a legitimate ``0.0`` — the safe replacement
+    for ``x or 50`` / ``float(x or 0)``.
+
+    Sibling of :func:`get_or_offline`: same falsy-collapse bug-class, different
+    type. ``x or default`` cannot distinguish "absent" from "measured, and the
+    measurement was zero" — and for a 0-100 pillar score those are opposite
+    claims. Zero is the most bearish reading there is; rewriting it to a neutral
+    50 inverts it, and does so precisely on the names that most deserve the
+    warning.
+
+    Found 2026-09-13 at ``app.py``'s "What would change this signal?" block,
+    where the collapse was not cosmetic: that code subtracts
+    ``pillar_score * weight`` from the REAL composite to derive what the other
+    pillars contribute, so a fabricated 50 understated that term by
+    ``50 * weight`` and overstated the required target by 50 — printing
+    "Technical: 50 -> 70" when the truth was "Technical: 0 -> 20". An inflated
+    target can also exceed the block's own ``<= 100`` guard, silently dropping
+    the one actionable pillar from the advice entirely.
+
+    ``NaN`` and infinities are rejected too, which ``or`` cannot do:
+    ``float('nan')`` is truthy, so it passes straight through and renders as
+    "nan". ``bool`` is excluded deliberately — it is an ``int`` subclass, so
+    ``True`` would otherwise become ``1.0``.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return float(default)
+    v = float(value)
+    if v != v or v in (float("inf"), float("-inf")):   # NaN / ±inf
+        return float(default)
+    return v
+
+
 def stop_recovery_state(
     live_gap_to_stop: float | None,
     margin_pct: float = 0.0,

@@ -297,6 +297,7 @@ from stock_analyzer.util import factor_tilt_state as _factor_tilt_state
 from stock_analyzer.util import sizing_cap_lines as _sizing_cap_lines
 from stock_analyzer.util import sizing_unavailable_caption as _sizing_unavailable_caption
 from stock_analyzer.util import get_or_offline as _get_or_offline
+from stock_analyzer.util import numeric_or as _numeric_or
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -21501,11 +21502,16 @@ elif page == "📈 Analysis":
 
                 # ── Upgrade / Downgrade trigger computation ───────────────────────────
                 # Pure display — reads pillar scores already in `r`; no scoring changes.
-                _composite  = r.get("total", 0) or 0
-                _t_sc   = r.get("t_score",  50) or 50
-                _bq_sc  = r.get("bq_score", r.get("f_score", 50)) or 50
-                _val_sc = r.get("val_score", 50) or 50
-                _s_sc   = r.get("s_score",  50) or 50
+                # numeric_or, not `or` — a pillar that genuinely scored 0.0 is the
+                # most bearish reading there is, and `or 50` inverts it to neutral.
+                # Load-bearing here: _others below subtracts _pscore * _pw from the
+                # REAL composite, so a fabricated 50 corrupts the arithmetic, not
+                # just the label (see stock_analyzer.util.numeric_or).
+                _composite = _numeric_or(r.get("total"), 0)
+                _t_sc   = _numeric_or(r.get("t_score"), 50)
+                _bq_sc  = _numeric_or(r.get("bq_score", r.get("f_score")), 50)
+                _val_sc = _numeric_or(r.get("val_score"), 50)
+                _s_sc   = _numeric_or(r.get("s_score"), 50)
                 _verdict_ladder = [
                     ("Strong Buy", COMPOSITE_STRONG_BUY),
                     ("Buy",        COMPOSITE_BUY),
