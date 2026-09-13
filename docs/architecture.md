@@ -2039,12 +2039,20 @@ Volume: ceiling ≈ 30 rows/day/source ≈ 7,600/year worst case, realistically 
 
 ```sql
 CREATE TABLE IF NOT EXISTS fundamentals_cache (
-    ticker      TEXT PRIMARY KEY,
-    financials  JSONB,
-    fetched_at  TEXT,
-    updated_at  TIMESTAMPTZ DEFAULT now()
+    ticker      TEXT        PRIMARY KEY,
+    financials  JSONB       NOT NULL,
+    fetched_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
+
+> **Corrected 2026-09-13.** This block previously documented an `updated_at TIMESTAMPTZ`
+> column that **does not exist** in production, typed `fetched_at` as `TEXT` when it is
+> `TIMESTAMPTZ`, and showed `financials` as nullable when it is `NOT NULL`. Found during the
+> data-integrity audit (`docs/plans/data-integrity.md`, finding D17) by transcribing this
+> block into a query exactly as the house rule requires and getting
+> `42703 column "updated_at" does not exist`. The authoritative DDL is `db.py`'s header
+> (lines 283-287); this table is one of the few whose `CREATE TABLE` lives there rather than
+> only here. Grade freshness on `fetched_at`.
 
 **Live-fetch fallback cache (read-only on outage).** Persists the last-known-good fundamental metrics (balance sheet, income statement ratios, etc.) for each ticker, populated on successful live fetch. Enables the fundamentals gate to remain viable even when the live data source is temporarily unreachable — reads `financials` dict plus `fetched_at` timestamp to assess freshness. Never cached on failure — a missing row means "no prior successful fetch was recorded", not "fetch failed today". Degrades gracefully when table is absent (returns `None`). Written by `db.save_fundamentals_cache(ticker, financials)` after every successful live fetch; read by `db.load_fundamentals_cache(ticker)` as the fallback before attempting live. Best-effort, never raises. RLS: `FOR ALL TO service_role`.
 

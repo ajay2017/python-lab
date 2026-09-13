@@ -3,6 +3,16 @@
 **Date:** 2026-09-13
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 5 (findings verified at HEAD; design pass by the `planner` agent, Opus 5)
+**Status (2026-09-13, Band A started):** **D20 and D17 FIXED.** D20 shipped as `81c45d4` —
+new pure `util.numeric_or()` (deliberate sibling of `get_or_offline`, same falsy-collapse
+class) replacing `or 50` at `app.py`'s "What would change this signal?" block, with 13 tests
+including a regression that pins the corrupted upgrade-trigger arithmetic rather than just
+describing it. D17 corrected `docs/architecture.md` §6.38 against the authoritative DDL at
+`db.py:283-287`. Full suite **5393 passed**; antipattern + constants-doc gates green. No
+reviewer citation on either — no `_GATE_FILES` member touched, no constant, gate, or
+scoring change. **Band A remaining: D19 (2 of 4 tiles fixable today), D8, D23, and the
+`exit_signals` price backfill.**
+
 **Status (2026-09-13, later same day):** **STEP 0 COMPLETE — ~18 read-only queries run
 against production.** Headline: **the stored data is in good shape.** Seven findings closed
 or retracted by measurement (D3, D7, D9, D10, D14, D15, D21); three demoted to latent
