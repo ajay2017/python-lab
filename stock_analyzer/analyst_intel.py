@@ -570,7 +570,41 @@ def consensus_tier(consensus_rating: str | None) -> str | None:
     return None
 
 
-def ladder_performance(results: list[dict]) -> dict:
+def _spy_return_pct(spy_close_by_date: dict | None, start_d, end_d) -> float | None:
+    """SPY % return from `start_d` to `end_d`, using the nearest trading-day
+    close on-or-before each date. `spy_close_by_date` is `{date: close}`.
+
+    Same nearest-close-on-or-before lookup semantics as
+    `recommendations_history._spy_return_pct` — deliberately kept as its own
+    small copy rather than a cross-module import, matching this codebase's
+    existing convention of each module owning a tiny independent version of
+    this lookup (`trade_review._spy_return_between` is a third, DataFrame-
+    based variant of the same idea). Unlike `recommendations_history`'s
+    version (which always benchmarks to "today"), this takes an explicit
+    `end_d` — `ladder_performance()`'s per-row window ends at a DIFFERENT
+    date for every row (30 days after `article_date`, or an earlier sell
+    date), not a single shared "today."
+
+    Returns `None` when the benchmark series is missing or doesn't cover the
+    window. Never raises.
+    """
+    if not spy_close_by_date or start_d is None or end_d is None:
+        return None
+
+    def _close_on_or_before(d):
+        keys = [k for k in spy_close_by_date if k <= d]
+        if not keys:
+            return None
+        return spy_close_by_date[max(keys)]
+
+    p0 = _close_on_or_before(start_d)
+    p1 = _close_on_or_before(end_d)
+    if p0 is None or p1 is None or p0 <= 0:
+        return None
+    return (p1 - p0) / p0 * 100.0
+
+
+def ladder_performance(results: list[dict], spy_close_by_date: dict | None = None) -> dict:
     """Average forward return per `VALUATION_CONSENSUS_PTS` tier — tests
     whether the composite's 30/24/15/9/0 point ladder (Strong Buy > Buy >
     Hold > Mixed > Sell) is actually earned, i.e. whether higher tiers
@@ -593,20 +627,36 @@ def ladder_performance(results: list[dict]) -> dict:
     `ret_pct` — the same signed quantity for every tier, regardless of which
     way that tier is supposed to lean — and never touches `directional_hit`.
 
+    `spy_close_by_date` ({date: close}, optional) benchmarks each row's
+    return against SPY over the SAME (article_date, window_end) window —
+    2026-09-13's first live reading found Sell (0 pts) beating Strong Buy
+    (30 pts) on ABSOLUTE return; the open question was whether that survives
+    stripping out the market's own move over the same period. When omitted,
+    every `avg_alpha_pct`/`alpha_verdict_shown` is `None`/`False` — the raw
+    `avg_ret_pct` reporting is unaffected either way, so this is a strictly
+    additive, backward-compatible parameter.
+
     Returns `{"tiers": {<tier>: {...}}, "n_unrated", "n_evaluable"}`.
     Each tier dict carries `n`, `avg_ret_pct` (`None` when `n == 0`),
     `pct_positive` (`None` when `n == 0`), `points` (from
-    `VALUATION_CONSENSUS_PTS`), and `verdict_shown`
+    `VALUATION_CONSENSUS_PTS`), `verdict_shown`
     (`n >= ANALYST_CALIBRATION_MIN_CASES` — reused verbatim rather than a new
     constant, matching the F-263 precedent of two surfaces sharing one
-    sample-size floor so they can never disagree on what counts as "enough").
+    sample-size floor so they can never disagree on what counts as "enough"),
+    plus `n_alpha` (count of rows in this tier with a usable SPY benchmark —
+    can be LESS than `n`, since a row's own window may fall outside SPY's
+    fetched history even when its `ret_pct` is known), `avg_alpha_pct`
+    (`ret_pct - spy_return_pct`, averaged over just those `n_alpha` rows,
+    `None` when `n_alpha == 0`), and `alpha_verdict_shown`
+    (`n_alpha >= ANALYST_CALIBRATION_MIN_CASES`, its OWN floor check — a
+    tier can clear the raw-return floor while its alpha coverage is thinner).
     `n_unrated` counts rows whose `consensus_rating` didn't match any tier —
     disclosed, never silently dropped. Never raises on empty input.
     """
     from stock_analyzer.constants import ANALYST_CALIBRATION_MIN_CASES, VALUATION_CONSENSUS_PTS
 
     tiers: dict[str, dict] = {
-        tier: {"n": 0, "_sum_ret": 0.0, "_n_positive": 0}
+        tier: {"n": 0, "_sum_ret": 0.0, "_n_positive": 0, "n_alpha": 0, "_sum_alpha": 0.0}
         for tier in VALUATION_CONSENSUS_PTS
     }
     n_unrated = 0
@@ -629,15 +679,24 @@ def ladder_performance(results: list[dict]) -> dict:
         if ret_pct > 0:
             t["_n_positive"] += 1
 
+        spy_ret = _spy_return_pct(spy_close_by_date, r.get("article_date"), r.get("window_end"))
+        if spy_ret is not None:
+            t["n_alpha"] += 1
+            t["_sum_alpha"] += (ret_pct - spy_ret)
+
     out_tiers: dict[str, dict] = {}
     for tier, t in tiers.items():
         n = t["n"]
+        n_alpha = t["n_alpha"]
         out_tiers[tier] = {
             "n":            n,
             "avg_ret_pct":  (t["_sum_ret"] / n) if n else None,
             "pct_positive": (t["_n_positive"] / n * 100) if n else None,
             "points":       VALUATION_CONSENSUS_PTS[tier],
             "verdict_shown": n >= ANALYST_CALIBRATION_MIN_CASES,
+            "n_alpha":         n_alpha,
+            "avg_alpha_pct":   (t["_sum_alpha"] / n_alpha) if n_alpha else None,
+            "alpha_verdict_shown": n_alpha >= ANALYST_CALIBRATION_MIN_CASES,
         }
 
     return {

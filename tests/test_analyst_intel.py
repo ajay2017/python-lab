@@ -626,12 +626,14 @@ def test_consensus_tier_unrecognized_label_returns_none():
 
 # ─── ladder_performance ──────────────────────────────────────────────────────
 
-def _ladder_row(consensus, ret_pct, status="hit", directional_hit=None):
+def _ladder_row(consensus, ret_pct, status="hit", directional_hit=None,
+                 article_date=None, window_end=None):
     if directional_hit is None:
         directional_hit = ret_pct > 0
     return {
         "status": status, "consensus_rating": consensus,
         "ret_pct": ret_pct, "directional_hit": directional_hit,
+        "article_date": article_date, "window_end": window_end,
     }
 
 
@@ -740,6 +742,95 @@ def test_ladder_performance_never_reads_a_valuation_or_gate_module():
     for f in forbidden:
         assert f not in names
         assert not any(isinstance(c, str) and f in c for c in consts if c is not ai.ladder_performance.__doc__)
+
+
+# ─── _spy_return_pct ─────────────────────────────────────────────────────────
+
+def test_spy_return_pct_none_or_empty_inputs_return_none():
+    assert ai._spy_return_pct(None, date(2026, 1, 1), date(2026, 1, 31)) is None
+    assert ai._spy_return_pct({}, date(2026, 1, 1), date(2026, 1, 31)) is None
+    assert ai._spy_return_pct({date(2026, 1, 1): 100.0}, None, date(2026, 1, 31)) is None
+    assert ai._spy_return_pct({date(2026, 1, 1): 100.0}, date(2026, 1, 1), None) is None
+
+
+def test_spy_return_pct_computes_return_between_exact_dates():
+    spy = {date(2026, 1, 1): 100.0, date(2026, 1, 31): 110.0}
+    assert ai._spy_return_pct(spy, date(2026, 1, 1), date(2026, 1, 31)) == pytest.approx(10.0)
+
+
+def test_spy_return_pct_uses_nearest_close_on_or_before_a_non_trading_day():
+    # Neither requested date is a key in the dict — both fall back to the
+    # nearest earlier trading-day close, same lookup classify_call relies on
+    # for the stock's own ret_pct.
+    spy = {date(2026, 1, 2): 100.0, date(2026, 1, 30): 120.0}
+    result = ai._spy_return_pct(spy, date(2026, 1, 5), date(2026, 1, 31))
+    assert result == pytest.approx((120.0 - 100.0) / 100.0 * 100.0)
+
+
+def test_spy_return_pct_window_before_earliest_data_returns_none():
+    spy = {date(2026, 6, 1): 100.0}
+    assert ai._spy_return_pct(spy, date(2026, 1, 1), date(2026, 1, 31)) is None
+
+
+def test_spy_return_pct_zero_start_price_returns_none():
+    spy = {date(2026, 1, 1): 0.0, date(2026, 1, 31): 100.0}
+    assert ai._spy_return_pct(spy, date(2026, 1, 1), date(2026, 1, 31)) is None
+
+
+# ─── ladder_performance — alpha vs SPY (analyst-weight-audit follow-on) ──────
+
+def test_ladder_performance_alpha_fields_default_empty_without_spy_dict():
+    # Backward-compatible default: omitting spy_close_by_date must not change
+    # any existing avg_ret_pct/pct_positive/verdict_shown behavior, and every
+    # alpha field must read as "not computed," never a fabricated 0.
+    out = ai.ladder_performance([_ladder_row("Buy (5/0/0)", 1.0)])
+    assert out["tiers"]["Buy"]["n_alpha"] == 0
+    assert out["tiers"]["Buy"]["avg_alpha_pct"] is None
+    assert out["tiers"]["Buy"]["alpha_verdict_shown"] is False
+
+
+def test_ladder_performance_computes_alpha_vs_spy_when_dict_supplied():
+    spy = {date(2026, 1, 1): 100.0, date(2026, 1, 31): 105.0}   # SPY +5%
+    rows = [_ladder_row("Buy (5/0/0)", 10.0,                    # stock +10%
+                         article_date=date(2026, 1, 1), window_end=date(2026, 1, 31))]
+    out = ai.ladder_performance(rows, spy_close_by_date=spy)
+    assert out["tiers"]["Buy"]["n_alpha"] == 1
+    assert out["tiers"]["Buy"]["avg_alpha_pct"] == pytest.approx(5.0)   # 10% - 5%
+
+
+def test_ladder_performance_row_outside_spy_coverage_counts_in_n_not_n_alpha():
+    spy = {date(2026, 6, 1): 100.0}   # doesn't cover the row's Jan window
+    rows = [_ladder_row("Buy (5/0/0)", 10.0,
+                         article_date=date(2026, 1, 1), window_end=date(2026, 1, 31))]
+    out = ai.ladder_performance(rows, spy_close_by_date=spy)
+    assert out["tiers"]["Buy"]["n"] == 1
+    assert out["tiers"]["Buy"]["n_alpha"] == 0
+    assert out["tiers"]["Buy"]["avg_alpha_pct"] is None
+
+
+def test_ladder_performance_alpha_averaged_only_over_covered_rows():
+    spy = {date(2026, 1, 1): 100.0, date(2026, 1, 31): 110.0}   # SPY +10%
+    rows = [
+        _ladder_row("Sell (0/0/5)", 20.0,                       # alpha = 20-10 = 10
+                    article_date=date(2026, 1, 1), window_end=date(2026, 1, 31)),
+        _ladder_row("Sell (0/0/5)", 5.0),                       # no dates -> counts in n, not n_alpha
+    ]
+    out = ai.ladder_performance(rows, spy_close_by_date=spy)
+    assert out["tiers"]["Sell"]["n"] == 2
+    assert out["tiers"]["Sell"]["n_alpha"] == 1
+    assert out["tiers"]["Sell"]["avg_alpha_pct"] == pytest.approx(10.0)
+
+
+def test_ladder_performance_alpha_verdict_shown_gates_independently_of_raw_verdict():
+    # A tier can clear the RAW n floor while its alpha coverage stays at
+    # zero (e.g. every row's window falls outside the fetched SPY history) —
+    # the two verdicts must be independently gated, not one implying the other.
+    rows = [_ladder_row("Buy (5/0/0)", 1.0,
+                         article_date=date(2026, 1, 1), window_end=date(2026, 1, 31))
+            for _ in range(ANALYST_CALIBRATION_MIN_CASES)]
+    out = ai.ladder_performance(rows, spy_close_by_date={})   # no SPY coverage at all
+    assert out["tiers"]["Buy"]["verdict_shown"] is True
+    assert out["tiers"]["Buy"]["alpha_verdict_shown"] is False
 
 
 # ─── fetch_anchor_price ────────────────────────────────────────────────────────

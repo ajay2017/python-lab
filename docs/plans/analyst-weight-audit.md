@@ -18,7 +18,14 @@ convention). All three deterministic gates green: full `pytest` (5231 passed),
 — traced to a deterministic proof, an exhaustive grep, and a live on-screen sort check —
 and shows the return ordering is INVERTED at the extremes (Sell +4.2% beats Strong Buy
 +1.8%, on n=22/n=395, not tiny samples), sharper evidence than Phase A's flat 48%.**
-Phase B (§8, any weight/window change) remains fully undecided.
+**SPY-relative alpha SHIPPED 2026-09-13 (§8b, same day)** — closes §8a's biggest open
+caveat (absolute return, not SPY-relative) by adding a per-tier `avg_alpha_pct`/`n_alpha`/
+`alpha_verdict_shown` to `ladder_performance()`, rendered as each tile's `st.metric` delta.
+One SPY history fetch total (not per-row), 15 new tests, full suite 5241 passed, gates
+green, no new constant. **Not yet read live** — §8a's numbers predate this capability;
+whether the inversion survives SPY-benchmarking is still open, see §8b's closing note.
+Phase B (§8, any weight/window change) remains fully undecided; the `planner` design pass
+should wait for the alpha-adjusted reading before starting.
 
 ---
 
@@ -441,6 +448,62 @@ worse than uninformative, it's currently the tier Sell beats. Finding 1 (Buy is 
 independent evidence for restructuring regardless of what any accuracy number says. Neither
 finding authorizes touching `constants.py` — still full `planner` + mandatory `reviewer` +
 the owner's explicit sign-off, unchanged from §8's requirement.
+
+---
+
+## 8b. SPY-relative alpha added to the ladder table (2026-09-13, built same day as §8a)
+
+The single biggest caveat on §8a's Finding 2 was that everything measured was **absolute**
+return — all three tiers sit inside whatever the market did over their own windows, so
+"+4.2% vs +1.8%" could partly just be "the market was up and Sell-rated names happened to
+sit in a rally too." Rather than commission the `planner` design pass on that caveat still
+open, closed it first: cheap, no gate touch, same review-exempt posture as Items 1/2.
+
+**What shipped:** `ladder_performance()` gained an optional `spy_close_by_date: dict | None`
+parameter (backward-compatible — omitting it leaves every existing field unchanged and
+every new alpha field reads as "not computed," never a fabricated value). Per row, a new
+private `_spy_return_pct(spy_close_by_date, start_d, end_d)` benchmarks SPY over the SAME
+`(article_date, window_end)` window `classify_call` already used for the stock's own
+`ret_pct` — same nearest-close-on-or-before lookup semantics as
+`recommendations_history._spy_return_pct`, deliberately kept as its own small copy per this
+codebase's existing convention (`trade_review.py` already has a third independent variant
+of the same idea) rather than a new cross-module import.
+
+**A real cost consideration surfaced and designed around before writing any code:** fetching
+SPY per-ROW (reusing the render's existing per-row cached OHLC fetcher with `ticker="SPY"`)
+would have created up to ~450 distinct new cache keys — one network fetch per unique
+`(start, end)` window across the library, since most rows have a different `article_date`.
+Instead, SPY's history is fetched **once** via the existing `_cached_spy(period)` helper
+(the same one Recommendations History already uses for its own `_rh_spy_by_date`, `app.py`
+~28686-28699) and turned into one `{date: close}` dict for O(1) lookups per row — one fetch
+total, not up to 450. **Period is `"2y"`, not the `"6mo"`/`"1y"` used elsewhere on this
+page** — several saved `analyst_coverage` article_dates go back over a year (one excluded
+row seen during the Buy=0 investigation dated 2025-07-09), and a shorter window would have
+silently starved alpha coverage for the library's oldest calls.
+
+**Each tier's output gained three fields**, each with its own independent floor
+(reusing `ANALYST_CALIBRATION_MIN_CASES`, same constant-reuse discipline as the raw-return
+verdict): `n_alpha` (count of rows in this tier with a usable SPY benchmark — can be LESS
+than `n`, since a row's own window may fall outside the fetched SPY history even when its
+own `ret_pct` is known), `avg_alpha_pct` (`ret_pct − spy_return_pct`, averaged over just
+those `n_alpha` rows), and `alpha_verdict_shown`. **A tier can clear the raw-return floor
+while its alpha floor stays unmet** — pinned by a dedicated regression test — so the two
+verdicts are never conflated.
+
+**Render:** the alpha reads as the `st.metric` `delta` on each tier tile (raw return stays
+the primary `value`), using the default `delta_color="normal"` deliberately — alpha is a
+benefit metric in the same direction for every tier here, so there is no sign-flip case a
+non-default `delta_color` would be needed for (see memory
+`feedback_metric_delta_color_sign_trap`). 15 new tests (5 for `_spy_return_pct`, 5 for the
+new `ladder_performance` alpha fields, plus fixture updates). Full suite 5241 passed;
+antipattern + constants-doc gates green; no new constant.
+
+**Not yet read live — this is the honest state as of committing this section.** §8a's
+Strong Buy/Hold/Sell numbers above were measured BEFORE this capability existed, so they
+carry no alpha figures. The next live check of this page will show whether the inversion
+(Sell beating Strong Buy) survives being benchmarked against SPY, shrinks, or reverses —
+record that result here, in this section, before treating §8a's absolute-return reading as
+the final word for the `planner` brief.
 
 ---
 
