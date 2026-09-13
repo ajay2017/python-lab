@@ -134,6 +134,34 @@ def sentiment_value_or_none(value: Any, bundle: dict | None) -> Any:
     return value if available else None
 
 
+def holdings_write_failed_message(ticker: str) -> str:
+    """User-facing message for when a post-trade `db.save_holdings()` call
+    returns False (finding D2).
+
+    By the point this fires, the underlying trade itself has ALREADY been
+    logged successfully (the BUY/SELL confirm flow checks `db.save_trade`'s
+    own return before ever reaching the holdings update) — only the derived
+    holdings AGGREGATE failed to persist. That is recoverable ("Rebuild from
+    trades" replays the trade log from scratch), so this is a real but
+    bounded failure, not data loss.
+
+    Callers must pair this with two things this function does not do itself:
+    (1) render it via `st.error`, never `st.success` — a write that did not
+    happen must never be told to the user as having happened, which is the
+    defect this closes; and (2) leave `st.session_state.holdings_df`
+    UNCHANGED on this path. Updating it to the unsaved value anyway would run
+    the rest of THIS session on a book the DB never received — a worse,
+    quieter version of the same defect, since every gate/stop/sizing
+    computation reads session_state, not the DB, until the next reload
+    silently reverts it.
+    """
+    return (
+        f"⚠️ Your trade for **{ticker}** was logged, but the holdings table "
+        f"failed to update — its share count may be out of sync until this is "
+        f"corrected. Use **'🔄 Rebuild from trades'** (Trade Journal) to fix it."
+    )
+
+
 def xcheck_is_alarm_worthy(result: dict, market_is_open: bool) -> bool:
     """Whether one price cross-check result should trigger the loud "sources
     disagree" banner, vs staying quiet (finding D23).

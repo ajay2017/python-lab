@@ -303,6 +303,7 @@ from stock_analyzer.util import bq_score_or_none as _bq_or_none
 from stock_analyzer.util import val_score_or_none as _val_or_none
 from stock_analyzer.util import sentiment_value_or_none as _sentiment_or_none
 from stock_analyzer.util import xcheck_is_alarm_worthy as _xcheck_is_alarm_worthy
+from stock_analyzer.util import holdings_write_failed_message as _holdings_write_failed_msg
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -24860,22 +24861,39 @@ elif page == "📒 Trade Journal":
                     _ps_new   = _ps_cur - _ps_shares
                     if _ps_new <= 0:
                         _ps_h_df = _ps_h_df.drop(_ps_h_idx).reset_index(drop=True)
-                        st.success(f"✅ **{_ps_ticker}** fully exited — position removed from portfolio.")
+                        _ps_msg = f"✅ **{_ps_ticker}** fully exited — position removed from portfolio."
                     else:
                         _ps_h_df.at[_ps_h_idx, "Shares"] = (
                             int(_ps_new) if _ps_new == int(_ps_new) else _ps_new
                         )
                         _ps_pnl_str = f"${_ps_pnl:+,.2f}" if _ps_pnl is not None else "—"
                         _ps_pnl_pct = ((_ps_price - _ps_cb) / _ps_cb * 100 if _ps_cb else 0)
-                        st.success(
+                        _ps_msg = (
                             f"✅ Sold **{_ps_shares:.0f} shares of {_ps_ticker}** "
                             f"@ ${_ps_price:.2f}  ·  "
                             f"Holdings: {_ps_cur:.0f} → {_ps_new:.0f} shares  ·  "
                             f"Realized P&L: **{_ps_pnl_str}** ({_ps_pnl_pct:+.1f}%)"
                         )
-                    db.save_holdings(_ps_h_df)
-                    st.session_state.holdings_df = _ps_h_df
-                    _refresh_portfolio_cache_after_trade(_ps_h_df)
+                    # D2: only claim success, and only update the app's own view,
+                    # once db.save_holdings() actually confirms the write. The
+                    # trade itself is already logged by this point (checked
+                    # above) -- a False here means only the derived holdings
+                    # aggregate didn't persist, which "Rebuild from trades"
+                    # repairs; session_state must never run ahead of the DB.
+                    # `or not db.has_db()`: mirrors this handler's OWN entry
+                    # gate a few lines up (`_ps_saved or not db.has_db()`).
+                    # save_holdings() returns False for BOTH a genuine write
+                    # failure AND the intentional no-DB/local-session-only
+                    # mode (db.py:1356-1357) -- without this, every trade in
+                    # that supported mode would show a FALSE "write failed"
+                    # error and never update session_state, breaking no-DB
+                    # mode entirely. Caught by Opus review, not the author.
+                    if db.save_holdings(_ps_h_df) or not db.has_db():
+                        st.success(_ps_msg)
+                        st.session_state.holdings_df = _ps_h_df
+                        _refresh_portfolio_cache_after_trade(_ps_h_df)
+                    else:
+                        st.error(_holdings_write_failed_msg(_ps_ticker))
                 else:
                     st.success(
                         f"✅ SELL recorded for **{_ps_ticker}** "
@@ -24977,7 +24995,7 @@ elif page == "📒 Trade Journal":
                         int(_pb_new_shares) if _pb_new_shares == int(_pb_new_shares) else _pb_new_shares
                     )
                     _pb_h_df.at[_pb_h_idx, "Avg Cost ($)"] = _pb_new_avg
-                    st.success(
+                    _pb_msg = (
                         f"✅ Added **{_pb_shares:.0f} shares of {_pb_ticker}** @ ${_pb_price:.2f}  ·  "
                         f"Holdings: {_pb_old_shares:.0f} → {_pb_new_shares:.0f} shares  ·  "
                         f"New avg cost: **${_pb_new_avg:.2f}**"
@@ -24989,108 +25007,124 @@ elif page == "📒 Trade Journal":
                         "Avg Cost ($)": round(_pb_price, 4),
                     }])
                     _pb_h_df = pd.concat([_pb_h_df, _pb_new_h_row], ignore_index=True)
-                    st.success(
+                    _pb_msg = (
                         f"✅ New position opened: **{_pb_shares:.0f} × {_pb_ticker}** @ ${_pb_price:.2f}"
                     )
-                db.save_holdings(_pb_h_df)
-                st.session_state.holdings_df = _pb_h_df
-                # Reads pre-trade _last_port_df; must precede _refresh_portfolio_cache_after_trade.
-                try:
-                    _pb_cc_pdf    = st.session_state.get("_last_port_df")
-                    _pb_cc_pv     = _f(st.session_state.get("_portfolio_value"), 0.0)
-                    # gate_basis() has returned basis="equity" unconditionally since the
-                    # 2026-07-09 policy reversal (stock_analyzer/portfolio.py docstring),
-                    # so a "basis in (account, over-levered)" check can never be true --
-                    # permanently dead code, same root cause as F-260 finding #6's Sankey
-                    # branch. Removed rather than gated on a cache-collapse disclosure.
-                    _pb_cc_gate   = st.session_state.get("_acct_gate_cache") or {}
-                    _pb_cc_denom  = _f(_pb_cc_gate.get("denom"), 0.0) or _pb_cc_pv
-                    if _pb_cc_pdf is not None and not _pb_cc_pdf.empty and _pb_cc_pv > 0:
-                        _pb_cc_match = _pb_cc_pdf[_pb_cc_pdf["Ticker"] == _pb_ticker]
-                        _pb_cc_existing_mv = (
-                            float(_pb_cc_match["Market Value"].iloc[0])
-                            if not _pb_cc_match.empty else 0.0
-                        )
-                        _pb_cc_sector = (
-                            str(_pb_cc_match["Sector"].iloc[0]) if not _pb_cc_match.empty
-                            else resolve_sector(_pb_ticker, None)
-                        )
-                        _pb_cc_sector_mv = (
-                            float(_pb_cc_pdf[_pb_cc_pdf["Sector"] == _pb_cc_sector]["Market Value"].sum())
-                            if "Sector" in _pb_cc_pdf.columns else 0.0
-                        )
-                        # F-255: resolve the separate net-capital cap for this add — uses
-                        # the plain gross book value (_pb_cc_pv), not the already-gated
-                        # _pb_cc_denom, since resolve_net_capital re-derives its own
-                        # margin/equity split from account cash.
-                        _f255_acct = db.load_account_cash()
-                        _f255_net_cap, _f255_basis = _margin_mod.resolve_net_capital(
-                            _pb_cc_pv, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
-                        )
-                        _pb_cc = assess_add_concentration(
-                            ticker=_pb_ticker, add_shares=_pb_shares, price=_pb_price,
-                            existing_name_mv=_pb_cc_existing_mv, sector_mv=_pb_cc_sector_mv,
-                            portfolio_value=_pb_cc_denom,
-                            single_ceiling=SINGLE_NAME_CEILING,
-                            sector_ceiling=SECTOR_CEILING, sector_elevated=SECTOR_ELEVATED,
-                            net_capital=_f255_net_cap, capital_ceiling=NET_CAPITAL_POSITION_CAP_PCT,
-                        )
-                        if _pb_cc:
-                            _pb_cc_msgs = []
-                            if _pb_cc["name_breach"]:
-                                _pb_cc_trim = _pb_cc["suggested_trim_shares"]
-                                _pb_cc_msgs.append(
-                                    f"**{_pb_ticker}** is now ~**{_pb_cc['post_name_wt']:.0f}%** of your "
-                                    f"book (single-name ceiling {SINGLE_NAME_CEILING:.0f}%)."
-                                    + (f" To get back under, trim ~**{_pb_cc_trim} share(s)**."
-                                       if _pb_cc_trim > 0 else "")
-                                )
-                            if _pb_cc["capital_breach"]:
-                                _pb_cc_msgs.append(
-                                    f"**{_pb_ticker}** is now ~**{_pb_cc['post_name_capital_pct']:.0f}%** "
-                                    f"of your net capital (net-capital cap "
-                                    f"{int(NET_CAPITAL_POSITION_CAP_PCT)}%) — separate from the single-name "
-                                    "book cap above."
-                                )
-                            if _pb_cc["sector_hard"]:
-                                _pb_cc_msgs.append(
-                                    f"Sector **{_pb_cc_sector}** is now ~**{_pb_cc['post_sector_wt']:.0f}%** "
-                                    f"— above the {SECTOR_CEILING:.0f}% sector cap."
-                                )
-                            elif _pb_cc["sector_elevated"]:
-                                _pb_cc_msgs.append(
-                                    f"Sector **{_pb_cc_sector}** is now ~**{_pb_cc['post_sector_wt']:.0f}%** "
-                                    f"— approaching the {SECTOR_CEILING:.0f}% cap "
-                                    f"(warn {SECTOR_ELEVATED:.0f}%)."
-                                )
-                            if _pb_cc_msgs:
-                                st.warning(
-                                    "⚠️ **Concentration check** — "
-                                    + "  ".join(_pb_cc_msgs)
-                                    + "\n\nNot blocked (this is a record of a real trade), but a "
-                                    "concentrated position amplifies every loss. Consider trimming, "
-                                    "or knowingly accept the higher single-name risk."
-                                )
-                    elif _pb_cc_pdf is None:
-                        # surface-proprioception F-260 finding: this whole
-                        # concentration check silently no-oped whenever
-                        # _last_port_df was absent (Home never visited this
-                        # session, or crashed before publishing it), with no
-                        # trace anywhere that the check didn't run. A
-                        # genuinely-empty portfolio (_pb_cc_pdf.empty) or a
-                        # non-positive book value are left OUT of this
-                        # disclosure deliberately -- those mean "nothing to
-                        # check against yet", a real answer, not an offline one.
-                        st.caption(
-                            "⚪ Concentration check unavailable this session — your "
-                            "portfolio snapshot wasn't loaded, so this new position "
-                            "wasn't checked against your single-name/sector/"
-                            "net-capital limits. Visit 🏠 Home, then re-check on the "
-                            "Portfolio pages."
-                        )
-                except Exception:
-                    pass
-                _refresh_portfolio_cache_after_trade(_pb_h_df)
+                # D2: only claim success, and only propagate the new book to
+                # this session's own view/caches, once db.save_holdings()
+                # actually confirms the write -- same discipline as the
+                # SELL-confirm flow above. The concentration-caution display
+                # and the cross-page cache refresh both assess/publish the
+                # NEW position, so both are meaningless (and misleading) if
+                # the write never landed -- nested under the same success
+                # gate rather than left to run on an unsaved book.
+                # `or not db.has_db()`: same fix as the SELL-confirm flow
+                # above, for the identical reason -- mirrors this handler's
+                # own entry gate at `_pb_saved = db.save_trade(...); if
+                # _pb_saved or not db.has_db():` a few lines up. See the
+                # SELL-side comment for the full rationale.
+                if db.save_holdings(_pb_h_df) or not db.has_db():
+                    st.success(_pb_msg)
+                    st.session_state.holdings_df = _pb_h_df
+                    # Reads pre-trade _last_port_df; must precede _refresh_portfolio_cache_after_trade.
+                    try:
+                        _pb_cc_pdf    = st.session_state.get("_last_port_df")
+                        _pb_cc_pv     = _f(st.session_state.get("_portfolio_value"), 0.0)
+                        # gate_basis() has returned basis="equity" unconditionally since the
+                        # 2026-07-09 policy reversal (stock_analyzer/portfolio.py docstring),
+                        # so a "basis in (account, over-levered)" check can never be true --
+                        # permanently dead code, same root cause as F-260 finding #6's Sankey
+                        # branch. Removed rather than gated on a cache-collapse disclosure.
+                        _pb_cc_gate   = st.session_state.get("_acct_gate_cache") or {}
+                        _pb_cc_denom  = _f(_pb_cc_gate.get("denom"), 0.0) or _pb_cc_pv
+                        if _pb_cc_pdf is not None and not _pb_cc_pdf.empty and _pb_cc_pv > 0:
+                            _pb_cc_match = _pb_cc_pdf[_pb_cc_pdf["Ticker"] == _pb_ticker]
+                            _pb_cc_existing_mv = (
+                                float(_pb_cc_match["Market Value"].iloc[0])
+                                if not _pb_cc_match.empty else 0.0
+                            )
+                            _pb_cc_sector = (
+                                str(_pb_cc_match["Sector"].iloc[0]) if not _pb_cc_match.empty
+                                else resolve_sector(_pb_ticker, None)
+                            )
+                            _pb_cc_sector_mv = (
+                                float(_pb_cc_pdf[_pb_cc_pdf["Sector"] == _pb_cc_sector]["Market Value"].sum())
+                                if "Sector" in _pb_cc_pdf.columns else 0.0
+                            )
+                            # F-255: resolve the separate net-capital cap for this add — uses
+                            # the plain gross book value (_pb_cc_pv), not the already-gated
+                            # _pb_cc_denom, since resolve_net_capital re-derives its own
+                            # margin/equity split from account cash.
+                            _f255_acct = db.load_account_cash()
+                            _f255_net_cap, _f255_basis = _margin_mod.resolve_net_capital(
+                                _pb_cc_pv, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
+                            )
+                            _pb_cc = assess_add_concentration(
+                                ticker=_pb_ticker, add_shares=_pb_shares, price=_pb_price,
+                                existing_name_mv=_pb_cc_existing_mv, sector_mv=_pb_cc_sector_mv,
+                                portfolio_value=_pb_cc_denom,
+                                single_ceiling=SINGLE_NAME_CEILING,
+                                sector_ceiling=SECTOR_CEILING, sector_elevated=SECTOR_ELEVATED,
+                                net_capital=_f255_net_cap, capital_ceiling=NET_CAPITAL_POSITION_CAP_PCT,
+                            )
+                            if _pb_cc:
+                                _pb_cc_msgs = []
+                                if _pb_cc["name_breach"]:
+                                    _pb_cc_trim = _pb_cc["suggested_trim_shares"]
+                                    _pb_cc_msgs.append(
+                                        f"**{_pb_ticker}** is now ~**{_pb_cc['post_name_wt']:.0f}%** of your "
+                                        f"book (single-name ceiling {SINGLE_NAME_CEILING:.0f}%)."
+                                        + (f" To get back under, trim ~**{_pb_cc_trim} share(s)**."
+                                           if _pb_cc_trim > 0 else "")
+                                    )
+                                if _pb_cc["capital_breach"]:
+                                    _pb_cc_msgs.append(
+                                        f"**{_pb_ticker}** is now ~**{_pb_cc['post_name_capital_pct']:.0f}%** "
+                                        f"of your net capital (net-capital cap "
+                                        f"{int(NET_CAPITAL_POSITION_CAP_PCT)}%) — separate from the single-name "
+                                        "book cap above."
+                                    )
+                                if _pb_cc["sector_hard"]:
+                                    _pb_cc_msgs.append(
+                                        f"Sector **{_pb_cc_sector}** is now ~**{_pb_cc['post_sector_wt']:.0f}%** "
+                                        f"— above the {SECTOR_CEILING:.0f}% sector cap."
+                                    )
+                                elif _pb_cc["sector_elevated"]:
+                                    _pb_cc_msgs.append(
+                                        f"Sector **{_pb_cc_sector}** is now ~**{_pb_cc['post_sector_wt']:.0f}%** "
+                                        f"— approaching the {SECTOR_CEILING:.0f}% cap "
+                                        f"(warn {SECTOR_ELEVATED:.0f}%)."
+                                    )
+                                if _pb_cc_msgs:
+                                    st.warning(
+                                        "⚠️ **Concentration check** — "
+                                        + "  ".join(_pb_cc_msgs)
+                                        + "\n\nNot blocked (this is a record of a real trade), but a "
+                                        "concentrated position amplifies every loss. Consider trimming, "
+                                        "or knowingly accept the higher single-name risk."
+                                    )
+                        elif _pb_cc_pdf is None:
+                            # surface-proprioception F-260 finding: this whole
+                            # concentration check silently no-oped whenever
+                            # _last_port_df was absent (Home never visited this
+                            # session, or crashed before publishing it), with no
+                            # trace anywhere that the check didn't run. A
+                            # genuinely-empty portfolio (_pb_cc_pdf.empty) or a
+                            # non-positive book value are left OUT of this
+                            # disclosure deliberately -- those mean "nothing to
+                            # check against yet", a real answer, not an offline one.
+                            st.caption(
+                                "⚪ Concentration check unavailable this session — your "
+                                "portfolio snapshot wasn't loaded, so this new position "
+                                "wasn't checked against your single-name/sector/"
+                                "net-capital limits. Visit 🏠 Home, then re-check on the "
+                                "Portfolio pages."
+                            )
+                    except Exception:
+                        pass
+                    _refresh_portfolio_cache_after_trade(_pb_h_df)
+                else:
+                    st.error(_holdings_write_failed_msg(_pb_ticker))
                 st.session_state.pop("_tj_pending_buy", None)
                 st.session_state.pop("_tj_prefill", None)
                 st.session_state.pop("_tj_override_price", None)

@@ -11,6 +11,7 @@ from stock_analyzer.util import (
     factor_tilt_evidence_line,
     factor_tilt_state,
     get_or_offline,
+    holdings_write_failed_message,
     md_bold_to_html,
     bq_score_or_none,
     numeric_or,
@@ -202,6 +203,33 @@ class TestSentimentValueOrNone:
     def test_a_genuine_measured_50_with_real_headlines_still_survives(self):
         b = {"headlines": [{"headline": "x", "score": 0.0}]}
         assert sentiment_value_or_none(50.0, b) == 50.0
+
+
+class TestHoldingsWriteFailedMessage:
+    """D2: a holdings-table write that did not happen must never be told to
+    the user as having happened."""
+
+    def test_names_the_ticker(self):
+        msg = holdings_write_failed_message("AAPL")
+        assert "AAPL" in msg
+
+    def test_never_claims_success(self):
+        msg = holdings_write_failed_message("AAPL").lower()
+        for word in ("success", "added", "sold", "recorded", "✅"):
+            assert word not in msg, word
+
+    def test_points_at_the_recovery_path(self):
+        msg = holdings_write_failed_message("AAPL")
+        assert "Rebuild from trades" in msg
+
+    def test_different_tickers_produce_different_messages(self):
+        assert holdings_write_failed_message("AAPL") != holdings_write_failed_message("MSFT")
+
+    def test_ticker_is_bolded_for_st_error(self):
+        # Rendered via st.error (native markdown support, not unsafe_allow_html
+        # HTML) so ** here is intentional emphasis, not a literal-bold leak.
+        msg = holdings_write_failed_message("AAPL")
+        assert "**AAPL**" in msg
 
 
 class TestXcheckIsAlarmWorthy:

@@ -430,6 +430,57 @@ Of 32 rows with NULL `price_at_signal`, **21 are now priced, 11 correctly remain
   they were never blocking; PLTR's remaining row is WATCH-type, which
   `protective_track_record.py` drops entirely regardless of price.
 
+### D2 · holdings save reported success before the write — FIXED, with a real regression caught mid-fix
+**Anchor:** 📒 Trade Journal's BUY-confirm and SELL-confirm handlers in `app.py`. Both called
+`st.success(...)` unconditionally before `db.save_holdings(...)`, then discarded that
+call's boolean return entirely.
+
+**Sharper than the original one-line description.** `db.save_holdings` (`db.py:1346`)
+already renders its own `st.error` on a genuine exception, so a hard DB failure was never
+*fully* silent — the real defect was narrower and, in one respect, worse: regardless of
+success or failure, `st.session_state.holdings_df` was overwritten with the new value. On
+a failed write, every gate/stop/sizing computation for the **rest of that session** ran
+against a book the DB never received — a silent divergence that only a future reload would
+quietly revert, with nothing in between ever telling the user.
+
+**Fix:** new pure `stock_analyzer/util.py::holdings_write_failed_message(ticker)`. Both
+confirm flows now gate the success message, the `session_state.holdings_df` write, and (in
+BUY's case) a ~90-line downstream concentration-caution display plus the cross-page cache
+refresh — all of which assess or propagate the *new* position — behind
+`db.save_holdings(...)`'s actual return value. On failure: a specific error naming the
+ticker and pointing at "Rebuild from trades" (the trade itself is already logged
+successfully by this point via a separately-checked `db.save_trade` call, so this is a
+recoverable aggregate-cache miss, not data loss — never conflated with genuine loss in the
+message).
+
+**A real regression was caught mid-fix, by review, not by the author.** `db.save_holdings`
+returns `False` for two different reasons: a genuine write failure, **and** the
+app's intentional no-DB / local-session-only mode (`db.py:1356-1357`). My first version's
+`if db.save_holdings(...):` gate couldn't distinguish them — in no-DB mode, an entirely
+supported and exercised mode, every single trade would have shown a **false** "write
+failed" error and silently stopped updating `holdings_df` at all, breaking that mode
+outright. Fixed by mirroring the exact entry gate the surrounding handler already uses
+(`_ps_saved or not db.has_db()` / `_pb_saved or not db.has_db()`), so
+`db.save_holdings(...) or not db.has_db()` reproduces the old, correct no-DB behaviour
+while still catching a genuine DB-present failure.
+
+Opus review: **FIX-FIRST → fixed → SHIP** (the no-DB regression above was the sole blocking
+finding). Two non-blocking notes, deliberately left as-is rather than expanded scope:
+(1) the new error, like the `st.success` it replaces, sits immediately before an
+unconditional `st.rerun()` — unverifiable locally (this repo never runs the app locally),
+and not a regression since it occupies the exact position the pre-existing success message
+always held; **track as unverified, check on the next live BUY/SELL after deploy**; (2)
+`db.save_holdings`'s own internal `st.error` and the new caller-side message can both
+render on a genuine failure — minor duplication, the caller's message is the more
+actionable of the two, not worth touching `db.py`'s exception path for.
+
+**Known residual, stated rather than hidden:** this is the largest structural edit to
+`app.py` this session (a ~90-line re-indent), and app.py has zero automated coverage of
+this control flow by design — the reviewer traced the diff line-by-line rather than
+relying on `py_compile` clean as sufficient. The pure `holdings_write_failed_message` is
+fully unit-tested; the surrounding wiring rests on that manual trace, the same residual
+class D8/D24 already carry for this file.
+
 ### D25 · `exit_signals.signal_date` can record a weekend — mechanism CONFIRMED, still live
 **New finding, surfaced while preparing the backfill above — not fixed.**
 
@@ -684,14 +735,9 @@ underneath, struck through in spirit, so the reasoning that produced it isn't lo
 **Ranked by urgency × impact, not by P-band alone — a P0 with zero live trigger and a P2
 with a common one can trade places.**
 
-1. **D2 — holdings save reports success before the write.** Cheap (move a message, branch
-   on a return value, matches the `refresh_outcome` extraction pattern already used
-   elsewhere this session), and its trigger — any transient write failure — is far more
-   probable than D1's (a corporate action). If this fires, every gate/stop/sizing
-   computation runs on a book the app silently failed to update. **Highest impact-per-hour
-   left in the register.** Anchor drifted from the register's cited `app.py:24886-24890` to
-   `~24980-24991` after this session's edits — re-locate by content, not the old line
-   number, when picked up.
+1. ~~**D2 — holdings save reports success before the write.**~~ **FIXED.** See its own
+   section below the table — a real regression was caught mid-fix by Opus review, not by
+   the author.
 2. **D4 — a silently-dropped holding inflates every remaining weight.** Also cheap (append
    to the existing `dropped` list one line above the bug, mirroring the bad-shares case
    right next to it). Direct breach of the house "never silently filter" rule. Correlated
