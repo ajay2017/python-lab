@@ -2677,6 +2677,70 @@ create policy "Allow all (service role)" on public.account_daily_snapshots
 
 Historical daily leverage and margin-cushion tracking, forward-only from ship date (2026-09-10). One row per trading day, written at EOD by the cron `eod` lane, reusing that SAME run's `daily_snapshots` rows (never a second fetch), via `stock_analyzer/db.py::save_account_daily_snapshot()`. Upserts on `snapshot_date` (idempotent if called twice same day). Fails silently (returns `False`) if the table doesn't exist (DDL not yet applied) or on any other error — a failure to persist this data cannot block the primary snapshots or any cron lane. `cushion` (a **dollar** figure) and `call_distance_pct` (a **percentage** — the two are call_distance()'s two distinct outputs, not the same metric at a different scale) are both filled verbatim from `stock_analyzer/margin.py::call_distance()`, reused from the live 💰 Account panel, never re-derived. All cash-derived fields (`cash_balance, net_equity, leverage, cushion, call_distance_pct`) are written as `NULL` when the `account_cash` record is missing, stale (older than `ACCOUNT_CASH_STALE_DAYS`), or has no cash value — never fabricated; `gross_book` and `maintenance_rate` are always populated regardless, since neither depends on cash. `maintenance_rate` is frozen at write time (not recomputed from `constants.py` on read) so a future change to that constant never retroactively alters old rows. Consumed by the new 💰 Account **"🛡️ Leverage & Margin Cushion"** chart (F-266) via `stock_analyzer/db.py::load_account_daily_snapshots(start_date, end_date)`, which returns `None` on any failure (offline contract, same as other loaders). RLS matches existing tables exactly (`"Allow all (service role)"`, `for all to service_role`).
 
+### 6.47 `score_history` table
+
+```sql
+CREATE TABLE IF NOT EXISTS score_history (
+    id            BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    ticker        TEXT NOT NULL,
+    score_date    DATE NOT NULL,
+    composite     NUMERIC NOT NULL,
+    t_score       NUMERIC,
+    bq_score      NUMERIC,
+    val_score     NUMERIC,
+    s_score       NUMERIC,
+    bq_available  BOOLEAN,
+    val_available BOOLEAN,
+    price         NUMERIC,
+    source        TEXT NOT NULL DEFAULT 'cron',
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT score_history_unique UNIQUE (ticker, score_date)
+);
+ALTER TABLE score_history ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_score_history" ON score_history
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+```
+
+**Capture-only, forward-only from ship date (2026-09-13) — no readout, card, or gate reads
+this table yet; that is a separate, separately-approved decision, sequenced exactly like the
+Gate Suppression Ledger (F-259).** One row per held ticker per day, written by the
+`premarket` cron lane inside `stock_analyzer/headless_alert_engine.py::
+compute_protective_alerts()` (reuses the bundles that lane already loads for
+`analyst_target_snapshots` — zero extra API calls), persisted via `stock_analyzer/db.py::
+save_score_history_batch()`. Upserts on `(ticker, score_date)`, idempotent same-day. Fails
+silently (`False`) if the table doesn't exist (DDL owner-applied by hand, not part of the
+shipping commit) or on any other error, logged distinctly by `cron_runner.py` as a
+`score_history: WRITE FAILED` line — never collapsed into a false "captured."
+
+**`composite` is stored verbatim, fabricated pillars baked in** — it's the number the app
+actually acted on that day, the whole point of the table. `bq_score`/`val_score`/`s_score`
+are the load-bearing exception: each is `NULL`, **never the pillar's fabricated neutral
+50**, when the bundle's own `bq_available`/`val_available`/empty-headlines signal says that
+pillar wasn't genuinely measured (`stock_analyzer.util::bq_score_or_none` /
+`val_score_or_none` / `sentiment_value_or_none`, the same helpers finding D24 built to null
+these exact fabricated neutrals at a different write boundary). **Deliberately NO
+coalesce-on-write** (unlike `save_exit_signals_batch`) — a NULL here means "not measurable
+this run," which *is* the information a future decay analysis needs; coalescing would
+silently resurrect an earlier run's value over a later honest NULL. `t_score` has no
+availability signal in the codebase today (a separate, tracked gap) and is stored as-is.
+`bq_available`/`val_available` are stored alongside `composite` specifically so a future
+readout can detect that a composite move was really a pillar-availability flip, not genuine
+score decay. A `stale_as_of`-served bundle (up to 5 days old) produces **no row at all**,
+not a placeholder — the same precedent as `analyst_target_snapshots`'s own skip, so cache
+staleness is never read as score stability. A ticker flagged by the split-guard (F-266-era
+`split_flagged`/`split_withheld` logic) is captured **normally, not skipped** — a
+deliberate decision: an unaccounted split corrupts the stored `avg_cost` (P&L/deterioration/
+stops), not the composite or any of the four pillars, all of which derive from the
+provider's already split-adjusted price series/fundamentals/valuation/news.
+
+Loaded via `stock_analyzer/db.py::load_score_history(days_back=365, limit=5000)` — an
+explicit high limit, not a client-library default (this project has hit a silent
+default-100-row truncation class before). No consumer exists yet. Pre-registered retirement
+criterion (mirrors the Gate Suppression Ledger's own discipline): replay score decay against
+closed round trips ~6 months after enough history accrues; if decay is not systematically
+earlier than the existing price-based exit ladder, the eventual readout is retired — that is
+the success condition of that criterion, not a failure to soften later.
+
 ---
 
 ## 7. Navigation and State Management

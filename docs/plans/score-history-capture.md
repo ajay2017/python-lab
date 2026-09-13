@@ -1,10 +1,16 @@
 # Score History Capture — persist the daily composite the app already computes and discards
 
-**Status: DESIGNED 2026-09-12, NOT STARTED. No code written, no DDL applied.**
-Capture-only by design: **no readout, no card, no gate** ships in this change — the readout
-is a separate, separately-approved decision, exactly as the Gate Suppression Ledger (F-259)
-was sequenced. Requires an Opus `planner` design pass and a **mandatory** Opus `reviewer`
-before commit (touches `db.py` + `cron_runner.py`, both `_GATE_FILES` members).
+**Status: SHIPPED 2026-09-13 (F-269).** Built by `implementer` per §1a's spec, Opus
+`reviewer`: **SHIP, 0 blocking** (one non-blocking note: the capture loop isn't wrapped in
+its own try/except, matching its already-shipping `analyst_target_snapshots` sibling's
+posture — accepted as-is, the three helpers it calls cannot raise on dict input). Full
+suite 5356 passed; `check_antipatterns.py` + `check_constants_documented.py` clean. **DDL
+still needs to be applied by hand** — the table ships inert until then, and the cron lane
+will log `score_history: WRITE FAILED` nightly until it exists. Capture-only by design: **no
+readout, no card, no gate** ships in this change — the readout is a separate,
+separately-approved decision, exactly as the Gate Suppression Ledger (F-259) was sequenced.
+See §1a for the planner pass's corrections, decisions, and the exact spec that was built
+from.
 
 ---
 
@@ -45,6 +51,133 @@ uses it only to enrich deteriorating signals. `bundle_loader.load_bundle`
 (`bundle_loader.py:213-232`) already returns `t_score` / `bq_score` / `val_score` /
 `s_score` **plus** `bq_available` / `val_available`, and `ctx["held_data"]` is already in
 scope. **Zero extra API calls, zero extra bundle loads.**
+
+---
+
+## 1a. Planner pass, 2026-09-13 — PROCEED WITH CHANGES
+
+Run as part of `docs/plans/investor-maturity-roadmap.md` §4 B1, after A4 (real median
+holding period ~7 calendar days) and A1 (first-ever Defense verdict, negative,
+`protect_alpha -15.7%`) both ran against real data. **Neither changes this capture design —
+capture is cheap, forward-only, and starting the clock loses nothing — but both are exactly
+the tension the eventual readout must open by confronting, not rediscover.** That's carried
+forward to §6/§10, not resolved here.
+
+**Every file:line citation below in this doc had drifted** (this doc was written
+2026-09-12; `headless_alert_engine.py`/`daily_briefing.py` were both edited 2026-09-13 by a
+concurrent session's split-guard fix, commit `aee98c3`) — re-verified against HEAD, not
+assumed:
+- The composite-map build (§1/§4) is now at `headless_alert_engine.py:296-300`, not
+  `:257-261` — same form, `port_df.set_index("Ticker")["Score"].to_dict()`.
+- The `stale_as_of` skip precedent (§4.3) is now at `headless_alert_engine.py:309-323`
+  (the `continue` at `:311`), not `:268-274`.
+- `bundle_loader`'s return (§1) is now `:213-241`, not `:213-232` — confirmed it still
+  carries `t_score`/`bq_score`/`val_score`/`s_score`/`bq_available`/`val_available`/
+  `stale_as_of`/`current_price`/`headlines`.
+- **`valuation.py`'s `val_available` contract is wider than §4.1 assumed**, and this doc's
+  NULL-not-50 rule already anticipated that in principle: `val_available =
+  objective_max_points > 0` (`valuation.py:134`) is False for an analyst-only ticker with no
+  Forward P/E or FCF Yield, not just "no data at all" (the 2026-09-13 analyst-weight-audit
+  Phase B widening). No further doc change needed — just don't cite the old line number.
+- The function this doc calls `build_protective_payload` (§5.1) does not exist — the real
+  function is `compute_protective_alerts` (`headless_alert_engine.py:208`), return dict at
+  `:362-380` (not `:325-335`).
+- **§4.2's own template pointer was wrong.** `save_exit_signals_batch` (`db.py:3011`) DOES
+  carry the coalesce pre-read (`:3052-3079`) this doc's §4.2 forbids — but
+  **`save_analyst_target_snapshots_batch` (`db.py:3152`) is already the correct no-coalesce
+  shape** (guard → guard → guard → plain `upsert(..., on_conflict=...)` → `return True` iff
+  executed). Model the new function on **that**, not on the exit_signals one with a step
+  removed.
+- **The NULL-not-50 logic (§4.1) already exists as tested pure helpers — reuse, don't
+  reauthor:** `stock_analyzer/util.py::bq_score_or_none` (`:78`), `val_score_or_none`
+  (`:94`), `sentiment_value_or_none` (`:100`) — all built for finding D24 to null these exact
+  fabricated neutrals at a write boundary.
+
+**Two design questions this doc left open, now decided:**
+- **Split-flagged tickers are captured NORMALLY, not skipped.** Traced explicitly (the brief
+  asked for this, not an assumption): the split guard withholds *deterioration signals*
+  because an unaccounted split corrupts the stored `avg_cost`
+  (`classify_deterioration_tier`'s `escalate` leg reads `price < avg_cost` directly) — but
+  `avg_cost` feeds none of the four pillars; every pillar derives from the provider's
+  already split-adjusted price series, fundamentals, valuation, and news
+  (`scoring.py:15`'s `combined_score`). Skipping capture on a split-flagged day would punch
+  false gaps into the exact decay history this feature exists to build, for an `avg_cost`
+  reason unrelated to the score. Add a one-line code comment saying so, so a future editor
+  "harmonising" this with the deterioration withhold doesn't reintroduce the gap.
+- **Also null a fabricated sentiment neutral, for free.** `sentiment_value_or_none` already
+  exists and the held bundle carries `headlines` — store `s_score` through it (a
+  zero-headline day's `analyze_news([]) → 0.0 → sentiment_score_0_100 → exactly 50.0` is
+  exactly the same class §4.1 already names for bq/val). `t_score` has no availability
+  signal at all (finding D3) — store it as-is, with a DDL comment saying why it isn't
+  nulled. **`composite` itself is stored AS-IS, fabricated pillars baked in** — it cannot be
+  nulled, it's the number the app actually acted on; the `bq_available`/`val_available`
+  columns exist precisely so a future readout can detect that a composite move was really a
+  pillar-availability flip, not genuine decay.
+
+**§4.6's open decision (recommendation, not a decree — still the owner's call):** omit the
+as-of `signal` label in v1. It's derivable later from a stored `composite` via
+`scoring.recommendation()`; a stored copy can silently drift if `COMPOSITE_BUY`/
+`COMPOSITE_STRONG_BUY` are retuned before the (undesigned, months-out) readout is built.
+Trivially additive later as a nullable column if wanted.
+
+**Exact DDL** (table name confirmed collision-free):
+
+```sql
+CREATE TABLE IF NOT EXISTS score_history (
+    id            BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    ticker        TEXT NOT NULL,
+    score_date    DATE NOT NULL,
+    composite     NUMERIC NOT NULL,   -- port_df["Score"]; the number the app acted on.
+                                       -- builder skips any ticker whose composite is
+                                       -- NULL/NaN, so a row always carries a real decision.
+    t_score       NUMERIC,             -- stored as-is (no availability flag exists; D3)
+    bq_score      NUMERIC,             -- NULL when bq_available is False (never the 50)
+    val_score     NUMERIC,             -- NULL when val_available is False (never the 50)
+    s_score       NUMERIC,             -- NULL when sentiment was unmeasurable
+    bq_available  BOOLEAN,             -- discloses a fabricated pillar baked into `composite`
+    val_available BOOLEAN,             -- same
+    price         NUMERIC,             -- port_df["Price"], contextualises a score move
+    source        TEXT NOT NULL DEFAULT 'cron',
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT score_history_unique UNIQUE (ticker, score_date)
+);
+
+ALTER TABLE score_history ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_score_history" ON score_history
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+```
+
+**`headless_alert_engine.py`, inside `compute_protective_alerts`, after the
+`analyst_target_snapshots` loop (currently ending `:323`):** build a `price_map` alongside
+the existing `composite_map` (both off `port_df`, so composite and price are the same frame
+the app acted on), loop `held_data.items()`, `continue` on `stale_as_of is not None`,
+`continue` on a NULL/NaN composite, else append a `score_history_rows` dict per the DDL
+above (import `bq_score_or_none`/`val_score_or_none`/`sentiment_value_or_none` from
+`stock_analyzer.util`); add `"score_history": score_history_rows` to the return dict.
+
+**`cron_runner.py::_run_premarket`, new block after the `analyst_target_snapshots` write
+(after line 377, before the velocity check at `:379`):** `if score_history_rows:` then
+`db.save_score_history_batch(...)`, logging an explicit success count or a `WRITE FAILED`
+line — never collapse a failed write into silence.
+
+**`stock_analyzer/db.py`:** `save_score_history_batch(rows)` modeled on
+`save_analyst_target_snapshots_batch`/`load_analyst_target_snapshots` — `is_readonly()` →
+`False`; empty → `False`; `not has_db()` → `False`; `upsert(rows, on_conflict=
+"ticker,score_date")`; `return True` iff executed; `except → warnings.warn; return False`.
+**No coalesce pre-read** — the docstring must say why: a NULL here means "not measurable
+this run," which *is* the information; coalescing would resurrect an earlier run's value
+over a later honest NULL, exactly the §4.2 bug. `load_score_history(days_back=..., limit=
+...)` with an explicit high limit (avoid the default-100-row truncation class this project
+has hit before).
+
+**Tests the build must include, beyond the existing plan:** a same-day re-run where the
+second batch carries a NULL for a pillar the first batch wrote non-null must leave it NULL
+(the direct anti-coalesce regression test); a split-flagged ticker with a non-stale bundle
+still produces a row (the D-1 boundary, proving the deterioration withhold doesn't bleed
+into this capture).
+
+Both `db.py` and `cron_runner.py` are confirmed `_GATE_FILES` members (`pre_tool_checks.py`
+lines 309/310) — mandatory Opus `reviewer` applies as this doc already stated.
 
 ---
 

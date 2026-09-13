@@ -605,6 +605,120 @@ def test_protective_alerts_analyst_target_snapshot_skips_nan_target():
     assert result["analyst_target_snapshots"] == []
 
 
+# ── score_history capture (roadmap B1, docs/plans/score-history-capture.md) ─
+
+def _bundle(stale_as_of=None, t_score=55.0, bq_score=70.0, val_score=65.0,
+            s_score=60.0, bq_available=True, val_available=True,
+            headlines=("h1",)):
+    return {
+        "stale_as_of": stale_as_of,
+        "t_score": t_score, "bq_score": bq_score, "val_score": val_score,
+        "s_score": s_score, "bq_available": bq_available,
+        "val_available": val_available, "headlines": list(headlines),
+    }
+
+
+def test_score_history_row_built_with_all_pillars():
+    ctx = _ok_ctx([_port_row("AAPL", gap_to_stop=5.0)], held_data={"AAPL": _bundle()})
+    result = _run_protective_alerts(ctx)
+    rows = result["score_history"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["ticker"] == "AAPL"
+    assert row["score_date"] == TODAY.isoformat()
+    assert row["composite"] == 60.0  # _port_row's default Score
+    assert row["t_score"] == 55.0
+    assert row["bq_score"] == 70.0
+    assert row["val_score"] == 65.0
+    assert row["s_score"] == 60.0
+    assert row["bq_available"] is True
+    assert row["val_available"] is True
+    assert row["price"] == 100.0  # _port_row's default Price
+    assert row["source"] == "cron"
+
+
+def test_score_history_val_unavailable_nulls_val_score_not_the_fabricated_50():
+    ctx = _ok_ctx([_port_row("AAPL", gap_to_stop=5.0)],
+                  held_data={"AAPL": _bundle(val_score=50.0, val_available=False)})
+    result = _run_protective_alerts(ctx)
+    row = result["score_history"][0]
+    assert row["val_score"] is None
+    assert row["val_available"] is False
+    assert row["bq_score"] == 70.0  # untouched — independent flag
+
+
+def test_score_history_bq_unavailable_nulls_bq_score_not_the_fabricated_50():
+    ctx = _ok_ctx([_port_row("AAPL", gap_to_stop=5.0)],
+                  held_data={"AAPL": _bundle(bq_score=50.0, bq_available=False)})
+    result = _run_protective_alerts(ctx)
+    row = result["score_history"][0]
+    assert row["bq_score"] is None
+    assert row["bq_available"] is False
+    assert row["val_score"] == 65.0  # untouched — independent flag
+
+
+def test_score_history_zero_headlines_nulls_the_fabricated_sentiment_neutral():
+    # analyze_news([]) -> 0.0 -> sentiment_score_0_100(0.0) == 50.0, a
+    # fabricated neutral indistinguishable from a real one without the
+    # headlines-derived availability check in sentiment_value_or_none.
+    ctx = _ok_ctx([_port_row("AAPL", gap_to_stop=5.0)],
+                  held_data={"AAPL": _bundle(s_score=50.0, headlines=())})
+    result = _run_protective_alerts(ctx)
+    row = result["score_history"][0]
+    assert row["s_score"] is None
+
+
+def test_score_history_stale_bundle_produces_no_row_not_a_placeholder():
+    ctx = _ok_ctx(
+        [_port_row("AAPL", gap_to_stop=5.0)],
+        held_data={"AAPL": _bundle(stale_as_of="2026-07-25")},
+    )
+    result = _run_protective_alerts(ctx)
+    assert result["score_history"] == []
+
+
+def test_score_history_nan_composite_yields_no_row():
+    ctx = _ok_ctx([_port_row("AAPL", gap_to_stop=5.0)], held_data={"AAPL": _bundle()})
+    ctx["port_df"].loc[0, "Score"] = float("nan")
+    result = _run_protective_alerts(ctx)
+    assert result["score_history"] == []
+
+
+def test_score_history_none_composite_yields_no_row():
+    ctx = _ok_ctx([_port_row("AAPL", gap_to_stop=5.0)], held_data={"AAPL": _bundle()})
+    ctx["port_df"].loc[0, "Score"] = None
+    result = _run_protective_alerts(ctx)
+    assert result["score_history"] == []
+
+
+def test_score_history_split_flagged_ticker_still_produces_a_row():
+    """The split guard withholds *deterioration* signals for a ticker whose
+    stored avg_cost is unreliable (an unaccounted split) -- it must NOT bleed
+    into score_history, since none of the four pillars derive from avg_cost.
+    Mirrors test_protective_alerts_split_flagged_ticker_excluded_and_disclosed
+    but asserts the opposite outcome for this capture.
+    """
+    ctx = _ok_ctx(
+        [{
+            "Ticker": "AAA", "Gap to Stop (%)": None, "Shares": 40.0,
+            "Avg Cost": 100.0, "Price": 10.0, "Weight (%)": 10.0,
+            "P&L (%)": -90.0, "Stop": None, "Stop Type": "Trailing", "Score": 60.0,
+        }],
+        held_data={"AAA": _bundle()},
+    )
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
+         patch("stock_analyzer.headless_alert_engine.split_detector.detect_split_adjustment",
+               return_value={"split_ratio": 10.0}), \
+         patch("stock_analyzer.exit_advisor.assess_risk_off_derisk", return_value=[]):
+        result = hae.compute_protective_alerts(TODAY)
+
+    assert result["split_withheld"] == ["AAA"]
+    assert result["alerts"] == []  # deterioration withheld, as before
+    rows = result["score_history"]
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "AAA"
+
+
 # ── compute_morning_picks ─────────────────────────────────────────────────
 
 def _scanner_df(tickers):

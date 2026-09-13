@@ -35,6 +35,7 @@ from stock_analyzer.tax_advisor import _build_open_lots
 from stock_analyzer.daily_briefing import deterioration_signals, build_daily_briefing
 from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
 from stock_analyzer.recommendations_history import build_enter_now_rows
+from stock_analyzer.util import bq_score_or_none, val_score_or_none, sentiment_value_or_none
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_ELEVATED,
     PORTFOLIO_BETA_CEILING,
@@ -322,6 +323,45 @@ def compute_protective_alerts(today: date | None = None) -> dict:
             "info_source": bundle.get("info_source"),
         })
 
+    # Score history capture — roadmap B1, docs/plans/score-history-capture.md
+    # §1a. Log-only: nothing reads this yet, never influences `alerts` above.
+    # Reuses composite_map/held_data already built for this run — zero extra
+    # API calls, zero extra bundle loads. Skips stale-cache-served bundles for
+    # the same reason the analyst_target_snapshots loop above does (a
+    # bundle_cache-served value would contaminate the decay history this
+    # feature exists to build). A split-flagged ticker is captured NORMALLY,
+    # NOT skipped alongside split-withheld deterioration signals: the split
+    # guard exists because an unaccounted split corrupts the stored avg_cost,
+    # which classify_deterioration_tier's escalate leg reads directly — but
+    # avg_cost feeds none of the four pillars, which all derive from the
+    # provider's already split-adjusted price series, fundamentals, valuation,
+    # and news. Skipping capture here would punch false gaps into this table
+    # for an avg_cost reason unrelated to the score.
+    price_map = (
+        port_df.set_index("Ticker")["Price"].to_dict()
+        if "Ticker" in port_df.columns and "Price" in port_df.columns else {}
+    )
+    score_history_rows: list[dict] = []
+    for t, bundle in held_data.items():
+        if bundle.get("stale_as_of") is not None:
+            continue
+        comp = _f(composite_map.get(t))
+        if comp is None:
+            continue
+        score_history_rows.append({
+            "ticker": t,
+            "score_date": today.isoformat(),
+            "composite": comp,
+            "t_score":  _f(bundle.get("t_score")),
+            "bq_score":  bq_score_or_none(_f(bundle.get("bq_score")), bundle),
+            "val_score": val_score_or_none(_f(bundle.get("val_score")), bundle),
+            "s_score":   sentiment_value_or_none(_f(bundle.get("s_score")), bundle),
+            "bq_available":  bool(bundle.get("bq_available", bundle.get("fundamentals_available", True))),
+            "val_available": bool(bundle.get("val_available", True)),
+            "price": _f(price_map.get(t)),
+            "source": "cron",
+        })
+
     for d in det:
         if d.get("tier") != "EXIT":
             continue
@@ -369,6 +409,9 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         # Additive — daily analyst-target consensus snapshot per held ticker,
         # log-only (Phase 1). Never used to build `alerts` above.
         "analyst_target_snapshots": analyst_target_snapshots,
+        # Additive — daily composite/pillar snapshot per held ticker, log-only
+        # (roadmap B1). Never used to build `alerts` above.
+        "score_history": score_history_rows,
         # D1 — tickers whose deterioration signals were withheld this run
         # because their cost basis is currently unreliable (an unaccounted
         # split). The caller MUST treat a non-empty list as reportable on its

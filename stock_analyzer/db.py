@@ -3206,6 +3206,75 @@ def load_analyst_target_snapshots(days_back: int = 365) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def save_score_history_batch(rows: list[dict]) -> bool:
+    """Persist a daily composite/pillar snapshot per held ticker (roadmap B1,
+    docs/plans/score-history-capture.md §1a) — capture-only, nothing reads
+    this table yet.
+
+    Idempotent: upserts on (ticker, score_date) — repeated same-day cron runs
+    are no-ops. Never raises — a capture failure must never break the
+    premarket cron.
+
+    Modeled on save_analyst_target_snapshots_batch, NOT save_exit_signals_batch
+    -- deliberately NO coalesce-on-write pre-read. In exit_signals a NULL means
+    "this build didn't derive it" and is worth resurrecting from a prior run;
+    here a NULL means "not measurable this run" (val_available/bq_available
+    was False), which IS the information the whole table exists to preserve.
+    Coalescing would let a later honest NULL be silently overwritten by an
+    earlier run's fabricated-neutral-free reading, poisoning the exact signal
+    §4.1/§4.2 of the plan doc were written to protect. Last write wins, NULLs
+    included.
+
+    Returns True iff the upsert itself actually executed; False for readonly
+    mode, no rows, no db, or a raised exception during the upsert.
+    """
+    if is_readonly():
+        return False
+    if not rows:
+        return False
+    if not has_db():
+        return False
+    try:
+        _client().table("score_history").upsert(
+            rows,
+            on_conflict="ticker,score_date",
+        ).execute()
+        return True
+    except Exception as e:
+        import warnings
+        warnings.warn(f"save_score_history_batch: {e}")
+        return False
+
+
+def load_score_history(days_back: int = 365, limit: int = 5000) -> pd.DataFrame:
+    """Read persisted score history going back days_back calendar days.
+
+    Returns a DataFrame (column names match the score_history table,
+    snake_case) on success, or an empty DataFrame on any exception. `limit`
+    is passed explicitly and set well above any realistic row count — this
+    project has hit the default-limit=100 silent-truncation class twice
+    already (db.load_analyst_coverage, db.load_model_predictions).
+    """
+    if not has_db():
+        return pd.DataFrame()
+    try:
+        from datetime import timedelta
+        from stock_analyzer.market_time import today_et
+        cutoff = (today_et() - timedelta(days=days_back)).isoformat()
+        rows = (
+            _client()
+            .table("score_history")
+            .select("*")
+            .gte("score_date", cutoff)
+            .limit(limit)
+            .execute()
+            .data
+        )
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
 # ── Judgment-layer opinions (Phase 0, log-only — see docs/plans/judgment-layer.md) ──
 # Ships inert until the DDL below is applied — degrades silently, same convention
 # as analyst_target_snapshots. RLS: FOR ALL TO service_role.

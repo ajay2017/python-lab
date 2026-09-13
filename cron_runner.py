@@ -376,6 +376,16 @@ def _run_premarket(now_et, force: bool) -> int:
             _log(f"analyst_target_snapshots: WRITE FAILED for {len(target_rows)} row(s), "
                  f"date={today_str} — see warnings log.")
 
+    # Score history capture — roadmap B1, log-only, no readout/gate yet.
+    # Reuses the bundles already loaded above (zero extra API cost).
+    score_history_rows = payload.get("score_history", [])
+    if score_history_rows:
+        if db.save_score_history_batch(score_history_rows):
+            _log(f"score_history captured ({len(score_history_rows)} rows, date={today_str}).")
+        else:
+            _log(f"score_history: WRITE FAILED for {len(score_history_rows)} row(s), "
+                 f"date={today_str} — see warnings log.")
+
     # Velocity check — detect WATCH tickers whose composite score is accelerating
     # toward TRIM. Silently skips when exit_signals has < 2 days of WATCH history
     # for a ticker; fills in naturally as data accumulates post-2026-07-21 launch.
