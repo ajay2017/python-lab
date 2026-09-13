@@ -10,6 +10,7 @@ from stock_analyzer import util
 from stock_analyzer.util import (
     factor_tilt_evidence_line,
     factor_tilt_state,
+    dropped_holdings_banner_text,
     get_or_offline,
     holdings_write_failed_message,
     md_bold_to_html,
@@ -203,6 +204,67 @@ class TestSentimentValueOrNone:
     def test_a_genuine_measured_50_with_real_headlines_still_survives(self):
         b = {"headlines": [{"headline": "x", "score": 0.0}]}
         assert sentiment_value_or_none(50.0, b) == 50.0
+
+
+class TestDroppedHoldingsBannerText:
+    """D4: a holding dropped for a data-entry problem and one dropped for a
+    data-provider problem must not be told to the user with the same
+    "check the entry" text — that would send them looking for a bug that
+    isn't there on the provider-outage case."""
+
+    def test_empty_or_none_returns_none(self):
+        assert dropped_holdings_banner_text([]) is None
+        assert dropped_holdings_banner_text(None) is None
+
+    def test_names_the_ticker(self):
+        text = dropped_holdings_banner_text(
+            [{"ticker": "BBB", "reason": "invalid_shares_or_cost"}]
+        )
+        assert "BBB" in text
+
+    def test_invalid_shares_or_cost_says_check_the_entry(self):
+        text = dropped_holdings_banner_text(
+            [{"ticker": "BBB", "reason": "invalid_shares_or_cost"}]
+        )
+        assert "check the entry" in text
+        assert "data-provider" not in text
+
+    def test_no_price_data_does_not_say_check_the_entry(self):
+        # The load-bearing distinction: the entry is fine here, so telling
+        # the user to check it would be actively misleading.
+        text = dropped_holdings_banner_text(
+            [{"ticker": "DDD", "reason": "no_price_data"}]
+        )
+        assert "check the entry" not in text
+        assert "data-provider" in text
+
+    def test_missing_reason_key_defaults_to_invalid_shares_or_cost(self):
+        # Backward-compat: a row from before the "reason" field existed is
+        # correctly assumed to be the only reason a drop could have meant
+        # then, not a guess.
+        text = dropped_holdings_banner_text([{"ticker": "BBB"}])
+        assert "check the entry" in text
+
+    def test_mixed_reasons_both_appear_and_stay_distinguishable(self):
+        text = dropped_holdings_banner_text([
+            {"ticker": "BBB", "reason": "invalid_shares_or_cost"},
+            {"ticker": "DDD", "reason": "no_price_data"},
+        ])
+        assert "BBB" in text and "DDD" in text
+        assert "check the entry" in text
+        assert "data-provider" in text
+
+    def test_count_in_the_message_matches_the_row_count(self):
+        text = dropped_holdings_banner_text([
+            {"ticker": "BBB", "reason": "invalid_shares_or_cost"},
+            {"ticker": "CCC", "reason": "invalid_shares_or_cost"},
+        ])
+        assert "2 holdings" in text
+
+    def test_singular_wording_for_one_row(self):
+        text = dropped_holdings_banner_text([{"ticker": "BBB"}])
+        assert "1 holding " in text
+        assert "1 holdings" not in text
 
 
 class TestHoldingsWriteFailedMessage:

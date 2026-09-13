@@ -481,6 +481,47 @@ relying on `py_compile` clean as sufficient. The pure `holdings_write_failed_mes
 fully unit-tested; the surrounding wiring rests on that manual trace, the same residual
 class D8/D24 already carry for this file.
 
+### D4 · a silently-dropped holding inflated every remaining weight — FIXED
+**Anchor:** `portfolio.build_portfolio_df` (`stock_analyzer/portfolio.py`) — the row-build
+loop's second `continue` (a held ticker with valid shares/cost but no `current_price`,
+because every provider failed to price it) dropped the row with **no record anywhere**,
+unlike the case immediately above it (invalid shares/cost), which was already recorded.
+
+Two consequences of the gap: the existing `dropped_holdings` banner in `app.py` never
+fired for this case, so the user had no visibility that a real held position vanished from
+the view; and `Weight (%)` (computed a few lines later as `Market Value / total_val * 100`,
+summed only over surviving rows) silently shrank its own denominator — every remaining
+holding's weight read as inflated, with nothing disclosing why. A direct breach of the
+house "never silently filter" rule.
+
+**Fix:** the no-price branch now appends to `dropped` too, tagged `"reason":
+"no_price_data"` — accurate, not fabricated, since this ticker's shares/cost were already
+confirmed valid by the branch above it. A new shared pure
+`stock_analyzer/util.py::dropped_holdings_banner_text(dropped)` replaces two `app.py` call
+sites that had **independently duplicated the identical hardcoded string** — "invalid
+shares or cost basis, check the entry" — which would have been actively misleading for the
+new case: an entry that's perfectly fine sent the user looking for a data-entry bug that
+doesn't exist. The two reasons now get genuinely different wording, grouped correctly when
+both occur in the same render; a row from an older cache with no `reason` key defaults to
+`invalid_shares_or_cost`, the only reason a drop could have meant before this fix.
+
+**Confirmed disclosure-only, not a behavior change.** This was the one thing worth being
+certain of on a `_GATE_FILES` commit: `total_val`/`Weight (%)` sums only the surviving
+`rows` list, never `dropped`, so the fix adds visibility without touching any actual
+weight, gate, or score. A repo-wide grep confirmed exactly one producer and two readers —
+no third consumer anywhere that could read the added `reason` key unexpectedly or
+disagree with the new shared message.
+
+Opus review: **SHIP, 0 blocking.** Confirmed `"no_price_data"` is an accurate label for
+both sub-cases it covers (bundle missing entirely, and bundle present but with no
+current_price) by tracing `bundle_loader.py`'s own contract — `current_price` is `None`
+specifically to mean "no price," never a fabricated zero, so there's no real-$0 case this
+label could be misapplied to. One non-blocking note: the labels map's fallback would print
+a raw snake_case key if a third drop reason is ever added without updating it — harmless
+today, worth a generic fallback label if that day comes. 11 new tests across
+`tests/test_portfolio.py` (including one pinning that `Weight (%)` still computes
+correctly with the drop now disclosed) and `tests/test_util.py`.
+
 ### D25 · `exit_signals.signal_date` can record a weekend — mechanism CONFIRMED, still live
 **New finding, surfaced while preparing the backfill above — not fixed.**
 
@@ -738,11 +779,8 @@ with a common one can trade places.**
 1. ~~**D2 — holdings save reports success before the write.**~~ **FIXED.** See its own
    section below the table — a real regression was caught mid-fix by Opus review, not by
    the author.
-2. **D4 — a silently-dropped holding inflates every remaining weight.** Also cheap (append
-   to the existing `dropped` list one line above the bug, mirroring the bad-shares case
-   right next to it). Direct breach of the house "never silently filter" rule. Correlated
-   with D3 (both fire on degraded-data days, both currently quiet) but doesn't need D3 to
-   fix — it's a one-line append regardless of pillar provenance.
+2. ~~**D4 — a silently-dropped holding inflates every remaining weight.**~~ **FIXED.** See
+   its own section below the table.
 3. **D1 — split detection absent from the protective-alert cron lane. Design pass, not
    code, starts here.** The single worst *outcome* in this entire register — the cron lane
    emails an EXIT on a healthy position with no human check, on a data-integrity failure

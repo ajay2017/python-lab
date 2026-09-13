@@ -425,13 +425,19 @@ def test_build_portfolio_df_zero_shares_is_dropped_and_reported():
     holdings = [{"Ticker": "BBB", "Shares": 0, "Avg Cost ($)": 50.0}]
     df = build_portfolio_df(holdings, {"BBB": _loaded_row()})
     assert df.empty
-    assert df.attrs["dropped_holdings"] == [{"ticker": "BBB", "shares": 0.0, "avg_cost": 50.0}]
+    assert df.attrs["dropped_holdings"] == [{
+        "ticker": "BBB", "shares": 0.0, "avg_cost": 50.0,
+        "reason": "invalid_shares_or_cost",
+    }]
 
 
 def test_build_portfolio_df_invalid_avg_cost_is_dropped_and_reported():
     holdings = [{"Ticker": "CCC", "Shares": 10, "Avg Cost ($)": 0}]
     df = build_portfolio_df(holdings, {"CCC": _loaded_row()})
-    assert df.attrs["dropped_holdings"] == [{"ticker": "CCC", "shares": 10.0, "avg_cost": 0.0}]
+    assert df.attrs["dropped_holdings"] == [{
+        "ticker": "CCC", "shares": 10.0, "avg_cost": 0.0,
+        "reason": "invalid_shares_or_cost",
+    }]
 
 
 def test_build_portfolio_df_mixed_valid_and_invalid_holdings():
@@ -441,7 +447,56 @@ def test_build_portfolio_df_mixed_valid_and_invalid_holdings():
     ]
     df = build_portfolio_df(holdings, {"AAA": _loaded_row(), "BBB": _loaded_row()})
     assert list(df["Ticker"]) == ["AAA"]
-    assert df.attrs["dropped_holdings"] == [{"ticker": "BBB", "shares": -5.0, "avg_cost": 50.0}]
+    assert df.attrs["dropped_holdings"] == [{
+        "ticker": "BBB", "shares": -5.0, "avg_cost": 50.0,
+        "reason": "invalid_shares_or_cost",
+    }]
+
+
+def test_build_portfolio_df_no_price_data_is_dropped_and_reported():
+    # D4: a held ticker with VALID shares/cost but no current_price (every
+    # provider failed) must be recorded in dropped_holdings too -- previously
+    # it was silently `continue`d with no record anywhere, which shrank the
+    # Weight (%) denominator below and inflated every surviving holding's
+    # weight with no disclosure.
+    holdings = [{"Ticker": "DDD", "Shares": 10, "Avg Cost ($)": 50.0}]
+    df = build_portfolio_df(holdings, {"DDD": {}})   # no current_price key at all
+    assert df.empty
+    assert df.attrs["dropped_holdings"] == [{
+        "ticker": "DDD", "shares": 10.0, "avg_cost": 50.0,
+        "reason": "no_price_data",
+    }]
+
+
+def test_build_portfolio_df_missing_bundle_entirely_is_also_no_price_data():
+    # loaded_data has no entry for the ticker at all (r is None), not just a
+    # bundle missing current_price -- same reason, same disclosure.
+    holdings = [{"Ticker": "EEE", "Shares": 10, "Avg Cost ($)": 50.0}]
+    df = build_portfolio_df(holdings, {})
+    assert df.attrs["dropped_holdings"] == [{
+        "ticker": "EEE", "shares": 10.0, "avg_cost": 50.0,
+        "reason": "no_price_data",
+    }]
+
+
+def test_build_portfolio_df_no_price_data_does_not_shrink_weight_denominator_silently():
+    # The actual consequence D4 fixes: before, a dropped no-price holding was
+    # invisible to `dropped`, so the reader had no way to know Weight (%) was
+    # computed over a SMALLER book than actually held. Now it's disclosed --
+    # this test pins that the surviving holding's weight is still computed
+    # correctly (100%, since DDD is the only other row and still excluded from
+    # the sum), while the drop itself is now visible via dropped_holdings.
+    holdings = [
+        {"Ticker": "AAA", "Shares": 10, "Avg Cost ($)": 50.0},
+        {"Ticker": "DDD", "Shares": 10, "Avg Cost ($)": 50.0},
+    ]
+    df = build_portfolio_df(holdings, {"AAA": _loaded_row(), "DDD": {}})
+    assert list(df["Ticker"]) == ["AAA"]
+    assert float(df.loc[df["Ticker"] == "AAA", "Weight (%)"].iloc[0]) == 100.0
+    assert df.attrs["dropped_holdings"] == [{
+        "ticker": "DDD", "shares": 10.0, "avg_cost": 50.0,
+        "reason": "no_price_data",
+    }]
 
 
 def test_build_portfolio_df_missing_ticker_not_added_to_dropped_list():

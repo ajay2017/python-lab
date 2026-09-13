@@ -304,6 +304,7 @@ from stock_analyzer.util import val_score_or_none as _val_or_none
 from stock_analyzer.util import sentiment_value_or_none as _sentiment_or_none
 from stock_analyzer.util import xcheck_is_alarm_worthy as _xcheck_is_alarm_worthy
 from stock_analyzer.util import holdings_write_failed_message as _holdings_write_failed_msg
+from stock_analyzer.util import dropped_holdings_banner_text as _dropped_holdings_banner_text
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -2402,12 +2403,9 @@ def _render_portfolio_stale_banner(key_suffix: str = "") -> None:
             st.rerun()
         return
     _pd_dropped = getattr(st.session_state.get("_last_port_df"), "attrs", {}).get("dropped_holdings") or []
-    if _pd_dropped:
-        st.warning(
-            f"⚠️ {len(_pd_dropped)} holding(s) skipped — invalid shares or cost basis: "
-            + ", ".join(str(d.get("ticker", "?")) for d in _pd_dropped)
-            + ". Check the entry for these tickers."
-        )
+    _pd_dropped_text = _dropped_holdings_banner_text(_pd_dropped)
+    if _pd_dropped_text:
+        st.warning(_pd_dropped_text)
 
     if not _portfolio_snapshot_stale():
         # Holdings themselves are current — but the caches DERIVED from them
@@ -4663,12 +4661,9 @@ if page == "🏠 Home":
     st.session_state["_signals_computed_at"] = _now_et().strftime("%I:%M %p")  # for staleness warning
 
     _pd_dropped = port_df.attrs.get("dropped_holdings") or []
-    if _pd_dropped:
-        st.warning(
-            f"⚠️ {len(_pd_dropped)} holding(s) skipped — invalid shares or cost basis: "
-            + ", ".join(str(d.get("ticker", "?")) for d in _pd_dropped)
-            + ". Check the entry for these tickers."
-        )
+    _pd_dropped_text = _dropped_holdings_banner_text(_pd_dropped)
+    if _pd_dropped_text:
+        st.warning(_pd_dropped_text)
 
     if port_df.empty:
         # Distinguish "no holdings yet" from "you HAVE holdings but the heavy

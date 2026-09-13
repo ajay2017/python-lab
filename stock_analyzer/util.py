@@ -134,6 +134,54 @@ def sentiment_value_or_none(value: Any, bundle: dict | None) -> Any:
     return value if available else None
 
 
+_DROPPED_HOLDING_REASON_LABELS = {
+    "invalid_shares_or_cost": "invalid shares or cost basis — check the entry",
+    "no_price_data": "no price data from any provider — a data-provider issue, not your entry",
+}
+
+
+def dropped_holdings_banner_text(dropped: list[dict] | None) -> str | None:
+    """User-facing message for `portfolio.build_portfolio_df`'s `dropped`
+    list (finding D4), or ``None`` when there is nothing to report.
+
+    A holding is dropped from `port_df` for one of two genuinely different
+    reasons, which must not be conflated: ``invalid_shares_or_cost`` (garbage
+    entered in Shares/Avg Cost) is a DATA-ENTRY problem the user can fix by
+    editing the holding; ``no_price_data`` (every provider failed to price an
+    otherwise-valid entry) is a DATA-PROVIDER problem with nothing wrong in
+    the entry at all. Telling the user to "check the entry" for a name whose
+    entry is fine would send them looking for a bug that isn't there — which
+    is exactly what both `app.py` call sites did before this existed, since
+    they hardcoded "invalid shares or cost basis" unconditionally for every
+    row regardless of why it was actually dropped.
+
+    A row missing the ``reason`` key (an older cache built before this field
+    existed) is treated as ``invalid_shares_or_cost`` — the ONLY reason a
+    drop could have meant before D4, so this is a correct backward-compat
+    default, not a guess.
+
+    Single source of truth for both `app.py` consumers, which previously
+    duplicated the same hardcoded string — a second drop reason could easily
+    have been added to one site and not the other.
+    """
+    d = dropped or []
+    if not d:
+        return None
+    by_reason: dict[str, list[str]] = {}
+    for row in d:
+        reason = row.get("reason") or "invalid_shares_or_cost"
+        by_reason.setdefault(reason, []).append(str(row.get("ticker", "?")))
+    parts = [
+        f"{', '.join(tickers)} ({_DROPPED_HOLDING_REASON_LABELS.get(reason, reason)})"
+        for reason, tickers in by_reason.items()
+    ]
+    n = len(d)
+    return (
+        f"⚠️ {n} holding{'s' if n != 1 else ''} skipped from the portfolio view: "
+        + "; ".join(parts) + "."
+    )
+
+
 def holdings_write_failed_message(ticker: str) -> str:
     """User-facing message for when a post-trade `db.save_holdings()` call
     returns False (finding D2).

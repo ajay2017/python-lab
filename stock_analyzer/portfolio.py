@@ -410,10 +410,32 @@ def build_portfolio_df(
         avg_cost = _safe_float(h.get("Avg Cost ($)", h.get("avg_cost")))
         if not ticker or shares <= 0 or avg_cost <= 0:
             if ticker:
-                dropped.append({"ticker": ticker, "shares": shares, "avg_cost": avg_cost})
+                dropped.append({
+                    "ticker": ticker, "shares": shares, "avg_cost": avg_cost,
+                    "reason": "invalid_shares_or_cost",
+                })
             continue
         r = loaded_data.get(ticker)
         if not r or not r.get("current_price"):
+            # D4: this ticker's entry is fine (valid shares/cost, just checked
+            # above) -- every provider simply failed to price it. Previously
+            # `continue`d WITHOUT recording it here, unlike the case just
+            # above, so it reached neither the dropped_holdings banner NOR
+            # the weight-denominator's awareness: total_val below sums only
+            # SURVIVING rows, so silently dropping a real position shrinks
+            # the denominator and inflates every remaining holding's
+            # Weight (%) with no disclosure anywhere (CLAUDE.md's "never
+            # silently filter" rule). "reason" lets the banner tell this
+            # apart from a genuine data-entry problem -- telling the user to
+            # "check the entry" for a name whose entry is fine would send
+            # them looking for a bug that isn't there. `ticker` is guaranteed
+            # non-empty here (the `not ticker` branch above already
+            # continued otherwise), unlike the invalid-shares-or-cost case
+            # just above where that guard is load-bearing.
+            dropped.append({
+                "ticker": ticker, "shares": shares, "avg_cost": avg_cost,
+                "reason": "no_price_data",
+            })
             continue
 
         price = r["current_price"]
