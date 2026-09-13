@@ -13,6 +13,7 @@ from stock_analyzer.util import (
     get_or_offline,
     md_bold_to_html,
     numeric_or,
+    pillar_tile,
     safe_html,
     stop_recovery_state,
 )
@@ -124,6 +125,71 @@ class TestNumericOr:
         bad_others = composite - collapsed * weight
         bad_needed = (threshold - bad_others) / weight
         assert bad_needed == 70.0      # what the user was actually shown
+
+
+class TestPillarTile:
+    """A measured 50 and a fabricated 50 must not render identically."""
+
+    INPUTS = "P/E · FCF Yield · PT Upside · Consensus"
+    REASON = "No objective valuation metric was available."
+
+    def test_available_shows_the_score(self):
+        hdr, cap = pillar_tile("Valuation", 72.4, True, self.INPUTS, self.REASON)
+        assert hdr == "**Valuation — 72/100**"
+        assert cap == self.INPUTS
+
+    def test_unavailable_withholds_the_number_entirely(self):
+        hdr, cap = pillar_tile("Valuation", 50.0, False, self.INPUTS, self.REASON)
+        assert "50" not in hdr
+        assert "/100" not in hdr
+        assert "not measured" in hdr
+        assert cap == self.REASON
+
+    def test_unavailable_does_not_assert_the_inputs(self):
+        # The old caption claimed four inputs had produced the number. On a
+        # withheld pillar none of them contributed.
+        _, cap = pillar_tile("Valuation", 50.0, False, self.INPUTS, self.REASON)
+        assert "P/E" not in cap
+        assert "Consensus" not in cap
+
+    def test_measured_fifty_still_renders_as_a_number(self):
+        # The whole point: a real 50 is a legitimate mid reading and must show.
+        hdr, _ = pillar_tile("Business Quality", 50.0, True, self.INPUTS, self.REASON)
+        assert hdr == "**Business Quality — 50/100**"
+
+    def test_measured_fifty_and_withheld_fifty_differ(self):
+        measured, _ = pillar_tile("Valuation", 50.0, True, self.INPUTS, self.REASON)
+        withheld, _ = pillar_tile("Valuation", 50.0, False, self.INPUTS, self.REASON)
+        assert measured != withheld
+
+    def test_zero_score_is_not_rewritten_to_neutral(self):
+        # Composes with numeric_or — a genuine 0 is the most bearish reading.
+        hdr, _ = pillar_tile("Valuation", 0.0, True, self.INPUTS, self.REASON)
+        assert hdr == "**Valuation — 0/100**"
+
+    def test_none_score_on_an_available_pillar_falls_back_to_neutral(self):
+        # Defensive: an available pillar with no number is a shape bug, but it
+        # must not crash the tile.
+        hdr, _ = pillar_tile("Valuation", None, True, self.INPUTS, self.REASON)
+        assert hdr == "**Valuation — 50/100**"
+
+    def test_nan_score_never_renders_as_nan(self):
+        hdr, _ = pillar_tile("Technical", float("nan"), True, self.INPUTS, self.REASON)
+        assert "nan" not in hdr.lower()
+
+    def test_falsy_availability_always_withholds(self):
+        # The caller owns the fail-open default; this honours what it is handed.
+        for falsy in (False, None, 0, ""):
+            hdr, _ = pillar_tile("Valuation", 72.0, falsy, self.INPUTS, self.REASON)
+            assert "not measured" in hdr, falsy
+
+    def test_no_literal_markdown_bold_leaks_into_the_caption(self):
+        # feedback_streamlit_renderer_mismatch: captions are not HTML-rendered,
+        # so assert here where it is constructible rather than at the call site.
+        for avail in (True, False):
+            _, cap = pillar_tile("Valuation", 60.0, avail, self.INPUTS, self.REASON)
+            assert "**" not in cap
+            assert "$" not in cap
 
 
 class TestSafeHtml:

@@ -75,6 +75,43 @@ def numeric_or(value: Any, default: float) -> float:
     return v
 
 
+def pillar_tile(
+    name: str,
+    score: Any,
+    available: bool,
+    inputs: str,
+    unavailable_reason: str,
+) -> tuple[str, str]:
+    """``(header_markdown, caption)`` for one composite-pillar tile.
+
+    A pillar whose inputs were unavailable returns a fabricated neutral 50 —
+    `valuation.py` and `fundamentals.py` both do this by design, and
+    `technicals.py` does it with no flag at all. Rendering that as
+    "**Valuation — 50/100**" under a caption asserting "P/E · FCF Yield · PT
+    Upside · Consensus" states two things that are not true: that a
+    measurement happened, and that those inputs produced it. A measured 50 and
+    a fabricated 50 must not render identically.
+
+    So when ``available`` is false the number is WITHHELD rather than shown
+    with a hedge, matching `quick_research.py`'s "❔ Verdict withheld"
+    precedent — the house position is that a score nobody measured is guessing,
+    not measuring, and the honest move is to decline to print it.
+
+    The caller owns the fail-open default (``r.get("val_available", True)``),
+    matching the five existing consumers of these flags; this function simply
+    honours the boolean it is handed, so a falsy value always withholds.
+
+    ``inputs`` is only returned when the tile is real, for the same reason: it
+    is a claim about what was scored. The per-signal detail list rendered
+    BELOW the tile is deliberately not this function's business — those are a
+    record of what was captured, which stays true either way (the same call
+    Phase B made for `val_signals` on a withheld valuation).
+    """
+    if available:
+        return f"**{name} — {numeric_or(score, 50):.0f}/100**", inputs
+    return f"**{name} — ❔ not measured**", unavailable_reason
+
+
 def stop_recovery_state(
     live_gap_to_stop: float | None,
     margin_pct: float = 0.0,

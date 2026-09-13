@@ -298,6 +298,7 @@ from stock_analyzer.util import sizing_cap_lines as _sizing_cap_lines
 from stock_analyzer.util import sizing_unavailable_caption as _sizing_unavailable_caption
 from stock_analyzer.util import get_or_offline as _get_or_offline
 from stock_analyzer.util import numeric_or as _numeric_or
+from stock_analyzer.util import pillar_tile as _pillar_tile
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -22679,9 +22680,19 @@ elif page == "📈 Analysis":
                             unsafe_allow_html=True,
                         )
                 with dd2:
-                    _dd2_bq = r.get("bq_score", r["f_score"])
-                    st.markdown(f"**Business Quality — {_dd2_bq:.0f}/100**")
-                    st.caption("Growth · Profitability · Balance Sheet")
+                    # Honour the availability flag: a fabricated neutral 50 must not
+                    # render identically to a measured one (D19). Signals below are
+                    # still shown — they record what WAS captured.
+                    _dd2_hdr, _dd2_cap = _pillar_tile(
+                        "Business Quality",
+                        r.get("bq_score", r.get("f_score")),
+                        r.get("bq_available", r.get("fundamentals_available", True)),
+                        "Growth · Profitability · Balance Sheet",
+                        "Company fundamentals couldn't be sourced from any provider, "
+                        "so a score here would be guessing rather than measuring.",
+                    )
+                    st.markdown(_dd2_hdr)
+                    st.caption(_dd2_cap)
                     for k, v in r.get("bq_signals", r["f_signals"]).items():
                         clr = "#00C851" if any(w in v.lower() for w in
                               ["strong","excellent","good","healthy","under"]) else (
@@ -22703,9 +22714,18 @@ elif page == "📈 Analysis":
                             unsafe_allow_html=True,
                         )
                 with dd2v:
-                    _dd2v_val = r.get("val_score", 50)
-                    st.markdown(f"**Valuation — {_dd2v_val:.0f}/100**")
-                    st.caption("P/E · FCF Yield · PT Upside · Consensus")
+                    # val_available requires an OBJECTIVE metric since Phase B
+                    # (7146468) — analyst opinion alone no longer scores the pillar.
+                    _dd2v_hdr, _dd2v_cap = _pillar_tile(
+                        "Valuation",
+                        r.get("val_score"),
+                        r.get("val_available", True),
+                        "P/E · FCF Yield · PT Upside · Consensus",
+                        "No objective valuation metric (Forward P/E or FCF Yield) was "
+                        "available — analyst opinion alone isn't scored as a verdict.",
+                    )
+                    st.markdown(_dd2v_hdr)
+                    st.caption(_dd2v_cap)
                     for k, v in r.get("val_signals", {}).items():
                         clr = "#00C851" if any(w in v.lower() for w in
                               ["strong","excellent","good","cheap","upside"]) else (
