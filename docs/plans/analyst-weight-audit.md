@@ -1,11 +1,18 @@
 # Analyst Weight Audit — is sell-side consensus earning its share of the composite?
 
-**Status (2026-09-13): Phase B chunk 1+2 (weight compression + leg-denominator invariant
-fix) SHIPPED, Opus reviewer FIX-FIRST → 2 blocking (both stale `docs/architecture.md`
-values) → fixed → SHIP. `VALUATION_CONSENSUS_PTS` is now Strong Buy 15 / Buy 12 / Hold 8 /
-Mixed 5 / Sell 0 (was 30/24/15/9/0) — see §8c for the full commit record. Chunk 3
-(closing the renormalization hole, option (c)) is separately scoped, not yet built — see
-this file's next update.**
+**Status (2026-09-13): PHASE B FULLY SHIPPED — all three chunks landed, nothing left open
+on this plan.** Chunk 1+2 (`722bed8`, weight compression + leg-denominator invariant fix)
+and chunk 3 (`7146468`, closing the renormalization hole — option (c)) both went through
+an Opus `planner` design pass, owner approval of specific numbers/decisions, and a
+mandatory Opus `reviewer` pass each (both FIX-FIRST → 2 blocking, both doc-staleness
+findings → fixed same commit → SHIP). `VALUATION_CONSENSUS_PTS` is now Strong Buy 15 /
+Buy 12 / Hold 8 / Mixed 5 / Sell 0 (was 30/24/15/9/0), and `valuation_score()`'s
+`val_available` now requires at least one objective metric (Forward P/E or FCF Yield) —
+analyst opinion alone no longer renders a trustworthy valuation verdict. Full commit
+record: §8c. Full suite 5253 passed after chunk 3; antipattern + constants-doc gates green
+throughout. This plan's own investigation (Phase A, Findings 1/2, the planner's design
+pass) is preserved below as the historical record — read §8c for the final outcome before
+treating anything above it as still-open.
 
 **Status: Items 1 and 2 SHIPPED 2026-09-12, committed and pushed directly to `main`**
 (commit `966a24a` — this repo is single-branch, direct-to-`main`, no feature branches).
@@ -620,8 +627,49 @@ from 16.5%) while noting the "~30% when only consensus is present" figure is UNC
 (it's a ratio, not an absolute — fixing it is exactly what chunk 3 is for). Non-blocking
 note also addressed: this file's own status line synced same commit.
 
-**Chunk 3 (renormalization hole, option (c)) is scoped, not yet built** — see the next
-update to this section once it ships.
+**Chunk 3 SHIPPED same day (`7146468`) — the renormalization hole (option (c)) is closed.**
+`valuation_score()`'s `val_available` now requires at least one OBJECTIVE metric (Forward
+P/E or FCF Yield) to have contributed via a new `objective_max_points` accumulator that
+tracks ONLY those two legs — PT Upside and Analyst Consensus never contribute to it. A
+ticker with only a saved consensus rating and/or PT upside (no objective data at all) now
+WITHHOLDS the valuation verdict (`val_available=False`, fabricated-neutral-50) instead of
+renormalising to 100% analyst opinion and reporting it as trustworthy. `signals` still
+discloses whatever the analyst-only legs computed — a fact about what was captured,
+independent of whether the pillar is scoreable. The pre-existing "no data at all" case is
+a proper subset of this new condition (`objective_max_points > 0` implies `max_points >
+0`), so this is a strict widening of an existing contract, not a second divergent branch.
+Every downstream consumer of `val_available` (`app.py`, `daily_briefing.py`,
+`watchlist_advisor.py`, `quick_research.py`, `analyst_intel.trustworthy_composite`) reads
+it via the generic `.get("val_available", True)` pattern with no assumption about *why*
+it's False — confirmed by direct trace of every site, zero downstream code changes needed.
+
+7 new boundary tests cover the full matrix (P/E alone, FCF alone, one objective metric
+blending normally alongside analyst legs, both analyst legs present with no objective data,
+each analyst leg alone, the pre-existing no-data case). 12 pre-existing tests (the PT
+Upside and Analyst Consensus test blocks, plus 2 of chunk 1+2's own tests) needed updating
+— they exercised each leg's point-banding math via ISOLATED analyst-only calls, which now
+correctly withhold rather than surface a raw score; each was given a `_PE_ANCHOR` (a fixed
+25/25 Forward P/E) to unlock `val_available=True` so the underlying math is still
+observable as a blended score. One of these (`test_pt_upside_overvalued_scores_zero`)
+coincidentally blends to exactly 50.0 — the same number as the fabricated-neutral
+sentinel — and disambiguates via an explicit `val_available is True` assertion rather than
+relying on the numeric coincidence (reviewer-verified not fragile).
+
+**Opus reviewer verdict: FIX-FIRST → 2 blocking → fixed → SHIP.** Both findings were the
+SAME class chunk 1+2's review caught: `docs/requirements.md`'s F-154c closing sentence and
+`docs/architecture.md`'s Block F narrative both still described the renormalization hole as
+open ("scoped as a separate, not-yet-shipped commit" / "rising to ~30%... not-yet-shipped
+follow-on") — both corrected in the same commit. **Two non-blocking notes, deliberately not
+acted on in this commit:** `app.py`'s pillar-detail renderer (~22701-22703) shows a
+"Valuation — 50/100" tile without consulting `val_available`, so a withheld verdict now
+renders indistinguishably from a genuinely-measured neutral 50 — this is a *net
+improvement* over the prior behavior (which showed a fabricated 100/100 for an
+analyst-only Strong Buy), and the ambiguity itself already pre-existed for the "no data at
+all" case, so it's a candidate for a future guard, not a regression from this change.
+`premortem_advisor.py:100/103` has the identical pre-existing shape.
+
+**This closes Phase B in full.** Nothing remains open on this plan — see the top status
+line.
 
 ---
 
