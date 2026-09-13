@@ -102,42 +102,66 @@ def test_fcf_yield_absent_excluded_from_scoring():
 
 
 # ─── PT Upside ────────────────────────────────────────────────────────────────
+#
+# 2026-09-13 (analyst-weight-audit Phase B option (c)): PT Upside is an
+# analyst-only leg, so — after the renormalization-hole fix below — it can no
+# longer be tested fully in ISOLATION; an isolated analyst-only call now
+# correctly withholds (val_available=False, score=50.0) regardless of what
+# tier the leg itself would have scored. Every test below adds `_PE_ANCHOR`
+# (a Forward P/E of 10.0, which always scores a clean 25/25 per
+# test_pe_cheap_scores_full_points) purely to unlock val_available=True, and
+# the expected `score` is the resulting BLEND of the two legs, not the PT
+# leg's own isolated percentage. The qualitative `signals["PT Upside"]` label
+# still describes the PT leg alone and is unaffected.
+
+_PE_ANCHOR = {"forward_pe": 10.0}   # always exactly 25/25 -- see note above
+
 
 def test_pt_upside_strong_scores_full_points():
-    score, signals, _ = valuation_score({}, {"avg_pt": 130.0}, 100.0)  # +30%
-    assert score == 100.0  # 25/25
+    score, signals, val_available = valuation_score(_PE_ANCHOR, {"avg_pt": 130.0}, 100.0)  # +30%
+    assert val_available is True
+    assert score == 100.0  # (25 P/E + 25 PT) / (25 + 25)
     assert "Strong upside" in signals["PT Upside"]
 
 
 def test_pt_upside_good_scores_20_of_25():
-    score, _, _ = valuation_score({}, {"avg_pt": 120.0}, 100.0)  # +20%, >= GOOD(15) < STRONG(30)
-    assert score == round(20 / 25 * 100, 1)
+    # +20%, >= GOOD(15) < STRONG(30) -> PT 20/25
+    score, _, val_available = valuation_score(_PE_ANCHOR, {"avg_pt": 120.0}, 100.0)
+    assert val_available is True
+    assert score == round((25 + 20) / (25 + 25) * 100, 1)
 
 
 def test_pt_upside_modest_scores_12_of_25():
-    score, _, _ = valuation_score({}, {"avg_pt": 108.0}, 100.0)  # +8%
-    assert score == round(12 / 25 * 100, 1)
+    score, _, val_available = valuation_score(_PE_ANCHOR, {"avg_pt": 108.0}, 100.0)  # +8%
+    assert val_available is True
+    assert score == round((25 + 12) / (25 + 25) * 100, 1)
 
 
 def test_pt_upside_neutral_scores_6_of_25():
-    score, _, _ = valuation_score({}, {"avg_pt": 102.0}, 100.0)  # +2%
-    assert score == round(6 / 25 * 100, 1)
+    score, _, val_available = valuation_score(_PE_ANCHOR, {"avg_pt": 102.0}, 100.0)  # +2%
+    assert val_available is True
+    assert score == round((25 + 6) / (25 + 25) * 100, 1)
 
 
 def test_pt_upside_near_scores_2_of_25():
-    score, _, _ = valuation_score({}, {"avg_pt": 98.0}, 100.0)  # -2%, >= NEAR(-5)
-    assert score == round(2 / 25 * 100, 1)
+    score, _, val_available = valuation_score(_PE_ANCHOR, {"avg_pt": 98.0}, 100.0)  # -2%, >= NEAR(-5)
+    assert val_available is True
+    assert score == round((25 + 2) / (25 + 25) * 100, 1)
 
 
 def test_pt_upside_overvalued_scores_zero():
-    score, signals, _ = valuation_score({}, {"avg_pt": 90.0}, 100.0)  # -10%
-    assert score == 0.0
+    score, signals, val_available = valuation_score(_PE_ANCHOR, {"avg_pt": 90.0}, 100.0)  # -10%
+    assert val_available is True   # disambiguates from the fabricated-50 withhold sentinel below
+    assert score == round((25 + 0) / (25 + 25) * 100, 1)   # == 50.0, but val_available=True here
     assert "overvalued" in signals["PT Upside"]
 
 
 def test_pt_upside_falls_back_to_financials_analyst_target_when_no_db_coverage():
     # analyst_data.avg_pt absent -> falls back to financials["analyst_target"]
-    score, signals, _ = valuation_score({"analyst_target": 130.0}, {}, 100.0)
+    score, signals, val_available = valuation_score(
+        {**_PE_ANCHOR, "analyst_target": 130.0}, {}, 100.0,
+    )
+    assert val_available is True
     assert score == 100.0
     assert "PT Upside" in signals
 
@@ -154,20 +178,28 @@ def test_pt_upside_excluded_when_price_is_zero():
 
 
 # ─── Analyst consensus rating ─────────────────────────────────────────────────
+#
+# Same 2026-09-13 note as the PT Upside block above: consensus rating is also
+# analyst-only, so these use `_PE_ANCHOR` to unlock val_available=True and
+# assert the resulting BLEND, not the leg's isolated percentage.
 
 def test_consensus_strong_buy_scores_full_points():
-    score, signals, _ = valuation_score(
-        {}, {"consensus_label": "Strong Buy", "has_coverage": True}, None,
+    score, signals, val_available = valuation_score(
+        _PE_ANCHOR, {"consensus_label": "Strong Buy", "has_coverage": True}, None,
     )
-    assert score == 100.0  # 30/30
+    assert val_available is True
+    assert score == 100.0   # both legs at 100% of their own leg -> blend is still 100%
     assert "Strong Buy" in signals["Analyst Consensus"]
 
 
 def test_consensus_sell_scores_zero():
-    score, signals, _ = valuation_score(
-        {}, {"consensus_label": "Sell", "has_coverage": True}, None,
+    from stock_analyzer.constants import VALUATION_CONSENSUS_PTS
+    score, signals, val_available = valuation_score(
+        _PE_ANCHOR, {"consensus_label": "Sell", "has_coverage": True}, None,
     )
-    assert score == 0.0
+    assert val_available is True
+    max_consensus = max(VALUATION_CONSENSUS_PTS.values())
+    assert score == round((25 + 0) / (25 + max_consensus) * 100, 1)
     assert "Analyst Consensus" in signals  # still counted, just 0 pts
 
 
@@ -188,10 +220,13 @@ def test_consensus_label_absent_excluded_even_with_coverage_true():
 
 def test_unrecognized_consensus_label_scores_zero_but_counted():
     # dict.get(label, 0) — an unrecognized label degrades to 0 pts, not a crash
-    score, signals, _ = valuation_score(
-        {}, {"consensus_label": "Neutral-ish", "has_coverage": True}, None,
+    from stock_analyzer.constants import VALUATION_CONSENSUS_PTS
+    score, signals, val_available = valuation_score(
+        _PE_ANCHOR, {"consensus_label": "Neutral-ish", "has_coverage": True}, None,
     )
-    assert score == 0.0
+    assert val_available is True
+    max_consensus = max(VALUATION_CONSENSUS_PTS.values())
+    assert score == round((25 + 0) / (25 + max_consensus) * 100, 1)
     assert "Analyst Consensus" in signals
 
 
@@ -206,11 +241,15 @@ def test_leg_invariant_top_consensus_tier_always_fills_its_own_leg_to_100pct():
     could silently drift out of sync with it. Before this fix, scaling the
     dict down without also scaling this denominator would have turned even
     the BEST rating into a partial-credit outcome on its own leg."""
+    # _PE_ANCHOR unlocks val_available=True (analyst-only inputs alone now
+    # withhold, Phase B option (c)) — both legs land at 100% of their OWN leg
+    # here, so the blend is still 100% regardless of the anchor's presence.
     from stock_analyzer.constants import VALUATION_CONSENSUS_PTS
     top_label = max(VALUATION_CONSENSUS_PTS, key=VALUATION_CONSENSUS_PTS.get)
-    score, _, _ = valuation_score(
-        {}, {"consensus_label": top_label, "has_coverage": True}, None,
+    score, _, val_available = valuation_score(
+        _PE_ANCHOR, {"consensus_label": top_label, "has_coverage": True}, None,
     )
+    assert val_available is True
     assert score == 100.0
 
 
@@ -245,12 +284,17 @@ def test_sell_stays_a_full_drag_zero_points_unchanged():
     rested on a small, self-selected sample) explicitly argued AGAINST
     moving Sell up — this pins that decision so a future edit can't drift it
     without failing a test."""
+    # _PE_ANCHOR unlocks val_available=True (analyst-only inputs alone now
+    # withhold, Phase B option (c)) — the blended score isn't 0.0 anymore,
+    # but the underlying dict value (what this test actually pins) is.
     from stock_analyzer.constants import VALUATION_CONSENSUS_PTS
     assert VALUATION_CONSENSUS_PTS["Sell"] == 0
-    score, _, _ = valuation_score(
-        {}, {"consensus_label": "Sell", "has_coverage": True}, None,
+    max_consensus = max(VALUATION_CONSENSUS_PTS.values())
+    score, _, val_available = valuation_score(
+        _PE_ANCHOR, {"consensus_label": "Sell", "has_coverage": True}, None,
     )
-    assert score == 0.0
+    assert val_available is True
+    assert score == round((25 + 0) / (25 + max_consensus) * 100, 1)
 
 
 def test_buy_and_mixed_remain_valid_keys_even_though_unreachable_in_production():
@@ -268,6 +312,86 @@ def test_buy_and_mixed_remain_valid_keys_even_though_unreachable_in_production()
         )
         assert "Analyst Consensus" in signals
         assert 0.0 <= score <= 100.0
+
+
+# ─── analyst-weight-audit Phase B option (c), 2026-09-13: the renormalization
+# hole — val_available now requires at least ONE OBJECTIVE metric (Forward
+# P/E or FCF Yield), analyst opinion alone is no longer sufficient ──────────
+
+def test_analyst_only_no_objective_data_withholds_the_verdict():
+    """The load-bearing boundary this fix exists for: a ticker with ONLY a
+    saved consensus_rating (no forward_pe, no fcf_yield) used to renormalise
+    to 100% analyst opinion and still report val_available=True — the pillar
+    leaning hardest on its least-measured input at exactly the moment it has
+    no objective data. Must now withhold (fabricated neutral 50, val_available
+    False), the same G-15 contract the "no data at all" case already used."""
+    score, signals, val_available = valuation_score(
+        {}, {"consensus_label": "Strong Buy", "has_coverage": True}, None,
+    )
+    assert val_available is False
+    assert score == 50.0
+    # The analyst-only signal is still disclosed — a display fact about what
+    # was captured, independent of whether the pillar is trustworthy to score.
+    assert "Analyst Consensus" in signals
+
+
+def test_pt_upside_only_no_objective_data_also_withholds():
+    # Same boundary via the OTHER analyst-only leg (PT Upside instead of
+    # consensus rating) — both analyst legs are equally "not objective."
+    score, signals, val_available = valuation_score(
+        {}, {"avg_pt": 130.0}, 100.0,
+    )
+    assert val_available is False
+    assert score == 50.0
+    assert "PT Upside" in signals
+
+
+def test_both_analyst_legs_present_still_withholds_without_any_objective_metric():
+    score, signals, val_available = valuation_score(
+        {}, {"avg_pt": 130.0, "consensus_label": "Strong Buy", "has_coverage": True}, 100.0,
+    )
+    assert val_available is False
+    assert score == 50.0
+    assert "PT Upside" in signals
+    assert "Analyst Consensus" in signals
+
+
+def test_forward_pe_alone_is_sufficient_for_val_available():
+    # One objective metric, no analyst data at all — the pre-existing
+    # behavior for a purely-objective read must be unaffected.
+    score, _, val_available = valuation_score({"forward_pe": 10.0}, {}, None)
+    assert val_available is True
+    assert score == 100.0
+
+
+def test_fcf_yield_alone_is_sufficient_for_val_available():
+    score, _, val_available = valuation_score({"fcf_yield": 6.0}, {}, None)
+    assert val_available is True
+    assert score == 100.0
+
+
+def test_one_objective_metric_plus_analyst_legs_is_available_and_blends_correctly():
+    # The boundary the fix must NOT break: as soon as ONE objective metric is
+    # present, val_available flips back to True and the analyst legs blend
+    # in normally (they are not excluded from the numerator/denominator,
+    # only from the val_available GATE itself).
+    financials = {"forward_pe": 10.0}   # 25/25 objective
+    analyst = {"consensus_label": "Strong Buy", "has_coverage": True}   # top tier, full leg
+    score, signals, val_available = valuation_score(financials, analyst, None)
+    assert val_available is True
+    assert score == 100.0   # both legs present score 100% each -> blended 100%
+    assert set(signals.keys()) == {"Forward P/E", "Analyst Consensus"}
+
+
+def test_no_data_at_all_is_a_special_case_of_the_same_withhold_not_a_different_one():
+    # The pre-existing "nothing present at all" case is a SUBSET of the new
+    # condition (objective_max_points > 0 implies max_points > 0), not a
+    # separately-handled branch — confirms the generalisation didn't
+    # introduce a second, divergent code path.
+    score, signals, val_available = valuation_score({}, {}, None)
+    assert val_available is False
+    assert score == 50.0
+    assert signals == {}
 
 
 # ─── Combined pillars — graceful degradation & weighting ─────────────────────

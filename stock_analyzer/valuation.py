@@ -28,14 +28,25 @@ def valuation_score(
 
     analyst_data keys: avg_pt (float|None), consensus_label (str|None), has_coverage (bool).
     Graceful degradation: absent metrics contribute 0 to numerator AND denominator.
-    val_available is False when NONE of the four metrics had any data at all —
-    in that case `score` is a fabricated neutral 50 with zero signal behind it
-    (mirrors business_quality_score's own fundamentals_available gate; see the
-    2026-08-04 audit finding — this pillar was fabricating a neutral 50 with
-    no availability flag for callers to withhold the verdict on).
+
+    val_available requires at least one OBJECTIVE metric (Forward P/E or FCF Yield) to
+    have contributed — analyst opinion alone (PT Upside, Analyst Consensus) is no longer
+    sufficient (analyst-weight-audit, Phase B option (c), 2026-09-13). Previously
+    `val_available = max_points > 0`, so a ticker with ONLY a saved consensus_rating and no
+    objective data at all would renormalise to 100% analyst opinion (`score =
+    points/max_points`) and still report `val_available=True` — the pillar leaning hardest
+    on its least-measured input at exactly the moment it has no objective data, with
+    nothing downstream able to tell. `val_available=False` here defers to the SAME
+    fabricated-neutral-50 / withhold contract this docstring already documented for the
+    "no data at all" case (mirrors business_quality_score's own gate, and the G-15
+    precedent of withholding a verdict rather than fabricating one from incomplete data).
+    `signals` may still be populated for any analyst-only leg that DID compute — those are
+    display facts about what was captured, independent of whether the overall pillar is
+    trustworthy enough to score.
     """
     points = 0
     max_points = 0
+    objective_max_points = 0   # Forward P/E + FCF Yield ONLY — gates val_available
     signals: dict[str, str] = {}
 
     norms = _SECTOR_NORMS.get(sector, _SECTOR_NORMS["_default"])
@@ -44,6 +55,7 @@ def valuation_score(
     pe = financials.get("forward_pe")
     if pe is not None and pe > 0:
         max_points += 25
+        objective_max_points += 25
         pe_cheap  = norms["pe_cheap"]
         pe_fair   = norms["pe_fair_hi"]
         pe_exp    = norms["pe_exp"]
@@ -64,6 +76,7 @@ def valuation_score(
     fcf = financials.get("fcf_yield")
     if fcf is not None:
         max_points += 20
+        objective_max_points += 20
         if fcf >= _FUND_BANDS["fcf_excel"]:
             pts, label = 20, f"Excellent — cheap per $1 FCF ({fcf:.1f}%)"
         elif fcf >= _FUND_BANDS["fcf_good"]:
@@ -78,6 +91,7 @@ def valuation_score(
         signals["FCF Yield"] = label
 
     # ── PT Upside to consensus avg target (25 pts) ───────────────────────────
+    # Analyst-derived, NOT objective — does not contribute to objective_max_points.
     avg_pt = analyst_data.get("avg_pt")
     # Fall back to yfinance single analyst target if no DB coverage
     if avg_pt is None:
@@ -101,6 +115,7 @@ def valuation_score(
         signals["PT Upside"] = label
 
     # ── Analyst consensus rating ──────────────────────────────────────────────
+    # Analyst-derived, NOT objective — does not contribute to objective_max_points.
     # max_points contribution is max(VALUATION_CONSENSUS_PTS.values()) — the dict's
     # OWN best achievable award — not a hardcoded literal. This is a load-bearing
     # invariant every other leg already has (each leg's max_points contribution equals
@@ -116,6 +131,6 @@ def valuation_score(
         points += pts
         signals["Analyst Consensus"] = f"{label_raw} (analyst consensus)"
 
-    val_available = max_points > 0
+    val_available = objective_max_points > 0
     score = round((points / max_points) * 100, 1) if val_available else 50.0
     return score, signals, val_available
