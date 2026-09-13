@@ -607,11 +607,34 @@ VALUATION_PT_UPSIDE_MODEST  = 5
 VALUATION_PT_UPSIDE_NEUTRAL = 0
 VALUATION_PT_UPSIDE_NEAR    = -5
 
+# Compressed 2026-09-13 (analyst-weight-audit Phase B, planner-designed,
+# owner-approved D1/D2 — see docs/plans/analyst-weight-audit.md §8/§8c):
+# Strong Buy 30→15, Buy 24→12, Hold 15→8, Mixed 9→5, Sell 0→0 (unchanged).
+# Strong Buy is ~90% of the owner's saved-research library (n=395 of 442
+# evaluable calls) and measured ~0% alpha vs SPY (-0.3%) — a rating
+# describing 90% of everything cannot discriminate, so paying it the
+# pillar's second-largest single award (tied with Forward P/E, larger than
+# FCF Yield) was not earned. Halved proportionally (D2: shape unchanged,
+# only the footprint shrinks) rather than reshaped, because the evidence
+# for THIS finding (Strong Buy ≈ no edge on a large, unbiased sample) is
+# far more robust than the per-tier ordering below it (Sell's measured
+# +alpha rests on n=22 of research the owner specifically chose to paste —
+# not a random sample of the market's Sell ratings, and four plausible
+# non-skill explanations exist: post-decline timing, sector concentration,
+# short-squeeze dynamics, and a contrarian-article selection effect).
+# Sell deliberately stays pinned at 0 — moving it up would LOOSEN a gate
+# (make a bearish-consensus name easier to clear COMPOSITE_BUY), which
+# this evidence does not support doing. Buy/Mixed remain coherent but are
+# mechanically unreachable given single-firm-article usage (verified via
+# derive_consensus()'s own branching, an exhaustive grep for any other
+# consensus_rating writer, and a live sort of the full saved-research
+# table) — kept in the dict as valid interpolation points (D4), not
+# specially handled.
 VALUATION_CONSENSUS_PTS = {
-    "Strong Buy": 30,
-    "Buy":        24,
-    "Hold":       15,
-    "Mixed":       9,
+    "Strong Buy": 15,
+    "Buy":        12,
+    "Hold":        8,
+    "Mixed":       5,
     "Sell":        0,
 }
 

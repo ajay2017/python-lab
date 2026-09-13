@@ -650,12 +650,16 @@ def test_ladder_performance_empty_input_never_raises():
 
 
 def test_ladder_performance_reports_all_five_tiers_with_their_points():
+    # Reads VALUATION_CONSENSUS_PTS directly rather than re-hardcoding its
+    # values here a second time — after the 2026-09-13 Phase B compression
+    # this exact duplication is what went stale (this test asserted the
+    # pre-compression 30/24/15/9/0 literals and failed the first time the
+    # policy changed). ladder_performance() must always mirror the dict
+    # verbatim; that's the invariant, not any particular set of numbers.
+    from stock_analyzer.constants import VALUATION_CONSENSUS_PTS
     out = ai.ladder_performance([])
-    assert out["tiers"]["Strong Buy"]["points"] == 30
-    assert out["tiers"]["Buy"]["points"] == 24
-    assert out["tiers"]["Hold"]["points"] == 15
-    assert out["tiers"]["Mixed"]["points"] == 9
-    assert out["tiers"]["Sell"]["points"] == 0
+    for tier, pts in VALUATION_CONSENSUS_PTS.items():
+        assert out["tiers"][tier]["points"] == pts
 
 
 def test_ladder_performance_averages_ret_pct_per_tier():

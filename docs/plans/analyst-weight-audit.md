@@ -1,5 +1,12 @@
 # Analyst Weight Audit — is sell-side consensus earning its share of the composite?
 
+**Status (2026-09-13): Phase B chunk 1+2 (weight compression + leg-denominator invariant
+fix) SHIPPED, Opus reviewer FIX-FIRST → 2 blocking (both stale `docs/architecture.md`
+values) → fixed → SHIP. `VALUATION_CONSENSUS_PTS` is now Strong Buy 15 / Buy 12 / Hold 8 /
+Mixed 5 / Sell 0 (was 30/24/15/9/0) — see §8c for the full commit record. Chunk 3
+(closing the renormalization hole, option (c)) is separately scoped, not yet built — see
+this file's next update.**
+
 **Status: Items 1 and 2 SHIPPED 2026-09-12, committed and pushed directly to `main`**
 (commit `966a24a` — this repo is single-branch, direct-to-`main`, no feature branches).
 Phase A (the free measurement) is **DONE**, recorded in §2 — it did **not** meet its own
@@ -535,6 +542,86 @@ paste, not a random draw of every Sell rating in the market. This has to travel 
 **This closes the evidence-gathering phase.** Commissioning the Opus `planner` design pass
 for Phase B next, per the sequence agreed with the owner (build alpha → read live → THEN
 commission planner — not before).
+
+---
+
+## 8c. Phase B design verdict (planner) + owner decisions + chunk 1+2 shipped (2026-09-13)
+
+**Opus `planner` verdict: PROCEED, narrowly.** Given the complete evidence package (Phase
+A's 48%, Finding 1's dead Buy tier, Finding 2's alpha-confirmed inversion, the
+Sell-selection-bias caveat), the planner recommended acting on the one uncontaminated,
+large-sample finding — **Strong Buy is ~90% of the whole library (n=395) and shows ~0%
+alpha (−0.3%)**, so paying it 30 points is not earned — while explicitly declining to act
+on the Sell-side finding, because rewarding Sell would **loosen** a gate (make a
+bearish-consensus name easier to clear `COMPOSITE_BUY`) on the thinnest, most
+selection-contaminated arm of the evidence. Four plausible non-skill explanations for
+Sell's measured alpha were named (post-decline timing/oversold bounce, sector
+concentration at n=22, short-squeeze dynamics on heavily-shorted names, and a
+contrarian-article selection effect) — any of which could fully explain the number without
+analyst skill being real. **Sell stays pinned at 0; do not revisit without new evidence**
+(the falsifiable condition: Sell reaching a materially larger, less-selection-biased sample
+AND sustaining +alpha through a continued-decline regime, which would rule out the
+oversold-bounce explanation).
+
+**A load-bearing technical finding from the planner, independent of the weight question:**
+the consensus leg's `max_points` contribution in code was a hardcoded literal (`+= 30`),
+not derived from the dict — every OTHER leg's denominator already equals its own best
+achievable award. Left alone, halving the dict without fixing this would have silently
+turned even a Strong Buy into a partial-credit outcome on its own leg. Fixed in the same
+commit as the weight compression, not after.
+
+**A correction to this plan's own evidence chain, caught by the planner:** §7 stated
+yfinance's `recommendationMean` is "consumed by nothing." It is — `app.py:20496-20509` maps
+it to a display label in an event/explore view. The substantive conclusion is unaffected
+(it never feeds `valuation_score`, scoring, or any gate — confirmed), only the phrasing was
+too absolute. Corrected here per this repo's zero-hallucination standard.
+
+**Owner decisions (2026-09-13, all four following the planner's recommendation):**
+- **D1 (footprint):** halve the consensus leg — 30 → 15.
+- **D2 (shape):** proportional scaling only, not a further Strong-Buy-toward-Hold
+  compression — the per-tier ordering below the robust Strong-Buy finding is noisier and
+  partly rests on the same Sell arm the planner said not to trust.
+- **D3 (renormalization hole, option (c)):** yes, withhold — scoped as its own separate
+  commit (chunk 3 below), not bundled with the weight change.
+- **D4 (dead tiers):** Buy/Mixed stay in the dict as coherent, unreached interpolation
+  points — no separate fix spent on tiers that cannot fire given current usage.
+
+**Final approved numbers:**
+
+```
+VALUATION_CONSENSUS_PTS = {
+    "Strong Buy": 15,   # was 30
+    "Buy":        12,   # was 24  (mechanically unreachable on current data — Finding 1)
+    "Hold":        8,   # was 15
+    "Mixed":       5,   # was 9   (mechanically unreachable on current data — Finding 1)
+    "Sell":        0,   # UNCHANGED — the protective floor, deliberately not loosened
+}
+```
+
+**Chunk 1+2 SHIPPED same day** — `stock_analyzer/valuation.py`'s consensus-leg denominator
+now reads `max(VALUATION_CONSENSUS_PTS.values())` instead of a hardcoded `30`;
+`stock_analyzer/constants.py`'s dict updated to the values above. 5 new tests in
+`tests/test_valuation.py` (leg invariant holds for any future dict — not by coincidence;
+footprint share pinned at ~5.3% of the composite, down from 9.0%; Strong-Buy-vs-Sell
+composite swing pinned at ~5.3 points, down from ~9.0; Sell-stays-a-full-drag regression;
+Buy/Mixed remain valid, scoreable keys). One pre-existing test in
+`tests/test_analyst_intel.py` was rewritten to read `VALUATION_CONSENSUS_PTS` directly
+instead of re-hardcoding the old literals — that duplication is exactly what broke the
+first time this ran (a legitimate test failure, not a defect in the new code). Full suite
+5246 passed; antipattern + constants-doc gates green.
+
+**Opus `reviewer` verdict: FIX-FIRST → 2 blocking → fixed → SHIP.** Both findings were
+stale values in `docs/architecture.md` describing the OLD policy as if still live: the
+§5.3 valuation-pillar constants table (`| Analyst consensus rating | 30 | ... |`) and the
+Block F narrative's opening clause (which quoted the pre-compression numbers and the old
+16.5%/30% composite-share figures). Both corrected in the same commit — table row now reads
+15/12/8/5/0, and the narrative states the new ~14.1% analyst-derived composite share (down
+from 16.5%) while noting the "~30% when only consensus is present" figure is UNCHANGED
+(it's a ratio, not an absolute — fixing it is exactly what chunk 3 is for). Non-blocking
+note also addressed: this file's own status line synced same commit.
+
+**Chunk 3 (renormalization hole, option (c)) is scoped, not yet built** — see the next
+update to this section once it ships.
 
 ---
 

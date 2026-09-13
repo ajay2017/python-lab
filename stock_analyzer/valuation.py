@@ -100,10 +100,18 @@ def valuation_score(
         points += pts
         signals["PT Upside"] = label
 
-    # ── Analyst consensus rating (30 pts) ────────────────────────────────────
+    # ── Analyst consensus rating ──────────────────────────────────────────────
+    # max_points contribution is max(VALUATION_CONSENSUS_PTS.values()) — the dict's
+    # OWN best achievable award — not a hardcoded literal. This is a load-bearing
+    # invariant every other leg already has (each leg's max_points contribution equals
+    # its own best possible pts): fixed 2026-09-13 alongside the Phase B weight
+    # compression (analyst-weight-audit), because scaling the dict's values without
+    # also scaling this denominator would have silently turned "Strong Buy" into a
+    # partial-credit outcome — the single best rating filling only a fraction of its
+    # own leg, dragging down every other pillar component for the best-rated names.
     label_raw = analyst_data.get("consensus_label")
     if label_raw and analyst_data.get("has_coverage"):
-        max_points += 30
+        max_points += max(VALUATION_CONSENSUS_PTS.values())
         pts = VALUATION_CONSENSUS_PTS.get(label_raw, 0)
         points += pts
         signals["Analyst Consensus"] = f"{label_raw} (analyst consensus)"

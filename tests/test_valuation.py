@@ -195,6 +195,81 @@ def test_unrecognized_consensus_label_scores_zero_but_counted():
     assert "Analyst Consensus" in signals
 
 
+# ─── analyst-weight-audit Phase B (2026-09-13): leg-denominator invariant +
+# weight compression — planner-designed, owner-approved D1/D2/D4 ────────────
+
+def test_leg_invariant_top_consensus_tier_always_fills_its_own_leg_to_100pct():
+    """The invariant chunk 1 restores: whichever VALUATION_CONSENSUS_PTS label
+    scores the dict's own maximum must fill its leg to exactly 100%, regardless
+    of the dict's absolute values — max_points is derived from the dict
+    (`max(VALUATION_CONSENSUS_PTS.values())`), never a hardcoded literal that
+    could silently drift out of sync with it. Before this fix, scaling the
+    dict down without also scaling this denominator would have turned even
+    the BEST rating into a partial-credit outcome on its own leg."""
+    from stock_analyzer.constants import VALUATION_CONSENSUS_PTS
+    top_label = max(VALUATION_CONSENSUS_PTS, key=VALUATION_CONSENSUS_PTS.get)
+    score, _, _ = valuation_score(
+        {}, {"consensus_label": top_label, "has_coverage": True}, None,
+    )
+    assert score == 100.0
+
+
+def test_footprint_consensus_share_of_composite_pinned_to_5_3_pct():
+    """Pins the 2026-09-13 compression's actual footprint (all four legs
+    present) so a LATER edit to VALUATION_CONSENSUS_PTS that silently changes
+    this share fails a test instead of passing unnoticed. Computed, not
+    hardcoded: consensus's own max / total pillar max, weighted by the
+    pillar's 0.30 composite weight."""
+    from stock_analyzer.constants import VALUATION_CONSENSUS_PTS, COMPOSITE_WEIGHTS
+    max_consensus = max(VALUATION_CONSENSUS_PTS.values())
+    pillar_max = 25 + 20 + 25 + max_consensus   # P/E + FCF + PT Upside + consensus
+    consensus_composite_share = (max_consensus / pillar_max) * COMPOSITE_WEIGHTS["valuation"]
+    assert consensus_composite_share == pytest.approx(0.053, abs=0.001)
+
+
+def test_footprint_strong_buy_vs_sell_composite_swing_pinned():
+    """The Strong-Buy-vs-Sell composite-point swing (all four legs present)
+    should be ~5.3 points post-compression, down from ~9.0 pre-compression —
+    the concrete number D1 was approved against."""
+    from stock_analyzer.constants import VALUATION_CONSENSUS_PTS, COMPOSITE_WEIGHTS
+    max_consensus = max(VALUATION_CONSENSUS_PTS.values())
+    pillar_max = 25 + 20 + 25 + max_consensus
+    swing_pillar_pts = VALUATION_CONSENSUS_PTS["Strong Buy"] - VALUATION_CONSENSUS_PTS["Sell"]
+    swing_composite_pts = (swing_pillar_pts / pillar_max) * 100 * COMPOSITE_WEIGHTS["valuation"]
+    assert swing_composite_pts == pytest.approx(5.3, abs=0.1)
+
+
+def test_sell_stays_a_full_drag_zero_points_unchanged():
+    """Regression against ever loosening the protective floor: Sell must
+    stay pinned at 0 points. The 2026-09-13 evidence (Sell's measured +alpha
+    rested on a small, self-selected sample) explicitly argued AGAINST
+    moving Sell up — this pins that decision so a future edit can't drift it
+    without failing a test."""
+    from stock_analyzer.constants import VALUATION_CONSENSUS_PTS
+    assert VALUATION_CONSENSUS_PTS["Sell"] == 0
+    score, _, _ = valuation_score(
+        {}, {"consensus_label": "Sell", "has_coverage": True}, None,
+    )
+    assert score == 0.0
+
+
+def test_buy_and_mixed_remain_valid_keys_even_though_unreachable_in_production():
+    """Finding 1 (analyst-weight-audit): a single-firm article can only ever
+    produce Strong Buy/Hold/Sell — Buy/Mixed are mechanically unreachable
+    given current usage (derive_consensus's own branching), but D4 keeps them
+    as coherent, scoreable dict entries rather than removing them, in case a
+    genuine multi-firm split ever does land in that band."""
+    from stock_analyzer.constants import VALUATION_CONSENSUS_PTS
+    assert "Buy" in VALUATION_CONSENSUS_PTS
+    assert "Mixed" in VALUATION_CONSENSUS_PTS
+    for label in ("Buy", "Mixed"):
+        score, signals, _ = valuation_score(
+            {}, {"consensus_label": label, "has_coverage": True}, None,
+        )
+        assert "Analyst Consensus" in signals
+        assert 0.0 <= score <= 100.0
+
+
 # ─── Combined pillars — graceful degradation & weighting ─────────────────────
 
 def test_all_four_pillars_combine_as_weighted_average():
