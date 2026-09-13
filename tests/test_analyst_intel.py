@@ -596,6 +596,152 @@ def test_calibration_matrix_never_reads_a_valuation_or_gate_module():
         assert not any(isinstance(c, str) and f in c for c in consts if c is not ai.calibration_matrix.__doc__)
 
 
+# ─── consensus_tier ─────────────────────────────────────────────────────────────
+
+def test_consensus_tier_none_and_blank_return_none():
+    assert ai.consensus_tier(None) is None
+    assert ai.consensus_tier("") is None
+    assert ai.consensus_tier("   ") is None
+
+
+def test_consensus_tier_all_five_labels():
+    assert ai.consensus_tier("Strong Buy (5/0/0)") == "Strong Buy"
+    assert ai.consensus_tier("Buy (5/0/0)") == "Buy"
+    assert ai.consensus_tier("Hold (2/3/0)") == "Hold"
+    assert ai.consensus_tier("Mixed (2/1/2)") == "Mixed"
+    assert ai.consensus_tier("Sell (0/0/5)") == "Sell"
+
+
+def test_consensus_tier_matches_leading_label_not_the_tally_substring():
+    # The parenthetical tally always contains the literal word "Buy" — a bare
+    # substring match would false-positive every Sell/Hold/Mixed row onto Buy.
+    assert ai.consensus_tier("Sell (3 Buy / 0 Hold / 5 Sell)") == "Sell"
+    assert ai.consensus_tier("Hold (3 Buy / 2 Hold / 0 Sell)") == "Hold"
+    assert ai.consensus_tier("Mixed (2 Buy / 1 Hold / 2 Sell)") == "Mixed"
+
+
+def test_consensus_tier_unrecognized_label_returns_none():
+    assert ai.consensus_tier("Neutral (0/0/0)") is None
+
+
+# ─── ladder_performance ──────────────────────────────────────────────────────
+
+def _ladder_row(consensus, ret_pct, status="hit", directional_hit=None):
+    if directional_hit is None:
+        directional_hit = ret_pct > 0
+    return {
+        "status": status, "consensus_rating": consensus,
+        "ret_pct": ret_pct, "directional_hit": directional_hit,
+    }
+
+
+def test_ladder_performance_empty_input_never_raises():
+    out = ai.ladder_performance([])
+    assert out["n_unrated"] == 0
+    assert out["n_evaluable"] == 0
+    for tier in out["tiers"].values():
+        assert tier["n"] == 0
+        assert tier["avg_ret_pct"] is None
+        assert tier["pct_positive"] is None
+    out_none = ai.ladder_performance(None)
+    assert out_none["n_evaluable"] == 0
+
+
+def test_ladder_performance_reports_all_five_tiers_with_their_points():
+    out = ai.ladder_performance([])
+    assert out["tiers"]["Strong Buy"]["points"] == 30
+    assert out["tiers"]["Buy"]["points"] == 24
+    assert out["tiers"]["Hold"]["points"] == 15
+    assert out["tiers"]["Mixed"]["points"] == 9
+    assert out["tiers"]["Sell"]["points"] == 0
+
+
+def test_ladder_performance_averages_ret_pct_per_tier():
+    out = ai.ladder_performance([
+        _ladder_row("Strong Buy (5/0/0)", 10.0),
+        _ladder_row("Strong Buy (5/0/0)", 20.0),
+        _ladder_row("Buy (4/1/0)", 5.0),
+    ])
+    assert out["tiers"]["Strong Buy"]["n"] == 2
+    assert out["tiers"]["Strong Buy"]["avg_ret_pct"] == pytest.approx(15.0)
+    assert out["tiers"]["Buy"]["n"] == 1
+    assert out["tiers"]["Buy"]["avg_ret_pct"] == pytest.approx(5.0)
+    assert out["tiers"]["Hold"]["n"] == 0
+    assert out["tiers"]["Hold"]["avg_ret_pct"] is None
+
+
+def test_ladder_performance_pct_positive():
+    out = ai.ladder_performance([
+        _ladder_row("Buy (5/0/0)", 10.0),
+        _ladder_row("Buy (5/0/0)", -5.0),
+        _ladder_row("Buy (5/0/0)", -1.0),
+    ])
+    assert out["tiers"]["Buy"]["n"] == 3
+    assert out["tiers"]["Buy"]["pct_positive"] == pytest.approx(100.0 / 3.0)
+
+
+def test_ladder_performance_does_not_use_directional_hit_a_falling_hold_scores_poorly():
+    # The direct regression against ever reusing classify_call's
+    # directional_hit here: a Hold tier whose stocks ALL FELL must show a
+    # NEGATIVE avg_ret_pct, not a positive "hit rate" — directional_hit would
+    # have scored every one of these as a "hit" (non-bullish + ret_pct < 0),
+    # which is exactly the trap this function's docstring forbids.
+    out = ai.ladder_performance([
+        _ladder_row("Hold (2/3/0)", -8.0, directional_hit=True),
+        _ladder_row("Hold (2/3/0)", -12.0, directional_hit=True),
+        _ladder_row("Hold (2/3/0)", -4.0, directional_hit=True),
+    ])
+    assert out["tiers"]["Hold"]["n"] == 3
+    assert out["tiers"]["Hold"]["avg_ret_pct"] < 0
+    assert out["tiers"]["Hold"]["pct_positive"] == 0.0
+
+
+def test_ladder_performance_below_floor_tiers_set_verdict_shown_false():
+    from stock_analyzer.constants import ANALYST_CALIBRATION_MIN_CASES
+    below = ai.ladder_performance(
+        [_ladder_row("Buy (5/0/0)", 1.0) for _ in range(ANALYST_CALIBRATION_MIN_CASES - 1)]
+    )
+    at_threshold = ai.ladder_performance(
+        [_ladder_row("Buy (5/0/0)", 1.0) for _ in range(ANALYST_CALIBRATION_MIN_CASES)]
+    )
+    assert below["tiers"]["Buy"]["verdict_shown"] is False
+    assert at_threshold["tiers"]["Buy"]["verdict_shown"] is True
+
+
+def test_ladder_performance_unrated_rows_disclosed_not_dropped():
+    out = ai.ladder_performance([
+        _ladder_row("Buy (5/0/0)", 1.0),
+        _ladder_row("Neutral (0/0/0)", 1.0),   # unrecognized label
+        _ladder_row(None, 1.0),                # no rating at all
+    ])
+    assert out["n_unrated"] == 2
+    assert out["n_evaluable"] == 3
+    assert out["tiers"]["Buy"]["n"] == 1
+
+
+def test_ladder_performance_only_evaluable_rows_count():
+    out = ai.ladder_performance([
+        _ladder_row("Buy (5/0/0)", 1.0, status="pending"),
+        _ladder_row("Buy (5/0/0)", 1.0, status="no_anchor"),
+        _ladder_row("Buy (5/0/0)", 1.0, status="no_consensus"),
+    ])
+    assert out["n_evaluable"] == 0
+    assert out["n_unrated"] == 0
+    assert out["tiers"]["Buy"]["n"] == 0
+
+
+def test_ladder_performance_never_reads_a_valuation_or_gate_module():
+    """Same import-isolation invariant as calibration_matrix — checked
+    against compiled bytecode, not source text, so this docstring's own
+    prose can't false-positive the scan."""
+    forbidden = ("valuation", "scoring", "risk_advisor", "watchlist_advisor")
+    names = ai.ladder_performance.__code__.co_names
+    consts = ai.ladder_performance.__code__.co_consts
+    for f in forbidden:
+        assert f not in names
+        assert not any(isinstance(c, str) and f in c for c in consts if c is not ai.ladder_performance.__doc__)
+
+
 # ─── fetch_anchor_price ────────────────────────────────────────────────────────
 
 def test_fetch_anchor_price_none_ticker_returns_none():

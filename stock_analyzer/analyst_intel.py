@@ -533,6 +533,120 @@ def calibration_matrix(results: list[dict]) -> dict:
     }
 
 
+def consensus_tier(consensus_rating: str | None) -> str | None:
+    """Which `VALUATION_CONSENSUS_PTS` tier a saved `consensus_rating` label
+    falls into, or `None` when there is no rating to classify.
+
+    Matches the LEADING label only, same reasoning as `consensus_side()` and
+    `classify_call`'s `is_bullish` check: the parenthetical tally always
+    contains the literal word "Buy" regardless of which label actually won,
+    so a bare substring match would false-positive on every row (e.g. a
+    "Sell (3 Buy / 0 Hold / 5 Sell)" row must classify as Sell, not Buy).
+
+    Unlike `consensus_side()`, this returns all FIVE `VALUATION_CONSENSUS_PTS`
+    keys ("Strong Buy" and "Buy" kept distinct, "Hold" and "Mixed" kept
+    distinct) rather than collapsing to a 3-way buy/sell/neutral axis — the
+    whole point of `ladder_performance()` below is to test whether the
+    composite's point SPREAD across these five tiers is earned, which
+    requires keeping them separate.
+
+    "strong buy" is tested before "buy" — order is load-bearing, since
+    `"strong buy...".startswith("buy")` is False but the reverse check order
+    would still need "strong buy" checked first to win the match.
+    """
+    label = (consensus_rating or "").strip().lower()
+    if not label:
+        return None
+    if label.startswith("strong buy"):
+        return "Strong Buy"
+    if label.startswith("buy"):
+        return "Buy"
+    if label.startswith("sell"):
+        return "Sell"
+    if label.startswith("hold"):
+        return "Hold"
+    if label.startswith("mixed"):
+        return "Mixed"
+    return None
+
+
+def ladder_performance(results: list[dict]) -> dict:
+    """Average forward return per `VALUATION_CONSENSUS_PTS` tier — tests
+    whether the composite's 30/24/15/9/0 point ladder (Strong Buy > Buy >
+    Hold > Mixed > Sell) is actually earned, i.e. whether higher tiers
+    produced better forward returns than lower ones.
+
+    Reads the SAME evaluated rows Blocks A-E already display; only
+    `status in ("hit", "miss")` rows carry a `ret_pct` to average.
+
+    *** LOAD-BEARING DESIGN DECISION — DO NOT "FIX" THIS TO USE
+    directional_hit. *** `classify_call`'s `directional_hit` treats EVERY
+    non-bullish rating as pseudo-bearish: `(is_bullish and ret_pct > 0) or
+    (not is_bullish and ret_pct < 0)`. That means a Hold row scores a "hit"
+    when the stock FALLS. Comparing tiers on `directional_hit` would compare
+    "did Buy calls rise" against "did Hold calls fall" — two different
+    questions — and in a falling market a Hold tier would look artificially
+    good for having no real predictive content at all.
+    `calibration_matrix()` sidesteps this trap by excluding Hold/Mixed
+    entirely; this function CANNOT use that escape, because comparing all
+    five tiers against each other is the entire point. So it measures
+    `ret_pct` — the same signed quantity for every tier, regardless of which
+    way that tier is supposed to lean — and never touches `directional_hit`.
+
+    Returns `{"tiers": {<tier>: {...}}, "n_unrated", "n_evaluable"}`.
+    Each tier dict carries `n`, `avg_ret_pct` (`None` when `n == 0`),
+    `pct_positive` (`None` when `n == 0`), `points` (from
+    `VALUATION_CONSENSUS_PTS`), and `verdict_shown`
+    (`n >= ANALYST_CALIBRATION_MIN_CASES` — reused verbatim rather than a new
+    constant, matching the F-263 precedent of two surfaces sharing one
+    sample-size floor so they can never disagree on what counts as "enough").
+    `n_unrated` counts rows whose `consensus_rating` didn't match any tier —
+    disclosed, never silently dropped. Never raises on empty input.
+    """
+    from stock_analyzer.constants import ANALYST_CALIBRATION_MIN_CASES, VALUATION_CONSENSUS_PTS
+
+    tiers: dict[str, dict] = {
+        tier: {"n": 0, "_sum_ret": 0.0, "_n_positive": 0}
+        for tier in VALUATION_CONSENSUS_PTS
+    }
+    n_unrated = 0
+    n_evaluable = 0
+
+    for r in results or []:
+        if r.get("status") not in ("hit", "miss"):
+            continue
+        n_evaluable += 1
+        tier = consensus_tier(r.get("consensus_rating"))
+        if tier is None:
+            n_unrated += 1
+            continue
+        ret_pct = r.get("ret_pct")
+        if ret_pct is None:
+            continue
+        t = tiers[tier]
+        t["n"] += 1
+        t["_sum_ret"] += ret_pct
+        if ret_pct > 0:
+            t["_n_positive"] += 1
+
+    out_tiers: dict[str, dict] = {}
+    for tier, t in tiers.items():
+        n = t["n"]
+        out_tiers[tier] = {
+            "n":            n,
+            "avg_ret_pct":  (t["_sum_ret"] / n) if n else None,
+            "pct_positive": (t["_n_positive"] / n * 100) if n else None,
+            "points":       VALUATION_CONSENSUS_PTS[tier],
+            "verdict_shown": n >= ANALYST_CALIBRATION_MIN_CASES,
+        }
+
+    return {
+        "tiers":       out_tiers,
+        "n_unrated":   n_unrated,
+        "n_evaluable": n_evaluable,
+    }
+
+
 def valid_anchor_price(value) -> float | None:
     """
     Coerce one candidate anchor price to a usable float, or None.

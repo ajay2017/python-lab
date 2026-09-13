@@ -35344,7 +35344,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **⚙️ App Settings** — owner-only, not shown in read-only viewer mode. Lets you curate the three ticker-roster lists the engine reads — the Grow Today scan universe, the Movers discovery net, and the Diversification candidate roster — from inside the app instead of by editing code. **Edits the engine's INPUT SET, never a decision rule**: no gate, threshold, scoring weight, or `COMPOSITE_BUY` lives here or is ever editable through this page. The database is the single source of truth for these lists — if it's unreachable, the affected page shows "unavailable" rather than silently falling back to a frozen list. Every save is validated (a typo'd symbol blocks the save, never saves with a warning) and versioned in an append-only history, the same way git records why an investment threshold changed.
 
 - **If the database is unreachable, most pages deliberately refuse to load.** You'll see a red banner saying your portfolio is *not* shown, with a **🔄 Retry connection** button. This is on purpose: rendering an empty portfolio would look like you hold nothing, which is a worse lie than showing nothing at all. Two pages stay open — **🩺 System Trust** (to diagnose it) and **📖 User Guide** (this page) — because neither displays any of your holdings, so neither can mislead you. The app retries by itself every 30 seconds and recovers on its own once the database is back; the button retries immediately. If only your *watchlist* or *trade history* is unreadable, you get an amber warning instead and the app keeps working — your holdings are still correct, but history-driven pages (🎯 My Edge, 🧾 Prior Trades) may look emptier than they are.
-- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets, plus an **Engine vs Analyst Calibration** matrix showing who was right when your saved research and the engine's composite disagreed at save time), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over — and the **💬 Ask** tab, where you can chat about your own trade history, a past recommendation's outcome, or your current position (e.g. "how many trades did I make last week and what was the gain/loss on each," "why did AAPL lose money after being recommended," "what's my current position in DELL," "how is my portfolio doing overall," or "what sector am I heaviest in") and get an answer sourced from what's actually on record or your already-loaded holdings — never a new engine verdict or gate; a follow-up question ("what about MSFT instead?") can refer back to what you just asked. Answers may quote a trade's own recorded thesis/notes/lesson, and — for a recommendation's outcome — the matching purchase's recorded Pre-Mortem risk case and exit commitment, read against what actually happened (never a new call). A position/portfolio/sector question needs your holdings loaded this session (open 🏠 Home first if you haven't); anything outside those question shapes is told plainly it's unsupported rather than guessed at. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot that includes the engine's own reasoning, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
+- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets, a **Consensus-Ladder Performance** panel showing average forward return by rating tier — Strong Buy vs Buy vs Hold vs Mixed vs Sell — to test whether that spread is actually earned, plus an **Engine vs Analyst Calibration** matrix showing who was right when your saved research and the engine's composite disagreed at save time), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over — and the **💬 Ask** tab, where you can chat about your own trade history, a past recommendation's outcome, or your current position (e.g. "how many trades did I make last week and what was the gain/loss on each," "why did AAPL lose money after being recommended," "what's my current position in DELL," "how is my portfolio doing overall," or "what sector am I heaviest in") and get an answer sourced from what's actually on record or your already-loaded holdings — never a new engine verdict or gate; a follow-up question ("what about MSFT instead?") can refer back to what you just asked. Answers may quote a trade's own recorded thesis/notes/lesson, and — for a recommendation's outcome — the matching purchase's recorded Pre-Mortem risk case and exit commitment, read against what actually happened (never a new call). A position/portfolio/sector question needs your holdings loaded this session (open 🏠 Home first if you haven't); anything outside those question shapes is told plainly it's unsupported rather than guessed at. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot that includes the engine's own reasoning, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
 """
             )
 
@@ -35758,7 +35758,11 @@ elif page == "🧠 AI Insights":
     from stock_analyzer import analyst_intel as _ai_intel
     from stock_analyzer.constants import ANALYST_COVERAGE_FRESH_DAYS as _AC_FRESH_DAYS
     _ac_df = _ai_db.load_analyst_coverage(days=_AC_FRESH_DAYS)
-    _ac_df_all = _ai_db.load_analyst_coverage()   # total count for status header
+    # limit=5000 matches the Scorecard's own "read the full library" call
+    # below (_sc_df = _ai_db.load_analyst_coverage(limit=5000)) — the bare
+    # default limit=100 silently capped this header at "100 saved" regardless
+    # of the real total (found 2026-09-12 while investigating the Scorecard).
+    _ac_df_all = _ai_db.load_analyst_coverage(limit=5000)   # total count for status header
 
     # Flash slot: the Ideas Inbox save handler below stashes this list right
     # before an st.rerun() (which discards any un-rerun delta, including a
@@ -37647,6 +37651,7 @@ elif page == "🧠 AI Insights":
             ANALYST_ACCURACY_LEADERBOARD_MIN_CALLS as _SC_LEADER_MIN,
             ANALYST_ACCURACY_HIGHLIGHTS_MIN_EVALUABLE as _SC_HILITE_MIN,
             ANALYST_CALIBRATION_MIN_CASES as _SC_CAL_MIN,
+            VALUATION_CONSENSUS_PTS as _VALUATION_CONSENSUS_PTS,
         )
 
         _sc_df = _ai_db.load_analyst_coverage(limit=5000)
@@ -37773,6 +37778,37 @@ elif page == "🧠 AI Insights":
                 f"{len(_sc_pending)} pending (< {_SC_DIR_DAYS}d since article date) · "
                 f"{len(_sc_excluded)} excluded (no anchor price / no consensus rating / price fetch failed)."
             )
+
+            # ── Consensus-ladder performance — is the composite's point spread
+            # earned? (analyst-weight-audit, 2026-09-12). Deliberately measures
+            # avg_ret_pct per tier, NEVER directional_hit — see
+            # ladder_performance()'s own docstring for why reusing
+            # directional_hit here would score a falling Hold as a "hit."
+            st.markdown("**🪜 Consensus-Ladder Performance**")
+            st.caption(
+                "Average forward return per consensus tier — NOT the directional hit rate "
+                "above. A Hold call isn't a bearish call, so it can't be graded a 'hit' when "
+                "the stock falls; this instead asks whether Strong Buy really outperformed "
+                "Buy, which outperformed Hold, the way the composite's point spread "
+                f"({', '.join(f'{k} {v}' for k, v in _VALUATION_CONSENSUS_PTS.items())}) assumes."
+            )
+            _sc_ladder = _ai_intel.ladder_performance(_sc_results)
+            _sc_lad_cols = st.columns(5)
+            for _sc_lad_col, (_sc_tier, _sc_t) in zip(_sc_lad_cols, _sc_ladder["tiers"].items()):
+                with _sc_lad_col:
+                    if _sc_t["verdict_shown"]:
+                        st.metric(
+                            f"{_sc_tier} ({_sc_t['points']} pts)",
+                            f"{_sc_t['avg_ret_pct']:+.1f}%",
+                            help=f"n={_sc_t['n']} · {_sc_t['pct_positive']:.0f}% positive",
+                        )
+                    else:
+                        st.metric(
+                            f"{_sc_tier} ({_sc_t['points']} pts)", "—",
+                            help=f"n={_sc_t['n']} — need ≥{_SC_CAL_MIN} cases before showing a verdict",
+                        )
+            if _sc_ladder["n_unrated"]:
+                st.caption(f"{_sc_ladder['n_unrated']} evaluable call(s) had an unrecognized consensus label — excluded from the ladder.")
 
             # ── Missing-anchor fetch-now — a live single-ticker pull via the
             # yfinance -> FMP failover chain (orchestrator.get_historical_close),
@@ -37963,15 +37999,29 @@ elif page == "🧠 AI Insights":
                     f"no directional call to place) · {_sc_cal['n_excluded_no_engine_score']} "
                     "excluded (no engine composite recorded at save time)."
                 )
+                # Derived, never hardcoded, so this stays honest as the ledger
+                # grows — a 2026-09-12 measurement found 383 of 442 evaluable
+                # rows (87%) missing composite_score_at_save, meaning this
+                # matrix is DORMANT (both disagreement cells below the
+                # ANALYST_CALIBRATION_MIN_CASES floor), not merely "skewed" —
+                # the earlier wording here overstated how close this was to
+                # useful. The 2026-09-07 fix (project_analyst_coverage) only
+                # applies to NEWLY saved rows, so this is a years-long fade at
+                # any realistic save rate, not a matter of a few more weeks.
+                _sc_cal_n_evaluable = _sc_cal["n_classifiable"] + _sc_cal["n_excluded_no_engine_score"] + _sc_cal["n_excluded_neutral"]
+                _sc_cal_no_score_pct = (
+                    _sc_cal["n_excluded_no_engine_score"] / _sc_cal_n_evaluable * 100
+                    if _sc_cal_n_evaluable else 0.0
+                )
                 st.caption(
-                    "⚠️ Historical selection bias: rows saved earlier only captured "
-                    "an engine composite for tickers already held at save time — "
-                    "those had already cleared the entry gate — so the existing "
-                    f"population still skews toward Engine ≥ {int(COMPOSITE_BUY)} "
-                    "and under-represents the 'engine skeptical' cases this matrix "
-                    "is most interested in. Newly saved research captures a "
-                    "composite for any ticker (held or not), so this skew fades as "
-                    "more research is saved going forward."
+                    f"⚠️ Mostly dormant, not just skewed: **{_sc_cal['n_excluded_no_engine_score']} of "
+                    f"{_sc_cal_n_evaluable}** evaluable rows ({_sc_cal_no_score_pct:.0f}%) have no engine "
+                    "composite recorded at save time, because that capture only started "
+                    "2026-09-07 and only applies to newly saved research — rows saved before then "
+                    "have no composite regardless of whether the ticker was held. At the current "
+                    "save rate this fills in over years, not weeks; treat this matrix as **dormant** "
+                    "until both disagreement cells clear their own case-count floor above, not as a "
+                    "verdict already forming."
                 )
 
     with _ai_tab_rt:
@@ -39216,8 +39266,15 @@ elif page == "🎯 My Edge":
         if _me_trades_df is None or (hasattr(_me_trades_df, "empty") and _me_trades_df.empty):
             st.info("No trade history loaded. Visit 🏠 Home first to load your portfolio.")
         else:
-            # Load prep-signal data (DB, cheap)
-            _me_analyst_df     = _me_db.load_analyst_coverage()
+            # Load prep-signal data (DB, cheap). limit=5000, NOT the bare
+            # default limit=100: classify_all_buys checks each trade's own
+            # cutoff (trade_date - WORKFLOW_ANALYST_LOOKBACK_DAYS) against
+            # this df, so it needs the FULL coverage history — the newest-
+            # first default limit=100 was silently hiding research attached
+            # to OLDER trades, biasing them toward "Cold Entry"/"Basic" tiers
+            # (found 2026-09-12; same class as db.load_model_predictions'
+            # PostgREST truncation, memory project_predictive_shadow_modeling).
+            _me_analyst_df     = _me_db.load_analyst_coverage(limit=5000)
             _me_earnings_ctx   = _me_db.load_all_earnings_context()
             _me_classified     = _dq.classify_all_buys(
                 _me_trades_df, _me_analyst_df, _me_earnings_ctx
