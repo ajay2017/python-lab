@@ -3,6 +3,18 @@
 **Date:** 2026-09-13
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 5 (findings verified at HEAD; design pass by the `planner` agent, Opus 5)
+**Status (2026-09-13, Band A — 3 of 6 done):** **D19 half-closed** (`a4e2e41`). New pure
+`util.pillar_tile()` withholds a pillar's score outright when its availability flag is
+false, following `quick_research.py:222-232`'s "Verdict withheld" precedent, and stops the
+caption asserting inputs that never contributed. **Business Quality and Valuation are
+done; Technical and Sentiment remain blocked on D3** — they have no `t_available` /
+`s_available` to read, which is now the concrete, user-visible thing the spine unblocks.
+10 tests; full suite **5403 passed**. **The withheld branch is test-covered but UNSEEN** —
+it needs a holding with neither `forward_pe` nor `fcf_yield`, and all 16 current holdings
+have at least one (Q1c), so it cannot be screenshot-verified today. Track it unverified,
+as F-204a tracks its Act Today rows. **Band A remaining: D8, D23, the `exit_signals`
+backfill, and D19's D3-blocked half.**
+
 **Status (2026-09-13, Band A started):** **D20 and D17 FIXED.** D20 shipped as `81c45d4` —
 new pure `util.numeric_or()` (deliberate sibling of `get_or_offline`, same falsy-collapse
 class) replacing `or 50` at `app.py`'s "What would change this signal?" block, with 13 tests
