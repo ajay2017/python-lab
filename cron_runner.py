@@ -407,22 +407,38 @@ def _run_premarket(now_et, force: bool) -> int:
     except Exception as _ve:
         _log(f"velocity check failed: {str(_ve)[:80]} — continuing without.")
 
-    # Combined fingerprint includes velocity tickers so a new acceleration
-    # triggers a re-send even when the hard-alert set is unchanged.
-    _fp_input = alerts + [{"kind": "velocity", "ticker": v["ticker"]} for v in velocity_alerts]
+    # D1: tickers whose deterioration signals were withheld this run (an
+    # unaccounted split makes their cost basis unreliable). Must be treated
+    # as reportable on its own -- a split-withheld-only run that fell
+    # through the same "nothing to act on" gate as a genuinely quiet day
+    # would send no email and disclose nothing, exactly the silent-filter
+    # this finding exists to close.
+    split_withheld = payload.get("split_withheld", [])
+    if split_withheld:
+        _log("split signal(s) withheld: " + ", ".join(split_withheld))
+
+    # Combined fingerprint includes velocity tickers AND split-withheld
+    # tickers so either a new acceleration or a newly-detected/newly-cleared
+    # split triggers a re-send even when the hard-alert set is unchanged.
+    _fp_input = (
+        alerts
+        + [{"kind": "velocity", "ticker": v["ticker"]} for v in velocity_alerts]
+        + [{"kind": "split_withheld", "ticker": t} for t in split_withheld]
+    )
     fp = _fingerprint(_fp_input)
     sent = False
-    if not alerts and not velocity_alerts:
+    if not alerts and not velocity_alerts and not split_withheld:
         _log("nothing to act on — no email.")
     elif fp == state.get("last_fingerprint") and not force:
         _log(f"unchanged since last send (fp={fp}) — no email (anti-spam).")
     else:
         subject, html = render_alert_email(
             alerts, payload.get("built_at", today_str), velocity_alerts=velocity_alerts,
+            split_withheld=split_withheld,
         )
         sent = _send_email("protective", subject, html)
 
-    if sent or (not alerts and not velocity_alerts):
+    if sent or (not alerts and not velocity_alerts and not split_withheld):
         # Save dedup state ONLY on a real send or a legitimately empty run — so a
         # transient Resend failure is retried by the later DST slot rather than
         # silently suppressed (matches buy-lane dedup contract).

@@ -187,3 +187,42 @@ def test_detect_portfolio_splits_dismissed_key_filters_out_match(monkeypatch):
     result_no_dismiss = sd.detect_portfolio_splits(holdings, live_prices, dismissed=set())
     assert len(result_no_dismiss) == 1
     assert result_no_dismiss[0]["ticker"] == "AAA"
+
+
+# ─── split_withheld_message (D1) ────────────────────────────────────────────
+
+def test_split_withheld_message_empty_or_none_returns_empty_string():
+    assert sd.split_withheld_message([]) == ""
+    assert sd.split_withheld_message(None) == ""
+
+
+def test_split_withheld_message_names_the_ticker():
+    msg = sd.split_withheld_message(["AAA"])
+    assert "AAA" in msg
+
+
+def test_split_withheld_message_singular_wording_for_one_ticker():
+    msg = sd.split_withheld_message(["AAA"])
+    assert "its cost basis" in msg
+    assert "signals withheld" not in msg  # singular "signal", not plural
+
+
+def test_split_withheld_message_plural_wording_for_multiple_tickers():
+    msg = sd.split_withheld_message(["AAA", "BBB"])
+    assert "AAA" in msg and "BBB" in msg
+    assert "their cost basis" in msg
+    assert "signals withheld" in msg
+
+
+def test_split_withheld_message_points_at_the_recovery_path():
+    msg = sd.split_withheld_message(["AAA"])
+    assert "🏠 Home" in msg
+    assert "Apply" in msg
+
+
+def test_split_withheld_message_filters_falsy_tickers():
+    # A defensive guard: an empty string in the list must not corrupt the
+    # count or produce a blank entry in the joined ticker list.
+    msg = sd.split_withheld_message(["AAA", "", None])
+    assert msg.count(",") == 0  # only one real ticker after filtering
+    assert "AAA" in msg

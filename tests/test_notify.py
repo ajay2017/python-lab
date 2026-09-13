@@ -111,6 +111,66 @@ def test_render_alert_email_body_escapes_html():
     assert "&lt;script&gt;" in body
 
 
+# ─── render_alert_email — split_withheld (D1) ────────────────────────────────
+# A split-withheld-only run (no hard alerts, no velocity) must still produce
+# a sendable email -- render_alert_email requires ONE of the three to be
+# non-empty per its own contract, and this is the case that closes the
+# "silent filter" this finding exists to prevent: without it, the disclosure
+# that a signal was withheld would itself go unreported.
+
+def test_render_alert_email_subject_split_withheld_only_singular():
+    subject, body = notify.render_alert_email(
+        [], "2026-01-15 08:00:00", split_withheld=["AAA"],
+    )
+    assert "signal withheld" in subject
+    assert "AAA" in subject
+    assert "AAA" in body
+
+
+def test_render_alert_email_subject_split_withheld_only_plural():
+    subject, _ = notify.render_alert_email(
+        [], "2026-01-15 08:00:00", split_withheld=["AAA", "BBB"],
+    )
+    assert "signals withheld" in subject
+    assert "AAA" in subject and "BBB" in subject
+
+
+def test_render_alert_email_hard_alerts_take_subject_priority_over_split_withheld():
+    alerts = [{"ticker": "AAPL", "kind": "stop_breach", "directive": "Sell now"}]
+    subject, body = notify.render_alert_email(
+        alerts, "2026-01-15 08:00:00", split_withheld=["ZZZ"],
+    )
+    assert "protective action" in subject
+    assert "signal withheld" not in subject
+    # But the disclosure must still appear somewhere in the body, not vanish
+    # just because a hard alert took the subject line.
+    assert "ZZZ" in body
+    assert "unaccounted stock split" in body
+
+
+def test_render_alert_email_velocity_takes_subject_priority_over_split_withheld():
+    vel = [{"ticker": "MSFT", "delta": -5.0, "n_days": 3}]
+    subject, body = notify.render_alert_email(
+        [], "2026-01-15 08:00:00", velocity_alerts=vel, split_withheld=["ZZZ"],
+    )
+    assert "WATCH accelerating" in subject
+    assert "signal withheld" not in subject
+    assert "ZZZ" in body
+
+
+def test_render_alert_email_split_withheld_body_escapes_html():
+    _, body = notify.render_alert_email(
+        [], "2026-01-15 08:00:00", split_withheld=["<script>"],
+    )
+    assert "<script>" not in body
+    assert "&lt;script&gt;" in body
+
+
+def test_render_alert_email_no_split_withheld_omits_the_section():
+    _, body = notify.render_alert_email([{"ticker": "AAPL", "kind": "stop_breach"}], "2026-01-15 08:00:00")
+    assert "SIGNAL WITHHELD" not in body
+
+
 # ─── render_test_email ───────────────────────────────────────────────────────
 
 def test_render_test_email_includes_count_and_fixed_subject():

@@ -172,27 +172,44 @@ def render_alert_email(
     alerts: list[dict],
     built_at: str,
     velocity_alerts: list[dict] | None = None,
+    split_withheld: list[str] | None = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the protective-alert email.
 
     `alerts` are the hard protective signals (stop breaches, EXIT, risk-off).
     `velocity_alerts` (optional) are WATCH tickers whose composite score is
     accelerating downward — shown as a separate section below hard alerts.
-    At least one of alerts / velocity_alerts must be non-empty (caller's
-    responsibility).
+    `split_withheld` (optional, finding D1) — tickers whose deterioration
+    signals were withheld this run because an unaccounted split makes their
+    cost basis unreliable; shown as its own informational section, never
+    styled as alarming (a withheld signal is a data-integrity disclosure,
+    not a protective action).
+    At least one of alerts / velocity_alerts / split_withheld must be
+    non-empty (caller's responsibility) — a split-withheld-only run must
+    still send an email, or the disclosure this parameter exists for would
+    itself go silently unreported.
     """
     velocity_alerts = velocity_alerts or []
+    split_withheld = split_withheld or []
     n = len(alerts)
     n_vel = len(velocity_alerts)
+    n_split = len(split_withheld)
     tickers = ", ".join(dict.fromkeys(str(a.get("ticker") or "") for a in alerts if a.get("ticker")))
     vel_tickers = ", ".join(dict.fromkeys(str(v.get("ticker") or "") for v in velocity_alerts if v.get("ticker")))
+    split_tickers = ", ".join(dict.fromkeys(split_withheld))
 
+    # Priority: a real protective action always leads; then an early warning;
+    # then — only when NEITHER exists — the split disclosure itself becomes
+    # the subject, so a split-withheld-only run is never mistaken for "0
+    # WATCH signals accelerating" (the bug this three-way branch avoids).
     if alerts:
         subject = f"DRISHTA · {n} protective action{'s' if n != 1 else ''} today — {tickers}"
-    else:
+    elif velocity_alerts:
         subject = (f"DRISHTA · {n_vel} WATCH accelerating — {vel_tickers}"
                    if n_vel == 1 else
                    f"DRISHTA · {n_vel} WATCH signals accelerating — {vel_tickers}")
+    else:
+        subject = f"DRISHTA · signal{'s' if n_split != 1 else ''} withheld — {split_tickers}"
 
     cards = []
     for a in alerts:
@@ -253,11 +270,38 @@ def render_alert_email(
           {''.join(vel_rows)}
         </div>"""
 
-    subtitle = (f"{n} protective action{'s' if n != 1 else ''}"
-                + (f" · {n_vel} WATCH accelerating" if n_vel else "")
-                + f" · built {_html.escape(str(built_at))[:19]} ET")
-    if not alerts:
-        subtitle = f"{n_vel} early warning{'s' if n_vel != 1 else ''} · built {_html.escape(str(built_at))[:19]} ET"
+    # Split-withheld section (D1) — deliberately NEUTRAL styling (gray, not
+    # orange/red): this is a data-integrity disclosure, not a protective
+    # action or an early warning. Rare and self-healing (resolves the
+    # moment the split is corrected on Home), so it must not read as urgent.
+    split_html = ""
+    if split_withheld:
+        split_html = f"""
+        <div style="margin-top:{14 if (alerts or velocity_alerts) else 0}px;
+                    border-left:3px solid #6b7280;background:#18181b;border-radius:0 6px 6px 0;
+                    padding:10px 14px;font-family:Arial,Helvetica,sans-serif">
+          <div style="color:#9ca3af;font-weight:700;font-size:12px;letter-spacing:.3px">
+            ℹ️ SIGNAL WITHHELD &nbsp;·&nbsp; <span style="color:#e5e7eb">{_html.escape(split_tickers)}</span>
+          </div>
+          <div style="color:#a8a29e;font-size:12px;margin-top:4px">
+            An unaccounted stock split makes {'its' if n_split == 1 else 'their'} cost basis
+            unreliable, so deterioration signals were withheld this run. Apply the split
+            adjustment on 🏠 Home to restore normal signals.
+          </div>
+        </div>"""
+
+    if alerts:
+        subtitle = (f"{n} protective action{'s' if n != 1 else ''}"
+                    + (f" · {n_vel} WATCH accelerating" if n_vel else "")
+                    + (f" · {n_split} signal{'s' if n_split != 1 else ''} withheld" if n_split else "")
+                    + f" · built {_html.escape(str(built_at))[:19]} ET")
+    elif velocity_alerts:
+        subtitle = (f"{n_vel} early warning{'s' if n_vel != 1 else ''}"
+                    + (f" · {n_split} signal{'s' if n_split != 1 else ''} withheld" if n_split else "")
+                    + f" · built {_html.escape(str(built_at))[:19]} ET")
+    else:
+        subtitle = (f"{n_split} signal{'s' if n_split != 1 else ''} withheld"
+                    + f" · built {_html.escape(str(built_at))[:19]} ET")
 
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
       <div style="max-width:640px;margin:0 auto">
@@ -269,11 +313,13 @@ def render_alert_email(
         </div>
         {''.join(cards)}
         {vel_html}
+        {split_html}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;margin-top:18px;
                     border-top:1px solid #292524;padding-top:10px">
           Protective signals (stop breaches · deterioration EXIT · risk-off trim) are directives —
           not auto-executed, open DRISHTA to act. Early-warning WATCH velocity is informational only
-          (the position has not yet reached TRIM). You receive this only when the set changes.
+          (the position has not yet reached TRIM). Signal-withheld notices mean a suspected
+          unaccounted stock split, not a protective action. You receive this only when the set changes.
         </div>
       </div>
     </body></html>"""

@@ -24,6 +24,7 @@ import pytz
 from stock_analyzer import db
 from stock_analyzer import broker_sync
 from stock_analyzer import exit_advisor
+from stock_analyzer import split_detector
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer.bundle_loader import load_bundle
 from stock_analyzer.data import fetch_spy, fetch_vix, fetch_risk_free_rate, is_trading_day
@@ -247,9 +248,45 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         })
         reduced.add(t)
 
+    # 1b. Split-safety gate (D1): a ticker whose stored avg_cost is currently
+    # unreliable (an unaccounted split) can have classify_deterioration_tier's
+    # `escalate` leg (price < avg_cost) fire on an otherwise-legitimate TRIM,
+    # turning it into an unwarranted EXIT with no real deterioration behind
+    # it. Detection is per-ticker off port_df's OWN columns (Ticker/Shares/
+    # Avg Cost/Price) -- deliberately NOT detect_portfolio_splits(), which
+    # expects the raw holdings_df shape ("Avg Cost ($)"), a different frame
+    # from port_df ("Avg Cost"). SPLIT_DETECT_MIN_DISTORTION's own 35%
+    # pre-filter (inside detect_split_adjustment) bounds this to only
+    # already-distorted names before it ever calls yfinance.
+    #
+    # Accepted fail-direction, not an oversight: detect_split_adjustment's
+    # own fetch_splits() swallows a yfinance failure into an empty Series
+    # (split_detector.py), which reads as "no split" here. A real split
+    # coinciding with a yfinance outage is therefore NOT flagged and the
+    # false-EXIT risk this block exists to close passes through unguarded
+    # that one day -- consistent with this app's existing provider-outage
+    # posture elsewhere (observable via api_health/Data Health), not a new
+    # gap introduced here.
+    split_flagged: set[str] = set()
+    for _, _sp_row in port_df.iterrows():
+        _sp_t = str(_sp_row.get("Ticker", "")).upper()
+        _sp_shares = _f(_sp_row.get("Shares"), 0) or 0
+        _sp_avg = _f(_sp_row.get("Avg Cost"), 0) or 0
+        _sp_price = _f(_sp_row.get("Price"), 0) or 0
+        if not _sp_t or _sp_shares <= 0 or _sp_avg <= 0 or _sp_price <= 0:
+            continue
+        try:
+            if split_detector.detect_split_adjustment(_sp_t, _sp_shares, _sp_avg, _sp_price) is not None:
+                split_flagged.add(_sp_t)
+        except Exception as _sp_e:
+            errors.append(f"split check failed for {_sp_t}: {_sp_e}")
+    split_withheld_msg = split_detector.split_withheld_message(sorted(split_flagged))
+    if split_withheld_msg:
+        errors.append(split_withheld_msg)
+
     # 2. Deterioration EXIT only (TRIM/WATCH excluded by the protective scope).
     try:
-        det = deterioration_signals(port_df, held_data, spy_6mo)
+        det = deterioration_signals(port_df, held_data, spy_6mo, split_flagged=split_flagged)
     except Exception as e:
         det = []
         errors.append(f"deterioration_signals failed: {e}")
@@ -332,6 +369,14 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         # Additive — daily analyst-target consensus snapshot per held ticker,
         # log-only (Phase 1). Never used to build `alerts` above.
         "analyst_target_snapshots": analyst_target_snapshots,
+        # D1 — tickers whose deterioration signals were withheld this run
+        # because their cost basis is currently unreliable (an unaccounted
+        # split). The caller MUST treat a non-empty list as reportable on its
+        # own — render_alert_email requires alerts/velocity_alerts to be
+        # non-empty to be called at all, so a split-withheld-only run would
+        # otherwise send NO email and disclose nothing (the exact silent-
+        # filter this finding exists to close).
+        "split_withheld": sorted(split_flagged),
     }
 
 

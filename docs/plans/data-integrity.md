@@ -430,6 +430,90 @@ Of 32 rows with NULL `price_at_signal`, **21 are now priced, 11 correctly remain
   they were never blocking; PLTR's remaining row is WATCH-type, which
   `protective_track_record.py` drops entirely regardless of price.
 
+### D1 · split detection absent from the protective-alert cron lane — Commit 1 SHIPPED
+**Anchor:** `stock_analyzer/exit_advisor.classify_deterioration_tier`'s `escalate` leg
+(`price < avg_cost`). Both the interactive Home render and the headless cron lane call the
+exact same `daily_briefing.deterioration_signals()`, which was entirely split-blind.
+
+**Design pass:** an Opus `planner` pass, given the mechanism and every relevant file:line,
+returned verdict **PROCEED** with option (a) — withhold-and-disclose, never auto-write a
+correction unattended. Two load-bearing facts the planner verified before recommending
+anything:
+
+- **The blast radius is narrower than first framed.** `dd_from_peak_pct`/`trend_broken_now`
+  (feeding `deep_exit`) come purely from the price-history series, which yfinance
+  auto-adjusts for splits (confirmed against the installed yfinance 1.3.0's actual
+  default). So a split can **never fabricate a signal from nothing** — it can only escalate
+  an *already-real, price-history-legitimate* TRIM into an unwarranted EXIT, and only on a
+  forward split (a reverse split makes the escalation conditions false, not true).
+- **No new constant needed.** `detect_split_adjustment`'s existing 35%-distortion pre-filter
+  plus its 60%-validation check are already a high-confidence gate; "detected" doesn't need
+  a second "how sure" threshold.
+
+**Owner decision (confirmed via AskUserQuestion, 2026-09-13):** withhold **every** tier for
+a flagged ticker, not only the EXIT escalation — every dollar figure a directive would
+render (P&L, dollar-risk) is built on the same uncorrected `avg_cost`, so even a
+split-safe WATCH/TRIM would still print wrong numbers. This means a genuinely real signal
+on that one ticker can go silent until the split is corrected on Home — accepted,
+self-healing, and disclosed rather than hidden.
+
+**Commit 1 (shipped) — the cron path:**
+- New pure `split_detector.split_withheld_message(tickers)` — disclosure text, names the
+  ticker(s), points at Home's "Apply Adjustment" as the recovery path.
+- `daily_briefing.deterioration_signals(..., *, split_flagged: set[str] | None = None)` —
+  a flagged ticker's payload is withheld entirely, before `exit_advisor.assess_holding` is
+  ever called for it. Default `None` reproduces old behaviour exactly.
+- `headless_alert_engine.py`: per-ticker `detect_split_adjustment` off `port_df`'s own
+  columns (`Ticker`/`Shares`/`Avg Cost`/`Price`) — **deliberately not**
+  `detect_portfolio_splits()`, which expects the raw `holdings_df` shape
+  (`"Avg Cost ($)"`, a different frame). Returns a new `"split_withheld"` key.
+
+**A real gap in the planner's own design brief, found and closed during implementation,
+not left for review to catch:** `notify.render_alert_email` requires `alerts` or
+`velocity_alerts` non-empty to be called at all, and the original design routed the
+disclosure only into a log-only `errors` list. A split-withheld-only day would have hit
+`cron_runner.py`'s existing "nothing to act on — no email" gate and produced **complete
+silence** — no email, no disclosure — on exactly the day this finding exists to guarantee
+one. Fixed by extending `render_alert_email` with a third, neutrally-styled
+(gray, not alarming — a data-integrity disclosure, not a protective action) section and
+subject-tier, and extending `cron_runner.py`'s send-gate, fingerprint, and dedup-save
+condition to a three-way `alerts / velocity_alerts / split_withheld` check, consistently.
+
+Opus review: **SHIP, 0 blocking**, with three non-blocking findings, two closed before
+commit:
+- **A real correction to my own scope, not the reviewer's invention.** I had described the
+  interactive-path follow-up as "patch `app.py:5349` and `app.py:9065`" — but
+  `daily_briefing.build_daily_briefing` (`daily_briefing.py:2891`) is a **third**, unguarded
+  caller of `deterioration_signals`, and it's the *primary* source of interactive Home's
+  own Act Today surface (reached via `app.py:5308` and `app.py:5637` — more central than the
+  two direct calls I'd named). **The still-open follow-up must thread `split_flagged`
+  through `build_daily_briefing` itself**, not just the two smaller call sites, or Home's
+  main Act Today keeps surfacing false EXITs while the follow-up reads as done.
+- **Closed before commit:** no test exercised the actual column names inside
+  `headless_alert_engine.py`'s new loop — every existing test mocked `deterioration_signals`
+  wholesale, so a `"Avg Cost ($)"`-style typo would have silently defeated the entire fix
+  with zero failing tests. Closed with 4 new integration tests that mock
+  `split_detector.detect_split_adjustment` directly instead, and verified by *actually
+  injecting that exact typo* and confirming 3 of the 4 fail — not just reasoning that they
+  would.
+- **Closed before commit:** the yfinance-outage fail-open direction (a real split
+  coinciding with a provider outage passes unguarded) is accepted and consistent with this
+  app's existing provider-outage posture elsewhere — now stated explicitly in a code
+  comment rather than left as unstated tribal knowledge.
+
+Sub-35%-distortion forward splits remain undetected (coextensive with the pre-existing
+`detect_split_adjustment` primitive, not made worse here) — awareness only, not acted on.
+
+19 new tests across `tests/test_split_detector.py`, `tests/test_deterioration_signals.py`
+(new file — includes the load-bearing proof that the false EXIT is real without the guard,
+and that it's absent with it, both verified against hand-computed `trim_floor`/`exit_floor`
+arithmetic, not just green tests), `tests/test_notify.py`, `tests/test_cron_split_withheld.py`
+(new file), and `tests/test_headless_alert_engine.py`.
+
+**Still open, correctly scoped now:** thread `split_flagged` through `build_daily_briefing`
+(not just its two direct callers) for the interactive Home path — its own commit, its own
+review, since it changes what an existing decision surface outputs on a split day.
+
 ### D2 · holdings save reported success before the write — FIXED, with a real regression caught mid-fix
 **Anchor:** 📒 Trade Journal's BUY-confirm and SELL-confirm handlers in `app.py`. Both called
 `st.success(...)` unconditionally before `db.save_holdings(...)`, then discarded that
@@ -781,16 +865,9 @@ with a common one can trade places.**
    the author.
 2. ~~**D4 — a silently-dropped holding inflates every remaining weight.**~~ **FIXED.** See
    its own section below the table.
-3. **D1 — split detection absent from the protective-alert cron lane. Design pass, not
-   code, starts here.** The single worst *outcome* in this entire register — the cron lane
-   emails an EXIT on a healthy position with no human check, on a data-integrity failure
-   the owner never sees — even though the trigger (an unaccounted forward/reverse split on
-   a currently-held name) has never once fired (zero `SPLIT` rows exist in `trades`, Q8b).
-   Ranked above D3/D8 despite low observed frequency because **the design conversation
-   itself is cheap to start** (a `planner` pass, not a code commit) and this is the one
-   item where a wrong call moves real money in a single tail event. Sequencing this ahead
-   of the provenance spine is a deliberate bet on consequence over frequency — flag if that
-   trade-off reads differently once the `planner` scopes it.
+3. ~~**D1 — split detection absent from the protective-alert cron lane.**~~ **Commit 1
+   (cron path) SHIPPED.** See its own section below the table for the full design,
+   mechanism confirmation, and — importantly — a corrected scope for what's still open.
 4. **D3 — the provenance spine.** Not urgent (Step 0 measured it clean on the live book —
    no evidence of the fabricated-pillar path firing), but the highest strategic value left:
    it's what unblocks D19's Technical/Sentiment tiles, gives real substance to D8's

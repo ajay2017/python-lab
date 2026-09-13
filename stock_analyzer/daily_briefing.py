@@ -1658,19 +1658,39 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
 
 # ── Act Today ─────────────────────────────────────────────────────────────────
 
-def deterioration_signals(port_df, held_data, spy_df=None) -> list[dict]:
+def deterioration_signals(
+    port_df, held_data, spy_df=None, *, split_flagged: set[str] | None = None,
+) -> list[dict]:
     """Held-position deterioration signals (exit_advisor) for every holding.
 
     Returns the list of non-None payloads (tier WATCH/TRIM/EXIT) — TRIM/EXIT feed
     Act Today, WATCH feeds the Review awareness lane. Pure pass-through to
     exit_advisor.assess_holding; all inputs come from data the brief already has
     (port_df row + held_data[t]'s df/atr/position_age_days + the SPY benchmark).
+
+    `split_flagged` (finding D1): tickers whose stored `avg_cost` is currently
+    unreliable (an unaccounted stock split, per split_detector.detect_split_
+    adjustment). classify_deterioration_tier's `escalate` leg reads price vs
+    avg_cost directly (`exit_advisor.py`) — a forward split can escalate an
+    otherwise-legitimate, price-history-real TRIM into an unwarranted EXIT
+    without any actual deterioration. ALL tiers are withheld for a flagged
+    ticker, not only EXIT: every dollar figure a directive would render
+    (P&L, dollar-risk) is built on the same uncorrected avg_cost, so even a
+    split-safe WATCH/TRIM would still print wrong numbers. Owner-confirmed
+    tradeoff (2026-09-13) — this can suppress a genuinely real signal on that
+    one ticker until the split is corrected on 🏠 Home; the caller MUST
+    disclose this (split_detector.split_withheld_message), never drop it
+    silently. Default `None` (empty set) reproduces today's behaviour
+    exactly, so every other caller is unaffected.
     """
     if port_df is None or getattr(port_df, "empty", True):
         return []
+    flagged = split_flagged or set()
     out: list[dict] = []
     for _, row in port_df.iterrows():
         ticker = str(row.get("Ticker", "")).upper()
+        if ticker in flagged:
+            continue
         data = (held_data or {}).get(ticker, {}) or {}
         payload = exit_advisor.assess_holding(
             ticker,

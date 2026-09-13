@@ -188,3 +188,35 @@ def detect_portfolio_splits(
         results.append(adj)
 
     return results
+
+
+def split_withheld_message(tickers: list[str]) -> str:
+    """User-facing disclosure for finding D1: a ticker whose cost basis is
+    unreliable (an unaccounted split, detected by `detect_split_adjustment`)
+    had ALL its deterioration directives withheld this run — WATCH/TRIM/EXIT
+    alike, not only the escalation a split could distort. Every dollar figure
+    a directive would render for that ticker (P&L, dollar-risk) is built on
+    the same uncorrected `avg_cost`, so a "safe" WATCH/TRIM would still print
+    wrong numbers; withholding the whole ticker rather than only the risky
+    tier is the deliberate, owner-confirmed choice (2026-09-13).
+
+    This is genuinely rare and self-healing, not a standing gate: once the
+    split is corrected via 🏠 Home's "Apply Adjustment" (which persists the
+    fix), the ticker's real directives resume on the very next run. Pure —
+    no I/O — so callers own actually surfacing this (an email section, a log
+    line); it must never be dropped silently (CLAUDE.md's "never silently
+    filter" rule) — if the withheld ticker was the only thing to report,
+    silence here would BE that violation.
+
+    Returns "" for an empty/None list so a caller can `if text: ...` cleanly.
+    """
+    ts = [str(t) for t in (tickers or []) if t]
+    if not ts:
+        return ""
+    n = len(ts)
+    return (
+        f"⚠️ Deterioration signal{'s' if n != 1 else ''} withheld for "
+        f"{', '.join(ts)} — an unaccounted stock split makes "
+        f"{'their' if n != 1 else 'its'} cost basis unreliable. Apply the "
+        "split adjustment on 🏠 Home to restore normal signals."
+    )

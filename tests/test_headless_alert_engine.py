@@ -446,6 +446,93 @@ def test_protective_alerts_risk_off_excludes_already_reduced_tickers():
     assert result["alerts"][1]["ticker"] == "MSFT"
 
 
+# ── split-safety gate (D1) — integration, real column names ────────────────
+# Every test ABOVE mocks deterioration_signals() wholesale, so none of them
+# would catch a column-name typo in the split-detection loop itself (e.g.
+# "Avg Cost ($)" instead of port_df's real "Avg Cost" would make every
+# _sp_avg read 0, the <=0 guard would skip every ticker, and split
+# detection would silently never fire for anyone — passing every test above
+# while being completely broken). These mock split_detector.detect_split_
+# adjustment directly and let deterioration_signals run for real, so the
+# actual port_df row values are what's asserted on.
+
+def test_protective_alerts_split_detection_reads_the_real_column_values():
+    """Confirms the new loop reads port_df's ACTUAL columns (Ticker/Shares/
+    Avg Cost/Price) by inspecting what detect_split_adjustment was called
+    with — not just that a result came back, which a wrong column read could
+    still (silently) satisfy via `or 0`-degraded no-op defaults.
+    """
+    ctx = _ok_ctx([{
+        "Ticker": "AAA", "Gap to Stop (%)": None, "Shares": 40.0,
+        "Avg Cost": 100.0, "Price": 10.0, "Weight (%)": 10.0,
+        "P&L (%)": -90.0, "Stop": None, "Stop Type": "Trailing", "Score": 60.0,
+    }])
+    calls = []
+
+    def _spy_detect(ticker, shares, avg_cost, price, *a, **k):
+        calls.append((ticker, shares, avg_cost, price))
+        return None  # no split detected — this test only cares what it was CALLED with
+
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
+         patch("stock_analyzer.headless_alert_engine.split_detector.detect_split_adjustment",
+               side_effect=_spy_detect), \
+         patch("stock_analyzer.exit_advisor.assess_risk_off_derisk", return_value=[]):
+        hae.compute_protective_alerts(TODAY)
+
+    assert len(calls) == 1
+    assert calls[0] == ("AAA", 40.0, 100.0, 10.0)
+
+
+def test_protective_alerts_split_flagged_ticker_excluded_and_disclosed():
+    """End-to-end: a ticker detect_split_adjustment flags is (a) absent from
+    the resulting deterioration-based alerts, and (b) present in the
+    returned split_withheld list — using the REAL deterioration_signals,
+    not a mock, so this exercises the actual split_flagged wiring.
+    """
+    ctx = _ok_ctx([{
+        "Ticker": "AAA", "Gap to Stop (%)": None, "Shares": 40.0,
+        "Avg Cost": 100.0, "Price": 10.0, "Weight (%)": 10.0,
+        "P&L (%)": -90.0, "Stop": None, "Stop Type": "Trailing", "Score": 60.0,
+    }])
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
+         patch("stock_analyzer.headless_alert_engine.split_detector.detect_split_adjustment",
+               return_value={"split_ratio": 10.0}), \
+         patch("stock_analyzer.exit_advisor.assess_risk_off_derisk", return_value=[]):
+        result = hae.compute_protective_alerts(TODAY)
+
+    assert result["split_withheld"] == ["AAA"]
+    assert result["alerts"] == []
+    assert result["all_deterioration_signals"] == []
+    assert any("AAA" in e for e in result["errors"])
+
+
+def test_protective_alerts_no_split_detected_leaves_split_withheld_empty():
+    ctx = _ok_ctx([_port_row("AAPL", gap_to_stop=5.0)])
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
+         patch("stock_analyzer.headless_alert_engine.split_detector.detect_split_adjustment",
+               return_value=None), \
+         patch("stock_analyzer.headless_alert_engine.deterioration_signals", return_value=[]), \
+         patch("stock_analyzer.exit_advisor.assess_risk_off_derisk", return_value=[]):
+        result = hae.compute_protective_alerts(TODAY)
+    assert result["split_withheld"] == []
+
+
+def test_protective_alerts_split_check_exception_appends_error_not_raise():
+    ctx = _ok_ctx([{
+        "Ticker": "AAPL", "Gap to Stop (%)": None, "Shares": 10.0,
+        "Avg Cost": 100.0, "Price": 90.0, "Weight (%)": 10.0,
+        "P&L (%)": -10.0, "Stop": None, "Stop Type": "Trailing", "Score": 60.0,
+    }])
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
+         patch("stock_analyzer.headless_alert_engine.split_detector.detect_split_adjustment",
+               side_effect=RuntimeError("yfinance boom")), \
+         patch("stock_analyzer.headless_alert_engine.deterioration_signals", return_value=[]), \
+         patch("stock_analyzer.exit_advisor.assess_risk_off_derisk", return_value=[]):
+        result = hae.compute_protective_alerts(TODAY)
+    assert result["split_withheld"] == []
+    assert any("split check failed for AAPL" in e for e in result["errors"])
+
+
 def test_protective_alerts_deterioration_signals_exception_appends_error():
     ctx = _ok_ctx([_port_row("AAPL", gap_to_stop=5.0)])
     with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
