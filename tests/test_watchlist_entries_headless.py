@@ -173,11 +173,18 @@ def test_cron_capture_persists_pillar_columns_from_the_bundle():
     Asserting on what actually reaches save_recommendations (not on the helper's
     signature) is what makes this catch a forgotten caller rather than a
     forgotten parameter.
+
+    Includes `headlines` (D24): the cron path computes an explicit
+    `sentiment_available` boolean from it, so a bundle with sentiment scores
+    but no headlines that produced them is a self-contradictory fixture, not
+    a real one — it would (correctly) get its sentiment nulled as fabricated.
     """
     result = _run_watchlist_entries(
         watchlist=("AAPL",),
         bundle={"sector": "Technology", "t_score": 80.0, "bq_score": 61.0,
-                "val_score": 44.0, "s_score": 55.0, "avg_sent": 0.1},
+                "val_score": 44.0, "s_score": 55.0, "avg_sent": 0.1,
+                "bq_available": True, "val_available": True,
+                "headlines": [{"headline": "AAPL rallies", "score": 0.2}]},
     )
     rows = result["_save_mock"].call_args[0][0]
     assert len(rows) == 1

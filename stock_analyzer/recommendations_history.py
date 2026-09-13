@@ -25,6 +25,11 @@ and conflating distinct decisions.
 from datetime import date
 from collections import defaultdict
 from stock_analyzer.constants import COMPOSITE_STRONG_BUY, COMPOSITE_BUY, COMPOSITE_HOLD
+from stock_analyzer.util import (
+    bq_score_or_none,
+    val_score_or_none,
+    sentiment_value_or_none,
+)
 
 
 def _f(v, default=0.0):
@@ -156,11 +161,20 @@ def build_enter_now_rows(recs: list[dict], held_tickers: set, rec_date,
             "thesis":           "",
             # Pillar capture (D8). Absent bundle -> every column None, i.e. the
             # pre-2026-09-13 behaviour, never a fabricated zero.
-            "s_score":          _b.get("s_score"),
-            "avg_sent":         _b.get("avg_sent"),
+            #
+            # bq_score/val_score/s_score/avg_sent are further sanitized (D24):
+            # a bundle whose bq_available/val_available is False, or whose
+            # sentiment was scored on zero headlines, carries a FABRICATED
+            # neutral (fundamentals.py / valuation.py / sentiment.py) rather
+            # than a real measurement. Persisting that as if measured would
+            # let F-225 Portfolio Q&A assert "valuation 50" for a name whose
+            # valuation was never actually scored. t_score is deliberately
+            # untouched — no t_available flag exists yet (that gap is D3).
+            "s_score":          sentiment_value_or_none(_b.get("s_score"), _b),
+            "avg_sent":         sentiment_value_or_none(_b.get("avg_sent"), _b),
             "t_score":          _b.get("t_score"),
-            "bq_score":         _b.get("bq_score", _b.get("f_score")),
-            "val_score":        _b.get("val_score"),
+            "bq_score":         bq_score_or_none(_b.get("bq_score", _b.get("f_score")), _b),
+            "val_score":        val_score_or_none(_b.get("val_score"), _b),
             "already_held":     tk_upper in held_upper,
         })
     return rows

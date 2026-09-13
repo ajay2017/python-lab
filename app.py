@@ -299,6 +299,9 @@ from stock_analyzer.util import sizing_unavailable_caption as _sizing_unavailabl
 from stock_analyzer.util import get_or_offline as _get_or_offline
 from stock_analyzer.util import numeric_or as _numeric_or
 from stock_analyzer.util import pillar_tile as _pillar_tile
+from stock_analyzer.util import bq_score_or_none as _bq_or_none
+from stock_analyzer.util import val_score_or_none as _val_or_none
+from stock_analyzer.util import sentiment_value_or_none as _sentiment_or_none
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -5768,21 +5771,27 @@ if page == "🏠 Home":
                         _ps = _port_score_map.get(_u, 0)
                         return _ps if _ps > 0 else None
                     def _s_score_for(_tk: str):
+                        # numeric_or is display-side; this is the WRITE-side
+                        # twin (D24) — a fabricated s_score (empty headlines ->
+                        # neutral 50, sentiment.py:36/42) must not persist as if
+                        # measured. Gate on whichever bundle actually answered,
+                        # not on the fallback source, so this changes only WHAT
+                        # is persisted, never WHICH bundle wins.
                         _u = str(_tk).upper()
                         _b = _grow_comp_cache.get(_u) or _grow_comp_cache.get(_tk) or {}
-                        _s = _b.get("s_score")
+                        _s, _src = _b.get("s_score"), _b
                         if _s is None:
                             _b2 = _held_data_cache.get(_u) or _held_data_cache.get(_tk) or {}
-                            _s = _b2.get("s_score")
-                        return _s
+                            _s, _src = _b2.get("s_score"), _b2
+                        return _sentiment_or_none(_s, _src)
                     def _avg_sent_for(_tk: str):
                         _u = str(_tk).upper()
                         _b = _grow_comp_cache.get(_u) or _grow_comp_cache.get(_tk) or {}
-                        _a = _b.get("avg_sent")
+                        _a, _src = _b.get("avg_sent"), _b
                         if _a is None:
                             _b2 = _held_data_cache.get(_u) or _held_data_cache.get(_tk) or {}
-                            _a = _b2.get("avg_sent")
-                        return _a
+                            _a, _src = _b2.get("avg_sent"), _b2
+                        return _sentiment_or_none(_a, _src)
                     # Pillar-score capture (2026-08-01) — feeds Portfolio Q&A's
                     # rec-outcome "why" answers. Mirrors _trim_basis's lookup
                     # (app.py, "capped by <pillar>" caption) so the same t/bq/val
@@ -5796,21 +5805,26 @@ if page == "🏠 Home":
                             _t = _b2.get("t_score")
                         return _t
                     def _bq_score_for(_tk: str):
+                        # D24: bq_score is fabricated (fundamentals.py's
+                        # neutral 50) whenever bq_available is False on the
+                        # bundle that actually answered — null it rather than
+                        # persist it as a measurement. Same "gate on the
+                        # winning bundle" discipline as _s_score_for.
                         _u = str(_tk).upper()
                         _b = _grow_comp_cache.get(_u) or _grow_comp_cache.get(_tk) or {}
-                        _bq = _b.get("bq_score", _b.get("f_score"))
+                        _bq, _src = _b.get("bq_score", _b.get("f_score")), _b
                         if _bq is None:
                             _b2 = _held_data_cache.get(_u) or _held_data_cache.get(_tk) or {}
-                            _bq = _b2.get("bq_score", _b2.get("f_score"))
-                        return _bq
+                            _bq, _src = _b2.get("bq_score", _b2.get("f_score")), _b2
+                        return _bq_or_none(_bq, _src)
                     def _val_score_for(_tk: str):
                         _u = str(_tk).upper()
                         _b = _grow_comp_cache.get(_u) or _grow_comp_cache.get(_tk) or {}
-                        _v = _b.get("val_score")
+                        _v, _src = _b.get("val_score"), _b
                         if _v is None:
                             _b2 = _held_data_cache.get(_u) or _held_data_cache.get(_tk) or {}
-                            _v = _b2.get("val_score")
-                        return _v
+                            _v, _src = _b2.get("val_score"), _b2
+                        return _val_or_none(_v, _src)
 
                     def _rec_sizing_cols(pick: dict) -> dict:
                         """The four F-249 Phase 2 sizing columns for one pick.

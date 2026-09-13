@@ -12,8 +12,11 @@ from stock_analyzer.util import (
     factor_tilt_state,
     get_or_offline,
     md_bold_to_html,
+    bq_score_or_none,
     numeric_or,
     pillar_tile,
+    sentiment_value_or_none,
+    val_score_or_none,
     safe_html,
     stop_recovery_state,
 )
@@ -125,6 +128,79 @@ class TestNumericOr:
         bad_others = composite - collapsed * weight
         bad_needed = (threshold - bad_others) / weight
         assert bad_needed == 70.0      # what the user was actually shown
+
+
+class TestBqScoreOrNone:
+    """D24: a fabricated neutral 50 must not persist as if measured."""
+
+    def test_available_passes_the_value_through(self):
+        assert bq_score_or_none(61.0, {"bq_available": True}) == 61.0
+
+    def test_unavailable_nulls_the_value(self):
+        # fundamentals.py's fabricated neutral — must not persist as real.
+        assert bq_score_or_none(50.0, {"bq_available": False}) is None
+
+    def test_legacy_bundle_missing_the_flag_fails_open(self):
+        # Matches the 5 existing consumers' `.get(key, True)` convention —
+        # a legacy-shaped bundle is not retroactively distrusted.
+        assert bq_score_or_none(72.0, {}) == 72.0
+
+    def test_honours_the_legacy_fundamentals_available_alias(self):
+        assert bq_score_or_none(50.0, {"fundamentals_available": False}) is None
+
+    def test_none_bundle_fails_open(self):
+        assert bq_score_or_none(72.0, None) == 72.0
+
+    def test_a_genuine_measured_50_still_survives(self):
+        # The point: gate on the FLAG, never on the value itself.
+        assert bq_score_or_none(50.0, {"bq_available": True}) == 50.0
+
+
+class TestValScoreOrNone:
+    def test_available_passes_the_value_through(self):
+        assert val_score_or_none(44.0, {"val_available": True}) == 44.0
+
+    def test_unavailable_nulls_the_value(self):
+        assert val_score_or_none(50.0, {"val_available": False}) is None
+
+    def test_legacy_bundle_missing_the_flag_fails_open(self):
+        assert val_score_or_none(30.0, {}) == 30.0
+
+
+class TestSentimentValueOrNone:
+    """The sentiment sibling has no flag (that gap is D3) — availability is
+    derived from whether any headline was actually scored."""
+
+    def test_populated_headlines_passes_the_value_through(self):
+        b = {"headlines": [{"headline": "x", "score": 0.1}]}
+        assert sentiment_value_or_none(72.0, b) == 72.0
+
+    def test_empty_headlines_nulls_the_value(self):
+        # analyze_news([]) -> avg 0.0 -> sentiment_score_0_100(0.0) == exactly
+        # 50.0 — the fabricated neutral this function exists to catch.
+        assert sentiment_value_or_none(50.0, {"headlines": []}) is None
+
+    def test_explicit_sentiment_available_flag_wins_over_headlines(self):
+        # A narrowed bundle (cron path) carries the precomputed bool instead
+        # of the list — that key must take precedence when both are present.
+        b = {"sentiment_available": True, "headlines": []}
+        assert sentiment_value_or_none(60.0, b) == 60.0
+
+    def test_explicit_false_sentiment_available_nulls_even_without_headlines(self):
+        assert sentiment_value_or_none(55.0, {"sentiment_available": False}) is None
+
+    def test_neither_signal_present_fails_open(self):
+        # No "headlines" AND no "sentiment_available" — a hand-built or future
+        # partial bundle, not a real scored one (which always carries
+        # `headlines`, even as []). Fails open like its bq/val siblings,
+        # rather than silently nulling a score for a shape it was never
+        # asked to carry.
+        assert sentiment_value_or_none(55.0, {}) == 55.0
+        assert sentiment_value_or_none(55.0, None) == 55.0
+
+    def test_a_genuine_measured_50_with_real_headlines_still_survives(self):
+        b = {"headlines": [{"headline": "x", "score": 0.0}]}
+        assert sentiment_value_or_none(50.0, b) == 50.0
 
 
 class TestPillarTile:

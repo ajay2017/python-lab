@@ -1413,6 +1413,55 @@ def test_build_enter_now_rows_pillars_fall_back_to_legacy_f_score():
     assert r["bq_score"] == 58.0
 
 
+def test_build_enter_now_rows_nulls_a_fabricated_bq_score():
+    # D24: bq_available=False means the 50 is fundamentals.py's fabricated
+    # neutral, not a measurement — must not persist as if measured.
+    cards = [_wl_card(ticker="AAA")]
+    bundles = {"AAA": {"bq_score": 50.0, "bq_available": False}}
+    r = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {}, bundles)[0]
+    assert r["bq_score"] is None
+
+
+def test_build_enter_now_rows_nulls_a_fabricated_val_score():
+    cards = [_wl_card(ticker="AAA")]
+    bundles = {"AAA": {"val_score": 50.0, "val_available": False}}
+    r = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {}, bundles)[0]
+    assert r["val_score"] is None
+
+
+def test_build_enter_now_rows_nulls_fabricated_sentiment_on_empty_headlines():
+    cards = [_wl_card(ticker="AAA")]
+    bundles = {"AAA": {"s_score": 50.0, "avg_sent": 0.0, "headlines": []}}
+    r = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {}, bundles)[0]
+    assert r["s_score"] is None
+    assert r["avg_sent"] is None
+
+
+def test_build_enter_now_rows_a_real_measured_50_still_survives():
+    # The point of D24: gate on the FLAG, never infer fabrication from the
+    # value. A genuinely measured 50 must not be collapsed to None either.
+    cards = [_wl_card(ticker="AAA")]
+    bundles = {"AAA": {"bq_score": 50.0, "bq_available": True,
+                       "val_score": 50.0, "val_available": True,
+                       "s_score": 50.0, "avg_sent": 0.0,
+                       "headlines": [{"headline": "x", "score": 0.0}]}}
+    r = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {}, bundles)[0]
+    assert r["bq_score"] == 50.0
+    assert r["val_score"] == 50.0
+    assert r["s_score"] == 50.0
+    assert r["avg_sent"] == 0.0
+
+
+def test_build_enter_now_rows_t_score_is_never_sanitized():
+    # No t_available flag exists yet (that gap is D3) — t_score must pass
+    # through untouched regardless of the other pillars' availability.
+    cards = [_wl_card(ticker="AAA")]
+    bundles = {"AAA": {"t_score": 50.0, "bq_available": False,
+                       "val_available": False, "headlines": []}}
+    r = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {}, bundles)[0]
+    assert r["t_score"] == 50.0
+
+
 def test_build_enter_now_rows_pillar_lookup_is_case_insensitive():
     cards = [_wl_card(ticker="aaa")]
     bundles = {"AAA": {"t_score": 80.0}}

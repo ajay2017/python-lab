@@ -75,6 +75,65 @@ def numeric_or(value: Any, default: float) -> float:
     return v
 
 
+def bq_score_or_none(value: Any, bundle: dict | None) -> Any:
+    """``value`` unless the bundle says Business Quality was unmeasurable —
+    in which case ``value`` is `fundamentals.py`'s fabricated neutral 50, and
+    persisting it would record a reading that never happened (finding D24).
+
+    Companion to :func:`pillar_tile`, which withholds the same fabrication
+    from a RENDER; this withholds it from a WRITE. Honours the same
+    fail-open flag lookup as the five existing consumers of these flags
+    (``.get(key, True)``, checking the legacy ``fundamentals_available``
+    alias), so a legacy-shaped bundle is treated as trustworthy, not gated.
+    """
+    b = bundle or {}
+    available = b.get("bq_available", b.get("fundamentals_available", True))
+    return value if available else None
+
+
+def val_score_or_none(value: Any, bundle: dict | None) -> Any:
+    """Same contract as :func:`bq_score_or_none`, for the Valuation pillar."""
+    b = bundle or {}
+    return value if b.get("val_available", True) else None
+
+
+def sentiment_value_or_none(value: Any, bundle: dict | None) -> Any:
+    """Same contract as :func:`bq_score_or_none`, for ``s_score``/``avg_sent``.
+
+    No ``s_available`` flag exists in the bundle yet (that gap is a separate,
+    larger finding — D3) — so availability here is derived from whether any
+    headline was actually scored: ``analyze_news([])`` returns avg ``0.0``,
+    and ``sentiment_score_0_100(0.0)`` is *exactly* 50.0 — a fabricated
+    neutral indistinguishable from a real one without this check.
+
+    Priority order, checked in this sequence:
+      (a) ``sentiment_available`` if present — a caller that has already
+          narrowed a bundle down to a smaller footprint (to avoid retaining a
+          full headline list) may carry this precomputed bool instead; it
+          wins over ``headlines`` so narrowing never has to re-carry the list
+          just to answer this question.
+      (b) ``headlines`` if present — derives availability from whether any
+          headline was actually scored.
+      (c) neither present — fails OPEN (treats the value as measured),
+          matching :func:`bq_score_or_none`/:func:`val_score_or_none`'s own
+          ``.get(key, True)`` convention for a legacy/partial bundle shape. A
+          real scored bundle always carries ``headlines`` (even as ``[]``,
+          meaning "scored, zero found" — which correctly resolves to
+          unavailable via (b)), so (c) only matters for a hand-built or
+          future caller that omits the key entirely; failing open there
+          avoids silently nulling a real score because of a shape it was
+          never asked to carry.
+    """
+    b = bundle or {}
+    if "sentiment_available" in b:
+        available = bool(b["sentiment_available"])
+    elif "headlines" in b:
+        available = bool(b["headlines"])
+    else:
+        available = True
+    return value if available else None
+
+
 def pillar_tile(
     name: str,
     score: Any,

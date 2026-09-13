@@ -668,6 +668,12 @@ analyst-only Strong Buy), and the ambiguity itself already pre-existed for the "
 all" case, so it's a candidate for a future guard, not a regression from this change.
 `premortem_advisor.py:100/103` has the identical pre-existing shape.
 
+**Owner decision 2026-09-13: PARKED, not urgent, not important enough to take on now.**
+Both notes above, plus the chunk 1+2 review's minor test-hardcode note (the footprint
+test's `25+20+25` isn't derived from anything), are recorded in CLAUDE.md's queue as a
+single deferred item. Trigger to revisit: either becomes actually confusing in practice, or
+picked up as a small polish pass — not on its own priority.
+
 **This closes Phase B in full.** Nothing remains open on this plan — see the top status
 line.
 

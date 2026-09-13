@@ -701,9 +701,21 @@ def compute_watchlist_entries(
         # would break the consumer's `get("bq_score", get("f_score"))` fallback,
         # because dict.get returns None for a present-but-None key instead of
         # falling through to the default. Narrowing must preserve absence.
-        bundle_map[_t_key] = (
-            {k: data[k] for k in _PILLAR_KEYS if k in data} if isinstance(data, dict) else {}
-        )
+        if isinstance(data, dict):
+            _entry = {k: data[k] for k in _PILLAR_KEYS if k in data}
+            # D24: carry the three availability SIGNALS, not the fields they
+            # would otherwise require (bq_available/val_available are already
+            # cheap booleans; sentiment_available is computed here instead of
+            # retaining the full `headlines` list, which this narrowing exists
+            # to avoid). bq_score_or_none/val_score_or_none/
+            # sentiment_value_or_none (stock_analyzer.util) read these to null
+            # a fabricated neutral rather than persist it as a measurement.
+            _entry["bq_available"] = data.get("bq_available", data.get("fundamentals_available", True))
+            _entry["val_available"] = data.get("val_available", True)
+            _entry["sentiment_available"] = bool(data.get("headlines"))
+        else:
+            _entry = {}
+        bundle_map[_t_key] = _entry
         sec_wt = 0.0
         if sector and port_df is not None and not port_df.empty and "Sector" in port_df.columns:
             gcol = "Gate Weight (%)" if "Gate Weight (%)" in port_df.columns else "Weight (%)"

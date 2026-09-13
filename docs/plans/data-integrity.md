@@ -256,15 +256,19 @@ product of Step 0 and should drive execution order.
 
 ### Band A — FIRING NOW. Fix these.
 
-| ID | Finding | P | Effort |
-|---|---|---|---|
-| **D20** | `or 50` inverts a legitimate 0 pillar score to neutral (`app.py:21504-21508`) | P1 | S |
-| **D19** | All 4 pillar tiles render possibly-fabricated `N/100` with an asserting caption | P1 | S (2 of 4) + D3 |
-| ~~**D8**~~ | `enter_now` half **FIXED**; `new_pick` 25% is NOT a writer bug — see below | P2 | — |
-| **D24** | A fabricated neutral pillar persists into `recommendations` as if measured | P2 | S (both writers) |
-| **D23** | Live-leg cross-check fires outside regular trading hours → alarm fatigue | P2 | S |
-| **D17** | `docs/architecture.md` §6.38 misdocuments `fundamentals_cache` | P2 | XS |
-| — | **Backfill**: 32 `exit_signals` rows unpriced 07-18→08-04, blocking Protective Track Record | P2 | S |
+**Shipped 2026-09-13** — `81c45d4` D20 · `47c4a54` D17 · `a4e2e41` D19 (2 of 4 tiles) ·
+`f1ecc85` D8 (`enter_now`, both writers) · D24 (pending commit, this pass). Full suite
+5431 passing throughout.
+
+| ID | Finding | P | Effort | State |
+|---|---|---|---|---|
+| ~~**D20**~~ | `or 50` inverted a legitimate 0 pillar score to neutral | P1 | S | **DONE** `81c45d4` |
+| ~~**D17**~~ | §6.38 misdocumented `fundamentals_cache` | P2 | XS | **DONE** `47c4a54` |
+| **D19** | 4 pillar tiles render possibly-fabricated `N/100` under an asserting caption | P1 | S | **HALF** `a4e2e41` — BQ + Valuation done; Technical + Sentiment **blocked on D3** |
+| **D8** | Pillar columns on `recommendations` rows | P2 | M | **HALF** `f1ecc85` — `enter_now` done; `new_pick` 25% **reclassified, needs `planner`** |
+| ~~**D24**~~ | A fabricated neutral pillar persists into `recommendations` as if measured | P2 | S | **DONE** — all 4 rec_type writers, one commit |
+| **D23** | Live-leg cross-check fires outside regular trading hours → alarm fatigue | P2 | S | **OPEN** |
+| — | **Backfill**: 32 `exit_signals` rows unpriced 07-18→08-04 | P2 | S | **OPEN** — unblocks Protective Track Record |
 
 ### Band B — real in code, measured NOT firing. Fix on consequence, not urgency.
 
@@ -324,6 +328,36 @@ that never happened."* This is that same rule, applied one table over.
 squarely D3's class: the composite's provenance is not carried, so the persisted row cannot
 record that it was built on a fabrication. **P2** — corrupts self-assessment, no wrong
 action.
+
+**FIXED 2026-09-13.** Three new pure functions in `stock_analyzer/util.py` —
+`bq_score_or_none`, `val_score_or_none`, `sentiment_value_or_none` — each return the value
+unchanged if the bundle's own flag says it was measured, else `None`. Applied at all four
+rec_type writers, not two: `new_pick`/`add_winner`/`buy_candidate` turned out to share the
+same four lookup closures in app.py, so one edit closed three rec_types; `enter_now`'s two
+callers (app-side and the F-265 cron lane) both needed the fix, since the cron path narrows
+its bundle to six pillar keys (D8) and had to be widened to also carry `bq_available` /
+`val_available` / a precomputed `sentiment_available` bool. **`t_score` is deliberately
+untouched everywhere** — no `t_available` flag exists yet (D3), and inferring fabrication
+from the *value* rather than a flag is exactly the pattern this whole effort avoids.
+
+**A real design question surfaced mid-implementation, not just a test fixture bug.**
+`sentiment_value_or_none`'s first version failed *closed* when a bundle carried neither
+`sentiment_available` nor `headlines` at all — inconsistent with its two siblings, which
+fail *open* on a missing flag (this codebase's established convention for a legacy bundle
+shape). Two pre-existing D8 tests caught it. Fixed to a three-tier priority: an explicit
+`sentiment_available` wins if present, else derive from `headlines` if present, else fail
+open. Opus review confirmed the fail-open tier cannot fire on live data — every real bundle
+source traces to `bundle_loader.load_bundle`, whose return literal unconditionally carries
+`headlines` (even as `[]`), so the ambiguous branch only reaches a hand-built or legacy
+partial bundle.
+
+Opus review: **SHIP, 0 blocking.** Also confirmed no fifth un-sanitized writer exists —
+`cron_runner.py`'s `_build_new_pick_rows` already omits all pillar columns, so it was never
+a gap. Full suite 5431 passed throughout; both deterministic gates green. **Known residual,
+flagged rather than hidden:** the app.py wiring (that `_src` correctly tracks which bundle
+answered) has no automated test — app.py has none by design. The sanitization decision
+itself is fully unit-tested; the reviewer traced the wiring manually rather than the tests
+proving it.
 
 ### Band C — closed, retracted, or informational
 
