@@ -58,7 +58,7 @@ _UNSET = object()  # distinguishes "caller didn't pass prior_df" from "caller ex
 def _run_watchlist_entries(
     watchlist=("AAPL",), held_rows=None, cards=None, ctx=None,
     prior_df=_UNSET, exit_signals_df=None, scanner_go_tickers=None,
-    watchlist_side_effect=None, holdings_side_effect=None,
+    watchlist_side_effect=None, holdings_side_effect=None, bundle=None,
 ):
     cards = cards if cards is not None else {t: _wl_card(t) for t in watchlist}
     ctx = ctx if ctx is not None else {
@@ -81,7 +81,9 @@ def _run_watchlist_entries(
          patch("stock_analyzer.headless_alert_engine.fetch_risk_free_rate", return_value=0.045), \
          patch("stock_analyzer.headless_alert_engine.fetch_spy", return_value=None), \
          patch("stock_analyzer.headless_alert_engine.load_bundle",
-               side_effect=lambda t, *a, **k: {"sector": "Technology"}), \
+               side_effect=lambda t, *a, **k: (
+                   bundle if bundle is not None else {"sector": "Technology"}
+               )), \
          patch("stock_analyzer.headless_alert_engine.build_watchlist_recommendation",
                side_effect=_fake_build_rec), \
          patch("stock_analyzer.headless_alert_engine.db.load_exit_signals",
@@ -155,6 +157,60 @@ def test_held_ticker_excluded_from_entries_but_still_captured():
     saved_rows = save_mock.call_args[0][0]
     assert saved_rows[0]["ticker"] == "AAPL"
     assert saved_rows[0]["already_held"] is True
+
+
+def test_cron_capture_persists_pillar_columns_from_the_bundle():
+    """D8 regression, and specifically a SECOND-CALLER regression.
+
+    `build_enter_now_rows` gained an optional bundles map so enter_now rows
+    stop persisting NULL pillars. The app-side caller was updated first and the
+    cron caller was missed — which made the fix nearly a no-op in production,
+    because `save_recommendations` upserts ON CONFLICT DO NOTHING with no
+    UPDATE path, so the first writer of a (ticker, rec_date, 'enter_now') key
+    wins permanently, and THIS lane fires unattended every day while the app
+    path needs a 📋 Watchlist visit.
+
+    Asserting on what actually reaches save_recommendations (not on the helper's
+    signature) is what makes this catch a forgotten caller rather than a
+    forgotten parameter.
+    """
+    result = _run_watchlist_entries(
+        watchlist=("AAPL",),
+        bundle={"sector": "Technology", "t_score": 80.0, "bq_score": 61.0,
+                "val_score": 44.0, "s_score": 55.0, "avg_sent": 0.1},
+    )
+    rows = result["_save_mock"].call_args[0][0]
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["t_score"] == 80.0
+    assert r["bq_score"] == 61.0
+    assert r["val_score"] == 44.0
+    assert r["s_score"] == 55.0
+    assert r["avg_sent"] == 0.1
+
+
+def test_cron_capture_preserves_the_legacy_f_score_fallback():
+    """The cron path narrows the bundle to just the pillar keys before handing
+    it on. That narrowing must preserve ABSENCE, not materialise missing keys
+    as None — `dict.get("bq_score", <fallback>)` returns None for a
+    present-but-None key instead of falling through, which would silently kill
+    the legacy f_score fallback on this path only.
+    """
+    result = _run_watchlist_entries(
+        watchlist=("AAPL",),
+        bundle={"sector": "Technology", "f_score": 58.0},   # no bq_score at all
+    )
+    r = result["_save_mock"].call_args[0][0][0]
+    assert r["bq_score"] == 58.0
+
+
+def test_cron_capture_pillars_are_null_not_zero_when_bundle_lacks_them():
+    # "Not captured" must stay distinguishable from a real 0 pillar score,
+    # which is the most bearish reading there is.
+    result = _run_watchlist_entries(watchlist=("AAPL",))   # sector-only bundle
+    r = result["_save_mock"].call_args[0][0][0]
+    for col in ("t_score", "bq_score", "val_score", "s_score", "avg_sent"):
+        assert r[col] is None, col
 
 
 def test_capture_scope_is_raw_and_wider_than_the_email_eligible_scope():

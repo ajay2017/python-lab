@@ -673,6 +673,16 @@ def compute_watchlist_entries(
     # ── Per-ticker: bundle load → portfolio_ctx → build_watchlist_recommendation ──
     qualifying: list[dict] = []
     sector_map: dict = {}
+    # Pillar scores per ticker for the enter_now rec-log capture below (D8).
+    # Zero extra fetches — load_bundle already returns these. Deliberately the
+    # SIX KEYS the consumer reads, not the whole bundle: retaining every
+    # bundle would hold each ticker's 6-month DataFrame and news_raw alive for
+    # the rest of the function, where `data` was previously rebound each
+    # iteration. Cheap to avoid, and this repo has a Railway memory-staircase
+    # history (memory project_perf_cache_bounding).
+    _PILLAR_KEYS = ("t_score", "bq_score", "f_score",
+                    "val_score", "s_score", "avg_sent")
+    bundle_map: dict = {}
     for t in watchlist:
         try:
             data = load_bundle(t, "6mo", spy_df=spy_for_bundles, rfr=rfr)
@@ -680,7 +690,20 @@ def compute_watchlist_entries(
             errors.append(f"{t}: bundle load failed ({e})")
             continue
         sector = str(data.get("sector") or "") if isinstance(data, dict) else ""
-        sector_map[t] = sector
+        # Both maps keyed UPPER, per build_enter_now_rows' documented contract.
+        # Provably a no-op for sector_map today (db.save_watchlist upper-cases
+        # every ticker at write, db.py:3827), but the raw key contradicted both
+        # the contract and the app-side sibling at app.py:23882 — aligning them
+        # stops a latent cron-only divergence.
+        _t_key = str(t).upper()
+        sector_map[_t_key] = sector
+        # `if k in data`, NOT `data.get(k)`: materialising an ABSENT key as None
+        # would break the consumer's `get("bq_score", get("f_score"))` fallback,
+        # because dict.get returns None for a present-but-None key instead of
+        # falling through to the default. Narrowing must preserve absence.
+        bundle_map[_t_key] = (
+            {k: data[k] for k in _PILLAR_KEYS if k in data} if isinstance(data, dict) else {}
+        )
         sec_wt = 0.0
         if sector and port_df is not None and not port_df.empty and "Sector" in port_df.columns:
             gcol = "Gate Weight (%)" if "Gate Weight (%)" in port_df.columns else "Weight (%)"
@@ -760,7 +783,13 @@ def compute_watchlist_entries(
     # cron-only days, and tomorrow's transition diff always has today's
     # baseline regardless of what's emailed today.
     try:
-        _rows = build_enter_now_rows(qualifying, held_set, today, sector_map)
+        # bundle_map is load-bearing here, not a nicety: save_recommendations
+        # upserts ON CONFLICT DO NOTHING with no UPDATE path anywhere, so the
+        # FIRST writer of a (ticker, rec_date, 'enter_now') key wins for good.
+        # This lane fires unattended ~09:45 ET daily while the app path needs a
+        # 📋 Watchlist visit — so on most days this is the writer that lands,
+        # and omitting the pillars here would leave the app-side fix a no-op.
+        _rows = build_enter_now_rows(qualifying, held_set, today, sector_map, bundle_map)
         if _rows:
             _save_result = db.save_recommendations(_rows)
             if _save_result.get("error"):

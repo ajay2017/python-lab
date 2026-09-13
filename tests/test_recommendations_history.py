@@ -1390,6 +1390,55 @@ def test_build_enter_now_rows_field_mapping():
     assert r["sector"] == "Technology"
 
 
+def test_build_enter_now_rows_captures_pillar_columns_from_the_bundle():
+    # D8: a live check found 100% of enter_now rows with NULL pillars, because
+    # the row literal never emitted them. Feeds Portfolio Q&A's "why" answers.
+    cards = [_wl_card(ticker="AAA")]
+    bundles = {"AAA": {"t_score": 80.0, "bq_score": 61.0, "val_score": 44.0,
+                       "s_score": 55.0, "avg_sent": 0.1}}
+    r = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {}, bundles)[0]
+    assert r["t_score"] == 80.0
+    assert r["bq_score"] == 61.0
+    assert r["val_score"] == 44.0
+    assert r["s_score"] == 55.0
+    assert r["avg_sent"] == 0.1
+
+
+def test_build_enter_now_rows_pillars_fall_back_to_legacy_f_score():
+    # Mirrors the new_pick writer's own bq_score/f_score fallback so the two
+    # rec_types cannot drift on a legacy-shaped bundle.
+    cards = [_wl_card(ticker="AAA")]
+    bundles = {"AAA": {"f_score": 58.0}}
+    r = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {}, bundles)[0]
+    assert r["bq_score"] == 58.0
+
+
+def test_build_enter_now_rows_pillar_lookup_is_case_insensitive():
+    cards = [_wl_card(ticker="aaa")]
+    bundles = {"AAA": {"t_score": 80.0}}
+    r = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {}, bundles)[0]
+    assert r["t_score"] == 80.0
+
+
+def test_build_enter_now_rows_without_bundles_emits_null_pillars_not_zeros():
+    # The parameter is optional: omitting it must reproduce the pre-fix
+    # behaviour exactly (NULL), never a fabricated 0 that would read as a real
+    # measurement of the worst possible score.
+    cards = [_wl_card(ticker="AAA")]
+    r = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {})[0]
+    for col in ("t_score", "bq_score", "val_score", "s_score", "avg_sent"):
+        assert r[col] is None, col
+
+
+def test_build_enter_now_rows_missing_or_malformed_bundle_is_not_a_crash():
+    cards = [_wl_card(ticker="AAA"), _wl_card(ticker="BBB")]
+    bundles = {"AAA": "not-a-dict"}          # BBB absent entirely
+    rows = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {}, bundles)
+    by_tk = {r["ticker"]: r for r in rows}
+    assert by_tk["AAA"]["t_score"] is None
+    assert by_tk["BBB"]["t_score"] is None
+
+
 def test_build_enter_now_rows_sector_absent_from_map_is_blank_not_a_crash():
     cards = [_wl_card(ticker="ZZZ")]
     rows = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {})

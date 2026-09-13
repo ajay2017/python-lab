@@ -73,7 +73,8 @@ def _spy_return_pct(spy_close_by_date: dict | None, start_d: date | None,
 # ── Capture (Watchlist ENTER_NOW rows) ──────────────────────────────────────
 
 def build_enter_now_rows(recs: list[dict], held_tickers: set, rec_date,
-                         sector_by_ticker: dict) -> list[dict]:
+                         sector_by_ticker: dict,
+                         bundles_by_ticker: dict | None = None) -> list[dict]:
     """
     Build `recommendations`-table rows for every ENTER_NOW card surfaced by
     📋 Watchlist this session, so that verdict gets graded through this same
@@ -99,6 +100,21 @@ def build_enter_now_rows(recs: list[dict], held_tickers: set, rec_date,
     up by the ticker's upper-cased form (the caller is expected to key it that
     way); an unmapped ticker resolves to "".
 
+    `bundles_by_ticker` ({ticker: scored bundle}) supplies the five pillar
+    columns. Added 2026-09-13 (data-integrity finding D8): a live check found
+    100% of enter_now rows carried NULL t_score/bq_score/val_score/s_score/
+    avg_sent, because this row literal simply never emitted them — unlike the
+    new_pick writer, which has since 2026-08-01. Those columns feed F-225
+    Portfolio Q&A's rec-outcome "why" answers, so without them an ENTER_NOW
+    call can be graded but never explained. Grading itself is unaffected:
+    `compute_outcomes` derives alpha from price and trades, never pillars.
+
+    Lookup mirrors the new_pick writer verbatim (`app.py` ~5790-5813) so the
+    two rec_types cannot drift: upper-cased key first, raw key as fallback, and
+    `bq_score` falls back to the legacy `f_score` alias. OPTIONAL by design —
+    omit it and every pillar column lands NULL, which is exactly today's
+    behaviour, so this parameter cannot break an existing caller.
+
     Blank-provenance fields (`conviction`, `verdict`, `thesis`) match the
     `buy_candidate` capture convention in app.py — the Watchlist card's prose
     lives in `summary`/`detail`, deliberately not truncated into these columns.
@@ -107,12 +123,26 @@ def build_enter_now_rows(recs: list[dict], held_tickers: set, rec_date,
     """
     held_upper = {str(t).strip().upper() for t in (held_tickers or set())}
     sector_map = sector_by_ticker or {}
+    bundle_map = bundles_by_ticker or {}
     rows: list[dict] = []
     for card in (recs or []):
         if not isinstance(card, dict) or card.get("action") != "ENTER_NOW":
             continue
         tk = card.get("ticker")
         tk_upper = str(tk).strip().upper()
+        # Explicit `is None`, not `a or b or {}` — the bug-class
+        # check_antipatterns exists to catch, and it flagged the first draft of
+        # this line. The real safety here is the isinstance guard, not the
+        # key chain: a TRUTHY non-dict (a stray string) passed the old `or`
+        # chain and then raised AttributeError on `.get()`, aborting the entire
+        # capture into the caller's except with attempted=0 — one malformed
+        # bundle silently costing every row. Covered by
+        # test_build_enter_now_rows_missing_or_malformed_bundle_is_not_a_crash.
+        _b = bundle_map.get(tk_upper)
+        if _b is None:
+            _b = bundle_map.get(tk)
+        if not isinstance(_b, dict):
+            _b = {}
         rows.append({
             "ticker":           tk,
             "rec_date":         rec_date,
@@ -124,6 +154,13 @@ def build_enter_now_rows(recs: list[dict], held_tickers: set, rec_date,
             "conviction":       "",
             "verdict":          "",
             "thesis":           "",
+            # Pillar capture (D8). Absent bundle -> every column None, i.e. the
+            # pre-2026-09-13 behaviour, never a fabricated zero.
+            "s_score":          _b.get("s_score"),
+            "avg_sent":         _b.get("avg_sent"),
+            "t_score":          _b.get("t_score"),
+            "bq_score":         _b.get("bq_score", _b.get("f_score")),
+            "val_score":        _b.get("val_score"),
             "already_held":     tk_upper in held_upper,
         })
     return rows

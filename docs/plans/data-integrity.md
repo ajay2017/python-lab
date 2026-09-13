@@ -260,7 +260,8 @@ product of Step 0 and should drive execution order.
 |---|---|---|---|
 | **D20** | `or 50` inverts a legitimate 0 pillar score to neutral (`app.py:21504-21508`) | P1 | S |
 | **D19** | All 4 pillar tiles render possibly-fabricated `N/100` with an asserting caption | P1 | S (2 of 4) + D3 |
-| **D8** | Pillar columns missing on 25% of `new_pick` and **100% of `enter_now`** rows | P2 | M |
+| ~~**D8**~~ | `enter_now` half **FIXED**; `new_pick` 25% is NOT a writer bug — see below | P2 | — |
+| **D24** | A fabricated neutral pillar persists into `recommendations` as if measured | P2 | S (both writers) |
 | **D23** | Live-leg cross-check fires outside regular trading hours → alarm fatigue | P2 | S |
 | **D17** | `docs/architecture.md` §6.38 misdocuments `fundamentals_cache` | P2 | XS |
 | — | **Backfill**: 32 `exit_signals` rows unpriced 07-18→08-04, blocking Protective Track Record | P2 | S |
@@ -278,6 +279,51 @@ product of Step 0 and should drive execution order.
 | **D5** | Fractional first buy truncates to 0 | P3 ↓ | No evidence of ever firing; no fractional first position exists. |
 | **D6** | NULL `cash_balance` reads as "no margin debit" | P3 ↓ | Value present and correctly signed (`-13533.79`). |
 | **D13** | Missing `Score` defaults to `50.0` vs `0` in two modules | P3 | Not reachable from `port_df`. Hygiene. |
+
+### D8 · outcome — `enter_now` fixed; `new_pick` reclassified
+**`enter_now` (was 100% NULL) — FIXED.** `build_enter_now_rows` gained an optional
+`bundles_by_ticker` and now emits the same five pillar columns the `new_pick` writer has
+since 2026-08-01, with identical lookup semantics so the two rec_types cannot drift.
+
+**The load-bearing part was the SECOND caller.** `headless_alert_engine.py` (the F-265
+scan lane) was missed on the first pass, and `db.save_recommendations` upserts
+`ON CONFLICT DO NOTHING` with **no UPDATE path anywhere in `db.py`** — so the FIRST writer
+of a `(ticker, rec_date, 'enter_now')` key wins permanently. That lane fires unattended
+daily while the app path needs a 📋 Watchlist visit, so fixing only the app side would have
+been a near no-op in production while reporting success. Caught by Opus review, not by the
+author or by the 5 pure-function tests.
+
+**`new_pick` (25%) is NOT a writer bug — reclassified, not fixed.** `_t_score_for`
+(`app.py` ~5790) looks the ticker up in `_grow_comp_cache`, then `_held_data_cache`, and
+returns `None` when it is in neither. So the composite comes from a lightweight cached path
+while the pillars need the full bundle in hand. The sharper question is therefore not "why
+is the log thin" but **"what was the pick based on"** — those picks may have been *made*
+with less loaded than the ones carrying pillars. Needs a `planner` pass, and it is
+D3-adjacent: provenance is exactly what would make it visible. **Do not "fix" it by
+back-filling a value the engine never had.**
+
+### D24 · A fabricated neutral pillar persists into `recommendations` as if measured
+Surfaced by the Opus reviewer during D8 (2026-09-13), deliberately NOT fixed there.
+
+When `val_available` is false, the bundle still carries `valuation.py`'s fabricated
+neutral **50**, and `avg_sent` is **0.0** on zero headlines (`sentiment.py:36`). Both
+writers — `new_pick` (`app.py` ~5849-5853) and now `enter_now` — persist those values with
+no marker, so F-225 Portfolio Q&A's rec-outcome "why" answers will state "valuation 50" for
+names where valuation was never measurable.
+
+**Why it was not fixed inside D8:** the `enter_now` writer faithfully mirrors the
+pre-existing `new_pick` writer, and correcting only one would *create* the cross-rec_type
+drift that D8 exists to remove. Both must change in one commit.
+
+**The rule already exists in this repo** — CLAUDE.md's queued score-history-capture design
+states it outright: persist `val_score`/`bq_score` as *"NULL, never the fabricated neutral
+50 the pillar returns when unavailable, or the history is silently poisoned with readings
+that never happened."* This is that same rule, applied one table over.
+
+`bq_available` / `val_available` travel in the same bundle, so the fix is mechanical. It is
+squarely D3's class: the composite's provenance is not carried, so the persisted row cannot
+record that it was built on a fabrication. **P2** — corrupts self-assessment, no wrong
+action.
 
 ### Band C — closed, retracted, or informational
 

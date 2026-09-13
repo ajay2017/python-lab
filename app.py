@@ -23916,7 +23916,11 @@ elif page == "📋 Watchlist":
     if db.has_db() and not st.session_state.get("_readonly", False):
         try:
             from stock_analyzer.recommendations_history import build_enter_now_rows
-            _enter_now_rows = build_enter_now_rows(_wl_recs, _wl_held, _today_et(), _wl_sector_map)
+            # _wl_data carries the scored bundles, so the five pillar columns are
+            # captured alongside the composite (D8) — previously 100% NULL here.
+            _enter_now_rows = build_enter_now_rows(
+                _wl_recs, _wl_held, _today_et(), _wl_sector_map, _wl_data
+            )
             if _enter_now_rows:
                 _wl_rec_save_result = db.save_recommendations(_enter_now_rows)
             else:
