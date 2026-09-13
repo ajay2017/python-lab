@@ -269,7 +269,8 @@ to 5432.
 | **D8** | Pillar columns on `recommendations` rows | P2 | M | **HALF** `f1ecc85` — `enter_now` done; `new_pick` 25% **reclassified, needs `planner`** |
 | ~~**D24**~~ | A fabricated neutral pillar persists into `recommendations` as if measured | P2 | S | **DONE** `5943a1c` — all 4 rec_type writers, one commit |
 | ~~**D23**~~ | Live-leg cross-check fires outside regular trading hours → alarm fatigue | P2 | S | **DONE** — both consumer sites, one commit |
-| — | **Backfill**: 32 `exit_signals` rows unpriced 07-18→08-04 | P2 | S | **OPEN** — unblocks Protective Track Record |
+| ~~—~~ | **Backfill**: 32 `exit_signals` rows unpriced 07-18→08-04 | P2 | S | **DONE** — 21 of 32 priced (13 via `daily_snapshots` join, 8 via a one-time historical fetch); 11 remain, none blocking |
+| **D25** | `exit_signals.signal_date` recorded a Saturday/Sunday for 3 tickers on capture's first two days | P3 | — | **NEW, unfixed** — needs its own look at the capture site |
 
 ### Band B — real in code, measured NOT firing. Fix on consequence, not urgency.
 
@@ -409,6 +410,58 @@ and a live fault during regular hours can't be quieted either; only the exact ar
 this finding targets is softened, and even that is disclosed, never dropped. Also confirmed
 `market_status()`'s calendar-staleness edge (past `MARKET_CALENDAR_LAST_YEAR`) fails toward
 `is_open=True` — the safe, over-alarming direction. 15 new tests.
+
+### exit_signals backfill — outcome (`docs/sql/exit-signals-backfill.sql`)
+Of 32 rows with NULL `price_at_signal`, **21 are now priced, 11 correctly remain NULL.**
+
+- **13 rows** — `daily_snapshots` already had the exact `(ticker, signal_date)` close;
+  a straight `UPDATE ... FROM daily_snapshots` join, no external fetch.
+- **8 rows** — a genuine gap: 5 tickers (AMD, FSLR, ISRG, NOW, TEAM) had confirmed **zero**
+  priced EXIT/TRIM row anywhere in the table, verified before writing anything (a
+  per-ticker check, not an assumption). Prices fetched via this repo's own
+  `providers.orchestrator.get_historical_close` (the same yfinance→FMP chain
+  `scripts/backfill_analyst_prices.py` uses), each date-to-close mapping visually
+  confirmed against a wider dated window before writing — `yf.download`'s `end` is
+  exclusive, so an initial same-day window silently returned nothing; caught before any
+  number was used, not after.
+- **11 remain NULL, and all 11 are accounted for:** 6 are genuinely un-fixable (D25,
+  below); 5 (LLY ×2, MU, TSLA, PLTR) were already confirmed not to matter — LLY/MU/TSLA
+  each have a *later* priced EXIT/TRIM for the same ticker elsewhere in the table, so
+  they were never blocking; PLTR's remaining row is WATCH-type, which
+  `protective_track_record.py` drops entirely regardless of price.
+
+### D25 · `exit_signals.signal_date` can record a weekend — mechanism CONFIRMED, still live
+**New finding, surfaced while preparing the backfill above — not fixed.**
+
+FSLR, ISRG and NOW each carry a row dated **2026-07-18 (Saturday)** and **2026-07-19
+(Sunday)**. The market was not open either day, so there is no real close to backfill —
+any price written would be a *different* day's close mislabeled as this weekend's
+`price_at_signal`, the exact fabrication this whole effort exists to prevent. Left NULL
+rather than guessed at.
+
+**First hypothesis (a UTC/ET midnight-boundary bug, the `trade_time.normalize_traded_at`
+class) was checked and was WRONG — corrected rather than left standing.** The commit
+that first shipped this capture (`f86147d`) was itself made on **Saturday 2026-07-18
+12:09 ET**, and its code already used `_today_et()` correctly — properly ET-anchored,
+no naive UTC date math, from day one.
+
+**The real mechanism, confirmed by reading the write path:** `signal_date` records the
+*calendar day the interactive session ran*, not *the trading day the underlying price
+data reflects*. The owner evidently opened the app and rebuilt the Daily Brief over that
+first weekend — a reasonable thing to do testing a brand-new feature — and the
+deterioration signals were computed off Friday's last available close, but stamped with
+the actual Saturday/Sunday date. **There is no weekday guard on the interactive
+exit_signals write path today** (`app.py`, confirmed by grep) — so this is not a
+one-time historical artifact confined to week one. Any weekend visit that rebuilds the
+Daily Brief would reproduce the identical defect right now.
+
+**P3, not P1/P0** — despite being live and reachable, the consequence is narrow and
+non-decision-bearing: it corrupts one historical-analysis column
+(`protective_track_record.py`'s alpha grading, and now this backfill), never a live
+gate, recommendation, or dollar figure. Worth a small guard (skip the interactive write
+when `not is_trading_day(_today_et())`, mirroring `data.is_trading_day`) next time
+`app.py`'s exit_signals capture is touched — not urgent enough to justify its own
+standalone commit today.
 
 ### D19 · All four pillar tiles render fabricated scores as measured
 **Anchors:** `app.py:22659` (Technical), `:22677` (Business Quality), `:22701` (Valuation),
