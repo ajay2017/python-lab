@@ -1,10 +1,10 @@
 # Investor Maturity Roadmap — raising confidence across Offense, Defense and Restraint
 
 **Status 2026-09-13: A1/A2/A4 (read-only analyses) run against real production data — see
-their RESULT blocks below. B1 (score-history capture) SHIPPED as F-269. B2 (gate-ledger
-expansion) designed, decided, ready for implementer + reviewer, not yet built. No C1/C2
-code, no D1 edit, no E1 edit.** This is a design/sequencing document, not a shipped feature
-in itself — B1 is the first item to actually ship out of it.
+their RESULT blocks below. Both Tier-1 items now SHIPPED: B1 (score-history capture) as
+F-269, B2 (gate-ledger expansion) as F-270. No C1/C2 code, no D1 edit, no E1 edit yet.**
+This is a design/sequencing document, not a shipped feature in itself — B1 and B2 are the
+first items to actually ship out of it.
 
 **Owner decisions, 2026-09-13:** tiered evidence-first · risk basis = *disclose first,
 decide later* · selloff gap = *make the blindness visible* · adaptation = **personalize the
@@ -404,26 +404,24 @@ cited per Hard Rule #4.
   decay **readout** may be answering a question that doesn't apply to this book. A4 does not
   block the **capture** itself (cheap, forward-only — starting the clock still wins), but
   **B1's readout design must not be committed to before A4 reports.**
-- **B2 — Expand the Gate Suppression Ledger** to 5 gates currently uncaptured: **G-02**
-  (Rebalancer ADD), **G-05** (sector → Watchlist downgrade), **G-06** (beta → downgrade),
-  **G-13** (R:R → downgrade), **G-18** (breached stop blocks an Analysis add). **This is a
-  scope boundary, not an oversight** — `gate-suppression-ledger.md` deliberately scoped
-  itself to "the nine suppression sites" inside `_grow_today` only.
-  **Opus `planner` design pass complete 2026-09-13: PROCEED, 2 owner decisions pending —
-  full spec in `gate-suppression-ledger.md` §8.** Bigger than originally scoped in one real
-  way, found by the pass, not assumed: `gate_ledger.build_suppression_rows` reads only
-  `grow_today`, and **none of these 5 gates flow through it** (they live in
-  `watchlist_advisor.py`, `rebalancer.py`, and inline in `app.py`'s Analysis page) — so this
-  is 3 new pure builders + 3 new interactive write sites, not an extension of the existing
-  function (which stays untouched). `db.py` needs zero changes. Resolved: `counterfactual =
-  True` at all 5 sites (mirrors G-01's own precedent); two new `lane` values,
-  `"downgrade"` (G-05/06/13) and `"add_suppressed"` (G-02/G-18), so the readout can never
-  blend a downgrade's alpha with a true suppression's; no readout code change needed now.
-  **Both owner decisions made 2026-09-13, both per the planner's recommendation** (§8d):
-  (1) accept the 5 new "building" cards auto-appearing on the existing ledger readout page;
-  (2) G-06's compound gate_value stores the ticker-beta leg, portfolio-beta narrated in text
-  only. **Fully unblocked — ready for `implementer` + mandatory Opus `reviewer`** (confirmed
-  `watchlist_advisor.py` is a `_GATE_FILES` member).
+- **B2 — Expand the Gate Suppression Ledger. SHIPPED 2026-09-13 as F-270.** Covers 5 gates
+  previously uncaptured: **G-02** (Rebalancer ADD), **G-05** (sector → Watchlist downgrade),
+  **G-06** (beta → downgrade), **G-13** (R:R → downgrade), **G-18** (breached stop blocks an
+  Analysis add). **This was a deliberate scope boundary, not an oversight** —
+  `gate-suppression-ledger.md` originally scoped itself to "the nine suppression sites"
+  inside `_grow_today` only. Bigger than originally scoped in one real way, found by the
+  `planner` pass, not assumed: `gate_ledger.build_suppression_rows` reads only
+  `grow_today`, and **none of these 5 gates flow through it** — shipped as 3 new pure
+  builders + 3 new interactive write sites (Watchlist/Rebalancer/Analysis pages), the
+  original function completely untouched. Two new `lane` values, `"downgrade"` (G-05/06/13)
+  and `"add_suppressed"` (G-02/G-18), so the readout can never blend a downgrade's alpha with
+  a true suppression's — required zero changes to `gate_ledger_readout.py` itself. Both
+  owner decisions (§8d) shipped exactly as decided: the 5 new "building" cards now
+  auto-render on the existing ledger readout page; G-06's compound gate_value stores the
+  ticker-beta leg. Opus `reviewer`: **SHIP, 0 blocking** — one non-blocking note acted on in
+  the same commit (the 3 new save-result keys wired into System Trust check ⑥, closing the
+  exact dead-diagnostic gap that check exists to prevent, rather than left as a new
+  instance of it). Full record: `gate-suppression-ledger.md` §8.
 
 ### D. Education — contextual, phase 1
 Decides nothing ⇒ sits entirely outside the `_GATE_FILES` / mandatory-review machinery.
