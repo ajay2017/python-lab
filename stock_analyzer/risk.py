@@ -183,6 +183,69 @@ def position_sizing(
     return out
 
 
+def capital_equivalent_risk(
+    risk_dollars: float,
+    portfolio_value: float,
+    net_capital: float | None,
+    basis: str,
+) -> dict:
+    """Re-express an already-sized per-trade dollar risk in net-capital terms.
+
+    RISK_PCT_PER_TRADE is budgeted against the GROSS book inside
+    position_sizing() (risk_dollars = portfolio_value * risk_pct). Under
+    margin, that same dollar risk is a materially larger share of the
+    capital actually held. This is a disclosure-only re-expression of a
+    number already on screen — it changes no sizing, no gate, no constant.
+
+    Parameters
+    ----------
+    risk_dollars : the per-trade dollar risk to re-express. Callers should
+        pass ps["actual_risk"] (not risk_budget) so the disclosed % lines up
+        with the "Max Risk" figure already shown (ps["risk_pct_actual"]).
+    portfolio_value : the gross book value the risk % was budgeted against.
+    net_capital : equity after margin debit, from margin.resolve_net_capital,
+        or None.
+    basis : margin.resolve_net_capital's own basis string ("unlevered" /
+        "levered" / "stale" / "called"). Required and authoritative — the
+        returned state keys off `basis`, NEVER off `net_capital is None`
+        alone, because net_capital is None in BOTH the "unlevered" and
+        "stale" cases and cannot on its own distinguish "no leverage" from
+        "figure too old to trust".
+
+    Returns an explicit-state dict — never a bare None, so every caller can
+    switch on .get("state") with no falsy-shortcut trap:
+      {"state": "unlevered"}
+          basis == "unlevered" — gross-terms risk already IS the
+          capital-terms risk, nothing more to disclose.
+      {"state": "unknown"}
+          basis in ("stale", "called"), or net_capital is missing/<=0 while
+          not unlevered, or portfolio_value <= 0 — never fabricate a number
+          from absent/untrustworthy data.
+      {"state": "levered", "gross_pct", "capital_pct", "net_capital",
+       "risk_dollars"}
+          basis == "levered" AND net_capital > 0 AND portfolio_value > 0.
+          capital_pct >= gross_pct by construction whenever genuinely
+          levered (net_capital <= portfolio_value under a margin debit).
+    """
+    if basis == "unlevered":
+        return {"state": "unlevered"}
+    if basis != "levered":
+        # "stale", "called", or any other/unrecognized basis — never trust a
+        # leftover net_capital value when the basis itself says don't.
+        return {"state": "unknown"}
+    if net_capital is None or net_capital <= 0 or portfolio_value <= 0:
+        return {"state": "unknown"}
+    gross_pct   = round(risk_dollars / portfolio_value * 100, 2)
+    capital_pct = round(risk_dollars / net_capital * 100, 2)
+    return {
+        "state": "levered",
+        "gross_pct": gross_pct,
+        "capital_pct": capital_pct,
+        "net_capital": net_capital,
+        "risk_dollars": risk_dollars,
+    }
+
+
 def sharpe_ratio(df: pd.DataFrame, risk_free_annual: float = 0.045) -> float:
     returns = df["Close"].pct_change().dropna()
     rf_daily = risk_free_annual / 252

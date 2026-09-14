@@ -63,7 +63,7 @@ from stock_analyzer.fundamentals import (
 )
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
-from stock_analyzer.risk import atr_stop_loss, position_sizing, sizing_unavailable_reason, compute_all_risk, rate_sensitivity_per_ticker
+from stock_analyzer.risk import atr_stop_loss, position_sizing, sizing_unavailable_reason, compute_all_risk, rate_sensitivity_per_ticker, capital_equivalent_risk
 from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations
 from stock_analyzer.earnings_advisor import build_earnings_playbook
 from stock_analyzer import earnings_intel as _earn_intel
@@ -22442,6 +22442,30 @@ elif page == "📈 Analysis":
                                   help="Maximum dollar loss if stop is hit. Should not exceed 1.5–2% of portfolio.")
                         p4.metric("Risk/Share", f"${ps['risk_per_share']:.2f}",
                                   help="Dollar distance from entry to stop per share.")
+
+                        # C2: capital-equivalent risk disclosure — awareness only,
+                        # no sizing/gate change. Reuses the net-capital/basis pair
+                        # already resolved once for this whole page render (F-255).
+                        _c2_cer = capital_equivalent_risk(
+                            ps["actual_risk"], portfolio_value, _f255_net_cap, _f255_basis,
+                        )
+                        if _c2_cer["state"] == "levered":
+                            st.caption(
+                                f"⚖️ That **${ps['actual_risk']:,.0f}** max risk is "
+                                f"**~{_c2_cer['capital_pct']:.1f}% of your net capital** — vs "
+                                f"{ps['risk_pct_actual']:.2f}% of the gross book shown above. "
+                                "Per-trade risk is budgeted against gross book value; under "
+                                "margin it's a larger share of the capital you actually hold. "
+                                "Awareness only — no sizing changed."
+                            )
+                        elif _c2_cer["state"] == "unknown":
+                            st.caption(
+                                "⚖️ The max risk above is budgeted against gross book value. "
+                                "You appear to be using margin, but your account-cash figure "
+                                "is missing or too old to convert it to net-capital terms — "
+                                "update it on 💰 Account to see the capital-equivalent risk."
+                            )
+
                         if ps.get("ceiling_capped"):
                             st.warning(
                                 f"⚠️ **Capped to your {ps['ceiling_pct']:.0f}% single-name ceiling.** "
@@ -24472,6 +24496,29 @@ elif page == "📋 Watchlist":
                     for _cap_line in _sizing_cap_lines(
                             _wl_ps, NET_CAPITAL_POSITION_CAP_PCT):
                         st.caption(_cap_line)
+
+                    # C2: capital-equivalent risk disclosure — awareness only,
+                    # no sizing/gate change. Reuses the net-capital/basis pair
+                    # already resolved once for this whole watchlist render (F-255).
+                    _c2_wl_cer = capital_equivalent_risk(
+                        _wl_ps["actual_risk"], _pv_now, _f255_wl_net_cap, _f255_wl_basis,
+                    )
+                    if _c2_wl_cer["state"] == "levered":
+                        st.caption(
+                            f"⚖️ That **${_wl_ps['actual_risk']:,.0f}** max risk is "
+                            f"**~{_c2_wl_cer['capital_pct']:.1f}% of your net capital** — vs "
+                            f"{_wl_ps['risk_pct_actual']:.2f}% of the gross book shown above. "
+                            "Per-trade risk is budgeted against gross book value; under "
+                            "margin it's a larger share of the capital you actually hold. "
+                            "Awareness only — no sizing changed."
+                        )
+                    elif _c2_wl_cer["state"] == "unknown":
+                        st.caption(
+                            "⚖️ The max risk above is budgeted against gross book value. "
+                            "You appear to be using margin, but your account-cash figure "
+                            "is missing or too old to convert it to net-capital terms — "
+                            "update it on 💰 Account to see the capital-equivalent risk."
+                        )
                 elif _price:
                     # Same two/three-cause split as Analysis — see the note there.
                     _wl_no_size_reason = sizing_unavailable_reason(

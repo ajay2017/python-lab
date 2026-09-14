@@ -12,6 +12,7 @@ from stock_analyzer.risk import (
     atr_stop_loss,
     position_sizing,
     sizing_unavailable_reason,
+    capital_equivalent_risk,
     sharpe_ratio,
     sortino_ratio,
     max_drawdown_pct,
@@ -319,6 +320,102 @@ def test_position_sizing_returns_none_for_negative_book():
 
 def test_position_sizing_returns_none_for_none_book():
     assert position_sizing(None, risk_pct=0.01, entry=100.0, stop=95.0) is None
+
+
+# ─── capital_equivalent_risk (C2 — disclosure only, no sizing change) ────────
+
+def test_cer_unlevered_keys_off_basis_not_net_capital():
+    """basis == 'unlevered' must return 'unlevered' even if a bogus non-None
+    net_capital happens to be passed — the state keys off basis, never off
+    net_capital's own value."""
+    result = capital_equivalent_risk(
+        risk_dollars=300.0, portfolio_value=20000.0,
+        net_capital=99999.0, basis="unlevered",
+    )
+    assert result == {"state": "unlevered"}
+
+
+def test_cer_stale_basis_never_reads_as_levered():
+    """Load-bearing invariant: basis == 'stale' must resolve to 'unknown'
+    even when net_capital happens to be a positive number left over from
+    elsewhere. This is the exact property that must never regress."""
+    result = capital_equivalent_risk(
+        risk_dollars=300.0, portfolio_value=20000.0,
+        net_capital=7802.0, basis="stale",
+    )
+    assert result == {"state": "unknown"}
+
+
+def test_cer_levered_computes_both_percentages_and_capital_pct_dominates():
+    result = capital_equivalent_risk(
+        risk_dollars=300.0, portfolio_value=20000.0,
+        net_capital=7802.0, basis="levered",
+    )
+    assert result["state"] == "levered"
+    assert result["gross_pct"] == round(300.0 / 20000.0 * 100, 2)
+    assert result["capital_pct"] == round(300.0 / 7802.0 * 100, 2)
+    assert result["net_capital"] == 7802.0
+    assert result["risk_dollars"] == 300.0
+    # The leverage invariant: capital-terms risk is always >= gross-terms
+    # risk whenever genuinely levered.
+    assert result["capital_pct"] >= result["gross_pct"]
+
+
+def test_cer_levered_but_net_capital_none_never_fabricates():
+    result = capital_equivalent_risk(
+        risk_dollars=300.0, portfolio_value=20000.0,
+        net_capital=None, basis="levered",
+    )
+    assert result == {"state": "unknown"}
+
+
+def test_cer_called_basis_is_unknown():
+    result = capital_equivalent_risk(
+        risk_dollars=300.0, portfolio_value=20000.0,
+        net_capital=-500.0, basis="called",
+    )
+    assert result == {"state": "unknown"}
+
+
+@pytest.mark.parametrize("bad_net_capital", [0, -100.0])
+def test_cer_non_positive_net_capital_while_levered_is_unknown(bad_net_capital):
+    result = capital_equivalent_risk(
+        risk_dollars=300.0, portfolio_value=20000.0,
+        net_capital=bad_net_capital, basis="levered",
+    )
+    assert result == {"state": "unknown"}
+
+
+@pytest.mark.parametrize("bad_pv", [0, -1.0])
+def test_cer_non_positive_portfolio_value_is_unknown(bad_pv):
+    result = capital_equivalent_risk(
+        risk_dollars=300.0, portfolio_value=bad_pv,
+        net_capital=7802.0, basis="levered",
+    )
+    assert result == {"state": "unknown"}
+
+
+@pytest.mark.parametrize("basis,net_capital", [
+    ("unlevered", None),
+    ("unlevered", 5000.0),
+    ("stale", None),
+    ("stale", 5000.0),
+    ("called", -1.0),
+    ("levered", None),
+    ("levered", 0),
+    ("levered", -1.0),
+])
+def test_cer_only_levered_state_ever_carries_pct_keys(basis, net_capital):
+    """No state other than 'levered' may leak a gross_pct/capital_pct number."""
+    result = capital_equivalent_risk(
+        risk_dollars=300.0, portfolio_value=20000.0,
+        net_capital=net_capital, basis=basis,
+    )
+    assert result["state"] != "levered"
+    assert "gross_pct" not in result
+    assert "capital_pct" not in result
+    assert "net_capital" not in result
+    assert "risk_dollars" not in result
 
 
 # ─── sharpe_ratio / sortino_ratio ─────────────────────────────────────────────
