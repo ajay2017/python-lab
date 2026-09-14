@@ -2214,6 +2214,28 @@ bucket→gate 1:1 map would destroy that distinction. Both score columns are lik
 read from explicit `composite_score` / `momentum_score` keys set at the producer; the
 module does **not** infer which of the two a site's `score` field meant.
 
+**Scope-expansion (roadmap B2, 2026-09-13): 3 more pure builders, `build_suppression_rows`
+itself untouched.** None of G-02/G-05/G-06/G-13/G-18 flow through `grow_today`, so the
+function above structurally cannot see them — they live on the Watchlist, Rebalancer and
+Analysis pages instead. `build_watchlist_suppression_rows(recs, *, rec_date, source,
+sector_by_ticker)` covers G-05/G-06/G-13 via a `_WATCHLIST_KIND` map keyed on each card's
+`suppression_kind` field (only cards that actually went through a hard-breach or in-zone-R:R
+downgrade branch carry this field — an ordinary NEAR_ENTRY/ENTER_NOW card carries `None` and
+emits nothing). `build_rebalance_suppression_rows(risk_blocked_adds, *, rec_date, source)`
+covers G-02. `build_analysis_stop_suppression_row(*, ticker, price, composite_score, stop,
+gap_pct, sector, rec_date, source)` covers G-18, returning one row or `None`. All 5 new
+`gate_id` literals are centralized in this module (not scattered at the call sites), so
+`tests/test_gate_registry.py`'s existing literal-scan continues to cover them unchanged.
+
+**Two new `lane` values, keyed to what the alpha reading actually means:**
+`"downgrade"` (G-05/06/13 — the name still renders as NEAR_ENTRY, so a future readout's
+alpha measures "cost of the timing/full-size call," not "cost of hiding the name entirely")
+vs `"add_suppressed"` (G-02/18 — a true suppression, identical claim shape to the existing
+`"add_winner"` lane). `counterfactual = True` unconditionally at all 3 new builders, mirroring
+G-01's own single-call-site precedent above. `gate_ledger_readout.py` itself needed **zero**
+changes — `enrich_and_grade` only special-cases `lane == "new_pick"`, so both new lanes flow
+straight through to maturity + forward-alpha with no assertion and no crash.
+
 ### `stock_analyzer/gate_ledger_readout.py`
 
 The readout half (F-259b, 2026-08-30) — "🛑 The Road Not Taken". Pure: no DB, no
@@ -2268,14 +2290,19 @@ a provably-missing table reads red/"down"; the inventory maps each cron lane to
 the stores it writes and whether the write is unconditional-daily or conditional),
 ③ provider health (`api_health`), ④ in-session `session_state` producer caches,
 ⑤ reference-data shelf life (thin adapter over `reference_shelf.py`, see below),
-⑥ **interactive write outcomes (added 2026-09-01, extended 2026-09-09)** — grades
-`check_write_outcomes()` against dead-diagnostic dicts app.py already wrote to
-`session_state` but never rendered: `_rec_log_save_result`/`_gate_ledger_save_result`
-(each shaped `{"attempted", "saved", "error"}`, written on the interactive Grow Today
-build path) plus `_wl_rec_save_result` (same shape, written on the 📋 Watchlist page
-by the F-264 ENTER_NOW capture — "unknown" here is the expected common case on any
-session that hasn't visited Watchlist yet, not a defect). The cron lane's equivalent
-writes have no session to publish into and stay console-logged. Before this, a caught
+⑥ **interactive write outcomes (added 2026-09-01, extended 2026-09-09, extended again
+2026-09-13 for roadmap B2)** — grades `check_write_outcomes()` against dead-diagnostic
+dicts app.py already wrote to `session_state` but never rendered:
+`_rec_log_save_result`/`_gate_ledger_save_result` (each shaped `{"attempted", "saved",
+"error"}`, written on the interactive Grow Today build path) plus `_wl_rec_save_result`
+(same shape, written on the 📋 Watchlist page by the F-264 ENTER_NOW capture — "unknown"
+here is the expected common case on any session that hasn't visited Watchlist yet, not a
+defect), plus `_wl_gate_ledger_save_result`/`_rb_gate_ledger_save_result`/
+`_an_gate_ledger_save_result` (same shape, one per new B2 gate-ledger capture site —
+Watchlist/Rebalancer/Analysis respectively — wired in the SAME commit the capture sites
+themselves shipped in, precisely to avoid recreating the dead-diagnostic gap this check
+exists to close). The cron lane's equivalent writes have no session to publish into and
+stay console-logged. Before this, a caught
 write exception (`error` set) rendered
 identically to a healthy no-op (`attempted=0`) — the absent-key case (`unknown`,
 "not attempted this session") is kept distinct from the present-but-clean-zero case

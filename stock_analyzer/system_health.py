@@ -260,7 +260,7 @@ _CACHES: tuple[tuple[str, str], ...] = (
 
 
 # ── Interactive write-outcome diagnostics (check ⑥) ────────────────────────────
-# Both dicts are shaped {"attempted": int, "saved": int, "error": str | None},
+# All dicts are shaped {"attempted": int, "saved": int, "error": str | None},
 # written only on the APP-interactive path (Grow Today build in app.py) inside
 # their own try/except. The cron lane's equivalent writes (cron_runner.py) have
 # no Streamlit session to publish into — their outcome is console-logged only,
@@ -271,6 +271,17 @@ _WRITE_OUTCOMES: tuple[tuple[str, str], ...] = (
     # Written on the Watchlist page, not Grow Today — "unknown" here is the
     # expected common case on any session that hasn't visited 📋 Watchlist yet.
     ("_wl_rec_save_result",      "Watchlist Ready-to-Enter log"),
+    # Roadmap B2 (2026-09-13) — the 3 new gate-ledger capture sites, each on a
+    # different page than the original _gate_ledger_save_result (which is
+    # Grow Today's own 9-site capture). "unknown" is the expected common case
+    # on any session that hasn't visited that specific page yet — same
+    # reasoning as _wl_rec_save_result above. Added proactively (the reviewer
+    # who shipped B2 flagged this as the exact dead-diagnostic shape System
+    # Trust check 6 was built to close for the original key) rather than left
+    # as a silent gap to be rediscovered later.
+    ("_wl_gate_ledger_save_result", "Watchlist gate suppression capture (G-05/06/13)"),
+    ("_rb_gate_ledger_save_result", "Rebalancer gate suppression capture (G-02)"),
+    ("_an_gate_ledger_save_result", "Analysis gate suppression capture (G-18)"),
 )
 
 

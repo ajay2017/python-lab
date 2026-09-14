@@ -220,6 +220,22 @@ def test_build_rebalance_plan_add_suppressed_by_risk_trim_set():
     assert "Risk Advisor recommends trimming" in result["risk_blocked_adds"][0]["reason"]
 
 
+def test_risk_blocked_add_carries_price_composite_and_sector():
+    """Gate Suppression Ledger (roadmap B2, 2026-09-13) — G-02 capture needs
+    price/composite_score/sector on the risk_blocked_adds row; these must be
+    the SAME values already in loop scope (row["Price ($)"]/row["Score"]/
+    row["Sector"]), never refetched."""
+    df = pd.DataFrame([_drift_row(
+        "AAPL", "ADD", -8.0, -8000.0, signal="Buy", score=70.0,
+        price=142.5, sector="Technology",
+    )])
+    result = reb.build_rebalance_plan(df, total_val=100_000.0, risk_trim_set={"AAPL"})
+    blocked = result["risk_blocked_adds"][0]
+    assert blocked["price"] == pytest.approx(142.5)
+    assert blocked["composite_score"] == pytest.approx(70.0)
+    assert blocked["sector"] == "Technology"
+
+
 def test_build_rebalance_plan_add_risk_trim_set_case_insensitive():
     df = pd.DataFrame([_drift_row("aapl", "ADD", -8.0, -8000.0)])
     result = reb.build_rebalance_plan(df, total_val=100_000.0, risk_trim_set={"AAPL"})

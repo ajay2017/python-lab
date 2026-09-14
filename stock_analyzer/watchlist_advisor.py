@@ -120,6 +120,10 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None) -> dict | None
                 f"Opening here would push concentration beyond the {SECTOR_CEILING:.0f}% "
                 "institutional single-sector ceiling — a single sector shock could swamp the rest of the book."
             ),
+            # Gate Suppression Ledger (roadmap B2, 2026-09-13) — G-05's
+            # structured gate_value/gate_threshold columns.
+            "gate_value":     sector_wt,
+            "gate_threshold": SECTOR_CEILING,
         }
 
     # ── Hard breach: high portfolio beta + critical ticker beta ─────────────
@@ -133,6 +137,12 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None) -> dict | None
                 f"Adding a β **{ticker_beta:.2f}** name compounds market sensitivity — "
                 "in a 10% correction this position would amplify the existing drag, not diversify it."
             ),
+            # G-06's compound gate is (port_beta, ticker_beta) — decided
+            # 2026-09-13 to store the per-instrument leg only; the
+            # portfolio-beta leg stays narrated in `reason` above, never in
+            # the structured columns (docs/plans/gate-suppression-ledger.md §8d.2).
+            "gate_value":     ticker_beta,
+            "gate_threshold": TICKER_BETA_CRITICAL,
         }
 
     # ── Soft concerns: warn but keep ENTER_NOW ───────────────────────────────
@@ -406,6 +416,12 @@ def build_watchlist_recommendation(
                     "Skipping this check is how concentration and beta drift quietly accumulate."
                 ),
                 portfolio_caution=gate["reason"],
+                # Gate Suppression Ledger (roadmap B2, 2026-09-13) — this is
+                # the ONLY branch that emits G-05/G-06 (discriminated by
+                # gate["kind"]); every other card leaves these None.
+                suppression_kind=gate["kind"],
+                gate_value=gate.get("gate_value"),
+                gate_threshold=gate.get("gate_threshold"),
             )
 
         soft_caution = gate["reason"] if (gate and gate["severity"] == "soft") else None
@@ -524,6 +540,14 @@ def build_watchlist_recommendation(
                 "never size a position off price alone — target, stop, and entry all have to "
                 "line up before capital moves. Refresh the data before entering; don't skip the check."
             ),
+            # Gate Suppression Ledger (roadmap B2, 2026-09-13) — this branch
+            # is G-13 specifically (in-zone, R:R not validated). The separate
+            # "approaching zone" NEAR_ENTRY branch below (no R:R involved)
+            # must NEVER set this — that is the load-bearing boundary a test
+            # asserts directly.
+            suppression_kind="rr",
+            gate_value=rr,
+            gate_threshold=RR_ENTRY_MIN,
         )
 
     # ── NEAR ENTRY ───────────────────────────────────────────────────────────
@@ -653,6 +677,14 @@ def _card(
     stop, rr, earn_days, title, summary, detail,
     conditions_met, conditions_missing, institutional_lens,
     portfolio_caution: str | None = None,
+    # Gate Suppression Ledger (roadmap B2, 2026-09-13) — additive, default
+    # None so every ordinary card (that never goes through a suppression
+    # branch) is unaffected. Only the hard-breach (G-05/G-06) and in-zone-R:R
+    # (G-13) branches set these. Consumed by
+    # gate_ledger.build_watchlist_suppression_rows.
+    suppression_kind: str | None = None,
+    gate_value: float | None = None,
+    gate_threshold: float | None = None,
 ) -> dict:
     priority = _ACTION_PRIORITY.get(action, "MONITOR")
 
@@ -691,4 +723,7 @@ def _card(
         "conditions_missing": [c for c in conditions_missing if c],
         "institutional_lens":       institutional_lens,
         "portfolio_caution":  portfolio_caution,
+        "suppression_kind":   suppression_kind,
+        "gate_value":         gate_value,
+        "gate_threshold":     gate_threshold,
     }

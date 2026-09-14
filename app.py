@@ -17742,6 +17742,27 @@ elif page == "🥧 Portfolio Overview":
             reduce_call_set=_rb_reduce_set,
         )
 
+        # ── Gate Suppression Ledger capture: G-02 (roadmap B2, 2026-09-13) ──
+        # Persists Rebalancer ADDs suppressed by an active Risk Advisor TRIM
+        # so this restraint can be graded the same way Grow Today's 9 gates
+        # already are — G-02 doesn't flow through grow_today, so it needs its
+        # own builder (gate_ledger.build_rebalance_suppression_rows). Own
+        # try/except — a failure here must never disturb the rendered plan.
+        if db.has_db() and not st.session_state.get("_readonly", False):
+            try:
+                from stock_analyzer.gate_ledger import build_rebalance_suppression_rows
+                _rb_gl_rows = build_rebalance_suppression_rows(
+                    _rb_plan.get("risk_blocked_adds"), rec_date=_today_et(), source="app",
+                )
+                if _rb_gl_rows:
+                    _rb_gate_ledger_save_result = db.save_gate_suppressions(_rb_gl_rows)
+                else:
+                    _rb_gate_ledger_save_result = {"attempted": 0, "saved": 0, "error": None}
+            except Exception as _rb_gl_save_err:
+                _rb_gate_ledger_save_result = {"attempted": 0, "saved": 0,
+                                                "error": str(_rb_gl_save_err)[:200]}
+            st.session_state["_rb_gate_ledger_save_result"] = _rb_gate_ledger_save_result
+
         # KPI summary
         _rb_k1, _rb_k2, _rb_k3, _rb_k4 = st.columns(4)
         _n_trim  = len(_rb_plan["trims"])
@@ -22171,6 +22192,31 @@ elif page == "📈 Analysis":
                             "don't add into a breach.</small></div>",
                             unsafe_allow_html=True,
                         )
+
+                        # ── Gate Suppression Ledger capture: G-18 (roadmap B2,
+                        # 2026-09-13) ────────────────────────────────────────
+                        # Persists this stop-breach suppression (the banner
+                        # above already renders it — G-18's own behavior is
+                        # not new, only its capture is) so this restraint can
+                        # be graded the same way Grow Today's 9 gates already
+                        # are. Own try/except — a failure here must never
+                        # disturb the rendered banner.
+                        if db.has_db() and not st.session_state.get("_readonly", False):
+                            try:
+                                from stock_analyzer.gate_ledger import build_analysis_stop_suppression_row
+                                _an_gl_row = build_analysis_stop_suppression_row(
+                                    ticker=ticker, price=price, composite_score=r.get("total"),
+                                    stop=_sa_stop, gap_pct=_br_gap, sector=r.get("sector"),
+                                    rec_date=_today_et(), source="app",
+                                )
+                                if _an_gl_row:
+                                    _an_gate_ledger_save_result = db.save_gate_suppressions([_an_gl_row])
+                                else:
+                                    _an_gate_ledger_save_result = {"attempted": 0, "saved": 0, "error": None}
+                            except Exception as _an_gl_save_err:
+                                _an_gate_ledger_save_result = {"attempted": 0, "saved": 0,
+                                                                "error": str(_an_gl_save_err)[:200]}
+                            st.session_state["_an_gate_ledger_save_result"] = _an_gate_ledger_save_result
                     elif _under_reduce:
                         # Held name under a Brief Reduce/Exit call (trend/deterioration,
                         # sell signal, risk-off trim) but stop NOT yet breached — e.g.
@@ -23989,6 +24035,31 @@ elif page == "📋 Watchlist":
             _wl_rec_save_result = {"attempted": 0, "saved": 0,
                                     "error": str(_wl_rec_save_err)[:200]}
         st.session_state["_wl_rec_save_result"] = _wl_rec_save_result
+
+    # ── Gate Suppression Ledger capture: G-05/G-06/G-13 downgrades (roadmap
+    # B2, 2026-09-13) ──────────────────────────────────────────────────────
+    # Persists Watchlist ENTER_NOW downgrades (sector/beta hard-breach, R:R
+    # not validated) so this restraint can be graded the same way Grow
+    # Today's 9 gates already are — none of these 3 flow through grow_today,
+    # so they need their own builder (gate_ledger.build_watchlist_
+    # suppression_rows), not an extension of the existing one. Same triple
+    # guard as the rec-log capture above; own try/except so a failure here
+    # can never disturb the rendered cards or _wl_rec_save_result.
+    if db.has_db() and not st.session_state.get("_readonly", False):
+        try:
+            from stock_analyzer.gate_ledger import build_watchlist_suppression_rows
+            _wl_gl_rows = build_watchlist_suppression_rows(
+                _wl_recs, rec_date=_today_et(), source="app",
+                sector_by_ticker=_wl_sector_map,
+            )
+            if _wl_gl_rows:
+                _wl_gate_ledger_save_result = db.save_gate_suppressions(_wl_gl_rows)
+            else:
+                _wl_gate_ledger_save_result = {"attempted": 0, "saved": 0, "error": None}
+        except Exception as _wl_gl_save_err:
+            _wl_gate_ledger_save_result = {"attempted": 0, "saved": 0,
+                                            "error": str(_wl_gl_save_err)[:200]}
+        st.session_state["_wl_gate_ledger_save_result"] = _wl_gate_ledger_save_result
 
     # ── KPI summary strip ─────────────────────────────────────────────────────
     _wl_enter    = sum(1 for r in _wl_recs if r["action"] == "ENTER_NOW")

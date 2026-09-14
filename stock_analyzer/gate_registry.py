@@ -23,4 +23,11 @@ GATE_IDS: dict[str, str] = {
     "G-20": "Early-deterioration WATCH → add-to-winner suppressed",
     "G-23": "Bear-day tone → all new entries deferred",
     "G-24": "Post-add cooldown → add-to-winner suppressed",
+    # Roadmap B2 (2026-09-13) — Watchlist/Rebalancer/Analysis gates, none of
+    # which flow through grow_today; see gate_ledger.py's three new builders.
+    "G-02": "Risk Advisor TRIM → Rebalancer ADD suppressed",
+    "G-05": "Sector at hard ceiling (35%) → Watchlist ENTER_NOW downgraded to NEAR_ENTRY",
+    "G-06": "Portfolio β + ticker β both breached → Watchlist ENTER_NOW downgraded to NEAR_ENTRY",
+    "G-13": "ENTER_NOW without validated R:R → Watchlist downgraded to NEAR_ENTRY",
+    "G-18": "Held position stop breached → Analysis add-to-position sizing suppressed",
 }

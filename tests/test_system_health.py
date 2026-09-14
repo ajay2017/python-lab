@@ -245,6 +245,11 @@ def test_write_outcome_absent_key_is_unknown():
     # _wl_rec_save_result is written on 📋 Watchlist, not Grow Today — "unknown"
     # here is the EXPECTED common case on any session that hasn't visited it yet.
     assert outcomes["_wl_rec_save_result"]["severity"] == "unknown"
+    # Roadmap B2 (2026-09-13) — same reasoning for the 3 new per-page gate-
+    # ledger capture keys: each is "unknown" until that specific page is visited.
+    assert outcomes["_wl_gate_ledger_save_result"]["severity"] == "unknown"
+    assert outcomes["_rb_gate_ledger_save_result"]["severity"] == "unknown"
+    assert outcomes["_an_gate_ledger_save_result"]["severity"] == "unknown"
 
 
 def test_write_outcome_watchlist_enter_now_error_is_down():
@@ -267,6 +272,37 @@ def test_write_outcome_watchlist_enter_now_nothing_to_record_is_ok():
     container = {"_wl_rec_save_result": {"attempted": 0, "saved": 0, "error": None}}
     outcomes = {r["key"]: r for r in sh.check_write_outcomes(container)}
     assert outcomes["_wl_rec_save_result"]["severity"] == "ok"
+
+
+def test_write_outcome_gate_ledger_b2_keys_error_is_down():
+    """The 3 new roadmap-B2 per-page gate-ledger capture keys (2026-09-13)
+    follow the identical grading contract as every other write-outcome key —
+    added proactively so a silent failure on any of the 3 new capture sites
+    (Watchlist/Rebalancer/Analysis) is never a dead diagnostic."""
+    container = {
+        "_wl_gate_ledger_save_result": {"attempted": 2, "saved": 0, "error": "boom"},
+        "_rb_gate_ledger_save_result": {"attempted": 1, "saved": 0, "error": "boom"},
+        "_an_gate_ledger_save_result": {"attempted": 1, "saved": 0, "error": "boom"},
+    }
+    outcomes = {r["key"]: r for r in sh.check_write_outcomes(container)}
+    assert outcomes["_wl_gate_ledger_save_result"]["severity"] == "down"
+    assert outcomes["_rb_gate_ledger_save_result"]["severity"] == "down"
+    assert outcomes["_an_gate_ledger_save_result"]["severity"] == "down"
+
+
+def test_write_outcome_gate_ledger_b2_keys_nothing_to_record_is_ok():
+    """attempted=0 (no suppressed cards that page-visit) → 'ok', not 'unknown' —
+    confirms the 3 new keys share the same nothing-to-record-is-ok contract as
+    every existing write-outcome key, not a special case."""
+    container = {
+        "_wl_gate_ledger_save_result": {"attempted": 0, "saved": 0, "error": None},
+        "_rb_gate_ledger_save_result": {"attempted": 0, "saved": 0, "error": None},
+        "_an_gate_ledger_save_result": {"attempted": 0, "saved": 0, "error": None},
+    }
+    outcomes = {r["key"]: r for r in sh.check_write_outcomes(container)}
+    assert outcomes["_wl_gate_ledger_save_result"]["severity"] == "ok"
+    assert outcomes["_rb_gate_ledger_save_result"]["severity"] == "ok"
+    assert outcomes["_an_gate_ledger_save_result"]["severity"] == "ok"
 
 
 def test_write_outcome_error_is_down():

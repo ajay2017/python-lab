@@ -278,6 +278,11 @@ def build_rebalance_plan(
                         f"Risk Advisor recommends trimming **{ticker}** (beta or Sharpe drag). "
                         "Rebalance ADD suppressed — resolve the investment-level trim first."
                     ),
+                    # Gate Suppression Ledger (roadmap B2, 2026-09-13) — G-02
+                    # capture. All three already in loop scope; no recompute.
+                    "price":           price,
+                    "composite_score": score,
+                    "sector":          sector,
                 })
                 continue
 

@@ -4,6 +4,7 @@ coverage despite containing an actual portfolio-risk GATE
 (_portfolio_risk_gate) that can downgrade a stock-level ENTER_NOW call.
 """
 from stock_analyzer.constants import (
+    PORTFOLIO_BETA_CEILING,
     PORTFOLIO_BETA_ELEVATED,
     SECTOR_CEILING,
     SECTOR_ELEVATED,
@@ -405,6 +406,113 @@ def test_near_entry_when_price_moderately_above_zone():
         "XYZ", _base_data(current_price=105.0, entry_lo=90.0, entry_hi=100.0)
     )
     assert rec["action"] == "NEAR_ENTRY"
+
+
+# ─── Gate Suppression Ledger fields (roadmap B2, 2026-09-13) ─────────────────
+# `suppression_kind`/`gate_value`/`gate_threshold` are additive card fields
+# consumed by gate_ledger.build_watchlist_suppression_rows. The single most
+# important invariant here: the ORDINARY "approaching zone" NEAR_ENTRY card
+# (no R:R involved) must NEVER carry a suppression_kind — only the hard
+# portfolio-breach (G-05/G-06) and in-zone-R:R (G-13) branches do.
+
+def test_ordinary_enter_now_card_has_no_suppression_kind():
+    rec = build_watchlist_recommendation("XYZ", _base_data())
+    assert rec["action"] == "ENTER_NOW"
+    assert rec["suppression_kind"] is None
+    assert rec["gate_value"] is None
+    assert rec["gate_threshold"] is None
+
+
+def test_approaching_zone_near_entry_card_has_no_suppression_kind():
+    """LOAD-BEARING: the approaching-zone branch (watchlist_advisor.py:530,
+    `pct_above <= 8`, no R:R involved) emits action=NEAR_ENTRY but must NEVER
+    be mistaken for a G-13 downgrade — it is a plain price-distance state,
+    not a suppression. A gate_ledger builder that inferred a row from
+    action=="NEAR_ENTRY" alone (without also checking suppression_kind) would
+    wrongly record a G-13 row here every single day this branch fires."""
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(current_price=105.0, entry_lo=90.0, entry_hi=100.0)
+    )
+    assert rec["action"] == "NEAR_ENTRY"
+    assert "Approaching Entry Zone" in rec["title"]
+    assert rec["suppression_kind"] is None
+    assert rec["gate_value"] is None
+    assert rec["gate_threshold"] is None
+
+
+def test_g13_in_zone_low_rr_card_carries_suppression_kind_rr():
+    rec = build_watchlist_recommendation("XYZ", _base_data(targets={"base": 115.0}))
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["title"] == "XYZ — In Entry Zone, R:R Not Yet Validated"
+    assert rec["suppression_kind"] == "rr"
+    assert rec["gate_value"] == pytest.approx(1.5)   # (115-100)/(100-90)
+    from stock_analyzer.constants import RR_ENTRY_MIN
+    assert rec["gate_threshold"] == pytest.approx(RR_ENTRY_MIN)
+
+
+def test_g13_in_zone_missing_target_card_carries_suppression_kind_rr():
+    rec = build_watchlist_recommendation("XYZ", _base_data(targets={}))
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["suppression_kind"] == "rr"
+    assert rec["gate_value"] is None   # rr stays None -- no target at all
+
+
+def test_g05_sector_hard_breach_card_carries_suppression_kind_sector():
+    ctx = {"sector_weight_pct": 40.0, "sector_of_ticker": "Technology"}
+    rec = build_watchlist_recommendation("XYZ", _base_data(), portfolio_ctx=ctx)
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["suppression_kind"] == "sector"
+    assert rec["gate_value"] == pytest.approx(40.0)
+    assert rec["gate_threshold"] == pytest.approx(SECTOR_CEILING)
+
+
+def test_g05_sector_at_exact_ceiling_fires_but_elevated_does_not():
+    """Boundary: SECTOR_CEILING (35.0, hard) fires the downgrade;
+    SECTOR_ELEVATED (25.0, soft) keeps ENTER_NOW with a caution only —
+    the roadmap B2 framing correction (§8a) pins this distinction."""
+    ctx_hard = {"sector_weight_pct": SECTOR_CEILING, "sector_of_ticker": "Technology"}
+    rec_hard = build_watchlist_recommendation("XYZ", _base_data(), portfolio_ctx=ctx_hard)
+    assert rec_hard["action"] == "NEAR_ENTRY"
+    assert rec_hard["suppression_kind"] == "sector"
+
+    ctx_soft = {"sector_weight_pct": SECTOR_ELEVATED, "sector_of_ticker": "Technology"}
+    rec_soft = build_watchlist_recommendation("XYZ", _base_data(), portfolio_ctx=ctx_soft)
+    assert rec_soft["action"] == "ENTER_NOW"
+    assert rec_soft["suppression_kind"] is None
+
+
+def test_g06_beta_hard_breach_card_carries_suppression_kind_beta():
+    ctx = {"portfolio_beta": 1.5}   # > PORTFOLIO_BETA_CEILING (1.4)
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(risk_metrics={"beta": 2.0}), portfolio_ctx=ctx
+    )  # ticker_beta 2.0 > TICKER_BETA_CRITICAL (1.8)
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["suppression_kind"] == "beta"
+    # Decided 2026-09-13 (§8d.2): store the ticker-beta leg only; the
+    # portfolio-beta leg stays narrated in `reason`/`portfolio_caution` text.
+    assert rec["gate_value"] == pytest.approx(2.0)
+    from stock_analyzer.constants import TICKER_BETA_CRITICAL
+    assert rec["gate_threshold"] == pytest.approx(TICKER_BETA_CRITICAL)
+
+
+def test_g06_beta_both_legs_required_ticker_beta_alone_not_enough():
+    """Compound gate: portfolio beta alone over ceiling, but ticker beta at
+    exactly the critical threshold (not strictly above) -- must NOT fire."""
+    ctx = {"portfolio_beta": 1.5}
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(risk_metrics={"beta": 1.8}), portfolio_ctx=ctx
+    )  # ticker_beta == TICKER_BETA_CRITICAL (1.8), not > -- gate uses strict >
+    assert rec["suppression_kind"] is None
+
+
+def test_g06_beta_both_legs_required_portfolio_beta_alone_not_enough():
+    """Compound gate: ticker beta over critical, but portfolio beta at
+    exactly the ceiling (not strictly above) -- must NOT fire."""
+    ctx = {"portfolio_beta": PORTFOLIO_BETA_CEILING}
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(risk_metrics={"beta": 2.0}), portfolio_ctx=ctx
+    )
+    assert rec["suppression_kind"] is None
 
 
 def test_wait_entry_when_price_far_above_zone():

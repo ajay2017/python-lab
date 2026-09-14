@@ -567,3 +567,65 @@ def test_readout_footnotes_g23_flags_no_instrument():
 def test_readout_footnotes_unknown_gate_returns_empty():
     assert glr.readout_footnotes("G-04") == []
     assert glr.readout_footnotes("G-99") == []
+
+
+# ─── roadmap B2 (2026-09-13) — new-lane smoke tests ─────────────────────────
+# The readout needs ZERO code changes for the 5 new gates (G-02/G-05/G-06/
+# G-13/G-18): enrich_and_grade only branches on lane == "new_pick", and
+# grade_by_gate never reads lane at all. These pin that a mixed population
+# including the two new lanes ("downgrade", "add_suppressed") doesn't crash
+# and that every row still gets exactly one status.
+
+def test_downgrade_lane_row_bypasses_new_pick_composite_filter():
+    """A 'downgrade'-lane row (G-05/G-06/G-13) must NOT be subjected to the
+    new_pick composite floor -- that filter is keyed on lane=='new_pick'
+    literally, so a null/low composite on a downgrade row must still reach
+    maturity/pricing like any add-lane row does."""
+    rows = [_row(gate_id="G-13", lane="downgrade", composite_score=None)]
+    out = glr.enrich_and_grade(
+        rows, today=TARGET_DATE, spy_close_by_date=_spy_flat(REC_DATE, TARGET_DATE),
+        historical_close_fn=lambda t, s, e: 105.0,
+        horizon_trading_days=HORIZON, composite_buy=COMPOSITE_BUY,
+    )
+    assert out[0]["status"] == glr.STATUS_MATURED_EVALUABLE
+
+
+def test_add_suppressed_lane_row_reaches_maturity_pricing_normally():
+    rows = [_row(gate_id="G-02", lane="add_suppressed", composite_score=None)]
+    out = glr.enrich_and_grade(
+        rows, today=TARGET_DATE, spy_close_by_date=_spy_flat(REC_DATE, TARGET_DATE),
+        historical_close_fn=lambda t, s, e: 105.0,
+        horizon_trading_days=HORIZON, composite_buy=COMPOSITE_BUY,
+    )
+    assert out[0]["status"] == glr.STATUS_MATURED_EVALUABLE
+
+
+def test_mixed_population_including_new_lanes_every_row_gets_one_status():
+    """No row is ever dropped -- the invariant must hold for the new lanes
+    too, in a population mixed with the original 9-site lanes."""
+    rows = [
+        _row(gate_id="G-04", lane="add_winner", ticker="AAA"),
+        _row(gate_id="G-07", lane="new_pick", ticker="BBB", composite_score=COMPOSITE_BUY),
+        _row(gate_id="G-02", lane="add_suppressed", ticker="CCC"),
+        _row(gate_id="G-05", lane="downgrade", ticker="DDD"),
+        _row(gate_id="G-06", lane="downgrade", ticker="EEE"),
+        _row(gate_id="G-13", lane="downgrade", ticker="FFF"),
+        _row(gate_id="G-18", lane="add_suppressed", ticker="GGG"),
+    ]
+    out = glr.enrich_and_grade(
+        rows, today=TARGET_DATE, spy_close_by_date=_spy_flat(REC_DATE, TARGET_DATE),
+        historical_close_fn=lambda t, s, e: 105.0,
+        horizon_trading_days=HORIZON, composite_buy=COMPOSITE_BUY,
+    )
+    assert len(out) == len(rows)
+    assert all(r.get("status") for r in out)
+
+    graded = glr.grade_by_gate(
+        out, gate_ids=("G-02", "G-05", "G-06", "G-13", "G-18"),
+        min_calls=GATE_LEDGER_MIN_CALLS, firm_calls=GATE_LEDGER_FIRM_CALLS,
+        min_tickers=GATE_LEDGER_MIN_TICKERS,
+    )
+    # One independent headline per new gate_id, in the requested order.
+    assert [g["gate_id"] for g in graded] == ["G-02", "G-05", "G-06", "G-13", "G-18"]
+    for g in graded:
+        assert g["n_matured_evaluable"] == 1
