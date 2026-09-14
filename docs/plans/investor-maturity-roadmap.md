@@ -1,10 +1,9 @@
 # Investor Maturity Roadmap — raising confidence across Offense, Defense and Restraint
 
 **Status 2026-09-14: A1/A2/A4 (read-only analyses) run against real production data — see
-their RESULT blocks below. Tier 1 SHIPPED: B1 (F-269), B2 (F-270). Tier 2 in progress: C1
-(risk-off visibility) SHIPPED as F-271; C2 (capital-equivalent risk) designed, decided,
-next to build. No D1 edit, no E1 edit yet.** This is a design/sequencing document, not a
-shipped feature in itself — B1/B2/C1 are the items shipped out of it so far.
+their RESULT blocks below. Tier 1 SHIPPED: B1 (F-269), B2 (F-270). Tier 2 SHIPPED: C1
+(F-271), C2 (F-272). No D1 edit, no E1 edit yet.** This is a design/sequencing document,
+not a shipped feature in itself — B1/B2/C1/C2 are the items shipped out of it so far.
 
 **Owner decisions, 2026-09-13:** tiered evidence-first · risk basis = *disclose first,
 decide later* · selloff gap = *make the blindness visible* · adaptation = **personalize the
@@ -462,8 +461,8 @@ Cheapest and lowest-risk capability class in the app, and currently the thinnest
   unchanged — absent data still never arms a trim.** Opus reviewer: SHIP, 0 blocking. Full
   detail: `docs/requirements.md` F-271; `docs/architecture.md`'s exit_advisor.py Known
   Behaviours row.
-- **C2 — Capital-equivalent risk disclosure. Designed and decided 2026-09-14, next to
-  build.** No behaviour change, no gate, no constant. `RISK_PCT_PER_TRADE` keeps
+- **C2 — Capital-equivalent risk disclosure. SHIPPED 2026-09-14 as F-272.** No behaviour
+  change, no gate, no constant. `RISK_PCT_PER_TRADE` keeps
   multiplying the gross book (`risk.py`'s `position_sizing`); show what that means in
   capital terms beside it, so the ~4.7%-of-capital reality at current leverage is visible
   before any policy decision. **Reconciliation finding, not assumed:** of the "five existing
