@@ -2938,6 +2938,12 @@ start, including wake-from-sleep. `app.py::_check_password()` additionally has a
 materialized file already covers it) plus a brute-force lockout (3+ fails → 2s delay, 10 fails →
 5-min lockout via `_login_fails`/`_login_locked_until` session_state keys) — Railway has no
 Streamlit-native "Private app" OAuth layer, so the password gate needed its own rate limiting.
+Auth state otherwise lives only in `st.session_state`, which any Railway redeploy/worker restart
+wipes — a signed 30-day "remember me" cookie (`drishta_auth`, via `extra_streamlit_components`)
+survives that, restoring `auth_ok`/`auth_role` on a fresh page load without re-entering the
+password. The cookie payload is `role:expiry:hmac`, signed with a key derived from `APP_PASSWORD`
+itself, so rotating that env var silently invalidates every outstanding cookie — there is no
+separate cookie secret and no logout/revoke UI.
 
 ### 9.2 Deployment Process
 

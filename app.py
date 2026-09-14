@@ -43,8 +43,10 @@ def _provider_label(name: str) -> str:
     }.get(name, str(name).replace("_", " ").title())
 
 import hmac
+import hashlib
 import html as _html
 import time
+import extra_streamlit_components as stx
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
     fetch_spy, fetch_tlt, fetch_vix, fetch_live_prices, fetch_market_indices, market_status,
@@ -2569,6 +2571,52 @@ def _fill_news_slot(slot, items: list) -> None:
 
 
 # ── Password gate ─────────────────────────────────────────────────────────────
+_AUTH_COOKIE_NAME = "drishta_auth"
+_AUTH_COOKIE_DAYS = 30
+
+
+def _auth_cookie_sign_key(owner_password):
+    """HMAC key derived from the owner password, so rotating APP_PASSWORD
+    invalidates every outstanding "remember me" cookie with no separate
+    secret to manage."""
+    return hashlib.sha256(("drishta-auth-cookie:" + owner_password).encode()).digest()
+
+
+def _make_auth_cookie(role, owner_password):
+    expiry = int(time.time()) + _AUTH_COOKIE_DAYS * 86400
+    payload = f"{role}:{expiry}"
+    sig = hmac.new(_auth_cookie_sign_key(owner_password), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}:{sig}"
+
+
+def _validate_auth_cookie(token, owner_password):
+    """Return the role ('owner'/'viewer') if `token` is well-formed, signed
+    with the current APP_PASSWORD, and unexpired — else None.
+
+    A tampered/malformed token must never raise here: this runs on every
+    unauthenticated page load (every cold start / redeploy), so an uncaught
+    exception would crash the owner out of the app instead of falling
+    through to the login form. `hmac.compare_digest` in particular raises
+    TypeError on a non-ASCII str argument, and `sig` is attacker-controlled —
+    so the compare has to sit inside the same guard as the parsing.
+    """
+    try:
+        role, expiry_s, sig = token.split(":", 2)
+        expiry = int(expiry_s)
+        if role not in ("owner", "viewer"):
+            return None
+        if time.time() > expiry:
+            return None
+        expected_sig = hmac.new(
+            _auth_cookie_sign_key(owner_password), f"{role}:{expiry_s}".encode(), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(sig, expected_sig):
+            return None
+        return role
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 def _check_password():
     try:
         expected    = st.secrets.get("app", {}).get("password", "")
@@ -2600,6 +2648,22 @@ def _check_password():
             unsafe_allow_html=True,
         )
         st.stop()
+
+    # "Remember me" cookie — restores the session across a Railway redeploy or
+    # worker restart without re-typing the password. The auth_ok session_state
+    # check above already covers a plain rerun within the same browser tab;
+    # this only matters once session_state itself has been wiped.
+    _cookie_mgr = stx.CookieManager(key="_drishta_cookie_mgr")
+    _cookies = _cookie_mgr.get_all() or {}
+    _cookie_token = _cookies.get(_AUTH_COOKIE_NAME, "")
+    if _cookie_token:
+        _cookie_role = _validate_auth_cookie(_cookie_token, expected)
+        if _cookie_role:
+            st.session_state.auth_ok = True
+            st.session_state["auth_role"] = _cookie_role
+            st.session_state["_login_fails"] = 0
+            return
+
     _render_brand(large=True)
     st.subheader("Sign In")
 
@@ -2618,12 +2682,22 @@ def _check_password():
             st.session_state.auth_ok   = True
             st.session_state["auth_role"] = "owner"
             st.session_state["_login_fails"] = 0
+            _cookie_mgr.set(
+                _AUTH_COOKIE_NAME, _make_auth_cookie("owner", expected),
+                expires_at=datetime.now(_ET_TZ) + timedelta(days=_AUTH_COOKIE_DAYS),
+                secure=True, key="_drishta_cookie_set",
+            )
             st.rerun()
         elif ro_expected and hmac.compare_digest(pwd, ro_expected):
             # Read-only password — viewer access.
             st.session_state.auth_ok   = True
             st.session_state["auth_role"] = "viewer"
             st.session_state["_login_fails"] = 0
+            _cookie_mgr.set(
+                _AUTH_COOKIE_NAME, _make_auth_cookie("viewer", expected),
+                expires_at=datetime.now(_ET_TZ) + timedelta(days=_AUTH_COOKIE_DAYS),
+                secure=True, key="_drishta_cookie_set",
+            )
             st.rerun()
         else:
             _fails += 1
