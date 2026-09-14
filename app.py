@@ -11476,17 +11476,24 @@ elif page == "🧾 Summary":
     # market_risk_posture() call + already-published fragility cache the
     # 🔗 Risk Analysis dial uses — never a second independent verdict.
     # Withholds (no card) when fragility isn't computed yet, mirroring the dial.
-    from stock_analyzer.exit_advisor import risk_off_regime as _sm_ro_regime, market_risk_posture as _sm_mk_posture
+    from stock_analyzer.exit_advisor import (
+        risk_off_regime as _sm_ro_regime,
+        risk_off_state as _sm_ro_state_fn,
+        market_risk_posture as _sm_mk_posture,
+    )
     from stock_analyzer.constants import RISK_OFF_TREND_MA as _SM_RO_MA
     _sm_posture = None
     try:
         _sm_ro_armed, _sm_ro_reasons = _sm_ro_regime(
             _cached_spy("1y"), _cached_vix(), trend_ma=_SM_RO_MA, vix_threshold=RISK_OFF_VIX_LEVEL,
         )
+        _sm_ro_state = _sm_ro_state_fn(_cached_spy("1y"), _cached_vix(), trend_ma=_SM_RO_MA)
         _sm_posture = _sm_mk_posture(
             st.session_state.get("_fragility_cache"), risk_off=_sm_ro_armed, reasons=_sm_ro_reasons,
+            regime_state=_sm_ro_state,
         )
     except Exception:
+        _sm_ro_state = "not_measured"
         _sm_posture = None
 
     # 5 tiles, down from 8 (2026-08-28): Alerts had already been displaced by
@@ -12158,7 +12165,10 @@ elif page == "🧾 Summary":
                 # Display-only override: exit_advisor's "Steady" tier icon is 🛡️,
                 # which collides with the risk-off de-risk TRIM card's own 🛡️
                 # (2026-08-04 UX audit CA10) — ☀️ here instead, producer untouched.
-                _sm_posture_icon = "☀️" if _sm_posture["score"] == 0 else _sm_posture["emoji"]
+                _sm_posture_icon = (
+                    "❔" if _sm_posture["regime_state"] != "measured"
+                    else ("☀️" if _sm_posture["score"] == 0 else _sm_posture["emoji"])
+                )
                 st.markdown(
                     f"<div style='font-size:1.15em;font-weight:600'>{_sm_posture_icon} "
                     f"{_safe_html(_sm_posture['label'])}</div>"
@@ -12166,6 +12176,11 @@ elif page == "🧾 Summary":
                     f"{_safe_html(_sm_posture['summary'])}</div>",
                     unsafe_allow_html=True,
                 )
+                if _sm_posture["regime_state"] != "measured":
+                    st.caption(
+                        "⚠ Market regime not evaluated this session — reading covers your "
+                        "book only."
+                    )
             elif _sm_act_bucket is None:
                 # No fragility dial AND no Brief — we genuinely cannot tell.
                 # Rendering a green all-clear here would be a safety claim on
@@ -14093,16 +14108,23 @@ elif page == "🔗 Risk Analysis":
             # severity (_fragility_cache) and risk_off_regime (SPY<200DMA or VIX≥level).
             # NOT a forecast, NOT a directive — when both legs are elevated it POINTS to the
             # Daily Brief's risk-off de-risk cards (single-surface), never duplicates them.
-            from stock_analyzer.exit_advisor import risk_off_regime as _ro_regime, market_risk_posture as _mk_posture
+            from stock_analyzer.exit_advisor import (
+                risk_off_regime as _ro_regime,
+                risk_off_state as _ro_state_fn,
+                market_risk_posture as _mk_posture,
+            )
             from stock_analyzer.constants import RISK_OFF_TREND_MA as _RO_MA, RISK_OFF_VIX_LEVEL as _RO_VIX
             try:
                 _ro_armed, _ro_reasons = _ro_regime(
                     _cached_spy("1y"), _cached_vix(), trend_ma=_RO_MA, vix_threshold=_RO_VIX,
                 )
+                _ro_state = _ro_state_fn(_cached_spy("1y"), _cached_vix(), trend_ma=_RO_MA)
             except Exception:
                 _ro_armed, _ro_reasons = False, []
+                _ro_state = "not_measured"
             _posture = _mk_posture(
                 st.session_state.get("_fragility_cache"), risk_off=_ro_armed, reasons=_ro_reasons,
+                regime_state=_ro_state,
             )
             st.markdown("#### 🧭 Market-Risk Posture")
             if _posture is None:
@@ -14144,6 +14166,19 @@ elif page == "🔗 Risk Analysis":
                         unsafe_allow_html=True,
                     )
                     st.markdown(_posture["summary"])
+                    if _posture["regime_state"] == "not_measured":
+                        st.caption(
+                            "⚠ Market-regime legs not evaluated — VIX and/or SPY history was "
+                            "unavailable this session, so the market half of this posture could "
+                            "not be read. The book half (fragility) is shown; no risk-off action "
+                            "is armed on absent data."
+                        )
+                    elif _posture["regime_state"] == "unusable":
+                        st.caption(
+                            "⚠ Market regime only partially evaluable — not enough SPY history "
+                            "for the trend check and VIX was unavailable. Treat the regime as "
+                            "unknown, not calm."
+                        )
                     if _posture["reasons"]:
                         st.caption("Regime legs: " + " · ".join(_posture["reasons"]))
                     if _posture["armed"]:

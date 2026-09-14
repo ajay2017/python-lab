@@ -414,6 +414,33 @@ def risk_off_regime(spy_trend_df, vix_level, *, trend_ma, vix_threshold):
     return (len(reasons) > 0, reasons)
 
 
+def risk_off_state(spy_trend_df, vix_level, *, trend_ma) -> str:
+    """"not_measured" | "unusable" | "measured" -- mirrors util.factor_tilt_state's shape.
+
+    A risk-off read has two INDEPENDENT legs (SPY trend, VIX level). The regime is
+    genuinely MEASURED if at least one leg had usable data -- trip or no trip.
+      not_measured -> neither input present (no SPY series AND vix is None)
+      unusable     -> input(s) present but no leg usable
+                      (SPY present but shorter than trend_ma AND VIX absent/non-numeric)
+      measured     -> >=1 leg evaluable (SPY close series length >= trend_ma, OR numeric VIX)
+    """
+    close = _series_close(spy_trend_df)
+    spy_present = close is not None
+    spy_usable = spy_present and len(close) >= trend_ma
+    vix_usable = False
+    try:
+        if vix_level is not None:
+            float(vix_level)
+            vix_usable = True
+    except (TypeError, ValueError):
+        vix_usable = False
+    if spy_usable or vix_usable:
+        return "measured"
+    if not spy_present and vix_level is None:
+        return "not_measured"
+    return "unusable"
+
+
 # Posture display strings (labels/emoji — NOT policy thresholds).
 _POSTURE_LABELS = {
     0: ("Steady",             "🛡️"),
@@ -428,7 +455,7 @@ _POSTURE_FRAG_TXT = {
 }
 
 
-def market_risk_posture(fragility, *, risk_off, reasons=None):
+def market_risk_posture(fragility, *, risk_off, reasons=None, regime_state="measured"):
     """Compose the ALREADY-computed book fragility and market regime into one
     read-only EXPOSURE posture (0-3). Pure / UI-free.
 
@@ -441,6 +468,12 @@ def market_risk_posture(fragility, *, risk_off, reasons=None):
         score = severity_rank(calm 0 / caution 1 / fragile 2) + (1 if risk_off else 0)   # 0..3
         armed = severity in {caution, fragile} AND risk_off   (the SAME gate assess_risk_off_derisk uses)
 
+    `regime_state` (from `risk_off_state`) is DISPLAY-ONLY — it changes the wording of
+    `summary` (never claims "calm" when the regime was never actually measured) but
+    never touches `score`/`armed`/`risk_off`: on unmeasured data `risk_off` upstream is
+    already `False`, so `armed` stays `False` regardless of `regime_state`. Absent data
+    must never arm a trim.
+
     Returns None when fragility is unavailable — WITHHOLD rather than render a falsely
     calm dial (mirrors assess_fragility).
     """
@@ -452,16 +485,23 @@ def market_risk_posture(fragility, *, risk_off, reasons=None):
     score = rank + (1 if ro else 0)
     armed = rank >= 1 and ro
     label, emoji = _POSTURE_LABELS[score]
-    regime_txt = "the market is in a risk-off regime" if ro else "the market regime is calm"
+    measured = regime_state == "measured"
+    if not measured:
+        regime_txt = "the market regime was not evaluated (VIX/SPY data unavailable)"
+    elif ro:
+        regime_txt = "the market is in a risk-off regime"
+    else:
+        regime_txt = "the market regime is calm"
     return {
-        "score":    score,
-        "label":    label,
-        "emoji":    emoji,
-        "armed":    armed,
-        "severity": sev,
-        "risk_off": ro,
-        "summary":  f"Right now {_POSTURE_FRAG_TXT[sev]} and {regime_txt}.",
-        "reasons":  list(reasons or []),
+        "score":        score,
+        "label":        label,
+        "emoji":        emoji,
+        "armed":        armed,
+        "severity":     sev,
+        "risk_off":     ro,
+        "regime_state": regime_state,
+        "summary":      f"Right now {_POSTURE_FRAG_TXT[sev]} and {regime_txt}.",
+        "reasons":      list(reasons or []),
     }
 
 

@@ -29,6 +29,7 @@ from stock_analyzer.exit_advisor import (
     classify_deterioration_tier,
     market_risk_posture,
     risk_off_regime,
+    risk_off_state,
 )
 import pytest
 
@@ -239,6 +240,31 @@ def test_risk_off_regime_insufficient_history_skips_trend_leg_not_fabricated():
     assert reasons == []
 
 
+# ── risk_off_state ─────────────────────────────────────────────────────────────
+
+def test_risk_off_state_not_measured_when_both_legs_absent():
+    assert risk_off_state(None, vix_level=None, trend_ma=200) == "not_measured"
+
+
+def test_risk_off_state_unusable_when_spy_too_short_and_no_vix():
+    closes = [100.0] * 10  # far short of trend_ma=200
+    assert risk_off_state(_spy_df(closes), vix_level=None, trend_ma=200) == "unusable"
+
+
+def test_risk_off_state_measured_at_exact_trend_ma_boundary():
+    closes = [100.0 + i * 0.1 for i in range(200)]  # exactly trend_ma=200
+    assert risk_off_state(_spy_df(closes), vix_level=None, trend_ma=200) == "measured"
+
+
+def test_risk_off_state_measured_via_vix_alone_with_no_spy():
+    assert risk_off_state(None, vix_level=14.0, trend_ma=200) == "measured"
+
+
+def test_risk_off_state_unusable_when_vix_non_numeric_and_spy_too_short():
+    closes = [100.0] * 10
+    assert risk_off_state(_spy_df(closes), vix_level="n/a", trend_ma=200) == "unusable"
+
+
 # ── market_risk_posture ───────────────────────────────────────────────────────
 
 def test_market_risk_posture_withholds_on_missing_fragility():
@@ -275,6 +301,33 @@ def test_market_risk_posture_fragile_and_risk_off_is_worst_case():
     assert result["score"] == 3
     assert result["label"] == "Risk-off & fragile"
     assert result["armed"] is True
+
+
+def test_market_risk_posture_default_regime_state_is_measured_backward_compat():
+    # An existing call with NO regime_state kwarg must keep today's exact wording.
+    result = market_risk_posture({"severity": "calm"}, risk_off=False)
+    assert result["regime_state"] == "measured"
+    assert "calm" in result["summary"]
+    assert "not evaluated" not in result["summary"]
+
+
+def test_market_risk_posture_not_measured_never_says_calm():
+    result = market_risk_posture({"severity": "calm"}, risk_off=False, regime_state="not_measured")
+    assert result is not None
+    assert "calm" not in result["summary"]
+    assert result["regime_state"] == "not_measured"
+    assert "not evaluated" in result["summary"]
+
+
+def test_market_risk_posture_redline_absent_data_never_arms():
+    # THE REDLINE INVARIANT: fragile book + not-measured regime must NOT arm a trim.
+    # risk_off upstream is already False on unmeasured data, so armed stays False
+    # regardless of regime_state -- this is display-only, never a gate.
+    result = market_risk_posture(
+        {"severity": "fragile"}, risk_off=False, regime_state="not_measured",
+    )
+    assert result is not None
+    assert result["armed"] is False
 
 
 # ── assess_risk_off_derisk — per-contributor "price" field (2026-08-05 bug fix) ─
