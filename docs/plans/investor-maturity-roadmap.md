@@ -2,8 +2,9 @@
 
 **Status 2026-09-14: A1/A2/A4 (read-only analyses) run against real production data — see
 their RESULT blocks below. Tier 1 SHIPPED: B1 (F-269), B2 (F-270). Tier 2 SHIPPED: C1
-(F-271), C2 (F-272). No D1 edit, no E1 edit yet.** This is a design/sequencing document,
-not a shipped feature in itself — B1/B2/C1/C2 are the items shipped out of it so far.
+(F-271), C2 (F-272). D1 and E1 also done same day** (§5 details below) — both pure-additive,
+no-reviewer-needed items, exactly as scoped. This is a design/sequencing document,
+not a shipped feature in itself — B1/B2/C1/C2/D1/E1 are the items shipped out of it so far.
 
 **Owner decisions, 2026-09-13:** tiered evidence-first · risk basis = *disclose first,
 decide later* · selloff gap = *make the blindness visible* · adaptation = **personalize the
@@ -426,20 +427,30 @@ cited per Hard Rule #4.
 Decides nothing ⇒ sits entirely outside the `_GATE_FILES` / mandatory-review machinery.
 Cheapest and lowest-risk capability class in the app, and currently the thinnest.
 
-- **D1 — Extend the glossary past its MVP boundary.** Add the ~12 risk/exit/leverage
-  concepts `_TIPS` never covered: beta, ATR stop, R:R, drawdown-from-peak, SMA50 trend
-  break, correlation, diversification score, margin maintenance, leverage ×, margin cushion
-  / call distance, composite pillars, entry zone. Same house style (bands + "⚠" caveat +
-  "Learn more"). Pure additive dict entries; no reviewer needed.
+- **D1 — Extend the glossary past its MVP boundary. SHIPPED 2026-09-14.** This item's own
+  premise was checked against the actual `_TIPS` dict before building anything, and turned
+  out to be substantially stale — beta, ATR stop, R:R, drawdown, SMA50-adjacent concepts
+  (RSI/MACD), correlation, and diversification score **already existed** (35 entries total,
+  not the "valuation/fundamentals-only" MVP this bullet assumed). The genuinely missing
+  concepts were the leverage/margin cluster: **Leverage**, **Margin Cushion**, **Margin Call
+  Distance**, and **Entry Zone** — all four now added to `app.py::_TIPS` in house style, and
+  wired via `help=_tip(...)` into every render site that displays them (replacing two
+  pre-existing sets of ad-hoc, mutually-inconsistent inline help strings on 🧾 Summary's
+  Book Safety card and 💰 Account's Margin Call Distance panel, and adding `help=` to three
+  previously-bare "Entry Zone" metrics on Watchlist/Analysis). Pure additive/display-only —
+  no `_GATE_FILES` touch, no reviewer needed; full suite 5578 passed.
 
 ### E. Living persona
-- **E1 — Make §2B versioned, not corrected.** Add a dated "investor state" note to §2B
-  recording that the owner runs deliberate leverage (~3.15x, measured 2026-08-23) and that
-  §2B's fail-safe posture was written 2026-06-02 for an unlevered book — so every future
-  reader sees the tension rather than inheriting the assumption. **Add an explicit re-read
-  trigger:** a new measurement that contradicts a §2B premise forces a §2B review. That
-  trigger is the actual fix for the unversioned-assumption problem this whole document is
-  about. Docs-only, no policy change, no reviewer needed.
+- **E1 — Make §2B versioned, not corrected. SHIPPED 2026-09-14.** Added a dated
+  "investor-state note" directly under §2B's intro in `docs/requirements.md`, recording that
+  §2B was written 2026-06-02 for an implicitly unlevered book and that the owner has since
+  run ~3.15x leverage by deliberate policy (measured 2026-08-23, `margin.py`/F-253 shipped
+  2026-08-24) — dates verified against `git log`, not recalled, per this project's own
+  doc-integrity standard. Includes the explicit re-read trigger this item was designed
+  around: any future measurement contradicting a §2B.1/§2B.2 premise (naming A1's negative
+  Defense verdict and A4's ~7-day holding period as live examples) is the signal to re-read
+  the section, not to silently patch around it. Docs-only, no policy change, no reviewer
+  needed.
 
 ---
 

@@ -969,6 +969,52 @@ _TIPS = {
         "• < −30% → Severe — review position sizing and stop discipline\n\n"
         "Recovery math is asymmetric: a −30% drawdown requires +43% just to break even."
     ),
+    "Leverage": (
+        "Total market value of your holdings ÷ your own equity (capital net of "
+        "any margin debit).\n\n"
+        "• 1.00× → No margin — you own outright what you hold\n"
+        "• > 1.00× → Borrowing to hold more than your capital alone would buy; "
+        "both gains and losses are amplified by the multiple\n\n"
+        "Under Reg T, brokers generally require 50% initial margin (2:1) and a "
+        "25% maintenance margin — this app's own Margin Cushion estimate below "
+        "mirrors that 25% maintenance floor, but real broker requirements are "
+        "often tighter on volatile or concentrated positions.\n\n"
+        "⚠️ Awareness only. Concentration gates (single-name, sector) are "
+        "measured on gross holdings regardless of leverage and never change "
+        "based on this number — see Margin Cushion / Margin Call Distance for "
+        "the actual risk leverage creates."
+    ),
+    "Margin Cushion": (
+        "Your equity above the estimated maintenance requirement — reaches $0 "
+        "at an estimated margin call.\n\n"
+        f"Cushion = your equity − ({MARGIN_MAINTENANCE_RATE*100:.0f}% × total holdings "
+        f"value). The {MARGIN_MAINTENANCE_RATE*100:.0f}% maintenance rate is an ESTIMATE, "
+        "not a broker guarantee — brokers often raise it on volatile or "
+        "concentrated positions, so the real threshold can be closer than this "
+        "cushion implies.\n\n"
+        "⚠️ Awareness only — never gates a recommendation. Shows '—' when the "
+        "cash balance behind it is stale."
+    ),
+    "Margin Call Distance": (
+        "The % decline in your WHOLE book (not any single name) that would "
+        "exhaust the Margin Cushion above and trigger an estimated margin "
+        f"call, at the assumed {MARGIN_MAINTENANCE_RATE*100:.0f}% maintenance rate.\n\n"
+        f"Compare it to a routine market pullback (~{abs(FRAGILITY_PULLBACK_PCT):.0f}% is "
+        "this app's own yardstick for one) to see how much room a normal down "
+        "day leaves before this estimate changes.\n\n"
+        "⚠️ Awareness only — never gates. An estimate, not a broker guarantee."
+    ),
+    "Entry Zone": (
+        "The price range this app considers a valid entry for a BUY / ENTER "
+        "NOW call, built around the price when the call was made using that "
+        "stock's own volatility (ATR) — wider room below (a modest dip is "
+        "still a good entry) and tighter room above (chasing the price up "
+        "erodes the R:R that made the call worth making).\n\n"
+        "If the live price has since moved above the zone, you'd be chasing — "
+        "the R:R shown no longer reflects what you'd actually get. Below the "
+        "zone the setup may be even better, but verify the call still holds "
+        "before acting on stale numbers."
+    ),
 }
 
 
@@ -11380,21 +11426,18 @@ elif page == "🧾 Summary":
         _sf1.metric(
             "Leverage",
             f"{_sm_safety['leverage_x']:.2f}×" if _sm_safety["leverage_x"] is not None else "—",
-            help="Gross holdings ÷ your own capital. 1.00× means no margin loan. "
-                 "Awareness only — this never changes a recommendation.",
+            help=_tip("Leverage"),
         )
         _sf2.metric(
             "Margin cushion",
             _m(f"${_sm_safety['cushion']:,.0f}") if _sm_safety["cushion"] is not None else "—",
-            help="Your capital above the maintenance requirement. When this reaches "
-                 "zero the broker can issue a margin call.",
+            help=_tip("Margin Cushion"),
         )
         _sf3.metric(
             "Distance to call",
             f"{_sm_safety['call_distance_pct']:+.1f}%"
             if _sm_safety["call_distance_pct"] is not None else "—",
-            help=f"How far the book can fall before a margin call. Red below "
-                 f"{abs(FRAGILITY_PULLBACK_PCT):.0f}% — the size of a routine correction.",
+            help=_tip("Margin Call Distance"),
         )
         # Five states, each with its own wording — the producer distinguishes
         # them and collapsing any two here would restate a fact it took care to
@@ -22097,7 +22140,8 @@ elif page == "📈 Analysis":
                                 )
                     else:
                         c3.metric("Entry Zone",
-                                  f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A")
+                                  f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A",
+                                  help=_tip("Entry Zone"))
                         c4.metric("R:R", f"{rr_val:.1f}:1" if rr_val and rr_val > 0 else "N/A",
                                   help=_tip("R:R Ratio"))
                         st.caption(
@@ -22149,7 +22193,8 @@ elif page == "📈 Analysis":
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Price", f"${price:.2f}" if price else "N/A")
                     c2.metric("Entry Zone",
-                              f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A")
+                              f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A",
+                              help=_tip("Entry Zone"))
                     c3.metric("Stop Loss", f"${r['stop']:.2f}" if r["stop"] else "N/A",
                               delta=f"-{(price-r['stop'])/price*100:.1f}%" if price and r["stop"] else None,
                               delta_color="inverse", help=_tip("ATR Stop"))
@@ -24465,6 +24510,7 @@ elif page == "📋 Watchlist":
             _wm[1].metric(
                 "Entry Zone",
                 f"${_entry_lo:.2f}–${_entry_hi:.2f}" if _entry_lo else "—",
+                help=_tip("Entry Zone"),
             )
             _wm[2].metric("ATR Stop",   f"${_stop:.2f}" if _stop else "—",
                           delta=f"-{(_price - _stop) / _price * 100:.1f}% gap"
@@ -32244,17 +32290,17 @@ elif page == "💰 Account":
                         _mg1.metric(
                             "Margin Cushion",
                             _m(f"${_md['cushion']:,.0f}"),
-                            help="Equity above the estimated maintenance floor. Reaches $0 at the call.",
+                            help=_tip("Margin Cushion"),
                         )
                         _mg2.metric(
                             "Call Triggers At",
                             f"{_md['call_distance_pct']:.1f}%",
-                            help=f"Estimated book decline that would trigger a margin call at the standard {MARGIN_MAINTENANCE_RATE*100:.0f}% maintenance rate.",
+                            help=_tip("Margin Call Distance"),
                         )
                         _mg3.metric(
                             "Leverage",
                             f"{_lev_ratio:.2f}×" if _lev_ratio is not None else "—",
-                            help="Total holdings ÷ owner equity.",
+                            help=_tip("Leverage"),
                         )
                         if _md["in_call"]:
                             st.error(

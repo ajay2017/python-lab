@@ -140,6 +140,10 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 
 This app is built for the **quality-first, medium-term investor with long-term tax discipline** — and a defensive bias. It is explicitly **not** a day-trading tool. This framing is a design constraint: features and gates are evaluated against it, and a request that only serves intraday trading is out of scope (see §5) unless the persona itself is revisited.
 
+> **Investor-state note (added 2026-09-14, Investor Maturity Roadmap E1).** This section was first written 2026-06-02, implicitly describing an **unlevered** book. `stock_analyzer/margin.py` (F-253) shipped 2026-08-24 after a real measurement (2026-08-23) found the owner runs **~3.15x leverage by deliberate policy** ($24,503 of holdings on $7,802 of capital — see the "Margin-maintenance distance-to-a-call" entry in CLAUDE.md's queue history and memory `project_margin_maintenance_blindness`). Nobody re-read this section against that fact until now. This is recorded as a **tension to carry forward, versioned rather than silently corrected** — §2B.1/§2B.2's "defensive bias" and "quality-first" framing were reasoned about for a book that didn't run leverage as policy, and may deserve revisiting once leverage is treated as a fact of the actual persona rather than a bolt-on awareness signal (F-09d).
+>
+> **Re-read trigger:** the next time a measurement (a new leverage reading, an investor-maturity-roadmap finding — e.g. A1's negative Defense verdict or A4's ~7-day real holding period, both 2026-09-13 — or any other real data point) contradicts a premise stated in §2B.1 or §2B.2, that is the signal to re-read this section before trusting it as-is, not to patch around it quietly. Update this note's date when that re-read happens, whether or not the section's content changes as a result.
+
 ### 2B.1 Persona fit by horizon
 
 | Persona | Horizon | Fit | Rationale |
