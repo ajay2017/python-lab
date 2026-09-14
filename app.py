@@ -65,7 +65,7 @@ from stock_analyzer.fundamentals import (
 )
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
-from stock_analyzer.risk import atr_stop_loss, position_sizing, sizing_unavailable_reason, compute_all_risk, rate_sensitivity_per_ticker, capital_equivalent_risk
+from stock_analyzer.risk import atr_stop_loss, position_sizing, sizing_unavailable_reason, compute_all_risk, rate_sensitivity_per_ticker, capital_equivalent_risk, beta_vs_market
 from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations
 from stock_analyzer.earnings_advisor import build_earnings_playbook
 from stock_analyzer import earnings_intel as _earn_intel
@@ -252,7 +252,7 @@ from stock_analyzer.portfolio import (
     manual_stop_wins, holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
     trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
-    classify_book_corr, CORR_MIN_OBS_TRUSTED,
+    classify_book_corr, CORR_MIN_OBS_TRUSTED, expected_beta_after_add,
 )
 from stock_analyzer.concentration import assess_add_concentration
 from stock_analyzer.scanner import (
@@ -13794,6 +13794,15 @@ elif page == "📡 Signals & Advice":
             if add_recs:
                 st.subheader("➕ Add for Diversification")
                 _add_port_ret = portfolio_return_series(port_df, held_data)
+                # Current portfolio beta/value — read once per rec (not per
+                # candidate) via the SAME session-state idiom other pages use
+                # (e.g. _wl_port_risk at app.py ~24074) so the "expected beta
+                # impact" caption reads the same numbers every other surface does.
+                _add_risk_cache_raw = st.session_state.get("_port_risk_cache")
+                _add_current_beta = (
+                    _add_risk_cache_raw.get("beta") if _add_risk_cache_raw is not None else None
+                )
+                _add_pv = st.session_state.get("_portfolio_value", 0)
                 for rec in add_recs:
                     with st.container(border=True):
                         ac1, ac2 = st.columns([3, 1])
@@ -13864,6 +13873,20 @@ elif page == "📡 Signals & Advice":
                         # same data-driven read the Rebalancer redeploy card uses,
                         # rather than the static sector-level prior above.
                         _corr_map: dict[str, float | None] = {}
+                        _beta_map: dict[str, float | None] = {}
+                        # Fetch SPY ONCE, outside the per-candidate loop, and never let
+                        # a provider outage raise here — _cached_spy re-raises on a
+                        # total failure (see the guarded sibling read at ~5529), so an
+                        # unguarded call would crash this whole section instead of
+                        # degrading every candidate's beta caption to "n/a".
+                        try:
+                            _add_spy = _cached_spy("6mo")
+                        except Exception:
+                            _add_spy = None
+                        _add_spy_ok = (
+                            _add_spy is not None and not _add_spy.empty
+                            and "Close" in _add_spy.columns
+                        )
                         for _c in _top:
                             _bd = _div_bundles.get(_c["ticker"])
                             _bd = _bd if _bd is not None else {}
@@ -13876,6 +13899,16 @@ elif page == "📡 Signals & Advice":
                             _corr_map[_c["ticker"]] = (
                                 correlation_to_portfolio(_close, _add_port_ret)
                                 if (_close is not None and _add_port_ret is not None) else None
+                            )
+                            # Candidate beta vs. the SAME 6mo SPY window the portfolio's
+                            # own beta is resolved against (build_risk_bundle /
+                            # compute_portfolio_risk_metrics, app.py ~5529), so the two
+                            # sides of the comparison share a lookback period.
+                            _beta_map[_c["ticker"]] = (
+                                beta_vs_market(_hist, _add_spy)
+                                if (_hist is not None and not _hist.empty
+                                    and "Close" in _hist.columns and _add_spy_ok)
+                                else None
                             )
                         # "Cleanest diversifier" = lowest corr among displayed
                         # gate-passers (highlight, not a re-rank — mirrors the
@@ -13943,6 +13976,28 @@ elif page == "📡 Signals & Advice":
                                 _copy += " · 🏆 cleanest diversifier"
                             return _copy
 
+                        # Expected portfolio beta impact of adding this candidate —
+                        # the ADD-side counterpart to the Rebalancer's beta-trim
+                        # card, so a user comparing "trim a high-beta position" vs
+                        # "diversify instead" can see both sides' beta effect.
+                        # Never fabricates a number: n/a whenever any input (book
+                        # beta, portfolio value, candidate beta) is unavailable.
+                        def _add_beta_caption(_cand_t: str) -> str:
+                            _cb_beta = _beta_map.get(_cand_t)
+                            if _cb_beta is None:
+                                return "beta impact: n/a (insufficient price-history overlap)"
+                            _new_b = expected_beta_after_add(
+                                _add_current_beta, _add_pv, rec["add_dollars"], _cb_beta
+                            )
+                            if _new_b is None:
+                                return f"β {_cb_beta:.2f} · portfolio beta impact: n/a (current beta unavailable)"
+                            _delta = _new_b - _add_current_beta
+                            _arrow = "↓" if _delta < 0 else ("↑" if _delta > 0 else "→")
+                            return (
+                                f"β {_cb_beta:.2f} · adds ${rec['add_dollars']:,.0f} → "
+                                f"portfolio beta {_add_current_beta:.2f} {_arrow} {_new_b:.2f}"
+                            )
+
                         # Per-candidate quality cards (top N, best-first, gated)
                         _score_cols = st.columns(len(_top))
                         for _scol, _c in zip(_score_cols, _top):
@@ -13953,6 +14008,7 @@ elif page == "📡 Signals & Advice":
                                     st.metric(_cand, "—", "score unavailable")
                                     st.caption("Could not load live score")
                                     st.caption(_add_corr_caption(_cand))
+                                    st.caption(_add_beta_caption(_cand))
                                     # Jump to the full Analysis scorecard (same
                                     # control as the New-Position cards) — trade
                                     # decisions happen on Analysis; this is the bridge.
@@ -13980,6 +14036,7 @@ elif page == "📡 Signals & Advice":
                                 if not _c["passes"]:
                                     st.caption(f"Below Buy gate ({COMPOSITE_BUY:.0f})")
                                 st.caption(_add_corr_caption(_cand))
+                                st.caption(_add_beta_caption(_cand))
                                 # Secondary fundamentals from the same bundle (no extra call)
                                 _fin = (_div_bundles.get(_cand) or {}).get("financials", {}) or {}
                                 _pe  = _fin.get("forward_pe")

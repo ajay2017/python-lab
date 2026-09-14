@@ -25,6 +25,7 @@ from stock_analyzer.portfolio import (
     build_portfolio_df,
     classify_book_corr,
     diversification_score,
+    expected_beta_after_add,
     manual_stop_wins,
     protective_stop,
     real_sector_exposure,
@@ -812,6 +813,72 @@ def test_classify_book_corr_reproduces_pre_migration_rebalancer_corr_label_state
         assert classify_book_corr(cv) == _pre_migration_corr_label_state(cv), (
             f"classify_book_corr diverged from pre-migration _corr_label at cv={cv!r}"
         )
+
+
+# ── expected_beta_after_add ────────────────────────────────────────────────────
+# Backs the Diversification Advisor ADD card's "expected portfolio beta impact"
+# display (app.py's Signals & Advice diversification tab) — a pure additive-
+# direction mirror of risk_advisor.py's trim-side weighted-average beta formula.
+
+def test_expected_beta_after_add_lowers_beta_for_a_low_beta_candidate():
+    new_beta = expected_beta_after_add(1.5, 100_000.0, 20_000.0, 0.5)
+    assert new_beta == pytest.approx(1.33, abs=0.01)
+    assert new_beta < 1.5
+
+
+def test_expected_beta_after_add_raises_beta_for_a_high_beta_candidate():
+    new_beta = expected_beta_after_add(1.5, 100_000.0, 20_000.0, 2.5)
+    assert new_beta == pytest.approx(1.67, abs=0.01)
+    assert new_beta > 1.5
+
+
+def test_expected_beta_after_add_current_beta_none_is_none():
+    assert expected_beta_after_add(None, 100_000.0, 20_000.0, 1.2) is None
+
+
+def test_expected_beta_after_add_candidate_beta_none_is_none():
+    assert expected_beta_after_add(1.5, 100_000.0, 20_000.0, None) is None
+
+
+def test_expected_beta_after_add_zero_or_negative_current_value_is_none():
+    assert expected_beta_after_add(1.5, 0.0, 20_000.0, 1.2) is None
+    assert expected_beta_after_add(1.5, -1_000.0, 20_000.0, 1.2) is None
+
+
+def test_expected_beta_after_add_none_current_value_is_none():
+    assert expected_beta_after_add(1.5, None, 20_000.0, 1.2) is None
+
+
+def test_expected_beta_after_add_nonpositive_new_total_is_none():
+    # A negative add_dollars large enough to zero out (or invert) the total —
+    # e.g. a caller passing a withdrawal rather than an addition — must not
+    # fabricate a beta from a nonsensical denominator.
+    assert expected_beta_after_add(1.5, 1_000.0, -2_000.0, 1.2) is None
+
+
+def test_expected_beta_after_add_mirrors_risk_advisor_trim_formula_in_reverse():
+    """Cross-check against risk_advisor.py's trim-side formula (~line 238):
+
+        new_beta = (beta - w_i*b_i*f) / (1 - w_i*f)
+
+    Trim $X of a beta-2.0 position out of the book, then add the SAME $X of a
+    SAME-beta candidate back in — the portfolio beta should return almost
+    exactly to its pre-trim value, proving the two formulas are mirror images
+    of the same weighted-average identity rather than independently invented.
+    """
+    beta = 1.5
+    pv = 100_000.0
+    w_i = 0.20   # top contributor's weight as a fraction of the book
+    b_i = 2.0    # top contributor's beta
+    f = 0.50     # sell fraction (matches risk_advisor.py's hardcoded 50%)
+    trim_dollars = pv * w_i * f
+
+    new_beta_after_trim = round((beta - w_i * b_i * f) / (1 - w_i * f), 2)
+    pv_after_trim = pv - trim_dollars
+
+    restored = expected_beta_after_add(new_beta_after_trim, pv_after_trim, trim_dollars, b_i)
+
+    assert restored == pytest.approx(beta, abs=0.01)
 
 
 # ── SECTOR_ETF coverage ────────────────────────────────────────────────────────

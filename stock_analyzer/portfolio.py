@@ -1290,6 +1290,34 @@ def correlation_to_portfolio(
         return None
 
 
+def expected_beta_after_add(
+    current_beta: float | None,
+    current_value: float,
+    add_dollars: float,
+    candidate_beta: float | None,
+) -> float | None:
+    """Portfolio beta after adding `add_dollars` of a position with `candidate_beta`.
+
+    Mirrors `risk_advisor.py`'s trim-side weighted-average beta formula
+    (~line 238, `_new_beta = (beta - w_i*b_i*f) / (1 - w_i*f)`) in the ADDITIVE
+    direction instead of the subtractive one: adding a new dollar amount at its
+    own beta shifts the portfolio's value-weighted average beta the same way
+    removing one does, just with a plus sign.
+
+    Returns None when `current_beta`/`candidate_beta` is None, `current_value`
+    is None or <= 0, or the resulting total is <= 0 — never fabricates a number
+    from a missing input.
+    """
+    if current_beta is None or candidate_beta is None:
+        return None
+    if current_value is None or current_value <= 0:
+        return None
+    new_total = current_value + add_dollars
+    if new_total <= 0:
+        return None
+    return round((current_beta * current_value + candidate_beta * add_dollars) / new_total, 2)
+
+
 def classify_book_corr(
     cv,
     diversifier_max: float = REDEPLOY_CORR_DIVERSIFIER_MAX,
