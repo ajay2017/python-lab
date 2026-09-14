@@ -1,10 +1,10 @@
 # Investor Maturity Roadmap — raising confidence across Offense, Defense and Restraint
 
-**Status 2026-09-13: A1/A2/A4 (read-only analyses) run against real production data — see
-their RESULT blocks below. Both Tier-1 items now SHIPPED: B1 (score-history capture) as
-F-269, B2 (gate-ledger expansion) as F-270. No C1/C2 code, no D1 edit, no E1 edit yet.**
-This is a design/sequencing document, not a shipped feature in itself — B1 and B2 are the
-first items to actually ship out of it.
+**Status 2026-09-14: A1/A2/A4 (read-only analyses) run against real production data — see
+their RESULT blocks below. Tier 1 SHIPPED: B1 (F-269), B2 (F-270). Tier 2 in progress: C1
+(risk-off visibility) SHIPPED as F-271; C2 (capital-equivalent risk) designed, decided,
+next to build. No D1 edit, no E1 edit yet.** This is a design/sequencing document, not a
+shipped feature in itself — B1/B2/C1 are the items shipped out of it so far.
 
 **Owner decisions, 2026-09-13:** tiered evidence-first · risk basis = *disclose first,
 decide later* · selloff gap = *make the blindness visible* · adaptation = **personalize the
@@ -446,24 +446,66 @@ Cheapest and lowest-risk capability class in the app, and currently the thinnest
 
 ## 5. OCT–NOV — visibility, and the first harvest
 
-- **C1 — Make the risk-off blindness visible.** `exit_advisor.risk_off_regime` "degrades to
-  not-tripped on missing/short data," so **a missing VIX/SPY read renders identically to a
-  measured calm market.** Expose a **third state** so callers can render *"market regime not
-  evaluated — VIX/SPY unavailable"* instead of nothing. Copy the `util.factor_tilt_state` /
-  `factor_tilt_evidence_line` shape (2026-08-28): one classifier every consumer reads, three
-  states — *not measured / measured-but-unusable / measured*.
-  **Redline: awareness only — must never arm a trim on absent data**, which would invert the
-  current, correct fail-safe. `exit_advisor.py` ⇒ mandatory Opus review.
-- **C2 — Capital-equivalent risk disclosure.** No behaviour change, no gate, no constant.
-  `RISK_PCT_PER_TRADE` keeps multiplying the gross book (`risk.py`'s `position_sizing`); we
-  show what that means in capital terms beside it, so the ~4.7%-of-capital reality at
-  current leverage is visible before any policy decision. Decision goes in a **pure
-  function** (e.g. `risk.capital_equivalent_risk(...)`) returning `None` when net capital is
-  unknown. **The caption must distinguish "not levered" from "leverage unknown"**
-  (`feedback_sentinel_is_present`) — collapsing those prints a reassuring number built on
-  absent data. Wire into the five existing F-255 sizing surfaces; reuse
-  `margin.capital_basis_weight()` and the net capital already resolved once per Home render.
-  `risk.py` ⇒ mandatory Opus review.
+- **C1 — Make the risk-off blindness visible. SHIPPED 2026-09-14 as F-271.**
+  `exit_advisor.risk_off_regime` "degrades to not-tripped on missing/short data," so **a
+  missing VIX/SPY read renders identically to a measured calm market.** New pure classifier
+  `risk_off_state()`, mirroring `util.factor_tilt_state`'s three-state shape (*not measured /
+  unusable / measured*); `market_risk_posture()` no longer says "calm" unless the regime was
+  actually read. **Owner decision, made explicitly after reviewing the design: scoped to
+  exactly the 2 UI sites that print a false claim today** (🧾 Summary's Risk Posture tile,
+  🔗 Risk Analysis's Market-Risk Posture section — the latter's own `except: False, []` was a
+  live, confirmed instance of the bug) — `risk_off_regime()` itself and its 3 other callers
+  (Home's de-risk cards, Forward Simulator, the premarket email) are unchanged; none of them
+  make a false claim today, so extending disclosure there is a new feature, not this fix, and
+  is queued separately below. **Redline verified independently by both `implementer` and
+  Opus `reviewer` via direct arithmetic trace: `score`/`armed`/`risk_off` math is byte-for-byte
+  unchanged — absent data still never arms a trim.** Opus reviewer: SHIP, 0 blocking. Full
+  detail: `docs/requirements.md` F-271; `docs/architecture.md`'s exit_advisor.py Known
+  Behaviours row.
+- **C2 — Capital-equivalent risk disclosure. Designed and decided 2026-09-14, next to
+  build.** No behaviour change, no gate, no constant. `RISK_PCT_PER_TRADE` keeps
+  multiplying the gross book (`risk.py`'s `position_sizing`); show what that means in
+  capital terms beside it, so the ~4.7%-of-capital reality at current leverage is visible
+  before any policy decision. **Reconciliation finding, not assumed:** of the "five existing
+  F-255 sizing surfaces," only **2 actually display a risk-per-trade figure** — the Analysis
+  Detailed Analysis panel and the Watchlist ENTER_NOW panel. Grow Today, the pullback-add
+  flow, and the email only ever show position SIZE, never risk — there is nothing for this
+  disclosure to sit beside there without inventing a new number those surfaces don't have
+  today. **Owner decision: scope to those 2 real sites now; extending a risk-per-trade
+  display to the other 3 is queued separately below**, since it's a bigger, different kind
+  of change (a new metric, not a reframe of an existing one).
+  Decision goes in a **pure function** `risk.capital_equivalent_risk(risk_dollars,
+  portfolio_value, net_capital, basis)`. **Owner decision: returns an explicit-state dict**
+  (`{"state": "unlevered"|"unknown"|"levered", ...}`), not the literal bare `None` this
+  bullet originally specified — a bare `None` invites the exact falsy-shortcut bug this
+  project has already shipped and fixed twice (`feedback_sentinel_is_present`,
+  `feedback_none_sentinel_meets_pandas`): a future caller writing `if result: render(...)`
+  would silently skip the "unknown" case, which is precisely the case that must speak. State
+  keys off `basis` (`resolve_net_capital`'s own basis string), never off `net_capital is
+  None` alone — `net_capital` is `None` in BOTH the `"unlevered"` and `"stale"` cases, so it
+  cannot distinguish them on its own. Wire into the 2 confirmed sites; reuse
+  `margin.capital_basis_weight()` and the net capital already resolved once per Home render
+  (`_f255_net_cap`/`_f255_basis` and their Watchlist-page siblings). `risk.py` ⇒ mandatory
+  Opus review; new user-facing disclosure ⇒ `feat(` commit needs `Design =`/`Build =`
+  trailers.
+- **Deferred, queued separately (owner decision 2026-09-14) — not rejected, deliberately not
+  bundled into C1/C2.** Two wide-scope extensions considered and explicitly declined for
+  now, each because it's a different KIND of change than the fix/disclosure it would ride
+  alongside, not because the idea is bad:
+  - **C1-wide** — extend the same 3-state disclosure to Home's de-risk cards
+    (`daily_briefing.py`), the Forward Simulator (`forward_sim.py`), and the premarket email
+    (`headless_alert_engine.py`). Would change `assess_risk_off_derisk`'s return contract
+    (list → `{state, cards}`) across 3 files and their tests. **Specifically flagged:** Home
+    already has a declined 2026-08-29 proposal to consolidate 5 stacking banner types with no
+    cross-type ranking (`project_home_redesign`) — a 6th ad hoc disclosure surface there
+    should be decided with that context in view, not inherited from an unrelated bug fix.
+  - **C2-wide** — add a risk-per-trade display (then its capital-equivalent) to Grow Today,
+    the pullback-add flow, and the email, where no risk figure exists today. A genuinely new
+    metric on 3 more surfaces, not a reframe of an existing one — and the email is a push
+    surface where this project's own posture is fewer numbers, not more.
+
+  Both deserve their own design pass when picked up, not a default answered by C1/C2's own
+  scope.
 - **D2 — Gates that argue.** Once the ledger produces verdicts, gate banners gain a *why
   this rule exists* line and, where evaluable, *what it has actually done*. Turns 24 hard
   suppressions into 24 teachable moments. **Naturally gated on A/B harvest** — build when
