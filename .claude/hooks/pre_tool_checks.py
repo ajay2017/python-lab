@@ -316,6 +316,15 @@ _GATE_FILES = {
     # db.py's writers -- squarely "DB-write / data-integrity" per CLAUDE.md's
     # prose policy, which the mechanical list had never actually caught.
     "stock_analyzer/broker_sync.py",
+    # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
+    # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
+    # margin/leverage side-effect) -- a recommendation-formula module per
+    # CLAUDE.md's prose policy from day one, gated mechanically now rather
+    # than relying on whoever edits it next to remember the prose rule
+    # (the exact gap CLAUDE.md's own "Review & test economy" section warns
+    # against -- two 2026-07-15 commits shipped without a required citation
+    # for precisely this reason).
+    "stock_analyzer/beta_repair.py",
 }
 
 

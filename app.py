@@ -255,6 +255,7 @@ from stock_analyzer.portfolio import (
     trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
     classify_book_corr, CORR_MIN_OBS_TRUSTED, expected_beta_after_add,
 )
+from stock_analyzer.beta_repair import leverage_side_effect
 from stock_analyzer.concentration import assess_add_concentration
 from stock_analyzer.scanner import (
     scan_sectors, scan_movers,
@@ -14859,6 +14860,117 @@ elif page == "🔗 Risk Analysis":
                                 f"<span style='color:#ccc;font-size:0.88em'>{_rec['expected_outcome']}</span>"
                                 f"</div>",
                                 unsafe_allow_html=True,
+                            )
+
+                    # ── Leverage side-effect of the trim lever (beta card only) ──
+                    # beta_repair.leverage_side_effect answers a question the
+                    # old rec never asked: does trimming further also reduce
+                    # absolute market-exposure-to-equity, not just the beta
+                    # RATIO. Render-time only — home_risk_synthesis.py (the
+                    # producer) has no account-cash access and _reduce_calls
+                    # doesn't exist yet at that point in the pipeline (it's
+                    # DERIVED from this very function's own output via
+                    # daily_briefing, so computing it inside the producer
+                    # would be circular — see beta_repair.py's module notes).
+                    # Two-arg .get(key, {}) is the house-sanctioned form here
+                    # (never `or {}`): beta_levers is always a populated dict
+                    # on every rec this producer emits, so the default only
+                    # ever matters if a future rec type omits the key
+                    # entirely — an `or {}` would ALSO silently collapse a
+                    # genuine offline `None`, which this key never actually
+                    # is, but the two-arg form is correct either way.
+                    _bl_trim = (
+                        _rec.get("beta_levers", {}).get("trim")
+                        if _rtype == "beta" else None
+                    )
+                    if _bl_trim is not None:
+                        # Reduce/Exit cross-check — same verified-state idiom
+                        # as the Rebalancer redeploy card (app.py ~17750/18054):
+                        # _coord_cache_state alone isn't enough since a
+                        # crashed Daily Brief fail-opens _reduce_calls to {}
+                        # rather than None.
+                        _bl_reduce_verified = (
+                            _coord_cache_state("_reduce_calls") == "ready"
+                            and not st.session_state.get("_daily_brief_offline", False)
+                        )
+                        # Two-arg .get(key, {}) is the house-sanctioned form:
+                        # only ever evaluated once _bl_reduce_verified confirms
+                        # the coord cache is "ready" (i.e. genuinely a dict,
+                        # never the offline None), so the default is inert
+                        # here -- but it's still the correct idiom, not `or {}`.
+                        _bl_reduce_set = (
+                            set(st.session_state.get("_reduce_calls", {}).keys())
+                            if _bl_reduce_verified else None
+                        )
+                        _bl_deferred = (
+                            _bl_reduce_set is not None
+                            and _bl_trim["ticker"] in _bl_reduce_set
+                        )
+
+                        st.markdown("")
+                        if _bl_deferred:
+                            st.info(
+                                f"ℹ️ **{_bl_trim['ticker']}** is already under an active "
+                                "Reduce/Exit call — the trim above is the SAME action, "
+                                "not an additional one on top of it.",
+                                icon="ℹ️",
+                            )
+                        elif not _bl_reduce_verified:
+                            st.caption(
+                                "⚠️ Reduce/Exit cross-check unavailable this session — "
+                                "the trim above isn't verified against an active call."
+                            )
+
+                        # _port_risk (in scope for this whole page, ~line 14080)
+                        # is guaranteed non-empty here: this render loop only
+                        # reaches a "beta"-type _rec because
+                        # build_risk_advisor_recommendations produced one,
+                        # which itself requires port_risk["beta"] to be
+                        # non-None (see risk_advisor.py's own beta-is-not-None
+                        # gate) — so this read cannot silently see a stale/
+                        # unrelated portfolio's beta the way a truly
+                        # independent read might.
+                        _bl_current_beta = _port_risk.get("beta")
+                        _bl_acct_cash = db.load_account_cash()
+                        _bl_net_cap, _bl_basis = _margin_mod.resolve_net_capital(
+                            total_val, _bl_acct_cash, ACCOUNT_CASH_STALE_DAYS, _now_et()
+                        )
+                        # Read off the rec's own 50%-trim math rather than
+                        # re-deriving new_beta here — one place computes it
+                        # (risk_advisor.py), this render just consumes it.
+                        _bl_effect = leverage_side_effect(
+                            kind="trim",
+                            dollars=_bl_trim["dollars_50pct"],
+                            current_beta=_bl_current_beta,
+                            new_beta=_bl_trim.get("new_beta_50pct"),
+                            gross_book=total_val,
+                            net_capital=_bl_net_cap,
+                            basis=_bl_basis,
+                        )
+                        _bl_state = _bl_effect["state"]
+                        if _bl_state == "not_levered":
+                            st.caption(
+                                "🛡️ No margin debit on file — this trim doesn't change "
+                                "your leverage."
+                            )
+                        elif _bl_state == "stale":
+                            st.caption(
+                                "⚠️ Leverage impact of this trim can't be measured this "
+                                "session (no fresh cash-balance figure on file)."
+                            )
+                        elif _bl_state == "called":
+                            st.warning(
+                                "🚨 Your account shows a margin-call condition on file — "
+                                "trimming further is especially important right now.",
+                                icon="🚨",
+                            )
+                        elif _bl_state == "measured":
+                            st.caption(
+                                f"🛡️ Also reduces market exposure against your equity: "
+                                f"beta-dollars ${_bl_effect['beta_dollars_before']:,.0f} → "
+                                f"${_bl_effect['beta_dollars_after']:,.0f} "
+                                f"(exposure/equity ratio {_bl_effect['ratio_before']:.2f}× → "
+                                f"{_bl_effect['ratio_after']:.2f}×)."
                             )
 
                     if _rec.get("institutional_lens"):

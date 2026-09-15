@@ -37,6 +37,21 @@ member -- see tests/test_beta_repair.py::test_module_does_not_import_gate_files)
 The two are proven to agree by tests/test_beta_repair.py's composition test
 (swap == trim-then-add, cross-checked against portfolio.expected_beta_after_add),
 which is what actually keeps them in sync -- not a shared function call.
+
+`leverage_side_effect` (added for the margin/leverage disclosure) answers a
+DIFFERENT question the audit also found missing entirely: does a lever's
+absolute market-exposure-to-equity ratio get better or worse, independent of
+whether its beta number improves. On the real book (beta-dollars
+1.88x$24,500=$46,060 against ~$7,802 equity, ratio ~5.90x), a margin-funded
+ADD improves the beta RATIO (1.88 -> 1.76) while the exposure/equity ratio
+gets WORSE (5.90x -> ~6.08x) -- a trade is equity-neutral at execution (basic
+double-entry: buying/selling moves value between stock and cash/debit
+without changing equity itself), so ANY add grows gross book against a fixed
+equity, and ANY trim/swap shrinks or holds it -- see the function's own
+"_LEVER_GROSS_BOOK_DELTA_SIGN" comment for the accounting reasoning. Never
+computes a ratio when the account's leverage state is unmeasured (basis
+"unlevered"/"stale") or in a margin call ("called") -- those three
+non-`measured` states carry no fabricated `direction`.
 """
 from __future__ import annotations
 
@@ -294,3 +309,120 @@ def aligned_beta(
         return round(cov_val / mkt_var, 2), n_obs
     except Exception:
         return None, 0
+
+
+# Kinds recognized by leverage_side_effect -- whether a lever shrinks, holds
+# constant, or grows the book's gross market value. A single BUY/SELL is
+# equity-neutral at execution (basic double-entry accounting: selling $X of
+# stock converts $X of exposure into $X of cash/paid-down debit, buying does
+# the reverse -- net_capital is unchanged by the trade itself, only by
+# subsequent price moves). So the direction leverage_side_effect reports is
+# driven entirely by whether GROSS_BOOK grows relative to a constant equity,
+# not by "how the purchase is funded" -- a cash-funded add and a margin-funded
+# add have the identical mechanical effect on the exposure/equity ratio; the
+# only thing "funding source" actually determines is whether cash_balance was
+# already negative (levered) going in, which `basis` already captures.
+_LEVER_GROSS_BOOK_DELTA_SIGN = {"trim": -1, "swap": 0, "add": +1}
+
+
+def leverage_side_effect(
+    *,
+    kind: str,
+    dollars: float | None,
+    current_beta: float | None,
+    new_beta: float | None,
+    gross_book: float | None,
+    net_capital: float | None,
+    basis: str | None,
+) -> dict:
+    """Margin/leverage side-effect of a beta lever -- the awareness the old
+    beta rec never carried at all (claim 7 of the original audit): a
+    margin-funded ADD can make the beta RATIO look better while absolute
+    market exposure against a fixed equity cushion actually gets WORSE.
+
+    `net_capital` and `basis` are expected to come straight from
+    `margin.resolve_net_capital(gross_book, account_cash_rec, stale_days_limit, now)`
+    -- this function does not call it itself (no DB/session access; stays
+    pure) and does not read `st.session_state["_leverage_cache"]`, whose
+    "equity" key is actually the gross book, not equity (a documented
+    footgun) -- the caller must resolve net_capital independently and pass
+    it through explicitly.
+
+    Returns a dict with an explicit "state", one of FOUR -- never collapsing
+    "no debt" into "can't tell" or vice versa (the house None-vs-empty
+    sentinel discipline, applied to a leverage read):
+      "not_levered" (basis == "unlevered")  -- no debit on file. A true,
+          complete answer: this lever carries no leverage concern to
+          disclose. No numbers computed (resolve_net_capital deliberately
+          withholds a net_capital figure in this case).
+      "stale"       (basis == "stale")      -- a debit EXISTS but the figure
+          on file is too old to trust. Genuinely different from
+          "not_levered" -- there IS something to measure, it just can't be
+          measured reliably right now. Distinct copy required at the caller.
+      "called"      (basis == "called", net_capital <= 0) -- the worst state
+          a levered book can be in. For kind="trim", this does NOT withhold
+          the lever -- trimming reduces exposure, which is exactly the right
+          move when called, so the state is disclosed as urgency, not
+          suppressed. For kind="add"/"swap" (not yet wired -- Phase 3), a
+          caller should treat "called" as a reason to withhold the ADD leg
+          specifically, since adding new exposure while called is the wrong
+          direction; that policy lives in the caller, not here.
+      "measured"    (basis == "levered")    -- real numbers: beta-dollars and
+          the exposure/equity ratio before and after, plus a "direction" in
+          {"better","worse","flat"}. `direction` is returned ONLY in this
+          state -- a direction attached to unmeasured data would be the
+          fabricated-neutral bug this house has already shipped and fixed
+          twice (feedback_none_sentinel_meets_pandas /
+          feedback_sentinel_is_present).
+
+    Any missing/NaN numeric input while basis == "levered" degrades to
+    "stale" rather than raising or fabricating a ratio -- the basis claims
+    measurable data exists, but if the specific numbers needed are absent,
+    this function still refuses to compute rather than guess.
+    """
+    if kind not in _LEVER_GROSS_BOOK_DELTA_SIGN:
+        return {"state": "stale", "kind": kind}
+    if basis == "unlevered":
+        return {"state": "not_levered", "kind": kind}
+    if basis == "stale":
+        return {"state": "stale", "kind": kind}
+    if basis == "called":
+        return {"state": "called", "kind": kind}
+    if basis != "levered":
+        return {"state": "stale", "kind": kind}
+
+    _d  = _pos_float(dollars)
+    _cb = _pos_float(current_beta)
+    _nb = _pos_float(new_beta)
+    _gb = _pos_float(gross_book)
+    _nc = _pos_float(net_capital)
+    if _d is None or _cb is None or _nb is None or _gb is None or _nc is None:
+        return {"state": "stale", "kind": kind}
+    if _gb <= 0 or _nc <= 0 or _d < 0:
+        return {"state": "stale", "kind": kind}
+
+    _sign = _LEVER_GROSS_BOOK_DELTA_SIGN[kind]
+    _gb_after = _gb + _sign * _d
+    if _gb_after < 0:
+        return {"state": "stale", "kind": kind}
+
+    _beta_dollars_before = round(_cb * _gb, 2)
+    _beta_dollars_after  = round(_nb * _gb_after, 2)
+    _ratio_before = round(_beta_dollars_before / _nc, 2)
+    _ratio_after  = round(_beta_dollars_after / _nc, 2)
+    if _ratio_after < _ratio_before:
+        _direction = "better"
+    elif _ratio_after > _ratio_before:
+        _direction = "worse"
+    else:
+        _direction = "flat"
+
+    return {
+        "state":               "measured",
+        "kind":                kind,
+        "beta_dollars_before": _beta_dollars_before,
+        "beta_dollars_after":  _beta_dollars_after,
+        "ratio_before":        _ratio_before,
+        "ratio_after":         _ratio_after,
+        "direction":           _direction,
+    }

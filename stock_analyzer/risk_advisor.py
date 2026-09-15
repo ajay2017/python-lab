@@ -296,6 +296,21 @@ def build_risk_advisor_recommendations(
                 _full_trim_pct = None
                 if _full_trim_dollar is not None and _full_trim_within_position:
                     _full_trim_pct = round(_full_trim_dollar / trim_row["market_value"] * 100)
+
+                # Structured payload for the render layer's leverage-side-
+                # effect disclosure (beta_repair.leverage_side_effect) — the
+                # recommendation/expected_outcome strings above are for
+                # display; this is for a caller (app.py's Risk Analysis
+                # render) that needs the RAW numbers, not a parsed sentence.
+                _beta_levers_trim = {
+                    "ticker":            trim_ticker,
+                    "position_beta":     _tb,
+                    "dollars_50pct":     _trim_dollar,
+                    "new_beta_50pct":    _new_beta,
+                    "market_value":      trim_row["market_value"],
+                    "dollars_to_target": _full_trim_dollar,
+                    "within_position":   _full_trim_within_position,
+                }
             else:
                 _new_beta = round(beta * 0.85, 2)
                 _beta_drop = round(beta - _new_beta, 2)
@@ -303,6 +318,11 @@ def build_risk_advisor_recommendations(
                 _full_trim_dollar = None
                 _full_trim_within_position = False
                 _full_trim_pct = None
+                # No honest trim candidate today (no beta data at all, or
+                # every top contributor was bought today) — None, not a
+                # fabricated dict, so the render layer's leverage disclosure
+                # is skipped rather than computed on absent data.
+                _beta_levers_trim = None
 
             recs.append({
                 "priority": beta_priority,
@@ -321,6 +341,14 @@ def build_risk_advisor_recommendations(
                 ),
                 "root_tickers": top_beta,
                 "beta_trim_excluded_recent": beta_trim_excluded_recent,
+                # Structured lever data for the render layer's leverage-side-
+                # effect disclosure (beta_repair.leverage_side_effect). "trim"
+                # is None when there's no honest trim candidate today (no
+                # beta data, or every top contributor was bought today).
+                "beta_levers": {
+                    "target": target,
+                    "trim":   _beta_levers_trim,
+                },
                 "recommendation": (
                     (
                         f"Sell 50% of **{trim_ticker}** (~${_trim_dollar:,.0f}): "
@@ -377,6 +405,7 @@ def build_risk_advisor_recommendations(
                 "title":    f"Beta {beta:.2f} — Market Sensitivity Well Managed",
                 "problem": "", "root_cause": "", "root_tickers": [],
                 "beta_trim_excluded_recent": [],
+                "beta_levers": {"target": None, "trim": None},
                 "recommendation": "No beta action required.",
                 "expected_outcome": "",
                 "institutional_lens": (

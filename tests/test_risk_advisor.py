@@ -621,3 +621,58 @@ def test_beta_rec_never_asserts_a_specific_add_percentage_claim():
     rec = find_rec(recs, "beta")
     assert "8–10%" not in rec["recommendation"]
     assert "consider adding" not in rec["recommendation"]
+
+
+# ── beta_levers structured payload (Phase 2, leverage disclosure) ────────────
+
+def test_beta_levers_trim_payload_present_and_matches_prose_numbers():
+    rows = [{"ticker": "HIGH", "weight": 60.0, "market_value": 14_700.0, "beta": 4.15}]
+    recs = _recs(rows, beta=1.88, portfolio_value=24_500.0)
+    rec = find_rec(recs, "beta")
+    assert rec is not None
+    levers = rec["beta_levers"]
+    assert levers["target"] == 1.3
+    trim = levers["trim"]
+    assert trim is not None
+    assert trim["ticker"] == "HIGH"
+    assert trim["position_beta"] == 4.15
+    assert trim["dollars_50pct"] == 7_350
+    assert trim["new_beta_50pct"] == 0.91
+    assert trim["market_value"] == 14_700.0
+    assert trim["dollars_to_target"] == pytest.approx(4_985.96, abs=0.01)
+    assert trim["within_position"] is True
+
+
+def test_beta_levers_trim_none_when_no_honest_candidate():
+    trades_df = pd.DataFrame([
+        {"ticker": "TOPBETA", "action": "BUY", "traded_at": _et_noon_today_as_utc_iso()},
+        {"ticker": "NEXTBETA", "action": "BUY", "traded_at": _et_noon_today_as_utc_iso()},
+    ])
+    port_df, held_data, port_risk, h_rets, pv, gd = make_risk_advisor_inputs(
+        _TWO_HIGH_BETA_ROWS, beta=1.88, portfolio_value=24_500.0,
+    )
+    recs = build_risk_advisor_recommendations(
+        port_df, held_data, port_risk, h_rets, pv, gd, trades_df=trades_df,
+    )
+    rec = find_rec(recs, "beta")
+    assert rec is not None
+    assert rec["beta_levers"]["trim"] is None
+    assert rec["beta_levers"]["target"] == 1.3
+
+
+def test_beta_levers_trim_within_position_false_when_position_too_small():
+    rows = [{"ticker": "TINY", "weight": 60.0, "market_value": 100.0, "beta": 4.15}]
+    recs = _recs(rows, beta=1.88, portfolio_value=24_500.0)
+    rec = find_rec(recs, "beta")
+    assert rec is not None
+    trim = rec["beta_levers"]["trim"]
+    assert trim["within_position"] is False
+    assert trim["dollars_to_target"] is not None
+    assert trim["dollars_to_target"] > trim["market_value"]
+
+
+def test_ok_beta_carries_beta_levers_key_with_none_trim():
+    recs = _recs(_ONE_ROW, beta=1.0)
+    rec = find_rec(recs, "ok_beta")
+    assert rec is not None
+    assert rec["beta_levers"] == {"target": None, "trim": None}

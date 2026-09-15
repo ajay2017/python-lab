@@ -19,6 +19,7 @@ from stock_analyzer.beta_repair import (
     dollars_to_target_trim,
     expected_beta_after_swap,
     expected_beta_after_trim,
+    leverage_side_effect,
 )
 from stock_analyzer.portfolio import expected_beta_after_add
 
@@ -334,3 +335,122 @@ def test_module_does_not_import_gate_files():
 
     hit = imported & forbidden
     assert not hit, f"beta_repair.py must not import: {hit}"
+
+
+# ── leverage_side_effect ──────────────────────────────────────────────────────
+
+_LEV_FIXTURE = dict(
+    dollars=2_450.0, current_beta=1.88, new_beta=1.76, gross_book=24_500.0,
+    net_capital=7_802.0, basis="levered",
+)
+
+
+def test_leverage_add_worsens_ratio_even_though_beta_improved():
+    # The counterintuitive claim this feature exists to surface: an ADD
+    # improves the beta number (1.88 -> 1.76) while the exposure/equity
+    # ratio gets WORSE, because gross_book grows against a fixed equity.
+    r = leverage_side_effect(kind="add", **_LEV_FIXTURE)
+    assert r["state"] == "measured"
+    assert r["direction"] == "worse"
+    assert r["ratio_after"] > r["ratio_before"]
+    assert r["beta_dollars_before"] == 46_060.0
+    assert r["ratio_before"] == 5.9
+
+
+def test_leverage_trim_always_improves_ratio():
+    r = leverage_side_effect(
+        kind="trim", dollars=7_350.0, current_beta=1.88, new_beta=0.91,
+        gross_book=24_500.0, net_capital=7_802.0, basis="levered",
+    )
+    assert r["state"] == "measured"
+    assert r["direction"] == "better"
+    assert r["ratio_after"] < r["ratio_before"]
+
+
+def test_leverage_swap_holds_gross_book_constant_and_improves_ratio():
+    r = leverage_side_effect(
+        kind="swap", dollars=4_003.0, current_beta=1.88, new_beta=1.3,
+        gross_book=24_500.0, net_capital=7_802.0, basis="levered",
+    )
+    assert r["state"] == "measured"
+    assert r["direction"] == "better"
+    # gross_book unchanged for a swap -> beta_dollars_after == new_beta * gross_book
+    assert r["beta_dollars_after"] == round(1.3 * 24_500.0, 2)
+
+
+@pytest.mark.parametrize("basis,expected_state", [
+    ("unlevered", "not_levered"),
+    ("stale", "stale"),
+    ("called", "called"),
+])
+def test_leverage_four_states_distinct_and_no_direction_outside_measured(basis, expected_state):
+    r = leverage_side_effect(
+        kind="trim", dollars=100, current_beta=1.88, new_beta=1.5,
+        gross_book=24_500.0, net_capital=None, basis=basis,
+    )
+    assert r["state"] == expected_state
+    assert "direction" not in r
+
+
+def test_leverage_unlevered_and_stale_are_not_the_same_state():
+    # Both return net_capital=None from resolve_net_capital, but they are NOT
+    # interchangeable -- "no debt" vs "can't measure" must stay distinguishable.
+    unlevered = leverage_side_effect(
+        kind="trim", dollars=100, current_beta=1.88, new_beta=1.5,
+        gross_book=24_500.0, net_capital=None, basis="unlevered",
+    )
+    stale = leverage_side_effect(
+        kind="trim", dollars=100, current_beta=1.88, new_beta=1.5,
+        gross_book=24_500.0, net_capital=None, basis="stale",
+    )
+    assert unlevered["state"] != stale["state"]
+
+
+def test_leverage_called_does_not_withhold_the_trim_lever():
+    # A margin call is exactly when trimming is MOST warranted -- called must
+    # not suppress a trim the way it would an add/swap (caller's job for
+    # those, not this function's -- but "called" for kind="trim" must still
+    # be a distinct, actionable state, not silently degraded to "stale").
+    r = leverage_side_effect(
+        kind="trim", dollars=7_350.0, current_beta=1.88, new_beta=0.91,
+        gross_book=24_500.0, net_capital=None, basis="called",
+    )
+    assert r["state"] == "called"
+    assert r["kind"] == "trim"
+
+
+def test_leverage_missing_numeric_input_while_levered_degrades_to_stale():
+    # basis claims measurable data exists, but a specific number is missing --
+    # must not raise, must not compute, must not fabricate a ratio.
+    r = leverage_side_effect(
+        kind="add", dollars=None, current_beta=1.88, new_beta=1.76,
+        gross_book=24_500.0, net_capital=7_802.0, basis="levered",
+    )
+    assert r["state"] == "stale"
+    assert "direction" not in r
+
+
+def test_leverage_nan_input_while_levered_degrades_to_stale():
+    r = leverage_side_effect(
+        kind="add", dollars=float("nan"), current_beta=1.88, new_beta=1.76,
+        gross_book=24_500.0, net_capital=7_802.0, basis="levered",
+    )
+    assert r["state"] == "stale"
+
+
+def test_leverage_unknown_kind_degrades_to_stale_not_a_crash():
+    r = leverage_side_effect(
+        kind="bogus", dollars=100, current_beta=1.88, new_beta=1.5,
+        gross_book=24_500.0, net_capital=7_802.0, basis="levered",
+    )
+    assert r["state"] == "stale"
+
+
+def test_leverage_gross_book_going_negative_degrades_to_stale():
+    # A trim larger than the entire book (should never happen upstream, but
+    # this function must not compute a negative gross_book_after silently).
+    r = leverage_side_effect(
+        kind="trim", dollars=50_000.0, current_beta=1.88, new_beta=0.5,
+        gross_book=24_500.0, net_capital=7_802.0, basis="levered",
+    )
+    assert r["state"] == "stale"
