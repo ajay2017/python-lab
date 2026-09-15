@@ -1,12 +1,18 @@
 # Measuring whether Rebalancer / Diversification-ADD / Tax-Harvest calls actually worked
 
-**Status: ALL 4 OWNER DECISIONS RATIFIED, 2026-09-15 — READY FOR BUILD, no code written
-yet.** §10 is the Opus `planner` design (Opus 4.8); §11 records the ratified decisions.
-Phase 1a (a new `portfolio_risk_snapshots` daily EOD capture, three non-colliding
-`trigger_type` values, and a non-banded tax-harvest running total) is fully unblocked.
-Phase 1b/2 (the rec-attribution ledger + banded readout) is also unblocked, gated only on
-Phase 1a's capture actually running long enough to accumulate data. See §10 for the full
-plan, risks, and required tests; §11 for exactly what was decided and why.
+**Status: PHASE 1a SHIPPED 2026-09-15 (commit `a7498b3`), DDL applied same day by the
+owner.** §10 is the Opus `planner` design (Opus 4.8); §11 records the ratified decisions,
+both built exactly as specified — two independent Opus `reviewer` passes, both SHIP/0
+blocking (Part 1: `portfolio_risk_snapshots` capture + the Account chart; Part 2: the 3
+`trigger_type` values + the tax-harvest running total + the wash-sale after-check). Full
+detail: `docs/requirements.md` F-273, `docs/shipped-log.md`. **Phase 1b/2 (the
+rec-attribution ledger + banded readout) is deliberately NOT started yet** — the owner's
+own call to first confirm Phase 1a's plumbing runs clean in production for a few days
+(🩺 System Trust check ② green on `portfolio_risk_snapshots`, the Account chart rendering)
+before building the next layer on top of it; see CLAUDE.md's queue entry for the exact
+pickup trigger. When picked up: §10's Phase 1b/2 plan (the `rec_events` schema, the
+attribution-matching rules, the 8/15/5-style floors) still needs its own fresh `planner`
+pass — none of that has been designed in code-ready detail yet, only sketched in §10.
 
 Source research: `docs/reviews/2026-09-09-app-review.md` Part 2 #4; memory
 `project_app_review_2026_09_09`'s 2026-09-14 section (exact file:line citations for the three
