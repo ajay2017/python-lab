@@ -7,7 +7,9 @@ passes across the 3 feature commits (Phase 3 needed a confirming second pass aft
 page-crash bug was found and fixed), all SHIP/0-blocking on the final pass for each commit.
 `docs/requirements.md` F-274; `docs/architecture.md`'s module tree entry; memory
 `project_beta_repair`. The separate "make Utilities recommendable" commit this plan's design
-phase anticipated is tracked in CLAUDE.md's "What's queued", not here.
+phase anticipated **also shipped the same day** (`a9a33ee`), including the manual Supabase
+`sector_candidates` roster seed (owner-executed SQL merge + a no-op App Settings Save) — see
+§5, updated below.
 
 ---
 
@@ -131,12 +133,16 @@ undisturbed: SHIP, 0 blocking.
 
 ---
 
-## 5. Deliberately not done here
+## 5. Deliberately not done here (at the time this plan was first written)
 
-- **Utilities becomes a recommendable sector** — separate commit, tracked in CLAUDE.md's
-  "What's queued", not gated on anything in this plan. `beta_diversifying_sectors()` and
-  `rank_defensive_candidates` both pick it up automatically with zero code change once it
-  lands in `_DIVERSIFYING_SECTORS`.
+- ~~**Utilities becomes a recommendable sector**~~ — **SHIPPED same day, commit `a9a33ee`**:
+  `beta_diversifying_sectors()` and `rank_defensive_candidates` picked it up automatically
+  with zero further code change once it landed in `_DIVERSIFYING_SECTORS`, exactly as
+  anticipated. The Supabase `sector_candidates` roster (DUK/SO/D/AEP/EXC) — the one piece a
+  coding session couldn't do itself — was seeded by the owner directly: a `jsonb ||` merge
+  UPDATE against the live `reference_tables` row (verified by a read-back before and after),
+  followed by a no-op Save through ⚙️ App Settings to re-stamp `payload_hash`/`as_of`
+  correctly. Nothing left open on this item.
 - **`risk_advisor.py:231`'s hardcoded `_tf = 0.50`** (the fixed "sell 50%" fraction) — a
   pre-existing Hard-Rule-#1 candidate found during this work, deliberately deferred to its
   own `constants.py` commit, unrelated to this feature's scope.
