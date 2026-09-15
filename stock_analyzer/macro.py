@@ -30,6 +30,12 @@ RATE_SENSITIVITY = {
     "Clean Energy":    -0.60,  # capital-intensive, subsidy-dependent
     "Cybersecurity":   -0.55,
     "EV & Auto":       -0.50,
+    # Added 2026-09-15 (F-274 follow-on, user-confirmed) — regulated bond-
+    # proxy: real dividend-discount/duration hit, but tempered by a
+    # recession-defensive bid that offsets pure long-duration growth names
+    # (2022's Fed hiking cycle: XLU still finished the year +1.4%, best
+    # sector besides Energy, despite real intra-year rate-driven volatility).
+    "Utilities":       -0.50,
     "Enterprise Tech": -0.45,
     "Healthcare":      -0.15,  # defensive, moderate sensitivity
     "Other":            0.00,

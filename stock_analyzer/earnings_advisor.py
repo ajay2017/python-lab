@@ -55,6 +55,11 @@ _SECTOR_DEFAULTS = {
     "Consumer Tech":    8.0,
     "EV & Auto":       10.0,
     "Enterprise Tech":  7.0,
+    # Added 2026-09-15 (F-274 follow-on, user-confirmed) — regulated,
+    # rate-case-driven utility earnings are famously small and predictable;
+    # real post-earnings moves for DUK/SO/D/AEP/EXC are typically 1-3%,
+    # well below the previous floor here (Defense, 5.0).
+    "Utilities":        3.0,
 }
 
 _SECTOR_WATCH = {

@@ -1424,6 +1424,15 @@ _DIVERSIFY_TO_DISCOVERY = {
     # as SECTOR_ETF's existing IGV triple-mapping across AI & Cloud/AI & Data/
     # Enterprise Tech.
     "Industrials":    "Industrials & Defense",
+    # Added 2026-09-15 (F-274 follow-on, user-confirmed) — intentional reuse
+    # of the SAME bucket Clean Energy already maps to, not a typo; same
+    # many-to-one pattern as Industrials/Defense above. Live immediately
+    # (unlike the sector_candidates roster, which still needs a manual
+    # Supabase seed) since diversifying_candidate_pool's discovery-bucket
+    # slice is TICKER_SECTORS-filtered — DUK/SO/D/AEP/EXC surface here the
+    # moment the "Clean Energy & Utilities" discovery_universe bucket
+    # contains them, with no further code change.
+    "Utilities":      "Clean Energy & Utilities",
     # EV & Auto and Enterprise Tech have no clean 1:1 discovery-universe bucket
     # (EV names are split across Mega-cap Tech/Consumer & Retail; Enterprise
     # Tech only partially overlaps Software & Cloud) — roster-only is fine,
@@ -1541,6 +1550,19 @@ _DIVERSIFYING_SECTORS = [
     # now has a sector_candidates roster too, so it's ready to be a genuine
     # ADD recommendation rather than silent dead plumbing.
     "Industrials",
+    # Added 2026-09-15 (F-274 follow-on, user-confirmed) — the best
+    # defensive-diversifier profile in this table (corr 0.15, tied with
+    # Healthcare) had classification (TICKER_SECTORS, SECTOR_ETF,
+    # _SECTOR_PROFILES) since 2026-08-21 but was never made a genuine ADD
+    # recommendation. RATE_SENSITIVITY and the _SECTOR_SHOCKS stress-scenario
+    # gap (all 6 scenarios) were closed the same day (F-274). Still needs a
+    # `sector_candidates` roster seeded in Supabase (Industrials precedent,
+    # commit `ee0e0f6`) before diversifying_candidate_pool's roster slice
+    # returns names for this sector -- the discovery-bucket slice
+    # (_DIVERSIFY_TO_DISCOVERY below) is live immediately, TICKER_SECTORS-
+    # filtered, so this is NOT inert: DUK/SO/D/AEP/EXC are already reachable
+    # via "Clean Energy & Utilities" once that discovery bucket contains them.
+    "Utilities",
 ]
 
 

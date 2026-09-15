@@ -763,10 +763,12 @@ def test_ticker_sectors_values_are_rate_known_or_a_documented_gap():
     from stock_analyzer.portfolio import TICKER_SECTORS
     known_gap = {
         "Industrials", "Communications", "Consumer Staples & Retail",
-        # Added 2026-09-02 (F-240 follow-up) — Materials/Utilities/Real Estate
-        # were deliberately scoped to _SECTOR_IMPACT/SECTOR_ETF/_SECTOR_PROFILES
+        # Added 2026-09-02 (F-240 follow-up) — Materials/Real Estate were
+        # deliberately scoped to _SECTOR_IMPACT/SECTOR_ETF/_SECTOR_PROFILES
         # only; RATE_SENSITIVITY is a separate, not-yet-made policy call.
-        "Materials", "Utilities", "Real Estate",
+        # Utilities REMOVED from this gap 2026-09-15 (F-274 follow-on) --
+        # RATE_SENSITIVITY["Utilities"] = -0.50 is now set, closing that gap.
+        "Materials", "Real Estate",
     }
     unknown = sorted({v for v in TICKER_SECTORS.values()} - set(RATE_SENSITIVITY) - known_gap)
     assert not unknown, f"new sector labels with no rate-sensitivity score: {unknown}"

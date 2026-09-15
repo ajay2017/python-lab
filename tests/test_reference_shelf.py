@@ -279,6 +279,16 @@ def test_diversify_map_keys_and_values_resolve():
         "Consumer Tech", "AI & Cloud", "AI & Data", "Cybersecurity",
         "Semiconductors", "Communications", "EV & Auto", "Enterprise Tech",
         "Industrials",
+        # Added 2026-09-15 (F-274 follow-on, user-confirmed) — Utilities made
+        # a genuine diversification candidate, same shape as the Industrials
+        # addition above. Unlike Industrials, the matching sector_candidates
+        # bucket (DUK/SO/D/AEP/EXC) had NOT yet been seeded in Supabase as of
+        # this commit -- this fixture records the CODE's intended structure
+        # (per this test's own docstring, that's its job), not a claim that
+        # the live table already has the bucket. diversifying_candidate_pool
+        # degrades gracefully (empty roster slice) until the manual Supabase
+        # seed lands, same precedent as ee0e0f6's own note.
+        "Utilities",
     }
     discovery_universe_keys = {
         "Mega-cap Tech", "Semiconductors", "Software & Cloud",
