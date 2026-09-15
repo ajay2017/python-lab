@@ -18,7 +18,13 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-09-02 (doc-integrity full sweep session: outage-gate + correlation-caption fixes, no test-suite-affecting code changes beyond those)
+## 1. Latest run — 2026-09-15 (beta card repair: F-274, prerequisite + 3 phases)
+
+**5544 passed, 0 failed, 19 warnings** (`python -m pytest -q -m fast`: ~260-270s). Python (local `.venv`). Transcribed from the run after Phase 3, not recalled. No coverage run this pass (the full `--cov` command wasn't re-run this session — see the how-to-update note above; the next full-sweep session should capture it).
+
+**+563 over the 4981 baseline (2026-09-02) below.** Not attributable to this session alone — F-273 (Recommendation-outcomes measurement, 2026-09-15 earlier the same day) and other work shipped between 2026-09-02 and this run also contributed; see `docs/shipped-log.md` for the full per-commit history. This session's own new/changed tests: `tests/test_stress_test.py` (+1, the `_SECTOR_SHOCKS` coverage guard), `tests/test_beta_repair.py` (new file, 58 tests across all 3 phases — lever arithmetic, leverage four-state disclosure, candidate ranking), `tests/test_risk_advisor.py` (+18, same-day-BUY exclusion + `beta_levers` payload), `tests/test_portfolio.py` (+3, `beta_diversifying_sectors`).
+
+## 1a. Previous run — 2026-09-02 (doc-integrity full sweep session: outage-gate + correlation-caption fixes, no test-suite-affecting code changes beyond those)
 
 **4981 passed, 0 failed, 16 warnings** (`python -m pytest -q`: 259-310s). Python (local `.venv`). Transcribed from the run, not recalled.
 
