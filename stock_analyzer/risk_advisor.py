@@ -12,6 +12,7 @@ import pandas as pd
 
 from collections import defaultdict
 
+from stock_analyzer.beta_repair import dollars_to_target_trim, expected_beta_after_trim
 from stock_analyzer.earnings_advisor import _today_et
 from stock_analyzer.constants import (
     DEFENSIVE_DIVERSIFIER_MIN_PCT,
@@ -221,30 +222,87 @@ def build_risk_advisor_recommendations(
                 for x in top_beta
             ) if top_beta else "your highest-weight positions"
 
-            # Compute exact new portfolio beta after selling 50% of the top contributor.
-            # Formula: new_beta = (beta - w_i × b_i × f) / (1 - w_i × f)
-            # where w_i is weight as fraction and f is the sell fraction.
-            trim_ticker = top_beta[0]["ticker"] if top_beta else None
-            if top_beta:
-                _tw   = top_beta[0]["weight"] / 100          # weight as fraction
-                _tb   = top_beta[0]["value"]                  # position beta
-                _tf   = 0.50                                   # sell 50%
+            # Same-day BUY exclusion (mirrors the sector-concentration rec's
+            # trim_candidates/trim_excluded_recent pattern above — see the
+            # trades_df docstring note at the top of this function). The beta
+            # rec's own trim candidate is a SINGLE top contributor, not a
+            # ranked list, so this walks past a same-day-bought contributor
+            # to the next one instead of filtering a list; a name skipped
+            # here is surfaced in beta_trim_excluded_recent, not silently
+            # dropped, so a resulting "no trim today" is explained on-screen.
+            trim_ticker = None
+            trim_row = None
+            beta_trim_excluded_recent = []
+            for _cand in top_beta:
+                if _cand["ticker"].upper() in _bought_today:
+                    beta_trim_excluded_recent.append({
+                        "ticker":       _cand["ticker"],
+                        "value":        _cand["value"],
+                        "weight":       _cand["weight"],
+                        "market_value": _cand["market_value"],
+                    })
+                    continue
+                trim_ticker = _cand["ticker"]
+                trim_row = _cand
+                break
+
+            # Compute exact new portfolio beta after selling 50% of the top
+            # (same-day-BUY-excluded) contributor. Formula:
+            # new_beta = (beta - w_i × b_i × f) / (1 - w_i × f)
+            # where w_i is weight as fraction and f is the sell fraction —
+            # generalized in beta_repair.expected_beta_after_trim so this
+            # call site no longer forks the arithmetic; the >0.999 guard and
+            # the 0.3 floor are call-site-specific and stay here.
+            if trim_row is not None:
+                _tw   = trim_row["weight"] / 100              # weight as fraction
+                _tb   = trim_row["value"]                       # position beta
+                _tf   = 0.50                                    # sell 50%
                 # Guard against w_i × f → 1 (would remove >99.9% of portfolio).
                 # Explicit if/else replaces a fragile `and/or` ternary that could
                 # return the wrong branch if `beta` were ever falsy.
                 if _tw * _tf > 0.999:
                     _new_beta = beta
                 else:
-                    _new_beta = round((beta - _tw * _tb * _tf) / (1 - _tw * _tf), 2)
+                    _new_beta = expected_beta_after_trim(
+                        current_beta=beta, book_fraction_sold=_tw * _tf, position_beta=_tb,
+                    )
+                    # Cannot actually be None here: beta/_tb are both confirmed
+                    # non-None above and _tw*_tf <= 0.999 by construction (the
+                    # only other None-producing guards inside
+                    # expected_beta_after_trim) — this is belt-and-braces, not
+                    # a real code path.
+                    if _new_beta is None:
+                        _new_beta = beta
                 _new_beta    = round(max(float(_new_beta), 0.3), 2)
                 _beta_drop   = round(beta - _new_beta, 2)
-                _trim_dollar = round(top_beta[0]["market_value"] * _tf)
+                _trim_dollar = round(trim_row["market_value"] * _tf)
                 _saved_10    = round(_beta_drop * pv * 0.10)
                 _saved_20    = round(_beta_drop * pv * 0.20)
+
+                # Honest "what would it take to reach target" figure — replaces
+                # the previous "adding 8-10% reaches target 1.3" claim, which
+                # was arithmetically false by ~8x (a 10% cash add at a typical
+                # defensive beta only reaches ~1.76, not 1.3; reaching 1.3 that
+                # way needs ~83% of the book). Computed from data already in
+                # tr_map (no assumed candidate beta) — trimming FURTHER into
+                # the SAME position, using its own real beta.
+                _full_trim_dollar = dollars_to_target_trim(
+                    current_beta=beta, current_value=pv, target=target, position_beta=_tb,
+                )
+                _full_trim_within_position = (
+                    _full_trim_dollar is not None
+                    and _full_trim_dollar <= trim_row["market_value"]
+                )
+                _full_trim_pct = None
+                if _full_trim_dollar is not None and _full_trim_within_position:
+                    _full_trim_pct = round(_full_trim_dollar / trim_row["market_value"] * 100)
             else:
                 _new_beta = round(beta * 0.85, 2)
                 _beta_drop = round(beta - _new_beta, 2)
                 _trim_dollar = _saved_10 = _saved_20 = 0
+                _full_trim_dollar = None
+                _full_trim_within_position = False
+                _full_trim_pct = None
 
             recs.append({
                 "priority": beta_priority,
@@ -262,17 +320,36 @@ def build_risk_advisor_recommendations(
                     "High-beta names dominate the book, amplifying both rallies and corrections."
                 ),
                 "root_tickers": top_beta,
+                "beta_trim_excluded_recent": beta_trim_excluded_recent,
                 "recommendation": (
                     (
                         f"Sell 50% of **{trim_ticker}** (~${_trim_dollar:,.0f}): "
                         f"portfolio beta drops **{beta:.2f} → {_new_beta:.2f}** "
                         f"(saving ~${_saved_10:,.0f} in a 10% correction). "
-                    ) if trim_ticker else ""
+                    ) if trim_ticker else (
+                        "Your highest-beta contributors were all bought today — "
+                        "giving them a day to settle before suggesting a trim; "
+                        "check back tomorrow. "
+                        if beta_trim_excluded_recent else ""
+                    )
                 ) + (
-                    f"To reach target beta of {target:.1f}, also consider adding "
-                    f"{DEFENSIVE_DIVERSIFIER_MIN_PCT:.0f}–{DEFENSIVE_DIVERSIFIER_MAX_PCT:.0f}% in a "
-                    "defensive sector (Healthcare XLV, Consumer Staples XLP, or Utilities XLU) "
-                    "to dilute beta without fully exiting high-conviction names."
+                    (
+                        f"Trimming further into **{trim_ticker}** — selling "
+                        f"~${_full_trim_dollar:,.0f} (~{_full_trim_pct:.0f}% of the "
+                        f"position) in total — would reach the full {target:.1f} "
+                        "target on its own. "
+                        if (trim_ticker and _full_trim_dollar is not None
+                            and _full_trim_within_position) else
+                        f"Reaching the full {target:.1f} target needs more than "
+                        f"{trim_ticker} alone can supply — a second high-beta "
+                        "position would need trimming too. "
+                        if (trim_ticker and _full_trim_dollar is not None) else ""
+                    )
+                ) + (
+                    "A cash-funded add of a defensive name reaches the same target "
+                    "only with substantially more new capital than a trim needs, "
+                    "since it dilutes the book rather than removing the source of "
+                    "the excess beta directly."
                 ),
                 "expected_outcome": (
                     (
@@ -299,6 +376,7 @@ def build_risk_advisor_recommendations(
                 "type":     "ok_beta",
                 "title":    f"Beta {beta:.2f} — Market Sensitivity Well Managed",
                 "problem": "", "root_cause": "", "root_tickers": [],
+                "beta_trim_excluded_recent": [],
                 "recommendation": "No beta action required.",
                 "expected_outcome": "",
                 "institutional_lens": (

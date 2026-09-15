@@ -486,3 +486,138 @@ def test_single_name_overweight_weak_conviction_not_flagged_here():
     }]
     recs = _recs(rows)
     assert find_rec(recs, "single_name_concentration") is None
+
+
+# ── beta_repair Phase 1 — characterization test (written BEFORE the refactor) ──
+# Pins today's inline _new_beta arithmetic (risk_advisor.py's beta rec, the
+# 50%-of-top-contributor trim math) bit-for-bit so importing
+# beta_repair.expected_beta_after_trim to replace the inline formula is a pure
+# generalization, not a behaviour change. If this test ever needs to change,
+# the beta rec's numbers changed and that is a decision-formula change
+# requiring its own Opus review, not a refactor.
+
+def test_beta_rec_trim_arithmetic_characterization():
+    rows = [{"ticker": "HIGH", "weight": 60.0, "market_value": 14700.0, "beta": 4.15}]
+    recs = _recs(rows, beta=1.88, portfolio_value=24500.0)
+    rec = find_rec(recs, "beta")
+    assert rec is not None
+    assert "1.88 → 0.91" in rec["recommendation"]
+    assert "~$7,350" in rec["recommendation"]
+    assert "~$2,376" in rec["recommendation"]
+    assert "0.91" in rec["expected_outcome"]
+    assert "~$4,753" in rec["expected_outcome"]
+    assert rec["root_tickers"][0] == {
+        "ticker": "HIGH",
+        "value": 4.15,
+        "weight": 60.0,
+        "market_value": 14700.0,
+        "label": "β 4.15  ·  60.0% of portfolio",
+        "_contrib": 2.49,
+    }
+
+
+# ── beta rec same-day-buy exclusion (B1, beta_repair Phase 1) ────────────────
+# Mirrors the sector-concentration rec's same-day-BUY exclusion above -- the
+# beta rec previously had NO such guard: Grow Today could recommend a buy at
+# 08:00 and the beta card could name that exact position for a trim the same
+# afternoon. Uses the SAME trades_df / _bought_today mechanism, walking past
+# an excluded top contributor to the next one instead of filtering a list.
+
+_TWO_HIGH_BETA_ROWS = [
+    {"ticker": "TOPBETA", "weight": 60.0, "market_value": 14_700.0, "beta": 4.15},
+    {"ticker": "NEXTBETA", "weight": 20.0, "market_value": 4_900.0, "beta": 2.0},
+]
+
+
+def test_beta_rec_excludes_same_day_buy_top_contributor():
+    trades_df = pd.DataFrame([
+        {"ticker": "TOPBETA", "action": "BUY", "traded_at": _et_noon_today_as_utc_iso()},
+    ])
+    port_df, held_data, port_risk, h_rets, pv, gd = make_risk_advisor_inputs(
+        _TWO_HIGH_BETA_ROWS, beta=1.88, portfolio_value=24_500.0,
+    )
+    recs = build_risk_advisor_recommendations(
+        port_df, held_data, port_risk, h_rets, pv, gd, trades_df=trades_df,
+    )
+    rec = find_rec(recs, "beta")
+    assert rec is not None
+    # root_tickers stays the full top-3 by contribution, unfiltered (frozen
+    # contract -- 4 downstream consumers depend on its shape/membership).
+    assert rec["root_tickers"][0]["ticker"] == "TOPBETA"
+    # But the ACTUAL trim recommendation skips the same-day-bought name and
+    # names the next contributor instead.
+    assert "TOPBETA" not in rec["recommendation"].split("saving")[0] or (
+        "Sell 50% of **NEXTBETA**" in rec["recommendation"]
+    )
+    assert "Sell 50% of **NEXTBETA**" in rec["recommendation"]
+    assert {c["ticker"] for c in rec["beta_trim_excluded_recent"]} == {"TOPBETA"}
+
+
+def test_beta_rec_all_top_contributors_bought_today_falls_back_honestly():
+    trades_df = pd.DataFrame([
+        {"ticker": "TOPBETA", "action": "BUY", "traded_at": _et_noon_today_as_utc_iso()},
+        {"ticker": "NEXTBETA", "action": "BUY", "traded_at": _et_noon_today_as_utc_iso()},
+    ])
+    port_df, held_data, port_risk, h_rets, pv, gd = make_risk_advisor_inputs(
+        _TWO_HIGH_BETA_ROWS, beta=1.88, portfolio_value=24_500.0,
+    )
+    recs = build_risk_advisor_recommendations(
+        port_df, held_data, port_risk, h_rets, pv, gd, trades_df=trades_df,
+    )
+    rec = find_rec(recs, "beta")
+    assert rec is not None
+    assert "bought today" in rec["recommendation"]
+    assert {c["ticker"] for c in rec["beta_trim_excluded_recent"]} == {"TOPBETA", "NEXTBETA"}
+
+
+def test_beta_rec_no_trades_df_is_backward_compatible():
+    recs = _recs(_TWO_HIGH_BETA_ROWS, beta=1.88, portfolio_value=24_500.0)
+    rec = find_rec(recs, "beta")
+    assert rec is not None
+    assert rec["beta_trim_excluded_recent"] == []
+    assert "Sell 50% of **TOPBETA**" in rec["recommendation"]
+
+
+def test_ok_beta_carries_empty_excluded_recent_key():
+    recs = _recs(_ONE_ROW, beta=1.0)
+    rec = find_rec(recs, "ok_beta")
+    assert rec is not None
+    assert rec["beta_trim_excluded_recent"] == []
+
+
+# ── beta rec honest "full trim to target" claim (replaces the false 8-10% add) ─
+
+def test_beta_rec_full_trim_within_position_states_exact_dollars_and_pct():
+    # Same fixture as the characterization test: trimming the SAME position
+    # further (beyond the 50% modeled) reaches target 1.3 within its own
+    # $14,700 market value -- dollars_to_target_trim(1.88, 24500, 1.3, 4.15)
+    # ~= $4,985.96, well under $14,700.
+    rows = [{"ticker": "HIGH", "weight": 60.0, "market_value": 14_700.0, "beta": 4.15}]
+    recs = _recs(rows, beta=1.88, portfolio_value=24_500.0)
+    rec = find_rec(recs, "beta")
+    assert rec is not None
+    assert "Trimming further into **HIGH**" in rec["recommendation"]
+    assert "$4,986" in rec["recommendation"] or "$4,985" in rec["recommendation"]
+    assert "reach the full 1.3 target on its own" in rec["recommendation"]
+
+
+def test_beta_rec_full_trim_exceeds_position_discloses_shortfall():
+    # A small, low-market-value top contributor: even fully liquidating it
+    # can't supply enough dollars to reach target alone.
+    rows = [{"ticker": "TINY", "weight": 60.0, "market_value": 100.0, "beta": 4.15}]
+    recs = _recs(rows, beta=1.88, portfolio_value=24_500.0)
+    rec = find_rec(recs, "beta")
+    assert rec is not None
+    assert "needs more than TINY alone can supply" in rec["recommendation"]
+
+
+def test_beta_rec_never_asserts_a_specific_add_percentage_claim():
+    # The old false claim ("adding 8-10% ... reaches target beta 1.3") was
+    # arithmetically wrong by ~8x. CLAUDE.md doc-integrity: a wrong number in
+    # a decision-support surface erodes trust. This exact phrase must never
+    # render again on the beta rec.
+    rows = [{"ticker": "HIGH", "weight": 60.0, "market_value": 14_700.0, "beta": 4.15}]
+    recs = _recs(rows, beta=1.88, portfolio_value=24_500.0)
+    rec = find_rec(recs, "beta")
+    assert "8–10%" not in rec["recommendation"]
+    assert "consider adding" not in rec["recommendation"]
