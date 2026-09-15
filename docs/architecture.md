@@ -2321,7 +2321,20 @@ when the provider's most recent call actually succeeded (`consec_err == 0`) — 
 2026-08-10 after a live premarket session showed Finnhub stuck red from an earlier
 rate-limit burst (`rate_limits >= 3` never decays within a session) minutes after
 it had already recovered via the Yahoo Finance failover; see memory
-`project_system_proprioception`.
+`project_system_proprioception`. A second, independent re-grade (2026-09-15) covers
+a "down" read whose EVERY recorded failure this session is a quota/plan-limit
+(HTTP 402) event — confirmed live against FMP, whose free tier restricts live
+quotes to a small symbol allowlist, so a held ticker outside it 402s every call,
+permanently. That's a structural plan boundary, not a fixable fault, so it also
+re-grades to "warn" (never "down") — display-only, and gated on every other error
+class (auth/rate-limit/generic/parse) being zero so a genuinely mixed fault still
+reads "down". `api_health.py`'s own `level` computation, and
+`orchestrator._is_red()`'s circuit-breaker that skips a red provider as an
+independent cross-check validator, are untouched by this — a quota-only source
+still reads "red" internally and is still correctly skipped as a validator. The
+🩺 System Trust page's top-of-page banner (`app.py`) was changed the same day to
+state the actual failing check(s)' label + detail text instead of a generic
+"a data provider is still actively erroring" paragraph.
 
 ### `stock_analyzer/reference_shelf.py`
 

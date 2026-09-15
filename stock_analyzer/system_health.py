@@ -29,7 +29,11 @@ Severity vocabulary:
                    a lane that ran and FAILED, or a provider still actively
                    erroring (its most recent call did NOT succeed — a resolved
                    burst re-grades to "warn", see check_providers()). The classes
-                   that mean the app may be deciding blind.
+                   that mean the app may be deciding blind. EXCEPTION: a provider
+                   whose every recorded failure this session is a quota/plan-limit
+                   (HTTP 402) event also re-grades to "warn" — a free-tier plan
+                   boundary is permanent and non-actionable, not an incident (see
+                   check_providers()).
   "unknown" (⚪) — not observed yet this session (no provider call made, a lane
                    with no heartbeat row yet, a page not visited). NEVER counted
                    as degraded — silence is not failure.
@@ -645,11 +649,64 @@ def check_providers() -> list[dict]:
                 recovered = severity == "down" and (h.get("consec_err", 0) or 0) == 0
                 if recovered:
                     severity = "warn"
+                # `recovered` and `quota_only` below cannot both fire for the same
+                # row: a quota-only history can only reach "down" via
+                # consecutive_errors >= 5 (quotas alone caps at "yellow" in
+                # api_health.get_health()), and any success resets that counter to
+                # 0 — dropping the level straight to "yellow" before this function
+                # ever sees "down". So a quota-only source with a trailing success
+                # never reaches this block as "down" in the first place; `recovered`
+                # is checked first purely for readability, not because ordering
+                # matters here (test_providers_quota_then_success_recovers_without_
+                # quota_wording pins this).
+                # Quota-only degradation (2026-09-15, confirmed against FMP's own
+                # support chat): FMP's free tier DOES include live quotes, but
+                # restricts them to a small allowlist of symbols (~87, e.g.
+                # AAPL/TSLA/AMZN) — any other ticker's quote call 402s ("Payment
+                # Required") every single time, forever. That's a structural plan
+                # boundary, not a fixable fault: no retry/backoff/key-rotation
+                # clears it, and it will recur every session for a book that
+                # doesn't happen to hold one of the allowlisted names. Grading
+                # that identically to a misconfigured key (auth) or a genuine
+                # rate-limit burst — both real, actionable incidents — trains the
+                # owner to distrust a permanently-amber-at-worst backup source.
+                # classify_error() already tags 402/"payment required"/"plan
+                # limit" as its own "quota" event distinct from "error"/"auth"/
+                # "rate_limit" — this only changes how THIS check reports that
+                # existing classification. Gated on EVERY other failure class
+                # being zero so a genuinely mixed fault (quota errors alongside
+                # real parse/auth/rate-limit/generic errors) still reads "down".
+                # Deliberately does NOT touch api_health.py's own "level", so
+                # orchestrator._is_red()'s circuit-breaker (which skips a red
+                # provider as a cross-check validator) is completely unaffected —
+                # this is a DISPLAY-only re-grade, matching this module's
+                # read-only/informing-only contract.
+                #
+                # Written against the FMP case above, but deliberately NOT
+                # scoped to source == "fmp" — the same reasoning (a pure run of
+                # 402s is a plan/billing boundary, never a fixable fault) applies
+                # to any provider, including a primary. If Finnhub's own key ever
+                # hits a billing wall, it should read "warn" here too, exactly
+                # like a recovered burst does — the circuit-breaker still
+                # red-skips it either way (see above).
+                quota_only = (
+                    severity == "down"
+                    and (h.get("quotas", 0) or 0) > 0
+                    and (h.get("auth_errors", 0) or 0) == 0
+                    and (h.get("rate_limits", 0) or 0) == 0
+                    and (h.get("errors", 0) or 0) == 0
+                    and (h.get("parse_errors", 0) or 0) == 0
+                )
+                if quota_only:
+                    severity = "warn"
                 detail = f"{h.get('successes', 0)}/{calls} ok · last success {h.get('freshness', '—')}"
                 if severity in ("warn", "down") and h.get("last_error"):
                     detail += f" · {str(h.get('last_error'))[:80]}"
                 if recovered:
                     detail += " · recovered — most recent call succeeded"
+                elif quota_only:
+                    detail += (" · plan/quota limit — a known, expected free-tier "
+                               "boundary, not an outage")
         except Exception as exc:
             severity, detail = "unknown", str(exc)[:120]
         out.append({"source": source, "label": label, "severity": severity, "detail": detail})

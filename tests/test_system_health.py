@@ -227,6 +227,52 @@ def test_providers_still_erroring_stays_down():
     assert provs["finnhub"]["severity"] == "down"
 
 
+def test_providers_quota_only_regrades_to_warn():
+    # FMP's free tier restricts live quotes to a small symbol allowlist — any
+    # other ticker 402s ("Payment Required") every call, forever. That's a
+    # permanent plan boundary, not a fixable incident, so it must never read
+    # the same "down" as a misconfigured key or an active rate-limit burst.
+    api_health.reset()
+    for _ in range(6):
+        api_health.record("fmp", "quota", "402 Client Error: Payment Required")
+    assert api_health.get_health("fmp")["level"] == "red"  # underlying counter still red
+    provs = {p["source"]: p for p in sh.check_providers()}
+    assert provs["fmp"]["severity"] == "warn"
+    assert "plan/quota limit" in provs["fmp"]["detail"]
+
+
+def test_providers_quota_then_success_recovers_without_quota_wording():
+    # A session that 402'd repeatedly and then had a call actually succeed:
+    # the success resets consecutive_errors to 0, so api_health's OWN level
+    # computation drops straight to "yellow" (quotas >= 1) — it never reaches
+    # "red" at all once a success has landed, so neither "down"-gated re-grade
+    # (recovered / quota_only) fires. There is no real scenario where a
+    # quota-only history is BOTH "down" and has a trailing success — the two
+    # re-grades can't collide in practice, only in a code review's imagination.
+    api_health.reset()
+    for _ in range(5):
+        api_health.record("fmp", "quota", "402 Client Error: Payment Required")
+    api_health.record("fmp", "success")
+    assert api_health.get_health("fmp")["level"] == "yellow"
+    provs = {p["source"]: p for p in sh.check_providers()}
+    assert provs["fmp"]["severity"] == "warn"
+    assert "recovered" not in provs["fmp"]["detail"]
+    assert "plan/quota limit" not in provs["fmp"]["detail"]
+
+
+def test_providers_quota_mixed_with_real_error_stays_down():
+    # A genuinely mixed fault (quota 402s AND a real error/auth/rate-limit
+    # class) must NOT be swallowed by the quota-only exemption — only a
+    # session where EVERY recorded failure is quota qualifies.
+    api_health.reset()
+    for _ in range(3):
+        api_health.record("fmp", "quota", "402 Client Error: Payment Required")
+    for _ in range(3):
+        api_health.record("fmp", "error", "boom")
+    provs = {p["source"]: p for p in sh.check_providers()}
+    assert provs["fmp"]["severity"] == "down"
+
+
 # ── ④ caches ──────────────────────────────────────────────────────────────────
 def test_caches_none_is_unknown_value_is_ok():
     container = {"_port_df_enriched": object(), "_risk_advisor_recs_cache": None}

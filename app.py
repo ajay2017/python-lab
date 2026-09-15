@@ -31725,10 +31725,30 @@ elif page == "🩺 System Trust":
     _chip = _health.get("chip_severity", "ok")
     _n_down = _health.get("n_down", 0)
     _n_warn = _health.get("n_warn", 0)
+
+    def _sysh_failure_reasons(health: dict, *severities: str, limit: int = 3) -> str:
+        """'<label> — <detail>' for every row at `severities`, across the same
+        four buckets (lanes/stores/providers/writes) that feed chip_severity/
+        n_down/n_warn — so whatever this states as the reason can never disagree
+        with the chip's own count. Capped at `limit` items (+ a 'N more' tail) so
+        a multi-failure morning doesn't turn the banner into a wall of text."""
+        reasons = []
+        for _bucket in ("lanes", "stores", "providers", "writes"):
+            for _r in health.get(_bucket, []):
+                if _r.get("severity") in severities:
+                    _detail = (_r.get("detail") or "").strip()
+                    reasons.append(f"{_r.get('label', '')} — {_detail}" if _detail
+                                   else _r.get("label", ""))
+        if not reasons:
+            return "see the rows below"
+        text = "; ".join(reasons[:limit])
+        if len(reasons) > limit:
+            text += f"; +{len(reasons) - limit} more"
+        return text
+
     if _chip == "down":
         st.error(
-            f"🔴 {_n_down} check(s) failing — an expected data store is missing, a "
-            "cron lane ran and failed, or a data provider is still actively erroring. "
+            f"🔴 {_n_down} check(s) failing — {_sysh_failure_reasons(_health, 'down')}. "
             "The app may be operating on incomplete data; see the red rows below."
         )
     elif _chip == "warn":
@@ -31761,8 +31781,9 @@ elif page == "🩺 System Trust":
             )
         else:
             st.warning(
-                f"🟡 {_n_warn} check(s) degraded — decisions still have their inputs, but "
-                "confidence is dented (a stale store, a backup data provider, or a late lane)."
+                f"🟡 {_n_warn} check(s) degraded — "
+                f"{_sysh_failure_reasons(_health, 'warn')}. Decisions still have "
+                "their inputs, but confidence is dented."
             )
     else:
         # The pipeline banner must account for check ⑤ even though ⑤ is
