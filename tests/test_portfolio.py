@@ -654,6 +654,50 @@ def test_diversifying_candidate_pool_roster_not_refiltered_by_ticker_sectors(mon
     assert pool == ["ZZZROSTER1"]
 
 
+# ── beta_diversifying_sectors (beta-repair Phase 3) ──────────────────────────
+
+def test_beta_diversifying_sectors_matches_manual_intersection():
+    # Derived, not hardcoded: _DIVERSIFYING_SECTORS ∩ {corr < REDEPLOY_CORR_
+    # DIVERSIFIER_MAX}. Pinned against the values live in the module today —
+    # if a sector's corr changes, this test documents the resulting set
+    # change rather than silently drifting.
+    from stock_analyzer.portfolio import (
+        _DIVERSIFYING_SECTORS, _SECTOR_PROFILES, REDEPLOY_CORR_DIVERSIFIER_MAX,
+        beta_diversifying_sectors,
+    )
+    expected = [
+        s for s in _DIVERSIFYING_SECTORS
+        if _SECTOR_PROFILES[s]["corr"] < REDEPLOY_CORR_DIVERSIFIER_MAX
+    ]
+    assert beta_diversifying_sectors() == expected
+    # EV & Auto (corr 0.40, exactly at the threshold) and Enterprise Tech
+    # (corr 0.45) are excluded; Healthcare/Energy/Defense/Communications/
+    # Financials/Clean Energy/Industrials clear it.
+    assert "EV & Auto" not in beta_diversifying_sectors()
+    assert "Enterprise Tech" not in beta_diversifying_sectors()
+    assert "Healthcare" in beta_diversifying_sectors()
+
+
+def test_beta_diversifying_sectors_order_preserved_from_source_list():
+    from stock_analyzer.portfolio import _DIVERSIFYING_SECTORS, beta_diversifying_sectors
+    result = beta_diversifying_sectors()
+    # Every returned sector appears in the same relative order as in
+    # _DIVERSIFYING_SECTORS (a stable subsequence, not re-sorted).
+    source_positions = [
+        _DIVERSIFYING_SECTORS.index(s) for s in result
+    ]
+    assert source_positions == sorted(source_positions)
+
+
+def test_beta_diversifying_sectors_respects_custom_corr_max():
+    from stock_analyzer.portfolio import beta_diversifying_sectors
+    # A very tight threshold excludes everything.
+    assert beta_diversifying_sectors(corr_max=0.05) == []
+    # A very loose threshold includes everything in _DIVERSIFYING_SECTORS.
+    from stock_analyzer.portfolio import _DIVERSIFYING_SECTORS
+    assert beta_diversifying_sectors(corr_max=1.0) == _DIVERSIFYING_SECTORS
+
+
 def test_diversification_recommendations_never_repeats_a_ticker_across_shared_bucket_sectors(monkeypatch):
     """End-to-end reproduction of the real finding: with Industrials and
     Defense both underweight and drawing from the same shared discovery

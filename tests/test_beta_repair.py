@@ -20,6 +20,7 @@ from stock_analyzer.beta_repair import (
     expected_beta_after_swap,
     expected_beta_after_trim,
     leverage_side_effect,
+    rank_defensive_candidates,
 )
 from stock_analyzer.portfolio import expected_beta_after_add
 
@@ -454,3 +455,190 @@ def test_leverage_gross_book_going_negative_degrades_to_stale():
         gross_book=24_500.0, net_capital=7_802.0, basis="levered",
     )
     assert r["state"] == "stale"
+
+
+# ── rank_defensive_candidates ─────────────────────────────────────────────────
+
+_HOLD_FLOOR = 44.0   # COMPOSITE_HOLD
+_BUY_GATE   = 65.0   # COMPOSITE_BUY
+_TARGET     = 1.3    # PORTFOLIO_BETA_ELEVATED
+
+
+def test_rank_defensive_candidates_none_when_candidates_none():
+    assert rank_defensive_candidates(
+        candidates=None, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    ) is None
+
+
+def test_rank_defensive_candidates_none_when_target_none():
+    assert rank_defensive_candidates(
+        candidates=[{"ticker": "AAA", "beta": 0.5, "corr": 0.1, "composite": 70}],
+        target=None, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    ) is None
+
+
+def test_rank_defensive_candidates_empty_list_when_measured_and_empty():
+    result = rank_defensive_candidates(
+        candidates=[], target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )
+    assert result == []
+
+
+def test_rank_defensive_candidates_never_drops_a_row():
+    # 4 candidates: one actionable, one below-floor, one structurally
+    # unreachable, one unscored -- ALL FOUR must appear in the output.
+    candidates = [
+        {"ticker": "ACTIONABLE", "beta": 0.5, "corr": 0.1, "composite": 70},
+        {"ticker": "BELOWFLOOR", "beta": 0.5, "corr": 0.1, "composite": 30},
+        {"ticker": "UNREACHABLE", "beta": 2.0, "corr": 0.1, "composite": 70},
+        {"ticker": "UNSCORED", "beta": 0.5, "corr": 0.1, "composite": None},
+    ]
+    result = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )
+    assert {r["ticker"] for r in result} == {
+        "ACTIONABLE", "BELOWFLOOR", "UNREACHABLE", "UNSCORED",
+    }
+
+
+def test_rank_defensive_candidates_actionable_true_only_when_reachable_and_above_buy_gate():
+    candidates = [
+        {"ticker": "A", "beta": 0.5, "corr": 0.1, "composite": 70},   # actionable
+        {"ticker": "B", "beta": 2.0, "corr": 0.1, "composite": 90},   # unreachable, never actionable
+    ]
+    result = {r["ticker"]: r for r in rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )}
+    assert result["A"]["actionable"] is True
+    assert result["B"]["actionable"] is False
+    assert result["B"]["reachable"] is False
+
+
+def test_rank_defensive_candidates_disclosed_cost_between_floor_and_buy_gate():
+    candidates = [{"ticker": "MID", "beta": 0.5, "corr": 0.1, "composite": 55}]
+    result = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )[0]
+    assert result["meets_floor"] is True
+    assert result["actionable"] is False
+    assert result["cost_note"] is not None
+    assert "risk trade" in result["cost_note"]
+
+
+def test_rank_defensive_candidates_below_floor_has_no_cost_note():
+    candidates = [{"ticker": "LOW", "beta": 0.5, "corr": 0.1, "composite": 30}]
+    result = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )[0]
+    assert result["meets_floor"] is False
+    assert result["cost_note"] is None
+
+
+def test_rank_defensive_candidates_unscored_composite_is_none_not_false():
+    # Distinct from "measured and below the floor" -- couldn't load a score
+    # at all must not masquerade as a measured failure.
+    candidates = [{"ticker": "NOLOAD", "beta": 0.5, "corr": 0.1, "composite": None}]
+    result = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )[0]
+    assert result["meets_floor"] is None
+    assert result["actionable"] is False
+
+
+def test_rank_defensive_candidates_unreachable_never_gets_a_floor_classification():
+    # A structurally unreachable candidate's composite is irrelevant to the
+    # beta objective -- meets_floor must stay None (not evaluated), never
+    # True/False, since the composite was never the reason it's excluded.
+    candidates = [{"ticker": "HIBETA", "beta": 5.0, "corr": 0.1, "composite": 90}]
+    result = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )[0]
+    assert result["reachable"] is False
+    assert result["meets_floor"] is None
+    assert result["actionable"] is False
+
+
+def test_rank_defensive_candidates_beta_exactly_at_target_is_unreachable():
+    # Structural boundary: beta == target means dilution can never pull the
+    # book strictly below target -- >= is unreachable, not just >.
+    candidates = [{"ticker": "ATTARGET", "beta": _TARGET, "corr": 0.1, "composite": 90}]
+    result = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )[0]
+    assert result["reachable"] is False
+
+
+def test_rank_defensive_candidates_unmeasured_beta_is_none_not_false():
+    candidates = [{"ticker": "NOBETA", "beta": None, "corr": 0.1, "composite": 90}]
+    result = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )[0]
+    assert result["reachable"] is None
+    assert result["actionable"] is False
+
+
+def test_rank_defensive_candidates_sort_order_reachable_before_unreachable():
+    candidates = [
+        {"ticker": "UNREACHABLE", "beta": 5.0, "corr": 0.1, "composite": 90},
+        {"ticker": "REACHABLE", "beta": 0.5, "corr": 0.1, "composite": 20},
+    ]
+    result = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )
+    assert [r["ticker"] for r in result] == ["REACHABLE", "UNREACHABLE"]
+
+
+def test_rank_defensive_candidates_sort_order_actionable_before_cost_disclosed():
+    candidates = [
+        {"ticker": "COST", "beta": 0.5, "corr": 0.1, "composite": 55},
+        {"ticker": "CLEAN", "beta": 0.5, "corr": 0.1, "composite": 70},
+    ]
+    result = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )
+    assert [r["ticker"] for r in result] == ["CLEAN", "COST"]
+
+
+def test_rank_defensive_candidates_sort_order_within_tier_by_beta_then_corr_then_composite():
+    candidates = [
+        {"ticker": "HIGHER_BETA", "beta": 0.7, "corr": 0.1, "composite": 70},
+        {"ticker": "LOWER_BETA", "beta": 0.3, "corr": 0.1, "composite": 70},
+    ]
+    result = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )
+    assert [r["ticker"] for r in result] == ["LOWER_BETA", "HIGHER_BETA"]
+
+
+def test_rank_defensive_candidates_never_returns_actionable_for_below_floor():
+    # No output field can read as a buy call for a sub-floor name.
+    candidates = [{"ticker": "LOW", "beta": 0.5, "corr": 0.1, "composite": 10}]
+    result = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )[0]
+    assert result["actionable"] is False
+    assert result["cost_note"] is None
+
+
+def test_rank_defensive_candidates_composite_exactly_at_hold_floor():
+    # composite == hold_floor exactly -> NOT below the floor (< is the gate,
+    # not <=) -> meets_floor True, with a disclosed cost note since it's
+    # still below buy_gate.
+    candidates = [{"ticker": "ATFLOOR", "beta": 0.5, "corr": 0.1, "composite": _HOLD_FLOOR}]
+    result = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )[0]
+    assert result["meets_floor"] is True
+    assert result["actionable"] is False
+    assert result["cost_note"] is not None
+
+
+def test_rank_defensive_candidates_composite_exactly_at_buy_gate():
+    # composite == buy_gate exactly -> actionable True (>= is the gate).
+    candidates = [{"ticker": "ATGATE", "beta": 0.5, "corr": 0.1, "composite": _BUY_GATE}]
+    result = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )[0]
+    assert result["meets_floor"] is True
+    assert result["actionable"] is True
+    assert result["cost_note"] is None

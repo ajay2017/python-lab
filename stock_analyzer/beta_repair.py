@@ -52,6 +52,16 @@ equity, and ANY trim/swap shrinks or holds it -- see the function's own
 computes a ratio when the account's leverage state is unmeasured (basis
 "unlevered"/"stale") or in a margin call ("called") -- those three
 non-`measured` states carry no fabricated `direction`.
+
+`rank_defensive_candidates` (added for the candidate-selection fix) replaces
+the old panel's momentum-sort-then-composite-filter ordering with a single
+pass over already-scored candidates: ranks by whether a candidate can even
+reach the beta target by dilution, then by the app's own COMPOSITE_HOLD
+floor, then by beta/corr/composite -- and NEVER drops a row from its output,
+so a caller can always disclose "N filtered, here's why" rather than making
+data vanish. It issues no buy call: `actionable` is a disclosed fact
+("clears the Buy gate too"), never a recommendation, and a sub-gate name is
+retained with a `cost_note` rather than hidden.
 """
 from __future__ import annotations
 
@@ -426,3 +436,139 @@ def leverage_side_effect(
         "ratio_after":         _ratio_after,
         "direction":           _direction,
     }
+
+
+def rank_defensive_candidates(
+    *,
+    candidates: "list[dict] | None",
+    target: float | None,
+    hold_floor: float,
+    buy_gate: float,
+) -> "list[dict] | None":
+    """Rank + disclose defensive-beta candidates — never recommend a buy.
+
+    Replaces the old "Find Defensive Recommendations" panel's momentum-
+    sort-then-composite-filter ordering (selection and judgement applied in
+    the wrong order — see the module's own audit history) with a single pass
+    that scores EVERY candidate on the objective this panel actually serves:
+    which name pulls the book's beta toward `target` at the least cost, not
+    which name has the hottest recent price action.
+
+    Parameters
+    ----------
+    candidates : a list of dicts, each `{"ticker": str, "beta": float|None,
+        "corr": float|None, "composite": float|None}` — ALREADY resolved by
+        the caller (this function does no I/O: no price fetch, no
+        composite-scoring call). `beta` is expected to come from
+        `aligned_beta` (book-window-restricted, not the candidate's own full
+        overlap with SPY); `corr` from `portfolio.correlation_to_portfolio`;
+        `composite` from the same stock-quality engine every other candidate
+        surface uses (Grow Today / Analysis).
+    target : the portfolio beta target (PORTFOLIO_BETA_ELEVATED). `None`
+        when the caller's own portfolio beta isn't known this session —
+        nothing to rank a "pull toward" candidate against.
+    hold_floor : composite floor (COMPOSITE_HOLD) below which a candidate is
+        excluded from the ranked list.
+    buy_gate : composite ceiling (COMPOSITE_BUY) at/above which a candidate
+        is `actionable` — still never an ACT NOW call, just the disclosed
+        fact that this name also clears the app's normal Buy gate.
+
+    Returns
+    -------
+    None  — not measured: `candidates` is None (the caller's own pool never
+            resolved this session, e.g. `reference_data.resolve_universe`
+            raised) or `target` is None (portfolio beta unknown).
+    []    — measured: `candidates` was a genuinely empty list (no pool this
+            session). A real, complete answer, not a failure.
+    list[dict] — ALWAYS the full input, one row per candidate, NEVER
+            filtered out of the response (per the house "never silently
+            filter" UI convention — a caller decides how many to DISPLAY
+            and discloses the rest via count, this function never hides
+            data). Each row adds:
+      reachable   : True (beta < target — dilutes the book toward target
+                    at some size), False (beta >= target — CANNOT pull the
+                    book to target by dilution at ANY size, a structural
+                    fact, not a data gap), or None (beta not measured).
+      meets_floor : True (composite >= hold_floor), False (composite <
+                    hold_floor — the disclosed-cost floor), or None
+                    (composite not measured, i.e. couldn't load — distinct
+                    from "measured and below the floor").
+      actionable  : True only when reachable is True AND composite >=
+                    buy_gate. NEVER True for a structurally-unreachable or
+                    sub-floor candidate — this is the one field a caller may
+                    treat as "a real Buy-gate pass," never anything else.
+      cost_note   : a disclosed-cost string when reachable is True and
+                    hold_floor <= composite < buy_gate (a genuine risk trade,
+                    below the app's normal conviction gate) — this is the
+                    ONLY sanctioned way a sub-buy-gate name may be shown as
+                    worth considering; never an implicit recommendation.
+
+    Sort (best first): reachable (True, then None, then False) → meets_floor
+    (True, then None, then False) → actionable (True first) → beta ascending
+    → corr ascending → composite descending. `None` values sort LAST within
+    their own comparison key (never coerced to 0, which would look like the
+    best possible reading). Pure / no I/O.
+    """
+    if candidates is None or target is None:
+        return None
+
+    out: list[dict] = []
+    for c in candidates:
+        _beta = _pos_float(c.get("beta"))
+        _corr = _pos_float(c.get("corr"))
+        _comp = _pos_float(c.get("composite"))
+
+        if _beta is None:
+            _reachable = None
+        elif _beta >= target:
+            _reachable = False
+        else:
+            _reachable = True
+
+        _meets_floor = None
+        _actionable  = False
+        _cost_note   = None
+        if _reachable is True:
+            if _comp is None:
+                _meets_floor = None
+            elif _comp < hold_floor:
+                _meets_floor = False
+            elif _comp < buy_gate:
+                _meets_floor = True
+                _cost_note = (
+                    f"composite {_comp:.0f} is below the Buy gate "
+                    f"({buy_gate:.0f}) — a risk trade, not a conviction trade"
+                )
+            else:
+                _meets_floor = True
+                _actionable  = True
+
+        out.append({
+            "ticker":      c.get("ticker"),
+            "beta":        _beta,
+            "corr":        _corr,
+            "composite":   _comp,
+            "reachable":   _reachable,
+            "meets_floor": _meets_floor,
+            "actionable":  _actionable,
+            "cost_note":   _cost_note,
+        })
+
+    def _tier3(v):
+        return {True: 0, None: 1, False: 2}[v]
+
+    def _rank(c: dict) -> tuple:
+        _beta_key = c["beta"] if c["beta"] is not None else float("inf")
+        _corr_key = c["corr"] if c["corr"] is not None else float("inf")
+        _comp_key = -(c["composite"]) if c["composite"] is not None else float("inf")
+        return (
+            _tier3(c["reachable"]),
+            _tier3(c["meets_floor"]),
+            0 if c["actionable"] else 1,
+            _beta_key,
+            _corr_key,
+            _comp_key,
+        )
+
+    out.sort(key=_rank)
+    return out

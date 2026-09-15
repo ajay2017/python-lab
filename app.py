@@ -254,8 +254,11 @@ from stock_analyzer.portfolio import (
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
     trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
     classify_book_corr, CORR_MIN_OBS_TRUSTED, expected_beta_after_add,
+    beta_diversifying_sectors,
 )
-from stock_analyzer.beta_repair import leverage_side_effect
+from stock_analyzer.beta_repair import (
+    aligned_beta, leverage_side_effect, rank_defensive_candidates,
+)
 from stock_analyzer.concentration import assess_add_concentration
 from stock_analyzer.scanner import (
     scan_sectors, scan_movers,
@@ -14977,8 +14980,12 @@ elif page == "🔗 Risk Analysis":
                         with st.expander("Why this matters"):
                             st.markdown(_rec['institutional_lens'])
 
-                    # Defensive picks — shown inside volatility and beta cards
-                    if _rtype in ("volatility", "beta"):
+                    # Defensive picks — volatility card keeps its existing
+                    # momentum-ranked list (owner decision, 2026-09-15: no
+                    # beta-target claims belong on the volatility card, so
+                    # this branch is left untouched). Beta card gets the
+                    # Phase-3 rank-and-disclose replacement below.
+                    if _rtype == "volatility":
                         st.markdown("")
                         with st.expander("🔍 Find Defensive Recommendations — Implement This Recommendation", expanded=False):
                             _def_sectors = {"Healthcare & Biotech", "Consumer Staples & Retail"}
@@ -15124,6 +15131,276 @@ elif page == "🔗 Risk Analysis":
                                                 f"composite score below the Hold floor ({COMPOSITE_HOLD}), "
                                                 "not suitable for defensive addition."
                                             )
+
+                    # ── Beta card: rank + disclose defensive-beta candidates ──
+                    # Phase 3 replacement for the old momentum-sort-then-
+                    # composite-filter panel (selection and judgement applied
+                    # in the wrong order, and neither "defensive" bucket was
+                    # reliably low-beta). This ranks by the actual objective
+                    # (does this candidate pull the book toward target beta
+                    # at the least cost) and NEVER issues a buy call below
+                    # COMPOSITE_BUY — a sub-gate name is retained with a
+                    # disclosed cost, never hidden, never recommended.
+                    if _rtype == "beta":
+                        st.markdown("")
+                        with st.expander(
+                            "📊 Rank Defensive-Beta Candidates — Which Name, and Why",
+                            expanded=False,
+                        ):
+                            # NOT a page-global -- _ru_sector_candidates/
+                            # _ru_discovery_universe are only assigned inside
+                            # the "if page == Home" branch (app.py ~4350),
+                            # and Streamlit re-runs the whole script fresh
+                            # per rerun, so a Risk Analysis render never
+                            # executes that branch. Every other consumer page
+                            # resolves its own copy locally (e.g. ~19833,
+                            # ~20905) -- this page must too, or referencing
+                            # the Home-only names crashes this card with a
+                            # NameError on every render (Opus review finding,
+                            # 2026-09-15).
+                            _ru_sector_candidates  = _resolve_ref_universe(
+                                "sector_candidates", "Diversification candidate roster"
+                            )
+                            _ru_discovery_universe = _resolve_ref_universe(
+                                "discovery_universe", "Movers discovery universe"
+                            )
+                            _bd_sectors = beta_diversifying_sectors()
+                            _bd_pool: list[str] = []
+                            _bd_seen: set = set()
+                            for _bd_sec in _bd_sectors:
+                                for _bd_t in diversifying_candidate_pool(
+                                    _bd_sec, set(held_tickers),
+                                    sector_candidates=_ru_sector_candidates,
+                                    discovery_universe=_ru_discovery_universe,
+                                ):
+                                    if _bd_t not in _bd_seen:
+                                        _bd_seen.add(_bd_t)
+                                        _bd_pool.append(_bd_t)
+
+                            _bd_port_ret = portfolio_return_series(port_df, held_data)
+                            try:
+                                _bd_spy = _cached_spy("6mo")
+                            except Exception:
+                                _bd_spy = None
+                            _bd_spy_ok = (
+                                _bd_spy is not None and not _bd_spy.empty
+                                and "Close" in _bd_spy.columns
+                            )
+
+                            if not _bd_pool:
+                                st.info(
+                                    "No candidate pool resolved this session for the "
+                                    "sectors that genuinely help beta — see ⚙️ App "
+                                    "Settings or 🩺 System Trust if this persists."
+                                )
+                            elif _bd_port_ret is None or not _bd_spy_ok:
+                                st.info(
+                                    "Live beta read unavailable this session (the "
+                                    "book's own return series or SPY history is "
+                                    "missing) — revisit 🏠 Home to rebuild, then come "
+                                    "back."
+                                )
+                            else:
+                                # Stage 1 (cheap): window-aligned beta for the whole
+                                # pool via the cached, exception-safe price-history
+                                # wrapper (no load_all calls yet).
+                                _bd_beta_map: dict = {}
+                                for _bd_t in _bd_pool:
+                                    _bd_hist = _cached_ticker_history_px(_bd_t, "6mo")
+                                    _bd_close = (
+                                        _bd_hist["Close"]
+                                        if (_bd_hist is not None and not _bd_hist.empty
+                                            and "Close" in _bd_hist.columns) else None
+                                    )
+                                    _bd_b, _ = aligned_beta(
+                                        candidate_close=_bd_close,
+                                        spy_close=_bd_spy["Close"],
+                                        on_index=_bd_port_ret.index,
+                                    )
+                                    _bd_beta_map[_bd_t] = _bd_b
+
+                                _bd_pool_by_beta = sorted(
+                                    _bd_pool,
+                                    key=lambda t: (
+                                        _bd_beta_map[t] is None,
+                                        _bd_beta_map[t] if _bd_beta_map[t] is not None else 0.0,
+                                    ),
+                                )
+                                _bd_stage2 = _bd_pool_by_beta[:DIVERSIFY_SCAN_CAP]
+
+                                # Stage 2 (bounded): composite score, checking
+                                # _grow_composites first (same pattern as the
+                                # Diversification ADD card) before an un-cached
+                                # load_all call.
+                                _bd_grow_cache = st.session_state.get("_grow_composites", {})
+                                _bd_candidates: list[dict] = []
+                                with st.spinner(
+                                    f"Scoring {len(_bd_stage2)} defensive-beta candidates…"
+                                ):
+                                    for _bd_t in _bd_stage2:
+                                        _bd_bundle = _bd_grow_cache.get(_bd_t)
+                                        if _bd_bundle is None:
+                                            try:
+                                                _bd_bundle = load_all(_bd_t)
+                                            except Exception:
+                                                _bd_bundle = None
+                                        _bd_composite = (
+                                            _bd_bundle.get("total") if _bd_bundle else None
+                                        )
+                                        _bd_hist2 = (
+                                            _bd_bundle.get("df") if _bd_bundle else None
+                                        )
+                                        if (_bd_hist2 is None or _bd_hist2.empty
+                                                or "Close" not in _bd_hist2.columns):
+                                            _bd_hist2 = _cached_ticker_history_px(_bd_t, "6mo")
+                                        _bd_close2 = (
+                                            _bd_hist2["Close"]
+                                            if (_bd_hist2 is not None and not _bd_hist2.empty
+                                                and "Close" in _bd_hist2.columns) else None
+                                        )
+                                        _bd_corr = (
+                                            correlation_to_portfolio(_bd_close2, _bd_port_ret)
+                                            if _bd_close2 is not None else None
+                                        )
+                                        _bd_candidates.append({
+                                            "ticker":    _bd_t,
+                                            "beta":      _bd_beta_map.get(_bd_t),
+                                            "corr":      _bd_corr,
+                                            "composite": _bd_composite,
+                                        })
+
+                                _bd_ranked = rank_defensive_candidates(
+                                    candidates=_bd_candidates,
+                                    target=PORTFOLIO_BETA_ELEVATED,
+                                    hold_floor=COMPOSITE_HOLD,
+                                    buy_gate=COMPOSITE_BUY,
+                                )
+
+                                if not _bd_ranked:
+                                    st.info(
+                                        "No candidate scored this session moves the "
+                                        "needle on beta — trimming remains the more "
+                                        "capital-efficient lever today."
+                                    )
+                                else:
+                                    _bd_display = _bd_ranked[:DIVERSIFY_DISPLAY_TOP]
+                                    _bd_n_below_floor = sum(
+                                        1 for c in _bd_ranked if c["meets_floor"] is False
+                                    )
+                                    _bd_n_unreachable = sum(
+                                        1 for c in _bd_ranked if c["reachable"] is False
+                                    )
+
+                                    if any(c["actionable"] for c in _bd_display):
+                                        _bd_best = next(c for c in _bd_display if c["actionable"])
+                                        st.success(
+                                            f"✅ **{_bd_best['ticker']}** — lowest beta among "
+                                            f"scored candidates AND clears the Buy gate "
+                                            f"({_bd_best['composite']:.0f} ≥ {COMPOSITE_BUY:.0f}).",
+                                            icon="🎯",
+                                        )
+                                    else:
+                                        st.warning(
+                                            "🚦 None of the ranked candidates clears the Buy "
+                                            f"gate (≥ {COMPOSITE_BUY:.0f}) today — a candidate "
+                                            "below may still reduce beta; this is a risk trade, "
+                                            "not a conviction trade.",
+                                            icon="🚦",
+                                        )
+
+                                    st.caption(
+                                        f"Scanned **{len(_bd_candidates)}** candidates from "
+                                        f"{', '.join(_bd_sectors)} · showing the top "
+                                        f"**{len(_bd_display)}** ranked by beta relief, "
+                                        "correlation to your book, then composite."
+                                        + (
+                                            f" Of the {len(_bd_candidates)} scanned, "
+                                            f"{_bd_n_unreachable} can't reach target by "
+                                            "dilution at any size"
+                                            if _bd_n_unreachable else ""
+                                        )
+                                        + (
+                                            f" and {_bd_n_below_floor} score below the Hold "
+                                            f"floor ({COMPOSITE_HOLD:.0f})"
+                                            if (_bd_n_unreachable and _bd_n_below_floor) else
+                                            (
+                                                f" Of the {len(_bd_candidates)} scanned, "
+                                                f"{_bd_n_below_floor} score below the Hold "
+                                                f"floor ({COMPOSITE_HOLD:.0f})"
+                                                if _bd_n_below_floor else ""
+                                            )
+                                        )
+                                        + (
+                                            " — one may still appear above if fewer than "
+                                            f"{DIVERSIFY_DISPLAY_TOP} cleaner candidates "
+                                            "scored this session, marked with why."
+                                            if (_bd_n_unreachable or _bd_n_below_floor) else ""
+                                        )
+                                    )
+
+                                    _bd_cols = st.columns(len(_bd_display))
+                                    for _bd_col, _bd_c in zip(_bd_cols, _bd_display):
+                                        _bd_t = _bd_c["ticker"]
+                                        with _bd_col:
+                                            _bd_gate_icon = "✅" if _bd_c["actionable"] else "⚠️"
+                                            st.metric(
+                                                f"{_bd_gate_icon} {_bd_t}",
+                                                (
+                                                    f"{_bd_c['composite']:.0f}/100"
+                                                    if _bd_c["composite"] is not None else "—"
+                                                ),
+                                                (
+                                                    f"β {_bd_c['beta']:.2f}"
+                                                    if _bd_c["beta"] is not None else "β n/a"
+                                                ),
+                                                delta_color="off",
+                                            )
+                                            if _bd_c["corr"] is not None:
+                                                st.caption(
+                                                    f"corr to your book: {_bd_c['corr']:.2f}"
+                                                )
+                                            else:
+                                                st.caption("corr to your book: n/a")
+                                            if _bd_c["cost_note"]:
+                                                st.caption(f"⚠️ {_bd_c['cost_note']}")
+                                            elif _bd_c["reachable"] is False:
+                                                st.caption(
+                                                    "⚠️ beta too high to reach target by "
+                                                    "dilution at any size — shown only "
+                                                    "because fewer than "
+                                                    f"{DIVERSIFY_DISPLAY_TOP} cleaner "
+                                                    "candidates scored this session"
+                                                )
+                                            elif _bd_c["meets_floor"] is False:
+                                                st.caption(
+                                                    f"⚠️ composite below the Hold floor "
+                                                    f"({COMPOSITE_HOLD:.0f}) — shown only "
+                                                    "because fewer than "
+                                                    f"{DIVERSIFY_DISPLAY_TOP} cleaner "
+                                                    "candidates scored this session"
+                                                )
+                                            # A low beta is not a low RISK — a rate-
+                                            # sensitive bond-proxy candidate can carry
+                                            # real duration risk even at low equity
+                                            # beta. Display-only, never a gate/re-rank.
+                                            _bd_sector = TICKER_SECTORS.get(_bd_t)
+                                            _bd_rs = (
+                                                RATE_SENSITIVITY.get(_bd_sector)
+                                                if _bd_sector else None
+                                            )
+                                            if _bd_rs is not None:
+                                                st.caption(
+                                                    f"rate sensitivity: {_bd_rs:+.2f} "
+                                                    "(this reduces beta, not rate risk)"
+                                                )
+                                            if st.button(
+                                                f"▶ Analyze {_bd_t}",
+                                                key=f"_bd_analyze_{_bd_t}",
+                                                width="stretch",
+                                            ):
+                                                st.session_state["_pending_page"]    = "📈 Analysis"
+                                                st.session_state["_analysis_ticker"] = _bd_t
+                                                st.rerun()
 
         # ── Regime Fit — Concept D regime-conditional position targets ────────
         # Diagnostic only: never gates/resizes/suppresses anything. Read-only

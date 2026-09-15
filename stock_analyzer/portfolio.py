@@ -1544,6 +1544,29 @@ _DIVERSIFYING_SECTORS = [
 ]
 
 
+def beta_diversifying_sectors(
+    corr_max: float = REDEPLOY_CORR_DIVERSIFIER_MAX,
+) -> list[str]:
+    """Sectors from `_DIVERSIFYING_SECTORS` whose `_SECTOR_PROFILES` corr is
+    below `corr_max` -- the subset genuinely useful as a BETA-repair lever
+    (beta_repair.py's candidate ranker), not just a general sector-tilt
+    diversifier. A sector that only weakly diversifies the book on lockstep
+    correlation is a weaker beta lever too, so this reuses the SAME corr
+    threshold (`REDEPLOY_CORR_DIVERSIFIER_MAX`) the Rebalancer redeploy card
+    and Diversification ADD card already classify a "genuine diversifier" by,
+    rather than inventing a second threshold for the same concept.
+
+    Order preserved from `_DIVERSIFYING_SECTORS`. Utilities joins this set
+    automatically once/if added to `_DIVERSIFYING_SECTORS` (its
+    `_SECTOR_PROFILES` corr of 0.15 already clears this bar) -- no code
+    change needed here when that ships. Pure, no I/O.
+    """
+    return [
+        s for s in _DIVERSIFYING_SECTORS
+        if _SECTOR_PROFILES.get(s, {}).get("corr", 1.0) < corr_max
+    ]
+
+
 def diversification_recommendations(
     port_df: pd.DataFrame,
     corr_df: pd.DataFrame,
