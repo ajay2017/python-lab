@@ -48,6 +48,10 @@ _SECTOR_SHOCKS = {
         "Financials":      -15.0,
         "Energy":          +55.0,
         "Defense":          +5.0,
+        "Utilities":        -9.0,   # bond-proxy duration hit, milder than growth tech
+        "Industrials":     -18.0,   # capex-cycle rate sensitivity, tracks Financials
+        "Communications":  -10.0,   # high-dividend telecom, income-substitute effect
+        "Enterprise Tech": -28.0,   # 2022 crushed SaaS names (WDAY/DOCU/ZM/BILL -40-60%)
     },
     "2020 COVID Crash": {
         # SPY: -34%  |  Energy destroyed, Healthcare defensive
@@ -62,6 +66,12 @@ _SECTOR_SHOCKS = {
         "Financials":      -42.0,
         "Energy":          -55.0,
         "Defense":         -22.0,
+        "Utilities":       -32.0,   # real XLU fell ~32-38% peak-to-trough (yield-chase unwind)
+        "Industrials":     -40.0,   # CAT construction/mining halt + GE aviation exposure
+        "Communications":  -20.0,   # T/VZ defensive, TMUS merger tailwind, CMCSA ad/parks hit
+        "Enterprise Tech": -28.0,   # peak-to-trough Feb-Mar 2020 (~-30% even for SaaS);
+                                    # the remote-work rally came AFTER the trough, so it
+                                    # doesn't reduce a peak-to-trough figure
     },
     "AI Trade Unwind": {
         # Hypothetical: AI/semis reprice -30%, defensives largely spared
@@ -76,6 +86,10 @@ _SECTOR_SHOCKS = {
         "Financials":       -8.0,
         "Energy":           -6.0,
         "Defense":          -4.0,
+        "Utilities":        -3.0,   # orthogonal to the AI trade
+        "Industrials":      -6.0,   # orthogonal, mild broader-cyclical drag
+        "Communications":   -3.0,   # orthogonal to the AI trade
+        "Enterprise Tech": -14.0,   # partial AI-adjacent narrative exposure
     },
     "Rate Spike (+100bps)": {
         # Sudden 100bps rate rise: long-duration assets hurt most
@@ -90,6 +104,10 @@ _SECTOR_SHOCKS = {
         "Financials":       +8.0,
         "Energy":           +5.0,
         "Defense":          -3.0,
+        "Utilities":       -20.0,   # THE classic rate-sensitive bond-proxy equity
+        "Industrials":     -10.0,   # capex borrowing cost, less duration-sensitive than growth
+        "Communications":  -14.0,   # high-dividend income-substitute effect
+        "Enterprise Tech": -14.0,   # blended legacy-value / growth-SaaS duration exposure
     },
     "2008 GFC": {
         # SPY: -56.8% peak-to-trough (Oct 2007 – Mar 2009)
@@ -106,6 +124,10 @@ _SECTOR_SHOCKS = {
         "Financials":      -78.0,   # Bear Stearns, Lehman, Citi devastated
         "Energy":          -50.0,   # oil collapsed despite supply dynamics
         "Defense":         -20.0,
+        "Utilities":       -27.0,   # some credit-related utility financing stress
+        "Industrials":     -55.0,   # GE Capital near-failure (GE fell >80% at its nadir) + CAT collapse
+        "Communications":  -28.0,   # defensive dividend support, still hit by consumer pullback
+        "Enterprise Tech": -48.0,   # corporate IT-budget freezes, value ballast vs pure growth tech
     },
     "Stagflation": {
         # High inflation + stagnant growth (1970s analogy / current macro risk).
@@ -122,6 +144,10 @@ _SECTOR_SHOCKS = {
         "Financials":       -5.0,
         "Energy":          +30.0,   # supply constraints + inflation = Energy outperforms
         "Defense":         +12.0,   # geopolitical tension historically accompanies stagflation
+        "Utilities":       -18.0,   # 1970s: regulated rate cases lag fuel-cost inflation — worse than Healthcare
+        "Industrials":     -15.0,   # input-cost squeeze + capex slowdown, less severe than EV & Auto
+        "Communications":   -6.0,   # essential-service resilience (people keep paying the phone bill)
+        "Enterprise Tech": -16.0,   # recurring SaaS revenue provides ballast vs pure cyclical
     },
 }
 

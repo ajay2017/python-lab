@@ -492,3 +492,35 @@ def test_stress_cache_key_custom_never_collides_with_a_preset_key():
     preset_keys = {st.stress_cache_key(sid) for sid in st.HISTORICAL_WINDOWS}
     custom_key = st.stress_cache_key("custom", "2026-06-01", "2026-06-22")
     assert custom_key not in preset_keys
+
+
+# ─── _SECTOR_SHOCKS coverage (Phase 0, beta-repair follow-on) ───────────────────
+# Regression guard for the gap found 2026-09-15: _SECTOR_SHOCKS is missing a
+# sector entirely means stress_test.py's own est_move=0.0 fallback (see the
+# "Sector-targeted scenario but this position's sector isn't in the scenario's
+# shock map" branch) silently models that sector as losing NOTHING in every
+# sector-targeted scenario — a diversification-recommendable sector that reads
+# as stress-immune. Assert every _DIVERSIFYING_SECTORS member has a value in
+# EVERY sector-targeted scenario (sector_key is not None), so the next sector
+# added to _DIVERSIFYING_SECTORS fails this test loudly instead of silently
+# reading as risk-free under every historical shock scenario.
+
+def test_every_diversifying_sector_has_a_shock_value_in_every_scenario():
+    from stock_analyzer.portfolio import _DIVERSIFYING_SECTORS
+
+    targeted_scenarios = {
+        s["sector_key"] for s in st.SCENARIOS if s.get("sector_key")
+    }
+    assert targeted_scenarios, "expected at least one sector-targeted scenario"
+
+    missing = []
+    for scenario_id in targeted_scenarios:
+        shock_map = st._SECTOR_SHOCKS.get(scenario_id, {})
+        for sector in _DIVERSIFYING_SECTORS:
+            if sector not in shock_map:
+                missing.append((scenario_id, sector))
+
+    assert not missing, (
+        "Sectors missing shock coverage (silently modeled as 0% loss under "
+        f"stress): {missing}"
+    )
