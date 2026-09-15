@@ -885,6 +885,42 @@ the user acted on it):
     -- table (12 found 2026-09-11 -- see project_snaptrade_broker_integration
     -- memory) are NOT retroactively collapsed by this migration. That is a
     -- one-time cleanup query, run once by hand after raw_code is backfilled.
+
+    -- portfolio_risk_snapshots: ONE row per calendar day of portfolio-level
+    -- risk-metric history (Recommendation-Outcomes-Measurement Phase 1a --
+    -- docs/plans/recommendation-outcomes-measurement.md §10/§11). Answers the
+    -- owner's own live question ("is beta actually coming down over time") as
+    -- a chart, independent of any attribution to a specific recommendation --
+    -- that attribution is Phase 1b/2, deliberately NOT this table's job.
+    -- Written once per trading day by the EOD cron
+    -- (risk_metric_history.build_portfolio_risk_snapshot), reusing that SAME
+    -- run's already-computed port_df/port_risk/held_data -- never a second
+    -- fetch. Mirrors account_daily_snapshots (F-266) exactly: NULL-preserving
+    -- on producer failure, never a fabricated 0/neutral value (the
+    -- feedback_sentinel_is_present / feedback_overloaded_producer_state bug
+    -- class this project has already been bitten by twice). No backfill is
+    -- possible once this ships -- history starts from ship date forward only.
+    -- Optional: until created, load returns None / save no-ops, so the EOD
+    -- cron step degrades to a logged no-op and the Account page's new
+    -- Portfolio Risk Trend chart shows its "not enough data yet" state,
+    -- exactly like Leverage & Margin Cushion does before this table
+    -- accumulates. Awareness-only -- no rec/scoring/sizing engine may read
+    -- this table (see §10's "Awareness-only redline").
+    create table if not exists public.portfolio_risk_snapshots (
+        snapshot_date          date    not null primary key,
+        portfolio_beta         numeric,  -- NULL when insufficient price history (risk.compute_portfolio_risk_metrics returns None)
+        top_sector             text,     -- NULL when Sector column unavailable/empty
+        top_sector_pct         numeric,  -- % of gate-weight basis in top_sector
+        max_single_name_pct    numeric,  -- largest single position's % of gate-weight basis
+        avg_pairwise_corr      numeric,  -- portfolio.diversification_score()'s avg_correlation; NULL when <2 usable price histories
+        diversification_score  numeric,  -- portfolio.diversification_score()'s score (0-100); NULL under the same condition
+        corr_coverage_n        integer,  -- portfolio.correlation_coverage()'s n_obs; NULL when coverage unavailable
+        created_at             timestamptz default now()
+    );
+    alter table public.portfolio_risk_snapshots enable row level security;
+    drop policy if exists "Allow all (service role)" on public.portfolio_risk_snapshots;
+    create policy "Allow all (service role)" on public.portfolio_risk_snapshots
+        for all to service_role using (true) with check (true);
 """
 
 import os
@@ -4414,6 +4450,64 @@ def load_account_daily_snapshots(start_date=None, end_date=None) -> "pd.DataFram
             columns=["snapshot_date", "gross_book", "cash_balance", "net_equity",
                      "leverage", "cushion", "call_distance_pct", "maintenance_rate",
                      "cash_as_of", "created_at"]
+        )
+    except Exception:
+        return None
+
+
+# ── Portfolio risk-metric history (Recommendation-Outcomes-Measurement Phase 1a) ──
+# Optional table. Written once/day by the EOD cron via
+# stock_analyzer.risk_metric_history.build_portfolio_risk_snapshot(); until
+# created, load returns None and save no-ops, so the app behaves exactly as
+# before (no history chart, live-only readouts elsewhere unaffected). See DDL
+# at module top. Mirrors save_account_daily_snapshot / load_account_daily_snapshots
+# exactly — same upsert-on-date-key, same None-vs-empty-DataFrame contract.
+
+def save_portfolio_risk_snapshot(row: dict) -> bool:
+    """Upsert one portfolio_risk_snapshots row, keyed on `snapshot_date`
+    (idempotent — a same-day re-run of the EOD lane, e.g. via `force`,
+    overwrites rather than duplicates). USER data → honours the read-only
+    viewer guard. Never raises: a pre-DDL "relation does not exist" error is
+    caught identically to any other failure — reported via the return value
+    only, matching save_account_daily_snapshot's contract shape."""
+    if is_readonly(): return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    if not row or not row.get("snapshot_date"):
+        return False
+    try:
+        _client().table("portfolio_risk_snapshots").upsert(
+            row, on_conflict="snapshot_date",
+        ).execute()
+        return True
+    except Exception as e:
+        import warnings
+        warnings.warn(f"save_portfolio_risk_snapshot: {e}")
+        return False
+
+
+def load_portfolio_risk_snapshots(start_date=None, end_date=None) -> "pd.DataFrame | None":
+    """Load portfolio_risk_snapshots for an optional date range, oldest-first.
+
+    Returns None (the offline sentinel) on ANY failure — no credentials, a
+    pre-DDL missing table, or a raised query exception — kept distinct from a
+    genuine empty DataFrame (the query succeeded, zero rows exist yet).
+    Mirrors load_account_daily_snapshots's None-vs-empty distinction exactly,
+    for the same reason: a consumer here (the Portfolio Risk Trend chart) must
+    never mistake "load failed" for "no history yet"."""
+    if not has_db():
+        return None
+    try:
+        q = _client().table("portfolio_risk_snapshots").select("*")
+        if start_date is not None:
+            q = q.gte("snapshot_date", str(start_date)[:10])
+        if end_date is not None:
+            q = q.lte("snapshot_date", str(end_date)[:10])
+        rows = q.order("snapshot_date", desc=False).execute().data
+        return pd.DataFrame(rows) if rows else pd.DataFrame(
+            columns=["snapshot_date", "portfolio_beta", "top_sector",
+                     "top_sector_pct", "max_single_name_pct", "avg_pairwise_corr",
+                     "diversification_score", "corr_coverage_n", "created_at"]
         )
     except Exception:
         return None

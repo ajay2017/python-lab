@@ -212,6 +212,7 @@ from stock_analyzer import act_today_precedence
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
     build_tax_analysis, _build_open_lots, holding_period_status, wash_sale_risk,
+    harvest_outcomes_summary,
 )
 from stock_analyzer import exit_advisor
 from stock_analyzer.exit_advisor import compute_relative_strength
@@ -289,6 +290,7 @@ from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
     baseline_anchor, money_weighted_return, build_equity_timeseries,
     annualization_caveat, leverage_series_for_chart,
+    risk_snapshots_series_for_chart,
 )
 from stock_analyzer import api_health as _ah
 from stock_analyzer import grow_dropoff as _grow_dropoff
@@ -13707,6 +13709,12 @@ elif page == "📡 Signals & Advice":
                             act.get("half_shares", act.get("trim_shares", act.get("shares", 1)))
                         )
                         _default_action = "SELL" if act["type"] in ("review", "trim") else "BUY"
+                        # "trim" is the weight/concentration-driven reduction
+                        # (SINGLE_NAME_TRIM_TRIGGER) — the specific beta/concentration
+                        # call the outcome-measurement feature tracks. "review" is a
+                        # bearish-composite-signal call (a different, Exit-Advisor-
+                        # adjacent judgment), so it stays RECOMMENDATION.
+                        _default_trigger = "REBAL_TRIM" if act["type"] == "trim" else "RECOMMENDATION"
                         if st.button(
                             f"📝 Log trade for {ticker}",
                             key=f"log_btn_{ticker}_{act['type']}",
@@ -13718,7 +13726,7 @@ elif page == "📡 Signals & Advice":
                                 "action":  _default_action,
                                 "shares":  _default_shares,
                                 "price":   act["price"],
-                                "trigger": "RECOMMENDATION",
+                                "trigger": _default_trigger,
                                 "notes":   f"Based on advisor recommendation: {act['title']}",
                             }
                             st.session_state["_pending_page"] = "📒 Trade Journal"
@@ -18448,6 +18456,23 @@ elif page == "🥧 Portfolio Overview":
         except Exception as _txe:
             _tax = {}
             st.warning(f"Tax analysis unavailable: {_txe}")
+
+        # Running total of harvests already logged (TAX_HARVEST trigger_type)
+        # — independent of the current portfolio's open-position table above,
+        # so it renders even in a session with no currently-harvestable rows.
+        # Non-banded (no min-calls floor) by design — tax-harvest events are
+        # rare/seasonal, see recommendation-outcomes-measurement.md §10 item 3.
+        _harvest_summary = harvest_outcomes_summary(_trades_for_tax)
+        if _harvest_summary["n_events"] > 0:
+            st.caption(
+                f"💰 **Tax Harvested to Date:** "
+                f"${_harvest_summary['estimated_tax_saved']:,.0f} saved across "
+                f"{_harvest_summary['n_events']} event"
+                f"{'s' if _harvest_summary['n_events'] != 1 else ''} "
+                f"since {_harvest_summary['since_date']} "
+                f"(${_harvest_summary['total_harvested_loss']:,.0f} in realized losses) — "
+                "estimated at top federal bracket, not your realized tax."
+            )
 
         if _tax and _tax.get("rows"):
             # Portfolio-level KPI strip
@@ -26073,8 +26098,8 @@ elif page == "📒 Trade Journal":
         with st.form("log_trade_form", clear_on_submit=True):
             f_col3, f_col4, f_col5 = st.columns(3)
             with f_col3:
-                _trigger_opts = ["MANUAL", "RECOMMENDATION", "STOP_HIT", "REBALANCE", "WATCHLIST_ENTRY"]
-                _trigger_labels = {"MANUAL": "Manual", "RECOMMENDATION": "Recommendation", "STOP_HIT": "Stop Hit", "REBALANCE": "Rebalance", "WATCHLIST_ENTRY": "Watchlist Entry"}
+                _trigger_opts = ["MANUAL", "RECOMMENDATION", "STOP_HIT", "REBALANCE", "WATCHLIST_ENTRY", "REBAL_TRIM", "DIVERSIFY_ADD", "TAX_HARVEST"]
+                _trigger_labels = {"MANUAL": "Manual", "RECOMMENDATION": "Recommendation", "STOP_HIT": "Stop Hit", "REBALANCE": "Rebalance", "WATCHLIST_ENTRY": "Watchlist Entry", "REBAL_TRIM": "Rebalancer Trim", "DIVERSIFY_ADD": "Diversification Add", "TAX_HARVEST": "Tax-Loss Harvest"}
                 _prefill_trigger = prefill.get("trigger", "MANUAL")
                 # Defensive: any unknown trigger value falls back to MANUAL
                 # so a future caller doesn't crash this form with a ValueError.
@@ -33004,6 +33029,99 @@ elif page == "💰 Account":
                     f"(> {ACCOUNT_CASH_STALE_DAYS}d old) or unset is dropped from this "
                     "chart entirely rather than shown as a break, so the line may look "
                     "continuous across it — never filled in as zero either way."
+                )
+
+        # ── 📊 Portfolio Risk Trend ──────────────────────────────────────────────
+        # portfolio_risk_snapshots history (Recommendation-Outcomes-Measurement
+        # Phase 1a — docs/plans/recommendation-outcomes-measurement.md §10/§11).
+        # Answers the owner's own live question ("is beta actually coming down
+        # over time") as a chart, independent of any attribution to a specific
+        # recommendation — that attribution is a later, separate phase, deliberately
+        # not this chart's job. Awareness only, mirrors the Leverage & Margin
+        # Cushion chart's structure directly above.
+        st.markdown("---")
+        st.markdown("### 📊 Portfolio Risk Trend")
+        st.caption(
+            "Portfolio beta and diversification score over time, from settled "
+            "end-of-day figures. **History starts from ship date forward only** "
+            "— these figures were never recorded before this chart existed, so "
+            "there's no way to backfill earlier days. Avg pairwise correlation / "
+            "diversification score assume **equal weighting** across holdings, "
+            "a known simplification — not the same gate-weighted figure used "
+            "elsewhere in the app."
+        )
+
+        _risk_hist = None
+        try:
+            _risk_hist = db.load_portfolio_risk_snapshots()
+        except Exception:
+            pass
+
+        if _risk_hist is None or len(_risk_hist) < 3:
+            st.info(
+                "Not enough snapshot history yet — revisit once a few weeks of "
+                "daily portfolio risk snapshots have accumulated (the EOD cron "
+                "writes one per trading day)."
+            )
+        else:
+            import plotly.graph_objects as _pgo_risk
+            from plotly.subplots import make_subplots as _make_subplots_risk
+
+            _risk_view = st.radio(
+                "Granularity",
+                ["Weekly", "Monthly", "All data"],
+                horizontal=True,
+                key="_risk_trend_view",
+            )
+
+            _risk_df = _risk_hist.copy()
+            _risk_df["snapshot_date"] = pd.to_datetime(_risk_df["snapshot_date"])
+            _risk_df = _risk_df.set_index("snapshot_date")
+            for _col in ("portfolio_beta", "diversification_score"):
+                if _col in _risk_df.columns:
+                    _risk_df[_col] = pd.to_numeric(_risk_df[_col], errors="coerce")
+
+            _risk_plot = risk_snapshots_series_for_chart(_risk_df, _risk_view)
+
+            if _risk_plot.empty:
+                st.info("Not enough snapshot history yet at this granularity.")
+            else:
+                _risk_fig = _make_subplots_risk(specs=[[{"secondary_y": True}]])
+                _risk_fig.add_trace(_pgo_risk.Scatter(
+                    x=_risk_plot.index, y=_risk_plot["portfolio_beta"],
+                    name="Portfolio Beta",
+                    mode="lines+markers",
+                    line=dict(color="#f59e0b", width=2),
+                    connectgaps=False,  # a "couldn't be computed" gap must stay visible
+                    hovertemplate="Beta: %{y:.2f}<extra></extra>",
+                ), secondary_y=False)
+                _risk_fig.add_trace(_pgo_risk.Scatter(
+                    x=_risk_plot.index, y=_risk_plot["diversification_score"],
+                    name="Diversification Score",
+                    mode="lines+markers",
+                    line=dict(color="#22c55e", width=2, dash="dot"),
+                    connectgaps=False,
+                    hovertemplate="Diversification: %{y:.0f}/100<extra></extra>",
+                ), secondary_y=True)
+                _risk_fig.update_layout(
+                    margin=dict(l=0, r=0, t=28, b=0),
+                    height=300,
+                    legend=dict(orientation="h", y=1.12, x=0),
+                    xaxis=dict(showgrid=False),
+                    hovermode="x unified",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                )
+                _risk_fig.update_yaxes(title_text="Beta", secondary_y=False,
+                                        gridcolor="rgba(128,128,128,0.15)")
+                _risk_fig.update_yaxes(title_text="Diversification (0-100)", secondary_y=True,
+                                        showgrid=False)
+                st.plotly_chart(_risk_fig, width="stretch")
+                st.caption(
+                    "A gap in either line means that metric couldn't be computed "
+                    "that day (e.g. fewer than 2 usable price histories for "
+                    "correlation, or insufficient data for beta) — never filled "
+                    "in as zero or a neutral midpoint either way."
                 )
 
         # ── 💳 Capital vs Margin ─────────────────────────────────────────────────

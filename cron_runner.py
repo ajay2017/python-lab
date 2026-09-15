@@ -78,6 +78,7 @@ from stock_analyzer.constants import (
     ALERT_EMAIL_HOUR_ET, ALERT_EOD_HOUR_ET, SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS,
     CRON_INTRADAY_START_HOUR_ET, MARGIN_MAINTENANCE_RATE, ACCOUNT_CASH_STALE_DAYS,
 )
+from stock_analyzer.risk_metric_history import build_portfolio_risk_snapshot
 from stock_analyzer.data import is_trading_day
 from stock_analyzer.headless_alert_engine import (
     compute_protective_alerts, compute_eod, compute_morning_picks,
@@ -507,6 +508,29 @@ def _run_eod(now_et, force: bool) -> int:
             _log(f"account_daily_snapshot NOT written (DB offline / table missing, date={today_str}).")
     except Exception as e:
         _log(f"account_daily_snapshot FAILED — {str(e)[:120]} — continuing.")
+
+    # 1c. Portfolio-level risk-metric history (Recommendation-Outcomes-
+    # Measurement Phase 1a — docs/plans/recommendation-outcomes-measurement.md
+    # §10/§11). Reuses the SAME `payload` from this run's own compute_eod call
+    # above — `port_df`/`port_risk` were already computed for the fragility
+    # read inside _build_context, `held_data` was already loaded for the
+    # sentiment snapshot below — no second fetch of any kind. Feeds the
+    # Account page's "Portfolio Risk Trend" chart. Never gates anything —
+    # history/awareness only, same posture as 1b above. A failed write is
+    # logged distinctly from a successful one so a silent DB-offline day
+    # doesn't read like a normal no-op.
+    try:
+        _risk_row = build_portfolio_risk_snapshot(
+            now_et.date(), payload.get("port_df"), payload.get("port_risk"),
+            payload.get("held_data", {}),
+        )
+        if db.save_portfolio_risk_snapshot(_risk_row):
+            _log(f"portfolio_risk_snapshot written (beta={_risk_row['portfolio_beta']}, "
+                 f"top_sector={_risk_row['top_sector']}, date={today_str}).")
+        else:
+            _log(f"portfolio_risk_snapshot NOT written (DB offline / table missing, date={today_str}).")
+    except Exception as e:
+        _log(f"portfolio_risk_snapshot FAILED — {str(e)[:120]} — continuing.")
 
     # 2. Sentiment snapshot: persist VADER + Finnhub readings for all held tickers
     # so Tier 3 sentiment-vs-price-move analysis has a growing daily series.

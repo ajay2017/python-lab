@@ -994,4 +994,12 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
     pullback = _assess_pullback(ctx["spy_6mo"], ctx["fragility"], pullback_threshold)
     return {"snapshot_rows": snapshot_rows, "pullback": pullback,
             "built_at": built_at, "errors": list(ctx["errors"]),
-            "held_data": ctx.get("held_data", {})}
+            "held_data": ctx.get("held_data", {}),
+            # Additive (2026-09-15, portfolio_risk_snapshots capture) — both
+            # already computed by this same _build_context call, at zero extra
+            # fetch cost. `port_df` gives the EOD cron step sector/single-name
+            # gate-weight columns; `port_risk` gives it the already-computed
+            # beta (None when the risk computation itself failed above —
+            # callers must treat that as "couldn't be built", never as beta=0,
+            # same contract _build_context's own docstring already states).
+            "port_df": ctx.get("port_df"), "port_risk": ctx.get("port_risk")}

@@ -140,6 +140,36 @@ def leverage_series_for_chart(df, granularity: str) -> "pd.DataFrame":
     return out
 
 
+def risk_snapshots_series_for_chart(df, granularity: str) -> "pd.DataFrame":
+    """Resample portfolio_risk_snapshots for the Portfolio Risk Trend chart,
+    mirroring leverage_series_for_chart's resampling logic exactly.
+
+    `df` must have a DatetimeIndex and "portfolio_beta"/"diversification_score"
+    columns (plus any others, carried through unchanged). `granularity` is one
+    of "Weekly" / "Monthly" / "All data" (same vocabulary as the existing
+    Capital Trend / Leverage & Margin Cushion radios) — "Weekly"/"Monthly"
+    resample via `.last()`; "All data" returns df unchanged (sorted).
+
+    A naive `.resample(...).last().dropna()` would silently erase every bucket
+    where a metric couldn't be computed that day (e.g. <2 usable price
+    histories for correlation), even though other fields (e.g. portfolio_beta)
+    might still be real. This drops a resampled row ONLY when EVERY plotted
+    column is null for that bucket — never on a partial null, so a day with
+    a beta but no correlation reading still shows up (as a gap in the
+    correlation line only, not a missing beta point)."""
+    out = df.sort_index()
+    if granularity == "Weekly":
+        out = out.resample("W-FRI").last()
+    elif granularity == "Monthly":
+        out = out.resample("ME").last()
+    # "All data" (or anything else): no resampling.
+
+    plotted = [c for c in ("portfolio_beta", "diversification_score") if c in out.columns]
+    if plotted:
+        out = out.dropna(how="all", subset=plotted)
+    return out
+
+
 def _parse_date(d):
     """Coerce a date / datetime / 'YYYY-MM-DD' string to a date; None if unparseable."""
     if isinstance(d, _datetime):

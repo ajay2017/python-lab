@@ -447,3 +447,174 @@ def wash_sale_risk(
             "window_days":     window_days,
         }
     return None
+
+
+def wash_sale_violation_after_harvest(
+    ticker: str,
+    sale_date: _date,
+    trades_df: pd.DataFrame,
+    today: _date | None = None,
+    window_days: int = TAX_WASH_SALE_DAYS,
+) -> dict:
+    """Wash-sale AFTER-side check for an already-executed harvest SELL.
+
+    ``wash_sale_risk()`` above only checks the BEFORE side (a same-ticker BUY
+    preceding a *prospective* sale) — the only side the app can see at SELL
+    time. This checks the AFTER side retrospectively, once the sale has
+    already happened: did a same-ticker BUY occur within ``window_days``
+    AFTER ``sale_date``? IRS wash-sale rule: a loss is disallowed if the same
+    (or a substantially identical) security is bought within 30 days before
+    OR after the sale — this closes the "after" half for a harvest sale that
+    already executed.
+
+    A violation can only be confirmed once the FULL window has elapsed
+    without a rebuy — "no rebuy yet" while the window is still open is not
+    evidence of a clean sale, it just hasn't had the chance to violate yet.
+    Returns exactly one of three states (never raises, never collapses to a
+    false "clean" on incomplete data or an unexpected error):
+      {"status": "violation", "rebuy_date": "YYYY-MM-DD", "days_after": int}
+      {"status": "pending", "days_remaining": int}
+      {"status": "clean"}
+    """
+    try:
+        if today is None:
+            today = _today_et()
+        elapsed = (today - sale_date).days
+        if elapsed < 0:
+            elapsed = 0  # sale_date after `today` — degrade to "just sold"
+
+        _tkr = str(ticker or "").upper()
+        if _tkr and trades_df is not None and not trades_df.empty \
+                and "ticker" in trades_df.columns and "action" in trades_df.columns:
+            buys = trades_df[
+                (trades_df["ticker"].astype(str).str.upper() == _tkr) &
+                (trades_df["action"].astype(str).str.upper().str.contains("BUY"))
+            ]
+            if not buys.empty:
+                dates = pd.to_datetime(
+                    buys["traded_at"], errors="coerce", utc=True, format="ISO8601"
+                ).dropna()
+                violations = []
+                for ts in dates:
+                    d = ts.date()
+                    days_after = (d - sale_date).days
+                    # Inclusive both ends, mirroring wash_sale_risk's BEFORE-side
+                    # boundary: day == window_days flags, day == window_days + 1
+                    # does not.
+                    if 0 <= days_after <= window_days:
+                        violations.append((days_after, d))
+                if violations:
+                    violations.sort()
+                    days_after, d = violations[0]
+                    return {
+                        "status":     "violation",
+                        "rebuy_date": str(d),
+                        "days_after": days_after,
+                    }
+
+        if elapsed < window_days:
+            return {"status": "pending", "days_remaining": window_days - elapsed}
+        return {"status": "clean"}
+    except Exception:
+        # Never confidently claim "clean" when the check itself failed —
+        # "pending" is the honest degrade (awareness-only, never gates).
+        return {"status": "pending", "days_remaining": window_days}
+
+
+def harvest_outcomes_summary(trades_df: pd.DataFrame) -> dict:
+    """Running actual-dollar total for TAX_HARVEST-tagged SELLs that were losses.
+
+    Deliberately non-banded, no maturity floor (unlike the Gate-Ledger-style
+    8/15/5 ledgers elsewhere in this codebase) — tax-harvest events are
+    rare/seasonal, so forcing them into a min-calls floor would leave this
+    permanently "building." See
+    docs/plans/recommendation-outcomes-measurement.md §10 item 3 / §3c.
+
+    Only SELL rows tagged ``trigger_type == "TAX_HARVEST"`` with a realized
+    LOSS count — a TAX_HARVEST-tagged trade that wasn't actually a loss by
+    execution time contributes $0, never a negative reduction. Short-term vs
+    long-term is read via ``holding_period_status()`` on the trade history as
+    it stood immediately before the sale (the shares about to be sold), which
+    for the common full-exit harvest case is exactly what got sold.
+
+    Returns {"total_harvested_loss": float, "estimated_tax_saved": float,
+    "n_events": int, "since_date": str | None}. Zero/NULL-safe throughout —
+    no qualifying rows (or malformed input) returns the all-zero dict with
+    since_date None, never a crash or NaN.
+    """
+    empty = {
+        "total_harvested_loss": 0.0,
+        "estimated_tax_saved":  0.0,
+        "n_events":             0,
+        "since_date":           None,
+    }
+    try:
+        if trades_df is None or trades_df.empty:
+            return empty
+        if "trigger_type" not in trades_df.columns or "action" not in trades_df.columns:
+            return empty
+
+        rows = trades_df[
+            (trades_df["trigger_type"].astype(str).str.upper() == "TAX_HARVEST") &
+            (trades_df["action"].astype(str).str.upper().str.contains("SELL"))
+        ]
+        if rows.empty:
+            return empty
+
+        all_ts = pd.to_datetime(
+            trades_df["traded_at"], errors="coerce", utc=True, format="ISO8601"
+        )
+
+        total_loss = 0.0
+        tax_saved  = 0.0
+        n_events   = 0
+        earliest   = None
+
+        for idx, row in rows.iterrows():
+            try:
+                pnl = _opt(row.get("realized_pnl"))
+                if pnl is None or pnl >= 0:
+                    continue  # excludes gains and unresolved rows — losses only
+                ts = all_ts.get(idx)
+                if ts is None or pd.isna(ts):
+                    continue
+                sale_date = ts.date()
+                ticker = str(row.get("ticker") or "").strip()
+                if not ticker:
+                    continue
+
+                loss = abs(pnl)
+                # Holding period as of the eve of this sale: trades strictly
+                # before it reconstruct the lots that were open right before
+                # the sale executed, without re-deriving lot math here.
+                prior = trades_df[all_ts < ts]
+                hp = holding_period_status(ticker, prior, today=sale_date)
+                gain_type = hp["gain_type"] if hp else None
+                # LTCG only when confidently long-term; STCG, MIXED, and the
+                # unknown/no-lots case all fall back to... conservative means
+                # not OVERSTATING the benefit shown to the user, so an
+                # ambiguous mix defaults to the lower LTCG rate rather than
+                # the higher STCG rate (the opposite convention from
+                # build_tax_analysis's GAIN-side "worst case" default, which
+                # assumes the highest tax bill — here the "worst case" for an
+                # unverified savings claim is the smallest one).
+                rate = TAX_RATE_SHORT_TERM if gain_type == "STCG" else TAX_RATE_LONG_TERM
+
+                total_loss += loss
+                tax_saved  += loss * rate
+                n_events   += 1
+                if earliest is None or sale_date < earliest:
+                    earliest = sale_date
+            except Exception:
+                continue  # one malformed row must not blank the whole total
+
+        if n_events == 0:
+            return empty
+        return {
+            "total_harvested_loss": round(total_loss, 2),
+            "estimated_tax_saved":  round(tax_saved, 2),
+            "n_events":             n_events,
+            "since_date":           str(earliest) if earliest else None,
+        }
+    except Exception:
+        return empty

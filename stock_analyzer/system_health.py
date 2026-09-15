@@ -116,6 +116,11 @@ _INVENTORY: tuple[_Store, ...] = (
     _Store("daily_snapshots",   "Daily P&L snapshot",             "eod",  "daily", True,  "snapshot_date", 19),
     _Store("model_predictions", "Volatility forecast (Model Lab)","eod",  "daily", True,  "made_at",       19),
     _Store("scanner_cache",     "Market scan cache",              "scan", "daily", True,  "scan_date",     12),
+    # portfolio_risk_snapshots (Recommendation-Outcomes-Measurement Phase 1a,
+    # 2026-09-15): the EOD cron writes one row every trading day, reusing that
+    # same run's already-computed port_df/port_risk — same unconditional
+    # posture as daily_snapshots/model_predictions right above.
+    _Store("portfolio_risk_snapshots", "Portfolio risk metrics snapshot", "eod", "daily", True, "snapshot_date", 19),
     # Conditional writes — EXISTENCE only (the DDL-catcher); absence is legitimate.
     _Store("exit_signals",              "Protective exit scan",          "premarket", "daily",   False),
     _Store("analyst_target_snapshots",  "Analyst price-target history",  "premarket", "daily",   False),
