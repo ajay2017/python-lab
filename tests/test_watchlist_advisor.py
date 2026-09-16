@@ -4,6 +4,7 @@ coverage despite containing an actual portfolio-risk GATE
 (_portfolio_risk_gate) that can downgrade a stock-level ENTER_NOW call.
 """
 from stock_analyzer.constants import (
+    DETERIORATION_TREND_MA,
     PORTFOLIO_BETA_CEILING,
     PORTFOLIO_BETA_ELEVATED,
     SECTOR_CEILING,
@@ -617,3 +618,126 @@ def test_the_imperative_is_still_issued():
     """The app decides, it does not inform — removing the false pointer must
     not soften the call itself."""
     assert any("Open the position" in s for s in _emitted_strings())
+
+
+# ─── deterioration_warning — warn-only pre-purchase disclosure ───────────────
+# 2026-09-16, ENVA incident follow-on to the 2026-09-11 ON/F-39i Grow Today
+# fix: Watchlist's ENTER_NOW had zero visibility into what exit_advisor would
+# already say about a candidate's own chart. This block proves the disclosure
+# fires on a genuinely bad chart, stays silent on a healthy/missing one, never
+# changes the action/score/rr, and is scoped to the clean ENTER_NOW branch only.
+
+def _det_df():
+    """80-bar flat-then-crash — an ENVA-shape fixture: ~23% drawdown from a
+    still-in-window peak (~$130) down to the current price ($100), ending
+    below its 50-day trend MA. Real depth + a broken trend, not a trivial
+    1-bar wiggle — this is exactly the shape the deep-drawdown EXIT shortcut
+    exists for (classify_deterioration_tier: dd_from_peak_pct >= exit_floor
+    AND trend_broken_now, no multi-session confirmation required).
+
+    Crucially: with the OLD code (pre-this-change), build_watchlist_recommendation
+    never even looked at `data["df"]` on the ENTER_NOW branch — this exact
+    fixture would have produced action=ENTER_NOW with NO warning at all, the
+    same blind spot the real ENVA trade fell into. That is what this fixture
+    is chosen to prove is now closed.
+    """
+    import pandas as pd
+    head = [130.0] * 70
+    tail = [125.0, 120.0, 115.0, 110.0, 105.0, 102.0, 100.0, 100.0, 100.0, 100.0]
+    close = pd.Series([float(c) for c in head + tail])
+    sma = close.rolling(DETERIORATION_TREND_MA).mean()
+    return pd.DataFrame({"Close": close, f"SMA_{DETERIORATION_TREND_MA}": sma})
+
+
+def test_enter_now_deteriorating_chart_gets_warning_but_still_enters():
+    """The core warn-only guarantee: a genuinely deteriorating candidate chart
+    must still return ENTER_NOW (never suppressed), annotated with a non-None
+    deterioration_warning."""
+    rec = build_watchlist_recommendation("XYZ", _base_data(df=_det_df()))
+    assert rec["action"] == "ENTER_NOW"
+    assert rec["deterioration_warning"] is not None
+    assert "XYZ" in rec["deterioration_warning"]
+    assert "own recent price action" in rec["deterioration_warning"]
+    # No markdown/math-mode leakage — plain text safe for both st.caption()
+    # and an escaped HTML email context.
+    assert "**" not in rec["deterioration_warning"]
+    assert "$" not in rec["deterioration_warning"]
+
+
+def test_enter_now_healthy_chart_has_no_warning():
+    """A healthy/rising df on an otherwise-identical ENTER_NOW candidate must
+    not trigger the disclosure — proves this isn't a blanket caption. Ends
+    exactly at _base_data's current_price (100.0) via a monotonic rise, so
+    the peak equals the current price (no drawdown at all) and the trend MA
+    sits below it (trend not broken) — the genuinely healthy case, on the
+    SAME price basis the deteriorating fixture above uses."""
+    import pandas as pd
+    close = pd.Series([80.0 + (100.0 - 80.0) * i / 79 for i in range(80)])
+    healthy_df = pd.DataFrame({"Close": close, f"SMA_{DETERIORATION_TREND_MA}": close.rolling(DETERIORATION_TREND_MA).mean()})
+    rec = build_watchlist_recommendation("XYZ", _base_data(df=healthy_df))
+    assert rec["action"] == "ENTER_NOW"
+    assert rec["deterioration_warning"] is None
+
+
+def test_enter_now_missing_df_has_no_warning_and_does_not_raise():
+    """No `df` key at all (the shape of every pre-existing test fixture in
+    this file) must fail safe to no warning, not an exception — and must not
+    change the action. Regression guard for the whole pre-existing suite."""
+    rec = build_watchlist_recommendation("XYZ", _base_data())  # no "df" key
+    assert rec["action"] == "ENTER_NOW"
+    assert rec["deterioration_warning"] is None
+
+
+def test_enter_now_df_missing_trend_column_has_no_warning_and_does_not_raise():
+    """`df` present but missing the SMA_<DETERIORATION_TREND_MA> trend column
+    candidate_deterioration_flag needs — assess_holding's own guard must
+    degrade to no signal, not raise."""
+    import pandas as pd
+    df_no_ma = pd.DataFrame({"Close": [100.0] * 80})   # no SMA_50 column
+    rec = build_watchlist_recommendation("XYZ", _base_data(df=df_no_ma))
+    assert rec["action"] == "ENTER_NOW"
+    assert rec["deterioration_warning"] is None
+
+
+def test_remove_card_never_carries_a_deterioration_warning():
+    """Scope isolation: REMOVE must not compute/carry the warning even when
+    given the same deteriorating df fixture used to prove the ENTER_NOW case."""
+    rec = build_watchlist_recommendation("XYZ", _base_data(total=30.0, df=_det_df()))
+    assert rec["action"] == "REMOVE"
+    assert rec.get("deterioration_warning") is None
+
+
+def test_hold_off_earnings_card_never_carries_a_deterioration_warning():
+    from datetime import date, timedelta
+    soon = (date.today() + timedelta(days=3)).isoformat()
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(total=60.0, earnings=soon, df=_det_df())
+    )
+    assert rec["action"] == "HOLD_OFF_EARNINGS"
+    assert rec.get("deterioration_warning") is None
+
+
+def test_data_unavailable_card_never_carries_a_deterioration_warning():
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(total=30.0, fundamentals_available=False, df=_det_df())
+    )
+    assert rec["action"] == "DATA_UNAVAILABLE"
+    assert rec.get("deterioration_warning") is None
+
+
+def test_hard_breach_downgraded_near_entry_never_carries_a_deterioration_warning():
+    """The hard-breach downgrade branch is a DIFFERENT return path from the
+    clean ENTER_NOW pass-through — it must not carry the warning either, even
+    though it is adjacent to the branch that does."""
+    ctx = {"sector_weight_pct": 40.0, "sector_of_ticker": "Technology"}
+    rec = build_watchlist_recommendation("XYZ", _base_data(df=_det_df()), portfolio_ctx=ctx)
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec.get("deterioration_warning") is None
+
+
+def test_deterioration_warning_uses_enter_now_verdict_phrase():
+    """Watchlist's caption must describe its own verdict ('ENTER NOW'), not
+    Grow Today's ('a buy') — the two surfaces share the helper, not the wording."""
+    rec = build_watchlist_recommendation("XYZ", _base_data(df=_det_df()))
+    assert rec["deterioration_warning"] is not None
+    assert "rates it ENTER NOW" in rec["deterioration_warning"]

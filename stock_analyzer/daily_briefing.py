@@ -1237,22 +1237,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             _cand_det = exit_advisor.candidate_deterioration_flag(
                 ticker, _comp_data.get("df"), spy_df, price=price, atr=_pick_atr,
             )
-            _cand_det_warning = None
-            if _cand_det:
-                _tier_phrase = {
-                    exit_advisor.WATCH: "early technical weakness",
-                    exit_advisor.TRIM:  "a weakening trend",
-                    exit_advisor.EXIT:  "a broken trend / deep drawdown",
-                }.get(_cand_det["tier"], "technical weakness")
-                _cand_det_warning = (
-                    f"📉 {ticker}'s own recent price action shows {_tier_phrase} — "
-                    f"down {_cand_det['dd_from_peak_pct']:.1f}% from its ~3-month "
-                    f"high and recently below its {_cand_det['trend_ma']}-day trend "
-                    "line. This describes the stock's chart, not a position (you "
-                    "don't own it yet); the composite still rates it a buy. Shown "
-                    "so you enter with eyes open. Awareness only — doesn't change "
-                    "this recommendation."
-                )
+            _cand_det_warning = exit_advisor.candidate_deterioration_caption(
+                _cand_det, ticker, verdict_phrase="a buy",
+            )
 
             pick = {
                 "ticker":          ticker,

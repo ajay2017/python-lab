@@ -25039,6 +25039,13 @@ elif page == "📋 Watchlist":
                     unsafe_allow_html=True,
                 )
 
+            # Pre-purchase deterioration disclosure (2026-09-16, ENVA incident
+            # follow-on to F-39i's Grow Today fix) — set ONLY on the clean
+            # ENTER_NOW pass-through branch (stock_analyzer/watchlist_advisor.py).
+            # Awareness only — never suppresses or changes the call above.
+            if _wr.get("deterioration_warning"):
+                st.caption(_wr["deterioration_warning"])
+
             # Conditions + Position Sizing
             _wl_cl, _wl_cr = st.columns([1, 1])
 

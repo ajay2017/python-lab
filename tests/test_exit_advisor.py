@@ -25,6 +25,7 @@ from stock_analyzer.exit_advisor import (
     _peak_window_bars,
     assess_holding,
     assess_risk_off_derisk,
+    candidate_deterioration_caption,
     candidate_deterioration_flag,
     classify_deterioration_tier,
     market_risk_posture,
@@ -525,3 +526,58 @@ def test_candidate_deterioration_flag_no_false_underwater_escalation():
     price = float(df["Close"].iloc[-1])
     result = candidate_deterioration_flag("XYZ", df, None, price=price, atr=0.5)
     assert result is None
+
+
+# ── candidate_deterioration_caption — warn-only string rendering ────────────
+
+def _flag(tier, dd=12.3, trend_ma=DETERIORATION_TREND_MA):
+    """Minimal synthetic flag dict — candidate_deterioration_caption only
+    reads tier / dd_from_peak_pct / trend_ma, so a synthetic dict exercises
+    every tier deterministically without needing a real df shaped to trip
+    that exact tier.
+    """
+    return {"tier": tier, "dd_from_peak_pct": dd, "trend_ma": trend_ma}
+
+
+def test_candidate_deterioration_caption_none_flag_returns_none():
+    assert candidate_deterioration_caption(None, "XYZ", verdict_phrase="a buy") is None
+
+
+def test_candidate_deterioration_caption_watch_phrase():
+    caption = candidate_deterioration_caption(_flag(WATCH), "XYZ", verdict_phrase="a buy")
+    assert caption is not None
+    assert "early technical weakness" in caption
+
+
+def test_candidate_deterioration_caption_trim_phrase():
+    caption = candidate_deterioration_caption(_flag(TRIM), "XYZ", verdict_phrase="a buy")
+    assert "a weakening trend" in caption
+
+
+def test_candidate_deterioration_caption_exit_phrase():
+    caption = candidate_deterioration_caption(_flag(EXIT), "XYZ", verdict_phrase="a buy")
+    assert "a broken trend / deep drawdown" in caption
+
+
+def test_candidate_deterioration_caption_interpolates_ticker_dd_and_ma():
+    caption = candidate_deterioration_caption(_flag(TRIM, dd=17.6, trend_ma=50), "ENVA", verdict_phrase="a buy")
+    assert "ENVA" in caption
+    assert "17.6%" in caption
+    assert "50-day" in caption
+
+
+def test_candidate_deterioration_caption_verdict_phrase_a_buy():
+    caption = candidate_deterioration_caption(_flag(TRIM), "XYZ", verdict_phrase="a buy")
+    assert "rates it a buy" in caption
+
+
+def test_candidate_deterioration_caption_verdict_phrase_enter_now():
+    caption = candidate_deterioration_caption(_flag(TRIM), "XYZ", verdict_phrase="ENTER NOW")
+    assert "rates it ENTER NOW" in caption
+
+
+def test_candidate_deterioration_caption_no_markdown_or_math_mode():
+    for tier in (WATCH, TRIM, EXIT):
+        caption = candidate_deterioration_caption(_flag(tier), "XYZ", verdict_phrase="a buy")
+        assert "**" not in caption
+        assert "$" not in caption

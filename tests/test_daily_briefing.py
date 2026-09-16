@@ -1773,3 +1773,47 @@ def test_grow_today_deterioration_warning_flags_trim_with_real_spy_df():
     assert pick is not None
     assert pick["deterioration_warning"] is not None
     assert "a weakening trend" in pick["deterioration_warning"]  # TRIM tier phrase
+
+
+def test_grow_today_deterioration_warning_byte_identical_to_pre_refactor_string():
+    """Parity guard for the 2026-09-16 refactor that moved this caption's
+    string-building out of _grow_today's inline block and into
+    exit_advisor.candidate_deterioration_caption(). Reconstructs the OLD
+    inline format independently (from the raw exit_advisor.assess_holding
+    payload, not by calling the new helper) and asserts the pick's
+    deterioration_warning is byte-identical to it.
+    """
+    from stock_analyzer import exit_advisor
+
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "price": 90.0}])
+    composites = {
+        "NEW": {
+            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+            "fundamentals_available": True, "df": _det_candidate_df(),
+        },
+    }
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       composites=composites, spy_df=_det_spy_df())
+    pick = find_item(grow["new_picks"], "NEW")
+    assert pick is not None
+
+    flag = exit_advisor.candidate_deterioration_flag(
+        "NEW", _det_candidate_df(), _det_spy_df(), price=90.0, atr=0.0,
+    )
+    assert flag is not None
+    tier_phrase = {
+        exit_advisor.WATCH: "early technical weakness",
+        exit_advisor.TRIM:  "a weakening trend",
+        exit_advisor.EXIT:  "a broken trend / deep drawdown",
+    }.get(flag["tier"], "technical weakness")
+    expected = (
+        f"📉 NEW's own recent price action shows {tier_phrase} — "
+        f"down {flag['dd_from_peak_pct']:.1f}% from its ~3-month "
+        f"high and recently below its {flag['trend_ma']}-day trend "
+        "line. This describes the stock's chart, not a position (you "
+        "don't own it yet); the composite still rates it a buy. Shown "
+        "so you enter with eyes open. Awareness only — doesn't change "
+        "this recommendation."
+    )
+    assert pick["deterioration_warning"] == expected

@@ -382,6 +382,43 @@ def candidate_deterioration_flag(ticker, df, spy_df=None, *, price, atr=None) ->
     )
 
 
+# Tier -> plain-English phrase, shared by every candidate_deterioration_flag()
+# consumer so Grow Today's picks and Watchlist's ENTER_NOW cards describe the
+# same tier identically rather than drifting into two separately-worded copies.
+_CANDIDATE_TIER_PHRASE = {
+    WATCH: "early technical weakness",
+    TRIM:  "a weakening trend",
+    EXIT:  "a broken trend / deep drawdown",
+}
+
+
+def candidate_deterioration_caption(flag: dict | None, ticker: str, *, verdict_phrase: str) -> str | None:
+    """Render `candidate_deterioration_flag`'s payload into a warn-only caption.
+
+    Returns None when `flag` is None (no signal / insufficient data — the
+    caller shows nothing, never a fabricated all-clear).
+
+    `verdict_phrase` lets each buy surface describe its own verdict in its own
+    words (Grow Today's "a buy", Watchlist's "ENTER NOW") without this helper
+    needing to know which surface called it. Plain text only — no markdown
+    `**`, no `$...$` math-mode syntax, no HTML — safe for both `st.caption()`
+    and an email context (callers that render to HTML still `_html.escape()`
+    this string themselves; it is not pre-escaped here).
+    """
+    if flag is None:
+        return None
+    tier_phrase = _CANDIDATE_TIER_PHRASE.get(flag["tier"], "technical weakness")
+    return (
+        f"📉 {ticker}'s own recent price action shows {tier_phrase} — "
+        f"down {flag['dd_from_peak_pct']:.1f}% from its ~3-month "
+        f"high and recently below its {flag['trend_ma']}-day trend "
+        "line. This describes the stock's chart, not a position (you "
+        f"don't own it yet); the composite still rates it {verdict_phrase}. Shown "
+        "so you enter with eyes open. Awareness only — doesn't change "
+        "this recommendation."
+    )
+
+
 # ── Risk-off protective de-risk (Phase 2) ─────────────────────────────────────
 # Phase 1 (above) handles IDIOSYNCRATIC deterioration and deliberately SKIPS
 # market-wide down days (the relative-strength gate). This layer closes that gap:

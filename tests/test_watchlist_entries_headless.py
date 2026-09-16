@@ -385,6 +385,41 @@ def test_render_watchlist_entries_email_no_disclosure_when_not_degraded():
     assert "Portfolio-beta fit check unavailable" not in html
 
 
+def test_render_watchlist_entries_email_shows_deterioration_warning_when_present():
+    """2026-09-16 ENVA follow-on — the email carries the same warn-only
+    disclosure the app page shows, escaped for the raw-HTML email context."""
+    from stock_analyzer.notify import render_watchlist_entries_email
+    card = _wl_card("NVDA")
+    card["deterioration_warning"] = (
+        "📉 NVDA's own recent price action shows a broken trend / deep "
+        "drawdown — down 22.0% from its ~3-month high and recently below "
+        "its 50-day trend line. This describes the stock's chart, not a "
+        "position (you don't own it yet); the composite still rates it "
+        "ENTER NOW. Shown so you enter with eyes open. Awareness only — "
+        "doesn't change this recommendation."
+    )
+    _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+    assert "broken trend / deep" in html
+    assert "down 22.0%" in html
+
+
+def test_render_watchlist_entries_email_no_deterioration_warning_when_absent():
+    """No `deterioration_warning` key at all (every pre-existing card shape)
+    must not render an empty div or raise."""
+    from stock_analyzer.notify import render_watchlist_entries_email
+    _, html = render_watchlist_entries_email([_wl_card("NVDA")], built_at="2026-09-10T09:45:00")
+    assert "own recent price action" not in html
+
+
+def test_render_watchlist_entries_email_escapes_deterioration_warning_metacharacters():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    card = _wl_card("NVDA")
+    card["deterioration_warning"] = "<script>alert(1)</script>"
+    _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html
+
+
 # ── cron_runner._run_scan wiring ─────────────────────────────────────────────
 
 def _run_scan_to_watchlist_entries(monkeypatch, *, wle_payload=None, wle_side_effect=None,

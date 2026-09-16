@@ -30,6 +30,7 @@ from stock_analyzer.constants import (
     RR_ENTRY_MIN,
     EARNINGS_IMMINENT_DAYS,
 )
+from stock_analyzer import exit_advisor
 
 
 def _f(val, default=0.0):
@@ -210,6 +211,7 @@ def build_watchlist_recommendation(
     ticker: str,
     data: dict,
     portfolio_ctx: dict | None = None,
+    spy_df=None,
 ) -> dict:
     """
     Returns a recommendation dict for a single watchlist candidate.
@@ -223,10 +225,20 @@ def build_watchlist_recommendation(
     advisor never blindly says "enter" while a hard concentration or beta limit
     is breached.
 
+    spy_df (optional): benchmark history threaded into
+        exit_advisor.candidate_deterioration_flag() for the warn-only
+        pre-purchase deterioration disclosure on the clean ENTER_NOW branch
+        (2026-09-16, ENVA incident follow-on to F-39i's Grow Today fix). None
+        (the default, and every caller before this change) is a fail-safe
+        UNDER-warn, not a crash — relative strength defaults to 0 inside
+        assess_holding, which keeps the TRIM tier from firing on unknown RS.
+
     Keys: ticker, action, priority, score, signal, price, entry_lo, entry_hi,
           stop, rr, earn_days, ps, title, readiness_pct, summary, detail,
           conditions_met, conditions_missing, institutional_lens,
           portfolio_caution (str | None — soft warning rendered inside the card)
+          deterioration_warning (str | None — set ONLY on the clean ENTER_NOW
+          pass-through; awareness only, never suppresses or changes the call)
     """
     score       = _f(data.get("total"))
     rec_label   = str((data.get("rec") or {}).get("label", ""))
@@ -426,6 +438,20 @@ def build_watchlist_recommendation(
 
         soft_caution = gate["reason"] if (gate and gate["severity"] == "soft") else None
 
+        # Pre-purchase deterioration warning (2026-09-16, ENVA incident
+        # follow-on to the 2026-09-11 ON/F-39i Grow Today fix) — warn-only,
+        # never suppresses or downgrades this ENTER_NOW call. Describes the
+        # CANDIDATE STOCK's own chart, not a position (the user doesn't own
+        # it yet). Scoped to this clean pass-through branch only — the
+        # hard-breach-downgraded NEAR_ENTRY case above and every other
+        # action branch deliberately do not compute this.
+        _cand_det = exit_advisor.candidate_deterioration_flag(
+            ticker, data.get("df"), spy_df, price=price, atr=data.get("atr"),
+        )
+        _det_warning = exit_advisor.candidate_deterioration_caption(
+            _cand_det, ticker, verdict_phrase="ENTER NOW",
+        )
+
         return _card(
             ticker, "ENTER_NOW", score, rec_label, price, entry_lo, entry_hi,
             stop, rr, earn_days,
@@ -493,6 +519,7 @@ def build_watchlist_recommendation(
                 "Execute the plan. Adjust the stop as the position matures."
             ),
             portfolio_caution=soft_caution,
+            deterioration_warning=_det_warning,
         )
 
     # ── NEAR ENTRY — price already in zone, R:R not yet validated ───────────
@@ -685,6 +712,11 @@ def _card(
     suppression_kind: str | None = None,
     gate_value: float | None = None,
     gate_threshold: float | None = None,
+    # Warn-only pre-purchase deterioration disclosure (2026-09-16, ENVA
+    # incident follow-on to F-39i) — set ONLY by the clean ENTER_NOW
+    # pass-through branch. Additive display string; never influences action,
+    # score, rr, or any gate/suppression field above.
+    deterioration_warning: str | None = None,
 ) -> dict:
     priority = _ACTION_PRIORITY.get(action, "MONITOR")
 
@@ -726,4 +758,5 @@ def _card(
         "suppression_kind":   suppression_kind,
         "gate_value":         gate_value,
         "gate_threshold":     gate_threshold,
+        "deterioration_warning": deterioration_warning,
     }

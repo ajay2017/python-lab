@@ -956,6 +956,7 @@ def render_watchlist_entries_email(
           </div>
           {f'<div style="color:#cbd5e1;font-size:12px;margin-top:5px">{zone_str}</div>' if zone_str else ''}
           {f'<div style="color:#a8a29e;font-size:12px;margin-top:4px">{summary}</div>' if summary else ''}
+          {f'<div style="color:#a8a29e;font-size:12px;margin-top:4px">{_html.escape(str(e.get("deterioration_warning")))}</div>' if e.get("deterioration_warning") else ''}
         </div>""")
 
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
