@@ -202,9 +202,15 @@ from stock_analyzer.constants import (
     GATE_LEDGER_FIRM_CALLS,
     GATE_LEDGER_MIN_TICKERS,
     GATE_LEDGER_HORIZON_TRADING_DAYS,
+    REC_OUTCOME_MIN_CALLS,
+    REC_OUTCOME_FIRM_CALLS,
+    REC_OUTCOME_MIN_TICKERS,
+    REC_OUTCOME_HORIZON_TRADING_DAYS,
+    REC_OUTCOME_ACTION_WINDOW_TRADING_DAYS,
 )
 from stock_analyzer import gate_registry
 from stock_analyzer import gate_ledger_readout
+from stock_analyzer import rec_events_readout
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer import capital_vs_margin
 from stock_analyzer import outage_gate as _outage_gate
@@ -2987,6 +2993,7 @@ with st.sidebar:
             ("Predictive Analytics", "📊 Predictive Analytics", ":material/insights:"),
             ("Model Lab", "🔬 Model Lab",              ":material/experiment:"),
             ("Road Not Taken", "🛑 The Road Not Taken", ":material/block:"),
+            ("Rec Outcomes", "🎯 Recommendation Outcomes", ":material/track_changes:"),
             ("System Trust", "🩺 System Trust",        ":material/health_and_safety:"),
             ("App Settings", "⚙️ App Settings",        ":material/tune:"),
         ]),
@@ -3023,7 +3030,8 @@ with st.sidebar:
     # special-casing the button loop itself. Flagged here explicitly since
     # every other `is_readonly()` use in this app only disables a write
     # control, never removes a whole nav item.
-    _OWNER_ONLY_PAGES = ("🔬 Model Lab", "🩺 System Trust", "🛑 The Road Not Taken", "⚙️ App Settings")
+    _OWNER_ONLY_PAGES = ("🔬 Model Lab", "🩺 System Trust", "🛑 The Road Not Taken",
+                         "⚙️ App Settings", "🎯 Recommendation Outcomes")
     if db.is_readonly():
         _NAV_GROUPS = [
             (_g_label, [item for item in _g_items if item[1] not in _OWNER_ONLY_PAGES])
@@ -32120,6 +32128,165 @@ elif page == "🛑 The Road Not Taken":
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# PAGE — RECOMMENDATION OUTCOMES (Recommendation-Outcomes-Measurement Phase 1b,
+# F-273 follow-on — owner-only, Gate-Ledger-style readout)
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "🎯 Recommendation Outcomes":
+    st.title("🎯 Recommendation Outcomes")
+    st.caption("Owner-only · retrospective measurement · changes no gate, no recommendation, no composite")
+
+    if db.is_readonly():
+        # Defense in depth: the sidebar nav entry is already hidden for a
+        # read-only viewer (see the _OWNER_ONLY_PAGES filter above), but a
+        # stale nav_page from before a mid-session downgrade could still land
+        # here.
+        st.info("🔒 This page is owner-only and isn't available in read-only viewer mode.")
+        st.stop()
+
+    st.caption(
+        "Did the Rebalancer's beta/concentration trims and the Diversification "
+        "Advisor's ADD calls actually move the portfolio metric they were "
+        "computed against, and did you act on them? Awareness only: this never "
+        "changes what the engine recommends."
+    )
+
+    _ro_rows = db.load_rec_events()
+    if _ro_rows is None:
+        st.warning("⚪ Could not read the recommendation-outcomes ledger — the database may be unreachable.")
+    elif not _ro_rows:
+        st.info(
+            "**No rec_events captured yet.** The ledger fills in going forward, "
+            "one row per qualifying rebal_trim/beta_trim/diversify_add call — "
+            "nothing to grade until then."
+        )
+    else:
+        _ro_collapsed = rec_events_readout.collapse_by_rec_ticker(_ro_rows)
+
+        # Portfolio-level risk-metric history for the trim types' realized-
+        # metric leg (rebal_trim/beta_trim) and diversify_add's Leg B —
+        # reused verbatim, never a second correlation/beta computation.
+        _ro_snap_df = db.load_portfolio_risk_snapshots()
+        _ro_snap_by_date: dict = {}
+        if _ro_snap_df is not None and not _ro_snap_df.empty:
+            for _, _sr in _ro_snap_df.iterrows():
+                _sd = str(_sr.get("snapshot_date", ""))[:10]
+                if _sd:
+                    _ro_snap_by_date[_sd] = _sr.to_dict()
+
+        # SPY history + a cached historical-close fetcher for diversify_add's
+        # Leg A (candidate-return-vs-SPY) — same reuse pattern as
+        # 🛑 The Road Not Taken.
+        _ro_spy_by_date: dict = {}
+        try:
+            _ro_spy_hist = _cached_spy("2y")
+            if _ro_spy_hist is not None and not _ro_spy_hist.empty \
+                    and "Close" in _ro_spy_hist.columns:
+                for _si, _sr in _ro_spy_hist.iterrows():
+                    _sd = _si.date() if hasattr(_si, "date") else None
+                    try:
+                        _sc = float(_sr["Close"])
+                    except (TypeError, ValueError):
+                        _sc = None
+                    if _sd is not None and _sc and _sc > 0:
+                        _ro_spy_by_date[_sd] = _sc
+        except Exception:
+            _ro_spy_by_date = {}
+
+        _ro_trades_df = st.session_state.get("trades_df")
+        _ro_trades = (
+            _ro_trades_df.to_dict("records")
+            if _ro_trades_df is not None and not _ro_trades_df.empty else []
+        )
+
+        # Cross-system overlap disclosure (§11 risk note / plan §4): the SAME
+        # `_reduce_calls` cache 🧑‍⚖️ The Judge and 🧾 Summary already read —
+        # tickers under an active Reduce/Exit call. `None` means "not
+        # computed this session" (Home hasn't run) — treated as an empty
+        # set, never as "no overlap exists" (this page only ever ADDS a
+        # disclosure flag on top of an already-earned `acted=True`, so an
+        # unpopulated cache costs nothing but a missed footnote, never a
+        # wrong credit).
+        _ro_reduce_calls_cache = st.session_state.get("_reduce_calls")
+        _ro_protective_tickers = (
+            set(_ro_reduce_calls_cache.keys()) if _ro_reduce_calls_cache is not None else set()
+        )
+
+        _ro_enriched = rec_events_readout.enrich_and_grade(
+            _ro_collapsed,
+            today=_today_et(),
+            trades=_ro_trades,
+            horizon_trading_days=REC_OUTCOME_HORIZON_TRADING_DAYS,
+            action_window_trading_days=REC_OUTCOME_ACTION_WINDOW_TRADING_DAYS,
+            protective_call_tickers=_ro_protective_tickers,
+            risk_snapshot_by_date=_ro_snap_by_date,
+            spy_close_by_date=_ro_spy_by_date,
+            historical_close_fn=_cached_historical_close,
+        )
+
+        _ro_type_labels = {
+            "rebal_trim":    "Rebalancer Trim (oversized + profitable)",
+            "beta_trim":     "Beta Trim (elevated portfolio beta)",
+            "diversify_add": "Diversification ADD",
+        }
+
+        for _rt, _label in _ro_type_labels.items():
+            with st.container(border=True):
+                st.markdown(f"**{_label}**")
+                for _arm in ("acted", "skipped"):
+                    _rg = rec_events_readout.grade_by_rec_type(
+                        _ro_enriched, rec_type=_rt, arm=_arm,
+                        min_calls=REC_OUTCOME_MIN_CALLS,
+                        firm_calls=REC_OUTCOME_FIRM_CALLS,
+                        min_tickers=REC_OUTCOME_MIN_TICKERS,
+                    )
+                    _arm_label = "Acted on" if _arm == "acted" else "Not acted on"
+                    if _rg["band"] == "building":
+                        st.caption(
+                            f"⚪ {_arm_label} — building ({_rg['n_calls']}/{REC_OUTCOME_MIN_CALLS} "
+                            f"matured calls, {_rg['n_distinct_tickers']}/{REC_OUTCOME_MIN_TICKERS} "
+                            "distinct tickers)."
+                        )
+                    else:
+                        st.caption(
+                            f"{'🟢' if _rg['band'] == 'firm' else '🟡'} {_arm_label} — "
+                            f"{_rg['band']} ({_rg['n_calls']} matured calls, "
+                            f"{_rg['n_distinct_tickers']} distinct tickers)."
+                        )
+
+                _rt_matured = [
+                    r for r in _ro_enriched
+                    if r.get("rec_type") == _rt
+                    and r.get("status") == rec_events_readout.STATUS_MATURED
+                ]
+                _rt_overlap = sum(1 for r in _rt_matured if r.get("overlap_with_exit_advisor"))
+                if _rt_overlap:
+                    st.caption(
+                        f"ℹ️ {_rt_overlap} acted call(s) also overlap an active Exit "
+                        "Advisor protective call on the same ticker — credited to BOTH, "
+                        "never picked as one or the other."
+                    )
+
+                for _fn in rec_events_readout.readout_footnotes(_rt):
+                    st.caption(f"ℹ️ {_fn}")
+
+        _ro_min_fired = rec_events_readout.earliest_fired_date(_ro_collapsed)
+        _ro_sched = rec_events_readout.schedule_disclosure(_ro_min_fired, _today_et())
+        if _ro_sched["sanity_check_date"] is not None:
+            st.caption(
+                f"Sanity-check date (accumulation only, no verdict): "
+                f"{_ro_sched['sanity_check_date'].isoformat()}"
+                + (" — reached." if _ro_sched["sanity_check_due"] else " — not yet reached.")
+            )
+            st.caption(
+                "Retirement criterion (pre-registered before any data existed, §11): "
+                f"if no rec_type produces an evaluable verdict distinguishable from "
+                f"zero by {_ro_sched['retirement_date'].isoformat()}, that type's "
+                "readout is retired — that outcome is this criterion's success "
+                "condition, not a failure."
+            )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # PAGE — SYSTEM TRUST (System Proprioception Phase 1 — owner-only diagnostic)
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "🩺 System Trust":
@@ -36332,6 +36499,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer with two independent sections. **Forward Volatility Forecaster** (Phase 1) tests whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. **Earnings-Move Magnitude** (Phase 2) tests whether the app's own already-live pre-earnings sizing heuristic beats a naive "assume it moves like its own past prints" baseline, per held ticker around its scheduled print — unsigned magnitude only, never a directional call, and no "upcoming, not yet matured" preview (an outcome is only ever shown after it's known). Both sections feed **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. Each section's skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated.
 - **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Six checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh), and **⑥ Write outcomes** (did today's interactive ledger writes — 6 write paths: the buy recommendations log, the Grow Today gate suppression ledger, the Watchlist Ready-to-Enter log, and the 3 Watchlist/Rebalancer/Analysis gate-ledger capture sites added 2026-09-13 — actually save, or did a swallowed failure look identical to a healthy "nothing to record"?). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Check ⑥, unlike ④/⑤, DOES feed the Home banner — it is a same-session pass/fail signal, not a standing condition or a cold-load cache. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.**
 - **🛑 The Road Not Taken** — owner-only, not shown in read-only viewer mode. Grades the app's own restraint: every time a gate held back a pick, an add, or downgraded a call, this page shows what the forward return vs SPY over the following ~30 trading days would have been — did the app's caution help or hurt? Covers 14 gates: the original 8 inside Grow Today (macro/sector filters, single-name ceiling, drift conflict, cooldown, early-deterioration WATCH, bear-day tone) plus 6 more — a Rebalancer ADD suppression, a Watchlist ENTER_NOW downgrade to NEAR_ENTRY (sector, beta, or unvalidated R:R — 3 separate gates), and an Analysis add-to-position suppression on a breached stop. A downgrade and an outright suppression are graded as distinct claims (a downgraded name still rendered, just weaker), never blended together. Per gate, not aggregate, and a gate shows no verdict at all ("building") until enough matured, priced, distinct-ticker calls have accrued — expect every gate to read "building" for the first couple of months, longer for the 6 gates added 2026-09-13. **A pure retrospective measurement — it never changes what the engine recommends, gates, or sizes**, today or in the future.
+- **🎯 Recommendation Outcomes** — owner-only, not shown in read-only viewer mode. Asks whether past Rebalancer trims, the Risk Advisor's beta-card trim, and Diversification ADD calls actually helped — the trim types compare each call's own predicted metric (target single-name weight, or predicted portfolio beta) against what the portfolio's risk-metric history actually shows at that same call's ~30-trading-day horizon, always as a portfolio-level proxy (never claimed as a per-ticker-causal result); the ADD type shows the added name's own return vs SPY as one leg, and the portfolio's correlation/diversification-score shift as a separate leg — never blended into a single "diversification worked" claim. A call only counts as "acted on" when you traded the SAME named ticker, in the right direction, within 10 trading days of the call firing — trading a different name to address the same concern moves the numbers on 💰 Account's own charts but doesn't credit this specific call. Each type shows no verdict at all ("building") until enough matured, distinct-ticker calls have accrued. Tax-Harvest calls are tracked separately (see 💰 Account's running total), not graded here. **A pure retrospective measurement — it never changes what the engine recommends, gates, or sizes.**
 - **⚙️ App Settings** — owner-only, not shown in read-only viewer mode. Lets you curate the three ticker-roster lists the engine reads — the Grow Today scan universe, the Movers discovery net, and the Diversification candidate roster — from inside the app instead of by editing code. **Edits the engine's INPUT SET, never a decision rule**: no gate, threshold, scoring weight, or `COMPOSITE_BUY` lives here or is ever editable through this page. The database is the single source of truth for these lists — if it's unreachable, the affected page shows "unavailable" rather than silently falling back to a frozen list. Every save is validated (a typo'd symbol blocks the save, never saves with a warning) and versioned in an append-only history, the same way git records why an investment threshold changed.
 
 - **If the database is unreachable, most pages deliberately refuse to load.** You'll see a red banner saying your portfolio is *not* shown, with a **🔄 Retry connection** button. This is on purpose: rendering an empty portfolio would look like you hold nothing, which is a worse lie than showing nothing at all. Two pages stay open — **🩺 System Trust** (to diagnose it) and **📖 User Guide** (this page) — because neither displays any of your holdings, so neither can mislead you. The app retries by itself every 30 seconds and recovers on its own once the database is back; the button retries immediately. If only your *watchlist* or *trade history* is unreadable, you get an amber warning instead and the app keeps working — your holdings are still correct, but history-driven pages (🎯 My Edge, 🧾 Prior Trades) may look emptier than they are.

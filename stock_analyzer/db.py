@@ -921,6 +921,46 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.portfolio_risk_snapshots;
     create policy "Allow all (service role)" on public.portfolio_risk_snapshots
         for all to service_role using (true) with check (true);
+
+    -- rec_events: Recommendation-Outcomes-Measurement Phase 1b/2 (docs/plans/
+    -- recommendation-outcomes-measurement.md §10/§11) -- one row per rebal_
+    -- trim / beta_trim / diversify_add call FIRED that day, written by the
+    -- EOD cron (rec_events_capture.build_rec_event_rows) reusing that SAME
+    -- run's already-computed port_df/port_risk/held_data/portfolio_risk_
+    -- snapshots row -- never a second fetch. A ticker whose call persists
+    -- across multiple daily runs gets one row PER DAY here (the readout half,
+    -- rec_events_readout.collapse_by_rec_ticker, collapses to one row per
+    -- (rec_type, ticker) ever, earliest-anchored -- same shape as
+    -- gate_suppressions/exit_signals). First-writer-wins upsert (ignore_
+    -- duplicates=True) so a same-day cron re-run is idempotent. NULL-
+    -- preserving on producer failure, never a fabricated 0/neutral (the
+    -- feedback_sentinel_is_present / feedback_overloaded_producer_state bug
+    -- class this project has already been bitten by twice). Awareness-only --
+    -- no rec/scoring/sizing engine may read this table (same redline as
+    -- portfolio_risk_snapshots above). Applied BY HAND in Supabase (same
+    -- pattern as every other table in this file) -- until then, save no-ops
+    -- and load returns None, so the EOD cron step degrades to a logged no-op
+    -- and the readout page shows its "not enough data yet" state.
+    create table if not exists public.rec_events (
+        rec_type                text    not null,  -- 'rebal_trim' | 'beta_trim' | 'diversify_add'
+        ticker                  text    not null,   -- the NAMED ticker (trim target, or ADD candidate)
+        sector                  text,               -- ADD target sector context; NULL for single-name types
+        fired_date              date    not null,   -- rec-fire (capture) date, ET
+        source                  text    not null default 'cron',
+        metric_name             text,               -- 'single_name_pct' | 'portfolio_beta' | 'avg_pairwise_corr'
+        metric_before           numeric,            -- NULL-preserving, never fabricated 0
+        metric_predicted_after  numeric,            -- nullable -- no formula exists yet for diversify_add
+        rec_dollars             numeric,
+        price_at_rec            numeric,            -- ADD only; NULL when unavailable
+        candidates              jsonb,              -- ADD only -- the full surfaced candidate pool
+        corr_coverage_n         integer,            -- ADD only
+        created_at              timestamptz default now(),
+        primary key (rec_type, ticker, fired_date, source)
+    );
+    alter table public.rec_events enable row level security;
+    drop policy if exists "Allow all (service role)" on public.rec_events;
+    create policy "Allow all (service role)" on public.rec_events
+        for all to service_role using (true) with check (true);
 """
 
 import os
@@ -4509,6 +4549,117 @@ def load_portfolio_risk_snapshots(start_date=None, end_date=None) -> "pd.DataFra
                      "top_sector_pct", "max_single_name_pct", "avg_pairwise_corr",
                      "diversification_score", "corr_coverage_n", "created_at"]
         )
+    except Exception:
+        return None
+
+
+# ── rec_events (Recommendation-Outcomes-Measurement Phase 1b/2) ─────────────
+# Optional table — see DDL at module top. Mirrors save_gate_suppressions /
+# load_gate_suppressions exactly: upsert-only (first-writer-wins,
+# ignore_duplicates=True, TypeError-compat fallback), None (never []) on any
+# read failure.
+
+def save_rec_events(rows: "list[dict]") -> dict:
+    """Persist rec_events rows to rec_events (UPSERT ONLY).
+
+    Returns {"attempted": N, "saved": M, "error": str | None}.
+
+    Hard rules (mirrors save_gate_suppressions):
+    - is_readonly() → immediate no-op (read-only viewer must never write).
+    - not rows or not has_db() → clean no-op.
+    - UPSERT only (on_conflict="rec_type,ticker,fired_date,source",
+      ignore_duplicates=True). NO plain .insert() fallback.
+    - Drops rows missing rec_type / ticker / fired_date / source.
+    - Never raises; catches broadly and returns the error string.
+    """
+    if is_readonly():
+        return {"attempted": 0, "saved": 0, "error": "read-only"}
+    if not rows or not has_db():
+        return {"attempted": 0, "saved": 0, "error": None}
+
+    def _safe_float_re(x):
+        try:
+            v = float(x) if x is not None else None
+        except (TypeError, ValueError):
+            return None
+        if v is None or v != v:   # NaN check
+            return None
+        return v
+
+    def _safe_int_re(x):
+        """Plain-int coerce for corr_coverage_n — tolerates a numpy int64
+        (from a DataFrame read) without raising; None-preserving."""
+        if x is None:
+            return None
+        try:
+            return int(x)
+        except (TypeError, ValueError):
+            return None
+
+    payload: list[dict] = []
+    for r in rows:
+        rt  = str(r.get("rec_type", "") or "").strip()
+        tk  = str(r.get("ticker", "") or "").strip().upper()
+        fd  = r.get("fired_date")
+        src = str(r.get("source", "") or "").strip()
+        if not rt or not tk or fd is None or not src:
+            continue
+        fd_str = fd.isoformat() if hasattr(fd, "isoformat") else str(fd)[:10]
+
+        payload.append({
+            "rec_type":               rt,
+            "ticker":                 tk,
+            "sector":                 r.get("sector"),
+            "fired_date":             fd_str,
+            "source":                 src,
+            "metric_name":            r.get("metric_name"),
+            "metric_before":          _safe_float_re(r.get("metric_before")),
+            "metric_predicted_after": _safe_float_re(r.get("metric_predicted_after")),
+            "rec_dollars":            _safe_float_re(r.get("rec_dollars")),
+            "price_at_rec":           _safe_float_re(r.get("price_at_rec")),
+            "candidates":             r.get("candidates"),
+            "corr_coverage_n":        _safe_int_re(r.get("corr_coverage_n")),
+        })
+
+    if not payload:
+        return {"attempted": 0, "saved": 0, "error": None}
+
+    try:
+        _client().table("rec_events").upsert(
+            payload,
+            on_conflict="rec_type,ticker,fired_date,source",
+            ignore_duplicates=True,
+        ).execute()
+        return {"attempted": len(payload), "saved": len(payload), "error": None}
+    except TypeError:
+        # ignore_duplicates kwarg unsupported on this supabase-py version —
+        # retry without it (still an upsert; tradeoff: last-writer-wins).
+        try:
+            _client().table("rec_events").upsert(
+                payload,
+                on_conflict="rec_type,ticker,fired_date,source",
+            ).execute()
+            return {"attempted": len(payload), "saved": len(payload),
+                    "error": "compat: ignore_duplicates unsupported (last-writer-wins)"}
+        except Exception as exc2:
+            _record_db_error(f"rec_events_upsert_compat: {str(exc2)[:100]}")
+            return {"attempted": len(payload), "saved": 0, "error": str(exc2)[:200]}
+    except Exception as exc:
+        _record_db_error(f"rec_events_upsert: {str(exc)[:100]}")
+        return {"attempted": len(payload), "saved": 0, "error": str(exc)[:200]}
+
+
+def load_rec_events() -> "list[dict] | None":
+    """Read every rec_events row (no date filter — the readout module
+    collapses/matures rows itself). Returns None on ANY failure (no
+    credentials, missing table, or a raised query exception) — an offline
+    sentinel, never collapsed into "genuinely no rec_events". Mirrors
+    load_gate_suppressions's contract exactly."""
+    if not has_db():
+        return None
+    try:
+        rows = _client().table("rec_events").select("*").execute().data
+        return rows if rows is not None else []
     except Exception:
         return None
 

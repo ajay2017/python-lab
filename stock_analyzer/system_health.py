@@ -139,6 +139,12 @@ _INVENTORY: tuple[_Store, ...] = (
     # being written with no signal anywhere in the app, not even "unknown".
     # All existence-only, same rationale as the block above.
     _Store("gate_suppressions",          "Gate suppression ledger",                   "scan",   "daily", False),
+    # rec_events (Recommendation-Outcomes-Measurement Phase 1b, 2026-09-17):
+    # written by the EOD cron alongside portfolio_risk_snapshots, but
+    # CONDITIONAL like gate_suppressions above — a day with no qualifying
+    # rebal_trim/beta_trim/diversify_add call writes nothing, and that
+    # absence is legitimate, not a failure. Existence-only.
+    _Store("rec_events",                 "Recommendation outcome events",             "eod",    "daily", False),
     _Store("account_cash",               "Account cash balance",                      "broker", "daily", False),
     _Store("account_flows",              "Account deposits/withdrawals",              "broker", "daily", False),
     _Store("snaptrade_pending_imports",  "Broker transactions pending confirmation",  "broker", "daily", False),

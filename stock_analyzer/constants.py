@@ -1277,6 +1277,31 @@ GATE_LEDGER_MIN_TICKERS = 5            # distinct-ticker floor (§5 "K") — a g
                                         # fake evaluability
 GATE_LEDGER_HORIZON_TRADING_DAYS = 30  # forward-alpha measurement window (§5 "H")
 
+# ── Recommendation Outcomes Measurement — Phase 1b/2 (`rec_events` + banded
+# readout, docs/plans/recommendation-outcomes-measurement.md §10/§11) ────────
+# DISPLAY-ONLY band thresholds + measurement/action-window horizons for the
+# rebal_trim / beta_trim / diversify_add attribution readout. Ratified with
+# the owner 2026-09-15 (§11, decision 4) — the 8/15/5/30 values are the SAME
+# convention as GATE_LEDGER_*/PROTECT_TRACK_*/ENGINE_TRACK_* (deliberately
+# NOT shared — a future tuning of one ledger must never silently move
+# another's floor). These are NOT investment decision gates — they never
+# feed risk_advisor, exit_advisor, daily_briefing, scoring, sizing, or any
+# other decision path (redline: this readout is a retrospective measurement
+# of the app's own past restraint, awareness only). Safe to tune from
+# observation, EXCEPT the horizon/action-window, which are load-bearing to
+# the pre-registered §11 retirement test and must not be changed without
+# re-deriving that test's validity.
+REC_OUTCOME_MIN_CALLS = 8    # below → "building" band (no verdict shown)
+REC_OUTCOME_FIRM_CALLS = 15  # at/above → "firm" band; 8–14 → "early" band
+REC_OUTCOME_MIN_TICKERS = 5  # distinct-ticker floor — a rec_type is evaluable
+                             # only at MIN_CALLS rows AND MIN_TICKERS distinct
+                             # tickers, so one ticker re-recorded daily can't
+                             # fake evaluability
+REC_OUTCOME_HORIZON_TRADING_DAYS = 30          # forward measurement window
+REC_OUTCOME_ACTION_WINDOW_TRADING_DAYS = 10    # trading days after a rec fires
+                                                # within which a matching trade
+                                                # still counts as "acted on"
+
 # ── Self Track Record ("is my own instinct good?", MEASUREMENT-ONLY) ─────────
 # Answers a DIFFERENT question than the Engine Track Record card above ("is
 # the engine good?") — this measures the user's own self-initiated BUYs

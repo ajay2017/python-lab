@@ -79,6 +79,7 @@ from stock_analyzer.constants import (
     CRON_INTRADAY_START_HOUR_ET, MARGIN_MAINTENANCE_RATE, ACCOUNT_CASH_STALE_DAYS,
 )
 from stock_analyzer.risk_metric_history import build_portfolio_risk_snapshot
+from stock_analyzer.rec_events_capture import build_rec_event_rows
 from stock_analyzer.data import is_trading_day
 from stock_analyzer.headless_alert_engine import (
     compute_protective_alerts, compute_eod, compute_morning_picks,
@@ -531,6 +532,54 @@ def _run_eod(now_et, force: bool) -> int:
             _log(f"portfolio_risk_snapshot NOT written (DB offline / table missing, date={today_str}).")
     except Exception as e:
         _log(f"portfolio_risk_snapshot FAILED — {str(e)[:120]} — continuing.")
+        _risk_row = None
+
+    # 1d. rec_events capture (Recommendation-Outcomes-Measurement Phase 1b —
+    # docs/plans/recommendation-outcomes-measurement.md §10/§11). Reuses the
+    # SAME `payload`/`_risk_row` this run already computed above — no second
+    # fetch of port_df/port_risk/held_data/avg_pairwise_corr/corr_coverage_n.
+    # Never gates anything — retrospective attribution capture only. A
+    # failed write is logged distinctly from a successful no-op, same
+    # convention as 1b/1c above.
+    try:
+        from stock_analyzer.reference_data import resolve_universe_or_none
+        _re_sc, _, _re_sc_err = resolve_universe_or_none("sector_candidates")
+        _re_du, _, _re_du_err = resolve_universe_or_none("discovery_universe")
+        if _re_sc_err:
+            _log(f"rec_events: sector_candidates unavailable this run ({_re_sc_err}) — using {{}}.")
+        if _re_du_err:
+            _log(f"rec_events: discovery_universe unavailable this run ({_re_du_err}) — using {{}}.")
+
+        def _rec_events_price_fn(ticker: str):
+            import stock_analyzer.data as _data
+            hist = _data.fetch_price_history(ticker, period="5d")
+            if hist is None or hist.empty or "Close" not in hist.columns:
+                return None
+            closes = hist["Close"].dropna()
+            return float(closes.iloc[-1]) if len(closes) else None
+
+        _re_trades_df = db.load_trades()
+        _re_rows = build_rec_event_rows(
+            now_et.date(),
+            payload.get("port_df"), payload.get("port_risk"),
+            payload.get("held_data", {}), _re_trades_df, _risk_row,
+            _re_sc or {}, _re_du or {},
+            None,  # portfolio_value: not needed by the ADD-generation path this
+                   # capture reads (add_dollars is not a persisted field) —
+                   # see rec_events_capture._build_diversify_add_rows.
+            price_fn=_rec_events_price_fn,
+        )
+        if not _re_rows:
+            _log("rec_events: 0 qualifying row(s) this run — nothing to write.")
+        else:
+            _re_result = db.save_rec_events(_re_rows)
+            if _re_result.get("saved"):
+                _log(f"rec_events written ({_re_result['saved']} row(s), date={today_str}).")
+            else:
+                _log(f"rec_events NOT written ({len(_re_rows)} candidate row(s); "
+                     f"DB offline / table missing — {_re_result.get('error')}).")
+    except Exception as e:
+        _log(f"rec_events FAILED — {str(e)[:120]} — continuing.")
 
     # 2. Sentiment snapshot: persist VADER + Finnhub readings for all held tickers
     # so Tier 3 sentiment-vs-price-move analysis has a growing daily series.

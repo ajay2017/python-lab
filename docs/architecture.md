@@ -331,6 +331,11 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `GATE_LEDGER_FIRM_CALLS` | 15 | **Display-only** band threshold. At/above this count a gate's readout shows a "firm" verdict; between `GATE_LEDGER_MIN_CALLS` and this value it shows "early". Same caveats as `GATE_LEDGER_MIN_CALLS`. |
 | `GATE_LEDGER_MIN_TICKERS` | 5 | **Display-only** distinct-ticker floor (§5 "K"). A gate is evaluable only at `GATE_LEDGER_MIN_CALLS` rows **and** this many distinct tickers — without it, one ticker re-recorded daily could reach the row-count floor on a single observation and falsely read as evaluable. Load-bearing to the pre-registered §5 retirement test; do not change without re-deriving that test's validity. |
 | `GATE_LEDGER_HORIZON_TRADING_DAYS` | 30 | Forward-alpha measurement window (§5 "H") for the Gate Suppression Ledger readout — how many NYSE trading sessions after `rec_date` a suppressed pick's alpha vs SPY is measured, via `predictive_analytics.forward_alpha_at_horizon` (reused, not re-implemented). Load-bearing to the pre-registered §5 retirement test; do not change without re-deriving that test's validity. |
+| `REC_OUTCOME_MIN_CALLS` | 8 | **Display-only** band threshold for the Recommendation Outcomes readout (F-273 Phase 1b/2, `rec_events` + `rec_events_readout.py`, `docs/plans/recommendation-outcomes-measurement.md` §10/§11). Below this count of matured, evaluable rows for a `rec_type` (rebal_trim/beta_trim/diversify_add), that type's arm shows "building" and withholds a verdict. NOT an investment gate; never feeds `risk_advisor`, `exit_advisor`, `daily_briefing`, scoring, or sizing — retrospective measurement only. Safe to tune from observation. |
+| `REC_OUTCOME_FIRM_CALLS` | 15 | **Display-only** band threshold. At/above this count a `rec_type`'s arm shows a "firm" verdict; between `REC_OUTCOME_MIN_CALLS` and this value it shows "early". Same caveats as `REC_OUTCOME_MIN_CALLS`. |
+| `REC_OUTCOME_MIN_TICKERS` | 5 | **Display-only** distinct-ticker floor. A `rec_type`/acted-or-skipped arm is evaluable only at `REC_OUTCOME_MIN_CALLS` rows **and** this many distinct tickers, mirroring `GATE_LEDGER_MIN_TICKERS` — one ticker re-recorded daily can't fake evaluability. Load-bearing to the pre-registered §11 retirement test; do not change without re-deriving that test's validity. |
+| `REC_OUTCOME_HORIZON_TRADING_DAYS` | 30 | Forward measurement window — how many NYSE trading sessions after `fired_date` a rebal_trim/beta_trim/diversify_add episode's outcome (predicted-vs-realized portfolio metric, or candidate-return-vs-SPY for diversify_add) is read from `portfolio_risk_snapshots` / priced via `predictive_analytics.forward_alpha_at_horizon`. Load-bearing to the pre-registered §11 retirement test; do not change without re-deriving that test's validity. |
+| `REC_OUTCOME_ACTION_WINDOW_TRADING_DAYS` | 10 | Trading-day window after a `rec_events` row fires within which a matching trade (same ticker, correct direction) still counts as "acted on" that call — a `trigger_type` match is a confirming boost only, never required. Ratified 2026-09-15 (§11). Not an investment gate — attribution-only. |
 | `SELF_TRACK_MATCH_LOOKBACK_DAYS` | 3 | My Edge → 🧭 Self vs Engine — a BUY counts as `app_aligned` only if a matching `new_pick`/`buy_candidate` recommendation exists within this many days before (inclusive) the trade date; a rec further back is a distinct, later decision, and a rec dated after the trade never counts (no lookahead). Measurement-only — never gates, sizes, or suppresses a recommendation. User chose the tighter 3-day option over looser 5/10-day alternatives, 2026-08-06. |
 | `SELF_TRACK_RELIABLE_LOG_START` | 2026-08-06 | My Edge → 🧭 Self vs Engine — ship date of the cron-side recommendation-logging fix (`cron_runner.py._run_scan` now persists today's `new_pick` rows even on days with no interactive session). Before this date, an in-scope ticker (universe or watchlist) bought with no matching rec on file is bucketed `coverage_limited` (disclosed, never graded either way) since the gap could be missing coverage rather than a genuine self-initiated call; on/after this date the same shape is graded `self_in_scope`. Boundary inclusive (`>=`). |
 | `SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS` | 5 | My Edge → 🧭 Self vs Engine → 📉 Sell-Side (F-233's SELL extension) — a SELL counts as `engine_aligned` only if an EXIT/TRIM `exit_signals` row for the same ticker falls within this many days before (inclusive) the sell date; WATCH-tier signals never count as a match. Measurement-only — never gates, sizes, or suppresses a recommendation. |
@@ -2781,6 +2786,166 @@ criterion (mirrors the Gate Suppression Ledger's own discipline): replay score d
 closed round trips ~6 months after enough history accrues; if decay is not systematically
 earlier than the existing price-based exit ladder, the eventual readout is retired — that is
 the success condition of that criterion, not a failure to soften later.
+
+### 6.48 `portfolio_risk_snapshots` table
+
+*(Retroactive doc-sync — this table shipped 2026-09-15 as F-273 Phase 1a but never got its
+own architecture.md section; caught while syncing docs for Phase 1b below.)*
+
+```sql
+create table if not exists public.portfolio_risk_snapshots (
+    snapshot_date          date    not null primary key,
+    portfolio_beta         numeric,  -- NULL when insufficient price history
+    top_sector             text,     -- NULL when Sector column unavailable/empty
+    top_sector_pct         numeric,  -- % of gate-weight basis in top_sector
+    max_single_name_pct    numeric,  -- largest single position's % of gate-weight basis
+    avg_pairwise_corr      numeric,  -- portfolio.diversification_score()'s avg_correlation
+    diversification_score  numeric,  -- portfolio.diversification_score()'s score (0-100)
+    corr_coverage_n        integer,  -- portfolio.correlation_coverage()'s n_obs
+    created_at             timestamptz default now()
+);
+alter table public.portfolio_risk_snapshots enable row level security;
+create policy "Allow all (service role)" on public.portfolio_risk_snapshots
+    for all to service_role using (true) with check (true);
+```
+
+One row per trading day of portfolio-level risk-metric history, written by the EOD cron
+step "1c" (`stock_analyzer/risk_metric_history.py::build_portfolio_risk_snapshot`), reusing
+that run's already-computed `port_df`/`port_risk`/`held_data` — never a second fetch. Every
+field NULL-preserving on producer failure, never a fabricated 0/neutral (the
+`feedback_sentinel_is_present`/`feedback_overloaded_producer_state` bug class this project
+has already been bitten by twice). Forward-only from ship date — no backfill possible.
+Persisted via `stock_analyzer/db.py::save_portfolio_risk_snapshot()` (upsert on
+`snapshot_date`); read via `load_portfolio_risk_snapshots(start_date, end_date)`, returning
+`None` on any failure. Registered in `system_health.py`'s `_INVENTORY` (System Trust check
+②). Consumed by 💰 Account's **"📊 Portfolio Risk Trend"** chart and, as of Phase 1b, by
+`rec_events_readout.py`'s outcome legs (§6.49 below) as the realized-metric source for
+`rebal_trim`/`beta_trim` episodes. Awareness only — no rec/scoring/sizing engine may read
+this table.
+
+### 6.49 `rec_events` table
+
+```sql
+create table if not exists public.rec_events (
+    rec_type                text    not null,   -- 'rebal_trim' | 'beta_trim' | 'diversify_add'
+    ticker                  text    not null,    -- the NAMED ticker (trim target, or ADD candidate)
+    sector                  text,                -- ADD target sector context; NULL for single-name types
+    fired_date              date    not null,    -- rec-fire (capture) date, ET
+    source                  text    not null default 'cron',
+    metric_name             text,                -- 'single_name_pct' | 'portfolio_beta' | 'avg_pairwise_corr'
+    metric_before           numeric,             -- NULL-preserving, never fabricated 0
+    metric_predicted_after  numeric,             -- nullable — no formula exists yet for diversify_add
+    rec_dollars             numeric,
+    price_at_rec            numeric,             -- ADD only; NULL when unavailable
+    candidates              jsonb,               -- ADD only — the full surfaced candidate pool
+    corr_coverage_n         integer,             -- ADD only
+    created_at              timestamptz default now(),
+    primary key (rec_type, ticker, fired_date, source)
+);
+alter table public.rec_events enable row level security;
+create policy "Allow all (service role)" on public.rec_events
+    for all to service_role using (true) with check (true);
+```
+
+**F-273 Phase 1b/2 (2026-09-17).** One row per `rebal_trim`/`beta_trim`/`diversify_add`
+call FIRED that day — a ticker whose call persists across multiple daily EOD runs gets one
+row PER DAY here; the readout half (`collapse_by_rec_ticker`, see below) collapses that down
+to one row per `(rec_type, ticker)` ever, earliest-anchored, mirroring
+`gate_suppressions`/`exit_signals`'s own capture-vs-collapse split. Written by the EOD cron
+step "1d", immediately after step 1c, reusing that SAME run's `port_df`/`port_risk`/
+`held_data`/`portfolio_risk_snapshots` row plus a `db.load_trades()` call — never a second
+fetch. First-writer-wins upsert (`on_conflict="rec_type,ticker,fired_date,source",
+ignore_duplicates=True`) so a same-day cron re-run is idempotent. Applied by hand in
+Supabase (same convention as every other optional table in this file) — until then, `save`
+no-ops and `load` returns `None`, and both the cron step and the readout page degrade to a
+logged no-op / "not enough data yet" state, never a crash or a fabricated zero.
+
+Persisted via `stock_analyzer/db.py::save_rec_events(rows)`; read via `load_rec_events()`,
+which returns `None` (never `[]`) on any read failure — this offline-sentinel contract is
+load-bearing, since the whole feature's point is distinguishing "ledger genuinely empty"
+from "couldn't read the ledger." Registered in `system_health.py`'s `_INVENTORY` (System
+Trust check ②). Awareness only — no rec/scoring/sizing engine may read this table (same
+redline as `portfolio_risk_snapshots`).
+
+### `stock_analyzer/rec_events_capture.py`
+
+Pure `build_rec_event_rows(fired_date, port_df, port_risk, held_data, trades_df, ...)`.
+Three independent generators, each wrapped in its own try/except so one failing generator
+never blanks the others (mirrors `risk_metric_history.build_portfolio_risk_snapshot`'s
+isolation pattern):
+
+- **`rebal_trim`** — from `portfolio.rebalance_actions()`'s "trim" branch (fires on
+  `weight > SINGLE_NAME_TRIM_TRIGGER and pnl > REBALANCE_TRIM_PNL_PCT`). `metric_name=
+  "single_name_pct"`, `metric_before`=current weight, `metric_predicted_after`=
+  `SINGLE_NAME_CEILING`, `rec_dollars`=trim_val.
+- **`beta_trim`** — reproduces (does **not** import) `risk_advisor.py`'s beta-card
+  top-contributor trim pick, so `risk_advisor.py` itself stays untouched by this feature (it
+  is a `_GATE_FILES` member; touching it would pull an unrelated mandatory-review scope into
+  this change for no reason). `metric_name="portfolio_beta"`, `metric_predicted_after` via
+  `stock_analyzer.beta_repair.expected_beta_after_trim()` reused verbatim — never
+  re-derived. Confirming `trigger_type` for this rec_type is `REBAL_TRIM` (no dedicated
+  trigger_type exists for the risk_advisor beta-card trim specifically — a manually-tagged
+  `REBAL_TRIM` SELL is treated as a confirming signal, since it's the same underlying
+  discretionary action). This only affects the `attribution_confirmed` disclosure flag,
+  never the `acted` credit itself, which fires off ticker+direction+window alone.
+- **`diversify_add`** — from `portfolio.diversification_recommendations()`'s ADD entries.
+  `ticker`=first surfaced candidate, `candidates`=jsonb of the full surfaced pool,
+  `corr_coverage_n`/`avg_pairwise_corr` read from that SAME EOD run's already-computed
+  `portfolio_risk_snapshots` row (never recomputed), `price_at_rec` via an injected
+  `price_fn` callback so the module stays I/O-free. `metric_predicted_after` is always
+  `None` — no "expected correlation after add" formula exists anywhere in this codebase
+  (confirmed against HEAD, not assumed); the readout discloses this as a genuine gap rather
+  than inventing a number.
+
+Every numeric field NULL-preserving on any missing input.
+
+### `stock_analyzer/rec_events_readout.py`
+
+Pure module, structured like `gate_ledger_readout.py`: `collapse_by_rec_ticker()` (one row
+per `(rec_type, ticker)`, earliest-anchored — extends `protective_track_record.
+collapse_by_ticker`'s pattern, keyed on the pair; no episode-gap-reopening mechanism), then
+per collapsed episode: a maturity gate FIRST (`_advance_trading_days(fired_date,
+REC_OUTCOME_HORIZON_TRADING_DAYS) > today` → `not_matured`; an unparseable `fired_date` is
+also `not_matured`, never a fabricated evaluable state), then `match_attribution()`, then
+per-type outcome legs, then `grade_by_rec_type()` banding.
+
+**`match_attribution()` — the single most load-bearing rule in this module.** A trade
+credits a rec_event iff ALL of: (a) trade ticker == the rec's named ticker **exactly** — a
+SELL of a *different* high-beta/oversized name never credits this rec, a directly
+owner-ratified rule (§11 decision 3, re-applied here); (b) trade direction matches the
+rec_type's expected direction (SELL for rebal_trim/beta_trim, BUY for diversify_add); (c)
+`traded_at` (ET) falls within `[fired_date, fired_date + REC_OUTCOME_ACTION_WINDOW_
+TRADING_DAYS]` trading days, inclusive both ends. For `diversify_add` only, an additional
+gate: the bought ticker must also be present in that rec's own `candidates` jsonb.
+`trigger_type` (`REBAL_TRIM`/`DIVERSIFY_ADD` if present) is a **confirming boost only**
+(`attribution_confirmed=True`) — never required; a manual/untagged trade matching (a)-(c)
+still counts as acted.
+
+**Outcome legs — never the BUY-side alpha-vs-SPY shape on the two trim types (a hard
+design redline).** `beta_trim`/`rebal_trim` compare the rec's own `metric_predicted_after`
+against the realized portfolio-level metric read from `portfolio_risk_snapshots` at
+`fired_date + horizon`, captioned as a portfolio-level proxy — not a per-ticker-causal
+claim (the daily table stores only the book's MAX single-name/sector weight, not this
+specific ticker's own weight history). `diversify_add` keeps two legs strictly separate:
+Leg A (`predictive_analytics.forward_alpha_at_horizon()`, reused verbatim) is captioned
+exactly "the added name's own performance," never "diversification worked"; Leg B
+(`avg_pairwise_corr`/`diversification_score` before vs. after) discloses `corr_coverage_n`
+at both endpoints so a listwise sample-size shift is never misread as a real diversification
+change (`project_correlation_sample_size`).
+
+**Banding requires BOTH floors** — `n_calls < REC_OUTCOME_MIN_CALLS` **or**
+`n_tickers < REC_OUTCOME_MIN_TICKERS` → "building"; a single ticker firing 8 times must not
+read as "early." **Cross-system overlap:** a SELL matching both a trim-type rec_event and an
+active Exit-Advisor protective call (`_reduce_calls`) credits BOTH, disclosed in the
+footnotes, never picking one over the other. Surfaces both pre-registered dates from §11: a
+3-month-from-`min(fired_date)` sanity checkpoint (row-count only, not a verdict) and the
+12-month-from-`min(fired_date)` per-rec_type retirement date.
+
+Rendered on the new owner-only **"🎯 Recommendation Outcomes"** page (RESEARCH nav group,
+alongside "🛑 The Road Not Taken") — retrospective/awareness only, never Act Today material.
+Tax-harvest is explicitly out of scope for this readout; it stays on Phase 1a's non-banded
+`tax_advisor.harvest_outcomes_summary()` running total. Opus `reviewer`: SHIP, 0 blocking.
+Full design: `docs/plans/recommendation-outcomes-measurement.md` §10/§11.
 
 ---
 

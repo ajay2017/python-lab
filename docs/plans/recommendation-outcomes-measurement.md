@@ -1,18 +1,29 @@
 # Measuring whether Rebalancer / Diversification-ADD / Tax-Harvest calls actually worked
 
-**Status: PHASE 1a SHIPPED 2026-09-15 (commit `a7498b3`), DDL applied same day by the
-owner.** §10 is the Opus `planner` design (Opus 4.8); §11 records the ratified decisions,
-both built exactly as specified — two independent Opus `reviewer` passes, both SHIP/0
-blocking (Part 1: `portfolio_risk_snapshots` capture + the Account chart; Part 2: the 3
-`trigger_type` values + the tax-harvest running total + the wash-sale after-check). Full
-detail: `docs/requirements.md` F-273, `docs/shipped-log.md`. **Phase 1b/2 (the
-rec-attribution ledger + banded readout) is deliberately NOT started yet** — the owner's
-own call to first confirm Phase 1a's plumbing runs clean in production for a few days
-(🩺 System Trust check ② green on `portfolio_risk_snapshots`, the Account chart rendering)
-before building the next layer on top of it; see CLAUDE.md's queue entry for the exact
-pickup trigger. When picked up: §10's Phase 1b/2 plan (the `rec_events` schema, the
-attribution-matching rules, the 8/15/5-style floors) still needs its own fresh `planner`
-pass — none of that has been designed in code-ready detail yet, only sketched in §10.
+**Status: BOTH PHASES SHIPPED. Phase 1a 2026-09-15 (commit `a7498b3`); Phase 1b/2
+2026-09-17 (F-273b).** §10 is the original Opus `planner` design (Opus 4.8); §11 records
+Phase 1a's ratified decisions. Phase 1a built exactly as specified — two independent Opus
+`reviewer` passes, both SHIP/0 blocking (Part 1: `portfolio_risk_snapshots` capture + the
+Account chart; Part 2: the 3 `trigger_type` values + the tax-harvest running total + the
+wash-sale after-check).
+
+**Phase 1b/2 picked up 2026-09-17** once 🩺 System Trust check ② confirmed
+`portfolio_risk_snapshots` was writing clean daily rows (the pre-registered trigger). A
+fresh `planner` pass (Opus 4.8 (1M context), verdict PROCEED WITH QUESTIONS) found §10's
+original sketch had conflated the Rebalancer's concentration-driven trim with the
+risk_advisor beta-card's portfolio-beta trim under one "trim" label — these are two
+different generators predicting two different metrics. Three owner decisions resolved it:
+capture BOTH as distinct `rec_type`s (`rebal_trim`, `beta_trim`); render the banded readout
+on a new owner-only page ("🎯 Recommendation Outcomes"), not folded into an existing page;
+`REC_OUTCOME_ACTION_WINDOW_TRADING_DAYS = 10`. Built by `implementer` (Sonnet 5) exactly to
+that resolved spec — new `rec_events` table, `rec_events_capture.py`, `rec_events_readout.py`,
+5 new constants, 62 new tests, full suite 5627 passed. Opus `reviewer`: SHIP, 0 blocking.
+Full detail: `docs/requirements.md` F-273b, `docs/architecture.md` §6.48/§6.49, memory
+`project_recommendation_outcomes_measurement`.
+
+**Nothing left queued from this feature's original scope** — the never-acted ADD
+counterfactual and the trim/harvest opportunity-cost return legs (§10 item 6) remain
+deliberately deferred, phase-3-or-never, per the original design.
 
 Source research: `docs/reviews/2026-09-09-app-review.md` Part 2 #4; memory
 `project_app_review_2026_09_09`'s 2026-09-14 section (exact file:line citations for the three
