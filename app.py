@@ -10255,6 +10255,7 @@ if page == "🏠 Home":
                 )
                 if _db_buy.get("sector_elevated_warning"):
                     st.caption(f"⚠️ {_db_buy['sector_elevated_warning']}")
+                if _db_buy.get("deterioration_warning"): st.caption(_db_buy["deterioration_warning"])
                 if st.button(f"▶ Analyze {_db_buy['ticker']}", key=f"_db_buy_{_db_buy['ticker']}",
                              width="content"):
                     st.session_state["_pending_page"]    = "📈 Analysis"
@@ -36109,7 +36110,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **Two entry triggers in "New Positions to Initiate":** curated scanner picks that passed the momentum gate show **"Momentum X/100"** in the header, while movers surfaced from the discovery universe show **"Breakout today"** with the day-change badge (e.g. "+7.6% today"). Both types pass the same portfolio-level gates (composite ≥ 65, sector diversity, concentration limits, macro event check).
 
-**A "📉 …" caption on a New Position pick discloses the stock's own recent technical weakness** (down materially from a recent high, below its 50-day trend) — this describes the stock's chart, not a position you hold, since you don't own it yet. It never suppresses the pick — the composite still rates it a buy — it's shown so you can enter with full context rather than being surprised hours later if the same weakness triggers a loss-protection card once you do own it.
+**A "📉 …" caption on a New Position pick (or, since 2026-09-17, a scanner-pick row under "More Buy Candidates" below) discloses the stock's own recent technical weakness** (down materially from a recent high, below its 50-day trend) — this describes the stock's chart, not a position you hold, since you don't own it yet. It never suppresses the pick — the composite still rates it a buy — it's shown so you can enter with full context rather than being surprised hours later if the same weakness triggers a loss-protection card once you do own it. The same caption also appears on 📋 Watchlist's ENTER_NOW cards for the identical reason.
 
 **⏱️ Entry Timing caution.** A card may show a small caption when momentum is running well ahead of the composite score for that specific pick — in your own history, similar cases have often looked calm in the first few days but underperformed by the time the position matured. This never changes the recommendation or blocks anything; it's the same pattern the 📊 Predictive Analytics → ⏱️ Entry Timing tab tracks in full, with current numbers.
 

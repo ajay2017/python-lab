@@ -2131,7 +2131,8 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                     earnings_lookup: dict | None = None,
                     composites: dict | None = None,
                     deterioration: list | None = None,
-                    sold_today: set | None = None) -> list[dict]:
+                    sold_today: set | None = None,
+                    spy_df: object | None = None) -> list[dict]:
     """
     Build buy candidate list with multi-signal confidence verdict for each pick.
     act_today: output of _act_today — tickers already flagged are excluded.
@@ -2147,6 +2148,10 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                active WATCH tier is annotated (not suppressed; WATCH is
                explicitly "no action yet") so an add-to-winner card doesn't read
                as contradicting the Review lane's early-deterioration tripwire.
+    spy_df: benchmark df for the relative-strength leg of the scanner-pick
+               deterioration warning (see exit_advisor.candidate_deterioration_flag).
+               Scoped to "new_pick" items only — "add_winner" describes an
+               already-held position, not a not-yet-owned candidate.
     """
     items: list[dict] = []
     held_tickers = _held_tickers(port_df)
@@ -2220,6 +2225,16 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                 continue
             xref   = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today,
                                       composites=composites)
+            # Pre-purchase deterioration warning — same warn-only pattern as
+            # _grow_today's new_picks (2026-09-11 ON incident follow-up).
+            _comp_data = (composites or {}).get(ticker, {})
+            _cand_det = exit_advisor.candidate_deterioration_flag(
+                ticker, _comp_data.get("df"), spy_df,
+                price=_f(row.get("Price"), None), atr=_f(_comp_data.get("atr")),
+            )
+            _cand_det_warning = exit_advisor.candidate_deterioration_caption(
+                _cand_det, ticker, verdict_phrase="a buy",
+            )
             items.append({
                 "type":           "new_pick",
                 "icon":           "🆕",
@@ -2234,6 +2249,7 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                 "trend":          str(row.get("Trend", "")),
                 "xref":           xref,
                 "sector_elevated_warning": _sector_warning(sector),
+                "deterioration_warning": _cand_det_warning,
             })
 
     # 2 — Add-to-winner: held, Strong Buy composite, Score ≥ COMPOSITE_BUY (65),
@@ -2954,7 +2970,8 @@ def build_daily_briefing(
                              earnings_lookup=earnings_lookup,
                              composites=grow_composites or {},
                              deterioration=deterioration,
-                             sold_today=_sold_today)
+                             sold_today=_sold_today,
+                             spy_df=spy_df)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, review_list=review, composites=grow_composites or {},
                          risk_recs=risk_recs,

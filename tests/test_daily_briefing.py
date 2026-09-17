@@ -163,6 +163,111 @@ def test_scanner_pick_excluded_below_composite_buy():
     assert find_item(items, "NEW") is None
 
 
+# ── _buy_candidates: pre-purchase deterioration warning (2026-09-17) ────────
+# Same warn-only cross-check as _grow_today's new_picks (see the _grow_today
+# precedent tests + _det_candidate_df/_det_spy_df fixtures further below in
+# this file) and Watchlist's ENTER_NOW cards — wired here into the last of
+# the three surfaces, Grow Today's own "More Buy Candidates" feed.
+
+def test_buy_candidates_new_pick_gets_deterioration_warning_not_suppressed():
+    """A deteriorating candidate must still appear in new_pick items,
+    annotated — never suppressed or removed. Same-count regression guard:
+    with the feature exercised, the item count must equal the no-signal case.
+    """
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "price": 90.0}])
+    composites = {
+        "NEW": {
+            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+            "fundamentals_available": True, "df": _det_candidate_df(),
+        },
+    }
+    items = _buy_candidates(port_df, scanner, [], {}, _TODAY,
+                             composites=composites, spy_df=_det_spy_df())
+    item = find_item(items, "NEW")
+    assert item is not None
+    assert item["type"] == "new_pick"
+    assert item["deterioration_warning"] is not None
+    assert "NEW" in item["deterioration_warning"]
+    assert "own recent price action" in item["deterioration_warning"]
+
+    # Same ticker, no deteriorating history (no "df") -> no warning, but the
+    # item still appears — proves the count is unaffected either way.
+    composites_clean = {
+        "NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True},
+    }
+    items_clean = _buy_candidates(port_df, scanner, [], {}, _TODAY,
+                                   composites=composites_clean, spy_df=_det_spy_df())
+    item_clean = find_item(items_clean, "NEW")
+    assert item_clean is not None
+    assert item_clean["deterioration_warning"] is None
+    assert len(items) == len(items_clean)
+
+
+def test_buy_candidates_deterioration_warning_fails_safe_to_watch_without_spy_df():
+    """Without spy_df, rel_strength defaults to 0.0 inside assess_holding, so
+    the TRIM tier (rel_strength < 0) can never fire — a fail-safe UNDER-warn,
+    not a crash. The same candidate must NOT be flagged TRIM here.
+    """
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "price": 90.0}])
+    composites = {
+        "NEW": {
+            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+            "fundamentals_available": True, "df": _det_candidate_df(),
+        },
+    }
+    items = _buy_candidates(port_df, scanner, [], {}, _TODAY,
+                             composites=composites)   # spy_df not passed -> None
+    item = find_item(items, "NEW")
+    assert item is not None
+    if item["deterioration_warning"] is not None:
+        assert "a weakening trend" not in item["deterioration_warning"]  # TRIM phrase
+
+
+def test_buy_candidates_deterioration_warning_flags_trim_with_real_spy_df():
+    """With a real weak-vs-SPY benchmark supplied, the SAME candidate DOES get
+    flagged — proves the spy_df plumbing works end to end, not just that the
+    None case fails safe.
+    """
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "price": 90.0}])
+    composites = {
+        "NEW": {
+            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+            "fundamentals_available": True, "df": _det_candidate_df(),
+        },
+    }
+    items = _buy_candidates(port_df, scanner, [], {}, _TODAY,
+                             composites=composites, spy_df=_det_spy_df())
+    item = find_item(items, "NEW")
+    assert item is not None
+    assert item["deterioration_warning"] is not None
+    assert "a weakening trend" in item["deterioration_warning"]  # TRIM tier phrase
+
+
+def test_buy_candidates_add_winner_never_gets_deterioration_warning():
+    """Scope-isolation guard: the add-to-winner block describes an
+    ALREADY-HELD position, not a not-yet-owned candidate, and must never
+    carry a non-None deterioration_warning — even when the identical
+    deteriorating fixture is attached to that same held ticker's composites
+    entry. Proves the add-to-winner block was deliberately left untouched.
+    """
+    port_df = make_port_df([_winner_row(ticker="AAA")])
+    composites = {
+        "AAA": {
+            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+            "fundamentals_available": True, "df": _det_candidate_df(),
+        },
+    }
+    items = _buy_candidates(port_df, None, [], {}, _TODAY,
+                             composites=composites, spy_df=_det_spy_df())
+    item = find_item(items, "AAA")
+    assert item is not None
+    assert item["type"] == "add_winner"
+    assert item.get("deterioration_warning") is None
+
+
 # ── _buy_candidates: add-to-winner ────────────────────────────────────────────
 
 def _winner_row(**overrides):
