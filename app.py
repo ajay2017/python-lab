@@ -31559,7 +31559,21 @@ elif page == "📊 Predictive Analytics":
                 else:
                     _bfa_trig = _pa_pd.Series(["Not logged"] * _bfa_n_buys)
 
-                _bfa_signal_n   = int((_bfa_trig == "RECOMMENDATION").sum())
+                # "Preceded by app signal" must recognize every BUY-side
+                # trigger_type, not just RECOMMENDATION — an exact-string match
+                # here mis-bucketed WATCHLIST_ENTRY (a real Watchlist ENTER_NOW
+                # alert), and, since F-273 added it, DIVERSIFY_ADD (a real
+                # diversification ADD call) as "no logged signal" (flagged
+                # during the F-273 Phase 1a/1b reviews, fixed here). MANUAL is
+                # explicitly no signal. REBALANCE is deliberately excluded —
+                # F-273 found it polluted (a synthetic SPLIT-row writer AND a
+                # live user-selectable option share it), so it can't be
+                # trusted either way. STOP_HIT/REBAL_TRIM/TAX_HARVEST are
+                # SELL/trim-side triggers that don't describe a BUY decision,
+                # so they don't count here even if one were ever logged on a
+                # BUY row by mistake.
+                _BFA_BUY_SIGNAL_TRIGGERS = {"RECOMMENDATION", "WATCHLIST_ENTRY", "DIVERSIFY_ADD"}
+                _bfa_signal_n   = int(_bfa_trig.isin(_BFA_BUY_SIGNAL_TRIGGERS).sum())
                 _bfa_noscore_n  = _bfa_n_buys - _bfa_signal_n
 
                 _bfa_prov_rows = [
