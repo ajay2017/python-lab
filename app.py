@@ -945,7 +945,11 @@ _TIPS = {
         "• 1.2–1.5 → Aggressive — amplifies both gains and losses\n"
         "• > 1.5 → High leverage equivalent — requires active management\n\n"
         "A tech-heavy portfolio typically has Beta 1.3–1.8. "
-        "Institutional risk teams target portfolio Beta ≤ 1.2 for managed accounts."
+        "Institutional risk teams target portfolio Beta ≤ 1.2 for managed accounts.\n\n"
+        "This is a single regression of your whole portfolio's returns vs. SPY — "
+        "a different calculation from the \"×\" multiplier on 🏠 Home's fragility "
+        "gauge, which is built bottom-up from each position's own beta under a "
+        "simulated pullback. The two numbers can legitimately differ."
     ),
     "Portfolio Volatility": (
         "Annualized standard deviation of daily portfolio returns.\n\n"
@@ -7623,6 +7627,19 @@ if page == "🏠 Home":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
+                # Clarifies why this "×" can differ from Risk Analysis's single
+                # "Portfolio Beta" figure — this one is a bottom-up, dollar-weighted
+                # blend of each position's OWN beta under a simulated shock, not a
+                # portfolio-level regression (stress_test.py's assess_fragility
+                # docstring). Without this, the two numbers look like they should
+                # match and a real one (e.g. beta 1.60 vs this gauge's 1.4x) reads
+                # as a bug rather than two different, both-correct calculations.
+                st.caption(
+                    "ℹ️ This multiplier reflects each position's own beta under a "
+                    "simulated pullback — a different calculation from the single "
+                    "\"Portfolio Beta\" figure on 🔗 Risk Analysis, so the two can "
+                    "legitimately differ."
+                )
             elif not port_df.empty:
                 # Withhold VISIBLY (never silently): holdings exist but beta couldn't be
                 # computed — say so rather than imply zero exposure. Matches the
