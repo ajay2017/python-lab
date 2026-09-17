@@ -91,7 +91,7 @@ Pre-market and end-of-day, the **email cron** may have already sent you a protec
 
 ### Group: MAIN
 
-**🏠 Home** — *The command center.* The daily brief (Act Today / Grow Today / Review), market-tone header, live price strip, pre-market intel, and awareness banners (Day Shock F-217, Structural alert F-218). **Look here first, every day.** No sub-tabs — it's a single synthesized surface (memoized via `_home_synth_cache`). What to do: act on Act Today, consider Grow Today, ignore the rest if quiet.
+**🏠 Home** — *The command center.* The daily brief (Act Today / Grow Today / Review), market-tone header, live price strip, pre-market intel, and awareness banners (Day Shock F-217, Structural alert F-218). **Look here first, every day.** No sub-tabs — it's a single synthesized surface (memoized via `_home_synth_cache`). The live price strip and the awareness banners each sit behind a collapsed-by-default "💹 Live Prices" / "⚠️ Alerts" toggle (2026-09-17) so Today's Brief is reached with less scrolling — click either to expand. What to do: act on Act Today, consider Grow Today, ignore the rest if quiet.
 
 **🧑‍⚖️ The Judge** (F-227) — *Portfolio-level coherence check.* Reconciles the engine's own opinions across dimensions (quality, momentum, position-health, structural-risk, concentration) and flags contradictions. **Read-only, audit-only — it has no authority to gate or override** (Phase 4 scoped to a coherence check after 3 of 4 protective dimensions were found already enforced elsewhere). Look when you want to know "does the engine agree with itself about my book?"
 

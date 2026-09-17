@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DRISHTA — Home collapse mockup</title>
+<style>
+  :root{
+    --bg:#0e1117; --card:#161b22; --card-border:#262d3a; --text:#e6e6e6; --muted:#9aa4b2;
+    --green:#22c55e; --red:#ef4444; --amber-bg:#4a4420; --amber-border:#8a7d2a; --amber-text:#e9dd8a;
+    --blue:#3b82f6; --pill-green:#14532d;
+  }
+  *{box-sizing:border-box;}
+  body{background:var(--bg); color:var(--text); font-family:"Source Sans Pro",-apple-system,Segoe UI,Roboto,sans-serif; margin:0; padding:24px 40px 120px;}
+  .mock-banner{background:#3b2f6b; border:1px solid #6d54c9; color:#d9d0ff; padding:8px 14px; border-radius:6px; font-size:13px; margin-bottom:22px; display:flex; justify-content:space-between; align-items:center;}
+  .mock-banner b{color:#fff;}
+  .switch{display:flex; gap:6px;}
+  .switch button{background:#20263a; border:1px solid #3a4256; color:#cfd6e4; padding:5px 12px; border-radius:5px; font-size:12px; cursor:pointer;}
+  .switch button.active{background:#4f46e5; border-color:#4f46e5; color:#fff;}
+  h2.page-title{font-size:26px; margin:0 0 18px;}
+  .collapse-row{
+    display:flex; align-items:center; gap:10px; background:#131722; border:1px solid var(--card-border);
+    border-radius:6px; padding:10px 14px; margin-bottom:10px; cursor:pointer; user-select:none;
+    transition:background .12s;
+  }
+  .collapse-row:hover{background:#1a2030;}
+  .collapse-row .chevron{transition:transform .15s; color:var(--muted); font-size:12px; width:12px;}
+  .collapse-row.open .chevron{transform:rotate(90deg);}
+  .collapse-row .label{font-weight:600; flex:1;}
+  .collapse-row .summary{color:var(--muted); font-size:13px;}
+  .collapse-body{max-height:0; overflow:hidden; transition:max-height .2s ease; margin-bottom:4px;}
+  .collapse-body.open{max-height:1400px; margin-bottom:16px;}
+  .collapse-body-inner{padding:14px 4px 4px;}
+
+  .ticker-grid{display:grid; grid-template-columns:repeat(6,1fr); gap:10px;}
+  .ticker{background:var(--card); border:1px solid var(--card-border); border-radius:6px; padding:8px 10px;}
+  .ticker .sym{font-weight:700; font-size:13px;}
+  .ticker .px{font-size:14px; margin:2px 0;}
+  .ticker .chg{font-size:12px;}
+  .up{color:var(--green);} .down{color:var(--red);}
+  .strip-meta{color:var(--muted); font-size:12px; margin-top:8px;}
+
+  .alert-banner{background:var(--amber-bg); border:1px solid var(--amber-border); border-radius:6px; padding:12px 16px; margin-bottom:12px;}
+  .alert-banner .title{color:var(--amber-text); font-weight:700; margin-bottom:4px;}
+  .alert-banner .sub{color:#cfc494; font-size:13px;}
+  .shock-pill{display:inline-flex; align-items:center; gap:8px; background:#0e2a1a; border:1px solid #1f6b3f; border-radius:20px; padding:5px 12px; margin:6px 8px 0 0; font-size:13px;}
+  .shock-pill .arr{color:var(--green); font-weight:700;}
+  .info-line{color:var(--muted); font-size:13px; margin-top:10px; display:flex; gap:6px; align-items:flex-start;}
+
+  .cc-card{border:1px solid #2a3550; border-radius:8px; padding:18px 20px; margin-bottom:22px; background:#10141f;}
+  .cc-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;}
+  .cc-head .title{font-size:17px; font-weight:700;}
+  .cc-head .chip{background:#4c1d1d; color:#f87171; border-radius:4px; padding:3px 10px; font-size:12px; font-weight:600;}
+  .catalysts{display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap;}
+  .cat-pill{border:1px solid #3a4256; border-radius:20px; padding:6px 14px; font-size:12px; color:#cfd6e4;}
+  .cat-pill b{color:#f87171;}
+  .kpi-row{display:grid; grid-template-columns:repeat(7,1fr); gap:10px; margin-bottom:12px;}
+  .kpi{text-align:left;}
+  .kpi .lbl{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em;}
+  .kpi .val{font-size:15px; letter-spacing:2px; color:#8b93a3; margin:4px 0;}
+  .kpi .tag{font-size:11px; background:#1f2937; color:var(--green); border-radius:3px; padding:1px 6px;}
+  .lev-line{color:var(--muted); font-size:13px; margin:10px 0 14px;}
+  .pnl-issue{background:var(--amber-bg); border:1px solid var(--amber-border); border-radius:6px; padding:10px 14px; font-size:13px; color:var(--amber-text); margin-bottom:8px;}
+  .pnl-expander{border:1px solid var(--card-border); border-radius:6px; padding:9px 14px; font-size:13px; color:#cfd6e4; cursor:pointer;}
+
+  .brief-wrap{border-top:2px solid #2a3550; padding-top:20px;}
+  .brief-title{font-size:22px; font-weight:700; margin-bottom:6px;}
+  .brief-note{color:var(--muted); font-size:13px; margin-bottom:14px;}
+  .brief-mock-body{background:#0f1420; border:1px dashed #3a4256; border-radius:8px; padding:30px; color:var(--muted); text-align:center; font-size:14px;}
+
+  .callout{font-size:12px; color:#7d8698; margin-top:2px; margin-bottom:18px;}
+</style>
+</head>
+<body>
+
+  <div class="mock-banner">
+    <span>🖼️ <b>MOCKUP ONLY</b> — static HTML, not live data. For layout/UX review before touching <code>app.py</code>.</span>
+    <div class="switch">
+      <button class="active" onclick="setMode('after')" id="btn-after">Proposed (default landing)</button>
+      <button onclick="setMode('before')" id="btn-before">Current (today, for comparison)</button>
+    </div>
+  </div>
+
+  <h2 class="page-title">🏠 Home</h2>
+
+  <!-- Ticker strip: collapsible -->
+  <div class="collapse-row" id="row-ticker" onclick="toggle('ticker')">
+    <span class="chevron">▸</span>
+    <span class="label">💹 Live Prices</span>
+    <span class="summary">19 positions · updated 14:13 ET · tap to expand</span>
+  </div>
+  <div class="collapse-body" id="body-ticker">
+    <div class="collapse-body-inner">
+      <div class="ticker-grid">
+        <div class="ticker"><div class="sym">AAPL</div><div class="px">$335.80</div><div class="chg up">▲ +1.02%</div></div>
+        <div class="ticker"><div class="sym">ABBV</div><div class="px">$262.40</div><div class="chg down">▼ -0.04%</div></div>
+        <div class="ticker"><div class="sym">APP</div><div class="px">$316.35</div><div class="chg down">▼ -3.13%</div></div>
+        <div class="ticker"><div class="sym">CF</div><div class="px">$134.03</div><div class="chg up">▲ +1.55%</div></div>
+        <div class="ticker"><div class="sym">CRM</div><div class="px">$244.89</div><div class="chg down">▼ -2.26%</div></div>
+        <div class="ticker"><div class="sym">CRWD</div><div class="px">$585.83</div><div class="chg up">▲ +4.00%</div></div>
+        <div class="ticker"><div class="sym">DELL</div><div class="px">$178.35</div><div class="chg up">▲ +3.61%</div></div>
+        <div class="ticker"><div class="sym">ENVA</div><div class="px">$704.00</div><div class="chg up">▲ +2.16%</div></div>
+        <div class="ticker"><div class="sym">MSFT</div><div class="px">$494.98</div><div class="chg up">▲ +0.95%</div></div>
+        <div class="ticker"><div class="sym">MU</div><div class="px">$978.65</div><div class="chg up">▲ +5.62%</div></div>
+        <div class="ticker"><div class="sym">NFLX</div><div class="px">$75.68</div><div class="chg down">▼ -0.96%</div></div>
+        <div class="ticker"><div class="sym">WDAY</div><div class="px">$198.26</div><div class="chg up">▲ +5.59%</div></div>
+      </div>
+      <div class="strip-meta">Prices: Finnhub (real-time) · 14:13:28 ET · Market Open · auto-refreshes every 60s</div>
+    </div>
+  </div>
+
+  <!-- Alerts: collapsible, bundles Day Shock + xcheck + split + structural + drift -->
+  <div class="collapse-row" id="row-alerts" onclick="toggle('alerts')">
+    <span class="chevron">▸</span>
+    <span class="label">⚠️ Alerts</span>
+    <span class="summary">2 positions moved ≥5% today, 1 note · tap to expand</span>
+  </div>
+  <div class="collapse-body" id="body-alerts">
+    <div class="collapse-body-inner">
+      <div class="alert-banner">
+        <div class="title">⚠️ Day Shock — 2 positions moved ≥5% today</div>
+        <div class="sub">Awareness only — not a recommendation change. Deterioration tier (WATCH/TRIM/EXIT) is unaffected unless the 50-day trend is also broken.</div>
+        <div>
+          <span class="shock-pill"><span class="arr">▲</span> WDAY +5.79% &nbsp;<span style="color:#9aa4b2">$187.76 → $198.64</span></span>
+          <span class="shock-pill"><span class="arr">▲</span> MU +5.50% &nbsp;<span style="color:#9aa4b2">$926.55 → $977.54</span></span>
+        </div>
+        <div class="info-line">ℹ️ Waiting on the broker to catch up on ABBV — you logged a trade after the Sep 17, 12:01 ET broker snapshot, so a difference here is expected. Nothing to fix.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Portfolio Command Center: UNCHANGED, not collapsible -->
+  <div class="cc-card">
+    <div class="cc-head">
+      <span class="title">Portfolio Command Center</span>
+      <span class="chip">Action Required</span>
+    </div>
+    <div class="catalysts">
+      <span class="cat-pill">👤 <b>Non-Farm Payrolls</b> · In 15d · AAPL, APP, CRM +11</span>
+      <span class="cat-pill">📊 <b>CPI Inflation</b> · In 27d · AAPL, APP, CRM +13</span>
+      <span class="cat-pill">🏦 <b>FOMC Rate Decision</b> · In 41d · AAPL, ABBV, APP +16</span>
+    </div>
+    <div class="kpi-row">
+      <div class="kpi"><div class="lbl">Portfolio Value</div><div class="val">••••••</div><span class="tag">↑ +2.8%</span></div>
+      <div class="kpi"><div class="lbl">Unrealized P&L</div><div class="val">••••••</div><span class="tag">↑ +11.94%</span></div>
+      <div class="kpi"><div class="lbl">Today's P&L</div><div class="val">••••••</div></div>
+      <div class="kpi"><div class="lbl">Alerts</div><div class="val" style="color:#e6e6e6;letter-spacing:0">3🔴 8🟡</div></div>
+      <div class="kpi"><div class="lbl">Avg Score</div><div class="val" style="color:#e6e6e6;letter-spacing:0">67/100</div></div>
+      <div class="kpi"><div class="lbl">Diversification</div><div class="val" style="color:#e6e6e6;letter-spacing:0">46/100</div><span class="tag">↑ Well Diversified</span></div>
+      <div class="kpi"><div class="lbl">Best: CRWD</div><div class="val" style="color:#e6e6e6;letter-spacing:0">+32.2%</div></div>
+    </div>
+    <div class="lev-line">📐 Leveraged 2.55× — •••• of margin debit against •••• of capital. Awareness only; this never changes a recommendation.</div>
+    <div class="pnl-issue">⚠️ Today's P&L is affected by 2 data issues — expand for the details and dollar impact of each.</div>
+    <div class="pnl-expander">▸ Why Today's P&L may be off (2 issues)</div>
+  </div>
+
+  <!-- Today's Brief -->
+  <div class="brief-wrap">
+    <div class="brief-title">📋 Today's Brief</div>
+    <div class="brief-note" id="brief-position-note">↑ In the proposed layout, this is now reached after 2 short collapsed rows + Command Center — no scrolling through per-ticker cards or alert detail unless you ask for it.</div>
+    <div class="brief-mock-body">(unchanged content — Act Today / Grow Today cards render here exactly as they do today)</div>
+  </div>
+
+<script>
+function toggle(id){
+  const row = document.getElementById('row-'+id);
+  const body = document.getElementById('body-'+id);
+  row.classList.toggle('open');
+  body.classList.toggle('open');
+}
+function setMode(mode){
+  document.getElementById('btn-after').classList.toggle('active', mode==='after');
+  document.getElementById('btn-before').classList.toggle('active', mode==='before');
+  const tickerOpen = document.getElementById('body-ticker').classList.contains('open');
+  const alertsOpen = document.getElementById('body-alerts').classList.contains('open');
+  if(mode==='before'){
+    if(!tickerOpen) toggle('ticker');
+    if(!alertsOpen) toggle('alerts');
+    document.getElementById('brief-position-note').textContent = 'This is today\'s CURRENT behavior — both sections rendered open, full ticker grid and full alert detail always shown before you reach the Brief.';
+  } else {
+    if(tickerOpen) toggle('ticker');
+    if(alertsOpen) toggle('alerts');
+    document.getElementById('brief-position-note').textContent = '↑ In the proposed layout, this is now reached after 2 short collapsed rows + Command Center — no scrolling through per-ticker cards or alert detail unless you ask for it.';
+  }
+}
+</script>
+</body>
+</html>

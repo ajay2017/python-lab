@@ -4505,6 +4505,12 @@ if page == "🏠 Home":
             pass
 
     # ── Live price strip — fragment auto-refreshes every 60 s ────────────
+    # Collapsed by default (2026-09-17 Home decluttering, mockup-approved) so
+    # Today's Brief is reached sooner. The fragment is called INSIDE the
+    # expander below, not moved — a fragment renders into whatever container
+    # was open at its call site and keeps re-rendering there on its own 60s
+    # schedule, independent of the outer script and of the expander's own
+    # open/closed state.
     @st.fragment(run_every=60)
     def _price_strip(tickers: list[str]):
         mkt = market_status()
@@ -4562,11 +4568,15 @@ if page == "🏠 Home":
         )
         st.divider()
 
-    _price_strip(held_tickers)
+    with st.expander(
+        f"💹 Live Prices ({len(held_tickers)} position{'s' if len(held_tickers) != 1 else ''})",
+        expanded=False, key="_home_price_strip_exp",
+    ):
+        _price_strip(held_tickers)
 
-    # ── Unified alert stack (2026-08-04 UX audit I1) — 4 reserved placeholders
-    # so Day Shock / Price cross-check / Stock Split / Structural alert all
-    # visually group together right after the price strip, even though
+    # ── Unified alert stack (2026-08-04 UX audit I1) — 5 reserved placeholders
+    # so Day Shock / Price cross-check / Stock Split / Structural alert / Broker
+    # drift all visually group together right after the price strip, even though
     # Structural alert's compute can't happen until much later (needs corr_df
     # from the synthesis block below — see its own placement comment). Each
     # placeholder is filled at its banner's existing, unmoved compute
@@ -4577,14 +4587,25 @@ if page == "🏠 Home":
     # bare st.empty() slot holds exactly one element — Day Shock and Stock
     # Split each render several (a summary line plus one row/card per
     # ticker), so .container() is required, not a simplification to undo.
-    _alert_ph_dayshock   = st.empty()
-    _alert_ph_xcheck     = st.empty()
-    _alert_ph_split      = st.empty()
-    _alert_ph_structural = st.empty()
-    # Filled far below (after live prices exist) but DECLARED here so it renders
-    # ABOVE the Portfolio Value tile — the caveat has to precede the number it
-    # caveats. Same declare-early/fill-late pattern as _alert_ph_structural.
-    _alert_ph_drift      = st.empty()
+    # Collapsed by default (2026-09-17 Home decluttering, mockup-approved) —
+    # a bundled generic label, not a live count, because Structural alert and
+    # Broker drift genuinely can't be evaluated until far below this point;
+    # showing an accurate live count here would need hoisting compute the
+    # existing placement comment already explains can't move. An st.empty()
+    # keeps its position in the render tree even after the `with` block that
+    # created it exits, so nesting the 5 declarations inside this expander
+    # moves ONLY where each banner visually lands — every .container() fill
+    # call far below is untouched.
+    with st.expander("⚠️ Alerts", expanded=False, key="_home_alerts_exp"):
+        _alert_ph_dayshock   = st.empty()
+        _alert_ph_xcheck     = st.empty()
+        _alert_ph_split      = st.empty()
+        _alert_ph_structural = st.empty()
+        # Filled far below (after live prices exist) but DECLARED here so it
+        # renders ABOVE the Portfolio Value tile — the caveat has to precede
+        # the number it caveats. Same declare-early/fill-late pattern as
+        # _alert_ph_structural.
+        _alert_ph_drift      = st.empty()
 
     # ── Price cross-check, computed early (2026-08-31) ────────────────────────
     # Hoisted ahead of Day Shock / the price strip so both can exclude a ticker
