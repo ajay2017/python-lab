@@ -370,10 +370,31 @@ Designing against a 3-week-old 52% figure would repeat `feedback_verify_against_
   sessions — a 7-day calendar median is closer to ~5 trading sessions, a real but smaller
   gap against the ladder's session-based confirmation than the raw number alone suggests;
   (2) this is one account's ~3.5-month window (2026-05-27 to 2026-09-11) — real, but not
-  proof the pattern is permanent; (3) the optional self-track (`classify_sells`) app-aligned
-  vs self-initiated cut was **not run** — `exit_signals` data was not pulled this pass — so
-  whether the short holds are disproportionately app-driven (stop-outs, mechanical exits) or
-  self-initiated remains open; worth a follow-up pull if this number is acted on.
+  proof the pattern is permanent; (3) ~~the optional self-track (`classify_sells`) app-aligned
+  vs self-initiated cut was not run~~ — **script capability extended 2026-09-17, still
+  awaiting an actual live run.** `scripts/holding_period_analysis.py` now cross-references
+  `classify_sells`'s per-sell bucket back onto each closed-lot fragment's own holding
+  duration and realized `pnl_abs` (two new sections: hold-duration × classification,
+  and $ P&L by classification) — directly answering whether short holds are mechanical
+  (`engine_aligned`, app-driven) or discretionary (`self_initiated`). The join is
+  **id-based, not date-based** — `build_closed_lots` and `classify_sells` derive a sell's
+  date via two genuinely different methods (UTC-normalized vs. a raw string-slice) that
+  can disagree by a calendar day on a non-UTC-zero-offset timestamp, a documented recurring
+  bug class in this project; joining on either function's own date field would have
+  silently mis-attributed exactly those rows. Verified via synthetic-data smoke tests (not
+  live data — no Supabase credentials in the build/review environment) covering the
+  offset-disagreement case, same-day multi-sell with differing buckets (correctly
+  `ambiguous_same_day_multi_sell`, excluded from grouped stats), and a same-day multi-sell
+  where only one id resolves to a real bucket (correctly attributed to that bucket, not
+  flagged ambiguous). Opus reviewer: SHIP, 2 non-blocking findings (a ticker-normalization
+  `.strip()` inconsistency vs. `build_closed_lots`'s bare `.upper()`, and a single
+  unresolved-id case mislabeling as ambiguous instead of unmatched) — both fixed same
+  session, re-verified, zero effect on the grouped `engine_aligned`/`self_initiated`
+  conclusions either way (both failure modes were already conservative — items dropped
+  from grouped stats, never mis-attributed). **Still needs an actual run against live
+  `trades`/`exit_signals`** (owner or a session with `SUPABASE_URL`/`SUPABASE_KEY`) before
+  this caveat can close — the code exists and is verified correct on synthetic data, but
+  the real answer to "mechanical or discretionary" is not yet in hand.
 
   **This is evidence, not a recommendation** — per this script's own redline, no gate,
   threshold or the ladder's confirmation window was touched. What to do with this finding

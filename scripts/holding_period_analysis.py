@@ -36,6 +36,17 @@ re-implementation. Reports:
      `SELF_TRACK_SELL_RELIABLE_LOG_START` -- a materially shorter window
      than the full trade history, so this is reported as a distinct,
      labelled subset, never blended into the primary distribution.
+  4. Two cross-references joining that same classify_sells() output back to
+     the closed-lot fragments from item 1 (a join classify_sells never does
+     itself -- it operates on raw SELL trade rows, not FIFO lot fragments):
+     (a) hold-duration bucket x engine_aligned/self_initiated counts, and
+     (b) realized $ pnl_abs summed by the same two buckets. Both answer
+     "are short holds mechanical (engine-driven) or discretionary
+     (self-initiated)?" -- the open question this docstring's second
+     paragraph raised. The join is id-based, not date-string-based, to
+     avoid a documented mixed-ISO-offset date-parsing disagreement between
+     the two functions' independent date derivations -- see
+     `_sell_id_key_map` for why.
 
 REDLINE. Read-only historical measurement. Touches no gate, no constant, no
 recommendation, no threshold in constants.py. If the results argue for a
@@ -255,7 +266,12 @@ def _print_distribution(lots: pd.DataFrame, ticker: str | None) -> None:
         print(f"  Fewer than 3 completed round trips (N={len(valid)}) -- no tercile cut possible.")
 
 
-def _print_self_track_cut(trades_df: pd.DataFrame, exit_signals_df) -> None:
+def _print_self_track_cut(trades_df: pd.DataFrame, exit_signals_df) -> list[dict] | None:
+    """Returns the raw `classify_sells()` output (or `None`/`[]`) so callers
+    downstream (the hold-duration x classification cross-tab, item 4 in the
+    module docstring) can reuse it without a second call -- classify_sells
+    is deterministic given the same inputs, but there is no reason to pay
+    for the iteration twice in one process."""
     print(
         f"\n{'-' * 78}\n"
         f"OPTIONAL CUT -- app-aligned vs self-initiated SELLS, restricted to sells "
@@ -270,17 +286,17 @@ def _print_self_track_cut(trades_df: pd.DataFrame, exit_signals_df) -> None:
             "issue) -- skipping this cut. The primary holding-period "
             "distribution above is unaffected."
         )
-        return
+        return None
     classified = _stv.classify_sells(
         trades_df, exit_signals_df,
         SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
     )
     if classified is None:
         print("classify_sells() returned None unexpectedly -- skipping this cut.")
-        return
+        return None
     if not classified:
         print("No SELL rows to classify.")
-        return
+        return classified
     buckets: dict[str, int] = {}
     for row in classified:
         buckets[row["bucket"]] = buckets.get(row["bucket"], 0) + 1
@@ -292,6 +308,210 @@ def _print_self_track_cut(trades_df: pd.DataFrame, exit_signals_df) -> None:
         f"(coverage_limited rows are pre-{SELF_TRACK_SELL_RELIABLE_LOG_START} "
         f"and excluded from this split by definition)."
     )
+    return classified
+
+
+def _sell_id_key_map(trades_df: pd.DataFrame) -> dict[tuple, list]:
+    """Maps (ticker, lot-consistent sell date) -> [trade id, ...] for every
+    SELL row in `trades_df`, using the EXACT SAME UTC-normalization
+    `investor_mirror.build_closed_lots` uses for its own `sell_date` field
+    (`pd.to_datetime(..., utc=True, format="ISO8601").dt.date`).
+
+    This project has a documented history of two independently-computed
+    date derivations from the same raw `traded_at` string disagreeing by a
+    calendar day for a non-UTC-zero offset timestamp (see
+    feedback_pandas_mixed_tz_parsing.md) -- `classify_sells()` derives its
+    own sell-date via `recommendations_history._to_date`, a raw string-slice
+    on the first 10 characters, which is NOT the same computation. Joining
+    on either function's own date field directly, trusting they already
+    agree, would silently mis-join on exactly that class of row. Instead
+    this function recomputes the date independently, matching
+    build_closed_lots bit-for-bit, and the caller joins to classify_sells'
+    output via trade `id` only -- never via a second, possibly-disagreeing
+    date string.
+
+    A list of ids per key (not a single id) because more than one SELL
+    trade for the same ticker on the same UTC calendar date is possible and
+    must be handled, not crash -- see `_classify_lots_by_self_track` for how
+    the resulting join ambiguity is resolved.
+    """
+    if trades_df is None or trades_df.empty:
+        return {}
+    ts = pd.to_datetime(trades_df["traded_at"], errors="coerce", utc=True, format="ISO8601")
+    key_map: dict[tuple, list] = {}
+    for idx, row in trades_df.iterrows():
+        action = str(row.get("action", "") or "").strip().upper()
+        if action != "SELL":
+            continue
+        t = ts.loc[idx]
+        if pd.isna(t):
+            continue
+        # No .strip() -- must match build_closed_lots' ticker normalization
+        # (investor_mirror.py: str(ticker).upper(), no strip) bit-for-bit, or
+        # a whitespace-padded ticker would key-mismatch here but not there.
+        tk = str(row.get("ticker", "") or "").upper()
+        if not tk:
+            continue
+        key_map.setdefault((tk, t.date()), []).append(row.get("id"))
+    return key_map
+
+
+def _classify_lots_by_self_track(
+    lots: pd.DataFrame, trades_df: pd.DataFrame, classified: list[dict],
+) -> pd.Series:
+    """Attributes each closed-lot fragment in `lots` a self-track bucket by
+    joining on trade `id` (never on either function's own date field --
+    see `_sell_id_key_map`'s docstring).
+
+    Per fragment:
+      - zero matching SELL ids at (ticker, sell_date) -> "unmatched"
+      - exactly one matching id -> that id's own classify_sells bucket
+        (engine_aligned / self_initiated / coverage_limited)
+      - more than one matching id (same ticker, same UTC calendar day,
+        multiple SELL trades) -> if every matching id shares the SAME
+        bucket, attribute that bucket unambiguously (no real ambiguity in
+        that case); otherwise "ambiguous_same_day_multi_sell" -- a lot
+        fragment carries no originating trade id of its own
+        (build_closed_lots never tracks one), so which of several
+        differently-classified same-day sells produced a given fragment is
+        genuinely unknowable and must not be guessed.
+
+    Future refinement, explicitly NOT built here: cross-checking against
+    exit_signals' own `trigger_type` (e.g. distinguishing a hard stop-out
+    from a discretionary TRIM) could sharpen the engine_aligned bucket
+    further, but is out of scope for this pass.
+    """
+    id_to_bucket = {row["id"]: row["bucket"] for row in classified}
+    key_map = _sell_id_key_map(trades_df)
+    buckets: list[str] = []
+    for _, lot in lots.iterrows():
+        tk = str(lot["ticker"]).upper()
+        d = lot["sell_date"]
+        ids = key_map.get((tk, d), [])
+        if not ids:
+            buckets.append("unmatched")
+            continue
+        # Drop ids classify_sells couldn't resolve (id_to_bucket.get -> None)
+        # BEFORE judging ambiguity -- a single matching id with no bucket is
+        # "unmatched", not "ambiguous" (ambiguity means >=2 REAL, DIFFERING
+        # classifications, not one real classification plus a missing one).
+        distinct = {id_to_bucket.get(i) for i in ids}
+        distinct.discard(None)
+        if len(distinct) == 1:
+            buckets.append(next(iter(distinct)))
+        elif len(distinct) == 0:
+            buckets.append("unmatched")
+        else:
+            buckets.append("ambiguous_same_day_multi_sell")
+    return pd.Series(buckets, index=lots.index)
+
+
+def _print_hold_duration_cross_tab(lots: pd.DataFrame) -> None:
+    """Section A -- hold-duration bucket x engine_aligned/self_initiated
+    counts, restricted to fragments joined within the reliable-log window.
+    `lots` must already carry a `self_track_bucket` column."""
+    print(
+        "\nSECTION A -- HOLD-DURATION BUCKET x CLASSIFICATION "
+        "(engine_aligned vs self_initiated):"
+    )
+    valid = lots.dropna(subset=["days_held"]).copy()
+    if valid.empty:
+        print("  No completed round trips with days_held data -- nothing to cross-tab.")
+        return
+    valid["hold_bucket"] = valid["days_held"].astype(int).apply(_bucket_label)
+
+    coverage_limited_n = int((valid["self_track_bucket"] == "coverage_limited").sum())
+    ambiguous_n = int((valid["self_track_bucket"] == "ambiguous_same_day_multi_sell").sum())
+    unmatched_n = int((valid["self_track_bucket"] == "unmatched").sum())
+    reliable = valid[valid["self_track_bucket"].isin(["engine_aligned", "self_initiated"])]
+
+    print(
+        f"  coverage_limited (pre-reliable-log sells, excluded from this cross-tab): "
+        f"{coverage_limited_n}\n"
+        f"  ambiguous_same_day_multi_sell (excluded, cannot disambiguate which "
+        f"same-day sell\n  produced this fragment): {ambiguous_n}\n"
+        f"  unmatched (no corresponding classify_sells SELL row found, excluded): "
+        f"{unmatched_n}\n"
+    )
+    if reliable.empty:
+        print("  No engine_aligned/self_initiated fragments to cross-tab.")
+        return
+    order = [b[2] for b in _BUCKETS]
+    print(f"  N={len(reliable)} reliable-window fragments:")
+    for label in order:
+        sub = reliable[reliable["hold_bucket"] == label]
+        if sub.empty:
+            continue
+        ea = int((sub["self_track_bucket"] == "engine_aligned").sum())
+        si = int((sub["self_track_bucket"] == "self_initiated").sum())
+        print(f"    {label:<10} engine_aligned={ea:>3}  self_initiated={si:>3}  (N={len(sub)})")
+
+
+def _print_pnl_by_classification(lots: pd.DataFrame) -> None:
+    """Section B -- realized $ pnl_abs summed by engine_aligned vs
+    self_initiated, restricted to fragments joined within the reliable-log
+    window. `lots` must already carry a `self_track_bucket` column."""
+    print("\nSECTION B -- REALIZED $ P&L BY CLASSIFICATION:")
+    valid = lots.dropna(subset=["pnl_abs"]).copy()
+    if valid.empty:
+        print("  No fragments with pnl_abs data -- nothing to sum.")
+        return
+    for bucket in ("engine_aligned", "self_initiated"):
+        sub = valid[valid["self_track_bucket"] == bucket]
+        total = sub["pnl_abs"].sum() if not sub.empty else 0.0
+        print(f"  {bucket:<15} N={len(sub):>4}  realized P&L = ${total:,.2f}")
+    for bucket in ("coverage_limited", "ambiguous_same_day_multi_sell", "unmatched"):
+        sub = valid[valid["self_track_bucket"] == bucket]
+        total = sub["pnl_abs"].sum() if not sub.empty else 0.0
+        print(
+            f"  {bucket:<15} N={len(sub):>4}  realized P&L = ${total:,.2f}  "
+            f"(reported for visibility, excluded from the grouped total above)"
+        )
+
+
+def _print_self_track_join(
+    lots: pd.DataFrame, trades_df: pd.DataFrame, classified: list[dict] | None,
+) -> None:
+    """Item 4 of the module docstring: cross-references classify_sells()'s
+    per-SELL classification back onto the closed-lot fragments from
+    `build_closed_lots`, via the id-based join in
+    `_classify_lots_by_self_track` (never a date-string join -- see
+    `_sell_id_key_map`)."""
+    print(
+        f"\n{'-' * 78}\n"
+        f"HOLD-DURATION x CLASSIFICATION CROSS-REFERENCE. Covers ONLY the same "
+        f"reliable-log\nwindow as the cut above (sells on/after "
+        f"{SELF_TRACK_SELL_RELIABLE_LOG_START}) for its\nengine_aligned/"
+        f"self_initiated grouped conclusions -- coverage_limited fragments "
+        f"(pre-cron-\nreliability sells) are counted and shown but never "
+        f"folded into those grouped stats.\nThis N is MATERIALLY SMALLER "
+        f"than the full holding-period distribution printed above,\nwhich "
+        f"spans the entire trade history -- do not read this section as "
+        f"covering everything.\n\n"
+        f"'engine_aligned' means an EXIT/TRIM exit_signals row fired within "
+        f"SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS={SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS} "
+        f"days before the sell --\na CORRELATIONAL signal-window match, NOT "
+        f"proof the signal caused the sell. A\ncoincidental signal counts. "
+        f"This is a JUDGMENT-CALL report, not a pass/fail criterion --\nsame "
+        f"framing as the rest of this script.\n{'-' * 78}\n"
+    )
+    if classified is None:
+        print(
+            "exit_signals could not be read -- skipping the hold-duration x "
+            "classification cross-tab and the P&L-by-bucket sections. The "
+            "sections above are unaffected."
+        )
+        return
+    if lots is None or lots.empty:
+        print("No completed round-trip lot fragments to cross-reference.")
+        return
+    if not classified:
+        print("No SELL rows were classified -- nothing to cross-reference.")
+        return
+    joined = lots.copy()
+    joined["self_track_bucket"] = _classify_lots_by_self_track(joined, trades_df, classified)
+    _print_hold_duration_cross_tab(joined)
+    _print_pnl_by_classification(joined)
 
 
 def main() -> int:
@@ -322,7 +542,8 @@ def main() -> int:
     _print_distribution(lots, args.ticker)
 
     exit_signals_df = load_exit_signals()
-    _print_self_track_cut(trades_df, exit_signals_df)
+    classified = _print_self_track_cut(trades_df, exit_signals_df)
+    _print_self_track_join(lots, trades_df, classified)
 
     return 0
 
