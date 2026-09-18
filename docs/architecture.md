@@ -485,6 +485,12 @@ Query-scoping parameters, not investment-policy thresholds — Portfolio Q&A is 
 
 **Session key:** `_qa_history` (Ask tab, `app.py`) — the tab's own conversational turn list (`{"question","answer","intent","facts",...}` per round), rendered via `st.chat_message`. This is a UI-local session_state key scoped to the Ask tab's own chat display — not a cross-feature publish/consume cache, so it isn't in CLAUDE.md's coordination-pattern cache-key list.
 
+| `INVESTIGATOR_MAX_LLM_CALLS` | 3 | 🔎 Portfolio Investigator (`stock_analyzer/investigator.py`) — hard cap on LLM calls per single investigation. Normal case is 2 (one plan call, one report call); the 3rd is reserved for exactly one re-plan attempt when the first plan is rejected/unparseable. Hitting the cap fails the investigation visibly ("couldn't converge on a plan") rather than retrying further — prevents an open-ended agentic loop. |
+| `INVESTIGATOR_MAX_TOKENS_PLAN` | 500 | Portfolio Investigator — max response tokens for the plan-step LLM call, which only emits a small structured JSON object naming toolbox `fn_id`s, not prose. |
+| `INVESTIGATOR_MAX_TOKENS_REPORT` | 1000 | Portfolio Investigator — max response tokens for the report-synthesis LLM call (prose plus a mandatory caveats section). |
+
+Safety/cost bounds on the LLM orchestration loop, not investment-policy thresholds — the Investigator is a fixed-toolbox, read-only, awareness-only investigation tool (see `docs/plans/portfolio-investigator.md`) and never gates or issues a recommendation.
+
 | `PERSONALIZED_DISCOVERY_MIN_MATCH_TRAITS` | 2 | Personalized Discovery (`stock_analyzer/personalized_discovery.py`, F-226) — of the 3 traits (composite band / momentum band / top sector), how many must match a candidate before the "matches your winning profile" caption renders on a 🏠 Home Grow Today pick. |
 | `PERSONALIZED_DISCOVERY_PROFILE_PCTL_LOW` | 25 | Personalized Discovery — lower percentile of the user's own realized winning entries' composite/momentum scores defining the "typical winner" band. |
 | `PERSONALIZED_DISCOVERY_PROFILE_PCTL_HIGH` | 75 | Personalized Discovery — upper percentile of the same band. |

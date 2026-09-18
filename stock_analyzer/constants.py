@@ -1812,3 +1812,13 @@ INCOME_EVENT_DEDUP_DATE_TOL_DAYS = 3
 # single hung call so the broker cron lane can fail loud instead of
 # blocking the job budget.
 SNAPTRADE_REQUEST_TIMEOUT_SEC = 15
+
+# ── Portfolio Investigator (investigator.py, 🔎 tab on AI Insights) ───────────
+# Multi-step, tool-composing LLM orchestration over a fixed, already-reviewed
+# toolbox (docs/plans/portfolio-investigator.md) — never a gate/score/rec
+# input, purely a safety/cost bound on the LLM call loop itself. Still lives
+# here per the no-hardcoded-values rule even though none of these are
+# investment-policy thresholds.
+INVESTIGATOR_MAX_LLM_CALLS = 3       # hard cap on LLM calls per investigation (2 normal: plan + report; the 3rd is reserved for exactly one re-plan attempt on a rejected/unparseable plan) — hitting the cap fails the investigation visibly rather than retrying further
+INVESTIGATOR_MAX_TOKENS_PLAN = 500   # max response tokens for the plan-step call — it only emits a small structured JSON object naming toolbox fn_ids, not prose
+INVESTIGATOR_MAX_TOKENS_REPORT = 1000  # max response tokens for the report-synthesis call — prose plus a mandatory caveats section

@@ -123,13 +123,31 @@ question.
 | `compute_protective_outcomes` / `collapse_by_ticker` / `protective_headline` | `protective_track_record.py` | Protective (EXIT/TRIM) call alpha, per ticker or aggregate |
 | `recalculate_from_trades` | `db.py` | Current holdings + corrected realized P&L, replayed from the trade log |
 | `match_recs_to_trades` / `compute_outcomes` | `recommendations_history.py` | BUY-side recommendation alpha, acted vs. skipped |
-| `forward_alpha_at_horizon` | `predictive_analytics.py` | Fixed-horizon forward alpha for any ticker/date |
 | `TICKER_SECTORS` (static lookup, not a fetch) | `portfolio.py` | Sector-level grouping, no network call needed |
 | `fetch_live_prices` / `fetch_spy` | `data.py` | Live price + SPY history inputs the above functions need |
 
 Deliberately excludes anything not already exercised against real data — the toolbox grows
 the same way Predictive Shadow Modeling's scope grew: one deliberate, reviewed addition at a
 time, never speculatively.
+
+**`forward_alpha_at_horizon` — DEFERRED to v1.1, caught by the implementer during chunk 2,
+resolved 2026-09-18.** It answers a single ticker/date/entry-price question, but the plan
+step's `{"fn_id", "why"}` shape (per this same `planner` pass's own design) has no per-step
+argument slot for a scalar like a ticker — the fixed input vocabulary is bulk data sources
+(`trades_df`, `exit_signals_df`, etc.), not per-question parameters, and no question-side
+resolver exists to populate one (the same job `portfolio_qa.py`'s own parse step already does
+for Ask, just not yet built for the Investigator). The implementer initially wired it with a
+graceful degrade-to-error-fact fallback rather than crashing, which is sound engineering — but
+it would still let the plan step select a function that can only ever fail today, which is a
+half-finished capability, not a working one, and wastes an LLM round-trip in exactly the cases
+where a question happens to name a ticker. **Removed from v1's registered `TOOLBOX` entirely**
+rather than shipped in a permanently-degraded state; the adapter's own reasoning is preserved
+in a code comment at its removal site. **v1.1 path, not started:** extend the plan-step JSON
+schema with a per-step `"params"` field (and matching validation in `validate_plan`) once a
+real question shape needs it, paired with a question-side ticker/date/price resolver at the
+`app.py` wiring layer — not before, since speculative param-passing plumbing with nothing yet
+to exercise it is exactly the kind of premature abstraction this project's own conventions
+warn against.
 
 ## Placement — owner decision, ratified 2026-09-17
 
