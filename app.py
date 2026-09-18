@@ -40083,6 +40083,7 @@ elif page == "🧠 AI Insights":
 
         from stock_analyzer import investigator as _inv
         from stock_analyzer import ai_provider as _inv_aip
+        from stock_analyzer.constants import INVESTIGATOR_LLM_TIMEOUT_SECONDS
 
         st.caption(
             "Ask an open-ended question about your trading — this composes "
@@ -40321,7 +40322,10 @@ elif page == "🧠 AI Insights":
             )
         else:
             def _inv_llm_fn(system, user, max_tokens, _p=_inv_provider, _m=_inv_model, _k=_inv_api_key):
-                return _inv_aip.call_llm(_p, _m, _k, system, user, max_tokens)
+                return _inv_aip.call_llm(
+                    _p, _m, _k, system, user, max_tokens,
+                    timeout=INVESTIGATOR_LLM_TIMEOUT_SECONDS,
+                )
 
             _inv_question = st.chat_input(
                 "Ask an open-ended question about your trading…", key="_inv_chat_input"
