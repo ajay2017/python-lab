@@ -233,6 +233,53 @@ Designing against a 3-week-old 52% figure would repeat `feedback_verify_against_
   after a market regime that isn't a persistent rally. The 3 immature rows (SHOP, COF, ON,
   all flagged within the last 4 days) are correctly excluded and will report in shortly
   regardless of any future action.
+
+  **REGIME-CONFOUND CHECK — RUN 2026-09-17, RESOLVED: concentrated in one cluster, not
+  broad-based.** Picked up as the load-bearing next step after A4 closed (§4 A4, below) and
+  the self-track cut's dollar finding independently echoed this same −alpha pattern. Ran the
+  live app's own exact chain (`protective_track_record.compute_protective_outcomes` →
+  `collapse_by_ticker` → `protective_headline`, not re-derived) against the full 86-row
+  `exit_signals` table (already in hand from the self-track cut) plus a live price fetch for
+  all 21 distinct EXIT/TRIM tickers and a fresh 6-month SPY series — both fetches worked
+  cleanly from the working session (yahoo_finance source, no credentials needed). **Live
+  headline reproduced first, as a sanity check: `protect_alpha = -14.7%`, N=20 mature+priced,
+  band="firm"** — matches the original −15.7% almost exactly (small drift from 3 more calls
+  maturing since 09-13), confirming the underlying negative track record is current, not
+  stale.
+
+  **Cross-tab by sector** (via `portfolio.TICKER_SECTORS`, no fetch needed) resolves the
+  caveat cleanly:
+
+  | Group | N | Avg protect_alpha |
+  |---|---|---|
+  | Growth cluster (AI & Cloud / AI & Data / Cybersecurity — TEAM, NOW, PLTR, CRWD, APP) | 5 | **-51.3%** |
+  | Semiconductors (MRVL, AMD, MU, ARM, AVGO, ON) | 6 | -4.5% |
+  | Everything else (8 sectors: Consumer Tech, Healthcare, Financials, EV & Auto, Clean Energy, Communications) | 9 | -1.2% |
+
+  **Five names in three closely-related sectors single-handedly drag the entire -14.7%
+  headline; the other 15 tickers across 8 sectors average close to neutral.** Robustness
+  check — excluding TEAM entirely (the single largest outlier, -135.3% alone), the growth
+  cluster (NOW/PLTR/CRWD/APP) still averages **-30.3%** vs. **-2.5%** for everything else —
+  the pattern holds without the biggest single name driving it.
+
+  **Verdict: this reads as a regime artifact concentrated in one market segment, not a
+  broad-based calibration defect.** If the deterioration ladder's price/trend mechanism were
+  genuinely miscalibrated, negative alpha would be expected to spread across sectors and
+  position types — instead it's tightly held to high-beta AI/growth/cybersecurity names
+  during what appears to be a persistent rally in exactly that segment, the textbook shape of
+  "insurance looks bad when the insured asset keeps running," not "the detector is broken."
+  **This does NOT support broadly loosening or retuning the ladder's thresholds** — 15 of 20
+  names are already close to neutral; a general threshold change would be fixing something
+  that isn't broken for most of the book to chase a problem concentrated in a handful of
+  names. No narrower, cluster-specific fix is proposed either — this is evidence, not a
+  build recommendation.
+
+  **Caveats on this result:** some sector buckets are N=1 (Financials, EV & Auto, Clean
+  Energy, Communications) — thin at that granularity, though the cluster-level comparison
+  (N=5 vs N=15) is more solid; single ~2-month window of matured signals, could still be
+  time-period-specific in ways this can't rule out; doesn't establish *why* the growth
+  cluster ran (a genuine AI-cycle fundamental story is not distinguishable here from "just a
+  rally"). Full numbers, per-ticker breakdown: memory `project_investor_maturity_roadmap`.
 - **A2 — Offense attribution** *(new `scripts/offense_attribution.py`)*, modelled on
   `scripts/exit_ladder_replay.py`: read-only, explicit REDLINE, honest caveats printed on
   every run, falsifiable criterion pre-registered **before** the first run.
