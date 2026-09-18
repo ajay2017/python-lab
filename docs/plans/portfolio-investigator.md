@@ -239,18 +239,139 @@ for cron liveness, data-store freshness, and write-outcome diagnostics.
    forced open); a single continuous conversation thread, same shape as Ask's, no separate
    named/revisitable investigation sessions for v1.
 
-## Open questions still genuinely unresolved (to be settled via mockup iteration, then a
-formal `planner` pass before any code)
+## `planner` pass — 2026-09-18, Opus 4.8 (1M context), verdict PROCEED WITH CHANGES
 
-- Exact plan-step prompt design and its failure mode when no toolbox function fits — the
-  mockup's second example (the ATR-stop-simulation question) shows the desired REFUSAL shape;
-  the actual prompt/logic that reliably produces that refusal instead of an improvised guess
-  is still unbuilt.
-- Cost/latency: multi-step tool orchestration is a materially bigger LLM-usage and latency
-  profile than Ask's single classify-then-lookup call — needs an honest budget conversation
-  before scoping v1's toolbox size.
-- Whether investigations should be resumable/multi-turn (like Ask's follow-up support) or
-  always start fresh per question.
+Read the mockup-approved design and verified every code claim against HEAD (not the plan
+doc's own descriptions) before proceeding — this caught a real defect, not just a nitpick.
+
+### THE DEFECT — the mockup's "Write this" file-write is impossible on this deploy model, fixed
+
+The mockup depicted an in-app button writing directly into `docs/*.md` and a memory file.
+**This cannot work and would have been silently wrong in production:** Hard Rule #3 means
+the app only ever runs on Railway (or the dormant Streamlit Cloud fallback) — never locally,
+never with the owner's own git working tree. A write from the running container hits an
+**ephemeral filesystem** (lost on next redeploy, never reaches git, no commit, no review) —
+the file a future session actually reads is the git-tracked repo on the owner's machine, not
+the container's copy, so a "successful" write would create a phantom edit nobody ever sees
+while the owner believes it's now ground truth — the exact inverse of the trust this sync
+feature exists to provide. Memory files live entirely outside the repo on the owner's local
+machine; the container has no path to them at all. Confirmed by grep: `app.py` has **never**
+written to a `.md`/memory file anywhere — no existing pattern was being copied, because this
+has never been safe to do from the app.
+
+**RATIFIED FIX, 2026-09-18: the action becomes "📋 Copy this markdown" (or a
+`st.download_button`), never an in-app file write.** The owner still sees the exact editable
+draft first — nothing about draft-then-approve changes — they paste it into the repo
+themselves afterward, the same manual step used all through the 2026-09-17 session. Keeps
+git as the real audit trail. No DDL, no new write path, no `_GATE_FILES` exposure. The
+mockup's purple draft panel is otherwise correct and stays as designed; only its final button
+changes semantics.
+
+### Three open questions, resolved
+
+**1. Refusal mechanism.** Refusal is a CODE decision over a closed enum, never the LLM's own
+self-assessment. The LLM proposes a structured plan (JSON naming specific `fn_id`s from the
+toolbox); a pure `validate_plan()` function checks it — any hallucinated function name, any
+compute-less plan, or any plan whose data needs aren't satisfiable is rejected in code before
+anything executes. The residual risk (a real toolbox function picked as a poor fit for the
+question) is mitigated by the mandatory "functions & data used" trace and quantified, not
+eliminated, by a required pre-ship eval (below).
+
+**2. Cost/latency.** A fixed 5-stage pipeline, never an open-ended agentic loop. Normal case
+= 2 LLM calls (plan, report); worst case = 3 (one re-plan). `INVESTIGATOR_MAX_LLM_CALLS = 3`
+enforced in code — on hitting the cap it fails VISIBLY ("couldn't converge on a plan — try
+rephrasing"), never loops. Same call-count order as Ask (parse + narrate = 2); the difference
+is per-call input size and the compute done between calls, not an unbounded loop.
+
+**3. Session shape.** Fresh per question, RATIFIED — each investigation re-runs fetch/verify/
+compute from scratch. One narrow exception: raw FETCHED DATA (trades, live prices) may be
+cached in session_state across questions within a session for speed — but a prior report's
+NARRATED conclusions never feed into a new plan step, closing off the "soft conclusion
+trusted as hard fact" failure mode `portfolio_qa.py` already avoids by design (its own
+multi-turn history feeds only the parser, never the narrator).
+
+### Four owner decisions, ratified 2026-09-18
+
+1. **Sync action: copy/download, not a file write** (see the defect above — not really a
+   choice, a required fix; ratified).
+2. **Model tier: ALL tiers selectable** (fast/cheap included), diverging from the planner's
+   own recommendation to restrict to the capable tier only. **Made consistent with decision 3
+   below:** the selectbox does not pre-filter by price tier — instead, a model only appears as
+   a real, enabled option once it has a recorded PASS on the refusal eval. Tier label alone
+   decides nothing; the eval result does. This is arguably more rigorous than a blanket
+   cutoff (it lets a genuinely capable fast/cheap model qualify on evidence rather than being
+   excluded by assumption, and excludes a "capable"-labeled model that still fails the eval).
+3. **Refusal eval is a REQUIRED ship gate, not optional.** A fixed, frozen labeled set of
+   ~15-25 "should refuse" and ~10-15 "should answer" questions
+   (`scripts/investigator_eval.py`), run against every candidate model, scoring refusal/answer
+   recall. A model without a recorded pass is not offered in the tab — mirrors this project's
+   own "prove skill before trusting a signal" discipline already used for the volatility-
+   forecast feature (Predictive Shadow Modeling).
+4. **`INVESTIGATOR_MAX_LLM_CALLS = 3`** approved as proposed.
+
+### Module boundaries (both new, both pure, neither a `_GATE_FILES` member — verified against
+`pre_tool_checks.py`'s actual list, not assumed)
+
+- **`stock_analyzer/ai_provider.py`** — extracts AI Snapshot's `_AI_PROVIDERS` registry shape
+  (`app.py` ~10685) and its dispatch (~10798-10830) into a reusable, Streamlit-free module.
+  Used ONLY by the Investigator — does not touch AI Snapshot's own inline dict or the other 19
+  pre-existing hardwired call sites (explicitly fenced out of this feature's scope, per
+  above). `AI_PROVIDERS` dict (now carrying a per-model `tier` field used only for display,
+  not gating — see decision 2), `capable_models()`, `resolve_key()` (secrets → env → ""),
+  `call_llm()` (fails open to `None` + `LAST_CALL_ERROR`, never raises).
+- **`stock_analyzer/investigator.py`** — the toolbox registry (per-function `adapter`, `needs`
+  over a fixed input vocabulary, `summary`, `cannot`-list of out-of-scope example phrasings),
+  `parse_plan`/`validate_plan` (the code gate), `verify_fetch`, `execute_plan` (runs ONLY
+  named toolbox adapters), prompt builders reusing `portfolio_qa`'s narration discipline
+  verbatim where it applies (no invented numbers, no rescaling a dollar figure, mandatory
+  caveats), `build_sync_draft` (pure — produces the draft markdown, no write), and the
+  `investigate()` orchestrator enforcing the call cap and the fail-visibly-on-offline
+  contract.
+
+Neither module gets added to `_GATE_FILES` — awareness-only, never influences a gate/score/
+recommendation, same posture as The Judge / Gate Suppression Ledger (also not gate files). A
+refusal-logic failure produces a wrong or absent ANSWER, never a moved call.
+
+### `app.py` integration points (verified at HEAD 2026-09-18; expect line drift by build time)
+
+- 8th tab added to the `st.tabs([...])` list (~37056-37058, currently 7 labels).
+- Tab body placed after `with _ai_tab_ask:` (~39717), reusing Ask's chat shell.
+- **Owner gate at the top of the tab body** — `if db.is_readonly(): st.info(...); st.stop()`,
+  the exact `⚙️ App Settings` pattern (~32606-32612). **Load-bearing, stated explicitly: this
+  in-tab check is the ONLY gate** — unlike Model Lab/System Trust/App Settings, 🧠 AI Insights
+  is not in `_OWNER_ONLY_PAGES` (~3037), so there is no sidebar-level defense-in-depth here.
+- Provider/model config section on 🩺 System Trust (page ~32345, already owner-gated),
+  mirroring AI Snapshot's settings-expander shape but sourced from `ai_provider.py`.
+
+### DDL — none for v1
+
+Session thread lives in `session_state` only (matches "fresh and bounded / no persisted state
+that changes future behavior"). No new Supabase table. A durable investigation-history table
+was considered and explicitly deferred — it would be a `db.py` write path (mandatory Opus
+review) buying nothing v1 needs.
+
+### Build-chunk sequence (ordered; chunk 5's eval gates chunk 6 enabling the tab)
+
+1. `ai_provider.py` + unit tests.
+2. `investigator.py` core (toolbox registry, `parse_plan`/`validate_plan`/`verify_fetch`/
+   `execute_plan`, NO LLM calls yet) + exhaustive deterministic unit tests for `validate_plan`
+   specifically (the refusal guardrail — a "never X" claim needs a test at that exact
+   boundary: hallucinated `fn_id` rejected, compute-less plan rejected, unsatisfiable `needs`
+   rejected, valid plan accepted).
+3. Constants (`INVESTIGATOR_MAX_LLM_CALLS`, max-token sizing) — `constants.py` is a
+   `_GATE_FILES` member, mandatory Opus review citation on this commit.
+4. Prompts + `investigate()` orchestrator (call cap, fail-visible offline handling,
+   `build_sync_draft`).
+5. **Refusal eval** (`scripts/investigator_eval.py`) — run per candidate model, record
+   refusal/answer recall in this doc, set the allowed-model set from real results. Ship gate:
+   chunk 6 cannot enable a model without a recorded pass here.
+6. `app.py` wiring — 8th tab, owner gate, chat shell, trace expander, caveats block, the
+   copy/download draft panel (not a write), System Trust config section.
+7. Docs sync, same session, all 7 Definition-of-Done steps.
+
+One Opus `reviewer` pass covers chunks 2/4/6 together (`validate_plan`/`execute_plan`/the
+orchestrator + eval results) before ship, on top of the mechanically-required citation on
+chunk 3's `constants.py` commit.
 
 ## Files (once a build is actually approved — not yet)
 

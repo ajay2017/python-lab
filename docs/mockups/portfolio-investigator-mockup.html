@@ -270,11 +270,21 @@
 
     <div class="sync-row">
       <button class="btn btn-sec btn-sm btn-dis">📝 Propose a docs/memory sync</button>
-      <span class="sync-note">↓ shown below in its CLICKED state (Option A — draft, then approve)</span>
+      <span class="sync-note">↓ shown below in its CLICKED state — REVISED 2026-09-18 per planner finding</span>
+    </div>
+
+    <div class="banner banner-amb" style="margin-top:10px">
+      ⚠️ <strong>Revised 2026-09-18:</strong> the original mockup showed an in-app "Write
+      this" file save. A `planner` design pass found that's impossible on this app's actual
+      deploy model — Railway's filesystem is ephemeral and has no access to the owner's git
+      repo or local memory files, so a write here would silently vanish rather than
+      persisting. Fixed below: the draft is still generated and editable exactly as before,
+      but the final action is <strong>copy/download</strong>, not a write — the owner pastes
+      it into the repo themselves, keeping git as the real audit trail.
     </div>
 
     <div class="draft-panel">
-      <div class="draft-panel-title">📝 Draft sync — nothing written yet</div>
+      <div class="draft-panel-title">📝 Draft sync — nothing saved anywhere yet</div>
 
       <div class="draft-target">Target 1 of 2 — <code>docs/plans/investor-maturity-roadmap.md</code> §4 A1</div>
       <div class="draft-box" contenteditable="true">**The completing piece — 2026-09-17:** growth cluster (TEAM/NOW/PLTR/CRWD/APP) carries 16.1% of held book value but produced only ~7.8% of total combined P&amp;L (+$264.60 of +$3,410.18). Bimodal: CRWD earned its volatility (~$427 combined); TEAM/NOW were realized dollar losses, so the app's caution on them was dollar-correct despite scoring badly on alpha-vs-SPY.</div>
@@ -282,12 +292,14 @@
       <div class="draft-target">Target 2 of 2 — memory <code>project_investor_maturity_roadmap</code></div>
       <div class="draft-box" contenteditable="true">Investigator run 2026-09-17: concentration check on the AI/growth cluster confirms disproportionate risk (16.1% of book, 7.8% of P&amp;L) but bimodal — CRWD justified, TEAM/NOW did not, consistent with the earlier regime-confound finding.</div>
 
-      <div class="draft-edit-hint">✎ Click into either box to edit before writing — this is the exact text that would be saved, editable in place, not a description of it.</div>
+      <div class="draft-edit-hint">✎ Click into either box to edit first — this is the exact text that would be copied, editable in place, not a description of it.</div>
 
       <div class="draft-actions">
-        <button class="btn btn-grn btn-sm">✅ Write this</button>
-        <button class="btn btn-sec btn-sm">✖ Cancel — discard draft</button>
+        <button class="btn btn-grn btn-sm">📋 Copy markdown</button>
+        <button class="btn btn-sec btn-sm">⬇ Download as .md</button>
+        <button class="btn btn-sec btn-sm">✖ Discard draft</button>
       </div>
+      <div class="sync-note" style="margin-top:8px">Paste into the target file yourself — nothing here ever writes to the repo or memory directly.</div>
     </div>
 
   </div>
@@ -320,11 +332,12 @@
 <div class="divider"></div>
 <div class="banner banner-grn">
   ✅ Resolved 2026-09-17: (1) trace visibility and (3) session shape — accepted as shown.
-  (2) sync action — <strong>Option A, draft-then-approve</strong> (the purple panel above):
-  the exact text is shown editable BEFORE anything writes, never a blind confirm on a
-  description. Matches this project's own zero-hallucination doc-integrity standard —
-  a future session trusts these files without re-verifying, so the human sees and can correct
-  the exact wording before it becomes ground truth, not after.
+  (2) sync action — draft-then-approve, editable text shown BEFORE anything happens, never a
+  blind confirm on a description — <strong>revised 2026-09-18</strong> from an in-app write to
+  copy/download after a `planner` pass found the write itself was impossible on Railway's
+  deploy model (ephemeral filesystem, no repo/memory access from the container). The
+  draft-first principle survives; only the final action changed. Full `planner` verdict
+  (PROCEED WITH CHANGES) and all four owner ratifications: `docs/plans/portfolio-investigator.md`.
 </div>
 
 </div>
