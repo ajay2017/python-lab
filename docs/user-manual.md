@@ -97,7 +97,7 @@ Pre-market and end-of-day, the **email cron** may have already sent you a protec
 
 **🧾 Summary** (F-204) — *The at-a-glance dashboard.* KPI tiles, Act Today, holdings table (moved here from Home, F-01), plus pointer cards: Engine Track Record (F-229), State of the Portfolio standing thesis (F-232). Look for a fast status read without the full Home synthesis.
 
-**💰 Account** — *Cash, account value, and capital trend.* Account-baseline: cash + total account value (F-03b), a flows ledger for growth-vs-contributions (F-03c), and a Capital Trend chart with a net-capital-contributed overlay (F-03d). Leverage/margin awareness (F-09d) lives here too — **read-only, never gates.** Look when reconciling real account value or checking margin.
+**💰 Account** — *Cash, account value, capital trend, and reports.* Account-baseline: cash + total account value (F-03b), a flows ledger for growth-vs-contributions (F-03c), and a Capital Trend chart with a net-capital-contributed overlay (F-03d). Leverage/margin awareness (F-09d) lives here too — **read-only, never gates.** Three tabs: 💰 Account, 🔌 Brokerage Trend, and 📄 Reports (F-276, owner-only) — the Reports tab currently hosts a Tax Report (FIFO realized short-term/long-term gains by tax year, wash-sale flags, CSV/markdown export, explicitly **not tax advice**); a Performance Review tab is queued but not yet built. Look when reconciling real account value, checking margin, or pulling a tax-year gains summary.
 
 **🔍 Market Scanner** — *Find new names.* Scans the curated universe (88 tickers across 14 sectors, F-60/F-240) plus a Movers discovery lane (F-60a), scores each 0–100 (F-61), ranks the top picks (F-62). Look when hunting for candidates beyond what the brief surfaced.
 

@@ -220,6 +220,7 @@ from stock_analyzer.tax_advisor import (
     build_tax_analysis, _build_open_lots, holding_period_status, wash_sale_risk,
     harvest_outcomes_summary,
 )
+from stock_analyzer import tax_report as _tax_report
 from stock_analyzer import exit_advisor
 from stock_analyzer.exit_advisor import compute_relative_strength
 from stock_analyzer.thesis_red_team import (
@@ -32971,7 +32972,9 @@ elif page == "💰 Account":
         "can still override it manually further down if it ever looks wrong."
     )
 
-    _acct_tab_main, _acct_tab_broker = st.tabs(["💰 Account", "🔌 Brokerage Trend"])
+    _acct_tab_main, _acct_tab_broker, _acct_tab_reports = st.tabs(
+        ["💰 Account", "🔌 Brokerage Trend", "📄 Reports"]
+    )
     with _acct_tab_main:
         _acct = db.load_account_cash()
         _cash = float(_acct["cash_balance"]) if _acct else None
@@ -34939,6 +34942,110 @@ elif page == "💰 Account":
                             _sii_msg_kind, _sii_msg_text = _sii_pending_msg
                             getattr(st, _sii_msg_kind)(_sii_msg_text)
 
+    with _acct_tab_reports:
+        # ── 📄 Reports (docs/plans/reports.md) — Phase 1: Tax Report ────────
+        # This page (💰 Account) is NOT owner-only, so gate the tab's CONTENT
+        # rather than st.stop()'ing the whole page — a read-only viewer must
+        # still be able to use the other two tabs.
+        if db.is_readonly():
+            st.info("🔒 This page is owner-only and isn't available in read-only viewer mode.")
+        else:
+            st.subheader("📄 Reports")
+            _rpt_kind = st.radio(
+                "Report type", ["🧾 Tax Report", "📈 Performance Review"],
+                horizontal=True, key="_rpt_kind_radio",
+            )
+            if _rpt_kind == "📈 Performance Review":
+                st.info(
+                    "📈 **Performance Review — coming soon.** A point-in-time "
+                    "return-vs-SPY / recommendations-acted / gates-fired snapshot "
+                    "for a custom date range or calendar quarter (Phase 2 of this "
+                    "feature, not yet built)."
+                )
+            else:
+                _rpt_trades_df = db.load_trades_or_none()
+                _rpt_years = _tax_report.available_tax_years(_rpt_trades_df)
+                _rpt_year_options = _rpt_years if _rpt_years else [_today_et().year]
+                _rpt_year = st.selectbox(
+                    "Tax year", _rpt_year_options, index=0, key="_rpt_tax_year",
+                )
+                st.warning(
+                    "⚠️ **Not tax advice** — informational reconciliation only. "
+                    "Verify every figure against your broker's official 1099-B "
+                    "before filing."
+                )
+                if _rpt_trades_df is None:
+                    st.error(
+                        "⛔ Couldn't load your trade history right now — the tax "
+                        "report needs it to reconstruct realized lots. Try again "
+                        "shortly."
+                    )
+                else:
+                    _rpt_ledger = _tax_report.build_realized_lot_ledger(
+                        _rpt_trades_df, _rpt_year, today=_today_et(),
+                    )
+                    if not _rpt_ledger["rows"]:
+                        st.info(f"No realized sales found for {_rpt_year}.")
+                    else:
+                        _rc1, _rc2, _rc3 = st.columns(3)
+                        _rc1.metric("Short-term gain/loss", f"${_rpt_ledger['st_gain']:,.0f}")
+                        _rc2.metric("Long-term gain/loss", f"${_rpt_ledger['lt_gain']:,.0f}")
+                        _rc3.metric("Unknown-term gain/loss", f"${_rpt_ledger['unknown_gain']:,.0f}")
+
+                        if _rpt_ledger["reconciles"]:
+                            st.caption(
+                                f"✅ Reconciles — FIFO total (${_rpt_ledger['st_gain'] + _rpt_ledger['lt_gain'] + _rpt_ledger['unknown_gain']:,.2f}) "
+                                f"matches the stored average-cost total (${_rpt_ledger['stored_realized_total']:,.2f})."
+                            )
+                        else:
+                            st.caption(
+                                f"ℹ️ FIFO total (${_rpt_ledger['st_gain'] + _rpt_ledger['lt_gain'] + _rpt_ledger['unknown_gain']:,.2f}) "
+                                f"differs from the stored average-cost total (${_rpt_ledger['stored_realized_total']:,.2f}). "
+                                "This is expected whenever you sold part of a position built from lots "
+                                "bought at different prices — FIFO and average-cost allocate the same "
+                                "overall gain differently; both are valid, they just split it differently."
+                            )
+
+                        _rpt_table_rows = []
+                        for _rr in _rpt_ledger["rows"]:
+                            _rr_ws = _rr.get("wash_sale_status")
+                            _rr_ws_label = _rr_ws.get("status") if isinstance(_rr_ws, dict) else "—"
+                            if _rr_ws_label == "violation":
+                                _rr_ws_label = "⛔ violation"
+                            elif _rr_ws_label == "pending":
+                                _rr_ws_label = "⏳ pending"
+                            elif _rr_ws_label == "clean":
+                                _rr_ws_label = "✅ clean"
+                            _rpt_table_rows.append({
+                                "Ticker": _rr["ticker"],
+                                "Buy Date": _rr["buy_date"] or "—",
+                                "Sell Date": _rr["sell_date"],
+                                "Shares": round(_rr["shares"], 4),
+                                "Proceeds": _rr["proceeds"],
+                                "Cost": _rr["cost"] if _rr["cost"] is not None else None,
+                                "Gain": _rr["gain"] if _rr["gain"] is not None else None,
+                                "Days Held": _rr["days_held"] if _rr["days_held"] is not None else None,
+                                "Term": _rr["term"],
+                                "Wash Sale": _rr_ws_label,
+                            })
+                        st.dataframe(pd.DataFrame(_rpt_table_rows), hide_index=True, width="stretch")
+
+                    _rpt_csv = _tax_report.format_ledger_csv(_rpt_ledger).to_csv(index=False)
+                    _rpt_md = _tax_report.format_ledger_markdown(_rpt_ledger)
+                    _rcol1, _rcol2 = st.columns(2)
+                    with _rcol1:
+                        st.download_button(
+                            "⬇️ Download CSV", data=_rpt_csv,
+                            file_name=f"tax_report_{_rpt_year}.csv", mime="text/csv",
+                            key="_rpt_dl_csv",
+                        )
+                    with _rcol2:
+                        st.download_button(
+                            "⬇️ Download Markdown", data=_rpt_md,
+                            file_name=f"tax_report_{_rpt_year}.md", mime="text/markdown",
+                            key="_rpt_dl_md",
+                        )
+
 elif page == "🔔 Catalyst Watch":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
     st.title("🔔 Catalyst Watch")
@@ -36594,6 +36701,8 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **Cash Activity** — a monthly trend of dividends, interest, and fees, purely for visibility (it never feeds your Growth/Return numbers above — those stay driven by the deposits/withdrawals you log). The 💵 Cash Activity chart pulls from your **SnapTrade broker sync** when available; if SnapTrade doesn't receive dividend/interest/fee details from your broker (a known gap with Robinhood), you can **manually upload your Robinhood statement** via the "📥 Import from Robinhood Statement" expander below the chart — download a CSV from your broker's Statements page and paste it to backfill the months that were missed. A **Realized P&L (trades)** line is overlaid on the same chart, showing how much your closed trades actually made or lost each month — the same avg-cost figure your 📒 Trade Journal's Monthly Realized P&L Trend already shows, so the two never disagree. Hover any month to see dividends, interest, fees, and realized P&L together in one tooltip. A **"📋 Last statement import"** caption shows how current your statement upload is and how many broker-synced events haven't been cross-checked against one yet; a **"⚠️ possible unreconciled duplicate(s)"** expander appears only if the app finds a broker-sync event and a statement event that look like the same real transaction but weren't automatically recognized as one — worth a manual look, never something the app merges or hides on its own.
 
 Setup is a one-time, three-step process shown on the page itself (it needs a free SnapTrade Personal API Key and one Railway environment variable pair — not something done from inside the app in one click). Broker Sync **supplements** the manual habits above — you can still enter cash by hand and log trades manually any time, connected or not.
+
+**8. 📄 Reports (owner-only) — a third tab on this page.** Currently hosts a **Tax Report**: pick a tax year and see your realized gains/losses split into short-term vs. long-term, reconstructed lot-by-lot in the order you actually bought (FIFO) rather than the single blended average-cost number shown elsewhere in the app. Each closed lot also gets a wash-sale flag (⛔ violation / ⏳ pending / ✅ clean) reusing the same check the Tax lens on 🥧 Portfolio Overview already applies to harvested losses. A reconciliation line compares this report's total to the app's own stored average-cost total — they can legitimately differ on a position you sold in parts at different prices, and the report says so rather than picking one silently. Download the full lot table as CSV or a formatted Markdown report. **This is not tax advice** — it's an informational reconciliation tool; verify every figure against your broker's official 1099-B before filing. A Performance Review tab (a point-in-time snapshot of returns, recommendations acted on, and gates that fired, for a quarter or custom date range) is planned but not yet built.
 """
             )
 
@@ -36603,7 +36712,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Awareness only, same as Day Shock.
 - **🧾 Summary** — the cockpit: one screen that answers "is the book safe, what must I do today, and is anything drifting" without visiting another page. Six zones, in order of urgency. **① Book Safety** (top, colour-coded) — leverage ×, margin cushion, distance to a margin call, and whether your share counts still match the broker. Awareness only; it never changes a recommendation. It shows a grey **"not verified"** rather than green when your cash balance hasn't been loaded — an unmeasured book and a debt-free book are not the same thing, and it won't guess. Broker drift likewise distinguishes **In sync** (checked, matches), **Clean, dated** (matched when last captured, but that snapshot is old), **Trades pending** (differences explained by trades you logged since), and **Not checked** (unknown). **② Today** — 5 KPI tiles: Portfolio Value (+ 45-day sparkline), Unrealized P&L, Today's P&L (Home's Tier-B figure when available, else an honestly-labelled held-mark), **Today's Movers** (the 3 biggest moves either way; a name with no quote is reported unpriced, never as a flat 0%), and Avg Score against the buy threshold. The movers tile **renames itself "Last session's movers"** on a weekend, a holiday, or before the open — the change is measured against the previous close, so it only means "today" once today's session has begun. **③ Act Today** — bucketed as **EXIT · TRIM · WATCH** so you can tell an alarm's *nature* at a glance, then **one row per item** (badge · ticker · why · composite score), worst first. Below it a purple banner names any tickers under an active reduce/exit call whose ADD suggestions are being suppressed app-wide. Same source as Home, so it can never under-report. **④ Portfolio Health** — four cards: Risk Posture (falls back to counting the protective calls in today's Brief when the fragility dial can't be computed, and says "not computed" rather than an all-clear if that's missing too), Thesis Integrity (**names** the weakening tickers, not just a count), Diversification, and Active Vetoes. All four say "not checked" rather than "none" when they genuinely don't know. **⑤ Horizon** — three cards: 🎯 Engine Track Record (whether acting on the app's calls has beaten the S&P, offence and defence, alongside what the calls you *skipped* returned so the headline can't read as pure skill), 🔔 Catalyst Watch (which holdings report and when, flagged 🚫 when the name is also under a reduce call), and 📋 Portfolio Thesis (this week's five standing claims, each marked held or shifted). The full ledger with last week's comparison stays in the collapsed expander below. **"Alert level" there is not the same thing as "Risk Posture" above it** — alert level counts danger-level alerts, risk posture reads the market regime, so the two can legitimately differ. **⑥ Top Positions** — your 6 largest by weight: score coloured by the same Buy/Hold/Sell bands the rest of the app uses, a weight bar scaled to your single-name cap, an inline EXIT/TRIM/CAP badge, and ⚡ on a same-day shock. A footer counts how many rose, fell, or had no quote. The full Holdings table is one click away in an expander. Reads what Home already computed this session — visit 🏠 Home first if this page says it needs today's Brief.
 - **🧑‍⚖️ The Judge** — **BETA, audit authority only: it never gates a recommendation.** Collects each advisor's opinion on a ticker, weights them by their own past accuracy once they clear a minimum sample, and flags **coherence gaps** — a name under an active protective veto that no other risk surface is currently flagging. It reports; it never suppresses or changes a call.
-- **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above).
+- **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above). A third tab, **📄 Reports** (owner-only), hosts a Tax Report — realized short-term/long-term gains by tax year, wash-sale flags, CSV/Markdown export (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.

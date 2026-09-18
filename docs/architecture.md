@@ -145,6 +145,7 @@ python-lab/
     ├── trade_review.py             Trade Review: behavioural retrospective (app-followed vs deviated trades, panic-day reactivity, per-trade outcome vs SPY)
     ├── trades.py                   Trade-record helpers (realised PnL, performance stats)
     ├── tax_advisor.py              Tax-lot analysis; HARVEST subordinated to investment view
+    ├── tax_report.py               📄 Reports Tax Report (F-276): FIFO closed-lot realized ST/LT gains + reconciliation + wash-sale flags
     ├── rebalancer.py               Portfolio rebalancing; ADD cross-checks news + risk trim
     ├── stress_test.py              Macro stress scenario modelling
     ├── attribution_readiness.py    E2 alpha-attribution data-readiness audit (F-247): distinct-snapshot-date coverage vs NYSE sessions, gaps, concentration, turnover — measurement only, no thresholds
@@ -3047,6 +3048,55 @@ run of `scripts/investigator_eval.py` records 0 misclassifications — never spe
 automatic, mirroring `ai_provider.AI_PROVIDERS`' own one-model-at-a-time growth discipline. A
 cross-module test asserts every entry still exists in `ai_provider.AI_PROVIDERS` so it can't
 silently drift onto a renamed/removed model.
+
+### `stock_analyzer/tax_report.py`
+
+Phase 1 of the 📄 Reports feature (F-276) — realized-gains tax report, rendered as a third tab
+("📄 Reports") on 💰 Account. Pure, no Streamlit imports.
+
+**`build_realized_lot_ledger(trades_df, tax_year, today=None) -> dict | None`** — a FIFO
+closed-lot replay, deliberately a SEPARATE implementation from `tax_advisor._build_open_lots`,
+not a reuse of it: that helper only tracks currently-OPEN lots as `[shares, buy_date,
+split_ratio]` with no cost-basis field (its consumers need holding period only, not dollar
+gain — a matched SELL just discards the lot it consumed). A realized-gains report needs the
+CLOSED-lot history with a cost-per-share on every lot, so this module mirrors
+`_build_open_lots`'s exact BUY/SELL/SPLIT/split-pro-ration conventions (including the
+no-prior-lots SPLIT-seed edge case, where `cost_known=False` rather than a fabricated zero cost)
+but additionally tracks `cost_per_share` and records every closed match. **One deliberate
+correction versus `_build_open_lots`:** every date is converted to America/New_York
+(`tax_advisor._ET`) before `.date()` is taken, rather than a bare UTC `.date()` — harmless for
+`_build_open_lots`'s own day-count use, but not acceptable for a tax-YEAR boundary, where a
+late-evening Dec 31 ET trade could otherwise parse as UTC Jan 1. Applied consistently across the
+closed-lot dates, the independent `stored_realized_total` reconciliation loop, and
+`available_tax_years`, so no cross-path date-boundary divergence is possible.
+
+A SELL that exceeds all available lot history (e.g. broker-imported partial history) reports its
+unmatched remainder as `term="Unknown"` — never a guessed ST/LT term or a fabricated cost —
+falling back to that SELL row's own stored average-cost `cost_basis`/`realized_pnl`, prorated to
+the unmatched share fraction.
+
+**Reconciliation:** `stored_realized_total` sums the journal's stored (average-cost-method)
+`realized_pnl` for the tax year independently of the FIFO replay, so `reconciles=False` is a
+genuine signal — expected whenever a position was partially sold across lots bought at different
+prices, since FIFO and average-cost allocate the same overall gain differently; both are valid,
+neither is silently preferred.
+
+**Wash-sale detection is not reimplemented** — every closed lot at a loss calls the existing
+`tax_advisor.wash_sale_violation_after_harvest()` verbatim (full, unfiltered `trades_df`, since
+the after-side check may need to see a BUY in the following tax year); the 3-state result
+(`violation`/`pending`/`clean`) is a bare pass-through, rendered distinctly (`pending` never
+collapses to `clean`).
+
+Offline (`trades_df is None`) and genuinely-empty-year are distinct return states: `None` vs. a
+shaped-empty dict (`rows: []`, all totals `0.0`, `reconciles=True`) — never collapsed.
+`available_tax_years(trades_df)` backs the tab's year selector (distinct ET-converted years among
+non-SPLIT SELL rows, descending). `format_ledger_csv`/`format_ledger_markdown` are pure
+formatting helpers so `app.py`'s Reports tab stays render-only wiring.
+
+Awareness/archival only — issues no recommendation, gates nothing, adds no new constant (reuses
+`TAX_STCG_THRESHOLD_DAYS`/`TAX_WASH_SALE_DAYS`). Not a `_GATE_FILES` member. Voluntary Opus
+`reviewer` pass (money-math, not a mechanical trigger): SHIP, 0 blocking. Design:
+`docs/plans/reports.md`.
 
 ---
 
