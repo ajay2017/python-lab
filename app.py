@@ -34994,13 +34994,13 @@ elif page == "💰 Account":
 
                         if _rpt_ledger["reconciles"]:
                             st.caption(
-                                f"✅ Reconciles — FIFO total (${_rpt_ledger['st_gain'] + _rpt_ledger['lt_gain'] + _rpt_ledger['unknown_gain']:,.2f}) "
-                                f"matches the stored average-cost total (${_rpt_ledger['stored_realized_total']:,.2f})."
+                                f"✅ Reconciles — FIFO total (\\${_rpt_ledger['st_gain'] + _rpt_ledger['lt_gain'] + _rpt_ledger['unknown_gain']:,.2f}) "
+                                f"matches the stored average-cost total (\\${_rpt_ledger['stored_realized_total']:,.2f})."
                             )
                         else:
                             st.caption(
-                                f"ℹ️ FIFO total (${_rpt_ledger['st_gain'] + _rpt_ledger['lt_gain'] + _rpt_ledger['unknown_gain']:,.2f}) "
-                                f"differs from the stored average-cost total (${_rpt_ledger['stored_realized_total']:,.2f}). "
+                                f"ℹ️ FIFO total (\\${_rpt_ledger['st_gain'] + _rpt_ledger['lt_gain'] + _rpt_ledger['unknown_gain']:,.2f}) "
+                                f"differs from the stored average-cost total (\\${_rpt_ledger['stored_realized_total']:,.2f}). "
                                 "This is expected whenever you sold part of a position built from lots "
                                 "bought at different prices — FIFO and average-cost allocate the same "
                                 "overall gain differently; both are valid, they just split it differently."
