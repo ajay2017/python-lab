@@ -123,7 +123,17 @@ def call_llm(provider: str, model: str, api_key: str, system: str, user: str,
                 messages=[{"role": "user", "content": user}],
                 timeout=timeout,
             )
-            return r.content[0].text
+            # content[0] is NOT always the text block -- a reasoning-capable
+            # model (confirmed live on claude-opus-5) can lead with a
+            # ThinkingBlock/RedactedThinkingBlock that has no .text attribute
+            # at all, so a blind [0].text crashes on exactly the calls where
+            # the model chose to think first. Scan for the first block that
+            # actually has text instead of trusting position.
+            for block in r.content:
+                text = getattr(block, "text", None)
+                if text is not None:
+                    return text
+            return None
         elif provider == "OpenAI":
             from openai import OpenAI as _OAI
             c = _OAI(api_key=api_key, timeout=timeout)

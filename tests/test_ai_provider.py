@@ -56,6 +56,30 @@ def _install_fake_anthropic(response_text=None, raise_exc=None):
     sys.modules["anthropic"] = fake_mod
 
 
+class _FakeAnthThinkingBlock:
+    """A block with no .text attribute at all -- matches the real SDK's
+    ThinkingBlock/RedactedThinkingBlock shape closely enough to reproduce the
+    live claude-opus-5 crash (content[0] was a thinking block, not text)."""
+
+
+def _install_fake_anthropic_with_leading_thinking_block(response_text):
+    class _Response:
+        def __init__(self, text):
+            self.content = [_FakeAnthThinkingBlock(), _FakeAnthBlock(text)]
+
+    class _Messages:
+        def create(self, **kwargs):
+            return _Response(response_text)
+
+    class _Client:
+        def __init__(self, **kwargs):
+            self.messages = _Messages()
+
+    fake_mod = types.ModuleType("anthropic")
+    fake_mod.Anthropic = lambda **kwargs: _Client()
+    sys.modules["anthropic"] = fake_mod
+
+
 # ── fake openai module (covers both "OpenAI" and "Groq (Free tier)", which
 #    both dispatch through the openai SDK shape) ─────────────────────────────
 
@@ -228,6 +252,20 @@ def test_call_llm_claude_success_returns_text():
         "sys prompt", "user prompt", max_tokens=100,
     )
     assert result == "hello from claude"
+    assert ai_provider.LAST_CALL_ERROR is None
+
+
+def test_call_llm_claude_skips_leading_non_text_block():
+    """Reproduces a real live crash: claude-opus-5 returned a ThinkingBlock
+    (no .text attribute) as content[0], and the code's old blind [0].text
+    raised AttributeError instead of finding the actual text in content[1]."""
+    _install_fake_anthropic_with_leading_thinking_block(response_text="the real answer")
+    from stock_analyzer import ai_provider
+    result = ai_provider.call_llm(
+        "Claude (Anthropic)", "claude-opus-5", "sk-ant-x",
+        "sys prompt", "user prompt", max_tokens=100,
+    )
+    assert result == "the real answer"
     assert ai_provider.LAST_CALL_ERROR is None
 
 
