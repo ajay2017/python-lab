@@ -85,6 +85,20 @@ AVAILABLE_INPUT_VOCAB = frozenset({
 _EMPTY_IS_FAILURE_KEYS = frozenset({"port_df", "current_prices", "spy_close_by_date"})
 
 
+# ─── Ship-gate: models with a recorded refusal-eval PASS ────────────────────
+# A model may only be offered in the tab's selector once scripts/investigator_eval.py
+# has recorded a clean pass for it (docs/plans/portfolio-investigator.md, ratified
+# decision 3). Add an entry here ONLY after running that eval for real against a
+# live API key and confirming 0 misclassifications -- never speculative, never
+# automatic. Mirrors how ai_provider.AI_PROVIDERS itself only grows one deliberate,
+# reviewed model at a time.
+EVAL_PASSED_MODELS: frozenset = frozenset({
+    ("Claude (Anthropic)", "claude-sonnet-4-6"),  # 34/34, 2026-09-18
+    ("Claude (Anthropic)", "claude-opus-5"),      # 34/34, 2026-09-18 (after the
+                                                    # ThinkingBlock content[0] fix)
+})
+
+
 def _or_empty(value, empty):
     """Explicit `is None` check — never `value or empty`. Behaviorally the
     same for every call site in this module (verify_fetch has already gated

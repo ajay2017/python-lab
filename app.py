@@ -32592,6 +32592,79 @@ elif page == "🩺 System Trust":
         " This page reports only; it changes nothing."
     )
 
+    # ── Portfolio Investigator — AI provider/model config ────────────────────
+    # docs/plans/portfolio-investigator.md, ratified 2026-09-18: this config
+    # lives on System Trust (not App Settings, which is scoped to the engine's
+    # ticker rosters only), and is deliberately NOT shared with 🤖 AI
+    # Snapshot's own provider choice or 💬 Ask's hardwired Anthropic key. Only
+    # a (provider, model) pair with a recorded refusal-eval PASS
+    # (investigator.EVAL_PASSED_MODELS) is ever offered here.
+    st.markdown("---")
+    st.markdown("##### 🤖 Portfolio Investigator — AI provider")
+    st.caption(
+        "Configures which AI model the 🔎 Investigator tab (🧠 AI Insights) uses. "
+        "Separate from 🤖 AI Snapshot's own provider choice — not shared, not "
+        "inherited. Only a model with a recorded PASS on the refusal eval "
+        "(scripts/investigator_eval.py) can be selected here."
+    )
+    from stock_analyzer import ai_provider as _inv_aiprov
+    from stock_analyzer import investigator as _inv_mod_cfg
+
+    _inv_eligible_providers = [
+        p for p in _inv_aiprov.AI_PROVIDERS
+        if any((p, m) in _inv_mod_cfg.EVAL_PASSED_MODELS for m in _inv_aiprov.AI_PROVIDERS[p]["models"])
+    ]
+    if not _inv_eligible_providers:
+        st.info(
+            "No models have passed the required refusal eval yet — see "
+            "scripts/investigator_eval.py."
+        )
+    else:
+        _inv_bp1, _inv_bp2 = st.columns([3, 3])
+        with _inv_bp1:
+            _inv_sel_provider = st.selectbox(
+                "AI Provider", _inv_eligible_providers, key="_inv_sel_provider"
+            )
+        _inv_prov_cfg = _inv_aiprov.AI_PROVIDERS[_inv_sel_provider]
+        _inv_model_opts = {
+            mid: entry for mid, entry in _inv_prov_cfg["models"].items()
+            if (_inv_sel_provider, mid) in _inv_mod_cfg.EVAL_PASSED_MODELS
+        }
+        with _inv_bp2:
+            if st.session_state.get("_inv_sel_model") not in _inv_model_opts:
+                st.session_state.pop("_inv_sel_model", None)
+            _inv_sel_model = st.selectbox(
+                "Model",
+                list(_inv_model_opts.keys()),
+                format_func=lambda m: _inv_model_opts[m]["label"],
+                key="_inv_sel_model",
+            )
+
+        _inv_sec_section, _inv_sec_field = _inv_prov_cfg["secrets_path"]
+        _inv_resolved_key = (
+            st.secrets.get(_inv_sec_section, {}).get(_inv_sec_field)
+            or os.environ.get(_inv_prov_cfg["env_var"])
+            or ""
+        )
+        _inv_key_store = f"_inv_key_store_{_inv_sel_provider}"
+        if _inv_resolved_key:
+            st.session_state[_inv_key_store] = _inv_resolved_key
+            st.caption("🔑 API key loaded from secrets / environment.")
+        else:
+            _inv_manual_key = st.text_input(
+                f"{_inv_sel_provider} API key",
+                value=st.session_state.get(_inv_key_store, ""),
+                type="password",
+                placeholder=_inv_prov_cfg["key_hint"],
+                help=f"Get a key at {_inv_prov_cfg['key_url']}",
+                key=f"_inv_key_input_{_inv_sel_provider}",
+            )
+            if _inv_manual_key:
+                st.session_state[_inv_key_store] = _inv_manual_key
+
+        st.session_state["_inv_provider"] = _inv_sel_provider
+        st.session_state["_inv_model"] = _inv_sel_model
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE — APP SETTINGS (UI-managed reference data — docs/plans/app-settings.md
@@ -37053,8 +37126,8 @@ elif page == "🧠 AI Insights":
     st.markdown("---")
 
     # ── Cadence tabs ───────────────────────────────────────────────────────────────────────────
-    _ai_tab_pos, _ai_tab_deb, _ai_tab_res, _ai_tab_score, _ai_tab_rt, _ai_tab_dlog, _ai_tab_ask = st.tabs(
-        ["🩺 Positions", "📅 Debriefs", "🏦 Research", "📊 Scorecard", "⚠️ Red Team", "⚔️ Debate Log", "💬 Ask"]
+    _ai_tab_pos, _ai_tab_deb, _ai_tab_res, _ai_tab_score, _ai_tab_rt, _ai_tab_dlog, _ai_tab_ask, _ai_tab_inv = st.tabs(
+        ["🩺 Positions", "📅 Debriefs", "🏦 Research", "📊 Scorecard", "⚠️ Red Team", "⚔️ Debate Log", "💬 Ask", "🔎 Investigator"]
     )
 
     with _ai_tab_pos:
@@ -39995,6 +40068,275 @@ elif page == "🧠 AI Insights":
 
             _qa_history.append(_qa_round)
             st.rerun()
+
+    with _ai_tab_inv:
+        # ── 🔎 Portfolio Investigator ─────────────────────────────────────────
+        # Multi-step, tool-composing LLM investigation over a FIXED,
+        # already-reviewed toolbox — a different KIND of tool from 💬 Ask
+        # (single-shot fixed-intent lookup), not a smarter version of it.
+        # Owner-only (see gate below) — unlike Ask, this tab is NOT visible to
+        # a read-only viewer. Read-only always: never influences a gate,
+        # score, or recommendation. See docs/plans/portfolio-investigator.md.
+        if db.is_readonly():
+            st.info("🔒 This tab is owner-only and isn't available in read-only viewer mode.")
+            st.stop()
+
+        from stock_analyzer import investigator as _inv
+        from stock_analyzer import ai_provider as _inv_aip
+
+        st.caption(
+            "Ask an open-ended question about your trading — this composes "
+            "existing, already-reviewed analysis functions to investigate it, "
+            "the way a research pass would, rather than looking up one fact. "
+            "Read-only: never changes a recommendation, a gate, or a trade."
+        )
+        st.caption(
+            "• \"Is my ~7-day median holding period mechanical or discretionary?\"\n\n"
+            "• \"How concentrated is my current portfolio by sector?\"\n\n"
+            "• \"How has my protective EXIT and TRIM alpha performed against SPY?\""
+        )
+
+        if st.button("🔄 Refresh data", key="_inv_refresh_data_btn"):
+            st.session_state.pop("_inv_data_bundle", None)
+            st.rerun()
+
+        _inv_history = st.session_state.setdefault("_inv_history", [])
+        if _inv_history:
+            _inv_clear_key = "_inv_clear_confirm"
+            if not st.session_state.get(_inv_clear_key):
+                if st.button("Clear conversation", key="_inv_clear_btn"):
+                    st.session_state[_inv_clear_key] = True
+                    st.rerun()
+            else:
+                st.warning("Clear this Investigator conversation?")
+                _inv_cc1, _inv_cc2 = st.columns(2)
+                with _inv_cc1:
+                    if st.button("Yes, clear", key="_inv_clear_yes", type="primary"):
+                        st.session_state.pop(_inv_clear_key, None)
+                        st.session_state["_inv_history"] = []
+                        st.rerun()
+                with _inv_cc2:
+                    if st.button("Cancel", key="_inv_clear_cancel"):
+                        st.session_state.pop(_inv_clear_key, None)
+                        st.rerun()
+
+        def _inv_build_data_bundle() -> dict:
+            """Built lazily, ONCE per session (or on an explicit 🔄 Refresh
+            data click), cached in st.session_state["_inv_data_bundle"] —
+            never re-fetched per question. A prior REPORT never feeds a new
+            plan (that's investigate()'s own history_questions contract,
+            question-text-only); this cache is raw FETCHED DATA only.
+            Any fetch failure degrades that ONE key to None (never a
+            fabricated empty container standing in for a failed fetch) — see
+            investigator.verify_fetch's contract."""
+            # _or_none variants, not the lenient loaders, for all three --
+            # a transient Supabase hiccup on trades/recommendations/exit_signals
+            # must show up as None (a real failure) to verify_fetch, never
+            # collapse into "genuinely zero rows" (the exact offline-sentinel-
+            # collapse class self_track_record.classify_sells' own docstring
+            # warns about for exit_signals_df specifically). st.session_state's
+            # own "trades_df" key is NOT reused here even though it's already
+            # loaded elsewhere this session -- app.py's own startup collapses a
+            # failed trades read to an empty-but-columned frame before caching
+            # it there (a soft "partial" outage that doesn't trip the F-243
+            # hard-stop), which would otherwise let this feature confidently
+            # report "no closed lots" on a read that actually failed.
+            _b_trades_df = db.load_trades_or_none()
+            _b_recs_df = db.load_recommendations_or_none(start_date=None, end_date=None)
+            _b_exit_signals_df = db.load_exit_signals_or_none()
+            _b_pdf = st.session_state.get("_port_df_enriched")
+
+            _b_held_tickers = []
+            if _b_pdf is not None and not _b_pdf.empty and "Ticker" in _b_pdf.columns:
+                _b_held_tickers = [str(t).upper() for t in _b_pdf["Ticker"].tolist()]
+
+            _b_current_prices = None
+            if _b_held_tickers:
+                try:
+                    _b_px = fetch_live_prices(_b_held_tickers)
+                    _b_current_prices = {
+                        t: float(d.get("price", 0))
+                        for t, d in (_b_px or {}).items()
+                        if d and d.get("price")
+                    } or None
+                except Exception:
+                    _b_current_prices = None
+
+            _b_spy_close_by_date = None
+            try:
+                _b_hist = fetch_spy("1y")
+                if _b_hist is not None and not _b_hist.empty and "Close" in _b_hist.columns:
+                    _b_spy_map = {}
+                    for _b_idx, _b_row in _b_hist.iterrows():
+                        _b_d = _b_idx.date() if hasattr(_b_idx, "date") else None
+                        try:
+                            _b_c = float(_b_row["Close"])
+                        except (TypeError, ValueError):
+                            _b_c = None
+                        if _b_d is not None and _b_c and _b_c > 0:
+                            _b_spy_map[_b_d] = _b_c
+                    _b_spy_close_by_date = _b_spy_map or None
+            except Exception:
+                _b_spy_close_by_date = None
+
+            return {
+                "trades_df": _b_trades_df,
+                "exit_signals_df": _b_exit_signals_df,
+                "recs_df": _b_recs_df,
+                "current_prices": _b_current_prices,
+                "spy_close_by_date": _b_spy_close_by_date,
+                "port_df": _b_pdf,
+            }
+
+        def _inv_trace_lines(trace: list) -> list:
+            lines = []
+            for _t_fn_id in (trace or []):
+                _t_entry = _inv.TOOLBOX.get(_t_fn_id)
+                _t_summary = _t_entry["summary"] if _t_entry else ""
+                lines.append(f"`{_t_fn_id}` — {_t_summary}" if _t_summary else f"`{_t_fn_id}`")
+            return lines
+
+        def _inv_render_round(idx: int, round_: dict) -> None:
+            with st.chat_message("user"):
+                st.markdown(round_["question"])
+            with st.chat_message("assistant"):
+                _r_result = round_.get("result")
+                if _r_result is None:
+                    _r_result = {}
+                _r_trace = _r_result.get("trace")
+                if _r_trace is None:
+                    _r_trace = []
+                with st.expander(f"How this was investigated ({len(_r_trace)} steps)", expanded=False):
+                    if _r_trace:
+                        for _r_line in _inv_trace_lines(_r_trace):
+                            st.markdown(f"- {_r_line}")
+                    else:
+                        st.caption("No steps were run.")
+
+                if _r_result.get("answered") is False:
+                    _r_status = _r_result.get("status")
+                    _r_reason = _r_result.get("reason") or "Couldn't answer that."
+                    if _r_status == "refused":
+                        # A refusal is the CORRECT, designed behavior here —
+                        # never treated as an error.
+                        st.info(_r_reason)
+                    else:
+                        st.warning(_r_reason)
+                elif _r_result.get("answered") is True:
+                    st.markdown(_r_result.get("report_text") or "")
+
+                    with st.expander("Functions & data used", expanded=False):
+                        for _r_fn_id in _r_trace:
+                            st.markdown(f"`{_r_fn_id}`")
+                        st.caption(
+                            "Same functions the live app's own pages call — "
+                            "this never re-derives a calculation."
+                        )
+
+                    _r_sync_key = f"_inv_sync_state_{idx}"
+                    _r_sync_state = st.session_state.setdefault(_r_sync_key, {})
+                    if not _r_sync_state.get("show_form") and not _r_sync_state.get("drafts"):
+                        if st.button("📝 Propose a docs/memory sync", key=f"_inv_sync_btn_{idx}"):
+                            _r_sync_state["show_form"] = True
+                            st.rerun()
+                    elif _r_sync_state.get("show_form") and not _r_sync_state.get("drafts"):
+                        _r_doc_target = st.text_input(
+                            "Doc target path (optional)",
+                            placeholder="e.g. docs/plans/your-plan.md",
+                            key=f"_inv_doc_target_{idx}",
+                        )
+                        _r_mem_target = st.text_input(
+                            "Memory file target name (optional)",
+                            placeholder="e.g. project_your_feature",
+                            key=f"_inv_mem_target_{idx}",
+                        )
+                        _r_gc1, _r_gc2 = st.columns(2)
+                        with _r_gc1:
+                            if st.button("Generate draft", key=f"_inv_gen_btn_{idx}"):
+                                _r_targets = []
+                                if _r_doc_target.strip():
+                                    _r_targets.append({"target": _r_doc_target.strip()})
+                                if _r_mem_target.strip():
+                                    _r_targets.append({"target": _r_mem_target.strip()})
+                                if _r_targets:
+                                    _r_sync_state["drafts"] = _inv.build_sync_draft(
+                                        round_["question"], _r_result.get("report_text") or "", _r_targets
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.warning("Enter at least one target before generating a draft.")
+                        with _r_gc2:
+                            if st.button("Cancel", key=f"_inv_form_cancel_btn_{idx}"):
+                                _r_sync_state["show_form"] = False
+                                st.rerun()
+                    elif _r_sync_state.get("drafts"):
+                        st.markdown("**📝 Draft sync — nothing saved anywhere yet**")
+                        for _d_idx, _d_draft in enumerate(_r_sync_state["drafts"]):
+                            st.caption(f"Target: `{_d_draft['target']}`")
+                            _d_ta_key = f"_inv_draft_text_{idx}_{_d_idx}"
+                            if _d_ta_key not in st.session_state:
+                                st.session_state[_d_ta_key] = _d_draft["draft_markdown"]
+                            st.text_area(
+                                "Draft (editable) — this is the exact text that "
+                                "would be copied, editable in place before you "
+                                "paste it into the repo yourself",
+                                key=_d_ta_key, height=180,
+                            )
+                            _d_current_text = st.session_state.get(_d_ta_key, _d_draft["draft_markdown"])
+                            _d_fname = _d_draft["target"].rsplit("/", 1)[-1].rsplit("\\", 1)[-1].strip() or "sync_draft"
+                            if not _d_fname.lower().endswith(".md"):
+                                _d_fname += ".md"
+                            st.download_button(
+                                "⬇ Download as .md", data=_d_current_text,
+                                file_name=_d_fname, mime="text/markdown",
+                                key=f"_inv_dl_btn_{idx}_{_d_idx}",
+                            )
+                        if st.button("✖ Discard draft", key=f"_inv_discard_btn_{idx}"):
+                            st.session_state.pop(_r_sync_key, None)
+                            st.rerun()
+                        st.caption(
+                            "Paste into the target file yourself — nothing here "
+                            "ever writes to the repo or memory directly."
+                        )
+
+        for _inv_i, _inv_round in enumerate(_inv_history):
+            _inv_render_round(_inv_i, _inv_round)
+
+        _inv_provider = st.session_state.get("_inv_provider")
+        _inv_model = st.session_state.get("_inv_model")
+        _inv_api_key = st.session_state.get(f"_inv_key_store_{_inv_provider}", "") if _inv_provider else ""
+        _inv_configured = bool(
+            _inv_provider and _inv_model
+            and (_inv_provider, _inv_model) in _inv.EVAL_PASSED_MODELS
+            and _inv_api_key
+        )
+
+        if not _inv_configured:
+            st.info(
+                "No eligible AI model is configured yet — open 🩺 System Trust "
+                "to choose a provider/model that has passed the required "
+                "refusal eval, and confirm its API key is resolved."
+            )
+        else:
+            def _inv_llm_fn(system, user, max_tokens, _p=_inv_provider, _m=_inv_model, _k=_inv_api_key):
+                return _inv_aip.call_llm(_p, _m, _k, system, user, max_tokens)
+
+            _inv_question = st.chat_input(
+                "Ask an open-ended question about your trading…", key="_inv_chat_input"
+            )
+            if _inv_question and _inv_question.strip():
+                if "_inv_data_bundle" not in st.session_state:
+                    with st.spinner("Loading your portfolio data…"):
+                        st.session_state["_inv_data_bundle"] = _inv_build_data_bundle()
+                _inv_bundle = st.session_state["_inv_data_bundle"]
+                _inv_hist_questions = [r["question"] for r in _inv_history]
+                with st.spinner("Investigating…"):
+                    _inv_result = _inv.investigate(
+                        _inv_question.strip(), _inv_bundle, _inv_llm_fn,
+                        history_questions=_inv_hist_questions,
+                    )
+                _inv_history.append({"question": _inv_question.strip(), "result": _inv_result})
+                st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 🎯 My Edge — Benchmark Mirror · Workflow ROI · Decision Quality

@@ -388,6 +388,15 @@ def test_build_plan_prompt_enumerates_every_toolbox_id():
         assert fn_id in prompt
 
 
+# ─── EVAL_PASSED_MODELS cross-module consistency ─────────────────────────────
+
+def test_every_eval_passed_model_exists_in_ai_provider_registry():
+    from stock_analyzer import ai_provider
+    for provider, model in inv.EVAL_PASSED_MODELS:
+        assert provider in ai_provider.AI_PROVIDERS, provider
+        assert model in ai_provider.AI_PROVIDERS[provider]["models"], (provider, model)
+
+
 def test_build_plan_prompt_history_carries_question_text_only_not_answers():
     prompt = inv.build_plan_prompt("and last week?", history_questions=["how did I do this month?"])
     assert "how did I do this month?" in prompt
