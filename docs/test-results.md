@@ -18,13 +18,21 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-09-15 (beta card repair: F-274, prerequisite + 3 phases)
+## 1. Latest run — 2026-09-18 (Portfolio Investigator: F-275 build + production fixes + sector_exposure toolbox growth)
+
+**5883 passed, 0 failed, 19 warnings** (`python -m pytest -q`, full suite, no marker filter: ~235-380s across several runs this session). Python (local `.venv`). Transcribed from the run, not recalled.
+
+**Coverage: 80%** (`pytest --cov=stock_analyzer --cov-report=term-missing -q`: 22238 statements, 4341 missed) — up from 79% at the 2026-09-02 baseline (19548 statements then).
+
+**+339 over the 5544 baseline (2026-09-15) below.** Not attributable to this session alone — see `docs/shipped-log.md` for the full per-commit history of everything shipped between 2026-09-15 and this run. This session's own contribution: `tests/test_investigator_eval.py` (+4, the `selected_fns` misclassification diagnostic), `tests/test_investigator.py` (+2, `EVAL_PASSED_MODELS` cross-module consistency; `sector_exposure`'s toolbox addition deliberately added zero new tests, matching this file's own established convention that individual `_adapt_*` functions are only covered by structural `TOOLBOX` sanity checks since the underlying reused function already has its own coverage), `tests/test_ai_provider.py` (+4: the `claude-opus-5` `ThinkingBlock` leading-non-text-block fix, the all-thinking/no-text-block diagnostic fix, the empty-text-block fall-through fix, and the `claude-opus-5` capable-tier registry entry). Also ships all 7 build chunks of F-275 itself (🔎 Portfolio Investigator) — full detail in `docs/requirements.md` F-275 and memory `project_portfolio_investigator`.
+
+## 1a. Previous run — 2026-09-15 (beta card repair: F-274, prerequisite + 3 phases)
 
 **5544 passed, 0 failed, 19 warnings** (`python -m pytest -q -m fast`: ~260-270s). Python (local `.venv`). Transcribed from the run after Phase 3, not recalled. No coverage run this pass (the full `--cov` command wasn't re-run this session — see the how-to-update note above; the next full-sweep session should capture it).
 
 **+563 over the 4981 baseline (2026-09-02) below.** Not attributable to this session alone — F-273 (Recommendation-outcomes measurement, 2026-09-15 earlier the same day) and other work shipped between 2026-09-02 and this run also contributed; see `docs/shipped-log.md` for the full per-commit history. This session's own new/changed tests: `tests/test_stress_test.py` (+1, the `_SECTOR_SHOCKS` coverage guard), `tests/test_beta_repair.py` (new file, 58 tests across all 3 phases — lever arithmetic, leverage four-state disclosure, candidate ranking), `tests/test_risk_advisor.py` (+18, same-day-BUY exclusion + `beta_levers` payload), `tests/test_portfolio.py` (+3, `beta_diversifying_sectors`).
 
-## 1a. Previous run — 2026-09-02 (doc-integrity full sweep session: outage-gate + correlation-caption fixes, no test-suite-affecting code changes beyond those)
+## 1b. Previous run — 2026-09-02 (doc-integrity full sweep session: outage-gate + correlation-caption fixes, no test-suite-affecting code changes beyond those)
 
 **4981 passed, 0 failed, 16 warnings** (`python -m pytest -q`: 259-310s). Python (local `.venv`). Transcribed from the run, not recalled.
 

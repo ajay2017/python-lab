@@ -3000,7 +3000,12 @@ compute/collapse/headline trio), `recalculate_holdings` (`db.recalculate_from_tr
 named recommendation by ticker+date, only the aggregate acted-vs-skipped track record),
 `ticker_sectors` (static `portfolio.TICKER_SECTORS` lookup, no fetch), `live_prices`/
 `spy_history` (trivial passthroughs — the actual fetch already happened upstream in the app's
-own Fetch stage). Each entry carries a `summary` (shown to the plan LLM) and a per-entry
+own Fetch stage), `sector_exposure` (`portfolio_qa.sector_composition`, itself a thin wrapper
+around `portfolio.sector_exposure` — dollar-weighted sector concentration, added 2026-09-18
+after a real production question exposed that no other toolbox function surfaces a per-position
+market value; more complete than `ticker_sectors`' bare lookup since `port_df`'s own `Sector`
+column already went through the live app's full curated-map → `.info` → cache → "Other"
+resolution chain). Each entry carries a `summary` (shown to the plan LLM) and a per-entry
 `cannot` list of out-of-scope example phrasings, kept per-function rather than one global list
 since each function's blind spots are specific to what it measures.
 `forward_alpha_at_horizon` was built then deliberately removed before ship — see F-275.
