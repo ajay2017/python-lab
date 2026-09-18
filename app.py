@@ -40207,7 +40207,8 @@ elif page == "🧠 AI Insights":
                 _r_trace = _r_result.get("trace")
                 if _r_trace is None:
                     _r_trace = []
-                with st.expander(f"How this was investigated ({len(_r_trace)} steps)", expanded=False):
+                _r_n_steps = len(_r_trace)
+                with st.expander(f"How this was investigated ({_r_n_steps} step{'' if _r_n_steps == 1 else 's'})", expanded=False):
                     if _r_trace:
                         for _r_line in _inv_trace_lines(_r_trace):
                             st.markdown(f"- {_r_line}")

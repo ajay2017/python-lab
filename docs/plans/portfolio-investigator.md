@@ -1,5 +1,24 @@
 # 🔎 Portfolio Investigator — Design Plan
 
+**Status update 2026-09-18: PRODUCTION-VERIFIED, two real live bugs found and fixed post-ship.**
+The refusal eval (chunk 5) only ever exercised the PLAN stage against a real API — the
+REPORT-synthesis stage had zero live-model test coverage until the owner tried a real question in
+production. First attempt (`claude-opus-5`, `INVESTIGATOR_MAX_TOKENS_REPORT`=1000) silently
+returned no report at all: a reasoning-capable model can spend the whole token budget on invisible
+thinking before emitting text, and the API returns a normal (non-exception) response in that case,
+so even the "Details:" diagnostic caption showed nothing. Fixed by bumping the budget to 4000
+(commit `4249a50`) and hardening `call_llm` to also catch an empty/whitespace-only text block, not
+just a completely absent one. That fix immediately surfaced a SECOND real failure: the larger
+budget let the model generate a genuinely longer response, which now exceeded `ai_provider.
+call_llm`'s fixed 30s timeout — a real `anthropic.APITimeoutError`. Fixed with a new, Investigator-
+specific `INVESTIGATOR_LLM_TIMEOUT_SECONDS`=90 constant (commit `705b344`), leaving `call_llm`'s
+own shared default untouched for any future caller. **First real end-to-end success, same day:**
+"How has my protective EXIT and TRIM alpha performed against SPY?" on `claude-sonnet-4-6` — a
+correct 1-step plan, a real per-signal table, honest handling of not-yet-scoreable signals, and a
+mandatory Caveats section, all rendering exactly per the mockup. Full detail + the third
+non-bug ("no eligible model configured" after every redeploy is session-state cold start, not a
+regression) in memory `project_portfolio_investigator`.
+
 **Status: FULLY SHIPPED 2026-09-18 — all 7 chunks complete.** Chunk 6 (`app.py` — the 8th
 "🔎 Investigator" tab on 🧠 AI Insights, plus the provider/model config section on 🩺 System
 Trust) built by `implementer` against a fully-researched, line-anchored spec, then the mandatory
