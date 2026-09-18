@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<!--
+  MOCKUP — 🔎 Portfolio Investigator (new 8th tab on 🧠 AI Insights, next to 💬 Ask)
+  Status: PRE-APPROVAL. Static HTML only, no code written yet.
+  See docs/plans/portfolio-investigator.md for the full design writeup.
+  Content below reuses REAL numbers from the 2026-09-17 session as a realistic example of
+  what a report looks like — this is a UI mockup, not a live render; nothing here is computed.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DRISHTA — 🔎 Portfolio Investigator mockup</title>
+<style>
+  :root{
+    --bg:#0e1117; --card:#111827; --line:#374151; --line-soft:#1f2937;
+    --txt:#f9fafb; --dim:#9ca3af; --mid:#d1d5db;
+    --grn:#22c55e; --grn-d:#052e16; --grn-mid:#16a34a;
+    --red:#ef4444; --red-d:#450a0a;
+    --amb:#f59e0b; --amb-d:#422006;
+    --blu:#60a5fa; --blu-d:#0c1e3a; --blu-mid:#2563eb;
+    --pur:#a78bfa; --pur-d:#2e1065;
+    --teal:#2dd4bf; --teal-d:#042f2e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);padding:28px 32px 80px;
+       font-family:"Source Sans Pro",-apple-system,Segoe UI,Roboto,sans-serif;
+       font-size:15px;line-height:1.5}
+  .wrap{max-width:1100px;margin:0 auto}
+
+  .mocknote{background:#1e1b4b;border-left:4px solid #818cf8;border-radius:8px;
+       padding:10px 14px;margin-bottom:24px;color:#c7d2fe;font-size:.86em}
+  .mocknote strong{color:#e0e7ff}
+
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       padding:16px 18px;margin-bottom:14px}
+  .panel-title{font-weight:700;font-size:.88em;color:var(--dim);text-transform:uppercase;
+       letter-spacing:.07em;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+
+  .banner{border-radius:8px;padding:9px 13px;margin-bottom:12px;font-size:.87em;
+       display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .banner-blu{background:var(--blu-d);border:1px solid #1e3a8a;color:#93c5fd}
+  .banner-amb{background:var(--amb-d);border:1px solid #78350f;color:#fde68a}
+  .banner-grn{background:var(--grn-d);border:1px solid #14532d;color:#86efac}
+  .banner-note{background:#1f2937;border:1px solid var(--line);color:var(--dim)}
+  .banner-pur{background:var(--pur-d);border:1px solid #6d28d9;color:#c4b5fd}
+
+  table{width:100%;border-collapse:collapse;font-size:.88em}
+  thead{background:#1f2937;border-bottom:1px solid var(--line)}
+  th{padding:9px 12px;color:var(--dim);font-size:.72em;font-weight:700;
+       letter-spacing:.07em;text-transform:uppercase;text-align:left}
+  td{padding:10px 12px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  .tbl-wrap{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       overflow:hidden;margin-bottom:10px}
+
+  .btn{padding:6px 14px;border-radius:7px;font-size:.84em;font-weight:600;
+       border:1px solid;cursor:pointer;white-space:nowrap;display:inline-block}
+  .btn-pri{background:#1d4ed8;color:#fff;border-color:#1d4ed8}
+  .btn-sec{background:transparent;color:var(--mid);border-color:var(--line)}
+  .btn-grn{background:var(--grn-d);color:#86efac;border-color:var(--grn-mid)}
+  .btn-sm{padding:4px 10px;font-size:.78em}
+  .btn-dis{opacity:.4;cursor:default}
+
+  .pos{color:var(--grn)} .neg{color:var(--red)} .neu{color:var(--mid)}
+  .divider{border:none;border-top:1px solid var(--line);margin:26px 0}
+
+  /* ── AI Insights tab bar ─────────────────────────────────── */
+  .tabbar{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:22px;
+       overflow-x:auto}
+  .tab{padding:10px 16px;font-size:.88em;color:var(--dim);white-space:nowrap;
+       border-bottom:2px solid transparent;cursor:pointer}
+  .tab.active{color:var(--txt);border-bottom-color:var(--blu-mid);font-weight:600}
+  .tab.new{position:relative}
+  .tab.new::after{content:"NEW";position:absolute;top:2px;right:-2px;background:var(--pur);
+       color:#fff;font-size:.55em;font-weight:800;padding:1px 4px;border-radius:4px}
+
+  /* ── example-question chips (matches Ask's caption style) ── */
+  .ex-caption{color:var(--dim);font-size:.86em;margin-bottom:16px;line-height:1.7}
+  .ex-caption code{color:var(--mid);background:#1a1f2b;padding:1px 5px;border-radius:4px;
+       font-size:.94em}
+
+  /* ── chat bubbles ────────────────────────────────────────── */
+  .chat-user{display:flex;gap:10px;margin-bottom:16px;align-items:flex-start}
+  .chat-avatar{width:30px;height:30px;border-radius:50%;flex-shrink:0;
+       display:flex;align-items:center;justify-content:center;font-size:.9em}
+  .chat-avatar.user{background:#374151}
+  .chat-avatar.ai{background:var(--pur-d);border:1px solid #6d28d9}
+  .chat-bubble{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       padding:12px 15px;flex:1}
+
+  /* ── multi-step trace ────────────────────────────────────── */
+  .trace{background:#0a0f1a;border:1px solid var(--line-soft);border-radius:9px;
+       padding:4px 14px;margin:10px 0 16px}
+  .trace-step{display:flex;align-items:center;gap:10px;padding:9px 0;
+       border-bottom:1px solid var(--line-soft);font-size:.86em}
+  .trace-step:last-child{border-bottom:none}
+  .trace-icon{width:20px;height:20px;border-radius:50%;flex-shrink:0;
+       display:flex;align-items:center;justify-content:center;font-size:.7em;font-weight:800}
+  .trace-icon.done{background:var(--grn-d);color:var(--grn);border:1px solid var(--grn-mid)}
+  .trace-label{font-weight:700;color:var(--mid);min-width:70px}
+  .trace-detail{color:var(--dim);flex:1}
+  .trace-detail code{color:#93c5fd;background:#0c1e3a;padding:0 4px;border-radius:3px;
+       font-size:.92em}
+
+  /* ── caveats block (mandatory shape) ────────────────────── */
+  .caveats{background:var(--amb-d);border:1px solid #78350f;border-radius:8px;
+       padding:12px 14px;margin:14px 0;font-size:.86em;color:#fde68a}
+  .caveats-title{font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+  .caveats ul{margin:4px 0 0 18px;color:#fcd34d}
+  .caveats li{margin-bottom:3px}
+
+  /* ── sync action row ─────────────────────────────────────── */
+  .sync-row{display:flex;align-items:center;gap:10px;padding-top:12px;
+       border-top:1px solid var(--line);margin-top:14px;flex-wrap:wrap}
+  .sync-note{color:var(--dim);font-size:.8em}
+
+  /* ── sync draft-preview state (Option A — shown expanded below) ── */
+  .draft-panel{background:#0a0f1a;border:1px solid var(--pur);border-radius:9px;
+       padding:14px 16px;margin-top:14px}
+  .draft-panel-title{display:flex;align-items:center;gap:8px;font-weight:700;
+       font-size:.86em;color:var(--pur);margin-bottom:10px}
+  .draft-target{color:var(--dim);font-size:.78em;margin-bottom:4px}
+  .draft-target code{color:#93c5fd}
+  .draft-box{background:#161b26;border:1px solid #2d3f5a;border-radius:7px;
+       padding:10px 12px;font-size:.86em;color:var(--txt);margin-bottom:14px;
+       font-family:"Source Sans Pro",sans-serif;line-height:1.55;white-space:pre-wrap}
+  .draft-box:focus-within{border-color:var(--pur)}
+  .draft-edit-hint{color:#6b7280;font-size:.72em;font-style:italic;margin-top:-10px;
+       margin-bottom:14px}
+  .draft-actions{display:flex;gap:10px;align-items:center}
+
+  .expander{background:#0a0f1a;border:1px solid var(--line-soft);border-radius:8px;
+       margin-top:10px;overflow:hidden}
+  .expander-head{padding:9px 13px;font-size:.84em;color:var(--dim);cursor:pointer;
+       display:flex;align-items:center;gap:6px}
+  .expander-body{padding:0 13px 13px;font-size:.85em;color:var(--mid)}
+  .fn-chip{display:inline-block;background:#172554;color:#93c5fd;border:1px solid #1d4ed8;
+       border-radius:5px;padding:2px 8px;font-size:.8em;font-family:monospace;
+       margin:2px 4px 2px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="mocknote">
+  <strong>PRE-APPROVAL MOCKUP</strong> — new 🔎 Investigator tab on 🧠 AI Insights, placed
+  immediately next to 💬 Ask. Shows: tab placement, the multi-step trace (plan → fetch →
+  verify → compute → report), the mandatory caveats block, and the gated docs/memory sync
+  action. Content reuses real 2026-09-17 findings as a realistic example — nothing here is
+  live-computed. See <code>docs/plans/portfolio-investigator.md</code>.
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     AI INSIGHTS TAB BAR
+══════════════════════════════════════════════════ -->
+<div class="tabbar">
+  <div class="tab">🩺 Positions</div>
+  <div class="tab">📅 Debriefs</div>
+  <div class="tab">🏦 Research</div>
+  <div class="tab">📊 Scorecard</div>
+  <div class="tab">⚠️ Red Team</div>
+  <div class="tab">⚔️ Debate Log</div>
+  <div class="tab">💬 Ask</div>
+  <div class="tab active new">🔎 Investigator</div>
+</div>
+
+<div class="ex-caption">
+  Ask an open-ended question about your trading — this composes existing, already-reviewed
+  analysis functions to investigate it, the way a research pass would, rather than looking up
+  one fact. Read-only: never changes a recommendation, a gate, or a trade. Three kinds of
+  questions work today:<br><br>
+  • <code>"Is my ~7-day median holding period mechanical or discretionary?"</code><br>
+  • <code>"Are the EXIT/TRIM signals actually miscalibrated, or is it a few names?"</code><br>
+  • <code>"Does [cluster/sector] earn the risk it's carrying?"</code>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     USER QUESTION
+══════════════════════════════════════════════════ -->
+<div class="chat-user">
+  <div class="chat-avatar user">🧑</div>
+  <div class="chat-bubble">Does the AI/growth cluster's return justify how much risk it's carrying?</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     ASSISTANT — MULTI-STEP TRACE (collapsed by default in real UI; shown open here)
+══════════════════════════════════════════════════ -->
+<div class="chat-user">
+  <div class="chat-avatar ai">🔎</div>
+  <div class="chat-bubble" style="flex:1">
+
+    <div class="expander" style="margin-top:0">
+      <div class="expander-head">▾ How this was investigated (5 steps)</div>
+      <div class="expander-body">
+        <div class="trace">
+          <div class="trace-step">
+            <div class="trace-icon done">✓</div>
+            <div class="trace-label">1&nbsp;Plan</div>
+            <div class="trace-detail">Needs realized + unrealized P&amp;L by ticker group →
+              <code>db.recalculate_from_trades</code>, <code>fetch_live_prices</code></div>
+          </div>
+          <div class="trace-step">
+            <div class="trace-icon done">✓</div>
+            <div class="trace-label">2&nbsp;Fetch</div>
+            <div class="trace-detail">268 trade rows, live prices for 19 held tickers</div>
+          </div>
+          <div class="trace-step">
+            <div class="trace-icon done">✓</div>
+            <div class="trace-label">3&nbsp;Verify</div>
+            <div class="trace-detail">268/268 rows confirmed, 0 replay warnings (no over-sells,
+              no missing-BUY gaps)</div>
+          </div>
+          <div class="trace-step">
+            <div class="trace-icon done">✓</div>
+            <div class="trace-label">4&nbsp;Compute</div>
+            <div class="trace-detail">Grouped realized+unrealized P&amp;L: cluster vs. rest of book</div>
+          </div>
+          <div class="trace-step">
+            <div class="trace-icon done">✓</div>
+            <div class="trace-label">5&nbsp;Report</div>
+            <div class="trace-detail">Below</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider" style="margin:16px 0"></div>
+
+    <p style="margin-bottom:12px"><strong>No — the cluster is carrying more risk than it's returning.</strong>
+    TEAM/NOW/PLTR/CRWD/APP hold <strong>16.1%</strong> of your current book value but produced only
+    <strong>~7.8%</strong> of total combined P&amp;L.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th></th><th>Realized</th><th>Unrealized (held)</th><th>Combined</th></tr></thead>
+        <tbody>
+          <tr><td>Growth cluster</td><td class="pos">+$5.80</td><td class="pos">+$258.80</td><td class="pos">+$264.60</td></tr>
+          <tr><td>Rest of book</td><td class="pos">+$3,138.66</td><td class="pos">+$6.92</td><td class="pos">+$3,145.58</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin:12px 0 6px;color:var(--mid);font-size:.92em">Not uniform, though — this
+    is bimodal:</p>
+    <ul style="margin-left:18px;color:var(--mid);font-size:.92em;line-height:1.7">
+      <li><strong style="color:var(--grn)">CRWD earned its volatility</strong> — +$155.60 realized, +$271.80 unrealized (~$427 combined)</li>
+      <li><strong style="color:var(--red)">TEAM and NOW were realized dollar losses</strong> (−$242.20, −$32.80) — the app's caution on both was dollar-correct, even though it scored badly on the alpha-vs-SPY metric</li>
+      <li>PLTR / APP: close to flat, neither the problem nor the fix</li>
+    </ul>
+
+    <div class="caveats">
+      <div class="caveats-title">⚠️ Caveats</div>
+      <ul>
+        <li>Unrealized figures are a point-in-time mark (live prices at the moment this ran) — will drift</li>
+        <li>One account, ~3.75-month window — not proof this pattern is permanent</li>
+        <li>This is a personal position-sizing conversation, not a software recommendation — no gate or threshold is implicated</li>
+      </ul>
+    </div>
+
+    <div class="expander">
+      <div class="expander-head">▾ Functions &amp; data used (traceability)</div>
+      <div class="expander-body">
+        <span class="fn-chip">db.recalculate_from_trades</span>
+        <span class="fn-chip">stock_analyzer.data.fetch_live_prices</span>
+        <span class="fn-chip">portfolio.TICKER_SECTORS</span>
+        <div style="margin-top:8px;color:var(--dim);font-size:.82em">Same functions the live
+          app's own pages call — this never re-derives an alpha or P&amp;L calculation.</div>
+      </div>
+    </div>
+
+    <div class="sync-row">
+      <button class="btn btn-sec btn-sm btn-dis">📝 Propose a docs/memory sync</button>
+      <span class="sync-note">↓ shown below in its CLICKED state (Option A — draft, then approve)</span>
+    </div>
+
+    <div class="draft-panel">
+      <div class="draft-panel-title">📝 Draft sync — nothing written yet</div>
+
+      <div class="draft-target">Target 1 of 2 — <code>docs/plans/investor-maturity-roadmap.md</code> §4 A1</div>
+      <div class="draft-box" contenteditable="true">**The completing piece — 2026-09-17:** growth cluster (TEAM/NOW/PLTR/CRWD/APP) carries 16.1% of held book value but produced only ~7.8% of total combined P&amp;L (+$264.60 of +$3,410.18). Bimodal: CRWD earned its volatility (~$427 combined); TEAM/NOW were realized dollar losses, so the app's caution on them was dollar-correct despite scoring badly on alpha-vs-SPY.</div>
+
+      <div class="draft-target">Target 2 of 2 — memory <code>project_investor_maturity_roadmap</code></div>
+      <div class="draft-box" contenteditable="true">Investigator run 2026-09-17: concentration check on the AI/growth cluster confirms disproportionate risk (16.1% of book, 7.8% of P&amp;L) but bimodal — CRWD justified, TEAM/NOW did not, consistent with the earlier regime-confound finding.</div>
+
+      <div class="draft-edit-hint">✎ Click into either box to edit before writing — this is the exact text that would be saved, editable in place, not a description of it.</div>
+
+      <div class="draft-actions">
+        <button class="btn btn-grn btn-sm">✅ Write this</button>
+        <button class="btn btn-sec btn-sm">✖ Cancel — discard draft</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════════════════
+     EXAMPLE: A QUESTION THE TOOLBOX CAN'T ANSWER YET
+══════════════════════════════════════════════════ -->
+<div class="chat-user">
+  <div class="chat-avatar user">🧑</div>
+  <div class="chat-bubble">Would a tighter ATR stop have saved me money on my losing trades this year?</div>
+</div>
+<div class="chat-user">
+  <div class="chat-avatar ai">🔎</div>
+  <div class="chat-bubble">
+    <div class="banner banner-amb">
+      ⚠️ I don't have a reviewed function for simulating a hypothetical stop width against
+      historical fills yet — <code>scripts/exit_ladder_replay.py</code> answers a related but
+      different question (would the EXISTING stop/ladder have fired earlier). Answering this
+      one safely would need a new toolbox function, reviewed the same way every other one was,
+      not something I should improvise live against your trade history.
+    </div>
+    <div class="sync-note" style="margin-top:6px">This is the honest-refusal shape — the tool
+      says what it can't do rather than approximating an answer from an unreviewed method.</div>
+  </div>
+</div>
+
+<div class="divider"></div>
+<div class="banner banner-grn">
+  ✅ Resolved 2026-09-17: (1) trace visibility and (3) session shape — accepted as shown.
+  (2) sync action — <strong>Option A, draft-then-approve</strong> (the purple panel above):
+  the exact text is shown editable BEFORE anything writes, never a blind confirm on a
+  description. Matches this project's own zero-hallucination doc-integrity standard —
+  a future session trusts these files without re-verifying, so the human sees and can correct
+  the exact wording before it becomes ground truth, not after.
+</div>
+
+</div>
+</body>
+</html>
