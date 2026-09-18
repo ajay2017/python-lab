@@ -32,6 +32,7 @@ AI_PROVIDERS = {
         "models": {
             "claude-haiku-4-5-20251001": {"label": "Haiku 4.5 — fast & cheap", "tier": "fast"},
             "claude-sonnet-4-6":         {"label": "Sonnet 4.6 — more capable", "tier": "capable"},
+            "claude-opus-5":             {"label": "Opus 5 — most capable", "tier": "capable"},
         },
         "secrets_path": ("anthropic", "api_key"),
         "env_var":      "ANTHROPIC_API_KEY",

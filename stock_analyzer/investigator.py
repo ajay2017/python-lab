@@ -285,6 +285,10 @@ TOOLBOX: dict = {
         "cannot": [
             "cannot score an acted SELL's alpha (unbenchmarkable holding period by design)",
             "cannot answer about a ticker with no recommendation ever surfaced for it",
+            "cannot isolate the outcome of ONE single named recommendation by "
+            "ticker and date (e.g. \"AAPL's alpha after the March 3rd BUY\") "
+            "-- only returns the full acted-vs-skipped track record across "
+            "every recommendation, never a per-instance result",
         ],
     },
     # forward_alpha_at_horizon is DELIBERATELY not registered for v1 — see
@@ -381,6 +385,13 @@ def build_plan_prompt(question: str, history_questions: list | None = None) -> s
         "- Use shape 2 whenever no combination of the toolbox functions "
         "above actually answers the question — do not force a poor-fit "
         "function into shape 1 just to produce an answer.\n"
+        "- A question asking for an open-ended overall verdict with no "
+        "named analytical angle (e.g. \"is my portfolio good?\", \"am I "
+        "doing well as an investor?\") is NOT answered by chaining together "
+        "several functions that each cover a different slice — that produces "
+        "a pile of facts, not an answer to the question asked. Use shape 2 "
+        "and ask the investor to name a specific angle (a metric, a time "
+        "period, a comparison) instead of guessing one.\n"
         "- Never invent a fn_id that isn't in the list above.\n"
         "- Output the JSON object and NOTHING else — no markdown code fence, "
         "no explanation before or after it."

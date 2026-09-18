@@ -159,8 +159,9 @@ def test_every_model_entry_has_a_valid_tier():
 
 def test_capable_models_filters_to_capable_tier_only():
     result = capable_models("Claude (Anthropic)")
-    assert set(result.keys()) == {"claude-sonnet-4-6"}
+    assert set(result.keys()) == {"claude-sonnet-4-6", "claude-opus-5"}
     assert result["claude-sonnet-4-6"]["tier"] == "capable"
+    assert result["claude-opus-5"]["tier"] == "capable"
 
 
 def test_capable_models_every_provider_has_at_least_one_capable_entry():

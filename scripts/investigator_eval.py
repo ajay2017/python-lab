@@ -409,7 +409,8 @@ def resolve_targets(provider: str | None, model: str | None) -> list[tuple[str, 
     return [(provider, model)]
 
 
-def score_outcome(entry: dict, status: str, reason: str, api_error: str | None = None) -> dict:
+def score_outcome(entry: dict, status: str, reason: str, api_error: str | None = None,
+                   plan: dict | None = None) -> dict:
     """Pure classification of ONE question's plan-validation outcome against
     its frozen `expected` label. Never calls an LLM or touches I/O -- this is
     the function tests exercise directly with canned (status, reason) pairs.
@@ -439,6 +440,22 @@ def score_outcome(entry: dict, status: str, reason: str, api_error: str | None =
     else:
         raise ValueError(f"unknown expected label {expected!r} on question: {entry['question']!r}")
 
+    # Captured for diagnosis only when a plan was actually produced (status
+    # "ok"/"infeasible" always have plan["steps"]; a "refuse" plan may or may
+    # not, depending on whether the model named a closest-but-rejected
+    # function) -- this is what lets a human tell "hallucinated/wrong-fit
+    # function selected" apart from "correctly saw nothing fit" when reading
+    # a misclassification, which the reason string alone doesn't show for an
+    # "ok" status (validate_plan returns "" for reason on "ok").
+    selected_fns = None
+    if isinstance(plan, dict):
+        steps = plan.get("steps") or []
+        if isinstance(steps, list):
+            selected_fns = [
+                {"fn_id": s.get("fn_id"), "why": s.get("why")}
+                for s in steps if isinstance(s, dict)
+            ]
+
     return {
         "question": entry["question"],
         "expected": expected,
@@ -448,6 +465,7 @@ def score_outcome(entry: dict, status: str, reason: str, api_error: str | None =
         "reason": reason,
         "api_error": api_error,
         "note": entry.get("note", ""),
+        "selected_fns": selected_fns,
     }
 
 
@@ -477,7 +495,7 @@ def run_question_against_model(entry: dict, provider: str, model: str, api_key: 
 
     plan = investigator.parse_plan(raw)
     status, reason = investigator.validate_plan(plan, investigator.AVAILABLE_INPUT_VOCAB)
-    return score_outcome(entry, status, reason, api_error)
+    return score_outcome(entry, status, reason, api_error, plan=plan)
 
 
 def score_model(results: list[dict]) -> dict:
@@ -518,6 +536,9 @@ def print_model_report(provider: str, model: str, scores: dict) -> None:
         print(f"  - [expected={r['expected']} -> got={r['status']}] {r['question']}")
         if r["status"] == "refuse":
             print(f"      reason given: {r['reason']}")
+        if r.get("selected_fns"):
+            for s in r["selected_fns"]:
+                print(f"      selected: {s['fn_id']}  (why: {s['why']})")
         if r["api_error"]:
             print(f"      (api call error: {r['api_error']})")
 

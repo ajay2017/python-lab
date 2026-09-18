@@ -78,6 +78,33 @@ def test_score_outcome_unknown_expected_label_raises():
         ev.score_outcome(entry, "ok", "")
 
 
+def test_score_outcome_no_plan_leaves_selected_fns_none():
+    entry = {"question": "q", "expected": "refuse", "note": "x"}
+    r = ev.score_outcome(entry, "refuse", "not in toolbox")
+    assert r["selected_fns"] is None
+
+
+def test_score_outcome_plan_with_steps_captures_fn_id_and_why():
+    entry = {"question": "sector concentration?", "expected": "answer", "note": "x"}
+    plan = {"steps": [{"fn_id": "sector_exposure", "why": "asked about sector concentration"}]}
+    r = ev.score_outcome(entry, "ok", "", plan=plan)
+    assert r["selected_fns"] == [{"fn_id": "sector_exposure", "why": "asked about sector concentration"}]
+
+
+def test_score_outcome_plan_with_no_steps_key_yields_empty_list():
+    entry = {"question": "q", "expected": "refuse", "note": "x"}
+    r = ev.score_outcome(entry, "refuse", "not in toolbox", plan={})
+    assert r["selected_fns"] == []
+
+
+def test_score_outcome_plan_not_a_dict_leaves_selected_fns_none():
+    """parse_plan can return None on a malformed/unparseable model response --
+    score_outcome must not crash trying to read .get off it."""
+    entry = {"question": "q", "expected": "refuse", "note": "x"}
+    r = ev.score_outcome(entry, "refuse", "no valid plan was produced", plan=None)
+    assert r["selected_fns"] is None
+
+
 # ─── score_model ─────────────────────────────────────────────────────────────
 
 def test_score_model_perfect_score():

@@ -1,5 +1,11 @@
 # 🔎 Portfolio Investigator — Design Plan
 
+**Status update 2026-09-18: chunks 1-5 of 7 SHIPPED. `claude-sonnet-4-6` has a recorded
+refusal-eval PASS (34/34, see chunk 5 below) — the first, and so far only, enabled candidate
+for chunk 6's model selector. Chunk 6 (`app.py` tab wiring) and chunk 7 (docs sync) are the
+only pieces left.** Older status line below is superseded except for the mockup/planner
+history it still accurately describes.
+
 **Status: MOCKUP-APPROVED, HANDED TO `planner` 2026-09-18.** Seven rounds of mockup
 iteration resolved every placement/UX/safety scope decision below (fixed toolbox, sync flow,
 owner-only gating, LLM provider flexibility, offline-failure discipline, relationship to the
@@ -380,20 +386,34 @@ review) buying nothing v1 needs.
    `_GATE_FILES` member, mandatory Opus review citation on this commit.
 4. Prompts + `investigate()` orchestrator (call cap, fail-visible offline handling,
    `build_sync_draft`).
-5. **Refusal eval — HARNESS BUILT 2026-09-18, NOT YET RUN FOR REAL.**
+5. **Refusal eval — `claude-sonnet-4-6` RECORDED PASS, 2026-09-18.**
    `scripts/investigator_eval.py`: a frozen, labeled 34-question set (21 refuse / 13 answer,
    drawn from the ratified toolbox's own `cannot` lists plus close phrasings of the three real
    2026-09-17 investigations), a `main()` that runs ONLY the plan step per `(provider, model)`
    pair (cheap — no Supabase/live-price credentials needed), scores refusal/answer recall, and
-   prints every individual misclassification, not just an aggregate. 29 tests, all against a
-   fake LLM, zero network dependency — the harness's own LOGIC is verified. **No live LLM
-   credentials exist in the build environment this was built in, so no real per-model result
-   has been produced or recorded anywhere in this doc.** Ship gate unchanged: chunk 6 cannot
-   enable a model without a recorded real pass here. **To actually run it:**
-   `ANTHROPIC_API_KEY=... python scripts/investigator_eval.py --provider "Claude (Anthropic)"
-   --model claude-sonnet-4-6` (or omit `--provider`/`--model` to sweep every model whose key is
-   set in the shell) — needs to happen on a machine/session with real provider credentials
-   before chunk 6's tab can offer any model.
+   prints every individual misclassification, not just an aggregate. 33 tests (29 original +
+   4 for the `selected_fns` diagnostic below), all against a fake LLM, zero network dependency.
+
+   **First real run** (owner's machine, real `ANTHROPIC_API_KEY`) against `claude-sonnet-4-6`:
+   18/21 refusal, 13/13 answer — 3 misclassifications, all `expected=refuse -> got=ok`. Added a
+   `score_outcome(..., plan=plan)` diagnostic that captures which `fn_id`(s) the model actually
+   selected and why, specifically so a misclassification is legible rather than just a wrong/
+   right count. That surfaced two distinct, genuine toolbox/prompt gaps, not eval noise:
+   (a) *"AAPL's alpha after the March 3rd BUY recommendation"* — the model correctly identified
+   `rec_outcomes` as relevant but had no way to know it only returns the aggregate acted-vs-
+   skipped track record, never one named ticker+date instance; fixed by adding that exact
+   limitation to `rec_outcomes`'s own `cannot` list. (b) *"Is my portfolio good?"* / *"Am I
+   doing well as an investor?"* — the model chained 4-6 unrelated functions together rather than
+   refusing an unscoped question with no named analytical angle; fixed with a new explicit rule
+   in `build_plan_prompt`'s Rules section (a pile of facts from different functions is not an
+   answer to a question that never named what it wanted measured).
+
+   **Second real run, same model, same machine, after both fixes: 21/21 refusal, 13/13
+   answer — 34/34, no misclassifications. Recorded PASS for `claude-sonnet-4-6`.** No other
+   candidate model has been run yet — each remains gated on its own recorded pass before chunk
+   6 can list it as enabled. To run another: `ANTHROPIC_API_KEY=... python
+   scripts/investigator_eval.py --provider "Claude (Anthropic)" --model <id>` (or omit
+   `--provider`/`--model` to sweep every model whose key is set in the shell).
 6. `app.py` wiring — 8th tab, owner gate, chat shell, trace expander, caveats block, the
    copy/download draft panel (not a write), System Trust config section. **Blocked on chunk
    5's real eval results** for which models the UI is allowed to list as enabled — the wiring
