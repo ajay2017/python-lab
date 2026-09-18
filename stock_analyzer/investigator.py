@@ -233,6 +233,31 @@ def _adapt_ticker_sectors(data_bundle: dict) -> dict:
     return {"ticker_sectors": dict(TICKER_SECTORS)}
 
 
+def _adapt_sector_exposure(data_bundle: dict) -> dict:
+    """Dollar-weighted sector concentration for currently-held positions --
+    added 2026-09-18 after a real live investigation ("how concentrated is my
+    portfolio by sector?") could only answer by POSITION COUNT, because no
+    toolbox function surfaced a per-position market value or weight
+    (recalculate_from_trades's holdings_df is deliberately just
+    [Ticker, Shares, Avg Cost ($)] -- market value/weight is out of scope for
+    what that function exists to fix). Reuses portfolio_qa.sector_composition()
+    verbatim (itself a thin, already-reviewed wrapper around
+    portfolio.sector_exposure()) rather than re-deriving the sum/pct math --
+    same numbers Portfolio Overview's own sector chart shows, so this can
+    never disagree with that page. Also more complete than the ticker_sectors
+    toolbox entry's bare static lookup: port_df's own Sector column already
+    went through the live app's full curated-map -> .info -> cache -> "Other"
+    resolution chain, not just the raw curated dict."""
+    from stock_analyzer.portfolio_qa import sector_composition
+    port_df = data_bundle.get("port_df")
+    if port_df is None:
+        return {"error": "portfolio not loaded this session"}
+    exposure = sector_composition(port_df)
+    if not exposure:
+        return {"error": "no sector exposure could be computed for the current portfolio"}
+    return {"sector_exposure": exposure}
+
+
 def _adapt_live_prices(data_bundle: dict) -> dict:
     """Trivial passthrough — the live fetch itself already happened in the
     app's own Fetch stage (stage 2), BEFORE investigate() is ever called;
@@ -319,6 +344,21 @@ TOOLBOX: dict = {
                    "result by sector (no network call, no fetch needed).",
         "cannot": [
             "cannot classify a ticker not already in the curated sector map",
+        ],
+    },
+    "sector_exposure": {
+        "adapter": _adapt_sector_exposure,
+        "needs": frozenset({"port_df"}),
+        "summary": "Dollar-weighted sector concentration for currently-held "
+                   "positions -- market value and % of book per sector, the "
+                   "SAME numbers the live Portfolio Overview sector chart "
+                   "shows. Use this, not ticker_sectors + manual counting, "
+                   "for any question about how concentrated the portfolio "
+                   "actually is by dollar exposure.",
+        "cannot": [
+            "cannot answer about a candidate/not-currently-held ticker",
+            "cannot answer about a past point in time -- reflects only the "
+            "currently-loaded portfolio snapshot",
         ],
     },
     "live_prices": {

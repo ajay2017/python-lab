@@ -166,10 +166,29 @@ question.
 | `match_recs_to_trades` / `compute_outcomes` | `recommendations_history.py` | BUY-side recommendation alpha, acted vs. skipped |
 | `TICKER_SECTORS` (static lookup, not a fetch) | `portfolio.py` | Sector-level grouping, no network call needed |
 | `fetch_live_prices` / `fetch_spy` | `data.py` | Live price + SPY history inputs the above functions need |
+| `sector_composition` (wraps `sector_exposure`) | `portfolio_qa.py` (wraps `portfolio.py`) | Dollar-weighted sector concentration for held positions — market value and % of book per sector |
 
 Deliberately excludes anything not already exercised against real data — the toolbox grows
 the same way Predictive Shadow Modeling's scope grew: one deliberate, reviewed addition at a
-time, never speculatively.
+time, never speculatively. **`sector_exposure` added 2026-09-18, the first genuine post-ship
+toolbox growth, exactly on that principle:** the first real production question ("how concentrated
+is my portfolio by sector?") could only be answered by counting positions per sector, because no
+toolbox function surfaced a per-position market value — `recalculate_from_trades`'s `holdings_df`
+is deliberately just `[Ticker, Shares, Avg Cost ($)]`, out of scope for what that function exists
+to fix. The model itself correctly refused to multiply shares × price into a market value on its
+own (the report-writing prompt's "narrate, never derive" rule working exactly as intended) rather
+than fabricating the number — so the gap was disclosed, not silently wrong, which is what made it
+legible as a real toolbox gap rather than a bug. Closed by reusing `portfolio_qa.sector_composition()`
+verbatim (already a thin, reviewed wrapper around `portfolio.sector_exposure()`) — same numbers
+Portfolio Overview's own sector chart shows, and more complete than the existing `ticker_sectors`
+entry's bare static lookup (`port_df`'s own `Sector` column already goes through the live app's
+full curated-map → `.info` → cache → "Other" resolution chain). Pure-additive, no `_GATE_FILES`
+touch, no reviewer required per the review-economy rule (reused function, non-gate file, full
+suite green). **Recommended, not yet done: re-run `scripts/investigator_eval.py` for both
+recorded-pass models** to confirm this toolbox growth doesn't introduce a new misclassification —
+the 3 sector-related eval questions were already correctly answerable before this change (via
+`ticker_sectors` + `recalculate_holdings`), so no refuse/answer flip is expected, but this is the
+project's own standing discipline for any toolbox change, not yet re-verified against a live API.
 
 **`forward_alpha_at_horizon` — DEFERRED to v1.1, caught by the implementer during chunk 2,
 resolved 2026-09-18.** It answers a single ticker/date/entry-price question, but the plan
