@@ -35101,16 +35101,33 @@ elif page == "💰 Account":
                             if _prv.get("spy_period_return_pct") is not None:
                                 st.caption(f"SPY period return: {_prv['spy_period_return_pct']:+.2f}%")
                         else:
-                            _prv_c1, _prv_c2 = st.columns(2)
+                            _prv_c1, _prv_c2, _prv_c3 = st.columns(3)
                             _prv_c1.metric(
                                 "SPY period return",
                                 f"{_prv['spy_period_return_pct']:+.2f}%"
                                 if _prv["spy_period_return_pct"] is not None else "—",
                             )
                             _prv_c2.metric(
+                                "Your realized return",
+                                f"{_prv['realized_return_pct']:+.2f}%"
+                                if _prv["realized_return_pct"] is not None else "—",
+                                delta=(
+                                    f"{_prv['delta_vs_spy_pp']:+.2f}pp vs SPY"
+                                    if _prv.get("delta_vs_spy_pp") is not None else None
+                                ),
+                                help="Realized P&L ÷ total cost basis of the shares closed this "
+                                     "period — directly comparable to SPY's own % return, unlike "
+                                     "a bare dollar figure.",
+                            )
+                            _prv_c3.metric(
                                 "Realized P&L (closed trades)",
                                 f"${_prv['realized_pnl_total']:,.2f}",
                             )
+                            if _prv["realized_return_pct"] is None:
+                                st.caption(
+                                    "⚪ Realized return % unavailable — no cost-basis data on "
+                                    "the closed trades this period."
+                                )
                             st.caption(
                                 f"ℹ️ {_prv['caption']} ({_prv['n_realized_trades']} "
                                 "trade(s) closed this period.)"
@@ -37027,7 +37044,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 
 **Tax Report:** pick a tax year and see your realized gains/losses split into short-term vs. long-term, reconstructed lot-by-lot in the order you actually bought (FIFO) rather than the single blended average-cost number shown elsewhere in the app. Each closed lot also gets a wash-sale flag (⛔ violation / ⏳ pending / ✅ clean) reusing the same check the Tax lens on 🥧 Portfolio Overview already applies to harvested losses. A reconciliation line compares this report's total to the app's own stored average-cost total — they can legitimately differ on a position you sold in parts at different prices, and the report says so rather than picking one silently. Download the full lot table as CSV or a formatted Markdown report. **This is not tax advice** — it's an informational reconciliation tool; verify every figure against your broker's official 1099-B before filing.
 
-**Performance Review:** pick a period (This Quarter, Last Quarter, This Tax Year, or a custom date range) for a point-in-time, downloadable snapshot: **Return vs SPY** (SPY's own move over the period next to your realized trade P&L closed in that window — realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎯 Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); and **Leverage & Margin Cushion Drift** / **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing account and risk-snapshot history). Downloads as CSV or Markdown, same as the Tax Report.
+**Performance Review:** pick a period (This Quarter, Last Quarter, This Tax Year, or a custom date range) for a point-in-time, downloadable snapshot: **Return vs SPY** (SPY's own % move over the period next to **your realized return %** — your realized P&L divided by the total cost basis of the shares you closed that period, so it's a genuine like-for-like comparison, not a percentage next to a dollar figure — plus the gap between the two in percentage points; realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎯 Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); and **Leverage & Margin Cushion Drift** / **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing account and risk-snapshot history). Downloads as CSV or Markdown, same as the Tax Report.
 """
             )
 

@@ -56,6 +56,20 @@ new nav.
   items (real PDF pipeline, multi-year tax comparison, an emailed report via `notify.py`) remain
   unstarted with no trigger set, per the original "Deferred to v2" section below.
 
+**Post-ship fix, same day, from a live owner screenshot:** the shipped `return_vs_spy` section
+showed SPY's period return as a **percentage** next to the owner's own figure as a **dollar
+amount** — not actually comparable, so there was no way to read "did I beat the market" off the
+screen despite both numbers being individually correct. Added `realized_return_pct` (realized
+P&L ÷ `total_cost_basis`, the total cost basis of the shares closed that period — a denominator
+owned entirely by the same trades the numerator already covers, deliberately not account equity)
+and `delta_vs_spy_pp`, both `None` rather than a fabricated `0%` when the window's closed trades
+carry no cost-basis data; pooled across multiple lots (dollar-weighted), not averaged per-trade.
+Rendered as a third `st.metric` tile with the SPY-relative delta. 2 new tests plus an exact-ratio
+assertion added to the existing basis/caption test. Small, mechanical, built directly on
+already-reviewed data (`realized_pnl_total`, SPY return) — handled without a fresh Opus
+`reviewer` pass this time, a judgment call given the narrow scope; full suite (5925 passed) +
+antipattern/constants gates all green.
+
 ## Phase 2 design (2026-09-18) — Performance Review
 
 Opus `planner` verdict: **PROCEED** — with one genuine owner scoping decision (below). Every

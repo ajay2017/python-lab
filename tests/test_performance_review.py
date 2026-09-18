@@ -351,6 +351,53 @@ def test_return_vs_spy_carries_realized_only_basis_and_caption():
     assert rvs["realized_pnl_total"] == pytest.approx(50.0)
     assert rvs["n_realized_trades"] == 1
     assert rvs["spy_period_return_pct"] is not None
+    # cost basis of the closed lot = 5 shares * $10 = $50; realized P&L $50
+    # -> realized_return_pct = 100.0%, directly comparable to SPY's own %.
+    assert rvs["total_cost_basis"] == pytest.approx(50.0)
+    assert rvs["realized_return_pct"] == pytest.approx(100.0)
+    assert rvs["delta_vs_spy_pp"] == pytest.approx(
+        rvs["realized_return_pct"] - rvs["spy_period_return_pct"]
+    )
+
+
+def test_realized_return_pct_is_none_without_cost_basis_data():
+    # A SELL with no recorded cost_basis contributes $0 to the denominator —
+    # the % must degrade to None (unavailable), never a fabricated 0% or a
+    # divide-by-zero crash. The dollar P&L (from realized_pnl) still shows.
+    rows = [
+        _trade_row(1, "ABC", "SELL", 5, 20.0, cost_basis=None, realized_pnl=50.0,
+                   when=date(2026, 1, 10)),
+    ]
+    kw = _base_kwargs(
+        trades=_trades_df(rows), spy_prices_by_date=_spy_series(date(2026, 1, 1), 40),
+    )
+    review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
+    rvs = review["return_vs_spy"]
+    assert rvs["status"] == "ok"
+    assert rvs["realized_pnl_total"] == pytest.approx(50.0)
+    assert rvs["total_cost_basis"] == pytest.approx(0.0)
+    assert rvs["realized_return_pct"] is None
+    assert rvs["delta_vs_spy_pp"] is None
+
+
+def test_realized_return_pct_uses_total_cost_basis_across_multiple_lots():
+    # Two closed lots at different cost bases in the same window — the %
+    # must be pooled ($ gain / $ total deployed), not averaged per-trade.
+    rows = [
+        _trade_row(1, "ABC", "SELL", 10, 15.0, cost_basis=10.0, realized_pnl=50.0,
+                   when=date(2026, 1, 10)),
+        _trade_row(2, "XYZ", "SELL", 4, 30.0, cost_basis=20.0, realized_pnl=40.0,
+                   when=date(2026, 1, 15)),
+    ]
+    kw = _base_kwargs(
+        trades=_trades_df(rows), spy_prices_by_date=_spy_series(date(2026, 1, 1), 40),
+    )
+    review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
+    rvs = review["return_vs_spy"]
+    # total cost basis = 10*10 + 4*20 = 180; total gain = 90 -> 50.0%
+    assert rvs["total_cost_basis"] == pytest.approx(180.0)
+    assert rvs["realized_pnl_total"] == pytest.approx(90.0)
+    assert rvs["realized_return_pct"] == pytest.approx(50.0)
 
 
 def test_return_vs_spy_offline_when_either_loader_missing():

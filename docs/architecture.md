@@ -3128,6 +3128,15 @@ net-equity change (which would need an undisclosed deposits/withdrawals caveat),
 Explicitly labeled `"realized only — excludes unrealized moves on positions still open during the
 window"` in both the pure dict and the rendered caption.
 
+**Fix, same day, from a live owner screenshot:** the first ship showed SPY's return as a
+percentage next to the owner's own figure as a bare dollar amount — not actually comparable, so
+there was no way to read "did I beat the market" off the screen. `realized_return_pct` (realized
+P&L ÷ `total_cost_basis`, the total cost basis of the shares closed this period — a denominator
+owned entirely by the same trades the numerator covers, not account equity) and
+`delta_vs_spy_pp` (`realized_return_pct − spy_period_return_pct`) were added so the two figures
+are genuinely apples-to-apples; both are `None`, never a fabricated `0%`, when the window's
+closed trades carry no cost-basis data.
+
 **Below-floor framing** (a second owner decision): a period under `REC_OUTCOME_MIN_CALLS`/
 `GATE_LEDGER_MIN_CALLS` etc. shows raw period counts + a descriptive matured-subset mean alpha as
 `below_floor=True`, and **never** renders a "building"/"early"/"firm" verdict band — that framing

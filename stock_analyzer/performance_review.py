@@ -392,16 +392,40 @@ def build_review(
         _realized_pnl_total = (
             0.0 if _tb_status != "ok" else round(float(_tb_windowed["realized_pnl"].sum()), 2)
         )
+        # Realized return %, so the comparison to SPY's % is actually
+        # apples-to-apples rather than a dollar figure next to a percentage
+        # (a real gap the owner caught live 2026-09-18 — the two numbers
+        # weren't on the same footing before this). Denominator is the total
+        # cost basis of the shares actually closed this window — an "owned"
+        # figure derived purely from the same trades the numerator covers,
+        # not account equity (which would reopen the deposits/withdrawals
+        # ambiguity this feature already declined to touch).
+        if _tb_status == "ok":
+            _total_cost_basis = float((_tb_windowed["cost_basis"] * _tb_windowed["shares"]).sum())
+        else:
+            _total_cost_basis = 0.0
+        _realized_return_pct = (
+            round(_realized_pnl_total / _total_cost_basis * 100, 2)
+            if _total_cost_basis > 0 else None
+        )
+        _delta_vs_spy_pp = (
+            round(_realized_return_pct - _spy_ret, 2)
+            if _realized_return_pct is not None and _spy_ret is not None else None
+        )
         return_vs_spy = {
             "status": "empty" if _n_realized == 0 else "ok",
             "basis": "realized_only",
             "spy_period_return_pct": _spy_ret,
             "realized_pnl_total": _realized_pnl_total,
+            "realized_return_pct": _realized_return_pct,
+            "total_cost_basis": round(_total_cost_basis, 2),
+            "delta_vs_spy_pp": _delta_vs_spy_pp,
             "n_realized_trades": _n_realized,
             "caption": (
-                "SPY's period return vs REALIZED trade P&L closed inside this "
-                "window only — unrealized moves on positions still open during "
-                "the window are not included."
+                "SPY's period return vs your REALIZED return on the capital "
+                "actually deployed in trades closed inside this window only — "
+                "unrealized moves on positions still open during the window are "
+                "not included, and this is not your whole-account return."
             ),
         }
 
@@ -553,9 +577,17 @@ def format_review_markdown(review: "dict | None") -> str:
             lines.append(f"- SPY period return: {_spy:+.2f}%")
     else:
         _spy = rvs.get("spy_period_return_pct")
+        _rr = rvs.get("realized_return_pct")
+        _delta = rvs.get("delta_vs_spy_pp")
         lines.append(f"- SPY period return: {_spy:+.2f}%" if _spy is not None else "- SPY period return: unavailable")
+        lines.append(
+            f"- Your realized return: {_rr:+.2f}% on ${rvs.get('total_cost_basis', 0.0):,.2f} deployed"
+            if _rr is not None else "- Your realized return: unavailable (no cost-basis data)"
+        )
         lines.append(f"- Realized trade P&L closed in period: ${rvs.get('realized_pnl_total', 0.0):,.2f} "
                      f"({rvs.get('n_realized_trades', 0)} trade(s))")
+        if _delta is not None:
+            lines.append(f"- Vs. SPY: {'+' if _delta >= 0 else ''}{_delta:.2f} percentage points")
         lines.append(f"- {rvs.get('caption', '')}")
     lines.append("")
 
