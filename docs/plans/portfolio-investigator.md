@@ -184,11 +184,12 @@ Portfolio Overview's own sector chart shows, and more complete than the existing
 entry's bare static lookup (`port_df`'s own `Sector` column already goes through the live app's
 full curated-map → `.info` → cache → "Other" resolution chain). Pure-additive, no `_GATE_FILES`
 touch, no reviewer required per the review-economy rule (reused function, non-gate file, full
-suite green). **Recommended, not yet done: re-run `scripts/investigator_eval.py` for both
-recorded-pass models** to confirm this toolbox growth doesn't introduce a new misclassification —
-the 3 sector-related eval questions were already correctly answerable before this change (via
-`ticker_sectors` + `recalculate_holdings`), so no refuse/answer flip is expected, but this is the
-project's own standing discipline for any toolbox change, not yet re-verified against a live API.
+suite green). **Re-verified 2026-09-18, same day: both recorded-pass models re-ran clean after
+this toolbox growth** — `claude-sonnet-4-6` 21/21 refusal + 13/13 answer, `claude-opus-5` 21/21
+refusal + 13/13 answer, 34/34 each, no misclassifications. Confirms the `sector_exposure` addition
+didn't shift any refuse/answer boundary, matching the "no flip expected" prediction — the 3
+sector-related eval questions were already correctly answerable before this change (via
+`ticker_sectors` + `recalculate_holdings`), just with a weaker (position-count) answer.
 
 **`forward_alpha_at_horizon` — DEFERRED to v1.1, caught by the implementer during chunk 2,
 resolved 2026-09-18.** It answers a single ticker/date/entry-price question, but the plan
