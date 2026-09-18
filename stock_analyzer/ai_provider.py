@@ -131,8 +131,21 @@ def call_llm(provider: str, model: str, api_key: str, system: str, user: str,
             # actually has text instead of trusting position.
             for block in r.content:
                 text = getattr(block, "text", None)
-                if text is not None:
+                if text and text.strip():
                     return text
+            # No block with genuinely non-empty text -- confirmed live: a
+            # thinking-heavy model can exhaust the entire max_tokens budget on
+            # thinking content before ever emitting text, which is NOT an
+            # exception (the API returns a normal response with
+            # stop_reason="max_tokens"), so this path must set its own error
+            # rather than silently returning None (or an empty/whitespace-only
+            # string that would render as a blank report) with no diagnostic.
+            LAST_CALL_ERROR = (
+                f"response contained no text content "
+                f"(stop_reason={getattr(r, 'stop_reason', None)!r}) -- "
+                f"likely truncated by max_tokens={max_tokens} before any "
+                f"text was emitted"
+            )
             return None
         elif provider == "OpenAI":
             from openai import OpenAI as _OAI

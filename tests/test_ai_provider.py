@@ -80,6 +80,53 @@ def _install_fake_anthropic_with_leading_thinking_block(response_text):
     sys.modules["anthropic"] = fake_mod
 
 
+def _install_fake_anthropic_empty_text_block(stop_reason="max_tokens"):
+    """A TextBlock IS present, but its .text is "" -- a response that STARTED
+    emitting text and then got truncated mid-stream. A bare `is not None`
+    check would have returned this empty string and rendered a blank report
+    with no diagnostic at all; must fall through to the same error path as
+    the zero-text-block case."""
+    class _Response:
+        def __init__(self):
+            self.content = [_FakeAnthBlock("")]
+            self.stop_reason = stop_reason
+
+    class _Messages:
+        def create(self, **kwargs):
+            return _Response()
+
+    class _Client:
+        def __init__(self, **kwargs):
+            self.messages = _Messages()
+
+    fake_mod = types.ModuleType("anthropic")
+    fake_mod.Anthropic = lambda **kwargs: _Client()
+    sys.modules["anthropic"] = fake_mod
+
+
+def _install_fake_anthropic_all_thinking_no_text(stop_reason="max_tokens"):
+    """No text block ANYWHERE in content -- reproduces the live production
+    failure: a thinking-heavy model can exhaust its entire max_tokens budget
+    on thinking content before ever emitting text. Not an exception (the API
+    returns a normal response), so this must set its own diagnostic error."""
+    class _Response:
+        def __init__(self):
+            self.content = [_FakeAnthThinkingBlock(), _FakeAnthThinkingBlock()]
+            self.stop_reason = stop_reason
+
+    class _Messages:
+        def create(self, **kwargs):
+            return _Response()
+
+    class _Client:
+        def __init__(self, **kwargs):
+            self.messages = _Messages()
+
+    fake_mod = types.ModuleType("anthropic")
+    fake_mod.Anthropic = lambda **kwargs: _Client()
+    sys.modules["anthropic"] = fake_mod
+
+
 # ── fake openai module (covers both "OpenAI" and "Groq (Free tier)", which
 #    both dispatch through the openai SDK shape) ─────────────────────────────
 
@@ -267,6 +314,39 @@ def test_call_llm_claude_skips_leading_non_text_block():
     )
     assert result == "the real answer"
     assert ai_provider.LAST_CALL_ERROR is None
+
+
+def test_call_llm_claude_no_text_block_anywhere_sets_diagnostic_error():
+    """Reproduces a real live production failure: a report-synthesis call
+    against claude-opus-5 returned only thinking content -- no text block at
+    all, no exception -- which used to return None with LAST_CALL_ERROR still
+    at its reset value, making the failure completely undiagnosable from the
+    UI. Must now set a specific, useful error naming the stop_reason."""
+    _install_fake_anthropic_all_thinking_no_text(stop_reason="max_tokens")
+    from stock_analyzer import ai_provider
+    result = ai_provider.call_llm(
+        "Claude (Anthropic)", "claude-opus-5", "sk-ant-x",
+        "sys prompt", "user prompt", max_tokens=1000,
+    )
+    assert result is None
+    assert ai_provider.LAST_CALL_ERROR is not None
+    assert "max_tokens" in ai_provider.LAST_CALL_ERROR
+    assert "1000" in ai_provider.LAST_CALL_ERROR
+
+
+def test_call_llm_claude_empty_text_block_falls_through_to_diagnostic_error():
+    """A present TextBlock with text="" (truncated mid-emission) must NOT be
+    returned as a silent blank report -- it has to fall through to the same
+    diagnostic error path as the zero-text-block case."""
+    _install_fake_anthropic_empty_text_block(stop_reason="max_tokens")
+    from stock_analyzer import ai_provider
+    result = ai_provider.call_llm(
+        "Claude (Anthropic)", "claude-opus-5", "sk-ant-x",
+        "sys prompt", "user prompt", max_tokens=1000,
+    )
+    assert result is None
+    assert ai_provider.LAST_CALL_ERROR is not None
+    assert "max_tokens" in ai_provider.LAST_CALL_ERROR
 
 
 def test_call_llm_claude_exception_returns_none_and_sets_error():

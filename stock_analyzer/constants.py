@@ -1821,4 +1821,4 @@ SNAPTRADE_REQUEST_TIMEOUT_SEC = 15
 # investment-policy thresholds.
 INVESTIGATOR_MAX_LLM_CALLS = 3       # hard cap on LLM calls per investigation (2 normal: plan + report; the 3rd is reserved for exactly one re-plan attempt on a rejected/unparseable plan) — hitting the cap fails the investigation visibly rather than retrying further
 INVESTIGATOR_MAX_TOKENS_PLAN = 500   # max response tokens for the plan-step call — it only emits a small structured JSON object naming toolbox fn_ids, not prose
-INVESTIGATOR_MAX_TOKENS_REPORT = 1000  # max response tokens for the report-synthesis call — prose plus a mandatory caveats section
+INVESTIGATOR_MAX_TOKENS_REPORT = 4000  # max response tokens for the report-synthesis call — prose plus a mandatory caveats section. Bumped from 1000 (2026-09-18): a reasoning-capable model (confirmed live on claude-opus-5) can spend a chunk of this SAME budget on invisible thinking content before emitting any visible text, and 1000 wasn't enough headroom for both — the call returned a response with stop_reason="max_tokens" and zero text blocks, which ai_provider.call_llm now also surfaces as a specific error rather than a silent None
