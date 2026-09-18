@@ -40222,6 +40222,8 @@ elif page == "🧠 AI Insights":
                         st.info(_r_reason)
                     else:
                         st.warning(_r_reason)
+                        if round_.get("llm_error"):
+                            st.caption(f"Details: {round_['llm_error']}")
                 elif _r_result.get("answered") is True:
                     st.markdown(_r_result.get("report_text") or "")
 
@@ -40335,7 +40337,19 @@ elif page == "🧠 AI Insights":
                         _inv_question.strip(), _inv_bundle, _inv_llm_fn,
                         history_questions=_inv_hist_questions,
                     )
-                _inv_history.append({"question": _inv_question.strip(), "result": _inv_result})
+                # ai_provider.LAST_CALL_ERROR reflects the LAST llm_fn call
+                # investigate() actually made -- accurate whether that was the
+                # plan or the report stage, since call_llm resets it to None
+                # at the top of every invocation. None here on an LLM-stage
+                # failure means the call itself succeeded but returned an
+                # unusable response (e.g. malformed plan JSON), which is
+                # already stated in _inv_result["reason"] -- this is purely
+                # additional detail, same pattern as 💬 Ask's own
+                # LAST_PARSE_ERROR/LAST_NARRATE_ERROR captions.
+                _inv_history.append({
+                    "question": _inv_question.strip(), "result": _inv_result,
+                    "llm_error": _inv_aip.LAST_CALL_ERROR,
+                })
                 st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
