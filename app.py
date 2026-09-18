@@ -39858,6 +39858,17 @@ elif page == "🧠 AI Insights":
                         "- \"What was my trade on AAPL?\"\n"
                         "- \"Why did AAPL lose money after being recommended on 2026-07-20?\""
                     )
+                    if not db.is_readonly():
+                        # 🔎 Investigator is owner-only (unlike this tab) -- only point a
+                        # read-only viewer somewhere they can actually follow.
+                        st.caption(
+                            "💡 If this is a broader, open-ended question rather than a specific "
+                            "trade/ticker/date lookup (e.g. \"how concentrated is my portfolio by "
+                            "sector?\" or \"has my protective EXIT alpha kept up with SPY?\"), try "
+                            "🔎 Investigator instead — it composes multiple analysis functions to "
+                            "investigate a question like a research pass would, rather than "
+                            "looking up one fact."
+                        )
                 elif round_.get("error"):
                     st.error(round_["error"])
                     if round_.get("details"):
@@ -40222,6 +40233,11 @@ elif page == "🧠 AI Insights":
                         # A refusal is the CORRECT, designed behavior here —
                         # never treated as an error.
                         st.info(_r_reason)
+                        st.caption(
+                            "💡 If this was about one specific trade, ticker, or past "
+                            "recommendation, try 💬 Ask instead — it may already answer that "
+                            "directly without needing a multi-step investigation."
+                        )
                     else:
                         st.warning(_r_reason)
                         if round_.get("llm_error"):
