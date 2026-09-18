@@ -1,10 +1,10 @@
 # 🔎 Portfolio Investigator — Design Plan
 
-**Status update 2026-09-18: chunks 1-5 of 7 SHIPPED. `claude-sonnet-4-6` has a recorded
-refusal-eval PASS (34/34, see chunk 5 below) — the first, and so far only, enabled candidate
-for chunk 6's model selector. Chunk 6 (`app.py` tab wiring) and chunk 7 (docs sync) are the
-only pieces left.** Older status line below is superseded except for the mockup/planner
-history it still accurately describes.
+**Status update 2026-09-18: chunks 1-5 of 7 SHIPPED. `claude-sonnet-4-6` and `claude-opus-5`
+both have a recorded refusal-eval PASS (34/34 each, see chunk 5 below) — the two enabled
+candidates for chunk 6's model selector so far. Chunk 6 (`app.py` tab wiring) and chunk 7 (docs
+sync) are the only pieces left.** Older status line below is superseded except for the
+mockup/planner history it still accurately describes.
 
 **Status: MOCKUP-APPROVED, HANDED TO `planner` 2026-09-18.** Seven rounds of mockup
 iteration resolved every placement/UX/safety scope decision below (fixed toolbox, sync flow,
@@ -409,10 +409,25 @@ review) buying nothing v1 needs.
    answer to a question that never named what it wanted measured).
 
    **Second real run, same model, same machine, after both fixes: 21/21 refusal, 13/13
-   answer — 34/34, no misclassifications. Recorded PASS for `claude-sonnet-4-6`.** No other
-   candidate model has been run yet — each remains gated on its own recorded pass before chunk
-   6 can list it as enabled. To run another: `ANTHROPIC_API_KEY=... python
-   scripts/investigator_eval.py --provider "Claude (Anthropic)" --model <id>` (or omit
+   answer — 34/34, no misclassifications. Recorded PASS for `claude-sonnet-4-6`.**
+
+   **`claude-opus-5` — RECORDED PASS, 2026-09-18, after a real bug fix (not a judgment fix).**
+   Added as a new candidate model in `ai_provider.py`'s registry (one-line, deliberate — see
+   ratified decision above). First real run crashed on 3 of 34 questions
+   (`AttributeError: 'ThinkingBlock' object has no attribute 'text'`), scored as false refusals
+   ("no valid plan was produced") rather than a real judgment gap — Opus 5 is reasoning-capable
+   and can lead its response `content` with a `ThinkingBlock`/`RedactedThinkingBlock` that has
+   no `.text` attribute, and `call_llm`'s Claude branch blindly read `content[0].text`. Fixed in
+   `ai_provider.py` by scanning `content` for the first block that actually has `.text` instead
+   of trusting position (the identical pattern still lives, unfixed, in `app.py`'s AI Snapshot
+   `_call_ai_brief` at ~line 10806 — flagged as a separate, explicitly out-of-scope latent risk,
+   not silently expanded into this fix). Second real run, after the fix: 21/21 refusal, 13/13
+   answer — 34/34, no misclassifications. **Recorded PASS for `claude-opus-5`.**
+
+   Two candidate models now enabled for chunk 6's model selector: `claude-sonnet-4-6` and
+   `claude-opus-5`. No other candidate model has been run yet — each remains gated on its own
+   recorded pass before chunk 6 can list it as enabled. To run another: `ANTHROPIC_API_KEY=...
+   python scripts/investigator_eval.py --provider "Claude (Anthropic)" --model <id>` (or omit
    `--provider`/`--model` to sweep every model whose key is set in the shell).
 6. `app.py` wiring — 8th tab, owner gate, chat shell, trace expander, caveats block, the
    copy/download draft panel (not a write), System Trust config section. **Blocked on chunk
