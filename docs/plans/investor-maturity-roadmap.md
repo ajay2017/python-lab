@@ -366,35 +366,53 @@ Designing against a 3-week-old 52% figure would repeat `feedback_verify_against_
   is taken up (Dec–Feb per §6), should open by re-reading this result rather than assuming
   the original weeks-scale framing still fits.
 
-  **Caveats carried forward, not resolved:** (1) `days_held` is CALENDAR days, not trading
+  **Caveats carried forward:** (1) `days_held` is CALENDAR days, not trading
   sessions — a 7-day calendar median is closer to ~5 trading sessions, a real but smaller
   gap against the ladder's session-based confirmation than the raw number alone suggests;
-  (2) this is one account's ~3.5-month window (2026-05-27 to 2026-09-11) — real, but not
-  proof the pattern is permanent; (3) ~~the optional self-track (`classify_sells`) app-aligned
-  vs self-initiated cut was not run~~ — **script capability extended 2026-09-17, still
-  awaiting an actual live run.** `scripts/holding_period_analysis.py` now cross-references
-  `classify_sells`'s per-sell bucket back onto each closed-lot fragment's own holding
-  duration and realized `pnl_abs` (two new sections: hold-duration × classification,
-  and $ P&L by classification) — directly answering whether short holds are mechanical
-  (`engine_aligned`, app-driven) or discretionary (`self_initiated`). The join is
-  **id-based, not date-based** — `build_closed_lots` and `classify_sells` derive a sell's
-  date via two genuinely different methods (UTC-normalized vs. a raw string-slice) that
-  can disagree by a calendar day on a non-UTC-zero-offset timestamp, a documented recurring
-  bug class in this project; joining on either function's own date field would have
-  silently mis-attributed exactly those rows. Verified via synthetic-data smoke tests (not
-  live data — no Supabase credentials in the build/review environment) covering the
-  offset-disagreement case, same-day multi-sell with differing buckets (correctly
-  `ambiguous_same_day_multi_sell`, excluded from grouped stats), and a same-day multi-sell
-  where only one id resolves to a real bucket (correctly attributed to that bucket, not
-  flagged ambiguous). Opus reviewer: SHIP, 2 non-blocking findings (a ticker-normalization
-  `.strip()` inconsistency vs. `build_closed_lots`'s bare `.upper()`, and a single
-  unresolved-id case mislabeling as ambiguous instead of unmatched) — both fixed same
-  session, re-verified, zero effect on the grouped `engine_aligned`/`self_initiated`
-  conclusions either way (both failure modes were already conservative — items dropped
-  from grouped stats, never mis-attributed). **Still needs an actual run against live
-  `trades`/`exit_signals`** (owner or a session with `SUPABASE_URL`/`SUPABASE_KEY`) before
-  this caveat can close — the code exists and is verified correct on synthetic data, but
-  the real answer to "mechanical or discretionary" is not yet in hand.
+  (2) this is one account's window, now ~3.75 months (2026-05-27 to 2026-09-17) — real, but
+  not proof the pattern is permanent; (3) ~~the optional self-track (`classify_sells`)
+  app-aligned vs self-initiated cut was not run~~ — **RUN 2026-09-17 against the full, owner-
+  provided, verified-complete `trades` (268 rows) and `exit_signals` (86 rows) tables. A4's
+  own open question is now CLOSED with a real answer: predominantly discretionary, not
+  mechanical.**
+
+  `scripts/holding_period_analysis.py` was extended (same session, Opus-reviewed SHIP, 2
+  non-blocking findings fixed — a ticker `.strip()` inconsistency and a single-unresolved-id
+  mislabeling, both fail-safe, zero effect on conclusions) to cross-reference `classify_sells`'s
+  per-sell bucket onto each closed-lot fragment's own holding duration and realized `pnl_abs`,
+  joining on the underlying SELL trade `id` rather than either function's own (independently,
+  sometimes-disagreeing) date derivation. Full detail on the join design: memory
+  `project_investor_maturity_roadmap`.
+
+  **Result, N=145 closed lots overall / N=80 fragments in the reliable-signal window
+  (sells on/after `SELF_TRACK_SELL_RELIABLE_LOG_START`=2026-07-21):** self-initiated exits
+  dominate EVERY holding-duration bucket, not just the short ones — 59 of 80 (74%)
+  reliable-window fragments are `self_initiated` vs. 21 `engine_aligned`, and the
+  self-initiated share is if anything *higher* in the 21-45d bucket (81%) than in the 0-3d
+  bucket (63%). **This closes the caveat: the ~7-day median hold is genuinely a reflection
+  of the owner's own decision cadence, not primarily the exit ladder firing quickly.**
+  Direct consequence: the original motivation for recalibrating the ladder's confirmation
+  window to a faster cadence does not hold — the ladder is a minority contributor to when
+  positions actually close, so speeding it up would not change most of what's happening.
+  **That idea is dropped, not deferred.**
+
+  **A second, unprompted finding from the same run, NOT yet actionable:** realized $ P&L by
+  classification (Section B) shows `engine_aligned` sells net **-$1,150.89** (N=21) while
+  `self_initiated` sells net **+$2,416.15** (N=59) — a dollar-denominated echo of A1's
+  percentage-based finding (`protect_alpha -15.7%`, only 4/17 protective calls validated).
+  **Deliberately not acted on** — this is correlational (a nearby signal doesn't prove
+  causation) and may be a regime artifact (several of A1's worst offenders were high-beta
+  growth names in a persistent rally, where a protective signal looking bad is what
+  insurance costs, not evidence it's miscalibrated) rather than a genuine calibration
+  defect. The regime-confound check A1 already flagged as unresolved is now the load-bearing
+  next step before this dollar finding — or A1's own percentage finding — informs any
+  decision.
+
+  **Consequence for B1 (score-history capture, already shipped as F-269) and its future
+  readout design (Dec 2026–Feb 2027 per §6):** unchanged from the original caveat's own
+  language — the readout design must open by confronting this result (predominantly
+  discretionary exits at every duration), not treat it as a remote possibility. Nothing to
+  build now; this is a note for whoever picks up that design.
 
   **This is evidence, not a recommendation** — per this script's own redline, no gate,
   threshold or the ladder's confirmation window was touched. What to do with this finding
