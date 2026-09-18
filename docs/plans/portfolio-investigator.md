@@ -380,11 +380,25 @@ review) buying nothing v1 needs.
    `_GATE_FILES` member, mandatory Opus review citation on this commit.
 4. Prompts + `investigate()` orchestrator (call cap, fail-visible offline handling,
    `build_sync_draft`).
-5. **Refusal eval** (`scripts/investigator_eval.py`) — run per candidate model, record
-   refusal/answer recall in this doc, set the allowed-model set from real results. Ship gate:
-   chunk 6 cannot enable a model without a recorded pass here.
+5. **Refusal eval — HARNESS BUILT 2026-09-18, NOT YET RUN FOR REAL.**
+   `scripts/investigator_eval.py`: a frozen, labeled 34-question set (21 refuse / 13 answer,
+   drawn from the ratified toolbox's own `cannot` lists plus close phrasings of the three real
+   2026-09-17 investigations), a `main()` that runs ONLY the plan step per `(provider, model)`
+   pair (cheap — no Supabase/live-price credentials needed), scores refusal/answer recall, and
+   prints every individual misclassification, not just an aggregate. 29 tests, all against a
+   fake LLM, zero network dependency — the harness's own LOGIC is verified. **No live LLM
+   credentials exist in the build environment this was built in, so no real per-model result
+   has been produced or recorded anywhere in this doc.** Ship gate unchanged: chunk 6 cannot
+   enable a model without a recorded real pass here. **To actually run it:**
+   `ANTHROPIC_API_KEY=... python scripts/investigator_eval.py --provider "Claude (Anthropic)"
+   --model claude-sonnet-4-6` (or omit `--provider`/`--model` to sweep every model whose key is
+   set in the shell) — needs to happen on a machine/session with real provider credentials
+   before chunk 6's tab can offer any model.
 6. `app.py` wiring — 8th tab, owner gate, chat shell, trace expander, caveats block, the
-   copy/download draft panel (not a write), System Trust config section.
+   copy/download draft panel (not a write), System Trust config section. **Blocked on chunk
+   5's real eval results** for which models the UI is allowed to list as enabled — the wiring
+   itself can be built, but the tab should render an honest "no models have passed evaluation
+   yet" state until real results exist.
 7. Docs sync, same session, all 7 Definition-of-Done steps.
 
 One Opus `reviewer` pass covers chunks 2/4/6 together (`validate_plan`/`execute_plan`/the
