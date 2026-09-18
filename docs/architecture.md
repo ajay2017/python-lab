@@ -2953,6 +2953,95 @@ Tax-harvest is explicitly out of scope for this readout; it stays on Phase 1a's 
 `tax_advisor.harvest_outcomes_summary()` running total. Opus `reviewer`: SHIP, 0 blocking.
 Full design: `docs/plans/recommendation-outcomes-measurement.md` §10/§11.
 
+### `stock_analyzer/ai_provider.py`
+
+Multi-provider LLM registry, extracted from 🤖 AI Snapshot's own inline `_AI_PROVIDERS`
+dict/dispatch (`app.py` ~10685-10830) so the 🔎 Portfolio Investigator (F-275) could reuse the
+same provider/model-flexible shape instead of Ask's hardwired single Anthropic key. Used ONLY
+by the Investigator — AI Snapshot's own inline dict is untouched, and 19 other pre-existing
+hardwired-Anthropic-only call sites across the app are explicitly out of scope for this
+extraction (real, acknowledged technical debt; see `docs/plans/portfolio-investigator.md`).
+
+`AI_PROVIDERS`: `{provider_name: {"models": {model_id: {"label", "tier"}}, "secrets_path",
+"env_var", "key_hint", "key_url"}}` for Claude/OpenAI/Gemini/Groq. `tier` (`"fast"`/`"capable"`)
+is display-only, never a gate — the Investigator keeps all tiers selectable, gating instead on
+`investigator.EVAL_PASSED_MODELS`. `capable_models(provider)` filters to `tier=="capable"` (a
+convenience for a caller that wants it — not how the Investigator itself decides eligibility).
+`resolve_key(provider_cfg, secrets_getter, environ)` — secrets → env → `""`, Streamlit-free
+(caller wraps `st.secrets.get`). `call_llm(provider, model, api_key, system, user, max_tokens,
+timeout=30.0)` dispatches to whichever provider's SDK, fails open to `None` +
+module-level `LAST_CALL_ERROR` on any exception, never raises. **Claude's branch scans
+`response.content` for the first block with a `.text` attribute rather than trusting
+`content[0]`** — a reasoning-capable model (confirmed live on `claude-opus-5`) can lead its
+response with a `ThinkingBlock`/`RedactedThinkingBlock` that has no `.text` attribute at all;
+the identical `content[0].text` pattern still lives, unfixed, in AI Snapshot's own
+`_call_ai_brief` (`app.py` ~10806) — a separate, explicitly out-of-scope latent risk, not
+silently expanded into this fix.
+
+### `stock_analyzer/investigator.py`
+
+The 🔎 Portfolio Investigator's safety-critical core (F-275) — pure, no Streamlit/app.py
+imports, deliberately does NOT import `ai_provider` (the caller injects an `llm_fn` callable so
+this module never depends on which provider/model is configured).
+
+**Fixed input vocabulary** (`AVAILABLE_INPUT_VOCAB`): `trades_df`, `exit_signals_df`,
+`recs_df`, `current_prices`, `spy_close_by_date`, `port_df` — the ONLY data_bundle keys any
+toolbox entry's `needs` may name; extending this is a deliberate, reviewed toolbox change,
+never something a plan step can request ad hoc. `_EMPTY_IS_FAILURE_KEYS` (`port_df`,
+`current_prices`, `spy_close_by_date`) treats an empty-but-present container as a failed fetch;
+`trades_df`/`exit_signals_df`/`recs_df` are deliberately excluded — a genuinely empty trade
+history or zero signals/recs on record are legitimate real states.
+
+**`TOOLBOX`**: `closed_lots` (`investor_mirror.build_closed_lots`), `classify_sells`
+(`self_track_record.classify_sells`), `protective_outcomes` (`protective_track_record`'s
+compute/collapse/headline trio), `recalculate_holdings` (`db.recalculate_from_trades`),
+`rec_outcomes` (`recommendations_history`'s match/compute pair — cannot isolate one single
+named recommendation by ticker+date, only the aggregate acted-vs-skipped track record),
+`ticker_sectors` (static `portfolio.TICKER_SECTORS` lookup, no fetch), `live_prices`/
+`spy_history` (trivial passthroughs — the actual fetch already happened upstream in the app's
+own Fetch stage). Each entry carries a `summary` (shown to the plan LLM) and a per-entry
+`cannot` list of out-of-scope example phrasings, kept per-function rather than one global list
+since each function's blind spots are specific to what it measures.
+`forward_alpha_at_horizon` was built then deliberately removed before ship — see F-275.
+
+**`parse_plan`/`validate_plan`** — the code gate. `validate_plan(plan, available_inputs)`
+returns `("refuse", reason)` unconditionally on `answerable=False`, empty/missing steps, or any
+unrecognized `fn_id` (no fuzzy matching); `("infeasible", reason)` when every `fn_id` is real
+but the union of their `needs` isn't a subset of `available_inputs`; `("ok", "")` otherwise.
+Refusal is this closed-enum CODE decision, never the LLM's own self-report.
+
+**`build_plan_prompt`** enumerates the toolbox (id/summary/needs/cannot) and instructs strict
+two-shape JSON output. Two explicit rules beyond "pick a real function": (1) use shape 2 rather
+than forcing a poor-fit function into shape 1; (2) an open-ended overall-verdict question with
+no named analytical angle ("is my portfolio good?") must be refused and the investor asked to
+name a specific angle, rather than chaining several unrelated functions into a pile of facts —
+added after `claude-sonnet-4-6`'s first real refusal-eval run misclassified exactly this
+question class (see F-275).
+
+**`investigate(question, data_bundle, llm_fn, history_questions=None, max_calls=None)`** — the
+5-stage pipeline (plan → fetch-already-done → verify → compute → report), fixed and bounded.
+At most one re-plan attempt; `INVESTIGATOR_MAX_LLM_CALLS` is a hard ceiling regardless. Returns
+`{question, answered, status ("ok"/"refused"/"no_plan"/"incomplete_data"/"report_failed"),
+reason, plan, facts, report_text, trace, calls_made}` — `trace` is the list of `fn_id`s actually
+planned, feeding the UI's always-available trace expander. `history_questions` carries prior
+QUESTION TEXT ONLY, never a prior report — closing the same "soft conclusion trusted as hard
+fact" failure mode `portfolio_qa.py`'s own multi-turn history already avoids.
+
+**`verify_fetch(fetched)`** gates `execute_plan` — a `None` value is always a failure for any
+key the plan actually needs; for `_EMPTY_IS_FAILURE_KEYS` members, an empty-but-present
+container also counts as failure. **`build_sync_draft(question, report_text, targets)`** is
+zero-I/O by design — the running container's filesystem is ephemeral with no path to the
+owner's git working tree or local memory files, so an in-app write would create a phantom edit
+nobody ever sees while looking like it succeeded; it only formats candidate markdown for the
+owner to copy/download and paste into the repo themselves.
+
+**`EVAL_PASSED_MODELS`** — the ship gate deciding which `(provider, model)` pairs may ever be
+selected in the tab: a deliberate, reviewed, manually-curated set, grown only after a real live
+run of `scripts/investigator_eval.py` records 0 misclassifications — never speculative, never
+automatic, mirroring `ai_provider.AI_PROVIDERS`' own one-model-at-a-time growth discipline. A
+cross-module test asserts every entry still exists in `ai_provider.AI_PROVIDERS` so it can't
+silently drift onto a renamed/removed model.
+
 ---
 
 ## 7. Navigation and State Management

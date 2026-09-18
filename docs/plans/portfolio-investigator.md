@@ -1,5 +1,21 @@
 # 🔎 Portfolio Investigator — Design Plan
 
+**Status: FULLY SHIPPED 2026-09-18 — all 7 chunks complete.** Chunk 6 (`app.py` — the 8th
+"🔎 Investigator" tab on 🧠 AI Insights, plus the provider/model config section on 🩺 System
+Trust) built by `implementer` against a fully-researched, line-anchored spec, then the mandatory
+Opus `reviewer` pass (required regardless of `_GATE_FILES` membership — a new user-facing
+decision surface per Hard Rule #4) caught one real blocking bug before ship: the data-bundle
+builder sourced `trades_df` via a path that collapsed a failed read into an indistinguishable
+empty DataFrame, unlike its sibling `recs_df`/`exit_signals_df` inputs which correctly used
+their `_or_none` loaders — fixed via `db.load_trades_or_none()`, same commit (`041085e`). Chunk 7
+(docs sync) closed requirements.md F-275, two new `docs/architecture.md` module sections
+(`ai_provider.py`, `investigator.py`), the in-app User Guide (both the AI Insights and System
+Trust descriptions), and memory `project_portfolio_investigator`. Full suite 5881 passed.
+**Nothing left queued from this feature's original v1 scope** — the only deliberately-deferred
+item is `forward_alpha_at_horizon`/v1.1 (a per-question ticker/date scalar the plan schema has no
+slot for; needs its own schema extension + resolver, not started, no trigger set). Older status
+lines below are superseded except for the mockup/planner history they still accurately describe.
+
 **Status update 2026-09-18: chunks 1-5 of 7 SHIPPED. `claude-sonnet-4-6` and `claude-opus-5`
 both have a recorded refusal-eval PASS (34/34 each, see chunk 5 below) — the two enabled
 candidates for chunk 6's model selector so far. Chunk 6 (`app.py` tab wiring) and chunk 7 (docs
@@ -429,12 +445,17 @@ review) buying nothing v1 needs.
    recorded pass before chunk 6 can list it as enabled. To run another: `ANTHROPIC_API_KEY=...
    python scripts/investigator_eval.py --provider "Claude (Anthropic)" --model <id>` (or omit
    `--provider`/`--model` to sweep every model whose key is set in the shell).
-6. `app.py` wiring — 8th tab, owner gate, chat shell, trace expander, caveats block, the
-   copy/download draft panel (not a write), System Trust config section. **Blocked on chunk
-   5's real eval results** for which models the UI is allowed to list as enabled — the wiring
-   itself can be built, but the tab should render an honest "no models have passed evaluation
-   yet" state until real results exist.
-7. Docs sync, same session, all 7 Definition-of-Done steps.
+6. **`app.py` wiring — SHIPPED 2026-09-18, commit `041085e`.** 8th tab, owner gate, chat shell,
+   trace expander, caveats block (baked into `report_text` itself, never extracted separately),
+   the copy/download draft panel (not a write), System Trust config section filtered to
+   `investigator.EVAL_PASSED_MODELS`. Built by `implementer`; Opus `reviewer` FIX-FIRST/1
+   blocking (the `trades_df` fetch-failure collapse described in the status line above) → fixed
+   same commit → effectively confirmed SHIP (the fix mirrors the already-reviewed-clean sibling
+   `_or_none` pattern one-to-one; no separate re-review pass was run for a change this
+   mechanical).
+7. **Docs sync — SHIPPED 2026-09-18, all 7 Definition-of-Done steps.** requirements.md F-275;
+   two new architecture.md module sections; in-app User Guide (AI Insights + System Trust
+   descriptions); memory `project_portfolio_investigator`; this plan doc's own status line.
 
 One Opus `reviewer` pass covers chunks 2/4/6 together (`validate_plan`/`execute_plan`/the
 orchestrator + eval results) before ship, on top of the mechanically-required citation on
