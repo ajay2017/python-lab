@@ -280,7 +280,49 @@ Designing against a 3-week-old 52% figure would repeat `feedback_verify_against_
   time-period-specific in ways this can't rule out; doesn't establish *why* the growth
   cluster ran (a genuine AI-cycle fundamental story is not distinguishable here from "just a
   rally"). Full numbers, per-ticker breakdown: memory `project_investor_maturity_roadmap`.
-- **A2 — Offense attribution** *(new `scripts/offense_attribution.py`)*, modelled on
+
+  **THE COMPLETING PIECE — RUN 2026-09-17, same session: does the growth cluster's return
+  justify its concentration?** The regime-confound check above answered "is the alpha miss
+  concentrated" but not "is the cluster actually worth the risk it carries." Reconstructed
+  current holdings from the full 268-row trade history via `db.recalculate_from_trades`
+  (pure replay, zero warnings — confirms the assembled trade history is internally
+  consistent, no over-sells or missing-BUY gaps), then combined realized P&L (from the
+  replay's own corrected per-SELL values, not the possibly-stale stored column) with
+  unrealized P&L on currently-held growth-cluster names, using a fresh live price fetch.
+
+  | | Realized | Unrealized (held) | Combined |
+  |---|---|---|---|
+  | Growth cluster (TEAM/NOW/PLTR/CRWD/APP) | +$5.80 | +$258.80 (PLTR/CRWD/APP only — TEAM/NOW already exited) | **+$264.60** |
+  | Rest of book (16 other positions) | +$3,138.66 | +$6.92 | **+$3,145.58** |
+
+  **The cluster carries 16.1% of current held book value ($3,711 of $23,051) but produced
+  only ~7.8% of total combined P&L ($264.60 of $3,410.18).** Disproportionate risk for
+  proportionate-or-less return — this is the piece that turns "the alpha miss is
+  concentrated" into "the concentration hasn't been compensated."
+
+  **The bimodal nuance that sharpens (not just confirms) the earlier read:** this is not a
+  uniformly weak cluster. **CRWD is a genuine winner** — +$155.60 already realized plus
+  +$271.80 currently unrealized, ~$427 combined, the single largest positive contributor in
+  the whole cluster. **TEAM and NOW — the two names responsible for nearly the entire
+  regime-confound's negative alpha — were ALSO realized dollar losses** (−$242.20, −$32.80),
+  not merely "early exits from stocks that later rallied." The rally after the sell is a
+  counterfactual (what holding would have made), not a correction of an actual loss —
+  **the caution shown on TEAM/NOW was validated in real dollars even though it scored
+  badly on the alpha-vs-SPY metric.** PLTR and APP are close to flat, neither the problem
+  nor the fix.
+
+  **Revised implication, sharper than the regime-confound check alone supported:** avoiding
+  "AI/growth/cyber names" as a sector label is not what this data argues for — CRWD earned
+  its volatility, TEAM/NOW did not, and the app's caution on the latter two was correct in
+  dollar terms regardless of what the alpha metric said. Any future sizing decision in this
+  space should differentiate by name, not by sector, which is consistent with A2's own
+  finding that the owner's judgment (not a sector-level rule) is where the demonstrated edge
+  is. **This is evidence for a personal position-sizing/concentration conversation, not a
+  software change** — no gate, threshold, or constant is implicated, and none is proposed.
+
+  **Caveat:** unrealized figures are a point-in-time mark (live prices at the moment this
+  ran) — will move by the time this is read. Same ~3.75-month single-account window
+  limitation as every other finding in this section.
   `scripts/exit_ladder_replay.py`: read-only, explicit REDLINE, honest caveats printed on
   every run, falsifiable criterion pre-registered **before** the first run.
   **Question:** is +14.4pp engine *ranking* skill, or owner *selection* among its calls?
