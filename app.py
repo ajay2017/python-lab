@@ -221,6 +221,7 @@ from stock_analyzer.tax_advisor import (
     harvest_outcomes_summary,
 )
 from stock_analyzer import tax_report as _tax_report
+from stock_analyzer import performance_review as _perf_review_mod
 from stock_analyzer import exit_advisor
 from stock_analyzer.exit_advisor import compute_relative_strength
 from stock_analyzer.thesis_red_team import (
@@ -34956,12 +34957,332 @@ elif page == "💰 Account":
                 horizontal=True, key="_rpt_kind_radio",
             )
             if _rpt_kind == "📈 Performance Review":
-                st.info(
-                    "📈 **Performance Review — coming soon.** A point-in-time "
-                    "return-vs-SPY / recommendations-acted / gates-fired snapshot "
-                    "for a custom date range or calendar quarter (Phase 2 of this "
-                    "feature, not yet built)."
+                st.caption(
+                    "A point-in-time, archivable snapshot for a date range — return "
+                    "vs SPY (realized only), recommendations acted/skipped, gates "
+                    "that fired, trade behavior, and leverage/risk drift. Awareness "
+                    "only: this never changes what the engine recommends, and a "
+                    "period below the standalone pages' evaluable floor shows raw "
+                    "counts only, never an independent verdict."
                 )
+
+                _perf_today = _today_et()
+                _perf_preset = st.radio(
+                    "Period", ["This Quarter", "Last Quarter", "This Tax Year", "Custom"],
+                    horizontal=True, key="_perf_period_preset",
+                )
+                _perf_q = (_perf_today.month - 1) // 3          # 0-3
+                _perf_q_start_month = _perf_q * 3 + 1
+                if _perf_preset == "This Quarter":
+                    _perf_start = date(_perf_today.year, _perf_q_start_month, 1)
+                    _perf_end = _perf_today
+                elif _perf_preset == "Last Quarter":
+                    if _perf_q == 0:
+                        _perf_start = date(_perf_today.year - 1, 10, 1)
+                        _perf_end = date(_perf_today.year - 1, 12, 31)
+                    else:
+                        _perf_start = date(_perf_today.year, (_perf_q - 1) * 3 + 1, 1)
+                        _perf_end = date(_perf_today.year, _perf_q_start_month, 1) - timedelta(days=1)
+                elif _perf_preset == "This Tax Year":
+                    _perf_start = date(_perf_today.year, 1, 1)
+                    _perf_end = _perf_today
+                else:
+                    _perf_c1, _perf_c2 = st.columns(2)
+                    _perf_start = _perf_c1.date_input(
+                        "Start date", value=_perf_today - timedelta(days=90),
+                        key="_perf_start_date",
+                    )
+                    _perf_end = _perf_c2.date_input(
+                        "End date", value=_perf_today, key="_perf_end_date",
+                    )
+
+                if _perf_start > _perf_end:
+                    st.error("⛔ Start date must be on or before the end date.")
+                else:
+                    # ── Load dependencies — exact patterns already used by
+                    # 🛑 The Road Not Taken (SPY/gate rows) and
+                    # 🎯 Recommendation Outcomes (risk snapshots/trades/
+                    # protective tickers), app.py ~L32060-32101/~L32207-32277.
+                    _perf_trades_df = db.load_trades_or_none()
+                    _perf_rec_rows = db.load_rec_events()
+                    _perf_gate_rows = db.load_gate_suppressions()
+                    _perf_acct_snap_df = db.load_account_daily_snapshots(_perf_start, _perf_end)
+                    _perf_risk_snap_df = db.load_portfolio_risk_snapshots(_perf_start, _perf_end)
+
+                    # Wide (2y), UNSCOPED SPY history — a rec/gate fired near
+                    # the window's end needs SPY data up to fired_date +
+                    # horizon, which can extend past period_end. `None` (not
+                    # `{}`) on any failure — distinct from "loaded but not
+                    # covering this window" — since return_vs_spy needs the
+                    # offline/available distinction the other two readout
+                    # pages never needed (they only feed it into an internal
+                    # alpha calc that already treats an empty dict as
+                    # "unpriceable").
+                    _perf_spy_by_date: "dict | None" = None
+                    try:
+                        _perf_spy_hist = _cached_spy("2y")
+                        if _perf_spy_hist is not None and not _perf_spy_hist.empty \
+                                and "Close" in _perf_spy_hist.columns:
+                            _perf_spy_by_date = {}
+                            for _psi, _psr in _perf_spy_hist.iterrows():
+                                _psd = _psi.date() if hasattr(_psi, "date") else None
+                                try:
+                                    _psc = float(_psr["Close"])
+                                except (TypeError, ValueError):
+                                    _psc = None
+                                if _psd is not None and _psc and _psc > 0:
+                                    _perf_spy_by_date[_psd] = _psc
+                    except Exception:
+                        _perf_spy_by_date = None
+
+                    # Unscoped portfolio-risk-snapshot lookup for the recs
+                    # outcome legs (rebal_trim/beta_trim/diversify_add's leg
+                    # B) — same reuse as 🎯 Recommendation Outcomes; distinct
+                    # from `_perf_risk_snap_df` above, which is period-scoped
+                    # for the risk_drift section only.
+                    _perf_rec_risk_snap_df = db.load_portfolio_risk_snapshots()
+                    _perf_rec_risk_snap_by_date: dict = {}
+                    if _perf_rec_risk_snap_df is not None and not _perf_rec_risk_snap_df.empty:
+                        for _, _prr in _perf_rec_risk_snap_df.iterrows():
+                            _prd = str(_prr.get("snapshot_date", ""))[:10]
+                            if _prd:
+                                _perf_rec_risk_snap_by_date[_prd] = _prr.to_dict()
+
+                    # Same `_reduce_calls` guard as 🎯 Recommendation Outcomes:
+                    # `None` (cache never populated this session) reads as an
+                    # empty set, never as "no overlap exists".
+                    _perf_reduce_calls_cache = st.session_state.get("_reduce_calls")
+                    _perf_protective_tickers = (
+                        set(_perf_reduce_calls_cache.keys())
+                        if _perf_reduce_calls_cache is not None else set()
+                    )
+
+                    _perf_review = _perf_review_mod.build_review(
+                        period_start=_perf_start,
+                        period_end=_perf_end,
+                        today=_perf_today,
+                        trades=_perf_trades_df,
+                        rec_events_rows=_perf_rec_rows,
+                        gate_rows=_perf_gate_rows,
+                        account_snapshots_df=_perf_acct_snap_df,
+                        risk_snapshots_df=_perf_risk_snap_df,
+                        spy_prices_by_date=_perf_spy_by_date,
+                        historical_close_fn=_cached_historical_close,
+                        rec_risk_snapshot_by_date=_perf_rec_risk_snap_by_date,
+                        protective_call_tickers=_perf_protective_tickers,
+                        rec_min_calls=REC_OUTCOME_MIN_CALLS,
+                        rec_firm_calls=REC_OUTCOME_FIRM_CALLS,
+                        rec_min_tickers=REC_OUTCOME_MIN_TICKERS,
+                        rec_horizon_days=REC_OUTCOME_HORIZON_TRADING_DAYS,
+                        rec_action_window_days=REC_OUTCOME_ACTION_WINDOW_TRADING_DAYS,
+                        gate_min_calls=GATE_LEDGER_MIN_CALLS,
+                        gate_firm_calls=GATE_LEDGER_FIRM_CALLS,
+                        gate_min_tickers=GATE_LEDGER_MIN_TICKERS,
+                        gate_horizon_days=GATE_LEDGER_HORIZON_TRADING_DAYS,
+                        composite_buy=COMPOSITE_BUY,
+                        gate_ids=tuple(gate_registry.GATE_IDS.keys()),
+                    )
+
+                    if _perf_review is None:
+                        st.error("⛔ Invalid date range.")
+                    else:
+                        st.caption(f"Period: **{_perf_start}** to **{_perf_end}**")
+
+                        # ── Return vs SPY ────────────────────────────────
+                        st.markdown("#### 📈 Return vs SPY (realized only)")
+                        _prv = _perf_review["return_vs_spy"]
+                        if _prv["status"] == "offline":
+                            st.warning(
+                                "⚪ Could not compute — trade history or SPY "
+                                "history isn't available right now."
+                            )
+                        elif _prv["status"] == "empty":
+                            st.info("No trades closed in this period.")
+                            if _prv.get("spy_period_return_pct") is not None:
+                                st.caption(f"SPY period return: {_prv['spy_period_return_pct']:+.2f}%")
+                        else:
+                            _prv_c1, _prv_c2 = st.columns(2)
+                            _prv_c1.metric(
+                                "SPY period return",
+                                f"{_prv['spy_period_return_pct']:+.2f}%"
+                                if _prv["spy_period_return_pct"] is not None else "—",
+                            )
+                            _prv_c2.metric(
+                                "Realized P&L (closed trades)",
+                                f"${_prv['realized_pnl_total']:,.2f}",
+                            )
+                            st.caption(
+                                f"ℹ️ {_prv['caption']} ({_prv['n_realized_trades']} "
+                                "trade(s) closed this period.)"
+                            )
+
+                        # ── Trade Behavior ───────────────────────────────
+                        st.markdown("#### 📊 Trade Behavior")
+                        _ptb = _perf_review["trade_behavior"]
+                        if _ptb["status"] == "offline":
+                            st.warning("⚪ Could not read trade history right now.")
+                        elif _ptb["status"] == "empty":
+                            st.info("No closed trades in this period.")
+                        else:
+                            _ptb_c1, _ptb_c2, _ptb_c3 = st.columns(3)
+                            _ptb_c1.metric("Trades closed", _ptb["n_trades"])
+                            _ptb_c2.metric("Total realized P&L", f"${_ptb['total_realized_pnl']:,.2f}")
+                            _ptb_c3.metric(
+                                "Win rate",
+                                f"{_ptb['win_rate_pct']:.1f}%" if _ptb["win_rate_pct"] is not None else "—",
+                            )
+                            if _ptb["trigger_breakdown"]:
+                                st.dataframe(
+                                    pd.DataFrame(_ptb["trigger_breakdown"]),
+                                    hide_index=True, width="stretch",
+                                )
+                            if _ptb["monthly_trend"]:
+                                st.dataframe(
+                                    pd.DataFrame(_ptb["monthly_trend"]),
+                                    hide_index=True, width="stretch",
+                                )
+
+                        # ── Recommendations acted vs skipped ─────────────
+                        st.markdown("#### 🎯 Recommendations Acted vs Skipped")
+                        _prc = _perf_review["recs"]
+                        if _prc["status"] == "offline":
+                            st.warning("⚪ Could not read the recommendation-outcomes ledger right now.")
+                        elif _prc["status"] == "empty":
+                            st.info("No qualifying recommendation calls fired in this period.")
+                        else:
+                            for _prg in _prc["by_type"]:
+                                with st.container(border=True):
+                                    st.markdown(
+                                        f"**{_prg['rec_type']} / {_prg['arm']}** — "
+                                        f"{_prg['n_calls']} call(s), {_prg['n_distinct_tickers']} "
+                                        "distinct ticker(s)"
+                                    )
+                                    if _prg["below_floor"]:
+                                        st.caption(
+                                            "⚪ Below the standalone page's evaluable floor — "
+                                            "descriptive counts only, no verdict implied."
+                                        )
+                                    if _prg.get("mean_leg_a_alpha_pct") is not None:
+                                        st.caption(
+                                            f"Mean candidate alpha vs SPY: {_prg['mean_leg_a_alpha_pct']:+.2f}%"
+                                        )
+                                    for _prfn in _prg["footnotes"]:
+                                        st.caption(f"ℹ️ {_prfn}")
+
+                        # ── Gates fired ───────────────────────────────────
+                        st.markdown("#### 🛑 Gates Fired")
+                        _pgt = _perf_review["gates"]
+                        if _pgt["status"] == "offline":
+                            st.warning("⚪ Could not read the suppression ledger right now.")
+                        elif _pgt["status"] == "empty":
+                            st.info("No gate suppressions logged in this period.")
+                        else:
+                            for _pgg in _pgt["by_gate"]:
+                                with st.container(border=True):
+                                    if _pgg.get("market_wide"):
+                                        st.markdown(f"**{_pgg['gate_id']}** — market-wide, no single ticker to evaluate.")
+                                    else:
+                                        st.markdown(
+                                            f"**{_pgg['gate_id']}** — {_pgg.get('n_matured_evaluable', 0)} "
+                                            f"matured evaluable, {_pgg.get('n_distinct_tickers_evaluable', 0)} "
+                                            "distinct ticker(s)"
+                                        )
+                                        if _pgg.get("below_floor"):
+                                            st.caption(
+                                                "⚪ Below the standalone page's evaluable floor — "
+                                                "descriptive counts only, no verdict implied."
+                                            )
+                                        if _pgg.get("mean_alpha_pct") is not None:
+                                            st.caption(f"Mean forward alpha: {_pgg['mean_alpha_pct']:+.2f}%")
+                                    for _pgfn in _pgg.get("footnotes", []):
+                                        st.caption(f"ℹ️ {_pgfn}")
+
+                        # ── Leverage & margin cushion drift ──────────────
+                        st.markdown("#### 🛡️ Leverage & Margin Cushion Drift")
+                        _pld = _perf_review["leverage_drift"]
+                        if _pld["status"] == "offline":
+                            st.warning("⚪ Could not read account snapshot history right now.")
+                        elif _pld["status"] == "empty":
+                            st.info("No account snapshots recorded in this period.")
+                        else:
+                            _pld_c1, _pld_c2, _pld_c3 = st.columns(3)
+                            _pld_c1.metric(
+                                "Leverage",
+                                f"{_pld['leverage_end']:.2f}x" if _pld["leverage_end"] is not None else "—",
+                                delta=(f"{_pld['leverage_delta']:+.2f}x"
+                                       if _pld["leverage_delta"] is not None else None),
+                            )
+                            _pld_c2.metric(
+                                "Cushion",
+                                f"${_pld['cushion_end']:,.0f}" if _pld["cushion_end"] is not None else "—",
+                                delta=(f"${_pld['cushion_delta']:+,.0f}"
+                                       if _pld["cushion_delta"] is not None else None),
+                            )
+                            _pld_c3.metric(
+                                "Call distance",
+                                f"{_pld['call_distance_pct_end']:.1f}%"
+                                if _pld["call_distance_pct_end"] is not None else "—",
+                                delta=(f"{_pld['call_distance_pct_delta']:+.1f}pp"
+                                       if _pld["call_distance_pct_delta"] is not None else None),
+                            )
+                            st.caption(f"Start of period: {_pld['start_date']} · End of period: {_pld['end_date']}")
+
+                        # ── Portfolio risk drift ──────────────────────────
+                        st.markdown("#### 🧬 Portfolio Risk Drift")
+                        _prd = _perf_review["risk_drift"]
+                        if _prd["status"] == "offline":
+                            st.warning("⚪ Could not read portfolio risk snapshot history right now.")
+                        elif _prd["status"] == "empty":
+                            st.info("No risk snapshots recorded in this period.")
+                        else:
+                            _prd_c1, _prd_c2, _prd_c3, _prd_c4 = st.columns(4)
+                            _prd_c1.metric(
+                                "Portfolio beta",
+                                f"{_prd['portfolio_beta_end']:.2f}" if _prd["portfolio_beta_end"] is not None else "—",
+                                delta=(f"{_prd['portfolio_beta_delta']:+.2f}"
+                                       if _prd["portfolio_beta_delta"] is not None else None),
+                            )
+                            _prd_c2.metric(
+                                "Top sector %",
+                                f"{_prd['top_sector_pct_end']:.1f}%" if _prd["top_sector_pct_end"] is not None else "—",
+                                delta=(f"{_prd['top_sector_pct_delta']:+.1f}pp"
+                                       if _prd["top_sector_pct_delta"] is not None else None),
+                            )
+                            _prd_c3.metric(
+                                "Max single-name %",
+                                f"{_prd['max_single_name_pct_end']:.1f}%"
+                                if _prd["max_single_name_pct_end"] is not None else "—",
+                                delta=(f"{_prd['max_single_name_pct_delta']:+.1f}pp"
+                                       if _prd["max_single_name_pct_delta"] is not None else None),
+                            )
+                            _prd_c4.metric(
+                                "Avg pairwise corr",
+                                f"{_prd['avg_pairwise_corr_end']:.2f}" if _prd["avg_pairwise_corr_end"] is not None else "—",
+                                delta=(f"{_prd['avg_pairwise_corr_delta']:+.2f}"
+                                       if _prd["avg_pairwise_corr_delta"] is not None else None),
+                            )
+                            st.caption(
+                                f"Correlation sample size: {_prd.get('corr_coverage_n_start')} → "
+                                f"{_prd.get('corr_coverage_n_end')} observations — a shift here can "
+                                "reflect sample size, not just a real diversification change."
+                            )
+
+                        # ── Export ─────────────────────────────────────────
+                        _perf_csv = _perf_review_mod.format_review_csv(_perf_review).to_csv(index=False)
+                        _perf_md = _perf_review_mod.format_review_markdown(_perf_review)
+                        _perf_dl_c1, _perf_dl_c2 = st.columns(2)
+                        with _perf_dl_c1:
+                            st.download_button(
+                                "⬇️ Download CSV", data=_perf_csv,
+                                file_name=f"performance_review_{_perf_start}_{_perf_end}.csv",
+                                mime="text/csv", key="_perf_dl_csv",
+                            )
+                        with _perf_dl_c2:
+                            st.download_button(
+                                "⬇️ Download Markdown", data=_perf_md,
+                                file_name=f"performance_review_{_perf_start}_{_perf_end}.md",
+                                mime="text/markdown", key="_perf_dl_md",
+                            )
             else:
                 _rpt_trades_df = db.load_trades_or_none()
                 _rpt_years = _tax_report.available_tax_years(_rpt_trades_df)
@@ -36702,7 +37023,11 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 
 Setup is a one-time, three-step process shown on the page itself (it needs a free SnapTrade Personal API Key and one Railway environment variable pair — not something done from inside the app in one click). Broker Sync **supplements** the manual habits above — you can still enter cash by hand and log trades manually any time, connected or not.
 
-**8. 📄 Reports (owner-only) — a third tab on this page.** Currently hosts a **Tax Report**: pick a tax year and see your realized gains/losses split into short-term vs. long-term, reconstructed lot-by-lot in the order you actually bought (FIFO) rather than the single blended average-cost number shown elsewhere in the app. Each closed lot also gets a wash-sale flag (⛔ violation / ⏳ pending / ✅ clean) reusing the same check the Tax lens on 🥧 Portfolio Overview already applies to harvested losses. A reconciliation line compares this report's total to the app's own stored average-cost total — they can legitimately differ on a position you sold in parts at different prices, and the report says so rather than picking one silently. Download the full lot table as CSV or a formatted Markdown report. **This is not tax advice** — it's an informational reconciliation tool; verify every figure against your broker's official 1099-B before filing. A Performance Review tab (a point-in-time snapshot of returns, recommendations acted on, and gates that fired, for a quarter or custom date range) is planned but not yet built.
+**8. 📄 Reports (owner-only) — a third tab on this page, with two report types.**
+
+**Tax Report:** pick a tax year and see your realized gains/losses split into short-term vs. long-term, reconstructed lot-by-lot in the order you actually bought (FIFO) rather than the single blended average-cost number shown elsewhere in the app. Each closed lot also gets a wash-sale flag (⛔ violation / ⏳ pending / ✅ clean) reusing the same check the Tax lens on 🥧 Portfolio Overview already applies to harvested losses. A reconciliation line compares this report's total to the app's own stored average-cost total — they can legitimately differ on a position you sold in parts at different prices, and the report says so rather than picking one silently. Download the full lot table as CSV or a formatted Markdown report. **This is not tax advice** — it's an informational reconciliation tool; verify every figure against your broker's official 1099-B before filing.
+
+**Performance Review:** pick a period (This Quarter, Last Quarter, This Tax Year, or a custom date range) for a point-in-time, downloadable snapshot: **Return vs SPY** (SPY's own move over the period next to your realized trade P&L closed in that window — realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎯 Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); and **Leverage & Margin Cushion Drift** / **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing account and risk-snapshot history). Downloads as CSV or Markdown, same as the Tax Report.
 """
             )
 
@@ -36712,7 +37037,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Awareness only, same as Day Shock.
 - **🧾 Summary** — the cockpit: one screen that answers "is the book safe, what must I do today, and is anything drifting" without visiting another page. Six zones, in order of urgency. **① Book Safety** (top, colour-coded) — leverage ×, margin cushion, distance to a margin call, and whether your share counts still match the broker. Awareness only; it never changes a recommendation. It shows a grey **"not verified"** rather than green when your cash balance hasn't been loaded — an unmeasured book and a debt-free book are not the same thing, and it won't guess. Broker drift likewise distinguishes **In sync** (checked, matches), **Clean, dated** (matched when last captured, but that snapshot is old), **Trades pending** (differences explained by trades you logged since), and **Not checked** (unknown). **② Today** — 5 KPI tiles: Portfolio Value (+ 45-day sparkline), Unrealized P&L, Today's P&L (Home's Tier-B figure when available, else an honestly-labelled held-mark), **Today's Movers** (the 3 biggest moves either way; a name with no quote is reported unpriced, never as a flat 0%), and Avg Score against the buy threshold. The movers tile **renames itself "Last session's movers"** on a weekend, a holiday, or before the open — the change is measured against the previous close, so it only means "today" once today's session has begun. **③ Act Today** — bucketed as **EXIT · TRIM · WATCH** so you can tell an alarm's *nature* at a glance, then **one row per item** (badge · ticker · why · composite score), worst first. Below it a purple banner names any tickers under an active reduce/exit call whose ADD suggestions are being suppressed app-wide. Same source as Home, so it can never under-report. **④ Portfolio Health** — four cards: Risk Posture (falls back to counting the protective calls in today's Brief when the fragility dial can't be computed, and says "not computed" rather than an all-clear if that's missing too), Thesis Integrity (**names** the weakening tickers, not just a count), Diversification, and Active Vetoes. All four say "not checked" rather than "none" when they genuinely don't know. **⑤ Horizon** — three cards: 🎯 Engine Track Record (whether acting on the app's calls has beaten the S&P, offence and defence, alongside what the calls you *skipped* returned so the headline can't read as pure skill), 🔔 Catalyst Watch (which holdings report and when, flagged 🚫 when the name is also under a reduce call), and 📋 Portfolio Thesis (this week's five standing claims, each marked held or shifted). The full ledger with last week's comparison stays in the collapsed expander below. **"Alert level" there is not the same thing as "Risk Posture" above it** — alert level counts danger-level alerts, risk posture reads the market regime, so the two can legitimately differ. **⑥ Top Positions** — your 6 largest by weight: score coloured by the same Buy/Hold/Sell bands the rest of the app uses, a weight bar scaled to your single-name cap, an inline EXIT/TRIM/CAP badge, and ⚡ on a same-day shock. A footer counts how many rose, fell, or had no quote. The full Holdings table is one click away in an expander. Reads what Home already computed this session — visit 🏠 Home first if this page says it needs today's Brief.
 - **🧑‍⚖️ The Judge** — **BETA, audit authority only: it never gates a recommendation.** Collects each advisor's opinion on a ticker, weights them by their own past accuracy once they clear a minimum sample, and flags **coherence gaps** — a name under an active protective veto that no other risk surface is currently flagging. It reports; it never suppresses or changes a call.
-- **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above). A third tab, **📄 Reports** (owner-only), hosts a Tax Report — realized short-term/long-term gains by tax year, wash-sale flags, CSV/Markdown export (see the section above).
+- **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above). A third tab, **📄 Reports** (owner-only), hosts a Tax Report (realized short-term/long-term gains by tax year, wash-sale flags) and a Performance Review (a point-in-time return-vs-SPY / recs-and-gates / trade-behavior / leverage-and-risk-drift snapshot for a picked period), both with CSV/Markdown export (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.

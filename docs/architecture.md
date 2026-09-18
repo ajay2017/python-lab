@@ -146,6 +146,7 @@ python-lab/
     ├── trades.py                   Trade-record helpers (realised PnL, performance stats)
     ├── tax_advisor.py              Tax-lot analysis; HARVEST subordinated to investment view
     ├── tax_report.py               📄 Reports Tax Report (F-276): FIFO closed-lot realized ST/LT gains + reconciliation + wash-sale flags
+    ├── performance_review.py       📄 Reports Performance Review (F-276b): period-scoped synthesis of rec/gate/trade/leverage/risk readouts, never a second computation
     ├── rebalancer.py               Portfolio rebalancing; ADD cross-checks news + risk trim
     ├── stress_test.py              Macro stress scenario modelling
     ├── attribution_readiness.py    E2 alpha-attribution data-readiness audit (F-247): distinct-snapshot-date coverage vs NYSE sessions, gaps, concentration, turnover — measurement only, no thresholds
@@ -3097,6 +3098,69 @@ Awareness/archival only — issues no recommendation, gates nothing, adds no new
 `TAX_STCG_THRESHOLD_DAYS`/`TAX_WASH_SALE_DAYS`). Not a `_GATE_FILES` member. Voluntary Opus
 `reviewer` pass (money-math, not a mechanical trigger): SHIP, 0 blocking. Design:
 `docs/plans/reports.md`.
+
+### `stock_analyzer/performance_review.py`
+
+Phase 2 of the 📄 Reports feature (F-276b) — the Performance Review, a second radio option inside
+the same "📄 Reports" tab on 💰 Account. Pure, no Streamlit imports; all I/O (trades, rec/gate
+rows, snapshot DataFrames, SPY price map) injected by the `app.py` caller.
+
+**Hard architectural rule, verified not just designed:** `build_review(...)` is pure SYNTHESIS,
+never a second computation. It delegates ALL alpha/banding math to the already-shipped
+`rec_events_readout.enrich_and_grade`/`grade_by_rec_type` and
+`gate_ledger_readout.enrich_and_grade`/`grade_by_gate`, filtering their input rows to
+`[period_start, period_end]` before calling rather than reimplementing any grading logic — an
+equivalence test (`test_recs_delegation_equals_direct_readout_call`/
+`test_gates_delegation_equals_direct_readout_call`) calls the real delegate functions directly on
+the same filtered input and asserts identical output, so this page cannot silently drift from
+🎯 Recommendation Outcomes / 🛑 The Road Not Taken.
+
+**Six independent sections** (`return_vs_spy`, `trade_behavior`, `recs`, `gates`,
+`leverage_drift`, `risk_drift`), each its own `{"status": "offline"|"empty"|"ok", ...}` —
+`"offline"` iff its underlying loader argument was `None`, `"empty"` iff loaded but nothing falls
+in the window, `"ok"` otherwise. One section's loader failing never forces another section
+offline (tested directly).
+
+**`return_vs_spy`** (an owner decision): SPY period return via `benchmark_mirror.price_on_or_before`
+at both endpoints (nearest close ≤ target) vs. **realized trade P&L closed strictly inside the
+window** (summed off `trade_analytics.compute_extended_stats()`'s windowed output) — not account
+net-equity change (which would need an undisclosed deposits/withdrawals caveat), not deferred.
+Explicitly labeled `"realized only — excludes unrealized moves on positions still open during the
+window"` in both the pure dict and the rendered caption.
+
+**Below-floor framing** (a second owner decision): a period under `REC_OUTCOME_MIN_CALLS`/
+`GATE_LEDGER_MIN_CALLS` etc. shows raw period counts + a descriptive matured-subset mean alpha as
+`below_floor=True`, and **never** renders a "building"/"early"/"firm" verdict band — that framing
+stays exclusively on the all-time standalone pages, so a thin custom period can never visually
+contradict the all-time verdict there. Within that: `rebal_trim`/`beta_trim` are graded as
+portfolio-metric deltas, not alpha, per `rec_events_readout`'s own §11 redline — they expose only
+raw `n_calls`/`n_distinct_tickers`, `mean_leg_a_alpha_pct=None`; only `diversify_add` (the one
+rec_type with a genuine alpha leg) gets the descriptive mean. Gates always carry their
+`mean_alpha_pct` regardless of floor (per owner decision — `grade_by_gate` already computes it
+unconditionally).
+
+**`hold_days` integrity**: `_windowed_ext_df()` runs `compute_extended_stats()` on the FULL trade
+journal FIRST, then filters the OUTPUT frame by its own date column — never the input `trades_df`
+— so a SELL's nearest-preceding-BUY match inside the window survives even when that BUY sits
+before `period_start` (mirrors Phase 1's own `_build_open_lots`/FIFO date-filtering discipline).
+
+**Deliberately excluded from v1**: `self_track_record.py`/`protective_track_record.py` (all-time
+behavioral measures with per-trade maturity floors, not sub-window measures — period-scoping them
+would either mislead or just re-show a permanent "building" band) and `capital_vs_margin.py` (a
+heavy backward-reconstruction engine, not needed here). `leverage_drift` instead reads a
+start-vs-end delta directly off `account_daily_snapshots`' already-recorded (F-266) columns.
+`risk_drift` discloses `corr_coverage_n` at BOTH period endpoints so a listwise sample-size shift
+on the correlation figure is never misread as a real diversification change.
+
+CSV/markdown export (`format_review_csv`/`format_review_markdown`) mirrors `tax_report.py`'s
+formatters. Explicitly checked for, and clear of, the `$`-pairing LaTeX rendering bug that shipped
+in Phase 1's Tax Report the same day (memory `feedback_streamlit_renderer_mismatch`) — every
+dollar-formatted value in the new `app.py` wiring is confined to `st.metric()`, which doesn't
+render markdown/LaTeX.
+
+No new constant, no `db.py`/`constants.py` touch, not a `_GATE_FILES` member — same footing as
+Phase 1: no mechanical Opus-review trigger, but a voluntary pass was run given the framing risk of
+a wrong return-vs-SPY comparison: SHIP, 0 blocking. Design: `docs/plans/reports.md`.
 
 ---
 

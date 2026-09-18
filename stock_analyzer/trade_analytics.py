@@ -48,7 +48,7 @@ def _pnl_pct(realized_pnl, cost_basis, shares):
     return round(pnl / invested * 100, 2)
 
 
-def compute_extended_stats(trades_df: pd.DataFrame) -> dict:
+def compute_extended_stats(trades_df: pd.DataFrame) -> pd.DataFrame:
     """
     Returns extended per-trade stats DataFrame with extra columns:
     pnl_pct, month_str, hold_days (estimated from matched BUY records).
