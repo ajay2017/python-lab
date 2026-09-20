@@ -52,6 +52,9 @@ from stock_analyzer.constants import (
     PROTECT_TRACK_FIRM_CALLS,
     SELF_TRACK_SELL_RELIABLE_LOG_START,
     SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    SELF_TRACK_RELIABLE_LOG_START,
+    SELF_TRACK_MATCH_LOOKBACK_DAYS,
+    BEHAVIORAL_MIN_SAMPLE_N,
 )
 # Reused verbatim, not reimplemented — portfolio_qa.py's balanced-brace JSON
 # extraction already handles the "LLM wraps JSON in prose despite being told
@@ -68,6 +71,7 @@ from stock_analyzer.portfolio_qa import _extract_json_object
 AVAILABLE_INPUT_VOCAB = frozenset({
     "trades_df", "exit_signals_df", "recs_df",
     "current_prices", "spy_close_by_date", "port_df",
+    "universe_set", "watchlist_set",
 })
 
 # Keys where an EMPTY-but-present container is treated the same as a failed
@@ -77,12 +81,18 @@ AVAILABLE_INPUT_VOCAB = frozenset({
 # current_prices/spy_close_by_date mirror the design doc's own example
 # ("fetch_live_prices returning {} when it should have live prices") — an
 # empty result from a live fetch that was actually attempted is suspicious,
-# not a legitimate "nothing to report" state. trades_df/exit_signals_df/
-# recs_df are deliberately EXCLUDED — a genuinely empty trade history, zero
-# exit signals ever fired, or zero recommendations on record are all
+# not a legitimate "nothing to report" state. universe_set joins this group
+# for the same reason — an empty scan universe from a fetch that actually ran
+# is suspicious, never a legitimate "nothing scanned" state. trades_df/
+# exit_signals_df/recs_df/watchlist_set are deliberately EXCLUDED — a
+# genuinely empty trade history, zero exit signals ever fired, zero
+# recommendations on record, or a genuinely empty watchlist are all
 # legitimate real states elsewhere in this app (e.g. classify_sells'
-# documented None-vs-empty distinction for exit_signals_df).
-_EMPTY_IS_FAILURE_KEYS = frozenset({"port_df", "current_prices", "spy_close_by_date"})
+# documented None-vs-empty distinction for exit_signals_df, and
+# classify_buys' identical treatment of watchlist_set).
+_EMPTY_IS_FAILURE_KEYS = frozenset({
+    "port_df", "current_prices", "spy_close_by_date", "universe_set",
+})
 
 
 # ─── Ship-gate: models with a recorded refusal-eval PASS ────────────────────
@@ -173,6 +183,27 @@ def _adapt_classify_sells(data_bundle: dict) -> dict:
     if classified is None:
         return {"error": "exit-signal history unavailable — can't classify sells"}
     return {"classified_sells": classified}
+
+
+def _adapt_classify_buys(data_bundle: dict) -> dict:
+    from stock_analyzer.self_track_record import classify_buys, self_vs_engine_summary
+    from stock_analyzer.market_time import today_et
+    trades_df = data_bundle.get("trades_df")
+    recs_df = data_bundle.get("recs_df")
+    universe_set = data_bundle.get("universe_set")
+    watchlist_set = data_bundle.get("watchlist_set")
+    current_prices = _or_empty(data_bundle.get("current_prices"), {})
+    spy_close_by_date = _or_empty(data_bundle.get("spy_close_by_date"), {})
+    classified = classify_buys(
+        trades_df, recs_df, universe_set or set(), watchlist_set or set(),
+        SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS,
+    )
+    if classified is None:
+        return {"error": "recommendation history unavailable — can't classify buys"}
+    summary = self_vs_engine_summary(
+        classified, current_prices, spy_close_by_date, today_et(), BEHAVIORAL_MIN_SAMPLE_N,
+    )
+    return {"self_vs_engine_buys": summary}
 
 
 def _adapt_protective_outcomes(data_bundle: dict) -> dict:
@@ -291,6 +322,20 @@ TOOLBOX: dict = {
         "cannot": [
             "cannot judge a BUY-side decision (see rec_outcomes for that)",
             "cannot classify a sell from before exit-signal capture went live",
+        ],
+    },
+    "classify_buys": {
+        "adapter": _adapt_classify_buys,
+        "needs": frozenset({"trades_df", "recs_df", "universe_set", "watchlist_set", "current_prices", "spy_close_by_date"}),
+        "summary": "Classifies every BUY trade as app-aligned (matched an active "
+                   "recommendation within a few days) vs. self-initiated (no "
+                   "matching recommendation on file), and compares each group's "
+                   "alpha vs SPY -- 'is my own buy instinct good?' vs the "
+                   "engine's own picks.",
+        "cannot": [
+            "cannot judge a SELL-side decision (see classify_sells for that)",
+            "cannot classify a buy from before recommendation-log reliability went live",
+            "cannot answer about the engine's own ranking/scoring quality in general (see rec_outcomes for that) -- this is specifically about the owner's OWN sourcing vs the engine's, not the engine's picks in isolation",
         ],
     },
     "protective_outcomes": {

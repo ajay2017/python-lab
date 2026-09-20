@@ -400,3 +400,24 @@ def test_every_eval_passed_model_exists_in_ai_provider_registry():
 def test_build_plan_prompt_history_carries_question_text_only_not_answers():
     prompt = inv.build_plan_prompt("and last week?", history_questions=["how did I do this month?"])
     assert "how did I do this month?" in prompt
+
+
+# ─── classify_buys adapter — degrade path ────────────────────────────────────
+# classify_buys/self_vs_engine_summary's own logic is already covered in
+# tests/test_self_track_record.py — not duplicated here. This only checks the
+# adapter's own defensive contract: a failed (None) recs_df must degrade to a
+# visible {"error": ...} fact, never a crash, when called directly (bypassing
+# verify_fetch, which would normally have already caught this upstream).
+
+def test_adapt_classify_buys_degrades_to_error_when_recs_df_is_none():
+    result = inv.TOOLBOX["classify_buys"]["adapter"]({
+        "trades_df": pd.DataFrame([{"action": "BUY", "ticker": "AAPL",
+                                     "traded_at": "2026-08-10", "shares": 1, "price": 100}]),
+        "recs_df": None,
+        "universe_set": {"AAPL"},
+        "watchlist_set": set(),
+        "current_prices": {"AAPL": 110},
+        "spy_close_by_date": {},
+    })
+    assert "error" in result
+    assert "self_vs_engine_buys" not in result

@@ -40648,6 +40648,26 @@ elif page == "🧠 AI Insights":
             _b_exit_signals_df = db.load_exit_signals_or_none()
             _b_pdf = st.session_state.get("_port_df_enriched")
 
+            # universe_set/watchlist_set: same real sources 🎯 My Edge's own
+            # Self-vs-Engine buy-side tab uses, but via the _or_none-disciplined
+            # loaders (never the app.py UI wrapper, which renders an st.error
+            # banner as a side effect -- wrong to trigger from a lazy builder).
+            _b_universe_set = None
+            try:
+                _b_uni_payload, _b_uni_as_of, _b_uni_err = reference_data.resolve_universe_or_none("sector_universe")
+                if _b_uni_payload is not None and not _b_uni_err:
+                    _b_universe_set = set().union(*_b_uni_payload.values()) if _b_uni_payload else set()
+            except Exception:
+                _b_universe_set = None
+
+            _b_watchlist_set = None
+            try:
+                _b_wl = db.load_watchlist_or_none()
+                if _b_wl is not None:
+                    _b_watchlist_set = set(_b_wl)
+            except Exception:
+                _b_watchlist_set = None
+
             _b_held_tickers = []
             if _b_pdf is not None and not _b_pdf.empty and "Ticker" in _b_pdf.columns:
                 _b_held_tickers = [str(t).upper() for t in _b_pdf["Ticker"].tolist()]
@@ -40688,6 +40708,8 @@ elif page == "🧠 AI Insights":
                 "current_prices": _b_current_prices,
                 "spy_close_by_date": _b_spy_close_by_date,
                 "port_df": _b_pdf,
+                "universe_set": _b_universe_set,
+                "watchlist_set": _b_watchlist_set,
             }
 
         def _inv_trace_lines(trace: list) -> list:

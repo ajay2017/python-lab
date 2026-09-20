@@ -2988,19 +2988,25 @@ imports, deliberately does NOT import `ai_provider` (the caller injects an `llm_
 this module never depends on which provider/model is configured).
 
 **Fixed input vocabulary** (`AVAILABLE_INPUT_VOCAB`): `trades_df`, `exit_signals_df`,
-`recs_df`, `current_prices`, `spy_close_by_date`, `port_df` — the ONLY data_bundle keys any
-toolbox entry's `needs` may name; extending this is a deliberate, reviewed toolbox change,
-never something a plan step can request ad hoc. `_EMPTY_IS_FAILURE_KEYS` (`port_df`,
-`current_prices`, `spy_close_by_date`) treats an empty-but-present container as a failed fetch;
-`trades_df`/`exit_signals_df`/`recs_df` are deliberately excluded — a genuinely empty trade
-history or zero signals/recs on record are legitimate real states.
+`recs_df`, `current_prices`, `spy_close_by_date`, `port_df`, `universe_set`, `watchlist_set` —
+the ONLY data_bundle keys any toolbox entry's `needs` may name; extending this is a deliberate,
+reviewed toolbox change, never something a plan step can request ad hoc (`universe_set`/
+`watchlist_set` added 2026-09-20 for `classify_buys`, below). `_EMPTY_IS_FAILURE_KEYS`
+(`port_df`, `current_prices`, `spy_close_by_date`, `universe_set`) treats an empty-but-present
+container as a failed fetch; `trades_df`/`exit_signals_df`/`recs_df`/`watchlist_set` are
+deliberately excluded — a genuinely empty trade history, zero signals/recs on record, or a
+genuinely empty watchlist are all legitimate real states.
 
 **`TOOLBOX`**: `closed_lots` (`investor_mirror.build_closed_lots`), `classify_sells`
-(`self_track_record.classify_sells`), `protective_outcomes` (`protective_track_record`'s
-compute/collapse/headline trio), `recalculate_holdings` (`db.recalculate_from_trades`),
-`rec_outcomes` (`recommendations_history`'s match/compute pair — cannot isolate one single
-named recommendation by ticker+date, only the aggregate acted-vs-skipped track record),
-`ticker_sectors` (static `portfolio.TICKER_SECTORS` lookup, no fetch), `live_prices`/
+(`self_track_record.classify_sells`), `classify_buys` (`self_track_record.classify_buys` +
+`self_vs_engine_summary` — the BUY-side sibling of `classify_sells`, added 2026-09-20 after a
+real gap: the toolbox could answer "is my own SELL instinct beating the app's exit calls?" but
+not the BUY-side equivalent; needs `universe_set`/`watchlist_set` in addition to
+`trades_df`/`recs_df`/`current_prices`/`spy_close_by_date`), `protective_outcomes`
+(`protective_track_record`'s compute/collapse/headline trio), `recalculate_holdings`
+(`db.recalculate_from_trades`), `rec_outcomes` (`recommendations_history`'s match/compute pair —
+cannot isolate one single named recommendation by ticker+date, only the aggregate acted-vs-skipped
+track record), `ticker_sectors` (static `portfolio.TICKER_SECTORS` lookup, no fetch), `live_prices`/
 `spy_history` (trivial passthroughs — the actual fetch already happened upstream in the app's
 own Fetch stage), `sector_exposure` (`portfolio_qa.sector_composition`, itself a thin wrapper
 around `portfolio.sector_exposure` — dollar-weighted sector concentration, added 2026-09-18
