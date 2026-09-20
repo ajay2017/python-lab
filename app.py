@@ -11915,6 +11915,45 @@ elif page == "🧾 Summary":
                         st.session_state["_pending_page"] = "🏠 Home"
                         st.rerun()
 
+                # ── Protective track-record disclosure (awareness only) ──────
+                # When there's an EXIT/TRIM item to act on, surface the SAME
+                # already-computed 🛡️ Defense-facet verdict shown on the 🎯
+                # Engine Track Record card below — reads the published
+                # `_etr_cache`, never recomputes it here (this app's
+                # coordination pattern: a consumer reads a producer's cache or
+                # treats it as unknown, it never duplicates the computation).
+                # The Engine Track Record card-data block that (re)builds
+                # `_etr_cache` runs LATER in this same page render, so on the
+                # first render of a NEW day this cache can still carry
+                # YESTERDAY's date/values at the moment this block reads it —
+                # checked explicitly below (never trust a same-day assumption)
+                # so a stale verdict reads as "not yet available this render"
+                # rather than a quietly-wrong number.
+                # Never gates/reorders/suppresses anything — a footnote, not a
+                # rule.
+                _sm_etr_cache_for_act = st.session_state.get("_etr_cache")
+                _sm_etr_fresh_for_act = (
+                    _sm_etr_cache_for_act is not None
+                    and _sm_etr_cache_for_act.get("date") == _today_et().isoformat()
+                )
+                if _sm_etr_fresh_for_act and (_sm_chips["EXIT"] > 0 or _sm_chips["TRIM"] > 0):
+                    _sm_prot_h_for_act = _sm_etr_cache_for_act.get("protective_headline")
+                    if _sm_prot_h_for_act is None:
+                        _sm_prot_h_for_act = {}
+                    _sm_prot_alpha_for_act = _sm_prot_h_for_act.get("protect_alpha")
+                    if (_sm_prot_h_for_act.get("band") == "firm"
+                            and _sm_prot_alpha_for_act is not None
+                            and _sm_prot_alpha_for_act < 0):
+                        st.caption(
+                            "ℹ️ This engine's protective EXIT/TRIM calls have "
+                            "historically run early — the flagged names went on "
+                            "to beat SPY by an average of "
+                            f"{abs(_sm_prot_alpha_for_act):.1f}pp afterward "
+                            f"(n={_sm_prot_h_for_act.get('n_mature', 0)} tracked "
+                            "calls). Worth confirming before you act, not a "
+                            "reason to ignore the call."
+                        )
+
                 # ONE CARD PER ITEM (2026-08-28). This strip previously rendered
                 # a single derived line ("REDUCE — DETERIORATION EXIT APP" from
                 # the FIRST item plus "+N more"), which is a count with a label
