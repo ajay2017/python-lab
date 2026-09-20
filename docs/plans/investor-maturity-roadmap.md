@@ -1,5 +1,24 @@
 # Investor Maturity Roadmap — raising confidence across Offense, Defense and Restraint
 
+**Status 2026-09-20: A1's regime-confound question, closed twice more, still holding.** A
+2026-09-17 follow-up (same day as this doc's last A1 work) found the -15.7%/-14.7%
+`protect_alpha` headline concentrated in exactly 5 tickers (an AI/growth/cyber cluster
+averaging -51.3%), bimodal within that cluster (CRWD earned its risk; TEAM/NOW's caution was
+dollar-correct despite bad alpha optics) — concentration/regime, not a broadly miscalibrated
+ladder, not a software fix. A 2026-09-20 follow-up ran the real dollar-cost diagnostic script
+(`scripts/exit_early_cost_analysis.py`, built that day) against live production data and found
+a SECOND high-beta pocket (semiconductors) — but a second Opus `planner` reconciliation
+confirmed real SPY closes were essentially flat over every signal window (idiosyncratic
+strength, not a rally) and the "new" dollars were dominated by names already flagged as laggards
+on 2026-09-17, not a genuinely broader problem. **Still no threshold change — the decisive
+blocker remains W6's opposite failure mode (52% of real closed losers get no protective signal
+at all), untouched by any of this.** Two low-risk, awareness-only pieces shipped instead: a
+disclosure caption on 🧾 Summary's Act Today card (reads the already-published protective
+track-record verdict, never recomputes) and the diagnostic script itself (a permanent,
+re-runnable tool for the next checkpoint). Full reasoning, all real numbers, and what would
+actually justify revisiting this: memory `project_investor_maturity_roadmap`'s 2026-09-20
+sections. Next real checkpoint: the mid-Oct 9-gate ledger evaluable verdicts.
+
 **Status 2026-09-14: A1/A2/A4 (read-only analyses) run against real production data — see
 their RESULT blocks below. Tier 1 SHIPPED: B1 (F-269), B2 (F-270). Tier 2 SHIPPED: C1
 (F-271), C2 (F-272). D1 and E1 also done same day** (§5 details below) — both pure-additive,

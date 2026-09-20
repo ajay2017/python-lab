@@ -1,5 +1,20 @@
 # 🔎 Portfolio Investigator — Design Plan
 
+**Status update 2026-09-20: toolbox grew a SECOND function, `classify_buys` (buy-side self-vs-
+engine, sibling to `classify_sells`) — a real gap found during the day's investment-analysis
+work (the toolbox could answer "is my own sell instinct beating the app's exit calls?" but not
+the buy-side mirror question). Bigger than `sector_exposure`'s earlier addition: required
+extending `AVAILABLE_INPUT_VOCAB` itself with two new keys, `universe_set`/`watchlist_set`,
+wired into `app.py`'s data-bundle builder via `reference_data.resolve_universe_or_none`/
+`db.load_watchlist_or_none` (both `_or_none`-disciplined). Voluntary Opus `reviewer`: SHIP, 0
+blocking — traced the full gate/verify data path and confirmed the adapter's `or set()`
+fallbacks are genuinely unreachable dead code, not a real offline-sentinel collapse. **Required
+ship-gate re-run CONFIRMED same day**: the owner ran `scripts/investigator_eval.py` for real —
+both `claude-sonnet-4-6` and `claude-opus-5` scored a clean 34/34 against the grown toolbox, no
+misclassifications (`claude-haiku-4-5` also scored 34/34 in the same run, not currently added to
+`EVAL_PASSED_MODELS`, a separate undecided call). Nothing left outstanding on this addition. Full
+detail: `docs/requirements.md` F-275, memory `project_portfolio_investigator`.**
+
 **Status update 2026-09-18: PRODUCTION-VERIFIED, two real live bugs found and fixed post-ship.**
 The refusal eval (chunk 5) only ever exercised the PLAN stage against a real API — the
 REPORT-synthesis stage had zero live-model test coverage until the owner tried a real question in
