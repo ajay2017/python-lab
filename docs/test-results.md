@@ -18,7 +18,15 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-09-18 (Portfolio Investigator: F-275 build + production fixes + sector_exposure toolbox growth)
+## 1. Latest run — 2026-09-20 (📄 Reports: F-276/F-276b Tax Report + Performance Review, plus the exit-signal disclosure/diagnostic pair)
+
+**5947 passed, 0 failed, 19 warnings** (`python -m pytest -q`, full suite, no marker filter; longest single run 692s). Python (local `.venv`). Transcribed from the run, not recalled.
+
+**No coverage run this pass** (the `--cov` command wasn't re-run — see the how-to-update note above; next full-sweep session should capture it).
+
+**+64 over the 5883 baseline (2026-09-18) below**, across four commits this session: `tests/test_tax_report.py` (new file, 21 tests — F-276's FIFO closed-lot replay, ST/LT boundary, ET tax-year boundary, reconciliation agree/diverge, wash-sale pass-through, SPLIT holding-period inheritance), `tests/test_performance_review.py` (new file, 22 tests then +2 more for the return-vs-SPY comparability fix — six-section offline independence, below-floor invariant, delegation-equals-direct-readout-call equivalence, `hold_days` output-filtering preservation, realized-return-pct pooling across multiple lots), `tests/test_exit_early_cost_analysis.py` (new file, 22 tests — direction classification incl. the zero-alpha tie, FIFO share/price attribution across partial fills and multi-lot buys, all four dollar-figure buckets incl. every "no figure, here's why" path). `app.py`'s new Summary Act Today disclosure caption and `trade_analytics.compute_extended_stats`'s corrected return-type hint added no new tests (render-only wiring / a type-hint-only fix, nothing new to exercise). Full detail: `docs/requirements.md` F-276/F-276b, `docs/shipped-log.md`, memory `project_reports_feature` and `project_investor_maturity_roadmap`.
+
+## 1a. Previous run — 2026-09-18 (Portfolio Investigator: F-275 build + production fixes + sector_exposure toolbox growth)
 
 **5883 passed, 0 failed, 19 warnings** (`python -m pytest -q`, full suite, no marker filter: ~235-380s across several runs this session). Python (local `.venv`). Transcribed from the run, not recalled.
 
