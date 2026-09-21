@@ -310,7 +310,7 @@ def build_watchlist_recommendation(
     net_rev = int(_f(revisions.get("net", 0)))
 
     # ── REMOVE ────────────────────────────────────────────────────────────────
-    if "Sell" in rec_label or "Strong Sell" in rec_label or score < 44:
+    if "Sell" in rec_label or "Strong Sell" in rec_label or score < COMPOSITE_HOLD:
         return _card(
             ticker, "REMOVE", score, rec_label, price, entry_lo, entry_hi,
             stop, rr, earn_days,
@@ -330,7 +330,7 @@ def build_watchlist_recommendation(
             ),
             conditions_met=[],
             conditions_missing=[
-                f"Score {score:.0f}/100 — below the 44 threshold for any buy consideration",
+                f"Score {score:.0f}/100 — below the {COMPOSITE_HOLD:.0f} threshold for any buy consideration",
                 f"Signal: {rec_label} — active bearish signal",
             ],
             institutional_lens=(
@@ -410,7 +410,7 @@ def build_watchlist_recommendation(
                     "The watchlist alert is right; the timing relative to your book is wrong."
                 ),
                 conditions_met=[
-                    f"Score {score:.0f}/100 — above 65 threshold",
+                    f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
                     f"Signal: {rec_label}",
                     f"Price {'in' if in_zone else 'near'} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
                     f"R:R {rr:.1f}:1 — above 2:1 minimum" if rr else "Risk/reward acceptable",
@@ -480,7 +480,7 @@ def build_watchlist_recommendation(
                 "Place the ATR stop immediately on entry — do not hold without a stop."
             ),
             conditions_met=[
-                f"Score {score:.0f}/100 — above 65 threshold",
+                f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
                 f"Signal: {rec_label}",
                 f"Price {'in' if in_zone else 'near'} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
                 f"R:R {rr:.1f}:1 — above 2:1 minimum" if rr else "Risk/reward acceptable",
@@ -554,7 +554,7 @@ def build_watchlist_recommendation(
                 "not a green light."
             ),
             conditions_met=[
-                f"Score {score:.0f}/100 — above 65 threshold",
+                f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
                 f"Signal: {rec_label}",
                 f"Price in entry zone (${entry_lo:.2f}–${entry_hi:.2f})",
             ],
@@ -599,7 +599,7 @@ def build_watchlist_recommendation(
                 "do not chase. If it pulls back to the zone, you're positioned perfectly."
             ),
             conditions_met=[
-                f"Score {score:.0f}/100 — above 65 threshold",
+                f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
                 f"Signal: {rec_label}",
                 f"Thesis intact — within 8% of entry zone",
             ],
@@ -640,7 +640,7 @@ def build_watchlist_recommendation(
                 "Re-evaluate if the score changes materially."
             ),
             conditions_met=[
-                f"Score {score:.0f}/100 — above 65 threshold",
+                f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
                 f"Signal: {rec_label}",
                 "Thesis intact",
             ],
@@ -666,13 +666,13 @@ def build_watchlist_recommendation(
         title=f"{ticker} — Monitoring for Catalyst (score {score:.0f}/100)",
         summary=(
             f"Score {score:.0f}/100 — above the remove threshold but not yet at "
-            "conviction level (65+). Mixed signals suggest waiting for a clearer setup."
+            f"conviction level ({COMPOSITE_BUY:.0f}+). Mixed signals suggest waiting for a clearer setup."
         ),
         detail=(
             f"Score {score:.0f}/100 places {ticker} in the 'monitoring' zone — "
             "fundamentals and technical signals are mixed. "
             "This is not a clear buy setup yet. "
-            "**Keep on watchlist and wait for one of:** a composite score break above 65, "
+            f"**Keep on watchlist and wait for one of:** a composite score break above {COMPOSITE_BUY:.0f}, "
             "a positive earnings surprise that re-rates the fundamentals, "
             "or a sector rotation that confirms the thesis. "
             "The stock is worth watching but does not yet meet the bar for capital deployment."
@@ -682,7 +682,7 @@ def build_watchlist_recommendation(
             "Thesis partially supported",
         ],
         conditions_missing=[
-            f"Score {score:.0f}/100 — needs to reach 65+ for conviction entry",
+            f"Score {score:.0f}/100 — needs to reach {COMPOSITE_BUY:.0f}+ for conviction entry",
             f"Signal {rec_label} — needs Buy or Strong Buy",
             "No specific catalyst confirmed yet",
         ],
@@ -690,7 +690,7 @@ def build_watchlist_recommendation(
             "A 'monitoring' position on the watchlist is intentional capital preservation. "
             "Institutional approach: the watchlist is not just a holding area — it's an active "
             "queue of theses at various stages of validation. "
-            "A score below 65 means the market hasn't yet confirmed your thesis. "
+            f"A score below {COMPOSITE_BUY:.0f} means the market hasn't yet confirmed your thesis. "
             "Deploying capital before confirmation is speculation; waiting for confirmation is investing. "
             "The catalysts to watch for: earnings revision momentum turning positive, "
             "a sector re-rating, or a technical breakout above a well-defined resistance level. "
