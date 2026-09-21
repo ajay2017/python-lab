@@ -338,6 +338,7 @@ from stock_analyzer.premarket_stance import (
     generate_stance as pms_generate_stance,
 )
 from stock_analyzer.quick_research import research_ticker as _qr_research
+from stock_analyzer.ticker_resolver import looks_like_ticker, resolve_company_name
 from stock_analyzer.decision_journal import compute_patterns
 from stock_analyzer import broker_import as _bimp
 from stock_analyzer import broker_screenshot as _bscr
@@ -7725,7 +7726,18 @@ if page == "🏠 Home":
         )
 
     if _qr_btn and _qr_ticker_in.strip():
-        _t = _qr_ticker_in.strip().upper()
+        _t_raw = _qr_ticker_in.strip()
+        # Free-text company names ("microsoft") don't look like a ticker —
+        # resolve via yfinance Search before attempting a doomed load_all()
+        # call. Anything already ticker-shaped skips the search entirely
+        # (fast path, no extra latency/quota cost on the common case).
+        if looks_like_ticker(_t_raw):
+            _qr_resolved = None
+            _t = _t_raw.upper()
+        else:
+            _qr_resolved = resolve_company_name(_t_raw)
+            _t = _qr_resolved["symbol"] if _qr_resolved else _t_raw.upper()
+        st.session_state["_qr_resolved"] = _qr_resolved
         with st.spinner(f"Analyzing {_t}..."):
             try:
                 _qr_raw = load_all(_t)
@@ -7776,6 +7788,11 @@ if page == "🏠 Home":
 
     _qr_res = st.session_state.get("_qr_result")
     if _qr_res:
+        _qr_resolved_info = st.session_state.get("_qr_resolved")
+        if _qr_resolved_info:
+            st.caption(
+                f"Showing results for **{_qr_resolved_info['symbol']}** — {_qr_resolved_info['name']}"
+            )
         if "error" in _qr_res:
             st.error(f"Could not load data for {_qr_res['ticker']}: {_qr_res['error']}")
         else:
