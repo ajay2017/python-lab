@@ -2354,6 +2354,19 @@ still reads "red" internally and is still correctly skipped as a validator. The
 state the actual failing check(s)' label + detail text instead of a generic
 "a data provider is still actively erroring" paragraph.
 
+**`tests/test_system_health_inventory_completeness.py` (added 2026-09-21)** is a
+structural guard on check ②'s `_INVENTORY`, added after the 2026-09-21 code audit
+found the SAME class of gap twice in a row — a cron-written table
+(`account_daily_snapshots`, `score_history`) shipping with zero `_INVENTORY` row,
+making a silent write failure or an un-applied DDL invisible on this page. Rather
+than rely on remembering to update `_INVENTORY` by hand for the next new table, this
+test statically parses `cron_runner.py` for every `db.save_*(...)` call, resolves
+each called function's target table by parsing `db.py`'s function body for a
+`.table("literal")` call, and asserts each resolved table is either registered in
+`_INVENTORY` or on a small, reasoned allowlist (`cron_heartbeat`, `alert_state` —
+both covered by check ① instead). Fails at test time, not at the next audit, if a
+future table is added to `cron_runner.py`'s writes without a matching `_Store` row.
+
 ### `stock_analyzer/reference_shelf.py`
 
 Shelf-life registry for the hand-maintained STATIC reference tables (F-238),

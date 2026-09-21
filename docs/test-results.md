@@ -18,7 +18,21 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-09-20 (📄 Reports: F-276/F-276b Tax Report + Performance Review, plus the exit-signal disclosure/diagnostic pair)
+## 1. Latest run — 2026-09-21 (F-278 rapid-reversal mirror + cross-asset stress signals + Research-a-Stock name resolution, then the 2026-09-21 code audit + UX audit fix passes)
+
+**5993 passed, 0 failed, 19 warnings** (`python -m pytest -q`, full suite, no marker filter; longest single run 311s). Python (local `.venv`). Transcribed from the run, not recalled.
+
+**No coverage run this pass** (see the how-to-update note above; next full-sweep session should capture it).
+
+**+46 over the 5947 baseline (2026-09-20) below**, across five commits — three that shipped before this doc-sync pass and were never logged, plus two from the code-audit/UX-audit fix passes:
+- `tests/test_behavioral_fingerprint.py` (+9 tests) — F-278's rapid-reversal live SELL mirror (mutual exclusivity with an active signal, bearish-composite suppression, window boundary, composite-`None` firing, tier-label floor mapping, most-recent-buy anchoring, malformed-input degrade-to-`None`).
+- `tests/test_cross_asset.py` (+8 tests, one parametrized ×2) — the WTI crude / 10Y yield-move stress signals.
+- `tests/test_ticker_resolver.py` (new file, 25 tests at ship, +2 more this pass) — Research-a-Stock's company-name-to-ticker resolution (`stock_analyzer/ticker_resolver.py`); the +2 are the 2026-09-21 UX audit's I3 fix (an "alternates" list disclosing other close-scoring EQUITY matches, e.g. GOOGL vs GOOG, instead of silently picking one).
+- `tests/test_system_health_inventory_completeness.py` (new file, 2 tests) — the 2026-09-21 code audit's Medium fix: a structural guard that statically resolves every `db.save_*` call in `cron_runner.py` to its target table and asserts registration in `system_health.py`'s `_INVENTORY`, so a future cron-written table missing a `_Store` row is caught at test time (this exact gap recurred twice — `account_daily_snapshots`, `score_history` — before the guard existed).
+
+Full detail: `docs/reviews/2026-09-21-review.md` (code audit) and `docs/reviews/2026-09-21-UX-review.md` (UX audit); memory `project_ux_audit_2026_09_21`.
+
+## 1a. Previous run — 2026-09-20 (📄 Reports: F-276/F-276b Tax Report + Performance Review, plus the exit-signal disclosure/diagnostic pair)
 
 **5947 passed, 0 failed, 19 warnings** (`python -m pytest -q`, full suite, no marker filter; longest single run 692s). Python (local `.venv`). Transcribed from the run, not recalled.
 
