@@ -465,6 +465,13 @@ def _run_premarket(now_et, force: bool) -> int:
 
 
 def _run_eod(now_et, force: bool) -> int:
+    # Reset at the top, mirroring `_run_maintenance`'s own established
+    # pattern -- otherwise a stale detail string from a PRIOR failed run
+    # (this lane's or read directly rather than through the dispatcher)
+    # could linger and be misread as describing the current run.
+    global _LAST_LANE_FAILURE_DETAIL
+    _LAST_LANE_FAILURE_DETAIL = None
+
     today_str = now_et.date().isoformat()
     if not force:
         if not is_trading_day(now_et.date()):
@@ -482,13 +489,30 @@ def _run_eod(now_et, force: bool) -> int:
     for e in payload.get("errors", []):
         _log(f"engine note: {e}")
 
+    # 2026-09-21 app-review Defect #2 fix: every write step below used to
+    # log its own failure but never propagated it into this function's
+    # return code, which always returned 0 unconditionally (unless the
+    # WHOLE run was blocked by a full DB outage above) -- so a heartbeat of
+    # "ok" could coexist with several of these writes having silently
+    # failed all along. `failures` mirrors the `_run_maintenance` lane's
+    # own pattern exactly (the established precedent for "isolated
+    # sub-job failures must flip the heartbeat, not just get logged").
+    # Only a write that SHOULD have succeeded and didn't goes in this list
+    # -- a write that's legitimately conditional (e.g. 0 qualifying
+    # rec_events rows today, no held tickers for sentiment) is never a
+    # failure and must never be added here.
+    failures: list[str] = []
+
     # 1. Today's-P&L baseline: write today's snapshot (idempotent upsert). Makes
     # the baseline deterministic even on days the app isn't opened post-close.
     rows = payload.get("snapshot_rows", [])
-    if rows and db.save_daily_snapshot(now_et.date(), rows):
+    if not rows:
+        _log("daily_snapshot skipped — no positions in payload.")
+    elif db.save_daily_snapshot(now_et.date(), rows):
         _log(f"daily_snapshot written ({len(rows)} positions, date={today_str}).")
     else:
-        _log(f"daily_snapshot NOT written ({len(rows)} rows; DB offline / table missing / empty).")
+        _log(f"daily_snapshot NOT written ({len(rows)} rows; DB offline / table missing).")
+        failures.append("daily_snapshot")
 
     # 1b. Account-level leverage/margin-cushion history — reuses the SAME
     # `rows` (snapshot_rows) just written above, no second fetch. Feeds the
@@ -507,8 +531,10 @@ def _run_eod(now_et, force: bool) -> int:
                  f"leverage={_acct_row['leverage']}, date={today_str}).")
         else:
             _log(f"account_daily_snapshot NOT written (DB offline / table missing, date={today_str}).")
+            failures.append("account_daily_snapshot")
     except Exception as e:
         _log(f"account_daily_snapshot FAILED — {str(e)[:120]} — continuing.")
+        failures.append(f"account_daily_snapshot: {str(e)[:120]}")
 
     # 1c. Portfolio-level risk-metric history (Recommendation-Outcomes-
     # Measurement Phase 1a — docs/plans/recommendation-outcomes-measurement.md
@@ -530,8 +556,10 @@ def _run_eod(now_et, force: bool) -> int:
                  f"top_sector={_risk_row['top_sector']}, date={today_str}).")
         else:
             _log(f"portfolio_risk_snapshot NOT written (DB offline / table missing, date={today_str}).")
+            failures.append("portfolio_risk_snapshot")
     except Exception as e:
         _log(f"portfolio_risk_snapshot FAILED — {str(e)[:120]} — continuing.")
+        failures.append(f"portfolio_risk_snapshot: {str(e)[:120]}")
         _risk_row = None
 
     # 1d. rec_events capture (Recommendation-Outcomes-Measurement Phase 1b —
@@ -578,8 +606,10 @@ def _run_eod(now_et, force: bool) -> int:
             else:
                 _log(f"rec_events NOT written ({len(_re_rows)} candidate row(s); "
                      f"DB offline / table missing — {_re_result.get('error')}).")
+                failures.append("rec_events")
     except Exception as e:
         _log(f"rec_events FAILED — {str(e)[:120]} — continuing.")
+        failures.append(f"rec_events: {str(e)[:120]}")
 
     # 2. Sentiment snapshot: persist VADER + Finnhub readings for all held tickers
     # so Tier 3 sentiment-vs-price-move analysis has a growing daily series.
@@ -608,10 +638,31 @@ def _run_eod(now_et, force: bool) -> int:
                 "vs_sector_pp":   _finnhub_sent.get("vs_sector_pp"),
                 "source":         "cron",
             })
-        if db.save_sentiment_snapshot(now_et.date(), _snap_sentiment_rows):
-            _log(f"sentiment_snapshot written ({len(_snap_sentiment_rows)} tickers, date={today_str}).")
+        # db.save_sentiment_snapshot() applies its OWN second filter
+        # internally (db.py:1682-1684: drops any row where BOTH
+        # vader_compound and bullish_pct are None) and returns False when
+        # that empties the payload (db.py:1699-1700) -- indistinguishable
+        # from a real DB failure by return value alone. Mirror that filter
+        # HERE too (2026-09-21 review finding on this same fix), or a
+        # low-news day combined with a Finnhub outage (every bundle present
+        # but no usable reading) would over-alert a healthy DB as "failed".
+        _snap_sentiment_writable = [
+            r for r in _snap_sentiment_rows
+            if r["vader_compound"] is not None or r["bullish_pct"] is not None
+        ]
+        if not _snap_sentiment_writable:
+            # held_data existed but either every bundle was malformed
+            # (non-dict) or none carried a usable sentiment reading --
+            # legitimate nothing-to-write, not a DB failure. Must be
+            # checked BEFORE calling save_sentiment_snapshot(), which
+            # returns False for both "empty payload" and a real DB
+            # failure, so this can't be told apart from the return value.
+            _log("sentiment_snapshot skipped — no usable bundles/readings in held_data.")
+        elif db.save_sentiment_snapshot(now_et.date(), _snap_sentiment_writable):
+            _log(f"sentiment_snapshot written ({len(_snap_sentiment_writable)} tickers, date={today_str}).")
         else:
-            _log("sentiment_snapshot NOT written (DB offline / table missing / no rows).")
+            _log("sentiment_snapshot NOT written (DB offline / table missing).")
+            failures.append("sentiment_snapshot")
     else:
         _log("sentiment_snapshot skipped — no held_data in payload.")
 
@@ -627,8 +678,16 @@ def _run_eod(now_et, force: bool) -> int:
             _log(f"daily_regime written (regime={regime.get('regime')}, date={today_str}).")
         else:
             _log("daily_regime NOT written (DB offline / table missing).")
+            failures.append("daily_regime")
     except Exception as e:
+        # detect_macro_regime() itself fails SOFT internally on missing/
+        # unreachable provider data (falls back to _NEUTRAL_REGIME,
+        # source="fallback") -- an exception reaching here means something
+        # genuinely broke, not a routine "FRED was slow today", so this is
+        # a real failure, same reasoning the maintenance lane's own comment
+        # uses for its liveness-sweep exception handler.
         _log(f"daily_regime detection failed: {str(e)[:120]}")
+        failures.append(f"daily_regime: {str(e)[:120]}")
 
     # 4. Reactive pullback email — once per qualifying down-day (row 2 dedup).
     pb = payload.get("pullback")
@@ -669,6 +728,7 @@ def _run_eod(now_et, force: bool) -> int:
         if _pred_err is not None:
             _log(f"model_predictions (live): WRITE FAILED after computing "
                  f"{_pred_n} candidate row(s) — {_pred_err}.")
+            failures.append(f"model_predictions (live): {_pred_err}")
         elif _pred_n == 0:
             _log("model_predictions (live): 0 candidate row(s) this run "
                  "(no held tickers with sufficient bars) — nothing to write.")
@@ -676,6 +736,7 @@ def _run_eod(now_et, force: bool) -> int:
             _log(f"model_predictions (live): {_pred_saved} row(s) written.")
     except Exception as e:
         _log(f"model_predictions (live) FAILED — {str(e)[:120]} — continuing.")
+        failures.append(f"model_predictions (live): {str(e)[:120]}")
 
     # 6. Predictive Modeling Shadow Layer — maturation. Independent of step 5
     # (a PRIOR day's live/backfill prediction can mature today even if today's
@@ -690,6 +751,7 @@ def _run_eod(now_et, force: bool) -> int:
         if _mat_err is not None:
             _log(f"model_predictions (maturation): FAILED "
                  f"({_mat_n} candidate row(s) computed) — {_mat_err}.")
+            failures.append(f"model_predictions (maturation): {_mat_err}")
         elif _mat_n == 0:
             _log("model_predictions (maturation): 0 candidate row(s) due this run "
                  "— nothing to mature.")
@@ -697,6 +759,7 @@ def _run_eod(now_et, force: bool) -> int:
             _log(f"model_predictions (maturation): {_mat_saved} row(s) matured.")
     except Exception as e:
         _log(f"model_predictions (maturation) FAILED — {str(e)[:120]} — continuing.")
+        failures.append(f"model_predictions (maturation): {str(e)[:120]}")
 
     # 7. Predictive Modeling Shadow Layer — Phase 2 (F-234) — LIVE earnings-move
     # prediction. MEASUREMENT-ONLY, same quarantine as steps 5/6: writes ONE
@@ -715,6 +778,7 @@ def _run_eod(now_et, force: bool) -> int:
         if _emp_err is not None:
             _log(f"model_predictions (earnings, live): WRITE FAILED after computing "
                  f"{_emp_n} candidate row(s) — {_emp_err}.")
+            failures.append(f"model_predictions (earnings, live): {_emp_err}")
         elif _emp_n == 0:
             _log("model_predictions (earnings, live): 0 candidate row(s) this run "
                  f"(skip_unknown_timing={_emp_result.get('skip_unknown_timing', 0)}, "
@@ -725,6 +789,7 @@ def _run_eod(now_et, force: bool) -> int:
                  f"skip_survivorship={_emp_result.get('skip_survivorship', 0)}).")
     except Exception as e:
         _log(f"model_predictions (earnings, live) FAILED — {str(e)[:120]} — continuing.")
+        failures.append(f"model_predictions (earnings, live): {str(e)[:120]}")
 
     # 8. Predictive Modeling Shadow Layer — Phase 2 maturation. Independent of
     # step 7 (a PRIOR day's live prediction can mature today even if today's
@@ -740,6 +805,7 @@ def _run_eod(now_et, force: bool) -> int:
         if _emm_err is not None:
             _log(f"model_predictions (earnings, maturation): FAILED "
                  f"({_emm_n} candidate row(s) computed) — {_emm_err}.")
+            failures.append(f"model_predictions (earnings, maturation): {_emm_err}")
         elif _emm_n == 0 and _emm_wd == 0:
             _log("model_predictions (earnings, maturation): 0 candidate row(s) due "
                  "this run — nothing to mature or withdraw.")
@@ -748,9 +814,23 @@ def _run_eod(now_et, force: bool) -> int:
                  f"matured, {_emm_wd} withdrawn (reschedule).")
     except Exception as e:
         _log(f"model_predictions (earnings, maturation) FAILED — {str(e)[:120]} — continuing.")
+        failures.append(f"model_predictions (earnings, maturation): {str(e)[:120]}")
 
-    _log(f"eod done · snapshot={bool(rows)} · sentiment={bool(_snap_sentiment_rows)} · pullback_sent={sent}")
-    return 0
+    if failures:
+        # Surfaced two ways, deliberately, mirroring `_run_maintenance`'s own
+        # established convention: the email is the immediate dead-man's-
+        # switch, and _LAST_LANE_FAILURE_DETAIL is what makes the heartbeat
+        # read "failed" on 🩺 System Trust instead of a false "ok" -- closing
+        # the 2026-09-21 app-review's Defect #2 (this lane previously
+        # returned 0 unconditionally regardless of how many of the writes
+        # above actually failed). `global` already declared at the top of
+        # this function.
+        _LAST_LANE_FAILURE_DETAIL = "; ".join(failures)
+        _notify_failure("eod", _LAST_LANE_FAILURE_DETAIL)
+
+    _log(f"eod done · snapshot={bool(rows)} · sentiment={bool(_snap_sentiment_rows)} · pullback_sent={sent}"
+         + (f" · FAILURES={len(failures)}" if failures else ""))
+    return 1 if failures else 0
 
 
 def _write_live_vol_predictions(now_et, payload: dict, regime_tag: str | None) -> dict:
