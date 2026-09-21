@@ -173,6 +173,7 @@ from stock_analyzer.constants import (
     BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP,
     BEHAVIORAL_MEANINGFUL_ALPHA_DELTA_PP,
     EXIT_SIGNAL_ACT_WINDOW_DAYS,
+    RAPID_REVERSAL_WINDOW_HOURS,
     INVESTOR_MIRROR_MIN_CLOSED_LOTS,
     INVESTOR_MIRROR_MIN_POSITIONS,
     CONVICTION_ALIGNMENT_LOW,
@@ -26234,7 +26235,7 @@ elif page == "📒 Trade Journal":
         # See docs/plans/behavioral-fingerprint-decision-moment.md.
         try:
             from stock_analyzer import behavioral_fingerprint as _bfl
-            from stock_analyzer.market_time import today_et as _bfl_today_et
+            from stock_analyzer.market_time import today_et as _bfl_today_et, now_et as _bfl_now_et
 
             if _live_action == "BUY" and _live_ticker:
                 _bfl_score = None
@@ -26314,6 +26315,34 @@ elif page == "📒 Trade Journal":
                             f"~{_bfl_sell['median_lag_days']:.0f} days)."
                         )
                         st.caption("An observed correlation in your own decisions, not a verdict on it.")
+                else:
+                    # No active signal -- the structural inverse: a fast,
+                    # unprompted reversal against a still-non-bearish read.
+                    # Can never co-fire with the mirror above (mutually
+                    # exclusive on _bfl_sig_type).
+                    _rr_score = None
+                    _rr_pf = st.session_state.get("_last_port_df")
+                    if _rr_pf is not None and not _rr_pf.empty and "Score" in _rr_pf.columns:
+                        _rr_row = _rr_pf[_rr_pf["Ticker"] == _live_ticker]
+                        if not _rr_row.empty:
+                            _rr_score = _rr_row.iloc[0].get("Score")
+                    _rr = _bfl.classify_rapid_reversal_sell(
+                        _live_ticker, _bfl_trades_df, _bfl_exit_df, _rr_score,
+                        _bfl_now_et(), RAPID_REVERSAL_WINDOW_HOURS,
+                        EXIT_SIGNAL_ACT_WINDOW_DAYS, COMPOSITE_HOLD,
+                        COMPOSITE_STRONG_BUY, COMPOSITE_BUY,
+                    )
+                    if _rr is not None:
+                        st.caption(
+                            f"⏱️ Fast exit: you bought {_live_ticker} {_rr['held_phrase']} ago, "
+                            "and there's no active protective signal on it."
+                        )
+                        if _rr["tier_label"] is not None:
+                            st.caption(
+                                f"The engine's read is still **{_rr['tier_label']}** "
+                                f"(Score {float(_rr['composite_score']):.0f})."
+                            )
+                        st.caption("Just noting the current state at log time — not a signal to hold or sell.")
         except Exception:
             pass
 

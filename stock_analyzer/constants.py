@@ -1432,6 +1432,14 @@ BEHAVIORAL_MEANINGFUL_ALPHA_DELTA_PP       = 1.0  # opening-window pattern
 # Exit-side: how many calendar days after a signal a SELL counts as "acted on"
 EXIT_SIGNAL_ACT_WINDOW_DAYS                = 7
 
+# Live SELL mirror -- "rapid reversal" state note (DISPLAY-ONLY, NEVER gates).
+# A SELL logged within this many wall-clock hours of the most-recent BUY of the
+# same ticker, with NO active exit signal and a still-non-bearish composite, gets
+# a fact-only timing caption on the Log Trade page. Awareness only; never blocks/
+# slows the write. Wall-clock (not trading) hours -- a weekend-straddling hold can
+# exceed this in clock time while being short in trading time; accepted.
+RAPID_REVERSAL_WINDOW_HOURS = 48.0
+
 # ── Tax-awareness lens (Concept F — DISPLAY-ONLY policy, NEVER gates) ─────────
 # Holding-period / harvest / wash-sale context layered onto EXIT signals and the
 # opportunity-cost read. These NEVER suppress, reorder, or size a recommendation

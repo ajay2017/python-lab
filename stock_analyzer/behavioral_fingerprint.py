@@ -519,6 +519,135 @@ def classify_live_sell_signal(
         return None
 
 
+# ── Live decision-moment mirror — SELL side (rapid reversal, NO active signal) ──
+# Structural inverse of classify_live_sell_signal: fires when there is NO
+# active exit signal, the position was bought within a very short window, and
+# the engine's own composite read is still non-bearish -- i.e. an unprompted,
+# fast reversal against a still-bullish read. Display-only, fact-based, never
+# gates/slows the trade write. Mutually exclusive with classify_live_sell_signal
+# by construction (the caller only reaches this path when latest_active_signal_
+# type returned None).
+
+def classify_rapid_reversal_sell(
+    ticker,
+    trades_df,
+    exit_signals_df,
+    composite_score,        # float | None -- optional enrichment, NOT required
+    as_of,                  # tz-aware datetime (market_time.now_et())
+    rapid_window_hours: float,
+    act_window_days: int,
+    hold_floor: float,      # constants.COMPOSITE_HOLD
+    strong_buy_floor: float,# constants.COMPOSITE_STRONG_BUY
+    buy_floor: float,       # constants.COMPOSITE_BUY
+) -> Optional[dict]:
+    """
+    Fact-only live state check for a SELL logged shortly after buying, with no
+    active protective signal and a still-non-bearish engine read. Returns None
+    (silence) unless ALL hold:
+      - a most-recent BUY of `ticker` exists in trades_df, and
+        0 <= (as_of - that buy's traded_at) in hours <= rapid_window_hours
+      - latest_active_signal_type(exit_signals_df, ticker, as_of.date(),
+        act_window_days) is None   (inverse of classify_live_sell_signal's own check)
+      - NOT (composite_score is present AND composite_score < hold_floor)
+        (a bearish read means the engine agrees with the sell -> nothing to note)
+
+    Composite is OPTIONAL: when None, fire on the two mechanical facts and set
+    tier_label=None (never claim a tier we don't have -- an absent value is not
+    a default/neutral state). Pure; swallows malformed input by returning None,
+    never raises.
+
+    Returns:
+      {"hours_since_buy": float,
+       "held_phrase": str,          # "2 minutes" / "18 hours" / "3 days"
+       "composite_score": float | None,
+       "tier_label": "Strong Buy" | "Buy" | "Hold" | None}
+    """
+    try:
+        if not ticker or trades_df is None or trades_df.empty:
+            return None
+        if as_of is None or as_of.tzinfo is None:
+            return None  # naive datetime -- refuse rather than assume a timezone
+
+        ticker_u = str(ticker).upper()
+        for col in ("action", "ticker", "traded_at"):
+            if col not in trades_df.columns:
+                return None
+
+        buys = trades_df[
+            (trades_df["action"] == "BUY")
+            & (trades_df["ticker"].astype(str).str.upper() == ticker_u)
+        ].copy()
+        if buys.empty:
+            return None
+
+        buys["_ts"] = pd.to_datetime(
+            buys["traded_at"], utc=True, errors="coerce", format="ISO8601"
+        )
+        buys = buys.dropna(subset=["_ts"])
+        if buys.empty:
+            return None
+
+        buy_ts = buys["_ts"].max()
+        as_of_utc = as_of.astimezone(buy_ts.tzinfo) if hasattr(as_of, "astimezone") else as_of
+
+        hours_since_buy = (as_of_utc - buy_ts).total_seconds() / 3600.0
+        if hours_since_buy < 0 or hours_since_buy > rapid_window_hours:
+            return None
+
+        # Inverse of classify_live_sell_signal's own gate -- must have NO
+        # currently-active signal for this to be the right (mutually exclusive) path.
+        # Note: this re-check uses as_of_utc.date() while app.py's outer gate uses
+        # an ET date -- near ET-midnight these can differ by a day, but a later
+        # date here only ever ages a signal OUT (more restrictive), never resurrects
+        # a caption the outer gate already suppressed. Harmless by construction.
+        sig_type = latest_active_signal_type(
+            exit_signals_df, ticker, as_of_utc.date(), act_window_days
+        )
+        if sig_type:
+            return None
+
+        score = _safe_float(composite_score)
+        tier_label = None
+        if score is not None:
+            if score < hold_floor:
+                return None  # engine already agrees with the sell -- nothing to note
+            if score >= strong_buy_floor:
+                tier_label = "Strong Buy"
+            elif score >= buy_floor:
+                tier_label = "Buy"
+            else:
+                tier_label = "Hold"
+
+        seconds = hours_since_buy * 3600.0
+        minutes = hours_since_buy * 60.0
+        days = hours_since_buy / 24.0
+        # The 48h cutoff below is a DISPLAY-ONLY hours-vs-days phrasing boundary,
+        # independent of rapid_window_hours (the actual decision gate above) --
+        # it happens to share the same number as this feature's real-world
+        # RAPID_REVERSAL_WINDOW_HOURS=48.0 default, but changing that constant
+        # does not change this formatting choice.
+        if seconds < 60:
+            held_phrase = "under a minute"
+        elif hours_since_buy < 1:
+            _mins = round(minutes)
+            held_phrase = f"{_mins} minute" + ("" if _mins == 1 else "s")
+        elif hours_since_buy < 48:
+            _hrs = round(hours_since_buy)
+            held_phrase = f"{_hrs} hour" + ("" if _hrs == 1 else "s")
+        else:
+            _days = round(days)
+            held_phrase = f"{_days} day" + ("" if _days == 1 else "s")
+
+        return {
+            "hours_since_buy": hours_since_buy,
+            "held_phrase": held_phrase,
+            "composite_score": score,
+            "tier_label": tier_label,
+        }
+    except Exception:
+        return None
+
+
 # ── Exit-side Pattern 3 — escalation sequences ignored ───────────────────────
 
 def escalation_ignored_pattern(

@@ -530,3 +530,176 @@ def test_classify_live_sell_signal_never_raises_on_malformed_input():
     assert bf.classify_live_sell_signal("WATCH", None, _trades([]), act_window_days=7, min_n=1) is None
     assert bf.classify_live_sell_signal("WATCH", pd.DataFrame(), None, act_window_days=7, min_n=1) is None
     assert bf.classify_live_sell_signal("WATCH", _exit_signals([]), _trades([]), act_window_days=7, min_n=1) is None
+
+
+# ─── classify_rapid_reversal_sell ─────────────────────────────────────────────
+# Structural inverse of classify_live_sell_signal -- fires when there is NO
+# active exit signal, the buy was very recent, and the composite (if known)
+# is still non-bearish. Floors used throughout mirror the real constants
+# (COMPOSITE_HOLD=44, COMPOSITE_BUY=65, COMPOSITE_STRONG_BUY=75) as literals,
+# matching this file's own convention for conviction_tier_pattern above.
+
+_RR_HOLD = 44
+_RR_BUY = 65
+_RR_STRONG_BUY = 75
+
+
+def _rr_call(ticker, trades, signals, composite, as_of, window_hours=48.0, act_window_days=7):
+    return bf.classify_rapid_reversal_sell(
+        ticker, trades, signals, composite, as_of,
+        window_hours, act_window_days,
+        _RR_HOLD, _RR_STRONG_BUY, _RR_BUY,
+    )
+
+
+def test_classify_rapid_reversal_sell_never_fires_with_an_active_signal():
+    # Fresh buy + bullish composite would otherwise qualify, but an active
+    # WATCH signal within the act window must suppress this path entirely --
+    # this is the load-bearing invariant proving mutual exclusivity with
+    # classify_live_sell_signal (the caller only reaches this function when
+    # latest_active_signal_type already returned None).
+    as_of = dt.datetime(2024, 1, 10, 12, 0, 0, tzinfo=dt.timezone.utc)
+    trades = _trades([{"ticker": "AAA", "action": "BUY", "traded_at": "2024-01-10T11:00:00Z"}])
+    signals = _exit_signals([{"ticker": "AAA", "signal_date": "2024-01-08", "signal_type": "WATCH"}])
+    assert _rr_call("AAA", trades, signals, 80, as_of) is None
+
+
+def test_classify_rapid_reversal_sell_never_fires_when_composite_is_bearish():
+    as_of = dt.datetime(2024, 1, 10, 12, 0, 0, tzinfo=dt.timezone.utc)
+    trades = _trades([{"ticker": "AAA", "action": "BUY", "traded_at": "2024-01-10T11:00:00Z"}])
+    signals = _exit_signals([])
+    assert _rr_call("AAA", trades, signals, _RR_HOLD - 1, as_of) is None
+
+
+def test_classify_rapid_reversal_sell_window_boundary_inclusive_then_excluded():
+    signals = _exit_signals([])
+    # Exactly rapid_window_hours (48.0) ago -> fires (inclusive boundary).
+    as_of_at = dt.datetime(2024, 1, 3, 0, 0, 0, tzinfo=dt.timezone.utc)
+    trades_at = _trades([{"ticker": "AAA", "action": "BUY", "traded_at": "2024-01-01T00:00:00Z"}])
+    result_at = _rr_call("AAA", trades_at, signals, 80, as_of_at, window_hours=48.0)
+    assert result_at is not None
+    assert result_at["hours_since_buy"] == pytest.approx(48.0)
+
+    # One second beyond the window -> None.
+    as_of_beyond = dt.datetime(2024, 1, 3, 0, 0, 1, tzinfo=dt.timezone.utc)
+    trades_beyond = _trades([{"ticker": "AAA", "action": "BUY", "traded_at": "2024-01-01T00:00:00Z"}])
+    assert _rr_call("AAA", trades_beyond, signals, 80, as_of_beyond, window_hours=48.0) is None
+
+
+def test_classify_rapid_reversal_sell_fires_with_composite_none():
+    as_of = dt.datetime(2024, 1, 10, 12, 5, 0, tzinfo=dt.timezone.utc)
+    trades = _trades([{"ticker": "AAA", "action": "BUY", "traded_at": "2024-01-10T12:00:00Z"}])
+    signals = _exit_signals([])
+    result = _rr_call("AAA", trades, signals, None, as_of)
+    assert result is not None
+    assert result["tier_label"] is None
+    assert result["composite_score"] is None
+    assert result["hours_since_buy"] == pytest.approx(5.0 / 60.0)
+    assert result["held_phrase"] == "5 minutes"
+
+
+def test_classify_rapid_reversal_sell_tier_label_mapping_at_each_floor():
+    as_of = dt.datetime(2024, 1, 10, 12, 0, 0, tzinfo=dt.timezone.utc)
+    trades = _trades([{"ticker": "AAA", "action": "BUY", "traded_at": "2024-01-10T11:00:00Z"}])
+    signals = _exit_signals([])
+
+    strong = _rr_call("AAA", trades, signals, _RR_STRONG_BUY, as_of)
+    assert strong["tier_label"] == "Strong Buy"
+
+    buy = _rr_call("AAA", trades, signals, _RR_BUY, as_of)
+    assert buy["tier_label"] == "Buy"
+
+    just_below_strong = _rr_call("AAA", trades, signals, _RR_STRONG_BUY - 1, as_of)
+    assert just_below_strong["tier_label"] == "Buy"
+
+    hold = _rr_call("AAA", trades, signals, _RR_HOLD, as_of)
+    assert hold["tier_label"] == "Hold"
+
+    just_below_buy = _rr_call("AAA", trades, signals, _RR_BUY - 1, as_of)
+    assert just_below_buy["tier_label"] == "Hold"
+
+    below_hold = _rr_call("AAA", trades, signals, _RR_HOLD - 1, as_of)
+    assert below_hold is None
+
+
+def test_classify_rapid_reversal_sell_anchors_on_most_recent_buy():
+    as_of = dt.datetime(2024, 1, 10, 12, 0, 0, tzinfo=dt.timezone.utc)
+    trades = _trades([
+        {"ticker": "AAA", "action": "BUY", "traded_at": "2023-06-01T00:00:00Z"},  # old, out of window
+        {"ticker": "AAA", "action": "BUY", "traded_at": "2024-01-10T11:00:00Z"},  # recent
+    ])
+    signals = _exit_signals([])
+    result = _rr_call("AAA", trades, signals, 80, as_of)
+    assert result is not None
+    assert result["hours_since_buy"] == pytest.approx(1.0)
+
+
+def test_classify_rapid_reversal_sell_held_phrase_humanization_across_branches():
+    signals = _exit_signals([])
+
+    # Under a minute.
+    as_of = dt.datetime(2024, 1, 10, 12, 0, 30, tzinfo=dt.timezone.utc)
+    trades = _trades([{"ticker": "AAA", "action": "BUY", "traded_at": "2024-01-10T12:00:00Z"}])
+    assert _rr_call("AAA", trades, signals, 80, as_of)["held_phrase"] == "under a minute"
+
+    # Minutes (a real-world ~2-minute round trip).
+    as_of = dt.datetime(2024, 1, 10, 12, 2, 0, tzinfo=dt.timezone.utc)
+    trades = _trades([{"ticker": "AAA", "action": "BUY", "traded_at": "2024-01-10T12:00:00Z"}])
+    assert _rr_call("AAA", trades, signals, 80, as_of)["held_phrase"] == "2 minutes"
+
+    # Hours.
+    as_of = dt.datetime(2024, 1, 10, 18, 0, 0, tzinfo=dt.timezone.utc)
+    trades = _trades([{"ticker": "AAA", "action": "BUY", "traded_at": "2024-01-10T00:00:00Z"}])
+    assert _rr_call("AAA", trades, signals, 80, as_of)["held_phrase"] == "18 hours"
+
+    # Days -- needs a larger window param than the real 48h constant to reach
+    # this branch at all (hours_since_buy must clear the >=48h gate first).
+    as_of = dt.datetime(2024, 1, 4, 0, 0, 0, tzinfo=dt.timezone.utc)
+    trades = _trades([{"ticker": "AAA", "action": "BUY", "traded_at": "2024-01-01T00:00:00Z"}])
+    result = _rr_call("AAA", trades, signals, 80, as_of, window_hours=100.0)
+    assert result["held_phrase"] == "3 days"
+
+
+def test_classify_rapid_reversal_sell_degrades_to_none_on_malformed_input():
+    as_of = dt.datetime(2024, 1, 10, 12, 0, 0, tzinfo=dt.timezone.utc)
+    signals = _exit_signals([])
+    good_trades = _trades([{"ticker": "AAA", "action": "BUY", "traded_at": "2024-01-10T11:00:00Z"}])
+
+    # Empty / None trades_df.
+    assert _rr_call("AAA", _trades([]), signals, 80, as_of) is None
+    assert _rr_call("AAA", None, signals, 80, as_of) is None
+
+    # No BUY rows for the ticker at all (only a SELL, or a BUY for a different ticker).
+    only_sell = _trades([{"ticker": "AAA", "action": "SELL", "traded_at": "2024-01-10T11:00:00Z"}])
+    assert _rr_call("AAA", only_sell, signals, 80, as_of) is None
+    other_ticker = _trades([{"ticker": "BBB", "action": "BUY", "traded_at": "2024-01-10T11:00:00Z"}])
+    assert _rr_call("AAA", other_ticker, signals, 80, as_of) is None
+
+    # Unparseable / NaT traded_at.
+    bad_ts = _trades([{"ticker": "AAA", "action": "BUY", "traded_at": "not-a-date"}])
+    assert _rr_call("AAA", bad_ts, signals, 80, as_of) is None
+
+    # Naive (non-tz-aware) as_of.
+    naive_as_of = dt.datetime(2024, 1, 10, 12, 0, 0)
+    assert _rr_call("AAA", good_trades, signals, 80, naive_as_of) is None
+
+    # Negative hours_since_buy (buy timestamp after as_of -- clock skew).
+    future_buy = _trades([{"ticker": "AAA", "action": "BUY", "traded_at": "2024-01-10T13:00:00Z"}])
+    assert _rr_call("AAA", future_buy, signals, 80, as_of) is None
+
+    # Never raises.
+    assert bf.classify_rapid_reversal_sell(
+        "AAA", "not a dataframe", signals, 80, as_of, 48.0, 7, 44, 75, 65
+    ) is None
+
+
+def test_classify_rapid_reversal_sell_fires_on_same_day_round_trip():
+    # Real-world shape this feature exists to surface: bought and sold ~2
+    # minutes apart, same session, no active signal, still-bullish read.
+    as_of = dt.datetime(2024, 1, 10, 9, 32, 0, tzinfo=dt.timezone.utc)
+    trades = _trades([{"ticker": "WDAY", "action": "BUY", "traded_at": "2024-01-10T09:30:00Z"}])
+    signals = _exit_signals([])
+    result = _rr_call("WDAY", trades, signals, 78, as_of)
+    assert result is not None
+    assert result["held_phrase"] == "2 minutes"
+    assert result["tier_label"] == "Strong Buy"
