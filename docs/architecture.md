@@ -2900,9 +2900,9 @@ redline as `portfolio_risk_snapshots`).
 ### `stock_analyzer/rec_events_capture.py`
 
 Pure `build_rec_event_rows(fired_date, port_df, port_risk, held_data, trades_df, ...)`.
-Three independent generators, each wrapped in its own try/except so one failing generator
-never blanks the others (mirrors `risk_metric_history.build_portfolio_risk_snapshot`'s
-isolation pattern):
+Five independent generators (grew from 3 to 5 on 2026-09-21, F-273c), each wrapped in its
+own try/except so one failing generator never blanks the others (mirrors
+`risk_metric_history.build_portfolio_risk_snapshot`'s isolation pattern):
 
 - **`rebal_trim`** — from `portfolio.rebalance_actions()`'s "trim" branch (fires on
   `weight > SINGLE_NAME_TRIM_TRIGGER and pnl > REBALANCE_TRIM_PNL_PCT`). `metric_name=
@@ -2927,6 +2927,27 @@ isolation pattern):
   (confirmed against HEAD, not assumed); the readout discloses this as a genuine gap rather
   than inventing a number.
 
+- **`single_name_concentration`** (F-273c, 2026-09-21) — reproduces (does **not** import)
+  `risk_advisor.py`'s conviction-independent single-name-overweight branch: fires on
+  `weight >= SINGLE_NAME_CEILING and score >= WEAK_CONVICTION_SCORE`. **Deduped against
+  `rebal_trim`'s same-run output** — the orchestrator builds `rebal_trim`'s ticker set first
+  and skips any ticker already in it, so a name qualifying for both never produces two rows
+  crediting one real SELL (the exact conflation class F-273b's own design was ratified
+  against). `metric_name="single_name_pct"`, same `metric_before`/`metric_predicted_after`
+  shape as `rebal_trim`; folds into that same outcome branch on the readout side.
+- **`sector_concentration`** (F-273c, 2026-09-21) — reproduces `risk_advisor.py`'s
+  sector-concentration branch. At most ONE row per day (names only the single worst real
+  sector, `UNCLASSIFIED_SECTOR` excluded), firing at `SECTOR_ELEVATED` — the live card's
+  actual render threshold, not just its HIGH escalation. `ticker`=the lowest-conviction trim
+  candidate; `candidates`=the full trim-candidate ticker list, consumed by the readout's new
+  match-any-candidate attribution mode.
+
+Both new generators derive `portfolio_value` from `port_df["Market Value"].sum()` directly
+rather than threading a `gate_denom` parameter through `cron_runner.py`, since the live
+cards' basis-scaling factor is always 1.0 under current policy (G-19, 2026-07-09) — see
+`risk_advisor.py`'s own `_acct_f`/`_gd` comment. No DDL change was needed for either;
+`cron_runner.py` needed zero changes (the orchestrator's call signature is unchanged).
+
 Every numeric field NULL-preserving on any missing input.
 
 ### `stock_analyzer/rec_events_readout.py`
@@ -2942,21 +2963,35 @@ per-type outcome legs, then `grade_by_rec_type()` banding.
 **`match_attribution()` — the single most load-bearing rule in this module.** A trade
 credits a rec_event iff ALL of: (a) trade ticker == the rec's named ticker **exactly** — a
 SELL of a *different* high-beta/oversized name never credits this rec, a directly
-owner-ratified rule (§11 decision 3, re-applied here); (b) trade direction matches the
-rec_type's expected direction (SELL for rebal_trim/beta_trim, BUY for diversify_add); (c)
-`traded_at` (ET) falls within `[fired_date, fired_date + REC_OUTCOME_ACTION_WINDOW_
-TRADING_DAYS]` trading days, inclusive both ends. For `diversify_add` only, an additional
-gate: the bought ticker must also be present in that rec's own `candidates` jsonb.
+owner-ratified rule (§11 decision 3, re-applied here) — **except** for `rec_type`s in
+`_MATCH_ANY_CANDIDATE` (currently just `sector_concentration`, added F-273c 2026-09-21),
+where a SELL of ANY ticker in the row's own `candidates` list credits the call, since
+`ticker` there is only the lowest-conviction candidate by construction and the owner may
+reasonably sell a different one of the named trim candidates instead; (b) trade direction
+matches the rec_type's expected direction (SELL for rebal_trim/beta_trim/
+single_name_concentration/sector_concentration, BUY for diversify_add); (c) `traded_at`
+(ET) falls within `[fired_date, fired_date + REC_OUTCOME_ACTION_WINDOW_TRADING_DAYS]`
+trading days, inclusive both ends. For `diversify_add`, an additional gate: the bought
+ticker must also be present in that rec's own `candidates` jsonb (a no-op for
+`sector_concentration`, since (a) above already requires candidate membership there).
 `trigger_type` (`REBAL_TRIM`/`DIVERSIFY_ADD` if present) is a **confirming boost only**
-(`attribution_confirmed=True`) — never required; a manual/untagged trade matching (a)-(c)
-still counts as acted.
+(`attribution_confirmed=True`) — never required; a manual/untagged trade matching the above
+still counts as acted. `single_name_concentration`/`sector_concentration` both reuse
+`REBAL_TRIM` as their confirming trigger (owner decision, F-273c — no new trade-journal tag).
 
-**Outcome legs — never the BUY-side alpha-vs-SPY shape on the two trim types (a hard
-design redline).** `beta_trim`/`rebal_trim` compare the rec's own `metric_predicted_after`
-against the realized portfolio-level metric read from `portfolio_risk_snapshots` at
-`fired_date + horizon`, captioned as a portfolio-level proxy — not a per-ticker-causal
-claim (the daily table stores only the book's MAX single-name/sector weight, not this
-specific ticker's own weight history). `diversify_add` keeps two legs strictly separate:
+**Outcome legs — never the BUY-side alpha-vs-SPY shape on the trim types (a hard
+design redline).** `beta_trim`/`rebal_trim`/`single_name_concentration` (the last folds into
+`rebal_trim`'s exact branch, F-273c 2026-09-21 — both measure the same realized
+`max_single_name_pct` substrate) compare the rec's own `metric_predicted_after` against the
+realized portfolio-level metric read from `portfolio_risk_snapshots` at `fired_date +
+horizon`, captioned as a portfolio-level proxy — not a per-ticker-causal claim (the daily
+table stores only the book's MAX single-name/sector weight, not this specific ticker's own
+weight history). `sector_concentration` (F-273c) gets its own branch on the same
+`top_sector_pct` substrate, plus a `top_sector_changed` disclosure flag — `None` (never a
+fabricated `False`) when the horizon snapshot is missing, `True` when the book's top sector
+at the horizon date is a DIFFERENT sector than the one this call was about (so the realized
+figure is never misread as this sector's own improvement). `diversify_add` keeps two legs
+strictly separate:
 Leg A (`predictive_analytics.forward_alpha_at_horizon()`, reused verbatim) is captioned
 exactly "the added name's own performance," never "diversification worked"; Leg B
 (`avg_pairwise_corr`/`diversification_score` before vs. after) discloses `corr_coverage_n`
