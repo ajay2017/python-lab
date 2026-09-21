@@ -14478,6 +14478,8 @@ elif page == "🔗 Risk Analysis":
                 ("dollar",   "Dollar (DXY)"),
                 ("copper",   "Copper"),
                 ("curve",    "Yield curve (3m10y)"),
+                ("oil",         "Oil (WTI, 5d move)"),
+                ("yield_shock", "10Y yield (5d move)"),
             ]
             for _ca_key, _ca_name in _ca_rows:
                 _ca_sig = _ca.get(_ca_key, {})

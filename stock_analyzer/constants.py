@@ -538,6 +538,10 @@ CROSS_ASSET_DXY_ROC_THRESHOLD  = 1.5  # % 5-day ROC above which dollar is "rapid
 CROSS_ASSET_VIX_TERM_RATIO     = 1.0  # VIX / VIX3M ratio threshold; >1 = term-structure inverted
 CROSS_ASSET_CURVE_STRESS_BP    = -50  # 3m10y yield spread (basis pts); below = deeply inverted (^IRX=3m T-bill, ^TNX=10yr)
 CROSS_ASSET_STRESS_BRIEF_SCORE = 2    # score >= this triggers a one-liner in Today's Brief
+CROSS_ASSET_OIL_ROC_DAYS       = 5     # short-window rate-of-change for WTI crude signal
+CROSS_ASSET_OIL_ROC_THRESHOLD  = 8.0   # % 5-day ROC above which WTI is "spiking" (inflation/risk-off read)
+CROSS_ASSET_YIELD_ROC_DAYS     = 5     # short-window rate-of-change for the 10Y yield-move signal
+CROSS_ASSET_YIELD_ROC_THRESHOLD_BP = 25  # bp rise over CROSS_ASSET_YIELD_ROC_DAYS days = "yield shock"
 
 # News sentiment via Finnhub /stock/news-sentiment — thresholds for the sentiment
 # awareness layer (Analysis scorecard row + Brief shift alert). Phase 1: display only.

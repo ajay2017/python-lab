@@ -139,7 +139,7 @@ python-lab/
     ├── portfolio_intelligence.py    🧩 Portfolio Intelligence page panels (correlation clustering, risk-budget, factor tilt, regime fit); awareness-only lenses on multi-source data
     ├── portfolio_health.py         Portfolio Construction Health Score (5 sub-scores: concentration/balance/diversification/factor/signal → grade A–F)
     ├── concentration.py            Concentration & sizing discipline: single-name ceiling enforcement + high-beta cluster awareness (pure logic)
-    ├── cross_asset.py              Cross-Asset Pulse — 5-signal macro stress (credit/VIX-term/dollar/copper/3m10y → 0–5 stress score; awareness-only, Risk tab + Brief one-liner; F-09c)
+    ├── cross_asset.py              Cross-Asset Pulse — 7-signal macro stress (credit/VIX-term/dollar/copper/3m10y/WTI-ROC/10Y-yield-move → 0–7 stress score; awareness-only, Risk tab + Brief one-liner; F-09c)
     ├── watchlist_advisor.py        Watchlist analysis with ENTER_NOW portfolio-risk gate
     ├── trade_analytics.py          Trade history analytics
     ├── trade_review.py             Trade Review: behavioural retrospective (app-followed vs deviated trades, panic-day reactivity, per-trade outcome vs SPY)
@@ -274,6 +274,8 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `CROSS_ASSET_DXY_ROC_DAYS` / `_DXY_ROC_THRESHOLD` | 5 / 1.5 | Dollar-stress leg: 5-day rate-of-change; stressed when the DXY trend is rising AND ROC > 1.5% |
 | `CROSS_ASSET_VIX_TERM_RATIO` | 1.0 | VIX/VIX3M ratio above which the term structure is "inverted" (a stress signal) |
 | `CROSS_ASSET_CURVE_STRESS_BP` | -50 | 3m10y spread in bp (^TNX − ^IRX) below which the curve is "deeply inverted" |
+| `CROSS_ASSET_OIL_ROC_DAYS` / `_OIL_ROC_THRESHOLD` | 5 / 8.0 | WTI crude (`CL=F`) leg: 5-day rate-of-change; stressed when the ROC > 8.0% (a fast upward spike — inflation/risk-off read, not a directional call on oil itself) |
+| `CROSS_ASSET_YIELD_ROC_DAYS` / `_YIELD_ROC_THRESHOLD_BP` | 5 / 25 | 10Y yield-*move* leg (`^TNX` raw level, separate from the `curve` spread leg above): stressed when the 5-day move is a rise > 25 bp — a fast repricing of the discount rate, distinct from `CROSS_ASSET_CURVE_STRESS_BP`'s check on the spread's absolute level |
 | `CROSS_ASSET_STRESS_BRIEF_SCORE` | 2 | Aggregate stress score (count of stressed signals among those with data) at/above which Today's Brief shows the cross-asset one-liner |
 | `NEWS_SENTIMENT_BULLISH_THRESHOLD` / `_BEARISH_THRESHOLD` | 0.60 / 0.40 | Finnhub news-sentiment (F-74) label cutoffs: bullish_pct ≥ 0.60 → 🟢 Bullish, < 0.40 → 🔴 Bearish, between → 🟡 Neutral. Awareness-only |
 | `NEWS_SENTIMENT_SHIFT_ALERT_BULLISH` / `_SHIFT_BUZZ_MIN` | 0.40 / 1.0 | Brief held-position shift card fires when bullish_pct < 0.40 AND buzz_score > 1.0 (both required — low-buzz bearishness is thin/stale, not alerted) |

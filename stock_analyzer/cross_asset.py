@@ -15,9 +15,13 @@ from stock_analyzer.constants import (
     CROSS_ASSET_DXY_ROC_THRESHOLD,
     CROSS_ASSET_VIX_TERM_RATIO,
     CROSS_ASSET_CURVE_STRESS_BP,
+    CROSS_ASSET_OIL_ROC_DAYS,
+    CROSS_ASSET_OIL_ROC_THRESHOLD,
+    CROSS_ASSET_YIELD_ROC_DAYS,
+    CROSS_ASSET_YIELD_ROC_THRESHOLD_BP,
 )
 
-_TICKERS = ["HYG", "^VIX", "^VIX3M", "DX-Y.NYB", "HG=F", "^IRX", "^TNX"]
+_TICKERS = ["HYG", "^VIX", "^VIX3M", "DX-Y.NYB", "HG=F", "^IRX", "^TNX", "CL=F"]
 
 _SCORE_LABELS = {0: "Calm", 1: "Calm", 2: "Caution", 3: "Stress", 4: "Stress", 5: "Alarm"}
 
@@ -27,6 +31,8 @@ _SIGNAL_NAMES = {
     "dollar":   "dollar strength",
     "copper":   "copper weakening",
     "curve":    "3m10y spread inverted",
+    "oil":      "oil spiking (WTI)",
+    "yield_shock": "10Y yield shock",
 }
 
 
@@ -165,6 +171,21 @@ def compute_cross_asset_signals(data: dict[str, pd.DataFrame]) -> dict:
             "available": True,
         }
 
+    # ── Oil / WTI crude (CL=F) ────────────────────────────────────────────────
+    oil = _close(data, "CL=F")
+    oil_roc_needed = CROSS_ASSET_OIL_ROC_DAYS + 1
+    if oil is None or len(oil) < oil_roc_needed:
+        signals["oil"] = _unavailable()
+    else:
+        roc = (float(oil.iloc[-1]) / float(oil.iloc[-(CROSS_ASSET_OIL_ROC_DAYS + 1)]) - 1) * 100
+        stressed = roc > CROSS_ASSET_OIL_ROC_THRESHOLD
+        signals["oil"] = {
+            "stressed": stressed,
+            "label": "WTI spiking — inflation/risk-off read" if stressed else "WTI trend contained",
+            "detail": f"{CROSS_ASSET_OIL_ROC_DAYS}-day ROC: {roc:+.2f}%",
+            "available": True,
+        }
+
     # ── Yield curve (^TNX − ^IRX, in basis points) ──────────────────────────
     tnx_s = _close(data, "^TNX")
     irx_s = _close(data, "^IRX")
@@ -179,6 +200,20 @@ def compute_cross_asset_signals(data: dict[str, pd.DataFrame]) -> dict:
             "stressed": stressed,
             "label": "3m10y deeply inverted — recession watch" if stressed else "3m10y spread normal/flat",
             "detail": f"3m10y spread {spread_bp:+.0f} bp",
+            "available": True,
+        }
+
+    # ── 10Y yield shock (^TNX raw move, in basis points) ────────────────────
+    yield_roc_needed = CROSS_ASSET_YIELD_ROC_DAYS + 1
+    if tnx_s is None or len(tnx_s) < yield_roc_needed:
+        signals["yield_shock"] = _unavailable()
+    else:
+        bp_move = (float(tnx_s.iloc[-1]) - float(tnx_s.iloc[-(CROSS_ASSET_YIELD_ROC_DAYS + 1)])) * 100
+        stressed = bp_move > CROSS_ASSET_YIELD_ROC_THRESHOLD_BP
+        signals["yield_shock"] = {
+            "stressed": stressed,
+            "label": "10Y yield shock — fast rise" if stressed else "10Y yield move contained",
+            "detail": f"{CROSS_ASSET_YIELD_ROC_DAYS}-day move: {bp_move:+.0f} bp",
             "available": True,
         }
 

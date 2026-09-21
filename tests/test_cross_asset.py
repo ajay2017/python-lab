@@ -7,7 +7,9 @@ Real constants (from stock_analyzer/constants.py, not invented):
 CROSS_ASSET_HYG_TREND_DAYS=20, CROSS_ASSET_COPPER_TREND_DAYS=20,
 CROSS_ASSET_DXY_TREND_DAYS=20, CROSS_ASSET_DXY_ROC_DAYS=5,
 CROSS_ASSET_DXY_ROC_THRESHOLD=1.5, CROSS_ASSET_VIX_TERM_RATIO=1.0,
-CROSS_ASSET_CURVE_STRESS_BP=-50.
+CROSS_ASSET_CURVE_STRESS_BP=-50, CROSS_ASSET_OIL_ROC_DAYS=5,
+CROSS_ASSET_OIL_ROC_THRESHOLD=8.0, CROSS_ASSET_YIELD_ROC_DAYS=5,
+CROSS_ASSET_YIELD_ROC_THRESHOLD_BP=25.
 """
 import pandas as pd
 import pytest
@@ -18,11 +20,17 @@ from stock_analyzer.constants import (
     CROSS_ASSET_COPPER_TREND_DAYS,
     CROSS_ASSET_DXY_TREND_DAYS,
     CROSS_ASSET_DXY_ROC_DAYS,
+    CROSS_ASSET_OIL_ROC_DAYS,
+    CROSS_ASSET_OIL_ROC_THRESHOLD,
+    CROSS_ASSET_YIELD_ROC_DAYS,
+    CROSS_ASSET_YIELD_ROC_THRESHOLD_BP,
 )
 
 pytestmark = pytest.mark.fast
 
 _DXY_N = max(CROSS_ASSET_DXY_TREND_DAYS, CROSS_ASSET_DXY_ROC_DAYS + 1)
+_OIL_N = CROSS_ASSET_OIL_ROC_DAYS + 1
+_YIELD_N = CROSS_ASSET_YIELD_ROC_DAYS + 1
 
 
 # ─── builders ────────────────────────────────────────────────────────────────
@@ -63,9 +71,32 @@ def _curve_dfs(inverted=False):
     return _mkdf([tnx]), _mkdf([irx])
 
 
+def _oil_df(n=_OIL_N, stressed=False):
+    if stressed:
+        # ~9% 5-day ROC, clears CROSS_ASSET_OIL_ROC_THRESHOLD (8.0%).
+        closes = [100.0] * (n - 1) + [109.0]
+    else:
+        closes = [100.0] * n  # flat, 0% ROC
+    return _mkdf(closes)
+
+
+def _yield_df(n=_YIELD_N, last=4.00, bp_move=0.0):
+    """^TNX series (in percent, e.g. 4.00 = 4.00%) whose close[-1] vs
+    close[-(CROSS_ASSET_YIELD_ROC_DAYS+1)] move equals bp_move basis points,
+    matching the curve signal's own (tnx - irx) * 100 scaling convention."""
+    first = last - bp_move / 100
+    if n == 1:
+        closes = [last]
+    else:
+        closes = [first + (last - first) * i / (n - 1) for i in range(n)]
+    return _mkdf(closes)
+
+
 def _full_data(hyg=False, vix=False, dxy=False, copper=False, curve=False):
-    """A dataset with all 5 signals available; each flag toggles that
-    signal's `stressed` state (True = stressed)."""
+    """A dataset with the 5 legacy signals available (oil/yield_shock are
+    deliberately absent here — CL=F isn't in the dict and ^TNX is too short
+    for yield_shock's length guard); each flag toggles a legacy signal's
+    `stressed` state (True = stressed)."""
     vix_df, vix3m_df = _vix_dfs(inverted=vix)
     tnx_df, irx_df = _curve_dfs(inverted=curve)
     return {
@@ -185,6 +216,60 @@ def test_curve_spread_just_below_negative_50bp_is_stressed():
     tnx_df, irx_df = _mkdf([2.99]), _mkdf([3.5])  # spread = -51bp
     result = ca.compute_cross_asset_signals({"^TNX": tnx_df, "^IRX": irx_df})
     assert result["curve"]["stressed"] is True
+
+
+# ─── Oil / WTI crude signal ───────────────────────────────────────────────────
+
+def test_oil_roc_above_threshold_is_stressed():
+    result = ca.compute_cross_asset_signals({"CL=F": _oil_df(stressed=True)})
+    assert result["oil"]["available"] is True
+    assert result["oil"]["stressed"] is True
+
+
+def test_oil_roc_below_threshold_is_not_stressed():
+    result = ca.compute_cross_asset_signals({"CL=F": _oil_df(stressed=False)})
+    assert result["oil"]["available"] is True
+    assert result["oil"]["stressed"] is False
+
+
+def test_oil_below_required_length_is_unavailable():
+    short = _oil_df(n=CROSS_ASSET_OIL_ROC_DAYS, stressed=True)
+    result = ca.compute_cross_asset_signals({"CL=F": short})
+    assert result["oil"]["available"] is False
+
+
+# ─── 10Y yield shock signal ───────────────────────────────────────────────────
+
+def test_yield_shock_bp_move_above_threshold_is_stressed():
+    tnx_df = _yield_df(bp_move=CROSS_ASSET_YIELD_ROC_THRESHOLD_BP + 5)
+    result = ca.compute_cross_asset_signals({"^TNX": tnx_df})
+    assert result["yield_shock"]["available"] is True
+    assert result["yield_shock"]["stressed"] is True
+
+
+def test_yield_shock_bp_move_below_threshold_is_not_stressed():
+    tnx_df = _yield_df(bp_move=CROSS_ASSET_YIELD_ROC_THRESHOLD_BP - 5)
+    result = ca.compute_cross_asset_signals({"^TNX": tnx_df})
+    assert result["yield_shock"]["available"] is True
+    assert result["yield_shock"]["stressed"] is False
+
+
+def test_yield_shock_below_required_length_is_unavailable():
+    short = _yield_df(n=CROSS_ASSET_YIELD_ROC_DAYS, bp_move=CROSS_ASSET_YIELD_ROC_THRESHOLD_BP + 5)
+    result = ca.compute_cross_asset_signals({"^TNX": short})
+    assert result["yield_shock"]["available"] is False
+
+
+def test_yield_shock_is_separate_signal_from_curve():
+    # Curve checks the SPREAD LEVEL (^TNX - ^IRX); yield_shock checks ^TNX's
+    # own RAW MOVE. Build a case where the spread stays wide (curve calm) but
+    # the 10Y itself moved fast enough to trip yield_shock, proving the two
+    # signals don't collapse into one another.
+    tnx_df = _yield_df(last=4.00, bp_move=CROSS_ASSET_YIELD_ROC_THRESHOLD_BP + 5)
+    irx_df = _mkdf([3.0])  # spread = (4.00 - 3.00) * 100 = +100bp, nowhere near inverted
+    result = ca.compute_cross_asset_signals({"^TNX": tnx_df, "^IRX": irx_df})
+    assert result["curve"]["stressed"] is False
+    assert result["yield_shock"]["stressed"] is True
 
 
 # ─── Aggregate score / label / summary ───────────────────────────────────────

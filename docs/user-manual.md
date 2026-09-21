@@ -243,7 +243,7 @@ Two distinct regime reads (don't confuse them):
 - **FRED-based 7-signal classifier** (`macro_calendar.detect_macro_regime`) — CPI YoY ladder (controlled ≤ 2.5%, elevated ≥ 3.0%, hot > 4.0%), Fed Funds trend, 2s10s curve, unemployment delta, HY credit spreads, SPY 20-day, VIX. Produces rate_cut / neutral / inflation_fight / recession_fear / stagflation_risk. Feeds **Regime-Conditional Targets** (F-188): a diagnostic beta-ceiling and cash-floor per regime (`REGIME_BETA_CEILING`, `REGIME_CASH_FLOOR_PCT`) — **never gates/resizes**.
 - **ETF-proxy legacy read** (`macro.detect_macro_regime_legacy`, TLT/SPY/VIX) — the manual-load `🌐 Macro` page read (F-211). Landmine F-212: not the FRED detector.
 
-Macro-event protective trims fire only when an affected sector is concentrated (> `MACRO_AFFECTED_TRIM_THRESHOLD_PCT`=30%) and a HIGH-impact event is imminent; portfolio-wide events (> 60%, `MACRO_BROAD_EXPOSURE_PCT`) downgrade to an awareness WATCH instead of pre-event churn. Cross-Asset Pulse (F-09c) scores 0–5 stress signals (HYG, copper, DXY, VIX term structure, yield curve).
+Macro-event protective trims fire only when an affected sector is concentrated (> `MACRO_AFFECTED_TRIM_THRESHOLD_PCT`=30%) and a HIGH-impact event is imminent; portfolio-wide events (> 60%, `MACRO_BROAD_EXPOSURE_PCT`) downgrade to an awareness WATCH instead of pre-event churn. Cross-Asset Pulse (F-09c) scores 0–7 stress signals (HYG, copper, DXY, VIX term structure, yield curve, WTI crude ROC, 10Y yield-move).
 
 ## II.7 The data layer (providers, failover, resilience)
 
