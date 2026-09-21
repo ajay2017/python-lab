@@ -1310,6 +1310,13 @@ def parse_robinhood_csv_income(csv_text: str) -> list[dict]:
 
             # --- dedup key: use signed cents so a same-day CDIV reversal
             # (opposite sign, same magnitude) gets a distinct key ---
+            # KNOWN, ACCEPTED TRADEOFF (2026-09-21 audit, Low): two genuinely
+            # distinct same-day/same-code/same-ticker/same-amount income rows
+            # collide onto this same key and the second is silently dropped by
+            # the upsert's ON CONFLICT DO NOTHING. Rare in practice, and this
+            # under-counts income rather than ever double-counting it — judged
+            # the safer failure direction for a table income totals are read
+            # from live.
             cents = round(amount * 100)
             ticker_part = ticker or ""
             snaptrade_txn_id = f"csv:{event_date}:{code}:{ticker_part}:{cents}"
