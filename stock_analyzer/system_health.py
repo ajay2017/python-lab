@@ -121,9 +121,23 @@ _INVENTORY: tuple[_Store, ...] = (
     # same run's already-computed port_df/port_risk — same unconditional
     # posture as daily_snapshots/model_predictions right above.
     _Store("portfolio_risk_snapshots", "Portfolio risk metrics snapshot", "eod", "daily", True, "snapshot_date", 19),
+    # account_daily_snapshots (F-266, 2026-09-10): the EOD cron writes one row
+    # every trading day (leverage.compute_account_snapshot), same unconditional
+    # posture as portfolio_risk_snapshots right above — gross_book is always
+    # populated even when cash_balance/leverage/cushion are NULL (stale/missing
+    # cash). 2026-09-21 audit Medium #1: this table shipped 11 days before this
+    # row did, with zero System Trust visibility in between.
+    _Store("account_daily_snapshots",  "Account leverage/cushion snapshot", "eod", "daily", True, "snapshot_date", 19),
     # Conditional writes — EXISTENCE only (the DDL-catcher); absence is legitimate.
     _Store("exit_signals",              "Protective exit scan",          "premarket", "daily",   False),
     _Store("analyst_target_snapshots",  "Analyst price-target history",  "premarket", "daily",   False),
+    # score_history (Investor Maturity Roadmap B1 / F-269, 2026-09-13): written
+    # by the premarket lane alongside analyst_target_snapshots right above,
+    # same conditional posture — capture-only, no readout/gate reads this yet,
+    # so absence on a no-holdings day is legitimate. 2026-09-21 audit Medium #1:
+    # this table shipped 8 days before this row did, with zero System Trust
+    # visibility in between.
+    _Store("score_history",             "Score history capture",         "premarket", "daily",   False),
     _Store("recommendations",           "Buy recommendations log",       "scan",      "daily",   False),
     _Store("sentiment_history",         "Sentiment snapshot",            "eod",       "daily",   False),
     _Store("weekly_debriefs",           "Weekly debrief",                "thesis",    "weekly",  False),
