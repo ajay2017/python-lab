@@ -1825,6 +1825,26 @@ downgrades to "warn" (never "down"/"unknown"). The email alert already covers
 the same failure through a DB-independent channel; this closes the dashboard
 side of the same gap.
 
+**Which lanes propagate a real write failure into `status='failed'`, not just a
+log line — updated 2026-09-21 (2026-09-21 app-review Defect #2).** `_run_
+maintenance` (`cron_runner.py`) already did this — a `failures: list[str]`
+accumulator, `rc=1` + `_LAST_LANE_FAILURE_DETAIL` set on any sub-job's real
+failure. `_run_eod` did NOT: every one of its ~10 independent writes (`daily_
+snapshot`, `account_daily_snapshot`, `portfolio_risk_snapshot`, `rec_events`,
+`sentiment_snapshot`, `daily_regime`, 4 `model_predictions` sub-steps) was
+wrapped in its own try/except that only logged a failure, so this lane's
+heartbeat could read "ok" even when several of its writes had silently failed
+all along — the dead-man's-switch this table exists to provide, defeated for
+this specific lane's data-write layer (as opposed to the lane simply not
+running at all, which the mechanism above already caught correctly). `_run_
+eod` now mirrors `_run_maintenance`'s exact pattern, distinguishing a real
+failure from a legitimate no-op at each site (e.g. zero qualifying `rec_
+events` rows today is not a failure; `account_daily_snapshot` failing to
+write when it should have unconditionally is). See `stock_analyzer/rec_
+events_capture.py` / `cron_runner.py::_run_eod` for the current per-site
+classification — do not assume every write failure in this lane still just
+logs silently.
+
 ### 6.33 `snaptrade_config` table
 
 ```sql
