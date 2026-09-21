@@ -25889,8 +25889,13 @@ elif page == "📒 Trade Journal":
                         # so a "basis in (account, over-levered)" check can never be true --
                         # permanently dead code, same root cause as F-260 finding #6's Sankey
                         # branch. Removed rather than gated on a cache-collapse disclosure.
-                        _pb_cc_gate   = st.session_state.get("_acct_gate_cache") or {}
-                        _pb_cc_denom  = _f(_pb_cc_gate.get("denom"), 0.0) or _pb_cc_pv
+                        # 2026-09-21 audit nit: read via _get_or_offline rather than
+                        # `.get(...) or {}` (the feedback_sentinel_is_present class) for
+                        # consistency, even though this cache has never been observed as
+                        # None in practice -- the `or _pb_cc_pv` fallback below still covers
+                        # a missing/offline gate.
+                        _pb_cc_gate   = _get_or_offline(st.session_state, "_acct_gate_cache")
+                        _pb_cc_denom  = _f((_pb_cc_gate or {}).get("denom"), 0.0) or _pb_cc_pv
                         if _pb_cc_pdf is not None and not _pb_cc_pdf.empty and _pb_cc_pv > 0:
                             _pb_cc_match = _pb_cc_pdf[_pb_cc_pdf["Ticker"] == _pb_ticker]
                             _pb_cc_existing_mv = (

@@ -49,7 +49,11 @@ def resolve_company_name(query: str, max_results: int = 8) -> dict | None:
     try:
         import yfinance as yf
 
-        result = yf.Search(query.strip(), max_results=max_results)
+        # yfinance's own default is timeout=30 (confirmed 2026-09-21 audit
+        # follow-up), which is too long for an interactive lookup on this
+        # page — pass an explicit shorter bound, mirroring earnings_intel's
+        # timeout=8 for the same "quick interactive call" shape.
+        result = yf.Search(query.strip(), max_results=max_results, timeout=8)
         quotes = getattr(result, "quotes", None) or []
         equities = [
             q for q in quotes

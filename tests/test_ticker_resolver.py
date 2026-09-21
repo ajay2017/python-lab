@@ -44,7 +44,7 @@ def test_looks_like_ticker_empty_input(raw):
 # ── resolve_company_name ─────────────────────────────────────────────────────
 
 class _FakeSearch:
-    """Stand-in for yfinance.Search(query, max_results=N)."""
+    """Stand-in for yfinance.Search(query, max_results=N, timeout=N)."""
     def __init__(self, quotes):
         self.quotes = quotes
 
@@ -54,7 +54,7 @@ def test_resolve_company_name_clean_single_match(monkeypatch):
         {"symbol": "MSFT", "longname": "Microsoft Corporation",
          "quoteType": "EQUITY", "exchange": "NMS", "score": 147839.0},
     ]
-    monkeypatch.setattr("yfinance.Search", lambda q, max_results=8: _FakeSearch(quotes))
+    monkeypatch.setattr("yfinance.Search", lambda q, max_results=8, timeout=30: _FakeSearch(quotes))
 
     result = resolve_company_name("microsoft")
 
@@ -71,7 +71,7 @@ def test_resolve_company_name_picks_top_equity_over_higher_scoring_nonequity(mon
          "quoteType": "EQUITY", "exchange": "NMS", "score": 147839.0},
         {"symbol": "MSFT.DE", "quoteType": "ETF", "exchange": "XETRA", "score": 500000.0},
     ]
-    monkeypatch.setattr("yfinance.Search", lambda q, max_results=8: _FakeSearch(quotes))
+    monkeypatch.setattr("yfinance.Search", lambda q, max_results=8, timeout=30: _FakeSearch(quotes))
 
     result = resolve_company_name("microsoft")
 
@@ -85,19 +85,19 @@ def test_resolve_company_name_no_equity_results(monkeypatch):
         {"symbol": "SMSFT=F", "quoteType": "FUTURE", "score": 999999.0},
         {"symbol": "QQQ", "quoteType": "ETF", "score": 500000.0},
     ]
-    monkeypatch.setattr("yfinance.Search", lambda q, max_results=8: _FakeSearch(quotes))
+    monkeypatch.setattr("yfinance.Search", lambda q, max_results=8, timeout=30: _FakeSearch(quotes))
 
     assert resolve_company_name("something") is None
 
 
 def test_resolve_company_name_empty_quotes_list(monkeypatch):
-    monkeypatch.setattr("yfinance.Search", lambda q, max_results=8: _FakeSearch([]))
+    monkeypatch.setattr("yfinance.Search", lambda q, max_results=8, timeout=30: _FakeSearch([]))
 
     assert resolve_company_name("nonexistent company xyz") is None
 
 
 def test_resolve_company_name_search_raises(monkeypatch):
-    def _boom(q, max_results=8):
+    def _boom(q, max_results=8, timeout=30):
         raise RuntimeError("network error")
 
     monkeypatch.setattr("yfinance.Search", _boom)
@@ -119,7 +119,7 @@ def test_resolve_company_name_missing_name_falls_back_to_symbol(monkeypatch):
     quotes = [
         {"symbol": "XYZ", "quoteType": "EQUITY", "score": 100.0},
     ]
-    monkeypatch.setattr("yfinance.Search", lambda q, max_results=8: _FakeSearch(quotes))
+    monkeypatch.setattr("yfinance.Search", lambda q, max_results=8, timeout=30: _FakeSearch(quotes))
 
     result = resolve_company_name("xyz corp")
 

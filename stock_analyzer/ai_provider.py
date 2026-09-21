@@ -175,5 +175,13 @@ def call_llm(provider: str, model: str, api_key: str, system: str, user: str,
             LAST_CALL_ERROR = f"unknown provider: {provider}"
             return None
     except Exception as e:
-        LAST_CALL_ERROR = f"{type(e).__name__}: {e}"[:300]
+        _msg = f"{type(e).__name__}: {e}"
+        # Defense-in-depth redaction (2026-09-21 audit, Low): no evidence any
+        # of the four provider SDKs actually put the key in an exception
+        # message (it's a constructor arg, not passed to the failing call),
+        # but this is cheap insurance against a future SDK version that does,
+        # since LAST_CALL_ERROR is rendered on-screen.
+        if api_key and len(api_key) >= 6:
+            _msg = _msg.replace(api_key, "***REDACTED***")
+        LAST_CALL_ERROR = _msg[:300]
         return None
