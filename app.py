@@ -938,6 +938,12 @@ _TIPS = {
         "• 0.30–0.60 → Moderate — typical for sector-focused or thematic portfolios\n"
         "• > 0.60 → High — limited diversification benefit; you're essentially making "
         "one concentrated bet\n\n"
+        "ℹ️ These are generic industry rule-of-thumb bands on the raw correlation "
+        "number itself — a different, wider scale from the Diversification Score "
+        "glossary entry just above, which is calibrated specifically to this app's "
+        "own equity-portfolio scoring (≤0.16/0.16–0.40/>0.40). Both describe the same "
+        "underlying correlation; the two entries intentionally use different cutoffs "
+        "for different purposes, not a contradiction.\n\n"
         "⚠️ During market crises correlations spike toward 1.0 — assets that appear "
         "uncorrelated in normal markets often crash together. "
         "This is why professionals also hold bonds, gold, or inverse positions as hedges."
@@ -7790,11 +7796,38 @@ if page == "🏠 Home":
     if _qr_res:
         _qr_resolved_info = st.session_state.get("_qr_resolved")
         if _qr_resolved_info:
+            # 2026-09-21 UX audit I3: disclose that a choice was made among
+            # real alternatives (e.g. "Alphabet" -> GOOGL vs GOOG), not just
+            # what was picked.
+            # .get(..., []) not "or []" -- resolve_company_name's contract
+            # guarantees "alternates" is always a real list, never None, so
+            # there's no offline sentinel here to collapse; the antipattern
+            # gate's static check can't see that contract, so the `or []`
+            # shape alone is enough to flag it -- write it the way that
+            # doesn't require the gate to trust the docstring.
+            _qr_alts = _qr_resolved_info.get("alternates", [])
+            _qr_alts_txt = (
+                " (other matches: " + ", ".join(a["symbol"] for a in _qr_alts) + ")"
+                if _qr_alts else ""
+            )
             st.caption(
-                f"Showing results for **{_qr_resolved_info['symbol']}** — {_qr_resolved_info['name']}"
+                f"Showing results for **{_qr_resolved_info['symbol']}** — "
+                f"{_qr_resolved_info['name']}{_qr_alts_txt}"
             )
         if "error" in _qr_res:
-            st.error(f"Could not load data for {_qr_res['ticker']}: {_qr_res['error']}")
+            # 2026-09-21 UX audit I4: don't put a raw provider/library
+            # exception string in the primary message -- a clean fallback
+            # sentence up front, the raw detail collapsed behind an
+            # expander. Deliberately NOT attempting to classify the failure
+            # into "no data"/"delisted"/"non-US ticker" here (the audit's
+            # fuller suggestion): fetch_ticker_bundle's multi-source
+            # orchestrator doesn't expose a stable, provider-independent
+            # error taxonomy today, and guessing a wrong category would be
+            # worse than a plain "couldn't load" per this project's
+            # zero-hallucination doc/UX standard.
+            st.error(f"⛔ Could not load data for {_qr_res['ticker']} right now.")
+            with st.expander("Technical details"):
+                st.caption(str(_qr_res["error"]))
         else:
             _qr_e = _qr_res["entry"]
             # Header strip: ticker | name | sector | price | entry verdict badge
@@ -14240,11 +14273,21 @@ elif page == "🔗 Risk Analysis":
                     if not _lv_sec.empty:
                         _lv_pb  = abs(FRAGILITY_PULLBACK_PCT) / 100.0   # single-source the −10% yardstick
                         _lv_hit = float(_lv_sec.iloc[0]) * _lv_pb
-                        _lv_eq_pct = (_lv_hit / _lv_eq * 100) if _lv_eq > 0 else None
+                        # 2026-09-21 UX audit C2: this must divide by net capital
+                        # (_lv_nc), never by _lv_eq -- `_leverage_cache`'s "equity"
+                        # key is the gross book value, not equity (the documented
+                        # footgun beta_repair.py's docstring warns about a few
+                        # hundred lines below). _lv_nc is already the correctly
+                        # resolved net-capital figure from THIS SAME cache
+                        # (app.py ~5093/5098, total_val + signed cash_balance),
+                        # so no fresh resolve_net_capital() call is needed here --
+                        # the enclosing `if _lev_c.get("levered")` block only
+                        # renders when that figure was freshly measured.
+                        _lv_nc_pct = (_lv_hit / _lv_nc * 100) if _lv_nc > 0 else None
                         _lv_line = (
                             f" A −{abs(FRAGILITY_PULLBACK_PCT):.0f}% move on your largest sector "
                             f"({_lv_sec.index[0]}) ≈ −\\${_lv_hit:,.0f}"
-                            + (f" (−{_lv_eq_pct:.0f}% of your equity)" if _lv_eq_pct is not None else "")
+                            + (f" (−{_lv_nc_pct:.0f}% of your actual capital)" if _lv_nc_pct is not None else "")
                             + "."
                         )
                         # Dual-basis weight — the SECTOR_CEILING gate reads the first
@@ -15065,9 +15108,13 @@ elif page == "🔗 Risk Analysis":
                                 "your leverage."
                             )
                         elif _bl_state == "stale":
+                            # 2026-09-21 UX audit I5: same "stale cash balance"
+                            # state as the Margin Call Distance captions
+                            # elsewhere on this page and on 💰 Account -- reuse
+                            # their exact phrasing rather than a third wording.
                             st.caption(
-                                "⚠️ Leverage impact of this trim can't be measured this "
-                                "session (no fresh cash-balance figure on file)."
+                                "📐 Leverage impact of this trim withheld — your "
+                                f"account's cash balance is stale (> {ACCOUNT_CASH_STALE_DAYS}d old)."
                             )
                         elif _bl_state == "called":
                             st.warning(
@@ -15444,6 +15491,18 @@ elif page == "🔗 Risk Analysis":
                                             "scored this session, marked with why."
                                             if (_bd_n_unreachable or _bd_n_below_floor) else ""
                                         )
+                                    )
+                                    # 2026-09-21 UX audit I7: "beta relief" is
+                                    # named as the sort key but never defined
+                                    # before the β/correlation/composite
+                                    # columns appear below.
+                                    st.caption(
+                                        "ℹ️ **Beta relief** = how much adding this "
+                                        "candidate would lower your book's overall beta — "
+                                        "among candidates that can actually reach your "
+                                        "target, ranked highest-relief first, ties broken "
+                                        "by lower correlation to what you already hold, "
+                                        "then by composite score."
                                     )
 
                                     _bd_cols = st.columns(len(_bd_display))
@@ -32149,6 +32208,17 @@ elif page == "🛑 The Road Not Taken":
         "graded against what actually happened. Awareness only: this never "
         "changes what the engine recommends."
     )
+    # 2026-09-21 UX audit I1: disclose the expected multi-month "Building"
+    # state near the top, not only in a footnote below every card — a
+    # first-time viewer seeing every row stuck at "Building" has no
+    # on-page signal distinguishing "working as designed, wait" from
+    # "something is broken." Identical wording on 🎯 Recommendation
+    # Outcomes' own intro (see below) so the two pages don't disagree.
+    st.caption(
+        "⚪ Expect most rows to read **Building** for the first couple of "
+        "months after a gate/call is added — that's the minimum-sample "
+        "floor not yet being met, by design, not a fault."
+    )
 
     _rnt_rows = db.load_gate_suppressions()
     if _rnt_rows is None:
@@ -32295,6 +32365,13 @@ elif page == "🎯 Recommendation Outcomes":
         "Advisor's ADD calls actually move the portfolio metric they were "
         "computed against, and did you act on them? Awareness only: this never "
         "changes what the engine recommends."
+    )
+    # 2026-09-21 UX audit I1 -- identical wording to 🛑 The Road Not Taken's
+    # own intro (see its page above) so the two pages don't disagree.
+    st.caption(
+        "⚪ Expect most rows to read **Building** for the first couple of "
+        "months after a gate/call is added — that's the minimum-sample "
+        "floor not yet being met, by design, not a fault."
     )
 
     _ro_rows = db.load_rec_events()
@@ -33160,9 +33237,13 @@ elif page == "💰 Account":
                                       - pd.to_datetime(_acct["updated_at"], utc=True)).days
                     _cash_stale = _cash_age_days > ACCOUNT_CASH_STALE_DAYS
                 if _cash_stale:
+                    # 2026-09-21 UX audit I5: reuse the exact phrasing of this
+                    # page's own sibling caption a few hundred lines up
+                    # (🔗 Risk Analysis has the identical wording too) so the
+                    # same underlying state isn't worded three different ways.
                     st.caption(
-                        "📐 Margin Call Distance withheld — the cash balance above "
-                        f"is stale (> {ACCOUNT_CASH_STALE_DAYS}d old)."
+                        "📐 Margin Call Distance withheld — your account's cash "
+                        f"balance is stale (> {ACCOUNT_CASH_STALE_DAYS}d old)."
                     )
                 else:
                     _lev_ratio = (_equity / _total_acct) if _total_acct > 0 else None
@@ -35213,7 +35294,7 @@ elif page == "💰 Account":
                             )
                             _prv_c3.metric(
                                 "Realized P&L (closed trades)",
-                                f"${_prv['realized_pnl_total']:,.2f}",
+                                _m(f"${_prv['realized_pnl_total']:,.2f}"),
                             )
                             if _prv["realized_return_pct"] is None:
                                 st.caption(
@@ -35235,7 +35316,7 @@ elif page == "💰 Account":
                         else:
                             _ptb_c1, _ptb_c2, _ptb_c3 = st.columns(3)
                             _ptb_c1.metric("Trades closed", _ptb["n_trades"])
-                            _ptb_c2.metric("Total realized P&L", f"${_ptb['total_realized_pnl']:,.2f}")
+                            _ptb_c2.metric("Total realized P&L", _m(f"${_ptb['total_realized_pnl']:,.2f}"))
                             _ptb_c3.metric(
                                 "Win rate",
                                 f"{_ptb['win_rate_pct']:.1f}%" if _ptb["win_rate_pct"] is not None else "—",
@@ -35323,8 +35404,8 @@ elif page == "💰 Account":
                             )
                             _pld_c2.metric(
                                 "Cushion",
-                                f"${_pld['cushion_end']:,.0f}" if _pld["cushion_end"] is not None else "—",
-                                delta=(f"${_pld['cushion_delta']:+,.0f}"
+                                _m(f"${_pld['cushion_end']:,.0f}") if _pld["cushion_end"] is not None else "—",
+                                delta=(_m(f"${_pld['cushion_delta']:+,.0f}")
                                        if _pld["cushion_delta"] is not None else None),
                             )
                             _pld_c3.metric(
@@ -35418,19 +35499,21 @@ elif page == "💰 Account":
                         st.info(f"No realized sales found for {_rpt_year}.")
                     else:
                         _rc1, _rc2, _rc3 = st.columns(3)
-                        _rc1.metric("Short-term gain/loss", f"${_rpt_ledger['st_gain']:,.0f}")
-                        _rc2.metric("Long-term gain/loss", f"${_rpt_ledger['lt_gain']:,.0f}")
-                        _rc3.metric("Unknown-term gain/loss", f"${_rpt_ledger['unknown_gain']:,.0f}")
+                        _rc1.metric("Short-term gain/loss", _m(f"${_rpt_ledger['st_gain']:,.0f}"))
+                        _rc2.metric("Long-term gain/loss", _m(f"${_rpt_ledger['lt_gain']:,.0f}"))
+                        _rc3.metric("Unknown-term gain/loss", _m(f"${_rpt_ledger['unknown_gain']:,.0f}"))
 
+                        _rpt_fifo_total = _m(f"\\${_rpt_ledger['st_gain'] + _rpt_ledger['lt_gain'] + _rpt_ledger['unknown_gain']:,.2f}")
+                        _rpt_stored_total = _m(f"\\${_rpt_ledger['stored_realized_total']:,.2f}")
                         if _rpt_ledger["reconciles"]:
                             st.caption(
-                                f"✅ Reconciles — FIFO total (\\${_rpt_ledger['st_gain'] + _rpt_ledger['lt_gain'] + _rpt_ledger['unknown_gain']:,.2f}) "
-                                f"matches the stored average-cost total (\\${_rpt_ledger['stored_realized_total']:,.2f})."
+                                f"✅ Reconciles — FIFO total ({_rpt_fifo_total}) "
+                                f"matches the stored average-cost total ({_rpt_stored_total})."
                             )
                         else:
                             st.caption(
-                                f"ℹ️ FIFO total (\\${_rpt_ledger['st_gain'] + _rpt_ledger['lt_gain'] + _rpt_ledger['unknown_gain']:,.2f}) "
-                                f"differs from the stored average-cost total (\\${_rpt_ledger['stored_realized_total']:,.2f}). "
+                                f"ℹ️ FIFO total ({_rpt_fifo_total}) "
+                                f"differs from the stored average-cost total ({_rpt_stored_total}). "
                                 "This is expected whenever you sold part of a position built from lots "
                                 "bought at different prices — FIFO and average-cost allocate the same "
                                 "overall gain differently; both are valid, they just split it differently."
@@ -40414,8 +40497,13 @@ elif page == "🧠 AI Insights":
                         )
                 elif round_.get("error"):
                     st.error(round_["error"])
+                    # 2026-09-21 UX audit I4: a raw provider/library exception
+                    # string was riding alongside the clean fallback message at
+                    # the same visual level -- collapse it behind an expander
+                    # instead.
                     if round_.get("details"):
-                        st.caption(f"Details: {round_['details']}")
+                        with st.expander("Technical details"):
+                            st.caption(round_["details"])
                 elif round_.get("cold_path"):
                     st.warning(round_["cold_path"])
                 elif round_.get("offline_no_key"):
@@ -40423,7 +40511,8 @@ elif page == "🧠 AI Insights":
                 elif round_.get("offline"):
                     st.warning("🔌 AI layer offline or rate-limited — couldn't narrate an answer. Every other page is unaffected.")
                     if round_.get("details"):
-                        st.caption(f"Details: {round_['details']}")
+                        with st.expander("Technical details"):
+                            st.caption(round_["details"])
                 else:
                     st.markdown(round_["answer"])
                     if round_.get("intent") in ("trades_in_range", "trade_lookup") and round_.get("facts"):
@@ -40651,6 +40740,12 @@ elif page == "🧠 AI Insights":
             "• \"How has my protective EXIT and TRIM alpha performed against SPY?\"\n\n"
             "• \"Is my own buy instinct beating the app's picks?\""
         )
+        # 2026-09-21 UX audit I2: state the scope boundary up front rather
+        # than only via a refusal after the fact.
+        st.caption(
+            "ℹ️ Answers questions about your own trading history and portfolio "
+            "state — not general market or stock questions."
+        )
 
         if st.button("🔄 Refresh data", key="_inv_refresh_data_btn"):
             st.session_state.pop("_inv_data_bundle", None)
@@ -40806,8 +40901,12 @@ elif page == "🧠 AI Insights":
                         )
                     else:
                         st.warning(_r_reason)
+                        # 2026-09-21 UX audit I4 (same fix as its Ask-tab
+                        # sibling above): don't ride a raw exception string
+                        # alongside the clean fallback message.
                         if round_.get("llm_error"):
-                            st.caption(f"Details: {round_['llm_error']}")
+                            with st.expander("Technical details"):
+                                st.caption(round_["llm_error"])
                 elif _r_result.get("answered") is True:
                     st.markdown(_r_result.get("report_text") or "")
 

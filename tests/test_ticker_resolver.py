@@ -8,7 +8,10 @@ Contracts being locked:
      non-EQUITY result (future/ETF) is present; no EQUITY match, empty
      quotes, or an exception -> None, never raises; empty/whitespace query
      short-circuits without calling yfinance at all; a quote missing
-     longname/shortname falls back to its own symbol as the name.
+     longname/shortname falls back to its own symbol as the name;
+     "alternates" (2026-09-21 UX audit I3) lists other EQUITY matches
+     within _AMBIGUOUS_MATCH_SCORE_MARGIN of the top score, empty when the
+     top match was clearly ahead.
 """
 import pytest
 
@@ -58,7 +61,10 @@ def test_resolve_company_name_clean_single_match(monkeypatch):
 
     result = resolve_company_name("microsoft")
 
-    assert result == {"symbol": "MSFT", "name": "Microsoft Corporation", "score": 147839.0}
+    assert result == {
+        "symbol": "MSFT", "name": "Microsoft Corporation", "score": 147839.0,
+        "alternates": [],
+    }
 
 
 def test_resolve_company_name_picks_top_equity_over_higher_scoring_nonequity(monkeypatch):
@@ -123,4 +129,33 @@ def test_resolve_company_name_missing_name_falls_back_to_symbol(monkeypatch):
 
     result = resolve_company_name("xyz corp")
 
-    assert result == {"symbol": "XYZ", "name": "XYZ", "score": 100.0}
+    assert result == {"symbol": "XYZ", "name": "XYZ", "score": 100.0, "alternates": []}
+
+
+def test_resolve_company_name_ambiguous_match_discloses_alternates(monkeypatch):
+    quotes = [
+        {"symbol": "GOOGL", "longname": "Alphabet Inc Class A",
+         "quoteType": "EQUITY", "score": 100000.0},
+        {"symbol": "GOOG", "longname": "Alphabet Inc Class C",
+         "quoteType": "EQUITY", "score": 95000.0},
+    ]
+    monkeypatch.setattr("yfinance.Search", lambda q, max_results=8, timeout=30: _FakeSearch(quotes))
+
+    result = resolve_company_name("alphabet")
+
+    assert result["symbol"] == "GOOGL"
+    assert result["alternates"] == [{"symbol": "GOOG", "name": "Alphabet Inc Class C"}]
+
+
+def test_resolve_company_name_clear_winner_has_no_alternates(monkeypatch):
+    quotes = [
+        {"symbol": "MSFT", "longname": "Microsoft Corporation",
+         "quoteType": "EQUITY", "score": 147839.0},
+        {"symbol": "MSFT.TO", "longname": "Microsoft Corporation (Toronto)",
+         "quoteType": "EQUITY", "score": 20000.0},
+    ]
+    monkeypatch.setattr("yfinance.Search", lambda q, max_results=8, timeout=30: _FakeSearch(quotes))
+
+    result = resolve_company_name("microsoft")
+
+    assert result["alternates"] == []

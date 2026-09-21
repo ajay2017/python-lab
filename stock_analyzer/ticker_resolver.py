@@ -25,6 +25,15 @@ import re
 # error to the user.
 _TICKER_SHAPE = re.compile(r"^[A-Z]{1,5}([.\-][A-Z]{1,2})?$")
 
+# UI disambiguation heuristic only -- NOT an investment-policy threshold
+# (Hard Rule #1 doesn't apply; this never influences which ticker is
+# analyzed, only whether the confirmation caption discloses that other
+# equities scored close to the one picked). Deliberately local to this
+# module rather than constants.py, same rationale system_health.py's own
+# observability windows use. A candidate within this fraction of the top
+# score is disclosed as an alternate (2026-09-21 UX audit I3).
+_AMBIGUOUS_MATCH_SCORE_MARGIN = 0.15
+
 
 def looks_like_ticker(raw: str) -> bool:
     """True if `raw` is shaped like a real ticker symbol.
@@ -40,9 +49,16 @@ def resolve_company_name(query: str, max_results: int = 8) -> dict | None:
     """Resolve free-text (a company name) to its most likely ticker via
     yfinance's Search.
 
-    Returns ``{"symbol": str, "name": str, "score": float}`` for the
-    top-scored EQUITY-type match, or ``None`` on no match, no equity-type
-    result, or any exception (network, library, malformed response).
+    Returns ``{"symbol": str, "name": str, "score": float, "alternates":
+    list[dict]}`` for the top-scored EQUITY-type match, or ``None`` on no
+    match, no equity-type result, or any exception (network, library,
+    malformed response). ``alternates`` (2026-09-21 UX audit I3) is a list
+    of ``{"symbol", "name"}`` for any OTHER equity match that scored within
+    ``_AMBIGUOUS_MATCH_SCORE_MARGIN`` of the top pick — e.g. a query like
+    "Alphabet" that could plausibly mean GOOGL or GOOG — so the caller can
+    disclose that a choice was made among real alternatives, not just what
+    was picked. Always a list, never ``None``; empty when the top match was
+    clearly ahead of the field.
     """
     if not query or not query.strip():
         return None
@@ -67,10 +83,24 @@ def resolve_company_name(query: str, max_results: int = 8) -> dict | None:
         equities.sort(key=lambda q: q.get("score", 0) or 0, reverse=True)
         top = equities[0]
         name = top.get("longname") or top.get("shortname") or top["symbol"]
+        top_score = float(top.get("score") or 0)
+        top_symbol = str(top["symbol"]).upper()
+        alternates = []
+        if top_score > 0:
+            for q in equities[1:]:
+                q_score = float(q.get("score", 0) or 0)
+                q_symbol = str(q.get("symbol", "")).upper()
+                if q_symbol and q_symbol != top_symbol \
+                        and q_score >= top_score * (1 - _AMBIGUOUS_MATCH_SCORE_MARGIN):
+                    alternates.append({
+                        "symbol": q_symbol,
+                        "name": str(q.get("longname") or q.get("shortname") or q_symbol),
+                    })
         return {
-            "symbol": str(top["symbol"]).upper(),
+            "symbol": top_symbol,
             "name": str(name),
-            "score": float(top.get("score") or 0),
+            "score": top_score,
+            "alternates": alternates,
         }
     except Exception:
         return None
