@@ -2194,10 +2194,14 @@ CREATE POLICY "service_role_all_reference_table_history" ON reference_table_hist
 
 ### `stock_analyzer/gate_registry.py`
 
-Frozen, **append-only** `gate_id` → label map for the ids the ledger can emit (G-01,
-G-04, G-07, G-09, G-16, G-20, G-23, G-24). Deliberately **not** in `constants.py`:
-these are identifiers, not thresholds, so they are not investment policy. Decides
-nothing, so it is deliberately **not** in the commit hook's `_GATE_FILES`.
+Frozen, **append-only** `gate_id` → label map for the ids the ledger can emit — **13
+today** (verified 2026-09-21: G-01, G-02, G-04, G-05, G-06, G-07, G-09, G-13, G-16, G-18,
+G-20, G-23, G-24; this line previously named only the original 8, caught as doc drift
+in that day's app-review — the roadmap B2 expansion adding G-02/G-05/G-06/G-13/G-18 was
+already described a few paragraphs below but never propagated up to this intro line).
+Deliberately **not** in `constants.py`: these are identifiers, not thresholds, so they
+are not investment policy. Decides nothing, so it is deliberately **not** in the commit
+hook's `_GATE_FILES`.
 
 Two anti-rot tests, because a registry nothing reads is a registry that rots:
 `tests/test_gate_registry.py` parses the §2A.3 gate table out of `docs/requirements.md`
@@ -2537,7 +2541,21 @@ after a live incident where the recorded source had no display surface at all).
 ### `stock_analyzer/broker_sync.py`
 
 Pure transform/decision logic (no I/O) sitting between `snaptrade_client.py`
-and the `broker` cron lane / `app.py` (F-244). Five functions:
+and the `broker` cron lane / `app.py` (F-244). **17 public functions today**
+(verified 2026-09-21 — grown from an original 5 as F-244a/b/c and F-268
+extended broker/income-event handling; this line previously said "Five
+functions," caught as doc drift in that day's app-review). The five
+documented in full below are the original core set and remain the most
+decision-relevant. Three more — `income_event_subtype()` and
+`dedupe_income_events()` (both named in passing inside
+`classify_transactions()`'s own writeup below) and
+`parse_robinhood_csv_income()` (named only in the top-of-file module map,
+§"stock_analyzer/ tree") — are mentioned but not individually documented
+here. The remaining nine (`normalize_positions`/`ticker_share_counts`/
+`diff_position_map`/`drift_dollar_impact`/`split_awaiting_sync`/
+`tickers_traded_since`/`decide_drift_banner`/
+`find_unreconciled_near_duplicates`/`reconciliation_freshness`) have no
+mention here at all — read the source directly for those.
 
 **`diff_positions(rh_positions, port_df)`** — three-bucket drift (rh_only /
 app_only / qty_mismatch, tolerance `BROKER_DRIFT_SHARE_TOL`) between live
