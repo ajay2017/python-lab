@@ -52,11 +52,14 @@ from stock_analyzer.predictive_analytics import _advance_trading_days, forward_a
 STATUS_NOT_MATURED = "not_matured"
 STATUS_MATURED = "matured"
 
-_TRIM_TYPES = ("rebal_trim", "beta_trim")
+_TRIM_TYPES = ("rebal_trim", "beta_trim", "single_name_concentration", "sector_concentration")
 _DIRECTION_FOR_TYPE = {
-    "rebal_trim":     "SELL",
-    "beta_trim":      "SELL",
-    "diversify_add":  "BUY",
+    "rebal_trim":                  "SELL",
+    "beta_trim":                   "SELL",
+    "diversify_add":               "BUY",
+    # 2026-09-21 app-review Part 2 #1 additions — both trims, same shape.
+    "single_name_concentration":   "SELL",
+    "sector_concentration":        "SELL",
 }
 # Confirming trigger_type per rec_type — a BOOST only, never required for
 # `acted`. beta_trim has no dedicated quick-log trigger_type of its own (only
@@ -64,12 +67,24 @@ _DIRECTION_FOR_TYPE = {
 # manually-tagged REBAL_TRIM SELL matching a beta_trim episode is still
 # treated as confirming, since it's the same underlying discretionary action
 # (a sell reducing beta/concentration), not a re-derivation of a different
-# rule.
+# rule. single_name_concentration / sector_concentration (2026-09-21) reuse
+# REBAL_TRIM for the same reason — owner decision, no new quick-log tag.
 _CONFIRMING_TRIGGER = {
-    "rebal_trim":    "REBAL_TRIM",
-    "beta_trim":     "REBAL_TRIM",
-    "diversify_add": "DIVERSIFY_ADD",
+    "rebal_trim":                  "REBAL_TRIM",
+    "beta_trim":                   "REBAL_TRIM",
+    "diversify_add":               "DIVERSIFY_ADD",
+    "single_name_concentration":   "REBAL_TRIM",
+    "sector_concentration":        "REBAL_TRIM",
 }
+# rec_types where a matching SELL may be of ANY ticker in the row's own
+# `candidates` list, not just its own `ticker` field (which is always the
+# FIRST/lowest-conviction candidate by construction). diversify_add does NOT
+# need this: its own `ticker` IS candidates[0] and match_attribution's
+# existing candidate-set check there is defense-in-depth only, never the
+# primary match. sector_concentration DOES need it — the owner may
+# reasonably sell the 2nd- or 3rd-ranked trim candidate instead of the
+# lowest-conviction one and that should still credit the call.
+_MATCH_ANY_CANDIDATE = frozenset({"sector_concentration"})
 
 
 def _safe_float(x) -> "float | None":
@@ -157,18 +172,27 @@ def match_attribution(
       (a) trade ticker == rec['ticker'] EXACTLY (a SELL of a DIFFERENT
           high-beta/oversized name never credits this rec —§11 ratified
           decision 3, re-applied here for rebal_trim/beta_trim, and the
-          natural reading of "the named ticker" for diversify_add too).
+          natural reading of "the named ticker" for diversify_add too) —
+          EXCEPT for `rec_type`s in `_MATCH_ANY_CANDIDATE` (currently just
+          `sector_concentration`), where a SELL of ANY ticker in the row's
+          own `candidates` list credits the call, not just `ticker` itself
+          (which is only the lowest-conviction candidate by construction —
+          the owner may reasonably sell a different one of the named
+          trim candidates instead).
       (b) trade action matches the rec_type's expected direction (SELL for
-          rebal_trim/beta_trim, BUY for diversify_add).
+          rebal_trim/beta_trim/single_name_concentration/
+          sector_concentration, BUY for diversify_add).
       (c) traded_date (ET) within [fired_date, fired_date +
           action_window_trading_days] trading days, INCLUSIVE both ends.
-    For diversify_add ONLY, an additional (d): the bought ticker must also
-    be present in the rec's own `candidates` jsonb — a defense-in-depth
-    invariant (the row's own `ticker` is always its own candidates[0] by
-    construction, so this only ever bites a corrupted/malformed row).
+    For diversify_add, an additional defense-in-depth check: the bought
+    ticker must also be present in the rec's own `candidates` jsonb (the
+    row's own `ticker` is always its own candidates[0] by construction, so
+    this only ever bites a corrupted/malformed row) — a no-op for
+    sector_concentration since (a) above already requires candidate
+    membership there.
 
     `trigger_type` is a CONFIRMING BOOST only, never required — a manual/
-    untagged trade matching (a)-(c)/(d) still counts as acted
+    untagged trade matching the above still counts as acted
     (`attribution_confirmed=False` in that case).
 
     Returns {"acted": bool, "attribution_confirmed": bool,
@@ -184,8 +208,9 @@ def match_attribution(
     if not ticker or direction is None or fired_date is None:
         return _none
 
+    match_any = rec_type in _MATCH_ANY_CANDIDATE
     candidate_set = None
-    if rec_type == "diversify_add":
+    if rec_type == "diversify_add" or match_any:
         _raw_candidates = rec.get("candidates")
         candidate_set = {
             str(c).strip().upper()
@@ -198,7 +223,10 @@ def match_attribution(
     best: "tuple[date, dict] | None" = None
     for tr in trades or []:
         tk = str(tr.get("ticker", "") or "").strip().upper()
-        if tk != ticker:
+        if match_any:
+            if not candidate_set or tk not in candidate_set:
+                continue
+        elif tk != ticker:
             continue
         action = str(tr.get("action", "") or "").strip().upper()
         if action != direction:
@@ -248,7 +276,14 @@ def _compute_outcome(
             ),
         }
 
-    if rec_type == "rebal_trim":
+    if rec_type in ("rebal_trim", "single_name_concentration"):
+        # single_name_concentration (2026-09-21) folds into this exact branch
+        # rather than getting its own — both measure the SAME realized
+        # substrate (max_single_name_pct), just from a different trigger
+        # condition on the capture side (profitable+oversized vs strong-
+        # conviction+oversized). Deduped at capture time (see
+        # rec_events_capture._build_single_name_conc_rows) so a ticker never
+        # produces both a rebal_trim and a single_name_concentration row.
         return {
             "predicted": _safe_float(r.get("metric_predicted_after")),
             "realized_max_single_name_pct": _safe_float(target_row.get("max_single_name_pct")),
@@ -257,6 +292,27 @@ def _compute_outcome(
                 "Portfolio-level proxy — the daily snapshot stores only the "
                 "book's MAX single-name/sector weight, not this specific "
                 "ticker's own weight history."
+            ),
+        }
+
+    if rec_type == "sector_concentration":
+        realized_top_sector = target_row.get("top_sector")
+        return {
+            "predicted": _safe_float(r.get("metric_predicted_after")),
+            "realized_top_sector_pct": _safe_float(target_row.get("top_sector_pct")),
+            "realized_top_sector": realized_top_sector,
+            # None (not True/False) when the horizon snapshot itself is
+            # missing — "did the top sector change" is unanswerable then,
+            # never silently read as "no, unchanged".
+            "top_sector_changed": (
+                (realized_top_sector != r.get("sector")) if realized_top_sector is not None else None
+            ),
+            "caption": (
+                "Portfolio-level proxy — the daily snapshot stores only the "
+                "book's MAX single-name/sector weight, not this specific "
+                "sector's own weight history. If the book's top sector "
+                "rotated by the horizon date, the realized figure describes "
+                "a DIFFERENT sector, not this one's improvement."
             ),
         }
 
@@ -436,6 +492,26 @@ def readout_footnotes(rec_type: str) -> "list[str]":
             "Portfolio-level proxy — the daily snapshot stores only the "
             "book's MAX single-name/sector weight, not this specific "
             "ticker's own weight history.",
+        ]
+    if rec_type == "single_name_concentration":
+        return [
+            "Portfolio-level proxy — the daily snapshot stores only the "
+            "book's MAX single-name/sector weight, not this specific "
+            "ticker's own weight history.",
+            "This population is specifically the oversized names Rebalancer "
+            "Trim does NOT catch — not yet profitable enough to trigger that "
+            "rec, but flagged here on size alone regardless of conviction.",
+        ]
+    if rec_type == "sector_concentration":
+        return [
+            "Portfolio-level proxy — the daily snapshot stores only the "
+            "book's MAX single-name/sector weight, not this specific "
+            "sector's own weight history.",
+            "If the book's top sector at the horizon date is a DIFFERENT "
+            "sector than the one this call was about, the realized figure "
+            "describes that different sector, not this one's improvement — "
+            "check the disclosed top-sector-changed flag before reading it "
+            "as this sector cooling off.",
         ]
     if rec_type == "diversify_add":
         return [

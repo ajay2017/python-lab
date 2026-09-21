@@ -11,7 +11,7 @@ SAME run's already-computed `port_df` / `port_risk` / `held_data`, plus
 `db.load_trades()` and the already-resolved `sector_candidates` /
 `discovery_universe` reference payloads — no second fetch of any kind.
 
-Three independent generators, one row (or list of rows) per rec_type, EACH
+Five independent generators, one row (or list of rows) per rec_type, EACH
 wrapped in its own try/except in `build_rec_event_rows` so one generator's
 failure can never blank the others (mirrors
 `risk_metric_history.build_portfolio_risk_snapshot`'s isolation pattern):
@@ -30,6 +30,38 @@ failure can never blank the others (mirrors
                      sector that day, `ticker` = the FIRST (highest-priority,
                      roster-before-discovery-bucket) candidate in that
                      sector's surfaced pool.
+  - `single_name_concentration` (2026-09-21 app-review Part 2 #1) —
+                     reproduces (does NOT import) `risk_advisor.py`'s
+                     conviction-INDEPENDENT single-name-overweight branch
+                     (`risk_advisor.py:883-931`): a ticker over
+                     `SINGLE_NAME_CEILING` with score >= `WEAK_CONVICTION_
+                     SCORE`. DEDUPED against `rebal_trim`'s same-run output
+                     (see `build_rec_event_rows`) — a ticker that is BOTH
+                     oversized+profitable (rebal_trim's own trigger) AND
+                     oversized+strong-conviction (this trigger) would
+                     otherwise get two rows crediting one real SELL, the
+                     exact `rebal_trim`/`beta_trim` conflation class §11
+                     already ratified against. This type measures only its
+                     genuine non-overlapping gap: oversized names rebal_trim
+                     structurally misses (not yet profitable). At most one
+                     row per ticker per day; a day can have several.
+  - `sector_concentration` (2026-09-21 app-review Part 2 #1) — reproduces
+                     (does NOT import) `risk_advisor.py`'s sector-
+                     concentration branch (`risk_advisor.py:692-881`). At
+                     most ONE row per day — like the live card, this names
+                     only the single WORST (highest-weight) real sector,
+                     never every sector over threshold. `ticker` = the
+                     lowest-conviction trim candidate in that sector (same
+                     ranking the live card uses); the FULL trim-candidate
+                     ticker list rides in `candidates` so attribution can
+                     credit a SELL of ANY of them, not just the first.
+
+Both new types are EQUITY-basis only (no `gate_denom` scaling) — under
+current policy (`risk_advisor.py`'s own `_acct_f` comment, 2026-07-09) the
+live cards' basis-scaling factor is always 1.0, so `portfolio_value` is
+derived directly from `port_df["Market Value"].sum()` here rather than
+threading a second policy-basis parameter through `cron_runner.py` for a
+value that never actually changes today.
 
 NULL-preserving contract (this project has shipped and fixed the fabricated-
 neutral bug class twice — feedback_sentinel_is_present /
@@ -53,7 +85,13 @@ from typing import Callable
 import pandas as pd
 
 from stock_analyzer.beta_repair import expected_beta_after_trim
-from stock_analyzer.constants import PORTFOLIO_BETA_ELEVATED, SINGLE_NAME_CEILING
+from stock_analyzer.constants import (
+    PORTFOLIO_BETA_ELEVATED,
+    SECTOR_ELEVATED,
+    SINGLE_NAME_CEILING,
+    UNCLASSIFIED_SECTOR,
+    WEAK_CONVICTION_SCORE,
+)
 from stock_analyzer.portfolio import diversification_recommendations, rebalance_actions
 
 _SOURCE = "cron"
@@ -312,6 +350,140 @@ def _build_diversify_add_rows(
     return rows
 
 
+# ── single_name_concentration ───────────────────────────────────────────────
+
+def _build_single_name_conc_rows(
+    port_df, trades_df, fired_date: date, fired_date_str: str,
+    rebal_trim_tickers: "set[str] | None" = None,
+) -> "list[dict]":
+    """One row per ticker over SINGLE_NAME_CEILING with score >=
+    WEAK_CONVICTION_SCORE — reproduces (does NOT import) risk_advisor.py's
+    conviction-independent single-name-overweight branch (risk_advisor.py:
+    883-931), EQUITY-basis only (no gate_denom scaling — see module docstring).
+
+    `rebal_trim_tickers`: tickers `_build_rebal_trim_rows` already emitted
+    THIS SAME RUN — skipped here to avoid crediting one real SELL with two
+    rows (this type and rebal_trim can both fire on an oversized+profitable+
+    strong-conviction name). Same-day-BUY exclusion mirrors
+    `_bought_today_tickers`.
+    """
+    if port_df is None or getattr(port_df, "empty", True):
+        return []
+    rebal_trim_tickers = rebal_trim_tickers or set()
+    bought_today = _bought_today_tickers(trades_df, fired_date)
+    try:
+        pv = float(port_df["Market Value"].sum())
+    except Exception:
+        pv = 0.0
+    if not pv or pv <= 0:
+        return []
+
+    rows: "list[dict]" = []
+    for _, row in port_df.iterrows():
+        ticker = str(row.get("Ticker", "") or "").strip().upper()
+        if not ticker or ticker in rebal_trim_tickers or ticker in bought_today:
+            continue
+        w = _safe_float(row.get("Weight (%)")) or 0.0
+        # Mirrors risk_advisor.py's own coercion here: a missing score
+        # defaults to 0.0, which only ever EXCLUDES a name from firing
+        # (never fabricates a false "high conviction" reading that would
+        # otherwise reach the user).
+        score = _safe_float(row.get("Score")) or 0.0
+        if w < SINGLE_NAME_CEILING or score < WEAK_CONVICTION_SCORE:
+            continue
+        excess_pp = w - SINGLE_NAME_CEILING
+        rows.append({
+            "rec_type":               "single_name_concentration",
+            "ticker":                 ticker,
+            "sector":                 None,
+            "fired_date":             fired_date_str,
+            "source":                 _SOURCE,
+            "metric_name":            "single_name_pct",
+            "metric_before":          _safe_float(w),
+            "metric_predicted_after": _safe_float(SINGLE_NAME_CEILING),
+            "rec_dollars":            _safe_float(round(excess_pp / 100.0 * pv)),
+            "price_at_rec":           None,
+            "candidates":             None,
+            "corr_coverage_n":        None,
+        })
+    return rows
+
+
+# ── sector_concentration ─────────────────────────────────────────────────────
+
+def _build_sector_conc_rows(port_df, trades_df, fired_date: date, fired_date_str: str) -> "list[dict]":
+    """At most ONE row per day — reproduces (does NOT import) risk_advisor.py's
+    sector-concentration branch (risk_advisor.py:692-881), EQUITY-basis only.
+    Like the live card, this names only the single WORST (highest-weight)
+    real sector (UNCLASSIFIED_SECTOR excluded, same as the live card — a
+    concentration "breach" on the unclassified catch-all is a data-hygiene
+    artifact, not a real correlated-sector risk), never every sector over
+    threshold. `ticker` = the lowest-conviction trim candidate (score_raw
+    ascending, same-day-BUY excluded); the FULL trim-candidate ticker list
+    rides in `candidates` so attribution can credit a SELL of ANY of them.
+    Fires at SECTOR_ELEVATED (the live card's own MEDIUM-or-HIGH threshold —
+    matches when the card is shown at all, not just its HIGH escalation).
+    No row when there are zero score-eligible, not-same-day-bought
+    candidates in the worst sector (nothing to attribute).
+    """
+    if port_df is None or getattr(port_df, "empty", True):
+        return []
+    bought_today = _bought_today_tickers(trades_df, fired_date)
+
+    sector_weights: "dict[str, float]" = {}
+    sector_holdings: "dict[str, list[dict]]" = {}
+    for _, row in port_df.iterrows():
+        ticker = str(row.get("Ticker", "") or "").strip().upper()
+        if not ticker:
+            continue
+        sec = str(row.get("Sector", "") or "").strip() or UNCLASSIFIED_SECTOR
+        w = _safe_float(row.get("Weight (%)")) or 0.0
+        sector_weights[sec] = sector_weights.get(sec, 0.0) + w
+        sector_holdings.setdefault(sec, []).append({
+            "ticker":    ticker,
+            "weight":    w,
+            "score_raw": _safe_float(row.get("Score")),
+        })
+
+    real_sector_weights = {s: w for s, w in sector_weights.items() if s != UNCLASSIFIED_SECTOR}
+    if not real_sector_weights:
+        return []
+    top_sec, top_wt = max(real_sector_weights.items(), key=lambda x: x[1])
+    if top_wt < SECTOR_ELEVATED:
+        return []
+
+    try:
+        pv = float(port_df["Market Value"].sum())
+    except Exception:
+        pv = 0.0
+    if not pv or pv <= 0:
+        return []
+
+    trim_eligible = sorted(
+        (h for h in sector_holdings.get(top_sec, []) if h["score_raw"] is not None),
+        key=lambda h: h["score_raw"],
+    )
+    candidates = [h["ticker"] for h in trim_eligible if h["ticker"] not in bought_today]
+    if not candidates:
+        return []
+
+    excess_pp = top_wt - SECTOR_ELEVATED
+    return [{
+        "rec_type":               "sector_concentration",
+        "ticker":                 candidates[0],
+        "sector":                 top_sec,
+        "fired_date":             fired_date_str,
+        "source":                 _SOURCE,
+        "metric_name":            "top_sector_pct",
+        "metric_before":          _safe_float(top_wt),
+        "metric_predicted_after": _safe_float(SECTOR_ELEVATED),
+        "rec_dollars":            _safe_float(round(excess_pp / 100.0 * pv)),
+        "price_at_rec":           None,
+        "candidates":             candidates,
+        "corr_coverage_n":        None,
+    }]
+
+
 # ── orchestrator ─────────────────────────────────────────────────────────────
 
 def build_rec_event_rows(
@@ -332,18 +504,25 @@ def build_rec_event_rows(
     `risk_snapshot` is the SAME run's already-computed `portfolio_risk_
     snapshots`-shaped row (risk_metric_history.build_portfolio_risk_snapshot's
     return value) — reused for the diversify_add rows' `avg_pairwise_corr`/
-    `corr_coverage_n`, never recomputed. Each of the three generators is
+    `corr_coverage_n`, never recomputed. Each of the five generators is
     independently try/excepted so one's failure can never blank the others
     (mirrors build_portfolio_risk_snapshot's own per-metric isolation).
     Returns [] (never None) when nothing qualifies today — an empty capture
     day is a real, complete answer, not a failure.
+
+    `single_name_concentration` runs AFTER `rebal_trim` specifically so its
+    dedup set (the tickers rebal_trim already emitted this run) is available
+    — see `_build_single_name_conc_rows`'s own docstring.
     """
     fired_date_str = _fired_date_str(fired_date)
     risk_snapshot = risk_snapshot or {}
     rows: "list[dict]" = []
+    rebal_trim_tickers: "set[str]" = set()
 
     try:
-        rows.extend(_build_rebal_trim_rows(port_df, fired_date_str))
+        rebal_rows = _build_rebal_trim_rows(port_df, fired_date_str)
+        rebal_trim_tickers = {r["ticker"] for r in rebal_rows}
+        rows.extend(rebal_rows)
     except Exception:
         pass
 
@@ -360,6 +539,19 @@ def build_rec_event_rows(
             risk_snapshot.get("avg_pairwise_corr"), risk_snapshot.get("corr_coverage_n"),
             fired_date_str, price_fn=price_fn,
         ))
+    except Exception:
+        pass
+
+    try:
+        rows.extend(_build_single_name_conc_rows(
+            port_df, trades_df, fired_date, fired_date_str,
+            rebal_trim_tickers=rebal_trim_tickers,
+        ))
+    except Exception:
+        pass
+
+    try:
+        rows.extend(_build_sector_conc_rows(port_df, trades_df, fired_date, fired_date_str))
     except Exception:
         pass
 

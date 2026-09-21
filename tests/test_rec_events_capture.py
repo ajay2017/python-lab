@@ -20,7 +20,12 @@ import pandas as pd
 import pytest
 
 from stock_analyzer import rec_events_capture as rec
-from stock_analyzer.constants import PORTFOLIO_BETA_ELEVATED, SINGLE_NAME_CEILING
+from stock_analyzer.constants import (
+    PORTFOLIO_BETA_ELEVATED,
+    SECTOR_ELEVATED,
+    SINGLE_NAME_CEILING,
+    WEAK_CONVICTION_SCORE,
+)
 
 pytestmark = pytest.mark.fast
 
@@ -218,6 +223,187 @@ def test_diversify_add_generator_failure_returns_empty(monkeypatch):
     assert rows == []
 
 
+# ── single_name_concentration (2026-09-21 app-review Part 2 #1) ─────────────
+
+def _sn_port_df(weight=20.0, score=70.0, ticker="AAA", market_value=20000.0):
+    return pd.DataFrame({
+        "Ticker":       [ticker],
+        "Weight (%)":   [weight],
+        "Market Value": [market_value],
+        "Score":        [score],
+    })
+
+
+def test_single_name_conc_fires_above_ceiling_and_conviction():
+    rows = rec._build_single_name_conc_rows(
+        _sn_port_df(weight=20.0, score=WEAK_CONVICTION_SCORE), None, FIRED_DATE, "2026-09-15",
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["rec_type"] == "single_name_concentration"
+    assert r["ticker"] == "AAA"
+    assert r["metric_name"] == "single_name_pct"
+    assert r["metric_before"] == pytest.approx(20.0)
+    assert r["metric_predicted_after"] == pytest.approx(SINGLE_NAME_CEILING)
+    assert r["rec_dollars"] == pytest.approx((20.0 - SINGLE_NAME_CEILING) / 100.0 * 20000.0)
+    assert r["price_at_rec"] is None
+    assert r["candidates"] is None
+    assert r["corr_coverage_n"] is None
+
+
+def test_single_name_conc_does_not_fire_below_ceiling():
+    rows = rec._build_single_name_conc_rows(
+        _sn_port_df(weight=SINGLE_NAME_CEILING - 0.1, score=90.0), None, FIRED_DATE, "2026-09-15",
+    )
+    assert rows == []
+
+
+def test_single_name_conc_does_not_fire_below_conviction():
+    rows = rec._build_single_name_conc_rows(
+        _sn_port_df(weight=25.0, score=WEAK_CONVICTION_SCORE - 1), None, FIRED_DATE, "2026-09-15",
+    )
+    assert rows == []
+
+
+def test_single_name_conc_missing_score_defaults_to_excluded_not_fabricated_high():
+    df = pd.DataFrame({
+        "Ticker": ["AAA"], "Weight (%)": [25.0], "Market Value": [25000.0], "Score": [None],
+    })
+    assert rec._build_single_name_conc_rows(df, None, FIRED_DATE, "2026-09-15") == []
+
+
+def test_single_name_conc_dedups_against_rebal_trim_tickers():
+    """The exact conflation class §11 was ratified against: a ticker BOTH
+    generators would independently flag must produce only one row."""
+    rows = rec._build_single_name_conc_rows(
+        _sn_port_df(weight=25.0, score=90.0), None, FIRED_DATE, "2026-09-15",
+        rebal_trim_tickers={"AAA"},
+    )
+    assert rows == []
+
+
+def test_single_name_conc_excludes_same_day_bought():
+    trades_df = pd.DataFrame({
+        "ticker": ["AAA"], "action": ["BUY"],
+        "traded_at": [pd.Timestamp(FIRED_DATE, tz="America/New_York")],
+    })
+    rows = rec._build_single_name_conc_rows(
+        _sn_port_df(weight=25.0, score=90.0), trades_df, FIRED_DATE, "2026-09-15",
+    )
+    assert rows == []
+
+
+def test_single_name_conc_empty_port_df_returns_empty():
+    assert rec._build_single_name_conc_rows(pd.DataFrame(), None, FIRED_DATE, "2026-09-15") == []
+    assert rec._build_single_name_conc_rows(None, None, FIRED_DATE, "2026-09-15") == []
+
+
+def test_single_name_conc_multiple_tickers_each_evaluated_independently():
+    df = pd.DataFrame({
+        "Ticker":       ["AAA", "BBB", "CCC"],
+        "Weight (%)":   [20.0, 25.0, 10.0],
+        "Market Value": [20000.0, 25000.0, 10000.0],
+        "Score":        [80.0, 30.0, 90.0],   # BBB below conviction, CCC below ceiling
+    })
+    rows = rec._build_single_name_conc_rows(df, None, FIRED_DATE, "2026-09-15")
+    assert {r["ticker"] for r in rows} == {"AAA"}
+
+
+# ── sector_concentration (2026-09-21 app-review Part 2 #1) ──────────────────
+
+def _sec_port_df():
+    return pd.DataFrame({
+        "Ticker":       ["AAA", "BBB", "CCC", "DDD"],
+        "Sector":       ["Tech", "Tech", "Tech", "Healthcare"],
+        "Weight (%)":   [15.0, 10.0, 5.0, 10.0],
+        "Market Value": [15000.0, 10000.0, 5000.0, 10000.0],
+        "Score":        [40.0, 60.0, 80.0, 70.0],
+    })
+
+
+def test_sector_conc_fires_on_worst_real_sector_lowest_conviction_first():
+    rows = rec._build_sector_conc_rows(_sec_port_df(), None, FIRED_DATE, "2026-09-15")
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["rec_type"] == "sector_concentration"
+    assert r["sector"] == "Tech"
+    # Tech = 15+10+5 = 30% >= SECTOR_ELEVATED(25) -- Healthcare (10%) doesn't qualify.
+    assert r["metric_before"] == pytest.approx(30.0)
+    assert r["metric_predicted_after"] == pytest.approx(SECTOR_ELEVATED)
+    # Lowest score_raw among Tech names (AAA=40) trims first.
+    assert r["ticker"] == "AAA"
+    assert r["candidates"] == ["AAA", "BBB", "CCC"]   # score-ascending order
+    assert r["rec_dollars"] == pytest.approx((30.0 - SECTOR_ELEVATED) / 100.0 * 40000.0)
+
+
+def test_sector_conc_excludes_unclassified_sector_even_if_largest():
+    df = pd.DataFrame({
+        "Ticker":       ["AAA", "BBB"],
+        "Sector":       ["Other", "Healthcare"],
+        "Weight (%)":   [40.0, 10.0],
+        "Market Value": [40000.0, 10000.0],
+        "Score":        [50.0, 60.0],
+    })
+    assert rec._build_sector_conc_rows(df, None, FIRED_DATE, "2026-09-15") == []
+
+
+def test_sector_conc_does_not_fire_below_elevated():
+    df = pd.DataFrame({
+        "Ticker":       ["AAA", "BBB"],
+        "Sector":       ["Tech", "Healthcare"],
+        "Weight (%)":   [SECTOR_ELEVATED - 1, 5.0],
+        "Market Value": [10000.0, 5000.0],
+        "Score":        [50.0, 60.0],
+    })
+    assert rec._build_sector_conc_rows(df, None, FIRED_DATE, "2026-09-15") == []
+
+
+def test_sector_conc_excludes_same_day_bought_from_candidates():
+    trades_df = pd.DataFrame({
+        "ticker": ["AAA"], "action": ["BUY"],
+        "traded_at": [pd.Timestamp(FIRED_DATE, tz="America/New_York")],
+    })
+    rows = rec._build_sector_conc_rows(_sec_port_df(), trades_df, FIRED_DATE, "2026-09-15")
+    assert len(rows) == 1
+    # AAA excluded (bought today) -- BBB (next-lowest score) leads instead.
+    assert rows[0]["ticker"] == "BBB"
+    assert "AAA" not in rows[0]["candidates"]
+
+
+def test_sector_conc_score_none_excluded_from_ranking():
+    df = pd.DataFrame({
+        "Ticker":       ["AAA", "BBB"],
+        "Sector":       ["Tech", "Tech"],
+        "Weight (%)":   [15.0, 15.0],
+        "Market Value": [15000.0, 15000.0],
+        "Score":        [None, 60.0],
+    })
+    rows = rec._build_sector_conc_rows(df, None, FIRED_DATE, "2026-09-15")
+    assert len(rows) == 1
+    assert rows[0]["candidates"] == ["BBB"]
+
+
+def test_sector_conc_no_eligible_candidates_returns_empty():
+    """All Tech names are same-day-bought -- nothing to attribute, no row."""
+    df = pd.DataFrame({
+        "Ticker":       ["AAA"],
+        "Sector":       ["Tech"],
+        "Weight (%)":   [30.0],
+        "Market Value": [30000.0],
+        "Score":        [50.0],
+    })
+    trades_df = pd.DataFrame({
+        "ticker": ["AAA"], "action": ["BUY"],
+        "traded_at": [pd.Timestamp(FIRED_DATE, tz="America/New_York")],
+    })
+    assert rec._build_sector_conc_rows(df, trades_df, FIRED_DATE, "2026-09-15") == []
+
+
+def test_sector_conc_empty_port_df_returns_empty():
+    assert rec._build_sector_conc_rows(pd.DataFrame(), None, FIRED_DATE, "2026-09-15") == []
+    assert rec._build_sector_conc_rows(None, None, FIRED_DATE, "2026-09-15") == []
+
+
 # ── orchestrator: isolation + NULL-preserving ────────────────────────────────
 
 def test_build_rec_event_rows_combines_all_three_generators(monkeypatch):
@@ -285,3 +471,69 @@ def test_no_qualifying_rec_returns_empty_list_not_none(monkeypatch):
         None, {}, {}, 50_000.0,
     )
     assert rows == []
+
+
+# ── orchestrator: single_name_concentration dedup against rebal_trim ────────
+
+def test_orchestrator_dedups_single_name_conc_against_rebal_trim(monkeypatch):
+    """AAA qualifies for BOTH rebal_trim (mocked to fire on it) and
+    single_name_concentration (weight/score in port_df) -- must produce
+    exactly ONE row for AAA, not two, per the §11-class conflation ratified
+    against on 2026-09-21."""
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [
+        {"type": "trim", "ticker": "AAA", "weight": 25.0, "trim_val": 2500.0},
+    ])
+    monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [])
+    port_df = pd.DataFrame({
+        "Ticker":       ["AAA"],
+        "Weight (%)":   [25.0],
+        "Market Value": [25000.0],
+        "Score":        [90.0],   # would ALSO qualify for single_name_concentration
+    })
+    rows = rec.build_rec_event_rows(
+        FIRED_DATE, port_df, {"beta": 1.0}, {}, None, None, {}, {}, 50_000.0,
+    )
+    aaa_rows = [r for r in rows if r["ticker"] == "AAA"]
+    assert len(aaa_rows) == 1
+    assert aaa_rows[0]["rec_type"] == "rebal_trim"
+
+
+def test_orchestrator_single_name_conc_fires_when_rebal_trim_misses_it(monkeypatch):
+    """BBB is oversized+strong-conviction but rebal_trim (mocked) doesn't
+    name it (e.g. not yet profitable) -- single_name_concentration must
+    still capture the genuine gap."""
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [])
+    monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [])
+    port_df = pd.DataFrame({
+        "Ticker":       ["BBB"],
+        "Weight (%)":   [20.0],
+        "Market Value": [20000.0],
+        "Score":        [90.0],
+    })
+    rows = rec.build_rec_event_rows(
+        FIRED_DATE, port_df, {"beta": 1.0}, {}, None, None, {}, {}, 50_000.0,
+    )
+    bbb_rows = [r for r in rows if r["ticker"] == "BBB"]
+    assert len(bbb_rows) == 1
+    assert bbb_rows[0]["rec_type"] == "single_name_concentration"
+
+
+def test_orchestrator_single_name_conc_or_sector_conc_failure_never_blanks_others(monkeypatch):
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [
+        {"type": "trim", "ticker": "AAA", "weight": 22.0, "trim_val": 1000.0},
+    ])
+    monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [
+        {"type": "ADD", "sector": "Energy", "candidates": ["XOM"]},
+    ])
+    monkeypatch.setattr(rec, "_build_single_name_conc_rows",
+                         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(rec, "_build_sector_conc_rows",
+                         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    port_risk = {"beta": PORTFOLIO_BETA_ELEVATED + 0.5}
+    rows = rec.build_rec_event_rows(
+        FIRED_DATE, _beta_port_df(), port_risk, _beta_held_data(), None,
+        {"avg_pairwise_corr": 0.3, "corr_coverage_n": 100},
+        {}, {}, 50_000.0,
+    )
+    types = {r["rec_type"] for r in rows}
+    assert types == {"rebal_trim", "beta_trim", "diversify_add"}

@@ -77,7 +77,11 @@ from stock_analyzer.trade_analytics import (
     build_monthly_trend, build_trigger_breakdown, compute_extended_stats,
 )
 
-_REC_TYPES = ("rebal_trim", "beta_trim", "diversify_add")
+_REC_TYPES = (
+    "rebal_trim", "beta_trim", "diversify_add",
+    # 2026-09-21 app-review Part 2 #1 additions.
+    "single_name_concentration", "sector_concentration",
+)
 _ARMS = ("acted", "skipped")
 
 

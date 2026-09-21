@@ -86,6 +86,42 @@ def test_diversify_add_candidate_membership_required():
     assert out["acted"] is False
 
 
+# ── sector_concentration match-any-candidate (2026-09-21 app-review) ────────
+
+def test_sector_conc_credits_sell_of_any_candidate_not_just_first():
+    rec = _rec(rec_type="sector_concentration", ticker="AAA", fired_date="2026-08-01",
+                candidates=["AAA", "BBB", "CCC"])
+    out = ro.match_attribution(rec, [_trade(ticker="CCC", action="SELL", traded_at="2026-08-03")], 10)
+    assert out["acted"] is True
+    assert out["matched_trade"]["ticker"] == "CCC"
+
+
+def test_sector_conc_does_not_credit_sell_of_ticker_outside_candidates():
+    rec = _rec(rec_type="sector_concentration", ticker="AAA", fired_date="2026-08-01",
+                candidates=["AAA", "BBB"])
+    out = ro.match_attribution(rec, [_trade(ticker="ZZZ", action="SELL", traded_at="2026-08-03")], 10)
+    assert out["acted"] is False
+
+
+def test_sector_conc_wrong_direction_not_credited_even_for_a_candidate():
+    rec = _rec(rec_type="sector_concentration", ticker="AAA", fired_date="2026-08-01",
+                candidates=["AAA", "BBB"])
+    out = ro.match_attribution(rec, [_trade(ticker="BBB", action="BUY", traded_at="2026-08-03")], 10)
+    assert out["acted"] is False
+
+
+def test_single_name_conc_matches_like_rebal_trim_exact_ticker_only():
+    """single_name_concentration is NOT in _MATCH_ANY_CANDIDATE -- exact
+    ticker match, same as rebal_trim/beta_trim."""
+    rec = _rec(rec_type="single_name_concentration", ticker="AAA", fired_date="2026-08-01")
+    out = ro.match_attribution(rec, [_trade(ticker="AAA", action="SELL", traded_at="2026-08-03")], 10)
+    assert out["acted"] is True
+    out_other = ro.match_attribution(
+        rec, [_trade(ticker="BBB", action="SELL", traded_at="2026-08-03")], 10,
+    )
+    assert out_other["acted"] is False
+
+
 # ── Action-window boundary ───────────────────────────────────────────────────
 
 def test_action_window_exact_boundary_counts():
@@ -339,6 +375,76 @@ def test_diversify_add_outcome_leg_a_none_without_price_at_rec():
         rows, today=TODAY, trades=[], horizon_trading_days=30, action_window_trading_days=10,
     )
     assert out[0]["outcome"]["leg_a_candidate_alpha_pct"] is None
+
+
+# ── single_name_concentration / sector_concentration outcomes (2026-09-21) ──
+
+def test_single_name_conc_outcome_folds_into_rebal_trim_shape():
+    fired = datetime.date(2026, 8, 1)
+    target = ro._advance_trading_days(fired, 30)
+    rows = [_rec(rec_type="single_name_concentration", ticker="AAA", fired_date=fired.isoformat(),
+                  metric_predicted_after=15.0)]
+    snap = {target.isoformat(): {"max_single_name_pct": 16.0, "top_sector_pct": 22.0}}
+    out = ro.enrich_and_grade(
+        rows, today=TODAY, trades=[], horizon_trading_days=30,
+        action_window_trading_days=10, risk_snapshot_by_date=snap,
+    )
+    assert out[0]["outcome"]["predicted"] == pytest.approx(15.0)
+    assert out[0]["outcome"]["realized_max_single_name_pct"] == pytest.approx(16.0)
+
+
+def test_sector_conc_outcome_realized_none_when_snapshot_missing():
+    fired = datetime.date(2026, 8, 1)
+    rows = [_rec(rec_type="sector_concentration", ticker="AAA", fired_date=fired.isoformat(),
+                  sector="Tech", candidates=["AAA"])]
+    out = ro.enrich_and_grade(
+        rows, today=TODAY, trades=[], horizon_trading_days=30,
+        action_window_trading_days=10, risk_snapshot_by_date={},
+    )
+    assert out[0]["outcome"]["realized_top_sector_pct"] is None
+    assert out[0]["outcome"]["realized_top_sector"] is None
+    assert out[0]["outcome"]["top_sector_changed"] is None
+
+
+def test_sector_conc_outcome_flags_unchanged_top_sector():
+    fired = datetime.date(2026, 8, 1)
+    target = ro._advance_trading_days(fired, 30)
+    rows = [_rec(rec_type="sector_concentration", ticker="AAA", fired_date=fired.isoformat(),
+                  sector="Tech", metric_predicted_after=25.0, candidates=["AAA"])]
+    snap = {target.isoformat(): {"top_sector_pct": 27.0, "top_sector": "Tech"}}
+    out = ro.enrich_and_grade(
+        rows, today=TODAY, trades=[], horizon_trading_days=30,
+        action_window_trading_days=10, risk_snapshot_by_date=snap,
+    )
+    assert out[0]["outcome"]["realized_top_sector_pct"] == pytest.approx(27.0)
+    assert out[0]["outcome"]["top_sector_changed"] is False
+
+
+def test_sector_conc_outcome_flags_rotated_top_sector():
+    """The book's top sector at the horizon is DIFFERENT from the one this
+    call was about -- the realized figure must be flagged, never silently
+    read as this sector's own improvement."""
+    fired = datetime.date(2026, 8, 1)
+    target = ro._advance_trading_days(fired, 30)
+    rows = [_rec(rec_type="sector_concentration", ticker="AAA", fired_date=fired.isoformat(),
+                  sector="Tech", metric_predicted_after=25.0, candidates=["AAA"])]
+    snap = {target.isoformat(): {"top_sector_pct": 30.0, "top_sector": "Healthcare"}}
+    out = ro.enrich_and_grade(
+        rows, today=TODAY, trades=[], horizon_trading_days=30,
+        action_window_trading_days=10, risk_snapshot_by_date=snap,
+    )
+    assert out[0]["outcome"]["top_sector_changed"] is True
+
+
+# ── readout_footnotes (2026-09-21 additions) ─────────────────────────────────
+
+def test_single_name_conc_and_sector_conc_have_footnotes():
+    assert ro.readout_footnotes("single_name_concentration")
+    assert ro.readout_footnotes("sector_concentration")
+
+
+def test_unknown_rec_type_has_no_footnotes():
+    assert ro.readout_footnotes("not_a_real_type") == []
 
 
 # ── schedule_disclosure ───────────────────────────────────────────────────────

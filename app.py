@@ -32483,9 +32483,12 @@ elif page == "🎯 Recommendation Outcomes":
         )
 
         _ro_type_labels = {
-            "rebal_trim":    "Rebalancer Trim (oversized + profitable)",
-            "beta_trim":     "Beta Trim (elevated portfolio beta)",
-            "diversify_add": "Diversification ADD",
+            "rebal_trim":                "Rebalancer Trim (oversized + profitable)",
+            "beta_trim":                 "Beta Trim (elevated portfolio beta)",
+            "diversify_add":             "Diversification ADD",
+            # 2026-09-21 app-review Part 2 #1 additions.
+            "single_name_concentration": "Single-Name Overweight (oversized, any conviction)",
+            "sector_concentration":      "Sector Concentration (worst sector over threshold)",
         }
 
         for _rt, _label in _ro_type_labels.items():
