@@ -22919,7 +22919,27 @@ elif page == "📈 Analysis":
                     # Brief's PUBLISHED reduce calls (same _is_reduce/_ticker canon
                     # as Opportunity Signals — no recompute drift) so the two
                     # surfaces agree.
-                    _rc = (st.session_state.get("_reduce_calls") or {}).get(str(ticker).upper())
+                    # 2026-09-21 app review defect #1: a bare `or {}` here let an
+                    # unverified _reduce_calls (Daily Brief not yet published this
+                    # session, distinct from _sa_port_state/_port_df_enriched
+                    # readiness above) silently read as "not under reduce",
+                    # letting this branch fall through to the plain "Already
+                    # held... sizing below" message (line ~23042) with add-on
+                    # sizing NOT suppressed for a position that IS under an
+                    # active Reduce/Exit call. Same verified-check pattern as
+                    # the already-fixed Hold branch a few hundred lines above
+                    # (`_hold_reduce_verified`) and the closed My Edge/Portfolio
+                    # Overview findings: _coord_cache_state alone is not enough
+                    # since a crashed Daily Brief fail-opens _reduce_calls to {}
+                    # rather than None.
+                    _sa_reduce_verified = (
+                        _coord_cache_state("_reduce_calls") == "ready"
+                        and not st.session_state.get("_daily_brief_offline", False)
+                    )
+                    _rc = (
+                        (st.session_state.get("_reduce_calls") or {}).get(str(ticker).upper())
+                        if _sa_reduce_verified else None
+                    )
                     _under_reduce = act_today_precedence.held_position_state(
                         is_holding=bool(_sa_holding), stop_breached=_stop_breached,
                         has_reduce_call=bool(_rc),
@@ -22947,6 +22967,21 @@ elif page == "📈 Analysis":
                             "neither the add-to-position sizing nor the Reduce suppression could "
                             "run. Open the 🏠 Home page once to load your holdings, "
                             "then re-check before acting."
+                        )
+                    elif _sa_holding and not _sa_reduce_verified:
+                        # Distinct from the banner above: HOLDINGS are known (this
+                        # position IS confirmed held), but the Daily Brief's
+                        # _reduce_calls hasn't published yet this session (Home was
+                        # visited, the Brief build wasn't, or it crashed) -- so the
+                        # Reduce/Exit cross-check specifically could not run. Without
+                        # this, a held position under an active Reduce/Exit call
+                        # could silently reach the plain "Already held... sizing
+                        # below" message a few lines down with add-on sizing NOT
+                        # suppressed. See the _rc computation above.
+                        st.caption(
+                            "⚪ Reduce/Exit cross-check unavailable this session — this plan may "
+                            "not reflect an active Reduce/Exit call on this position. Open "
+                            "🏠 Home to refresh Today's Brief, then re-check before adding."
                         )
 
                     if _sa_holding and _stop_breached:
