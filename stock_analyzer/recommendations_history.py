@@ -182,6 +182,55 @@ def build_enter_now_rows(recs: list[dict], held_tickers: set, rec_date,
 
 # ── Match recs to trades ────────────────────────────────────────────────────
 
+# Rec-type credit precedence when >1 same-day rec for the same ticker would
+# otherwise be double-credited by ONE real matched trade (locked decision —
+# docs/plans/data-foundation-strategy.md §2 A4): new_pick beats enter_now
+# beats add_winner beats buy_candidate. Any unrecognized rec_type sorts last.
+_REC_TYPE_CREDIT_RANK = {
+    "new_pick": 0, "enter_now": 1, "add_winner": 2, "buy_candidate": 3,
+}
+
+
+def _dedup_acted_credit(matched: list[dict]) -> None:
+    """
+    Mutates `matched` in place — the recs-side dedup `match_recs_to_trades`
+    itself was missing. The trade side is already deduped (first trade per
+    (ticker, date) wins, via `trade_lookup.setdefault` above), but N rec rows
+    for the SAME (ticker, rec_date) all look up the SAME `trade_lookup` entry
+    and all land `acted_on=True` pointing at the identical trade — e.g. a
+    same-day `new_pick` and `enter_now` for one name both get credited with
+    the one real buy. Within any group of >1 acted rows sharing a (ticker,
+    rec_date), keep `acted_on=True`/`acted_trade` on exactly ONE winner
+    (`_REC_TYPE_CREDIT_RANK` precedence; tie-break earliest `surfaced_at`,
+    then `id`) and force every other row in the group to `acted_on=False`,
+    `acted_trade=None`.
+
+    Does NOT touch the trade-side dedup or the same-day/UTC date semantics
+    above — both are correct as-is.
+    """
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for rec in matched:
+        if rec.get("acted_on") and rec.get("acted_trade") is not None:
+            groups[(rec["ticker"], rec["rec_date"])].append(rec)
+
+    for group in groups.values():
+        if len(group) <= 1:
+            continue
+
+        def _sort_key(rec):
+            return (
+                _REC_TYPE_CREDIT_RANK.get(rec.get("rec_type"), 99),
+                str(rec.get("surfaced_at") or ""),
+                rec.get("id") if rec.get("id") is not None else -1,
+            )
+
+        winner = min(group, key=_sort_key)
+        for rec in group:
+            if rec is not winner:
+                rec["acted_on"] = False
+                rec["acted_trade"] = None
+
+
 def match_recs_to_trades(recs_df, trades_df) -> list[dict]:
     """
     For each recommendation, find a same-day trade with the same ticker and
@@ -252,6 +301,7 @@ def match_recs_to_trades(recs_df, trades_df) -> list[dict]:
             "acted_on":         trade is not None,
             "acted_trade":      trade,
         })
+    _dedup_acted_credit(matched)
     return matched
 
 
@@ -1038,6 +1088,92 @@ def engine_trust_by_band(enriched: list[dict]) -> list[dict]:
     return rows
 
 
+def collapse_recs_by_ticker(
+    enriched: list[dict], rec_types: tuple | None = ("new_pick",)
+) -> list[dict]:
+    """
+    THE DEDUP INVARIANT, applied to this module's own row shape. The
+    premarket cron writes one `new_pick` row per ticker, every single day it
+    still qualifies — a name that stays a top pick for two weeks contributes
+    ~10-14 rows for one real "should I buy this" decision. Feeding that raw
+    list to `summary_stats`/`by_rec_type` double/N-counts one real decision,
+    and — because a persistently-surfaced name and a briefly-surfaced one
+    bias `missed_alpha`/`action_rate` unevenly — the distortion isn't a flat
+    inflation, it's a persistence-weighted skew
+    (`docs/plans/data-foundation-strategy.md` §2 A1).
+
+    Mirrors `protective_track_record.collapse_by_ticker`'s earliest-anchor
+    pattern (its own module docstring calls this "THE DEDUP INVARIANT"), not
+    a shared generic module — this project's own control #1 explicitly
+    rejects a premature shared abstraction across these three call sites.
+
+    Membership scope: the distinct set of tickers having >=1 row whose
+    `rec_type` is in `rec_types` (ALL tickers, if `rec_types is None`).
+
+    Acted detection is CROSS-REC_TYPE, computed over the FULL input —
+    `acted_tickers = {r["ticker"] for r in enriched if r.get("acted_on")}` —
+    not the scoped subset. This is deliberate: a ticker eventually bought via
+    a DIFFERENT rec_type's surfacing (e.g. bought on a day it was only a
+    `buy_candidate`, not that day's `new_pick`) must not still pollute the
+    missed pool with its earlier not-yet-acted `new_pick` days. Mirrors
+    `distinct_missed`'s own "acted on via ANY surfacing" guard.
+
+    For each scoped ticker, ONE representative row is picked (candidate pool
+    grouped over the FULL input, not just the scoped rec_types):
+      - ACTED arm (ticker in `acted_tickers`): candidate pool = that
+        ticker's rows with `acted_on=True` (may be a different rec_type than
+        the scope — the real trade outcome lives on whichever row was
+        acted, regardless of which rec_type surfaced it). Anchor = earliest
+        dated + priced (`outcome_pct is not None`) row, else earliest dated
+        row, else the pool's first row — the same three-tier anchor as
+        `protective_track_record.collapse_by_ticker`. `acted_on` is forced
+        True on the representative.
+      - MISSED arm (never acted): candidate pool = that ticker's rows within
+        `rec_types` only. Same three-tier anchor. `acted_on` is forced False.
+
+    Maturity is NOT filtered here — `outcome_maturing`/`outcome_pct`/
+    `alpha_pct`/`rec_date`/`composite_score`/`verdict` are kept verbatim
+    from the representative row; that stays `summary_stats`'s job, unchanged.
+
+    Returns one dict per scoped ticker (order not guaranteed).
+    """
+    acted_tickers = {r["ticker"] for r in enriched if r.get("acted_on")}
+
+    by_ticker_all: dict[str, list[dict]] = defaultdict(list)
+    for r in enriched:
+        tk = r.get("ticker")
+        if tk:
+            by_ticker_all[tk].append(r)
+
+    scoped_tickers = {
+        r["ticker"] for r in enriched
+        if r.get("ticker") and (rec_types is None or r.get("rec_type") in rec_types)
+    }
+
+    def _anchor(pool: list[dict]) -> dict:
+        dated = [r for r in pool if r.get("rec_date") is not None]
+        priced_dated = [r for r in dated if r.get("outcome_pct") is not None]
+        if priced_dated:
+            return min(priced_dated, key=lambda r: r["rec_date"])
+        if dated:
+            return min(dated, key=lambda r: r["rec_date"])
+        return pool[0]
+
+    out: list[dict] = []
+    for tk in scoped_tickers:
+        rows = by_ticker_all[tk]
+        if tk in acted_tickers:
+            pool = [r for r in rows if r.get("acted_on")]
+            rep = dict(_anchor(pool))
+            rep["acted_on"] = True
+        else:
+            pool = [r for r in rows if rec_types is None or r.get("rec_type") in rec_types]
+            rep = dict(_anchor(pool))
+            rep["acted_on"] = False
+        out.append(rep)
+    return out
+
+
 def engine_trust_headline(
     enriched: list[dict],
     min_calls: int,
@@ -1053,16 +1189,30 @@ def engine_trust_headline(
     ``compute_outcomes`` chain.  ``min_calls`` and ``firm_calls`` drive
     the band classification.
 
+    Collapses to ONE representative row per distinct ticker first
+    (`collapse_recs_by_ticker`, scoped to ``rec_types=("new_pick",)``) before
+    computing anything else — the cron writes one row per ticker per day it
+    stays a top pick, so an uncollapsed population double/N-counts one real
+    decision and persistence-weights `missed_alpha` specifically (see
+    `collapse_recs_by_ticker`'s docstring / `docs/plans/data-foundation-
+    strategy.md` §2 A1). `acted_alpha`/`missed_alpha`/`n_acted_mature`/
+    `since_date`/`band` are all now measured over distinct TICKERS, not rows.
+
     Returns a dict:
-        acted_alpha    float | None — avg alpha_pct for mature acted new_picks
-                                      (sourced from summary_stats, not reimplemented)
-        missed_alpha   float | None — avg alpha_pct for mature missed new_picks
-        n_acted_mature int          — count of acted new_picks that are both mature
-                                      AND have a priced outcome — the same population
-                                      that summary_stats uses for avg_acted_alpha, so
-                                      band classification, caption count, and alpha all
-                                      describe one consistent set of calls
-        since_date     date | None  — earliest rec_date in the new_pick set
+        acted_alpha    float | None — avg alpha_pct for mature acted new_pick
+                                      tickers (sourced from summary_stats, not
+                                      reimplemented)
+        missed_alpha   float | None — avg alpha_pct for mature missed new_pick
+                                      tickers
+        n_acted_mature int          — count of DISTINCT acted new_pick tickers
+                                      that are both mature AND have a priced
+                                      outcome — the same population that
+                                      summary_stats uses for avg_acted_alpha,
+                                      so band classification, caption count,
+                                      and alpha all describe one consistent
+                                      set of calls
+        since_date     date | None  — earliest rec_date across the collapsed
+                                      representative set
         band           str          — "building" | "early" | "firm"
     """
     _empty: dict = {
@@ -1075,29 +1225,29 @@ def engine_trust_headline(
     if not enriched:
         return _empty
 
-    # Scope to new_pick only — buy_candidate and add_winner excluded.
-    new_picks = [r for r in enriched if r.get("rec_type") == "new_pick"]
-    if not new_picks:
+    # One representative row per distinct new_pick ticker — see docstring.
+    reps = collapse_recs_by_ticker(enriched, rec_types=("new_pick",))
+    if not reps:
         return _empty
 
     # Aggregate via the existing summary_stats helper — no reimplementation of
     # outcome / alpha math.
-    stats = summary_stats(new_picks)
+    stats = summary_stats(reps)
 
-    # n_acted_mature: acted recs that have cleared the maturity window AND have
-    # a priced outcome — the identical population that summary_stats uses for
-    # avg_acted_alpha, so band classification, caption count, and alpha all
-    # describe one consistent set of calls.  Unpriced acted rows (no current
-    # price available) are excluded so they cannot inflate the band or count
-    # beyond what the alpha is actually computed from.
+    # n_acted_mature: acted TICKERS that have cleared the maturity window AND
+    # have a priced outcome — the identical population that summary_stats
+    # uses for avg_acted_alpha, so band classification, caption count, and
+    # alpha all describe one consistent set of calls.  Unpriced acted reps (no
+    # current price available) are excluded so they cannot inflate the band
+    # or count beyond what the alpha is actually computed from.
     n_acted_mature = sum(
-        1 for r in new_picks
+        1 for r in reps
         if r.get("acted_on") and not r.get("outcome_maturing")
         and r.get("outcome_pct") is not None
     )
 
-    # since_date: earliest rec_date across all new_picks.
-    rec_dates = [r["rec_date"] for r in new_picks if r.get("rec_date") is not None]
+    # since_date: earliest rec_date across the collapsed representative set.
+    rec_dates = [r["rec_date"] for r in reps if r.get("rec_date") is not None]
     since_date = min(rec_dates) if rec_dates else None
 
     # Band classification based on how many matured acted calls we have.

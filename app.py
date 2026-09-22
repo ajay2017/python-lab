@@ -12280,7 +12280,13 @@ elif page == "🧾 Summary":
         except Exception:
             _etr_spy = {}
         # Load all-time recs (all rec_types), fetch prices for the full ticker
-        # universe (shared cache), then enrich + headline over new_picks only.
+        # universe (shared cache), then enrich + headline. The FULL (all
+        # rec_types) set is fed through match/compute — not a new_pick-only
+        # subset — because collapse_recs_by_ticker's cross-rec_type acted
+        # detection (inside engine_trust_headline) needs to SEE a ticker's
+        # buy_candidate/enter_now/add_winner rows too, to catch a name bought
+        # via a rec_type other than that day's new_pick. new_pick scoping now
+        # happens inside engine_trust_headline itself.
         _etr_headline_d: dict = {
             "acted_alpha": None, "missed_alpha": None,
             "n_acted_mature": 0, "since_date": None, "band": "building",
@@ -12289,16 +12295,11 @@ elif page == "🧾 Summary":
             _etr_recs_df = db.load_recommendations(
                 start_date=_etr_start_d, end_date=_etr_today_d,
             )
-            _etr_np_df = (
-                _etr_recs_df[_etr_recs_df["rec_type"] == "new_pick"]
-                if not _etr_recs_df.empty else _etr_recs_df
-            )
-            # Fetch live prices for the FULL rec-ticker universe (ALL rec_types),
-            # not just new_pick.  This dict is written under the SHARED cache key
-            # Rec History also reads (first-writer-wins), so it must be a proper
-            # superset — a new_pick-only subset would poison Rec History's
-            # add_winner / buy_candidate rows on a Summary-first visit.  The
-            # headline itself is still computed over new_picks only (_etr_np_df).
+            # Fetch live prices for the FULL rec-ticker universe (ALL rec_types).
+            # This dict is written under the SHARED cache key Rec History also
+            # reads (first-writer-wins), so it must be a proper superset — a
+            # new_pick-only subset would poison Rec History's add_winner /
+            # buy_candidate rows on a Summary-first visit.
             if st.session_state.get(_etr_ph_key) is None:
                 _etr_all_tickers = sorted({
                     str(t).strip().upper()
@@ -12323,8 +12324,8 @@ elif page == "🧾 Summary":
             _etr_trades = st.session_state.get("trades_df")
             if _etr_trades is None:
                 _etr_trades = db.load_trades()
-            if not _etr_np_df.empty:
-                _etr_matched  = _etr_match(_etr_np_df, _etr_trades)
+            if not _etr_recs_df.empty:
+                _etr_matched  = _etr_match(_etr_recs_df, _etr_trades)
                 _etr_enriched = _etr_compute_o(
                     _etr_matched, _etr_prices, today=_etr_today_d,
                     spy_close_by_date=_etr_spy, min_days=_etr_min_days,

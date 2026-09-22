@@ -53,6 +53,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
+import pandas as pd
+
 from stock_analyzer.constants import (
     JUDGMENT_HORIZON_MOMENTUM_DAYS,
     JUDGMENT_HORIZON_QUALITY_DAYS,
@@ -210,6 +212,19 @@ def grade_portfolio_opinion(
     }
 
 
+def _parse_signal_date(v) -> "date | None":
+    """Best-effort date coerce for the stored ISO 'YYYY-MM-DD' `signal_date`
+    string — mirrors this project's other `_to_date` helpers
+    (recommendations_history / gate_ledger_readout / rec_events_readout).
+    Unparseable input -> None, never a fabricated date."""
+    if v is None:
+        return None
+    try:
+        return v.date() if hasattr(v, "date") else date.fromisoformat(str(v)[:10])
+    except Exception:
+        return None
+
+
 def track_record_summary(grades_df, min_sample_n: int) -> list[dict]:
     """Roll up graded rows into a per-(source, dimension) track record.
 
@@ -218,12 +233,47 @@ def track_record_summary(grades_df, min_sample_n: int) -> list[dict]:
     incorrectness. `sufficient_sample` marks whether N has cleared the shared
     min-sample gate (BEHAVIORAL_MIN_SAMPLE_N) — display only; Phase 3 is what
     would actually act on this by assigning weight.
+
+    Per-ticker dimensions (momentum, quality — grade_ticker_opinion, a real
+    `ticker`) are collapsed to ONE trial per (source, dimension, ticker)
+    before the rollup: a witness opining daily on the same still-open
+    position is graded once per day it stays open, so an uncollapsed rollup
+    counts one real standing opinion multiple times (the same "THE DEDUP
+    INVARIANT" shape `protective_track_record.collapse_by_ticker` /
+    `rec_events_readout.collapse_by_rec_ticker` already guard against — see
+    `docs/plans/data-foundation-strategy.md` §2 A3). The representative per
+    group is the row with the EARLIEST `signal_date`.
+
+    Portfolio-wide dimensions (position_health, concentration,
+    structural_risk — grade_portfolio_opinion, `ticker == "_PORTFOLIO"`) are
+    DELIBERATELY NOT collapsed here: there is no ticker to key a per-episode
+    collapse on, and their overlapping-forward-window pseudo-replication is a
+    different, separate problem (see the module's own withheld-protective-
+    grading note and the roadmap's Phase 5) — every portfolio-wide row
+    survives into the rollup uncollapsed.
     """
     if grades_df is None or grades_df.empty:
         return []
     df = grades_df[grades_df["correct"].notna()].copy()
     if df.empty:
         return []
+
+    portfolio_mask = df["ticker"] == "_PORTFOLIO"
+    portfolio_rows = df[portfolio_mask]
+    ticker_rows = df[~portfolio_mask]
+
+    if not ticker_rows.empty:
+        ticker_rows = ticker_rows.copy()
+        ticker_rows["_signal_date_parsed"] = ticker_rows["signal_date"].apply(_parse_signal_date)
+        collapsed_parts = []
+        for _, g in ticker_rows.groupby(["source", "dimension", "ticker"], sort=False):
+            dated = g[g["_signal_date_parsed"].notna()]
+            rep_idx = dated["_signal_date_parsed"].idxmin() if not dated.empty else g.index[0]
+            collapsed_parts.append(g.loc[[rep_idx]])
+        ticker_rows = pd.concat(collapsed_parts, ignore_index=False).drop(columns=["_signal_date_parsed"])
+
+    df = pd.concat([ticker_rows, portfolio_rows], ignore_index=True)
+
     out = []
     for (source, dimension), g in df.groupby(["source", "dimension"]):
         n = len(g)

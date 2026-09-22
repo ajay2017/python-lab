@@ -146,6 +146,51 @@ def test_k_is_load_bearing_one_ticker_recorded_repeatedly_stays_building():
     assert out[0]["band"] == "building"
 
 
+# ─── mean_alpha_pct collapses to one alpha per episode, not per day ────────
+
+def test_mean_alpha_pct_collapses_to_earliest_episode_alpha_not_the_raw_mean():
+    """One gate, one ticker suppressed 12 consecutive days, evaluable, with a
+    spread of alpha values chosen so the EARLIEST-dated value is NOT equal to
+    the 12-day mean (ruling out a coincidental pass). mean_alpha_pct must
+    equal the earliest episode's alpha alone; n_matured_evaluable (the raw
+    row count) and n_distinct_tickers_evaluable are DELIBERATELY untouched by
+    this collapse — proving the alpha collapsed while the banding-relevant
+    counts did not."""
+    rows = [
+        _graded_row("AAA", gate_id="G-04", alpha=float(i), rec_date=date(2026, 1, i))
+        for i in range(1, 13)   # 12 consecutive days, same ticker, alphas 1.0..12.0
+    ]
+    out = glr.grade_by_gate(
+        rows, gate_ids=("G-04",), min_calls=1, firm_calls=2, min_tickers=1,
+    )
+    assert out[0]["n_matured_evaluable"] == 12
+    assert out[0]["n_distinct_tickers_evaluable"] == 1
+    # Earliest-dated day's alpha (day 1 -> 1.0), not the 12-day mean (6.5).
+    assert out[0]["mean_alpha_pct"] == pytest.approx(1.0)
+    assert out[0]["n_alpha_episodes"] == 1
+
+
+def test_banding_regression_unaffected_by_the_mean_alpha_collapse():
+    """Banding (building/early/firm) is DELIBERATELY untouched by this
+    change — regression-pinned on a fixture that clears both floors, with a
+    spread of alpha values per ticker so a broken collapse implementation
+    would not silently also break this assertion."""
+    distinct = GATE_LEDGER_MIN_TICKERS
+    n = GATE_LEDGER_FIRM_CALLS
+    enriched = [
+        _graded_row(f"T{i % distinct}", gate_id="G-04", alpha=float(i),
+                    rec_date=date(2026, 1, i + 1))
+        for i in range(n)
+    ]
+    out = glr.grade_by_gate(
+        enriched, gate_ids=("G-04",), min_calls=GATE_LEDGER_MIN_CALLS,
+        firm_calls=GATE_LEDGER_FIRM_CALLS, min_tickers=GATE_LEDGER_MIN_TICKERS,
+    )
+    assert out[0]["band"] == "firm"
+    assert out[0]["n_matured_evaluable"] == n
+    assert out[0]["n_distinct_tickers_evaluable"] == distinct
+
+
 # ─── 3. maturity boundary ───────────────────────────────────────────────────
 
 def test_maturity_boundary_exact_horizon_matures():

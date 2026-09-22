@@ -247,6 +247,39 @@ def test_match_recs_to_trades_price_at_surface_nan_normalizes_to_none():
     assert matched[0]["price_at_surface"] is None
 
 
+# ─── match_recs_to_trades: rec-side dedup (one real trade, N same-day recs) ─
+
+def test_match_recs_to_trades_dedup_credits_new_pick_over_buy_candidate_regardless_of_order():
+    """buy_candidate is fed FIRST in the input list — the winner must be
+    chosen by rec_type precedence, not by iteration/insertion order."""
+    recs = _recs_df([
+        _rec_row(id_=1, ticker="AAA", rec_date="2026-01-15", rec_type="buy_candidate"),
+        _rec_row(id_=2, ticker="AAA", rec_date="2026-01-15", rec_type="new_pick"),
+    ])
+    trades = _trades_df([_trade_row(
+        ticker="AAA", traded_at="2026-01-15", trigger_type="RECOMMENDATION",
+    )])
+    matched = rh.match_recs_to_trades(recs, trades)
+    acted = [r for r in matched if r["acted_on"]]
+    assert len(acted) == 1
+    assert acted[0]["rec_type"] == "new_pick"
+    assert acted[0]["id"] == 2
+
+
+def test_match_recs_to_trades_dedup_one_real_trade_credits_exactly_once():
+    """The load-bearing invariant: one real trade must never sum to 2 acted
+    rows just because two rec_types surfaced the same ticker that day."""
+    recs = _recs_df([
+        _rec_row(id_=1, ticker="AAA", rec_date="2026-01-15", rec_type="buy_candidate"),
+        _rec_row(id_=2, ticker="AAA", rec_date="2026-01-15", rec_type="new_pick"),
+    ])
+    trades = _trades_df([_trade_row(
+        ticker="AAA", traded_at="2026-01-15", trigger_type="RECOMMENDATION",
+    )])
+    matched = rh.match_recs_to_trades(recs, trades)
+    assert sum(1 for r in matched if r["acted_on"]) == 1
+
+
 # ─── compute_outcomes ───────────────────────────────────────────────────────
 
 def test_compute_outcomes_acted_buy_priced():
@@ -1159,6 +1192,75 @@ def test_daily_volume_groups_by_date_skips_none_and_sorts():
     assert day2["missed"] == 0
 
 
+# ─── collapse_recs_by_ticker ────────────────────────────────────────────────
+
+def test_collapse_recs_by_ticker_ten_day_missed_streak_collapses_to_one_earliest_priced():
+    """10 consecutive never-acted new_pick days -> ONE representative, whose
+    alpha_pct is the EARLIEST priced surfacing's value — not an average of
+    the 10, and not the latest."""
+    rows = [
+        _erow(ticker="AAA", rec_type="new_pick", acted_on=False, outcome_maturing=False,
+              rec_date=date(2026, 1, i), outcome_pct=float(i), alpha_pct=float(i))
+        for i in range(1, 11)
+    ]
+    out = rh.collapse_recs_by_ticker(rows, rec_types=("new_pick",))
+    assert len(out) == 1
+    assert out[0]["ticker"] == "AAA"
+    assert out[0]["rec_date"] == date(2026, 1, 1)
+    assert out[0]["alpha_pct"] == 1.0   # earliest (day 1), not avg(1..10)=5.5, not latest=10.0
+
+
+def test_collapse_recs_by_ticker_acted_via_a_different_rec_type_day_sources_the_acted_row():
+    """8 not-yet-acted new_pick days, plus a real buy that landed on a day
+    the ticker was only a buy_candidate (not that day's new_pick). The
+    ticker must land in the ACTED arm, contributing ZERO rows to the missed
+    pool, and its outcome must come from the ACTED row specifically — not
+    from any new_pick day (the acted row's value is deliberately DIFFERENT
+    from the new_pick days' value so this can't pass by coincidence)."""
+    new_pick_days = [
+        _erow(ticker="BBB", rec_type="new_pick", acted_on=False, outcome_maturing=False,
+              rec_date=date(2026, 1, i), outcome_pct=1.0, alpha_pct=1.0)
+        for i in range(1, 9)
+    ]
+    acted_day = _erow(ticker="BBB", rec_type="buy_candidate", acted_on=True,
+                       outcome_maturing=False, rec_date=date(2026, 1, 9),
+                       outcome_pct=99.0, alpha_pct=99.0)
+    out = rh.collapse_recs_by_ticker(new_pick_days + [acted_day], rec_types=("new_pick",))
+    assert len(out) == 1
+    rep = out[0]
+    assert rep["acted_on"] is True
+    assert rep["rec_type"] == "buy_candidate"
+    assert rep["outcome_pct"] == 99.0   # sourced from the acted row, not a new_pick day (1.0)
+
+
+def test_collapse_recs_by_ticker_buy_candidate_only_ticker_absent_from_new_pick_scope():
+    """A ticker that was ONLY ever a buy_candidate, never acted, must be
+    absent entirely from a new_pick-scoped collapse."""
+    rows = [
+        _erow(ticker="CCC", rec_type="buy_candidate", acted_on=False, outcome_maturing=False,
+              rec_date=date(2026, 1, 1), outcome_pct=5.0, alpha_pct=5.0),
+    ]
+    assert rh.collapse_recs_by_ticker(rows, rec_types=("new_pick",)) == []
+
+
+def test_collapse_recs_by_ticker_missed_anchor_is_earliest_priced_not_earliest_dated():
+    """Earliest-DATED row is UNPRICED; earliest-PRICED row is a LATER date
+    with one alpha value; an even-later priced row carries a DIFFERENT
+    alpha. The rep must be the earliest-PRICED (middle) row."""
+    rows = [
+        _erow(ticker="DDD", rec_type="new_pick", acted_on=False, outcome_maturing=False,
+              rec_date=date(2026, 1, 1), outcome_pct=None, alpha_pct=None),   # earliest-dated, unpriced
+        _erow(ticker="DDD", rec_type="new_pick", acted_on=False, outcome_maturing=False,
+              rec_date=date(2026, 1, 5), outcome_pct=10.0, alpha_pct=4.0),    # earliest-PRICED
+        _erow(ticker="DDD", rec_type="new_pick", acted_on=False, outcome_maturing=False,
+              rec_date=date(2026, 1, 10), outcome_pct=20.0, alpha_pct=9.0),   # later, different alpha
+    ]
+    out = rh.collapse_recs_by_ticker(rows, rec_types=("new_pick",))
+    assert len(out) == 1
+    assert out[0]["rec_date"] == date(2026, 1, 5)
+    assert out[0]["alpha_pct"] == 4.0
+
+
 # ─── engine_trust_headline ───────────────────────────────────────────────────
 
 def test_engine_trust_headline_empty_input_returns_building():
@@ -1196,10 +1298,12 @@ def test_engine_trust_headline_buy_candidate_add_winner_ignored_in_scoping():
 
 
 def test_engine_trust_headline_building_band_when_below_min_calls():
+    # DISTINCT tickers — n_acted_mature now counts distinct TICKERS post-
+    # collapse, not rows; a shared ticker across all 7 would collapse to 1.
     rows = [
-        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, alpha_pct=5.0,
-              outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
-        for i in range(1, 8)   # 7 rows — below min_calls=8
+        _erow(ticker=f"T{i}", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+              alpha_pct=5.0, outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
+        for i in range(1, 8)   # 7 distinct tickers — below min_calls=8
     ]
     out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
     assert out["band"] == "building"
@@ -1208,9 +1312,9 @@ def test_engine_trust_headline_building_band_when_below_min_calls():
 
 def test_engine_trust_headline_early_band_at_min_calls_boundary():
     rows = [
-        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, alpha_pct=5.0,
-              outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
-        for i in range(1, 9)   # exactly 8 rows — at min_calls=8 → early
+        _erow(ticker=f"T{i}", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+              alpha_pct=5.0, outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
+        for i in range(1, 9)   # exactly 8 distinct tickers — at min_calls=8 → early
     ]
     out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
     assert out["band"] == "early"
@@ -1219,9 +1323,9 @@ def test_engine_trust_headline_early_band_at_min_calls_boundary():
 
 def test_engine_trust_headline_early_band_below_firm_calls():
     rows = [
-        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, alpha_pct=5.0,
-              outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
-        for i in range(1, 15)   # 14 rows — above min=8, below firm=15 → early
+        _erow(ticker=f"T{i}", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+              alpha_pct=5.0, outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
+        for i in range(1, 15)   # 14 distinct tickers — above min=8, below firm=15 → early
     ]
     out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
     assert out["band"] == "early"
@@ -1230,9 +1334,9 @@ def test_engine_trust_headline_early_band_below_firm_calls():
 
 def test_engine_trust_headline_firm_band_at_firm_calls_boundary():
     rows = [
-        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, alpha_pct=5.0,
-              outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
-        for i in range(1, 16)   # exactly 15 rows — at firm_calls=15 → firm
+        _erow(ticker=f"T{i}", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+              alpha_pct=5.0, outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
+        for i in range(1, 16)   # exactly 15 distinct tickers — at firm_calls=15 → firm
     ]
     out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
     assert out["band"] == "firm"
@@ -1241,9 +1345,9 @@ def test_engine_trust_headline_firm_band_at_firm_calls_boundary():
 
 def test_engine_trust_headline_firm_band_above_firm_calls():
     rows = [
-        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, alpha_pct=5.0,
-              outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
-        for i in range(1, 20)   # 19 rows — above firm_calls=15 → firm
+        _erow(ticker=f"T{i}", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+              alpha_pct=5.0, outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
+        for i in range(1, 20)   # 19 distinct tickers — above firm_calls=15 → firm
     ]
     out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
     assert out["band"] == "firm"
@@ -1253,8 +1357,9 @@ def test_engine_trust_headline_firm_band_above_firm_calls():
 def test_engine_trust_headline_alpha_values_from_summary_stats():
     """acted_alpha and missed_alpha are sourced from summary_stats, not reimplemented."""
     rows = [
-        # 10 acted, mature, with computable alpha
-        _erow(rec_type="new_pick", acted_on=True,  outcome_maturing=False,
+        # 10 acted, mature, with computable alpha — DISTINCT tickers so the
+        # collapse doesn't fold them into 1.
+        _erow(ticker=f"P{i}", rec_type="new_pick", acted_on=True,  outcome_maturing=False,
               alpha_pct=6.0,  outcome_pct=8.0, outcome_label="win",
               rec_date=date(2026, 1, i))
         for i in range(1, 11)
@@ -1274,9 +1379,10 @@ def test_engine_trust_headline_alpha_values_from_summary_stats():
 def test_engine_trust_headline_maturing_rows_excluded_from_n_acted_mature():
     """Maturing rows (outcome_maturing=True) do not count toward n_acted_mature."""
     rows = [
-        # 7 mature acted WITH priced outcomes
-        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, alpha_pct=5.0,
-              outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
+        # 7 mature acted WITH priced outcomes — DISTINCT tickers so collapse
+        # doesn't fold them into 1.
+        _erow(ticker=f"MAT{i}", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+              alpha_pct=5.0, outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
         for i in range(1, 8)
     ] + [
         # 5 still-maturing acted — should NOT count even if priced
@@ -1340,6 +1446,37 @@ def test_engine_trust_headline_acted_unpriced_excluded_from_n_acted_mature():
     assert out["n_acted_mature"] == 10
     # Alpha computed only over the 10 priced rows
     assert out["acted_alpha"] == pytest.approx(4.0)
+
+
+def test_engine_trust_headline_missed_alpha_uses_collapsed_value_not_raw_rows():
+    """The raw (uncollapsed) missed_alpha differs from the collapsed one —
+    engine_trust_headline must report the COLLAPSED value."""
+    rows = [
+        _erow(ticker="ACT1", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+              rec_date=date(2026, 1, 1), outcome_pct=3.0, alpha_pct=3.0),
+    ] + [
+        _erow(ticker="MISS1", rec_type="new_pick", acted_on=False, outcome_maturing=False,
+              rec_date=date(2026, 1, i), outcome_pct=a, alpha_pct=a)
+        for i, a in zip((1, 5, 10), (1.0, 5.0, 9.0))
+    ]
+    raw_stats = rh.summary_stats(rows)
+    assert raw_stats["avg_missed_alpha"] == pytest.approx(5.0)   # raw mean over all 3 rows
+
+    out = rh.engine_trust_headline(rows, min_calls=1, firm_calls=2)
+    assert out["missed_alpha"] == pytest.approx(1.0)   # collapsed: earliest-priced day only
+
+
+def test_engine_trust_headline_ticker_acted_on_two_separate_days_counts_once():
+    """Two separate real trades on the same ticker (different rec_dates) must
+    count ONCE toward n_acted_mature, not twice."""
+    rows = [
+        _erow(ticker="TWICE", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+              rec_date=date(2026, 1, 1), outcome_pct=5.0, alpha_pct=5.0),
+        _erow(ticker="TWICE", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+              rec_date=date(2026, 2, 1), outcome_pct=8.0, alpha_pct=8.0),
+    ]
+    out = rh.engine_trust_headline(rows, min_calls=1, firm_calls=2)
+    assert out["n_acted_mature"] == 1
 
 
 # ─── build_enter_now_rows ───────────────────────────────────────────────────

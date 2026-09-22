@@ -211,6 +211,37 @@ def enrich_and_grade(
     return out
 
 
+def _collapse_evaluable_by_ticker(evaluable: "list[dict]") -> "list[dict]":
+    """
+    One representative row per distinct ticker among already-`matured_evaluable`
+    rows, so `mean_alpha_pct` measures one alpha per suppressed EPISODE, not
+    one per day a suppression persisted (a name suppressed by the same gate on
+    a multi-day streak otherwise gets averaged in once per day —
+    `docs/plans/data-foundation-strategy.md` §2 A2).
+
+    Every row here is already priced (that's what `matured_evaluable` means),
+    so no priced/unpriced tier is needed — just the earliest-dated row per
+    ticker, falling back to the group's first row when none parse as a date.
+
+    Scope is intentionally narrow: this does NOT change `n_matured_evaluable`,
+    `n_distinct_tickers_evaluable`, or the two-floor banding below — only
+    `mean_alpha_pct`'s own input population.
+    """
+    by_ticker: "dict[str, list[dict]]" = {}
+    for r in evaluable:
+        tk = r.get("ticker")
+        if not tk:
+            continue
+        by_ticker.setdefault(tk, []).append(r)
+
+    out: "list[dict]" = []
+    for rows in by_ticker.values():
+        dated = [r for r in rows if _to_date(r.get("rec_date")) is not None]
+        rep = min(dated, key=lambda r: _to_date(r["rec_date"])) if dated else rows[0]
+        out.append(rep)
+    return out
+
+
 def grade_by_gate(
     enriched: "list[dict]",
     *,
@@ -280,9 +311,17 @@ def grade_by_gate(
         else:
             band = "firm"
 
+        # mean_alpha_pct is measured over ONE representative row per distinct
+        # ticker (collapsed episode), not over every matured_evaluable row —
+        # a persisted multi-day suppression must not average into this mean
+        # once per day it persisted. n_matured_evaluable / the two-floor
+        # banding above are DELIBERATELY left on the raw row/ticker counts —
+        # see `_collapse_evaluable_by_ticker`'s docstring.
+        _collapsed_evaluable = _collapse_evaluable_by_ticker(evaluable)
+        n_alpha_episodes = len(_collapsed_evaluable)
         mean_alpha_pct = (
-            round(sum(r["alpha_pct"] for r in evaluable) / n_matured_evaluable, 2)
-            if n_matured_evaluable else None
+            round(sum(r["alpha_pct"] for r in _collapsed_evaluable) / n_alpha_episodes, 2)
+            if n_alpha_episodes else None
         )
 
         since_dates = [d for d in (_to_date(r.get("rec_date")) for r in gate_rows) if d is not None]
@@ -300,6 +339,11 @@ def grade_by_gate(
             "n_excluded_low_composite": n_excluded_low_composite,
             "n_excluded_counterfactual_false": n_excluded_counterfactual_false,
             "n_excluded_source_mismatch": n_excluded_source_mismatch,
+            # Collapsed-episode count mean_alpha_pct is actually averaged over
+            # — equals n_distinct_tickers_evaluable by construction (every
+            # evaluable ticker contributes exactly one representative).
+            # Purely additive, for future caption honesty; forces no new UI.
+            "n_alpha_episodes": n_alpha_episodes,
             "band": band,
             "mean_alpha_pct": mean_alpha_pct,
             "since_date": since_date,
