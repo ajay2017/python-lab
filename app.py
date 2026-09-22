@@ -13859,7 +13859,20 @@ elif page == "📡 Signals & Advice":
                         half_val = half * act["price"]
                         full_val = act["shares"] * act["price"]
                         _rbc_bq = r_data.get("bq_score", f_score)
-                        if _rbc_bq is not None and t_score is not None:
+                        # 2026-09-22 app-review follow-up: `_rbc_bq` can be a
+                        # FABRICATED neutral 50 when business quality was never
+                        # measured (`fundamentals.py`'s documented withhold-to-50
+                        # design). Comparing that placeholder against
+                        # COMPOSITE_HOLD below picked "fundamentals are intact"
+                        # for any ticker whose fabricated 50 happened to clear
+                        # the threshold — an AFFIRMATIVE false claim, not a
+                        # silent gap, on data that was never actually measured.
+                        # Gate on availability so an unmeasured case falls
+                        # through to the existing generic fallback instead.
+                        _rbc_bq_available = r_data.get(
+                            "bq_available", r_data.get("fundamentals_available", True)
+                        )
+                        if _rbc_bq is not None and t_score is not None and _rbc_bq_available:
                             if _rbc_bq < COMPOSITE_HOLD:
                                 action_text = (
                                     f"**Business quality weakness — act with urgency.**  \n"
@@ -13886,6 +13899,13 @@ elif page == "📡 Signals & Advice":
                                 f"Sell **{half} shares** (~\\${half_val:,.0f}) to bank gain on half the position.  \n"
                                 f"Hold remainder with stop at **\\${act['stop']:.2f}**."
                             )
+                            if _rbc_bq is not None and t_score is not None and not _rbc_bq_available:
+                                action_text += (
+                                    "  \n❔ Business quality couldn't be measured for this "
+                                    "ticker (no fundamentals data available) — can't tell "
+                                    "whether this is a business-quality or technical-only "
+                                    "signal, so this defaults to the even split above."
+                                )
                         st.markdown(action_text)
 
                     elif act["type"] == "trim":
@@ -18129,17 +18149,41 @@ elif page == "🥧 Portfolio Overview":
             sb1, sb2, sb3, sb4 = st.columns(4)
             from stock_analyzer.constants import COMPOSITE_WEIGHTS as _CW
             t_contrib  = round(r['t_score']  * _CW["technical"],        1)
-            bq_contrib = round(r.get('bq_score', r['f_score']) * _CW["business_quality"], 1)
-            v_contrib  = round(r.get('val_score', 50) * _CW["valuation"], 1)
             s_contrib  = round(r['s_score']  * _CW["sentiment"],         1)
             sb1.metric("Technical",       f"{r['t_score']:.0f}/100", f"+{t_contrib} pts (25%)",
                        help="RSI · MACD · Bollinger Bands · MA trend · Volume\n\n"
                             + _tip("RSI"))
-            sb2.metric("Business Quality", f"{r.get('bq_score', r['f_score']):.0f}/100", f"+{bq_contrib} pts (35%)",
-                       help="Revenue & Earnings growth · Margins · Debt/Equity")
-            sb3.metric("Valuation",       f"{r.get('val_score', 50):.0f}/100", f"+{v_contrib} pts (30%)",
-                       help="Forward P/E · FCF Yield · Analyst PT Upside · Consensus Rating\n\n"
-                            + _tip("FCF Yield"))
+            # 2026-09-22 app-review follow-up: Business Quality/Valuation can
+            # each be a FABRICATED neutral 50 when unavailable (fundamentals.py/
+            # valuation.py's own documented withhold-to-50 design) — rendering
+            # that as a real "50/100 · +X pts" tile states two things that
+            # aren't true: that a measurement happened, and that it contributed
+            # those points to the composite. Same policy util.pillar_tile()
+            # already applies on Analysis's Deep Dive tab; this tile never had
+            # it. Withhold rather than hedge, per that helper's own precedent.
+            _sb_bq_available = r.get("bq_available", r.get("fundamentals_available", True))
+            if _sb_bq_available:
+                bq_contrib = round(r.get('bq_score', r['f_score']) * _CW["business_quality"], 1)
+                sb2.metric("Business Quality", f"{r.get('bq_score', r['f_score']):.0f}/100", f"+{bq_contrib} pts (35%)",
+                           help="Revenue & Earnings growth · Margins · Debt/Equity")
+            else:
+                sb2.metric("Business Quality", "❔ Withheld", "no data",
+                           delta_color="off",
+                           help="Company fundamentals couldn't be sourced from any "
+                                "provider, so a score here would be guessing rather "
+                                "than measuring.")
+            _sb_val_available = r.get("val_available", True)
+            if _sb_val_available:
+                v_contrib = round(r.get('val_score', 50) * _CW["valuation"], 1)
+                sb3.metric("Valuation",       f"{r.get('val_score', 50):.0f}/100", f"+{v_contrib} pts (30%)",
+                           help="Forward P/E · FCF Yield · Analyst PT Upside · Consensus Rating\n\n"
+                                + _tip("FCF Yield"))
+            else:
+                sb3.metric("Valuation", "❔ Withheld", "no data",
+                           delta_color="off",
+                           help="No objective valuation metric (Forward P/E or FCF "
+                                "Yield) was available — analyst opinion alone isn't "
+                                "scored as a verdict.")
             sb4.metric("Sentiment",       f"{r['s_score']:.0f}/100", f"+{s_contrib} pts (10%)",
                        help="VADER analysis of latest news headlines from Yahoo Finance")
 

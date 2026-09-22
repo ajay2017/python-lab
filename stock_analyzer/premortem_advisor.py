@@ -84,6 +84,17 @@ def driving_pillar_from_bundle(bundle: dict) -> dict:
 
     Returns {"driving_pillar": str|None, "driving_signals": list[str]} —
     degrades to (None, []) if no pillar scores are present in the bundle.
+
+    2026-09-22 app-review follow-up: `fundamentals`/`valuation` can each carry
+    a FABRICATED neutral 50 when their source module couldn't measure them
+    (`fundamentals.py`/`valuation.py`'s documented withhold-to-50 design,
+    flagged by `bq_available`/`val_available` on a `load_all()`-shaped
+    bundle). Never let a fabricated placeholder win `max()` and get NAMED as
+    the pillar driving a real recommendation — excluded from the candidate
+    pool entirely when unavailable, same policy `util.pillar_tile()` already
+    applies at the RENDER layer. `technical`/`sentiment` carry no such flag
+    (per `pillar_tile`'s own docstring, `technicals.py` never withholds), so
+    they default to available.
     """
     if not bundle:
         return {"driving_pillar": None, "driving_signals": []}
@@ -100,7 +111,14 @@ def driving_pillar_from_bundle(bundle: dict) -> dict:
         "valuation":    (bundle.get("val_score"), _signals_dict_to_strings(bundle.get("val_signals"))),
         "sentiment":    (bundle.get("s_score"), _headline_signals),
     }
-    scored = {k: v for k, (v, _sig) in _pillars.items() if v is not None}
+    _available = {
+        "fundamentals": bundle.get("bq_available", bundle.get("fundamentals_available", True)),
+        "valuation":    bundle.get("val_available", True),
+    }
+    scored = {
+        k: v for k, (v, _sig) in _pillars.items()
+        if v is not None and _available.get(k, True)
+    }
     if not scored:
         return {"driving_pillar": None, "driving_signals": []}
     top = max(scored, key=scored.get)

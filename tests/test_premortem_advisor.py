@@ -156,6 +156,63 @@ def test_driving_pillar_from_bundle_valuation_picked_when_highest():
     assert result["driving_signals"] == ["P/E: 12x — cheap"]
 
 
+# ─── driving_pillar_from_bundle: withheld pillar exclusion (2026-09-22) ───────
+# A fabricated neutral 50 (bq_available=False / val_available=False) must
+# never win max() and get NAMED as the pillar driving a recommendation — same
+# policy util.pillar_tile() already applies at the render layer.
+
+def test_driving_pillar_from_bundle_excludes_unavailable_fundamentals_even_if_highest():
+    bundle = {
+        "t_score": 40, "val_score": 30, "s_score": 20,
+        "bq_score": 90, "bq_signals": {"ROE": "22% — strong"},
+        "bq_available": False,
+    }
+    result = pa.driving_pillar_from_bundle(bundle)
+    assert result["driving_pillar"] == "technical"
+
+
+def test_driving_pillar_from_bundle_excludes_unavailable_valuation_even_if_highest():
+    bundle = {
+        "t_score": 10, "val_score": 99, "val_signals": {"P/E": "12x — cheap"},
+        "val_available": False,
+    }
+    result = pa.driving_pillar_from_bundle(bundle)
+    # valuation (99) excluded despite being highest — technical (10) is the
+    # only remaining scored pillar, so it wins by elimination, not by score.
+    assert result["driving_pillar"] == "technical"
+
+
+def test_driving_pillar_from_bundle_unavailable_via_fundamentals_available_alias():
+    # bq_available absent, legacy fundamentals_available alias present and False
+    bundle = {
+        "t_score": 20, "bq_score": 95, "bq_signals": {"ROE": "should be excluded"},
+        "fundamentals_available": False,
+    }
+    result = pa.driving_pillar_from_bundle(bundle)
+    assert result["driving_pillar"] == "technical"
+
+
+def test_driving_pillar_from_bundle_available_true_still_wins_normally():
+    # Sanity: an explicit available=True on the winning pillar behaves exactly
+    # like the pre-existing (no-flag) case.
+    bundle = {
+        "t_score": 40, "bq_score": 90, "bq_signals": {"ROE": "22% — strong"},
+        "bq_available": True,
+    }
+    result = pa.driving_pillar_from_bundle(bundle)
+    assert result["driving_pillar"] == "fundamentals"
+    assert result["driving_signals"] == ["ROE: 22% — strong"]
+
+
+def test_driving_pillar_from_bundle_all_available_pillars_excluded_degrades_to_none():
+    bundle = {
+        "bq_score": 90, "bq_available": False,
+        "val_score": 80, "val_available": False,
+    }
+    result = pa.driving_pillar_from_bundle(bundle)
+    assert result == {"driving_pillar": None, "driving_signals": []}
+
+
 # ─── build_premortem_inputs ───────────────────────────────────────────────────
 
 def test_build_premortem_inputs_all_none_defaults():
