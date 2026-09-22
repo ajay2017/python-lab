@@ -25,12 +25,14 @@ class _FakeExecResult:
 
 
 class _FakeQueryBuilder:
-    """Mimics the .select().gte().lte().order().execute() chain
-    load_recommendations()/load_recommendations_or_none() build."""
+    """Mimics the .select().gte().lte().order().range().execute() chain
+    load_recommendations()/load_recommendations_or_none() build (via their
+    shared _load_recommendations_all_pages helper)."""
 
     def __init__(self, rows=None, raise_on_execute=False):
         self._rows = rows or []
         self._raise = raise_on_execute
+        self._range = None
 
     def select(self, *_a, **_kw):
         return self
@@ -44,9 +46,16 @@ class _FakeQueryBuilder:
     def order(self, *_a, **_kw):
         return self
 
+    def range(self, start, end):
+        self._range = (start, end)
+        return self
+
     def execute(self):
         if self._raise:
             raise RuntimeError("simulated transient Supabase failure")
+        if self._range is not None:
+            start, end = self._range
+            return _FakeExecResult(self._rows[start:end + 1])
         return _FakeExecResult(self._rows)
 
 
@@ -119,3 +128,34 @@ def test_real_rows_both_functions_return_matching_data(monkeypatch):
     assert out_or_none is not None
     assert list(out_plain["ticker"]) == ["AAPL"]
     assert list(out_or_none["ticker"]) == ["AAPL"]
+
+
+# ── Pagination past PostgREST's default row cap ─────────────────────────────
+
+def test_load_recommendations_paginates_past_page_size(monkeypatch):
+    """2026-09-22: recommendations confirmed live at 1473 rows, over
+    PostgREST's default 1000-row page cap -- the same silent-truncation bug
+    class already fixed on model_predictions (confirmed live 2026-09-04).
+    A result set bigger than one page must still come back whole via
+    `.range()` looping, not silently capped at the first page."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_RECOMMENDATIONS_PAGE_SIZE", 2)
+    rows = [{"ticker": f"T{i}", "rec_date": "2026-08-01", "rec_type": "new_pick"} for i in range(5)]
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(rows=rows))
+
+    out = db.load_recommendations()
+    assert len(out) == 5
+    assert list(out["ticker"]) == [f"T{i}" for i in range(5)]
+
+
+def test_load_recommendations_or_none_paginates_past_page_size(monkeypatch):
+    """Same pagination fix, verified on the _or_none sibling too."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_RECOMMENDATIONS_PAGE_SIZE", 2)
+    rows = [{"ticker": f"T{i}", "rec_date": "2026-08-01", "rec_type": "new_pick"} for i in range(5)]
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(rows=rows))
+
+    out = db.load_recommendations_or_none()
+    assert out is not None
+    assert len(out) == 5
+    assert list(out["ticker"]) == [f"T{i}" for i in range(5)]

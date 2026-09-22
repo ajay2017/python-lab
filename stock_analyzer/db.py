@@ -3017,6 +3017,51 @@ def load_gate_suppressions() -> list[dict] | None:
         return None
 
 
+# PostgREST's own server-side default row cap on an unpaginated `.select()`.
+# Both load_recommendations() and load_recommendations_or_none() page in
+# chunks of this size via `.range()` rather than relying on a single call,
+# which silently truncates past this ceiling -- the same failure mode
+# `_MODEL_PREDICTIONS_PAGE_SIZE` already guards against on model_predictions
+# (confirmed live 2026-09-04 there; recommendations confirmed live at 1473
+# rows on 2026-09-22, also past the cap). Because the query orders
+# surfaced_at DESCENDING, an unpaginated truncation silently drops the
+# OLDEST rows, not the newest.
+_RECOMMENDATIONS_PAGE_SIZE = 1000
+
+
+def _load_recommendations_all_pages(start_date=None, end_date=None) -> list[dict]:
+    """Shared paginated query for load_recommendations()/
+    load_recommendations_or_none() -- builds the same
+    .select().gte().lte().order() chain both functions used before pagination,
+    then pages through every row via `.range()` (mirrors
+    load_model_predictions's loop) instead of a single unbounded `.execute()`.
+    Raises on failure -- callers keep their own distinct except-branch
+    contracts (empty DataFrame vs None)."""
+    page_size = _RECOMMENDATIONS_PAGE_SIZE
+    all_rows: list = []
+    start = 0
+    while True:
+        # Rebuilt fresh each iteration (mirrors load_model_predictions's loop)
+        # rather than reusing one builder across `.range()` calls -- makes
+        # correctness independent of whether the client library treats
+        # `.range()` as replacing or accumulating bounds on a shared builder.
+        q = _client().table("recommendations").select("*")
+        if start_date is not None:
+            sd = start_date.isoformat() if hasattr(start_date, "isoformat") else str(start_date)[:10]
+            q = q.gte("rec_date", sd)
+        if end_date is not None:
+            ed = end_date.isoformat() if hasattr(end_date, "isoformat") else str(end_date)[:10]
+            q = q.lte("rec_date", ed)
+        page = q.order("surfaced_at", desc=True).range(start, start + page_size - 1).execute().data
+        if not page:
+            break
+        all_rows.extend(page)
+        if len(page) < page_size:
+            break
+        start += page_size
+    return all_rows
+
+
 def load_recommendations(start_date=None, end_date=None) -> pd.DataFrame:
     """
     Read recommendation history. No date filter applied when start_date/
@@ -3032,14 +3077,7 @@ def load_recommendations(start_date=None, end_date=None) -> pd.DataFrame:
     if not has_db():
         return empty
     try:
-        q = _client().table("recommendations").select("*")
-        if start_date is not None:
-            sd = start_date.isoformat() if hasattr(start_date, "isoformat") else str(start_date)[:10]
-            q = q.gte("rec_date", sd)
-        if end_date is not None:
-            ed = end_date.isoformat() if hasattr(end_date, "isoformat") else str(end_date)[:10]
-            q = q.lte("rec_date", ed)
-        rows = q.order("surfaced_at", desc=True).execute().data
+        rows = _load_recommendations_all_pages(start_date, end_date)
         return pd.DataFrame(rows) if rows else empty
     except Exception:
         return empty
@@ -3062,14 +3100,7 @@ def load_recommendations_or_none(start_date=None, end_date=None) -> pd.DataFrame
     if not has_db():
         return None
     try:
-        q = _client().table("recommendations").select("*")
-        if start_date is not None:
-            sd = start_date.isoformat() if hasattr(start_date, "isoformat") else str(start_date)[:10]
-            q = q.gte("rec_date", sd)
-        if end_date is not None:
-            ed = end_date.isoformat() if hasattr(end_date, "isoformat") else str(end_date)[:10]
-            q = q.lte("rec_date", ed)
-        rows = q.order("surfaced_at", desc=True).execute().data
+        rows = _load_recommendations_all_pages(start_date, end_date)
         return pd.DataFrame(rows) if rows else empty
     except Exception:
         return None
