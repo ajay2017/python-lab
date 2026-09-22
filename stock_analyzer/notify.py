@@ -10,11 +10,14 @@ from the engine's normalised alert list.
 from __future__ import annotations
 
 import html as _html
+import math
 import re
 
 import requests
 
 from stock_analyzer.constants import SINGLE_NAME_CEILING, NET_CAPITAL_POSITION_CAP_PCT
+from stock_analyzer.risk import capital_equivalent_risk
+from stock_analyzer.trade_economics import entry_tier
 
 _RESEND_ENDPOINT = "https://api.resend.com/emails"
 
@@ -74,6 +77,15 @@ def _sizing_cap_note(sz: dict) -> str:
             f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
             f'📐 No size suggested — one share is ~{float(sz["one_share_capital_pct"]):.0f}% of your net capital, '
             f'above the {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap (margin-aware).</div>'
+        )
+    # net_capital <= 0 (margin-called): _position_size_for_render leaves
+    # one_share_capital_pct None, so the arm above can't fire — without this
+    # the card would show a silently empty sizing slot on the worst possible day.
+    if sz.get("capital_infeasible"):
+        return (
+            f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+            f'📐 No size suggested — your net capital after the margin debit is at '
+            f'or below zero.</div>'
         )
     if sz.get("stop_infeasible") and sz.get("stop_at") is not None:
         return (
@@ -906,7 +918,27 @@ def render_watchlist_entries_email(
     convention, footer disclaimer. The card's own `summary` prose is advisor
     text and may carry markdown bold, so it's routed through
     `_email_md_inline` (escape-then-bold) — never raw-interpolated, per the
-    **bold**-leaks-literally class (2026-08-28 audit finding)."""
+    **bold**-leaks-literally class (2026-08-28 audit finding).
+
+    2026-09-22 parity pass — the email carried ticker/score/entry-zone/R:R/
+    stop/prose only, with none of the sizing or dollar-risk detail the
+    interactive page has shown since F-249/F-272. Each entry may now also
+    carry (all optional, attached best-effort by
+    headless_alert_engine.compute_watchlist_entries; absent, never a
+    fabricated 0, on a sizing/economics failure):
+      `sizing`         — daily_briefing._position_size_for_render's output.
+      `net_capital` / `capital_basis` — margin.resolve_net_capital's pair,
+                         threaded through so capital_equivalent_risk can be
+                         called with the SAME basis the sizing was computed
+                         under, never re-derived here.
+      `economics`      — trade_economics.trade_economics's output: honest
+                         dollars-at-risk / dollars-at-target / breakeven-
+                         win-rate arithmetic. Deliberately NOT a forecast —
+                         see trade_economics.py's own docstring for why this
+                         project refuses a fabricated "confidence" number.
+    A deterioration-flagged entry (entry_tier == "caution") gets a visibly
+    different amber header instead of the identical green banner a clean
+    entry gets — previously buried 3 lines down as a footnote."""
     n = len(entries)
     tickers = ", ".join(
         dict.fromkeys(str(e.get("ticker") or "") for e in entries if e.get("ticker"))
@@ -937,6 +969,18 @@ def render_watchlist_entries_email(
         stop    = e.get("stop")
         lo, hi  = e.get("entry_lo"), e.get("entry_hi")
         summary = _email_md_inline(str(e.get("summary") or ""))
+        det_warning = e.get("deterioration_warning")
+
+        # (a) Two-tier header — a deterioration-flagged name previously got
+        # the IDENTICAL green header as a clean one, with the warning buried
+        # 3 lines down. entry_tier is the email's single source of truth here;
+        # app.py tests the same `deterioration_warning` field directly.
+        tier = entry_tier(det_warning)
+        accent = "#f59e0b" if tier == "caution" else "#22c55e"
+        header_label = (
+            "⚠️ READY TO ENTER &nbsp;·&nbsp; WITH CAUTION" if tier == "caution"
+            else "✅ READY TO ENTER"
+        )
 
         zone_bits = []
         if lo is not None and hi is not None:
@@ -947,16 +991,116 @@ def render_watchlist_entries_email(
             zone_bits.append(f"stop ${float(stop):.2f}")
         zone_str = "  ·  ".join(zone_bits)
 
+        # (b) Economics line — honest, derived arithmetic, never a forecast.
+        # Only the halves trade_economics.trade_economics could actually
+        # derive are rendered (its own explicit-state contract): an
+        # "unpriced"/"no_stop_room" entry renders neither bit rather than a
+        # fabricated number. Phrased as a REQUIREMENT ("needs >N% win rate
+        # to break even"), never "confidence"/"probability"/"odds" — a
+        # reader must not be able to mistake this for a forecast.
+        # Explicit `is None` check, not `... or {}` — `economics` is either
+        # ABSENT (older card shape / a sizing failure upstream) or a real
+        # dict; never explicitly written as a falsy sentinel, so collapsing
+        # both onto `or {}` risks the offline-sentinel bug class this repo's
+        # antipattern gate exists to catch (check_antipatterns.py).
+        econ = e.get("economics")
+        if econ is None:
+            econ = {}
+        econ_bits = []
+        if econ.get("risk_per_share") is not None and econ.get("risk_pct") is not None:
+            econ_bits.append(
+                f"risk ${float(econ['risk_per_share']):.2f}/sh "
+                f"(-{float(econ['risk_pct']):.1f}%)"
+            )
+        if econ.get("target") is not None and econ.get("gain_per_share") is not None:
+            econ_bits.append(
+                f"target ${float(econ['target']):.2f} "
+                f"(+${float(econ['gain_per_share']):.2f}/sh)"
+            )
+        if econ.get("breakeven_pct") is not None:
+            # ceil, not round: a true 32.4% rendered as ">32%" would understate
+            # the bar this line exists to state honestly.
+            econ_bits.append(
+                f"needs >{math.ceil(float(econ['breakeven_pct']))}% win rate to break even"
+            )
+        econ_str = "  ·  ".join(econ_bits)
+
+        # (c) Sizing block — F-272 parity with the interactive page. A
+        # no-size marker renders its REASON, never a blank and never a
+        # fabricated number (F-261 posture, non-negotiable); `_sizing_cap_note`
+        # is reused as-is for every capped/infeasible disclosure rather than
+        # re-implemented here.
+        # Same explicit `is None` rationale as `econ` above.
+        sz = e.get("sizing")
+        if sz is None:
+            sz = {}
+        sizing_html = ""
+        if sz.get("shares"):
+            _sh, _tc = sz.get("shares"), sz.get("total_cost")
+            _risk_dollars = None
+            try:
+                if econ.get("risk_per_share") is not None:
+                    _risk_dollars = round(float(_sh) * float(econ["risk_per_share"]), 2)
+            except (TypeError, ValueError):
+                _risk_dollars = None
+            _size_bits = [f"{int(_sh)} shares"]
+            if _tc is not None:
+                _size_bits.append(f"~${float(_tc):,.0f}")
+            if _risk_dollars is not None:
+                _size_bits.append(f"risking ~${_risk_dollars:,.0f}")
+            sizing_html = (
+                f'<div style="color:#f1f5f9;font-size:13px;margin-top:6px">'
+                f'<b style="color:{accent}">Suggested size:</b> {"  ·  ".join(_size_bits)}</div>'
+            )
+            # Capital-basis re-expression (F-272 disclosure pattern) — awareness
+            # only, no sizing/gate change. `basis` is authoritative per
+            # capital_equivalent_risk's own contract, so a failed/absent
+            # net-capital resolution (capital_basis == "unknown") correctly
+            # renders NOTHING here rather than guessing "unlevered".
+            if _risk_dollars is not None:
+                _cer = capital_equivalent_risk(
+                    _risk_dollars, float(sz.get("portfolio_value") or 0.0),
+                    e.get("net_capital"), str(e.get("capital_basis") or "unknown"),
+                )
+                if _cer.get("state") == "levered":
+                    sizing_html += (
+                        f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+                        f'⚖️ That risk is ~{float(_cer["capital_pct"]):.1f}% of your net capital '
+                        f'(vs {float(_cer["gross_pct"]):.1f}% of gross book) — you&#39;re trading '
+                        f'on margin, so it&#39;s a larger share of the capital you actually hold.</div>'
+                    )
+                elif _cer.get("state") == "unknown":
+                    # Matches the interactive page's own caption. Staying silent
+                    # here would read as "unlevered" on the one surface where
+                    # that assumption is most expensive to get wrong.
+                    sizing_html += (
+                        f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+                        f'⚖️ Capital-basis risk not shown — your account-cash figure is '
+                        f'missing or too old to trust, so the margin-adjusted share of '
+                        f'this risk could not be checked.</div>'
+                    )
+            sizing_html += _sizing_cap_note(sz)
+        elif sz.get("portfolio_unknown"):
+            sizing_html = (
+                f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+                f'📐 Position sizing unavailable — your portfolio value could not be '
+                f'verified for this run, so any share count would be a guess.</div>'
+            )
+        elif sz.get("ceiling_infeasible") or sz.get("capital_infeasible") or sz.get("stop_infeasible"):
+            sizing_html = _sizing_cap_note(sz)
+
         cards.append(f"""
-        <div style="border-left:4px solid #22c55e;background:#1c1917;border-radius:0 6px 6px 0;
+        <div style="border-left:4px solid {accent};background:#1c1917;border-radius:0 6px 6px 0;
                     padding:12px 16px;margin:0 0 10px 0;font-family:Arial,Helvetica,sans-serif">
-          <div style="color:#22c55e;font-weight:700;font-size:13px;letter-spacing:.3px">
-            ✅ READY TO ENTER &nbsp;·&nbsp; <span style="color:#e5e7eb">{ticker}</span>
+          <div style="color:{accent};font-weight:700;font-size:13px;letter-spacing:.3px">
+            {header_label} &nbsp;·&nbsp; <span style="color:#e5e7eb">{ticker}</span>
             {f'<span style="color:#9ca3af;font-weight:400">&nbsp;·&nbsp;composite {float(score):.0f}/100</span>' if score is not None else ''}
           </div>
           {f'<div style="color:#cbd5e1;font-size:12px;margin-top:5px">{zone_str}</div>' if zone_str else ''}
+          {f'<div style="color:#cbd5e1;font-size:12px;margin-top:4px">{econ_str}</div>' if econ_str else ''}
+          {sizing_html}
           {f'<div style="color:#a8a29e;font-size:12px;margin-top:4px">{summary}</div>' if summary else ''}
-          {f'<div style="color:#a8a29e;font-size:12px;margin-top:4px">{_html.escape(str(e.get("deterioration_warning")))}</div>' if e.get("deterioration_warning") else ''}
+          {f'<div style="color:#a8a29e;font-size:12px;margin-top:4px">{_html.escape(str(det_warning))}</div>' if det_warning else ''}
         </div>""")
 
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
@@ -976,6 +1120,8 @@ def render_watchlist_entries_email(
           them, and none is on today's high-conviction scan or under an active protective call
           today. Sent once per name, the day it first clears — it will not repeat while the call
           persists. Advisory only — verify price is still near this level before acting.
+          Composite clears a bar; it does not rank which names outperform — measured on this
+          engine's own past calls. The engine finds candidates; the selection is yours.
         </div>
       </div>
     </body></html>"""

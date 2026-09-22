@@ -341,6 +341,71 @@ def test_gate_degraded_when_ctx_ok_but_beta_missing():
     assert [c["ticker"] for c in result["entries"]] == ["NVDA"]
 
 
+# ── sizing/economics parity fields (2026-09-22) ─────────────────────────────
+# The "Ready to Enter" email showed ticker/score/entry-zone/R:R/stop/prose
+# only, with none of the sizing or dollar-risk detail the interactive page
+# has carried since F-249/F-272. Attached ONLY to the final email-eligible
+# list, best-effort — a failure must leave the fields absent, never abort
+# the run or fabricate a number.
+
+def _ctx_with_portfolio_value(pv, beta=1.1):
+    port_df = pd.DataFrame({"Ticker": ["MSFT"], "Market Value": [pv], "Price": [300.0]})
+    return {"ok": True, "errors": [], "port_df": port_df, "spy_6mo": None,
+            "port_risk": {"beta": beta}}
+
+
+def test_emitted_entries_carry_sizing_economics_and_capital_fields():
+    ctx = _ctx_with_portfolio_value(100_000.0)
+    with patch("stock_analyzer.headless_alert_engine.db.load_account_cash", return_value=None):
+        result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx)
+    assert [c["ticker"] for c in result["entries"]] == ["NVDA"]
+    entry = result["entries"][0]
+    assert "sizing" in entry
+    assert "economics" in entry
+    assert "net_capital" in entry
+    assert "capital_basis" in entry
+    assert entry["economics"]["state"] == "ok"
+    assert entry["sizing"].get("shares")
+    assert entry["capital_basis"] == "unlevered"
+    assert entry["net_capital"] is None
+
+
+def test_sizing_fields_show_portfolio_unknown_marker_when_portfolio_value_zero():
+    """The default test fixture's ctx carries an empty port_df -> portfolio
+    value 0.0 -> _position_size_for_render's own 'portfolio' no-size marker
+    (F-261 cold-path posture) rather than a fabricated size."""
+    result = _run_watchlist_entries(watchlist=["NVDA"])
+    entry = result["entries"][0]
+    assert entry["sizing"].get("portfolio_unknown") is True
+    assert "shares" not in entry["sizing"]
+
+
+def test_sizing_economics_failure_leaves_fields_absent_but_entries_still_returned():
+    ctx = _ctx_with_portfolio_value(100_000.0)
+    with patch("stock_analyzer.headless_alert_engine._position_size_for_render",
+               side_effect=RuntimeError("boom")):
+        result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx)
+    assert [c["ticker"] for c in result["entries"]] == ["NVDA"]
+    entry = result["entries"][0]
+    assert "sizing" not in entry
+    assert "economics" not in entry
+    assert any("sizing/economics failed" in e for e in result["errors"])
+
+
+def test_account_cash_lookup_failure_falls_back_to_unknown_basis_not_unlevered():
+    """A FAILED net-capital check must not be indistinguishable from a
+    verified 'no leverage' finding — capital_basis == 'unknown' (not
+    'unlevered') so a downstream capital_equivalent_risk call correctly
+    reads it as unknown rather than asserting a state never checked."""
+    ctx = _ctx_with_portfolio_value(100_000.0)
+    with patch("stock_analyzer.headless_alert_engine.db.load_account_cash",
+               side_effect=RuntimeError("boom")):
+        result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx)
+    entry = result["entries"][0]
+    assert entry["capital_basis"] == "unknown"
+    assert entry["net_capital"] is None
+
+
 # ── render_watchlist_entries_email ───────────────────────────────────────────
 
 def test_render_watchlist_entries_email_subject_lists_tickers():
@@ -418,6 +483,198 @@ def test_render_watchlist_entries_email_escapes_deterioration_warning_metacharac
     _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
+
+
+# ── two-tier header (2026-09-22) ─────────────────────────────────────────────
+
+def test_render_watchlist_entries_email_caution_tier_gets_amber_header_and_text():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    card = _wl_card("NVDA")
+    card["deterioration_warning"] = "chart looks broken"
+    _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+    assert "#f59e0b" in html
+    assert "WITH CAUTION" in html
+
+
+def test_render_watchlist_entries_email_clean_tier_gets_green_header_no_caution_text():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    card = _wl_card("NVDA")
+    _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+    assert "#22c55e" in html
+    assert "WITH CAUTION" not in html
+
+
+# ── economics line (2026-09-22) ──────────────────────────────────────────────
+
+def test_render_watchlist_entries_email_shows_economics_line_hand_checked():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    card = _wl_card("NVDA")
+    card["economics"] = {
+        "state": "ok", "risk_per_share": 8.88, "risk_pct": 4.39,
+        "gain_per_share": 19.53, "target": 221.74, "breakeven_pct": 31.25,
+    }
+    _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+    assert "risk $8.88/sh" in html
+    assert "target $221.74" in html
+    # ceil, not round: the true 31.25% bar must never render as ">31%".
+    assert "needs >32% win rate to break even" in html
+
+
+def test_render_watchlist_entries_email_breakeven_never_understates_the_bar():
+    """A breakeven that rounds DOWN under `.0f` must still render a bar the
+    reader can trust: ">N%" has to be >= the real requirement, never below it."""
+    from stock_analyzer.notify import render_watchlist_entries_email
+    import re as _re
+    for be, expected in ((32.258, 33), (31.25, 32), (30.0, 30), (33.7, 34)):
+        card = _wl_card("NVDA")
+        card["economics"] = {
+            "state": "ok", "risk_per_share": 2.59, "risk_pct": 7.5,
+            "gain_per_share": 5.44, "target": 39.94, "breakeven_pct": be,
+        }
+        _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+        m = _re.search(r"needs >(\d+)% win rate", html)
+        assert m is not None, "breakeven line missing"
+        shown = int(m.group(1))
+        assert shown == expected
+        assert shown >= be - 1e-9, f"understated the breakeven bar: {shown} < {be}"
+
+
+def test_render_watchlist_entries_email_no_economics_line_when_unpriced():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    card = _wl_card("NVDA")
+    card["economics"] = {"state": "unpriced", "risk_per_share": None, "risk_pct": None,
+                          "gain_per_share": None, "target": None, "breakeven_pct": None}
+    _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+    assert "break even" not in html
+
+
+def test_render_watchlist_entries_email_never_uses_forecast_language():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    card = _wl_card("NVDA")
+    card["economics"] = {
+        "state": "ok", "risk_per_share": 8.88, "risk_pct": 4.39,
+        "gain_per_share": 19.53, "target": 221.74, "breakeven_pct": 31.25,
+    }
+    _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+    lowered = html.lower()
+    assert "confidence" not in lowered
+    assert "probability" not in lowered
+    assert "odds" not in lowered
+
+
+# ── sizing block (2026-09-22, F-272 email parity) ────────────────────────────
+
+def test_render_watchlist_entries_email_sizing_block_shows_shares_and_capital_basis():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    card = _wl_card("NVDA")
+    card["sizing"] = {"shares": 10, "total_cost": 1000.0, "portfolio_value": 40000.0,
+                       "sizing_version": 3}
+    card["economics"] = {
+        "state": "ok", "risk_per_share": 8.88, "risk_pct": 4.39,
+        "gain_per_share": 19.53, "target": 221.74, "breakeven_pct": 31.25,
+    }
+    card["net_capital"] = 20000.0
+    card["capital_basis"] = "levered"
+    _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+    assert "10 shares" in html
+    assert "Suggested size" in html
+    assert "net capital" in html
+
+
+def test_render_watchlist_entries_email_portfolio_unknown_shows_reason_not_shares():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    card = _wl_card("NVDA")
+    card["sizing"] = {"portfolio_unknown": True, "sizing_version": 3}
+    _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+    assert "Position sizing unavailable" in html
+    assert "Suggested size" not in html
+
+
+def test_render_watchlist_entries_email_stop_infeasible_renders_reason_via_cap_note():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    card = _wl_card("NVDA")
+    card["sizing"] = {"stop_infeasible": True, "stop_at": 95.0,
+                       "portfolio_value": 40000.0, "sizing_version": 3}
+    _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+    assert "No size suggested" in html
+    assert "95.00" in html
+    assert "Suggested size" not in html
+
+
+def test_render_watchlist_entries_email_capital_infeasible_margin_called_still_gives_a_reason():
+    """net_capital <= 0 leaves `one_share_capital_pct` None, so the guarded
+    cap-note arm cannot fire. Without a fallback the card renders a header and
+    an economics line above a SILENTLY EMPTY sizing slot — on the one day the
+    account is margin-called. The reason must always be stated."""
+    from stock_analyzer.notify import render_watchlist_entries_email
+    card = _wl_card("NVDA")
+    card["sizing"] = {"capital_infeasible": True, "one_share_capital_pct": None,
+                       "net_capital": -500.0, "portfolio_value": 40000.0,
+                       "sizing_version": 3}
+    _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+    assert "No size suggested" in html
+    assert "at or below zero" in html
+    assert "Suggested size" not in html
+
+
+def test_render_watchlist_entries_email_stale_capital_basis_discloses_instead_of_silence():
+    """A stale/unresolvable account-cash figure must SAY so. Silence here
+    would read as "unlevered" on the surface where that assumption is most
+    expensive to get wrong — the owner trades on ~3x margin."""
+    from stock_analyzer.notify import render_watchlist_entries_email
+    card = _wl_card("NVDA")
+    card["sizing"] = {"shares": 10, "total_cost": 1000.0, "portfolio_value": 40000.0,
+                       "sizing_version": 3}
+    card["economics"] = {
+        "state": "ok", "risk_per_share": 8.88, "risk_pct": 4.39,
+        "gain_per_share": 19.53, "target": 221.74, "breakeven_pct": 31.25,
+    }
+    card["net_capital"] = None
+    card["capital_basis"] = "stale"
+    _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+    assert "10 shares" in html
+    assert "missing or too old" in html
+    # Must never assert the un-checked state as "no leverage".
+    assert "of your net capital (vs" not in html
+
+
+def test_render_watchlist_entries_email_no_sizing_block_when_sizing_absent():
+    """Every pre-existing card shape (no `sizing` key at all) must not
+    render an empty block or raise."""
+    from stock_analyzer.notify import render_watchlist_entries_email
+    _, html = render_watchlist_entries_email([_wl_card("NVDA")], built_at="2026-09-10T09:45:00")
+    assert "Suggested size" not in html
+    assert "Position sizing unavailable" not in html
+
+
+def test_render_watchlist_entries_email_full_fields_no_markdown_leak():
+    """Combines summary markdown + sizing + economics + capital fields — the
+    literal-** leak class must not regress once these new fields land beside
+    the existing markdown-bearing summary field."""
+    from stock_analyzer.notify import render_watchlist_entries_email
+    card = _wl_card("NVDA")
+    card["summary"] = "Score 70/100 · **all conditions align** for opening a position."
+    card["sizing"] = {"shares": 10, "total_cost": 1000.0, "portfolio_value": 40000.0,
+                       "sizing_version": 3}
+    card["economics"] = {
+        "state": "ok", "risk_per_share": 8.88, "risk_pct": 4.39,
+        "gain_per_share": 19.53, "target": 221.74, "breakeven_pct": 31.25,
+    }
+    card["net_capital"] = 20000.0
+    card["capital_basis"] = "levered"
+    _, html = render_watchlist_entries_email([card], built_at="2026-09-10T09:45:00")
+    assert "**" not in html
+    assert "<strong>all conditions align</strong>" in html
+
+
+# ── footer calibration disclosure (2026-09-22) ───────────────────────────────
+
+def test_render_watchlist_entries_email_footer_has_calibration_disclosure():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    _, html = render_watchlist_entries_email([_wl_card("NVDA")], built_at="2026-09-10T09:45:00")
+    assert "Composite clears a bar" in html
+    assert "does not rank which names outperform" in html
+    assert "239" not in html   # never hardcode the sample count — it rots
 
 
 # ── cron_runner._run_scan wiring ─────────────────────────────────────────────

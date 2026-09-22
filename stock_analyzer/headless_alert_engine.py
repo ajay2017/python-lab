@@ -32,9 +32,10 @@ from stock_analyzer.portfolio import build_portfolio_df
 from stock_analyzer.risk import compute_portfolio_risk_metrics
 from stock_analyzer.stress_test import SCENARIOS, run_scenario, assess_fragility
 from stock_analyzer.tax_advisor import _build_open_lots
-from stock_analyzer.daily_briefing import deterioration_signals, build_daily_briefing
+from stock_analyzer.daily_briefing import deterioration_signals, build_daily_briefing, _position_size_for_render
 from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
 from stock_analyzer.recommendations_history import build_enter_now_rows
+from stock_analyzer.trade_economics import trade_economics
 from stock_analyzer.util import bq_score_or_none, val_score_or_none, sentiment_value_or_none
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_ELEVATED,
@@ -926,6 +927,60 @@ def compute_watchlist_entries(
         [] if prior_tickers is None else
         [c for c in eligible if str(c.get("ticker", "")).upper() not in prior_tickers]
     )
+
+    # ── Sizing/economics parity with the interactive page (2026-09-22) ──────
+    # The email showed ticker/score/entry-zone/R:R/stop/advisor-prose only —
+    # no sizing, no dollar risk, no capital-basis impact — while the
+    # interactive 📋 Watchlist page has carried all three since F-249/F-272.
+    # Attached ONLY to the final EMAIL-ELIGIBLE, NEWLY-transitioning list
+    # (`new_entries`), never to `qualifying`/`eligible` — those two feed the
+    # enter_now rec-log capture ABOVE this block, which must stay exactly the
+    # shape it was (capture scope and announce scope are deliberately
+    # different; see the docstring). Mutating `new_entries`' own dicts after
+    # capture has already run is safe precisely because capture already read
+    # what it needed from `qualifying` before this point.
+    #
+    # Wholly best-effort: a failure here must never cost the entry its other,
+    # already-working fields — this is display arithmetic, not part of the
+    # ENTER_NOW decision itself. An absent field is the honest "not computed"
+    # signal (per trade_economics' own explicit-state contract); a caller
+    # must never fabricate a 0 in its place.
+    if new_entries:
+        try:
+            _wl_pv = (
+                float(port_df["Market Value"].sum())
+                if port_df is not None and not port_df.empty else 0.0
+            )
+        except Exception:
+            _wl_pv = 0.0
+        # Same F-255 net-capital resolution every other headless lane uses
+        # (compute_morning_picks, mirrored here). On any failure, fall back
+        # to a basis value that is neither "unlevered" nor "levered" so
+        # risk.capital_equivalent_risk reads it as "unknown" (never a false
+        # "you're unlevered, nothing to disclose" claim) rather than
+        # asserting a specific state we did not actually verify.
+        _wl_net_cap, _wl_basis = None, "unknown"
+        try:
+            _wl_acct = db.load_account_cash()
+            _wl_net_cap, _wl_basis = _margin_mod.resolve_net_capital(
+                _wl_pv, _wl_acct, ACCOUNT_CASH_STALE_DAYS, datetime.now(_ET),
+            )
+        except Exception:
+            _wl_net_cap, _wl_basis = None, "unknown"
+        for _e in new_entries:
+            try:
+                _e["sizing"] = _position_size_for_render(
+                    _wl_pv, _e.get("price"), _e.get("stop"),
+                    _e.get("entry_lo"), _e.get("entry_hi"),
+                    net_capital=_wl_net_cap,
+                )
+                _e["net_capital"] = _wl_net_cap
+                _e["capital_basis"] = _wl_basis
+                _e["economics"] = trade_economics(
+                    _e.get("price"), _e.get("stop"), _e.get("rr"),
+                )
+            except Exception as _ex:
+                errors.append(f"{_e.get('ticker', '?')}: sizing/economics failed ({_ex})")
 
     return {
         "entries": new_entries, "built_at": built_at, "errors": errors,
