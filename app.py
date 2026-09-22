@@ -11276,11 +11276,24 @@ elif page == "🧑‍⚖️ The Judge":
     if _jr is None:
         st.caption("Unavailable — see the notice above.")
     else:
-        _jr_reduce_calls_raw = st.session_state.get("_reduce_calls")
+        # 2026-09-21 app-review Part 3 A follow-up (2026-09-22): a bare
+        # `is None` check here missed that a CRASHED Daily Brief fail-opens
+        # `_reduce_calls` to `{}` (app.py ~5857), not `None` — so this audit
+        # could run against an empty reduce set and report "no coherence
+        # gap" on a day the Brief never actually checked, which is exactly
+        # the false-all-clear this audit exists to catch. Same two-part
+        # gate as the already-shipped Defect #1 fix.
+        _jr_reduce_verified = (
+            _coord_cache_state("_reduce_calls") == "ready"
+            and not st.session_state.get("_daily_brief_offline", False)
+        )
+        _jr_reduce_calls_raw = (
+            st.session_state.get("_reduce_calls") if _jr_reduce_verified else None
+        )
         if _jr_reduce_calls_raw is None:
             st.info(
                 "ℹ️ Coherence audit unavailable this run — reduce-call data not "
-                "published yet this session. Visit 🏠 Home first."
+                "published (or not yet verified) this session. Visit 🏠 Home first."
             )
         else:
             _jr_audit = audit_coherence(_jr, set(_jr_reduce_calls_raw.keys()))
@@ -12083,7 +12096,19 @@ elif page == "🧾 Summary":
     # Sentinel discipline: `None` means NOT CHECKED (Home never ran) and must not
     # read as "no vetoes"; `{}` means checked and genuinely none. `.get()` with
     # no default, then an explicit `is None` test — never `or {}`.
-    _sm_reduce = st.session_state.get("_reduce_calls")
+    #
+    # 2026-09-21 app-review Part 3 A follow-up (2026-09-22): that discipline
+    # alone still missed one case — a CRASHED Daily Brief fail-opens
+    # `_reduce_calls` to `{}` (app.py ~5857), which is indistinguishable from
+    # "checked, genuinely none" by an `is None` test alone. This banner exists
+    # specifically to disclose suppression that's happening — rendering "no
+    # active vetoes" on a crash day would be the exact false-all-clear it was
+    # built to prevent, so a crash now also reads as "not checked" here.
+    _sm_reduce_verified = (
+        _coord_cache_state("_reduce_calls") == "ready"
+        and not st.session_state.get("_daily_brief_offline", False)
+    )
+    _sm_reduce = st.session_state.get("_reduce_calls") if _sm_reduce_verified else None
     # Two names on purpose, matching the 📡 Signals & Advice idiom: `_sm_reduce`
     # PRESERVES the None sentinel for the "not checked" messaging below, while
     # `_sm_reduce_map` is the iteration/lookup-safe view. A per-ticker badge
@@ -12877,8 +12902,24 @@ elif page == "🧾 Summary":
             _pth_already_written_this_week = _pth.should_skip_weekly_write(
                 _pth_recent, _pth_iso_year, _pth_iso_week
             )
+            # 2026-09-21 app-review Part 3 A follow-up (2026-09-22): a bare
+            # forward of the raw session_state value let a crashed Daily
+            # Brief's fail-open `_reduce_calls={}` (app.py ~5857) read as
+            # "verified clean" to `_classify_action_posture` (which only
+            # checks `isinstance(reduce_calls, dict)`, not this app's
+            # `_daily_brief_offline` flag) — so a crash day could get
+            # PERSISTED as "deploying"/"holding" in the weekly stability
+            # ledger instead of "unavailable". Same two-part gate as the
+            # already-shipped Defect #1 fix.
+            _pth_reduce_verified = (
+                _coord_cache_state("_reduce_calls") == "ready"
+                and not st.session_state.get("_daily_brief_offline", False)
+            )
+            _pth_reduce_calls = (
+                st.session_state.get("_reduce_calls") if _pth_reduce_verified else None
+            )
             _pth_this_week = _pth.compose_thesis(
-                _pth_bundle, _pth_acct_gate, st.session_state.get("_reduce_calls"),
+                _pth_bundle, _pth_acct_gate, _pth_reduce_calls,
                 engine_trust=_pth_engine_trust, today=_pth_today,
             )
             if _pth_this_week is not None and not _pth_already_written_this_week:
