@@ -19,9 +19,9 @@ blocking (one non-blocking suggestion applied before commit). **The live Engine 
 the new number has not yet been independently reconfirmed against a fresh screenshot.**
 
 **Remaining, not yet started:** the rest of Phase 2 (pagination for the other 7 tables named in
-§2 A7), Phase 3 (A4/A5/A8/C3 — the small bounded fixes; C2 is now closed, needs nothing further),
-Phase 4 (`COMPOSITE_WEIGHTS` durable versioning — sized but not designed), Phase 5 (deferred,
-correctly, since it has zero data to act on).
+§2 A7), Phase 3 (A5/A8/C3 remain — A4 shipped inside Phase 1's Chunk 2, C2 is closed, neither
+needs anything further), Phase 4 (`COMPOSITE_WEIGHTS` durable versioning — sized but not
+designed), Phase 5 (deferred, correctly, since it has zero data to act on).
 
 This is a planning/design deliverable that has since had two of its phases executed under
 review, per explicit sign-off at each step — not a unilateral build. Every finding below is
@@ -531,12 +531,15 @@ under-bounded loaders named in A7. Pure mechanical extension of an already-revie
 **Review gate:** `db.py` is explicitly named in CLAUDE.md's `_GATE_FILES` DB-write list — the
 commit hook will require an Opus reviewer citation regardless; budget for it.
 
-**Phase 3 — the small, bounded fixes.** A4 (rec-side dedup in `match_recs_to_trades`), A5
-(`debrief_advisor.py`'s date filter), A8 (income-event subtype unification's remaining gap), C2
-(duplicate-row cleanup, contingent on Phase 0's answer), C3 (sector-taxonomy sweep). Each is
-independent, small, and low-risk — bundle or sequence at the owner's discretion. A4 and A5 touch
-a decision-adjacent history table; a voluntary `reviewer` pass is proportionate, same logic as
-Phase 1.
+**Phase 3 — the small, bounded fixes. A4 CLOSED — shipped inside Phase 1, not here.** Chunk 2 of
+the Phase 1 build (commit `6c60656`) already added `_dedup_acted_credit()` to
+`match_recs_to_trades()`, closing A4 — the planner folded it into Phase 1's scope because both
+touch the same function. **Remaining in this phase:** A5 (`debrief_advisor.py`'s date filter),
+A8 (income-event subtype unification's remaining gap), C2 (duplicate-row cleanup — CLOSED, both
+tables confirmed clean via Phase 0's live query, nothing left to run), C3 (sector-taxonomy
+sweep). Each is independent, small, and low-risk — bundle or sequence at the owner's discretion.
+A5 touches a decision-adjacent history table; a voluntary `reviewer` pass is proportionate, same
+logic as Phase 1.
 
 **Phase 4 — `COMPOSITE_WEIGHTS` durable versioning (the schema half of C1 only), a genuine
 policy decision.** The cheap segment-by-date discipline already moved to Phase 1 as a
