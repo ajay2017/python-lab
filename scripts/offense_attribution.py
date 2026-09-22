@@ -109,6 +109,7 @@ from stock_analyzer.predictive_analytics import (  # noqa: E402
     forward_alpha_at_horizon,
 )
 from stock_analyzer.recommendations_history import (  # noqa: E402
+    collapse_recs_by_ticker,
     compute_outcomes,
     distinct_missed,
     match_recs_to_trades,
@@ -216,25 +217,69 @@ def _mean(vals: list[float]) -> "float | None":
     return round(sum(vals) / len(vals), 2) if vals else None
 
 
-def _print_band_table(enriched: list[dict]) -> dict:
-    """First lens: compute_outcomes' to-today alpha, bucketed by composite
-    band. Returns the per-band summary dict for the pre-registered-criterion
-    check that follows."""
+def _gradable_rows(population: list[dict]) -> tuple[list[dict], int]:
+    """Rows usable for banding: mature, priced, composite-scored. Returns
+    (gradable, n_no_composite) -- the latter is reported, never silently
+    dropped, matching this project's own disclosure convention."""
     gradable = [
-        r for r in enriched
+        r for r in population
         if not r.get("outcome_maturing")
         and r.get("alpha_pct") is not None
         and r.get("composite_score") is not None
     ]
     n_no_composite = sum(
-        1 for r in enriched
+        1 for r in population
         if not r.get("outcome_maturing")
         and r.get("alpha_pct") is not None
         and r.get("composite_score") is None
     )
+    return gradable, n_no_composite
+
+
+def _compute_band_summary(gradable: list[dict]) -> dict:
+    """Pure band-bucketing arithmetic, no printing -- shared by both lenses
+    below so raw and collapsed use identical bucketing logic."""
+    band_summary: dict = {}
+    for _lo, _hi, label in _BANDS:
+        rows = [r for r in gradable if _band_label(r["composite_score"]) == label]
+        if not rows:
+            band_summary[label] = {"n": 0, "alpha_all": None, "n_acted": 0,
+                                    "alpha_acted": None, "n_skipped": 0, "alpha_skipped": None}
+            continue
+        acted = [r for r in rows if r.get("acted_on")]
+        skipped = [r for r in rows if not r.get("acted_on")]
+        band_summary[label] = {
+            "n": len(rows), "alpha_all": _mean([r["alpha_pct"] for r in rows]),
+            "n_acted": len(acted), "alpha_acted": _mean([r["alpha_pct"] for r in acted]),
+            "n_skipped": len(skipped), "alpha_skipped": _mean([r["alpha_pct"] for r in skipped]),
+        }
+    return band_summary
+
+
+def _print_band_summary(band_summary: dict) -> None:
+    for _lo, _hi, label in _BANDS:
+        b = band_summary.get(label, {"n": 0})
+        if not b.get("n"):
+            print(f"  {label:<8} N=0 -- no rows in this band.")
+            continue
+        print(
+            f"  {label:<8} N={b['n']:<4} all-alpha={b['alpha_all']!s:<8} | "
+            f"acted N={b['n_acted']:<3} alpha={b['alpha_acted']!s:<8} | "
+            f"skipped N={b['n_skipped']:<3} alpha={b['alpha_skipped']!s:<8}"
+        )
+
+
+def _print_band_table(enriched: list[dict]) -> dict:
+    """LENS 1 (raw, unmodified since this script's first run): compute_outcomes'
+    to-today alpha, bucketed by composite band, ONE ROW PER SURFACING -- a
+    ticker that stayed a pick for N days contributes N rows here. This is the
+    view the ORIGINAL 2026-09-13 A2 run used. Kept unchanged so the historical
+    verdict stays reproducible; LENS 1b below is the corrected view."""
+    gradable, n_no_composite = _gradable_rows(enriched)
     print(
-        f"\nLENS 1 -- compute_outcomes to-today alpha (SAME methodology as the "
-        f"live Engine Track Record card).\nN={len(gradable)} mature, priced, "
+        f"\nLENS 1 -- compute_outcomes to-today alpha, RAW (one row per "
+        f"surfacing -- the pre-2026-09-22 methodology, kept for continuity "
+        f"with the original A2 run).\nN={len(gradable)} mature, priced, "
         f"composite-scored new_pick row(s)."
         + (f" ({n_no_composite} more mature+priced row(s) had no recorded "
            f"composite_score -- excluded from banding, not silently dropped "
@@ -244,30 +289,38 @@ def _print_band_table(enriched: list[dict]) -> dict:
     if not gradable:
         print("No gradable rows. Nothing to bucket.")
         return {}
+    band_summary = _compute_band_summary(gradable)
+    _print_band_summary(band_summary)
+    return band_summary
 
-    band_summary: dict = {}
-    for _lo, _hi, label in _BANDS:
-        rows = [r for r in gradable if _band_label(r["composite_score"]) == label]
-        if not rows:
-            band_summary[label] = {"n": 0, "alpha_all": None, "n_acted": 0,
-                                    "alpha_acted": None, "n_skipped": 0, "alpha_skipped": None}
-            print(f"  {label:<8} N=0 -- no rows in this band.")
-            continue
-        acted = [r for r in rows if r.get("acted_on")]
-        skipped = [r for r in rows if not r.get("acted_on")]
-        alpha_all = _mean([r["alpha_pct"] for r in rows])
-        alpha_acted = _mean([r["alpha_pct"] for r in acted])
-        alpha_skipped = _mean([r["alpha_pct"] for r in skipped])
-        band_summary[label] = {
-            "n": len(rows), "alpha_all": alpha_all,
-            "n_acted": len(acted), "alpha_acted": alpha_acted,
-            "n_skipped": len(skipped), "alpha_skipped": alpha_skipped,
-        }
-        print(
-            f"  {label:<8} N={len(rows):<4} all-alpha={alpha_all!s:<8} | "
-            f"acted N={len(acted):<3} alpha={alpha_acted!s:<8} | "
-            f"skipped N={len(skipped):<3} alpha={alpha_skipped!s:<8}"
-        )
+
+def _print_band_table_collapsed(enriched: list[dict]) -> dict:
+    """LENS 1b (added 2026-09-22, docs/plans/data-foundation-strategy.md
+    Phase 1): the SAME to-today alpha, but bucketed over
+    `collapse_recs_by_ticker`'s ONE-REP-PER-TICKER output -- the identical
+    methodology the live Engine Track Record card now uses post-fix. A
+    ticker that stayed a pick for N days contributes exactly ONE row here,
+    anchored on its earliest priced surfacing (acted arm sourced from
+    whichever row was actually acted on, cross-rec_type). This is the
+    reading that should inform any go-forward decision about the composite's
+    ranking ability -- Lens 1 above is kept only for continuity with the
+    original run, not because it's the more correct view."""
+    reps = collapse_recs_by_ticker(enriched, rec_types=("new_pick",))
+    gradable, n_no_composite = _gradable_rows(reps)
+    print(
+        f"\nLENS 1b -- compute_outcomes to-today alpha, COLLAPSED BY TICKER "
+        f"(one row per distinct ticker, matching the live Engine Track "
+        f"Record card's current methodology).\nN={len(gradable)} mature, "
+        f"priced, composite-scored DISTINCT ticker(s)."
+        + (f" ({n_no_composite} more had no recorded composite_score -- "
+           f"excluded from banding.)" if n_no_composite else "")
+        + "\n"
+    )
+    if not gradable:
+        print("No gradable rows. Nothing to bucket.")
+        return {}
+    band_summary = _compute_band_summary(gradable)
+    _print_band_summary(band_summary)
     return band_summary
 
 
@@ -334,8 +387,8 @@ def _print_distinct_missed_crosscheck(enriched: list[dict]) -> None:
     print(f"N={len(missed)} distinct missed ticker(s). Mean alpha_pct: {_mean(alphas)}")
 
 
-def _print_verdict(band_summary: dict) -> None:
-    print(f"\n{'=' * 78}\nPRE-REGISTERED CRITERION CHECK\n{'=' * 78}")
+def _print_verdict(band_summary: dict, label: str = "") -> None:
+    print(f"\n{'=' * 78}\nPRE-REGISTERED CRITERION CHECK{f' -- {label}' if label else ''}\n{'=' * 78}")
     ordered_labels = [b[2] for b in _BANDS]
     populated = [(lbl, band_summary.get(lbl, {})) for lbl in ordered_labels
                  if band_summary.get(lbl, {}).get("n", 0) > 0]
@@ -416,13 +469,16 @@ def main() -> int:
 
     print(
         f"\n{'=' * 78}\n"
-        f"HONEST CAVEATS: per-band N will likely be small (roughly two dozen "
-        f"acted all-time as\nof 2026-08-30) -- read N before the table. Lens 1's "
-        f"alpha is to-TODAY, not a fixed\nwindow, so an older rec has had more "
-        f"time to compound than a younger one -- Lens 2\nexists specifically to "
-        f"check that. rec_type='new_pick' ONLY, matching the live card's own\n"
-        f"scope -- buy_candidate/add_winner excluded by design, not by this "
-        f"script's choice.\n{'=' * 78}"
+        f"HONEST CAVEATS: per-band N will likely be small -- read N before the "
+        f"table. Lens 1's\nalpha is to-TODAY, not a fixed window, so an older "
+        f"rec has had more time to compound\nthan a younger one -- Lens 2 exists "
+        f"specifically to check that. rec_type='new_pick'\nONLY, matching the "
+        f"live card's own scope -- buy_candidate/add_winner excluded by\n"
+        f"design, not by this script's choice. Lens 1 counts one row per "
+        f"SURFACING (kept for\ncontinuity with the original 2026-09-13 A2 run); "
+        f"Lens 1b (added 2026-09-22, see\ndocs/plans/data-foundation-strategy.md "
+        f"Phase 1) collapses to one row per TICKER --\nthat is the reading that "
+        f"should inform any go-forward decision, not Lens 1.\n{'=' * 78}"
     )
 
     matched = match_recs_to_trades(recs_df, trades_df)
@@ -437,9 +493,11 @@ def main() -> int:
     )
 
     band_summary = _print_band_table(enriched)
+    band_summary_collapsed = _print_band_table_collapsed(enriched)
     _print_forward_alpha_lens(enriched, spy_close_by_date, skip=args.skip_forward_alpha)
     _print_distinct_missed_crosscheck(enriched)
-    _print_verdict(band_summary)
+    _print_verdict(band_summary, label="LENS 1 (raw, per-surfacing -- legacy view)")
+    _print_verdict(band_summary_collapsed, label="LENS 1b (collapsed by ticker -- current view)")
 
     return 0
 
