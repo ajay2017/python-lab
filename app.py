@@ -12740,6 +12740,31 @@ elif page == "🧾 Summary":
             _etr_cap.append("measured AFTER the warning, not a prediction of it")
             st.caption(" · ".join(_etr_cap) + ". Defense has no detail page yet.")
 
+            # 2026-09-21 app-review Part 2 #4, owner decision 2026-09-22: the
+            # Act Today caption above (~line 11998) surfaces this SAME
+            # Defense-facet finding, but only on a day with a live EXIT/TRIM
+            # item -- most days have none (CLAUDE.md's own F-204a note), so
+            # the standing finding was invisible most days even though it's
+            # a persistent fact, not a transient one. This card renders
+            # daily regardless of Act Today's state, so disclose the same
+            # already-computed verdict here unconditionally instead. States
+            # only the measured number, never a cause -- the 2026-09-17
+            # regime-confound follow-up found this concentrated in a
+            # handful of high-beta names rather than broad-based, so that
+            # qualifier is included to avoid reading this as a verdict on
+            # every future exit.
+            if (_etr_prot_band == "firm" and _etr_prot_alpha is not None
+                    and _etr_prot_alpha < 0):
+                st.caption(
+                    "ℹ️ Historically, this engine's protective EXIT/TRIM "
+                    "calls have run early — the flagged names went on to "
+                    f"beat SPY by an average of {abs(_etr_prot_alpha):.1f}pp "
+                    f"afterward (n={_etr_prot_n} tracked calls), concentrated "
+                    "in a handful of high-beta names rather than broad-based. "
+                    "Worth confirming before acting, not a reason to ignore "
+                    "a call."
+                )
+
     with _sm_ptr_row1[1]:
         # 🔔 Catalyst Watch — promoted into Row 1 beside the Engine Track Record
         # when Thesis Review moved to Portfolio Health. Reads the same cached
