@@ -27945,6 +27945,15 @@ elif page == "📒 Trade Journal":
         # ── Trade History table ───────────────────────────────────────────────────
         st.subheader("📋 Trade History")
         st.caption("Check the **Delete?** box on any row then click **🗑️ Delete selected trade(s)** to remove duplicates or mistakes.")
+        # 2026-09-21 app-review Part 2 #3: this table is every trade ever logged,
+        # with no tax-year or date-range grouping — the natural place to point
+        # toward Reports' Tax Report when what's actually wanted is "how much
+        # did I realize THIS tax year", not the full unfiltered history below.
+        if not db.is_readonly():
+            st.caption(
+                "💡 Need realized gains grouped by tax year instead of this full "
+                "unfiltered history? See the **📄 Reports** tab's Tax Report."
+            )
         if trades_df.empty:
             st.info("No trades recorded yet. Use the form above to log your first trade.")
         else:
@@ -34547,6 +34556,20 @@ elif page == "💰 Account":
                 "answers whether the leverage has been worth it SO FAR."
             )
 
+        # 2026-09-21 app-review Part 2 #3: 📄 Reports (the tab right next to
+        # this one) had zero pointers to it anywhere in the app except its
+        # own tab and the User Guide. This page's own charts are all LIVE
+        # re-renders of the current state; a user looking at a specific
+        # PAST period (a tax year, a quarter) belongs on Reports instead.
+        if not db.is_readonly():
+            st.caption(
+                "💡 Want a downloadable snapshot for a specific past period "
+                "instead of the live view above? See the **📄 Reports** tab — "
+                "Tax Report (realized gains by tax year) and Performance "
+                "Review (return vs SPY, gates fired, leverage/risk drift for "
+                "a date range you pick)."
+            )
+
     with _acct_tab_broker:
         # ── ⚡ Broker Sync (SnapTrade — Robinhood) ───────────────────────────────
         # docs/plans/snaptrade-broker-integration.md. Three capabilities:
@@ -35046,6 +35069,12 @@ elif page == "💰 Account":
                     f"**-{_m(f'\\${_sii_int_charged:,.2f}')}** charged (margin interest) "
                     "— shown separately, never netted, so a credit can't mask a charge."
                 )
+                if not db.is_readonly():
+                    st.caption(
+                        "💡 Need this YTD figure broken out by tax year instead, "
+                        "or realized gains alongside it? See the **📄 Reports** "
+                        "tab's Tax Report."
+                    )
 
                 # Reconciliation awareness (2026-09-12 follow-on to F-268):
                 # three real cross-path dedup bugs in a row were each found
