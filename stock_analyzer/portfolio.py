@@ -94,6 +94,12 @@ TICKER_SECTORS = {
     # mature Enterprise Tech utilities above — confirmed with the user.
     "ADBE": "AI & Cloud", "TEAM": "AI & Cloud", "HUBS": "AI & Cloud",
     "TWLO": "AI & Cloud",
+    # GOOG added 2026-09-23 (Phase 3 C3, data-foundation-strategy.md): same
+    # company as GOOGL (already AI & Cloud), just a different share class --
+    # GOOG sits in discovery_universe with no entry here, so a Movers-sourced
+    # pick in it fell back to the raw provider GICS string, invisible to
+    # _SECTOR_IMPACT/RATE_SENSITIVITY. Same class as the 2026-09-01/09-02 fixes.
+    "GOOG": "AI & Cloud",
     # Consumer-internet / social-advertising names — map to Consumer Tech so they
     # don't fall through to the "Other" catch-all and inflate a phantom breach.
     "PINS": "Consumer Tech", "SPOT": "Consumer Tech", "DASH": "Consumer Tech",
@@ -123,6 +129,14 @@ TICKER_SECTORS = {
     "MRK": "Healthcare", "TMO": "Healthcare", "ABT": "Healthcare",
     "AMGN": "Healthcare", "BMY": "Healthcare", "MDT": "Healthcare", "DHR": "Healthcare",
     "BIIB": "Healthcare", "BSX": "Healthcare",
+    # CVS/GILD/HCA/HIMS/SYK/VRTX added 2026-09-23 (Phase 3 C3): all 6 sit in
+    # discovery_universe with no entry here, same raw-GICS-shadow class as the
+    # fixes above -- a Movers-sourced pick in any of them fell back to the raw
+    # provider GICS string, unknown to _SECTOR_IMPACT/RATE_SENSITIVITY. HIMS
+    # (Healthcare, not Consumer Tech despite its consumer-facing telehealth
+    # app) was the one genuinely ambiguous call here, confirmed with the owner.
+    "CVS": "Healthcare", "GILD": "Healthcare", "HCA": "Healthcare",
+    "HIMS": "Healthcare", "SYK": "Healthcare", "VRTX": "Healthcare",
     "JPM": "Financials", "V": "Financials", "MA": "Financials",
     "GS": "Financials", "XYZ": "Financials", "COIN": "Financials",
     "BX": "Financials", "BAC": "Financials", "WFC": "Financials",
@@ -148,6 +162,14 @@ TICKER_SECTORS = {
     "BA": "Defense",
     "XOM": "Energy", "CVX": "Energy", "OXY": "Energy", "COP": "Energy",
     "EOG": "Energy",
+    # KMI/MPC/PSX/SLB/VLO/WMB added 2026-09-23 (Phase 3 C3): all 6 sit in
+    # discovery_universe with no entry here, same raw-GICS-shadow class as
+    # XOM/CVX/OXY/COP/EOG above -- a Movers-sourced pick in any of them fell
+    # back to the raw provider GICS string, unknown to _SECTOR_IMPACT/
+    # RATE_SENSITIVITY, so an Energy-blocking macro event could never
+    # suppress it via the Movers path even though a curated peer would.
+    "KMI": "Energy", "MPC": "Energy", "PSX": "Energy", "SLB": "Energy",
+    "VLO": "Energy", "WMB": "Energy",
     "SPCX": "Communications",   # Specialty Telecom (Nasdaq classification)
     "T": "Communications", "VZ": "Communications", "TMUS": "Communications",
     # CMCSA added 2026-09-01: in discovery_universe's "Internet & Media"
@@ -188,8 +210,24 @@ TICKER_SECTORS = {
     # confirmed sector, ETF and correlation values (see macro_calendar.py
     # _SECTOR_IMPACT and this file's SECTOR_ETF/_SECTOR_PROFILES).
     "LIN": "Materials", "DOW": "Materials", "APD": "Materials", "FCX": "Materials", "NUE": "Materials",
+    # ALB/NEM/CCJ added 2026-09-23 (Phase 3 C3): mining/extraction names
+    # matching FCX above, same discovery_universe gap as LIN/DOW/APD/FCX/NUE.
+    # CCJ (uranium mining) classified Materials rather than Energy -- it
+    # extracts a mined commodity, it does not produce or refine fuel -- the
+    # one genuinely ambiguous call here, confirmed with the owner.
+    "ALB": "Materials", "NEM": "Materials", "CCJ": "Materials",
     "DUK": "Utilities", "SO": "Utilities", "D": "Utilities", "AEP": "Utilities", "EXC": "Utilities",
+    # CEG/VST added 2026-09-23 (Phase 3 C3): matches EXC/DUK above, same
+    # discovery_universe gap.
+    "CEG": "Utilities", "VST": "Utilities",
     "AMT": "Real Estate", "PLD": "Real Estate", "EQIX": "Real Estate", "O": "Real Estate", "SPG": "Real Estate",
+    # DE/EMR/ETN/FDX/HON/ITW/MMM/PH/PWR/UNP/UPS added 2026-09-23 (Phase 3 C3):
+    # all 11 sit in discovery_universe with no entry here, same raw-GICS-
+    # shadow class as the fixes above -- classified alongside CAT/GE/GEV.
+    "DE": "Industrials", "EMR": "Industrials", "ETN": "Industrials",
+    "FDX": "Industrials", "HON": "Industrials", "ITW": "Industrials",
+    "MMM": "Industrials", "PH": "Industrials", "PWR": "Industrials",
+    "UNP": "Industrials", "UPS": "Industrials",
 }
 
 

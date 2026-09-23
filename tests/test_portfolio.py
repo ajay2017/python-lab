@@ -774,6 +774,39 @@ def test_ticker_sectors_values_are_rate_known_or_a_documented_gap():
     assert not unknown, f"new sector labels with no rate-sensitivity score: {unknown}"
 
 
+def test_ticker_sectors_2026_09_23_discovery_universe_gap_closed():
+    """Phase 3 C3 (data-foundation-strategy.md): 29 tickers sitting in
+    discovery_universe had no TICKER_SECTORS entry at all, so a Movers-sourced
+    pick in any of them fell back to the raw provider GICS string -- unknown
+    to _SECTOR_IMPACT/RATE_SENSITIVITY -- and a sector-blocking macro event
+    could never suppress it via the Movers path even though a curated peer
+    correctly would be. Locks in all 29 additions the same way this project's
+    prior 5 TICKER_SECTORS-expansion commits did (2026-09-01/09-02/09-15)."""
+    from stock_analyzer.portfolio import TICKER_SECTORS, resolve_sector
+
+    expected = {
+        "GOOG": "AI & Cloud",
+        "ALB": "Materials", "NEM": "Materials", "CCJ": "Materials",
+        "KMI": "Energy", "MPC": "Energy", "PSX": "Energy", "SLB": "Energy",
+        "VLO": "Energy", "WMB": "Energy",
+        "CVS": "Healthcare", "GILD": "Healthcare", "HCA": "Healthcare",
+        "HIMS": "Healthcare", "SYK": "Healthcare", "VRTX": "Healthcare",
+        "DE": "Industrials", "EMR": "Industrials", "ETN": "Industrials",
+        "FDX": "Industrials", "HON": "Industrials", "ITW": "Industrials",
+        "MMM": "Industrials", "PH": "Industrials", "PWR": "Industrials",
+        "UNP": "Industrials", "UPS": "Industrials",
+        "CEG": "Utilities", "VST": "Utilities",
+    }
+    assert len(expected) == 29
+    for ticker, sector in expected.items():
+        assert TICKER_SECTORS.get(ticker) == sector, (
+            f"{ticker} must resolve to {sector!r} via the curated map"
+        )
+        assert resolve_sector(ticker) == sector, (
+            f"{ticker} must resolve to {sector!r} via resolve_sector too"
+        )
+
+
 # ─── Discovery-universe macro-gate coverage — RETIRED 2026-09-01 ────────────
 # `DISCOVERY_UNIVERSE`, the module-level dict these content checks (curated-
 # sector coverage / macro-rate-known values / the specific removals-and-
