@@ -492,16 +492,30 @@ class _FakeExecResult:
 
 
 class _FakeQueryBuilder:
+    """Mimics the .select().order().range().execute() chain
+    load_gate_suppressions() builds."""
+
     def __init__(self, rows=None, raise_on_execute=False):
         self._rows = rows if rows is not None else []
         self._raise = raise_on_execute
+        self._range = None
 
     def select(self, *_a, **_kw):
+        return self
+
+    def order(self, *_a, **_kw):
+        return self
+
+    def range(self, start, end):
+        self._range = (start, end)
         return self
 
     def execute(self):
         if self._raise:
             raise RuntimeError("simulated transient Supabase failure")
+        if self._range is not None:
+            start, end = self._range
+            return _FakeExecResult(self._rows[start:end + 1])
         return _FakeExecResult(self._rows)
 
 
@@ -539,6 +553,21 @@ def test_load_gate_suppressions_returns_real_rows(monkeypatch):
     monkeypatch.setattr(db, "_client", lambda: _FakeClient(rows=rows))
     out = db.load_gate_suppressions()
     assert out == rows
+
+
+def test_load_gate_suppressions_paginates_past_page_size(monkeypatch):
+    """2026-09-22 data-foundation pass: PostgREST's own server-side default
+    row cap on an unpaginated `.select()` (already confirmed live on
+    model_predictions and recommendations) applies identically here. A
+    result set bigger than one page must still come back whole via
+    `.range()` looping, not silently capped at the first page."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_GATE_SUPPRESSIONS_PAGE_SIZE", 2)
+    rows = [{"ticker": f"T{i}", "gate_id": "G-04", "rec_date": "2026-01-05"} for i in range(5)]
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(rows=rows))
+    out = db.load_gate_suppressions()
+    assert len(out) == 5
+    assert [r["ticker"] for r in out] == [f"T{i}" for i in range(5)]
 
 
 # ─── 10. import-isolation redline ───────────────────────────────────────────

@@ -37847,11 +37847,14 @@ elif page == "🧠 AI Insights":
     from stock_analyzer import analyst_intel as _ai_intel
     from stock_analyzer.constants import ANALYST_COVERAGE_FRESH_DAYS as _AC_FRESH_DAYS
     _ac_df = _ai_db.load_analyst_coverage(days=_AC_FRESH_DAYS)
-    # limit=5000 matches the Scorecard's own "read the full library" call
-    # below (_sc_df = _ai_db.load_analyst_coverage(limit=5000)) — the bare
-    # default limit=100 silently capped this header at "100 saved" regardless
-    # of the real total (found 2026-09-12 while investigating the Scorecard).
-    _ac_df_all = _ai_db.load_analyst_coverage(limit=5000)   # total count for status header
+    # limit=None ("give me everything") matches the Scorecard's own "read
+    # the full library" call below (_sc_df = _ai_db.load_analyst_coverage
+    # (limit=None)) — the bare default limit=100 silently capped this header
+    # at "100 saved" regardless of the real total (found 2026-09-12 while
+    # investigating the Scorecard). Was a guessed limit=5000 magic number
+    # until the 2026-09-22 data-foundation pass gave this a real unbounded
+    # mode instead.
+    _ac_df_all = _ai_db.load_analyst_coverage(limit=None)   # total count for status header
 
     # Flash slot: the Ideas Inbox save handler below stashes this list right
     # before an st.rerun() (which discards any un-rerun delta, including a
@@ -39743,7 +39746,7 @@ elif page == "🧠 AI Insights":
             VALUATION_CONSENSUS_PTS as _VALUATION_CONSENSUS_PTS,
         )
 
-        _sc_df = _ai_db.load_analyst_coverage(limit=5000)
+        _sc_df = _ai_db.load_analyst_coverage(limit=None)
         _sc_evaluable_source = _sc_df[_sc_df["price_at_article_date"].notna()] if not _sc_df.empty else _sc_df
 
         if _sc_evaluable_source.empty:
@@ -39760,7 +39763,7 @@ elif page == "🧠 AI Insights":
                 series for the same call, but share this one fetch.
 
                 max_entries bounds the (ticker, start, end) key space against
-                load_analyst_coverage(limit=5000)'s row count — entries are tiny
+                load_analyst_coverage(limit=None)'s row count — entries are tiny
                 (two floats) but unbounded count still isn't free
                 (2026-08-06 perf investigation)."""
                 try:
@@ -41738,15 +41741,18 @@ elif page == "🎯 My Edge":
         if _me_trades_df is None or (hasattr(_me_trades_df, "empty") and _me_trades_df.empty):
             st.info("No trade history loaded. Visit 🏠 Home first to load your portfolio.")
         else:
-            # Load prep-signal data (DB, cheap). limit=5000, NOT the bare
-            # default limit=100: classify_all_buys checks each trade's own
-            # cutoff (trade_date - WORKFLOW_ANALYST_LOOKBACK_DAYS) against
-            # this df, so it needs the FULL coverage history — the newest-
-            # first default limit=100 was silently hiding research attached
-            # to OLDER trades, biasing them toward "Cold Entry"/"Basic" tiers
-            # (found 2026-09-12; same class as db.load_model_predictions'
-            # PostgREST truncation, memory project_predictive_shadow_modeling).
-            _me_analyst_df     = _me_db.load_analyst_coverage(limit=5000)
+            # Load prep-signal data (DB, cheap). limit=None ("give me
+            # everything"), NOT the bare default limit=100: classify_all_buys
+            # checks each trade's own cutoff (trade_date -
+            # WORKFLOW_ANALYST_LOOKBACK_DAYS) against this df, so it needs
+            # the FULL coverage history — the newest-first default limit=100
+            # was silently hiding research attached to OLDER trades, biasing
+            # them toward "Cold Entry"/"Basic" tiers (found 2026-09-12; same
+            # class as db.load_model_predictions' PostgREST truncation,
+            # memory project_predictive_shadow_modeling). Was a guessed
+            # limit=5000 magic number until the 2026-09-22 data-foundation
+            # pass gave this a real unbounded mode instead.
+            _me_analyst_df     = _me_db.load_analyst_coverage(limit=None)
             _me_earnings_ctx   = _me_db.load_all_earnings_context()
             _me_classified     = _dq.classify_all_buys(
                 _me_trades_df, _me_analyst_df, _me_earnings_ctx

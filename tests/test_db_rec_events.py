@@ -20,16 +20,32 @@ class _FakeExecResult:
 
 
 class _FakeSelectBuilder:
+    """Mimics the .select().order().range().execute() chain
+    load_rec_events() builds."""
+
     def __init__(self, rows=None, raise_on_execute=False):
         self._rows = rows or []
         self._raise = raise_on_execute
+        self._range = None
+        self.order_calls: list = []
 
     def select(self, *_a, **_kw):
+        return self
+
+    def order(self, *_a, **_kw):
+        self.order_calls.append((_a, _kw))
+        return self
+
+    def range(self, start, end):
+        self._range = (start, end)
         return self
 
     def execute(self):
         if self._raise:
             raise RuntimeError("simulated transient Supabase failure")
+        if self._range is not None:
+            start, end = self._range
+            return _FakeExecResult(self._rows[start:end + 1])
         return _FakeExecResult(self._rows)
 
 
@@ -70,6 +86,7 @@ class _FakeClient:
         # Return an object that supports BOTH select() (load) and upsert() (save).
         _sel = _FakeSelectBuilder(self._rows, self._raise_on_select)
         _ups = self.upsert_builder
+        self.last_select_builder = _sel
 
         class _Combined:
             def select(_self, *a, **kw):
@@ -115,6 +132,42 @@ def test_load_real_rows_returned(monkeypatch):
     out = db.load_rec_events()
     assert out is not None
     assert out[0]["ticker"] == "AAA"
+
+
+def test_load_paginates_past_page_size(monkeypatch):
+    """2026-09-22 data-foundation pass: PostgREST's own server-side default
+    row cap on an unpaginated `.select()` (already confirmed live on
+    model_predictions and recommendations) applies identically here. A
+    result set bigger than one page must still come back whole via
+    `.range()` looping, not silently capped at the first page."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_REC_EVENTS_PAGE_SIZE", 2)
+    rows = [dict(_ROW, ticker=f"T{i}") for i in range(5)]
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(rows=rows))
+    out = db.load_rec_events()
+    assert out is not None
+    assert len(out) == 5
+    assert [r["ticker"] for r in out] == [f"T{i}" for i in range(5)]
+
+
+def test_load_rec_events_orders_by_full_unique_key_as_tie_breaker(monkeypatch):
+    """Regression for the Opus review finding (2026-09-23): rec_events has
+    no `id` column, so `fired_date` alone ties across every ticker that
+    fired the same rec_type the same day. `.range()` pagination re-executes
+    the query per page and cannot safely tie-break a non-unique ORDER BY
+    across those separate executions. Asserts the query orders by the
+    table's full unique key (rec_type, ticker, fired_date, source), not
+    just fired_date -- a prior version of this test could not have caught
+    the missing tie-breaker by construction (it only proved pagination
+    assembles correctly, not that ordering is deterministic)."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    fake = _FakeClient(rows=[dict(_ROW)])
+    monkeypatch.setattr(db, "_client", lambda: fake)
+
+    db.load_rec_events()
+
+    ordered_cols = [args[0] for args, _kw in fake.last_select_builder.order_calls]
+    assert ordered_cols == ["fired_date", "ticker", "rec_type", "source"]
 
 
 # ── save_rec_events ──────────────────────────────────────────────────────────

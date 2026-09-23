@@ -27,12 +27,14 @@ class _FakeExecResult:
 
 
 class _FakeQueryBuilder:
-    """Mimics the .select().gte().execute() chain
-    load_exit_signals()/load_exit_signals_or_none() build."""
+    """Mimics the .select().gte().order().range().execute() chain
+    load_exit_signals()/load_exit_signals_or_none() build (via their shared
+    _load_exit_signals_all_pages helper)."""
 
     def __init__(self, rows=None, raise_on_execute=False):
         self._rows = rows or []
         self._raise = raise_on_execute
+        self._range = None
 
     def select(self, *_a, **_kw):
         return self
@@ -40,9 +42,19 @@ class _FakeQueryBuilder:
     def gte(self, *_a, **_kw):
         return self
 
+    def order(self, *_a, **_kw):
+        return self
+
+    def range(self, start, end):
+        self._range = (start, end)
+        return self
+
     def execute(self):
         if self._raise:
             raise RuntimeError("simulated transient Supabase failure")
+        if self._range is not None:
+            start, end = self._range
+            return _FakeExecResult(self._rows[start:end + 1])
         return _FakeExecResult(self._rows)
 
 
@@ -117,3 +129,34 @@ def test_real_rows_both_functions_return_matching_data(monkeypatch):
     assert out_or_none is not None
     assert list(out_plain["ticker"]) == ["AAPL"]
     assert list(out_or_none["ticker"]) == ["AAPL"]
+
+
+# ── Pagination past PostgREST's default row cap ─────────────────────────────
+
+def test_load_exit_signals_paginates_past_page_size(monkeypatch):
+    """2026-09-22 data-foundation pass: PostgREST's own server-side default
+    row cap on an unpaginated `.select()` (already confirmed live on
+    model_predictions and recommendations) applies identically here. A
+    result set bigger than one page must still come back whole via
+    `.range()` looping, not silently capped at the first page."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_EXIT_SIGNALS_PAGE_SIZE", 2)
+    rows = [{"ticker": f"T{i}", "signal_date": "2026-08-01", "signal_type": "EXIT"} for i in range(5)]
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(rows=rows))
+
+    out = db.load_exit_signals()
+    assert len(out) == 5
+    assert list(out["ticker"]) == [f"T{i}" for i in range(5)]
+
+
+def test_load_exit_signals_or_none_paginates_past_page_size(monkeypatch):
+    """Same pagination fix, verified on the _or_none sibling too."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_EXIT_SIGNALS_PAGE_SIZE", 2)
+    rows = [{"ticker": f"T{i}", "signal_date": "2026-08-01", "signal_type": "EXIT"} for i in range(5)]
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(rows=rows))
+
+    out = db.load_exit_signals_or_none()
+    assert out is not None
+    assert len(out) == 5
+    assert list(out["ticker"]) == [f"T{i}" for i in range(5)]

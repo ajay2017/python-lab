@@ -1520,20 +1520,67 @@ def load_recent_snapshots(days: int = 10) -> pd.DataFrame:
         return empty
 
 
-def load_daily_snapshots(start_date=None, end_date=None) -> "pd.DataFrame":
-    """Load daily portfolio snapshots for a date range.
-    Returns DataFrame with columns: snapshot_date, ticker, shares, close_price."""
-    import pandas as pd
-    empty = pd.DataFrame(columns=["snapshot_date", "ticker", "shares", "close_price"])
-    if not has_db():
-        return empty
-    try:
+# PostgREST's own server-side default row cap on an unpaginated `.select()`
+# -- see _RECOMMENDATIONS_PAGE_SIZE's docstring for the full history. Both
+# bounds default to None here (a genuine full-table scan when called
+# unfiltered), and this table hasn't grown past the cap yet, but the fix is
+# identical and cheap enough to apply ahead of that, not after.
+_DAILY_SNAPSHOTS_PAGE_SIZE = 1000
+
+
+def _load_daily_snapshots_all_pages(start_date=None, end_date=None) -> list:
+    """Shared paginated query for load_daily_snapshots()/
+    load_daily_snapshots_or_none() -- builds the same
+    .select().gte().lte().order() chain both functions used before
+    pagination, then pages through every row via `.range()` (mirrors
+    _load_recommendations_all_pages) instead of a single unbounded
+    `.execute()`. Raises on failure -- callers keep their own distinct
+    except-branch contracts (empty DataFrame vs None).
+
+    Orders by (snapshot_date, ticker), not snapshot_date alone -- the PK is
+    (snapshot_date, ticker), so EVERY multi-ticker day ties on snapshot_date
+    alone. `.range()` pagination re-executes the query per page; without a
+    unique tie-breaker, Postgres does not guarantee the same tie order
+    across those separate executions, which can silently skip or duplicate
+    a row at a page boundary once this table exceeds one page (Opus review
+    finding, 2026-09-23 -- caught before this table's ~923 rows crossed the
+    1000-row page boundary, not after)."""
+    page_size = _DAILY_SNAPSHOTS_PAGE_SIZE
+    all_rows: list = []
+    start = 0
+    while True:
         q = _client().table("daily_snapshots").select("*")
         if start_date is not None:
             q = q.gte("snapshot_date", str(start_date)[:10])
         if end_date is not None:
             q = q.lte("snapshot_date", str(end_date)[:10])
-        rows = q.order("snapshot_date", desc=False).execute().data
+        page = (
+            q.order("snapshot_date", desc=False).order("ticker")
+            .range(start, start + page_size - 1).execute().data
+        )
+        if not page:
+            break
+        all_rows.extend(page)
+        if len(page) < page_size:
+            break
+        start += page_size
+    return all_rows
+
+
+def load_daily_snapshots(start_date=None, end_date=None) -> "pd.DataFrame":
+    """Load daily portfolio snapshots for a date range.
+    Returns DataFrame with columns: snapshot_date, ticker, shares, close_price.
+
+    Paginates in `_DAILY_SNAPSHOTS_PAGE_SIZE`-row pages (`.range()`) rather
+    than one unbounded `.execute()` -- see _RECOMMENDATIONS_PAGE_SIZE's
+    docstring.
+    """
+    import pandas as pd
+    empty = pd.DataFrame(columns=["snapshot_date", "ticker", "shares", "close_price"])
+    if not has_db():
+        return empty
+    try:
+        rows = _load_daily_snapshots_all_pages(start_date, end_date)
         return pd.DataFrame(rows) if rows else empty
     except Exception:
         return empty
@@ -1558,12 +1605,7 @@ def load_daily_snapshots_or_none(start_date=None, end_date=None) -> "pd.DataFram
     if not has_db():
         return None
     try:
-        q = _client().table("daily_snapshots").select("*")
-        if start_date is not None:
-            q = q.gte("snapshot_date", str(start_date)[:10])
-        if end_date is not None:
-            q = q.lte("snapshot_date", str(end_date)[:10])
-        rows = q.order("snapshot_date", desc=False).execute().data
+        rows = _load_daily_snapshots_all_pages(start_date, end_date)
         return pd.DataFrame(rows) if rows else empty
     except Exception:
         return None
@@ -2194,32 +2236,92 @@ def save_analyst_coverage(record: dict) -> bool:
         return False
 
 
+# PostgREST's own server-side default row cap on an unpaginated `.select()`
+# -- see _RECOMMENDATIONS_PAGE_SIZE's docstring for the full history. Used
+# ONLY by the `limit=None` ("give me everything") path below -- a real int
+# `limit` (including the default 100) keeps the original single-`.limit()`
+# call, never paginates.
+_ANALYST_COVERAGE_PAGE_SIZE = 1000
+
+
+def _load_analyst_coverage_all_pages(ticker: str | None, days: int | None) -> list:
+    """Shared paginated query for load_analyst_coverage()/
+    load_analyst_coverage_or_none() when `limit=None` -- pages through every
+    row via `.range()` (mirrors _load_recommendations_all_pages) instead of
+    a single `.limit(N).execute()` capped at a guessed magic number (5000,
+    then 10000 -- callers were always trying to say "give me everything").
+    Raises on failure -- callers keep their own distinct except-branch
+    contracts (empty DataFrame vs None).
+
+    Orders by (article_date desc, id desc), not article_date alone -- two
+    articles saved the same day tie on article_date, and `.range()`
+    pagination re-executes the query per page, so a tie with no unique
+    secondary key is not guaranteed to sort the same way across those
+    separate executions (Opus review finding, 2026-09-23 -- see
+    _DAILY_SNAPSHOTS_PAGE_SIZE's docstring for the general shape). This
+    table has an unused `id` PK sitting right there, so use it."""
+    from datetime import datetime, timedelta
+    import pytz
+    page_size = _ANALYST_COVERAGE_PAGE_SIZE
+    all_rows: list = []
+    start = 0
+    while True:
+        q = _client().table("analyst_coverage").select("*")
+        if ticker:
+            q = q.eq("ticker", ticker.strip().upper())
+        if days:
+            _et = pytz.timezone("America/New_York")
+            cutoff = (datetime.now(tz=_et) - timedelta(days=days)).date().isoformat()
+            q = q.gte("article_date", cutoff)
+        page = (
+            q.order("article_date", desc=True).order("id", desc=True)
+            .range(start, start + page_size - 1).execute().data
+        )
+        if not page:
+            break
+        all_rows.extend(page)
+        if len(page) < page_size:
+            break
+        start += page_size
+    return all_rows
+
+
 def load_analyst_coverage(
     ticker: str | None = None,
     days: int | None = None,
-    limit: int = 100,
+    limit: int | None = 100,
 ) -> "pd.DataFrame":
     """Load analyst coverage rows, newest first. Empty DataFrame on any failure or missing table.
 
     ticker  — filter to a single ticker (optional).
     days    — restrict to articles with article_date >= today_ET − days (optional).
-    limit   — max rows returned (default 100).
+    limit   — max rows returned (default 100). Pass `limit=None` for the
+              FULL table, paginated via `.range()` in
+              `_ANALYST_COVERAGE_PAGE_SIZE` chunks rather than a single
+              `.limit(N)` call -- several callers needed "give me
+              everything" and were guessing an ever-bigger magic number
+              (5000, then 10000) instead of a real unbounded mode. A real
+              int here (including this default of 100) behaves EXACTLY as
+              before: a single non-paginating `.limit(limit).execute()`.
     """
     import pandas as pd
     empty = pd.DataFrame(columns=_ANALYST_COVERAGE_COLS)
     if not has_db():
         return empty
     try:
-        q = _client().table("analyst_coverage").select("*")
-        if ticker:
-            q = q.eq("ticker", ticker.strip().upper())
-        if days:
-            from datetime import datetime, timedelta
-            import pytz
-            _et = pytz.timezone("America/New_York")
-            cutoff = (datetime.now(tz=_et) - timedelta(days=days)).date().isoformat()
-            q = q.gte("article_date", cutoff)
-        rows = q.order("article_date", desc=True).limit(limit).execute().data
+        if limit is None:
+            rows = _load_analyst_coverage_all_pages(ticker, days)
+        else:
+            q = _client().table("analyst_coverage").select("*")
+            if ticker:
+                q = q.eq("ticker", ticker.strip().upper())
+            if days:
+                from datetime import datetime, timedelta
+                import pytz
+                _et = pytz.timezone("America/New_York")
+                cutoff = (datetime.now(tz=_et) - timedelta(days=days)).date().isoformat()
+                q = q.gte("article_date", cutoff)
+            rows = q.order("article_date", desc=True).limit(limit).execute().data
         if not rows:
             return empty
         df = pd.DataFrame(rows)
@@ -2234,7 +2336,7 @@ def load_analyst_coverage(
 def load_analyst_coverage_or_none(
     ticker: str | None = None,
     days: int | None = None,
-    limit: int = 100,
+    limit: int | None = 100,
 ) -> "pd.DataFrame | None":
     """
     Same query as load_analyst_coverage(), but distinguishes a genuine
@@ -2247,22 +2349,29 @@ def load_analyst_coverage_or_none(
     all of which already degrade gracefully to "no coverage yet") but unsafe
     for a consumer where "load failed" must never be treated as "zero
     coverage rows exist" -- the offline-sentinel-collapse bug class.
+
+    `limit` follows load_analyst_coverage()'s same contract: a real int
+    (including the default 100) is a single non-paginating `.limit()` call,
+    byte-identical to before; `limit=None` pages through the full table.
     """
     import pandas as pd
     empty = pd.DataFrame(columns=_ANALYST_COVERAGE_COLS)
     if not has_db():
         return None
     try:
-        q = _client().table("analyst_coverage").select("*")
-        if ticker:
-            q = q.eq("ticker", ticker.strip().upper())
-        if days:
-            from datetime import datetime, timedelta
-            import pytz
-            _et = pytz.timezone("America/New_York")
-            cutoff = (datetime.now(tz=_et) - timedelta(days=days)).date().isoformat()
-            q = q.gte("article_date", cutoff)
-        rows = q.order("article_date", desc=True).limit(limit).execute().data
+        if limit is None:
+            rows = _load_analyst_coverage_all_pages(ticker, days)
+        else:
+            q = _client().table("analyst_coverage").select("*")
+            if ticker:
+                q = q.eq("ticker", ticker.strip().upper())
+            if days:
+                from datetime import datetime, timedelta
+                import pytz
+                _et = pytz.timezone("America/New_York")
+                cutoff = (datetime.now(tz=_et) - timedelta(days=days)).date().isoformat()
+                q = q.gte("article_date", cutoff)
+            rows = q.order("article_date", desc=True).limit(limit).execute().data
         if not rows:
             return empty
         df = pd.DataFrame(rows)
@@ -2998,6 +3107,14 @@ def save_gate_suppressions(rows: list[dict]) -> dict:
         return {"attempted": len(payload), "saved": 0, "error": str(exc)[:200]}
 
 
+# PostgREST's own server-side default row cap on an unpaginated `.select()`
+# -- see _RECOMMENDATIONS_PAGE_SIZE's docstring for the full history
+# (confirmed live truncation on model_predictions 2026-09-04, on
+# recommendations 2026-09-22). This table hasn't grown past the cap yet, but
+# the fix is identical and cheap enough to apply ahead of that, not after.
+_GATE_SUPPRESSIONS_PAGE_SIZE = 1000
+
+
 def load_gate_suppressions() -> list[dict] | None:
     """Read every gate_suppressions row (no date filter — the readout module
     filters/matures rows itself). Returns None on ANY failure (no
@@ -3007,12 +3124,29 @@ def load_gate_suppressions() -> list[dict] | None:
     "we couldn't check the ledger", so this loader has no lenient sibling —
     it IS the `_or_none`-shaped one from day one (see
     load_exit_signals_or_none for the same contract over a different table).
+
+    Paginates in `_GATE_SUPPRESSIONS_PAGE_SIZE`-row pages (`.range()`,
+    ordered by `id` for a stable, non-overlapping cursor) rather than one
+    unbounded `.select("*")` -- mirrors _load_recommendations_all_pages.
     """
     if not has_db():
         return None
     try:
-        rows = _client().table("gate_suppressions").select("*").execute().data
-        return rows if rows is not None else []
+        page_size = _GATE_SUPPRESSIONS_PAGE_SIZE
+        all_rows: list = []
+        start = 0
+        while True:
+            page = (
+                _client().table("gate_suppressions").select("*")
+                .order("id").range(start, start + page_size - 1).execute().data
+            )
+            if not page:
+                break
+            all_rows.extend(page)
+            if len(page) < page_size:
+                break
+            start += page_size
+        return all_rows
     except Exception:
         return None
 
@@ -3197,27 +3331,55 @@ def save_exit_signals_batch(signals: list[dict]) -> bool:
         return False
 
 
+# PostgREST's own server-side default row cap on an unpaginated `.select()`
+# -- see _RECOMMENDATIONS_PAGE_SIZE's docstring for the full history. This
+# table hasn't grown past the cap yet, but the fix is identical and cheap
+# enough to apply ahead of that, not after.
+_EXIT_SIGNALS_PAGE_SIZE = 1000
+
+
+def _load_exit_signals_all_pages(days_back: int) -> list:
+    """Shared paginated query for load_exit_signals()/
+    load_exit_signals_or_none() -- builds the same .select().gte() chain
+    both functions used before pagination, then pages through every row via
+    `.range()` (mirrors _load_recommendations_all_pages) instead of a single
+    unbounded `.execute()`. Raises on failure -- callers keep their own
+    distinct except-branch contracts (empty DataFrame vs None)."""
+    from datetime import timedelta
+    from stock_analyzer.market_time import today_et
+    cutoff = (today_et() - timedelta(days=days_back)).isoformat()
+    page_size = _EXIT_SIGNALS_PAGE_SIZE
+    all_rows: list = []
+    start = 0
+    while True:
+        page = (
+            _client().table("exit_signals").select("*")
+            .gte("signal_date", cutoff)
+            .order("id").range(start, start + page_size - 1).execute().data
+        )
+        if not page:
+            break
+        all_rows.extend(page)
+        if len(page) < page_size:
+            break
+        start += page_size
+    return all_rows
+
+
 def load_exit_signals(days_back: int = 365) -> pd.DataFrame:
     """Read persisted exit signals going back days_back calendar days.
 
     Returns a DataFrame (column names match the exit_signals table, snake_case)
     on success, or an empty DataFrame on any exception.
     Uses the same date-filter pattern as load_recommendations().
+
+    Paginates in `_EXIT_SIGNALS_PAGE_SIZE`-row pages (`.range()`) rather than
+    one unbounded `.execute()` -- see _RECOMMENDATIONS_PAGE_SIZE's docstring.
     """
     if not has_db():
         return pd.DataFrame()
     try:
-        from datetime import timedelta
-        from stock_analyzer.market_time import today_et
-        cutoff = (today_et() - timedelta(days=days_back)).isoformat()
-        rows = (
-            _client()
-            .table("exit_signals")
-            .select("*")
-            .gte("signal_date", cutoff)
-            .execute()
-            .data
-        )
+        rows = _load_exit_signals_all_pages(days_back)
         return pd.DataFrame(rows) if rows else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
@@ -3240,17 +3402,7 @@ def load_exit_signals_or_none(days_back: int = 365) -> pd.DataFrame | None:
     if not has_db():
         return None
     try:
-        from datetime import timedelta
-        from stock_analyzer.market_time import today_et
-        cutoff = (today_et() - timedelta(days=days_back)).isoformat()
-        rows = (
-            _client()
-            .table("exit_signals")
-            .select("*")
-            .gte("signal_date", cutoff)
-            .execute()
-            .data
-        )
+        rows = _load_exit_signals_all_pages(days_back)
         return pd.DataFrame(rows) if rows else pd.DataFrame()
     except Exception:
         return None
@@ -3290,25 +3442,43 @@ def save_analyst_target_snapshots_batch(snapshots: list[dict]) -> bool:
         return False
 
 
+# PostgREST's own server-side default row cap on an unpaginated `.select()`
+# -- see _RECOMMENDATIONS_PAGE_SIZE's docstring for the full history. This
+# table hasn't grown past the cap yet, but the fix is identical and cheap
+# enough to apply ahead of that, not after.
+_ANALYST_TARGET_SNAPSHOTS_PAGE_SIZE = 1000
+
+
 def load_analyst_target_snapshots(days_back: int = 365) -> pd.DataFrame:
     """Read persisted analyst target snapshots going back days_back calendar days.
 
     Returns a DataFrame (column names match the analyst_target_snapshots
     table, snake_case) on success, or an empty DataFrame on any exception.
+
+    Paginates in `_ANALYST_TARGET_SNAPSHOTS_PAGE_SIZE`-row pages (`.range()`,
+    ordered by `id` for a stable cursor) rather than one unbounded
+    `.execute()` -- see _RECOMMENDATIONS_PAGE_SIZE's docstring.
     """
     try:
         from datetime import timedelta
         from stock_analyzer.market_time import today_et
         cutoff = (today_et() - timedelta(days=days_back)).isoformat()
-        rows = (
-            _client()
-            .table("analyst_target_snapshots")
-            .select("*")
-            .gte("snapshot_date", cutoff)
-            .execute()
-            .data
-        )
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
+        page_size = _ANALYST_TARGET_SNAPSHOTS_PAGE_SIZE
+        all_rows: list = []
+        start = 0
+        while True:
+            page = (
+                _client().table("analyst_target_snapshots").select("*")
+                .gte("snapshot_date", cutoff)
+                .order("id").range(start, start + page_size - 1).execute().data
+            )
+            if not page:
+                break
+            all_rows.extend(page)
+            if len(page) < page_size:
+                break
+            start += page_size
+        return pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
@@ -3438,6 +3608,13 @@ def save_judgment_opinions_batch(opinions: list[dict]) -> None:
         warnings.warn(f"save_judgment_opinions_batch: {e}")
 
 
+# PostgREST's own server-side default row cap on an unpaginated `.select()`
+# -- see _RECOMMENDATIONS_PAGE_SIZE's docstring for the full history. This
+# table hasn't grown past the cap yet, but the fix is identical and cheap
+# enough to apply ahead of that, not after.
+_JUDGMENT_OPINIONS_PAGE_SIZE = 1000
+
+
 def load_judgment_opinions(days_back: int = 365) -> pd.DataFrame:
     """Read persisted judgment-layer opinions going back days_back calendar days.
 
@@ -3445,20 +3622,31 @@ def load_judgment_opinions(days_back: int = 365) -> pd.DataFrame:
     snake_case) on success, or an empty DataFrame on any exception. Nothing
     consumes this yet (Phase 0) — it exists so Phase 2's grading harness has
     history to read once it's built.
+
+    Paginates in `_JUDGMENT_OPINIONS_PAGE_SIZE`-row pages (`.range()`,
+    ordered by `id` for a stable cursor) rather than one unbounded
+    `.execute()` -- see _RECOMMENDATIONS_PAGE_SIZE's docstring.
     """
     try:
         from datetime import timedelta
         from stock_analyzer.market_time import today_et
         cutoff = (today_et() - timedelta(days=days_back)).isoformat()
-        rows = (
-            _client()
-            .table("judgment_opinions")
-            .select("*")
-            .gte("signal_date", cutoff)
-            .execute()
-            .data
-        )
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
+        page_size = _JUDGMENT_OPINIONS_PAGE_SIZE
+        all_rows: list = []
+        start = 0
+        while True:
+            page = (
+                _client().table("judgment_opinions").select("*")
+                .gte("signal_date", cutoff)
+                .order("id").range(start, start + page_size - 1).execute().data
+            )
+            if not page:
+                break
+            all_rows.extend(page)
+            if len(page) < page_size:
+                break
+            start += page_size
+        return pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
@@ -3510,6 +3698,13 @@ def save_judgment_grades_batch(grades: list[dict]) -> None:
         warnings.warn(f"save_judgment_grades_batch: {e}")
 
 
+# PostgREST's own server-side default row cap on an unpaginated `.select()`
+# -- see _RECOMMENDATIONS_PAGE_SIZE's docstring for the full history. This
+# table hasn't grown past the cap yet, but the fix is identical and cheap
+# enough to apply ahead of that, not after.
+_JUDGMENT_GRADES_PAGE_SIZE = 1000
+
+
 def load_judgment_grades(days_back: int = 365) -> pd.DataFrame:
     """Read persisted judgment-layer grades going back days_back calendar days.
 
@@ -3517,20 +3712,31 @@ def load_judgment_grades(days_back: int = 365) -> pd.DataFrame:
     snake_case) on success, or an empty DataFrame on any exception. Consumed by
     the Judge page's track-record display and (eventually) Phase 3's
     evidence-based weighting.
+
+    Paginates in `_JUDGMENT_GRADES_PAGE_SIZE`-row pages (`.range()`, ordered
+    by `id` for a stable cursor) rather than one unbounded `.execute()` --
+    see _RECOMMENDATIONS_PAGE_SIZE's docstring.
     """
     try:
         from datetime import timedelta
         from stock_analyzer.market_time import today_et
         cutoff = (today_et() - timedelta(days=days_back)).isoformat()
-        rows = (
-            _client()
-            .table("judgment_grades")
-            .select("*")
-            .gte("signal_date", cutoff)
-            .execute()
-            .data
-        )
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
+        page_size = _JUDGMENT_GRADES_PAGE_SIZE
+        all_rows: list = []
+        start = 0
+        while True:
+            page = (
+                _client().table("judgment_grades").select("*")
+                .gte("signal_date", cutoff)
+                .order("id").range(start, start + page_size - 1).execute().data
+            )
+            if not page:
+                break
+            all_rows.extend(page)
+            if len(page) < page_size:
+                break
+            start += page_size
+        return pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
@@ -4680,17 +4886,48 @@ def save_rec_events(rows: "list[dict]") -> dict:
         return {"attempted": len(payload), "saved": 0, "error": str(exc)[:200]}
 
 
+# PostgREST's own server-side default row cap on an unpaginated `.select()`
+# -- see _RECOMMENDATIONS_PAGE_SIZE's docstring for the full history. This
+# table hasn't grown past the cap yet, but the fix is identical and cheap
+# enough to apply ahead of that, not after.
+_REC_EVENTS_PAGE_SIZE = 1000
+
+
 def load_rec_events() -> "list[dict] | None":
     """Read every rec_events row (no date filter — the readout module
     collapses/matures rows itself). Returns None on ANY failure (no
     credentials, missing table, or a raised query exception) — an offline
     sentinel, never collapsed into "genuinely no rec_events". Mirrors
-    load_gate_suppressions's contract exactly."""
+    load_gate_suppressions's contract exactly.
+
+    Paginates in `_REC_EVENTS_PAGE_SIZE`-row pages (`.range()`, ordered by
+    the table's own unique key (rec_type, ticker, fired_date, source) --
+    rec_events has no `id` column, and `fired_date` ALONE ties across every
+    ticker that fired the same rec_type the same day, which a `.range()`
+    re-execute-per-page loop cannot safely tie-break without a unique
+    ORDER BY (Opus review finding, 2026-09-23 -- see
+    _DAILY_SNAPSHOTS_PAGE_SIZE's docstring for the general shape of this
+    bug). Ordering the full unique key makes cross-page pagination
+    deterministic, rather than one unbounded `.select("*")`."""
     if not has_db():
         return None
     try:
-        rows = _client().table("rec_events").select("*").execute().data
-        return rows if rows is not None else []
+        page_size = _REC_EVENTS_PAGE_SIZE
+        all_rows: list = []
+        start = 0
+        while True:
+            page = (
+                _client().table("rec_events").select("*")
+                .order("fired_date").order("ticker").order("rec_type").order("source")
+                .range(start, start + page_size - 1).execute().data
+            )
+            if not page:
+                break
+            all_rows.extend(page)
+            if len(page) < page_size:
+                break
+            start += page_size
+        return all_rows
     except Exception:
         return None
 

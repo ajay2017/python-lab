@@ -62,7 +62,7 @@ def run_backfill(log=print) -> dict:
         log("DB unavailable — skipping analyst anchor-price backfill (not a no-op success).")
         return {"updated": 0, "skipped_count": 0, "pending": 0, "offline": True}
 
-    df = db.load_analyst_coverage(limit=10000)
+    df = db.load_analyst_coverage(limit=None)  # give me everything, not a guessed cap
     if df is None or df.empty:
         log("No analyst_coverage rows found — nothing to backfill.")
         return {"updated": 0, "skipped_count": 0, "pending": 0, "offline": False}

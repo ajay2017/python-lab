@@ -26,12 +26,15 @@ class _FakeExecResult:
 
 
 class _FakeQueryBuilder:
-    """Mimics the .select().gte().lte().order().execute() chain
-    load_daily_snapshots()/load_daily_snapshots_or_none() build."""
+    """Mimics the .select().gte().lte().order().range().execute() chain
+    load_daily_snapshots()/load_daily_snapshots_or_none() build (via their
+    shared _load_daily_snapshots_all_pages helper)."""
 
     def __init__(self, rows=None, raise_on_execute=False):
         self._rows = rows or []
         self._raise = raise_on_execute
+        self._range = None
+        self.order_calls: list = []
 
     def select(self, *_a, **_kw):
         return self
@@ -43,11 +46,19 @@ class _FakeQueryBuilder:
         return self
 
     def order(self, *_a, **_kw):
+        self.order_calls.append((_a, _kw))
+        return self
+
+    def range(self, start, end):
+        self._range = (start, end)
         return self
 
     def execute(self):
         if self._raise:
             raise RuntimeError("simulated transient Supabase failure")
+        if self._range is not None:
+            start, end = self._range
+            return _FakeExecResult(self._rows[start:end + 1])
         return _FakeExecResult(self._rows)
 
 
@@ -55,9 +66,12 @@ class _FakeClient:
     def __init__(self, rows=None, raise_on_execute=False):
         self._rows = rows
         self._raise = raise_on_execute
+        self.builders: list = []
 
     def table(self, _name):
-        return _FakeQueryBuilder(self._rows, self._raise)
+        b = _FakeQueryBuilder(self._rows, self._raise)
+        self.builders.append(b)
+        return b
 
 
 # ── No credentials ──────────────────────────────────────────────────────────
@@ -122,3 +136,63 @@ def test_real_rows_both_functions_return_matching_data(monkeypatch):
     assert out_or_none is not None
     assert list(out_plain["ticker"]) == ["AAPL"]
     assert list(out_or_none["ticker"]) == ["AAPL"]
+
+
+# ── Pagination past PostgREST's default row cap ─────────────────────────────
+
+def test_load_daily_snapshots_paginates_past_page_size(monkeypatch):
+    """2026-09-22 data-foundation pass: PostgREST's own server-side default
+    row cap on an unpaginated `.select()` (already confirmed live on
+    model_predictions and recommendations) applies identically here. A
+    result set bigger than one page must still come back whole via
+    `.range()` looping, not silently capped at the first page."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_DAILY_SNAPSHOTS_PAGE_SIZE", 2)
+    rows = [
+        {"snapshot_date": "2026-08-01", "ticker": f"T{i}", "shares": 10, "close_price": 200.0}
+        for i in range(5)
+    ]
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(rows=rows))
+
+    out = db.load_daily_snapshots()
+    assert len(out) == 5
+    assert list(out["ticker"]) == [f"T{i}" for i in range(5)]
+
+
+def test_load_daily_snapshots_or_none_paginates_past_page_size(monkeypatch):
+    """Same pagination fix, verified on the _or_none sibling too."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_DAILY_SNAPSHOTS_PAGE_SIZE", 2)
+    rows = [
+        {"snapshot_date": "2026-08-01", "ticker": f"T{i}", "shares": 10, "close_price": 200.0}
+        for i in range(5)
+    ]
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(rows=rows))
+
+    out = db.load_daily_snapshots_or_none()
+    assert out is not None
+    assert len(out) == 5
+    assert list(out["ticker"]) == [f"T{i}" for i in range(5)]
+
+
+def test_load_daily_snapshots_orders_by_ticker_as_tie_breaker(monkeypatch):
+    """Regression for the Opus review finding (2026-09-23): snapshot_date
+    alone ties on every multi-ticker day (the table's own PK is
+    (snapshot_date, ticker)), which `.range()` pagination cannot safely
+    tie-break across separate page executions without a unique secondary
+    ORDER BY. Asserts the actual query chain orders by BOTH columns, not
+    just that pagination assembles correctly (a prior version of this test
+    file could not have caught the missing tie-breaker by construction)."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    fake = _FakeClient(rows=[{"snapshot_date": "2026-08-01", "ticker": "AAA",
+                               "shares": 1, "close_price": 1.0}])
+    monkeypatch.setattr(db, "_client", lambda: fake)
+
+    db.load_daily_snapshots()
+
+    assert len(fake.builders) == 1
+    order_calls = fake.builders[0].order_calls
+    assert [args[0] for args, _kw in order_calls] == ["snapshot_date", "ticker"]
+    # Direction matters too: snapshot_date must stay ascending (oldest-first
+    # history), not just present -- a flipped desc would pass a column-only check.
+    assert order_calls[0][1].get("desc") is False
