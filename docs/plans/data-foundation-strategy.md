@@ -567,15 +567,22 @@ under-bounded loaders named in A7. Pure mechanical extension of an already-revie
 **Review gate:** `db.py` is explicitly named in CLAUDE.md's `_GATE_FILES` DB-write list — the
 commit hook will require an Opus reviewer citation regardless; budget for it.
 
-**Phase 3 — the small, bounded fixes. A4 CLOSED — shipped inside Phase 1, not here.** Chunk 2 of
-the Phase 1 build (commit `6c60656`) already added `_dedup_acted_credit()` to
-`match_recs_to_trades()`, closing A4 — the planner folded it into Phase 1's scope because both
-touch the same function. **Remaining in this phase:** A5 (`debrief_advisor.py`'s date filter),
-A8 (income-event subtype unification's remaining gap), C2 (duplicate-row cleanup — CLOSED, both
-tables confirmed clean via Phase 0's live query, nothing left to run), C3 (sector-taxonomy
-sweep). Each is independent, small, and low-risk — bundle or sequence at the owner's discretion.
-A5 touches a decision-adjacent history table; a voluntary `reviewer` pass is proportionate, same
-logic as Phase 1.
+**Phase 3 — the small, bounded fixes. A4 and A5 both CLOSED.** A4 shipped inside Phase 1 (Chunk
+2, `_dedup_acted_credit()` in `match_recs_to_trades()`). **A5 SHIPPED 2026-09-23 as commit
+`8dc11fa`** — `debrief_advisor.py`'s raw string-slice date filter replaced with the hardened
+`pd.to_datetime(..., utc=True, format="ISO8601")` idiom, via a new `_traded_at_et_dates()`
+helper. Turned out bigger than scoped: a full-file grep surfaced **4 real instances of the bug,
+not the 2** originally cited (the recs-surfaced acted-tickers filter and the protective-signals
+sold flag were the same bug, just not in the doc's original line citations). A 5th lookalike
+site (the recs week-filter's `rec_date`/`surfaced_at` fallback) was deliberately left untouched
+and documented in-code — `rec_date` is a plain date column in the common path, and applying the
+same idiom there would introduce a NEW off-by-one-day bug to fix a rarer, production-unreachable
+fallback. Opus reviewer independently verified this reasoning (hand-computed the off-by-one) and
+confirmed all 5 new regression tests fail against the pre-fix code for the predicted reason, not
+coincidentally: SHIP, 0 blocking. Full suite 6145 passed. **Remaining in this phase:** A8
+(income-event subtype unification's remaining gap — needs the owner's judgment on whether two
+charge types are really equivalent, not a mechanical fix), C2 (CLOSED, both tables confirmed
+clean via Phase 0's live query), C3 (sector-taxonomy sweep — needs a live query first).
 
 **Phase 4 — `COMPOSITE_WEIGHTS` durable versioning (the schema half of C1 only), a genuine
 policy decision.** The cheap segment-by-date discipline already moved to Phase 1 as a
