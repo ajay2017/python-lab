@@ -46,6 +46,19 @@ each define their own raw-REST `load_exit_signals()`, bypassing `db.py` entirely
 unpaginated exposure this whole Phase 2 effort exists to close. Owner-run diagnostics, not named
 in the original task — worth having them adopt `db.load_exit_signals` eventually, not urgent.
 
+**A second small item, found and CLOSED the same day (commit `a614173`):** Phase 2's own commit
+message deliberately left 3 `analyst_coverage` call sites on the bare `limit=100` default,
+untested for whether their own `days=`/`ticker=` scoping ever exceeds 100 rows in practice. A
+live query answered it same-day: **204 real articles fall within the 30-day
+`ANALYST_COVERAGE_FRESH_DAYS` window** — two `app.py` call sites using that window (the Ideas
+Inbox header count, and the per-ticker "newest analyst read" annotation dict) were **already**
+silently truncating in production, not a future risk. Fixed by adding `limit=None` to both —
+pure reuse of the unbounded mode Phase 2 already built and reviewed, no new read logic. The
+third bare-default site (`bundle_loader.py`, per-ticker + 90-day window) was checked and
+confirmed safe (worst case 26 articles for one ticker in 90 days) — left untouched, correctly.
+Mechanical, non-gate, awareness-only fix — voluntary reviewer skipped per the review-economy
+rule (full suite 6140 passed, both gates green).
+
 This is a planning/design deliverable that has since had two of its phases executed under
 review, per explicit sign-off at each step — not a unilateral build. Every finding below is
 tagged with how it was verified — code-cited (file:line, checked directly this session, not
