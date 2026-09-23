@@ -3474,11 +3474,18 @@ def _cached_sentiment(ticker_csv: str) -> dict[str, dict]:
 def _cached_analyst_coverage_recent() -> dict:
     """Newest analyst_coverage row per ticker within ANALYST_COVERAGE_FRESH_DAYS.
     Returns {TICKER: {consensus_rating, avg_pt, n_firms, article_date}}; empty dict
-    when none/offline. Awareness-only — used to ANNOTATE cards, never to gate/rank."""
+    when none/offline. Awareness-only — used to ANNOTATE cards, never to gate/rank.
+
+    limit=None (2026-09-23): the bare 100-row default silently capped this at
+    the newest 100 of a 30-day window that can genuinely exceed 100 (204
+    confirmed live) -- a ticker whose only recent article fell past the cut
+    went silently missing from this dict entirely, not stale, just absent.
+    Uses the unbounded pagination mode the 2026-09-22 data-foundation pass
+    already built and reviewed for this same function."""
     from stock_analyzer import db as _acr_db
     from stock_analyzer.constants import ANALYST_COVERAGE_FRESH_DAYS
     import json as _acr_json
-    df = _acr_db.load_analyst_coverage(days=ANALYST_COVERAGE_FRESH_DAYS)
+    df = _acr_db.load_analyst_coverage(days=ANALYST_COVERAGE_FRESH_DAYS, limit=None)
     out: dict = {}
     if df is None or df.empty:
         return out
@@ -37846,7 +37853,14 @@ elif page == "🧠 AI Insights":
 
     from stock_analyzer import analyst_intel as _ai_intel
     from stock_analyzer.constants import ANALYST_COVERAGE_FRESH_DAYS as _AC_FRESH_DAYS
-    _ac_df = _ai_db.load_analyst_coverage(days=_AC_FRESH_DAYS)
+    # limit=None (2026-09-23): the bare default limit=100 silently capped
+    # this at "100 within 30d" -- confirmed live at 204 real rows in the
+    # window, so this header was ALREADY wrong on screen, not a future risk.
+    # Same fix, same reasoning as _ac_df_all below, just missed in the
+    # 2026-09-22 pass because that pass only migrated call sites already
+    # using a magic-number workaround -- this one used the bare default and
+    # was never flagged as exposed until the live count confirmed it.
+    _ac_df = _ai_db.load_analyst_coverage(days=_AC_FRESH_DAYS, limit=None)
     # limit=None ("give me everything") matches the Scorecard's own "read
     # the full library" call below (_sc_df = _ai_db.load_analyst_coverage
     # (limit=None)) — the bare default limit=100 silently capped this header
