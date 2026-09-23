@@ -37,9 +37,8 @@ trip, vs. an honest large-but-incomplete read). Fixed by adding each table's own
 secondary sort; the other 5 functions already ordered by a genuine unique `id` column and needed
 no change. Second Opus pass: SHIP, 0 blocking. Full suite 6140 passed both gates green.
 
-**Genuinely remaining: Phase 3 is now FULLY CLOSED (A4/A5/A8/C2/C3 all shipped or resolved).**
-Phase 4 (`COMPOSITE_WEIGHTS` durable versioning — sized but not designed) is the only build-shaped
-item left; Phase 5 remains correctly deferred, since it has zero data to act on. **One small new item found while building Phase
+**Phases 0-4 are now ALL SHIPPED, RESOLVED, OR CONFIRMED.** Only Phase 5 remains, correctly
+deferred since it has zero data to act on. **One small new item found while building Phase
 2, flagged but deliberately not fixed (out of scope for that change):** two standalone
 diagnostic scripts (`scripts/exit_early_cost_analysis.py:379`, `scripts/holding_period_analysis.py:164`)
 each define their own raw-REST `load_exit_signals()`, bypassing `db.py` entirely, with the same
@@ -629,14 +628,31 @@ dedup); closed with 4 invariant-locking tests, no source change, no review neede
 for the full trace). **Remaining in this phase:** C2 (CLOSED, both tables confirmed clean via
 Phase 0's live query), C3 (sector-taxonomy sweep — needs a live query first).
 
-**Phase 4 — `COMPOSITE_WEIGHTS` durable versioning (the schema half of C1 only), a genuine
-policy decision.** The cheap segment-by-date discipline already moved to Phase 1 as a
-prerequisite. What's left for Phase 4 is only the durable question: whether to add a
-`weights_version` column, backfilled by date, so future readers get the boundary for free
-instead of re-deriving it each time. Real `constants.py`/`db.py` implications — **squarely a
-`planner`-then-`reviewer` item per Hard Rule #4**, and its priority should be set by Phase 0's
-missing query (see §9): if `recommendations`/`exit_signals` turn out to hold few or no
-pre-2026-07-09 rows, this phase's urgency drops to near zero.
+**Phase 4 — [SHIPPED 2026-09-23, commit `6448265`] `COMPOSITE_WEIGHTS` durable versioning.**
+A `planner` (Opus) design pass re-verified the single-boundary premise independently (walked
+history back to the first-ever scoring commit, 2026-05-05 — confirmed exactly two regimes ever
+existed, no hidden third) and ran a blast-radius census: only `recommendations` (27%
+pre-boundary) is actually ambiguous — `exit_signals`/`gate_suppressions`/`analyst_coverage`/
+`score_history` all began capturing `composite_score` after the 2026-07-09 boundary and are
+already 100% single-regime. Owner decided both open questions: proceed with the schema change
+(the backfill is uniquely lossless — the boundary date is exact and deterministic, unlike
+almost every other historical gap this initiative found), scoped to `recommendations` only (not
+`exit_signals`, despite it storing the same field — zero current ambiguity there, touching it
+now would be premature future-proofing).
+
+Shipped: `COMPOSITE_WEIGHTS_VERSION = 2` constant next to the dict it versions;
+`recommendations.weights_version` stamped unconditionally at the single shared write boundary
+inside `save_recommendations` (never read from a caller's dict, so none of the 4 real call
+sites needed a change and a stale caller value can never override the current constant); the
+usual inert-until-DDL compat pattern; owner-run DDL + backfill SQL documented in both `db.py`'s
+own docstring and `docs/architecture.md`. **The real recurrence-prevention is a new, permanent
+Definition-of-Done item (#8)** — a stored column doesn't stop an analyst from forgetting to
+check it, any more than forgetting to check `rec_date` did; the DoD rule is what actually closes
+the gap for the NEXT formula change. Opus reviewer SHIP, 0 blocking, independently traced the
+write-boundary invariant in the actual code (not the tests) and the read path's pre-DDL safety;
+agreed with the implementer's own flagged scope call (no shared `regime_for_date()` helper yet —
+correctly deferred until a real reader-side consumer exists, not built speculatively ahead of
+one). Full suite 6156 passed.
 
 **Phase 5 — the "effective N" discipline (D3/control #4), scoped to The Judge's
 `_PORTFOLIO`-keyed dimensions only** (position_health, concentration, structural_risk — A3's
