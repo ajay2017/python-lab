@@ -262,6 +262,29 @@ pillar-score and sizing columns above.
 
     ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS already_held boolean;
 
+Composite-weights version stamp (added 2026-09-23 — Phase 4 of the
+data-foundation strategy, docs/plans/data-foundation-strategy.md). COMPOSITE_WEIGHTS
+has changed its actual weight VALUES exactly once in this project's history
+(commit 6dc1197, 2026-07-09, splitting the 3-pillar formula into the current
+4-pillar one), and no row persisted before this column existed says which
+regime produced its composite_score. weights_version stamps
+constants.COMPOSITE_WEIGHTS_VERSION at the shared write boundary in
+save_recommendations — unconditionally, for every row, regardless of what the
+caller's own record dict supplies — so a future weight change can never be
+silently compared against a historical score produced under the old weights.
+NULL on a row means "not-yet-backfilled" (a state that should only exist
+between this deploy and the owner running the backfill UPDATE below), NOT
+"unknown regime" — mirroring rec_sizing_version's own NULL semantics above: a
+reader hitting NULL should fall back to `rec_date < '2026-07-09'` as the
+regime signal. Optional/inert until applied, exactly like the pillar-score and
+sizing columns above. Forward-only capture; the historical backfill is a
+separate one-time pair of UPDATEs the owner runs by hand once the column
+exists:
+
+    ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS weights_version integer;
+    UPDATE public.recommendations SET weights_version = 1 WHERE rec_date <  '2026-07-09';
+    UPDATE public.recommendations SET weights_version = 2 WHERE rec_date >= '2026-07-09';
+
 Manual stops (added 2026-05-29 — user-set stop overrides recorded when
 the Brief's "raise stop" recommendation is actioned. Without this the
 recommendation re-fires every render because the system has no record
@@ -2712,7 +2735,7 @@ def recalculate_from_trades(trades_df: pd.DataFrame) -> dict:
 
 _REC_COLS = ["id", "ticker", "rec_date", "rec_type", "surfaced_at",
              "price_at_surface", "composite_score", "momentum_score",
-             "sector", "conviction", "verdict", "thesis"]
+             "sector", "conviction", "verdict", "thesis", "weights_version"]
 
 
 def save_scanner_cache(results_df, scan_date, source: str = "cron") -> bool:
@@ -2794,6 +2817,7 @@ def save_recommendations(records: list[dict]) -> dict:
     The DB defaults `surfaced_at` to now() — don't set it client-side so the
     first-seen timestamp is server-authoritative.
     """
+    from stock_analyzer.constants import COMPOSITE_WEIGHTS_VERSION
     if is_readonly(): return {"attempted": 0, "saved": 0, "error": "read-only"}  # read-only viewer: no-op
     if not records or not has_db():
         return {"attempted": 0, "saved": 0, "error": None}
@@ -2864,29 +2888,41 @@ def save_recommendations(records: list[dict]) -> dict:
             # None-coalesced to False, so "not recorded" stays distinguishable
             # from "recorded, not held" once the column exists.
             "already_held":        _bool_or_none(r.get("already_held")),
+            # Composite-weights version stamp (Phase 4 data-foundation
+            # strategy, 2026-09-23). Stamped from constants.COMPOSITE_WEIGHTS_VERSION
+            # directly — NEVER read from `r` — so this is a shared write-boundary
+            # guarantee that holds for every caller uniformly, with zero
+            # build-site changes required. See db.py's header docstring for
+            # the NULL-means-"not-yet-backfilled" semantics.
+            "weights_version":     COMPOSITE_WEIGHTS_VERSION,
         })
     if not payload:
         return {"attempted": 0, "saved": 0, "error": None}
 
-    # Columns that require an ALTER TABLE DDL before they exist. Two GENERATIONS,
-    # stripped in order — s_score/avg_sent (F-179) already exist in production;
-    # only the 2026-08-01 pillar-score cols are actually pending its DDL. A
-    # column-missing error must strip ONLY the columns actually still missing —
-    # stripping s_score/avg_sent too on a t_score-missing error would silently
-    # stop persisting sentiment (already-working, unrelated data) for the
-    # entire window until the pillar-score DDL is applied, with no error
-    # surfaced (saved=N, error=None) to reveal the loss.
+    # Columns that require an ALTER TABLE DDL before they exist. FIVE GENERATIONS
+    # (F-179 sentiment, the 2026-08-01 pillar-score cols, F-249 sizing,
+    # already_held, and 2026-09-23's weights_version), stripped independently —
+    # most of these already exist in production; only the newest pending its own
+    # DDL is actually missing at any given time. A column-missing error must
+    # strip ONLY the columns actually still missing — stripping an unrelated,
+    # already-working generation too on one column's missing error would
+    # silently stop persisting that unrelated data for the entire window until
+    # its own DDL is applied, with no error surfaced (saved=N, error=None) to
+    # reveal the loss.
+    _WEIGHTS_VERSION_COLS = frozenset(("weights_version",))
     _ENTER_NOW_COLS = frozenset(("already_held",))
     _F249_SIZING_COLS = frozenset(("rec_shares", "rec_stop",
                                    "rec_portfolio_value", "rec_sizing_version"))
     _QA_PILLAR_COLS = frozenset(("t_score", "bq_score", "val_score"))
     _F179_COLS      = frozenset(("s_score", "avg_sent"))
-    _OPTIONAL_COLS  = _ENTER_NOW_COLS | _F249_SIZING_COLS | _QA_PILLAR_COLS | _F179_COLS
+    _OPTIONAL_COLS  = (_WEIGHTS_VERSION_COLS | _ENTER_NOW_COLS | _F249_SIZING_COLS
+                       | _QA_PILLAR_COLS | _F179_COLS)
     # NEWEST GENERATION FIRST. The strip cascade peels one generation at a time
     # in this order, so a "rec_shares is missing" error cannot also discard the
     # pillar scores and sentiment that are already working in production. Append
     # new generations to the FRONT, never extend an existing frozenset.
-    _COL_GENERATIONS = (_ENTER_NOW_COLS, _F249_SIZING_COLS, _QA_PILLAR_COLS, _F179_COLS)
+    _COL_GENERATIONS = (_WEIGHTS_VERSION_COLS, _ENTER_NOW_COLS, _F249_SIZING_COLS,
+                        _QA_PILLAR_COLS, _F179_COLS)
 
     def _upsert(rows):
         try:

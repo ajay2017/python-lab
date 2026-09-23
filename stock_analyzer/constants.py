@@ -784,6 +784,10 @@ COMPOSITE_WEIGHTS = {
     "sentiment":        0.10,
 }
 
+COMPOSITE_WEIGHTS_VERSION = 2   # bump ONLY when the weight VALUES change, never on unrelated edits near the dict
+#  1 = 3-pillar {technical .45, fundamental .40, sentiment .15}   2026-05-05 .. 2026-07-08
+#  2 = 4-pillar {technical .25, business_quality .35, valuation .30, sentiment .10}  2026-07-09 onward
+
 # ── Earnings / macro proximity windows (days) ────────────────────────────────
 EARNINGS_IMMINENT_DAYS      = 7  # any trade within this window = caution (binary-event conflict)
 # Tighter "danger" sub-window inside EARNINGS_IMMINENT_DAYS — decide position

@@ -322,3 +322,84 @@ def test_cron_row_without_sizing_omits_the_columns_entirely():
     r = rows[0]
     for c in _SIZING_COLS:
         assert c not in r
+
+
+# ── Phase 4 data-foundation strategy: weights_version stamp ─────────────────
+#
+# COMPOSITE_WEIGHTS has changed its weight VALUES exactly once in this
+# project's history (commit 6dc1197, 2026-07-09). weights_version is stamped
+# unconditionally at this shared write boundary from constants.COMPOSITE_WEIGHTS_
+# VERSION -- never read from the caller's own record dict -- so every existing
+# caller (cron, app.py's two sites, headless_alert_engine) gets it for free.
+
+def test_weights_version_stamped_from_constants_at_write_boundary(monkeypatch):
+    """Exercises the real write boundary (save_recommendations), not a mock
+    of it -- the stamp must equal the live constant, whatever it currently is."""
+    from stock_analyzer import constants
+    _, fake = _run([_row()], monkeypatch)
+    sent = fake.calls[0][0]
+    assert sent["weights_version"] == constants.COMPOSITE_WEIGHTS_VERSION
+
+
+def test_weights_version_stamped_even_when_caller_omits_it(monkeypatch):
+    """Proves write-boundary defaulting, not build-site dependence -- this is
+    the load-bearing invariant, since it must work for every existing caller
+    without any of them changing anything. _row() deliberately carries no
+    'weights_version' key at all."""
+    from stock_analyzer import constants
+    r = _row()
+    assert "weights_version" not in r
+    _, fake = _run([r], monkeypatch)
+    sent = fake.calls[0][0]
+    assert sent["weights_version"] == constants.COMPOSITE_WEIGHTS_VERSION
+
+
+def test_missing_weights_version_column_strips_only_that_generation(monkeypatch):
+    """Inert-until-DDL: a write still succeeds via drop-and-retry when the
+    weights_version column doesn't exist yet on the live DB -- mirrors the
+    existing rec_sizing_version/t_score compat pattern exactly."""
+    result, fake = _run([_sized_row()], monkeypatch, exc=_missing("weights_version"))
+    assert result["saved"] == 1 and result["error"] is None
+    assert len(fake.calls) == 2, "expected exactly one retry"
+    retried = fake.calls[1][0]
+    assert "weights_version" not in retried, "should have been stripped"
+    for c in _SIZING_COLS + _PILLAR_COLS + _F179_COLS:
+        assert c in retried, f"{c} must SURVIVE a weights_version-missing error"
+
+
+def test_missing_pillar_column_does_NOT_strip_weights_version(monkeypatch):
+    """The mirror guarantee: an unrelated bq_score-missing error must not take
+    the new weights_version generation with it."""
+    result, fake = _run([_sized_row()], monkeypatch, exc=_missing("bq_score"))
+    assert result["saved"] == 1 and result["error"] is None
+    retried = fake.calls[1][0]
+    assert "weights_version" in retried, "must survive an unrelated pillar-column error"
+
+
+def test_weights_version_boundary_date_maps_to_regime_2_not_1():
+    """Pure logic-level boundary check on the deterministic backfill mapping
+    (the owner-run UPDATEs quoted in db.py's save_recommendations() header
+    docstring and docs/architecture.md §6.12):
+
+        UPDATE recommendations SET weights_version = 1 WHERE rec_date <  '2026-07-09'
+        UPDATE recommendations SET weights_version = 2 WHERE rec_date >= '2026-07-09'
+
+    2026-07-09 is the date commit 6dc1197 shipped the 4-pillar weights, so the
+    boundary day ITSELF must map to regime 2, not 1 -- a `<=` vs `<` mixup on
+    either leg would silently mis-tag it. This transcribes the two WHERE
+    comparisons verbatim (this is SQL run by hand, not a Python code path) so
+    a future edit to either boundary operator without updating this test would
+    be a deliberate, visible drift, not a silent one.
+    """
+    from datetime import date, timedelta
+
+    boundary = date(2026, 7, 9)
+    day_before = boundary - timedelta(days=1)
+
+    def regime_for(d):
+        if d < boundary:      # mirrors "rec_date <  '2026-07-09'" -> 1
+            return 1
+        return 2              # mirrors "rec_date >= '2026-07-09'" -> 2
+
+    assert regime_for(boundary) == 2, "the boundary date itself must be regime 2 (4-pillar)"
+    assert regime_for(day_before) == 1
