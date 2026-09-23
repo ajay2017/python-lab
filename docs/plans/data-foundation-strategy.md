@@ -37,8 +37,27 @@ trip, vs. an honest large-but-incomplete read). Fixed by adding each table's own
 secondary sort; the other 5 functions already ordered by a genuine unique `id` column and needed
 no change. Second Opus pass: SHIP, 0 blocking. Full suite 6140 passed both gates green.
 
-**Phases 0-4 are now ALL SHIPPED, RESOLVED, OR CONFIRMED.** Only Phase 5 remains, correctly
-deferred since it has zero data to act on. **One small new item found while building Phase
+**Phase 3 fully closed, all five items.** A4 shipped inside Phase 1. A5 (commit `8dc11fa`) fixed
+`debrief_advisor.py`'s date-filter bug — turned out to be 4 real instances, not the 2 originally
+scoped. A8 (income-event mislabeling) was investigated by a `planner` pass and found to be a
+non-issue once every real consumer was traced — closed with 5 invariant-locking tests, zero
+`broker_sync.py` change. C2 confirmed clean. C3 (commit `06cc05b`) closed a 29-ticker
+sector-taxonomy gap, the same class already fixed 6 times before.
+
+**Phase 4 SHIPPED 2026-09-23 (commit `6448265`), design-first as the owner explicitly
+requested.** A `planner` pass re-verified `COMPOSITE_WEIGHTS`'s single-boundary premise back to
+the very first scoring commit (2026-05-05) and found only `recommendations` is actually
+ambiguous. Owner decided: proceed with a `weights_version` column (the backfill is uniquely
+lossless), scoped to `recommendations` only. `COMPOSITE_WEIGHTS_VERSION` constant + the column,
+stamped unconditionally at the one shared write boundary; a new, permanent Definition-of-Done
+item (#8) is the actual recurrence-prevention, not the column itself. Opus reviewer SHIP, 0
+blocking on the first pass. **DDL applied and verified live the same day:** 395 rows at
+version 1 (matches the pre-backfill count exactly), 1118 at version 2 (up from 1078 the day
+before — normal cron growth, not a discrepancy), zero `NULL` rows.
+
+**Phases 0-4 are now ALL SHIPPED, RESOLVED, OR CONFIRMED — code, tests, review, and live
+database state.** Only Phase 5 remains, correctly deferred since it has zero data to act on.
+**One small new item found while building Phase
 2, flagged but deliberately not fixed (out of scope for that change):** two standalone
 diagnostic scripts (`scripts/exit_early_cost_analysis.py:379`, `scripts/holding_period_analysis.py:164`)
 each define their own raw-REST `load_exit_signals()`, bypassing `db.py` entirely, with the same
@@ -263,7 +282,7 @@ consumer of `composite_score` spans it silently.
 **Because there was only ONE boundary, at one known date, this is retroactively fixable by
 inference** — see §4 below.
 
-### A7. [CODE-VERIFIED] Silent-truncation risk on unbounded reads — already confirmed to have bitten this project once
+### A7. [RESOLVED — SHIPPED 2026-09-23 via Phase 2, commits `eea121d`/`0f583fe`] Silent-truncation risk on unbounded reads — already confirmed to have bitten this project once
 
 This project's own `db.py` comment (3330-3332) states it plainly: PostgREST's default 1000-row
 page cap has already silently truncated a real read once, confirmed live — `model_predictions`
@@ -302,6 +321,13 @@ since mid-2026, `recommendations` plausibly already exceeds the 1000-row page ca
 `SELECT COUNT(*) FROM recommendations` (and the same for `exit_signals`) before re-deriving
 A1's collapsed headline** — if either is already truncated, the collapsed re-run would still be
 computed over an incomplete population and its answer would still be wrong, just differently.
+
+**Confirmed live and closed.** `recommendations` was indeed already over the cap (1473 rows),
+`analyst_coverage` turned out to be a SECOND, worse instance (678 rows against a 100-row
+default — 85% dropped) discovered while scoping the fix. All 8 loaders now paginate for real;
+3 of them needed a non-unique `ORDER BY` tie-breaker fix caught by a mandatory Opus review
+before shipping (see the Phase 2 status note at the top of this document). Nothing in this
+section remains open.
 
 ### A8. [RESOLVED 2026-09-23 — the original finding didn't hold once the full consumer chain was traced]
 
@@ -402,14 +428,19 @@ Phase 4):**
     confounded by mixing two scoring methodologies in one band axis, independent of whatever
     the episode-collapse fix does. Segment by date before trusting the re-derived verdict.
   - **More durable, genuinely Phase 4 (schema + policy):** add a `weights_version` column to
-    `recommendations` (and `exit_signals` if it stores a composite), backfilled by date for
-    every existing row
-    gets this for free instead of re-deriving the boundary each time. This is a `constants.py`
-    -adjacent, DB-write change — see §6 for the review-gate implication.
+    `recommendations`, backfilled by date for every existing row, so future readers get the
+    boundary for free instead of re-deriving it each time. This is a `constants.py`-adjacent,
+    DB-write change — see §6 for the review-gate implication.
 
-### C2. Duplicate-row cleanups already identified, status unconfirmed
+  **[RESOLVED — SHIPPED 2026-09-23, commit `6448265`, see §7 Phase 4.]** Both halves done: the
+  cheap segment-by-date discipline shipped as part of Phase 1's own review scope, and the schema
+  change shipped as Phase 4 — scoped to `recommendations` only, per a `planner` blast-radius
+  census that found `exit_signals` never actually needed it (100% single-regime already). DDL
+  applied and verified live: 395 rows at version 1, 1118 at version 2, zero `NULL`.
 
-Two known, already-diagnosed duplicate-row issues have documented one-time SQL fixes that may
+### C2. [RESOLVED — confirmed clean, nothing to run] Duplicate-row cleanups already identified
+
+Two known, already-diagnosed duplicate-row issues had documented one-time SQL fixes that may
 or may not have been run:
   - `snaptrade_income_events` — 12 duplicate rows (3 MINT margin-interest, 9 CDIV/MDIV dividend)
     found 2026-09-11, with a documented manual cleanup query (`db.py:883-887`).
@@ -417,9 +448,8 @@ or may not have been run:
     added (`db.py:818-841`); "net_contributed_capital stays inflated until they are manually
     reviewed/deleted" (`db.py:830-832`).
 
-**[NEEDS LIVE QUERY]** — a simple `COUNT(*)`/`GROUP BY` check on both tables would confirm
-whether these were run. If not, this is a bounded, one-time, low-risk cleanup — not a design
-question.
+**Checked live via `COUNT(*)`/`GROUP BY` on both tables — both already clean.** No duplicates
+found on either table; nothing needed to run.
 
 ### C3. [SHIPPED 2026-09-23, commit `06cc05b`] Sector-taxonomy reconciliation gap — swept and closed
 
@@ -516,8 +546,8 @@ Four controls, each extending a pattern this project has already proven rather t
 new one — matching the explicit ask to improve quality "without unnecessarily redesigning
 functionality that already exists":
 
-1. **Reuse the proven earliest-anchor collapse PATTERN — not a mandatory shared module
-   (revised).** The first draft of this control oversold how identical the three cases are.
+1. **[FOLLOWED — Phase 1] Reuse the proven earliest-anchor collapse PATTERN — not a mandatory
+   shared module (revised).** The first draft of this control oversold how identical the three cases are.
    They aren't: `collapse_by_ticker` keys on ticker alone and carries severity-escalation logic
    specific to protective calls; `collapse_by_rec_ticker` keys on `(rec_type, ticker)` with no
    escalation; The Judge's per-ticker dimensions would need a third key shape, and its
@@ -529,16 +559,17 @@ functionality that already exists":
    function, not a shared abstraction. A1's and A3's per-ticker fixes should do the same — two
    or three small functions, not one shared module.
 
-2. **Extend real pagination (the `model_predictions` pattern) to every unbounded loader named in
-   A7**, rather than patch each with its own ad-hoc `.limit()` ceiling. This is mechanical,
-   `db.py`-scoped, and directly closes the single highest-uncertainty risk in this whole
-   assessment.
+2. **[DONE — Phase 2] Extend real pagination (the `model_predictions` pattern) to every
+   unbounded loader named in A7**, rather than patch each with its own ad-hoc `.limit()`
+   ceiling. Shipped across two commits (`eea121d`, `0f583fe`), all 8 loaders, plus a
+   non-unique-`ORDER BY` correctness fix a mandatory review caught before ship.
 
-3. **Version-stamp any constant that produces a value persisted long-term.** `SIZING_FORMULA_VERSION`
-   is the good model; `COMPOSITE_WEIGHTS` is the gap. Add one line to the Definition-of-Done
-   checklist (CLAUDE.md already has a 7-step DoD): *"if a changed constant feeds a value written
-   to a history/track-record table, does a reader need to know which regime produced an old row?
-   If yes, version it."* This is a documentation/discipline addition, not a new mechanism.
+3. **[DONE — Phase 4] Version-stamp any constant that produces a value persisted long-term.**
+   `SIZING_FORMULA_VERSION` was the good model; `COMPOSITE_WEIGHTS` was the gap. Shipped as
+   `COMPOSITE_WEIGHTS_VERSION` + `recommendations.weights_version`, plus the recommended
+   Definition-of-Done line added as CLAUDE.md's new item **#8** (the DoD is now 8 steps, not 7)
+   — *"if a changed constant feeds a value written to a history/track-record table, does a
+   reader need to know which regime produced an old row? If yes, version it."*
 
 4. **Adopt "effective N" as a named discipline for any daily-repeating opinion/forecast table**,
    generalizing `model_predictions`' stride-discount to `judgment_grades` and any future
@@ -573,12 +604,12 @@ correctness, though, and is broken out below rather than bundled into general Ph
 itself already be silently truncated (A7's own finding) — a collapsed-but-truncated re-run
 would still hand the owner a wrong number, just wrong in a different way.
 
-**Phase 0 — background live-data verification (no code, needs the owner's Supabase access, does
-NOT block Phase 1).** Row counts for the tables named in A7 (has silent truncation already
-happened anywhere besides `model_predictions`?); whether the two C2 duplicate-cleanup queries
-were run; current maturity (row/distinct-ticker counts) for `exit_signals`, `gate_suppressions`,
-`rec_events`, `judgment_grades` against their own `MIN_CALLS`/`FIRM_CALLS` floors. Costs nothing
-but a handful of `SELECT COUNT(*)` queries; run it in parallel with Phase 1, not before it.
+**Phase 0 — [CLOSED] background live-data verification.** Row counts for the tables named in A7
+(has silent truncation already happened anywhere besides `model_predictions`?); whether the two
+C2 duplicate-cleanup queries were run; current maturity (row/distinct-ticker counts) for
+`exit_signals`, `gate_suppressions`, `rec_events`, `judgment_grades` against their own
+`MIN_CALLS`/`FIRM_CALLS` floors. All run by the owner the same day; results folded into the
+status header at the top of this document and into §9 below.
 
 **Phase 1 — the episode-collapse fix, proceeds now, does not wait on Phase 0.** Scope, revised
 per A1-A3's corrected mechanisms: (a) fix `recommendations_history.py`'s `missed_alpha`/
@@ -625,8 +656,9 @@ coincidentally: SHIP, 0 blocking. Full suite 6145 passed. **A8 RESOLVED 2026-09-
 out to be a non-issue once the full consumer chain was traced (no display groups by the field
 in question; the confirmed margin-interest charges are already counted correctly via existing
 dedup); closed with 4 invariant-locking tests, no source change, no review needed (see §2 A8
-for the full trace). **Remaining in this phase:** C2 (CLOSED, both tables confirmed clean via
-Phase 0's live query), C3 (sector-taxonomy sweep — needs a live query first).
+for the full trace). C2 (CLOSED, both tables confirmed clean via Phase 0's live query). **C3
+SHIPPED 2026-09-23 (commit `06cc05b`)** — closed a 29-ticker `TICKER_SECTORS` gap in
+`portfolio.py`. Nothing remains in this phase.
 
 **Phase 4 — [SHIPPED 2026-09-23, commit `6448265`] `COMPOSITE_WEIGHTS` durable versioning.**
 A `planner` (Opus) design pass re-verified the single-boundary premise independently (walked
@@ -680,22 +712,30 @@ consequential.
 
 ---
 
-## 9. Open items needing a live Supabase query before Phase 0 can close
+## 9. Open items needing a live Supabase query — status as of 2026-09-23
 
-1. Current row counts for `gate_suppressions`, `recommendations`, `rec_events`, `exit_signals`,
-   `score_history`, `judgment_opinions`/`judgment_grades`, `analyst_target_snapshots`,
-   `daily_snapshots` — has silent truncation already happened on any of these besides the
-   confirmed `model_predictions` incident?
-2. Whether the two documented C2 duplicate-row cleanups (`snaptrade_income_events`,
-   `account_flows`) were actually run.
-3. Current distinct-ticker and total-row counts for `exit_signals`/`gate_suppressions`/
-   `rec_events`/`judgment_grades` against their own maturity floors, both raw and (once Phase 1
-   ships) collapsed — to see how much the collapse actually moves each feature's maturity date.
-4. A live re-run of `correlation_coverage()`'s `n_obs` (portfolio.py) — last measured sound at
-   125 observations on 2026-08-21; that's a point-in-time fact, not a standing guarantee.
-5. **[Added on review]** What fraction of `recommendations`/`exit_signals` rows predate
-   2026-07-09? A single `SELECT COUNT(*) FILTER (WHERE rec_date < '2026-07-09'), COUNT(*) FROM
-   recommendations` (and the `exit_signals` equivalent on `signal_date`) directly sizes Phase 4:
-   if the pre-boundary population is a small minority (or empty — if meaningful capture only
-   began after that date), the `weights_version` schema question becomes low-stakes rather than
-   something needing a `planner` design pass soon.
+1. **[RESOLVED]** Row counts for all named tables — run live. Only `recommendations` and
+   (discovered while scoping Phase 2) `analyst_coverage` were actually over their respective
+   caps; both fixed. See the status header at the top of this document for the exact counts.
+2. **[RESOLVED]** Both C2 duplicate-row cleanups checked — both tables confirmed already clean,
+   nothing needed to run.
+3. **[PARTIALLY RESOLVED]** Raw counts were obtained for all four tables (see the status
+   header). The "both raw and collapsed" comparison was only done in full for The Judge
+   (confirmed via direct SQL match against the live screenshot — see memory
+   `project_data_foundation_strategy`'s Phase 1 visual-confirmation entry) — `gate_suppressions`
+   was checked only as a negative control (still all "building," unchanged, as predicted; no
+   gate has crossed its floor yet so there was nothing to compare pre/post collapse). A full
+   pre/post comparison for `exit_signals`/`rec_events` was never explicitly run — low priority,
+   since neither table's headline is currently displayed anywhere the way Engine Track Record's
+   is, but worth knowing this specific comparison was never completed if it's ever needed.
+4. **[STILL OPEN — never checked this session, no urgency tied to it]** A live re-run of
+   `correlation_coverage()`'s `n_obs` (`portfolio.py`) — last measured sound at 125 observations
+   on 2026-08-21, over a month old as of this update. That was always framed as "a point-in-time
+   fact, not a standing guarantee," and nothing in Phases 0-4 touched correlation computation —
+   this is a genuinely separate, still-unanswered question, not resolved by anything shipped
+   here. Worth a periodic re-check, not urgent.
+5. **[RESOLVED, and then some]** What fraction of `recommendations`/`exit_signals` rows predate
+   2026-07-09? Answered as part of Phase 4's own `planner` design pass, which went further than
+   this item asked — it walked the full history back to the very first scoring commit
+   (2026-05-05) to confirm there was never a hidden third regime, not just the one boundary this
+   item named.
