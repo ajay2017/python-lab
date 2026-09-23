@@ -1,27 +1,50 @@
-**Status, updated same day: Phase 0 CLOSED, Phase 1 SHIPPED, the `recommendations`-table slice
-of Phase 2 SHIPPED ahead of schedule.** Owner ran all four Phase 0 queries live (§9) — no
-truncation found anywhere except `recommendations` itself (1473 rows, confirmed over the
-1000-row cap), both known duplicate-row cleanups (`snaptrade_income_events`, `account_flows`)
-confirmed already clean, and the persistence multipliers measured live: `recommendations`
-new_pick 293 rows/78 tickers (3.8x), `gate_suppressions` 264/80 (3.3x), `judgment_grades`
-non-portfolio 230/48 (4.8x) — with the `judgment_grades` count exactly matching that table's
-total, confirming zero `_PORTFOLIO`-keyed rows exist yet (Phase 5 has nothing to act on today).
-`recommendations`/`exit_signals` pre-2026-07-09 fractions: 395/1473 (27%) and 0/98 (0%) — sizes
-Phase 4's real urgency to `recommendations` only.
+**Status, updated 2026-09-23: Phase 0 CLOSED, Phase 1 SHIPPED + VISUALLY CONFIRMED, Phase 2
+FULLY SHIPPED (all 8 tables).** Owner ran all four Phase 0 queries live (§9) — no truncation
+found anywhere except `recommendations` itself (1473 rows, confirmed over the 1000-row cap) and,
+discovered while scoping Phase 2, `analyst_coverage` (678 rows against a caller-facing
+`limit=100` default — 85% silently dropped, worse than `recommendations`). Both known
+duplicate-row cleanups (`snaptrade_income_events`, `account_flows`) confirmed already clean.
+Persistence multipliers measured live: `recommendations` new_pick 293 rows/78 tickers (3.8x),
+`gate_suppressions` 264/80 (3.3x), `judgment_grades` non-portfolio 230/48 (4.8x) — with the
+`judgment_grades` count exactly matching that table's total, confirming zero `_PORTFOLIO`-keyed
+rows exist yet (Phase 5 has nothing to act on today). `recommendations`/`exit_signals`
+pre-2026-07-09 fractions: 395/1473 (27%) and 0/98 (0%) — sizes Phase 4's real urgency to
+`recommendations` only.
 
-**Phase 1 shipped as commit `6c60656`** (`recommendations_history.py`, `gate_ledger_readout.py`,
-`judgment_grading.py`, the Engine Track Record card in `app.py`) — Opus reviewer SHIP, 0
-blocking, full suite 6116 passed. **The `recommendations` pagination slice of Phase 2 shipped as
-commit `eea121d`**, pulled forward ahead of schedule because it was a confirmed (not
-theoretical) prerequisite for trusting Phase 1's own re-derived numbers — Opus reviewer SHIP, 0
-blocking (one non-blocking suggestion applied before commit). **The live Engine Track Record
-"+14.4pp" headline has moved as a result — this is expected and disclosed, not a regression;
-the new number has not yet been independently reconfirmed against a fresh screenshot.**
+**Phase 1 shipped as commit `6c60656`** — Opus reviewer SHIP, 0 blocking, full suite 6116 passed.
+**Visually confirmed the same day** against real production data on all three surfaces it
+touched: the 🎯 Engine Track Record card (real before/after screenshot, Offense 21→30 matured /
++6.3pp→+8.3pp, Defense correctly unchanged as a negative control), 🧑‍⚖️ The Judge (direct SQL
+match — on-screen `n=45`/`n=38` matched live `distinct_tickers` counts exactly, not just
+plausible), and 🛑 the Gate Suppression Ledger (clean negative control, every gate still
+"building" exactly as expected, nothing broke). **Nothing left to validate on Phase 1.**
 
-**Remaining, not yet started:** the rest of Phase 2 (pagination for the other 7 tables named in
-§2 A7), Phase 3 (A5/A8/C3 remain — A4 shipped inside Phase 1's Chunk 2, C2 is closed, neither
-needs anything further), Phase 4 (`COMPOSITE_WEIGHTS` durable versioning — sized but not
-designed), Phase 5 (deferred, correctly, since it has zero data to act on).
+**Phase 2 fully shipped, in two commits.** The `recommendations` slice shipped first as commit
+`eea121d` (pulled forward because it was a confirmed prerequisite for trusting Phase 1's own
+re-derived numbers) — Opus reviewer SHIP, 0 blocking. The remaining 7 tables (9 function bodies)
+plus the differently-shaped `analyst_coverage` fix shipped as commit `0f583fe` — **this one
+needed two review rounds**, worth remembering as a real example of the mandatory-review gate
+catching something the deterministic tests couldn't: the first Opus pass returned FIX-FIRST,
+finding that 3 of the 8 paginated queries ordered by a non-unique date column alone
+(`daily_snapshots` by `snapshot_date`, `rec_events` by `fired_date`, `analyst_coverage`'s
+unbounded path by `article_date`) — `.range()`-based pagination re-executes the query fresh per
+page, and Postgres doesn't guarantee a stable tie order across separate executions without a
+unique `ORDER BY`. For `daily_snapshots` specifically, ties aren't an edge case — its own PK is
+`(snapshot_date, ticker)`, so every multi-ticker day ties. A silently wrong pagination fix would
+have been WORSE than the truncation bug it exists to close (a silently duplicated or skipped row
+in Capital Trend / Alpha Attribution / F-250 day-P&L, with no error and no offline-sentinel
+trip, vs. an honest large-but-incomplete read). Fixed by adding each table's own unique key as a
+secondary sort; the other 5 functions already ordered by a genuine unique `id` column and needed
+no change. Second Opus pass: SHIP, 0 blocking. Full suite 6140 passed both gates green.
+
+**Genuinely remaining:** Phase 3 (A5/A8/C3 — A4 shipped inside Phase 1's Chunk 2, C2 is closed),
+Phase 4 (`COMPOSITE_WEIGHTS` durable versioning — sized but not designed), Phase 5 (deferred,
+correctly, since it has zero data to act on). **One small new item found while building Phase
+2, flagged but deliberately not fixed (out of scope for that change):** two standalone
+diagnostic scripts (`scripts/exit_early_cost_analysis.py:379`, `scripts/holding_period_analysis.py:164`)
+each define their own raw-REST `load_exit_signals()`, bypassing `db.py` entirely, with the same
+unpaginated exposure this whole Phase 2 effort exists to close. Owner-run diagnostics, not named
+in the original task — worth having them adopt `db.load_exit_signals` eventually, not urgent.
 
 This is a planning/design deliverable that has since had two of its phases executed under
 review, per explicit sign-off at each step — not a unilateral build. Every finding below is
