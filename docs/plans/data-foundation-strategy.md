@@ -37,9 +37,9 @@ trip, vs. an honest large-but-incomplete read). Fixed by adding each table's own
 secondary sort; the other 5 functions already ordered by a genuine unique `id` column and needed
 no change. Second Opus pass: SHIP, 0 blocking. Full suite 6140 passed both gates green.
 
-**Genuinely remaining:** Phase 3 (C3 only — A4/A5/A8 shipped or resolved, C2 is closed),
-Phase 4 (`COMPOSITE_WEIGHTS` durable versioning — sized but not designed), Phase 5 (deferred,
-correctly, since it has zero data to act on). **One small new item found while building Phase
+**Genuinely remaining: Phase 3 is now FULLY CLOSED (A4/A5/A8/C2/C3 all shipped or resolved).**
+Phase 4 (`COMPOSITE_WEIGHTS` durable versioning — sized but not designed) is the only build-shaped
+item left; Phase 5 remains correctly deferred, since it has zero data to act on. **One small new item found while building Phase
 2, flagged but deliberately not fixed (out of scope for that change):** two standalone
 diagnostic scripts (`scripts/exit_early_cost_analysis.py:379`, `scripts/holding_period_analysis.py:164`)
 each define their own raw-REST `load_exit_signals()`, bypassing `db.py` entirely, with the same
@@ -422,16 +422,31 @@ or may not have been run:
 whether these were run. If not, this is a bounded, one-time, low-risk cleanup — not a design
 question.
 
-### C3. Sector-taxonomy reconciliation gap — bounded, sweepable
+### C3. [SHIPPED 2026-09-23, commit `06cc05b`] Sector-taxonomy reconciliation gap — swept and closed
 
 `reference_data.validate_payload`'s presence-only check for `discovery_universe` tickers
 against `TICKER_SECTORS` is explicitly scoped to *newly changed* tickers only
 (`reference_data.py:229-239`), grandfathering an unknown-but-real subset of pre-existing
-tickers that may still disagree with `TICKER_SECTORS`'s own classification. This is finite and
-sweepable: a one-time pass comparing every `discovery_universe` ticker against `TICKER_SECTORS`
-would surface the full disagreement list in one query, closeable the same way the
-Industrials/Defense/Utilities dedup work already closed three prior instances of this exact
-class.
+tickers that may still disagree with `TICKER_SECTORS`'s own classification.
+
+**Swept via a live query** (`SELECT payload FROM reference_tables WHERE name =
+'discovery_universe'`) cross-referenced against the in-code `TICKER_SECTORS` dict: **29 tickers
+had zero entry**, not the "unknown-but-real subset" this section originally hedged on —
+`GOOG` (Mega-cap Tech); `ALB/CCJ/KMI/MPC/NEM/PSX/SLB/VLO/WMB` (Energy & Materials); `CVS/GILD/
+HCA/HIMS/SYK/VRTX` (Healthcare & Biotech); `DE/EMR/ETN/FDX/HON/ITW/MMM/PH/PWR/UNP/UPS`
+(Industrials & Defense); `CEG/VST` (Clean Energy & Utilities). Closed the same way the
+Financials/Semiconductors/Software & Cloud/Internet & Media/Consumer & Retail/Materials-
+Utilities-Real-Estate fixes already closed 6 prior instances of this exact class: added each
+ticker to `TICKER_SECTORS` under the closest-matching existing peer's sector. Two genuinely
+ambiguous classifications (`CCJ` — Materials not Energy, matching FCX/NEM's extraction-business
+precedent over the oil & gas peers; `HIMS` — Healthcare not Consumer Tech, classified by what it
+delivers rather than its subscription UX) confirmed directly with the owner before building,
+not decided solo. Opus reviewer SHIP, 0 blocking — independently verified all 6 sector labels
+are recognized by `_SECTOR_IMPACT`/`SECTOR_ETF`/`_SECTOR_PROFILES` (not just `RATE_SENSITIVITY`,
+which has a separate, pre-existing, already-documented gap for Materials/Industrials — unrelated
+to this fix, degrades honestly to "Unknown" rather than a fabricated value). `TICKER_SECTORS`
+now 217 entries. Full suite 6151 passed. **Phase 3 is now fully closed — A4/A5/A8/C2/C3 all
+shipped or resolved.**
 
 ---
 
@@ -595,7 +610,7 @@ under-bounded loaders named in A7. Pure mechanical extension of an already-revie
 **Review gate:** `db.py` is explicitly named in CLAUDE.md's `_GATE_FILES` DB-write list — the
 commit hook will require an Opus reviewer citation regardless; budget for it.
 
-**Phase 3 — the small, bounded fixes. A4 and A5 both CLOSED.** A4 shipped inside Phase 1 (Chunk
+**Phase 3 — FULLY CLOSED (A4/A5/A8/C2/C3 all shipped or resolved).** A4 shipped inside Phase 1 (Chunk
 2, `_dedup_acted_credit()` in `match_recs_to_trades()`). **A5 SHIPPED 2026-09-23 as commit
 `8dc11fa`** — `debrief_advisor.py`'s raw string-slice date filter replaced with the hardened
 `pd.to_datetime(..., utc=True, format="ISO8601")` idiom, via a new `_traded_at_et_dates()`
