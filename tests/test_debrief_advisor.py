@@ -189,6 +189,46 @@ def test_build_debrief_package_week_had_trades_false_when_trade_outside_window()
     assert package["week_had_trades"] is False
 
 
+def test_build_debrief_package_week_had_trades_normal_trade_unaffected_by_fix():
+    """A plain intraday fill, nowhere near the ET-midnight boundary, must
+    classify identically before and after the ET-anchored fix (14:00 UTC =
+    10:00 ET on 07-22, safely mid-week either way)."""
+    trades = pd.DataFrame([
+        {"ticker": "AAA", "action": "SELL", "traded_at": "2026-07-22T14:00:00+00:00"},
+    ])
+    package = da.build_debrief_package(WEEK_ENDING, _snap_rows(), None, trades)
+    assert package["week_had_trades"] is True
+
+
+def test_build_debrief_package_week_had_trades_true_for_late_et_fill_crossing_utc_midnight():
+    """Regression for the raw `.astype(str).str[:10]` string-slice bug (data-
+    foundation-strategy.md A5). A genuine fill executed 23:30 ET on the
+    week's LAST trading day (Fri 07-24) serializes to UTC as
+    2026-07-25T03:30:00+00:00 -- the calendar day rolls to Saturday in UTC
+    even though the fill happened Friday ET. The old raw string-slice read
+    the UTC-embedded date ("2026-07-25"), which falls OUTSIDE
+    [start_date, end_date] = 2026-07-20..2026-07-24 and misclassified this
+    real Friday trade as having happened after the week ended -- this test
+    would have FAILED (week_had_trades False) against the pre-fix code."""
+    trades = pd.DataFrame([
+        {"ticker": "AAA", "action": "SELL", "traded_at": "2026-07-25T03:30:00+00:00"},
+    ])
+    package = da.build_debrief_package(WEEK_ENDING, _snap_rows(), None, trades)
+    assert package["week_had_trades"] is True
+
+
+def test_build_debrief_package_closed_positions_detects_late_et_fill_crossing_utc_midnight():
+    """Same boundary-crossing scenario as above, exercised through the
+    SEPARATE closed-position detection filter rather than week_had_trades --
+    both consume trades_df via independent date-range filters. CCC is the
+    fixture's own closed-position ticker (present at start, absent at end)."""
+    trades = pd.DataFrame([
+        {"ticker": "CCC", "action": "SELL", "traded_at": "2026-07-25T03:30:00+00:00"},
+    ])
+    package = da.build_debrief_package(WEEK_ENDING, _snap_rows(), None, trades)
+    assert package["closed_positions"] == ["CCC"]
+
+
 def test_build_debrief_package_contributors_sorted_descending_capped_at_3():
     package = da.build_debrief_package(WEEK_ENDING, _snap_rows(), None, _trades_df())
     tickers = [c["ticker"] for c in package["contributors"]]
@@ -232,6 +272,25 @@ def test_build_debrief_package_recs_surfaced_acted_flag_from_trades():
     aaa = next(r for r in package["recs_surfaced"] if r["ticker"] == "AAA")
     ddd = next(r for r in package["recs_surfaced"] if r["ticker"] == "DDD")
     assert aaa["acted"] is True
+    assert ddd["acted"] is False
+
+
+def test_build_debrief_package_recs_surfaced_acted_excludes_fill_before_week_start_et():
+    """Regression for the raw string-slice bug, direction-reversed: a fill
+    whose raw UTC timestamp date-slices to week_start's own date but whose
+    ET wall-clock time is actually the PRIOR evening (Sunday 23:30 ET,
+    serialized as 2026-07-20T03:30:00+00:00 UTC) must NOT count as 'acted
+    on' for a signal surfaced this week -- the old raw string-slice included
+    it because the UTC-embedded date happened to equal week_start. This test
+    would have FAILED (acted True) against the pre-fix code."""
+    recs_df = pd.DataFrame([
+        {"ticker": "DDD", "rec_date": "2026-07-20", "rec_type": "new_pick", "verdict": "Confirmed"},
+    ])
+    trades = pd.DataFrame([
+        {"ticker": "DDD", "action": "BUY", "traded_at": "2026-07-20T03:30:00+00:00"},
+    ])
+    package = da.build_debrief_package(WEEK_ENDING, _snap_rows(), recs_df, trades)
+    ddd = next(r for r in package["recs_surfaced"] if r["ticker"] == "DDD")
     assert ddd["acted"] is False
 
 
@@ -324,6 +383,25 @@ def test_build_debrief_package_protective_signals_sold_flag_true_when_sell_trade
     ddd = next(s for s in package["protective_signals"] if s["ticker"] == "DDD")
     assert aaa["sold"] is True
     assert ddd["sold"] is False
+
+
+def test_build_debrief_package_protective_signals_sold_flag_true_for_late_sunday_et_fill():
+    """Regression for the raw string-slice bug on this block's own
+    week_start/week_ending window. A SELL executed 23:30 ET on the week's
+    LAST calendar day (Sun 07-26 = week_ending) serializes to UTC as
+    2026-07-27T03:30:00+00:00 -- the old raw string-slice read the UTC date
+    ("2026-07-27"), which falls just past the week_ending upper bound and
+    misclassified the sale as not-acted-on for a TRIM call surfaced this
+    week. This test would have FAILED (sold False) against the pre-fix
+    code."""
+    sig_df = pd.DataFrame([_exit_sig("AAA", "2026-07-21", "TRIM")])
+    trades = pd.DataFrame([
+        {"ticker": "AAA", "action": "SELL", "traded_at": "2026-07-27T03:30:00+00:00"},
+    ])
+    package = da.build_debrief_package(WEEK_ENDING, _snap_rows(), None, trades,
+                                        exit_signals_df=sig_df)
+    aaa = next(s for s in package["protective_signals"] if s["ticker"] == "AAA")
+    assert aaa["sold"] is True
 
 
 def test_build_debrief_package_protective_signals_none_when_exit_signals_df_is_none():

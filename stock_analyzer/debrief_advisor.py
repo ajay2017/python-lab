@@ -75,6 +75,28 @@ def _pct(v: float | None) -> str:
     return f"{v:+.1f}%"
 
 
+def _traded_at_et_dates(trades_df):
+    """ET calendar date for each `trades_df["traded_at"]` row.
+
+    `traded_at` is a genuinely mixed-offset ISO string (mostly `+00:00`, plus
+    `-04:00`/`-05:00` for imported rows `trade_time.py` has re-anchored to a
+    wall-clock ET string) -- see that module's docstring. A raw
+    `.astype(str).str[:10]` string-slice reads whatever calendar day happens
+    to be embedded in the string (the UTC day for a real fill, the
+    re-anchored ET day for an imported one) rather than the actual ET day,
+    and misclassifies a genuine late-evening ET fill whose UTC-serialized
+    date has already rolled to the next (or, near week_start, the previous)
+    calendar day. `utc=True` + `format="ISO8601"` is required for the
+    mixed-offset column (memory `feedback_pandas_mixed_tz_parsing`) --
+    mirrors the idiom used throughout `tax_advisor.py`, `daily_briefing.py`,
+    `risk_advisor.py`, `behavioral_fingerprint.py`, etc.
+    """
+    import pandas as pd
+    return pd.to_datetime(
+        trades_df["traded_at"], errors="coerce", utc=True, format="ISO8601"
+    ).dt.tz_convert("America/New_York").dt.date
+
+
 def classify_snapshot_read(snapshots_or_none, min_days: int) -> tuple[str, int]:
     """Classify a daily_snapshots read for the weekly-debrief generation gate.
 
@@ -190,6 +212,13 @@ def build_debrief_package(
     start_snap = snap[snap["snapshot_date"] == start_date]
     end_snap   = snap[snap["snapshot_date"] == end_date]
 
+    # start_date/end_date are ISO date STRINGS sliced from snapshot_date
+    # above (a plain date column, no offset), not date objects -- convert
+    # once so the trades_df["traded_at"] date-range filters below can
+    # compare like-for-like `date` objects against the ET-anchored parse.
+    _start_d = date.fromisoformat(start_date)
+    _end_d   = date.fromisoformat(end_date)
+
     # Portfolio value
     start_val = float((start_snap["shares"] * start_snap["close_price"]).sum()) if not start_snap.empty else 0.0
     end_val   = float((end_snap["shares"] * end_snap["close_price"]).sum())   if not end_snap.empty else 0.0
@@ -208,9 +237,10 @@ def build_debrief_package(
     # can't be treated as external capital flows.
     week_had_trades = False
     if trades_df is not None and not (hasattr(trades_df, "empty") and trades_df.empty):
+        _ta_dates = _traded_at_et_dates(trades_df)
         _wt = trades_df[
-            (trades_df["traded_at"].astype(str).str[:10] >= start_date) &
-            (trades_df["traded_at"].astype(str).str[:10] <= end_date) &
+            (_ta_dates >= _start_d) &
+            (_ta_dates <= _end_d) &
             trades_df["action"].str.upper().isin(["BUY", "SELL"])
         ]
         week_had_trades = not _wt.empty
@@ -242,9 +272,10 @@ def build_debrief_package(
     # Exclude from contributors/detractors so the LLM doesn't narrate them as losses.
     closed_tickers: set[str] = set()
     if trades_df is not None and not (hasattr(trades_df, "empty") and trades_df.empty):
+        _ta_dates2 = _traded_at_et_dates(trades_df)
         _week_sells = trades_df[
-            (trades_df["traded_at"].astype(str).str[:10] >= start_date) &
-            (trades_df["traded_at"].astype(str).str[:10] <= end_date) &
+            (_ta_dates2 >= _start_d) &
+            (_ta_dates2 <= _end_d) &
             (trades_df["action"].str.upper() == "SELL")
         ]
         for _stk in _week_sells["ticker"].astype(str).str.upper().unique():
@@ -266,6 +297,16 @@ def build_debrief_package(
         date_col = "rec_date" if "rec_date" in recs_df.columns else (
             "surfaced_at" if "surfaced_at" in recs_df.columns else None
         )
+        # Known, documented gap (data-foundation A5 follow-up, 2026-09-23):
+        # this string-slice is CORRECT for the common "rec_date" path (a
+        # plain date column, no tz offset) and deliberately NOT rewritten to
+        # the utc=True/tz_convert idiom used elsewhere in this file -- doing
+        # so would introduce a NEW off-by-one-day bug on every plain-date
+        # row (midnight UTC is the prior evening in ET) to fix a rarer
+        # fallback. The "surfaced_at" fallback path (a genuine timestamptz)
+        # is unreachable in practice: db.py's loader always supplies
+        # rec_date, so date_col never actually resolves to "surfaced_at" in
+        # production. Left as-is; not queued as active work.
         if date_col:
             week_recs = recs_df[
                 recs_df[date_col].astype(str).str[:10] >= str(week_start)
@@ -276,9 +317,7 @@ def build_debrief_package(
 
             week_trades = pd.DataFrame()
             if trades_df is not None and not (hasattr(trades_df, "empty") and trades_df.empty):
-                week_trades = trades_df[
-                    trades_df["traded_at"].astype(str).str[:10] >= str(week_start)
-                ]
+                week_trades = trades_df[_traded_at_et_dates(trades_df) >= week_start]
             acted_tickers = set(week_trades["ticker"].astype(str).str.upper()) if not week_trades.empty else set()
 
             # Deduplicate by ticker — one entry with a times_surfaced count and
@@ -333,9 +372,10 @@ def build_debrief_package(
         if not _week_sig.empty:
             week_sells: set[str] = set()
             if trades_df is not None and not (hasattr(trades_df, "empty") and trades_df.empty):
+                _ta_dates4 = _traded_at_et_dates(trades_df)
                 _week_sells_df = trades_df[
-                    (trades_df["traded_at"].astype(str).str[:10] >= str(week_start)) &
-                    (trades_df["traded_at"].astype(str).str[:10] <= str(week_ending)) &
+                    (_ta_dates4 >= week_start) &
+                    (_ta_dates4 <= week_ending) &
                     (trades_df["action"].str.upper() == "SELL")
                 ]
                 week_sells = set(_week_sells_df["ticker"].astype(str).str.upper())
