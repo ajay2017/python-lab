@@ -13,6 +13,7 @@ diff of exactly BROKER_DRIFT_SHARE_TOL is NOT drift).
 import pandas as pd
 
 from stock_analyzer import broker_sync as bs
+from stock_analyzer import capital_vs_margin as cvm
 from stock_analyzer.constants import BROKER_DRIFT_SHARE_TOL, INCOME_EVENT_DEDUP_DATE_TOL_DAYS
 import pytest
 
@@ -1044,3 +1045,118 @@ def test_freshness_does_not_mutate_input():
     before = [dict(e) for e in events]
     bs.reconciliation_freshness(events)
     assert events == before
+
+
+# ─── A8 lock-in (2026-09-23) — the confirmed-margin-interest cross-path pair
+# is ALREADY counted correctly as interest, not a fee, and this must never
+# regress. A `planner` design pass traced every real consumer and found
+# income_event_subtype()'s raw "FEE" mislabeling premise doesn't hold in
+# practice: dedupe_income_events()'s _DEDUP_RAW_CODE_BUCKET_OVERRIDE already
+# collapses a live FEE row against its CSV MINT twin (exact amount+date
+# match), and the CSV row wins the tie-break while already carrying
+# event_type="interest" (set by the prior MINT-reclassification migration).
+# These tests pin that CURRENT correct behaviour so a future "fix" of the
+# override (mistaking it for dead code) would be caught immediately.
+
+def test_confirmed_margin_interest_pair_counted_once_as_interest():
+    """The load-bearing case: a CSV MINT row and its live FEE twin for the
+    SAME real margin-interest charge collapse to ONE row, the CSV row (with
+    event_type='interest') survives, and that survivor is credited to the
+    interest side of capital_vs_margin.interest_partition() -- not lost and
+    not double-counted."""
+    csv_mint = _ev(None, "interest", "MINT", -36.59, "2026-06-26",
+                   "csv:2026-06-26:MINT::-3659")
+    live_fee = _ev(None, "fee", "FEE", -36.59, "2026-06-26",
+                   "72ebdf97-1aad-421f-9cb9-af933f3de9d9")
+    out = bs.dedupe_income_events([live_fee, csv_mint])
+    assert len(out) == 1
+    assert out[0]["event_type"] == "interest"
+    assert out[0]["snaptrade_txn_id"] == "csv:2026-06-26:MINT::-3659"
+
+    part = cvm.interest_partition(out)
+    assert part["n_neg"] == 1
+    assert part["sum_neg_magnitude"] == pytest.approx(36.59)
+    assert part["sum_pos_magnitude"] == 0.0
+
+
+def test_gold_membership_shaped_fee_row_is_never_touched():
+    """A second, unrelated live FEE row (a different date/amount, no CSV
+    twin at all -- shaped like a recurring membership charge) must survive
+    dedupe_income_events() unchanged, stay event_type='fee', and never leak
+    into interest_partition()'s interest sums, even in the SAME batch as the
+    confirmed margin-interest pair above. income_event_subtype() itself has
+    no visibility into cross-path matches (only the dedup layer does), so
+    it must return 'fee' for a bare FEE code regardless of what else is in
+    the batch."""
+    assert bs.income_event_subtype("FEE", "fee") == "fee"
+
+    csv_mint = _ev(None, "interest", "MINT", -36.59, "2026-06-26",
+                   "csv:2026-06-26:MINT::-3659")
+    live_fee_matched = _ev(None, "fee", "FEE", -36.59, "2026-06-26",
+                           "72ebdf97-1aad-421f-9cb9-af933f3de9d9")
+    membership_fee = _ev(None, "fee", "FEE", -5.00, "2026-07-15",
+                         "gold-membership-uuid")
+
+    out = bs.dedupe_income_events([csv_mint, live_fee_matched, membership_fee])
+    assert len(out) == 2  # confirmed pair collapsed to 1, membership fee untouched
+    survivors_by_txn = {e["snaptrade_txn_id"]: e for e in out}
+    assert survivors_by_txn["gold-membership-uuid"]["event_type"] == "fee"
+
+    # The fee row must never contribute to the interest side -- only the
+    # confirmed $36.59 margin-interest charge should show up there.
+    part = cvm.interest_partition(out)
+    assert part["n_neg"] == 1
+    assert part["sum_neg_magnitude"] == pytest.approx(36.59)
+
+
+def test_confirmed_pair_survivor_is_load_order_independent():
+    """No flicker: the CSV row must win the tie-break regardless of which
+    order the two rows arrive in (a real difference in load order, e.g. a
+    query returning live-sync rows before CSV rows on one render and after
+    on another)."""
+    csv_mint = _ev(None, "interest", "MINT", -36.59, "2026-06-26",
+                   "csv:2026-06-26:MINT::-3659")
+    live_fee = _ev(None, "fee", "FEE", -36.59, "2026-06-26",
+                   "72ebdf97-1aad-421f-9cb9-af933f3de9d9")
+
+    csv_first = bs.dedupe_income_events([csv_mint, live_fee])
+    fee_first = bs.dedupe_income_events([live_fee, csv_mint])
+    assert len(csv_first) == 1 and len(fee_first) == 1
+    assert csv_first[0]["snaptrade_txn_id"] == fee_first[0]["snaptrade_txn_id"] == \
+        "csv:2026-06-26:MINT::-3659"
+    assert csv_first[0]["event_type"] == fee_first[0]["event_type"] == "interest"
+
+
+def test_lone_live_fee_row_stays_a_fee_when_its_csv_twin_is_absent_from_the_batch():
+    """The label must never depend on incidental batch composition beyond
+    'is genuine matching evidence actually present' -- a live FEE row must
+    not be promoted to interest just because it happens to be the only
+    income event loaded this render (e.g. the CSV import isn't in the
+    current query window / session)."""
+    live_fee_alone = _ev(None, "fee", "FEE", -36.59, "2026-06-26",
+                         "72ebdf97-1aad-421f-9cb9-af933f3de9d9")
+    out = bs.dedupe_income_events([live_fee_alone])
+    assert len(out) == 1
+    assert out[0]["event_type"] == "fee"
+
+    part = cvm.interest_partition(out)
+    assert part["n_neg"] == 0
+    assert part["sum_neg_magnitude"] == 0.0
+
+
+def test_write_side_suppresses_live_fee_matching_existing_csv_mint_row():
+    """Write-side regression: extends test_a_live_activity_matching_an_
+    existing_csv_row_is_suppressed to the FEE/MINT shape specifically. A
+    live FEE activity that cross-matches an existing CSV MINT row must be
+    routed to `ignored` at write time, never persisted as a second
+    income_events row -- so it can never later double-count against its
+    CSV twin even before any read-time dedup runs."""
+    existing = [_ev(None, "interest", "MINT", -36.59, "2026-06-26",
+                    "csv:2026-06-26:MINT::-3659")]
+    out = bs.classify_transactions(
+        [_txn("FEE", -36.59, trade_date="2026-06-26", ticker=None, txn_id="live-fee-1")],
+        pd.DataFrame(),
+        existing_income_events=existing,
+    )
+    assert out["income_events"] == []
+    assert out["ignored"].get("FEE (cross-path duplicate)") == 1

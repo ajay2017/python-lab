@@ -37,7 +37,7 @@ trip, vs. an honest large-but-incomplete read). Fixed by adding each table's own
 secondary sort; the other 5 functions already ordered by a genuine unique `id` column and needed
 no change. Second Opus pass: SHIP, 0 blocking. Full suite 6140 passed both gates green.
 
-**Genuinely remaining:** Phase 3 (A5/A8/C3 — A4 shipped inside Phase 1's Chunk 2, C2 is closed),
+**Genuinely remaining:** Phase 3 (C3 only — A4/A5/A8 shipped or resolved, C2 is closed),
 Phase 4 (`COMPOSITE_WEIGHTS` durable versioning — sized but not designed), Phase 5 (deferred,
 correctly, since it has zero data to act on). **One small new item found while building Phase
 2, flagged but deliberately not fixed (out of scope for that change):** two standalone
@@ -304,19 +304,47 @@ since mid-2026, `recommendations` plausibly already exceeds the 1000-row page ca
 A1's collapsed headline** — if either is already truncated, the collapsed re-run would still be
 computed over an incomplete population and its answer would still be wrong, just differently.
 
-### A8. [CODE-VERIFIED] Income-event vocabulary genuinely splits one real cost category by ingestion path
+### A8. [RESOLVED 2026-09-23 — the original finding didn't hold once the full consumer chain was traced]
 
-`broker_sync.py::income_event_subtype()` (975-1013) mostly unifies the CSV and live-SnapTrade
-vocabularies, but one real, currently-live gap remains: CSV `MINT` (confirmed real margin
-interest) is kept as its own `margin_interest` subtype, while this account's live SnapTrade
-connector reports the same real-world charge type under the generic `type="FEE"`
-(`broker_sync.py:961-970`, confirmed by the module's own comment against the owner's actual
-statement). A dedup-matching override (`_DEDUP_RAW_CODE_BUCKET_OVERRIDE`, 1035-1037) lets
-duplicate-detection see through this, but `income_event_subtype()` itself — the function any
-interest-cost trend chart groups by — still returns two different labels for the same real
-event depending on which path captured it. **Any interest-cost trend built by grouping on
-subtype silently splits one real cost line into two**, with the split boundary being
-"which ingestion path happened to capture this particular charge."
+Original claim: CSV `MINT` (confirmed real margin interest) gets its own `margin_interest`
+subtype, while this account's live SnapTrade connector reports the same real-world charge under
+the generic `type="FEE"` — so `income_event_subtype()` returns two different labels for the same
+real event depending on ingestion path, and "any interest-cost trend built by grouping on
+subtype silently splits one real cost line into two."
+
+**A `planner` design pass, dispatched to fix this, traced every real consumer instead of
+building the fix and found the premise doesn't survive contact with the actual pipeline:**
+1. **No consumer groups by `subtype`.** `income_event_subtype()` has exactly one caller
+   (`_income_dedup_bucket_key`, used only for dedup bucketing) — grepped the whole repo. Every
+   real display (the Cash Activity chart, `capital_vs_margin.interest_partition()`, the Summary
+   "of which interest" caption) groups on the coarser `event_type` column instead. The
+   interest-cost chart the original finding assumed exists does not.
+2. **The confirmed margin-interest charges are already counted correctly today.** Both read
+   consumers call `dedupe_income_events()` before summing; it matches a live FEE row against its
+   CSV MINT twin via the existing `_DEDUP_RAW_CODE_BUCKET_OVERRIDE` (exact amount+date match),
+   and the CSV row — which already carries `event_type="interest"` — wins the tie-break. The
+   live FEE twin is dropped, so it neither inflates the fee total nor goes missing from
+   interest. Traced by hand against all 3 originally-confirmed events (06-26, 07-27, 08-25);
+   each nets to interest exactly once.
+
+**Directly confirmed with the owner why a blanket relabel would have been wrong, not just
+unnecessary:** `FEE` is a genuinely mixed real-world bucket on this account — margin interest is
+one thing that lands there, but so is the Robinhood Gold membership fee and other unrelated
+recurring charges. The only evidence-based way to tell them apart is the exact cross-path
+amount+date match dedup already performs; there is no safe heuristic (a fixed-recurring-amount
+pattern, etc.) the redline permits building without further confirmed evidence. **Real, open
+policy fact, not a software gap:** margin interest is only ever counted correctly for periods
+the owner imports a CSV statement for — a live-sync-only period with no CSV import has no
+evidence either way and correctly stays labeled generic "fee." This is the owner's existing
+practice already, not a new requirement.
+
+**Closed by locking in the current-correct behavior with tests, not by changing
+`broker_sync.py`** (touching that file would trip its mandatory-review gate for a change with
+zero display effect). 5 new tests added to `tests/test_broker_sync.py`: a confirmed CSV/live
+pair nets to interest exactly once; a Gold-membership-shaped FEE row with no CSV twin is never
+touched; the result doesn't depend on load order or on the CSV twin merely being absent from a
+given batch; the write-side suppression still routes a cross-matched live FEE to `ignored`
+before persistence. Tests-only — no source file changed, no Opus review needed.
 
 ---
 
@@ -579,10 +607,12 @@ and documented in-code — `rec_date` is a plain date column in the common path,
 same idiom there would introduce a NEW off-by-one-day bug to fix a rarer, production-unreachable
 fallback. Opus reviewer independently verified this reasoning (hand-computed the off-by-one) and
 confirmed all 5 new regression tests fail against the pre-fix code for the predicted reason, not
-coincidentally: SHIP, 0 blocking. Full suite 6145 passed. **Remaining in this phase:** A8
-(income-event subtype unification's remaining gap — needs the owner's judgment on whether two
-charge types are really equivalent, not a mechanical fix), C2 (CLOSED, both tables confirmed
-clean via Phase 0's live query), C3 (sector-taxonomy sweep — needs a live query first).
+coincidentally: SHIP, 0 blocking. Full suite 6145 passed. **A8 RESOLVED 2026-09-23** — turned
+out to be a non-issue once the full consumer chain was traced (no display groups by the field
+in question; the confirmed margin-interest charges are already counted correctly via existing
+dedup); closed with 4 invariant-locking tests, no source change, no review needed (see §2 A8
+for the full trace). **Remaining in this phase:** C2 (CLOSED, both tables confirmed clean via
+Phase 0's live query), C3 (sector-taxonomy sweep — needs a live query first).
 
 **Phase 4 — `COMPOSITE_WEIGHTS` durable versioning (the schema half of C1 only), a genuine
 policy decision.** The cheap segment-by-date discipline already moved to Phase 1 as a
