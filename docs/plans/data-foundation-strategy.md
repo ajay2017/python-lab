@@ -728,12 +728,18 @@ consequential.
    pre/post comparison for `exit_signals`/`rec_events` was never explicitly run — low priority,
    since neither table's headline is currently displayed anywhere the way Engine Track Record's
    is, but worth knowing this specific comparison was never completed if it's ever needed.
-4. **[STILL OPEN — never checked this session, no urgency tied to it]** A live re-run of
-   `correlation_coverage()`'s `n_obs` (`portfolio.py`) — last measured sound at 125 observations
-   on 2026-08-21, over a month old as of this update. That was always framed as "a point-in-time
-   fact, not a standing guarantee," and nothing in Phases 0-4 touched correlation computation —
-   this is a genuinely separate, still-unanswered question, not resolved by anything shipped
-   here. Worth a periodic re-check, not urgent.
+4. **[RESOLVED 2026-09-23]** Live re-run of `correlation_coverage()`'s `n_obs`, read directly off
+   the 🔗 Risk Analysis → 📊 Dashboard caption (the actual production code path, not a proxy):
+   **`n_obs = 69`** daily returns shared by all 18 of 18 holdings (down from 125 on 2026-08-21,
+   but still well above the `CORR_MIN_OBS_TRUSTED = 20` trust floor) — **SPCX** now caps the
+   sample (70 bars vs 127 for the longest), and SPCX was not among the 2026-08-21 holdings, so
+   this reads as one newer/shorter-listed position pulling the intersection down, not a broad
+   degradation of every fetch. Avg portfolio correlation 0.10, classification still "Well
+   Diversified," 1 high-correlation pair — consistent with the 2026-08-21 reading, not a
+   contradiction of it. **This is exactly the D4 pattern** (a single named driver, not a
+   systemic thinning) — don't read the 125→69 drop as reopening the listwise-fragility concern
+   without first checking whether SPCX specifically is the kind of short-history name that
+   would always cap a sample this way.
 5. **[RESOLVED, and then some]** What fraction of `recommendations`/`exit_signals` rows predate
    2026-07-09? Answered as part of Phase 4's own `planner` design pass, which went further than
    this item asked — it walked the full history back to the very first scoring commit
