@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DRISHTA — D1/D2/E4 Mockup (2026-09-24)</title>
+<style>
+  body {
+    background: #0b1120;
+    color: #e5e7eb;
+    font-family: Inter, system-ui, sans-serif;
+    margin: 0;
+    padding: 32px;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin-bottom: 4px; }
+  .subtitle { color: #9ca3af; font-size: 0.95rem; margin-bottom: 28px; }
+  .section {
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 22px 26px;
+    margin-bottom: 28px;
+  }
+  .section-tag {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #93c5fd;
+    background: #1e3a5f;
+    border-radius: 6px;
+    padding: 3px 10px;
+    margin-bottom: 10px;
+  }
+  .page-name { font-size: 1.05rem; font-weight: 700; color: #f1f5f9; margin: 0 0 14px 0; }
+  .new-badge {
+    display: inline-block;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: #0b1120;
+    background: #57d98a;
+    border-radius: 4px;
+    padding: 2px 7px;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+  table { width: 100%; border-collapse: collapse; background: #0f172a; border: 1px solid #334155;
+    border-radius: 12px; font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums; font-size: 0.86rem; }
+  th { text-align: right; padding: 10px 14px; font-family: Inter, system-ui, sans-serif;
+    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    color: #9ca3af; background: #111827; border-bottom: 1px solid #334155; }
+  th:first-child { text-align: left; }
+  td { padding: 9px 14px; border-top: 1px solid #1f2937; text-align: right; }
+  td:first-child { text-align: left; font-weight: 700; }
+  .gain { color: #57d98a; } .loss { color: #fca5a5; } .calm { color: #9ca3af; }
+  .chip {
+    display: inline-block; font-size: 0.62rem; font-weight: 700; padding: 1px 6px;
+    border-radius: 10px; margin-left: 6px; background: #14532d; color: #86efac;
+    vertical-align: middle; cursor: help;
+  }
+  .caption { color: #9ca3af; font-size: 0.85rem; margin-top: 10px; }
+  .metrics-row { display: flex; gap: 18px; margin-top: 14px; flex-wrap: wrap; }
+  .metric { flex: 1; min-width: 150px; }
+  .metric-label { font-size: 0.72rem; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.04em; }
+  .metric-value { font-size: 1.3rem; font-weight: 700; color: #f1f5f9; margin-top: 2px; }
+  .metric-help { font-size: 0.72rem; color: #6b7280; margin-top: 3px; }
+  .metric.new { background: rgba(87,217,138,0.08); border: 1px dashed #57d98a; border-radius: 8px; padding: 8px 10px; }
+  .card-border { border-left: 4px solid #57d98a; background: rgba(0,0,0,0.15); border-radius: 0 6px 6px 0; padding: 14px 18px; }
+  .badge { font-weight: 700; }
+  .basis { font-size: 0.8rem; color: #9ca3af; margin-top: 4px; }
+  .diff-old { text-decoration: line-through; color: #6b7280; }
+  .diff-new { color: #86efac; font-weight: 600; }
+  .note {
+    background: #1e293b; border-left: 3px solid #f0c24b; border-radius: 0 6px 6px 0;
+    padding: 10px 14px; font-size: 0.82rem; color: #fde68a; margin-top: 14px;
+  }
+  .verdict-tag { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 4px; margin-left: 8px; }
+  .v-tier1 { background: #14532d; color: #86efac; }
+  .v-tier2 { background: #422006; color: #fbbf24; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Mockup — D1 (settling disclosure), D2 (settling-sold stat), E4 (window labels)</h1>
+  <div class="subtitle">2026-09-24 app review backlog · design by <code>planner</code> pass · nothing implemented yet</div>
+
+  <!-- ============ D1 TIER 1 ============ -->
+  <div class="section">
+    <span class="section-tag">D1 — 🏠 Home / 🧾 Summary · Holdings table</span>
+    <span class="verdict-tag v-tier1">TIER 1 — SAFE, NO GATE</span>
+    <p class="page-name">💼 Holdings (5)</p>
+    <table>
+      <thead><tr><th>Ticker</th><th>Shares</th><th>Price</th><th>Value</th><th>Day Δ%</th><th>Total Δ%</th><th>Weight</th></tr></thead>
+      <tbody>
+        <tr><td>NVDA</td><td>12</td><td>$187.42</td><td>$2,249</td><td class="gain">+1.84%</td><td class="gain">+22.4%</td><td>9.4%</td></tr>
+        <tr><td>HPE<span class="chip" title="Settling — day 6/10. Routine deterioration nudges paused; a hard EXIT is never suppressed.">🌱 settling</span></td><td>60</td><td>$21.10</td><td>$1,266</td><td class="loss">-0.62%</td><td class="loss">-3.1%</td><td>5.3%</td></tr>
+        <tr><td>MSFT</td><td>8</td><td>$512.30</td><td>$4,098</td><td class="calm">—</td><td class="gain">+4.7%</td><td>17.1%</td></tr>
+        <tr><td>COF</td><td>15</td><td>$198.55</td><td>$2,978</td><td class="loss">-2.14%</td><td class="loss">-8.9%</td><td>12.4%</td></tr>
+        <tr><td>ALB<span class="chip" title="Settling — day 2/10. Routine deterioration nudges paused; a hard EXIT is never suppressed.">🌱 settling</span></td><td>25</td><td>$143.25</td><td>$3,581</td><td class="gain">+0.31%</td><td class="gain">+1.2%</td><td>14.9%</td></tr>
+      </tbody>
+    </table>
+    <div class="caption">🌱 <b>2 positions settling</b> (held &lt; 10 days). Routine TRIM/WATCH deterioration nudges are paused for these while they find their feet — only a hard EXIT can fire. This is by design, not an all-clear.</div>
+    <div class="note">
+      <b>Why no "N days remaining" countdown:</b> the review's original wording implied a promise ("a TRIM will fire in N days"), which the ladder can't honor — its drawdown-from-peak read changes daily and can clear on its own. The chip and caption above make <i>no claim about which tier would fire</i>, only that nudges are paused. Tooltip states the age but never a forecast.
+    </div>
+  </div>
+
+  <!-- ============ D1 TIER 2 (optional) ============ -->
+  <div class="section" style="opacity:0.85">
+    <span class="section-tag">D1 — optional escalation, deferred unless Tier 1 proves too vague</span>
+    <span class="verdict-tag v-tier2">TIER 2 — GATED, NEEDS REVIEWER</span>
+    <p class="page-name">Same row, if ever escalated</p>
+    <table>
+      <thead><tr><th>Ticker</th><th>Shares</th><th>Price</th><th>Value</th><th>Day Δ%</th><th>Total Δ%</th><th>Weight</th></tr></thead>
+      <tbody>
+        <tr><td>HPE<span class="chip" style="background:#422006;color:#fbbf24" title="Currently reads as a TRIM shape — held back while settling (day 6/10). Re-checked daily; may clear on its own.">🌱 TRIM-shape, held</span></td><td>60</td><td>$21.10</td><td>$1,266</td><td class="loss">-0.62%</td><td class="loss">-3.1%</td><td>5.3%</td></tr>
+      </tbody>
+    </table>
+    <div class="caption">🌱 <b>HPE</b> shows a TRIM shape today, held back — this name currently reads as a deterioration nudge, but nudges are paused while it settles (day 6/10). Re-checked daily; may clear on its own. Awareness only.</div>
+    <div class="note">Requires a new would-be-tier recompute inside <code>exit_advisor.py</code> (a <code>_GATE_FILES</code> member) → mandatory Opus reviewer + boundary tests, and a strict guarantee this new signal never leaks into <code>deterioration_signals()</code>/<code>exit_signals</code> capture. <b>Not built unless Tier 1 turns out insufficient.</b></div>
+  </div>
+
+  <!-- ============ D2 ============ -->
+  <div class="section">
+    <span class="section-tag">D2 — 📒 Trade Journal → 📊 Performance tab · Hold Time Analysis</span>
+    <span class="verdict-tag v-tier1">SAFE, NO GATE</span>
+    <p class="page-name">📒 Trade Journal → 📊 Performance → Hold Time Analysis <span style="color:#f0c24b;font-size:0.75rem">(corrected — NOT 🪞 Trade Review, a separate page)</span></p>
+    <div class="metrics-row">
+      <div class="metric">
+        <div class="metric-label">Winners: avg hold</div>
+        <div class="metric-value">18 days</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Losers: avg hold</div>
+        <div class="metric-value">9 days</div>
+        <div class="metric-help" style="color:#86efac">Cutting losers faster ✓</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Sample size</div>
+        <div class="metric-value">139 matched pairs</div>
+      </div>
+      <div class="metric new">
+        <div class="metric-label">Sold while settling <span class="new-badge">NEW</span></div>
+        <div class="metric-value">22 of 139 (16%)</div>
+        <div class="metric-help">Round trips closed in fewer than 10 days — inside the settling-grace window, before the deterioration ladder's TRIM/WATCH nudges could fire. Descriptive of past closed trades only.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ E4 ============ -->
+  <div class="section">
+    <span class="section-tag">E4 — 🧾 Summary · Engine Track Record card (Offense facet)</span>
+    <span class="verdict-tag v-tier1">SAFE, NO GATE</span>
+    <p class="page-name">🎯 Engine Track Record</p>
+    <div class="card-border">
+      <span class="badge" style="color:#57d98a">WORKING ✓</span> &nbsp;·&nbsp; <span style="font-weight:700;font-size:1.1rem;color:#57d98a">+8.3pp</span>
+      <div class="basis">
+        <span class="diff-old">42 matured · avg alpha vs SPY</span><br>
+        <span class="diff-new">42 matured · avg alpha vs SPY · all-time (since Jan 1, 2020)</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <span class="section-tag">E4 — 📊 Predictive Analytics · Discretion Value tab</span>
+    <span class="verdict-tag v-tier1">SAFE, NO GATE</span>
+    <p class="page-name">⚖️ Discretion Value</p>
+    <div class="caption">When the engine surfaced a signal and you passed, did you make the right call? Compares the alpha of recommendations you acted on vs recommendations you passed.</div>
+    <div class="caption" style="color:#86efac;border-left:2px solid #57d98a;padding-left:8px;margin-top:6px;">
+      <span class="new-badge">NEW</span> &nbsp;Window: all-time — every matured BUY call, no date filter.
+    </div>
+  </div>
+
+  <div class="section">
+    <span class="section-tag">E4 — 📜 Recommendations History</span>
+    <span class="verdict-tag v-tier1">SAFE, NO GATE (optional — window already visible via selectbox)</span>
+    <p class="page-name">📊 Summary tab</p>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+      <span class="caption" style="margin:0">Window:</span>
+      <span style="background:#111827;border:1px solid #334155;border-radius:6px;padding:4px 10px;font-size:0.85rem">Last 30 days ▾</span>
+    </div>
+    <div class="caption" style="color:#86efac;border-left:2px solid #57d98a;padding-left:8px;">
+      <span class="new-badge">NEW</span> &nbsp;Figures below reflect the <b>Last 30 days</b> window selected above — a different window than the all-time Summary/Predictive Analytics figures.
+    </div>
+  </div>
+
+  <div class="section" style="background:rgba(87,217,138,0.05);border-color:#166534">
+    <span class="section-tag">E4 — ✉️ Monthly report email — CONFIRMED, no change needed</span>
+    <span class="verdict-tag v-tier1">ALREADY DISCLOSED</span>
+    <p class="page-name">DRISHTA Monthly Intelligence</p>
+    <div class="caption">Checked <code>notify.py:1314-1374</code>: the email header already renders <code>{period_start} → {period_end}</code> (e.g. "2026-08-24 → 2026-09-21") directly under the title. Nothing to add here — confirms E4 stays entirely non-gated (no <code>cron_runner.py</code> touch needed).</div>
+  </div>
+</div>
+</body>
+</html>

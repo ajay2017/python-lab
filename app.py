@@ -101,6 +101,7 @@ from stock_analyzer.rebalancer import (
 from stock_analyzer.constants import (
     DB_OUTAGE_SAFE_PAGES,
     DB_RELOAD_RETRY_SEC,
+    POSITION_SETTLING_DAYS,
     PORTFOLIO_BETA_CEILING,
     PORTFOLIO_BETA_ELEVATED,
     PORTFOLIO_DRAWDOWN_ACTION_MAX,
@@ -231,7 +232,7 @@ from stock_analyzer.thesis_red_team import (
 )
 from stock_analyzer.severity import ACT_NOW, WATCH as _SEV_WATCH, STEADY, SEVERITY_RANK, style as _severity_style
 from stock_analyzer.analyst_targets import detect_pt_cut
-from stock_analyzer.position_lifecycle import lifecycle_badge
+from stock_analyzer.position_lifecycle import lifecycle_badge, classify_position_state
 from stock_analyzer.decision_bucket import (
     split_defensive, reduce_call_items, suppress_orphans_under_reduce_call,
     bucket_act_by_type,
@@ -1384,7 +1385,13 @@ def _render_holdings_table(port_df) -> None:
     # move to today. Absent (Home hasn't run this session) means no
     # exclusion, matching every other reader of this same session_state key.
     _hxc_bad = st.session_state.get("_xc_bad_prev_tickers") or set()
+    # 2026-09-24 app review D1 (Tier 1 — generic disclosure only, no
+    # specific-tier claim; see position_lifecycle.py's own module docstring
+    # for why age=None never yields "settling", so a missing/offline
+    # held_data safely degrades AWAY from this badge, never fabricates it).
+    _hold_held_data = st.session_state.get("_last_held_data")
     _hold_rows = []
+    _hold_settling_n = 0
     for _, _hr in port_df.iterrows():
         _ht      = str(_hr["Ticker"])
         _hlive   = _live_px.get(_ht, {})
@@ -1402,9 +1409,22 @@ def _render_holdings_table(port_df) -> None:
             _hday_disp  = f"{_hday:+.2f}%" if _hday is not None else "—"
             _hday_color = (_HOME_GAIN if _hday >= 0 else _HOME_LOSS) if _hday is not None else _HOME_CALM
         _htot_color = _HOME_GAIN if _htotal >= 0 else _HOME_LOSS
+        _hage = _hold_held_data.get(_ht, {}).get("position_age_days") if _hold_held_data else None
+        _hstate = classify_position_state(_hage, _htotal, _hr.get("Gap to Stop (%)"), has_exit_signal=False)
+        if _hstate == "settling":
+            _hold_settling_n += 1
+            _hticker_cell = (
+                f"{_ht}<span style='display:inline-block;font-size:0.62rem;font-weight:700;"
+                f"padding:1px 6px;border-radius:10px;margin-left:6px;background:#14532d;"
+                f"color:#86efac' title='Settling — day {int(_hage)}/{POSITION_SETTLING_DAYS}. "
+                f"Routine deterioration nudges paused; a hard EXIT is never suppressed.'>"
+                f"🌱 settling</span>"
+            )
+        else:
+            _hticker_cell = _ht
         _hold_rows.append(
             f"<tr>"
-            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;font-weight:700'>{_ht}</td>"
+            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;font-weight:700'>{_hticker_cell}</td>"
             f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hshares_txt}</td>"
             f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>${_hprice:,.2f}</td>"
             f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hval_txt}</td>"
@@ -1431,6 +1451,12 @@ def _render_holdings_table(port_df) -> None:
         + "</tbody></table></div>",
         unsafe_allow_html=True,
     )
+    if _hold_settling_n > 0:
+        st.caption(
+            f"🌱 **{_hold_settling_n} position(s) settling** (held < {POSITION_SETTLING_DAYS} days). "
+            "Routine TRIM/WATCH deterioration nudges are paused for these while they find "
+            "their feet — only a hard EXIT can fire. This is by design, not an all-clear."
+        )
 
 
 def _render_section_label(label: str, top_margin: int = 18) -> None:
@@ -12759,7 +12785,19 @@ elif page == "🧾 Summary":
                 _etr_badge, _etr_bcol = "EARLY READ", "#f0c24b"
             _etr_val  = f"{_etr_alpha:+.1f}pp"
             _etr_vcol = "#57d98a" if _etr_alpha > 0 else "#fca5a5"
-            _etr_basis = f"{_etr_n} matured · avg alpha vs SPY"
+            # 2026-09-24 app review E4: state the window inline rather than
+            # aligning it with Rec History/Predictive Analytics' own windows
+            # (rejected -- this card's all-time window is deliberately
+            # coupled to Rec History's "All time" via a shared price-cache
+            # key, app.py:12314-12319, precisely so the two can never
+            # disagree; realigning either would break that).
+            _etr_since_txt = (
+                _etr_since.strftime("%b %d, %Y") if hasattr(_etr_since, "strftime")
+                else str(_etr_since)
+            ) if _etr_since else None
+            _etr_basis = f"{_etr_n} matured · avg alpha vs SPY" + (
+                f" · all-time (since {_etr_since_txt})" if _etr_since_txt else ""
+            )
 
         # ── Defense facet: same bands as before ──────────────────────────────
         # 2026-09-24 app review, B1 — badge/color decision extracted into
@@ -27816,7 +27854,7 @@ elif page == "📒 Trade Journal":
                 _hs = _ta["hold_stats"]
                 if _hs.get("avg_hold_days") and _hs.get("winners_avg_days") and _hs.get("losers_avg_days"):
                     st.markdown("#### Hold Time Analysis")
-                    _ht1, _ht2, _ht3 = st.columns(3)
+                    _ht1, _ht2, _ht3, _ht4 = st.columns(4)
                     _ht1.metric("Winners: avg hold", f"{_hs['winners_avg_days']:.0f} days")
                     _ht2.metric("Losers: avg hold",  f"{_hs['losers_avg_days']:.0f} days",
                                 delta=(
@@ -27831,6 +27869,17 @@ elif page == "📒 Trade Journal":
                                 ))
                     _ht3.metric("Sample size", f"{_hs['sample_size']} matched pairs",
                                 help="Trades where a BUY was found before the SELL for the same ticker")
+                    # 2026-09-24 app review D2: descriptive of past closed
+                    # trades only -- no live suppression logic involved.
+                    _ht4.metric(
+                        "Sold while settling",
+                        f"{_hs['settling_sold_n']} of {_hs['sample_size']} ({_hs['settling_sold_pct']:.0f}%)",
+                        help=(
+                            f"Round trips closed in fewer than {POSITION_SETTLING_DAYS} days — "
+                            "inside the settling-grace window, before the deterioration ladder's "
+                            "TRIM/WATCH nudges could fire. Descriptive of past closed trades only."
+                        ),
+                    )
 
                 # ── Trading Volume ────────────────────────────────────────────────
                 st.markdown("#### Trading Volume")
@@ -30110,6 +30159,11 @@ elif page == "📜 Recommendations History":
     ])
 
     with _rh_tab_sum:
+        # 2026-09-24 app review E4: the window is already visible via the
+        # "Date range" selectbox above, but restate it here so a screenshot
+        # of just this tab is self-describing -- a different window than
+        # Summary's/Predictive Analytics' own all-time figures.
+        st.caption(f"Window: **{_rh_range_label}** ({_rh_start} → {_rh_end}), from the selector above.")
         # ── Headline metrics ────────────────────────────────────────────────────
         _rh_stats = summary_stats(_rh_enriched)
         _rh_m1, _rh_m2, _rh_m3, _rh_m4 = st.columns(4)
@@ -31125,6 +31179,10 @@ elif page == "📊 Predictive Analytics":
             "When the engine surfaced a signal and you passed, did you make the right call? "
             "Compares the alpha of recommendations you acted on vs recommendations you passed."
         )
+        # 2026-09-24 app review E4: this reads the full rec set with no date
+        # filter -- state that plainly so a reader doesn't assume it shares
+        # a window with Recommendations History's own selectable range.
+        st.caption("Window: all-time — every matured BUY call, no date filter.")
 
         _avm_acted  = _pac_avm["acted"]
         _avm_missed = _pac_avm["missed"]

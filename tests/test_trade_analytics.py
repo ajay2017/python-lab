@@ -252,6 +252,26 @@ def test_build_hold_time_stats_happy_path():
     assert stats["winners_avg_days"] == 10.0
     assert stats["losers_avg_days"] == 5.0
     assert stats["sample_size"] == 2
+    # BBB held 5 days (< POSITION_SETTLING_DAYS=10) -> counts; AAA held
+    # exactly 10 days -> does NOT count (strict `<`, matches exit_advisor's
+    # own in_settling check).
+    assert stats["settling_sold_n"] == 1
+    assert stats["settling_sold_pct"] == 50.0
+
+
+def test_build_hold_time_stats_settling_sold_boundary_at_exactly_the_floor():
+    """hold_days == POSITION_SETTLING_DAYS (10) is NOT settling-sold; one day
+    shorter (9) IS -- the boundary must match exit_advisor's own strict `<`."""
+    df = _trades_df([
+        _buy(ticker="AAA", traded_at="2026-01-01"),
+        _sell(ticker="AAA", traded_at="2026-01-11", realized_pnl=10.0),  # exactly 10 days
+        _buy(ticker="BBB", traded_at="2026-01-01"),
+        _sell(ticker="BBB", traded_at="2026-01-10", realized_pnl=10.0),  # exactly 9 days
+    ])
+    ext = ta.compute_extended_stats(df)
+    stats = ta.build_hold_time_stats(ext)
+    assert stats["settling_sold_n"] == 1
+    assert stats["settling_sold_pct"] == 50.0
 
 
 # ─── _build_overtrading_stats ────────────────────────────────────────────────

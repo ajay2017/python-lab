@@ -15,6 +15,8 @@ import numpy as np
 import pytz as _pytz
 from datetime import datetime as _dt
 
+from stock_analyzer.constants import POSITION_SETTLING_DAYS
+
 _ET = _pytz.timezone("America/New_York")
 
 
@@ -188,12 +190,22 @@ def build_hold_time_stats(ext_df: pd.DataFrame) -> dict:
     hd_win = hd[hd["realized_pnl"] > 0]["hold_days"]
     hd_los = hd[hd["realized_pnl"] < 0]["hold_days"]
 
+    # 2026-09-24 app review D2: how much of the closed book was sold WHILE
+    # still inside the settling-grace window (the same POSITION_SETTLING_DAYS
+    # the deterioration ladder uses to suppress routine TRIM/WATCH nudges on
+    # a young position) -- purely descriptive of past closed trades, no live
+    # suppression logic touched. Strict `<` matches exit_advisor's own
+    # `age_days < POSITION_SETTLING_DAYS` "in_settling" check.
+    settling_sold_n = int((hd["hold_days"] < POSITION_SETTLING_DAYS).sum())
+
     return {
         "avg_hold_days":     round(float(hd["hold_days"].mean()), 1),
         "median_hold_days":  round(float(hd["hold_days"].median()), 1),
         "winners_avg_days":  round(float(hd_win.mean()), 1) if not hd_win.empty else None,
         "losers_avg_days":   round(float(hd_los.mean()), 1) if not hd_los.empty else None,
         "sample_size":       len(hd),
+        "settling_sold_n":   settling_sold_n,
+        "settling_sold_pct": round(100.0 * settling_sold_n / len(hd), 0),
     }
 
 
