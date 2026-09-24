@@ -172,6 +172,34 @@ def _macro_coverage_banner(expired: "list[dict] | None") -> str:
     )
 
 
+def _exit_check_unavailable_banner() -> str:
+    """"Could not check for exits" disclosure for the morning-action email.
+
+    2026-09-24 app review, Top-5 #1 / A1. Deliberately NOT modelled on
+    `_book_drift_banner`'s silence-on-None: that None is mostly benign (no
+    broker linked, no capture yet), so firing on every such email would be
+    the amber-fatigue its own docstring warns against. This banner's trigger
+    is different in kind — `exit_signals` is written every premarket run for
+    every held ticker, so a failed read here is never "not configured," it
+    is always a genuine check failure. Absent this banner, an empty
+    exit_alerts list is indistinguishable from "checked, nothing to exit" —
+    on the one email that also tells the user to deploy new capital. Always
+    renders when called; the caller (`render_daily_action_email`) is
+    responsible for calling it only when the read actually failed.
+    """
+    return (
+        f'<div style="border-left:4px solid #f59e0b;background:#1c1710;border-radius:0 6px 6px 0;'
+        f'padding:12px 16px;margin:0 0 16px 0;font-family:Arial,Helvetica,sans-serif">'
+        f'<div style="color:#f59e0b;font-weight:700;font-size:12px;letter-spacing:.3px">'
+        f'⚠️ COULD NOT CHECK FOR EXITS TODAY</div>'
+        f'<div style="color:#cbd5e1;font-size:12px;margin-top:4px">'
+        f'The exit-signal read failed, so this is NOT a clean check — it does '
+        f'not mean you have nothing to exit. Open \U0001f3e0 Home to confirm '
+        f'before acting on the pick below.</div>'
+        f'</div>'
+    )
+
+
 # Per-kind accent + headline label for the email cards.
 _KIND_STYLE = {
     "stop_breach":        ("#ef4444", "🛑 STOP BREACH"),
@@ -579,11 +607,13 @@ def render_daily_action_email(
     built_at: str,
     book_drift: dict | None = None,
     macro_coverage_expired: "list[dict] | None" = None,
+    exit_check_unavailable: bool = False,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the single-action morning email.
 
     Replaces the flat buy-list format with a priority-first layout:
       Section 1 (if any EXIT/TRIM signals from premarket run) — handle exits first
+      Section 1a (if the exit-signal read itself failed) — "could not check" disclosure
       Section 1b (if book_drift shows real drift) — book-vs-broker disclosure
       Section 1c (if macro calendar is overdue) — macro coverage blind-spot
       Section 2 — #1 entry action today (top composite pick, full detail)
@@ -596,6 +626,15 @@ def render_daily_action_email(
     None — see `_book_drift_banner` for when it renders (F-252 follow-up).
     `macro_coverage_expired` is from reference_shelf.expired_macro_series or
     None — see `_macro_coverage_banner` for when it renders.
+    `exit_check_unavailable` — True when the caller's own exit_signals read
+    failed (see `_resolve_exit_alerts_for_email` in cron_runner.py), so
+    `exit_alerts` being empty here does NOT mean "checked, none found." Unlike
+    `book_drift`'s None (mostly benign — not configured), a failed read here
+    is unambiguous: exit_signals is written every premarket run for every
+    held ticker, so this is always a genuine check failure, and this is the
+    one email that also recommends deploying new capital — see
+    `_exit_check_unavailable_banner` for when it renders (2026-09-24 app
+    review, Top-5 #1 / A1).
     """
     from stock_analyzer.constants import SCAN_TOP_PICK_MIN_COMPOSITE
 
@@ -651,6 +690,14 @@ def render_daily_action_email(
           </div>
           {''.join(rows)}
         </div>"""
+    elif exit_check_unavailable:
+        # exit_alerts is empty here for a DIFFERENT reason than "checked, none
+        # found" -- the read itself failed. Rendering nothing would be the
+        # fabricated all-clear this fix exists to close (2026-09-24 app
+        # review, A1): this is the one email that also tells the user to
+        # deploy new capital, so its absence must never be read as "no exits
+        # to handle."
+        exit_html = _exit_check_unavailable_banner()
 
     # ── Section 1b: book-vs-broker drift disclosure (if any) ─────────────────
     drift_html = _book_drift_banner(book_drift)

@@ -1375,17 +1375,55 @@ def _mature_earnings_predictions(now_et) -> dict:
     }
 
 
-def _daily_action_fingerprint(top_pick: dict, exit_alerts: list[dict]) -> str:
+def _resolve_exit_alerts_for_email(today_str: str) -> tuple[list[dict], bool]:
+    """Fetch today's EXIT/TRIM signals for the morning-action email.
+
+    Returns (exit_alerts, check_failed). `check_failed=True` means the
+    exit_signals read itself failed (no DB credentials, or a raised
+    exception) — distinct from a genuine zero-row day. Uses
+    `db.load_exit_signals_or_none()`, NOT `db.load_exit_signals()`: the
+    latter's own docstring says its except branch "returns the same empty
+    DataFrame either way" on failure or on a genuine zero-row result, which
+    is exactly the fabricated-all-clear this helper exists to avoid (2026-09-24
+    app review, Top-5 #1 / A1) — the caller must be able to disclose "could
+    not check" rather than silently rendering as if the check succeeded and
+    found nothing, on the one email that also tells the user to deploy new
+    capital.
+    """
+    try:
+        signals_df = db.load_exit_signals_or_none(days_back=1)
+        if signals_df is None:
+            return [], True
+        if (signals_df.empty
+                or "signal_date" not in signals_df.columns
+                or "signal_type" not in signals_df.columns):
+            return [], False
+        _today_rows = signals_df[
+            (signals_df["signal_date"].astype(str) == today_str) &
+            (signals_df["signal_type"].isin(["EXIT", "TRIM"]))
+        ]
+    except Exception:
+        return [], True
+    return _today_rows.to_dict("records"), False
+
+
+def _daily_action_fingerprint(
+    top_pick: dict, exit_alerts: list[dict], exit_check_unavailable: bool = False,
+) -> str:
     """Stable hash of the morning action brief: top ticker+score + any EXIT/TRIM
     set. Re-fires when the top pick changes or exit signals change; silent when
-    only secondary picks shuffle."""
+    only secondary picks shuffle. Also re-fires when the exit-check STATE
+    changes (clean <-> failed) — a day where the check starts failing (or
+    recovers) is itself a legitimate re-fire condition, not something dedup
+    should mask against yesterday's fingerprint (2026-09-24 app review, A1)."""
     top_t = str(top_pick.get("ticker") or "").upper()
     top_c = round(float(top_pick.get("composite_score") or 0), 1)
     exits = sorted(
         f"{str(a.get('ticker') or '').upper()}:{a.get('signal_type', '')}"
         for a in exit_alerts if a.get("ticker")
     )
-    key = f"{top_t}:{top_c}|" + "|".join(exits)
+    _check_state = "FAILED" if exit_check_unavailable else "OK"
+    key = f"{top_t}:{top_c}|{_check_state}|" + "|".join(exits)
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 
@@ -1547,24 +1585,20 @@ def _run_scan(now_et, force: bool) -> int:
 
         # Pull today's EXIT/TRIM signals from the premarket run so the email can
         # warn the user to handle exits before entering any new position.
-        exit_alerts: list[dict] = []
-        try:
-            signals_df = db.load_exit_signals(days_back=1)
-            if signals_df is not None and not signals_df.empty and "signal_date" in signals_df.columns:
-                _today_rows = signals_df[
-                    (signals_df["signal_date"].astype(str) == today_str) &
-                    (signals_df["signal_type"].isin(["EXIT", "TRIM"]))
-                ]
-                exit_alerts = _today_rows.to_dict("records")
-        except Exception as _e:
-            _log(f"exit_signals load for scan email failed: {str(_e)[:80]} — skipping exit section.")
-
-        if exit_alerts:
+        # `_resolve_exit_alerts_for_email` distinguishes a genuine zero-row day
+        # from a failed read (2026-09-24 app review, A1) — a failure must
+        # disclose "could not check" in the email itself, not silently render
+        # as if the check succeeded and found nothing.
+        exit_alerts, exit_check_unavailable = _resolve_exit_alerts_for_email(today_str)
+        if exit_check_unavailable:
+            _log("exit_signals load for scan email failed — email will disclose "
+                 "'could not check', not omit the section.")
+        elif exit_alerts:
             _log(f"exit alerts in email: " + ", ".join(
                 f"{a.get('ticker')}/{a.get('signal_type')}" for a in exit_alerts
             ))
 
-        fp = _daily_action_fingerprint(top_pick, exit_alerts)
+        fp = _daily_action_fingerprint(top_pick, exit_alerts, exit_check_unavailable)
         state = db.load_alert_state(_BUY_ROW) or {}
         if (state.get("last_emailed_date") == today_str
                 and state.get("last_fingerprint") == fp and not force):
@@ -1577,6 +1611,7 @@ def _run_scan(now_et, force: bool) -> int:
                 built_at=payload.get("built_at", today_str),
                 book_drift=payload.get("book_drift"),
                 macro_coverage_expired=payload.get("macro_coverage"),
+                exit_check_unavailable=exit_check_unavailable,
             )
             sent = _send_email("morning-action", subject, html)
             # Save dedup state ONLY on a real send — so a transient Resend failure

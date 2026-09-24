@@ -273,6 +273,60 @@ def test_render_daily_action_email_other_picks_rendered():
     assert "OTHER SETUPS" in body
 
 
+# ─── _exit_check_unavailable_banner / exit_check_unavailable wiring ─────────
+# (2026-09-24 app review, Top-5 #1 / A1 — the fabricated-all-clear fix)
+
+def test_exit_check_unavailable_banner_always_renders_when_called():
+    banner = notify._exit_check_unavailable_banner()
+    assert "COULD NOT CHECK FOR EXITS" in banner
+    assert "NOT a clean check" in banner
+
+
+def test_daily_action_email_silent_by_default_no_exits_no_failure():
+    """The ordinary, healthy day: no exit alerts, check succeeded — neither
+    the real exit banner nor the unavailable banner should render."""
+    top_pick = _pick(ticker="AAA")
+    _, body = notify.render_daily_action_email(top_pick, [], [], "2026-01-15 08:00:00")
+    assert "HANDLE EXITS BEFORE ENTERING" not in body
+    assert "COULD NOT CHECK FOR EXITS" not in body
+
+
+def test_daily_action_email_discloses_when_exit_check_failed():
+    top_pick = _pick(ticker="AAA")
+    _, body = notify.render_daily_action_email(
+        top_pick, [], [], "2026-01-15 08:00:00", exit_check_unavailable=True,
+    )
+    assert "COULD NOT CHECK FOR EXITS" in body
+    assert "HANDLE EXITS BEFORE ENTERING" not in body
+
+
+def test_daily_action_email_real_exit_alerts_take_priority_over_unavailable_flag():
+    """A caller bug could theoretically pass both a populated exit_alerts
+    list AND exit_check_unavailable=True — real, named alerts must win; the
+    generic 'could not check' banner must never bury a specific ticker."""
+    top_pick = _pick(ticker="AAA")
+    exit_alerts = [{"ticker": "ZZZ", "signal_type": "EXIT"}]
+    _, body = notify.render_daily_action_email(
+        top_pick, exit_alerts, [], "2026-01-15 08:00:00", exit_check_unavailable=True,
+    )
+    assert "HANDLE EXITS BEFORE ENTERING" in body
+    assert "ZZZ" in body
+    assert "COULD NOT CHECK FOR EXITS" not in body
+
+
+def test_daily_action_email_sizing_text_unchanged_when_exit_check_unavailable():
+    """The disclosure must never alter the suggested share size — same
+    invariant as the book_drift banner's own equivalent test."""
+    top_pick = _pick(ticker="AAA")
+    _, body_ok     = notify.render_daily_action_email(top_pick, [], [], "2026-01-15 08:00:00")
+    _, body_failed = notify.render_daily_action_email(
+        top_pick, [], [], "2026-01-15 08:00:00", exit_check_unavailable=True,
+    )
+    for body in (body_ok, body_failed):
+        assert "10 shares" in body
+        assert "2.0% of book" in body
+
+
 # ─── _book_drift_banner (F-252 follow-up, 2026-08-24) ────────────────────────
 
 def test_book_drift_banner_silent_for_none():
