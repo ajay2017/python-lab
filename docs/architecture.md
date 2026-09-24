@@ -3051,7 +3051,7 @@ footnotes, never picking one over the other. Surfaces both pre-registered dates 
 3-month-from-`min(fired_date)` sanity checkpoint (row-count only, not a verdict) and the
 12-month-from-`min(fired_date)` per-rec_type retirement date.
 
-Rendered on the new owner-only **"🎯 Recommendation Outcomes"** page (RESEARCH nav group,
+Rendered on the new owner-only **"🎖️ Recommendation Outcomes"** page (RESEARCH nav group,
 alongside "🛑 The Road Not Taken") — retrospective/awareness only, never Act Today material.
 Tax-harvest is explicitly out of scope for this readout; it stays on Phase 1a's non-banded
 `tax_advisor.harvest_outcomes_summary()` running total. Opus `reviewer`: SHIP, 0 blocking.
@@ -3220,7 +3220,7 @@ never a second computation. It delegates ALL alpha/banding math to the already-s
 equivalence test (`test_recs_delegation_equals_direct_readout_call`/
 `test_gates_delegation_equals_direct_readout_call`) calls the real delegate functions directly on
 the same filtered input and asserts identical output, so this page cannot silently drift from
-🎯 Recommendation Outcomes / 🛑 The Road Not Taken.
+🎖️ Recommendation Outcomes / 🛑 The Road Not Taken.
 
 **Six independent sections** (`return_vs_spy`, `trade_behavior`, `recs`, `gates`,
 `leverage_drift`, `risk_drift`), each its own `{"status": "offline"|"empty"|"ok", ...}` —
@@ -3384,7 +3384,7 @@ fetch_live_prices()         # Called by 60s auto-refresh fragment (Finnhub real-
 **Railway Hobby is the primary deploy** (`drishta.up.railway.app`) as of the 2026-08-15
 cutover, after a 3-week parallel pilot that ran clean from 2026-07-24 — full phase log
 and rationale in [docs/plans/railway-migration.md](plans/railway-migration.md). The same
-Railway project also hosts all 6 cron lanes (§12.6).
+Railway project also hosts all 7 cron lanes (§12.6).
 
 Streamlit Community Cloud is **retained as a dormant cold fallback**: it still auto-deploys
 from the same `main` branch against the same Supabase DB, but it is not the surface changes

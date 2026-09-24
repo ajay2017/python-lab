@@ -114,7 +114,7 @@ return-vs-SPY framing.
   `MIN_TICKERS`(5)/`HORIZON_TRADING_DAYS`(30)/`ACTION_WINDOW_TRADING_DAYS`(10);
   `GATE_LEDGER_MIN_CALLS`(8)/`FIRM_CALLS`(15)/`MIN_TICKERS`(5)/`HORIZON_TRADING_DAYS`(30).
 - Existing wiring to mirror: 🛑 Road Not Taken's dependency-loading pattern (`app.py` ~L32060-32101,
-  SPY→`spy_by_date`, `enrich_and_grade`, `grade_by_gate`); 🎯 Recommendation Outcomes' pattern
+  SPY→`spy_by_date`, `enrich_and_grade`, `grade_by_gate`); 🎖️ Recommendation Outcomes' pattern
   (~L32207-32277, `load_portfolio_risk_snapshots`→`snap_by_date`, SPY, trades, protective tickers
   from `_reduce_calls` via `.get()` + explicit `is None → set()`, never `or {}`). The Performance
   Review placeholder to replace is at ~L34958-34964, inside the existing `📄 Reports` tab.
@@ -152,7 +152,7 @@ options, all honoring "synthesis, not recomputation":
 **Second, smaller confirmation:** a period below the standalone pages' 8-call/5-ticker floors
 shows RAW period counts + the matured-subset mean alpha as an explicitly-labeled *descriptive*
 stat, and **never** re-renders a "building"/"early"/"firm" band that could visually contradict the
-all-time verdict on 🛑 Road Not Taken / 🎯 Recommendation Outcomes — a framing choice, not a
+all-time verdict on 🛑 Road Not Taken / 🎖️ Recommendation Outcomes — a framing choice, not a
 threshold change. Confirm this default.
 
 ### Plan (supersedes the sketch below for Phase 2)
@@ -250,7 +250,7 @@ threshold change. Confirm this default.
 **Owner decisions, final:**
 1. **FIFO** lot-matching for the ST/LT split, with a reconciliation line vs the stored
    average-cost `realized_pnl` total and a visible divergence note if they don't match.
-2. **Owner-only gating** — same check as 🛑 The Road Not Taken / 🎯 Recommendation Outcomes.
+2. **Owner-only gating** — same check as 🛑 The Road Not Taken / 🎖️ Recommendation Outcomes.
 3. **No estimated tax owed** in v1 — ST/LT realized totals + wash-sale flags only ("informational
    reconciliation, not tax advice").
 4. **Custom date-range picker + Quarter/Year quick-presets** for the performance review.
@@ -299,7 +299,7 @@ realized tax report must do FIFO lot-matching itself** — no stored field gives
 
 **Performance-review sources to synthesize (all pure, none in `_GATE_FILES`, reuse — don't
 recompute):**
-- `rec_events_readout.py` (🎯 Recommendation Outcomes), `gate_ledger_readout.py` (🛑 The Road Not
+- `rec_events_readout.py` (🎖️ Recommendation Outcomes), `gate_ledger_readout.py` (🛑 The Road Not
   Taken), `trade_analytics.py` (`compute_extended_stats`, `build_monthly_trend`,
   `build_trigger_breakdown`), `self_track_record.py` / `protective_track_record.py` /
   `benchmark_mirror.py` (return-vs-SPY / alpha), `account_daily_snapshots` +
@@ -331,7 +331,7 @@ reportlab/weasyprint/fpdf. Nav has 28 pages; no Reports/Export page today.
    Quarter/Year quick-presets (calendar-quarter buttons + "this tax year"). Confirm quarterly is
    the primary framing.
 5. **Nav placement.** ~~Recommended: insert "📄 Reports" in the owner-admin cluster, adjacent to
-   💰 Account / 🎯 Recommendation Outcomes.~~ **Superseded by the owner's final call above: a third
+   💰 Account / 🎖️ Recommendation Outcomes.~~ **Superseded by the owner's final call above: a third
    tab on the 💰 Account page itself, not a new sidebar page.**
 
 ## Plan

@@ -19,7 +19,7 @@
 - **Part I — Using it day-to-day**
   - I.1 First run (get your data in — the one step that everything else trusts)
   - I.2 The daily loop
-  - I.3 Page-by-page tour (all 23 pages, in nav order)
+  - I.3 Page-by-page tour (all 28 pages, in nav order)
 - **Part II — How it works behind the scenes**
   - II.1 The composite score (4 pillars)
   - II.2 The daily brief & decision buckets
@@ -87,7 +87,7 @@ Pre-market and end-of-day, the **email cron** may have already sent you a protec
 
 ## I.3 Page-by-page tour
 
-23 pages, grouped exactly as the sidebar groups them. For each: *what it's for · when to look · key tabs · what to do.*
+28 pages, grouped exactly as the sidebar groups them. For each: *what it's for · when to look · key tabs · what to do.*
 
 ### Group: MAIN
 
@@ -113,15 +113,17 @@ Pre-market and end-of-day, the **email cron** may have already sent you a protec
 
 **🌐 Macro** — *Regime & sector-rotation awareness.* A manual-load regime read (TLT/SPY/VIX proxy, F-211), sector-rotation playbook + portfolio macro-alignment (F-213). ⚠️ Landmine (F-212): this ETF-proxy read is **not** the FRED-based 7-signal regime detector used elsewhere — don't confuse them.
 
-**📊 Predictive Analytics** (F-178) — *Your personal edge map.* Six tabs: 🎯 Score Calibration | ⚖️ Decision Quality | 🏷️ Signal Breakdown | 🌐 Sector Alpha | 🧭 Sentiment Alignment (F-179) | ⏱️ Entry Timing (F-220). Measurement-only — none of it feeds back into the engine. Look to learn where *your* edge actually comes from.
+**📊 Predictive Analytics** (F-178) — *Your personal edge map.* Six tabs: 🎯 Score Calibration | ⚖️ Discretion Value (renamed 2026-09-24, was "Decision Quality" — collided in name with 🎯 My Edge's own tab of that name) | 🏷️ Signal Breakdown | 🌐 Sector Alpha | 🧭 Sentiment Alignment (F-179) | ⏱️ Entry Timing (F-220). Measurement-only — none of it feeds back into the engine. Look to learn where *your* edge actually comes from.
 
 **🔬 Model Lab** (F-234) — *Owner-only, experimental.* Quarantined forward-volatility shadow layer: 20-day EWMA vol forecast per held ticker + portfolio, scored against a naive persistence baseline. Feeds no gate, no recommendation, no composite. Dead-end by design — a measurement harness to validate before any signal is ever wired in.
 
 **🛑 The Road Not Taken** (F-259b, added 2026-09-02 to this manual — page shipped 2026-08-30) — *Owner-only, retrospective gate grading.* Reads the Gate Suppression Ledger's captured data (every time a protective gate suppressed a call) and grades each gate's historical suppressions against SPY at a 30-trading-day horizon — did suppressing this call actually help? Expect most gates to show "building" for months: the N=8-calls/K=5-distinct-tickers evidence floors are deliberately conservative, and low counts on a rarely-binding gate are disclosed as exactly that, not as "rarely wrong." Awareness/retrospective only — never feeds back into any live gate.
 
-**⚙️ App Settings** (F-262, added 2026-09-02 to this manual — page shipped 2026-09-01) — *Owner-only, reference-data editor.* Lets you edit three ticker-roster reference tables (`sector_candidates`, `sector_universe`, `discovery_universe`) directly in the app instead of editing Python — additions/removals of ticker membership only. **Bucket/sector structure itself is locked**: you cannot add, rename, or delete a bucket, which is what protects a downstream coupling (`portfolio._DIVERSIFY_TO_DISCOVERY`) without needing a live orphan-guard. Every save is validated against `portfolio.TICKER_SECTORS` before it's accepted — an unmapped ticker is rejected rather than silently creating a macro-gate coverage hole — and every change is kept in an append-only history table so a bad edit can be traced. These three tables are pure input-set DATA, never a decision threshold; `TICKER_SECTORS` itself, `NYSE_HOLIDAYS`, and `SECTOR_ETF` were all deliberately EXCLUDED from this editor because each routes through investment-policy logic that a non-technical edit could silently break.
+**🎖️ Recommendation Outcomes** (F-273/F-273b, added 2026-09-24 to this manual — page shipped 2026-09-15/17) — *Owner-only, retrospective call grading — the other half of the same question as Road Not Taken.* Where Road Not Taken grades calls a gate **suppressed**, this page grades calls the engine actually **made**: the Rebalancer's concentration trim, the Risk Advisor's beta-card trim, and Diversification ADD recommendations, each checked against the portfolio's own risk-metric history at a ~10-trading-day action window. Trim outcomes are portfolio-level proxies (never per-ticker-causal); ADD outcomes keep the candidate's own return separate from the correlation/diversification-score shift. A call only counts as "acted on" with an exact named-ticker match, in the right direction, within the window. Same "building" floors and philosophy as Road Not Taken — a thin sample reads as unproven, not wrong.
 
 **🩺 System Trust** (F-235) — *Owner-only, pipeline-health diagnostic.* Answers "can I trust what the app told me today?" Six live checks at page load: ① Cron liveness (did each Railway lane fire?), ② Data stores (does every expected table exist with fresh data — catches unapplied DDL and silent write failures), ③ Data providers (source health this session), ④ In-session caches (what loaded this run), ⑤ Reference data — is any hand-maintained ticker list overdue for a refresh (F-238), ⑥ Interactive write outcomes — did today's recommendations-log / gate-suppression-ledger writes actually save, or silently fail (added 2026-09-01). Checks ⑤ and ④ are deliberately **excluded** from the Home chip — ⑤ is a standing chore that stays amber for weeks until a human acts, ④ is legitimately unset early in a cold session — and a permanent amber would train you to ignore the chip that also reports dead cron lanes. Check ⑥ **is** included: a swallowed write failure is a same-session pass/fail fault, not a standing chore. Each row is green/amber/red. A one-line chip appears at the top of 🏠 Home only when something is degraded; invisible when healthy. Reports only — changes no recommendation, no gate, nothing. Below the six checks, a **🤖 Portfolio Investigator — AI provider** section (F-275, added 2026-09-18) configures which AI model 🔎 Investigator uses — separate from 🤖 AI Snapshot's own provider choice, not shared or inherited. Only a model with a recorded PASS on the required refusal eval is offered.
+
+**⚙️ App Settings** (F-262, added 2026-09-02 to this manual — page shipped 2026-09-01) — *Owner-only, reference-data editor.* Lets you edit three ticker-roster reference tables (`sector_candidates`, `sector_universe`, `discovery_universe`) directly in the app instead of editing Python — additions/removals of ticker membership only. **Bucket/sector structure itself is locked**: you cannot add, rename, or delete a bucket, which is what protects a downstream coupling (`portfolio._DIVERSIFY_TO_DISCOVERY`) without needing a live orphan-guard. Every save is validated against `portfolio.TICKER_SECTORS` before it's accepted — an unmapped ticker is rejected rather than silently creating a macro-gate coverage hole — and every change is kept in an append-only history table so a bad edit can be traced. These three tables are pure input-set DATA, never a decision threshold; `TICKER_SECTORS` itself, `NYSE_HOLIDAYS`, and `SECTOR_ETF` were all deliberately EXCLUDED from this editor because each routes through investment-policy logic that a non-technical edit could silently break.
 
 ### Group: PORTFOLIO
 
@@ -292,7 +294,7 @@ Per-request timeout `LLM_REQUEST_TIMEOUT_SEC` (=30s); a timeout just yields the 
 
 ## II.11 Persistence (database) & deployment
 
-**Database:** Supabase Postgres, 30 tables (`architecture.md §6.1–6.30`). Core: `holdings`, `watchlist`, `trades` (source of truth), `manual_stops`, `daily_snapshots`, `recommendations`, `analyst_coverage`, `exit_signals`, plus caches (`bundle_cache`, `scanner_cache`, `sector_cache`, `fundamentals_cache`) and feature tables (`thesis_reviews`, `judgment_opinions/_grades`, `debate_cache`, `structural_scan_cache`, etc.).
+**Database:** Supabase Postgres, 49 tables (`architecture.md §6.1–6.49`). Core: `holdings`, `watchlist`, `trades` (source of truth), `manual_stops`, `daily_snapshots`, `recommendations`, `analyst_coverage`, `exit_signals`, plus caches (`bundle_cache`, `scanner_cache`, `sector_cache`, `fundamentals_cache`) and feature tables (`thesis_reviews`, `judgment_opinions/_grades`, `debate_cache`, `structural_scan_cache`, etc.).
 
 - **New columns must be backward-compatible** — `db.load_trades()` backfills `None` for legacy rows; additive columns are dropped-and-retried by the writer until the DDL is applied.
 - **RLS is always on** — every table is `FOR ALL TO service_role`. The Streamlit secret `[supabase] key` must be the **service-role/secret** key. "RLS blocking" errors → swap secrets & reboot, never disable RLS.

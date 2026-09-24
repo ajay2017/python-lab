@@ -14,7 +14,7 @@ original sketch had conflated the Rebalancer's concentration-driven trim with th
 risk_advisor beta-card's portfolio-beta trim under one "trim" label — these are two
 different generators predicting two different metrics. Three owner decisions resolved it:
 capture BOTH as distinct `rec_type`s (`rebal_trim`, `beta_trim`); render the banded readout
-on a new owner-only page ("🎯 Recommendation Outcomes"), not folded into an existing page;
+on a new owner-only page ("🎖️ Recommendation Outcomes"), not folded into an existing page;
 `REC_OUTCOME_ACTION_WINDOW_TRADING_DAYS = 10`. Built by `implementer` (Sonnet 5) exactly to
 that resolved spec — new `rec_events` table, `rec_events_capture.py`, `rec_events_readout.py`,
 5 new constants, 62 new tests, full suite 5627 passed. Opus `reviewer`: SHIP, 0 blocking.
