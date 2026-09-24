@@ -469,3 +469,35 @@ def test_run_scan_source_no_longer_imports_sector_universe_directly():
         "`from stock_analyzer.scanner import SECTOR_UNIVERSE`"
     )
     assert "resolve_universe_or_none" in imported
+
+
+def test_run_debrief_source_uses_the_safe_exit_signals_lookup():
+    """2026-09-24 app review, J2. AST (not a substring search), for the same
+    reason as the sibling check above: `db.load_exit_signals` (the UNSAFE
+    function) is still legitimately called elsewhere in cron_runner.py (the
+    premarket lane's velocity check, a separate, un-scoped finding) — a raw
+    substring search for "load_exit_signals" would false-positive against
+    `load_exit_signals_or_none` itself. Scoping to `_run_debrief`'s own AST
+    means this can never be fooled by another function's call, and asserts
+    the actual attribute-access call, not a mock's behavior."""
+    import ast
+    import inspect
+    import textwrap
+    import cron_runner as cr
+
+    src = inspect.getsource(cr._run_debrief)
+    tree = ast.parse(textwrap.dedent(src))
+    called_attrs = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert "load_exit_signals_or_none" in called_attrs, (
+        "_run_debrief must call db.load_exit_signals_or_none(), not the "
+        "unsafe db.load_exit_signals() whose except branch cannot "
+        "distinguish a failed read from a genuine zero-signal week"
+    )
+    assert "load_exit_signals" not in called_attrs, (
+        "_run_debrief must not ALSO call the unsafe db.load_exit_signals() "
+        "anywhere in its own body"
+    )

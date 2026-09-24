@@ -850,14 +850,29 @@ def compute_watchlist_entries(
     # transition diff and the final `entries` — never for the capture above.
 
     # Today's EXIT/TRIM/RISK_OFF protective-call tickers — never announce a BUY
-    # on a name simultaneously under an active protective call. Same
-    # non-distinguishing offline behaviour as the scan lane's own existing
-    # exit_alerts read (load_exit_signals collapses "outage" and "empty" to
-    # the same empty frame) — mirrored, not a new risk.
+    # on a name simultaneously under an active protective call. This is a HARD
+    # invariant like held_set above, not a degradable gate like beta (D-D): a
+    # wrong inclusion here would announce "buy" on a name the app itself is
+    # telling the owner to exit or trim. 2026-09-24 app review, J1: previously
+    # used the unsafe `load_exit_signals()`, whose own docstring says its
+    # except branch "returns the same empty DataFrame either way" on a failed
+    # read or a genuine zero-row day — an outage would silently empty
+    # `protective_tickers` and let a flagged name through unexcluded. Now uses
+    # `load_exit_signals_or_none()` so a genuine failure is distinguishable,
+    # and — mirroring the prior_tickers/D-B pattern a few lines below, the
+    # established precedent in THIS SAME function for "can't verify, so
+    # suppress rather than risk announcing wrongly" — a failed check
+    # suppresses the entire email-eligible set for today. Never affects
+    # `qualifying`/the capture above, which doesn't depend on this check.
     protective_tickers: set = set()
+    protective_check_failed = False
     try:
-        sig_df = db.load_exit_signals(days_back=1)
-        if sig_df is not None and not sig_df.empty and "signal_date" in sig_df.columns:
+        sig_df = db.load_exit_signals_or_none(days_back=1)
+        if sig_df is None:
+            protective_check_failed = True
+            errors.append("exit_signals lookup unavailable — cannot verify protective-call "
+                          "status, suppressing all entries")
+        elif not sig_df.empty and "signal_date" in sig_df.columns:
             today_str = today.isoformat()
             _rows = sig_df[
                 (sig_df["signal_date"].astype(str) == today_str)
@@ -867,16 +882,21 @@ def compute_watchlist_entries(
                 str(t).strip().upper() for t in _rows["ticker"].tolist() if str(t).strip()
             }
     except Exception as e:
-        errors.append(f"exit_signals lookup failed: {e}")
+        protective_check_failed = True
+        errors.append(f"exit_signals lookup failed: {e} — cannot verify protective-call "
+                      "status, suppressing all entries")
 
     # D-C (held) + scanner-Go dedup + protective-call exclusion — applied ONLY
     # to derive the email-eligible set, never to the capture above.
-    eligible = [
-        c for c in qualifying
-        if str(c.get("ticker", "")).upper() not in held_set
-        and str(c.get("ticker", "")).upper() not in scanner_go
-        and str(c.get("ticker", "")).upper() not in protective_tickers
-    ]
+    eligible = (
+        [] if protective_check_failed else
+        [
+            c for c in qualifying
+            if str(c.get("ticker", "")).upper() not in held_set
+            and str(c.get("ticker", "")).upper() not in scanner_go
+            and str(c.get("ticker", "")).upper() not in protective_tickers
+        ]
+    )
 
     # enter_now recommendation-log capture — the FULL RAW qualifying set
     # (every ENTER_NOW ticker, held or not — see the capture-vs-announce note

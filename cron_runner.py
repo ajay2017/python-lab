@@ -1974,7 +1974,25 @@ def _run_debrief(now_et, force: bool) -> int:
     # Protective (WATCH/TRIM/EXIT) signals for the week — the symmetric
     # counterpart to recs_df above. days_back=10 comfortably covers the
     # 7-day window; build_debrief_package does the exact date filtering.
-    exit_signals_df = db.load_exit_signals(days_back=10)
+    # 2026-09-24 app review, J2: was db.load_exit_signals(), whose own
+    # docstring says its except branch "returns the same empty DataFrame
+    # either way" on a failed read or a genuine zero-signal week --
+    # build_debrief_package already has its own correct None-vs-empty
+    # contract (exit_signals_df=None is documented "optional; omitted
+    # gracefully"), but a failed read collapsing to an empty frame meant a
+    # DB hiccup silently persisted this week's debrief with NO protective-
+    # signal section, indistinguishable from a genuinely quiet week, into a
+    # frozen historical artifact. Now uses load_exit_signals_or_none() so a
+    # failure is at least visible in the cron log (see below) -- lower
+    # stakes than A1/J1 (a retrospective review, not a deploy-capital rec),
+    # so the fix is scoped to correctness + observability, not a deeper
+    # narrative-disclosure change to build_debrief_package itself.
+    exit_signals_df = db.load_exit_signals_or_none(days_back=10)
+    if exit_signals_df is None:
+        _log("debrief: exit_signals lookup failed — this week's debrief will "
+             "omit the protective-signal section (same as a genuinely quiet "
+             "week would render, but this is NOT a genuinely quiet week; "
+             "check DB connectivity).")
 
     # Fetch SPY return for the week
     spy_week_pct = None

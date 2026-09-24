@@ -57,8 +57,9 @@ _UNSET = object()  # distinguishes "caller didn't pass prior_df" from "caller ex
 
 def _run_watchlist_entries(
     watchlist=("AAPL",), held_rows=None, cards=None, ctx=None,
-    prior_df=_UNSET, exit_signals_df=None, scanner_go_tickers=None,
+    prior_df=_UNSET, exit_signals_df=_UNSET, scanner_go_tickers=None,
     watchlist_side_effect=None, holdings_side_effect=None, bundle=None,
+    exit_signals_side_effect=None,
 ):
     cards = cards if cards is not None else {t: _wl_card(t) for t in watchlist}
     ctx = ctx if ctx is not None else {
@@ -66,7 +67,12 @@ def _run_watchlist_entries(
         "port_risk": {"beta": 1.1},
     }
     prior_df = pd.DataFrame() if prior_df is _UNSET else prior_df
-    exit_signals_df = exit_signals_df if exit_signals_df is not None else pd.DataFrame()
+    # _UNSET (the default) means "genuinely no signals today" (empty frame) --
+    # load_exit_signals_or_none()'s check-succeeded-clean case. Pass
+    # exit_signals_df=None explicitly, or exit_signals_side_effect=<exception>,
+    # to simulate the check-FAILED case (2026-09-24 app review, J1) --
+    # load_exit_signals_or_none()'s own documented `None`-on-failure contract.
+    exit_signals_df = pd.DataFrame() if exit_signals_df is _UNSET else exit_signals_df
 
     def _fake_build_rec(ticker, data, portfolio_ctx=None):
         return cards[ticker]
@@ -86,8 +92,8 @@ def _run_watchlist_entries(
                )), \
          patch("stock_analyzer.headless_alert_engine.build_watchlist_recommendation",
                side_effect=_fake_build_rec), \
-         patch("stock_analyzer.headless_alert_engine.db.load_exit_signals",
-               return_value=exit_signals_df), \
+         patch("stock_analyzer.headless_alert_engine.db.load_exit_signals_or_none",
+               return_value=exit_signals_df, side_effect=exit_signals_side_effect), \
          patch("stock_analyzer.headless_alert_engine.db.save_recommendations",
                side_effect=lambda rows: {"attempted": len(rows), "saved": len(rows), "error": None}) as save_mock, \
          patch("stock_analyzer.headless_alert_engine.is_trading_day", return_value=True), \
@@ -315,6 +321,57 @@ def test_unrelated_protective_call_does_not_exclude_other_tickers():
         exit_signals_df=_today_signals_df(["NVDA"], "EXIT"),
     )
     assert [c["ticker"] for c in result["entries"]] == ["AMD"]
+
+
+# ── protective-check failure -- 2026-09-24 app review, J1 ────────────────────
+# Previously used the unsafe db.load_exit_signals(), whose except branch
+# returns the same empty DataFrame on a failed read as on a genuine zero-row
+# day -- an outage silently emptied protective_tickers and let a flagged name
+# through unexcluded. Now uses load_exit_signals_or_none(); a None return
+# (or a raised exception) must suppress ALL entries, matching the
+# already-established prior_tickers/D-B "can't verify, so suppress" pattern
+# a few lines below in the same function -- never silently proceed as if
+# nothing were under a protective call.
+
+def test_protective_check_returning_none_suppresses_all_entries():
+    """load_exit_signals_or_none() returning None (its documented failure
+    sentinel) must suppress the whole email-eligible set for today -- the
+    same posture as a failed prior_tickers lookup, not a soft degradation
+    like the beta gate."""
+    result = _run_watchlist_entries(watchlist=["NVDA"], exit_signals_df=None)
+    assert result["entries"] == []
+    assert any(
+        "cannot verify protective-call status" in e for e in result["errors"]
+    )
+
+
+def test_protective_check_raising_suppresses_all_entries():
+    result = _run_watchlist_entries(
+        watchlist=["NVDA"], exit_signals_side_effect=RuntimeError("supabase unreachable"),
+    )
+    assert result["entries"] == []
+    assert any(
+        "cannot verify protective-call status" in e for e in result["errors"]
+    )
+
+
+def test_protective_check_failure_does_not_abort_the_capture_step():
+    """The capture (rec-log grading baseline) reads `qualifying`, not
+    `eligible` -- it must still write today's ENTER_NOW baseline even when
+    the protective check fails and the email-eligible set is suppressed."""
+    result = _run_watchlist_entries(watchlist=["NVDA"], exit_signals_df=None)
+    assert result["entries"] == []
+    assert result["_save_mock"].called
+
+
+def test_protective_check_failure_does_not_falsely_suppress_when_signals_are_genuinely_clean():
+    """Regression guard on the sentinel logic itself: a genuinely clean day
+    (empty DataFrame, not None) must NOT be misread as a failure."""
+    result = _run_watchlist_entries(watchlist=["NVDA"], exit_signals_df=pd.DataFrame())
+    assert [c["ticker"] for c in result["entries"]] == ["NVDA"]
+    assert not any(
+        "cannot verify protective-call status" in e for e in result["errors"]
+    )
 
 
 # ── D-D: gate degradation disclosure ─────────────────────────────────────────
