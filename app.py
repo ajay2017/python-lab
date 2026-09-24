@@ -12888,8 +12888,14 @@ elif page == "🧾 Summary":
     # computed it today (util.benchmark_mirror_summary_state's freshness
     # check) — same "skip silently rather than show a stale verdict"
     # discipline as the F-277 protective-track-record caption above.
+    #
+    # Placed in slot [1] (under Catalyst Watch), not [0] (2026-09-24, owner
+    # screenshot feedback): Engine Track Record's card in [0] is by far the
+    # tallest of the three above, so a slot-[0] card here sat under it with a
+    # large, obviously-empty gap beside it. Catalyst Watch's card is short,
+    # so slot [1] fills space that would otherwise sit blank.
     _sm_ptr_row2 = st.columns(3)
-    with _sm_ptr_row2[0]:
+    with _sm_ptr_row2[1]:
         with st.container(border=True, key="sm_ptr_bm_box"):
             st.markdown(
                 "<style>.st-key-sm_ptr_bm_box{background:#1b2130}"
