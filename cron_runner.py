@@ -426,12 +426,23 @@ def _run_premarket(now_et, force: bool) -> int:
         from stock_analyzer.constants import (
             EXIT_VELOCITY_LOOKBACK_DAYS, EXIT_VELOCITY_DROP_THRESHOLD,
         )
-        _signals_hist = db.load_exit_signals(days_back=EXIT_VELOCITY_LOOKBACK_DAYS)
+        # 2026-09-24 app review K1: was db.load_exit_signals(), whose own
+        # except branch returns the same empty DataFrame on a genuine read
+        # failure as on a real zero-row result -- indistinguishable from
+        # "insufficient history" below. Swapped to the _or_none variant so a
+        # failed read logs distinctly. Same fail-safe direction as before
+        # (an outage still collapses to velocity_alerts=[], no false alert,
+        # never a false one) -- this is an observability fix, not a
+        # fail-open/fail-closed behavior change.
+        _signals_hist = db.load_exit_signals_or_none(days_back=EXIT_VELOCITY_LOOKBACK_DAYS)
         _watch_tickers = [
             d.get("ticker") for d in payload.get("all_deterioration_signals", [])
             if d.get("tier") == "WATCH" and d.get("ticker")
         ]
-        if _watch_tickers and _signals_hist is not None and not _signals_hist.empty:
+        if _signals_hist is None:
+            _log("velocity check: exit-signals history read failed -- skipping "
+                 "(may miss a real acceleration alert this run).")
+        elif _watch_tickers and not _signals_hist.empty:
             velocity_alerts = find_accelerating_watches(
                 _signals_hist, _watch_tickers,
                 EXIT_VELOCITY_LOOKBACK_DAYS, EXIT_VELOCITY_DROP_THRESHOLD,

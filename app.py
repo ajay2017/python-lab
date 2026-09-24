@@ -11227,6 +11227,11 @@ elif page == "🧑‍⚖️ The Judge":
         "BETA — AUDIT AUTHORITY ONLY, NEVER GATES A RECOMMENDATION</span>",
         unsafe_allow_html=True,
     )
+    # 2026-09-24 app review I2: true of the Judge's OUTPUT (it never blocks
+    # or overrides a recommendation), but its witness track record shapes
+    # its OWN INPUT (the blend weighting below) -- the badge alone could
+    # read as "purely passive," which isn't quite right.
+    st.caption("_\"Gates\" above means the Judge's output — it never blocks a recommendation. Its own witness weighting below IS shaped by the track record._")
     st.caption(
         "Reconciles today's witnesses (concentration, structural risk, exit "
         "signals, composite, momentum, verdict reconciliation) across your "
@@ -11305,6 +11310,13 @@ elif page == "🧑‍⚖️ The Judge":
     else:
         from stock_analyzer.judgment_synthesis import synthesize, audit_coherence
         from stock_analyzer.judgment_grading import track_record_summary
+        # 2026-09-24 app review I1: an empty track-record map is the SAME
+        # input synthesize() sees in the legitimate pre-sample state (every
+        # witness stays at equal, neutral weight) -- so a read failure here
+        # used to render identically to "not enough grades yet." Disclose
+        # the two differently rather than let a DB hiccup pass as genuine
+        # neutrality.
+        _jg_tr_error = False
         try:
             _jg_tr_rows = track_record_summary(
                 db.load_judgment_grades(days_back=365), BEHAVIORAL_MIN_SAMPLE_N,
@@ -11312,6 +11324,13 @@ elif page == "🧑‍⚖️ The Judge":
             _jg_track_record_map = {(r["source"], r["dimension"]): r for r in _jg_tr_rows}
         except Exception:
             _jg_track_record_map = {}
+            _jg_tr_error = True
+        if _jg_tr_error:
+            st.caption(
+                "⚪ Could not read the witness track record this render — "
+                "weighting below falls back to equal/neutral, same as genuinely "
+                "having no grades yet. Not a gate; refresh to retry."
+            )
         try:
             _jr = synthesize(_jo_today, track_record=_jg_track_record_map)
 
@@ -25139,6 +25158,11 @@ elif page == "📋 Watchlist":
     # recommendation-log rows below can resolve a sector without a second pass
     # over _wl_data (F-1xx Watchlist ENTER_NOW capture, 2026-09-09).
     _wl_sector_map: dict = {}
+    # 2026-09-24 app review F1: a per-ticker crash used to silently drop that
+    # ticker from an ENTER_NOW-capable surface with no counter and no
+    # caption — the only guard fired when EVERY ticker failed. Track which
+    # tickers were skipped so a partial failure is disclosed, not silent.
+    _wl_skipped: list[str] = []
     for _wt, _wd in _wl_data.items():
         if _wd is None:
             continue
@@ -25161,11 +25185,19 @@ elif page == "📋 Watchlist":
         try:
             _wl_recs.append(build_watchlist_recommendation(_wt, _wd, portfolio_ctx=_wl_pctx))
         except Exception:
-            pass
+            _wl_skipped.append(str(_wt))
 
     if not _wl_recs:
         st.warning("Could not generate analysis for any watchlist ticker. Check your connection.")
         st.stop()
+
+    if _wl_skipped:
+        st.warning(
+            f"⚠️ Could not generate analysis for {len(_wl_skipped)} ticker"
+            f"{'s' if len(_wl_skipped) != 1 else ''}: {', '.join(_wl_skipped)} — "
+            "these are omitted below, not cleared from your watchlist. Check "
+            "spelling or try again later."
+        )
 
     # Sort: ENTER_NOW → NEAR_ENTRY → REMOVE → HOLD_OFF_EARNINGS → WAIT_ENTRY → WAIT_CATALYST
     # (actionable opportunities first — see sort_key_for_action for rationale)
@@ -37279,7 +37311,7 @@ The footer line beneath the cards states **risk, not capital** — "you'd be ris
 Two separate questions live here — keeping them apart answers most *"why didn't X show up?"* puzzles:
 
 **1. What gets *scanned* (the universe).** Each time signals refresh, the app screens:
-- **~90 curated names** across 14 sectors (the core list the scanner runs daily),
+- **88 curated names** across 14 sectors (the core list the scanner runs daily),
 - **your Watchlist**, and
 - a broad **~200-name "discovery" universe** of liquid large/mid-caps, swept for big 1-day movers so a breakout in a name you *don't* track can still surface.
 
