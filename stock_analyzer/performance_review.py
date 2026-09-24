@@ -45,7 +45,7 @@ UTC judgment call for the identical column.
 Below-floor framing (owner decision, 2026-09-18): a period under the
 standalone pages' 8-call/5-ticker floors NEVER renders an independent
 "building"/"early"/"firm" band here — that banding vocabulary is reserved for
-the all-time 🛑 The Road Not Taken / 🎯 Recommendation Outcomes pages, and a
+the all-time 🛑 The Road Not Taken / 🎖️ Recommendation Outcomes pages, and a
 quarter-scoped review would almost always sit below those floors. Instead,
 every `recs`/`gates` entry carries a `below_floor: bool` tag alongside its RAW
 `n_calls`/`n_distinct_tickers` (and, for `gates`, the same descriptive

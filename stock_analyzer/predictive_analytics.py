@@ -375,7 +375,7 @@ def synthesize_directives(
             "source_tab": "🎯 Score Calibration",
         })
 
-    # ── Decision Quality ───────────────────────────────────────────────────────
+    # ── Discretion Value ───────────────────────────────────────────────────────
     edge    = avm.get("edge", "insufficient")
     edge_pp = avm.get("edge_pp")
 
@@ -406,7 +406,7 @@ def synthesize_directives(
                 f"signal from noise effectively. Don't feel pressure to act on every signal; "
                 f"your selectivity is working."
             ),
-            "source_tab": "⚖️ Decision Quality",
+            "source_tab": "⚖️ Discretion Value",
         })
     elif edge == "passing" and edge_pp is not None and edge_pp >= 0.5:
         directives.append({
@@ -416,7 +416,7 @@ def synthesize_directives(
                 f"than your current act rate{basis}. Review what's making you pass — the engine "
                 f"may be seeing something you're discounting."
             ),
-            "source_tab": "⚖️ Decision Quality",
+            "source_tab": "⚖️ Discretion Value",
         })
     elif edge in ("neutral", "insufficient"):
         directives.append({
@@ -426,7 +426,7 @@ def synthesize_directives(
                 "Discretion isn't adding or removing measurable edge yet — "
                 "use score and sector patterns as your primary guide for now."
             ),
-            "source_tab": "⚖️ Decision Quality",
+            "source_tab": "⚖️ Discretion Value",
         })
 
     # ── Sector Alpha ───────────────────────────────────────────────────────────
@@ -583,7 +583,7 @@ def total_graded(enriched: list[dict]) -> int:
     )
 
 
-# ── Decision Quality (Tab 2) ───────────────────────────────────────────────────
+# ── Discretion Value (Tab 2) ───────────────────────────────────────────────────
 
 def acted_vs_missed_comparison(enriched: list[dict]) -> dict:
     """

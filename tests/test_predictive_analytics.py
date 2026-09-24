@@ -1,7 +1,7 @@
 """
 Tests for stock_analyzer/predictive_analytics.py — the calibration/synthesis
 substrate behind the "📊 Predictive Analytics" page (Score Calibration,
-Decision Quality, Signal Breakdown, Sector Alpha, and Entry Timing tabs).
+Discretion Value, Signal Breakdown, Sector Alpha, and Entry Timing tabs).
 
 Pure functions only, operating on plain lists/dicts shaped like
 recommendations_history.compute_outcomes()'s output. Previously zero test
@@ -436,11 +436,11 @@ def test_synthesize_directives_score_calibration_no_bands_no_directive():
     assert _has_source(out, "🎯 Score Calibration") == []
 
 
-# Decision Quality
+# Discretion Value
 
 def test_synthesize_directives_decision_quality_acting_action():
     out = _synth(avm={"edge": "acting", "edge_pp": 0.5})
-    matches = _has_source(out, "⚖️ Decision Quality")
+    matches = _has_source(out, "⚖️ Discretion Value")
     assert matches[0]["type"] == "action"
 
 
@@ -458,7 +458,7 @@ def test_synthesize_directives_acting_states_both_sample_sizes():
         "edge": "acting", "edge_pp": 8.3,
         "acted": {"n": 34}, "missed": {"n": 310},
     })
-    text = _has_source(out, "⚖️ Decision Quality")[0]["text"]
+    text = _has_source(out, "⚖️ Discretion Value")[0]["text"]
     assert "34 acted vs 310 passed" in text
 
 
@@ -467,7 +467,7 @@ def test_synthesize_directives_passing_states_both_sample_sizes():
         "edge": "passing", "edge_pp": 2.0,
         "acted": {"n": 4}, "missed": {"n": 120},
     })
-    matches = _has_source(out, "⚖️ Decision Quality")
+    matches = _has_source(out, "⚖️ Discretion Value")
     assert matches[0]["type"] == "caution"
     assert "4 acted vs 120 passed" in matches[0]["text"]
 
@@ -479,36 +479,36 @@ def test_synthesize_directives_thin_acted_side_is_visible_in_the_text():
         "edge": "acting", "edge_pp": 12.0,
         "acted": {"n": 1}, "missed": {"n": 300},
     })
-    assert "1 acted vs 300 passed" in _has_source(out, "⚖️ Decision Quality")[0]["text"]
+    assert "1 acted vs 300 passed" in _has_source(out, "⚖️ Discretion Value")[0]["text"]
 
 
 def test_synthesize_directives_omits_the_basis_when_side_counts_absent():
     """Callers legitimately pass an avm carrying only edge/edge_pp. That must
     render clean prose, not "(None acted vs None passed)"."""
     out = _synth(avm={"edge": "acting", "edge_pp": 5.0})
-    text = _has_source(out, "⚖️ Decision Quality")[0]["text"]
+    text = _has_source(out, "⚖️ Discretion Value")[0]["text"]
     assert "acted vs" not in text
     assert "None" not in text
 
 
 def test_synthesize_directives_decision_quality_acting_below_threshold_no_directive():
     out = _synth(avm={"edge": "acting", "edge_pp": 0.4999})
-    assert _has_source(out, "⚖️ Decision Quality") == []
+    assert _has_source(out, "⚖️ Discretion Value") == []
 
 
 def test_synthesize_directives_decision_quality_passing_caution():
     out = _synth(avm={"edge": "passing", "edge_pp": 0.5})
-    matches = _has_source(out, "⚖️ Decision Quality")
+    matches = _has_source(out, "⚖️ Discretion Value")
     assert matches[0]["type"] == "caution"
 
 
 def test_synthesize_directives_decision_quality_neutral_and_insufficient_context():
     out = _synth(avm={"edge": "neutral", "edge_pp": None})
-    matches = _has_source(out, "⚖️ Decision Quality")
+    matches = _has_source(out, "⚖️ Discretion Value")
     assert matches[0]["type"] == "context"
 
     out2 = _synth(avm={"edge": "insufficient"})
-    matches2 = _has_source(out2, "⚖️ Decision Quality")
+    matches2 = _has_source(out2, "⚖️ Discretion Value")
     assert matches2[0]["type"] == "context"
 
 
@@ -706,7 +706,7 @@ def test_total_graded_empty_input_zero():
     assert pa.total_graded([]) == 0
 
 
-# ══════════════════════════════ Decision Quality ════════════════════════════
+# ══════════════════════════════ Discretion Value ════════════════════════════
 
 def test_acted_vs_missed_comparison_avg_alpha_none_when_side_empty():
     rows = [_row(acted_on=False, alpha_pct=1.0, outcome_pct=1.0)]

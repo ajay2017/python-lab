@@ -3042,7 +3042,7 @@ with st.sidebar:
             ("Predictive Analytics", "📊 Predictive Analytics", ":material/insights:"),
             ("Model Lab", "🔬 Model Lab",              ":material/experiment:"),
             ("Road Not Taken", "🛑 The Road Not Taken", ":material/block:"),
-            ("Rec Outcomes", "🎯 Recommendation Outcomes", ":material/track_changes:"),
+            ("Rec Outcomes", "🎖️ Recommendation Outcomes", ":material/track_changes:"),
             ("System Trust", "🩺 System Trust",        ":material/health_and_safety:"),
             ("App Settings", "⚙️ App Settings",        ":material/tune:"),
         ]),
@@ -3080,7 +3080,7 @@ with st.sidebar:
     # every other `is_readonly()` use in this app only disables a write
     # control, never removes a whole nav item.
     _OWNER_ONLY_PAGES = ("🔬 Model Lab", "🩺 System Trust", "🛑 The Road Not Taken",
-                         "⚙️ App Settings", "🎯 Recommendation Outcomes")
+                         "⚙️ App Settings", "🎖️ Recommendation Outcomes")
     if db.is_readonly():
         _NAV_GROUPS = [
             (_g_label, [item for item in _g_items if item[1] not in _OWNER_ONLY_PAGES])
@@ -17117,9 +17117,17 @@ elif page == "🧩 Intelligence":
             "as one 3-name cluster). For the full pairwise heatmap, see "
             "🔗 Risk Analysis."
         )
+        # 2026-09-24 app review E1: named a destination with no way to click
+        # there.
+        if st.button("→ Risk Analysis", key="_pi_clusters_ra_btn", type="tertiary"):
+            st.session_state["_pending_page"] = "🔗 Risk Analysis"
+            st.rerun()
         _pi_corr_df = st.session_state.get("_corr_df_cache")
         if _pi_corr_df is None or (hasattr(_pi_corr_df, "empty") and _pi_corr_df.empty):
             st.info("Correlation data isn't available this session — revisit 🏠 Home to compute it.")
+            if st.button("→ Home", key="_pi_clusters_home_btn", type="tertiary"):
+                st.session_state["_pending_page"] = "🏠 Home"
+                st.rerun()
         else:
             _pi_weights_map = dict(zip(_pi_pdf["Ticker"], _pi_pdf["Weight (%)"]))
             _pi_clusters = portfolio_intelligence.correlation_clusters(_pi_corr_df, _pi_weights_map)
@@ -17571,6 +17579,9 @@ elif page == "🧩 Intelligence":
         # when the correlation-gated branch below never runs this render.
         if _ss_corr_df is None or (hasattr(_ss_corr_df, "empty") and _ss_corr_df.empty):
             st.info("Correlation data isn't available this session — revisit 🏠 Home to compute it.")
+            if st.button("→ Home", key="_ss_home_btn", type="tertiary"):
+                st.session_state["_pending_page"] = "🏠 Home"
+                st.rerun()
         else:
             _ss_weights = dict(zip(_pi_pdf["Ticker"], _pi_pdf["Weight (%)"]))
             _ss_rb = portfolio_intelligence.risk_budget(_pi_hd, _ss_weights)
@@ -20726,6 +20737,16 @@ elif page == "🏆 Health":
             icon="✅",
         )
     else:
+        # 2026-09-24 app review E1: each card's copy names a destination page
+        # ("Check the concentration section on Portfolio Overview", etc.) but
+        # had no way to click there — a missing affordance, not just prose.
+        _ph_dest_page = {
+            "concentration":    "🥧 Portfolio Overview",
+            "sector_balance":   "🏠 Home",
+            "diversification":  "🔗 Risk Analysis",
+            "factor_exposure":  "🔗 Risk Analysis",
+            "signal_integrity": "📡 Signals & Advice",
+        }
         for _ph_imp in _ph_improv:
             _ph_imp_color = score_color(_ph_imp["score"])
             _ph_specific  = _ph_imp.get("specific") or ""
@@ -20753,6 +20774,12 @@ elif page == "🏆 Health":
                 """,
                 unsafe_allow_html=True,
             )
+            _ph_dest = _ph_dest_page.get(_ph_imp["dimension"])
+            if _ph_dest and st.button(
+                f"→ {_ph_dest}", key=f"_ph_imp_btn_{_ph_imp['dimension']}", type="tertiary"
+            ):
+                st.session_state["_pending_page"] = _ph_dest
+                st.rerun()
 
     if _ph_result["n_available"] < 5:
         _ph_missing = [
@@ -30962,7 +30989,7 @@ elif page == "📊 Predictive Analytics":
     # ── 6 live tabs ─────────────────────────────────────────────────────────────
     _pa_tab1, _pa_tab2, _pa_tab3, _pa_tab4, _pa_tab5, _pa_tab6 = st.tabs([
         "🎯 Score Calibration",
-        "⚖️ Decision Quality",
+        "⚖️ Discretion Value",
         "🏷️ Signal Breakdown",
         "🌐 Sector Alpha",
         "🧭 Sentiment Alignment",
@@ -31088,7 +31115,11 @@ elif page == "📊 Predictive Analytics":
             else:
                 st.info("No outcomes available yet.")
 
-    # ── TAB 2 — Decision Quality ───────────────────────────────────────────────
+    # ── TAB 2 — Discretion Value (renamed 2026-09-24 app review E2 — was
+    # "Decision Quality", colliding in name with 🎯 My Edge's own "📅 Decision
+    # Quality" tab, a different measurement: this one asks "did acting vs.
+    # passing on a signal add alpha," that one asks "am I improving month over
+    # month.") ────────────────────────────────────────────────────────────────
     with _pa_tab2:
         st.caption(
             "When the engine surfaced a signal and you passed, did you make the right call? "
@@ -32502,11 +32533,23 @@ elif page == "🛑 The Road Not Taken":
         "graded against what actually happened. Awareness only: this never "
         "changes what the engine recommends."
     )
+    # 2026-09-24 app review E3: these two pages are Cluster-3 twins (same
+    # "was the app's past call right" question) but neither told the reader
+    # the other exists, or which of them covers a SUPPRESSED call vs. one
+    # the engine actually MADE.
+    st.caption(
+        "See also 🎖️ Recommendation Outcomes — that page grades calls the "
+        "engine actually **made** (a rebalance trim, an ADD); this page "
+        "grades calls it **suppressed** (a gate that held something back)."
+    )
+    if st.button("→ Recommendation Outcomes", key="_rnt_ro_btn", type="tertiary"):
+        st.session_state["_pending_page"] = "🎖️ Recommendation Outcomes"
+        st.rerun()
     # 2026-09-21 UX audit I1: disclose the expected multi-month "Building"
     # state near the top, not only in a footnote below every card — a
     # first-time viewer seeing every row stuck at "Building" has no
     # on-page signal distinguishing "working as designed, wait" from
-    # "something is broken." Identical wording on 🎯 Recommendation
+    # "something is broken." Identical wording on 🎖️ Recommendation
     # Outcomes' own intro (see below) so the two pages don't disagree.
     st.caption(
         "⚪ Expect most rows to read **Building** for the first couple of "
@@ -32642,8 +32685,8 @@ elif page == "🛑 The Road Not Taken":
 # PAGE — RECOMMENDATION OUTCOMES (Recommendation-Outcomes-Measurement Phase 1b,
 # F-273 follow-on — owner-only, Gate-Ledger-style readout)
 # ═════════════════════════════════════════════════════════════════════════════
-elif page == "🎯 Recommendation Outcomes":
-    st.title("🎯 Recommendation Outcomes")
+elif page == "🎖️ Recommendation Outcomes":
+    st.title("🎖️ Recommendation Outcomes")
     st.caption("Owner-only · retrospective measurement · changes no gate, no recommendation, no composite")
 
     if db.is_readonly():
@@ -32660,6 +32703,17 @@ elif page == "🎯 Recommendation Outcomes":
         "computed against, and did you act on them? Awareness only: this never "
         "changes what the engine recommends."
     )
+    # 2026-09-24 app review E3: same Cluster-3-twin cross-reference as
+    # The Road Not Taken carries (see its page above), stated from this
+    # page's own side.
+    st.caption(
+        "See also 🛑 The Road Not Taken — that page grades calls the engine "
+        "**suppressed** (a gate that held something back); this page grades "
+        "calls it actually **made**."
+    )
+    if st.button("→ The Road Not Taken", key="_ro_rnt_btn", type="tertiary"):
+        st.session_state["_pending_page"] = "🛑 The Road Not Taken"
+        st.rerun()
     # 2026-09-21 UX audit I1 -- identical wording to 🛑 The Road Not Taken's
     # own intro (see its page above) so the two pages don't disagree.
     st.caption(
@@ -35506,7 +35560,7 @@ elif page == "💰 Account":
                 else:
                     # ── Load dependencies — exact patterns already used by
                     # 🛑 The Road Not Taken (SPY/gate rows) and
-                    # 🎯 Recommendation Outcomes (risk snapshots/trades/
+                    # 🎖️ Recommendation Outcomes (risk snapshots/trades/
                     # protective tickers), app.py ~L32060-32101/~L32207-32277.
                     _perf_trades_df = db.load_trades_or_none()
                     _perf_rec_rows = db.load_rec_events()
@@ -35542,7 +35596,7 @@ elif page == "💰 Account":
 
                     # Unscoped portfolio-risk-snapshot lookup for the recs
                     # outcome legs (rebal_trim/beta_trim/diversify_add's leg
-                    # B) — same reuse as 🎯 Recommendation Outcomes; distinct
+                    # B) — same reuse as 🎖️ Recommendation Outcomes; distinct
                     # from `_perf_risk_snap_df` above, which is period-scoped
                     # for the risk_drift section only.
                     _perf_rec_risk_snap_df = db.load_portfolio_risk_snapshots()
@@ -35553,7 +35607,7 @@ elif page == "💰 Account":
                             if _prd:
                                 _perf_rec_risk_snap_by_date[_prd] = _prr.to_dict()
 
-                    # Same `_reduce_calls` guard as 🎯 Recommendation Outcomes:
+                    # Same `_reduce_calls` guard as 🎖️ Recommendation Outcomes:
                     # `None` (cache never populated this session) reads as an
                     # empty set, never as "no overlap exists".
                     _perf_reduce_calls_cache = st.session_state.get("_reduce_calls")
@@ -37193,7 +37247,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **This list recomputes live — it is *not* a fixed morning list.** Every time Home refreshes, prices re-score and every gate re-evaluates, so a name can appear and later drop off *within the same day*. That is expected, not an error. Three cues make it legible: **(a) a firmness badge** — a pick "at the line" (amber) is clearing the entry bar by only a few points and a normal intraday move could flip it below; a "firm" pick is comfortably clear. **(b) a "was showing earlier today" footer** — if a name surfaced earlier but is no longer clearing this pass, it's listed with *why* (its composite re-priced below the bar, a sector cap, a macro event, or a fresh Reduce/Exit call), so a name leaving the list is never silent. These are **not** retractions or buy signals — the earlier read was correct for its moment. **(c) a pre-market note** — before the 9:30 ET open, prices are provisional and picks may re-price at the open. Every name that surfaced today is also kept permanently on the 📜 Recommendations History page.
 
-**"More Buy Candidates" are *not* recommendations.** They're momentum names from the *same scan* that did **not** clear the gates — most often *"composite contradicts momentum"* (hot price, but the full Technical + Fundamental + Sentiment picture says Hold). They're shown as **research leads to verify on the Analysis page — not buy calls.** A 🔥 badge marks a candidate that surfaced from the discovery sweep (a fresh breakout outside your tracked list).
+**"More Buy Candidates" are *not* recommendations.** They're momentum names from the *same scan* that did **not** clear the gates — most often *"composite contradicts momentum"* (hot price, but the full Technical + Business Quality + Sentiment picture says Hold). They're shown as **research leads to verify on the Analysis page — not buy calls.** A 🔥 badge marks a candidate that surfaced from the discovery sweep (a fresh breakout outside your tracked list).
 
 **What it deliberately does *not* do:** it does **not** scan the entire market. A thin micro-cap up 300% on the day — the kind a broker's *"all stocks > 20% today"* filter shows — won't appear here by design: the app screens *liquid, quality* names and stays a medium-term advisor, not a squeeze-chaser. To check any specific ticker yourself, use **🔍 Research a Stock** on Home or the **📈 Analysis** page — type a company name ("microsoft") instead of a ticker and it resolves the most likely match, disclosing which symbol it picked (and any other close-scoring match, e.g. GOOGL vs GOOG) rather than silently substituting one.
 """
@@ -37382,7 +37436,7 @@ The app's intelligence is computed live in your browser — so it can only reach
                 subgraph cluster_engine {
                     label="Rules Engine  ·  always runs, zero AI dependency"
                     style=filled fillcolor="#eef2ff" color="#4f6cdb" fontsize=11
-                    Comp  [label="Composite Score\\nTechnical 25%  ·  Fundamentals 35%\\nValuation 30%  ·  Sentiment 10%" shape=box style="rounded,filled" fillcolor=white]
+                    Comp  [label="Composite Score\\nTechnical 25%  ·  Business Quality 35%\\nValuation 30%  ·  Sentiment 10%" shape=box style="rounded,filled" fillcolor=white]
                     Gates [label="Gates  &  Thresholds\\nBUY ≥ 65  ·  sector caps  ·  stops\\nAll values rules-only  (constants.py)" shape=box style="rounded,filled" fillcolor=white]
                     Comp -> Gates [label="hard decisions"]
                 }
@@ -37551,7 +37605,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 
 **Tax Report:** pick a tax year and see your realized gains/losses split into short-term vs. long-term, reconstructed lot-by-lot in the order you actually bought (FIFO) rather than the single blended average-cost number shown elsewhere in the app. Each closed lot also gets a wash-sale flag (⛔ violation / ⏳ pending / ✅ clean) reusing the same check the Tax lens on 🥧 Portfolio Overview already applies to harvested losses. A reconciliation line compares this report's total to the app's own stored average-cost total — they can legitimately differ on a position you sold in parts at different prices, and the report says so rather than picking one silently. Download the full lot table as CSV or a formatted Markdown report. **This is not tax advice** — it's an informational reconciliation tool; verify every figure against your broker's official 1099-B before filing.
 
-**Performance Review:** pick a period (This Quarter, Last Quarter, This Tax Year, or a custom date range) for a point-in-time, downloadable snapshot: **Return vs SPY** (SPY's own % move over the period next to **your realized return %** — your realized P&L divided by the total cost basis of the shares you closed that period, so it's a genuine like-for-like comparison, not a percentage next to a dollar figure — plus the gap between the two in percentage points; realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎯 Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); and **Leverage & Margin Cushion Drift** / **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing account and risk-snapshot history). Downloads as CSV or Markdown, same as the Tax Report.
+**Performance Review:** pick a period (This Quarter, Last Quarter, This Tax Year, or a custom date range) for a point-in-time, downloadable snapshot: **Return vs SPY** (SPY's own % move over the period next to **your realized return %** — your realized P&L divided by the total cost basis of the shares you closed that period, so it's a genuine like-for-like comparison, not a percentage next to a dollar figure — plus the gap between the two in percentage points; realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎖️ Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); and **Leverage & Margin Cushion Drift** / **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing account and risk-snapshot history). Downloads as CSV or Markdown, same as the Tax Report.
 """
             )
 
@@ -37567,10 +37621,10 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
 - **📋 Watchlist** — names you're tracking, with enter-now flags. Defaults to a **🎯 Actionable** filter (just the Enter Now / Near Entry names) rather than showing everything at once — other chips (Hold / Waiting / Remove / All), a ticker search box, and a sort dropdown are there to look further. Old, forgotten names that just became actionable get a "👁️ actionable again" callout.
 - **🌐 Macro** — market regime, VIX, SPY trend, cross-asset pulse, and economic calendar context. Tone-flip conditions are shown here.
-- **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Six live lenses — Score Calibration, Decision Quality, Signal Breakdown, Sector Alpha, Sentiment Alignment, and Entry Timing — plus a synthesis panel that turns the data into 2–5 actionable directives. Entry Timing asks a narrower question: does momentum running far ahead of the composite score at the moment a pick fires predict a rough first few days? Opt-in (click "Analyze") since it fetches forward prices per pick. Awareness only; never gates. **Read the coverage line at the top before trusting any figure on this page.** It states how many matured recommendations could actually be scored and — for those that could not — exactly why, one reason at a time: sold positions (excluded by design, since realized P&L spans a holding period no single market window can benchmark), recommendations with no current price, ones with no entry price logged, and ones the SPY benchmark couldn't cover. The missing-price bucket is the one worth watching: a failed price lookup tends to happen on delisted, acquired or renamed tickers, so those exclusions are **not random** and the names are listed so you can see them. If more matured recommendations were dropped than scored, an amber note says so — every average on the page describes only the ones that could be scored.
+- **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Six live lenses — Score Calibration, Discretion Value, Signal Breakdown, Sector Alpha, Sentiment Alignment, and Entry Timing — plus a synthesis panel that turns the data into 2–5 actionable directives. Entry Timing asks a narrower question: does momentum running far ahead of the composite score at the moment a pick fires predict a rough first few days? Opt-in (click "Analyze") since it fetches forward prices per pick. Awareness only; never gates. **Read the coverage line at the top before trusting any figure on this page.** It states how many matured recommendations could actually be scored and — for those that could not — exactly why, one reason at a time: sold positions (excluded by design, since realized P&L spans a holding period no single market window can benchmark), recommendations with no current price, ones with no entry price logged, and ones the SPY benchmark couldn't cover. The missing-price bucket is the one worth watching: a failed price lookup tends to happen on delisted, acquired or renamed tickers, so those exclusions are **not random** and the names are listed so you can see them. If more matured recommendations were dropped than scored, an amber note says so — every average on the page describes only the ones that could be scored.
 - **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, a **🧭 Sector Gaps** pointer (sectors you're underweight/unheld that could genuinely diversify this book, linking to the full Diversification Advisor), and Analytics (relative strength, sector rotation, rankings, and a **Portfolio vs. S&P 500** real-sector benchmark tilt — uses each holding's actual market sector, not this app's thematic groupings) for your current holdings.
 - **🏆 Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
-- **🎯 My Edge** — five retrospective-only tabs, no recommendations or gates: **📐 Benchmark Mirror** (money-weighted return vs. a shadow SPY/QQQ portfolio using your real cash flows), **🔬 Workflow ROI**, **📅 Decision Quality**, **🧬 Behavioral Fingerprint** (sample-gated Buy-side and Exit Signal Response patterns), and **🪞 Investor Mirror** (conviction alignment, disposition-effect checks, Sizing Alpha, and Premature-Exit Cost). Answers "am I beating passive," "does prep pay off," "am I improving" — never scores anything that feeds a recommendation elsewhere.
+- **🎯 My Edge** — six retrospective-only tabs, no recommendations or gates: **📐 Benchmark Mirror** (money-weighted return vs. a shadow SPY/QQQ portfolio using your real cash flows), **🔬 Workflow ROI**, **📅 Decision Quality**, **🧬 Behavioral Fingerprint** (sample-gated Buy-side and Exit Signal Response patterns), **🪞 Investor Mirror** (conviction alignment, disposition-effect checks, Sizing Alpha, and Premature-Exit Cost), and **🧭 Self vs Engine** (Buy-side and Sell-side alpha comparing your own calls to the engine's). Answers "am I beating passive," "does prep pay off," "am I improving" — never scores anything that feeds a recommendation elsewhere.
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing (including an optional **🎯 Regime-Aware Adversarial Scenario** — see below), and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. Awareness only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap. The **beta card**, when your portfolio beta breaches its target, states the exact dollar figure needed to trim your top contributor back to target (not a rough percentage), discloses whether that trim also improves or worsens your margin/leverage exposure (a margin-funded ADD can make the beta *number* look better while your actual exposure against your equity gets *worse* — the app now says so explicitly), and — inside a **"📊 Rank Defensive-Beta Candidates"** expander — ranks real defensive-sector candidates by how much beta relief they'd actually provide, disclosing (never hiding) when a candidate is below the app's normal Buy gate or structurally can't reach target at all. It never issues a buy call below that gate — ranking and disclosure only, the decision stays yours.
 - **🧩 Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. **🧬 Structural Scan** composes the three panels above into a Blast Radius Map (live, no click needed — estimates what a -20% shock to your biggest risk contributors would cost the whole book) plus an on-demand Haiku narrative naming your portfolio's single most dangerous structural pattern in plain English, and (further down the same tab) a **Hidden Same-Bet Detector** — an on-demand check for positions that look diversified by sector and price correlation but secretly bet on the same underlying assumption, classifying each finding as unverified/possible/confirmed against the correlation data above. **🧭 Signal Coherence** (a 5th tab) mechanically joins three existing per-ticker surfaces — the composite score's own direction, the weekly Thesis Review status, and the most recent Bull/Bear debate verdict — and surfaces only names where they genuinely disagree; no synthesized explanation, just the raw signals side by side. Explicitly directional, not precise. Awareness only — never gates or reorders; composite score still decides which name to act on.
 - **📡 Signals & Advice** — two tabs: **📡 Active Signals** (active alerts by category — stops, signals, concentration, earnings, revisions; custom price alerts; signal-driven actions) and **🧩 Diversification** (sector reduce/rebalance and add-for-diversification recommendations). Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander on the Active Signals tab — fired alerts surface above it, each dismissible for the session (a dismissed alert reappears if the target/floor changes or a new one fires, so nothing is silently suppressed permanently). Note: weight-*target* rebalancing (drift vs. a target allocation %) lives on 🥧 Portfolio Overview's ⚖️ Rebalancing tab — a different feature from this page's score-driven actions.
@@ -37583,7 +37637,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer with two independent sections. **Forward Volatility Forecaster** (Phase 1) tests whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. **Earnings-Move Magnitude** (Phase 2) tests whether the app's own already-live pre-earnings sizing heuristic beats a naive "assume it moves like its own past prints" baseline, per held ticker around its scheduled print — unsigned magnitude only, never a directional call, and no "upcoming, not yet matured" preview (an outcome is only ever shown after it's known). Both sections feed **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. Each section's skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated.
 - **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Six checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh), and **⑥ Write outcomes** (did today's interactive ledger writes — 6 write paths: the buy recommendations log, the Grow Today gate suppression ledger, the Watchlist Ready-to-Enter log, and the 3 Watchlist/Rebalancer/Analysis gate-ledger capture sites added 2026-09-13 — actually save, or did a swallowed failure look identical to a healthy "nothing to record"?). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Check ⑥, unlike ④/⑤, DOES feed the Home banner — it is a same-session pass/fail signal, not a standing condition or a cold-load cache. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.** Below the six checks, a **🤖 Portfolio Investigator — AI provider** section lets you choose which AI model the 🔎 Investigator tab (🧠 AI Insights) uses — separate from 🤖 AI Snapshot's own provider choice, not shared or inherited. Only a model that's already passed a required accuracy check is offered.
 - **🛑 The Road Not Taken** — owner-only, not shown in read-only viewer mode. Grades the app's own restraint: every time a gate held back a pick, an add, or downgraded a call, this page shows what the forward return vs SPY over the following ~30 trading days would have been — did the app's caution help or hurt? Covers 14 gates: the original 8 inside Grow Today (macro/sector filters, single-name ceiling, drift conflict, cooldown, early-deterioration WATCH, bear-day tone) plus 6 more — a Rebalancer ADD suppression, a Watchlist ENTER_NOW downgrade to NEAR_ENTRY (sector, beta, or unvalidated R:R — 3 separate gates), and an Analysis add-to-position suppression on a breached stop. A downgrade and an outright suppression are graded as distinct claims (a downgraded name still rendered, just weaker), never blended together. Per gate, not aggregate, and a gate shows no verdict at all ("building") until enough matured, priced, distinct-ticker calls have accrued — expect every gate to read "building" for the first couple of months, longer for the 6 gates added 2026-09-13. **A pure retrospective measurement — it never changes what the engine recommends, gates, or sizes**, today or in the future.
-- **🎯 Recommendation Outcomes** — owner-only, not shown in read-only viewer mode. Asks whether past Rebalancer trims, the Risk Advisor's beta-card trim, and Diversification ADD calls actually helped — the trim types compare each call's own predicted metric (target single-name weight, or predicted portfolio beta) against what the portfolio's risk-metric history actually shows at that same call's ~30-trading-day horizon, always as a portfolio-level proxy (never claimed as a per-ticker-causal result); the ADD type shows the added name's own return vs SPY as one leg, and the portfolio's correlation/diversification-score shift as a separate leg — never blended into a single "diversification worked" claim. A call only counts as "acted on" when you traded the SAME named ticker, in the right direction, within 10 trading days of the call firing — trading a different name to address the same concern moves the numbers on 💰 Account's own charts but doesn't credit this specific call. Each type shows no verdict at all ("building") until enough matured, distinct-ticker calls have accrued. Tax-Harvest calls are tracked separately (see 💰 Account's running total), not graded here. **A pure retrospective measurement — it never changes what the engine recommends, gates, or sizes.**
+- **🎖️ Recommendation Outcomes** — owner-only, not shown in read-only viewer mode. Asks whether past Rebalancer trims, the Risk Advisor's beta-card trim, and Diversification ADD calls actually helped — the trim types compare each call's own predicted metric (target single-name weight, or predicted portfolio beta) against what the portfolio's risk-metric history actually shows at that same call's ~30-trading-day horizon, always as a portfolio-level proxy (never claimed as a per-ticker-causal result); the ADD type shows the added name's own return vs SPY as one leg, and the portfolio's correlation/diversification-score shift as a separate leg — never blended into a single "diversification worked" claim. A call only counts as "acted on" when you traded the SAME named ticker, in the right direction, within 10 trading days of the call firing — trading a different name to address the same concern moves the numbers on 💰 Account's own charts but doesn't credit this specific call. Each type shows no verdict at all ("building") until enough matured, distinct-ticker calls have accrued. Tax-Harvest calls are tracked separately (see 💰 Account's running total), not graded here. **A pure retrospective measurement — it never changes what the engine recommends, gates, or sizes.**
 - **⚙️ App Settings** — owner-only, not shown in read-only viewer mode. Lets you curate the three ticker-roster lists the engine reads — the Grow Today scan universe, the Movers discovery net, and the Diversification candidate roster — from inside the app instead of by editing code. **Edits the engine's INPUT SET, never a decision rule**: no gate, threshold, scoring weight, or `COMPOSITE_BUY` lives here or is ever editable through this page. The database is the single source of truth for these lists — if it's unreachable, the affected page shows "unavailable" rather than silently falling back to a frozen list. Every save is validated (a typo'd symbol blocks the save, never saves with a warning) and versioned in an append-only history, the same way git records why an investment threshold changed.
 
 - **If the database is unreachable, most pages deliberately refuse to load.** You'll see a red banner saying your portfolio is *not* shown, with a **🔄 Retry connection** button. This is on purpose: rendering an empty portfolio would look like you hold nothing, which is a worse lie than showing nothing at all. Two pages stay open — **🩺 System Trust** (to diagnose it) and **📖 User Guide** (this page) — because neither displays any of your holdings, so neither can mislead you. The app retries by itself every 30 seconds and recovers on its own once the database is back; the button retries immediately. If only your *watchlist* or *trade history* is unreadable, you get an amber warning instead and the app keeps working — your holdings are still correct, but history-driven pages (🎯 My Edge, 🧾 Prior Trades) may look emptier than they are.
@@ -37903,7 +37957,7 @@ the full "how it works," not just the quick version here.
         with st.expander("📚 Glossary & external references", expanded=False):
             st.markdown(
                 """
-- **Composite** — the blended 0–100 score (Technical + Fundamental + Valuation + Sentiment).
+- **Composite** — the blended 0–100 score (Technical + Business Quality + Valuation + Sentiment).
 - **Momentum** — a single-factor breakout signal; necessary but not sufficient for a Buy.
 - **Lifecycle (Settling / Winning / At Risk)** — where a held position is in its life, used to decide which nudges are worth showing.
 - **Act vs Awareness vs Tune-up** — decision-today / FYI / standing-quality, respectively.
