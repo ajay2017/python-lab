@@ -12877,25 +12877,29 @@ elif page == "🧾 Summary":
                 st.session_state["_pending_page"] = "🔔 Catalyst Watch"
                 st.rerun()
 
-    # 📐 Benchmark Mirror pointer card (2026-09-24 app review, C1). The app's
-    # broadest self-measurement — is the active strategy beating a passive
-    # benchmark at all? — was previously visible on exactly ONE tab of 🎯 My
-    # Edge, a page nothing on Summary pointed to. Reads `_bm_summary_cache`,
-    # published by that tab; NEVER recomputes (would trigger the unmemoized
-    # yfinance fetch that tab's own "Load benchmark data" button exists to
-    # gate). The pointer button renders unconditionally so there is always a
-    # path to My Edge; the NUMBER only renders when this session has already
-    # computed it today (util.benchmark_mirror_summary_state's freshness
-    # check) — same "skip silently rather than show a stale verdict"
-    # discipline as the F-277 protective-track-record caption above.
-    #
-    # Placed in slot [1] (under Catalyst Watch), not [0] (2026-09-24, owner
-    # screenshot feedback): Engine Track Record's card in [0] is by far the
-    # tallest of the three above, so a slot-[0] card here sat under it with a
-    # large, obviously-empty gap beside it. Catalyst Watch's card is short,
-    # so slot [1] fills space that would otherwise sit blank.
-    _sm_ptr_row2 = st.columns(3)
-    with _sm_ptr_row2[1]:
+        # 📐 Benchmark Mirror pointer card (2026-09-24 app review, C1). The
+        # app's broadest self-measurement — is the active strategy beating a
+        # passive benchmark at all? — was previously visible on exactly ONE
+        # tab of 🎯 My Edge, a page nothing on Summary pointed to. Reads
+        # `_bm_summary_cache`, published by that tab; NEVER recomputes
+        # (would trigger the unmemoized yfinance fetch that tab's own "Load
+        # benchmark data" button exists to gate). The pointer button renders
+        # unconditionally so there is always a path to My Edge; the NUMBER
+        # only renders when this session has already computed it today
+        # (util.benchmark_mirror_summary_state's freshness check) — same
+        # "skip silently rather than show a stale verdict" discipline as the
+        # F-277 protective-track-record caption above.
+        #
+        # Stacked INSIDE this same column (`with _sm_ptr_row1[1]:`), directly
+        # below the Catalyst Watch card, rather than in a separate
+        # `st.columns()` row (2026-09-24, second owner screenshot pass): a
+        # second `st.columns()` call starts an entirely new row below the
+        # TALLEST column of the previous row regardless of which slot you
+        # target within it — Engine Track Record's column [0] is far taller
+        # than Catalyst Watch's, so a slot-[1] card in a NEW row still landed
+        # well below Catalyst Watch's own box, with an empty gap between
+        # them. Nesting it in this column grows [1]'s own height directly,
+        # with no gap, and leaves [0]/[2] unaffected.
         with st.container(border=True, key="sm_ptr_bm_box"):
             st.markdown(
                 "<style>.st-key-sm_ptr_bm_box{background:#1b2130}"
