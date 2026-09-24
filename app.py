@@ -329,6 +329,7 @@ from stock_analyzer.util import catalyst_watch_mini_state
 from stock_analyzer.util import earnings_posture_alert_count
 from stock_analyzer.util import catalyst_watch_nav_badge
 from stock_analyzer.util import signals_advice_nav_badge
+from stock_analyzer.util import benchmark_mirror_summary_state
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -12874,6 +12875,43 @@ elif page == "🧾 Summary":
                     st.caption("🚫 = also under an active reduce/exit call")
             if st.button("→ Catalyst Watch", key="sm_ptr_catalyst", type="tertiary"):
                 st.session_state["_pending_page"] = "🔔 Catalyst Watch"
+                st.rerun()
+
+    # 📐 Benchmark Mirror pointer card (2026-09-24 app review, C1). The app's
+    # broadest self-measurement — is the active strategy beating a passive
+    # benchmark at all? — was previously visible on exactly ONE tab of 🎯 My
+    # Edge, a page nothing on Summary pointed to. Reads `_bm_summary_cache`,
+    # published by that tab; NEVER recomputes (would trigger the unmemoized
+    # yfinance fetch that tab's own "Load benchmark data" button exists to
+    # gate). The pointer button renders unconditionally so there is always a
+    # path to My Edge; the NUMBER only renders when this session has already
+    # computed it today (util.benchmark_mirror_summary_state's freshness
+    # check) — same "skip silently rather than show a stale verdict"
+    # discipline as the F-277 protective-track-record caption above.
+    _sm_ptr_row2 = st.columns(3)
+    with _sm_ptr_row2[0]:
+        with st.container(border=True, key="sm_ptr_bm_box"):
+            st.markdown(
+                "<style>.st-key-sm_ptr_bm_box{background:#1b2130}"
+                ".st-key-sm_ptr_bm_box button{color:#6ea8fe !important}</style>",
+                unsafe_allow_html=True,
+            )
+            st.markdown("**📐 Benchmark Mirror**")
+            _sm_bm_state = benchmark_mirror_summary_state(
+                st.session_state.get("_bm_summary_cache"), _today_et().isoformat(),
+            )
+            if _sm_bm_state is None:
+                st.caption("Are your picks beating a passive benchmark? Not computed this session.")
+            else:
+                st.markdown(
+                    f"<div style='font-size:1.1em;font-weight:600;color:{_safe_html(_sm_bm_state['color'])}'>"
+                    f"{_safe_html(_sm_bm_state['value_text'])}</div>"
+                    f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>"
+                    f"{_safe_html(_sm_bm_state['label'])} · {_safe_html(_sm_bm_state['basis'])}</div>",
+                    unsafe_allow_html=True,
+                )
+            if st.button("→ My Edge", key="sm_ptr_bm", type="tertiary"):
+                st.session_state["_pending_page"] = "🎯 My Edge"
                 st.rerun()
 
     # ── 📜 State of the Portfolio — standing thesis (full-width, below the
@@ -41530,6 +41568,30 @@ elif page == "🎯 My Edge":
                     and _me_cash < 0 and _me_port_val and _me_port_val > 0):
                 _me_port_beta = _me_port_beta * (_me_equity / _me_port_val)
             _me_beta_adj_alpha = _bm.beta_adjusted_alpha(_me_actual_disp, _me_shadow_disp, _me_port_beta)
+
+            # 2026-09-24 app review, C1: publish the headline result so 🧾
+            # Summary can surface it without recomputing (this app's
+            # coordination pattern) and without triggering the unmemoized
+            # yfinance fetch this tab's own "Load benchmark data" button
+            # exists specifically to gate. Stamped with today's date so
+            # Summary's freshness check (same pattern as `_etr_cache`) can
+            # tell "computed this session, today" from a stale earlier-day
+            # value in a long-lived session — the honest limitation this
+            # creates is that Summary can only show a number once THIS
+            # session has visited this tab and clicked Load; there is no
+            # cross-session persistence (that would need a DB column and its
+            # own reviewed commit, deliberately out of scope here).
+            st.session_state["_bm_summary_cache"] = {
+                "date":           _me_today.isoformat(),
+                "benchmark":      _me_bench_ticker,
+                "range_label":    _me_range_label,
+                "is_ann":         _me_is_ann,
+                "alpha_ann":      _me_alpha_ann,
+                "beta_adj_alpha": _me_beta_adj_alpha,
+                "actual_disp":    _me_actual_disp,
+                "shadow_disp":    _me_shadow_disp,
+                "dollar_gap":     _me_dollar_gap,
+            }
 
             with _me_kpi1:
                 st.metric(

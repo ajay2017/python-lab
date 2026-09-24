@@ -670,3 +670,46 @@ def signals_advice_nav_badge(n_danger: int, n_warning: int, offline: bool) -> li
     if n_warning > 0:
         parts.append(f":orange-background[● {n_warning}]")
     return parts
+
+
+def benchmark_mirror_summary_state(cache: dict | None, today_iso: str) -> dict | None:
+    """Classify `_bm_summary_cache` for 🧾 Summary's Benchmark Mirror
+    disclosure card (2026-09-24 app review, C1).
+
+    Returns `None` when the cache is absent or stale (a different date) —
+    the caller must skip the headline number entirely rather than show a
+    stale verdict, same discipline as the F-277 protective-track-record
+    caption. `None` here does NOT mean "no pointer" — the caller renders the
+    → My Edge button unconditionally regardless of this function's result;
+    it only governs whether a NUMBER is shown alongside it.
+
+    On a fresh cache, prefers `beta_adj_alpha` (isolates stock-selection
+    skill from leveraged beta exposure — the more honest of the two figures)
+    and falls back to raw `alpha_ann` only when beta wasn't available this
+    session (My Edge shows the same fallback, for the same reason). Returns
+    a dict with everything the caller needs to render one line:
+    `label`, `value_text`, `color`, `basis`.
+    """
+    if not isinstance(cache, dict) or cache.get("date") != today_iso:
+        return None
+    _beta_adj = cache.get("beta_adj_alpha")
+    _raw      = cache.get("alpha_ann")
+    _bench    = cache.get("benchmark") or "benchmark"
+    _range    = cache.get("range_label") or ""
+    _is_ann   = cache.get("is_ann")
+    _period   = "ann." if _is_ann else "total, <30d"
+
+    if _beta_adj is not None:
+        _val, _label, _adj_note = _beta_adj, "Beta-Adj. Alpha", ", beta-adjusted"
+    elif _raw is not None:
+        _val, _label, _adj_note = _raw, "Your Alpha", ""
+    else:
+        return None
+
+    _color = "#57d98a" if _val > 0 else ("#fca5a5" if _val < 0 else "#9ca3af")
+    return {
+        "label":      _label,
+        "value_text": f"{_val:+.1f}pp",
+        "color":      _color,
+        "basis":      f"vs {_bench} · {_range} ({_period}){_adj_note}",
+    }

@@ -26,6 +26,7 @@ from stock_analyzer.util import (
     earnings_posture_alert_count,
     catalyst_watch_nav_badge,
     signals_advice_nav_badge,
+    benchmark_mirror_summary_state,
 )
 import pytest
 
@@ -943,3 +944,92 @@ class TestSignalsAdviceNavBadge:
         assert signals_advice_nav_badge(2, 3, False) == [
             ":red-background[● 2]", ":orange-background[● 3]",
         ]
+
+
+class TestBenchmarkMirrorSummaryState:
+    """C1 (2026-09-24 app review): 🧾 Summary's Benchmark Mirror disclosure
+    must never show a stale/absent verdict as if it were fresh, must prefer
+    beta-adjusted alpha, and must fall back to raw alpha only when beta
+    wasn't available -- mirroring My Edge's own fallback."""
+
+    TODAY = "2026-09-24"
+
+    def _cache(self, **overrides):
+        base = {
+            "date": self.TODAY, "benchmark": "SPY", "range_label": "Last 12 months",
+            "is_ann": True, "alpha_ann": -12.3, "beta_adj_alpha": -18.7,
+            "actual_disp": -5.0, "shadow_disp": 7.3, "dollar_gap": -1100.0,
+        }
+        base.update(overrides)
+        return base
+
+    def test_none_cache_returns_none(self):
+        assert benchmark_mirror_summary_state(None, self.TODAY) is None
+
+    def test_non_dict_cache_returns_none(self):
+        assert benchmark_mirror_summary_state("not a dict", self.TODAY) is None
+        assert benchmark_mirror_summary_state([], self.TODAY) is None
+
+    def test_stale_date_returns_none_even_with_a_real_value(self):
+        """The load-bearing guard: a cache from an earlier day in a
+        long-lived session must not render as today's verdict."""
+        stale = self._cache(date="2026-09-23")
+        assert benchmark_mirror_summary_state(stale, self.TODAY) is None
+
+    def test_fresh_cache_prefers_beta_adjusted_alpha(self):
+        state = benchmark_mirror_summary_state(self._cache(), self.TODAY)
+        assert state is not None
+        assert state["label"] == "Beta-Adj. Alpha"
+        assert state["value_text"] == "-18.7pp"
+        assert "beta-adjusted" in state["basis"]
+
+    def test_falls_back_to_raw_alpha_when_beta_adjusted_is_none(self):
+        """Same fallback My Edge's own KPI strip uses when portfolio beta
+        wasn't available this session -- must not fabricate a beta-adjusted
+        number, and must not silently show nothing when a real raw alpha
+        exists."""
+        state = benchmark_mirror_summary_state(
+            self._cache(beta_adj_alpha=None), self.TODAY,
+        )
+        assert state is not None
+        assert state["label"] == "Your Alpha"
+        assert state["value_text"] == "-12.3pp"
+        assert "beta-adjusted" not in state["basis"]
+
+    def test_both_alpha_values_none_returns_none(self):
+        """Nothing measurable this session -- must not fabricate a 0."""
+        state = benchmark_mirror_summary_state(
+            self._cache(beta_adj_alpha=None, alpha_ann=None), self.TODAY,
+        )
+        assert state is None
+
+    def test_positive_alpha_is_green(self):
+        state = benchmark_mirror_summary_state(
+            self._cache(beta_adj_alpha=4.2), self.TODAY,
+        )
+        assert state["color"] == "#57d98a"
+
+    def test_negative_alpha_is_red(self):
+        state = benchmark_mirror_summary_state(
+            self._cache(beta_adj_alpha=-4.2), self.TODAY,
+        )
+        assert state["color"] == "#fca5a5"
+
+    def test_exactly_zero_alpha_is_neutral_not_fabricated_positive_or_negative(self):
+        state = benchmark_mirror_summary_state(
+            self._cache(beta_adj_alpha=0.0), self.TODAY,
+        )
+        assert state["color"] == "#9ca3af"
+
+    def test_basis_names_the_benchmark_and_window(self):
+        state = benchmark_mirror_summary_state(
+            self._cache(benchmark="QQQ", range_label="Last 6 months"), self.TODAY,
+        )
+        assert "QQQ" in state["basis"]
+        assert "Last 6 months" in state["basis"]
+
+    def test_period_label_reflects_annualized_flag(self):
+        ann_state    = benchmark_mirror_summary_state(self._cache(is_ann=True), self.TODAY)
+        period_state = benchmark_mirror_summary_state(self._cache(is_ann=False), self.TODAY)
+        assert "ann." in ann_state["basis"]
+        assert "total, <30d" in period_state["basis"]
