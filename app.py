@@ -2735,6 +2735,15 @@ def _check_password():
     # check above already covers a plain rerun within the same browser tab;
     # this only matters once session_state itself has been wiped.
     _cookie_mgr = stx.CookieManager(key="_drishta_cookie_mgr")
+    # 2026-09-24 app review, Q2 (antipattern-baseline decision): `.get_all()`
+    # returns None on the FIRST render while the browser's JS round-trip is
+    # still pending -- a normal, expected transient state, not a failure.
+    # `or {}` fails CLOSED here (no readable cookie -> show the login form),
+    # which is the correct, conservative direction for an auth gate: worst
+    # case a legitimate returning user re-enters their password once; never
+    # a security hole. Baselined, not fixed -- unlike the exit_signals class
+    # this rule was widened to catch, there is no "fabricated all-clear" risk
+    # in this direction.
     _cookies = _cookie_mgr.get_all() or {}
     _cookie_token = _cookies.get(_AUTH_COOKIE_NAME, "")
     if _cookie_token:
@@ -3605,6 +3614,20 @@ def _cached_held_earnings_dates(tickers_tuple: tuple, from_str: str, to_str: str
     held = {str(t).strip().upper() for t in tickers_tuple}
     out: dict = {}
     try:
+        # 2026-09-24 app review, Q2 (antipattern-baseline decision):
+        # `fetch_earnings_calendar` NEVER returns None (its own return type
+        # is `list[dict]`, always) -- an FMP outage is already absorbed
+        # into `[]` several layers below by design (stock_analyzer/data.py
+        # and providers/orchestrator.py both document "return [] (not an
+        # error) ... degrades gracefully"). Confirmed neither hard gate
+        # (G-10 earnings-imminence, G-07 macro-imminence) depends on this
+        # market-wide FMP path: G-10 reads per-ticker load_bundle data
+        # (daily_briefing.py's own earnings_lookup construction), and G-07's
+        # core signal is a hardcoded static calendar, not a live fetch. AND
+        # this function's own two-layer design (FMP first, then a per-name
+        # yfinance fallback below for anything FMP missed) already covers
+        # the realistic "one provider down" case. `or []` is redundant
+        # defensive code here, not a fabricated-all-clear risk -- baselined.
         for _r in (fetch_earnings_calendar(from_str, to_str) or []):
             _tk = str(_r.get("ticker", "")).strip().upper()
             _dt = str(_r.get("date", ""))[:10]
@@ -3641,6 +3664,8 @@ def _cached_catalyst_calendar(tracked_tuple: tuple, from_str: str, to_str: str) 
     rows: list[dict] = []
     covered: set = set()
     try:
+        # Same antipattern-baseline decision as `_cached_held_earnings_dates`
+        # above (2026-09-24 app review, Q2) -- see that function's comment.
         for r in (fetch_earnings_calendar(from_str, to_str) or []):
             t = str(r.get("ticker", "")).upper()
             if t in tracked:
@@ -35016,12 +35041,27 @@ elif page == "💰 Account":
                 # render — propagated as (None, None) so annotate never fabricates.
                 _snap_holdings_for_counts = st.session_state.get("holdings_df")
                 if _snap_drift is not None:
+                    # 2026-09-24 app review, Q2: explicit `is None` check
+                    # (matching the already-correct handling at the FIRST
+                    # _snap_cached_positions call site above, ~line 34940),
+                    # not `or []`. Low real-world risk here specifically --
+                    # this branch only runs when _snap_drift is not None,
+                    # meaning every account's position fetch already
+                    # succeeded moments earlier in the same render, and
+                    # st.cache_data's TTL means this is very likely a cache
+                    # hit on that same result -- fixed for consistency with
+                    # the sibling call site, not because a live bug was
+                    # traced.
+                    def _snap_positions_or_empty(_acct_id: str) -> list:
+                        _pos = _snap_cached_positions(_acct_id)
+                        return _pos if _pos is not None else []
+
                     # Re-use the already-normalized RH positions map from drift
                     # (they're the same per-ticker share totals drift computed).
                     _snap_rh_map, _snap_app_map = broker_sync.ticker_share_counts(
                         broker_sync.normalize_positions(
                             [pos for _sa2 in (_snap_accounts or [])
-                             for pos in (_snap_cached_positions(_sa2.get("id", "")) or [])]
+                             for pos in _snap_positions_or_empty(_sa2.get("id", ""))]
                         ),
                         _snap_holdings_for_counts,
                     )

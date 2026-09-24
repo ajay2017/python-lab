@@ -248,6 +248,16 @@ def get_earnings_calendar(from_date: str, to_date: str) -> list[dict]:
     for prov in chain():
         if hasattr(prov, "earnings_calendar"):
             try:
+                # 2026-09-24 app review, Q2 (antipattern-baseline decision):
+                # this function's own docstring already commits to "return
+                # [] (not an error)" as its designed no-data contract -- the
+                # `or []` is that contract, not a fabricated-all-clear risk.
+                # Same silently-degrades-to-empty design as
+                # macro_calendar.build_macro_calendar (see
+                # headless_alert_engine.py's comment) and
+                # data.fetch_earnings_calendar (see app.py's
+                # _cached_held_earnings_dates comment for the full G-07/G-10
+                # hard-gate independence trace).
                 return prov.earnings_calendar(from_date, to_date) or []
             except Exception:
                 return []
@@ -318,6 +328,16 @@ def crosscheck_price(ticker: str, primary_price: float,
             # the crosscheck_batch validator-health gate). If no healthy independent
             # validator remains, the loop exhausts → returns None (no opinion).
             continue
+        # 2026-09-24 app review, Q2 (antipattern-baseline decision): this
+        # `or {}` collapses ONE provider's own None/empty into "no rec from
+        # THIS provider" -- it does NOT defeat the function's overall
+        # None-propagation contract, since a genuine total failure (every
+        # provider tried and failed) still correctly falls through to the
+        # loop exhausting and the function returning None ("no opinion",
+        # per the comment above), which the caller already treats as
+        # "couldn't validate," not a false all-clear. Same reasoning
+        # applies to the sibling site below in this file (named-source
+        # cross-check).
         try:
             rec = (prov.live_prices([ticker]) or {}).get(ticker)
         except Exception:
@@ -369,6 +389,10 @@ def crosscheck_against(source: str, ticker: str, primary_price: float,
     prov = next((p for p in _live_price_providers() if p.name == source), None)
     if prov is None or _is_red(prov.name):
         return None
+    # 2026-09-24 app review, Q2 (antipattern-baseline decision): same
+    # reasoning as crosscheck_price()'s identical `or {}` above in this
+    # file -- a total failure here still falls through to `not rec` ->
+    # None ("no opinion"), never a false all-clear.
     try:
         rec = (prov.live_prices([ticker]) or {}).get(ticker)
     except Exception:

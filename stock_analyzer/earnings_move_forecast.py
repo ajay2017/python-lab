@@ -47,6 +47,12 @@ def resolve_upcoming_earnings(ticker: str, today: date, lookout_days: int) -> tu
     from_str = today.isoformat()
     to_str = (today + timedelta(days=lookout_days)).isoformat()
     try:
+        # 2026-09-24 app review, Q2 (antipattern-baseline decision):
+        # fetch_earnings_calendar's return type is always `list[dict]`,
+        # never None -- a provider outage is already absorbed into `[]`
+        # several layers below, by design (see app.py's
+        # _cached_held_earnings_dates for the full trace). `or []` is
+        # redundant here, not a fabricated-all-clear risk.
         for row in (_data.fetch_earnings_calendar(from_str, to_str) or []):
             if str(row.get("ticker", "")).strip().upper() == tkr:
                 d = str(row.get("date", ""))[:10]

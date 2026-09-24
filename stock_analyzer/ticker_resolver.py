@@ -70,6 +70,14 @@ def resolve_company_name(query: str, max_results: int = 8) -> dict | None:
         # page — pass an explicit shorter bound, mirroring earnings_intel's
         # timeout=8 for the same "quick interactive call" shape.
         result = yf.Search(query.strip(), max_results=max_results, timeout=8)
+        # 2026-09-24 app review, Q2 (antipattern-baseline decision): this
+        # whole function is one try/except returning None on ANY exception
+        # (a genuine yfinance failure never reaches this line at all) --
+        # `or []` here only collapses "no `quotes` attribute" / "quotes is
+        # already empty" into the SAME empty-list shape, both of which fall
+        # through to the `if not equities: return None` below regardless.
+        # No path exists where a real failure gets misread as "searched,
+        # zero results."
         quotes = getattr(result, "quotes", None) or []
         equities = [
             q for q in quotes

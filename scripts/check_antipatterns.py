@@ -11,12 +11,19 @@ that are mechanically detectable (see CLAUDE.md "Definition of Done" and the
 audit memories project_audit_2026_07_29 / project_audit_2026_08_04).
 
 Rules (each an AST signature, low false-positive by design):
-  OFFLINE_SENTINEL_COLLAPSE  — `<something>.get(...) or []` / `or {}` / `or ()`,
-      OR the semantically identical ternary form `<something>.get(...) if <cond>
-      else []` / `[] if <cond> else <something>.get(...)` (2026-08-24 audit: an
+  OFFLINE_SENTINEL_COLLAPSE  — `<any call>(...) or []` / `or {}` / `or ()`,
+      OR the semantically identical ternary form `<any call>(...) if <cond>
+      else []` / `[] if <cond> else <any call>(...)` (2026-08-24 audit: an
       `IfExp` collapses "couldn't compute" into "checked, empty" exactly like the
       `BoolOp/Or` form — a live instance survived undetected in app.py's F-252
       broker-drift cross-reference until this rule was widened).
+      Widened 2026-09-24 (2026-09-24 app review, Q2) from matching ONLY a
+      `.get(...)` method call to ANY call — a bare `fetch_x()` or `db.load_y()`
+      collapses the same None-on-failure contract the same way when OR'd
+      against an empty default; the function's NAME was never the load-bearing
+      part of the shape. See `docs/reviews/2026-09-24-app-review.md` Q2 for
+      what this widening found in the existing codebase and how each instance
+      was resolved (fixed at the source vs. baselined).
       The offline-vs-checked-empty contract (producer returns None on failure)
       is silently defeated at the *consumer* read site by `or []`, turning
       "couldn't compute" into "checked, no risk." The single most-repeated
@@ -165,10 +172,46 @@ def _is_empty_container(node: ast.AST) -> bool:
 
 
 def _has_get_call(node: ast.AST) -> bool:
-    """True if the expr is (or contains at its top level) a `.get(...)` call."""
+    """True if the expr is (or contains at its top level) a `.get(...)` call.
+
+    Deliberately kept `.get()`-only for the IfExp/ternary shape (see
+    `visit_IfExp`) even after 2026-09-24's widening of the BoolOp/`or` form
+    to `_has_any_call` below. Tried widening this one too (2026-09-24, app
+    review Q2) and reverted after a real run: the ternary's condition is
+    frequently an INPUT precondition unrelated to the call's own success —
+    e.g. `_build_open_lots(t, _hd_trades, _today_et()) if _hd_trades is not
+    None else []` guards against a None INPUT, it does not collapse a None
+    RETURN VALUE the way `X.get(...) or []` structurally does (`or` only
+    falls through when the LEFT side is itself falsy — the call's own
+    result, not some unrelated condition). Widening the ternary form to any
+    call produced ~30 hits on a single run, the large majority of them
+    exactly this false-positive shape. `or`'s semantics don't have that
+    ambiguity, so only that form was safe to widen.
+    """
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         return node.func.attr == "get"
     return False
+
+
+def _has_any_call(node: ast.AST) -> bool:
+    """True if the expr is (or contains at its top level) ANY call.
+
+    Widened 2026-09-24 (2026-09-24 app review, Q2) from `_has_get_call`
+    (`.get(...)` only) — used ONLY for the BoolOp/`or` shape (`visit_BoolOp`),
+    NOT the ternary shape (see `_has_get_call`'s own docstring for why the
+    ternary form stayed narrow). `or`'s semantics make this widening safe:
+    `X(...) or []` only falls through to `[]` when `X(...)` itself is
+    falsy — a `.get()` call and a bare `fetch_x()`/`db.load_y()` call
+    collapse the SAME None-on-failure sentinel the SAME way here; the
+    function's NAME was never the load-bearing part of the shape. Confirmed
+    live instances the narrower version missed:
+    `fetch_earnings_calendar(...) or []` (app.py) and
+    `db.load_alert_state(...) or {}` (cron_runner.py, 5 sites) — neither is
+    a `.get()` call, both collapse a documented None-on-failure contract.
+    See `docs/reviews/2026-09-24-app-review.md` Q2 for what this widening
+    found and how each instance was resolved.
+    """
+    return isinstance(node, ast.Call)
 
 
 def _sentinel_read_key(node: ast.AST) -> str | None:
@@ -387,8 +430,11 @@ class _Visitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_BoolOp(self, node: ast.BoolOp) -> None:
+        # ANY call (`_has_any_call`, widened 2026-09-24) — safe here because
+        # `or` only falls through to the empty default when the call's OWN
+        # result is falsy. See `_has_any_call`'s docstring.
         if isinstance(node.op, ast.Or):
-            has_get = any(_has_get_call(v) for v in node.values)
+            has_get = any(_has_any_call(v) for v in node.values)
             empty_default = any(_is_empty_container(v) for v in node.values[1:])
             if has_get and empty_default:
                 self.hits.append(("OFFLINE_SENTINEL_COLLAPSE", self._seg(node)))
@@ -399,6 +445,11 @@ class _Visitor(ast.NodeVisitor):
         # the ternary form of the same OFFLINE_SENTINEL_COLLAPSE the `or []`
         # BoolOp form above catches. Checked in both orderings since either
         # side of the ternary may be the `.get()` call (2026-08-24 audit).
+        # Deliberately still `.get()`-only (`_has_get_call`, NOT the widened
+        # `_has_any_call`) — see `_has_get_call`'s own docstring: unlike `or`,
+        # a ternary's condition is frequently an input precondition unrelated
+        # to the call's own success, so widening this shape to any call
+        # produced mostly false positives on a real run (2026-09-24).
         for get_side, empty_side in ((node.body, node.orelse), (node.orelse, node.body)):
             if _has_get_call(get_side) and _is_empty_container(empty_side):
                 self.hits.append(("OFFLINE_SENTINEL_COLLAPSE", self._seg(node)))

@@ -21,6 +21,7 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001f_cb.get(\"rec\") or {}": 2,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_cb.get(\"targets\") or {}": 2,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_comp_cov.get(\"intended\", []) or []": 1,
+      "OFFLINE_SENTINEL_COLLAPSE\u001f_cookie_mgr.get_all() or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_cov.get(\"intended\", []) or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_cov_newest.get(\"analysts\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_covrow.get(\"analysts\") or []": 1,
@@ -79,6 +80,7 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001f_sm_hd.get(_sm_et, {}) or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_x_hd.get(_db_ticker) or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_xref.get(\"verdict_reconciled\", {}) or {}": 1,
+      "OFFLINE_SENTINEL_COLLAPSE\u001ffetch_earnings_calendar(from_str, to_str) or []": 2,
       "OFFLINE_SENTINEL_COLLAPSE\u001fgetattr(st.session_state.get(\"_last_port_df\"), \"attrs\", {}).get(\"dropped_holdings\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fgrow.get(\"sector_blocked_adds\", []) or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fgrow.get(\"sector_blocked_picks\", []) or []": 1,
@@ -93,12 +95,11 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001frt.get(\"by_weekday\", {}) or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001frt.get(\"stats\", {}) or {}": 2,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.secrets.get(\"anthropic\") or {}": 8,
-      "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_acct_gate_cache\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_grow_composites\") or {}": 3,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_grow_composites\", {}) or {}": 4,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_grow_composites_coverage\") or {}": 2,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_home_synth_cache\") or {}": 1,
-      "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_last_held_data\") or {}": 3,
+      "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_last_held_data\") or {}": 2,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_last_held_data\", {}) or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_last_held_tickers\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fst.session_state.get(\"_live_prices\") or {}": 5,
@@ -487,6 +488,7 @@
     "cron_runner.py": {
       "OFFLINE_SENTINEL_COLLAPSE\u001f(p.get(\"xref\") or {}).get(\"verdict_reconciled\") or {}": 2,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_sb.get(\"headlines\") or []": 1,
+      "OFFLINE_SENTINEL_COLLAPSE\u001ffetch_live_prices(tickers) or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fp.get(\"xref\") or {}": 2,
       "OFFLINE_SENTINEL_COLLAPSE\u001fpayload.get(\"diag\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fpayload.get(\"held_data\") or {}": 1,
@@ -563,6 +565,9 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001fdata.get(\"risk_metrics\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fheld_data.get(ticker) or {}": 1
     },
+    "stock_analyzer/earnings_move_forecast.py": {
+      "OFFLINE_SENTINEL_COLLAPSE\u001f_data.fetch_earnings_calendar(from_str, to_str) or []": 1
+    },
     "stock_analyzer/evening_debrief.py": {
       "OFFLINE_SENTINEL_COLLAPSE\u001fbrief.get(\"buy_candidates\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fbrief.get(\"grow_today\") or {}": 1,
@@ -577,6 +582,7 @@
     },
     "stock_analyzer/headless_alert_engine.py": {
       "OFFLINE_SENTINEL_COLLAPSE\u001fbrief.get(\"grow_today\") or {}": 1,
+      "OFFLINE_SENTINEL_COLLAPSE\u001fbuild_macro_calendar( port_df, fred_key=(_os.environ.get(\"FRED_API_KEY\") or None), today=today, ) or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fbundle.get(\"financials\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001ffrag.get(\"exposed\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fgrow.get(\"composite_skipped\", []) or []": 1,
@@ -632,6 +638,10 @@
     "stock_analyzer/providers/fmp_provider.py": {
       "NAIVE_DATE_TODAY\u001fdate.today()": 4,
       "OFFLINE_SENTINEL_COLLAPSE\u001fpayload.get(\"content\") if isinstance(payload, dict) else []": 1
+    },
+    "stock_analyzer/providers/orchestrator.py": {
+      "OFFLINE_SENTINEL_COLLAPSE\u001fprov.earnings_calendar(from_date, to_date) or []": 1,
+      "OFFLINE_SENTINEL_COLLAPSE\u001fprov.live_prices([ticker]) or {}": 2
     },
     "stock_analyzer/providers/selftest.py": {
       "OFFLINE_SENTINEL_COLLAPSE\u001fb.get('news') or []": 1
@@ -700,6 +710,9 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001fpc.get(\"tickers\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fraw_c.get(\"quotes\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fraw_c.get(\"tickers\") or []": 1
+    },
+    "stock_analyzer/ticker_resolver.py": {
+      "OFFLINE_SENTINEL_COLLAPSE\u001fgetattr(result, \"quotes\", None) or []": 1
     },
     "stock_analyzer/trade_review.py": {
       "OFFLINE_SENTINEL_COLLAPSE\u001f(match_info or {}).get(\"matched\", []) or []": 1,

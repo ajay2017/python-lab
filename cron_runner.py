@@ -192,6 +192,35 @@ def _log(msg: str) -> None:
     print(f"[alerts-cron] {msg}", flush=True)
 
 
+def _dedup_state_or_log(row_id: int, lane: str) -> dict:
+    """Read `alert_state` for `row_id`, logging when the read itself failed
+    instead of silently collapsing it via `... or {}` (2026-09-24 app
+    review, Q2 — the antipattern gate's OFFLINE_SENTINEL_COLLAPSE rule
+    widened to catch this exact shape). `db.load_alert_state()` already
+    returns `None` on a genuine failure (DB offline / table missing) per
+    its own docstring; the bug was only that every one of the 5 call sites
+    threw that signal away with `or {}`.
+
+    Deliberately NOT a fail-closed fix like J1/A1: the functional behavior
+    is unchanged either way (proceed as if nothing was sent yet). A dedup
+    check failing open risks a DUPLICATE email if this alert was already
+    sent earlier today, never a MISSING one — the safe direction, unlike
+    J1's protective-exclusion check, where failing open could recommend a
+    buy on a name under an active protective call. Suppressing the whole
+    lane here (the J1 pattern) would trade a rare, harmless duplicate for a
+    missing legitimate alert, which is the wrong direction for THIS check.
+    The fix here is observability (a log line a human can find), not a
+    behavior change.
+    """
+    state = db.load_alert_state(row_id)
+    if state is None:
+        _log(f"{lane}: dedup-state read failed or row/table absent -- "
+             "proceeding as if nothing was sent yet today (may re-send if "
+             "this alert already went out earlier).")
+        return {}
+    return state
+
+
 def _fingerprint(alerts: list[dict]) -> str:
     """Stable hash of the protective SET — by (kind, ticker), not wording, so a
     re-phrased directive doesn't re-trigger an email. Empty set → 'none'."""
@@ -317,7 +346,7 @@ def _run_premarket(now_et, force: bool) -> int:
         if now_et.hour < ALERT_EMAIL_HOUR_ET:
             _log(f"premarket: too early (ET hour {now_et.hour} < {ALERT_EMAIL_HOUR_ET}) — skip.")
             return 0
-    state = db.load_alert_state(_PROTECTIVE_ROW) or {}
+    state = _dedup_state_or_log(_PROTECTIVE_ROW, "premarket")
 
     payload = compute_protective_alerts(today=now_et.date())
     # A DB outage must NOT read as "no protective actions today" — that is the
@@ -697,7 +726,7 @@ def _run_eod(now_et, force: bool) -> int:
     else:
         _log(f"pullback: S&P {pb.get('index_pct')}% · book~{pb.get('book_implied_pct')}% "
              f"({pb.get('severity')}).")
-        state = db.load_alert_state(_EOD_ROW) or {}
+        state = _dedup_state_or_log(_EOD_ROW, "pullback")
         if state.get("last_emailed_date") == today_str and not force:
             _log("pullback already emailed today — skip.")
         else:
@@ -1599,7 +1628,7 @@ def _run_scan(now_et, force: bool) -> int:
             ))
 
         fp = _daily_action_fingerprint(top_pick, exit_alerts, exit_check_unavailable)
-        state = db.load_alert_state(_BUY_ROW) or {}
+        state = _dedup_state_or_log(_BUY_ROW, "morning-action")
         if (state.get("last_emailed_date") == today_str
                 and state.get("last_fingerprint") == fp and not force):
             _log(f"morning action unchanged since last send (fp={fp}) — no email.")
@@ -1655,7 +1684,7 @@ def _run_scan(now_et, force: bool) -> int:
             _wle_fp = hashlib.sha1(
                 f"{today_str}|{'|'.join(_wle_tickers)}".encode("utf-8")
             ).hexdigest()[:16]
-            _wle_state = db.load_alert_state(_WATCHLIST_ENTRIES_ROW) or {}
+            _wle_state = _dedup_state_or_log(_WATCHLIST_ENTRIES_ROW, "watchlist-entries")
             if (_wle_state.get("last_emailed_date") == today_str
                     and _wle_state.get("last_fingerprint") == _wle_fp and not force):
                 _log(f"watchlist-entries: same set already sent today (fp={_wle_fp}) — skip.")
@@ -1769,7 +1798,7 @@ def _run_intraday(now_et, force: bool) -> int:
         # re-fire when the cron re-runs (DST dual-slot or FORCE re-test).
         _fp_keys = sorted(f"{str(e.get('ticker')).upper()}:{today_str}" for e in entries)
         fp = hashlib.sha1("|".join(_fp_keys).encode("utf-8")).hexdigest()[:16]
-        state = db.load_alert_state(_INTRADAY_ROW) or {}
+        state = _dedup_state_or_log(_INTRADAY_ROW, "intraday")
         if (state.get("last_emailed_date") == today_str
                 and state.get("last_fingerprint") == fp and not force):
             _log(f"intraday: same entries already sent today (fp={fp}) — skip.")
@@ -2140,6 +2169,13 @@ def _run_monthly_report(now_et, force: bool) -> int:
             str(t).strip().upper() for t in recs_df["ticker"].dropna().tolist() if str(t).strip()
         })
         if tickers:
+            # 2026-09-24 app review, Q2 (antipattern-baseline decision):
+            # fetch_live_prices' return type is always `dict[str, dict]`,
+            # never None (traced to providers/orchestrator.py::get_live_prices,
+            # which always returns its accumulator dict). A raised exception
+            # is already caught by this block's own enclosing except below,
+            # which logs "live-price fetch failed ... degrades gracefully" --
+            # `or {}` is redundant here, not a fabricated-all-clear risk.
             px = fetch_live_prices(tickers) or {}
             prices = {t: float(d.get("price", 0)) for t, d in px.items() if d and d.get("price")}
     except Exception as e:

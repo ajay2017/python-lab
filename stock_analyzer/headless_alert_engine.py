@@ -521,6 +521,14 @@ def compute_morning_picks(today: date | None = None, scanner_results=None) -> di
     try:
         import os as _os
         from stock_analyzer.macro_calendar import build_macro_calendar
+        # 2026-09-24 app review, Q2 (antipattern-baseline decision):
+        # build_macro_calendar's own return type is always `list[dict]`,
+        # never None -- its core event/date/impact data comes from a
+        # HARDCODED static table (_STATIC in macro_calendar.py), not a live
+        # API call, so it isn't exposed to a provider outage the way
+        # exit_signals is. The FRED layer only enriches with actual
+        # released VALUES, which G-07's imminence gate doesn't read. `or []`
+        # is redundant defensive code here, not a fabricated-all-clear risk.
         macro_events = build_macro_calendar(
             port_df, fred_key=(_os.environ.get("FRED_API_KEY") or None), today=today,
         ) or []
