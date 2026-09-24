@@ -27,6 +27,7 @@ from stock_analyzer.util import (
     catalyst_watch_nav_badge,
     signals_advice_nav_badge,
     benchmark_mirror_summary_state,
+    defense_facet_badge,
 )
 import pytest
 
@@ -1033,3 +1034,68 @@ class TestBenchmarkMirrorSummaryState:
         period_state = benchmark_mirror_summary_state(self._cache(is_ann=False), self.TODAY)
         assert "ann." in ann_state["basis"]
         assert "total, <30d" in period_state["basis"]
+
+
+class TestDefenseFacetBadge:
+    """B1 (2026-09-24 app review): the Defense facet's SIGN READING is
+    inverted relative to Offense's (negative protect_alpha is the GOOD
+    outcome here) even though both now share the identical alpha formula.
+    Extracted from what was an untested inline app.py conditional."""
+
+    def test_building_band_shows_building_regardless_of_alpha(self):
+        state = defense_facet_badge("building", None, n_mature=3, min_calls=8)
+        assert state["badge"] == "BUILDING"
+        assert state["value_text"] == "—"
+        assert "5 more" in state["basis"]
+
+    def test_building_band_with_none_needed_shows_maturing(self):
+        state = defense_facet_badge("building", None, n_mature=8, min_calls=8)
+        assert state["basis"] == "maturing"
+
+    def test_no_data_when_alpha_is_none_but_band_is_not_building(self):
+        """Defensive: band != 'building' with a None alpha is a shape bug,
+        but must render neutral, never crash or fabricate a number."""
+        state = defense_facet_badge("firm", None, n_mature=10, min_calls=8)
+        assert state["badge"] == "NO DATA"
+        assert state["value_text"] == "—"
+
+    def test_firm_negative_alpha_is_validated_green(self):
+        """The core sign-flip assertion: NEGATIVE is good for Defense,
+        unlike Offense where positive is good."""
+        state = defense_facet_badge("firm", -17.7, n_mature=22, min_calls=8)
+        assert state["badge"] == "VALIDATED ✓"
+        assert state["badge_color"] == "#57d98a"
+        assert state["value_color"] == "#57d98a"
+        assert state["value_text"] == "-17.7pp"
+
+    def test_firm_positive_alpha_is_ran_early_amber(self):
+        state = defense_facet_badge("firm", 12.3, n_mature=22, min_calls=8)
+        assert state["badge"] == "RAN EARLY"
+        assert state["badge_color"] == "#f0c24b"
+        assert state["value_color"] == "#fca5a5"
+        assert state["value_text"] == "+12.3pp"
+
+    def test_early_band_is_early_read_regardless_of_sign(self):
+        """band='early' (below firm_calls) never renders VALIDATED/RAN EARLY
+        -- only 'firm' band commits to a verdict label."""
+        negative_early = defense_facet_badge("early", -5.0, n_mature=10, min_calls=8)
+        positive_early = defense_facet_badge("early", 5.0, n_mature=10, min_calls=8)
+        assert negative_early["badge"] == "EARLY READ"
+        assert positive_early["badge"] == "EARLY READ"
+
+    def test_basis_names_the_flagged_count(self):
+        state = defense_facet_badge("firm", -5.0, n_mature=22, min_calls=8)
+        assert "22 flagged" in state["basis"]
+
+    def test_zero_alpha_at_firm_band_is_ran_early_not_validated(self):
+        """Boundary: exactly 0.0 is not < 0, so it falls to the 'firm, not
+        VALIDATED' branch -- RAN EARLY. This is the ORIGINAL inline app.py
+        logic's own pre-existing tie behavior (only the `>`/`<` DIRECTION
+        flipped in B1, not this structure) and is worth noting it disagrees
+        with the standalone exit_early_cost_analysis.py::classify_direction's
+        separately-disclosed tie-goes-to-validated convention at exactly
+        0.0 -- a real but pre-existing inconsistency, not introduced by
+        this fix, and out of B1's scope (B1 reconciles the FORMULA, not
+        this hypothetical exact-zero tie edge case)."""
+        state = defense_facet_badge("firm", 0.0, n_mature=22, min_calls=8)
+        assert state["badge"] == "RAN EARLY"

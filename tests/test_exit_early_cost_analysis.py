@@ -23,18 +23,21 @@ pytestmark = pytest.mark.fast
 
 
 # ─── classify_direction ──────────────────────────────────────────────────────
+# Sign flipped 2026-09-24 (2026-09-24 app review, B1) to match
+# protective_track_record.py's own flip -- see that module's docstring.
 
-def test_classify_direction_negative_is_ran_early():
-    assert eeca.classify_direction(-5.2) == "ran_early"
+def test_classify_direction_positive_is_ran_early():
+    assert eeca.classify_direction(5.2) == "ran_early"
 
 
-def test_classify_direction_positive_is_validated():
-    assert eeca.classify_direction(3.1) == "validated"
+def test_classify_direction_negative_is_validated():
+    assert eeca.classify_direction(-3.1) == "validated"
 
 
 def test_classify_direction_zero_tie_is_validated():
     """Disclosed judgment call -- protective_track_record.py itself only
-    defines strict positive/negative, not a tie rule."""
+    defines strict positive/negative, not a tie rule. Unaffected by the sign
+    flip: 0.0 is neither > 0 nor < 0 either way."""
     assert eeca.classify_direction(0.0) == "validated"
 
 

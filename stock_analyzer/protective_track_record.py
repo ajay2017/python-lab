@@ -3,17 +3,32 @@ Protective Track Record — 🛡️ Defense facet of the 🎯 Engine Track Recor
 (🧾 Summary page, F-229 Phase 2).
 
 Mirrors `recommendations_history.py`'s BUY-side ("⚔️ Offense") measurement
-pattern but over a different substrate (`exit_signals`, not `recommendations`)
-and with a sign-flipped alpha: a protective EXIT/TRIM call is "right" when the
-flagged name UNDERPERFORMS SPY after the warning.
+pattern over a different substrate (`exit_signals`, not `recommendations`),
+using the SAME alpha formula as every other alpha figure in the app —
+Offense, 📜 Recommendations History, 📊 Predictive Analytics, and 🧭 Self vs
+Engine's Sell-Side tab (which reuses `recommendations_history.compute_outcomes`
+verbatim for exactly this reason):
 
-    protect_alpha_pct = spy_return_pct(signal_date → today)
-                       − name_return_pct(signal_date → today)
+    protect_alpha_pct = name_return_pct(signal_date → today)
+                       − spy_return_pct(signal_date → today)
 
-Positive ⇒ the flagged name lagged the benchmark after the warning (the
-caution was right). Negative ⇒ the name recovered faster than SPY (the call
-ran early). Never dressed as a failure — see `protective_headline`'s honesty
-rules.
+A protective EXIT/TRIM call is "right" when the flagged name UNDERPERFORMS
+SPY after the warning — so for THIS metric, unlike the BUY-side, **negative
+is the good outcome**: negative ⇒ the flagged name lagged the benchmark (the
+caution was right); positive ⇒ the name recovered faster than SPY (the call
+ran early). Same "read the caption, not just the sign" discipline Self vs
+Engine's own Sell-Side tab already documents for the identical reason. Never
+dressed as a failure — see `protective_headline`'s honesty rules.
+
+**Sign convention changed 2026-09-24** (2026-09-24 app review, B1) to match
+the app-wide formula above — this module previously computed
+`spy_return_pct − name_return_pct`, uniquely inverted relative to every other
+alpha figure in the app. `protect_alpha_pct` is never persisted (always
+recomputed live from `exit_signals` + current prices), so there is no stored
+row whose sign is now ambiguous — but a `protect_alpha` figure quoted in a
+doc or memory file dated before 2026-09-24 uses the OPPOSITE sign from a live
+reading of the same finding today. The qualitative verdict ("ran early" /
+"validated") is unaffected by the flip; only the raw number's sign is.
 
 Scope: EXIT + TRIM only (locked decision, `docs/plans/engine-track-record-meter.md`
 Phase 2). WATCH is awareness, not a call to act; RISK_OFF is a portfolio-wide
@@ -76,9 +91,11 @@ def compute_protective_outcomes(
       price_at_signal    float | None
       name_return_pct    float | None — (current − price_at_signal) / price_at_signal * 100
       spy_return_pct     float | None — SPY % over signal_date → today
-      protect_alpha_pct  float | None — spy_return_pct − name_return_pct (sign-flipped
-                         vs BUY-side: positive = the flagged name underperformed,
-                         i.e. the caution was right). None if either input is None.
+      protect_alpha_pct  float | None — name_return_pct − spy_return_pct (SAME
+                         formula as BUY-side; negative = the flagged name
+                         underperformed, i.e. the caution was right — the
+                         opposite sign-read from BUY-side, see module
+                         docstring). None if either input is None.
       days_since         int | None
       maturing           bool — True when younger than `min_days` (or when
                          signal_date is unknown) — excluded from headline aggregates.
@@ -112,7 +129,11 @@ def compute_protective_outcomes(
         spy_return_pct = _spy_return_pct(spy_close_by_date, signal_date, today)
 
         if name_return_pct is not None and spy_return_pct is not None:
-            protect_alpha_pct = spy_return_pct - name_return_pct
+            # 2026-09-24 app review, B1: flipped to match the app-wide
+            # name_return − spy_return formula (see module docstring) —
+            # previously spy_return_pct - name_return_pct, uniquely inverted
+            # relative to every other alpha figure in the app.
+            protect_alpha_pct = name_return_pct - spy_return_pct
         else:
             protect_alpha_pct = None
 

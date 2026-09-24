@@ -713,3 +713,50 @@ def benchmark_mirror_summary_state(cache: dict | None, today_iso: str) -> dict |
         "color":      _color,
         "basis":      f"vs {_bench} · {_range} ({_period}){_adj_note}",
     }
+
+
+def defense_facet_badge(
+    band: str, protect_alpha: float | None, n_mature: int, min_calls: int,
+) -> dict:
+    """Badge/color/value/basis for 🧾 Summary's Engine Track Record card,
+    Defense facet (2026-09-24 app review, B1).
+
+    Extracted from what was an untested inline `app.py` conditional, same
+    "extract the decision" motivation as `catalyst_watch_mini_state` etc.
+    Mirrors the shape of the Offense facet's own (untouched, not part of
+    this fix) inline logic, with the SIGN READING INVERTED: unlike Offense,
+    where positive alpha is unambiguously good, Defense's `protect_alpha` is
+    "good" when NEGATIVE — see `protective_track_record.py`'s module
+    docstring for why (a protective call is right when the flagged name
+    underperforms SPY after the warning). `protect_alpha` uses the SAME
+    formula as every other alpha in the app (`name_return − spy_return`,
+    flipped 2026-09-24 from a uniquely-inverted local formula) — only the
+    READING of the sign differs here, not the arithmetic.
+
+    Returns `{badge, badge_color, value_text, value_color, basis}`. `band`
+    is `protective_headline()`'s own building/early/firm classification
+    (sample-size only, never sign-dependent — no flip needed there).
+    """
+    if band == "building" or protect_alpha is None:
+        _need = max(0, min_calls - n_mature)
+        return {
+            "badge":       "BUILDING" if band == "building" else "NO DATA",
+            "badge_color": "#8b94a7",
+            "value_text":  "—",
+            "value_color": "#6b7280",
+            "basis":       (f"needs {_need} more matured EXIT/TRIM call(s)"
+                             if _need else "maturing"),
+        }
+    if band == "firm" and protect_alpha < 0:
+        badge, badge_color = "VALIDATED ✓", "#57d98a"
+    elif band == "firm":
+        badge, badge_color = "RAN EARLY", "#f0c24b"
+    else:
+        badge, badge_color = "EARLY READ", "#f0c24b"
+    return {
+        "badge":       badge,
+        "badge_color": badge_color,
+        "value_text":  f"{protect_alpha:+.1f}pp",
+        "value_color": "#57d98a" if protect_alpha < 0 else "#fca5a5",
+        "basis":       f"{n_mature} flagged · avg vs SPY after the warning",
+    }

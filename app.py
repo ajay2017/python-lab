@@ -330,6 +330,7 @@ from stock_analyzer.util import earnings_posture_alert_count
 from stock_analyzer.util import catalyst_watch_nav_badge
 from stock_analyzer.util import signals_advice_nav_badge
 from stock_analyzer.util import benchmark_mirror_summary_state
+from stock_analyzer.util import defense_facet_badge
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -12039,9 +12040,14 @@ elif page == "🧾 Summary":
                     if _sm_prot_h_for_act is None:
                         _sm_prot_h_for_act = {}
                     _sm_prot_alpha_for_act = _sm_prot_h_for_act.get("protect_alpha")
+                    # 2026-09-24 app review, B1: "ran early" is now protect_alpha
+                    # > 0 (see protective_track_record.py's module docstring —
+                    # formula flipped to match the app-wide alpha convention;
+                    # the LABEL/threshold this caption fires on is unchanged,
+                    # only which raw sign triggers it).
                     if (_sm_prot_h_for_act.get("band") == "firm"
                             and _sm_prot_alpha_for_act is not None
-                            and _sm_prot_alpha_for_act < 0):
+                            and _sm_prot_alpha_for_act > 0):
                         st.caption(
                             "ℹ️ This engine's protective EXIT/TRIM calls have "
                             "historically run early — the flagged names went on "
@@ -12731,26 +12737,20 @@ elif page == "🧾 Summary":
             _etr_basis = f"{_etr_n} matured · avg alpha vs SPY"
 
         # ── Defense facet: same bands as before ──────────────────────────────
+        # 2026-09-24 app review, B1 — badge/color decision extracted into
+        # util.defense_facet_badge; see that function's docstring for the
+        # sign-flip context (protect_alpha's formula flipped to match every
+        # other alpha figure in the app; only the SIGN READING here is
+        # inverted, not the arithmetic).
         _etr_prot_band  = _etr_prot_h["band"]
         _etr_prot_alpha = _etr_prot_h["protect_alpha"]
         _etr_prot_n     = _etr_prot_h["n_mature"]
-        if _etr_prot_band == "building" or _etr_prot_alpha is None:
-            _etr_pneed  = max(0, _etr_prot_min_calls - _etr_prot_n)
-            _etr_pbadge = "BUILDING" if _etr_prot_band == "building" else "NO DATA"
-            _etr_pbcol  = "#8b94a7"
-            _etr_pval,  _etr_pvcol = "—", "#6b7280"
-            _etr_pbasis = (f"needs {_etr_pneed} more matured EXIT/TRIM call(s)"
-                           if _etr_pneed else "maturing")
-        else:
-            if _etr_prot_band == "firm" and _etr_prot_alpha > 0:
-                _etr_pbadge, _etr_pbcol = "VALIDATED ✓", "#57d98a"
-            elif _etr_prot_band == "firm":
-                _etr_pbadge, _etr_pbcol = "RAN EARLY", "#f0c24b"
-            else:
-                _etr_pbadge, _etr_pbcol = "EARLY READ", "#f0c24b"
-            _etr_pval  = f"{_etr_prot_alpha:+.1f}pp"
-            _etr_pvcol = "#57d98a" if _etr_prot_alpha > 0 else "#fca5a5"
-            _etr_pbasis = f"{_etr_prot_n} flagged · avg vs SPY after the warning"
+        _etr_pfacet = defense_facet_badge(
+            _etr_prot_band, _etr_prot_alpha, _etr_prot_n, _etr_prot_min_calls,
+        )
+        _etr_pbadge, _etr_pbcol = _etr_pfacet["badge"], _etr_pfacet["badge_color"]
+        _etr_pval,   _etr_pvcol = _etr_pfacet["value_text"], _etr_pfacet["value_color"]
+        _etr_pbasis = _etr_pfacet["basis"]
 
         def _etr_facet(title, badge, bcol, basis, val, vcol):
             return (
@@ -12804,7 +12804,23 @@ elif page == "🧾 Summary":
                     if hasattr(_etr_since, "strftime") else f"since {_etr_since}"
                 )
             _etr_cap.append("measured AFTER the warning, not a prediction of it")
-            st.caption(" · ".join(_etr_cap) + ". Defense has no detail page yet.")
+            st.caption(" · ".join(_etr_cap) + ".")
+            # 2026-09-24 app review, B2: replaces the old plain-text "Defense
+            # has no detail page yet." Per the owner's decision, this closes
+            # the gap by cross-referencing 🎯 My Edge's existing Self vs
+            # Engine → Sell-Side tab rather than building a new page — after
+            # B1's formula unification the two ask the SAME question with
+            # the SAME formula, over a DIFFERENT population (every EXIT/TRIM
+            # call the app issued here, vs. only the sells actually executed
+            # there). st.tabs() has no session-state binding (see the
+            # existing "_sg_jump_hint" precedent on 📡 Signals & Advice), so
+            # the button can only land on the My Edge PAGE, not the specific
+            # sub-tab — named explicitly in the caption so the reader knows
+            # where to look once there.
+            st.caption("Per-trade detail: 🎯 My Edge → 🧭 Self vs Engine → 📉 Sell-Side.")
+            if st.button("→ My Edge", key="etr_defense_detail_btn", type="tertiary"):
+                st.session_state["_pending_page"] = "🎯 My Edge"
+                st.rerun()
 
             # 2026-09-21 app-review Part 2 #4, owner decision 2026-09-22: the
             # Act Today caption above (~line 11998) surfaces this SAME
@@ -12819,8 +12835,12 @@ elif page == "🧾 Summary":
             # handful of high-beta names rather than broad-based, so that
             # qualifier is included to avoid reading this as a verdict on
             # every future exit.
+            # 2026-09-24 app review, B1: "ran early" is now protect_alpha > 0
+            # (formula flipped to match the app-wide alpha convention, see
+            # protective_track_record.py's module docstring) — the label
+            # and threshold this fires on are unchanged, only the sign.
             if (_etr_prot_band == "firm" and _etr_prot_alpha is not None
-                    and _etr_prot_alpha < 0):
+                    and _etr_prot_alpha > 0):
                 st.caption(
                     "ℹ️ Historically, this engine's protective EXIT/TRIM "
                     "calls have run early — the flagged names went on to "
@@ -43780,6 +43800,20 @@ elif page == "🎯 My Edge":
                 "the market after you left it); a **positive** alpha means you "
                 "sold too early. Read-only — awareness only, no gates, no "
                 "buy/sell prompts."
+            )
+            # 2026-09-24 app review, B1/B2: 🛡️ Summary's Defense facet asks
+            # this SAME question with the SAME formula (unified 2026-09-24 —
+            # see protective_track_record.py's module docstring) over a
+            # DIFFERENT population: every EXIT/TRIM call the app issued,
+            # whether or not it was ever acted on, vs. only the sells graded
+            # above (the ones you actually executed). No overlap count is
+            # quoted here — it isn't verifiable from this render without a
+            # live query, and the two counts (Summary's "n flagged" vs.
+            # "Engine-called" above) are already both on screen.
+            st.caption(
+                "🛡️ Summary's Defense facet asks the same question, same "
+                "formula, over a different population — every EXIT/TRIM call "
+                "the app issued, not just the ones you acted on."
             )
 
             from stock_analyzer.constants import (

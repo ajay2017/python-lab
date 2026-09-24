@@ -5,12 +5,17 @@ early -- and on how much the owner already self-corrected for free.
 Grew out of an Opus `planner` design pass reconciling two already-computed,
 seemingly-opposite findings about this app's protective signals:
 
-  1. `protective_track_record.py`'s per-ticker collapsed measure currently
-     shows `protect_alpha = -15.7%` at `n_mature = 17` (`band = "firm"`) --
-     EXIT/TRIM-flagged tickers, on average, went on to BEAT SPY after being
-     flagged. Sign convention there (reused verbatim, never re-derived
-     here): negative = the flagged name beat SPY (the call ran early);
-     positive = the flagged name lagged SPY (the call was right).
+  1. `protective_track_record.py`'s per-ticker collapsed measure showed
+     `protect_alpha = -15.7%` at `n_mature = 17` (`band = "firm"`) at the
+     time this design pass ran -- EXIT/TRIM-flagged tickers, on average,
+     went on to BEAT SPY after being flagged. **Sign convention changed
+     2026-09-24** (2026-09-24 app review, B1) to match the app-wide alpha
+     formula everywhere else in the app -- the `-15.7%` figure above uses
+     the OLD (pre-2026-09-24) convention and is quoted here only as the
+     historical reason this script was built, not as a value comparable to
+     a live reading today. Current convention (reused verbatim, never
+     re-derived here): positive = the flagged name beat SPY (the call ran
+     early); negative = the flagged name lagged SPY (the call was right).
   2. `scripts/exit_ladder_replay.py`'s W6 replay found the opposite-sounding
      result: of 54 real closed LOSING round trips, 52% got NO protective
      signal at all before the loss (too late/absent), not too early.
@@ -28,9 +33,9 @@ MATURE, priced population (reused via `compute_protective_outcomes` +
 `collapse_by_ticker` exactly -- the outcome classification and its sign
 convention are never re-derived here), splits by direction:
 
-  "ran early"  -- protect_alpha_pct < 0 (the flagged name beat SPY)
-  "validated"  -- protect_alpha_pct >= 0 (the flagged name lagged/tied SPY)
-    (a >= 0.0 tie counts as "validated" -- a disclosed judgment call;
+  "ran early"  -- protect_alpha_pct > 0 (the flagged name beat SPY)
+  "validated"  -- protect_alpha_pct <= 0 (the flagged name lagged/tied SPY)
+    (a <= 0.0 tie counts as "validated" -- a disclosed judgment call;
     protective_track_record.py itself only defines strict positive/negative)
 
 then, per ticker, determines whether the owner actually SOLD near a
@@ -188,14 +193,15 @@ def _fmt(d) -> str:
 # ── Pure helpers (unit-testable with synthetic data -- no DB/network) ───────
 
 def classify_direction(protect_alpha_pct: float) -> str:
-    """"ran_early" (protect_alpha_pct < 0 -- the flagged name beat SPY after
-    the warning, i.e. the call ran early) or "validated" (>= 0 -- the name
+    """"ran_early" (protect_alpha_pct > 0 -- the flagged name beat SPY after
+    the warning, i.e. the call ran early) or "validated" (<= 0 -- the name
     lagged or tied SPY, i.e. the call was right). Sign convention reused
-    verbatim from `protective_track_record.py`; the >= 0 tie-goes-to-
+    verbatim from `protective_track_record.py` (flipped 2026-09-24, 2026-09-24
+    app review B1, to match the app-wide alpha formula); the <= 0 tie-goes-to-
     "validated" rule is this script's own disclosed judgment call -- that
     module only defines strict positive/negative.
     """
-    return "ran_early" if protect_alpha_pct < 0 else "validated"
+    return "ran_early" if protect_alpha_pct > 0 else "validated"
 
 
 def trade_rows_for_ticker(trades_df, ticker: str) -> list[dict]:

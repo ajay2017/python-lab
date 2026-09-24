@@ -4,7 +4,10 @@ of the 🎯 Engine Track Record card (F-229 Phase 2).
 
 Covers the invariants called out in the design doc
 (docs/plans/engine-track-record-meter.md, Phase 2 section):
-  - sign convention (protect_alpha_pct is spy − name, sign-flipped vs BUY-side)
+  - sign convention (protect_alpha_pct is name − spy, SAME formula as
+    BUY-side since 2026-09-24 (2026-09-24 app review, B1) — only the
+    "which sign is good" READING differs, not the arithmetic; previously
+    this module computed spy − name, uniquely inverted)
   - never-negative-on-absent (building/no-data render neutral, never a computed number)
   - dedup/anti-inflation (one row per distinct ticker after collapse_by_ticker)
   - severity escalation (TRIM→EXIT keeps the earlier anchor, worse severity label)
@@ -58,8 +61,12 @@ def _erow(ticker="AAA", signal_date=date(2026, 1, 1), signal_type="EXIT",
 
 # ─── compute_protective_outcomes — sign convention ─────────────────────────
 
-def test_sign_convention_name_falls_spy_rises_is_positive_alpha():
-    """Flagged name falls while SPY rises → protect_alpha_pct > 0 (caution was right)."""
+def test_sign_convention_name_falls_spy_rises_is_negative_alpha():
+    """Flagged name falls while SPY rises → protect_alpha_pct < 0 (caution
+    was right). Sign flipped 2026-09-24 (2026-09-24 app review, B1) to match
+    the app-wide name − spy alpha formula — this SCENARIO (caution right) is
+    unchanged from before the flip; only the resulting sign is (was +30,
+    now -30)."""
     signals = [_sig_row(ticker="BAD", signal_date=date(2026, 1, 1), price_at_signal=100.0)]
     current_prices = {"BAD": 80.0}   # -20%
     spy = {date(2026, 1, 1): 100.0, date(2026, 2, 1): 110.0}   # +10%
@@ -71,13 +78,16 @@ def test_sign_convention_name_falls_spy_rises_is_positive_alpha():
     row = out[0]
     assert row["name_return_pct"] == pytest.approx(-20.0)
     assert row["spy_return_pct"] == pytest.approx(10.0)
-    assert row["protect_alpha_pct"] == pytest.approx(30.0)
-    assert row["protect_alpha_pct"] > 0
+    assert row["protect_alpha_pct"] == pytest.approx(-30.0)
+    assert row["protect_alpha_pct"] < 0
 
 
-def test_sign_convention_name_rises_spy_falls_is_negative_alpha():
-    """Flagged name rises while SPY falls → protect_alpha_pct < 0 (honest negative,
-    the call ran early — must NOT be suppressed or floored at zero)."""
+def test_sign_convention_name_rises_spy_falls_is_positive_alpha():
+    """Flagged name rises while SPY falls → protect_alpha_pct > 0 (honest
+    positive, the call ran early — must NOT be suppressed or floored at
+    zero). Sign flipped 2026-09-24 (2026-09-24 app review, B1) — this
+    SCENARIO (ran early) is unchanged; only the resulting sign is (was -30,
+    now +30)."""
     signals = [_sig_row(ticker="RECOVERED", signal_date=date(2026, 1, 1), price_at_signal=100.0)]
     current_prices = {"RECOVERED": 120.0}   # +20%
     spy = {date(2026, 1, 1): 100.0, date(2026, 2, 1): 90.0}   # -10%
@@ -88,8 +98,8 @@ def test_sign_convention_name_rises_spy_falls_is_negative_alpha():
     row = out[0]
     assert row["name_return_pct"] == pytest.approx(20.0)
     assert row["spy_return_pct"] == pytest.approx(-10.0)
-    assert row["protect_alpha_pct"] == pytest.approx(-30.0)
-    assert row["protect_alpha_pct"] < 0
+    assert row["protect_alpha_pct"] == pytest.approx(30.0)
+    assert row["protect_alpha_pct"] > 0
 
 
 # ─── compute_protective_outcomes — never-negative-on-absent ────────────────
@@ -192,7 +202,9 @@ def test_nan_price_at_signal_excluded_from_headline_average_live_scenario():
     assert headline["protect_alpha"] is not None
     assert headline["protect_alpha"] == headline["protect_alpha"]   # not NaN
     assert not math.isnan(headline["protect_alpha"])
-    assert headline["protect_alpha"] == pytest.approx(30.0)
+    # -20% name return vs +10% SPY return -> name - spy = -30 (2026-09-24
+    # app review, B1: was +30 under the pre-flip spy - name formula).
+    assert headline["protect_alpha"] == pytest.approx(-30.0)
 
 
 def test_headline_defensive_guard_strips_nan_protect_alpha_pct():
