@@ -322,6 +322,13 @@ from stock_analyzer.util import sentiment_value_or_none as _sentiment_or_none
 from stock_analyzer.util import xcheck_is_alarm_worthy as _xcheck_is_alarm_worthy
 from stock_analyzer.util import holdings_write_failed_message as _holdings_write_failed_msg
 from stock_analyzer.util import dropped_holdings_banner_text as _dropped_holdings_banner_text
+# 2026-09-24 app review, A2/A3/A4 — nav-badge / mini-card tri-state
+# classification, extracted so a failed check can no longer render
+# indistinguishably from a genuine "checked, clean" result.
+from stock_analyzer.util import catalyst_watch_mini_state
+from stock_analyzer.util import earnings_posture_alert_count
+from stock_analyzer.util import catalyst_watch_nav_badge
+from stock_analyzer.util import signals_advice_nav_badge
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -2971,9 +2978,26 @@ with st.sidebar:
     _risk_alerts_raw  = st.session_state.get("_risk_high_alerts_cache")
     _cw_alerts        = 0 if _risk_alerts_raw is None else len(_risk_alerts_raw)
     _cw_alerts_offline = _risk_alerts_raw is None
-    _earnings_alerts  = st.session_state.get("_earnings_posture_alerts_cache") or 0
-    _n_danger_nav     = st.session_state.get("_n_danger_cache") or 0
-    _n_warning_nav    = st.session_state.get("_n_warning_cache") or 0
+    # 2026-09-24 app review, A3/A4: _earnings_posture_alerts_cache now
+    # publishes None on a failed check (A3) rather than a fabricated 0 --
+    # this must read as "not checked", not silently collapse back to 0 via
+    # `or 0`, which is the same offline-sentinel-collapse bug A2/A3 fixed on
+    # the producer side.
+    _earnings_alerts_raw = st.session_state.get("_earnings_posture_alerts_cache")
+    _earnings_alerts     = 0 if _earnings_alerts_raw is None else _earnings_alerts_raw
+    _earnings_offline    = _earnings_alerts_raw is None
+    # _n_danger_cache/_n_warning_cache are published together, at the same two
+    # call sites as _alert_list_cache (see the Home synthesis block) -- None
+    # here means "Home hasn't run this session yet", the SAME state the
+    # Signals & Advice page itself already renders as an explicit offline
+    # banner (`_sa_offline` there). The nav badge collapsed it via `or 0`
+    # instead, showing no dot at all where Catalyst Watch's sibling badge,
+    # 3 lines above, already shows a grey "?" for the equivalent state.
+    _n_danger_raw   = st.session_state.get("_n_danger_cache")
+    _n_warning_raw  = st.session_state.get("_n_warning_cache")
+    _n_danger_nav   = 0 if _n_danger_raw is None else _n_danger_raw
+    _n_warning_nav  = 0 if _n_warning_raw is None else _n_warning_raw
+    _sa_nav_offline = _n_danger_raw is None or _n_warning_raw is None
 
     _NAV_ACCENT = {
         "MAIN":      "#3b82f6",
@@ -3086,24 +3110,20 @@ with st.sidebar:
             if _dest is None:  # sentinel
                 st.markdown('<hr class="nav-divider">', unsafe_allow_html=True)
                 continue
-            # Catalyst Watch / Signals & Advice get a live alert badge on their label.
-            # _cw_alerts_offline means the risk check did not run — show a grey ● ?
-            # so "not checked" is distinguishable from "0 alerts" and "N alerts".
-            if _dest == "🔔 Catalyst Watch" and (_cw_alerts > 0 or _earnings_alerts > 0 or _cw_alerts_offline):
-                _cw_parts = []
-                if _cw_alerts_offline:
-                    _cw_parts.append(":grey-background[● ?]")
-                elif _cw_alerts > 0:
-                    _cw_parts.append(f":red-background[● {_cw_alerts}]")
-                if _earnings_alerts > 0:
-                    _cw_parts.append(f":orange-background[● {_earnings_alerts}]")
+            # Catalyst Watch / Signals & Advice get a live alert badge on their
+            # label. 2026-09-24 app review, A4 — see
+            # util.catalyst_watch_nav_badge / util.signals_advice_nav_badge
+            # for why each offline source keeps its own grey "?" slot rather
+            # than collapsing into one generic indicator.
+            if _dest == "🔔 Catalyst Watch" and (
+                _cw_alerts > 0 or _earnings_alerts > 0 or _cw_alerts_offline or _earnings_offline
+            ):
+                _cw_parts = catalyst_watch_nav_badge(
+                    _cw_alerts, _cw_alerts_offline, _earnings_alerts, _earnings_offline,
+                )
                 _btn_label = f"Catalyst Watch  {' '.join(_cw_parts)}"
-            elif _dest == "📡 Signals & Advice" and (_n_danger_nav > 0 or _n_warning_nav > 0):
-                _badge_parts = []
-                if _n_danger_nav > 0:
-                    _badge_parts.append(f":red-background[● {_n_danger_nav}]")
-                if _n_warning_nav > 0:
-                    _badge_parts.append(f":orange-background[● {_n_warning_nav}]")
+            elif _dest == "📡 Signals & Advice" and (_n_danger_nav > 0 or _n_warning_nav > 0 or _sa_nav_offline):
+                _badge_parts = signals_advice_nav_badge(_n_danger_nav, _n_warning_nav, _sa_nav_offline)
                 _btn_label = f"Signals & Advice  {' '.join(_badge_parts)}"
             else:
                 _btn_label = _disp
@@ -4102,6 +4122,7 @@ def _render_holdings_earnings(port_df, held_data):
         )
 
     # ── Pre-Earnings Playbook ─────────────────────────────────────────────
+    _earn_playbook_check_failed = False
     try:
         _earn_held_tickers = [
             str(r.get("Ticker", "")).strip().upper()
@@ -4113,11 +4134,16 @@ def _render_holdings_earnings(port_df, held_data):
     except Exception:
         _earn_ctx_batch = {}
         _playbook = []
+        _earn_playbook_check_failed = True
 
-    # Publish earnings alert count for nav badge
-    _pb_exit_count   = sum(1 for p in _playbook if p["action"] == "EXIT")
-    _pb_reduce_count = sum(1 for p in _playbook if p["action"] == "REDUCE")
-    st.session_state["_earnings_posture_alerts_cache"] = _pb_exit_count + _pb_reduce_count
+    # Publish earnings alert count for nav badge. 2026-09-24 app review, A3 —
+    # see util.earnings_posture_alert_count's docstring for why this must
+    # publish None (not the fabricated 0 a genuine zero-EXIT/REDUCE day also
+    # produces) on a failed lookup. The nav badge (see the sidebar block) is
+    # responsible for rendering that None as an offline state.
+    st.session_state["_earnings_posture_alerts_cache"] = earnings_posture_alert_count(
+        _playbook, _earn_playbook_check_failed,
+    )
 
     if _playbook:
         st.divider()
@@ -12215,6 +12241,11 @@ elif page == "🧾 Summary":
     # computed in this loop and was thrown away, leaving a bare count that could
     # not be acted on without opening another page.
     _sm_earn_soon: list[tuple[str, int]] = []
+    # 2026-09-24 app review, A2: distinguishes "checked, nothing reporting
+    # soon" from "the earnings lookup itself failed" -- the render below used
+    # to collapse both into the SAME green "None soon," a fabricated all-clear
+    # on a failed check. False only when the try below completes.
+    _sm_earn_check_failed = False
     try:
         _sm_earn_held_tuple = tuple(sorted(
             str(_pr["Ticker"]).strip().upper() for _, _pr in port_df.iterrows()
@@ -12240,6 +12271,7 @@ elif page == "🧾 Summary":
     except Exception:
         _sm_n_earnings_soon = 0
         _sm_earn_soon = []
+        _sm_earn_check_failed = True
 
     # ── Card data: 🎯 Engine Track Record ─────────────────────────────────────
     # Loads all-time new_pick recs, runs the same match → compute_outcomes →
@@ -12810,12 +12842,12 @@ elif page == "🧾 Summary":
                 unsafe_allow_html=True,
             )
             st.markdown("**🔔 Catalyst Watch**")
-            if _sm_n_earnings_soon:
-                _sm_cw_line  = f"{_sm_n_earnings_soon} reporting"
-                _sm_cw_color = "#f59e0b"
-            else:
-                _sm_cw_line  = "None soon"
-                _sm_cw_color = "#22c55e"
+            # 2026-09-24 app review, A2 — see util.catalyst_watch_mini_state's
+            # docstring for why a failed lookup must never render as the SAME
+            # green "None soon" a genuine clean check produces.
+            _sm_cw_line, _sm_cw_color = catalyst_watch_mini_state(
+                _sm_n_earnings_soon, _sm_earn_check_failed,
+            )
             st.markdown(
                 f"<div style='font-size:1.1em;font-weight:600;color:{_sm_cw_color}'>{_sm_cw_line}</div>"
                 f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>within {CATALYST_WATCH_WINDOW_DAYS}d</div>",

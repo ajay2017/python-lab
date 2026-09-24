@@ -22,6 +22,10 @@ from stock_analyzer.util import (
     xcheck_is_alarm_worthy,
     safe_html,
     stop_recovery_state,
+    catalyst_watch_mini_state,
+    earnings_posture_alert_count,
+    catalyst_watch_nav_badge,
+    signals_advice_nav_badge,
 )
 import pytest
 
@@ -805,3 +809,137 @@ class TestMdBoldToHtml:
 
     def test_plain_text_is_unchanged_apart_from_escaping(self):
         assert md_bold_to_html("no markup here") == "no markup here"
+
+
+# ── Nav-badge / mini-card tri-state classification (2026-09-24 app review) ──
+
+class TestCatalystWatchMiniState:
+    """A2: Summary's Catalyst Watch mini-card must not render a failed
+    lookup identically to a genuine clean check."""
+
+    def test_check_failed_renders_unknown_grey_regardless_of_count(self):
+        line, color = catalyst_watch_mini_state(0, True)
+        assert line == "Unknown"
+        assert color == "#9ca3af"
+
+    def test_check_failed_takes_priority_even_with_a_nonzero_count(self):
+        # Defensive: a caller bug could pass a stale count alongside the
+        # failure flag. Failure must still win, never show a specific number
+        # from a check that didn't actually complete.
+        line, color = catalyst_watch_mini_state(3, True)
+        assert line == "Unknown"
+        assert color == "#9ca3af"
+
+    def test_genuine_zero_is_green_none_soon(self):
+        line, color = catalyst_watch_mini_state(0, False)
+        assert line == "None soon"
+        assert color == "#22c55e"
+
+    def test_genuine_positive_count_is_amber_reporting(self):
+        line, color = catalyst_watch_mini_state(3, False)
+        assert line == "3 reporting"
+        assert color == "#f59e0b"
+
+    def test_three_states_are_pairwise_distinct(self):
+        failed  = catalyst_watch_mini_state(0, True)
+        clean   = catalyst_watch_mini_state(0, False)
+        alert   = catalyst_watch_mini_state(3, False)
+        assert failed != clean
+        assert failed != alert
+        assert clean != alert
+
+
+class TestEarningsPostureAlertCount:
+    """A3: the count published to the nav-badge coordination cache must be
+    None (not the fabricated 0 a genuine clean day also produces) when the
+    lookup that built the playbook failed."""
+
+    def test_check_failed_returns_none_regardless_of_playbook_contents(self):
+        playbook = [{"action": "EXIT"}, {"action": "REDUCE"}]
+        assert earnings_posture_alert_count(playbook, True) is None
+
+    def test_check_failed_with_none_playbook_still_returns_none(self):
+        assert earnings_posture_alert_count(None, True) is None
+
+    def test_genuine_empty_playbook_returns_zero_not_none(self):
+        """Distinguishes 'checked, nothing due' from 'could not check' --
+        both must be representable and must not collapse to the same value."""
+        assert earnings_posture_alert_count([], False) == 0
+
+    def test_counts_only_exit_and_reduce_actions(self):
+        playbook = [
+            {"action": "EXIT"},
+            {"action": "REDUCE"},
+            {"action": "MONITOR"},
+            {"action": "HOLD"},
+        ]
+        assert earnings_posture_alert_count(playbook, False) == 2
+
+    def test_missing_action_key_does_not_raise(self):
+        playbook = [{"ticker": "AAA"}]
+        assert earnings_posture_alert_count(playbook, False) == 0
+
+
+class TestCatalystWatchNavBadge:
+    """A4: two INDEPENDENT sources (risk alerts, earnings alerts) share one
+    badge slot -- a failure in either must not hide a known-good count from
+    the other."""
+
+    def test_both_clean_and_silent_renders_no_parts(self):
+        assert catalyst_watch_nav_badge(0, False, 0, False) == []
+
+    def test_risk_offline_shows_grey_regardless_of_earnings_state(self):
+        parts = catalyst_watch_nav_badge(0, True, 0, False)
+        assert parts == [":grey-background[● ?]"]
+
+    def test_earnings_offline_shows_grey_regardless_of_risk_state(self):
+        parts = catalyst_watch_nav_badge(0, False, 0, True)
+        assert parts == [":grey-background[● ?]"]
+
+    def test_risk_alerts_present_and_earnings_offline_shows_both_a_red_count_and_grey(self):
+        """The load-bearing case: a real, known-good risk count must survive
+        even though the earnings check failed -- collapsing both into one
+        generic '?' would silently drop the red count."""
+        parts = catalyst_watch_nav_badge(2, False, 0, True)
+        assert f":red-background[● 2]" in parts
+        assert ":grey-background[● ?]" in parts
+        assert len(parts) == 2
+
+    def test_earnings_alerts_present_and_risk_offline_shows_both_grey_and_orange_count(self):
+        parts = catalyst_watch_nav_badge(0, True, 3, False)
+        assert ":grey-background[● ?]" in parts
+        assert f":orange-background[● 3]" in parts
+        assert len(parts) == 2
+
+    def test_both_sources_genuinely_alerting_shows_both_colors(self):
+        parts = catalyst_watch_nav_badge(2, False, 3, False)
+        assert parts == [":red-background[● 2]", ":orange-background[● 3]"]
+
+    def test_zero_count_with_check_ok_renders_nothing_for_that_source(self):
+        parts = catalyst_watch_nav_badge(0, False, 3, False)
+        assert parts == [":orange-background[● 3]"]
+
+
+class TestSignalsAdviceNavBadge:
+    """A4: n_danger/n_warning are ONE source (published together, always
+    offline or online in lockstep) -- unlike the Catalyst Watch badge's two
+    independent sources, one combined '?' correctly replaces both slots."""
+
+    def test_offline_shows_one_grey_regardless_of_stale_counts(self):
+        # Defensive: even if a stale nonzero count somehow accompanied the
+        # offline flag, offline must still win and show only the grey token.
+        assert signals_advice_nav_badge(5, 5, True) == [":grey-background[● ?]"]
+
+    def test_online_and_clean_renders_no_parts(self):
+        assert signals_advice_nav_badge(0, 0, False) == []
+
+    def test_online_with_danger_only(self):
+        assert signals_advice_nav_badge(2, 0, False) == [":red-background[● 2]"]
+
+    def test_online_with_warning_only(self):
+        assert signals_advice_nav_badge(0, 3, False) == [":orange-background[● 3]"]
+
+    def test_online_with_both_renders_danger_then_warning(self):
+        assert signals_advice_nav_badge(2, 3, False) == [
+            ":red-background[● 2]", ":orange-background[● 3]",
+        ]

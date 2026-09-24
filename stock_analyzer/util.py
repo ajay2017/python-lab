@@ -580,3 +580,93 @@ def sizing_unavailable_caption(
             "load it, then come back."
         )
     return "Position sizing unavailable — stop price too close to entry or not set."
+
+
+# ── Nav-badge / mini-card tri-state classification (2026-09-24 app review) ──
+# A2/A3/A4: these three sites collapsed "the check failed" into the SAME
+# render as "checked, found nothing" — a fabricated all-clear, on both a
+# Summary mini-card and a sidebar nav badge. Extracted into pure functions
+# per the "extract the DECISION, not just the helper" convention (app.py has
+# no test coverage of its own): each is a tri-state classification, not a
+# render, and each is now boundary-tested here instead of only verifiable by
+# screenshot.
+
+def catalyst_watch_mini_state(n_earnings_soon: int, check_failed: bool) -> tuple[str, str]:
+    """(line_text, hex_color) for 🧾 Summary's Catalyst Watch mini-card.
+
+    `check_failed` takes priority over `n_earnings_soon`: a failed lookup
+    must never render as the SAME green "None soon" a genuine clean check
+    produces (2026-09-24 app review, A2). Grey is a third, honest state,
+    distinct from both the amber "reporting" and green "none soon" outcomes.
+    """
+    if check_failed:
+        return "Unknown", "#9ca3af"
+    if n_earnings_soon:
+        return f"{n_earnings_soon} reporting", "#f59e0b"
+    return "None soon", "#22c55e"
+
+
+def earnings_posture_alert_count(playbook: list[dict] | None, check_failed: bool) -> int | None:
+    """Count of EXIT/REDUCE Pre-Earnings Playbook items, or None if the
+    lookup that would have built `playbook` failed.
+
+    Publishing `None` on failure (instead of the fabricated `0` a genuine
+    zero-EXIT/REDUCE day also produces) is the fix: the nav badge reading
+    `_earnings_posture_alerts_cache` can only recover the offline state if
+    the producer never collapses it in the first place (2026-09-24 app
+    review, A3). `playbook` is ignored (and may be `None`/anything) when
+    `check_failed` is True.
+    """
+    if check_failed:
+        return None
+    return sum(1 for p in (playbook or []) if p.get("action") in ("EXIT", "REDUCE"))
+
+
+def catalyst_watch_nav_badge(
+    risk_alerts: int, risk_offline: bool, earnings_alerts: int, earnings_offline: bool,
+) -> list[str]:
+    """Markdown badge-part strings (possibly empty) for the 🔔 Catalyst Watch
+    sidebar nav entry.
+
+    Two INDEPENDENT sources share one badge slot — risk-high-alerts and
+    earnings-posture-alerts — so each gets its own grey/colored token rather
+    than collapsing either failure into a combined generic "?" (2026-09-24
+    app review, A4). A real risk-alert count must still show even if the
+    earnings check failed, and vice versa; losing a known-good count to a
+    sibling source's failure would be a NEW instance of the same bug class
+    this fix closes.
+    """
+    parts: list[str] = []
+    if risk_offline:
+        parts.append(":grey-background[● ?]")
+    elif risk_alerts > 0:
+        parts.append(f":red-background[● {risk_alerts}]")
+    if earnings_offline:
+        parts.append(":grey-background[● ?]")
+    elif earnings_alerts > 0:
+        parts.append(f":orange-background[● {earnings_alerts}]")
+    return parts
+
+
+def signals_advice_nav_badge(n_danger: int, n_warning: int, offline: bool) -> list[str]:
+    """Markdown badge-part strings (possibly empty) for the 📡 Signals &
+    Advice sidebar nav entry.
+
+    `n_danger`/`n_warning` are published together at the same call sites as
+    `_alert_list_cache` — `offline` means Home hasn't run this session yet,
+    the SAME state the Signals & Advice page's own body already renders as
+    an explicit banner (`_sa_offline`). Previously the nav badge alone
+    collapsed this via `or 0`, showing no dot at all where its Catalyst
+    Watch sibling already showed a grey "?" for the equivalent state
+    (2026-09-24 app review, A4). Unlike `catalyst_watch_nav_badge`'s two
+    independent sources, danger/warning are one source and always agree on
+    offline-ness, so one combined "?" replaces both color slots.
+    """
+    if offline:
+        return [":grey-background[● ?]"]
+    parts: list[str] = []
+    if n_danger > 0:
+        parts.append(f":red-background[● {n_danger}]")
+    if n_warning > 0:
+        parts.append(f":orange-background[● {n_warning}]")
+    return parts

@@ -243,14 +243,14 @@ Only item in this tier. It is the one place where current behaviour actively rec
 
 | ID | Item | Where | Effort | Gated? |
 |---|---|---|---|---|
-| **A2** | 🧾 Summary paints green "None soon" when the earnings lookup threw. Add a third "not checked" state. | `app.py:12239-12241` → `:12816` | S | No |
-| **A3** | Earnings-playbook producer writes a fabricated `0` into `_earnings_posture_alerts_cache` — producer-side, so no consumer can recover the offline state. | `app.py:4113-4120` | S | No |
-| **A4** | Signals & Advice nav badge has no offline state, 3 lines below a sibling that has one. | `app.py:2974-2976` → `:3101` | XS | No |
+| **A2** | ✅ **DONE 2026-09-24.** 🧾 Summary paints green "None soon" when the earnings lookup threw. Added a third "Unknown" (grey) state via `util.catalyst_watch_mini_state`. | `app.py:12239-12241` → `:12816` | S | No |
+| **A3** | ✅ **DONE 2026-09-24.** Earnings-playbook producer wrote a fabricated `0` into `_earnings_posture_alerts_cache`. Now publishes `None` via `util.earnings_posture_alert_count`. | `app.py:4113-4120` | S | No |
+| **A4** | ✅ **DONE 2026-09-24.** Signals & Advice nav badge had no offline state; Catalyst Watch's badge collapsed `_earnings_posture_alerts_cache`'s new `None` back to 0 via `or 0`. Both fixed via `util.catalyst_watch_nav_badge`/`signals_advice_nav_badge` — each offline source keeps its own grey "?" slot rather than hiding a sibling source's known-good count. | `app.py:2974-2976` → `:3101` | XS | No |
 | **B1** | Reconcile the two exit-side track records onto one sign convention; cross-reference each from the other with the population overlap. | `app.py:12768-12774`, `:43673-43676`, `protective_track_record.py:10-11` | M | No |
 | **B2** | Resolve "Defense has no detail page yet" — give it a page, or fold Defense into Self-vs-Engine sell-side as the canonical exit-quality home. | `app.py:12774` | M | No |
 | **C1** | Put Benchmark Mirror's standing result on 🧾 Summary via the F-277 pattern, caveats inline; add 🎯 My Edge to Summary's pointer set. | `app.py` (Summary zone), `benchmark_mirror.py` | M | No |
 
-**Bundle A2+A3+A4 into one commit** — they are one bug class, and the project's own `feedback_upstream_downstream_impact_analysis` calls for fixing the class rather than the symptoms. **B1 is blocked on an owner decision** (which sign convention wins).
+**A2+A3+A4 shipped as one class-fix commit** — same bug class, per `feedback_upstream_downstream_impact_analysis`. All three tri-state classifications were extracted into pure, boundary-tested functions in `stock_analyzer/util.py` rather than left inline in `app.py`, per the "extract the DECISION" convention — `app.py` has no test coverage of its own, so these were otherwise only verifiable by screenshot. None touches `_GATE_FILES`; full suite + antipattern + constants-doc gates green, no Opus review invoked (correctly skipped per the review-economy rule — say so and why, rather than invoking reflexively). **B1 is blocked on an owner decision** (which sign convention wins).
 
 ### P2 — medium (real value; needs a design pass or is broader in scope)
 
