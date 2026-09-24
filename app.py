@@ -31538,6 +31538,13 @@ elif page == "📊 Predictive Analytics":
             "recommends or gates — it's a lens on entry-day technical conditions, "
             "separate from every other tab on this page."
         )
+        st.caption(
+            "⚠️ The Aligned/Diverging/Extreme band boundaries below are "
+            "provisional — fit to a single anecdote (AMD firing as a new pick "
+            "5× in 2026-07), not yet checked against the full divergence-band "
+            "distribution. Treat the pattern as a lead worth watching, not a "
+            "calibrated cutoff."
+        )
 
         if st.button("🔍 Analyze Entry Timing", key="_et_load_btn"):
             with st.spinner(
