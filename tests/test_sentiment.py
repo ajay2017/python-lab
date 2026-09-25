@@ -31,6 +31,35 @@ def test_analyze_news_all_titleless_returns_zero_and_empty():
     assert results == []
 
 
+# ─── analyze_news — `"content": None` (2026-09-25 live production incident) ──
+# yfinance's news feed can return a PRESENT "content" key with a null value
+# (not merely absent), which `.get("content", {})` passes through as `None`
+# rather than substituting `{}` -- observed live crashing every held-ticker
+# load with AttributeError: 'NoneType' object has no attribute 'get'.
+
+def test_analyze_news_none_content_does_not_raise():
+    items = [{"title": "Neutral update", "content": None}]
+    _, results = sm.analyze_news(items)
+    assert results[0]["headline"] == "Neutral update"
+    assert results[0]["url"] == ""
+
+
+def test_analyze_news_none_content_falls_back_to_no_title_when_title_key_absent():
+    items = [{"content": None}]
+    avg, results = sm.analyze_news(items)
+    assert avg == 0.0
+    assert results == []
+
+
+def test_analyze_news_none_canonical_and_click_through_url_does_not_raise():
+    items = [{
+        "title": "Neutral update",
+        "content": {"canonicalUrl": None, "clickThroughUrl": None},
+    }]
+    _, results = sm.analyze_news(items)
+    assert results[0]["url"] == ""
+
+
 # ─── analyze_news — cap at 10 headlines ──────────────────────────────────────
 
 def test_analyze_news_caps_at_ten_headlines():
