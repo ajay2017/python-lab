@@ -3129,28 +3129,12 @@ with st.sidebar:
                 break
 
     _active_tint = f"{_active_accent}2e"  # ~18% opacity hex suffix
-    # Per-group header text color (2026-09-24 app review Q4 follow-up):
-    # st.expander's own header chrome has no per-instance color parameter,
-    # so each group's accent is applied via position -- `nth-of-type` on
-    # [data-testid="stExpander"], matching _NAV_GROUPS' fixed render order
-    # (the only st.expander calls in the sidebar are this one loop, so
-    # position N always corresponds to the Nth group). Same data-testid-CSS
-    # convention this file already uses for the button active-state above,
-    # not a new pattern.
-    _nav_group_color_css = "\n".join(
-        f'[data-testid="stSidebar"] [data-testid="stExpander"]:nth-of-type({_i}) summary,\n'
-        f'    [data-testid="stSidebar"] [data-testid="stExpander"]:nth-of-type({_i}) summary * {{\n'
-        f'        color: {_NAV_ACCENT.get(_grp_label.split()[0], "#9ca3af")} !important;\n'
-        f'    }}'
-        for _i, (_grp_label, _grp_items) in enumerate(_NAV_GROUPS, start=1)
-    )
     st.markdown(
         f"""<style>
     [data-testid="stSidebar"] [data-testid="stButton"] > button:disabled {{
         border-left: 3px solid {_active_accent};
         background: {_active_tint};
     }}
-    {_nav_group_color_css}
     </style>""",
         unsafe_allow_html=True,
     )
