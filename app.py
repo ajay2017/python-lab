@@ -10408,83 +10408,96 @@ if page == "🏠 Home":
                 "(picks, Filtered Out, or pending)."
             )
         else:
-            for _db_buy in _db_buys_unique:
-                _xref       = _db_buy.get("xref", {})
-                _reconciled = _xref.get("verdict_reconciled", {}) or {}
-                _vcolor     = _reconciled.get("color") or _xref.get("verdict_color", "#86efac")
-                _vlabel     = _reconciled.get("label") or _xref.get("verdict_label", "")
-                _v_one      = _reconciled.get("one_liner") or _xref.get("verdict_one_liner", "")
-                _vagreed    = _xref.get("agreed", [])
-                _vconflicts = _xref.get("conflicts", [])
-                _db_bg      = "#1c1917"
-                # 📊 detail line — shown only when RSI is available (is not None).
-                # Each clause (RSI, 1M, Trend) is assembled independently so a
-                # missing value omits its clause rather than printing a placeholder.
-                # Guard is `is not None` not bare truthiness: RSI 0 is a real value,
-                # add_winner items carry no rsi key at all (returns None).
-                _db_rsi   = _db_buy.get("rsi")
-                _db_m1m   = _db_buy.get("mom_1m")
-                _db_sig   = _db_buy.get("scanner_signal", "")
-                _db_tr    = _db_buy.get("trend", "")
-                if _db_rsi is not None:
-                    _db_detail = (
-                        f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>📊 {_db_sig}"
-                        + f" · RSI {_db_rsi:.0f}"
-                        + (f" · 1M {_db_m1m:+.1f}%" if _db_m1m is not None else "")
-                        + (f" · {_db_tr}" if _db_tr else "")
-                        + "</div>"
+            # Collapsed by default (2026-09-25, owner report + screenshot) — the
+            # card list can run long enough that reaching Evening Debrief needed
+            # scrolling past every candidate. The green "More Buy Candidates"
+            # banner above (count + confirmed/unverified/conflicted breakdown)
+            # stays visible unconditionally; only the per-ticker card list below
+            # it collapses. Same `st.expander(..., expanded=False)` pattern as
+            # the Live Prices / Alerts groups above (2026-09-17 Home
+            # decluttering) — a pure display wrap, no data/logic touched.
+            with st.expander(
+                f"📋 View {len(_db_buys_unique)} candidate"
+                f"{'s' if len(_db_buys_unique) != 1 else ''}",
+                expanded=False, key="_db_more_buys_exp",
+            ):
+                for _db_buy in _db_buys_unique:
+                    _xref       = _db_buy.get("xref", {})
+                    _reconciled = _xref.get("verdict_reconciled", {}) or {}
+                    _vcolor     = _reconciled.get("color") or _xref.get("verdict_color", "#86efac")
+                    _vlabel     = _reconciled.get("label") or _xref.get("verdict_label", "")
+                    _v_one      = _reconciled.get("one_liner") or _xref.get("verdict_one_liner", "")
+                    _vagreed    = _xref.get("agreed", [])
+                    _vconflicts = _xref.get("conflicts", [])
+                    _db_bg      = "#1c1917"
+                    # 📊 detail line — shown only when RSI is available (is not None).
+                    # Each clause (RSI, 1M, Trend) is assembled independently so a
+                    # missing value omits its clause rather than printing a placeholder.
+                    # Guard is `is not None` not bare truthiness: RSI 0 is a real value,
+                    # add_winner items carry no rsi key at all (returns None).
+                    _db_rsi   = _db_buy.get("rsi")
+                    _db_m1m   = _db_buy.get("mom_1m")
+                    _db_sig   = _db_buy.get("scanner_signal", "")
+                    _db_tr    = _db_buy.get("trend", "")
+                    if _db_rsi is not None:
+                        _db_detail = (
+                            f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>📊 {_db_sig}"
+                            + f" · RSI {_db_rsi:.0f}"
+                            + (f" · 1M {_db_m1m:+.1f}%" if _db_m1m is not None else "")
+                            + (f" · {_db_tr}" if _db_tr else "")
+                            + "</div>"
+                        )
+                    else:
+                        _db_detail = ""
+                    st.markdown(
+                        f"<div style='background:{_db_bg};border-left:3px solid {_vcolor};"
+                        f"border-radius:6px;padding:10px 14px;margin-bottom:4px'>"
+                        f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
+                        f"<span style='color:#f9fafb;font-weight:700;font-size:0.9em'>"
+                        f"{_db_buy['icon']} {_db_buy['action']} — "
+                        f"<span style='color:#fbbf24'>{_db_buy['ticker']}</span></span>"
+                        # "Score" meant two DIFFERENT numbers in this one card list:
+                        # new_pick carries scanner_results["Score"] (momentum only),
+                        # add_winner carries port_df["Score"] (the 4-pillar composite,
+                        # see F-232). Label by type so the word means exactly one
+                        # thing per row. A blanket rename would have been wrong for
+                        # one of the two paths.
+                        f"<span style='color:#9ca3af;font-size:0.8em'>"
+                        f"{'Composite' if _db_buy.get('type') == 'add_winner' else 'Momentum'} "
+                        f"{_db_buy['score']:.0f}/100"
+                        + (f" · {_db_buy.get('sector','')}" if _db_buy.get('sector') else "")
+                        + f"</span>"
+                        f"<span style='background:{_vcolor}22;border:1px solid {_vcolor};"
+                        f"color:{_vcolor};padding:2px 10px;border-radius:12px;"
+                        f"font-size:0.75em;font-weight:700;white-space:nowrap'>{_vlabel}</span>"
+                        f"</div>"
+                        # Resolution one-liner — replaces the diffuse "Verify" guidance
+                        # block with the explicit reconciled verdict for this ticker.
+                        + (f"<div style='color:{_vcolor};font-size:0.85em;margin-top:5px;"
+                           f"font-weight:600'>→ {_v_one}</div>" if _v_one else "")
+                        + _db_detail
+                        + ("".join(
+                            f"<div style='color:#fca5a5;font-size:0.8em;margin-top:3px'>⚠ {c}</div>"
+                            for c in _vconflicts
+                        ) if _vconflicts else "")
+                        + (f"<div style='color:#6b7280;font-size:0.75em;margin-top:3px'>"
+                           f"✓ {' · '.join(_vagreed[:3])}"
+                           + (f" +{len(_vagreed)-3} more" if len(_vagreed) > 3 else "")
+                           + f"</div>" if _vagreed else "")
+                        + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
+                           f"⏱ First surfaced: {_fmt_first_seen(_db_buy.get('_first_seen_at'))}"
+                           f"</div>" if _db_buy.get("_first_seen_at") else "")
+                        + f"</div>",
+                        unsafe_allow_html=True,
                     )
-                else:
-                    _db_detail = ""
-                st.markdown(
-                    f"<div style='background:{_db_bg};border-left:3px solid {_vcolor};"
-                    f"border-radius:6px;padding:10px 14px;margin-bottom:4px'>"
-                    f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
-                    f"<span style='color:#f9fafb;font-weight:700;font-size:0.9em'>"
-                    f"{_db_buy['icon']} {_db_buy['action']} — "
-                    f"<span style='color:#fbbf24'>{_db_buy['ticker']}</span></span>"
-                    # "Score" meant two DIFFERENT numbers in this one card list:
-                    # new_pick carries scanner_results["Score"] (momentum only),
-                    # add_winner carries port_df["Score"] (the 4-pillar composite,
-                    # see F-232). Label by type so the word means exactly one
-                    # thing per row. A blanket rename would have been wrong for
-                    # one of the two paths.
-                    f"<span style='color:#9ca3af;font-size:0.8em'>"
-                    f"{'Composite' if _db_buy.get('type') == 'add_winner' else 'Momentum'} "
-                    f"{_db_buy['score']:.0f}/100"
-                    + (f" · {_db_buy.get('sector','')}" if _db_buy.get('sector') else "")
-                    + f"</span>"
-                    f"<span style='background:{_vcolor}22;border:1px solid {_vcolor};"
-                    f"color:{_vcolor};padding:2px 10px;border-radius:12px;"
-                    f"font-size:0.75em;font-weight:700;white-space:nowrap'>{_vlabel}</span>"
-                    f"</div>"
-                    # Resolution one-liner — replaces the diffuse "Verify" guidance
-                    # block with the explicit reconciled verdict for this ticker.
-                    + (f"<div style='color:{_vcolor};font-size:0.85em;margin-top:5px;"
-                       f"font-weight:600'>→ {_v_one}</div>" if _v_one else "")
-                    + _db_detail
-                    + ("".join(
-                        f"<div style='color:#fca5a5;font-size:0.8em;margin-top:3px'>⚠ {c}</div>"
-                        for c in _vconflicts
-                    ) if _vconflicts else "")
-                    + (f"<div style='color:#6b7280;font-size:0.75em;margin-top:3px'>"
-                       f"✓ {' · '.join(_vagreed[:3])}"
-                       + (f" +{len(_vagreed)-3} more" if len(_vagreed) > 3 else "")
-                       + f"</div>" if _vagreed else "")
-                    + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
-                       f"⏱ First surfaced: {_fmt_first_seen(_db_buy.get('_first_seen_at'))}"
-                       f"</div>" if _db_buy.get("_first_seen_at") else "")
-                    + f"</div>",
-                    unsafe_allow_html=True,
-                )
-                if _db_buy.get("sector_elevated_warning"):
-                    st.caption(f"⚠️ {_db_buy['sector_elevated_warning']}")
-                if _db_buy.get("deterioration_warning"): st.caption(_db_buy["deterioration_warning"])
-                if st.button(f"▶ Analyze {_db_buy['ticker']}", key=f"_db_buy_{_db_buy['ticker']}",
-                             width="content"):
-                    st.session_state["_pending_page"]    = "📈 Analysis"
-                    st.session_state["_analysis_ticker"] = _db_buy["ticker"]
-                    st.rerun()
+                    if _db_buy.get("sector_elevated_warning"):
+                        st.caption(f"⚠️ {_db_buy['sector_elevated_warning']}")
+                    if _db_buy.get("deterioration_warning"): st.caption(_db_buy["deterioration_warning"])
+                    if st.button(f"▶ Analyze {_db_buy['ticker']}", key=f"_db_buy_{_db_buy['ticker']}",
+                                 width="content"):
+                        st.session_state["_pending_page"]    = "📈 Analysis"
+                        st.session_state["_analysis_ticker"] = _db_buy["ticker"]
+                        st.rerun()
 
     # ── Thesis Under Pressure — Daily Brief annotation (Thesis Red Team
     # Phase 3, F-196). Pure cache read from thesis_erosion_cache — never
