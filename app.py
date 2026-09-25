@@ -33728,6 +33728,29 @@ elif page == "💰 Account":
 
         if _cash is not None and _have_pf:
             _render_portfolio_stale_banner(key_suffix="acct")
+            # 2026-09-25: a holding dropped from port_df (no_price_data etc.) is
+            # completely excluded from the Market Value sum below -- NOT priced
+            # at $0, just missing -- which understates _equity and can swing
+            # Total Account Value / Cash % / leverage into a wildly wrong,
+            # alarming reading (observed live: 5 excluded holdings turned a
+            # normal-looking book into "-1004.4% cash" / "11.04x leverage").
+            # _render_portfolio_stale_banner above already names which holdings
+            # and why (shared across pages); this adds the ACCOUNT-specific
+            # consequence, since these are the exact 4 metrics it corrupts.
+            _pd_dropped_acct = getattr(_acc_pdf, "attrs", {}).get("dropped_holdings")
+            if _pd_dropped_acct is None:
+                _pd_dropped_acct = []
+            if _pd_dropped_acct:
+                _pd_acct_names = ", ".join(str(r.get("ticker", "?")) for r in _pd_dropped_acct)
+                _pd_acct_n = len(_pd_dropped_acct)
+                st.warning(
+                    f"⚠️ **Total Account Value, Cash %, and leverage below are "
+                    f"UNDERSTATED, not just imprecise** — {_pd_acct_n} holding"
+                    f"{'s' if _pd_acct_n != 1 else ''} ({_pd_acct_names}) "
+                    f"{'are' if _pd_acct_n != 1 else 'is'} completely missing from "
+                    "Invested Equity above, not priced at $0. Do not use the four "
+                    "figures below to gauge real leverage until this clears."
+                )
             _total_acct = _equity + _cash
             _cash_pct = (_cash / _total_acct * 100) if _total_acct > 0 else 0.0
             _levered = _cash < 0   # negative net cash = a margin debit (borrowed)
