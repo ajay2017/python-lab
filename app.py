@@ -4457,6 +4457,63 @@ if page == "🏠 Home":
     # grading harness.
     st.session_state["_judgment_opinions_today"] = []
 
+    # ── Unified alert stack (2026-08-04 UX audit I1; widened 2026-09-25) —
+    # 15 reserved placeholders so every AMBIENT (background-computed, not
+    # click-triggered) notice on Home visually groups into one collapsed
+    # section instead of appearing wherever its own compute happens to run.
+    # Declared here, at the very top of Home, because 3 of the 15 (System
+    # Trust chip, held-ticker load failures, stale-cache) fire before the
+    # original 6-placeholder block's old position — an st.empty() must be
+    # assigned before anything can .container() into it, so the whole block
+    # moved up rather than leaving a second one behind (Streamlit raises on
+    # two `with st.expander(..., key=...)` blocks sharing a key in one run).
+    # Each placeholder is filled at its banner's existing, unmoved compute
+    # position; st.empty() renders content at the RESERVED slot, not the
+    # fill-in call site, so nothing about data-dependency ordering below
+    # changes — only where each banner visually lands.
+    #
+    # Deliberately NOT everything warning-shaped on the page (2026-09-25
+    # scoping pass, catalogued ~39 sites first): roughly half of the
+    # scattered banners are inline feedback for something the user just
+    # clicked (Debate button, Refresh Signals, Generate Brief, a rebalance-
+    # plan toggle, Research a Stock) — moving those away from their trigger
+    # would hurt usability, not improve it, so they stay put. Only the
+    # AMBIENT ones (fire from background computation, no click) move here —
+    # matching a 2026-08-29 finding (project_home_redesign memory) that a
+    # FULL synthesized "needs attention" tray was declined on risk grounds
+    # (new consumer of overloaded/3-state producer caches, a severity-
+    # ranking layer). This is deliberately NOT that: no new cache reads, no
+    # ranking, no synthesis — every site below keeps its own existing
+    # condition/text/logic untouched; only the render DESTINATION moves,
+    # reusing the exact mechanism already proven on the original 6 (buttons
+    # and loops included, via the Stock Split banner).
+    with st.expander("⚠️ Alerts", expanded=False, key="_home_alerts_exp"):
+        _alert_ph_dayshock   = st.empty()
+        _alert_ph_xcheck     = st.empty()
+        _alert_ph_split      = st.empty()
+        _alert_ph_structural = st.empty()
+        # Filled far below (after live prices exist) but DECLARED here so it
+        # renders ABOVE the Portfolio Value tile — the caveat has to precede
+        # the number it caveats. Same declare-early/fill-late pattern as
+        # _alert_ph_structural.
+        _alert_ph_drift      = st.empty()
+        # 2026-09-24: moved in from the end of Today's Brief (was rendering
+        # below the Buy Candidates overflow, well past this expander) so this
+        # awareness nudge groups with the other 5 instead of surfacing far
+        # down the page. Same declare-early/fill-late pattern; its compute
+        # (thesis_erosion_cache read, dedup, baseline walk-back) is unmoved.
+        _alert_ph_thesis     = st.empty()
+        # 2026-09-25 widening — 9 ambient sites added:
+        _alert_ph_systrust   = st.empty()   # System Trust chip (degraded/down)
+        _alert_ph_heldload   = st.empty()   # held-ticker _parallel_load_all failures
+        _alert_ph_stale      = st.empty()   # "showing cached data" (stale_as_of)
+        _alert_ph_dropped    = st.empty()   # dropped-holdings (no_price_data etc.)
+        _alert_ph_outage     = st.empty()   # full-book data outage + retry
+        _alert_ph_leverage   = st.empty()   # margin/leverage awareness caption
+        _alert_ph_pnldq      = st.empty()   # Today's P&L data-quality cluster
+        _alert_ph_crossasset = st.empty()   # cross-asset macro stress / offline
+        _alert_ph_debrief    = st.empty()   # Evening Debrief build failure
+
     # ── System Trust chip (System Proprioception Phase 1) — owner-only, degraded-
     # only. One line at the top of Home ONLY when a pipeline check is amber/red,
     # linking to the 🩺 System Trust page. INFORMS ONLY — suppresses nothing.
@@ -4485,14 +4542,15 @@ if page == "🏠 Home":
                         f"🟡 {_sh.get('n_warn', 0)} pipeline check(s) degraded — decisions still "
                         "have their inputs, but confidence is dented."
                     )
-                _sh_c1, _sh_c2 = st.columns([5, 1])
-                with _sh_c1:
-                    (st.error if _sh_sev == "down" else st.warning)(_sh_msg)
-                with _sh_c2:
-                    if st.button("Open →", key="_sysh_chip_open", width="stretch",
-                                 help="Open the System Trust diagnostic page"):
-                        st.session_state["_pending_page"] = "🩺 System Trust"
-                        st.rerun()
+                with _alert_ph_systrust.container():
+                    _sh_c1, _sh_c2 = st.columns([5, 1])
+                    with _sh_c1:
+                        (st.error if _sh_sev == "down" else st.warning)(_sh_msg)
+                    with _sh_c2:
+                        if st.button("Open →", key="_sysh_chip_open", width="stretch",
+                                     help="Open the System Trust diagnostic page"):
+                            st.session_state["_pending_page"] = "🩺 System Trust"
+                            st.rerun()
         except Exception:
             pass  # proprioception must never break the Home decision surface
 
@@ -4627,10 +4685,13 @@ if page == "🏠 Home":
         # held_data always ends up in build_portfolio_df's own `dropped_holdings`
         # ("no_price_data") a few lines below, since port_df is built FROM
         # held_data. Rendering both said the same thing in different words
-        # (owner report). That banner is the single source of truth; this stays
-        # a quiet expander with the raw per-ticker exception for whoever wants
-        # to dig in past "a data-provider issue" into the actual error string.
-        with st.expander(f"Technical detail — {len(_hd_load_errs)} load failure(s)"):
+        # (owner report). That banner is the single source of truth; this is
+        # just the raw per-ticker exception for whoever wants to dig in past
+        # "a data-provider issue" into the actual error string. No nested
+        # st.expander here (Streamlit disallows expander-in-expander) -- a
+        # plain caption block is fine since it's already one level collapsed.
+        with _alert_ph_heldload.container():
+            st.caption(f"Technical detail — {len(_hd_load_errs)} load failure(s):")
             for _t, _why in _hd_load_errs:
                 st.caption(f"**{_t}** — {_why}" if _why else f"**{_t}**")
 
@@ -4648,12 +4709,13 @@ if page == "🏠 Home":
     if _stale_held:
         _stale_oldest = min(d for _, d in _stale_held if d)
         _stale_names  = ", ".join(t for t, _ in _stale_held)
-        st.warning(
-            f"📦 **Showing cached data** (as of {_stale_oldest}) for "
-            f"{len(_stale_held)} name{'s' if len(_stale_held) != 1 else ''}: {_stale_names}. "
-            "The live history/fundamentals provider is down — live prices in the strip remain "
-            "current, but signals & analysis for these names may be slightly stale."
-        )
+        with _alert_ph_stale.container():
+            st.warning(
+                f"📦 **Showing cached data** (as of {_stale_oldest}) for "
+                f"{len(_stale_held)} name{'s' if len(_stale_held) != 1 else ''}: {_stale_names}. "
+                "The live history/fundamentals provider is down — live prices in the strip remain "
+                "current, but signals & analysis for these names may be slightly stale."
+            )
 
     if held_data:
         _news = curate_news_items(held_data)
@@ -4743,46 +4805,6 @@ if page == "🏠 Home":
         expanded=False, key="_home_price_strip_exp",
     ):
         _price_strip(held_tickers)
-
-    # ── Unified alert stack (2026-08-04 UX audit I1) — 6 reserved placeholders
-    # so Day Shock / Price cross-check / Stock Split / Structural alert / Broker
-    # drift / Thesis Under Pressure all visually group together right after the
-    # price strip, even though Structural alert's compute can't happen until
-    # much later (needs corr_df from the synthesis block below — see its own
-    # placement comment). Each placeholder is filled at its banner's existing,
-    # unmoved compute position; st.empty() renders content at the RESERVED
-    # slot, not the fill-in call site, so nothing about the careful
-    # data-dependency ordering below changes — only where each banner visually
-    # lands.
-    # Each fill uses .container() (not a direct st.empty() call) because a
-    # bare st.empty() slot holds exactly one element — Day Shock and Stock
-    # Split each render several (a summary line plus one row/card per
-    # ticker), so .container() is required, not a simplification to undo.
-    # Collapsed by default (2026-09-17 Home decluttering, mockup-approved) —
-    # a bundled generic label, not a live count, because Structural alert and
-    # Broker drift genuinely can't be evaluated until far below this point;
-    # showing an accurate live count here would need hoisting compute the
-    # existing placement comment already explains can't move. An st.empty()
-    # keeps its position in the render tree even after the `with` block that
-    # created it exits, so nesting the 6 declarations inside this expander
-    # moves ONLY where each banner visually lands — every .container() fill
-    # call far below is untouched.
-    with st.expander("⚠️ Alerts", expanded=False, key="_home_alerts_exp"):
-        _alert_ph_dayshock   = st.empty()
-        _alert_ph_xcheck     = st.empty()
-        _alert_ph_split      = st.empty()
-        _alert_ph_structural = st.empty()
-        # Filled far below (after live prices exist) but DECLARED here so it
-        # renders ABOVE the Portfolio Value tile — the caveat has to precede
-        # the number it caveats. Same declare-early/fill-late pattern as
-        # _alert_ph_structural.
-        _alert_ph_drift      = st.empty()
-        # 2026-09-24: moved in from the end of Today's Brief (was rendering
-        # below the Buy Candidates overflow, well past this expander) so this
-        # awareness nudge groups with the other 5 instead of surfacing far
-        # down the page. Same declare-early/fill-late pattern; its compute
-        # (thesis_erosion_cache read, dedup, baseline walk-back) is unmoved.
-        _alert_ph_thesis     = st.empty()
 
     # ── Price cross-check, computed early (2026-08-31) ────────────────────────
     # Hoisted ahead of Day Shock / the price strip so both can exclude a ticker
@@ -4995,7 +5017,8 @@ if page == "🏠 Home":
     _pd_dropped = port_df.attrs.get("dropped_holdings") or []
     _pd_dropped_text = _dropped_holdings_banner_text(_pd_dropped)
     if _pd_dropped_text:
-        st.warning(_pd_dropped_text)
+        with _alert_ph_dropped.container():
+            st.warning(_pd_dropped_text)
 
     if port_df.empty:
         # Distinguish "no holdings yet" from "you HAVE holdings but the heavy
@@ -5013,29 +5036,30 @@ if page == "🏠 Home":
             # too, not just the shares-changed case it already covers.
             st.session_state["_home_data_outage_at"] = _now_et().strftime("%I:%M %p")
             _n = len(held_tickers)
-            st.error(
-                f"⚠️ **Couldn't load market data for your {_n} holding"
-                f"{'s' if _n != 1 else ''}** ({', '.join(held_tickers)}).\n\n"
-                "Your holdings are **safe** — this is a data-provider issue, not data loss. "
-                "Live prices in the strip above are fine; only the **history & fundamentals** "
-                "feed is temporarily failing (usually a brief upstream hiccup, common pre-open). "
-                "It clears itself once the provider recovers — no need to re-enter anything."
-            )
-            _rl_locked, _rl_rem = _refresh_gate("data")
-            if st.button(
-                "🔄 Retry data load",
-                key="_home_retry_load",
-                disabled=_rl_locked,
-                help=(f"Cooling down — available in {_rl_rem}s (avoids burning the daily API budget)."
-                      if _rl_locked else "Clears the cache and re-fetches across all providers."),
-            ):
-                _refresh_gate_arm("data")
-                _ah.reset()
-                st.cache_data.clear()
-                st.rerun()
-            if _rl_locked:
-                st.caption(f"⏳ Retry cooling down — available in {_rl_rem}s. "
-                           "Hammering it deepens the throttle; give the provider a minute.")
+            with _alert_ph_outage.container():
+                st.error(
+                    f"⚠️ **Couldn't load market data for your {_n} holding"
+                    f"{'s' if _n != 1 else ''}** ({', '.join(held_tickers)}).\n\n"
+                    "Your holdings are **safe** — this is a data-provider issue, not data loss. "
+                    "Live prices in the strip above are fine; only the **history & fundamentals** "
+                    "feed is temporarily failing (usually a brief upstream hiccup, common pre-open). "
+                    "It clears itself once the provider recovers — no need to re-enter anything."
+                )
+                _rl_locked, _rl_rem = _refresh_gate("data")
+                if st.button(
+                    "🔄 Retry data load",
+                    key="_home_retry_load",
+                    disabled=_rl_locked,
+                    help=(f"Cooling down — available in {_rl_rem}s (avoids burning the daily API budget)."
+                          if _rl_locked else "Clears the cache and re-fetches across all providers."),
+                ):
+                    _refresh_gate_arm("data")
+                    _ah.reset()
+                    st.cache_data.clear()
+                    st.rerun()
+                if _rl_locked:
+                    st.caption(f"⏳ Retry cooling down — available in {_rl_rem}s. "
+                               "Hammering it deepens the throttle; give the provider a minute.")
         else:
             st.info(
                 "👋 No holdings yet — log your first BUY on 📒 Trade Journal "
@@ -6873,10 +6897,11 @@ if page == "🏠 Home":
         # shipped without it, which is the sibling-regression class again.
         _lev_debit = _m(f"\\${_lev_h['margin_debit']:,.0f}")
         _lev_net   = _m(f"\\${_lev_h['net_capital']:,.0f}")
-        st.caption(
-            f"📐 Leveraged {_lev_h['ratio']:.2f}× — {_lev_debit} of margin debit against "
-            f"{_lev_net} of capital. Awareness only; this never changes a recommendation."
-        )
+        with _alert_ph_leverage.container():
+            st.caption(
+                f"📐 Leveraged {_lev_h['ratio']:.2f}× — {_lev_debit} of margin debit against "
+                f"{_lev_net} of capital. Awareness only; this never changes a recommendation."
+            )
 
     # I7: these five data-integrity warnings are independent, so any combination
     # can fire at once — five stacked multi-sentence captions between the KPI row
@@ -7030,13 +7055,16 @@ if page == "🏠 Home":
             f"after the baseline date and held uncaptured until today's sale."
         )
     if len(_dq_msgs) == 1:
-        st.caption(_dq_msgs[0])
+        with _alert_ph_pnldq.container():
+            st.caption(_dq_msgs[0])
     elif len(_dq_msgs) > 1:
-        st.warning(
-            f"⚠️ Today's P&L is affected by {len(_dq_msgs)} data issues — "
-            "expand for the details and dollar impact of each."
-        )
-        with st.expander(f"Why Today's P&L may be off ({len(_dq_msgs)} issues)", expanded=False):
+        # No nested st.expander (Streamlit disallows expander-in-expander,
+        # and this now lives inside the top "⚠️ Alerts" one) -- the per-issue
+        # captions just render directly below the summary warning.
+        with _alert_ph_pnldq.container():
+            st.warning(
+                f"⚠️ Today's P&L is affected by {len(_dq_msgs)} data issues:"
+            )
             for _dq_m in _dq_msgs:
                 st.caption(_dq_m)
 
@@ -7857,19 +7885,21 @@ if page == "🏠 Home":
     from stock_analyzer.constants import CROSS_ASSET_STRESS_BRIEF_SCORE as _CA_BRIEF_MIN
     _ca_brief = _cached_cross_asset()
     if _ca_brief.get("score", 0) >= _CA_BRIEF_MIN:
-        st.info(
-            f"📡 **Cross-asset:** {_ca_brief['summary']} "
-            f"Check the **🔗 Risk Analysis** page for the full breakdown.",
-            icon=None,
-        )
+        with _alert_ph_crossasset.container():
+            st.info(
+                f"📡 **Cross-asset:** {_ca_brief['summary']} "
+                f"Check the **🔗 Risk Analysis** page for the full breakdown.",
+                icon=None,
+            )
     elif _ca_brief.get("label") == "—":
         # Total cross-asset outage: the module returns label "—" (never a
         # fabricated "Calm") precisely so blind ≠ calm. Echo that quietly on
         # the Brief so a silent card isn't read as a macro all-clear.
-        st.caption(
-            "📡 Cross-asset macro signals are offline (market data unavailable) — "
-            "no stress read this run."
-        )
+        with _alert_ph_crossasset.container():
+            st.caption(
+                "📡 Cross-asset macro signals are offline (market data unavailable) — "
+                "no stress read this run."
+            )
 
     # ── Quick Research — label · input · button on one row ────────────────
     # Collapsed from a header banner + caption + input row down to a single
@@ -10704,7 +10734,8 @@ if page == "🏠 Home":
             am_baseline_at      = _ed_baseline_at,
         )
     except Exception as _ed_e:
-        st.error(f"Could not build Evening Debrief: {_ed_e}")
+        with _alert_ph_debrief.container():
+            st.error(f"Could not build Evening Debrief: {_ed_e}")
         _ed_data = None
 
     # ── Header strip ────────────────────────────────────────────────────────
