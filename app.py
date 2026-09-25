@@ -3884,6 +3884,7 @@ def _parallel_load_all(tickers, period: str = "6mo", max_workers: int = DATA_LOA
         return out
     from concurrent.futures import ThreadPoolExecutor, as_completed
     _errs: dict = {}
+    _pla_first_full_logged = False
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {}
         for t in tickers:
@@ -3900,6 +3901,16 @@ def _parallel_load_all(tickers, period: str = "6mo", max_workers: int = DATA_LOA
                 # downstream (indicators/scoring) — without this the cause was
                 # swallowed and invisible.
                 _errs[t] = f"{type(exc).__name__}: {str(exc)[:160]}"
+                # Full traceback for the FIRST failure only (2026-09-25 — a whole-book
+                # failure logs one useful traceback instead of N near-identical ones;
+                # the short type+message above already covers the rest for the UI).
+                import logging as _pla_logging
+                if not _pla_first_full_logged:
+                    _pla_logging.getLogger(__name__).error(
+                        "_parallel_load_all: %s failed (first failure this batch, "
+                        "full traceback below)", t, exc_info=True,
+                    )
+                    _pla_first_full_logged = True
     try:
         st.session_state["_load_all_errs"] = _errs
     except Exception:
@@ -4582,11 +4593,18 @@ if page == "🏠 Home":
     # case: keep recommending an add the user already executed). None when
     # there's no journal — then no cooldown (calm, not blind).
     _hd_trades = st.session_state.get("trades_df")
+    # Collect per-ticker load failures instead of rendering one st.warning each --
+    # a batch-wide provider hiccup (Yahoo/FMP rate-limited or down) previously
+    # meant one stacked box per held ticker, which buried the actual signal
+    # ("the whole book failed together") under a wall of near-identical boxes
+    # (2026-09-25, owner report). One summary banner + an expander for detail,
+    # matching the existing Watchlist _wl_skipped pattern (F1, 2026-09-24).
+    _hd_load_errs: list[tuple[str, str]] = []
     for t in held_tickers:
         bundle = _hd_results.get(t)
         if bundle is None:
             _why = st.session_state.get("_load_all_errs", {}).get(t, "")
-            st.warning(f"Could not load {t}" + (f" — {_why}" if _why else ""))
+            _hd_load_errs.append((t, _why))
         else:
             try:
                 _lots = _build_open_lots(t, _hd_trades, _today_et()) if _hd_trades is not None else []
@@ -4603,6 +4621,19 @@ if page == "🏠 Home":
                 bundle["days_since_last_buy"] = None
                 bundle["material_add_age_days"] = None
             held_data[t] = bundle
+
+    if _hd_load_errs:
+        _hd_err_names = ", ".join(t for t, _ in _hd_load_errs)
+        st.warning(
+            f"⚠ Could not load {len(_hd_load_errs)} of {len(held_tickers)} held "
+            f"position{'s' if len(held_tickers) != 1 else ''} — a data-provider "
+            f"issue, not a portfolio problem. Missing: {_hd_err_names}. Signals "
+            "and scores below will be incomplete for these names until it "
+            "clears; try refreshing in a few minutes."
+        )
+        with st.expander("Per-ticker detail"):
+            for _t, _why in _hd_load_errs:
+                st.caption(f"**{_t}** — {_why}" if _why else f"**{_t}**")
 
     # Full scored view is ready — clear the instant snapshot (the Command Center
     # below supersedes it) and mark the cold load done so warm reruns skip the
@@ -7923,6 +7954,13 @@ if page == "🏠 Home":
                 }
                 st.session_state["_qr_result"] = _qr_research(_t, _qr_raw, portfolio_ctx=_qr_ctx)
             except Exception as _qr_e:
+                # Previously only `str(_qr_e)` was kept, discarding the traceback --
+                # a recurrence was undiagnosable even from Railway logs. exc_info=True
+                # logs the full traceback so the next occurrence is actually traceable.
+                import logging as _qr_logging
+                _qr_logging.getLogger(__name__).error(
+                    "Research a Stock failed for %s", _t, exc_info=True
+                )
                 st.session_state["_qr_result"] = {"error": str(_qr_e), "ticker": _t}
 
     _qr_res = st.session_state.get("_qr_result")
@@ -7958,7 +7996,11 @@ if page == "🏠 Home":
             # error taxonomy today, and guessing a wrong category would be
             # worse than a plain "couldn't load" per this project's
             # zero-hallucination doc/UX standard.
-            st.error(f"⛔ Could not load data for {_qr_res['ticker']} right now.")
+            st.error(
+                f"⛔ Could not load data for {_qr_res['ticker']} right now. "
+                "This is usually a temporary data-provider hiccup — try again "
+                "in a moment."
+            )
             with st.expander("Technical details"):
                 st.caption(str(_qr_res["error"]))
         else:
