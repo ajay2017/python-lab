@@ -136,7 +136,10 @@ def sentiment_value_or_none(value: Any, bundle: dict | None) -> Any:
 
 _DROPPED_HOLDING_REASON_LABELS = {
     "invalid_shares_or_cost": "invalid shares or cost basis — check the entry",
-    "no_price_data": "no price data from any provider — a data-provider issue, not your entry",
+    "no_price_data": (
+        "no price data from any provider — a data-provider issue, not your "
+        "entry; signals & scores are unavailable for these too until it clears"
+    ),
 }
 
 

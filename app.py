@@ -4623,15 +4623,14 @@ if page == "🏠 Home":
             held_data[t] = bundle
 
     if _hd_load_errs:
-        _hd_err_names = ", ".join(t for t, _ in _hd_load_errs)
-        st.warning(
-            f"⚠ Could not load {len(_hd_load_errs)} of {len(held_tickers)} held "
-            f"position{'s' if len(held_tickers) != 1 else ''} — a data-provider "
-            f"issue, not a portfolio problem. Missing: {_hd_err_names}. Signals "
-            "and scores below will be incomplete for these names until it "
-            "clears; try refreshing in a few minutes."
-        )
-        with st.expander("Per-ticker detail"):
+        # No summary st.warning here (2026-09-25) -- a ticker missing from
+        # held_data always ends up in build_portfolio_df's own `dropped_holdings`
+        # ("no_price_data") a few lines below, since port_df is built FROM
+        # held_data. Rendering both said the same thing in different words
+        # (owner report). That banner is the single source of truth; this stays
+        # a quiet expander with the raw per-ticker exception for whoever wants
+        # to dig in past "a data-provider issue" into the actual error string.
+        with st.expander(f"Technical detail — {len(_hd_load_errs)} load failure(s)"):
             for _t, _why in _hd_load_errs:
                 st.caption(f"**{_t}** — {_why}" if _why else f"**{_t}**")
 
