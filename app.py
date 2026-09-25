@@ -495,22 +495,9 @@ footer { visibility: hidden; }
 }
 
 /* ── Sidebar grouped nav ──────────────────────────────────────────────── */
-/* Nav group headers — typography */
-[data-testid="stSidebar"] .nav-group-header {
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    padding: 0 4px 4px;
-    margin-top: 18px;
-    margin-bottom: 6px;
-    /* color is set per-group via inline style — no static color here */
-}
-
-/* First group: tighter top margin */
-[data-testid="stSidebar"] .nav-group-header:first-of-type {
-    margin-top: 8px;
-}
+/* Nav group headers are now rendered as st.expander widgets (2026-09-24 app
+   review Q4, collapsible groups) -- the .nav-group-header div this CSS used
+   to style no longer exists; removed rather than left as dead rules. */
 
 /* Nav item buttons — base */
 [data-testid="stSidebar"] [data-testid="stButton"] > button {
@@ -3038,6 +3025,7 @@ with st.sidebar:
 
     _NAV_ACCENT = {
         "MAIN":      "#3b82f6",
+        "TRACK":     "#f472b6",
         "RESEARCH":  "#22d3ee",
         "PORTFOLIO": "#22c55e",
         "SIGNALS":   "#f59e0b",
@@ -3045,12 +3033,20 @@ with st.sidebar:
     }
     _NAV_ICON = {
         "MAIN":      "🏠",
+        "TRACK":     "📚",
         "RESEARCH":  "📈",
         "PORTFOLIO": "🗂️",
         "SIGNALS":   "🔔",
         "AI":        "🧠",
     }
 
+    # 2026-09-24 app review Q4 -- "TRACK RECORD" collects the app's
+    # retrospective/measurement-only surfaces (previously scattered across
+    # RESEARCH and PORTFOLIO) into their own group, placed right after MAIN.
+    # Dict key for accent/icon lookup is the group label's FIRST WORD
+    # (`_grp_label.split()[0]`, below) -- "TRACK RECORD" resolves via
+    # "TRACK", not the full label. Pure regrouping: no page's own content,
+    # gates, or scoring changed; pages only moved which tuple lists them.
     _NAV_GROUPS = [
         ("MAIN", [
             ("Home",    "🏠 Home",                    ":material/home:"),
@@ -3060,27 +3056,29 @@ with st.sidebar:
             ("Scanner", "🔍 Market Scanner",           ":material/radar:"),
             ("User Guide", "📖 User Guide",           ":material/help:"),
         ]),
+        ("TRACK RECORD", [
+            ("Recommendations", "📜 Recommendations History",  ":material/history:"),
+            ("Rec Outcomes", "🎖️ Recommendation Outcomes", ":material/track_changes:"),
+            ("Road Not Taken", "🛑 The Road Not Taken", ":material/block:"),
+            ("My Edge",             "🎯 My Edge",              ":material/trophy:"),
+            ("Predictive Analytics", "📊 Predictive Analytics", ":material/insights:"),
+            ("Trade Review",    "🪞 Trade Review",             ":material/rate_review:"),
+            ("Model Lab", "🔬 Model Lab",              ":material/experiment:"),
+        ]),
         ("RESEARCH", [
             ("Analysis", "📈 Analysis",               ":material/trending_up:"),
             ("Compare",  "⚖️ Compare",                ":material/compare_arrows:"),
             ("Watchlist","📋 Watchlist",               ":material/bookmarks:"),
             ("Macro",    "🌐 Macro",                    ":material/public:"),
-            ("Predictive Analytics", "📊 Predictive Analytics", ":material/insights:"),
-            ("Model Lab", "🔬 Model Lab",              ":material/experiment:"),
-            ("Road Not Taken", "🛑 The Road Not Taken", ":material/block:"),
-            ("Rec Outcomes", "🎖️ Recommendation Outcomes", ":material/track_changes:"),
             ("System Trust", "🩺 System Trust",        ":material/health_and_safety:"),
             ("App Settings", "⚙️ App Settings",        ":material/tune:"),
         ]),
         ("PORTFOLIO", [
             ("Overview", "🥧 Portfolio Overview", ":material/pie_chart:"),
             ("Health",    "🏆 Health",     ":material/analytics:"),
-            ("My Edge",             "🎯 My Edge",              ":material/trophy:"),
             ("Risk Analysis",   "🔗 Risk Analysis",           ":material/monitoring:"),
             ("Intelligence", "🧩 Intelligence", ":material/hub:"),
             ("Trade Journal",   "📒 Trade Journal",           ":material/book:"),
-            ("Trade Review",    "🪞 Trade Review",             ":material/rate_review:"),
-            ("Recommendations", "📜 Recommendations History",  ":material/history:"),
         ]),
         ("SIGNALS", [
             ("Signals & Advice",  "📡 Signals & Advice",  ":material/notifications_active:"),
@@ -3113,8 +3111,13 @@ with st.sidebar:
             for _g_label, _g_items in _NAV_GROUPS
         ]
 
-    # Determine which group the current page belongs to, for accent-colored active state
+    # Determine which group the current page belongs to, for accent-colored
+    # active state AND (2026-09-24 app review Q4) to force that group's
+    # expander open below regardless of its remembered collapsed state --
+    # a page's own group must never be hidden behind a collapsed section, or
+    # its active-state highlight becomes invisible in the sidebar.
     _active_accent = "#3b82f6"  # fallback to MAIN blue
+    _active_group_key = "MAIN"
     for _grp_label, _grp_items in _NAV_GROUPS:
         _grp_key = _grp_label.split()[0]  # first word = the key in _NAV_ACCENT
         for _item_display, _item_dest, _item_icon in _grp_items:
@@ -3122,6 +3125,7 @@ with st.sidebar:
                 continue
             if _item_dest == _cur_page:
                 _active_accent = _NAV_ACCENT.get(_grp_key, "#3b82f6")
+                _active_group_key = _grp_key
                 break
 
     _active_tint = f"{_active_accent}2e"  # ~18% opacity hex suffix
@@ -3135,46 +3139,66 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
+    # Collapsible nav groups (2026-09-24 app review Q4, mockup-approved
+    # before build): MAIN and TRACK RECORD default open, the rest default
+    # collapsed. Each group's own open/closed choice persists via
+    # st.expander's `key` binding to session_state (a plain `st.expander`,
+    # not a custom widget, per the owner's own call to keep this simple/
+    # cheap rather than hand-rolling toggle state) -- EXCEPT the active
+    # page's own group, force-opened every render by writing session_state
+    # before the widget is created (the standard way to override a keyed
+    # widget's remembered value), so navigating never hides your own
+    # location. A manually-collapsed group elsewhere is left untouched.
+    _NAV_DEFAULT_OPEN_GROUPS = {"MAIN", "TRACK"}
     for _grp_label, _grp_items in _NAV_GROUPS:
         _grp_key = _grp_label.split()[0]
-        _accent = _NAV_ACCENT.get(_grp_key, "#4b5563")
         _icon = _NAV_ICON.get(_grp_key, "")
-        st.markdown(
-            f'<div class="nav-group-header" style="color:{_accent};">{_icon} {_grp_label}</div>',
-            unsafe_allow_html=True,
-        )
-        for _disp, _dest, _icon in _grp_items:
-            if _dest is None:  # sentinel
-                st.markdown('<hr class="nav-divider">', unsafe_allow_html=True)
-                continue
-            # Catalyst Watch / Signals & Advice get a live alert badge on their
-            # label. 2026-09-24 app review, A4 — see
-            # util.catalyst_watch_nav_badge / util.signals_advice_nav_badge
-            # for why each offline source keeps its own grey "?" slot rather
-            # than collapsing into one generic indicator.
-            if _dest == "🔔 Catalyst Watch" and (
-                _cw_alerts > 0 or _earnings_alerts > 0 or _cw_alerts_offline or _earnings_offline
-            ):
-                _cw_parts = catalyst_watch_nav_badge(
-                    _cw_alerts, _cw_alerts_offline, _earnings_alerts, _earnings_offline,
-                )
-                _btn_label = f"Catalyst Watch  {' '.join(_cw_parts)}"
-            elif _dest == "📡 Signals & Advice" and (_n_danger_nav > 0 or _n_warning_nav > 0 or _sa_nav_offline):
-                _badge_parts = signals_advice_nav_badge(_n_danger_nav, _n_warning_nav, _sa_nav_offline)
-                _btn_label = f"Signals & Advice  {' '.join(_badge_parts)}"
-            else:
-                _btn_label = _disp
-            # Active: disabled=True (CSS renders as selected highlight)
-            _is_active = (_cur_page == _dest)
-            if st.button(
-                _btn_label,
-                key=f"_nav_{_disp.lower().replace(' ', '_')}",
-                icon=_icon,
-                disabled=_is_active,
-                width="stretch",
-            ):
-                st.session_state["_pending_page"] = _dest
-                st.rerun()
+        _exp_key = f"_nav_exp_{_grp_key}"
+        if _exp_key not in st.session_state:
+            st.session_state[_exp_key] = _grp_key in _NAV_DEFAULT_OPEN_GROUPS
+        if _grp_key == _active_group_key:
+            st.session_state[_exp_key] = True
+        # `expanded=` deliberately omitted: st.session_state[_exp_key] is
+        # already set above on every render (first-time default or the
+        # active-group override), and Streamlit's own documented pattern for
+        # programmatically controlling a keyed widget is to set its
+        # session_state entry before creation, not to also pass a redundant
+        # default -- avoids any risk of the "widget created with a default
+        # value but also had its value set via the Session State API"
+        # warning (2026-09-24 app review Q4, voluntary reviewer note).
+        with st.expander(f"{_icon} {_grp_label}", key=_exp_key):
+            for _disp, _dest, _icon in _grp_items:
+                if _dest is None:  # sentinel
+                    st.markdown('<hr class="nav-divider">', unsafe_allow_html=True)
+                    continue
+                # Catalyst Watch / Signals & Advice get a live alert badge on their
+                # label. 2026-09-24 app review, A4 — see
+                # util.catalyst_watch_nav_badge / util.signals_advice_nav_badge
+                # for why each offline source keeps its own grey "?" slot rather
+                # than collapsing into one generic indicator.
+                if _dest == "🔔 Catalyst Watch" and (
+                    _cw_alerts > 0 or _earnings_alerts > 0 or _cw_alerts_offline or _earnings_offline
+                ):
+                    _cw_parts = catalyst_watch_nav_badge(
+                        _cw_alerts, _cw_alerts_offline, _earnings_alerts, _earnings_offline,
+                    )
+                    _btn_label = f"Catalyst Watch  {' '.join(_cw_parts)}"
+                elif _dest == "📡 Signals & Advice" and (_n_danger_nav > 0 or _n_warning_nav > 0 or _sa_nav_offline):
+                    _badge_parts = signals_advice_nav_badge(_n_danger_nav, _n_warning_nav, _sa_nav_offline)
+                    _btn_label = f"Signals & Advice  {' '.join(_badge_parts)}"
+                else:
+                    _btn_label = _disp
+                # Active: disabled=True (CSS renders as selected highlight)
+                _is_active = (_cur_page == _dest)
+                if st.button(
+                    _btn_label,
+                    key=f"_nav_{_disp.lower().replace(' ', '_')}",
+                    icon=_icon,
+                    disabled=_is_active,
+                    width="stretch",
+                ):
+                    st.session_state["_pending_page"] = _dest
+                    st.rerun()
 
     # Expose the active page as `page` — replaces the value st.radio used to return.
     # Must be inside the sidebar block so the variable is in scope for all page

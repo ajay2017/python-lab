@@ -3051,8 +3051,9 @@ footnotes, never picking one over the other. Surfaces both pre-registered dates 
 3-month-from-`min(fired_date)` sanity checkpoint (row-count only, not a verdict) and the
 12-month-from-`min(fired_date)` per-rec_type retirement date.
 
-Rendered on the new owner-only **"🎖️ Recommendation Outcomes"** page (RESEARCH nav group,
-alongside "🛑 The Road Not Taken") — retrospective/awareness only, never Act Today material.
+Rendered on the new owner-only **"🎖️ Recommendation Outcomes"** page (TRACK RECORD nav group
+since 2026-09-24's app review Q4 — moved out of RESEARCH alongside "🛑 The Road Not Taken")
+— retrospective/awareness only, never Act Today material.
 Tax-harvest is explicitly out of scope for this readout; it stays on Phase 1a's non-banded
 `tax_advisor.harvest_outcomes_summary()` running total. Opus `reviewer`: SHIP, 0 blocking.
 Full design: `docs/plans/recommendation-outcomes-measurement.md` §10/§11.

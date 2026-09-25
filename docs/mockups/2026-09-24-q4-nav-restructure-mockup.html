@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DRISHTA — Q4 Nav Restructure Mockup (2026-09-24)</title>
+<style>
+  body { background:#0b1120; color:#e5e7eb; font-family:Inter,system-ui,sans-serif; margin:0; padding:32px; }
+  .wrap { max-width:1180px; margin:0 auto; }
+  h1 { font-size:1.4rem; margin-bottom:4px; }
+  .subtitle { color:#9ca3af; font-size:0.92rem; margin-bottom:24px; }
+  .cols { display:flex; gap:28px; align-items:flex-start; flex-wrap:wrap; }
+  .sidebar-card {
+    background:#0f172a; border:1px solid #334155; border-radius:12px;
+    padding:16px 14px; width:250px; font-size:0.86rem;
+  }
+  .sidebar-title { font-size:0.7rem; font-weight:700; letter-spacing:0.08em; text-transform:uppercase;
+    color:#6b7280; text-align:center; margin-bottom:12px; }
+  .nav-group-header {
+    font-size:0.68rem; font-weight:700; letter-spacing:0.08em; text-transform:uppercase;
+    padding:10px 8px 4px; margin-top:6px;
+  }
+  .nav-item {
+    display:flex; align-items:center; gap:8px; padding:6px 10px; border-radius:6px;
+    color:#cbd5e1; margin:1px 0;
+  }
+  .nav-item.active { background:rgba(255,255,255,0.06); border-left:3px solid; padding-left:7px; }
+  .nav-item.new { background:rgba(244,114,182,0.10); border-radius:6px; }
+  .nav-item.owner { opacity:0.75; }
+  .owner-tag { font-size:0.58rem; color:#6b7280; margin-left:auto; }
+  .section { background:#0f172a; border:1px solid #334155; border-radius:12px; padding:20px 24px; margin:26px 0; }
+  .section-tag { display:inline-block; font-size:0.68rem; font-weight:700; letter-spacing:0.08em; text-transform:uppercase;
+    color:#93c5fd; background:#1e3a5f; border-radius:6px; padding:3px 10px; margin-bottom:10px; }
+  .diff-remove { color:#fca5a5; text-decoration:line-through; }
+  .diff-add { color:#86efac; }
+  .note { background:#1e293b; border-left:3px solid #f0c24b; border-radius:0 6px 6px 0; padding:10px 14px;
+    font-size:0.82rem; color:#fde68a; margin-top:14px; }
+  .decision { background:#1e293b; border-left:3px solid #93c5fd; border-radius:0 6px 6px 0; padding:10px 14px;
+    font-size:0.85rem; margin-top:10px; }
+  .decision b { color:#93c5fd; }
+  table { border-collapse:collapse; width:100%; font-size:0.85rem; margin-top:10px; }
+  th, td { text-align:left; padding:6px 10px; border-bottom:1px solid #1f2937; }
+  th { color:#9ca3af; font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em; }
+  .move { color:#86efac; font-weight:600; }
+  .keep { color:#9ca3af; }
+
+  /* Collapsible-group demo (native <details>/<summary> — genuinely clickable, no JS) */
+  .nav-collapse summary {
+    list-style:none; cursor:pointer; display:flex; align-items:center; gap:6px;
+    font-size:0.68rem; font-weight:700; letter-spacing:0.08em; text-transform:uppercase;
+    padding:10px 8px; margin-top:6px; border-radius:6px;
+  }
+  .nav-collapse summary::-webkit-details-marker { display:none; }
+  .nav-collapse summary::before { content:"▸"; font-size:0.7rem; transition:transform 0.15s; display:inline-block; }
+  .nav-collapse[open] summary::before { transform:rotate(90deg); }
+  .nav-collapse summary:hover { background:rgba(255,255,255,0.04); }
+  .nav-collapse .nav-item { padding-left:22px; }
+  .active-page-tag { font-size:0.6rem; color:#f472b6; margin-left:6px; font-weight:400; text-transform:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Mockup — Q4: a dedicated retrospective/track-record nav group</h1>
+  <div class="subtitle">2026-09-24 app review · design by <code>planner</code> pass · pure navigation regrouping, no page content/gate/constant changes · nothing implemented yet</div>
+
+  <div class="section">
+    <span class="section-tag">Before → After</span>
+    <div class="cols">
+      <div class="sidebar-card">
+        <div class="sidebar-title">Current (5 groups)</div>
+        <div class="nav-group-header" style="color:#3b82f6">🏠 MAIN</div>
+        <div class="nav-item">🏠 Home</div>
+        <div class="nav-item">🧑‍⚖️ The Judge</div>
+        <div class="nav-item">🧾 Summary</div>
+        <div class="nav-item">💰 Account</div>
+        <div class="nav-item">🔍 Market Scanner</div>
+        <div class="nav-item">📖 User Guide</div>
+        <div class="nav-group-header" style="color:#22d3ee">📈 RESEARCH</div>
+        <div class="nav-item">📈 Analysis</div>
+        <div class="nav-item">⚖️ Compare</div>
+        <div class="nav-item">📋 Watchlist</div>
+        <div class="nav-item">🌐 Macro</div>
+        <div class="nav-item diff-remove">📊 Predictive Analytics</div>
+        <div class="nav-item diff-remove">🔬 Model Lab</div>
+        <div class="nav-item diff-remove">🛑 The Road Not Taken</div>
+        <div class="nav-item diff-remove">🎖️ Recommendation Outcomes</div>
+        <div class="nav-item">🩺 System Trust</div>
+        <div class="nav-item">⚙️ App Settings</div>
+        <div class="nav-group-header" style="color:#22c55e">🗂️ PORTFOLIO</div>
+        <div class="nav-item">🥧 Portfolio Overview</div>
+        <div class="nav-item">🏆 Health</div>
+        <div class="nav-item diff-remove">🎯 My Edge</div>
+        <div class="nav-item">🔗 Risk Analysis</div>
+        <div class="nav-item">🧩 Intelligence</div>
+        <div class="nav-item">📒 Trade Journal</div>
+        <div class="nav-item diff-remove">🪞 Trade Review</div>
+        <div class="nav-item diff-remove">📜 Recommendations History</div>
+        <div class="nav-group-header" style="color:#f59e0b">🔔 SIGNALS</div>
+        <div class="nav-item">📡 Signals &amp; Advice</div>
+        <div class="nav-item">🔔 Catalyst Watch</div>
+        <div class="nav-item">📅 Economic Calendar</div>
+        <div class="nav-group-header" style="color:#a78bfa">🧠 AI</div>
+        <div class="nav-item">🧠 AI Insights</div>
+      </div>
+
+      <div class="sidebar-card">
+        <div class="sidebar-title">Proposed (6 groups) — Option A "TRACK RECORD" / rose</div>
+        <div class="nav-group-header" style="color:#3b82f6">🏠 MAIN</div>
+        <div class="nav-item">🏠 Home</div>
+        <div class="nav-item">🧑‍⚖️ The Judge</div>
+        <div class="nav-item">🧾 Summary</div>
+        <div class="nav-item">💰 Account</div>
+        <div class="nav-item">🔍 Market Scanner</div>
+        <div class="nav-item">📖 User Guide</div>
+        <div class="nav-group-header" style="color:#f472b6">📚 TRACK RECORD <span style="color:#f472b6;font-weight:700">NEW · moved up next to MAIN</span></div>
+        <div class="nav-item new">📜 Recommendations History</div>
+        <div class="nav-item new owner">🎖️ Recommendation Outcomes<span class="owner-tag">owner-only</span></div>
+        <div class="nav-item new owner">🛑 The Road Not Taken<span class="owner-tag">owner-only</span></div>
+        <div class="nav-item new">🎯 My Edge</div>
+        <div class="nav-item new">📊 Predictive Analytics</div>
+        <div class="nav-item new">🪞 Trade Review</div>
+        <div class="nav-item new owner">🔬 Model Lab<span class="owner-tag">owner-only</span></div>
+        <div class="nav-group-header" style="color:#22d3ee">📈 RESEARCH <span style="color:#6b7280;font-weight:400;text-transform:none">(sharper — forward tools only)</span></div>
+        <div class="nav-item">📈 Analysis</div>
+        <div class="nav-item">⚖️ Compare</div>
+        <div class="nav-item">📋 Watchlist</div>
+        <div class="nav-item">🌐 Macro</div>
+        <div class="nav-item">🩺 System Trust</div>
+        <div class="nav-item">⚙️ App Settings</div>
+        <div class="nav-group-header" style="color:#22c55e">🗂️ PORTFOLIO <span style="color:#6b7280;font-weight:400;text-transform:none">(sharper — current book state)</span></div>
+        <div class="nav-item">🥧 Portfolio Overview</div>
+        <div class="nav-item">🏆 Health</div>
+        <div class="nav-item">🔗 Risk Analysis</div>
+        <div class="nav-item">🧩 Intelligence</div>
+        <div class="nav-item">📒 Trade Journal</div>
+        <div class="nav-group-header" style="color:#f59e0b">🔔 SIGNALS</div>
+        <div class="nav-item">📡 Signals &amp; Advice</div>
+        <div class="nav-item">🔔 Catalyst Watch</div>
+        <div class="nav-item">📅 Economic Calendar</div>
+        <div class="nav-group-header" style="color:#a78bfa">🧠 AI</div>
+        <div class="nav-item">🧠 AI Insights</div>
+      </div>
+
+      <div class="sidebar-card">
+        <div class="sidebar-title">Option B — "LEARN" / slate</div>
+        <div class="nav-group-header" style="color:#94a3b8">📚 LEARN <span style="color:#94a3b8;font-weight:700">NEW</span></div>
+        <div class="nav-item new">📜 Recommendations History</div>
+        <div class="nav-item new owner">🎖️ Recommendation Outcomes<span class="owner-tag">owner-only</span></div>
+        <div class="nav-item new owner">🛑 The Road Not Taken<span class="owner-tag">owner-only</span></div>
+        <div class="nav-item new">🎯 My Edge</div>
+        <div class="nav-item new">📊 Predictive Analytics</div>
+        <div class="nav-item new">🪞 Trade Review</div>
+        <div class="nav-item new owner">🔬 Model Lab<span class="owner-tag">owner-only</span></div>
+        <div class="note" style="margin-top:16px">Same 7 pages, same order — only the label + accent differ from Option A. Everything else in this mockup (MAIN/RESEARCH/PORTFOLIO/SIGNALS/AI) is identical either way, so only this one group card is shown for Option B.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <span class="section-tag">NEW — collapsible groups (applied to Option A) · click any header below, it's real</span>
+    <p style="color:#9ca3af;font-size:0.85rem;margin-top:-4px">Updated per your last note: TRACK RECORD moved up next to MAIN, and both default OPEN (everything else — RESEARCH, PORTFOLIO, SIGNALS, AI — starts collapsed). Try it — these are live <code>&lt;details&gt;</code> elements, not a static image.</p>
+    <div class="sidebar-card" style="width:280px">
+      <details class="nav-collapse" open>
+        <summary style="color:#3b82f6">🏠 MAIN</summary>
+        <div class="nav-item">🏠 Home</div>
+        <div class="nav-item">🧑‍⚖️ The Judge</div>
+        <div class="nav-item">🧾 Summary</div>
+        <div class="nav-item">💰 Account</div>
+        <div class="nav-item">🔍 Market Scanner</div>
+        <div class="nav-item">📖 User Guide</div>
+      </details>
+      <details class="nav-collapse" open>
+        <summary style="color:#f472b6">📚 TRACK RECORD <span style="color:#f472b6;font-weight:400;text-transform:none">moved up, default open</span></summary>
+        <div class="nav-item">📜 Recommendations History</div>
+        <div class="nav-item owner">🎖️ Recommendation Outcomes<span class="owner-tag">owner-only</span></div>
+        <div class="nav-item owner">🛑 The Road Not Taken<span class="owner-tag">owner-only</span></div>
+        <div class="nav-item">🎯 My Edge</div>
+        <div class="nav-item">📊 Predictive Analytics</div>
+        <div class="nav-item">🪞 Trade Review</div>
+        <div class="nav-item owner">🔬 Model Lab<span class="owner-tag">owner-only</span></div>
+      </details>
+      <details class="nav-collapse">
+        <summary style="color:#22d3ee">📈 RESEARCH</summary>
+        <div class="nav-item">📈 Analysis</div>
+        <div class="nav-item">⚖️ Compare</div>
+        <div class="nav-item">📋 Watchlist</div>
+        <div class="nav-item">🌐 Macro</div>
+        <div class="nav-item">🩺 System Trust</div>
+        <div class="nav-item">⚙️ App Settings</div>
+      </details>
+      <details class="nav-collapse" id="portfolio-demo">
+        <summary style="color:#22c55e">🗂️ PORTFOLIO <span class="active-page-tag">← auto-expanded because you're on Risk Analysis right now</span></summary>
+        <div class="nav-item">🥧 Portfolio Overview</div>
+        <div class="nav-item">🏆 Health</div>
+        <div class="nav-item active" style="border-color:#22c55e">🔗 Risk Analysis</div>
+        <div class="nav-item">🧩 Intelligence</div>
+        <div class="nav-item">📒 Trade Journal</div>
+      </details>
+      <details class="nav-collapse">
+        <summary style="color:#f59e0b">🔔 SIGNALS</summary>
+        <div class="nav-item">📡 Signals &amp; Advice</div>
+        <div class="nav-item">🔔 Catalyst Watch</div>
+        <div class="nav-item">📅 Economic Calendar</div>
+      </details>
+      <details class="nav-collapse">
+        <summary style="color:#a78bfa">🧠 AI</summary>
+        <div class="nav-item">🧠 AI Insights</div>
+      </details>
+    </div>
+    <script>
+      document.getElementById('portfolio-demo').open = true;
+    </script>
+    <div class="decision"><b>4. The rule this needs, so navigating never hides your own location:</b> whichever group contains the CURRENTLY ACTIVE page auto-force-expands on that render, regardless of its remembered collapsed/expanded state — shown above, PORTFOLIO is pre-opened simulating a landing on Risk Analysis while PORTFOLIO was still collapsed. Without this rule, you could click into a page and its own sidebar highlight would be invisible inside a collapsed section — confusing, not just inconsistent. Streamlit-side this is simple: each group's expanded/collapsed state lives in <code>st.session_state</code> (default: only "MAIN" and "TRACK RECORD" start <code>True</code>), and the render loop ORs in "is this the active page's group" before deciding whether to show it expanded — the user's own manual toggle is still remembered for next time, this rule just overrides it for the one render where it matters.</div>
+    <div class="note">This is a genuinely separate implementation piece from the regroup itself (a new per-group collapse mechanism touching ALL 6 groups, not just the new one) — bigger blast radius than Q4's original "just move some pages" scope, but still pure UI/interaction, zero gate/content/constant touch. Confirm you want it bundled into the same commit, or shipped as its own immediate follow-up once the regroup itself is live.</div>
+  </div>
+
+  <div class="section">
+    <span class="section-tag">Decisions needed from you</span>
+    <div class="decision"><b>1. Group label:</b> "TRACK RECORD" (Option A) vs "LEARN" (Option B)? Note: "TRACK RECORD" needs the code to key off just the word "TRACK" (first word of the label) for its accent/icon lookup — a minor maintainer quirk, not a user-visible difference. "LEARN" is a single word so it doesn't have that quirk, and reads a bit softer/broader (fits Predictive Analytics' "learn where your edge comes from" framing and Model Lab's validation-harness role slightly better).</div>
+    <div class="decision"><b>2. Accent color:</b> rose #f472b6 (Option A — maximally distinct from all 5 existing colors) vs muted slate #94a3b8 (Option B — an "archival" tone, but risks reading as "disabled/greyed out").</div>
+    <div class="decision"><b>3. Does 🔬 Model Lab belong here?</b> It's the one genuinely borderline page — it forward-forecasts 20-day volatility, so it's not strictly "did a past call work" like the other 6. The planner recommends moving it anyway (same DNA: owner-only, quarantined, "feeds no gate, no recommendation, no composite — a measurement harness," which fits "retrospective/validation" better than it fits RESEARCH's live decision tools). If you disagree, it can simply stay in RESEARCH with zero impact on the rest of this design.</div>
+  </div>
+
+  <div class="section">
+    <span class="section-tag">What moves, and why (mockup table)</span>
+    <table>
+      <thead><tr><th>Page</th><th>From</th><th>Verdict</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td>📜 Recommendations History</td><td>PORTFOLIO</td><td class="move">MOVE</td><td>THE canonical "did the engine's calls work" surface</td></tr>
+        <tr><td>🎖️ Recommendation Outcomes</td><td>RESEARCH</td><td class="move">MOVE</td><td>Retrospective grading of calls the engine made</td></tr>
+        <tr><td>🛑 The Road Not Taken</td><td>RESEARCH</td><td class="move">MOVE</td><td>Retrospective grading of calls a gate suppressed</td></tr>
+        <tr><td>🎯 My Edge</td><td>PORTFOLIO</td><td class="move">MOVE</td><td>Its own manual text: "retrospective-only ... no recommendations, no gates"</td></tr>
+        <tr><td>📊 Predictive Analytics</td><td>RESEARCH</td><td class="move">MOVE</td><td>"Measurement-only — none of it feeds back into the engine"</td></tr>
+        <tr><td>🪞 Trade Review</td><td>PORTFOLIO</td><td class="move">MOVE</td><td>"Retrospective behavioral lens"</td></tr>
+        <tr><td>🔬 Model Lab</td><td>RESEARCH</td><td class="move">MOVE (borderline — your call)</td><td>Forward-forecasting, but same "feeds nothing live" DNA as the group</td></tr>
+        <tr><td>🩺 System Trust</td><td>RESEARCH</td><td class="keep">KEEP</td><td>Live pipeline health ("today"), not a past-call track record</td></tr>
+        <tr><td>⚙️ App Settings</td><td>RESEARCH</td><td class="keep">KEEP</td><td>Config/write surface, not retrospective</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note" style="max-width:1100px">
+    Scope reminder: this is navigation grouping ONLY — no page's content, tabs, gates, or scoring changes. The review's separate recommendation ("one canonical surface per question," consolidating overlapping measurements) is a much bigger, different project and is NOT part of this change. Confirmed zero <code>_GATE_FILES</code> touch, zero test dependency on the current group names, and the owner-only filter (which hides Model Lab/Road Not Taken/Rec Outcomes from a read-only viewer) keeps working unchanged since it filters by page name, not by group.
+  </div>
+</div>
+</body>
+</html>
