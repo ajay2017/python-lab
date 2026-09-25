@@ -4714,15 +4714,16 @@ if page == "🏠 Home":
     ):
         _price_strip(held_tickers)
 
-    # ── Unified alert stack (2026-08-04 UX audit I1) — 5 reserved placeholders
+    # ── Unified alert stack (2026-08-04 UX audit I1) — 6 reserved placeholders
     # so Day Shock / Price cross-check / Stock Split / Structural alert / Broker
-    # drift all visually group together right after the price strip, even though
-    # Structural alert's compute can't happen until much later (needs corr_df
-    # from the synthesis block below — see its own placement comment). Each
-    # placeholder is filled at its banner's existing, unmoved compute
-    # position; st.empty() renders content at the RESERVED slot, not the
-    # fill-in call site, so nothing about the careful data-dependency
-    # ordering below changes — only where each banner visually lands.
+    # drift / Thesis Under Pressure all visually group together right after the
+    # price strip, even though Structural alert's compute can't happen until
+    # much later (needs corr_df from the synthesis block below — see its own
+    # placement comment). Each placeholder is filled at its banner's existing,
+    # unmoved compute position; st.empty() renders content at the RESERVED
+    # slot, not the fill-in call site, so nothing about the careful
+    # data-dependency ordering below changes — only where each banner visually
+    # lands.
     # Each fill uses .container() (not a direct st.empty() call) because a
     # bare st.empty() slot holds exactly one element — Day Shock and Stock
     # Split each render several (a summary line plus one row/card per
@@ -4733,7 +4734,7 @@ if page == "🏠 Home":
     # showing an accurate live count here would need hoisting compute the
     # existing placement comment already explains can't move. An st.empty()
     # keeps its position in the render tree even after the `with` block that
-    # created it exits, so nesting the 5 declarations inside this expander
+    # created it exits, so nesting the 6 declarations inside this expander
     # moves ONLY where each banner visually lands — every .container() fill
     # call far below is untouched.
     with st.expander("⚠️ Alerts", expanded=False, key="_home_alerts_exp"):
@@ -4746,6 +4747,12 @@ if page == "🏠 Home":
         # the number it caveats. Same declare-early/fill-late pattern as
         # _alert_ph_structural.
         _alert_ph_drift      = st.empty()
+        # 2026-09-24: moved in from the end of Today's Brief (was rendering
+        # below the Buy Candidates overflow, well past this expander) so this
+        # awareness nudge groups with the other 5 instead of surfacing far
+        # down the page. Same declare-early/fill-late pattern; its compute
+        # (thesis_erosion_cache read, dedup, baseline walk-back) is unmoved.
+        _alert_ph_thesis     = st.empty()
 
     # ── Price cross-check, computed early (2026-08-31) ────────────────────────
     # Hoisted ahead of Day Shock / the price strip so both can exclude a ticker
@@ -10552,31 +10559,32 @@ if page == "🏠 Home":
                     "label":  _tup_row.get("erosion_label") or "",
                 })
 
-        if _tup_flags:
-            st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
-            st.markdown(
-                f"<div style='background:#1e293b;border-left:4px solid #f59e0b;"
-                f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
-                f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
-                f"⚠️ Thesis Under Pressure ({len(_tup_flags)})</span>"
-                f"<span style='color:#94a3b8;font-size:0.82em'>"
-                f" · adversarial review flagged new pressure today</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            for _tf in sorted(_tup_flags, key=lambda r: r["score"], reverse=True):
-                _tf_label = f" ({_tf['label']})" if _tf["label"] else ""
+        with _alert_ph_thesis.container():
+            if _tup_flags:
+                st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
                 st.markdown(
-                    f"<div style='background:#0f172a;border:1px solid #78350f;"
-                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                    f"<div style='color:#fbbf24;font-weight:700;font-size:0.86em'>"
-                    f"{_tf['ticker']} thesis erosion at {_tf['score']:.0f}/100{_tf_label}</div>"
-                    f"<div style='color:#94a3b8;font-size:0.8em;margin-top:4px'>"
-                    f"See 🧠 AI Insights → ⚠️ Red Team tab for the signal breakdown and "
-                    f"counter-evidence.</div>"
-                    "</div>",
+                    f"<div style='background:#1e293b;border-left:4px solid #f59e0b;"
+                    f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+                    f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
+                    f"⚠️ Thesis Under Pressure ({len(_tup_flags)})</span>"
+                    f"<span style='color:#94a3b8;font-size:0.82em'>"
+                    f" · adversarial review flagged new pressure today</span>"
+                    f"</div>",
                     unsafe_allow_html=True,
                 )
+                for _tf in sorted(_tup_flags, key=lambda r: r["score"], reverse=True):
+                    _tf_label = f" ({_tf['label']})" if _tf["label"] else ""
+                    st.markdown(
+                        f"<div style='background:#0f172a;border:1px solid #78350f;"
+                        f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                        f"<div style='color:#fbbf24;font-weight:700;font-size:0.86em'>"
+                        f"{_tf['ticker']} thesis erosion at {_tf['score']:.0f}/100{_tf_label}</div>"
+                        f"<div style='color:#94a3b8;font-size:0.8em;margin-top:4px'>"
+                        f"See 🧠 AI Insights → ⚠️ Red Team tab for the signal breakdown and "
+                        f"counter-evidence.</div>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
 
     st.divider()
 
@@ -37646,7 +37654,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🧭 Monthly Intelligence Report — "is the engine picking well, and am I acting well?"** A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. The report is visual (funnel chart, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
 
-- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). A position whose label changed since the last day it was scored auto-expands with a **"🆕 Changed since your last visit"** badge, so a real tier shift can't get missed just because this tab only recomputes once per trading day. Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears at the end of Today's Brief on 🏠 Home when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Awareness only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
+- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). A position whose label changed since the last day it was scored auto-expands with a **"🆕 Changed since your last visit"** badge, so a real tier shift can't get missed just because this tab only recomputes once per trading day. Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears in the "⚠️ Alerts" group near the top of 🏠 Home (alongside Day Shock, price cross-check, and the other awareness banners) when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Awareness only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
 
 - **⚔️ Debate — "make me the strongest case on both sides before I buy this"** On any 📈 Grow Today entry candidate, click **⚔️ Debate** to run a structured 4-round argument: a Bull agent opens the case for the position, a Bear agent counters, Bull rebuts, Bear delivers its closing concern — then an impartial judge scores both sides and names the **one specific claim** they disagree on most. Verdict reads as 🟢 Bull wins, 🔴 Bear wins, or ⚖️ Contested (the most common and most useful outcome — it tells you exactly what to research further before deciding). Both agents debate the same evidence — composite score, momentum, and relative strength vs the market — so neither side is arguing from information you don't also have. Runs once per candidate per day (results are cached — reopen the card any time to reread it), capped at 3 new debates per session. **The debate never reorders candidates or changes the composite score — it's a second opinion you read before deciding, not a vote that counts.**
 
