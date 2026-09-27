@@ -11,6 +11,7 @@ from stock_analyzer.util import (
     factor_tilt_evidence_line,
     factor_tilt_state,
     dropped_holdings_banner_text,
+    score_withheld_banner_text,
     get_or_offline,
     holdings_write_failed_message,
     md_bold_to_html,
@@ -271,6 +272,46 @@ class TestDroppedHoldingsBannerText:
         text = dropped_holdings_banner_text([{"ticker": "BBB"}])
         assert "1 holding " in text
         assert "1 holdings" not in text
+
+
+class TestScoreWithheldBannerText:
+    """Companion to dropped_holdings_banner_text -- but a genuinely different
+    situation: the holding is NOT missing from the portfolio view (price/
+    weight/stops/risk still apply), only its composite Score/Signal are
+    withheld because fundamentals_available/val_available were False (any
+    provider, e.g. a fund/ETF, or a stock mid-data-outage)."""
+
+    def test_none_returns_none(self):
+        assert score_withheld_banner_text(None) is None
+
+    def test_empty_list_returns_none(self):
+        assert score_withheld_banner_text([]) is None
+
+    def test_names_the_ticker(self):
+        text = score_withheld_banner_text([{"ticker": "SPY"}])
+        assert text is not None
+        assert "SPY" in text
+
+    def test_singular_wording_for_one_row(self):
+        text = score_withheld_banner_text([{"ticker": "SPY"}])
+        assert "1 holding " in text
+        assert "1 holdings" not in text
+
+    def test_plural_wording_and_count_for_multiple_rows(self):
+        text = score_withheld_banner_text([{"ticker": "SPY"}, {"ticker": "QQQ"}])
+        assert "2 holdings" in text
+        assert "SPY" in text and "QQQ" in text
+
+    def test_does_not_claim_funds_are_the_exclusive_cause(self):
+        # A stock mid-data-outage hits this same withhold path -- must not
+        # assert ETFs are the only possible cause.
+        text = score_withheld_banner_text([{"ticker": "SPY"}])
+        assert "e.g." in text  # "e.g. funds/ETFs", not an unconditional claim
+
+    def test_rows_missing_ticker_are_skipped_defensively(self):
+        assert score_withheld_banner_text([{}]) is None
+        text = score_withheld_banner_text([{"ticker": "SPY"}, {}])
+        assert "1 holding " in text
 
 
 class TestHoldingsWriteFailedMessage:

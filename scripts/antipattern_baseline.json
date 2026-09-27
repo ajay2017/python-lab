@@ -82,11 +82,13 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001f_xref.get(\"verdict_reconciled\", {}) or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001ffetch_earnings_calendar(from_str, to_str) or []": 2,
       "OFFLINE_SENTINEL_COLLAPSE\u001fgetattr(st.session_state.get(\"_last_port_df\"), \"attrs\", {}).get(\"dropped_holdings\") or []": 1,
+      "OFFLINE_SENTINEL_COLLAPSE\u001fgetattr(st.session_state.get(\"_last_port_df\"), \"attrs\", {}).get(\"score_withheld\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fgrow.get(\"sector_blocked_adds\", []) or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fgrow.get(\"sector_blocked_picks\", []) or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fheld_data.get(_bct) or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fheld_data.get(_t, {}).get(\"info\", {}) or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fport_df.attrs.get(\"dropped_holdings\") or []": 1,
+      "OFFLINE_SENTINEL_COLLAPSE\u001fport_df.attrs.get(\"score_withheld\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fr.get(\"analysts\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fr.get(\"risk_metrics\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001frec.get(\"related_trades\", {}) or {}": 2,
@@ -667,9 +669,6 @@
     "stock_analyzer/risk_advisor.py": {
       "OFFLINE_SENTINEL_COLLAPSE\u001f(held_data.get(t) or {}).get(\"risk_metrics\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fheld_data.get(t) or {}": 1
-    },
-    "stock_analyzer/sentiment.py": {
-      "OFFLINE_SENTINEL_COLLAPSE\u001fitem.get(\"content\") or {}": 1
     },
     "stock_analyzer/sentiment_velocity.py": {
       "OFFLINE_SENTINEL_COLLAPSE\u001fdata.get(\"news_raw\") or []": 1,

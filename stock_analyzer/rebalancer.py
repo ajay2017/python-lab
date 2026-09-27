@@ -60,6 +60,7 @@ def compute_drift(
         score   = _f(row.get("Score"))
         signal  = str(row.get("Signal", ""))
         sector  = str(row.get("Sector", "Other"))
+        score_available = bool(row.get("Score Available", True))
 
         target_val = target / 100 * total_val
         drift_val  = round(mval - target_val, 0)  # positive = trim, negative = add
@@ -88,6 +89,7 @@ def compute_drift(
             "Score":            score,
             "Signal":           signal,
             "Status":           status,
+            "Score Available":  score_available,
         })
 
     return pd.DataFrame(rows).sort_values("Drift (pp)", ascending=False).reset_index(drop=True)
@@ -154,6 +156,13 @@ def build_rebalance_plan(
         current   = row["Current (%)"]
         target    = row["Target (%)"]
         sector    = row["Sector"]
+        # Fundamentals-withhold consistency (fail-open True: a legacy
+        # drift_df built before compute_drift carried this column must not
+        # be treated as withheld). See portfolio.build_portfolio_df — when
+        # False, `score` above is _f()'s 0.0 coercion of a withheld NaN, not
+        # a real measurement, so neither the urgency bump nor the
+        # score-mentioning rationale below may treat it as one.
+        _score_ok = bool(row.get("Score Available", True))
 
         if status == "OK":
             ok_list.append(ticker)
@@ -169,7 +178,7 @@ def build_rebalance_plan(
             urgency = 0
             if "Sell" in signal or "Strong Sell" in signal:
                 urgency += 40   # broken thesis + overweight = highest priority
-            if score < COMPOSITE_HOLD:
+            if _score_ok and score < COMPOSITE_HOLD:
                 urgency += 20
             if abs(drift_pp) > TOLERANCE_WATCH:
                 urgency += 30
@@ -189,6 +198,20 @@ def build_rebalance_plan(
                     f"Sell **{shares_delta:,} shares** (≈${abs(drift_val):,.0f}) to bring "
                     f"weight from {current:.1f}% → {target:.1f}%. "
                     "Priority: do this before considering any other trim."
+                )
+            elif not _score_ok:
+                # Fundamentals unavailable (fund/ETF or a data outage) — never
+                # assert "Sell zone" or a numeric score for a composite that
+                # was never actually measured. Drift/concentration alone
+                # drives this trim; the trim ACTION itself is unchanged.
+                rationale = (
+                    f"**{ticker}** is {drift_pp:+.1f}pp overweight (conviction unmeasured — "
+                    "fundamentals unavailable). Drift/concentration alone drives this trim, "
+                    "not a broken thesis."
+                )
+                action_detail = (
+                    f"Sell **{shares_delta:,} shares** (≈${abs(drift_val):,.0f}) to bring "
+                    f"weight from {current:.1f}% → {target:.1f}%."
                 )
             elif score < COMPOSITE_HOLD:
                 rationale = (
@@ -307,6 +330,22 @@ def build_rebalance_plan(
                     f"Buy **{shares_delta:,} shares** (≈${abs(drift_val):,.0f}) to build "
                     f"from {current:.1f}% → {target:.1f}%. "
                     "Deploy in 1–2 tranches to average in, not all at once."
+                )
+            elif not _score_ok:
+                # Same fundamentals-withhold guard as the TRIM branch above.
+                # The urgency legs just above are already naturally dormant
+                # here (score coerced to 0.0 by _f(), signal carries no "Buy"
+                # substring), but this fallback rationale still asserted a
+                # fabricated "Score 0/100" -- fixed here, not just the leg
+                # that gates whether the add fires at all.
+                rationale = (
+                    f"**{ticker}** is {abs(drift_pp):.1f}pp underweight vs target. "
+                    "Conviction unmeasured — fundamentals unavailable for this "
+                    "holding, so this reflects drift only, not a scored recommendation."
+                )
+                action_detail = (
+                    f"Consider buying **{shares_delta:,} shares** (≈${abs(drift_val):,.0f}) "
+                    f"to move from {current:.1f}% → {target:.1f}%, if you still want the exposure."
                 )
             else:
                 rationale = (

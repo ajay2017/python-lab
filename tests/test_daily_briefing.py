@@ -661,6 +661,33 @@ def test_weak_large_flag_silent_when_conviction_is_strong():
     assert find_item(items, "AAA") is None
 
 
+def test_weak_large_flag_silent_when_score_withheld():
+    # A withheld composite (fundamentals unavailable -- portfolio.
+    # build_portfolio_df's "Score Available" flag) must not fire a false
+    # weak-conviction trim card off a fabricated/NaN score, even when weight
+    # is well past the large-position threshold.
+    port_df = make_port_df([{
+        "ticker": "AAA", "weight": LARGE_POSITION_WEIGHT_PCT + 2,
+        "score": float("nan"),
+    }])
+    port_df["Score Available"] = False
+    items = _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0)
+    assert find_item(items, "AAA") is None
+
+
+def test_weak_large_flag_fires_when_score_available_is_explicitly_true():
+    # Otherwise-identical to the withheld case above, contrasted with a real
+    # measured weak score -- confirms the guard is specific to the withheld
+    # flag, not an accidental blanket suppression.
+    port_df = make_port_df([{
+        "ticker": "AAA", "weight": LARGE_POSITION_WEIGHT_PCT + 2,
+        "score": WEAK_CONVICTION_SCORE - 10,
+    }])
+    port_df["Score Available"] = True
+    items = _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0)
+    assert find_item(items, "AAA") is not None
+
+
 # ── Review Before Close: earnings-overweight dynamic floor ──────────────────
 # A flat EARNINGS_OVERWEIGHT_TRIM_PCT (12%) assumed a fixed ~10-position
 # portfolio: at N positions, pure equal-weight is 100/N, which exceeds 12%

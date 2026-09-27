@@ -2559,6 +2559,16 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     for _, row in port_df.iterrows():
         weight = _f(row.get("Weight (%)"))
         score  = _f(row.get("Score"))
+        if not bool(row.get("Score Available", True)):
+            # Score is fabricated-neutral withheld (fundamentals unavailable
+            # from any provider — a fund/ETF or a stock mid-data-outage; see
+            # portfolio.build_portfolio_df). _f() coerces the withheld NaN
+            # Score to 0.0, which would otherwise ALWAYS satisfy
+            # `score < WEAK_CONVICTION_SCORE` below and fire a false
+            # "weak conviction, trim" card off a number nobody measured.
+            # Fail-open default True: a legacy row missing this column
+            # entirely (before this flag existed) must not be skipped.
+            continue
         if not (weight >= LARGE_POSITION_WEIGHT_PCT and score < WEAK_CONVICTION_SCORE):
             continue
         ticker = str(row["Ticker"])

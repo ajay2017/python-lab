@@ -323,6 +323,7 @@ from stock_analyzer.util import sentiment_value_or_none as _sentiment_or_none
 from stock_analyzer.util import xcheck_is_alarm_worthy as _xcheck_is_alarm_worthy
 from stock_analyzer.util import holdings_write_failed_message as _holdings_write_failed_msg
 from stock_analyzer.util import dropped_holdings_banner_text as _dropped_holdings_banner_text
+from stock_analyzer.util import score_withheld_banner_text as _score_withheld_banner_text
 # 2026-09-24 app review, A2/A3/A4 — nav-badge / mini-card tri-state
 # classification, extracted so a failed check can no longer render
 # indistinguishably from a genuine "checked, clean" result.
@@ -2503,6 +2504,11 @@ def _render_portfolio_stale_banner(key_suffix: str = "") -> None:
     if _pd_dropped_text:
         st.warning(_pd_dropped_text)
 
+    _pd_withheld = getattr(st.session_state.get("_last_port_df"), "attrs", {}).get("score_withheld") or []
+    _pd_withheld_text = _score_withheld_banner_text(_pd_withheld)
+    if _pd_withheld_text:
+        st.info(_pd_withheld_text)
+
     if not _portfolio_snapshot_stale():
         # Holdings themselves are current — but the caches DERIVED from them
         # may not be. Weakest branch deliberately last: an outage or a changed
@@ -4508,6 +4514,7 @@ if page == "🏠 Home":
         _alert_ph_heldload   = st.empty()   # held-ticker _parallel_load_all failures
         _alert_ph_stale      = st.empty()   # "showing cached data" (stale_as_of)
         _alert_ph_dropped    = st.empty()   # dropped-holdings (no_price_data etc.)
+        _alert_ph_scorewithheld = st.empty()   # score-withheld holdings (no fundamentals)
         _alert_ph_outage     = st.empty()   # full-book data outage + retry
         _alert_ph_leverage   = st.empty()   # margin/leverage awareness caption
         _alert_ph_pnldq      = st.empty()   # Today's P&L data-quality cluster
@@ -5019,6 +5026,12 @@ if page == "🏠 Home":
     if _pd_dropped_text:
         with _alert_ph_dropped.container():
             st.warning(_pd_dropped_text)
+
+    _pd_withheld = port_df.attrs.get("score_withheld") or []
+    _pd_withheld_text = _score_withheld_banner_text(_pd_withheld)
+    if _pd_withheld_text:
+        with _alert_ph_scorewithheld.container():
+            st.info(_pd_withheld_text)
 
     if port_df.empty:
         # Distinguish "no holdings yet" from "you HAVE holdings but the heavy
@@ -37519,7 +37532,7 @@ A composite of **65 or higher** clears the Buy threshold. Momentum alone is *not
 
 This is why a name can show up in Grow Today in the morning (bull open) and quietly drop off by the afternoon (tape gone flat): the *stock* didn't change — the bar it had to clear did. It's the same medium-term discipline as the loss protection below: don't chase risk the market isn't rewarding.
 
-**"Verdict withheld":** when fundamentals can't be fetched from any data source, the app does **not** invent a neutral score — it withholds the verdict and tells you so, rather than showing a confidently-wrong Hold/Buy.
+**"Verdict withheld":** when fundamentals can't be fetched from any data source, the app does **not** invent a neutral score — it withholds the verdict and tells you so, rather than showing a confidently-wrong Hold/Buy. This applies everywhere a held ticker's composite is shown, not just the Analysis page — if a holding is a fund/ETF (which has no earnings, margins, or P/E for the engine to score) or a stock is mid-data-outage, you'll see "❔ Verdict Withheld" instead of a score on Home/Watchlist/Summary too, with a banner naming which holdings are affected. Price, weight, stops, and risk metrics still apply normally — only the composite score/signal is withheld.
 """
             )
 

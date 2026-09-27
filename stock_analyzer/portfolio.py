@@ -248,6 +248,20 @@ def resolve_sector(ticker: str, fallback: str = "") -> str:
     )
 
 
+# Signal text shown in place of the composite icon+label when fundamentals
+# aren't available for a holding (any provider, e.g. funds/ETFs, or a stock
+# mid-data-outage) -- mirrors quick_research.py's "Verdict withheld" text so
+# the two surfaces agree instead of one showing a fabricated neutral-50
+# composite. Deliberately NOT in constants.py: this is display text, not a
+# decision threshold. Contains none of "Buy"/"Sell"/"Avoid"/"Hold" so every
+# Signal-substring-gated card elsewhere (alerts(), rebalance_actions(),
+# daily_briefing, rebalancer) stays dormant for a withheld row without needing
+# its own bespoke check -- see the "Score Available" flag for the sites that
+# DO need an explicit check (score comparisons, which a bare Signal check
+# can't protect).
+WITHHELD_SIGNAL = "❔ Verdict Withheld"
+
+
 def protective_stop(
     current_price: float, avg_cost: float, atr_stop: float
 ) -> tuple[float, str]:
@@ -442,6 +456,7 @@ def build_portfolio_df(
     manual_stops = manual_stops or {}
     rows = []
     dropped: list[dict] = []
+    withheld: list[dict] = []
     for h in holdings:
         ticker = str(h.get("Ticker", h.get("ticker", "")) or "").strip().upper()
         shares = _safe_float(h.get("Shares", h.get("shares")))
@@ -512,6 +527,21 @@ def build_portfolio_df(
                 stop_label = "Manual"
                 gap_to_stop = round((price - stop) / price * 100, GAP_TO_STOP_ROUND_DECIMALS)
 
+        # Fundamentals-withhold consistency: bundle_loader/fundamentals.py/
+        # valuation.py return a FABRICATED neutral 50 (baked into r["total"])
+        # plus these two availability flags when core metrics are absent from
+        # every provider (e.g. an ETF/fund with no fundamentals, or a stock
+        # mid-data-outage). quick_research.py and daily_briefing.py already
+        # gate on this exact expression and withhold their verdict; this was
+        # the one consumer that didn't, so a fund could silently score/signal
+        # off a made-up composite and even trigger a false weak-conviction
+        # trim card downstream. Same fail-open `True` default as those two
+        # call sites — a legacy bundle missing both keys entirely (before this
+        # gate existed) must read as available, not withheld.
+        fund_ok = bool(r.get("fundamentals_available", True) and r.get("val_available", True))
+        if not fund_ok:
+            withheld.append({"ticker": ticker})
+
         rows.append({
             "Ticker": ticker,
             # Sector: prefer the curated granular bucket (Semiconductors, AI &
@@ -533,8 +563,9 @@ def build_portfolio_df(
             "Stop Type Auto": stop_type_auto if stop is not None else None,
             "Manual Stop Set At": (_ms or {}).get("set_at") if _ms else None,
             "Gap to Stop (%)": gap_to_stop,
-            "Signal": f"{r['rec']['icon']} {r['rec']['label']}",
-            "Score": r["total"],
+            "Signal": (f"{r['rec']['icon']} {r['rec']['label']}") if fund_ok else WITHHELD_SIGNAL,
+            "Score":  r["total"] if fund_ok else None,
+            "Score Available": fund_ok,
         })
 
     df = pd.DataFrame(rows)
@@ -547,11 +578,19 @@ def build_portfolio_df(
             # failed. Leave Weight at its 0.0 default rather than letting
             # inf/NaN propagate into rebalancer / risk_advisor / brief gates.
             df["Weight (%)"] = 0.0
+        # An all-withheld book (e.g. every holding is a fund/ETF) would leave
+        # "Score" as an object-dtype column of all `None`, which raises on
+        # round()/float() downstream (an all-ETF edge case) rather than
+        # comparing cleanly like a normal missing-numeric value. Coercing to
+        # float64 turns None -> NaN, which every numeric comparison/rounding
+        # already handles safely throughout this codebase.
+        df["Score"] = pd.to_numeric(df["Score"], errors="coerce")
     # Never silently filter (CLAUDE.md UI-suppression rule) — pandas .attrs is
     # pure metadata (no signature/call-site change for the 3 existing callers,
     # invisible to DataFrame equality/column checks), read by app.py to render
     # a visible banner for whichever holdings got dropped above.
     df.attrs["dropped_holdings"] = dropped
+    df.attrs["score_withheld"] = withheld
     return df
 
 
@@ -1658,7 +1697,16 @@ def diversification_recommendations(
         if pct > SECTOR_REDUCE_TRIGGER:
             target_pct = SINGLE_NAME_CEILING
             reduce_pct = round(pct - target_pct, 1)
-            sector_rows = port_df[port_df["Sector"] == sector].sort_values("Score")
+            sector_rows = port_df[port_df["Sector"] == sector]
+            # Exclude score-withheld holdings (a fund/ETF or a stock
+            # mid-data-outage — see build_portfolio_df's "Score Available")
+            # from trim-candidate ranking: their Score is NaN post-fix (was a
+            # fabricated neutral 50 before), and neither is a real measure of
+            # conviction to rank "weakest" by. Fail-open when the column is
+            # absent (a caller-built frame in a test, pre-dating this flag).
+            if "Score Available" in sector_rows.columns:
+                sector_rows = sector_rows[sector_rows["Score Available"]]
+            sector_rows = sector_rows.sort_values("Score")
             weakest = [
                 {
                     "ticker":  row["Ticker"],
@@ -1692,6 +1740,20 @@ def diversification_recommendations(
         r1 = port_df[port_df["Ticker"] == t1]
         r2 = port_df[port_df["Ticker"] == t2]
         if r1.empty or r2.empty:
+            continue
+        s1_avail = bool(r1["Score Available"].iloc[0]) if "Score Available" in r1.columns else True
+        s2_avail = bool(r2["Score Available"].iloc[0]) if "Score Available" in r2.columns else True
+        if not (s1_avail and s2_avail):
+            # Conviction (composite score) isn't measurable for at least one
+            # member of this pair (a fund/ETF or a stock mid-data-outage —
+            # see build_portfolio_df's "Score Available"). There is no
+            # honest basis to call either name "weaker," and comparing
+            # against / printing a withheld NaN score would fabricate a
+            # comparison (previously a fabricated neutral-50 comparison,
+            # now a NaN one — neither is real). Per this app's own posture
+            # ("recommend nothing rather than recommend wrongly"), skip the
+            # pair; its correlation itself is still visible via the
+            # correlation matrix / structural scan surfaces.
             continue
         s1, s2 = float(r1["Score"].iloc[0]), float(r2["Score"].iloc[0])
         weaker   = t1 if s1 <= s2 else t2

@@ -112,6 +112,18 @@ def test_compute_drift_shares_truncated_to_int():
     assert result.iloc[0]["Shares"] == 99
 
 
+def test_compute_drift_propagates_score_available_flag():
+    df = pd.DataFrame([{**_port_row("AAPL", weight=16.0), "Score Available": False}])
+    result = reb.compute_drift(df, {"AAPL": 10.0}, total_val=100_000.0)
+    assert result.iloc[0]["Score Available"] == False
+
+
+def test_compute_drift_score_available_defaults_true_when_column_absent():
+    df = pd.DataFrame([_port_row("AAPL", weight=16.0)])
+    result = reb.compute_drift(df, {"AAPL": 10.0}, total_val=100_000.0)
+    assert result.iloc[0]["Score Available"] == True
+
+
 # ── build_rebalance_plan ───────────────────────────────────────────────────
 
 def _drift_row(ticker, status, drift_pp, drift_val, price=100.0, shares=100,
@@ -192,6 +204,43 @@ def test_build_rebalance_plan_trim_shares_delta_at_least_1_even_if_price_invalid
     df = pd.DataFrame([_drift_row("AAPL", "TRIM", 8.0, 8000.0, price=0.0)])
     result = reb.build_rebalance_plan(df, total_val=100_000.0)
     assert result["trims"][0]["shares_delta"] == 1
+
+
+def test_build_rebalance_plan_trim_withheld_score_skips_urgency_bump_and_numeric_rationale():
+    # An overweight withheld holding (fundamentals unavailable -- portfolio.
+    # build_portfolio_df's "Score Available" flag) must not be told apart as
+    # a "Sell zone / conviction broken" trim from a numeric score that was
+    # never actually measured -- compare directly against the otherwise-
+    # identical non-withheld row (test_build_rebalance_plan_trim_broken_
+    # conviction_rationale above), which DOES get both.
+    df = pd.DataFrame([{
+        **_drift_row("AAPL", "TRIM", 8.0, 8000.0, signal="Hold", score=40.0),
+        "Score Available": False,
+    }])
+    result = reb.build_rebalance_plan(df, total_val=100_000.0)
+    trim = result["trims"][0]
+    assert "Sell zone" not in trim["rationale"]
+    assert "conviction is broken" not in trim["rationale"]
+    assert "/100" not in trim["rationale"]
+    assert "conviction unmeasured" in trim["rationale"]
+    # score<HOLD(+20) must NOT apply -- only drift>WATCH(+30), same as the
+    # "winner running" (score >= HOLD) case's urgency, not the broken-
+    # conviction case's 50.
+    assert trim["urgency"] == 30
+    # The trim ACTION itself (whether to trim, share count) is unaffected.
+    assert result["trims"][0]["shares_delta"] == 80
+
+
+def test_build_rebalance_plan_add_withheld_score_avoids_numeric_rationale():
+    df = pd.DataFrame([{
+        **_drift_row("AAPL", "ADD", -8.0, -8000.0, signal="Hold", score=40.0),
+        "Score Available": False,
+    }])
+    result = reb.build_rebalance_plan(df, total_val=100_000.0)
+    add = result["adds"][0]
+    assert "/100" not in add["rationale"]
+    assert "unmeasured" in add["rationale"]
+    assert add["urgency"] == 30  # only drift>WATCH tier, same as the low-conviction case
 
 
 def test_build_rebalance_plan_add_high_conviction_underweight():

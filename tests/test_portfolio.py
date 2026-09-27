@@ -33,6 +33,7 @@ from stock_analyzer.portfolio import (
     SECTOR_ETF,
     stop_ladder,
     trim_allocation,
+    WITHHELD_SIGNAL,
 )
 
 pytestmark = pytest.mark.fast
@@ -508,6 +509,92 @@ def test_build_portfolio_df_missing_ticker_not_added_to_dropped_list():
     assert df.attrs["dropped_holdings"] == []
 
 
+# ── build_portfolio_df — fundamentals-withhold consistency (F-??? fix) ──────
+# fundamentals.py/valuation.py return a FABRICATED neutral 50 (baked into
+# r["total"]) plus fundamentals_available/val_available flags when core
+# metrics are absent from every provider (e.g. an ETF/fund, or a stock
+# mid-data-outage). quick_research.py already withholds its verdict on this
+# exact expression; build_portfolio_df previously did not, so a fund could
+# silently score/signal off a made-up composite. These tests pin the fix.
+
+def test_build_portfolio_df_fundamentals_unavailable_withholds_score_and_signal():
+    holdings = [{"Ticker": "ETF1", "Shares": 10, "Avg Cost ($)": 50.0}]
+    bundle = _loaded_row()
+    bundle["fundamentals_available"] = False
+    bundle["val_available"] = True
+    df = build_portfolio_df(holdings, {"ETF1": bundle})
+    row = df.iloc[0]
+    assert pd.isna(row["Score"])
+    assert row["Signal"] == WITHHELD_SIGNAL
+    assert row["Score Available"] == False
+    assert df.attrs["score_withheld"] == [{"ticker": "ETF1"}]
+
+
+def test_build_portfolio_df_valuation_unavailable_alone_also_withholds():
+    # Mirrors quick_research's `and` — either leg being False must withhold.
+    holdings = [{"Ticker": "ETF2", "Shares": 10, "Avg Cost ($)": 50.0}]
+    bundle = _loaded_row()
+    bundle["fundamentals_available"] = True
+    bundle["val_available"] = False
+    df = build_portfolio_df(holdings, {"ETF2": bundle})
+    row = df.iloc[0]
+    assert pd.isna(row["Score"])
+    assert row["Signal"] == WITHHELD_SIGNAL
+    assert row["Score Available"] == False
+    assert df.attrs["score_withheld"] == [{"ticker": "ETF2"}]
+
+
+def test_build_portfolio_df_both_flags_true_leaves_score_and_signal_untouched():
+    holdings = [{"Ticker": "AAA", "Shares": 10, "Avg Cost ($)": 50.0}]
+    bundle = _loaded_row()
+    bundle["fundamentals_available"] = True
+    bundle["val_available"] = True
+    df = build_portfolio_df(holdings, {"AAA": bundle})
+    row = df.iloc[0]
+    assert row["Score"] == bundle["total"]
+    assert row["Signal"] == f"{bundle['rec']['icon']} {bundle['rec']['label']}"
+    assert row["Score Available"] == True
+    assert df.attrs["score_withheld"] == []
+
+
+def test_build_portfolio_df_legacy_bundle_missing_flags_fails_open():
+    # _loaded_row() itself never carries these two keys -- the legacy-bundle
+    # shape every other test in this file already exercises. Must be treated
+    # as available, not withheld.
+    holdings = [{"Ticker": "AAA", "Shares": 10, "Avg Cost ($)": 50.0}]
+    bundle = _loaded_row()
+    assert "fundamentals_available" not in bundle and "val_available" not in bundle
+    df = build_portfolio_df(holdings, {"AAA": bundle})
+    row = df.iloc[0]
+    assert row["Score"] == bundle["total"]
+    assert row["Signal"] == f"{bundle['rec']['icon']} {bundle['rec']['label']}"
+    assert row["Score Available"] == True
+    assert df.attrs["score_withheld"] == []
+
+
+def test_build_portfolio_df_all_withheld_book_score_column_is_numeric_not_object():
+    # An all-ETF book: Score must coerce to a real float64 NaN column, not an
+    # object-dtype column of Python `None` -- the latter raises on
+    # round()/float() downstream instead of comparing/rounding safely.
+    holdings = [{"Ticker": "ETF1", "Shares": 10, "Avg Cost ($)": 50.0}]
+    bundle = _loaded_row()
+    bundle["fundamentals_available"] = False
+    df = build_portfolio_df(holdings, {"ETF1": bundle})
+    assert pd.api.types.is_float_dtype(df["Score"])
+    assert df["Score"].isna().all()
+    # Must not raise -- proves a real NaN, not a surviving object-dtype None.
+    round(df["Score"].iloc[0], 0)
+    float(df["Score"].iloc[0])
+
+
+def test_withheld_signal_contains_no_decision_substrings():
+    # Invariant every Signal-substring-gated card elsewhere (alerts(),
+    # rebalance_actions(), daily_briefing, rebalancer) relies on to stay
+    # dormant for a withheld row.
+    for bad in ("Buy", "Sell", "Avoid", "Weak Hold", "Hold"):
+        assert bad not in WITHHELD_SIGNAL
+
+
 # ── alerts() — earnings-date parse failure isolation (2026-08-04 audit) ─────
 # Was a bare `except Exception: pass`; narrowed to (ValueError, TypeError) so
 # a genuine bug elsewhere can't be silently masked as a routine bad-date.
@@ -736,6 +823,108 @@ def test_diversifying_candidate_pool_respects_cap():
         discovery_universe={}, cap=2,
     )
     assert pool == ["A", "B"]
+
+
+def test_diversification_reduce_excludes_score_withheld_from_weakest_candidates():
+    """REDUCE's 'lowest conviction first' trim-candidate ranking must never
+    surface a score-withheld holding (a fund/ETF or a stock mid-data-outage —
+    Score is NaN post-build_portfolio_df-fix) as a 'weakest' name: there is no
+    real composite to rank it by. Found by the Opus reviewer pass on the
+    fundamentals-withhold consistency fix — pre-fix this crashed the sort
+    ordering claim; post-fix without this guard it would render 'Score: nan/100'."""
+    import pandas as pd
+    from stock_analyzer.portfolio import diversification_recommendations, SECTOR_REDUCE_TRIGGER
+
+    port_df = pd.DataFrame({
+        "Ticker":         ["SOXX", "NVDA", "AMD"],
+        "Sector":         ["Semiconductors"] * 3,
+        "Score":          [float("nan"), 40.0, 60.0],
+        "Score Available": [False, True, True],
+        "Signal":         ["❔ Verdict Withheld", "🔴 Sell", "🟡 Hold"],
+        "P&L (%)":        [2.0, -5.0, 3.0],
+        "Weight (%)":     [SECTOR_REDUCE_TRIGGER + 10, 5.0, 5.0],
+        "Market Value":   [70_000.0, 5_000.0, 5_000.0],
+    })
+    recs = diversification_recommendations(
+        port_df, pd.DataFrame(), {"risk_pairs": []},
+        sector_candidates={}, discovery_universe={},
+    )
+    reduce_recs = [r for r in recs if r["type"] == "REDUCE"]
+    assert reduce_recs, "the overweight sector must still produce a REDUCE rec"
+    weakest_tickers = {wt["ticker"] for wt in reduce_recs[0]["weakest_tickers"]}
+    assert "SOXX" not in weakest_tickers
+    assert weakest_tickers == {"NVDA", "AMD"}
+    for wt in reduce_recs[0]["weakest_tickers"]:
+        assert not pd.isna(wt["score"])
+
+
+def test_diversification_reduce_weakest_empty_when_sector_is_entirely_score_withheld():
+    """An overweight sector made up ENTIRELY of score-withheld holdings (e.g.
+    a book concentrated in funds) must still surface the REDUCE rec (the
+    concentration itself is real) but with an empty weakest_tickers list
+    rather than a fabricated/NaN ranking — app.py's render already guards on
+    `if rec["weakest_tickers"]:`."""
+    import pandas as pd
+    from stock_analyzer.portfolio import diversification_recommendations, SECTOR_REDUCE_TRIGGER
+
+    port_df = pd.DataFrame({
+        "Ticker":         ["SOXX", "SMH"],
+        "Sector":         ["Semiconductors"] * 2,
+        "Score":          [float("nan"), float("nan")],
+        "Score Available": [False, False],
+        "Signal":         ["❔ Verdict Withheld", "❔ Verdict Withheld"],
+        "P&L (%)":        [2.0, 1.0],
+        "Weight (%)":     [SECTOR_REDUCE_TRIGGER + 5, SECTOR_REDUCE_TRIGGER + 5],
+        "Market Value":   [50_000.0, 50_000.0],
+    })
+    recs = diversification_recommendations(
+        port_df, pd.DataFrame(), {"risk_pairs": []},
+        sector_candidates={}, discovery_universe={},
+    )
+    reduce_recs = [r for r in recs if r["type"] == "REDUCE"]
+    assert reduce_recs
+    assert reduce_recs[0]["weakest_tickers"] == []
+
+
+def test_diversification_pair_risk_skips_pair_when_either_side_score_withheld():
+    """PAIR_RISK's weaker/stronger conviction call must never be built on a
+    score-withheld (NaN) side of a correlated pair — no honest basis exists
+    to call either name 'weaker,' and comparing/printing a NaN or
+    misattributed score fabricates a conviction claim. Per this app's
+    'recommend nothing rather than recommend wrongly' posture, the pair is
+    skipped entirely rather than rendered with a fabricated comparison."""
+    import pandas as pd
+    from stock_analyzer.portfolio import diversification_recommendations
+
+    port_df = pd.DataFrame({
+        "Ticker":         ["SOXX", "NVDA", "AMD", "QCOM"],
+        "Sector":         ["Semiconductors"] * 4,
+        "Score":          [float("nan"), 40.0, 60.0, 30.0],
+        "Score Available": [False, True, True, True],
+        "Signal":         ["❔ Verdict Withheld", "🔴 Sell", "🟡 Hold", "🔴 Sell"],
+        "P&L (%)":        [2.0, -5.0, 3.0, -2.0],
+        "Weight (%)":     [5.0, 5.0, 5.0, 5.0],
+        "Market Value":   [5_000.0, 5_000.0, 5_000.0, 5_000.0],
+    })
+    div_result = {
+        "risk_pairs": [
+            # SOXX side withheld -> must be skipped entirely.
+            {"t1": "SOXX", "t2": "NVDA", "corr": 0.9, "level": "danger"},
+            # Both sides measured -> must still fire normally (regression guard).
+            {"t1": "AMD", "t2": "QCOM", "corr": 0.85, "level": "danger"},
+        ],
+    }
+    recs = diversification_recommendations(
+        port_df, pd.DataFrame(), div_result,
+        sector_candidates={}, discovery_universe={},
+    )
+    pair_recs = [r for r in recs if r["type"] == "PAIR_RISK"]
+    pairs_seen = {(r["t1"], r["t2"]) for r in pair_recs}
+    assert ("SOXX", "NVDA") not in pairs_seen
+    assert ("AMD", "QCOM") in pairs_seen
+    amd_qcom = next(r for r in pair_recs if (r["t1"], r["t2"]) == ("AMD", "QCOM"))
+    assert not pd.isna(amd_qcom["weaker_score"])
+    assert amd_qcom["weaker"] == "QCOM"  # QCOM (30.0) <= AMD (60.0)
 
 
 # NOTE — a test asserting CEG/VST stay out of the Clean Energy pool was written

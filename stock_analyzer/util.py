@@ -185,6 +185,37 @@ def dropped_holdings_banner_text(dropped: list[dict] | None) -> str | None:
     )
 
 
+def score_withheld_banner_text(withheld: list[dict] | None) -> str | None:
+    """User-facing message for `portfolio.build_portfolio_df`'s `score_withheld`
+    list, or ``None`` when there is nothing to report.
+
+    Companion to `dropped_holdings_banner_text` above, but a genuinely
+    different situation: a `score_withheld` holding is NOT missing from the
+    portfolio view (price/weight/stops/risk metrics all still apply) — only
+    its composite Score/Signal are withheld, because `fundamentals_available`/
+    `val_available` were False for it (any provider, e.g. a fund/ETF with no
+    fundamentals to score, or a stock mid-data-outage — never claim it's
+    EXCLUSIVELY funds, since a stock outage hits this same path). Calm,
+    informational tone (not the dropped-holdings warning tone) since nothing
+    is actually broken or missing here — matches the withhold already shown
+    on the Analysis page (quick_research.py) for the same reason.
+    """
+    d = withheld or []
+    if not d:
+        return None
+    tickers = [str(row.get("ticker")) for row in d if row.get("ticker")]
+    if not tickers:
+        return None
+    n = len(tickers)
+    return (
+        f"ℹ️ {n} holding{'s' if n != 1 else ''} shown without a composite score: "
+        f"{', '.join(tickers)}. Company fundamentals aren't available for these "
+        "from any provider (e.g. funds/ETFs), so a composite score would be a "
+        "guess rather than a measurement — it's withheld here too, matching the "
+        "Analysis page. Price, weight, stops and risk metrics still apply."
+    )
+
+
 def holdings_write_failed_message(ticker: str) -> str:
     """User-facing message for when a post-trade `db.save_holdings()` call
     returns False (finding D2).
