@@ -25,7 +25,10 @@ from stock_analyzer.constants import (
     ATR_STOP_MULT,
     VALUATION_COVERAGE_FRESH_DAYS,
 )
-from stock_analyzer.data import fetch_ticker_bundle, fetch_financials_from_info
+from stock_analyzer.data import (
+    fetch_ticker_bundle, fetch_financials_from_info, fetch_etf_facts_from_info,
+)
+from stock_analyzer import asset_type
 from stock_analyzer.technicals import compute_indicators, technical_score
 from stock_analyzer.fundamentals import (
     business_quality_score, fundamental_score,
@@ -210,6 +213,12 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     industry          = _info.get("industry", "")
     market_cap        = _info.get("marketCap")
     business_summary  = _info.get("longBusinessSummary", "")
+    # Asset-type observability (Phase 1, F-279 §11). Additive only — nothing
+    # here consumes these keys for a decision yet; Phase 0 already makes
+    # bq_available/val_available correctly withhold for a fund via the
+    # fundamentals-metric-count gate, independent of this discriminator.
+    _quote_type = _info.get("quoteType")
+    _asset_type = asset_type.from_quote_type(_quote_type)
     return {
         "df": df, "t_score": t_score, "t_signals": t_signals,
         # New 4-pillar keys:
@@ -233,6 +242,12 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         "industry": industry, "market_cap": market_cap,
         "business_summary": business_summary,
         "info_source": bundle.get("_info_source"),
+        "quote_type": _quote_type,
+        "asset_type": _asset_type,
+        "etf_facts": (
+            fetch_etf_facts_from_info(_info)
+            if _asset_type == asset_type.ASSET_TYPE_ETF else None
+        ),
         "fund_metric_count": _fund_metric_count,
         "fund_source": _fund_source,
         "fund_cache_age_days": _fund_cache_age_days,

@@ -271,6 +271,38 @@ def test_validate_payload_sector_candidates_equality_rule_is_scoped():
     assert errors == []
 
 
+def test_validate_payload_etf_registry_skips_ticker_sectors_check_entirely():
+    """Phase 1 ETF support (F-279 §11): validate_payload's TICKER_SECTORS-
+    coverage check is scoped by NAME to sector_candidates/sector_universe/
+    discovery_universe only. A NEW table name ("etf_registry") must fall
+    through untouched -- no code change to validate_payload was made for
+    this, and this is the load-bearing invariant that proves it: an ETF has
+    no single GICS sector and must never be forced to have one. SPY/VOO/IVV
+    have no portfolio.TICKER_SECTORS entry at all, and that must not error."""
+    from stock_analyzer.portfolio import TICKER_SECTORS
+
+    assert "SPY" not in TICKER_SECTORS  # sanity: genuinely unmapped
+    errors = validate_payload(
+        "etf_registry",
+        {"Broad Market": ["SPY", "VOO", "IVV"]},
+        existing_bucket_keys=None,
+    )
+    assert errors == []
+
+
+def test_validate_payload_etf_registry_structure_lock_still_applies():
+    """The bucket/sector structure lock is name-agnostic (applies whenever
+    existing_bucket_keys is given) -- confirming etf_registry isn't
+    accidentally exempted from THAT rule too, only the TICKER_SECTORS one."""
+    errors = validate_payload(
+        "etf_registry",
+        {"Broad Market": ["SPY"]},
+        existing_bucket_keys={"Broad Market", "Bond"},
+    )
+    assert errors
+    assert "locked" in errors[0]
+
+
 def test_validate_payload_rejects_unmapped_ticker_for_universe_tables():
     """2026-09-01 audit fix: sector_universe/discovery_universe now get the
     same TICKER_SECTORS-presence check as sector_candidates (but NOT the

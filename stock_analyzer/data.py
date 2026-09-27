@@ -275,6 +275,43 @@ def fetch_financials_from_info(info: dict) -> dict:
     }
 
 
+def fetch_etf_facts_from_info(info: dict) -> dict:
+    """Extract fund-level facts from a pre-fetched .info dict for an ETF/fund
+    ticker. Every value is optional/None-safe via .get() — no arithmetic that
+    assumes presence. Field-verification status (live-probed against real
+    SPY/TLT .info dicts, 2026-09-27 — do not re-derive from memory):
+
+    VERIFIED PRESENT: quoteType, longName/shortName, category, fundFamily,
+    netExpenseRatio (PERCENT units, e.g. 0.0945 == 0.0945%), totalAssets,
+    navPrice, yield (FRACTION units, e.g. 0.0098 == 0.98% -- do NOT compare
+    directly against netExpenseRatio without converting one to match the
+    other's units), ytdReturn, legalType, trailingAnnualDividendYield
+    (FRACTION units, same caveat as yield).
+
+    VERIFIED ABSENT for both probed tickers -- do not read these:
+    expenseRatio, annualReportExpenseRatio, beta (all None; beta must come
+    from this app's own price-derived risk.py, never .info).
+
+    NOT YET VERIFIED -- extract defensively (.get(), never assume present)
+    if you add these later, but do not let Phase 2 rely on them without a
+    fresh live check: constituent/look-through holdings, premium/discount to
+    NAV, inception date, multi-year returns.
+    """
+    return {
+        "quote_type":                     info.get("quoteType"),
+        "name":                           info.get("longName") or info.get("shortName"),
+        "category":                       info.get("category"),
+        "fund_family":                    info.get("fundFamily"),
+        "net_expense_ratio":              info.get("netExpenseRatio"),
+        "total_assets":                   info.get("totalAssets"),
+        "nav_price":                      info.get("navPrice"),
+        "distribution_yield":             info.get("yield"),
+        "ytd_return":                     info.get("ytdReturn"),
+        "legal_type":                     info.get("legalType"),
+        "trailing_annual_dividend_yield": info.get("trailingAnnualDividendYield"),
+    }
+
+
 def fetch_financials(ticker: str) -> dict:
     """Fetch financials by ticker — prefer fetch_ticker_bundle for batch loads."""
     info = _PRIMARY.info(ticker)

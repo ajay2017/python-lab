@@ -1,13 +1,17 @@
 # Multi-asset-type support (ETF first) — architecture review + phased plan
 
-**Status: ANALYSIS COMPLETE + PHASE 0 SHIPPED, both 2026-09-27 (F-279).** Opus
-`planner` architecture review, then a second `planner` design pass scoped Phase 0
-exactly, `implementer` built it, Opus `reviewer` two rounds (FIX-FIRST/1 blocking →
-fixed same session → SHIP/0 blocking). Phases 1-4 below are DESIGNED, NOT STARTED —
-each needs its own fresh `planner`/`reviewer` pass and, for Phase 2+, explicit owner
-sign-off on new policy constants before any code is written. This doc is the
-design-of-record; do not start a later phase from memory without reconfirming this
-file still matches the code.
+**Status: ANALYSIS COMPLETE + PHASES 0 AND 1 SHIPPED, all 2026-09-27 (F-279, F-280).**
+Opus `planner` architecture review, then a second `planner` design pass per phase,
+`implementer` built each, Opus `reviewer` before every commit (Phase 0: FIX-FIRST/1
+blocking → fixed same session → SHIP/0 blocking; Phase 1: SHIP/0 blocking, first
+pass). **The DDL for Phase 1's new columns has NOT been applied to production yet —
+see the Phase 1 record below for the exact SQL; nothing in Phase 1 requires it to
+ship (every write path degrades gracefully pre-DDL), but apply it when convenient
+to close a small non-blocking window the reviewer flagged.** Phases 2-4 below are
+DESIGNED, NOT STARTED — each needs its own fresh `planner`/`reviewer` pass and, for
+Phase 2, explicit owner sign-off on new policy constants before any code is written.
+This doc is the design-of-record; do not start a later phase from memory without
+reconfirming this file still matches the code.
 
 ---
 
@@ -292,3 +296,98 @@ been missed at the time). Constants-doc gate: clean, no new constant.
 no real ETF-specific verdict — it's now honestly withheld instead of wrongly
 scored, which is the entire scope of this phase. Phase 2 is what gives it an
 actual decidable ETF composite.
+
+## Phase 1 — implementation record
+
+**Shipped 2026-09-27 as F-280** (`docs/requirements.md` F-280).
+
+**Design chain:** Opus `planner` scoped Phase 1 exactly (reading `reference_data.py`,
+`db.py`, `broker_sync.py`, `bundle_loader.py`, `data.py` first) → `implementer`
+(Sonnet) built all 6 chunks → Opus `reviewer`, SHIP/0 blocking on the first pass.
+
+**Two corrections the planner found vs. this doc's original §7/§11 guess** (worth
+keeping so a future session doesn't re-derive them): (1) `holdings` is a DERIVED
+artifact rebuilt from `trades` via `recalculate_from_trades()` — there is no
+independent write path to stamp it directly, so Phase 1 deliberately does NOT touch
+`recalculate_from_trades`; the persisted `asset_type` column on `holdings` exists
+for schema symmetry but has no Phase-1 writer of its own yet. (2) SnapTrade's
+ground-truth `instrument.kind` lives on the POSITIONS payload, which is a different
+API call than the ACTIVITIES payload that builds `trades` — so capturing the
+broker's real classification required a deliberate bridge (`resolve_trade_asset_type`
+at pending-import promotion), not just "read the kind and save it."
+
+**What shipped:**
+- New `stock_analyzer/asset_type.py` — see `docs/architecture.md`'s module section.
+- `stock_analyzer/data.py::fetch_etf_facts_from_info()` — new sibling of the
+  untouched `fetch_financials_from_info`; field list verified against a LIVE probe
+  of real SPY/TLT `.info` output (not assumed from memory) — `netExpenseRatio` is
+  the real field (`expenseRatio`/`beta` are always `None` for a fund), and
+  `netExpenseRatio` is PERCENT-unit while `yield`/`trailingAnnualDividendYield` are
+  FRACTION-unit — do not compare them directly without converting.
+- `stock_analyzer/bundle_loader.py::load_bundle` — purely additive `quote_type`/
+  `asset_type`/`etf_facts` keys; a regression test independently recomputes a stock
+  bundle's `total`/`rec`/`bq_available`/`val_available` and asserts byte-identical
+  output to before this change.
+- `stock_analyzer/db.py` — nullable `asset_type` on `holdings`/`trades`/
+  `recommendations` (NULL→"stock" backfilled at read; every writer degrades
+  gracefully pre-DDL via the existing optional-column drop-and-retry pattern), and
+  a nullable `kinds` jsonb column on `broker_position_snapshot` with the same
+  pre-DDL resilience on both read and write.
+- `stock_analyzer/broker_sync.py::position_kinds()` (sibling of `normalize_positions`,
+  same offline-sentinel contract: `None`→`None`, `[]`→`{}` real-empty) and
+  `::resolve_trade_asset_type()` (promotion-time precedence: broker snapshot
+  `kinds` → an in-scope live bundle's `asset_type` → `"stock"` fail-safe — every
+  path routes through `asset_type.normalize`, so an unrecognized input can never
+  resolve to `"etf"` by accident).
+- `cron_runner.py` computes the kinds map alongside the existing
+  `normalize_positions` call at zero extra SnapTrade API cost.
+- `app.py` — the broker-trade confirm-record path stamps `asset_type` via
+  `resolve_trade_asset_type()`; a manually-logged trade is untouched (defaults to
+  `"stock"` at read via the DB backfill — accepted, Phase 0's fundamentals gate
+  already protects the actual decision regardless of this label); a new
+  `"etf_registry"` row added to the App Settings `_AS_TABLES` list.
+- New owner-editable **ETF registry** reference table (`"etf_registry"`,
+  category→ticker-list), reusing the F-262 `reference_data.py` pattern with ZERO
+  changes to that file — confirmed its `TICKER_SECTORS`-coverage check is
+  name-scoped to `sector_candidates`/`sector_universe`/`discovery_universe` only,
+  so `etf_registry` falls through untouched (an ETF has no single GICS sector).
+  Deliberately NOT added to `reference_shelf.py`'s staleness tracker — that's a
+  refresh-cadence policy decision, correctly deferred, not an oversight.
+
+**Review = Opus reviewer (Claude Opus 4.8 (1M context)): SHIP, 0 blocking.** Every
+pre-DDL write-resilience claim traced line-by-line and confirmed real (not just
+described); every read-path offline-sentinel-vs-backfill distinction confirmed
+correct; the fail-safe classification direction confirmed (nothing can accidentally
+resolve to `"etf"`); `fetch_financials_from_info` confirmed byte-for-byte untouched;
+`load_bundle`'s existing scoring behavior confirmed unperturbed. **One non-blocking
+finding:** until the DDL below is applied, a broker-confirmed trade write strips
+`asset_type` alongside `broker_txn_id`/`idempotency_key` together (the existing
+optional-column cascade drops the whole set on any one miss) — low practical risk
+for a single-user, low-frequency confirm action; apply the DDL soon to close this
+window, not because anything breaks without it. 156 tests passed across the new +
+touched test files; antipattern and constants-doc gates both clean.
+
+**DDL for the owner to run in Supabase (not applied by any agent — no live
+credentials were used or available; every write path already degrades gracefully
+without this, so there is no urgency beyond closing the note above):**
+
+```sql
+ALTER TABLE public.holdings        ADD COLUMN IF NOT EXISTS asset_type text;
+ALTER TABLE public.trades          ADD COLUMN IF NOT EXISTS asset_type text;
+ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS asset_type text;
+ALTER TABLE public.broker_position_snapshot ADD COLUMN IF NOT EXISTS kinds jsonb;
+```
+
+**ETF registry seeding — do this via the App Settings UI, not a raw SQL hash guess:**
+insert a placeholder row for `"etf_registry"` (payload can be anything valid, e.g.
+`{"Broad Market": ["SPY", "VOO", "IVV"]}`) directly in `reference_tables`, then open
+⚙️ App Settings → the new "ETF metadata registry" table → make any trivial edit and
+Save (or edit it to the real desired categories directly) so `save_reference_table`
+stamps `payload_hash`/`as_of` correctly itself — this is the same two-step sequence
+already used for the Industrials/Utilities seeds (`docs/plans/scan-universe-refresh`
+precedent), safer than hand-computing a hash to match `reference_data.canonicalize`.
+
+**What this does NOT do (deliberately, Phase 2+ territory):** nothing consumes
+`asset_type`/`etf_facts`/the registry for a decision yet. An ETF's composite is
+still withheld (Phase 0), not scored — Phase 2 is what builds the actual ETF
+scoring strategy.

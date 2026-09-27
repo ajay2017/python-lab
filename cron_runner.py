@@ -2682,14 +2682,26 @@ def _run_broker(now_et, force: bool) -> int:
             # would also be the offline-sentinel-collapse the repo's own gate
             # blocks.
             _snap_positions: dict[str, float] = {}
+            # Broker ground-truth kind map (Phase 1 ETF support, F-279 §11) —
+            # same source payloads as normalize_positions above, computed
+            # alongside it at zero extra SnapTrade cost. First account where
+            # a ticker resolves wins; a later account re-reporting the same
+            # ticker never overwrites it (mirrors position_kinds' own
+            # within-account precedence one level up, across accounts).
+            _snap_kinds: dict[str, str] = {}
             for _apos in _pos_by_account.values():
                 _norm = broker_sync.normalize_positions(_apos)
                 for _tk, _sh in _norm.items():
                     _snap_positions[_tk] = _snap_positions.get(_tk, 0.0) + _sh
+                _kinds = broker_sync.position_kinds(_apos)
+                for _tk, _kd in _kinds.items():
+                    if _tk not in _snap_kinds:
+                        _snap_kinds[_tk] = _kd
             if db.save_broker_position_snapshot(
                 _snap_positions,
                 account_ids=sorted(_pos_by_account),
                 all_accounts_ok=True,
+                kinds=_snap_kinds,
             ):
                 _log(f"broker: position snapshot saved — {len(_snap_positions)} ticker(s) "
                      f"across {len(_pos_by_account)} account(s)")

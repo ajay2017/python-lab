@@ -2439,6 +2439,24 @@ keeps telling the truth exactly as before. The other three registry entries
 (`sp500_sector_weights`, `macro_event_calendar`, `nyse_calendar`) are untouched
 and never call the DB, asserted by a dedicated test.
 
+### `stock_analyzer/asset_type.py`
+
+New 2026-09-27 (Phase 1 of the ETF/multi-asset architecture review, F-280;
+`docs/plans/etf-multi-asset-support.md`). Single-source vocabulary module so
+every consumer (`data.py`, `bundle_loader.py`, `broker_sync.py`, `db.py`)
+classifies "is this a stock or a fund" the same way instead of each inventing
+its own check — deliberately NOT in `constants.py` (these are enum labels,
+not decision thresholds). Three pure functions, all fail-safe toward
+`"stock"` (an unrecognized input is NEVER classified `"etf"`):
+`from_quote_type(quote_type)` (yfinance `.info["quoteType"]` — `"ETF"`/
+`"MUTUALFUND"` → `"etf"`), `from_broker_kind(kind)` (SnapTrade
+`instrument.kind` — only `"etf"` → `"etf"`, `"adr"` stays `"stock"` since an
+ADR is an individually-scoreable company), and `normalize(raw)` (coerces any
+persisted/legacy DB value, `NULL`/anything not exactly `"etf"` → `"stock"` —
+the backfill helper `db.py`'s loaders call for a pre-migration row). Not
+wired into any scoring/gate decision yet — Phase 1 is classification +
+capture plumbing only; Phase 2 is where a consumer acts on this label.
+
 ### `stock_analyzer/reference_data.py`
 
 Pure decision layer for App Settings (F-262, 2026-09-01) — the UI-managed
@@ -2568,15 +2586,25 @@ after a live incident where the recorded source had no display surface at all).
 ### `stock_analyzer/broker_sync.py`
 
 Pure transform/decision logic (no I/O) sitting between `snaptrade_client.py`
-and the `broker` cron lane / `app.py` (F-244). **17 public functions today**
-(verified 2026-09-21 — grown from an original 5 as F-244a/b/c and F-268
+and the `broker` cron lane / `app.py` (F-244). **19 public functions today**
+(verified 2026-09-27 — up from 17 with F-280 Phase 1's `position_kinds()` and
+`resolve_trade_asset_type()`; grown from an original 5 as F-244a/b/c and F-268
 extended broker/income-event handling; this line previously said "Five
 functions," caught as doc drift in that day's app-review). The five
 documented in full below are the original core set and remain the most
-decision-relevant. Three more — `income_event_subtype()` and
-`dedupe_income_events()` (both named in passing inside
-`classify_transactions()`'s own writeup below) and
-`parse_robinhood_csv_income()` (named only in the top-of-file module map,
+decision-relevant. **`position_kinds(rh_positions)`** (F-280) — sibling of
+`normalize_positions` below, same filtering/offline-sentinel contract, but
+maps `{TICKER: asset_type}` from SnapTrade's own `instrument.kind` (the
+ground-truth classification source — no yfinance guessing needed for a
+broker-synced position) instead of share counts; `None` in → `None` out,
+`[]` in → `{}` out (a real "broker holds nothing" result). **
+`resolve_trade_asset_type(ticker, kinds, bundle_asset_type)`** (F-280) — the
+promotion-time precedence a SnapTrade pending-import → logged-trade write
+uses to stamp `trades.asset_type`: broker snapshot `kinds` map (ground truth)
+→ an already-in-scope live bundle's `asset_type` → `"stock"` fail-safe
+default. Three more — `income_event_subtype()` and `dedupe_income_events()`
+(both named in passing inside `classify_transactions()`'s own writeup below)
+and `parse_robinhood_csv_income()` (named only in the top-of-file module map,
 §"stock_analyzer/ tree") — are mentioned but not individually documented
 here. The remaining nine (`normalize_positions`/`ticker_share_counts`/
 `diff_position_map`/`drift_dollar_impact`/`split_awaiting_sync`/

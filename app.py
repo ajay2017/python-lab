@@ -27740,6 +27740,21 @@ elif page == "📒 Trade Journal":
                         except (ValueError, TypeError):
                             pass  # unparseable date — let the anchor step fail loudly
                         record["traded_at"] = _et_anchor_iso(_bp_date)
+                    # Asset-type bridge (Phase 1 ETF support, F-279 §11):
+                    # broker_sync.resolve_trade_asset_type owns the
+                    # precedence (broker snapshot kinds -> an already-loaded
+                    # bundle's own asset_type, if trivially in scope -> the
+                    # "stock" fail-safe default). No new live fetch is added
+                    # here — there is no already-loaded bundle in scope on
+                    # this form, so `bundle_asset_type` is always None.
+                    try:
+                        _at_snapshot = db.load_broker_position_snapshot()
+                    except Exception:
+                        _at_snapshot = None
+                    _at_kinds = (_at_snapshot or {}).get("kinds")
+                    record["asset_type"] = broker_sync.resolve_trade_asset_type(
+                        ticker_input, _at_kinds, None
+                    )
                 elif _is_manual_backdated:
                     # Same anchor helper the broker path uses — a bare date
                     # would cast to midnight UTC (the PRIOR EVENING in ET),
@@ -33455,6 +33470,17 @@ elif page == "⚙️ App Settings":
         ("sector_universe",    "Grow Today scan universe"),
         ("discovery_universe", "Movers discovery universe"),
         ("sector_candidates",  "Diversification candidate roster"),
+        # ETF metadata registry (Phase 1 ETF support, F-279 §11) — category ->
+        # [tickers], same shape reference_data.canonicalize already assumes.
+        # Deliberately NOT added to reference_shelf._REFERENCE_TABLES: that
+        # would require picking a staleness/refresh-cadence policy for this
+        # table, which is out of Phase 1's scope — it shows "⚪ status
+        # unknown" below until that's decided, same as any key absent from
+        # that shelf. No TICKER_SECTORS-coverage check applies to this name
+        # (validate_payload scopes that check to sector_candidates/
+        # sector_universe/discovery_universe only) — an ETF has no single
+        # GICS sector and must never be forced to have one.
+        ("etf_registry",       "ETF metadata registry"),
     ]
     _AS_LABELS = {k: lbl for k, lbl in _AS_TABLES}
 

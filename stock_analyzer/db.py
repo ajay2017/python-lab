@@ -708,6 +708,21 @@ the user acted on it):
     create policy "Allow all (service role)" on public.missed_opportunity_cache
         for all to service_role using (true) with check (true);
 
+    -- Phase 1 ETF support (docs/plans/etf-multi-asset-support.md §11, F-279).
+    -- Nullable asset_type discriminator ("stock" | "etf") on the three tables
+    -- that key a decision to a specific instrument, NULL -> "stock" backfilled
+    -- at read time via stock_analyzer.asset_type.normalize (same convention
+    -- as every other legacy-column backfill in this file). Every write path
+    -- degrades gracefully pre-DDL via the existing "optional column, drop and
+    -- retry" mechanism, so applying this at any time is safe and needs no
+    -- coordinated deploy. `kinds` on broker_position_snapshot is the broker's
+    -- own ground-truth {TICKER: asset_type} map (SnapTrade instrument.kind),
+    -- additive to the existing `positions` payload.
+    ALTER TABLE public.holdings        ADD COLUMN IF NOT EXISTS asset_type text;
+    ALTER TABLE public.trades          ADD COLUMN IF NOT EXISTS asset_type text;
+    ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS asset_type text;
+    ALTER TABLE public.broker_position_snapshot ADD COLUMN IF NOT EXISTS kinds jsonb;
+
     -- SnapTrade broker integration (Robinhood sync via SnapTrade REST
     -- middleware — docs/plans/snaptrade-broker-integration.md). Three new
     -- tables + one trades column. Until this DDL is applied, has_snaptrade()
@@ -1189,7 +1204,7 @@ def _client():
 
 # ── Holdings ──────────────────────────────────────────────────────────────────
 
-_HOLDINGS_COLS = ["Ticker", "Shares", "Avg Cost ($)"]
+_HOLDINGS_COLS = ["Ticker", "Shares", "Avg Cost ($)", "Asset Type"]
 
 
 def load_holdings_or_none() -> "pd.DataFrame | None":
@@ -1219,10 +1234,19 @@ def load_holdings_or_none() -> "pd.DataFrame | None":
         rows = _client().table("holdings").select("*").order("ticker").execute().data
         _ah.record("supabase", "success")
         if rows:
-            df = pd.DataFrame(rows)[["ticker", "shares", "avg_cost"]]
+            from stock_analyzer import asset_type as _at
+            df_full = pd.DataFrame(rows)
+            if "asset_type" not in df_full.columns:
+                df_full["asset_type"] = None  # DDL not yet applied — legacy shape
+            df = df_full[["ticker", "shares", "avg_cost", "asset_type"]].copy()
             df.columns = _HOLDINGS_COLS
             df["Shares"] = df["Shares"].astype(float)
             df["Avg Cost ($)"] = df["Avg Cost ($)"].astype(float)
+            # NULL/missing backfills to "stock" — never "etf" (see asset_type.
+            # normalize's fail-safe-default docstring). Only an actually-loaded
+            # row with a NULL column gets backfilled; a genuine read FAILURE
+            # is handled by the except branch below and still returns None.
+            df["Asset Type"] = df["Asset Type"].apply(_at.normalize)
             return df
         # Read succeeded, table is genuinely empty — NOT the same as unreadable.
         return pd.DataFrame(columns=_HOLDINGS_COLS)
@@ -1311,6 +1335,13 @@ def load_trades_or_none() -> "pd.DataFrame | None":
                     "premortem_trigger_direction", "situational_category"):
             if col not in df.columns:
                 df[col] = None
+        # asset_type backfills to "stock" (never "etf") via asset_type.
+        # normalize, not a bare None — same NULL-means-legacy contract as
+        # every other loader touched by Phase 1 (F-279 §11).
+        if "asset_type" not in df.columns:
+            df["asset_type"] = None
+        from stock_analyzer import asset_type as _at
+        df["asset_type"] = df["asset_type"].apply(_at.normalize)
         # Re-anchor imported trades that carry a date but no time. They land as
         # midnight UTC, which is the PRIOR EVENING in ET, so every
         # tz_convert("America/New_York") reader dated them a day early — a wrong
@@ -1452,6 +1483,7 @@ def save_holdings(df: pd.DataFrame) -> bool:
     """
     if is_readonly(): return False  # read-only viewer: no-op
     from stock_analyzer import api_health as _ah
+    from stock_analyzer import asset_type as _at
     if not has_db():
         return False
 
@@ -1466,13 +1498,28 @@ def save_holdings(df: pd.DataFrame) -> bool:
         except (TypeError, ValueError):
             continue
         if ticker and shares > 0 and avg_cost > 0 and ticker not in seen:
-            records.append({"ticker": ticker, "shares": shares, "avg_cost": avg_cost})
+            records.append({
+                "ticker": ticker, "shares": shares, "avg_cost": avg_cost,
+                "asset_type": _at.normalize(row.get("Asset Type")),
+            })
             seen.add(ticker)
 
     try:
         client = _client()
         if records:
-            client.table("holdings").upsert(records, on_conflict="ticker").execute()
+            try:
+                client.table("holdings").upsert(records, on_conflict="ticker").execute()
+            except Exception as _e_up:
+                # Graceful degradation: `asset_type` may not exist yet in
+                # Supabase (DDL not applied) — same "optional column, drop
+                # and retry once" pattern as save_trade's `_optional` cascade.
+                if "asset_type" in str(_e_up):
+                    client.table("holdings").upsert(
+                        [{k: v for k, v in r.items() if k != "asset_type"} for r in records],
+                        on_conflict="ticker",
+                    ).execute()
+                else:
+                    raise
         # Sweep tickers no longer present. Idempotent — a partial failure here
         # leaves stale rows (recoverable on next save) but never destroys the
         # current truth.
@@ -1948,7 +1995,7 @@ _TRADE_COLS = ["id", "ticker", "action", "shares", "price",
                "lesson_category", "traded_at", "user_thesis", "thesis_source",
                "decision_context", "premortem_case_against", "premortem_commitment",
                "premortem_trigger_price", "premortem_trigger_direction",
-               "broker_txn_id", "situational_category"]
+               "broker_txn_id", "situational_category", "asset_type"]
 
 
 def load_trades() -> pd.DataFrame:
@@ -2011,7 +2058,7 @@ def save_trade(record: dict) -> bool:
                      "premortem_case_against", "premortem_commitment",
                      "premortem_trigger_price", "premortem_trigger_direction",
                      "lesson_category", "idempotency_key", "broker_txn_id",
-                     "situational_category")
+                     "situational_category", "asset_type")
         _any_optional = any(c in _err_str for c in _optional)
         if _any_optional:
             _to_drop = {c for c in _optional if c in record}
@@ -2735,7 +2782,8 @@ def recalculate_from_trades(trades_df: pd.DataFrame) -> dict:
 
 _REC_COLS = ["id", "ticker", "rec_date", "rec_type", "surfaced_at",
              "price_at_surface", "composite_score", "momentum_score",
-             "sector", "conviction", "verdict", "thesis", "weights_version"]
+             "sector", "conviction", "verdict", "thesis", "weights_version",
+             "asset_type"]
 
 
 def save_scanner_cache(results_df, scan_date, source: str = "cron") -> bool:
@@ -2895,6 +2943,12 @@ def save_recommendations(records: list[dict]) -> dict:
             # build-site changes required. See db.py's header docstring for
             # the NULL-means-"not-yet-backfilled" semantics.
             "weights_version":     COMPOSITE_WEIGHTS_VERSION,
+            # Asset-type plumbing (Phase 1 ETF support, F-279 §11). No
+            # existing caller passes this yet — it reads NULL until a future
+            # phase wires a real value, which normalizes to "stock" on read
+            # (never "etf") via asset_type.normalize, same fail-safe default
+            # as every other Phase 1 loader.
+            "asset_type":          r.get("asset_type"),
         })
     if not payload:
         return {"attempted": 0, "saved": 0, "error": None}
@@ -2909,20 +2963,21 @@ def save_recommendations(records: list[dict]) -> dict:
     # silently stop persisting that unrelated data for the entire window until
     # its own DDL is applied, with no error surfaced (saved=N, error=None) to
     # reveal the loss.
+    _ASSET_TYPE_COLS = frozenset(("asset_type",))
     _WEIGHTS_VERSION_COLS = frozenset(("weights_version",))
     _ENTER_NOW_COLS = frozenset(("already_held",))
     _F249_SIZING_COLS = frozenset(("rec_shares", "rec_stop",
                                    "rec_portfolio_value", "rec_sizing_version"))
     _QA_PILLAR_COLS = frozenset(("t_score", "bq_score", "val_score"))
     _F179_COLS      = frozenset(("s_score", "avg_sent"))
-    _OPTIONAL_COLS  = (_WEIGHTS_VERSION_COLS | _ENTER_NOW_COLS | _F249_SIZING_COLS
-                       | _QA_PILLAR_COLS | _F179_COLS)
+    _OPTIONAL_COLS  = (_ASSET_TYPE_COLS | _WEIGHTS_VERSION_COLS | _ENTER_NOW_COLS
+                       | _F249_SIZING_COLS | _QA_PILLAR_COLS | _F179_COLS)
     # NEWEST GENERATION FIRST. The strip cascade peels one generation at a time
     # in this order, so a "rec_shares is missing" error cannot also discard the
     # pillar scores and sentiment that are already working in production. Append
     # new generations to the FRONT, never extend an existing frozenset.
-    _COL_GENERATIONS = (_WEIGHTS_VERSION_COLS, _ENTER_NOW_COLS, _F249_SIZING_COLS,
-                        _QA_PILLAR_COLS, _F179_COLS)
+    _COL_GENERATIONS = (_ASSET_TYPE_COLS, _WEIGHTS_VERSION_COLS, _ENTER_NOW_COLS,
+                        _F249_SIZING_COLS, _QA_PILLAR_COLS, _F179_COLS)
 
     def _upsert(rows):
         try:
@@ -3271,7 +3326,18 @@ def load_recommendations_or_none(start_date=None, end_date=None) -> pd.DataFrame
         return None
     try:
         rows = _load_recommendations_all_pages(start_date, end_date)
-        return pd.DataFrame(rows) if rows else empty
+        if not rows:
+            return empty
+        df = pd.DataFrame(rows)
+        # asset_type backfills to "stock" (never "etf") — same NULL-means-
+        # legacy contract as every other Phase 1 loader (F-279 §11). A
+        # genuine read FAILURE is handled by the except branch below and
+        # still returns None, never confused with this backfill.
+        from stock_analyzer import asset_type as _at
+        if "asset_type" not in df.columns:
+            df["asset_type"] = None
+        df["asset_type"] = df["asset_type"].apply(_at.normalize)
+        return df
     except Exception:
         return None
 
@@ -5869,33 +5935,56 @@ def load_broker_position_snapshot() -> dict | None:
     responded and holds nothing — and is returned as `{}`, not None. Collapsing
     the two would let an outage read as an all-cash account, which would flag
     every holding as drift.
+
+    `kinds` (Phase 1 ETF support, F-279 §11) is a `{TICKER: asset_type}` map
+    derived from the broker's own `instrument.kind`, additive to `positions` —
+    a missing/empty `kinds` means "kind unknown for these tickers", NOT "the
+    whole snapshot is unknown" (that's still governed by the `positions is
+    None` check below, unaffected). Pre-DDL, the `kinds` column doesn't exist
+    yet — the select degrades to the original column list so this feature
+    keeps working exactly as it did before Phase 1 added the column.
     """
     if not has_db():
         return None
     try:
-        rows = (
-            _client().table("broker_position_snapshot")
-            .select("positions,account_ids,all_accounts_ok,captured_at")
-            .eq("id", 1).limit(1).execute().data
-        )
+        try:
+            rows = (
+                _client().table("broker_position_snapshot")
+                .select("positions,account_ids,all_accounts_ok,captured_at,kinds")
+                .eq("id", 1).limit(1).execute().data
+            )
+        except Exception as _e_sel:
+            if "kinds" in str(_e_sel).lower():
+                rows = (
+                    _client().table("broker_position_snapshot")
+                    .select("positions,account_ids,all_accounts_ok,captured_at")
+                    .eq("id", 1).limit(1).execute().data
+                )
+            else:
+                raise
         if not rows:
             return None
         row = rows[0]
         positions = row.get("positions")
         if positions is None:
             return None          # unreadable payload — unknown, not "no drift"
+        _kinds_raw = row.get("kinds")
+        if _kinds_raw is None:
+            _kinds_raw = {}
         return {
             "positions":       {str(k).upper(): float(v) for k, v in dict(positions).items()},
             "account_ids":     row.get("account_ids"),
             "all_accounts_ok": bool(row.get("all_accounts_ok", False)),
             "captured_at":     row.get("captured_at"),
+            "kinds":           {str(k).upper(): str(v) for k, v in dict(_kinds_raw).items()},
         }
     except Exception:
         return None
 
 
 def save_broker_position_snapshot(positions: dict, account_ids=None,
-                                  all_accounts_ok: bool = False) -> bool:
+                                  all_accounts_ok: bool = False,
+                                  kinds: "dict | None" = None) -> bool:
     """Upsert the single broker_position_snapshot row (id=1).
 
     CALLER INVARIANT, and the highest-consequence rule in this feature: do NOT
@@ -5909,29 +5998,49 @@ def save_broker_position_snapshot(positions: dict, account_ids=None,
     Read-only-viewer gated at the db layer for the same reason as
     `save_snaptrade_config`: `is_readonly()` is False in the headless cron, so
     this costs it nothing, while a live viewer session can never write.
+
+    `kinds` (Phase 1 ETF support, F-279 §11) is an optional `{TICKER:
+    asset_type}` map from `broker_sync.position_kinds()` — additive, `None`
+    by default so an existing caller (there is only one, the `broker` cron)
+    that hasn't been updated to pass it keeps writing exactly as before.
+    Degrades gracefully pre-DDL via the same drop-and-retry pattern as
+    `save_trade`'s `_optional` columns.
     """
     if is_readonly(): return False  # read-only viewer: no-op
     if not has_db():
         return False
     if positions is None:
         return False                 # never write "unknown" as a row
+    _row = {
+        "id":              1,
+        "positions":       {str(k).upper(): float(v) for k, v in dict(positions).items()},
+        "account_ids":     list(account_ids) if account_ids else None,
+        "all_accounts_ok": bool(all_accounts_ok),
+        # Explicit, not the column default: `default now()` fires only
+        # on INSERT, so an upsert over an existing row would keep the
+        # ORIGINAL capture time and the staleness check would trust a
+        # fresh snapshot as old (or worse, an old one as fresh).
+        "captured_at":     _mt_now_et().isoformat(),
+    }
+    if kinds is not None:
+        _row["kinds"] = {str(k).upper(): str(v) for k, v in dict(kinds).items()}
     try:
         _client().table("broker_position_snapshot").upsert(
-            {
-                "id":              1,
-                "positions":       {str(k).upper(): float(v) for k, v in dict(positions).items()},
-                "account_ids":     list(account_ids) if account_ids else None,
-                "all_accounts_ok": bool(all_accounts_ok),
-                # Explicit, not the column default: `default now()` fires only
-                # on INSERT, so an upsert over an existing row would keep the
-                # ORIGINAL capture time and the staleness check would trust a
-                # fresh snapshot as old (or worse, an old one as fresh).
-                "captured_at":     _mt_now_et().isoformat(),
-            },
+            _row,
             on_conflict="id",
         ).execute()
         return True
     except Exception as e:
+        _err = str(e)
+        if "kinds" in _row and "kinds" in _err:
+            try:
+                _row2 = {k: v for k, v in _row.items() if k != "kinds"}
+                _client().table("broker_position_snapshot").upsert(
+                    _row2, on_conflict="id",
+                ).execute()
+                return True
+            except Exception as e2:
+                e = e2
         _record_db_error(str(e)[:120])
         return False
 

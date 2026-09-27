@@ -25,14 +25,14 @@ class _Recorder:
     def __init__(self):
         self.calls = []
 
-    def __call__(self, positions, account_ids=None, all_accounts_ok=False):
+    def __call__(self, positions, account_ids=None, all_accounts_ok=False, kinds=None):
         self.calls.append({"positions": positions, "account_ids": account_ids,
-                           "all_accounts_ok": all_accounts_ok})
+                           "all_accounts_ok": all_accounts_ok, "kinds": kinds})
         return True
 
 
-def _pos(ticker, units):
-    return {"instrument": {"kind": "stock", "symbol": ticker}, "units": units}
+def _pos(ticker, units, kind="stock"):
+    return {"instrument": {"kind": kind, "symbol": ticker}, "units": units}
 
 
 def _run_lane(monkeypatch, accounts, positions_by_id):
@@ -117,6 +117,25 @@ def test_non_equity_positions_are_excluded_from_the_snapshot(monkeypatch):
         "ira": [], "individual": [_pos("DELL", 20.0)],
     })
     assert rec.calls[0]["positions"] == {"DELL": 20.0}
+
+
+def test_kinds_map_computed_alongside_positions(monkeypatch):
+    """Phase 1 ETF support (F-279 §11): the broker ground-truth kind map is
+    computed from the SAME payloads normalize_positions already used, at
+    zero extra SnapTrade cost, and passed alongside positions."""
+    rec = _run_lane(monkeypatch, _ACCOUNTS, {
+        "cc": [], "crypto": [], "ira": [],
+        "individual": [_pos("SPY", 10.0, kind="etf"), _pos("AAPL", 5.0, kind="stock")],
+    })
+    assert rec.calls[0]["kinds"] == {"SPY": "etf", "AAPL": "stock"}
+
+
+def test_kinds_map_ticker_in_two_accounts_first_resolved_kind_wins(monkeypatch):
+    rec = _run_lane(monkeypatch, _ACCOUNTS, {
+        "cc": [], "crypto": [], "ira": [_pos("SPY", 4.0, kind="etf")],
+        "individual": [_pos("SPY", 6.0, kind="etf")],
+    })
+    assert rec.calls[0]["kinds"] == {"SPY": "etf"}
 
 
 def test_a_snapshot_write_failure_does_not_fail_the_lane(monkeypatch):

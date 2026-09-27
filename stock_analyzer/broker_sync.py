@@ -61,6 +61,7 @@ import math
 import pandas as pd
 
 from stock_analyzer.constants import BROKER_DRIFT_SHARE_TOL, INCOME_EVENT_DEDUP_DATE_TOL_DAYS
+from stock_analyzer import asset_type
 
 # SnapTrade `type` values that add/remove cash-basis capital — the ONLY types
 # allowed to become an account_flows row. Everything else that touches cash
@@ -162,6 +163,83 @@ def normalize_positions(rh_positions: list[dict] | None) -> dict | None:
             continue  # a closed (zero-unit) position is not a real holding
         rh_shares[ticker] = rh_shares.get(ticker, 0.0) + float(units)
     return rh_shares
+
+
+def position_kinds(rh_positions: "list[dict] | None") -> "dict[str, str] | None":
+    """Raw SnapTrade position dicts → `{TICKER: asset_type}`, or None if
+    unreadable. Sibling of `normalize_positions`, mirroring its exact
+    filtering (non-equity instruments dropped, zero-unit/closed positions
+    skipped) — Phase 1 ETF support (F-279 §11), the broker ground-truth half.
+
+    Unlike `normalize_positions`, "summing" across the user's multiple linked
+    accounts doesn't apply to a KIND — a ticker's asset type does not vary by
+    account. Instead, the kind is taken from wherever the ticker FIRST
+    appears with a non-None `instrument.kind` — a position's `kind` is
+    optional (`_position_ticker` accepts `None`), so a ticker whose first
+    occurrence happens to omit it still gets classified correctly if a LATER
+    account reports it. A ticker whose kind is None in every account it
+    appears under still gets an entry (defaulting to `"stock"` via
+    `asset_type.from_broker_kind(None)`), so every real holding is present in
+    the returned map — only the offline (`None`-input) case omits entries.
+
+    None in → None out (offline sentinel, never collapse to `{}`). An empty
+    positions list → `{}` — a REAL result: the broker holds nothing, never
+    conflated with "could not read".
+    """
+    if rh_positions is None:
+        return None
+    raw_kinds: dict[str, str] = {}
+    seen: set[str] = set()
+    for pos in rh_positions:
+        ticker = _position_ticker(pos)
+        if ticker is None:
+            continue
+        units = pos.get("units")
+        if units is None or float(units) == 0.0:
+            continue  # a closed (zero-unit) position is not a real holding
+        seen.add(ticker)
+        if ticker in raw_kinds:
+            continue  # already resolved a non-None kind for this ticker
+        instrument = pos.get("instrument", {})
+        if instrument is None:
+            instrument = {}
+        kind = instrument.get("kind")
+        if kind is not None:
+            raw_kinds[ticker] = kind
+    return {t: asset_type.from_broker_kind(raw_kinds.get(t)) for t in seen}
+
+
+def resolve_trade_asset_type(
+    ticker: str,
+    kinds: "dict | None",
+    bundle_asset_type: "str | None" = None,
+) -> str:
+    """The precedence app.py's SnapTrade pending-import promotion (BUY/SELL
+    confirm) uses to stamp `asset_type` on a broker-sourced trade write
+    (Phase 1 ETF support, F-279 §11's "the bridge"):
+
+    1. `kinds` — the broker's own ground-truth `{TICKER: asset_type}` map
+       (from the most recently persisted `broker_position_snapshot`,
+       `position_kinds()`'s own output) — if this ticker is present there,
+       it wins, no matter what else is available.
+    2. `bundle_asset_type` — an already-loaded bundle's own `asset_type` key
+       (`bundle_loader.load_bundle`'s output), ONLY if trivially in scope at
+       the call site — the caller must NOT fetch one just for this.
+    3. `"stock"` — the fail-safe default (never `"etf"`) when neither source
+       resolves the ticker. A manually-logged trade (never broker-synced)
+       has no `kinds` entry and reaches this branch too — accepted for Phase
+       1 (see the plan doc: Phase 0's fundamentals gate already protects the
+       actual decision regardless of this label).
+
+    `kinds=None` (broker snapshot unknown/unreachable) is treated exactly
+    like "ticker absent" — falls through to `bundle_asset_type` then
+    `"stock"`, never raises.
+    """
+    if kinds and ticker in kinds:
+        return asset_type.normalize(kinds[ticker])
+    if bundle_asset_type:
+        return asset_type.normalize(bundle_asset_type)
+    return asset_type.ASSET_TYPE_STOCK
 
 
 def ticker_share_counts(rh_shares: dict | None, port_df) -> tuple[dict, dict] | tuple[None, None]:
