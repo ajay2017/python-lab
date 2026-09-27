@@ -397,6 +397,40 @@ precedent), safer than hand-computing a hash to match `reference_data.canonicali
 still withheld (Phase 0), not scored — Phase 2 is what builds the actual ETF
 scoring strategy.
 
+## Phase 3 data-readiness probe — RESOLVED POSITIVE, 2026-09-27
+
+The earlier assumption in this doc (§6, §11) that look-through/constituent
+data was "unproven — likely NOT in `.info` at all" is **corrected**: it isn't
+in `.info` (that part was right), but a live probe of `yfinance.Ticker(sym)
+.funds_data` — a DIFFERENT API surface Phase 1 never used — returns real data:
+
+- `sector_weightings` — a dict of 11 GICS-like sector keys → fraction of fund
+  (verified on SPY, XLK, ARKK, VTI, all real and internally consistent —
+  XLK's `technology` key alone is `1.0`, SPY's 11 keys sum to ~1.0).
+- `top_holdings` — a DataFrame of roughly the top 10 constituent tickers +
+  weight (not the FULL holdings list — a real depth limit).
+- A bond ETF (TLT) correctly returns an EMPTY `sector_weightings` dict and an
+  empty `top_holdings` frame — no equity sector exposure to report, which is
+  the accurate answer, not a failure. **Must not be read as "diversified" or
+  defaulted to a fabricated bucket** — same offline-sentinel discipline as
+  everywhere else in this app.
+- An invalid/delisted ticker raises an `HTTPError` — needs the same
+  provider-failure handling as every other yfinance call in this codebase.
+- yfinance's sector vocabulary (`consumer_cyclical`, `consumer_defensive`,
+  `basic_materials`, `realestate`, etc.) does NOT match `portfolio.py`'s own
+  `TICKER_SECTORS`/`_SECTOR_PROFILES` naming — a translation table is needed
+  before this can feed the existing concentration gate.
+
+**This unblocks Phase 3**, but it is still a NEW, previously-unused data
+fetch path (not wired into `fetch_etf_facts_from_info`/`bundle_loader.py`
+today) with real open design questions: does a partial-exposure ETF (e.g.
+XLK at 5% of the book, 100% tech-weighted) count as a full 5% tech exposure
+toward `SECTOR_CEILING`, or something more conservative? Where does the
+extra network call happen without slowing every portfolio load? How does an
+ETF with NO equity sector data (a bond fund) get treated by the gate
+(excluded, same as today, not silently zero-weighted)? These need a proper
+`planner` design pass before any code — not assumed from this probe alone.
+
 ## Phase 2 — implementation record
 
 **Shipped 2026-09-27 as F-281** (`docs/requirements.md` F-281).
