@@ -1198,6 +1198,107 @@ def real_sector_exposure_with_lookthrough(port_df: pd.DataFrame, loaded_data: di
     return df.sort_values("Pct", ascending=False).reset_index(drop=True)
 
 
+def _etf_lookthrough_holdings(bundle: dict) -> list[dict]:
+    """Safely extract a held ETF's top_holdings list from its bundle, or []
+    when unavailable -- fetch failed / never fetched (`etf_lookthrough is
+    None`) or a fund with no equity constituents (a bond ETF, present-but-
+    empty `top_holdings`). Same offline-sentinel discipline as
+    `real_sector_exposure_with_lookthrough`'s inline handling above: neither
+    case raises or fabricates a number, both simply contribute nothing.
+    Shared here so `combined_name_exposure` doesn't duplicate the same
+    None/empty-checking shape a second time.
+    """
+    lookthrough = bundle.get("etf_lookthrough")
+    if not lookthrough:
+        return []
+    # Two-arg .get(key, []) deliberately, not `.get(key) or []` -- when
+    # etf_lookthrough is truthy (fetch succeeded), top_holdings is always a
+    # real list (empty for a bond/no-equity fund, never an explicit None), so
+    # the two-arg default preserves the same offline-sentinel discipline
+    # real_sector_exposure_with_lookthrough's own comment above documents.
+    return lookthrough.get("top_holdings", [])
+
+
+def combined_name_exposure(port_df: pd.DataFrame, loaded_data: dict) -> list[dict]:
+    """For every ticker that appears EITHER as a direct holding OR as a
+    top-10 constituent of a held ETF, compute combined (direct + look-through)
+    exposure as a % of the book, and flag when that combined figure crosses
+    SINGLE_NAME_CEILING (ETF-support Phase 3b).
+
+    loaded_data: ticker -> bundle dict, same shape `build_portfolio_df`'s
+    caller already has -- a held ETF's bundle["etf_lookthrough"]["top_holdings"]
+    is read via `_etf_lookthrough_holdings` above.
+
+    Returns a list of dicts, one per ticker with any combined exposure > 0,
+    sorted by combined exposure descending:
+        {
+            "ticker": str,
+            "direct_pct": float,       # 0.0 if not held directly
+            "lookthrough_pct": float,  # summed look-through contribution across every held ETF that lists this ticker
+            "combined_pct": float,     # direct_pct + lookthrough_pct
+            "over_ceiling": bool,      # combined_pct >= SINGLE_NAME_CEILING
+            "via_etfs": list[str],     # held ETF ticker(s) contributing look-through exposure, [] if none
+        }
+
+    A non-ETF row contributes only its own market value / total book value to
+    its OWN ticker's direct_pct -- never look-through exposure to anything
+    else. An ETF row with no usable `etf_lookthrough` data (None, or present
+    but empty top_holdings) contributes zero look-through exposure without
+    raising or fabricating a reading -- awareness-only, this function never
+    gates and is never read by risk_advisor's single_name_concentration check.
+    Percentages are rounded to 1 decimal, matching this codebase's convention
+    for these figures. total_book_value reuses the same `port_df["Market
+    Value"].sum()` denominator `sector_exposure`/`real_sector_exposure` use.
+    """
+    if port_df.empty:
+        return []
+    total = float(port_df["Market Value"].sum())
+    if not total:
+        return []
+
+    direct_pct: dict[str, float] = {}
+    lookthrough_pct: dict[str, float] = {}
+    via_etfs: dict[str, list[str]] = {}
+
+    for _, row in port_df[["Ticker", "Market Value"]].iterrows():
+        ticker = row["Ticker"]
+        mv = float(row["Market Value"])
+        direct_pct[ticker] = direct_pct.get(ticker, 0.0) + mv / total * 100
+
+        bundle = loaded_data.get(ticker, {})
+        if bundle.get("asset_type") != asset_type.ASSET_TYPE_ETF:
+            continue
+        for holding in _etf_lookthrough_holdings(bundle):
+            constituent = holding.get("ticker")
+            weight = holding.get("weight")
+            if not constituent or weight is None:
+                continue
+            lookthrough_pct[constituent] = (
+                lookthrough_pct.get(constituent, 0.0) + mv * float(weight) / total * 100
+            )
+            names = via_etfs.setdefault(constituent, [])
+            if ticker not in names:
+                names.append(ticker)
+
+    rows = []
+    for t in set(direct_pct) | set(lookthrough_pct):
+        d_pct = round(direct_pct.get(t, 0.0), 1)
+        l_pct = round(lookthrough_pct.get(t, 0.0), 1)
+        combined_pct = round(direct_pct.get(t, 0.0) + lookthrough_pct.get(t, 0.0), 1)
+        if combined_pct <= 0:
+            continue
+        rows.append({
+            "ticker": t,
+            "direct_pct": d_pct,
+            "lookthrough_pct": l_pct,
+            "combined_pct": combined_pct,
+            "over_ceiling": combined_pct >= SINGLE_NAME_CEILING,
+            "via_etfs": sorted(via_etfs.get(t, [])),
+        })
+    rows.sort(key=lambda r: r["combined_pct"], reverse=True)
+    return rows
+
+
 def sector_benchmark_tilt(real_sector_df: pd.DataFrame) -> pd.DataFrame:
     """Portfolio real-sector % vs. SP500_SECTOR_WEIGHTS, outer-joined so a
     benchmark sector held at 0% still shows a negative tilt. Tilt = portfolio

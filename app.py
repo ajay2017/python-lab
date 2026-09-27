@@ -263,7 +263,7 @@ from stock_analyzer.portfolio import (
     manual_stop_wins, holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
     trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
-    real_sector_exposure_with_lookthrough,
+    real_sector_exposure_with_lookthrough, combined_name_exposure,
     classify_book_corr, CORR_MIN_OBS_TRUSTED, expected_beta_after_add,
     beta_diversifying_sectors,
 )
@@ -20507,6 +20507,58 @@ elif page == "🥧 Portfolio Overview":
                     # for the full 11-sector table — always show every row.
                     height=(len(_tilt_df) + 1) * 35 + 3,
                 )
+
+            # ── True Single-Name Exposure incl. ETF look-through (Phase 3b) ──────
+            # Awareness-only — reuses SINGLE_NAME_CEILING purely as a display
+            # flag; never feeds risk_advisor's own single_name_concentration
+            # check and never touches Act Today.
+            with st.expander("🔍 True Single-Name Exposure (incl. ETF look-through)"):
+                _cne_rows = combined_name_exposure(port_df, held_data)
+                _cne_visible = [
+                    r for r in _cne_rows if r["lookthrough_pct"] > 0 or r["over_ceiling"]
+                ]
+                _cne_missing_etfs = sorted({
+                    t for t in port_df["Ticker"]
+                    if held_data.get(t, {}).get("asset_type") == "etf"
+                    and not held_data.get(t, {}).get("etf_lookthrough")
+                })
+                if not _cne_visible:
+                    st.info(
+                        "No overlap detected among your held ETFs' top holdings — every "
+                        "name's combined exposure matches its direct holding alone."
+                    )
+                else:
+                    st.dataframe(
+                        pd.DataFrame([
+                            {
+                                "Ticker": r["ticker"],
+                                "Direct %": r["direct_pct"],
+                                "Look-through %": r["lookthrough_pct"],
+                                "Combined %": (
+                                    f"⚠️ {r['combined_pct']:.1f}%" if r["over_ceiling"]
+                                    else f"{r['combined_pct']:.1f}%"
+                                ),
+                                "Via ETF(s)": ", ".join(r["via_etfs"]) if r["via_etfs"] else "—",
+                            }
+                            for r in _cne_visible
+                        ]),
+                        width='stretch', hide_index=True,
+                    )
+                st.caption(
+                    "Look-through only reflects each held ETF's top ~10 disclosed "
+                    "holdings, not its full constituent list — real combined exposure "
+                    "could be higher than shown. ⚠️ marks a name whose combined "
+                    f"(direct + look-through) weight crosses the {SINGLE_NAME_CEILING:.0f}% "
+                    "single-name ceiling — informational only, this does not trigger any "
+                    "gate or Act Today card."
+                )
+                if _cne_missing_etfs:
+                    st.caption(
+                        "⚠️ Look-through data isn't available right now for: "
+                        f"{', '.join(_cne_missing_etfs)} — their real overlap with your "
+                        "other holdings isn't reflected above. A clean table doesn't mean "
+                        "confirmed no overlap for these names."
+                    )
 
         with _an_t4:
         # RANKINGS (Analytics tab)

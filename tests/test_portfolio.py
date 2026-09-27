@@ -18,12 +18,14 @@ from stock_analyzer.constants import (
     CORR_HIGH_PAIRS_THRESHOLD,
     REDEPLOY_CORR_CORRELATED_MIN,
     REDEPLOY_CORR_DIVERSIFIER_MAX,
+    SINGLE_NAME_CEILING,
 )
 from stock_analyzer import portfolio
 from stock_analyzer.portfolio import (
     alerts,
     build_portfolio_df,
     classify_book_corr,
+    combined_name_exposure,
     diversification_score,
     expected_beta_after_add,
     manual_stop_wins,
@@ -438,6 +440,199 @@ def test_lookthrough_matches_real_sector_exposure_on_stock_only_portfolio():
 
 def test_lookthrough_empty_portfolio_returns_empty_df():
     assert real_sector_exposure_with_lookthrough(pd.DataFrame(), {}).empty
+
+
+# ── combined_name_exposure ────────────────────────────────────────────────────
+# ETF-support Phase 3b (docs/plans/etf-multi-asset-support.md) -- awareness-only
+# holdings-overlap detector. Reuses SINGLE_NAME_CEILING purely as a display flag;
+# must never be read by risk_advisor's single_name_concentration check.
+
+def test_combined_exposure_direct_plus_lookthrough_crosses_ceiling():
+    # Total book = 10,000. SPY's 10%-weighted AAPL slice always contributes a
+    # fixed 2% of the book (2000 * 0.10 / 10000 * 100). Direct AAPL exposure is
+    # set to exactly SINGLE_NAME_CEILING, so combined always clears it
+    # regardless of the constant's live value -- never hardcode the threshold.
+    direct_mv = SINGLE_NAME_CEILING / 100.0 * 10000.0
+    port_df = pd.DataFrame([
+        {"Ticker": "AAPL", "Market Value": direct_mv},
+        {"Ticker": "SPY",  "Market Value": 2000.0},
+        {"Ticker": "MSFT", "Market Value": 10000.0 - direct_mv - 2000.0},
+    ])
+    held_data = {
+        "AAPL": {"asset_type": "stock"},
+        "MSFT": {"asset_type": "stock"},
+        "SPY": {
+            "asset_type": asset_type_mod.ASSET_TYPE_ETF,
+            "etf_lookthrough": {
+                "sector_weightings": {},
+                "top_holdings": [{"ticker": "AAPL", "weight": 0.10}],
+            },
+        },
+    }
+    rows = combined_name_exposure(port_df, held_data)
+    by_ticker = {r["ticker"]: r for r in rows}
+    aapl = by_ticker["AAPL"]
+    assert aapl["direct_pct"] == pytest.approx(SINGLE_NAME_CEILING, abs=0.1)
+    assert aapl["lookthrough_pct"] == pytest.approx(2.0)
+    assert aapl["combined_pct"] == pytest.approx(SINGLE_NAME_CEILING + 2.0, abs=0.1)
+    assert aapl["over_ceiling"] is True
+    assert aapl["via_etfs"] == ["SPY"]
+
+
+def test_combined_exposure_direct_plus_lookthrough_does_not_cross_ceiling():
+    # A small direct stake (1%) plus SPY's fixed 2% look-through slice stays
+    # comfortably under any realistic single-name ceiling.
+    port_df = pd.DataFrame([
+        {"Ticker": "AAPL", "Market Value": 100.0},
+        {"Ticker": "SPY",  "Market Value": 2000.0},
+        {"Ticker": "MSFT", "Market Value": 7900.0},
+    ])
+    held_data = {
+        "AAPL": {"asset_type": "stock"},
+        "MSFT": {"asset_type": "stock"},
+        "SPY": {
+            "asset_type": asset_type_mod.ASSET_TYPE_ETF,
+            "etf_lookthrough": {
+                "sector_weightings": {},
+                "top_holdings": [{"ticker": "AAPL", "weight": 0.10}],
+            },
+        },
+    }
+    rows = combined_name_exposure(port_df, held_data)
+    aapl = next(r for r in rows if r["ticker"] == "AAPL")
+    assert aapl["combined_pct"] == pytest.approx(3.0)
+    assert aapl["combined_pct"] < SINGLE_NAME_CEILING
+    assert aapl["over_ceiling"] is False
+
+
+def test_combined_exposure_constituent_in_two_held_etfs_sums_and_lists_both():
+    port_df = pd.DataFrame([
+        {"Ticker": "SPY", "Market Value": 5000.0},
+        {"Ticker": "QQQ", "Market Value": 5000.0},
+    ])
+    held_data = {
+        "SPY": {
+            "asset_type": asset_type_mod.ASSET_TYPE_ETF,
+            "etf_lookthrough": {
+                "sector_weightings": {},
+                "top_holdings": [{"ticker": "NVDA", "weight": 0.08}],
+            },
+        },
+        "QQQ": {
+            "asset_type": asset_type_mod.ASSET_TYPE_ETF,
+            "etf_lookthrough": {
+                "sector_weightings": {},
+                "top_holdings": [{"ticker": "NVDA", "weight": 0.12}],
+            },
+        },
+    }
+    rows = combined_name_exposure(port_df, held_data)
+    nvda = next(r for r in rows if r["ticker"] == "NVDA")
+    # SPY contributes 5000*0.08/10000*100 = 4.0; QQQ contributes 5000*0.12/10000*100 = 6.0.
+    assert nvda["direct_pct"] == 0.0
+    assert nvda["lookthrough_pct"] == pytest.approx(10.0)
+    assert nvda["combined_pct"] == pytest.approx(10.0)
+    assert sorted(nvda["via_etfs"]) == ["QQQ", "SPY"]
+
+
+def test_combined_exposure_none_lookthrough_contributes_zero_but_own_ticker_still_counted():
+    port_df = pd.DataFrame([
+        {"Ticker": "AAPL", "Market Value": 1000.0},
+        {"Ticker": "SPY",  "Market Value": 1000.0},
+    ])
+    held_data = {
+        "AAPL": {"asset_type": "stock"},
+        "SPY": {"asset_type": asset_type_mod.ASSET_TYPE_ETF, "etf_lookthrough": None},
+    }
+    rows = combined_name_exposure(port_df, held_data)
+    by_ticker = {r["ticker"]: r for r in rows}
+    # SPY's own direct exposure (it's a holding too) is still correctly counted.
+    assert by_ticker["SPY"]["direct_pct"] == 50.0
+    assert by_ticker["SPY"]["lookthrough_pct"] == 0.0
+    assert by_ticker["SPY"]["via_etfs"] == []
+    assert by_ticker["AAPL"]["combined_pct"] == 50.0
+    assert by_ticker["AAPL"]["via_etfs"] == []
+
+
+def test_combined_exposure_bond_fund_empty_top_holdings_contributes_zero():
+    port_df = pd.DataFrame([{"Ticker": "TLT", "Market Value": 1000.0}])
+    held_data = {
+        "TLT": {
+            "asset_type": asset_type_mod.ASSET_TYPE_ETF,
+            "etf_lookthrough": {"sector_weightings": {}, "top_holdings": []},
+        },
+    }
+    rows = combined_name_exposure(port_df, held_data)
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "TLT"
+    assert rows[0]["lookthrough_pct"] == 0.0
+    assert rows[0]["via_etfs"] == []
+
+
+def test_combined_exposure_zero_exposure_ticker_absent_from_output():
+    port_df = pd.DataFrame([{"Ticker": "SPY", "Market Value": 1000.0}])
+    held_data = {
+        "SPY": {
+            "asset_type": asset_type_mod.ASSET_TYPE_ETF,
+            "etf_lookthrough": {
+                "sector_weightings": {},
+                "top_holdings": [{"ticker": "NVDA", "weight": 0.08}],
+            },
+        },
+    }
+    rows = combined_name_exposure(port_df, held_data)
+    tickers = {r["ticker"] for r in rows}
+    assert "MSFT" not in tickers  # never held, never a top-holding constituent
+    assert tickers == {"SPY", "NVDA"}
+
+
+def test_combined_exposure_stock_only_portfolio_has_zero_lookthrough_everywhere():
+    port_df = pd.DataFrame([
+        {"Ticker": "AAPL", "Market Value": 3000.0},
+        {"Ticker": "MSFT", "Market Value": 7000.0},
+    ])
+    held_data = {
+        "AAPL": {"asset_type": "stock"},
+        "MSFT": {"asset_type": "stock"},
+    }
+    rows = combined_name_exposure(port_df, held_data)
+    by_ticker = {r["ticker"]: r for r in rows}
+    assert by_ticker["AAPL"]["lookthrough_pct"] == 0.0
+    assert by_ticker["AAPL"]["via_etfs"] == []
+    assert by_ticker["AAPL"]["direct_pct"] == by_ticker["AAPL"]["combined_pct"] == 30.0
+    assert by_ticker["MSFT"]["direct_pct"] == by_ticker["MSFT"]["combined_pct"] == 70.0
+
+
+def test_combined_exposure_rounds_to_one_decimal():
+    port_df = pd.DataFrame([
+        {"Ticker": "AAPL", "Market Value": 1000.0},
+        {"Ticker": "MSFT", "Market Value": 2000.0},
+    ])
+    held_data = {
+        "AAPL": {"asset_type": "stock"},
+        "MSFT": {"asset_type": "stock"},
+    }
+    rows = combined_name_exposure(port_df, held_data)
+    by_ticker = {r["ticker"]: r for r in rows}
+    # 1000/3000*100 = 33.333... -> rounds to 33.3
+    assert by_ticker["AAPL"]["direct_pct"] == 33.3
+    assert by_ticker["AAPL"]["combined_pct"] == 33.3
+
+
+def test_combined_exposure_sorted_descending_by_combined_pct():
+    port_df = pd.DataFrame([
+        {"Ticker": "AAPL", "Market Value": 1000.0},
+        {"Ticker": "MSFT", "Market Value": 5000.0},
+        {"Ticker": "NVDA", "Market Value": 4000.0},
+    ])
+    held_data = {t: {"asset_type": "stock"} for t in ("AAPL", "MSFT", "NVDA")}
+    rows = combined_name_exposure(port_df, held_data)
+    combined_vals = [r["combined_pct"] for r in rows]
+    assert combined_vals == sorted(combined_vals, reverse=True)
+
+
+def test_combined_exposure_empty_portfolio_returns_empty_list():
+    assert combined_name_exposure(pd.DataFrame(), {}) == []
 
 
 def test_sector_benchmark_tilt_unheld_benchmark_sector_shows_negative_tilt():

@@ -1,11 +1,12 @@
 # Multi-asset-type support (ETF first) — architecture review + phased plan
 
-**Status: ANALYSIS COMPLETE + PHASES 0, 1, 2, AND 3a SHIPPED, all 2026-09-27
-(F-279, F-280, F-281, F-282). Phase 3a's `etf_lookthrough_cache` DDL is
-written but NOT YET APPLIED by the owner** (every write path degrades
+**Status: ANALYSIS COMPLETE + PHASES 0, 1, 2, 3a, AND 3b SHIPPED, all
+2026-09-27 (F-279, F-280, F-281, F-282, F-283) — Phase 3 (look-through +
+overlap) is now fully closed.** Phase 3a's `etf_lookthrough_cache` DDL is
+written but NOT YET APPLIED by the owner (every write path degrades
 gracefully without it — same non-blocking posture as Phase 1's DDL window).
-Phase 3b (top-holdings overlap detector) and Phase 4 (type-aware UI) are
-DESIGNED, NOT STARTED, no trigger date.
+Only Phase 4 (type-aware UI polish) remains DESIGNED, NOT STARTED, no
+trigger date.
 Opus `planner` architecture review, then a second `planner` design pass per phase,
 `implementer` built each, Opus `reviewer` before every commit (Phase 0: FIX-FIRST/1
 blocking → fixed same session → SHIP/0 blocking; Phase 1: SHIP/0 blocking, first
@@ -633,3 +634,60 @@ built this pass); no wiring of the look-through readout into
 Phase 2 still stands: ETFs stay excluded from the hard concentration gate);
 no UI caption/gate change on Watchlist/Analysis/Portfolio Overview beyond the
 one Analytics-tab toggle.
+
+## Phase 3b — implementation record
+
+**Shipped 2026-09-27 as F-283** (`docs/requirements.md` F-283). Design chain:
+the exact function shape and policy (reuse `SINGLE_NAME_CEILING`, no new
+constant, reuse Phase 3a's already-fetched/cached data, no new fetch) was
+already fully specified during the original Phase 3 design pass — no fresh
+`planner` round was needed for this phase, since there was no new policy
+value to decide. `implementer` (Sonnet) built directly to that spec; Opus
+`reviewer` SHIP/0 blocking, first pass.
+
+**What shipped:** `stock_analyzer/portfolio.py::combined_name_exposure(port_df,
+loaded_data)` — for every ticker with any direct-holding or ETF-look-through
+exposure, computes `direct_pct` + `lookthrough_pct` (summed across every held
+ETF whose top-~10 disclosed holdings include that ticker) = `combined_pct`,
+flags `over_ceiling` at the existing `SINGLE_NAME_CEILING` (15.0, no new
+constant), and names which ETF(s) contributed (`via_etfs`). A new expander
+"🔍 True Single-Name Exposure (incl. ETF look-through)" on the same Analytics
+tab as Phase 3a's toggle, showing only rows where an ETF actually adds
+something to the picture, with three required disclosure captions: the
+top-~10-only coverage limit (never implies full-holdings coverage), which
+held ETF(s) currently have no look-through data (`etf_lookthrough is None`,
+distinguished from a legitimate bond-fund empty result), and a calm
+"no overlap detected" message when nothing qualifies. Zero changes to
+`risk_advisor.py`'s existing `single_name_concentration` check — this is a
+separate, read-only awareness surface that never gates or feeds any
+recommendation.
+
+**Review = Opus reviewer (Claude Opus 4.8 (1M context)): SHIP, 0 blocking.**
+Confirmed no new `constants.py` value, confirmed `risk_advisor.py` has zero
+diff lines, traced the offline-sentinel handling (a bond-fund's legitimately
+empty `top_holdings` is never confused with a `None`/missing-data state, at
+both the pure-function and the render-caption layer), re-derived the
+multi-ETF summation arithmetic by hand from the test's own numbers, and
+confirmed the denominator matches `sector_exposure()`'s existing convention
+(sum of `port_df["Market Value"]`) so this feature's percentages can't
+silently disagree with every other exposure percentage in the app. Two minor
+non-blocking notes, left as-is: the zero-exposure omission technically checks
+the ROUNDED value (a position under ~0.05% of book could in principle be
+dropped) rather than a stricter "truly zero" check — negligible in practice
+for an awareness surface, and no test exists yet for the specific case of a
+held ETF also appearing as a top-holding constituent of a DIFFERENT held ETF
+(the code's separate direct/look-through tallies make this safe by
+construction, just untested directly). Full suite 6390 passed; antipattern
+gate confirmed clean (the implementer's own first draft tripped the
+`OFFLINE_SENTINEL_COLLAPSE` rule on an `or []` collapse and fixed it to the
+two-arg `.get(key, [])` form before handback — the reviewer independently
+re-derived that this specific fix is semantically safe, not just
+gate-shaped, since Phase 3a's producer never stores an explicit `None` for a
+present `top_holdings` key).
+
+**What this does NOT do:** no new fetch, no new cache table (reuses Phase
+3a's `etf_lookthrough` bundle data as-is), no new `constants.py` value, no
+change to any gate or existing recommendation. **This closes Phase 3
+entirely** (3a + 3b) — only Phase 4 (type-aware UI polish, incl. surfacing
+the still-unwired `etf_aum_thin` flag from Phase 2, and deciding ETF new-pick
+eligibility as a possible 2b) remains designed, not started.
