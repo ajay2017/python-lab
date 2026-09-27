@@ -1019,7 +1019,8 @@ _DEFAULT_WATCHLIST = ["NVDA", "AMD", "INTC", "MU"]
 # viewer's visit is harmless and desirable. The full list, so the exemption
 # stops drifting (it was written naming only the first, then grew to 12 by
 # 2026-08-28 — six of which were not this class at all):
-#     save_fundamentals_cache, save_sector_cache, save_sentiment_llm_cache
+#     save_fundamentals_cache, save_sector_cache, save_sentiment_llm_cache,
+#     save_etf_lookthrough_cache (ETF-support Phase 3a)
 #         (bundle_loader, on load)
 #     save_price_xcheck_history_batch  (app.py, on render; no LLM, and the
 #         upsert is idempotent on (ticker, check_date))
@@ -4467,6 +4468,58 @@ def save_fundamentals_cache(ticker: str, financials: dict) -> bool:
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
         _client().table("fundamentals_cache").upsert(record, on_conflict="ticker").execute()
+        return True
+    except Exception:
+        return False
+
+
+def load_etf_lookthrough_cache(ticker: str) -> dict | None:
+    """Return the last-known ETF sector look-through + top-holdings payload
+    for a ticker, or None.
+
+    Shape: {"payload": {...the dict fetch_etf_lookthrough returned...},
+    "fetched_at": "<iso>"}. Returns None when the DB is offline, the table
+    doesn't exist yet, or there's no row — so the feature degrades to a live
+    fetch every time until the table is created. Never raises: a cache miss
+    must not break the data path."""
+    t = str(ticker or "").upper().strip()
+    if not t or not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("etf_lookthrough_cache")
+            .select("payload,updated_at")
+            .eq("ticker", t).limit(1).execute().data
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        payload = row.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        return {"payload": payload, "fetched_at": row.get("updated_at")}
+    except Exception:
+        return None
+
+
+def save_etf_lookthrough_cache(ticker: str, payload: dict) -> bool:
+    """Upsert the last-known ETF sector look-through + top-holdings payload
+    for a ticker (write-through on a successful live fetch). System cache,
+    not user data -> NOT _READONLY-gated (mirrors save_fundamentals_cache /
+    save_sector_cache — a read-only viewer still benefits from a warm cache).
+    Best-effort: a failure (e.g. table not created yet) is swallowed so it
+    never disrupts the data path."""
+    t = str(ticker or "").upper().strip()
+    if not t or not isinstance(payload, dict) or not has_db():
+        return False
+    try:
+        from datetime import datetime, timezone
+        record = {
+            "ticker":     t,
+            "payload":    _json_safe(payload),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _client().table("etf_lookthrough_cache").upsert(record, on_conflict="ticker").execute()
         return True
     except Exception:
         return False

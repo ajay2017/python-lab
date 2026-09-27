@@ -1,6 +1,6 @@
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import pytz
 
 from stock_analyzer import constants as _C
@@ -310,6 +310,55 @@ def fetch_etf_facts_from_info(info: dict) -> dict:
         "legal_type":                     info.get("legalType"),
         "trailing_annual_dividend_yield": info.get("trailingAnnualDividendYield"),
     }
+
+
+def fetch_etf_lookthrough(ticker: str) -> dict | None:
+    """Fetch real sector look-through + top-holdings data for an ETF via
+    yfinance's `funds_data` API — a DIFFERENT surface than `.info` (a separate
+    network call, never reuse an already-fetched `.info` dict for this).
+
+    ETF-support Phase 3a (`docs/plans/etf-multi-asset-support.md`). Three-state
+    contract, same offline-sentinel discipline as every other cache-backed
+    provider call in this codebase:
+      - Provider failure (network error, invalid/delisted ticker -> HTTPError,
+        confirmed in the live probe) -> None (offline sentinel — caller must
+        never read this as "no equity exposure").
+      - Fetched successfully but the fund has no equity sector exposure (a
+        bond ETF like TLT -- confirmed empty in the live probe) -> a PRESENT,
+        non-None dict with empty contents:
+        {"sector_weightings": {}, "top_holdings": [], "fetched_at": <iso>}.
+        This must NEVER be confused with a fetch failure, and consumers must
+        NEVER read an empty dict as "diversified" or default it to any bucket.
+      - Fetched with real equity sector data ->
+        {"sector_weightings": {<yfinance keys>: <float fraction>, ...},
+         "top_holdings": [{"ticker": str, "weight": float}, ...],
+         "fetched_at": <iso>}.
+        `top_holdings` is read from `funds_data.top_holdings` (a DataFrame
+        indexed by ticker symbol with a "Holding Percent" column).
+
+    Catches broad exceptions around the yfinance call (network/HTTP/parsing) —
+    this must never raise into a caller; any unexpected failure collapses to
+    None, same as every other provider call in this codebase.
+    """
+    try:
+        fd = yf.Ticker(ticker).funds_data
+        sector_weightings = dict(fd.sector_weightings or {})
+        top_holdings: list[dict] = []
+        _th_df = fd.top_holdings
+        if _th_df is not None and not _th_df.empty:
+            for sym, row in _th_df.iterrows():
+                weight = row.get("Holding Percent")
+                top_holdings.append({
+                    "ticker": str(sym),
+                    "weight": float(weight) if weight is not None else None,
+                })
+        return {
+            "sector_weightings": sector_weightings,
+            "top_holdings":      top_holdings,
+            "fetched_at":        datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception:
+        return None
 
 
 def fetch_financials(ticker: str) -> dict:

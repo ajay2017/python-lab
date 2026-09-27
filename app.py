@@ -263,6 +263,7 @@ from stock_analyzer.portfolio import (
     manual_stop_wins, holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
     trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
+    real_sector_exposure_with_lookthrough,
     classify_book_corr, CORR_MIN_OBS_TRUSTED, expected_beta_after_add,
     beta_diversifying_sectors,
 )
@@ -20447,7 +20448,25 @@ elif page == "🥧 Portfolio Overview":
                 "answers a different question — \"are we over/underweight the actual market,\" "
                 "not \"which thematic sectors are we diversified across.\""
             )
-            _rsx_df = real_sector_exposure(port_df, held_data)
+            _rsx_lookthrough = st.checkbox(
+                "Include ETF look-through (blend held ETFs' real sector composition in, "
+                "instead of a single 'Other' bucket)",
+                key="_rsx_lookthrough_toggle",
+            )
+            _rsx_df = (
+                real_sector_exposure_with_lookthrough(port_df, held_data)
+                if _rsx_lookthrough else
+                real_sector_exposure(port_df, held_data)
+            )
+            if _rsx_lookthrough:
+                st.caption(
+                    "🔬 ETF look-through ON — a held ETF's market value is split across "
+                    "GICS sectors per its own real holdings (yfinance `funds_data`) instead of "
+                    "landing in one bucket. An ETF with no fetched/cached look-through data "
+                    "(or a bond/no-equity fund) contributes nothing here rather than a "
+                    "fabricated 'diversified' reading — its exposure is simply not represented "
+                    "in this view until that data is available."
+                )
             if _rsx_df.empty:
                 st.info("No holdings with a resolvable sector.")
             else:

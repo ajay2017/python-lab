@@ -1103,6 +1103,101 @@ def real_sector_exposure(port_df: pd.DataFrame, loaded_data: dict) -> pd.DataFra
     )
 
 
+# Maps yfinance funds_data.sector_weightings' raw keys (verified via the live
+# probe, docs/plans/etf-multi-asset-support.md "Phase 3 data-readiness probe")
+# onto the SAME GICS-11 target vocabulary _PROVIDER_SECTOR_ALIASES already
+# uses, so the ETF look-through readout and the stock real-sector readout can
+# never disagree on a sector's name. Deliberately a SEPARATE dict from
+# _PROVIDER_SECTOR_ALIASES rather than merged into it: the two source
+# vocabularies differ in naming convention (yfinance funds_data uses
+# snake_case/compound single-token keys like "realestate", vs .info["sector"]'s
+# space-separated strings like "real estate") — an explicit 1:1 mapping here is
+# safer than a shared string-normalization step across two different provider
+# conventions. Any key not listed here falls through to UNCLASSIFIED_SECTOR —
+# visible, never silently miscounted (ETF-support Phase 3a).
+_ETF_LOOKTHROUGH_SECTOR_ALIASES = {
+    "technology":              "Information Technology",
+    "financial_services":      "Financials",
+    "consumer_cyclical":       "Consumer Discretionary",
+    "consumer_defensive":      "Consumer Staples",
+    "communication_services":  "Communication Services",
+    "basic_materials":         "Materials",
+    "realestate":              "Real Estate",
+    "utilities":               "Utilities",
+    "industrials":             "Industrials",
+    "energy":                  "Energy",
+    "healthcare":              "Health Care",
+}
+
+
+def _normalize_etf_lookthrough_sector(raw: str | None) -> str:
+    """Maps a raw yfinance funds_data.sector_weightings key onto a GICS-11
+    key, or UNCLASSIFIED_SECTOR when unmapped/blank."""
+    key = str(raw or "").strip().lower()
+    return _ETF_LOOKTHROUGH_SECTOR_ALIASES.get(key, UNCLASSIFIED_SECTOR)
+
+
+def real_sector_exposure_with_lookthrough(port_df: pd.DataFrame, loaded_data: dict) -> pd.DataFrame:
+    """Like real_sector_exposure(), but a held ETF's market value is split
+    FRACTIONALLY across GICS-11 buckets per its real
+    etf_lookthrough["sector_weightings"], instead of collapsing an ETF into a
+    single "Other" bucket the way real_sector_exposure() does for any ticker
+    whose .info["sector"] is blank/unmapped.
+
+    A stock holding (asset_type != "etf") is handled EXACTLY as
+    real_sector_exposure() does — reuses the same _normalize_provider_sector
+    alias table, contributing its full market value to one GICS bucket — so
+    the two functions agree byte-for-byte on a stock-only portfolio.
+
+    A held ETF whose etf_lookthrough is None (fetch failed / not yet fetched)
+    or present-but-EMPTY (a bond/no-equity fund, e.g. TLT) contributes ZERO to
+    every GICS bucket — explicitly excluded, never defaulted to any bucket
+    (including "Other") and never read as "diversified". A None/missing
+    etf_lookthrough NEVER flows into the numeric tally as a NaN — it is
+    skipped outright before any arithmetic.
+
+    Awareness-only (ETF-support Phase 3a) — does NOT touch sector_exposure(),
+    resolve_sector(), TICKER_SECTORS, or SECTOR_CEILING, the curated taxonomy
+    the hard concentration gate reads. Same output shape as
+    real_sector_exposure(): columns Sector / Value / Pct, sorted by Pct desc.
+    """
+    if port_df.empty:
+        return pd.DataFrame()
+    tally: dict[str, float] = {}
+    for _, row in port_df[["Ticker", "Market Value"]].iterrows():
+        ticker = row["Ticker"]
+        mv = float(row["Market Value"])
+        # Two-arg .get(key, {}) deliberately, not `.get(key) or {}` — loaded_data
+        # never stores an explicit None value for a present ticker key (it's
+        # either a real bundle or the key is absent entirely), so the two-arg
+        # default preserves the same offline-sentinel discipline the rest of
+        # this codebase uses (see OFFLINE_SENTINEL_COLLAPSE in
+        # scripts/check_antipatterns.py).
+        bundle = loaded_data.get(ticker, {})
+        if bundle.get("asset_type") == asset_type.ASSET_TYPE_ETF:
+            lookthrough = bundle.get("etf_lookthrough")
+            if not lookthrough:
+                continue  # None (fetch failed) -- contribute nothing, ever
+            weightings = lookthrough.get("sector_weightings", {})
+            if not weightings:
+                continue  # present-but-empty (bond fund) -- contribute nothing
+            for raw_key, weight in weightings.items():
+                if weight is None:
+                    continue
+                gics = _normalize_etf_lookthrough_sector(raw_key)
+                tally[gics] = tally.get(gics, 0.0) + mv * float(weight)
+        else:
+            gics = _normalize_provider_sector(bundle.get("sector"))
+            tally[gics] = tally.get(gics, 0.0) + mv
+
+    if not tally:
+        return pd.DataFrame()
+    df = pd.DataFrame({"Sector": list(tally.keys()), "Value": list(tally.values())})
+    total = df["Value"].sum()
+    df["Pct"] = (df["Value"] / total * 100).round(1) if total else 0.0
+    return df.sort_values("Pct", ascending=False).reset_index(drop=True)
+
+
 def sector_benchmark_tilt(real_sector_df: pd.DataFrame) -> pd.DataFrame:
     """Portfolio real-sector % vs. SP500_SECTOR_WEIGHTS, outer-joined so a
     benchmark sector held at 0% still shows a negative tilt. Tilt = portfolio

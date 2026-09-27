@@ -22,11 +22,13 @@ from stock_analyzer.constants import (
     FUNDAMENTALS_GATE_MIN_METRICS,
     FUNDAMENTALS_CACHE_MAX_AGE_DAYS,
     BUNDLE_CACHE_MAX_AGE_DAYS,
+    ETF_LOOKTHROUGH_CACHE_MAX_AGE_DAYS,
     ATR_STOP_MULT,
     VALUATION_COVERAGE_FRESH_DAYS,
 )
 from stock_analyzer.data import (
     fetch_ticker_bundle, fetch_financials_from_info, fetch_etf_facts_from_info,
+    fetch_etf_lookthrough,
 )
 from stock_analyzer import asset_type
 from stock_analyzer import etf_scoring
@@ -244,6 +246,30 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         if _etf_total is not None else None
     )
     _etf_aum_thin = etf_scoring.etf_aum_thin((_etf_facts or {}).get("total_assets"))
+    # ETF sector look-through (Phase 3a, ETF-support). Additive only, scoped
+    # entirely to asset_type == "etf" -- a stock bundle's _etf_lookthrough is
+    # None, same "not applicable" contract as _etf_facts/_etf_available above.
+    # Cache-FIRST (the reverse of the fundamentals resolve/write-through
+    # pattern above, which is live-first): a fund's sector composition moves
+    # far more slowly than a stock's fundamentals, so check the persistent
+    # cache before spending a live `funds_data` call, and only fetch live on a
+    # miss or an entry older than ETF_LOOKTHROUGH_CACHE_MAX_AGE_DAYS. Never
+    # raises -- fetch_etf_lookthrough and the db.* cache calls already
+    # degrade to None/no-op on any failure.
+    _etf_lookthrough = None
+    if _asset_type == asset_type.ASSET_TYPE_ETF:
+        _cached_lt = db.load_etf_lookthrough_cache(ticker)
+        _cached_lt_age = _cache_age_in_days((_cached_lt or {}).get("fetched_at"))
+        if (
+            _cached_lt is not None
+            and _cached_lt_age is not None
+            and _cached_lt_age <= ETF_LOOKTHROUGH_CACHE_MAX_AGE_DAYS
+        ):
+            _etf_lookthrough = _cached_lt["payload"]
+        else:
+            _etf_lookthrough = fetch_etf_lookthrough(ticker)
+            if _etf_lookthrough is not None:
+                db.save_etf_lookthrough_cache(ticker, _etf_lookthrough)
     return {
         "df": df, "t_score": t_score, "t_signals": t_signals,
         # New 4-pillar keys:
@@ -275,6 +301,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         "etf_total":      _etf_total,
         "etf_rec":        _etf_rec,
         "etf_aum_thin":   _etf_aum_thin,
+        "etf_lookthrough": _etf_lookthrough,
         "fund_metric_count": _fund_metric_count,
         "fund_source": _fund_source,
         "fund_cache_age_days": _fund_cache_age_days,

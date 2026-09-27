@@ -29,12 +29,14 @@ from stock_analyzer.portfolio import (
     manual_stop_wins,
     protective_stop,
     real_sector_exposure,
+    real_sector_exposure_with_lookthrough,
     sector_benchmark_tilt,
     SECTOR_ETF,
     stop_ladder,
     trim_allocation,
     WITHHELD_SIGNAL,
 )
+from stock_analyzer import asset_type as asset_type_mod
 
 pytestmark = pytest.mark.fast
 
@@ -315,6 +317,127 @@ def test_real_sector_exposure_missing_sector_field_falls_back_to_other():
 
 def test_real_sector_exposure_empty_portfolio_returns_empty_df():
     assert real_sector_exposure(pd.DataFrame(), {}).empty
+
+
+# ── _ETF_LOOKTHROUGH_SECTOR_ALIASES / real_sector_exposure_with_lookthrough ──
+# ETF-support Phase 3a (docs/plans/etf-multi-asset-support.md).
+
+_LIVE_PROBE_FUNDS_DATA_KEYS = [
+    "technology", "financial_services", "consumer_cyclical", "consumer_defensive",
+    "communication_services", "basic_materials", "realestate", "utilities",
+    "industrials", "energy", "healthcare",
+]
+
+_GICS_11 = {
+    "Information Technology", "Financials", "Communication Services",
+    "Consumer Discretionary", "Health Care", "Consumer Staples", "Energy",
+    "Utilities", "Materials", "Real Estate", "Industrials",
+}
+
+
+def test_etf_lookthrough_sector_aliases_cover_every_live_probe_key():
+    for key in _LIVE_PROBE_FUNDS_DATA_KEYS:
+        assert key in portfolio._ETF_LOOKTHROUGH_SECTOR_ALIASES
+        assert portfolio._ETF_LOOKTHROUGH_SECTOR_ALIASES[key] in _GICS_11
+    # All 11 target strings actually used -- no accidental many-to-fewer collapse.
+    assert set(portfolio._ETF_LOOKTHROUGH_SECTOR_ALIASES.values()) == _GICS_11
+
+
+def test_etf_lookthrough_sector_unrecognized_key_falls_through_to_unclassified():
+    from stock_analyzer.constants import UNCLASSIFIED_SECTOR
+    assert portfolio._normalize_etf_lookthrough_sector("some_weird_key") == UNCLASSIFIED_SECTOR
+    assert portfolio._normalize_etf_lookthrough_sector(None) == UNCLASSIFIED_SECTOR
+    assert portfolio._normalize_etf_lookthrough_sector("") == UNCLASSIFIED_SECTOR
+
+
+def test_lookthrough_broad_etf_splits_across_multiple_gics_buckets():
+    port_df = pd.DataFrame([{"Ticker": "SPY", "Market Value": 1000.0}])
+    held_data = {
+        "SPY": {
+            "asset_type": asset_type_mod.ASSET_TYPE_ETF,
+            "etf_lookthrough": {
+                "sector_weightings": {"technology": 0.4, "financial_services": 0.6},
+                "top_holdings": [],
+            },
+        },
+    }
+    result = real_sector_exposure_with_lookthrough(port_df, held_data)
+    values = dict(zip(result["Sector"], result["Value"]))
+    assert values == {
+        "Information Technology": pytest.approx(400.0),
+        "Financials":             pytest.approx(600.0),
+    }
+    assert result["Value"].sum() == pytest.approx(1000.0)  # sums to the ETF's full market value
+
+
+def test_lookthrough_single_sector_etf_lands_entirely_in_one_bucket():
+    port_df = pd.DataFrame([{"Ticker": "XLK", "Market Value": 500.0}])
+    held_data = {
+        "XLK": {
+            "asset_type": asset_type_mod.ASSET_TYPE_ETF,
+            "etf_lookthrough": {"sector_weightings": {"technology": 1.0}, "top_holdings": []},
+        },
+    }
+    result = real_sector_exposure_with_lookthrough(port_df, held_data)
+    assert result["Sector"].tolist() == ["Information Technology"]
+    assert result["Value"].iloc[0] == pytest.approx(500.0)
+    assert result["Pct"].iloc[0] == 100.0
+
+
+def test_lookthrough_none_contributes_zero_and_does_not_corrupt_other_rows():
+    """etf_lookthrough=None (fetch failed / never fetched) -- zero footprint,
+    not NaN, and the other (stock) row's Pct is computed correctly, not
+    corrupted by a stray NaN in the tally."""
+    port_df = pd.DataFrame([
+        {"Ticker": "AAPL", "Market Value": 1000.0},
+        {"Ticker": "SPY",  "Market Value": 500.0},
+    ])
+    held_data = {
+        "AAPL": {"sector": "Technology"},  # stock, real_sector_exposure alias path
+        "SPY":  {"asset_type": asset_type_mod.ASSET_TYPE_ETF, "etf_lookthrough": None},
+    }
+    result = real_sector_exposure_with_lookthrough(port_df, held_data)
+    assert result["Sector"].tolist() == ["Information Technology"]
+    assert result["Value"].iloc[0] == pytest.approx(1000.0)
+    assert result["Pct"].iloc[0] == 100.0
+    assert not result["Value"].isna().any()
+    assert not result["Pct"].isna().any()
+
+
+def test_lookthrough_empty_sector_weightings_bond_fund_contributes_zero():
+    """A present-but-empty etf_lookthrough (a bond/no-equity fund, e.g. TLT)
+    as the sole holding -- must be distinguishable from "diversified": an
+    empty result, not a fabricated bucket."""
+    port_df = pd.DataFrame([{"Ticker": "TLT", "Market Value": 750.0}])
+    held_data = {
+        "TLT": {
+            "asset_type": asset_type_mod.ASSET_TYPE_ETF,
+            "etf_lookthrough": {"sector_weightings": {}, "top_holdings": []},
+        },
+    }
+    result = real_sector_exposure_with_lookthrough(port_df, held_data)
+    assert result.empty
+
+
+def test_lookthrough_matches_real_sector_exposure_on_stock_only_portfolio():
+    """Side-by-side comparison: a stock-only portfolio must produce BYTE-
+    IDENTICAL output between the two functions -- the ETF-aware path must not
+    perturb the existing stock behavior."""
+    port_df = pd.DataFrame([
+        {"Ticker": "V",   "Market Value": 1000.0},
+        {"Ticker": "LLY", "Market Value": 500.0},
+    ])
+    held_data = {
+        "V":   {"sector": "Financial Services"},
+        "LLY": {"sector": "Healthcare"},
+    }
+    baseline    = real_sector_exposure(port_df, held_data).reset_index(drop=True)
+    lookthrough = real_sector_exposure_with_lookthrough(port_df, held_data).reset_index(drop=True)
+    pd.testing.assert_frame_equal(baseline, lookthrough)
+
+
+def test_lookthrough_empty_portfolio_returns_empty_df():
+    assert real_sector_exposure_with_lookthrough(pd.DataFrame(), {}).empty
 
 
 def test_sector_benchmark_tilt_unheld_benchmark_sector_shows_negative_tilt():

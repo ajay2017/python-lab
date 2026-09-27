@@ -1173,6 +1173,21 @@ FUNDAMENTALS_GATE_MIN_METRICS = 1
 # keeps the verdict materially correct. Changing it is an investment-policy call.
 FUNDAMENTALS_CACHE_MAX_AGE_DAYS = 7
 
+# Persistent ETF sector look-through + top-holdings cache (Supabase
+# `etf_lookthrough_cache`). ETF-support Phase 3a
+# (`docs/plans/etf-multi-asset-support.md`). `funds_data.sector_weightings`
+# moves far more slowly than a stock's fundamentals (a fund's index/holdings
+# composition is rebalanced quarterly at most, not daily), so this cache is
+# checked FIRST and a live yfinance `funds_data` call is only made on a
+# cache-miss or an entry older than this — the reverse order from
+# FUNDAMENTALS_CACHE_MAX_AGE_DAYS (live-first, cache-as-fallback), because that
+# fetch is fast/cheap while `funds_data` is a separate, slower API surface.
+# Awareness-only diagnostic (never gates), but still a real policy choice
+# about how stale a displayed sector blend may be before it's treated as
+# unknown. Changing it is an investment-policy call, same as
+# FUNDAMENTALS_CACHE_MAX_AGE_DAYS above.
+ETF_LOOKTHROUGH_CACHE_MAX_AGE_DAYS = 30
+
 # ── NYSE market calendar (holiday awareness) ─────────────────────────────────
 # Hardcoded NYSE full-day closures + 1pm early-close half-days, 2026–2028, by
 # the OBSERVED date (weekend holidays move to the Fri/Mon NYSE actually closes).

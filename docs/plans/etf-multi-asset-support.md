@@ -1,18 +1,23 @@
 # Multi-asset-type support (ETF first) — architecture review + phased plan
 
-**Status: ANALYSIS COMPLETE + PHASES 0, 1, AND 2 SHIPPED, all 2026-09-27 (F-279,
-F-280, F-281).**
+**Status: ANALYSIS COMPLETE + PHASES 0, 1, 2, AND 3a SHIPPED, all 2026-09-27
+(F-279, F-280, F-281, F-282). Phase 3a's `etf_lookthrough_cache` DDL is
+written but NOT YET APPLIED by the owner** (every write path degrades
+gracefully without it — same non-blocking posture as Phase 1's DDL window).
+Phase 3b (top-holdings overlap detector) and Phase 4 (type-aware UI) are
+DESIGNED, NOT STARTED, no trigger date.
 Opus `planner` architecture review, then a second `planner` design pass per phase,
 `implementer` built each, Opus `reviewer` before every commit (Phase 0: FIX-FIRST/1
 blocking → fixed same session → SHIP/0 blocking; Phase 1: SHIP/0 blocking, first
 pass). **The Phase 1 DDL was applied by the owner directly in Supabase 2026-09-27**
 (same day as ship) — `asset_type`/`kinds` now exist on all four tables, closing the
 reviewer's one non-blocking note (a broker-confirmed trade write no longer strips
-`broker_txn_id`/`idempotency_key` alongside `asset_type`). Phases 2-4 below are
-DESIGNED, NOT STARTED — each needs its own fresh `planner`/`reviewer` pass and, for
-Phase 2, explicit owner sign-off on new policy constants before any code is written.
-This doc is the design-of-record; do not start a later phase from memory without
-reconfirming this file still matches the code.
+`broker_txn_id`/`idempotency_key` alongside `asset_type`). Phase 3b (top-holdings
+overlap detector) and Phase 4 below are DESIGNED, NOT STARTED — each needs its own
+fresh `planner`/`reviewer` pass and, where noted, explicit owner sign-off on new
+policy constants before any code is written. This doc is the design-of-record; do
+not start a later phase from memory without reconfirming this file still matches
+the code.
 
 ---
 
@@ -485,3 +490,146 @@ sector exposure (still gated on an unverified constituent-holdings data probe),
 no ETF new-pick/Grow Today eligibility, no UI caption for `etf_aum_thin`, no
 ETF-specific BUY/HOLD/SELL thresholds (reused the equity ones — revisit only if
 they prove loose once eyeballed against real ETF holdings).
+
+## Phase 3a — implementation record
+
+**Shipped 2026-09-27.** Design chain: Opus `planner` resolved the Phase 3
+data-readiness probe (above) into an approved policy set (full fractional
+blending, a new `ETF_LOOKTHROUGH_CACHE_MAX_AGE_DAYS = 30` constant,
+awareness-only — zero `SECTOR_CEILING`/`sector_exposure` touch), the owner
+signed off, `implementer` (Sonnet 5) built to spec, Opus `reviewer` SHIP/0
+blocking on the first pass.
+
+**Review = Opus reviewer (Claude Opus 4.8 (1M context)): SHIP, 0 blocking.**
+Confirmed the single most important thing to verify — the hard-gate
+boundary — is real, not just claimed: every `SECTOR_CEILING` call site
+across the whole codebase lives in files NOT in this changeset, and
+`SECTOR_CEILING`/`sector_exposure`/`TICKER_SECTORS`/`resolve_sector` appear
+in the diff only inside new comments/docstrings. Traced the three-state
+sentinel end-to-end (fetch → cache → bundle → consumer) and confirmed no
+`None`/pandas-NaN collapse anywhere. Confirmed the GICS-11 target vocabulary
+is character-for-character identical between the new alias table and the
+existing one (no "Healthcare"/"Health Care" drift). Independently re-derived
+the fractional split arithmetic and confirmed the read-site defensive-check
+change (`.get(key, {})` vs the original `(loaded_data.get(t) or {})`) cannot
+introduce a crash, since a failed ticker is genuinely absent from
+`loaded_data` rather than present-with-`None` (verified against both
+populate sites). **One non-blocking correction to this section's own earlier
+wording:** the new function's stock-path output is functionally equivalent
+to `real_sector_exposure()` but not literally byte-identical — it always
+calls `.reset_index(drop=True)` (the original doesn't), ties on exactly-equal
+`Pct` values can sort in a different row order, and the `Value` column is
+always float64 vs. the original's int64-preserving dtype. Cosmetic for the
+single awareness-chart consumer (both differences are neutralized by the
+comparison test's own `reset_index` on both sides), but "byte-identical" was
+an overstatement — corrected here. Full suite 6380 passed; antipattern and
+constants-doc gates both clean.
+
+**What shipped (code + tests, pending review):**
+- `stock_analyzer/data.py::fetch_etf_lookthrough(ticker)` — a NEW fetch via
+  `yf.Ticker(ticker).funds_data` (a different API surface than `.info`, never
+  merged into `fetch_etf_facts_from_info`). Three-state contract: provider
+  failure -> `None`; fetched with no equity exposure (a bond fund) -> a
+  present dict with `sector_weightings={}`/`top_holdings=[]`; fetched with
+  real data -> the full shape. Broad `except Exception: return None`, mirrors
+  every other provider call in this codebase.
+- `stock_analyzer/db.py::save_etf_lookthrough_cache`/`load_etf_lookthrough_cache`
+  — new persistent cache, byte-for-byte mirroring `save_fundamentals_cache`/
+  `load_fundamentals_cache`'s structure (has_db() guard, `.limit(1)`,
+  swallow-all-exceptions, upsert on `ticker`). NOT `_READONLY`-gated — a
+  system cache, not user data, same posture as `save_sector_cache`. Added to
+  `tests/test_db_readonly.py::_UNGATED_BY_DESIGN` and to `db.py`'s own
+  exemption comment (mechanically enforced — see Hard Rule discussion in
+  `tests/test_db_readonly.py`).
+- `stock_analyzer/constants.py::ETF_LOOKTHROUGH_CACHE_MAX_AGE_DAYS = 30` — a
+  cache-age policy value, deliberately checked CACHE-FIRST (the reverse order
+  from `FUNDAMENTALS_CACHE_MAX_AGE_DAYS`'s live-first pattern), since a fund's
+  sector composition moves far more slowly than a stock's fundamentals.
+  `docs/architecture.md` constants table updated; `check_constants_documented.py`
+  clean.
+- `stock_analyzer/bundle_loader.py::load_bundle` — additive `etf_lookthrough`
+  key, `None` for a stock bundle (regression-tested), populated for an ETF
+  bundle via the cache-first resolve/write-through described above. Never
+  raises; the live fetch and both cache calls all already degrade to
+  `None`/no-op on any failure.
+- `stock_analyzer/portfolio.py` — new `_ETF_LOOKTHROUGH_SECTOR_ALIASES` (a
+  SEPARATE dict from `_PROVIDER_SECTOR_ALIASES`, not merged: the two source
+  vocabularies use different naming conventions — yfinance `funds_data`'s
+  snake_case/compound keys like `realestate` vs `.info["sector"]`'s
+  space-separated strings like `"real estate"` — an explicit 1:1 mapping is
+  safer than a shared string-normalization step) mapping all 11 live-probed
+  `funds_data.sector_weightings` keys onto the exact same GICS-11 target
+  vocabulary `_PROVIDER_SECTOR_ALIASES` already uses. New
+  `real_sector_exposure_with_lookthrough(port_df, loaded_data)` — same output
+  shape as `real_sector_exposure()`; a stock holding is scored the same way
+  (functionally equivalent on a stock-only portfolio, confirmed by a
+  side-by-side comparison test — see the reviewer note below on the two
+  cosmetic dtype/row-order differences that keep this from being literally
+  byte-identical); a held ETF's market value is split FRACTIONALLY
+  across GICS buckets per its real `etf_lookthrough["sector_weightings"]`; an
+  ETF with `etf_lookthrough=None` or a present-but-empty `sector_weightings`
+  (a bond fund) contributes ZERO to every bucket — explicitly excluded, never
+  defaulted to any bucket (including "Other"), never read as "diversified."
+  Does NOT touch `sector_exposure()`, `resolve_sector()`, `TICKER_SECTORS`,
+  or `SECTOR_CEILING` — zero change to the hard concentration gate.
+  Deliberately used the two-arg `.get(key, {})` form (not `.get(key) or {}`)
+  at both new read sites, per `scripts/check_antipatterns.py`'s
+  `OFFLINE_SENTINEL_COLLAPSE` rule's own documented distinction — this
+  codebase's producers never store an explicit `None` for a present key, so
+  the two-arg default preserves the same offline-sentinel discipline without
+  growing the antipattern baseline.
+- `app.py` — the existing F-223 "🏛️ Portfolio vs. S&P 500 (Real Sector)"
+  chart (Analytics tab) gained a checkbox, "Include ETF look-through"; when
+  checked, it calls `real_sector_exposure_with_lookthrough` instead of
+  `real_sector_exposure` and shows an explanatory caption. Render-only wiring,
+  no new decision logic in `app.py` itself — same chart, same taxonomy, one
+  toggle between two readouts that can never disagree on a sector's name.
+- **Phase 3b is intentionally NOT built here** — the fetched/cached payload
+  already carries `top_holdings` (index=symbol, `Holding Percent`-derived
+  weight) precisely so a future top-holdings overlap detector can reuse this
+  same cache without a second `funds_data` fetch.
+
+**Tests added:** `tests/test_data_etf_lookthrough.py` (5 — success shape, bond
+fund present-but-empty, `Ticker()` construction raising, `.funds_data`
+property raising, `top_holdings=None` handled), `tests/test_db_etf_lookthrough_cache.py`
+(8 — round-trip, missing ticker, DB offline for both read/write, table-missing
+for both read/write, non-dict payload rejected, blank ticker), 10 new/extended
+cases in `tests/test_bundle_loader_asset_type.py` (stock bundle's
+`etf_lookthrough` is `None` in two existing tests + 4 new Phase 3a cases:
+fresh-cache-hit-skips-live-fetch, no-cache-live-fetch-writes-through,
+stale-cache-falls-through-to-live, live-failure-with-no-cache-stays-`None`),
+8 new cases in `tests/test_portfolio.py` (alias coverage of all 11 live-probed
+keys + unrecognized-key fallthrough, broad-ETF fractional split, single-sector
+100% bucket, `None`-lookthrough zero-footprint-without-corrupting-other-rows,
+empty-`sector_weightings` bond-fund zero-footprint, stock-only
+byte-identical-to-`real_sector_exposure` comparison, empty-portfolio). Full
+suite: **6380 passed** (up from 6355 pre-Phase-3a). Antipattern gate: clean
+(no baseline growth needed — see the two-arg `.get()` fix above). Constants-doc
+gate: clean.
+
+**DDL — NOT YET APPLIED, for the owner to run by hand** (no agent has live
+production Supabase credentials, same convention as every prior DDL in this
+plan):
+
+```sql
+CREATE TABLE IF NOT EXISTS public.etf_lookthrough_cache (
+    ticker     text PRIMARY KEY,
+    payload    jsonb,
+    updated_at timestamptz
+);
+```
+
+Until this is applied, `load_etf_lookthrough_cache`/`save_etf_lookthrough_cache`
+degrade to `None`/`False` (the `_client().table("etf_lookthrough_cache")` call
+raises, caught by the broad `except Exception`), so `bundle_loader.load_bundle`
+falls through to a live `fetch_etf_lookthrough` call every time with no
+write-through persisting — functionally correct (an ETF bundle still gets a
+real look-through reading), just uncached until the table exists.
+
+**What this does NOT do (deliberately, Phase 3b/4 territory):** no
+top-holdings overlap detector (Phase 3b — reuses this same fetch/cache, not
+built this pass); no wiring of the look-through readout into
+`SECTOR_CEILING`/`sector_exposure`/any gate (approved policy point 7 from
+Phase 2 still stands: ETFs stay excluded from the hard concentration gate);
+no UI caption/gate change on Watchlist/Analysis/Portfolio Overview beyond the
+one Analytics-tab toggle.

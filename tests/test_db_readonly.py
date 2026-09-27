@@ -100,6 +100,7 @@ def test_is_readonly_falls_back_to_global_when_session_state_key_absent():
 _UNGATED_BY_DESIGN = {
     "save_fundamentals_cache",          # bundle_loader, on load
     "save_sector_cache",                # bundle_loader, on load
+    "save_etf_lookthrough_cache",       # bundle_loader, on load (ETF-support Phase 3a)
     "save_sentiment_llm_cache",         # bundle_loader, on load
     "save_price_xcheck_history_batch",  # app.py, on render; no LLM, idempotent
     "save_alert_state",                 # cron-only; no viewer code path
