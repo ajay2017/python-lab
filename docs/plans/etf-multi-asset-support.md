@@ -4,10 +4,10 @@
 Opus `planner` architecture review, then a second `planner` design pass per phase,
 `implementer` built each, Opus `reviewer` before every commit (Phase 0: FIX-FIRST/1
 blocking → fixed same session → SHIP/0 blocking; Phase 1: SHIP/0 blocking, first
-pass). **The DDL for Phase 1's new columns has NOT been applied to production yet —
-see the Phase 1 record below for the exact SQL; nothing in Phase 1 requires it to
-ship (every write path degrades gracefully pre-DDL), but apply it when convenient
-to close a small non-blocking window the reviewer flagged.** Phases 2-4 below are
+pass). **The Phase 1 DDL was applied by the owner directly in Supabase 2026-09-27**
+(same day as ship) — `asset_type`/`kinds` now exist on all four tables, closing the
+reviewer's one non-blocking note (a broker-confirmed trade write no longer strips
+`broker_txn_id`/`idempotency_key` alongside `asset_type`). Phases 2-4 below are
 DESIGNED, NOT STARTED — each needs its own fresh `planner`/`reviewer` pass and, for
 Phase 2, explicit owner sign-off on new policy constants before any code is written.
 This doc is the design-of-record; do not start a later phase from memory without
@@ -360,16 +360,15 @@ described); every read-path offline-sentinel-vs-backfill distinction confirmed
 correct; the fail-safe classification direction confirmed (nothing can accidentally
 resolve to `"etf"`); `fetch_financials_from_info` confirmed byte-for-byte untouched;
 `load_bundle`'s existing scoring behavior confirmed unperturbed. **One non-blocking
-finding:** until the DDL below is applied, a broker-confirmed trade write strips
-`asset_type` alongside `broker_txn_id`/`idempotency_key` together (the existing
-optional-column cascade drops the whole set on any one miss) — low practical risk
-for a single-user, low-frequency confirm action; apply the DDL soon to close this
-window, not because anything breaks without it. 156 tests passed across the new +
-touched test files; antipattern and constants-doc gates both clean.
+finding, since CLOSED:** until the DDL was applied, a broker-confirmed trade write
+would have stripped `asset_type` alongside `broker_txn_id`/`idempotency_key`
+together (the existing optional-column cascade drops the whole set on any one
+miss) — low practical risk for a single-user, low-frequency confirm action, and
+moot now that the columns exist. 156 tests passed across the new + touched test
+files; antipattern and constants-doc gates both clean.
 
-**DDL for the owner to run in Supabase (not applied by any agent — no live
-credentials were used or available; every write path already degrades gracefully
-without this, so there is no urgency beyond closing the note above):**
+**DDL — APPLIED by the owner directly in Supabase, 2026-09-27** (no agent ran this;
+none had live production credentials):
 
 ```sql
 ALTER TABLE public.holdings        ADD COLUMN IF NOT EXISTS asset_type text;
@@ -377,6 +376,11 @@ ALTER TABLE public.trades          ADD COLUMN IF NOT EXISTS asset_type text;
 ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS asset_type text;
 ALTER TABLE public.broker_position_snapshot ADD COLUMN IF NOT EXISTS kinds jsonb;
 ```
+
+Not yet independently verified against a live query (e.g. `information_schema.columns`)
+in this session — the owner's own report is the source for "applied." If a future
+session needs to confirm the columns are actually live (not just that the SQL was
+run without error), that's a quick Supabase check, not a re-run of this DDL.
 
 **ETF registry seeding — do this via the App Settings UI, not a raw SQL hash guess:**
 insert a placeholder row for `"etf_registry"` (payload can be anything valid, e.g.
