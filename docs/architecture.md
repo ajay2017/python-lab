@@ -551,6 +551,12 @@ before tuning. See §6.29 (`judgment_opinions` table) and
 | `SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS` | 90 | SnapTrade broker integration — bounds the `broker` cron lane's transaction-history fetch window (days back from now). Prevents an unbounded historical pull on first connect or after a long SnapTrade/cron outage; anything older is expected to already be in `trades` via manual/CSV entry. Data-integrity/operational bound, not an investment threshold. |
 | `SNAPTRADE_REQUEST_TIMEOUT_SEC` | 15 | SnapTrade broker integration — per-call wall-clock timeout for `stock_analyzer/snaptrade_client.py`. Same operational-cap convention as `DATA_YF_REQUEST_TIMEOUT_SEC` — bounds a single hung SnapTrade call so the `broker` cron lane fails loud instead of blocking the job budget. |
 | `INCOME_EVENT_DEDUP_DATE_TOL_DAYS` | 3 | 2026-09-11, F-268 cross-path income-event dedup follow-on. A manual CSV statement import and the live SnapTrade broker-sync cron can both capture the SAME real dividend/interest/fee event under independent ids (found: 12 duplicate rows in production). `stock_analyzer/broker_sync.py`'s `income_event_subtype()` maps BOTH vocabularies (Robinhood `Trans Code` and SnapTrade `type`) into one canonical subtype, and a match requires the same (ticker, canonical subtype) + SIGNED amount to the cent, within this many days — absorbing the CSV statement date vs. SnapTrade activity date sometimes differing by a day or two for the identical event. Used by `classify_transactions()`'s write-time defense (`existing_income_events` param) and the read-side backstop `dedupe_income_events()` (applied in 🧾 Cash Activity and `capital_vs_margin.reconstruct_daily_cash()`). Data-integrity dedup tolerance, not an investment threshold — chosen well below the shortest realistic gap between two genuinely distinct recurring events of the same subtype/amount/ticker (e.g. monthly dividends ~30 days apart), so it cannot collapse two real, distinct payments. |
+| `ETF_COMPOSITE_WEIGHTS` | `{technical: 0.70, cost: 0.30}` | ETF-support Phase 2 (`docs/plans/etf-multi-asset-support.md`). `etf_scoring.etf_composite`'s weighted blend for an ETF/fund — NOT the equity `COMPOSITE_WEIGHTS` mix, since 65% of that mix (business_quality + valuation) is structurally unmeasurable for a fund. Owner sign-off obtained 2026-09-27 before implementation. |
+| `ETF_COMPOSITE_WEIGHTS_VERSION` | 1 | Provenance stamp for `ETF_COMPOSITE_WEIGHTS`' own weight VALUES, mirroring `COMPOSITE_WEIGHTS_VERSION`'s convention. `1` = the only weight set so far, `{technical .70, cost .30}` (2026-09-27 onward). |
+| `ETF_EXPENSE_RATIO_CHEAP_PCT` | 0.20 | `etf_scoring.expense_ratio_score` — at/below this expense ratio (percent units, matches `etf_facts["net_expense_ratio"]`), cost score = 100 (ceiling). |
+| `ETF_EXPENSE_RATIO_EXPENSIVE_PCT` | 0.75 | `etf_scoring.expense_ratio_score` — at/above this expense ratio, cost score = `ETF_COST_SCORE_FLOOR`. Linear interpolation between this and `ETF_EXPENSE_RATIO_CHEAP_PCT`. |
+| `ETF_COST_SCORE_FLOOR` | 25 | `etf_scoring.expense_ratio_score` — an expensive fund's cost score never drops below this; a high fee is a real drag, not a disqualifier, so the cost pillar never zeroes out. |
+| `ETF_AUM_THIN_FLOOR_USD` | 50,000,000 | `etf_scoring.etf_aum_thin` — awareness-only threshold; a fund with known `total_assets` below this is flagged "thin" in a caption. **Never feeds `etf_composite`, never read by `risk_advisor`/`exit_advisor`** — same posture as `MARGIN_MAINTENANCE_RATE` above. Not yet wired into any UI caption (Phase 4 concern) — computed and tested only as of Phase 2. |
 
 ### 4.0.2 Cross-feature coordination caches
 
@@ -2456,6 +2462,60 @@ persisted/legacy DB value, `NULL`/anything not exactly `"etf"` → `"stock"` —
 the backfill helper `db.py`'s loaders call for a pre-migration row). Not
 wired into any scoring/gate decision yet — Phase 1 is classification +
 capture plumbing only; Phase 2 is where a consumer acts on this label.
+
+### `stock_analyzer/etf_scoring.py`
+
+New 2026-09-27 (Phase 2 of the ETF/multi-asset architecture review, F-281;
+`docs/plans/etf-multi-asset-support.md`). Gives a held ETF/fund a real
+Strong Buy/Buy/Hold/Sell verdict, replacing Phase 0's permanent
+"❔ Verdict Withheld" wherever the new gate passes. Deliberately a NEW module
+rather than grown inside `scoring.py`/`fundamentals.py`, so it carries its own
+review history rather than inheriting theirs. Five pure functions, all owner-
+approved policy values read from `constants.py` (`ETF_COMPOSITE_WEIGHTS`,
+`ETF_EXPENSE_RATIO_CHEAP_PCT`/`_EXPENSIVE_PCT`, `ETF_COST_SCORE_FLOOR`,
+`ETF_AUM_THIN_FLOOR_USD`):
+
+- **`etf_available(etf_facts)`** — the availability gate: `True` only when
+  `net_expense_ratio is not None`. Without a known cost, only technicals
+  would drive a verdict — the same "manufactured Buy on technicals alone"
+  risk this app avoids everywhere else — so a missing expense ratio keeps
+  the ETF on Phase 0's honest withhold instead.
+- **`expense_ratio_score(net_expense_ratio_pct)`** — 0-100 cost-quality leg.
+  At/below `ETF_EXPENSE_RATIO_CHEAP_PCT` → ceiling 100; at/above
+  `ETF_EXPENSE_RATIO_EXPENSIVE_PCT` → `ETF_COST_SCORE_FLOOR` (25, not 0 — a
+  high fee is a real permanent drag, not a disqualifier on its own); linear
+  between. `None` in → `None` out.
+- **`etf_composite(technical_score, cost_score)`** — weighted 0-100 via
+  `ETF_COMPOSITE_WEIGHTS` (70% technical / 30% cost), same rounding
+  convention as `scoring.combined_score`. The 70/30 split is deliberate: cost
+  is a near-static number, so keeping it a minority weight means the verdict
+  still moves with market conditions day to day, while still capping an
+  expensive-but-technically-hot fund below where a cheap fund at the same
+  technical reading would clear Buy.
+- **`etf_recommendation(score)`** — reuses `scoring.recommendation()`
+  UNCHANGED for label/color/icon/threshold boundaries (the same
+  `COMPOSITE_STRONG_BUY`/`BUY`/`HOLD`/`SELL` cutoffs as equities — no
+  ETF-specific thresholds in this phase, deliberately, pending real-holdings
+  eyeballing post-ship), swapping in ETF-appropriate rationale text so it
+  never claims a fundamentals/revenue/earnings analysis that never happened.
+- **`etf_aum_thin(total_assets)`** — awareness-only flag, `True` when known
+  and below `ETF_AUM_THIN_FLOOR_USD` ($50M). Computed on every ETF bundle but
+  **wired into nothing yet** — never feeds the composite or gate, never read
+  by `risk_advisor.py`/`exit_advisor.py`; the actual on-screen caption is
+  Phase 4.
+
+Business quality and valuation stay dropped from the ETF composite entirely
+(structurally unmeasurable — no revenue/margins/P/E for a fund); sentiment is
+also deliberately excluded (for a broad ETF, news is generic market/macro
+noise, not fund-specific signal). Wired into `bundle_loader.load_bundle`
+(additive `etf_available`/`etf_cost_score`/`etf_total`/`etf_rec`/
+`etf_aum_thin` keys, computed only when `asset_type == "etf"`) and
+`portfolio.build_portfolio_df` (a held ETF's `Score`/`Signal` resolve from
+`etf_total`/`etf_rec` when `etf_available` is true, otherwise Phase 0's
+withhold still applies — a stock's own scoring path is untouched).
+`daily_briefing.py` independently excludes `asset_type == "etf"` from
+`new_picks`, so an ETF cannot become a new-pick candidate regardless of this
+module's output — existing/held ETFs only in this phase.
 
 ### `stock_analyzer/reference_data.py`
 

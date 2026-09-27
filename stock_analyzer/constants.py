@@ -788,6 +788,36 @@ COMPOSITE_WEIGHTS_VERSION = 2   # bump ONLY when the weight VALUES change, never
 #  1 = 3-pillar {technical .45, fundamental .40, sentiment .15}   2026-05-05 .. 2026-07-08
 #  2 = 4-pillar {technical .25, business_quality .35, valuation .30, sentiment .10}  2026-07-09 onward
 
+# ── ETF composite-score weights (etf_scoring.etf_composite) ─────────────────
+# An ETF's composite is NOT the equity COMPOSITE_WEIGHTS mix — 65% of that mix
+# (business_quality + valuation) scores fields that don't exist for a fund
+# (see docs/plans/etf-multi-asset-support.md §2). ETF Phase 2 gives a fund its
+# own weighted blend of technical trend + cost quality instead. Owner sign-off
+# obtained 2026-09-27 before implementation; changing these is a fresh
+# investment-policy decision, same as COMPOSITE_WEIGHTS.
+ETF_COMPOSITE_WEIGHTS = {
+    "technical": 0.70,
+    "cost":      0.30,
+}
+
+ETF_COMPOSITE_WEIGHTS_VERSION = 1   # bump ONLY when the weight VALUES change, mirrors COMPOSITE_WEIGHTS_VERSION's convention
+#  1 = {technical .70, cost .30}   2026-09-27 onward
+
+# Expense-ratio decision bands feeding etf_scoring.expense_ratio_score. Percent
+# units — matches etf_facts["net_expense_ratio"] as returned by
+# data.fetch_etf_facts_from_info (e.g. 0.20 == 0.20%, NOT a fraction). At/below
+# CHEAP -> cost score ceiling of 100; at/above EXPENSIVE -> cost score floor of
+# ETF_COST_SCORE_FLOOR; linear interpolation between the two.
+ETF_EXPENSE_RATIO_CHEAP_PCT = 0.20       # at/below this expense ratio, cost score = 100 (ceiling)
+ETF_EXPENSE_RATIO_EXPENSIVE_PCT = 0.75   # at/above this expense ratio, cost score = ETF_COST_SCORE_FLOOR
+ETF_COST_SCORE_FLOOR = 25                # an expensive fund's cost score never drops below this — a high fee is a real drag, not a disqualifier
+
+# Awareness-only: a fund with known total_assets below this floor is flagged
+# "thin" in a caption. NEVER feeds etf_composite and is NEVER read by
+# risk_advisor/exit_advisor — same posture as the existing leverage/margin
+# awareness captions (e.g. MARGIN_MAINTENANCE_RATE above).
+ETF_AUM_THIN_FLOOR_USD = 50_000_000
+
 # ── Earnings / macro proximity windows (days) ────────────────────────────────
 EARNINGS_IMMINENT_DAYS      = 7  # any trade within this window = caution (binary-event conflict)
 # Tighter "danger" sub-window inside EARNINGS_IMMINENT_DAYS — decide position

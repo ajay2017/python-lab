@@ -85,6 +85,7 @@ from stock_analyzer import exit_advisor
 from stock_analyzer import decision_bucket
 from stock_analyzer.predictive_analytics import divergence_at_entry
 from stock_analyzer.personalized_discovery import score_candidate_match
+from stock_analyzer import asset_type
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -1085,6 +1086,22 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             _comp_data       = (composites or {}).get(ticker, {})
             _composite_score = _f(_comp_data.get("total")) if _comp_data else None
             _composite_label = str((_comp_data.get("rec") or {}).get("label", "")) if _comp_data else ""
+
+            # ETF/fund new-pick exclusion (ETF-support Phase 2, F-279 §11) —
+            # belt-and-suspenders: an ETF must never become new-pick eligible
+            # this phase ("existing holdings only, no new-pick eligibility"),
+            # even if a future data change made fundamentals_available/
+            # val_available accidentally True for it. Today those flags are
+            # already False for every ETF (the fundamentals-metric-count gate
+            # below already catches it), so this is redundant on purpose, not
+            # the load-bearing guard — an explicit, deliberate invariant.
+            if _comp_data.get("asset_type") == asset_type.ASSET_TYPE_ETF:
+                composite_unavailable.append({
+                    "ticker":         ticker,
+                    "sector":         sector,
+                    "momentum_score": _f(row.get("Score", 0)),
+                })
+                continue
 
             # Staleness gate: if the bundle was served from the Supabase cache
             # fallback (stale_as_of is not None), the composite could reflect data

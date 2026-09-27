@@ -1,12 +1,14 @@
 """stock_analyzer/bundle_loader.py::load_bundle() — Phase 1 ETF support
-(F-279 §11) additive observability keys (quote_type/asset_type/etf_facts).
+(F-279 §11) additive observability keys (quote_type/asset_type/etf_facts),
+plus Phase 2 (ETF-support etf_scoring wiring) additive scoring keys
+(etf_available/etf_cost_score/etf_total/etf_rec/etf_aum_thin).
 
 Mocks every I/O boundary (fetch_ticker_bundle + all db.* calls) so this runs
 pure-pandas, no network/Supabase — same convention as
 tests/test_headless_alert_engine.py's load_bundle mocking, just one level
 deeper (this IS load_bundle's own internals, not a caller that mocks it away).
 
-Two things this file must prove:
+Things this file must prove:
   1. A bundle whose .info lacks quoteType entirely -> asset_type == "stock",
      etf_facts is None (the fail-safe default — Phase 1 does not change what
      an ordinary stock bundle looks like).
@@ -15,6 +17,12 @@ Two things this file must prove:
      (technical_score/business_quality_score/valuation_score/combined_score/
      recommendation) on the same inputs — pinning that this purely-additive
      change did not perturb the existing return dict.
+  3. (Phase 2) A stock bundle's 5 new etf_* keys are all None/False —
+     "not applicable", never fabricated.
+  4. (Phase 2) An ETF bundle with a known net_expense_ratio gets a real
+     etf_total/etf_rec surfaced through the bundle.
+  5. (Phase 2) An ETF bundle WITHOUT a known net_expense_ratio (etf_available
+     False) gets etf_total/etf_rec == None, same as a stock.
 """
 import pandas as pd
 import pytest
@@ -154,3 +162,66 @@ def test_stock_bundle_scoring_pipeline_is_unperturbed(monkeypatch):
     assert out["rec"] == expected_rec
     # Sanity: with zero fundamentals fields, the gate must be closed either way.
     assert expected_bq_available is False
+
+
+# ── Phase 2 (ETF-support etf_scoring wiring) ─────────────────────────────────
+
+def test_stock_bundle_etf_scoring_keys_are_all_none_or_false(monkeypatch):
+    """A stock bundle's 5 new etf_* keys must read as "not applicable" —
+    None/False — never a fabricated value."""
+    info = {"sector": "Technology"}  # no quoteType -> asset_type "stock"
+    monkeypatch.setattr(bundle_loader, "fetch_ticker_bundle",
+                         lambda ticker, period: _fake_bundle(info))
+
+    out = bundle_loader.load_bundle("TESTX")
+
+    assert out["asset_type"] == asset_type_mod.ASSET_TYPE_STOCK
+    assert out["etf_available"] is False
+    assert out["etf_cost_score"] is None
+    assert out["etf_total"] is None
+    assert out["etf_rec"] is None
+    assert out["etf_aum_thin"] is False
+
+
+def test_etf_bundle_with_known_expense_ratio_surfaces_real_composite(monkeypatch):
+    info = {
+        "quoteType": "ETF", "sector": "", "category": "Large Blend",
+        "netExpenseRatio": 0.03, "longName": "Test ETF", "totalAssets": 1_000_000_000,
+    }
+    monkeypatch.setattr(bundle_loader, "fetch_ticker_bundle",
+                         lambda ticker, period: _fake_bundle(info))
+
+    out = bundle_loader.load_bundle("TESTETF")
+
+    assert out["asset_type"] == asset_type_mod.ASSET_TYPE_ETF
+    assert out["etf_available"] is True
+    assert out["etf_cost_score"] == 100.0  # 0.03% is well below ETF_EXPENSE_RATIO_CHEAP_PCT
+    assert out["etf_total"] is not None
+    assert out["etf_rec"] is not None
+    assert out["etf_rec"]["label"] in ("Strong Buy", "Buy", "Hold", "Sell", "Strong Sell")
+    assert out["etf_aum_thin"] is False
+
+    # Cross-check against an independent recomputation of the pure function.
+    from stock_analyzer import etf_scoring
+    from stock_analyzer.technicals import compute_indicators, technical_score
+    df = compute_indicators(_price_df())
+    t_score, _ = technical_score(df)
+    expected_total = etf_scoring.etf_composite(t_score, 100.0)
+    assert out["etf_total"] == expected_total
+
+
+def test_etf_bundle_without_expense_ratio_stays_unavailable(monkeypatch):
+    """An ETF quoteType with NO netExpenseRatio data (etf_available False)
+    must behave exactly like a stock for the 4 downstream etf_* keys —
+    never fabricate a composite off technicals alone."""
+    info = {"quoteType": "ETF", "sector": "", "category": "Large Blend"}
+    monkeypatch.setattr(bundle_loader, "fetch_ticker_bundle",
+                         lambda ticker, period: _fake_bundle(info))
+
+    out = bundle_loader.load_bundle("TESTETF2")
+
+    assert out["asset_type"] == asset_type_mod.ASSET_TYPE_ETF
+    assert out["etf_available"] is False
+    assert out["etf_cost_score"] is None
+    assert out["etf_total"] is None
+    assert out["etf_rec"] is None

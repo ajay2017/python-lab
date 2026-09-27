@@ -1,6 +1,7 @@
 # Multi-asset-type support (ETF first) — architecture review + phased plan
 
-**Status: ANALYSIS COMPLETE + PHASES 0 AND 1 SHIPPED, all 2026-09-27 (F-279, F-280).**
+**Status: ANALYSIS COMPLETE + PHASES 0, 1, AND 2 SHIPPED, all 2026-09-27 (F-279,
+F-280, F-281).**
 Opus `planner` architecture review, then a second `planner` design pass per phase,
 `implementer` built each, Opus `reviewer` before every commit (Phase 0: FIX-FIRST/1
 blocking → fixed same session → SHIP/0 blocking; Phase 1: SHIP/0 blocking, first
@@ -395,3 +396,58 @@ precedent), safer than hand-computing a hash to match `reference_data.canonicali
 `asset_type`/`etf_facts`/the registry for a decision yet. An ETF's composite is
 still withheld (Phase 0), not scored — Phase 2 is what builds the actual ETF
 scoring strategy.
+
+## Phase 2 — implementation record
+
+**Shipped 2026-09-27 as F-281** (`docs/requirements.md` F-281).
+
+**Design chain:** Opus `planner` proposed the composite shape + every candidate
+policy value with reasoning (not final numbers to adopt) → owner walked through
+and explicitly approved all 10 decision points in a structured review, at the
+planner's recommended default on every single one → `implementer` (Sonnet) built
+to the approved spec → Opus `reviewer`, SHIP/0 blocking, first pass.
+
+**The 10 approved decisions (all at the planner's recommended default):**
+1. Composite = technical 70% + cost 30% (not 60/40, not a 3-pillar mix with sentiment).
+2. Sentiment excluded from the ETF composite entirely (generic macro noise for a fund, not fund-specific signal).
+3. Availability gate = `net_expense_ratio is not None` only (no technical-only fallback verdict).
+4. Expense-ratio bands: cheap ≤ 0.20%, expensive ≥ 0.75% (deliberately wide/round — moderate-high confidence on rough magnitude, low confidence on the exact cutoff).
+5. Cost-score floor = 25/100, not 0 (a high fee is a real drag, not a disqualifier).
+6. AUM: soft awareness flag at $50M, never a gate.
+7. Sector/concentration: ETFs stay excluded from `SECTOR_CEILING` like "Other" — no registry-category wiring into the gate (a single category label can't distinguish "broad/diversifying" from "sector-concentrated" without real constituent weights).
+8. Thresholds: reuse the equity `75/65/44/30` bands and label vocabulary — no new ETF-specific thresholds this phase.
+9. New-pick scope: existing/held ETFs only; `daily_briefing.py` gained an explicit, independent guard so an ETF can never become new-pick-eligible regardless of what the availability flags say.
+10. `ETF_COMPOSITE_WEIGHTS_VERSION = 1` stamped for future lineage (Definition-of-Done #8) even though nothing persists an ETF composite to a DB history table yet — confirmed by the reviewer as genuinely unwired, not a half-finished feature.
+
+**What shipped:** new `stock_analyzer/etf_scoring.py` (`etf_available`,
+`expense_ratio_score`, `etf_composite`, `etf_recommendation`, `etf_aum_thin` — see
+`docs/architecture.md`'s module section for full detail); 6 new `constants.py`
+values with matching `docs/architecture.md` rows; additive `bundle_loader.py`
+keys; `portfolio.build_portfolio_df`'s three-way `fund_ok`/`etf_ok`/withheld
+resolution (the reviewer's top-risk item — confirmed byte-identical for the
+`fund_ok=True` stock path, and confirmed `etf_ok` can never be `True` for
+`asset_type != "etf"` even on a malformed bundle); the `daily_briefing.py`
+new-pick guard; an in-app User Guide addendum explaining the ETF verdict shape
+and its two known gaps (no new-pick eligibility yet, no sector look-through yet).
+
+**Review = Opus reviewer (Claude Opus 4.8 (1M context)): SHIP, 0 blocking.**
+Verified the cost/composite arithmetic by hand (not just trusting the tests),
+confirmed the asymmetry the design was built for actually holds (technical=80:
+cheap fund composite 86.0 clears Buy, expensive fund composite 63.5 lands in
+Hold — same technical reading, different verdict), confirmed the stock scoring
+path is genuinely byte-identical, confirmed `etf_aum_thin` and
+`ETF_COMPOSITE_WEIGHTS_VERSION` are both truly unwired (not silently touching
+any DB write path), confirmed zero scope creep into `technicals.py`/`risk.py`/
+`business_quality_score`/`valuation_score`/`resolve_sector`/any new-pick path
+beyond the one guard. Two non-blocking notes, left as-is (cosmetic): a minor
+defensive-check style inconsistency in `daily_briefing.py`'s new guard (matches
+an adjacent existing pattern, not a new risk), and the implementer's stated
+rationale for a `bundle_loader.py` micro-refactor was slightly inaccurate
+(the refactor itself is still confirmed behavior-neutral). Full suite 6355
+passed; antipattern and constants-doc gates both clean.
+
+**What this does NOT do (deliberately, Phase 3/4 territory):** no look-through
+sector exposure (still gated on an unverified constituent-holdings data probe),
+no ETF new-pick/Grow Today eligibility, no UI caption for `etf_aum_thin`, no
+ETF-specific BUY/HOLD/SELL thresholds (reused the equity ones — revisit only if
+they prove loose once eyeballed against real ETF holdings).

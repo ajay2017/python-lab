@@ -4,6 +4,7 @@ import numpy as np
 
 from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_UNDERSIZED_PCT, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS, EARNINGS_IMMINENT_DAYS, EARNINGS_CRITICAL_DAYS, REDEPLOY_CORR_DIVERSIFIER_MAX, REDEPLOY_CORR_CORRELATED_MIN
 from stock_analyzer.earnings_advisor import _today_et
+from stock_analyzer import asset_type
 
 
 def _safe_float(val, default: float = 0.0) -> float:
@@ -539,8 +540,33 @@ def build_portfolio_df(
         # call sites — a legacy bundle missing both keys entirely (before this
         # gate existed) must read as available, not withheld.
         fund_ok = bool(r.get("fundamentals_available", True) and r.get("val_available", True))
-        if not fund_ok:
+        # ETF Phase 2 (F-279 §11) — an ETF/fund never has fund_ok=True (its
+        # fundamentals-metric count is structurally 0), but it can still get
+        # a real, decidable verdict via etf_scoring's own composite
+        # (technical + expense-ratio cost quality). etf_ok is deliberately
+        # gated on asset_type == "etf" so a stock can NEVER take this branch
+        # even if some future data quirk made etf_available True for it.
+        etf_ok = (r.get("asset_type") == asset_type.ASSET_TYPE_ETF) and bool(r.get("etf_available", False))
+        if not fund_ok and not etf_ok:
             withheld.append({"ticker": ticker})
+
+        # Three-way Score/Signal resolution: fund_ok (stock, equity composite)
+        # is completely unchanged from Phase 0 — byte-identical for every
+        # stock. etf_ok (fund_ok is always False for an ETF) surfaces the
+        # ETF-specific composite/rec instead of a withhold. Neither -> the
+        # existing Phase 0 withheld behavior, unchanged.
+        if fund_ok:
+            _signal = f"{r['rec']['icon']} {r['rec']['label']}"
+            _score = r["total"]
+            _score_available = True
+        elif etf_ok:
+            _signal = f"{r['etf_rec']['icon']} {r['etf_rec']['label']}"
+            _score = r["etf_total"]
+            _score_available = True
+        else:
+            _signal = WITHHELD_SIGNAL
+            _score = None
+            _score_available = False
 
         rows.append({
             "Ticker": ticker,
@@ -563,9 +589,9 @@ def build_portfolio_df(
             "Stop Type Auto": stop_type_auto if stop is not None else None,
             "Manual Stop Set At": (_ms or {}).get("set_at") if _ms else None,
             "Gap to Stop (%)": gap_to_stop,
-            "Signal": (f"{r['rec']['icon']} {r['rec']['label']}") if fund_ok else WITHHELD_SIGNAL,
-            "Score":  r["total"] if fund_ok else None,
-            "Score Available": fund_ok,
+            "Signal": _signal,
+            "Score":  _score,
+            "Score Available": _score_available,
         })
 
     df = pd.DataFrame(rows)

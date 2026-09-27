@@ -437,6 +437,50 @@ def test_grow_today_new_pick_no_warning_below_elevated_band():
     assert pick["sector_elevated_warning"] is None
 
 
+# ── _grow_today: ETF/fund new-pick exclusion (ETF-support Phase 2) ──────────
+# Belt-and-suspenders invariant: an ETF must never become new-pick eligible
+# this phase, even if it WOULD otherwise be scorable (etf_available True) --
+# "existing holdings only, no new-pick eligibility this phase" per the
+# approved scope. Today fundamentals_available/val_available are already
+# False for every ETF, so this guard is redundant with the existing
+# fundamentals gate -- the test constructs a bundle where that redundancy is
+# defeated (fundamentals_available/val_available both True) to prove THIS
+# guard, not the pre-existing one, is what's actually excluding it.
+
+def test_grow_today_new_pick_excludes_etf_even_when_fundamentals_flags_are_true():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "SPY", "score": COMPOSITE_BUY + 10, "sector": "Other"}])
+    composites = {
+        "SPY": {
+            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+            # Deliberately True, unlike a real ETF bundle today -- this
+            # proves the asset_type guard itself is load-bearing here, not
+            # just riding on the pre-existing fundamentals gate.
+            "fundamentals_available": True, "val_available": True,
+            "asset_type": "etf",
+        }
+    }
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"}, composites=composites)
+    assert find_item(grow["new_picks"], "SPY") is None
+    assert find_item(grow["composite_unavailable"], "SPY") is not None
+
+
+def test_grow_today_new_pick_stock_unaffected_by_etf_exclusion_guard():
+    # Negative control -- a stock (asset_type != "etf") must not be caught by
+    # the new guard.
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Healthcare"}])
+    composites = {
+        "NEW": {
+            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+            "fundamentals_available": True, "val_available": True,
+            "asset_type": "stock",
+        }
+    }
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"}, composites=composites)
+    assert find_item(grow["new_picks"], "NEW") is not None
+
+
 # ── _grow_today: leading-sector alias reach (2026-08-25 fix) ─────────────────
 # IGV backs three SECTOR_ETF keys ("AI & Cloud", "AI & Data", "Enterprise
 # Tech"). Before this fix, the leading-sectors list only ever carried the

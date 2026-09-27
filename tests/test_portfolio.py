@@ -595,6 +595,87 @@ def test_withheld_signal_contains_no_decision_substrings():
         assert bad not in WITHHELD_SIGNAL
 
 
+# ── build_portfolio_df — ETF-support Phase 2 (etf_ok) ────────────────────────
+# fund_ok is completely unchanged for a stock -- this is the single most
+# important regression test in the whole Phase 2 build (a stock's
+# asset_type is never "etf", so etf_ok is always False for it). An ETF with
+# a real etf_scoring composite gets it surfaced through Score/Signal instead
+# of the Phase 0 withhold; an ETF with no usable composite still withholds,
+# unchanged.
+
+def test_build_portfolio_df_stock_score_signal_unaffected_by_etf_wiring():
+    # A stock bundle NEVER carries asset_type == "etf" -- etf_ok must be
+    # False regardless of what (if anything) etf_available/etf_total say,
+    # and fund_ok's own existing behavior must be byte-identical to before
+    # this change.
+    holdings = [{"Ticker": "AAA", "Shares": 10, "Avg Cost ($)": 50.0}]
+    bundle = _loaded_row()
+    bundle["fundamentals_available"] = True
+    bundle["val_available"] = True
+    bundle["asset_type"] = "stock"
+    df = build_portfolio_df(holdings, {"AAA": bundle})
+    row = df.iloc[0]
+    assert row["Score"] == bundle["total"]
+    assert row["Signal"] == f"{bundle['rec']['icon']} {bundle['rec']['label']}"
+    assert row["Score Available"] == True
+    assert df.attrs["score_withheld"] == []
+
+
+def test_build_portfolio_df_etf_available_surfaces_etf_composite():
+    holdings = [{"Ticker": "SPY", "Shares": 10, "Avg Cost ($)": 50.0}]
+    bundle = _loaded_row()
+    bundle["fundamentals_available"] = False  # an ETF never has real fundamentals
+    bundle["val_available"] = False
+    bundle["asset_type"] = "etf"
+    bundle["etf_available"] = True
+    bundle["etf_total"] = 68.0
+    bundle["etf_rec"] = {"icon": "⬆", "label": "Buy"}
+    df = build_portfolio_df(holdings, {"SPY": bundle})
+    row = df.iloc[0]
+    assert row["Score"] == 68.0
+    assert row["Signal"] == "⬆ Buy"
+    assert row["Score Available"] == True
+    # Not withheld -- a real ETF verdict was surfaced instead.
+    assert df.attrs["score_withheld"] == []
+
+
+def test_build_portfolio_df_etf_unavailable_still_withholds():
+    holdings = [{"Ticker": "OBSCUREETF", "Shares": 10, "Avg Cost ($)": 50.0}]
+    bundle = _loaded_row()
+    bundle["fundamentals_available"] = False
+    bundle["val_available"] = False
+    bundle["asset_type"] = "etf"
+    bundle["etf_available"] = False  # no net_expense_ratio data
+    bundle["etf_total"] = None
+    bundle["etf_rec"] = None
+    df = build_portfolio_df(holdings, {"OBSCUREETF": bundle})
+    row = df.iloc[0]
+    assert pd.isna(row["Score"])
+    assert row["Signal"] == WITHHELD_SIGNAL
+    assert row["Score Available"] == False
+    assert df.attrs["score_withheld"] == [{"ticker": "OBSCUREETF"}]
+
+
+def test_build_portfolio_df_etf_ok_never_true_for_a_stock_even_if_etf_available_true():
+    # Defense-in-depth invariant: even if etf_available were somehow True on
+    # a bundle whose asset_type is "stock" (should never happen in practice),
+    # etf_ok must stay gated on asset_type == "etf" -- a stock must never
+    # take the ETF-composite branch.
+    holdings = [{"Ticker": "AAA", "Shares": 10, "Avg Cost ($)": 50.0}]
+    bundle = _loaded_row()
+    bundle["fundamentals_available"] = False
+    bundle["val_available"] = False
+    bundle["asset_type"] = "stock"
+    bundle["etf_available"] = True
+    bundle["etf_total"] = 68.0
+    bundle["etf_rec"] = {"icon": "⬆", "label": "Buy"}
+    df = build_portfolio_df(holdings, {"AAA": bundle})
+    row = df.iloc[0]
+    assert pd.isna(row["Score"])
+    assert row["Signal"] == WITHHELD_SIGNAL
+    assert row["Score Available"] == False
+
+
 # ── alerts() — earnings-date parse failure isolation (2026-08-04 audit) ─────
 # Was a bare `except Exception: pass`; narrowed to (ValueError, TypeError) so
 # a genuine bug elsewhere can't be silently masked as a routine bad-date.

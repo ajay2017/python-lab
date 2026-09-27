@@ -29,6 +29,7 @@ from stock_analyzer.data import (
     fetch_ticker_bundle, fetch_financials_from_info, fetch_etf_facts_from_info,
 )
 from stock_analyzer import asset_type
+from stock_analyzer import etf_scoring
 from stock_analyzer.technicals import compute_indicators, technical_score
 from stock_analyzer.fundamentals import (
     business_quality_score, fundamental_score,
@@ -213,12 +214,36 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     industry          = _info.get("industry", "")
     market_cap        = _info.get("marketCap")
     business_summary  = _info.get("longBusinessSummary", "")
-    # Asset-type observability (Phase 1, F-279 §11). Additive only — nothing
-    # here consumes these keys for a decision yet; Phase 0 already makes
+    # Asset-type observability (Phase 1, F-279 §11). Phase 0 already makes
     # bq_available/val_available correctly withhold for a fund via the
     # fundamentals-metric-count gate, independent of this discriminator.
+    # Phase 2 (below) is the first consumer that reads asset_type/etf_facts
+    # for an actual decision (the ETF composite).
     _quote_type = _info.get("quoteType")
     _asset_type = asset_type.from_quote_type(_quote_type)
+    _etf_facts = (
+        fetch_etf_facts_from_info(_info)
+        if _asset_type == asset_type.ASSET_TYPE_ETF else None
+    )
+    # ETF composite scoring (Phase 2, F-279 §11). Additive only, and scoped
+    # entirely to asset_type == "etf" — a stock bundle's _etf_facts is
+    # already None above, so every one of these five keys is None/False for
+    # a stock: "not applicable", never a fabricated value. `t_score` is the
+    # SAME technical score computed earlier in this function for every
+    # bundle (stock or ETF) — reused, never recomputed.
+    _etf_available = etf_scoring.etf_available(_etf_facts)
+    _etf_cost_score = etf_scoring.expense_ratio_score(
+        (_etf_facts or {}).get("net_expense_ratio")
+    )
+    _etf_total = (
+        etf_scoring.etf_composite(t_score, _etf_cost_score)
+        if _etf_available and _etf_cost_score is not None else None
+    )
+    _etf_rec = (
+        etf_scoring.etf_recommendation(_etf_total)
+        if _etf_total is not None else None
+    )
+    _etf_aum_thin = etf_scoring.etf_aum_thin((_etf_facts or {}).get("total_assets"))
     return {
         "df": df, "t_score": t_score, "t_signals": t_signals,
         # New 4-pillar keys:
@@ -244,10 +269,12 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         "info_source": bundle.get("_info_source"),
         "quote_type": _quote_type,
         "asset_type": _asset_type,
-        "etf_facts": (
-            fetch_etf_facts_from_info(_info)
-            if _asset_type == asset_type.ASSET_TYPE_ETF else None
-        ),
+        "etf_facts": _etf_facts,
+        "etf_available":  _etf_available,
+        "etf_cost_score": _etf_cost_score,
+        "etf_total":      _etf_total,
+        "etf_rec":        _etf_rec,
+        "etf_aum_thin":   _etf_aum_thin,
         "fund_metric_count": _fund_metric_count,
         "fund_source": _fund_source,
         "fund_cache_age_days": _fund_cache_age_days,
