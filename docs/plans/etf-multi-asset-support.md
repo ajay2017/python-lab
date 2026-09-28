@@ -2,9 +2,10 @@
 
 **Status: THE ETF/MULTI-ASSET ARCHITECTURE INITIATIVE, AS ORIGINALLY SCOPED,
 IS COMPLETE — Phases 0 through 4 ALL SHIPPED, all 2026-09-27 (F-279 through
-F-284).** Phase 3a's `etf_lookthrough_cache` DDL is written but NOT YET
-APPLIED by the owner (every write path degrades gracefully without it — same
-non-blocking posture as Phase 1's DDL window). **One thing remains
+F-284). Phase 3a's `etf_lookthrough_cache` DDL was APPLIED by the owner in
+Supabase 2026-09-27** (not independently verified against a live query in
+this session — the owner's own report is the source for "applied," same
+posture as the Phase 1 DDL confirmation). **One thing remains
 deliberately unscoped, by explicit owner choice, no trigger date: whether
 ETFs should ever become eligible as NEW Grow Today buy candidates** (today
 only existing/held ETFs get a real verdict) — this is a separate, bigger
@@ -612,9 +613,9 @@ suite: **6380 passed** (up from 6355 pre-Phase-3a). Antipattern gate: clean
 (no baseline growth needed — see the two-arg `.get()` fix above). Constants-doc
 gate: clean.
 
-**DDL — NOT YET APPLIED, for the owner to run by hand** (no agent has live
-production Supabase credentials, same convention as every prior DDL in this
-plan):
+**DDL — APPLIED by the owner directly in Supabase, 2026-09-27** (no agent has
+live production Supabase credentials, same convention as every prior DDL in
+this plan):
 
 ```sql
 CREATE TABLE IF NOT EXISTS public.etf_lookthrough_cache (
@@ -624,12 +625,15 @@ CREATE TABLE IF NOT EXISTS public.etf_lookthrough_cache (
 );
 ```
 
-Until this is applied, `load_etf_lookthrough_cache`/`save_etf_lookthrough_cache`
-degrade to `None`/`False` (the `_client().table("etf_lookthrough_cache")` call
-raises, caught by the broad `except Exception`), so `bundle_loader.load_bundle`
-falls through to a live `fetch_etf_lookthrough` call every time with no
-write-through persisting — functionally correct (an ETF bundle still gets a
-real look-through reading), just uncached until the table exists.
+Before this was applied, `load_etf_lookthrough_cache`/`save_etf_lookthrough_cache`
+degraded to `None`/`False` (the `_client().table("etf_lookthrough_cache")` call
+raised, caught by the broad `except Exception`), so `bundle_loader.load_bundle`
+fell through to a live `fetch_etf_lookthrough` call every time with no
+write-through persisting — functionally correct throughout (an ETF bundle
+still got a real look-through reading), just uncached until the table
+existed. Now that the table is live, a fresh ETF bundle's look-through data
+persists and gets reused for `ETF_LOOKTHROUGH_CACHE_MAX_AGE_DAYS` (30 days)
+before the next live re-fetch.
 
 **What this does NOT do (deliberately, Phase 3b/4 territory):** no
 top-holdings overlap detector (Phase 3b — reuses this same fetch/cache, not
@@ -757,13 +761,12 @@ caption). Five Opus reviewer passes across the phases that touched
 blocking on Phases 1, 2, 3a, 3b); Phase 4 correctly used the deterministic
 gates alone.
 
-**Genuinely still open, both deliberately out of scope for every phase
-above, no trigger date:**
+**Genuinely still open, deliberately out of scope for every phase above, no
+trigger date:**
 - **ETF new-pick/Grow Today eligibility** — a real, unscoped policy question
   (needs a discovery universe + threshold recalibration decision), explicitly
   declined for Phase 4 by the owner. Pick up only via a fresh explicit ask.
-- **The `etf_lookthrough_cache` DDL** — written (Phase 3a's record above has
-  the exact SQL), not yet applied to production. Every write path already
-  degrades gracefully without it; apply whenever convenient, no urgency.
 
-Nothing else from the original architecture review remains unaddressed.
+The `etf_lookthrough_cache` DDL (Phase 3a) was applied by the owner
+2026-09-27, closing the last non-blocking item from any phase. Nothing else
+from the original architecture review remains unaddressed.
