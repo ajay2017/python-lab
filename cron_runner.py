@@ -83,7 +83,7 @@ from stock_analyzer.rec_events_capture import build_rec_event_rows
 from stock_analyzer.data import is_trading_day
 from stock_analyzer.headless_alert_engine import (
     compute_protective_alerts, compute_eod, compute_morning_picks,
-    compute_watchlist_entries,
+    compute_watchlist_entries, _build_context,
 )
 from stock_analyzer.notify import (
     render_alert_email, render_test_email, render_pullback_email,
@@ -1519,7 +1519,16 @@ def _run_scan(now_et, force: bool) -> int:
 
     # ── Morning buy-list email — high-conviction New Positions to Initiate ──────
     sent = False
-    payload = compute_morning_picks(today=now_et.date(), scanner_results=results_df)
+    # Built once and shared with compute_watchlist_entries below (perf fix,
+    # 2026-09-28): both independently reloaded the whole held-ticker book
+    # (bundles + SPY/VIX/risk-free-rate) via their own _build_context() call
+    # for the SAME `today`, serially, with no threading in this lane —
+    # doubling the scan lane's external-API cost and duration for identical
+    # inputs. Each function still builds its own ctx when called without one
+    # (e.g. the separate `intraday` lane), so this is additive, not a behavior
+    # change to either function's contract.
+    _scan_ctx = _build_context(now_et.date())
+    payload = compute_morning_picks(today=now_et.date(), scanner_results=results_df, ctx=_scan_ctx)
     # A DB outage returns an empty picks list — the tone-gate explainer below would
     # attribute that to market conditions, which is confidently wrong under an outage.
     # Checked before the error-log loop so no misleading engine notes print either.
@@ -1673,7 +1682,7 @@ def _run_scan(now_et, force: bool) -> int:
             str(p.get("ticker")).strip().upper() for p in hi if p.get("ticker")
         }
         _wle_payload = compute_watchlist_entries(
-            today=now_et.date(), scanner_go_tickers=_wle_scanner_go,
+            today=now_et.date(), scanner_go_tickers=_wle_scanner_go, ctx=_scan_ctx,
         )
         if _wle_payload.get("reason") == "db_unavailable":
             return _handle_db_unavailable(

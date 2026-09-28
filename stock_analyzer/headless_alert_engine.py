@@ -424,7 +424,8 @@ def compute_protective_alerts(today: date | None = None) -> dict:
     }
 
 
-def compute_morning_picks(today: date | None = None, scanner_results=None) -> dict:
+def compute_morning_picks(today: date | None = None, scanner_results=None,
+                           ctx: dict | None = None) -> dict:
     """Return {"picks": [...new_picks...], "built_at": <ET iso>, "errors": [...]}.
 
     The OFFENSE counterpart to compute_protective_alerts: the headless equivalent
@@ -439,13 +440,22 @@ def compute_morning_picks(today: date | None = None, scanner_results=None) -> di
     Mirrors the app's full input assembly (tone + composites + news + macro
     calendar) so the gating — including the imminent-macro sector suppression —
     matches Grow Today and the email never surfaces a pick the app would suppress.
+
+    `ctx`: pass an already-built `_build_context(today)` result to skip
+    rebuilding it here. The `scan` cron lane calls this and
+    `compute_watchlist_entries` back-to-back for the SAME `today` — without
+    this, each call independently re-fetched the entire held-ticker book
+    (bundles + SPY/VIX/risk-free-rate), serially, twice, in one process
+    invocation. `None` (default) preserves the old behaviour for every other
+    caller (e.g. the `intraday` lane, a separate process on its own `today`).
     """
     today = today or datetime.now(_ET).date()
     built_at = datetime.now(_ET).isoformat()
     if scanner_results is None or getattr(scanner_results, "empty", True):
         return {"picks": [], "built_at": built_at, "errors": ["no scanner results"]}
 
-    ctx = _build_context(today)
+    if ctx is None:
+        ctx = _build_context(today)
     if not ctx.get("ok"):
         return {"picks": [], "built_at": built_at, "errors": ctx.get("errors", []),
                 "reason": ctx.get("reason")}
@@ -647,9 +657,15 @@ def compute_watchlist_entries(
     today: date | None = None,
     watchlist: "list[str] | None" = None,
     scanner_go_tickers=None,
+    ctx: dict | None = None,
 ) -> dict:
     """Return {"entries": [...] | None, "built_at": <ET iso>, "errors": [...],
     "reason": str | None, "gate_degraded": bool}.
+
+    `ctx`: pass an already-built `_build_context(today)` result (from a
+    same-`today` `compute_morning_picks` call, e.g. the `scan` cron lane) to
+    skip rebuilding it here — see compute_morning_picks' own `ctx` doc for why.
+    `None` (default) builds it locally, as before.
 
     The PROACTIVE counterpart to opening 📋 Watchlist: recomputes each
     watchlist ticker's verdict via the SAME `build_watchlist_recommendation`
@@ -737,7 +753,8 @@ def compute_watchlist_entries(
     # Portfolio-fit context (sector weight + beta) for the gate — best-effort.
     # Reuses the SAME _build_context prep every other headless computation
     # uses, so sector weights/beta tie out with the protective/offense lanes.
-    ctx = _build_context(today)
+    if ctx is None:
+        ctx = _build_context(today)
     gate_degraded = False
     port_df = None
     portfolio_beta = None
