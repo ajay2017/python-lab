@@ -951,6 +951,44 @@ during this fix** (`python-lab-b9`, unrelated test-suite-optimization work)
 files, before staging, that this fix's changes were cleanly isolated from
 the peer's in-progress files, and committed only the 4 files by exact name.
 
+**FIFTH follow-on, same day 2026-09-28 — closes a real leftover-signal
+leak the fourth fix's own verification claim missed.** A screenshot of
+SPY's Deep Dive tab, taken to confirm the fourth fix, showed a stray
+warning under the (now-correct) "Cost (expense ratio)" tile: "⚠ Data
+Quality: 4/4 core BQ metrics unavailable... business quality score is
+based on limited data and may be unreliable." Root cause:
+`stock_analyzer/fundamentals.py::business_quality_score()` unconditionally
+injects this exact self-diagnostic entry into its returned `signals` dict
+whenever 3+ of the 4 core BQ metrics are `None` — which is ALWAYS true for
+an ETF (a fund has none of these fields at all). **The fourth fix's own
+verification claim — "confirmed `bq_signals`/`f_signals` is empty for an
+ETF" — was WRONG:** the dict isn't empty, it just lacks the 4 NAMED metric
+signals; the catch-all diagnostic entry survives, and two consumers in
+`app.py` rendered it (or, in the Rebalancer's case, rendered a whole
+"📊 Business Quality · 50/100 — raw values from Yahoo Finance" block)
+unconditionally, regardless of asset type. Fixed by gating both consumers
+on the ALREADY-canonical `_da_etf_ok`/`_rbc_etf_ok` flags (reused, not
+recomputed) — the Deep Dive signals loop wrapped in `if not _da_etf_ok:`
+(mirroring the adjacent `val_signals` loop's existing gate exactly), and
+the Rebalancer's `f_sigs_all` forced to `{}` for an ETF via an `if`/`else`
+STATEMENT (not a ternary — a ternary form tripped `check_antipatterns.py`'s
+`OFFLINE_SENTINEL_COLLAPSE` rule as a genuine, acknowledged false positive;
+restructuring to avoid the `ast.IfExp` node entirely cleared it without
+touching the baseline). `stock_analyzer/fundamentals.py` was deliberately
+NOT changed — the pure scorer correctly serves its stock-oriented purpose;
+the bug was only in rendering its output for an asset type it was never
+designed for. Opus reviewer (sixth pass): SHIP, 0 blocking — independently
+re-read `business_quality_score()` to confirm the root cause, confirmed
+both flags are reused not recomputed, confirmed the stock path is
+byte-identical at both sites, confirmed no other unguarded consumer exists
+(`valuation.py` has no equivalent catch-all, so `val_signals` was never at
+risk). Full suite 6401 passed. **Lesson: a "verified empty" claim about a
+dict's CONTENTS needs to check for catch-all/diagnostic entries specifically,
+not just the absence of the named fields being searched for** — the fourth
+fix's own investigation checked whether the 4 metric-specific signals were
+present and correctly found they weren't, but never checked whether a FIFTH,
+unconditional entry existed in the same dict.
+
 **Genuinely still open, deliberately out of scope for every phase above, no
 trigger date:**
 - **ETF new-pick/Grow Today eligibility** — a real, unscoped policy question

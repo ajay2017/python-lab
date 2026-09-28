@@ -14103,8 +14103,21 @@ elif page == "📡 Signals & Advice":
                         else:
                             st.caption("No news headlines available for this ticker.")
 
-                        # Bearish fundamental signals with values and source
-                        f_sigs_all = r_data.get("f_signals", {})
+                        # Bearish fundamental signals with values and source.
+                        # For a fund, f_signals still carries fundamentals.py's
+                        # unconditional "⚠ Data Quality" self-diagnostic entry
+                        # (added whenever 3+ of the 4 core BQ metrics are
+                        # missing -- always true for an ETF), so this dict is
+                        # NOT actually empty even though none of the 4 named
+                        # metrics exist. Left unguarded this rendered an
+                        # affirmative "Business Quality · 50/100 -- raw values
+                        # from Yahoo Finance" claim for a fund with no business
+                        # quality at all -- the exact bug class this campaign
+                        # exists to close. Force empty for an ETF instead.
+                        if _rbc_etf_ok:
+                            f_sigs_all = {}
+                        else:
+                            f_sigs_all = r_data.get("f_signals", {})
                         bearish_f = {
                             k: v for k, v in f_sigs_all.items()
                             if any(w in v.lower() for w in
@@ -24393,26 +24406,36 @@ elif page == "📈 Analysis":
                         )
                     st.markdown(_dd2_hdr)
                     st.caption(_dd2_cap)
-                    for k, v in r.get("bq_signals", r["f_signals"]).items():
-                        clr = "#00C851" if any(w in v.lower() for w in
-                              ["strong","excellent","good","healthy","under"]) else (
-                              "#ff4444" if any(w in v.lower() for w in
-                              ["declin","contract","high lev","expensive","loss","burn"]) else "#aaa")
-                        tip_map = {
-                            "Revenue Growth": "Revenue Growth", "Earnings Growth": "Earnings Growth",
-                            "Profit Margin": "Profit Margin", "Debt/Equity": "Debt/Equity",
-                        }
-                        tip_key = tip_map.get(k, "")
-                        label_md = (
-                            f"<abbr title='{_tip(tip_key).split(chr(10))[0]}' "
-                            f"style='cursor:help;border-bottom:1px dotted #666'><b>{k}</b></abbr>"
-                            if tip_key else f"<b>{k}</b>"
-                        )
-                        st.markdown(
-                            f"<small style='color:{clr}'>●</small> {label_md}: "
-                            f"<span style='color:#ccc'>{v}</span>",
-                            unsafe_allow_html=True,
-                        )
+                    # bq_signals/f_signals can carry a self-diagnostic
+                    # "⚠ Data Quality" entry (fundamentals.py's
+                    # business_quality_score, added whenever 3+ of the 4 core
+                    # metrics are missing -- which is ALWAYS the case for a
+                    # fund) even though none of the 4 named metric signals
+                    # exist. Left unguarded, this leaked equity-specific
+                    # "business quality score is based on limited data"
+                    # language under the repurposed Cost tile above. Same
+                    # gate as the val_signals loop below.
+                    if not _da_etf_ok:
+                        for k, v in r.get("bq_signals", r["f_signals"]).items():
+                            clr = "#00C851" if any(w in v.lower() for w in
+                                  ["strong","excellent","good","healthy","under"]) else (
+                                  "#ff4444" if any(w in v.lower() for w in
+                                  ["declin","contract","high lev","expensive","loss","burn"]) else "#aaa")
+                            tip_map = {
+                                "Revenue Growth": "Revenue Growth", "Earnings Growth": "Earnings Growth",
+                                "Profit Margin": "Profit Margin", "Debt/Equity": "Debt/Equity",
+                            }
+                            tip_key = tip_map.get(k, "")
+                            label_md = (
+                                f"<abbr title='{_tip(tip_key).split(chr(10))[0]}' "
+                                f"style='cursor:help;border-bottom:1px dotted #666'><b>{k}</b></abbr>"
+                                if tip_key else f"<b>{k}</b>"
+                            )
+                            st.markdown(
+                                f"<small style='color:{clr}'>●</small> {label_md}: "
+                                f"<span style='color:#ccc'>{v}</span>",
+                                unsafe_allow_html=True,
+                            )
                 with dd2v:
                     if _da_etf_ok:
                         # A fund has no valuation leg at all (structural, not a
