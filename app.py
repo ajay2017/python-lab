@@ -160,6 +160,7 @@ from stock_analyzer.constants import (
     COMPOSITE_STRONG_BUY,
     COMPOSITE_SELL,
     COMPOSITE_WEIGHTS,
+    ETF_COMPOSITE_WEIGHTS,
     EARNINGS_IMMINENT_DAYS,
     UNCLASSIFIED_SECTOR,
     ECONOMIC_CALENDAR_WINDOW_DAYS,
@@ -22581,12 +22582,33 @@ elif page == "📈 Analysis":
     if len(results) == 1:
         _sv_ticker, _sv_r = next(iter(results.items()))
         _sv_rec = _sv_r["rec"]
-        if not (_sv_r.get("fundamentals_available", True) and _sv_r.get("val_available", True)):
+        # ETF/fund Phase 2 (F-279 §11, docs/plans/etf-multi-asset-support.md):
+        # fundamentals_available/val_available are structurally always False
+        # for a fund (no equity fundamentals fields exist), so etf_ok is
+        # checked as a second chance before withholding — same three-way
+        # resolution as portfolio.build_portfolio_df. etf_ok is gated on
+        # asset_type == "etf" so a stock can never take this branch.
+        _sv_fund_ok = bool(_sv_r.get("fundamentals_available", True) and _sv_r.get("val_available", True))
+        _sv_etf_ok = (_sv_r.get("asset_type") == "etf") and bool(_sv_r.get("etf_available", False))
+        if not _sv_fund_ok and not _sv_etf_ok:
             st.markdown(
                 "<div style='padding:12px;border-radius:8px;background:#dc262618;"
                 "border-left:5px solid #dc2626;margin-bottom:10px'>"
                 f"<b style='font-size:1.1em;color:#dc2626'>🚫 Verdict withheld — "
                 f"fundamentals unavailable for {_sv_ticker}</b></div>",
+                unsafe_allow_html=True,
+            )
+        elif _sv_etf_ok:
+            _sv_etf_rec = _sv_r["etf_rec"]
+            st.markdown(
+                f"<div style='padding:12px;border-radius:8px;"
+                f"background:{_safe_html(_sv_etf_rec['color'])}18;"
+                f"border-left:5px solid {_safe_html(_sv_etf_rec['color'])};margin-bottom:10px'>"
+                f"<b style='font-size:1.2em;color:{_safe_html(_sv_etf_rec['color'])}'>"
+                f"{_safe_html(_sv_etf_rec['icon'])} {_safe_html(_sv_etf_rec['label'])} · "
+                f"{_safe_html(_sv_r['etf_total'])}/100</b>"
+                f"<br><span style='color:#ccc;font-size:0.9em'>{_md_bold(_sv_etf_rec['rationale'])}</span>"
+                "</div>",
                 unsafe_allow_html=True,
             )
         else:
@@ -22715,13 +22737,20 @@ elif page == "📈 Analysis":
         # — the quick-glance surface — must match, or the same page shows
         # "Hold 54.2" up top and "verdict withheld" in the body. Score/Signal are
         # withheld; price-derived columns (Stop, Target, R:R) stay (data is real).
+        # ETF/fund Phase 2 (F-279 §11): _sc_fund_ok is structurally always False
+        # for a fund, so _sc_etf_ok is checked as a second chance before falling
+        # through to "—"/Withheld — this row must never disagree with Site 3's
+        # Detailed Analysis banner below on whether a ticker is withheld or what
+        # verdict it shows.
         _sc_fund_ok = r.get("fundamentals_available", True) and r.get("val_available", True)
+        _sc_etf_ok = (r.get("asset_type") == "etf") and bool(r.get("etf_available", False))
         rows.append({
             "Ticker":           ticker,
             "Price":            f"${price:.2f}" if price else "N/A",
-            "Composite Score":  r["total"] if _sc_fund_ok else "—",
-            "Signal":           (f"{r['rec']['icon']} {r['rec']['label']}"
-                                 if _sc_fund_ok else "🚫 Withheld"),
+            "Composite Score":  r["total"] if _sc_fund_ok else (r["etf_total"] if _sc_etf_ok else "—"),
+            "Signal":           (f"{r['rec']['icon']} {r['rec']['label']}" if _sc_fund_ok else
+                                 f"{r['etf_rec']['icon']} {r['etf_rec']['label']}" if _sc_etf_ok else
+                                 "🚫 Withheld"),
             "Position / Entry": _sc_position,
             "Stop":             _sc_stop_str,
             "Base Target":      f"${targets['base']:.2f} ({targets['base_pct']:+.1f}%)" if targets else "—",
@@ -22837,25 +22866,86 @@ elif page == "📈 Analysis":
             # mismatch the user would otherwise see. The composite number is
             # deliberately NOT shown — a "Hold 58.1" on a fake 50 is the
             # misleading output we're suppressing.
-            if not (r.get("fundamentals_available", True) and r.get("val_available", True)):
-                _vg_missing = "Business Quality" if not r.get("fundamentals_available", True) else "Valuation"
+            #
+            # ETF/fund Phase 2 (F-279 §11, docs/plans/etf-multi-asset-support.md):
+            # fundamentals_available/val_available are structurally always False
+            # for a fund (business_quality_score/valuation_score both score
+            # fields — revenue growth, margins, forward P/E — that don't exist
+            # for a fund), so a third branch checks etf_ok (the ETF-specific
+            # composite from etf_scoring.py) as a real, decidable alternative
+            # before falling through to the true withhold below. etf_ok is
+            # gated on asset_type == "etf" so a stock can never take this
+            # branch even on a malformed bundle. When neither is available —
+            # a stock with no fundamentals data, OR an ETF whose expense ratio
+            # itself couldn't be sourced (etf_scoring.etf_available's own
+            # minimum bar) — the withhold below covers both, with wording that
+            # names the actual missing piece for each case rather than always
+            # claiming "fundamental data".
+            _da_fund_ok = bool(r.get("fundamentals_available", True) and r.get("val_available", True))
+            _da_etf_ok = (r.get("asset_type") == "etf") and bool(r.get("etf_available", False))
+            if not _da_fund_ok and not _da_etf_ok:
+                if r.get("asset_type") == "etf":
+                    # A fund's fundamentals gate is never the issue (it's
+                    # structurally always "unavailable" — that's the ETF
+                    # composite's whole reason to exist). The actual missing
+                    # piece here is the expense ratio itself, per
+                    # etf_scoring.etf_available's own minimum bar.
+                    st.markdown(
+                        "<div style='padding:12px;border-radius:8px;background:#dc262618;"
+                        "border-left:5px solid #dc2626;margin-bottom:10px'>"
+                        "<b style='font-size:1.1em;color:#dc2626'>🚫 Verdict withheld — "
+                        "expense ratio unavailable</b>"
+                        f"<br><span style='color:#dc2626'>We couldn't get {_safe_html(ticker)}'s "
+                        "expense ratio from any data source right now. A fund's verdict "
+                        "needs that figure to score its cost-quality leg — without it, "
+                        "only the technical trend would drive a call, risking a "
+                        "<b>manufactured buy/sell on price action alone</b>, so the app "
+                        "is holding the recommendation rather than guessing.</span>"
+                        "</div>", unsafe_allow_html=True,
+                    )
+                else:
+                    _vg_missing = "Business Quality" if not r.get("fundamentals_available", True) else "Valuation"
+                    st.markdown(
+                        "<div style='padding:12px;border-radius:8px;background:#dc262618;"
+                        "border-left:5px solid #dc2626;margin-bottom:10px'>"
+                        "<b style='font-size:1.1em;color:#dc2626'>🚫 Verdict withheld — "
+                        "fundamentals unavailable</b>"
+                        f"<br><span style='color:#dc2626'>We couldn't get {ticker}'s "
+                        "fundamental data from any source right now (Yahoo Finance returned "
+                        "nothing and the failover couldn't backfill it). The composite needs "
+                        f"the {_vg_missing} leg to issue a trustworthy call — "
+                        "without it the score defaults to a neutral 50 and produces a "
+                        "<b>misleading verdict</b>, so the app is holding the recommendation "
+                        "rather than guessing.</span>"
+                        f"<br><small style='color:#dc2626'>⚠️ If {ticker} appeared under "
+                        "<b>New Positions to Initiate</b> in today's Brief, that read used "
+                        "fundamentals that are momentarily missing here — re-check in a "
+                        "minute (data sources recover), or verify on your broker before "
+                        "acting. This is a data gap, not a change in the thesis.</small>"
+                        "</div>", unsafe_allow_html=True,
+                    )
+            elif _da_etf_ok:
+                # ETF-specific verdict banner — same visual style as the equity
+                # banner below, but the pillar breakdown reflects the ACTUAL
+                # ETF composite shape (technical + cost, via
+                # constants.ETF_COMPOSITE_WEIGHTS — never hardcoded here) and
+                # never claims a Business Quality/Valuation/Sentiment pillar
+                # that doesn't exist for a fund. No upside/price-target line
+                # either — that's a stock-analyst-target concept with no ETF
+                # equivalent.
+                _da_etf_rec = r["etf_rec"]
                 st.markdown(
-                    "<div style='padding:12px;border-radius:8px;background:#dc262618;"
-                    "border-left:5px solid #dc2626;margin-bottom:10px'>"
-                    "<b style='font-size:1.1em;color:#dc2626'>🚫 Verdict withheld — "
-                    "fundamentals unavailable</b>"
-                    f"<br><span style='color:#dc2626'>We couldn't get {ticker}'s "
-                    "fundamental data from any source right now (Yahoo Finance returned "
-                    "nothing and the failover couldn't backfill it). The composite needs "
-                    f"the {_vg_missing} leg to issue a trustworthy call — "
-                    "without it the score defaults to a neutral 50 and produces a "
-                    "<b>misleading verdict</b>, so the app is holding the recommendation "
-                    "rather than guessing.</span>"
-                    f"<br><small style='color:#dc2626'>⚠️ If {ticker} appeared under "
-                    "<b>New Positions to Initiate</b> in today's Brief, that read used "
-                    "fundamentals that are momentarily missing here — re-check in a "
-                    "minute (data sources recover), or verify on your broker before "
-                    "acting. This is a data gap, not a change in the thesis.</small>"
+                    f"<div style='padding:10px;border-radius:8px;background:{_safe_html(_da_etf_rec['color'])}18;"
+                    f"border-left:5px solid {_safe_html(_da_etf_rec['color'])};margin-bottom:10px'>"
+                    f"<b style='font-size:1.1em;color:{_safe_html(_da_etf_rec['color'])}'>"
+                    f"{_safe_html(_da_etf_rec['icon'])} "
+                    f"{_safe_html(_da_etf_rec['label'])} · {_safe_html(r['etf_total'])}/100</b>"
+                    f"<span style='color:#888;font-size:0.85em'> "
+                    f"(Technical {_safe_html(round(r['t_score']))} × "
+                    f"{_safe_html(round(ETF_COMPOSITE_WEIGHTS['technical']*100))}% + "
+                    f"Cost {_safe_html(round(r.get('etf_cost_score', 0)))} × "
+                    f"{_safe_html(round(ETF_COMPOSITE_WEIGHTS['cost']*100))}%)"
+                    f"</span><br>{_md_bold(_da_etf_rec['rationale'])}"
                     "</div>", unsafe_allow_html=True,
                 )
             else:

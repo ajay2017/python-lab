@@ -364,6 +364,66 @@ def test_research_ticker_val_missing_key_defaults_available_true():
     assert result["score"] == 72.0
 
 
+# ─── research_ticker — ETF verdict (bullet 1), etf_scoring Phase 2 fix ───────
+# Root-cause bug: bullet 1 only ever checked fundamentals_available, which is
+# structurally always False for a fund (no equity fundamentals fields exist),
+# so an ETF was ALWAYS withheld even when etf_scoring had a real, decidable
+# verdict for it. etf_ok is now checked as a second chance before withholding.
+
+def _etf_data(close_values, etf_available=True, etf_aum_thin=False):
+    data = _base_data(close_values, fundamentals_available=False, val_available=False)
+    data["asset_type"] = "etf"
+    data["etf_available"] = etf_available
+    data["etf_aum_thin"] = etf_aum_thin
+    if etf_available:
+        data["etf_total"] = 86.0
+        data["etf_rec"] = {
+            "icon": "✅", "label": "Buy", "color": "#22c55e",
+            "rationale": "Favorable technical trend and a reasonable expense ratio for the position.",
+        }
+    return data
+
+
+def test_research_ticker_etf_available_shows_real_etf_verdict_not_withheld():
+    data = _etf_data([100, 101, 102], etf_available=True)
+    result = qr.research_ticker("SPY", data)
+    assert result["signal"] == "Buy"
+    assert result["score"] == 86.0
+    assert "withheld" not in result["bullets"][0]
+    assert "Favorable technical trend" in result["bullets"][0]
+
+
+def test_research_ticker_etf_unavailable_still_withholds():
+    # etf_available=False (e.g. expense ratio unknown) — must still withhold,
+    # since only technicals would otherwise drive a verdict.
+    data = _etf_data([100, 101, 102], etf_available=False)
+    result = qr.research_ticker("SPY", data)
+    assert result["score"] is None
+    assert result["signal"] == "Verdict withheld"
+    assert "withheld" in result["bullets"][0]
+
+
+def test_research_ticker_stock_bundle_unaffected_by_etf_branch():
+    # A stock bundle has no asset_type/etf_* keys at all — byte-identical
+    # withheld behavior to before this fix.
+    data = _base_data([100, 101, 102], fundamentals_available=False)
+    result = qr.research_ticker("XYZ", data)
+    assert result["score"] is None
+    assert result["signal"] == "Verdict withheld"
+    assert "withheld" in result["bullets"][0]
+
+
+def test_research_ticker_etf_real_verdict_and_aum_thin_caption_both_fire():
+    # Phase 4's AUM-thin clause (bullet 4) must still fire alongside a NOW-real
+    # ETF verdict (bullet 1) — this combination was never actually reachable
+    # before this fix, since bullet 1 was always withheld for any ETF.
+    data = _etf_data([100, 101, 102], etf_available=True, etf_aum_thin=True)
+    result = qr.research_ticker("SPY", data)
+    assert "withheld" not in result["bullets"][0]
+    assert result["signal"] == "Buy"
+    assert "verify liquidity" in result["bullets"][3]
+
+
 # ─── research_ticker — momentum move calc len(close) guards ─────────────────
 
 def test_research_ticker_exactly_2_rows_gives_move1d_but_not_move5d():

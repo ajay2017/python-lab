@@ -218,10 +218,24 @@ def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) 
     target     = fins.get("analyst_target")
     upside_pct = float((target - price) / price * 100) if target and price else None
 
-    # Bullet 1: overall signal + composite score — withheld when fundamentals absent.
+    # Bullet 1: overall signal + composite score — withheld when fundamentals
+    # absent, UNLESS this is an ETF/fund with a real ETF-specific verdict
+    # (etf_scoring, Phase 2 of the ETF-support initiative). fundamentals_available
+    # is always False for a fund (it has none of the equity fundamentals fields),
+    # so etf_ok is checked as a second chance before falling through to the
+    # true withhold — same three-way resolution as portfolio.build_portfolio_df's
+    # fund_ok/etf_ok/withheld split. etf_ok is gated on asset_type == "etf" so a
+    # stock (which never has this key, or has it set to something else) can
+    # never take this branch.
+    etf_ok = data.get("asset_type") == "etf" and bool(data.get("etf_available", False))
     if fundamentals_available:
         b1 = f"**Signal: {rec['icon']} {rec['label']} ({score:.0f}/100)** — {rec['rationale']}"
         sig_label, sig_icon, sig_color, sig_score = rec["label"], rec["icon"], rec["color"], score
+    elif etf_ok:
+        etf_rec = data["etf_rec"]
+        etf_score = data["etf_total"]
+        b1 = f"**Signal: {etf_rec['icon']} {etf_rec['label']} ({etf_score:.0f}/100)** — {etf_rec['rationale']}"
+        sig_label, sig_icon, sig_color, sig_score = etf_rec["label"], etf_rec["icon"], etf_rec["color"], etf_score
     else:
         b1 = (
             "**Signal: ❔ Verdict withheld** — fundamentals couldn't be sourced "

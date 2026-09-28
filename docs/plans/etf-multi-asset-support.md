@@ -514,6 +514,42 @@ no ETF new-pick/Grow Today eligibility, no UI caption for `etf_aum_thin`, no
 ETF-specific BUY/HOLD/SELL thresholds (reused the equity ones — revisit only if
 they prove loose once eyeballed against real ETF holdings).
 
+**CORRECTION, found and fixed 2026-09-28 via a real owner screenshot:** Phase
+2's own scope claim above — "the new verdict flows through the EXISTING
+`port_df["Score"]`/`["Signal"]` render paths... nothing new to render" — was
+WRONG for two standalone per-ticker research surfaces that never read
+`port_df` at all: the 📈 Analysis page (three separate inline duplicates of
+the OLDER `fund_ok`-only withhold check — a single-ticker summary banner, the
+Scorecard table, and the "Detailed Analysis" per-ticker banner, all in
+`app.py`) and 🏠 Home's "🔍 Research a Stock" widget
+(`quick_research.py::research_ticker`, a different feature from the Analysis
+page — confirmed by tracing the real call site at `app.py:7998`, not assumed).
+None of these four sites were ever updated to check `etf_ok`, so every one of
+them showed "🚫 Verdict withheld" for any ETF — including SPY, which clearly
+has a known expense ratio and should have gotten a real verdict. This was a
+genuine blast-radius miss by both the original Phase 2 `planner` design pass
+and its `reviewer` pass — neither traced these two standalone per-ticker
+research surfaces, only `portfolio.build_portfolio_df` (Home/Watchlist/
+Summary) and `daily_briefing.py`'s new-pick gate. **Fixed same day** by
+extending the exact same already-approved `fund_ok`/`etf_ok`/withheld
+three-way resolution to all four sites — no new policy value, no new
+`constants.py` entry, `ETF_COMPOSITE_WEIGHTS` reused (never hardcoded) for the
+new ETF-branch pillar-breakdown captions. Opus `reviewer`: SHIP, 0 blocking —
+verified the stock path is byte-identical at every site (the equity branches
+were either untouched or only had an `elif` inserted before them), verified
+the Scorecard/Detailed-Analysis agreement invariant holds (same ticker can
+never show conflicting states across the two sites), verified the new dynamic
+HTML is genuinely escaped (`_safe_html`/`_md_bold`, not just gate-shaped),
+verified the ETF withhold-wording tweak ("expense ratio unavailable")
+accurately names the real failure mode rather than reusing stock language
+that doesn't fit. Full suite 6397 passed. Memory
+`feedback_handoff_needs_the_runnable_artifact`-adjacent lesson for a future
+session: **when a phase's design explicitly assumes "the existing render
+paths already cover this," verify that claim against every REAL render call
+site, not just the one the design pass happened to trace** — `app.py` has no
+test suite to catch a missed consumer, so this class of gap is invisible to
+everything except a live screenshot.
+
 ## Phase 3a — implementation record
 
 **Shipped 2026-09-27.** Design chain: Opus `planner` resolved the Phase 3
