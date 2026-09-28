@@ -1,12 +1,16 @@
 # Multi-asset-type support (ETF first) — architecture review + phased plan
 
-**Status: ANALYSIS COMPLETE + PHASES 0, 1, 2, 3a, AND 3b SHIPPED, all
-2026-09-27 (F-279, F-280, F-281, F-282, F-283) — Phase 3 (look-through +
-overlap) is now fully closed.** Phase 3a's `etf_lookthrough_cache` DDL is
-written but NOT YET APPLIED by the owner (every write path degrades
-gracefully without it — same non-blocking posture as Phase 1's DDL window).
-Only Phase 4 (type-aware UI polish) remains DESIGNED, NOT STARTED, no
-trigger date.
+**Status: THE ETF/MULTI-ASSET ARCHITECTURE INITIATIVE, AS ORIGINALLY SCOPED,
+IS COMPLETE — Phases 0 through 4 ALL SHIPPED, all 2026-09-27 (F-279 through
+F-284).** Phase 3a's `etf_lookthrough_cache` DDL is written but NOT YET
+APPLIED by the owner (every write path degrades gracefully without it — same
+non-blocking posture as Phase 1's DDL window). **One thing remains
+deliberately unscoped, by explicit owner choice, no trigger date: whether
+ETFs should ever become eligible as NEW Grow Today buy candidates** (today
+only existing/held ETFs get a real verdict) — this is a separate, bigger
+policy question needing its own discovery-universe design, not a natural
+extension of any phase above. See the final "Where the initiative stands
+now" section at the bottom of this doc for the complete picture.
 Opus `planner` architecture review, then a second `planner` design pass per phase,
 `implementer` built each, Opus `reviewer` before every commit (Phase 0: FIX-FIRST/1
 blocking → fixed same session → SHIP/0 blocking; Phase 1: SHIP/0 blocking, first
@@ -691,3 +695,75 @@ change to any gate or existing recommendation. **This closes Phase 3
 entirely** (3a + 3b) — only Phase 4 (type-aware UI polish, incl. surfacing
 the still-unwired `etf_aum_thin` flag from Phase 2, and deciding ETF new-pick
 eligibility as a possible 2b) remains designed, not started.
+
+## Phase 4 — implementation record (closes the initiative as originally scoped)
+
+**Shipped 2026-09-27 as F-284** (`docs/requirements.md` F-284).
+
+The owner was asked to disambiguate what "finish Phase 4" meant, since it had
+bundled two unrelated things: a small display item (surface the `etf_aum_thin`
+flag) and a much bigger, genuinely undecided policy question (ETF new-pick
+eligibility on Grow Today). **Owner chose to scope this pass to the AUM-thin
+caption only** — the new-pick eligibility question remains explicitly out of
+scope, unscoped, no trigger date.
+
+**What shipped:** `stock_analyzer/quick_research.py`'s existing "Key Context"
+bullet (bullet 4 — already surfaces earnings proximity, analyst-revision
+spikes, short interest for a stock) gained one more clause: when
+`asset_type == "etf"` and `etf_aum_thin` is `True` on the bundle, it shows
+"⚠ Small fund by assets under management — verify liquidity/spread before
+sizing a position." `etf_aum_thin` has been computed on every ETF bundle
+since Phase 2 but was never wired into any UI until now. Absent/`False` for
+every stock and for an ETF whose AUM is unknown or above the floor, so this
+is a no-op for the overwhelming majority of tickers — confirmed by a
+dedicated regression test that a stock bundle (missing both keys entirely)
+never satisfies the clause.
+
+**A second finding closed a loose end from the very first architecture
+review without any code change being needed:** the original Phase 0 review
+(§4) anticipated needing to explicitly suppress the earnings-proximity and
+analyst-revision alerts in `portfolio.alerts()` for ETFs ("type-aware
+panels... hide the earnings/analyst-revision cards"). Reading the actual code
+this pass confirmed that's already true by construction — `alerts()`'s
+earnings branch only fires `if earn:` (an ETF bundle's `earnings` key is
+never populated by any provider), and its analyst-revision branch reads
+`rev.get("downgrades_90d", 0)`/`net` from a `revisions` dict that's likewise
+never populated for a fund (no analyst-coverage data source exists for ETFs
+in this app). No suppression code was needed; both already correctly no-op.
+
+**Review:** deterministic gates only (full suite 6393 passed, antipattern and
+constants-doc gates both clean) — no Opus `reviewer` pass, per this repo's
+own review-economy rule: `quick_research.py` is not a `_GATE_FILES` member,
+no new `constants.py` value was added, and the change is pure-additive
+display text reading an already-approved, already-computed Phase 2 flag.
+3 new tests (clause fires when thin, clause absent when not-thin, clause
+absent for a stock bundle missing both keys entirely).
+
+---
+
+## Where the ETF/multi-asset initiative stands now (all phases, final)
+
+**Shipped, all 2026-09-27:** Phase 0 (F-279, fundamentals-withhold
+consistency fix — closed a live mis-scoring bug), Phase 1 (F-280, asset-type
+classification + broker capture plumbing, DDL applied to production same
+day), Phase 2 (F-281, the actual ETF scoring composite + gate, 6 owner-approved
+constants), Phase 3a (F-282, real sector look-through on the existing GICS-11
+diagnostic — deliberately NOT wired into the hard concentration gate, whose
+own taxonomy is incompatible with ETF sector data), Phase 3b (F-283, a
+holdings-overlap detector reusing Phase 3a's data and the existing
+`SINGLE_NAME_CEILING`, no new constant), Phase 4 (F-284, the AUM-thin
+caption). Five Opus reviewer passes across the phases that touched
+`_GATE_FILES` (one FIX-FIRST/1 blocking on Phase 0, fixed same session; SHIP/0
+blocking on Phases 1, 2, 3a, 3b); Phase 4 correctly used the deterministic
+gates alone.
+
+**Genuinely still open, both deliberately out of scope for every phase
+above, no trigger date:**
+- **ETF new-pick/Grow Today eligibility** — a real, unscoped policy question
+  (needs a discovery universe + threshold recalibration decision), explicitly
+  declined for Phase 4 by the owner. Pick up only via a fresh explicit ask.
+- **The `etf_lookthrough_cache` DDL** — written (Phase 3a's record above has
+  the exact SQL), not yet applied to production. Every write path already
+  degrades gracefully without it; apply whenever convenient, no urgency.
+
+Nothing else from the original architecture review remains unaddressed.

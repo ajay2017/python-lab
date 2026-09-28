@@ -475,6 +475,31 @@ def test_research_ticker_key_context_short_interest_at_15_not_included():
     assert "Short interest" not in result["bullets"][3]
 
 
+def test_research_ticker_key_context_etf_aum_thin_clause():
+    data = _base_data([100, 101, 102])
+    data["asset_type"] = "etf"
+    data["etf_aum_thin"] = True
+    result = qr.research_ticker("XYZ", data)
+    assert "verify liquidity" in result["bullets"][3]
+
+
+def test_research_ticker_key_context_etf_aum_not_thin_omits_clause():
+    data = _base_data([100, 101, 102])
+    data["asset_type"] = "etf"
+    data["etf_aum_thin"] = False
+    result = qr.research_ticker("XYZ", data)
+    assert "verify liquidity" not in result["bullets"][3]
+
+
+def test_research_ticker_key_context_stock_never_shows_aum_thin_clause():
+    # A stock bundle has no "asset_type"/"etf_aum_thin" keys at all (Phase 1/2
+    # only populate them for an ETF); confirm the absence of both keys can
+    # never accidentally satisfy the ETF-only clause.
+    data = _base_data([100, 101, 102])
+    result = qr.research_ticker("XYZ", data)
+    assert "verify liquidity" not in result["bullets"][3]
+
+
 # ─── research_ticker — portfolio_ctx None vs {} vs dict ──────────────────────
 
 def test_research_ticker_portfolio_ctx_none_omits_5th_bullet():

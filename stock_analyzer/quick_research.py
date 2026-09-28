@@ -267,6 +267,16 @@ def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) 
         b4_parts.append(
             f"⚡ Short interest {short_pct:.0f}% of float — squeeze potential"
         )
+    # Phase 4 (F-284): ETF/fund thin-AUM awareness. Computed since Phase 2
+    # (etf_scoring.etf_aum_thin) but never surfaced anywhere until now.
+    # Awareness only — never gates, never touches the composite. False for
+    # every stock (asset_type != "etf") and for an ETF where AUM is unknown
+    # or above the floor, so this is a no-op for the vast majority of tickers.
+    if data.get("asset_type") == "etf" and data.get("etf_aum_thin"):
+        b4_parts.append(
+            "⚠ Small fund by assets under management — verify liquidity/spread "
+            "before sizing a position"
+        )
     b4 = "**Key Context:** " + (
         "; ".join(b4_parts) if b4_parts else "No additional signals available"
     )
