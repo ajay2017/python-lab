@@ -394,14 +394,31 @@ in this session — the owner's own report is the source for "applied." If a fut
 session needs to confirm the columns are actually live (not just that the SQL was
 run without error), that's a quick Supabase check, not a re-run of this DDL.
 
-**ETF registry seeding — do this via the App Settings UI, not a raw SQL hash guess:**
-insert a placeholder row for `"etf_registry"` (payload can be anything valid, e.g.
-`{"Broad Market": ["SPY", "VOO", "IVV"]}`) directly in `reference_tables`, then open
-⚙️ App Settings → the new "ETF metadata registry" table → make any trivial edit and
-Save (or edit it to the real desired categories directly) so `save_reference_table`
-stamps `payload_hash`/`as_of` correctly itself — this is the same two-step sequence
-already used for the Industrials/Utilities seeds (`docs/plans/scan-universe-refresh`
-precedent), safer than hand-computing a hash to match `reference_data.canonicalize`.
+**ETF registry seeding — CLOSED 2026-09-27.** This step was under-delivered
+at Phase 1 ship time: the implementer correctly described the two-step
+sequence (seed via raw SQL, then a real Save through the App Settings UI so
+`save_reference_table` recomputes `payload_hash`/`as_of` itself) but no
+runnable SQL was actually handed to the owner, so opening "ETF metadata
+registry" in App Settings surfaced `resolve_universe`'s
+`ReferenceDataUnavailable` error (a missing row reads identically to "the DB
+is unreachable" or "RLS is misconfigured," by design — a fail-loud message,
+not an empty editable table) until this was caught and fixed. The owner ran:
+
+```sql
+INSERT INTO public.reference_tables (name, payload, payload_hash, as_of, updated_by)
+VALUES (
+  'etf_registry',
+  '{"Broad Market": ["SPY", "VOO", "IVV"]}'::jsonb,
+  'seed',
+  CURRENT_DATE,
+  'seed_migration'
+);
+```
+
+The placeholder `'seed'` hash doesn't need to be a real sha256 — the next
+Save through the App Settings UI recomputes `payload_hash`/`as_of` correctly
+and overwrites it, the same two-step sequence already used for the
+Industrials/Utilities seeds (`docs/plans/scan-universe-refresh` precedent).
 
 **What this does NOT do (deliberately, Phase 2+ territory):** nothing consumes
 `asset_type`/`etf_facts`/the registry for a decision yet. An ETF's composite is
