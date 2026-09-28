@@ -8,10 +8,12 @@ this session — the owner's own report is the source for "applied," same
 posture as the Phase 1 DDL confirmation). **One thing remains
 deliberately unscoped, by explicit owner choice, no trigger date: whether
 ETFs should ever become eligible as NEW Grow Today buy candidates** (today
-only existing/held ETFs get a real verdict) — this is a separate, bigger
-policy question needing its own discovery-universe design, not a natural
-extension of any phase above. See the final "Where the initiative stands
-now" section at the bottom of this doc for the complete picture.
+only existing/held ETFs get a real verdict) was designed as **Phase 2b**,
+same day (2026-09-28) — all 7 decision points approved by the owner, **but
+NOT YET BUILT**; implementation needs its own explicit go-ahead. See the
+"Phase 2b" section below for the full design-of-record, and the final
+"Where the initiative stands now" section at the bottom of this doc for the
+complete picture.
 Opus `planner` architecture review, then a second `planner` design pass per phase,
 `implementer` built each, Opus `reviewer` before every commit (Phase 0: FIX-FIRST/1
 blocking → fixed same session → SHIP/0 blocking; Phase 1: SHIP/0 blocking, first
@@ -989,13 +991,155 @@ fix's own investigation checked whether the 4 metric-specific signals were
 present and correctly found they weren't, but never checked whether a FIFTH,
 unconditional entry existed in the same dict.
 
-**Genuinely still open, deliberately out of scope for every phase above, no
-trigger date:**
-- **ETF new-pick/Grow Today eligibility** — a real, unscoped policy question
-  (needs a discovery universe + threshold recalibration decision), explicitly
-  declined for Phase 4 by the owner. Pick up only via a fresh explicit ask.
-
 The `etf_lookthrough_cache` DDL (Phase 3a) was applied by the owner
-2026-09-27, closing that non-blocking item. Nothing else from the original
-architecture review remains unaddressed beyond the one deliberately-deferred
-item above.
+2026-09-27, closing that non-blocking item.
+
+---
+
+## Phase 2b — ETF new-pick eligibility: DESIGN APPROVED 2026-09-28, NOT YET BUILT
+
+The owner explicitly asked to design/plan this — the one item every prior
+phase deferred — before deciding whether to implement it. An Opus `planner`
+pass designed it; the owner then walked through and approved all 7 decision
+points, each at the planner's recommended default, in a structured review
+(mirroring Phase 2's own 10-decision walkthrough). **No code has been
+written. This section is the design-of-record for a future implementation
+session, not a shipped feature.**
+
+### The decisive finding — why this can't be "just remove the exclusion guard"
+
+Reading `daily_briefing.py`'s actual new-pick pipeline found the real
+blocker is the CANDIDATE SOURCE, not the equity gates: today's new-pick
+candidates come from exactly two pools (`scanner_results` filtered by
+`sector_universe`, and `movers`) — **the owner-editable `etf_registry` table
+feeds NEITHER**, so zero ETF tickers can reach the candidate loop at all
+today. The `asset_type == "etf"` exclusion guard added earlier in this
+campaign is genuinely redundant belt-and-suspenders (an ETF would already
+fail the fundamentals-availability gate right after it), not the actual
+blocker.
+
+More importantly, the arithmetic on the EXISTING ETF composite
+(`etf_composite = 0.70·technical + 0.30·cost`) revealed a real calibration
+trap: a cheap fund (cost score ≈100, true of SPY/VOO/IVV) clears the STOCK
+`COMPOSITE_BUY` bar (65) at a technical score of just **50** — barely above
+average, with no fundamental floor underneath the way a stock's weighted
+business-quality/valuation legs provide. Since new picks are only allowed on
+bull days (when a broad index's technical score is almost always ≥50),
+reusing the stock bar as-is would have made SPY/VOO/IVV show "Buy" on nearly
+every bull day — "the market is up, so buy the market," not a decision.
+**This is the reason the design raises the bar rather than just opening the
+gate.**
+
+### The 7 approved decisions (all at the planner's recommended default)
+
+1. **Composite bar:** an ETF new pick must clear `COMPOSITE_STRONG_BUY`
+   (75), not the stock `COMPOSITE_BUY` (65) — reuses an existing constant,
+   no new magnitude value. At 75, a cheap fund needs technical ≥64
+   (genuinely strong), not just "above average."
+2. **Day-type eligibility:** bull days only (mirroring the existing
+   add-to-winner restriction) — no flat-day ETF picks in v1, since a flat
+   day is exactly when "real entry vs. a calm index doing nothing" is
+   hardest to tell apart.
+3. **AUM:** `ETF_AUM_THIN_FLOOR_USD` ($50M) becomes a HARD gate for new
+   picks specifically (it stays awareness-only for already-held ETFs) —
+   committing NEW capital to a thin/illiquid fund is a different risk than
+   already holding one. No-op for SPY/VOO/IVV today; a real guard the
+   moment a niche fund is ever added to the registry.
+4. **Daily cap:** ETF picks get their own separate allowance, capped at
+   1/day (a NEW constant, `ETF_MAX_PICKS = 1`) — this is the ONLY genuinely
+   new policy-magnitude value in the whole design. Stops an index pick from
+   crowding out single-name stock ideas and prevents a bull run from
+   filling the pick list with "buy the index" every day.
+5. **Discovery scope:** v1 draws candidates ONLY from the existing
+   owner-curated `etf_registry` table (currently "Broad Market":
+   SPY/VOO/IVV) — no separate ETF scan/discovery universe. Smallest safe
+   surface; the owner already controls the registry's contents via
+   ⚙️ App Settings.
+6. **Sector ETFs:** if a concentrated sector fund (e.g. XLK) is ever added
+   to the registry, accept the same "Other"-bucket concentration blindness
+   held ETFs already have, documented rather than solved now — a
+   "broad/diversified" flag is explicitly NOT being designed today, since
+   the registry only holds broad-market funds and there's nothing to guard
+   against yet.
+7. **Overlap-detector integration:** Phase 3b's holdings-overlap warning
+   ("adding this duplicates X% you already hold via another fund") is
+   explicitly DEFERRED to a v2 — get new-pick eligibility working first;
+   the data Phase 3b already computes can be wired in cleanly later
+   without redesigning anything built in this phase.
+
+### What v1 does NOT include (explicitly out of scope, not forgotten)
+
+- Any ETF scan/discovery universe beyond the curated `etf_registry`.
+- Phase 3b's overlap-detector wiring into the new-pick decision flow.
+- True sector look-through into `SECTOR_CEILING`/the hard concentration
+  gate — stays deferred, Phase 3a's own reasoning is unchanged by this
+  design.
+- Any new ETF-specific BUY/HOLD/SELL threshold *magnitudes* — reuses the
+  existing equity 75/65/44/30 vocabulary; the only new lever is WHICH band
+  gates a new pick, plus the one new `ETF_MAX_PICKS` count constant.
+- Any ETF-specific email redesign — reuses the existing buy-list email
+  renderer as-is (cosmetic wording only, if anything).
+
+### Implementer-ready build sequence (for a FUTURE session, once explicitly asked for)
+
+Ordered smallest-safe-first, mirroring exactly how Phases 0-4 were
+sequenced — each `_GATE_FILES` commit needs its own mandatory Opus
+`reviewer` pass, not one review at the end:
+
+1. New pure module `stock_analyzer/etf_candidates.py` (deliberately new,
+   not grown inside `daily_briefing.py`, so it carries its own review
+   history) — a pure function resolving the `etf_registry` payload + held
+   tickers into a deduped not-held ETF ticker list, and a pure
+   `etf_newpick_eligible(bundle, tone) -> (bool, reason)` encoding
+   decisions 1-3 above (`etf_available` AND `asset_type == "etf"` AND not
+   AUM-thin AND `tone == "bull"` AND `etf_total >= COMPOSITE_STRONG_BUY`).
+2. `constants.py`: add `ETF_MAX_PICKS = 1` (decision 4) with a documented
+   rationale; reuse `COMPOSITE_STRONG_BUY`/`ETF_AUM_THIN_FLOOR_USD` for
+   decisions 1/3 (no new magnitude values there) + the matching
+   `docs/architecture.md` constants-table row.
+3. `daily_briefing.py`: a THIRD candidate pool (`etf_candidates`, parallel
+   to the existing curated/movers pools, kept separate so it's never
+   truncated by or subjected to the equity fundamentals gate), capped at
+   `ETF_MAX_PICKS`. The existing `asset_type == "etf"` exclusion guard on
+   the scanner/mover pools stays exactly as-is (it's still the correct
+   belt-and-suspenders protection for THAT path).
+4. `cron_runner.py`'s `_build_new_pick_rows` (+ the app.py interactive
+   equivalent): stamp `asset_type` on the saved recommendation row —
+   currently missing even though Phase 1 added the column. Needed so an
+   ETF new-pick doesn't silently contaminate the stock-only
+   alpha-attribution readouts (Engine Track Record, Self Track Record, the
+   A2 monotonicity analysis).
+5. Wiring: `headless_alert_engine.compute_morning_picks` + app.py's Home
+   build both resolve the registry, load ETF bundles, and pass the new
+   candidate pool into `build_daily_briefing` (default `None` →
+   byte-identical to today for the stock-only path).
+6. `notify.py`: cosmetic label fix only (an ETF pick's driving leg is
+   technical + cost, not "momentum") — optional, not decision-bearing.
+7. Docs: `requirements.md` new F-ID, `architecture.md` module + constants
+   rows, this plan doc's own status line, shipped-log, user guide.
+
+### Tests the eventual build must include (pre-specified so a future session doesn't have to re-derive the boundaries)
+
+- The exact calibration boundary: a cheap ETF at technical score just below
+  ~64.3 (composite just below 75) is excluded; just above is included.
+- ETF eligible ONLY on bull days — explicit flat-day and down-day exclusion
+  cases, not just relying on early-return behavior.
+- `etf_available=False` (no expense ratio) → never surfaced, never a
+  fabricated verdict.
+- `etf_aum_thin=True` → excluded (hard gate); at/above the floor →
+  allowed.
+- No more than `ETF_MAX_PICKS` ETF picks in a single day's `new_picks`.
+- REGRESSION: the existing scanner/mover-pool exclusion guard still holds
+  (an ETF that somehow entered THAT pool must still be excluded there).
+- REGRESSION: `etf_candidates=None`/`[]` produces byte-identical
+  `new_picks` to today (the stock-only path must be provably unperturbed).
+- ETF pick sizing respects `NET_CAPITAL_POSITION_CAP_PCT`/
+  `SINGLE_NAME_CEILING` unchanged (already asset-agnostic, confirmed — no
+  new test needed beyond a sanity check).
+- A saved ETF pick's recommendation row stamps `asset_type == "etf"`.
+
+**Trigger to actually build this:** an explicit owner ask to proceed to
+implementation. This design being approved does not itself authorize
+building — matching this project's own established pattern (design and
+build are separate steps, separate sign-offs) throughout this entire
+initiative.
