@@ -3791,28 +3791,44 @@ def _get_premarket_brief(held_tickers: tuple, watchlist: tuple) -> dict:
 
 
 @st.cache_data(ttl=86400, show_spinner=False, max_entries=20)
+def _cached_monte_carlo_paths(
+    tickers_tuple: tuple, weights_tuple: tuple, horizon_days: int,
+) -> dict:
+    """24h-cached expensive half of the Monte Carlo simulation (multi-year
+    history fetch + 2000-trial block bootstrap) — keyed on holdings + weights
+    + horizon ONLY, deliberately excluding dollar market values (see
+    _cached_monte_carlo below, which merges those back in uncached).
+    Re-keys on primitive tuples (not port_df) to keep the cache key stable
+    and cheap to hash. See stock_analyzer/monte_carlo.py::run_monte_carlo_paths
+    for the pure simulation logic — this is a thin Streamlit-caching wrapper."""
+    weights = dict(zip(tickers_tuple, weights_tuple))
+    return _mc.run_monte_carlo_paths(list(tickers_tuple), weights, horizon_days)
+
+
 def _cached_monte_carlo(
     tickers_tuple: tuple, weights_tuple: tuple, market_values_tuple: tuple,
     horizon_days: int,
 ) -> dict:
-    """24h-cached historical block-bootstrap Monte Carlo (🎲 Outcome Range tab,
-    Risk Analysis). Re-keys on the holdings set + weights + horizon, not on
-    port_df directly, so an unrelated page rerun doesn't force a fresh multi-
-    year re-fetch. Takes primitive tuples (not port_df) to keep the cache key
-    stable and cheap to hash. See stock_analyzer/monte_carlo.py for the pure
-    simulation logic — this is a thin Streamlit-caching wrapper only.
+    """Historical block-bootstrap Monte Carlo (🎲 Outcome Range tab, Risk
+    Analysis). The expensive part (_cached_monte_carlo_paths above) is
+    24h-cached on holdings/weights/horizon only; `market_values_tuple` is
+    applied HERE, deliberately uncached, as a cheap dollar-scaling step on
+    every call.
 
-    max_entries=20: market_values_tuple drifts on every live price tick during
-    market hours, so this key can churn many times a day; the 24h ttl alone
-    would let every distinct tick's full 2000-trial result sit retained for a
-    full day. This bounds the worst case to a fixed number of the most-recent
-    simulations (LRU) rather than an unbounded set (2026-08-06 perf investigation)."""
-    port_df = pd.DataFrame({
-        "Ticker":       list(tickers_tuple),
-        "Weight (%)":   list(weights_tuple),
-        "Market Value": list(market_values_tuple),
-    })
-    return _mc.run_monte_carlo(port_df, horizon_days=horizon_days)
+    2026-09-28 perf fix: market_values_tuple (live intraday $ prices) used to
+    sit INSIDE the cached function's key, and it drifts on every price tick
+    during market hours — so almost every "Run Simulation" click re-ran the
+    full 2000-trial simulation from scratch for an otherwise-unchanged
+    ticker/weight/horizon combination, defeating the 24h cache in practice.
+    portfolio_value is a simple dollar sum over the already-simulated
+    `included` tickers (see monte_carlo.run_monte_carlo's own docstring) —
+    it never needed to be part of the expensive cache key at all."""
+    if not tickers_tuple:
+        return {}
+    result = _cached_monte_carlo_paths(tickers_tuple, weights_tuple, horizon_days)
+    market_values = dict(zip(tickers_tuple, market_values_tuple))
+    included_value = float(sum(market_values.get(t, 0.0) for t in result.get("included", [])))
+    return {**result, "portfolio_value": included_value}
 
 
 # ── Shared data loader ────────────────────────────────────────────────────────

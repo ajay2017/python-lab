@@ -175,6 +175,49 @@ def summarize_paths(
     }
 
 
+def run_monte_carlo_paths(
+    tickers: list[str],
+    weights: dict[str, float],
+    horizon_days: int,
+    n_trials: int = MC_TRIALS,
+    block_days: int = MC_BLOCK_DAYS,
+    min_days: int = MC_MIN_HISTORY_DAYS,
+    history_period: str = MC_HISTORY_PERIOD,
+    seed: int | None = None,
+) -> dict:
+    """
+    The expensive half of run_monte_carlo: fetch long history for `tickers`,
+    build the aligned return matrix, run the block bootstrap, and summarize.
+    Depends only on tickers/weights/horizon (+ the trial/block/history
+    knobs) — NEVER on dollar market values, unlike run_monte_carlo's
+    `portfolio_value` leg. Split out so a caller can cache this half on a
+    key that live intraday price ticks can't churn (app.py's
+    _cached_monte_carlo does exactly that — see its docstring).
+
+    Returns a dict with `excluded` (tickers dropped for insufficient
+    history), `included` (tickers actually simulated), and `summary` (see
+    summarize_paths) — no `portfolio_value`; merge that in separately.
+    """
+    long_history = fetch_long_history(tickers, period=history_period)
+    returns_df, excluded = build_return_matrix(long_history, min_days=min_days)
+
+    included = [t for t in returns_df.columns if t in weights]
+    if not included:
+        return {"excluded": excluded, "included": [], "summary": {}}
+
+    paths = block_bootstrap_paths(
+        returns_df, weights,
+        n_trials=n_trials, block_days=block_days,
+        horizon_days=horizon_days, seed=seed,
+    )
+
+    return {
+        "excluded": excluded,
+        "included": included,
+        "summary":  summarize_paths(paths),
+    }
+
+
 def run_monte_carlo(
     port_df: pd.DataFrame,
     horizon_days: int,
@@ -185,8 +228,8 @@ def run_monte_carlo(
     seed: int | None = None,
 ) -> dict:
     """
-    Top-level orchestrator: fetch long history for held tickers, build the
-    aligned return matrix, run the block bootstrap, and summarize.
+    Top-level orchestrator: delegates the fetch/bootstrap/summarize work to
+    run_monte_carlo_paths, then merges in `portfolio_value`.
 
     Returns {} if there's no portfolio to simulate; otherwise a dict with
     `excluded` (tickers dropped for insufficient history), `included`
@@ -211,29 +254,11 @@ def run_monte_carlo(
         for _, row in port_df.iterrows()
     }
 
-    long_history = fetch_long_history(tickers, period=history_period)
-    returns_df, excluded = build_return_matrix(long_history, min_days=min_days)
-
-    included = [t for t in returns_df.columns if t in weights]
-    included_value = sum(market_values.get(t, 0.0) for t in included)
-
-    if not included:
-        return {
-            "excluded":        excluded,
-            "included":        [],
-            "summary":         {},
-            "portfolio_value": 0.0,
-        }
-
-    paths = block_bootstrap_paths(
-        returns_df, weights,
+    result = run_monte_carlo_paths(
+        tickers, weights, horizon_days,
         n_trials=n_trials, block_days=block_days,
-        horizon_days=horizon_days, seed=seed,
+        min_days=min_days, history_period=history_period, seed=seed,
     )
+    included_value = float(sum(market_values.get(t, 0.0) for t in result.get("included", [])))
 
-    return {
-        "excluded":        excluded,
-        "included":        included,
-        "summary":         summarize_paths(paths),
-        "portfolio_value": included_value,
-    }
+    return {**result, "portfolio_value": included_value}
