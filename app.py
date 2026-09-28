@@ -44311,17 +44311,30 @@ elif page == "🎯 My Edge":
                 )
 
                 _stv_tickers = sorted({r["ticker"] for r in (_stv_classified or [])})
-                _stv_prices: dict = {}
-                if _stv_tickers:
-                    try:
-                        _stv_px = fetch_live_prices(_stv_tickers)
-                        _stv_prices = {
-                            t: float(d.get("price", 0))
-                            for t, d in (_stv_px or {}).items()
-                            if d and d.get("price")
-                        }
-                    except Exception:
-                        _stv_prices = {}
+                # Day-scoped session_state cache (mirrors Rec History / Engine Track
+                # Record's _rh_prices_cache_{start}_{end} pattern) -- this previously
+                # called the raw fetch_live_prices() unconditionally on every rerun
+                # while this tab was open, bypassing the app's own 45s-ttl
+                # _cached_live_prices wrapper entirely. A separate key namespace
+                # (not the shared _rh_prices_cache_ key) because this tab's ticker
+                # set is self-initiated/app-aligned BUY tickers, not the recs-table
+                # universe those pages fetch -- reusing their key could silently
+                # omit a ticker neither of them happened to need this session.
+                _stv_prices_cache_key = f"_stv_buy_prices_cache_{_me_today.isoformat()}"
+                if st.session_state.get(_stv_prices_cache_key) is None:
+                    _stv_prices_fresh: dict = {}
+                    if _stv_tickers:
+                        try:
+                            _stv_px = fetch_live_prices(_stv_tickers)
+                            _stv_prices_fresh = {
+                                t: float(d.get("price", 0))
+                                for t, d in (_stv_px or {}).items()
+                                if d and d.get("price")
+                            }
+                        except Exception:
+                            _stv_prices_fresh = {}
+                    st.session_state[_stv_prices_cache_key] = _stv_prices_fresh
+                _stv_prices = st.session_state[_stv_prices_cache_key]
 
                 _stv_summary = _stv.self_vs_engine_summary(
                     _stv_classified, _stv_prices, _stv_spy, _me_today, BEHAVIORAL_MIN_SAMPLE_N,
@@ -44543,17 +44556,23 @@ elif page == "🎯 My Edge":
                 # held/bought set: this needs live prices for tickers that may
                 # no longer be held at all.
                 _sts_tickers = sorted({r["ticker"] for r in (_sts_classified or [])})
-                _sts_prices: dict = {}
-                if _sts_tickers:
-                    try:
-                        _sts_px = fetch_live_prices(_sts_tickers)
-                        _sts_prices = {
-                            t: float(d.get("price", 0))
-                            for t, d in (_sts_px or {}).items()
-                            if d and d.get("price")
-                        }
-                    except Exception:
-                        _sts_prices = {}
+                # Same day-scoped cache fix as Buy-Side above, own key namespace
+                # (SOLD tickers, a different set from Buy-Side's bought/held set).
+                _sts_prices_cache_key = f"_stv_sell_prices_cache_{_me_today.isoformat()}"
+                if st.session_state.get(_sts_prices_cache_key) is None:
+                    _sts_prices_fresh: dict = {}
+                    if _sts_tickers:
+                        try:
+                            _sts_px = fetch_live_prices(_sts_tickers)
+                            _sts_prices_fresh = {
+                                t: float(d.get("price", 0))
+                                for t, d in (_sts_px or {}).items()
+                                if d and d.get("price")
+                            }
+                        except Exception:
+                            _sts_prices_fresh = {}
+                    st.session_state[_sts_prices_cache_key] = _sts_prices_fresh
+                _sts_prices = st.session_state[_sts_prices_cache_key]
 
                 _sts_summary = _stv.self_vs_engine_sell_summary(
                     _sts_classified, _sts_prices, _stv_spy, _me_today, BEHAVIORAL_MIN_SAMPLE_N,
