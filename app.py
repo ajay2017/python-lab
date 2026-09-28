@@ -26901,7 +26901,13 @@ elif page == "📒 Trade Journal":
             st.session_state.pop("_tj_broker_prefill", None)
             st.rerun()
 
-    trades_df = st.session_state.get("trades_df", db.load_trades())
+    # `.get(key, db.load_trades())` evaluates the default eagerly, so the
+    # unbounded trades read fired every rerun regardless of a cache hit and
+    # was then discarded — fixed to the two-step get-then-check idiom already
+    # used correctly elsewhere on this page (e.g. Self vs Engine above).
+    trades_df = st.session_state.get("trades_df")
+    if trades_df is None:
+        trades_df = db.load_trades()
     stats = performance_stats(trades_df)
 
     _tj_tab_log, _tj_tab_perf, _tj_tab_hist = st.tabs(["📝 Log Trade", "📊 Performance", "📋 History"])
@@ -41551,7 +41557,12 @@ elif page == "🧠 AI Insights":
                     # Current prices for still-open BUY lots, reusing the
                     # session's already-loaded holdings rather than a live
                     # fetch — same cache Diversification/Risk Analysis read.
-                    _qa_trades_df = st.session_state.get("trades_df", db.load_trades())
+                    # (get-then-check, not a `.get(key, db.load_trades())`
+                    # eager default — that form fires the unbounded read every
+                    # rerun regardless of a cache hit; see Trade Journal above.)
+                    _qa_trades_df = st.session_state.get("trades_df")
+                    if _qa_trades_df is None:
+                        _qa_trades_df = db.load_trades()
                     _qa_prices: dict = {}
                     _qa_pdf = st.session_state.get("_port_df_enriched")
                     if _qa_pdf is not None and not _qa_pdf.empty and "Shares" in _qa_pdf.columns:
@@ -41647,7 +41658,9 @@ elif page == "🧠 AI Insights":
                 elif _qa_parsed["intent"] == "rec_outcome":
                     _qa_tk      = _qa_parsed["ticker"]
                     _qa_horizon = _qa_parsed["horizon_days"] or _qa_default_horizon
-                    _qa_trades_df = st.session_state.get("trades_df", db.load_trades())
+                    _qa_trades_df = st.session_state.get("trades_df")
+                    if _qa_trades_df is None:
+                        _qa_trades_df = db.load_trades()
 
                     if _qa_parsed["start_date"]:
                         _qa_rec_date = _qa_parsed["start_date"]
@@ -41658,7 +41671,20 @@ elif page == "🧠 AI Insights":
                         # No date given — fall back to the most recent recommendation
                         # on record for this ticker, and say so explicitly rather than
                         # silently picking one.
-                        _qa_all_recs = db.load_recommendations(start_date=None, end_date=None)
+                        # Day-scoped session_state cache (same precedent as the
+                        # live-price caches elsewhere on this page): this full-
+                        # table read otherwise re-fired on every no-date Ask-tab
+                        # question for the rest of the session. A server-side
+                        # ticker filter would need a new db.load_recommendations()
+                        # parameter (a db.py change, gated on Opus review per
+                        # _GATE_FILES) — deferred; this stops the repeat network
+                        # cost within a session/day without touching the query.
+                        _qa_all_recs_cache_key = f"_qa_all_recs_cache_{_today_et().isoformat()}"
+                        if st.session_state.get(_qa_all_recs_cache_key) is None:
+                            st.session_state[_qa_all_recs_cache_key] = db.load_recommendations(
+                                start_date=None, end_date=None
+                            )
+                        _qa_all_recs = st.session_state[_qa_all_recs_cache_key]
                         _qa_tk_recs  = (
                             _qa_all_recs[_qa_all_recs["ticker"].astype(str).str.upper() == _qa_tk]
                             if not _qa_all_recs.empty else _qa_all_recs
@@ -43372,6 +43398,11 @@ elif page == "🎯 My Edge":
             "not biases you're being accused of, and never something the engine acts on.**"
         )
 
+        # load_recommendations() with no args already returns FULL history --
+        # both start_date/end_date default to None, there is no 30-day-bounded
+        # variant (a stale comment on the Personalized Discovery block below
+        # used to claim otherwise). Reused there instead of re-querying and
+        # re-matching the identical table a second time in this same render.
         _bf_recs_df   = db.load_recommendations()
         _bf_trades_df = st.session_state.get("trades_df")
         if _bf_trades_df is None:
@@ -43385,10 +43416,9 @@ elif page == "🎯 My Edge":
         # ── Personalized Discovery — your winning entry profile ─────────────
         # Runs this tab's own backward-looking analysis FORWARD: what did a
         # typical REALIZED winning entry look like, so Grow Today can flag
-        # today's picks that resemble it. Uses FULL recommendation history
-        # (not the 30-day default _bf_recs_df above — a closed lot's entry
-        # can be far older than 30 days) joined against build_closed_lots()'s
-        # realized round-trips. Zero new fetches.
+        # today's picks that resemble it. Joined against build_closed_lots()'s
+        # realized round-trips. Zero new fetches — reuses _bf_matched_all
+        # above (already FULL history, see the comment there).
         with st.container(border=True):
             st.markdown("**🔭 Your Winning Entry Profile**")
             st.caption(
@@ -43398,8 +43428,7 @@ elif page == "🎯 My Edge":
                 "picks — never re-scores, re-ranks, or gates anything."
             )
             from stock_analyzer.investor_mirror import build_closed_lots as _im_build_closed_lots
-            _pd_full_recs_df = db.load_recommendations(start_date=None, end_date=None)
-            _pd_full_matched = _bf_match(_pd_full_recs_df, _bf_trades_df)
+            _pd_full_matched = _bf_matched_all
             _pd_closed_lots  = _im_build_closed_lots(_bf_trades_df)
             # min_n=0 so this ALWAYS returns the real matched-entry count (n),
             # even below the floor — the "have N" withhold message below must
