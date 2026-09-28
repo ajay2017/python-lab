@@ -30,6 +30,7 @@ from stock_analyzer.constants import (
     ETF_EXPENSE_RATIO_EXPENSIVE_PCT,
     ETF_COST_SCORE_FLOOR,
     ETF_AUM_THIN_FLOOR_USD,
+    COMPOSITE_HOLD,
 )
 from stock_analyzer.scoring import recommendation
 
@@ -119,3 +120,14 @@ def etf_aum_thin(total_assets: float | None) -> bool:
     if total_assets is None:
         return False
     return float(total_assets) < ETF_AUM_THIN_FLOOR_USD
+
+
+def cost_urgency_high(cost_score: float | None) -> bool:
+    """True when a held fund's expense-ratio cost score is weak enough that
+    a concurrent technical-review signal warrants acting (sell half) rather
+    than merely trailing the stop. Mirrors the equity Rebalancer's own
+    `bq_score < COMPOSITE_HOLD` test, reusing the SAME band -- owner-approved
+    reuse, not a new policy value. None -> False."""
+    if cost_score is None:
+        return False
+    return float(cost_score) < COMPOSITE_HOLD

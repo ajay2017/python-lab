@@ -899,18 +899,65 @@ confirmed the stock path reduces to exactly the original expression, and
 confirmed the 3 deferred sites are untouched. Full suite 6397 passed, no new
 `constants.py` value.
 
+**FOURTH follow-on, same day 2026-09-28 — closes the 3 deferred display-
+completeness sites, plus 2 more real gaps found while scoping them.** An
+Opus `planner` design pass, given the exact 3 sites, found the scope was
+bigger than "add a Cost tile": (1) the Rebalancer's evidence panel could
+print an affirmative FALSE claim like "🟡 business quality remains solid"
+for a fund with no business quality at all — the exact bug class this whole
+campaign started from; (2) Home's Position Drill-Down "Composite Score"
+metric showed the raw fabricated equity composite, contradicting the correct
+ETF verdict already shown in a caption just above it on the SAME page. Both
+folded into the fix as necessary, not optional.
+
+**New consistent vocabulary** (`stock_analyzer/util.py`): `ETF_PILLAR_NA_SHORT
+= "➖ n/a for funds"` / `ETF_PILLAR_NA_REASON`, deliberately distinct from the
+existing "❔ Withheld"/"❔ not measured" (which means "a transient data gap")
+— this new state means "structurally not part of this asset type's composite
+by design." The two must never share a glyph. **New classifier**
+(`stock_analyzer/etf_scoring.py::cost_urgency_high`): reuses the EXISTING
+`COMPOSITE_HOLD` constant (owner-approved reuse, confirmed via a direct
+question before building — not a new policy value) as the cutoff for
+whether a fund's cost pillar counts as "weak enough to act on" alongside a
+technical review signal, mirroring exactly how the stock case already uses
+the same constant for `bq_score`. Extracted into `stock_analyzer/` rather
+than compared inline in `app.py`, specifically to avoid tripping
+`check_antipatterns.py`'s `POLICY_DECISION_IN_RENDER` rule.
+
+**Fixed:** the Rebalancer evidence panel + action message (dims list and
+diagnosis become ETF-aware; a new cost-framed urgency message), Home's
+`d4` Composite Score metric (now reads `etf_total`/`etf_rec` for a real
+ETF, closing the contradiction) and its 4-tile row (Technical corrected to
+its real 70% weight, a real "Cost" tile added, Valuation/Sentiment show the
+new NA state — critically, Sentiment no longer falsely claims a "+X pts
+(10%)" contribution, since Phase 2 excludes it from the ETF composite
+entirely), and the Analysis Deep Dive tab's pillar tiles (reuses the
+already-in-scope `_da_etf_ok` from an earlier fix, Business-Quality slot
+repurposed to Cost, Valuation slot shows the NA state). Opus reviewer
+(fifth pass): SHIP, 0 blocking — confirmed every equity/stock branch at all
+3 sites is provably byte-identical (either untouched, or reachable only via
+a new branch inserted before/around it), confirmed the NA-vs-Withheld glyph
+distinction holds everywhere, confirmed the `COMPOSITE_HOLD` reuse is real
+(no bare threshold literal introduced), confirmed dollar-sign escaping
+matches the existing convention in the new branches. Full suite 6401
+passed. Two non-blocking notes, left as-is: the Deep Dive Sentiment tab
+still shows a numeric score header before its new NA caption for an ETF
+(honest, just slightly mixed messaging — worth an owner eyeball on a live
+screenshot); and a PRE-EXISTING (not introduced by this diff) unescaped
+`~${tv:,.0f}` in an adjacent, unrelated Rebalancer "trim" branch, flagged
+for awareness only. **A concurrent peer session was active in the same repo
+during this fix** (`python-lab-b9`, unrelated test-suite-optimization work)
+— the lead independently verified via `git diff` on each of the 4 touched
+files, before staging, that this fix's changes were cleanly isolated from
+the peer's in-progress files, and committed only the 4 files by exact name.
+
 **Genuinely still open, deliberately out of scope for every phase above, no
 trigger date:**
 - **ETF new-pick/Grow Today eligibility** — a real, unscoped policy question
   (needs a discovery universe + threshold recalibration decision), explicitly
   declined for Phase 4 by the owner. Pick up only via a fresh explicit ask.
-- **3 display-completeness sites** (Rebalancer action-plan message, Portfolio
-  Overview Score Breakdown tiles, Analysis Deep Dive pillar tiles) — an ETF
-  correctly shows "withheld" for pillars that don't apply to it, but never
-  shows its real Cost pillar in their place. Not wrong, just incomplete;
-  deferred by explicit owner choice 2026-09-28, no trigger date.
 
 The `etf_lookthrough_cache` DDL (Phase 3a) was applied by the owner
 2026-09-27, closing that non-blocking item. Nothing else from the original
-architecture review remains unaddressed beyond the two deliberately-deferred
-items above.
+architecture review remains unaddressed beyond the one deliberately-deferred
+item above.

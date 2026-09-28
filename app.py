@@ -212,6 +212,7 @@ from stock_analyzer.constants import (
     REC_OUTCOME_ACTION_WINDOW_TRADING_DAYS,
 )
 from stock_analyzer import gate_registry
+from stock_analyzer import etf_scoring
 from stock_analyzer import gate_ledger_readout
 from stock_analyzer import rec_events_readout
 from stock_analyzer import margin as _margin_mod
@@ -319,6 +320,7 @@ from stock_analyzer.util import sizing_unavailable_caption as _sizing_unavailabl
 from stock_analyzer.util import get_or_offline as _get_or_offline
 from stock_analyzer.util import numeric_or as _numeric_or
 from stock_analyzer.util import pillar_tile as _pillar_tile
+from stock_analyzer.util import ETF_PILLAR_NA_SHORT, ETF_PILLAR_NA_REASON
 from stock_analyzer.util import bq_score_or_none as _bq_or_none
 from stock_analyzer.util import val_score_or_none as _val_or_none
 from stock_analyzer.util import sentiment_value_or_none as _sentiment_or_none
@@ -13883,6 +13885,11 @@ elif page == "📡 Signals & Advice":
                 ticker  = act["ticker"]
                 urgency = act["urgency"]
                 r_data  = held_data.get(ticker, {})
+                _rbc_etf_ok = (
+                    r_data.get("asset_type") == "etf"
+                    and bool(r_data.get("etf_available", False))
+                )
+                _rbc_cost = r_data.get("etf_cost_score")
                 fin     = r_data.get("financials", {})
                 rev     = r_data.get("revisions", {})
                 earn    = r_data.get("earnings")
@@ -13915,12 +13922,19 @@ elif page == "📡 Signals & Advice":
                         if t_score is not None:
                             _bq_score = r_data.get("bq_score", f_score)
                             _val_score = r_data.get("val_score", 50)
-                            for dim, sc, weight, tip_key in [
-                                ("Technical",        t_score,    "25%", "RSI"),
-                                ("Business Quality", _bq_score,  "35%", ""),
-                                ("Valuation",        _val_score, "30%", "FCF Yield"),
-                                ("Sentiment",        s_score,    "10%", ""),
-                            ]:
+                            if _rbc_etf_ok:
+                                _rbc_dims = [
+                                    ("Technical", t_score,    f"{ETF_COMPOSITE_WEIGHTS['technical']*100:.0f}%", "RSI"),
+                                    ("Cost",      _rbc_cost,  f"{ETF_COMPOSITE_WEIGHTS['cost']*100:.0f}%", ""),
+                                ]
+                            else:
+                                _rbc_dims = [
+                                    ("Technical",        t_score,    "25%", "RSI"),
+                                    ("Business Quality", _bq_score,  "35%", ""),
+                                    ("Valuation",        _val_score, "30%", "FCF Yield"),
+                                    ("Sentiment",        s_score,    "10%", ""),
+                                ]
+                            for dim, sc, weight, tip_key in _rbc_dims:
                                 clr  = "#00C851" if sc >= 60 else ("#ffbb33" if sc >= 44 else "#ff4444")
                                 icon_s = "✅" if sc >= 60 else ("⚠️" if sc >= 44 else "❌")
                                 bar_w = int(sc)
@@ -13935,7 +13949,7 @@ elif page == "📡 Signals & Advice":
                                 )
 
                             # Primary driver diagnosis
-                            if t_score is not None and _bq_score is not None:
+                            if not _rbc_etf_ok and t_score is not None and _bq_score is not None:
                                 gap_tf = t_score - _bq_score
                                 if gap_tf < -15:
                                     driver = "🔴 **Business quality deterioration** is the primary driver — this is a thesis-change signal, act with more urgency."
@@ -13944,6 +13958,11 @@ elif page == "📡 Signals & Advice":
                                 else:
                                     driver = "⚠️ **Both Technical and Business Quality signals are weak** — broader caution warranted."
                                 st.info(driver)
+                            elif _rbc_etf_ok:
+                                if etf_scoring.cost_urgency_high(_rbc_cost):
+                                    st.info("🔴 **High expense ratio is a structural drag** — the fund's ongoing cost weakens the case for holding through this technical rough patch.")
+                                else:
+                                    st.info("🟡 **Technical weakness only** — this is a low-cost fund, so the ratchet stop may handle it without a full exit.")
 
                         # Specific bearish signals from t_signals
                         bearish_sigs = {k: v for k, v in t_sigs.items() if "bearish" in v.lower()}
@@ -14210,7 +14229,27 @@ elif page == "📡 Signals & Advice":
                         _rbc_bq_available = r_data.get(
                             "bq_available", r_data.get("fundamentals_available", True)
                         )
-                        if _rbc_bq is not None and t_score is not None and _rbc_bq_available:
+                        if _rbc_etf_ok and _rbc_cost is not None and t_score is not None:
+                            if etf_scoring.cost_urgency_high(_rbc_cost):
+                                action_text = (
+                                    f"**High fund cost compounds a weakening trend — act with urgency.**  \n"
+                                    f"This fund's expense ratio is a permanent drag, so there's less "
+                                    f"reason to hold through a technical rough patch.  \n"
+                                    f"Sell **{half} shares** (~\\${half_val:,.0f}) at market now to bank "
+                                    f"the {act['pnl']:.0f}% gain on half the position.  \n"
+                                    f"Hold remaining {act['shares'] - half} shares with stop at "
+                                    f"**\\${act['stop']:.2f}** ({act['stop_type']})."
+                                )
+                            else:
+                                action_text = (
+                                    f"**Technical-only weakness — the fund's cost profile is fine.**  \n"
+                                    f"Option A (conservative): let the ratchet stop at **\\${act['stop']:.2f}** "
+                                    f"do the work — it already locks in a portion of your gain.  \n"
+                                    f"Option B (active): sell **{half} shares** (~\\${half_val:,.0f}) to "
+                                    f"reduce exposure, trail the remainder with the existing stop.  \n"
+                                    f"A low-cost fund on a technical signal alone doesn't warrant a full exit."
+                                )
+                        elif _rbc_bq is not None and t_score is not None and _rbc_bq_available:
                             if _rbc_bq < COMPOSITE_HOLD:
                                 action_text = (
                                     f"**Business quality weakness — act with urgency.**  \n"
@@ -18426,6 +18465,10 @@ elif page == "🥧 Portfolio Overview":
         sel = st.selectbox("Select position to drill down", port_df["Ticker"].tolist(), key="_home_drilldown_pick")
         if sel and sel in held_data:
             r = held_data[sel]
+            _sb_etf_ok = (
+                r.get("asset_type") == "etf"
+                and bool(r.get("etf_available", False))
+            )
             price = r["current_price"]
             targets = r["targets"]
             ps_row = port_df[port_df["Ticker"] == sel].iloc[0]
@@ -18491,50 +18534,73 @@ elif page == "🥧 Portfolio Overview":
             d3.metric("Gap to Stop",
                       f"{_ps_gap:.1f}%" if _ps_gap is not None else "—",
                       help=_tip("Ratchet Stop"))
-            d4.metric("Composite Score", f"{r['total']:.0f}/100",  r['rec']['label'],
+            _sb_total = r["etf_total"] if _sb_etf_ok else r["total"]
+            _sb_rec   = r["etf_rec"]  if _sb_etf_ok else r["rec"]
+            d4.metric("Composite Score", f"{_sb_total:.0f}/100", _sb_rec["label"],
                       help=_tip("Composite Score"))
 
             # Score breakdown row
             sb1, sb2, sb3, sb4 = st.columns(4)
             from stock_analyzer.constants import COMPOSITE_WEIGHTS as _CW
-            t_contrib  = round(r['t_score']  * _CW["technical"],        1)
-            s_contrib  = round(r['s_score']  * _CW["sentiment"],         1)
-            sb1.metric("Technical",       f"{r['t_score']:.0f}/100", f"+{t_contrib} pts (25%)",
-                       help="RSI · MACD · Bollinger Bands · MA trend · Volume\n\n"
-                            + _tip("RSI"))
-            # 2026-09-22 app-review follow-up: Business Quality/Valuation can
-            # each be a FABRICATED neutral 50 when unavailable (fundamentals.py/
-            # valuation.py's own documented withhold-to-50 design) — rendering
-            # that as a real "50/100 · +X pts" tile states two things that
-            # aren't true: that a measurement happened, and that it contributed
-            # those points to the composite. Same policy util.pillar_tile()
-            # already applies on Analysis's Deep Dive tab; this tile never had
-            # it. Withhold rather than hedge, per that helper's own precedent.
-            _sb_bq_available = r.get("bq_available", r.get("fundamentals_available", True))
-            if _sb_bq_available:
-                bq_contrib = round(r.get('bq_score', r['f_score']) * _CW["business_quality"], 1)
-                sb2.metric("Business Quality", f"{r.get('bq_score', r['f_score']):.0f}/100", f"+{bq_contrib} pts (35%)",
-                           help="Revenue & Earnings growth · Margins · Debt/Equity")
+            if not _sb_etf_ok:
+                t_contrib  = round(r['t_score']  * _CW["technical"],        1)
+                s_contrib  = round(r['s_score']  * _CW["sentiment"],         1)
+                sb1.metric("Technical",       f"{r['t_score']:.0f}/100", f"+{t_contrib} pts (25%)",
+                           help="RSI · MACD · Bollinger Bands · MA trend · Volume\n\n"
+                                + _tip("RSI"))
+                # 2026-09-22 app-review follow-up: Business Quality/Valuation can
+                # each be a FABRICATED neutral 50 when unavailable (fundamentals.py/
+                # valuation.py's own documented withhold-to-50 design) — rendering
+                # that as a real "50/100 · +X pts" tile states two things that
+                # aren't true: that a measurement happened, and that it contributed
+                # those points to the composite. Same policy util.pillar_tile()
+                # already applies on Analysis's Deep Dive tab; this tile never had
+                # it. Withhold rather than hedge, per that helper's own precedent.
+                _sb_bq_available = r.get("bq_available", r.get("fundamentals_available", True))
+                if _sb_bq_available:
+                    bq_contrib = round(r.get('bq_score', r['f_score']) * _CW["business_quality"], 1)
+                    sb2.metric("Business Quality", f"{r.get('bq_score', r['f_score']):.0f}/100", f"+{bq_contrib} pts (35%)",
+                               help="Revenue & Earnings growth · Margins · Debt/Equity")
+                else:
+                    sb2.metric("Business Quality", "❔ Withheld", "no data",
+                               delta_color="off",
+                               help="Company fundamentals couldn't be sourced from any "
+                                    "provider, so a score here would be guessing rather "
+                                    "than measuring.")
+                _sb_val_available = r.get("val_available", True)
+                if _sb_val_available:
+                    v_contrib = round(r.get('val_score', 50) * _CW["valuation"], 1)
+                    sb3.metric("Valuation",       f"{r.get('val_score', 50):.0f}/100", f"+{v_contrib} pts (30%)",
+                               help="Forward P/E · FCF Yield · Analyst PT Upside · Consensus Rating\n\n"
+                                    + _tip("FCF Yield"))
+                else:
+                    sb3.metric("Valuation", "❔ Withheld", "no data",
+                               delta_color="off",
+                               help="No objective valuation metric (Forward P/E or FCF "
+                                    "Yield) was available — analyst opinion alone isn't "
+                                    "scored as a verdict.")
+                sb4.metric("Sentiment",       f"{r['s_score']:.0f}/100", f"+{s_contrib} pts (10%)",
+                           help="VADER analysis of latest news headlines from Yahoo Finance")
             else:
-                sb2.metric("Business Quality", "❔ Withheld", "no data",
-                           delta_color="off",
-                           help="Company fundamentals couldn't be sourced from any "
-                                "provider, so a score here would be guessing rather "
-                                "than measuring.")
-            _sb_val_available = r.get("val_available", True)
-            if _sb_val_available:
-                v_contrib = round(r.get('val_score', 50) * _CW["valuation"], 1)
-                sb3.metric("Valuation",       f"{r.get('val_score', 50):.0f}/100", f"+{v_contrib} pts (30%)",
-                           help="Forward P/E · FCF Yield · Analyst PT Upside · Consensus Rating\n\n"
-                                + _tip("FCF Yield"))
-            else:
-                sb3.metric("Valuation", "❔ Withheld", "no data",
-                           delta_color="off",
-                           help="No objective valuation metric (Forward P/E or FCF "
-                                "Yield) was available — analyst opinion alone isn't "
-                                "scored as a verdict.")
-            sb4.metric("Sentiment",       f"{r['s_score']:.0f}/100", f"+{s_contrib} pts (10%)",
-                       help="VADER analysis of latest news headlines from Yahoo Finance")
+                # An ETF's composite is technical (70%) + cost (30%) only —
+                # Business Quality/Valuation/Sentiment are structurally not
+                # part of a fund's score (etf_scoring.py), not merely
+                # withheld, so they render distinctly from "❔ Withheld" via
+                # ETF_PILLAR_NA_SHORT/REASON rather than reusing that wording.
+                _sb_t_contrib = round(r['t_score'] * ETF_COMPOSITE_WEIGHTS["technical"], 1)
+                sb1.metric("Technical", f"{r['t_score']:.0f}/100",
+                           f"+{_sb_t_contrib} pts ({ETF_COMPOSITE_WEIGHTS['technical']*100:.0f}%)",
+                           help="RSI · MACD · Bollinger Bands · MA trend · Volume\n\n"
+                                + _tip("RSI"))
+                _sb_cost_contrib = round(r["etf_cost_score"] * ETF_COMPOSITE_WEIGHTS["cost"], 1)
+                sb2.metric("Cost (expense ratio)", f"{r['etf_cost_score']:.0f}/100",
+                           f"+{_sb_cost_contrib} pts ({ETF_COMPOSITE_WEIGHTS['cost']*100:.0f}%)",
+                           help="Net expense ratio scored against category cost bands "
+                                "— a fund's second composite pillar.")
+                sb3.metric("Valuation", ETF_PILLAR_NA_SHORT, delta_color="off",
+                           help=ETF_PILLAR_NA_REASON)
+                sb4.metric("Sentiment", ETF_PILLAR_NA_SHORT, delta_color="off",
+                           help=ETF_PILLAR_NA_REASON)
 
             # News Sentiment — Finnhub awareness row (not a gate; strictly additive).
             # Reuse the Brief's batch cache key (all held tickers, sorted CSV) rather
@@ -24305,14 +24371,26 @@ elif page == "📈 Analysis":
                     # Honour the availability flag: a fabricated neutral 50 must not
                     # render identically to a measured one (D19). Signals below are
                     # still shown — they record what WAS captured.
-                    _dd2_hdr, _dd2_cap = _pillar_tile(
-                        "Business Quality",
-                        r.get("bq_score", r.get("f_score")),
-                        r.get("bq_available", r.get("fundamentals_available", True)),
-                        "Growth · Profitability · Balance Sheet",
-                        "Company fundamentals couldn't be sourced from any provider, "
-                        "so a score here would be guessing rather than measuring.",
-                    )
+                    # An ETF has no business-quality leg at all (structural, not a
+                    # data gap) -- show its real Cost pillar here instead, reusing
+                    # `_da_etf_ok` computed once at the top of this per-ticker loop.
+                    if _da_etf_ok:
+                        _dd2_hdr, _dd2_cap = _pillar_tile(
+                            "Cost (expense ratio)",
+                            r["etf_cost_score"],
+                            True,
+                            "Net expense ratio vs category cost bands",
+                            "",
+                        )
+                    else:
+                        _dd2_hdr, _dd2_cap = _pillar_tile(
+                            "Business Quality",
+                            r.get("bq_score", r.get("f_score")),
+                            r.get("bq_available", r.get("fundamentals_available", True)),
+                            "Growth · Profitability · Balance Sheet",
+                            "Company fundamentals couldn't be sourced from any provider, "
+                            "so a score here would be guessing rather than measuring.",
+                        )
                     st.markdown(_dd2_hdr)
                     st.caption(_dd2_cap)
                     for k, v in r.get("bq_signals", r["f_signals"]).items():
@@ -24336,64 +24414,75 @@ elif page == "📈 Analysis":
                             unsafe_allow_html=True,
                         )
                 with dd2v:
-                    # val_available requires an OBJECTIVE metric since Phase B
-                    # (7146468) — analyst opinion alone no longer scores the pillar.
-                    _dd2v_hdr, _dd2v_cap = _pillar_tile(
-                        "Valuation",
-                        r.get("val_score"),
-                        r.get("val_available", True),
-                        "P/E · FCF Yield · PT Upside · Consensus",
-                        "No objective valuation metric (Forward P/E or FCF Yield) was "
-                        "available — analyst opinion alone isn't scored as a verdict.",
-                    )
-                    st.markdown(_dd2v_hdr)
-                    st.caption(_dd2v_cap)
-                    for k, v in r.get("val_signals", {}).items():
-                        clr = "#00C851" if any(w in v.lower() for w in
-                              ["strong","excellent","good","cheap","upside"]) else (
-                              "#ff4444" if any(w in v.lower() for w in
-                              ["expensive","overvalued","negative"]) else "#aaa")
-                        tip_map = {
-                            "Forward P/E": "Forward P/E", "FCF Yield": "FCF Yield",
-                        }
-                        tip_key = tip_map.get(k, "")
-                        tip_safe = _tip(tip_key).split(chr(10))[0].replace("'", "&#39;")
-                        label_md = (
-                            f"<abbr title='{tip_safe}' "
-                            f"style='cursor:help;border-bottom:1px dotted #666'><b>{k}</b></abbr>"
-                            if tip_key else f"<b>{k}</b>"
+                    if _da_etf_ok:
+                        # A fund has no valuation leg at all (structural, not a
+                        # data gap) -- Cost already covers the fund's second
+                        # pillar in dd2 above, so this tile is purely "n/a",
+                        # never "❔ Withheld" (that glyph means unmeasured).
+                        st.markdown(f"**Valuation — {ETF_PILLAR_NA_SHORT}**")
+                        st.caption(ETF_PILLAR_NA_REASON)
+                    else:
+                        # val_available requires an OBJECTIVE metric since Phase B
+                        # (7146468) — analyst opinion alone no longer scores the pillar.
+                        _dd2v_hdr, _dd2v_cap = _pillar_tile(
+                            "Valuation",
+                            r.get("val_score"),
+                            r.get("val_available", True),
+                            "P/E · FCF Yield · PT Upside · Consensus",
+                            "No objective valuation metric (Forward P/E or FCF Yield) was "
+                            "available — analyst opinion alone isn't scored as a verdict.",
                         )
-                        st.markdown(
-                            f"<small style='color:{clr}'>●</small> {label_md}: "
-                            f"<span style='color:#ccc'>{v}</span>",
-                            unsafe_allow_html=True,
-                        )
-                    _dd2v_fin = r["financials"]
-                    st.markdown("---")
-                    raw_metrics = [
-                        ("Trailing P/E", "pe_ratio",    _tip("P/E Ratio")),
-                        ("Forward P/E",  "forward_pe",  _tip("Forward P/E")),
-                        ("FCF Yield",    "fcf_yield",   _tip("FCF Yield")),
-                        ("EPS (TTM)",    "eps",         _tip("EPS")),
-                        ("Current Ratio","current_ratio", "Current assets ÷ current liabilities. >1.5 = healthy liquidity."),
-                        ("ROE",          "return_on_equity", _tip("ROE")),
-                    ]
-                    for label, key, tip_txt in raw_metrics:
-                        v = _dd2v_fin.get(key)
-                        if v is None:
-                            continue
-                        suffix = "%" if key == "fcf_yield" else ""
-                        fmt = f"{v:.1f}{suffix}" if key == "fcf_yield" else f"{v:.2f}"
-                        tip_safe = tip_txt.split(chr(10))[0].replace("'", "&#39;")
-                        st.markdown(
-                            f"<small><abbr title='{tip_safe}' "
-                            f"style='cursor:help;border-bottom:1px dotted #555'>**{label}**</abbr>: "
-                            f"{fmt}</small>",
-                            unsafe_allow_html=True,
-                        )
+                        st.markdown(_dd2v_hdr)
+                        st.caption(_dd2v_cap)
+                    if not _da_etf_ok:
+                        for k, v in r.get("val_signals", {}).items():
+                            clr = "#00C851" if any(w in v.lower() for w in
+                                  ["strong","excellent","good","cheap","upside"]) else (
+                                  "#ff4444" if any(w in v.lower() for w in
+                                  ["expensive","overvalued","negative"]) else "#aaa")
+                            tip_map = {
+                                "Forward P/E": "Forward P/E", "FCF Yield": "FCF Yield",
+                            }
+                            tip_key = tip_map.get(k, "")
+                            tip_safe = _tip(tip_key).split(chr(10))[0].replace("'", "&#39;")
+                            label_md = (
+                                f"<abbr title='{tip_safe}' "
+                                f"style='cursor:help;border-bottom:1px dotted #666'><b>{k}</b></abbr>"
+                                if tip_key else f"<b>{k}</b>"
+                            )
+                            st.markdown(
+                                f"<small style='color:{clr}'>●</small> {label_md}: "
+                                f"<span style='color:#ccc'>{v}</span>",
+                                unsafe_allow_html=True,
+                            )
+                        _dd2v_fin = r["financials"]
+                        st.markdown("---")
+                        raw_metrics = [
+                            ("Trailing P/E", "pe_ratio",    _tip("P/E Ratio")),
+                            ("Forward P/E",  "forward_pe",  _tip("Forward P/E")),
+                            ("FCF Yield",    "fcf_yield",   _tip("FCF Yield")),
+                            ("EPS (TTM)",    "eps",         _tip("EPS")),
+                            ("Current Ratio","current_ratio", "Current assets ÷ current liabilities. >1.5 = healthy liquidity."),
+                            ("ROE",          "return_on_equity", _tip("ROE")),
+                        ]
+                        for label, key, tip_txt in raw_metrics:
+                            v = _dd2v_fin.get(key)
+                            if v is None:
+                                continue
+                            suffix = "%" if key == "fcf_yield" else ""
+                            fmt = f"{v:.1f}{suffix}" if key == "fcf_yield" else f"{v:.2f}"
+                            tip_safe = tip_txt.split(chr(10))[0].replace("'", "&#39;")
+                            st.markdown(
+                                f"<small><abbr title='{tip_safe}' "
+                                f"style='cursor:help;border-bottom:1px dotted #555'>**{label}**</abbr>: "
+                                f"{fmt}</small>",
+                                unsafe_allow_html=True,
+                            )
                 with dd3:
                     st.markdown(f"**Sentiment — {r['s_score']:.0f}/100**")
                     st.caption("VADER · Yahoo Finance news · −1 bearish → +1 bullish")
+                    if _da_etf_ok:
+                        st.caption(ETF_PILLAR_NA_REASON)
                     for h in r["headlines"][:6]:
                         clr = "#00b300" if h["label"] == "Positive" else (
                               "#ff4444" if h["label"] == "Negative" else "#888")

@@ -314,6 +314,19 @@ def pillar_tile(
     return f"**{name} — ❔ not measured**", unavailable_reason
 
 
+# Distinct from "❔ Withheld"/"❔ not measured" (a transient provider-side
+# data gap). This state means the pillar is STRUCTURALLY not part of this
+# asset type's composite by design (a fund has no business-quality/
+# valuation/sentiment leg -- see etf_scoring.py). Never render the two
+# states with the same glyph or wording.
+ETF_PILLAR_NA_SHORT = "➖ n/a for funds"
+ETF_PILLAR_NA_REASON = (
+    "Not part of a fund's score. This pillar measures an individual "
+    "company; an ETF's verdict is built from its technical trend and "
+    "expense ratio instead (see the Cost tile)."
+)
+
+
 def stop_recovery_state(
     live_gap_to_stop: float | None,
     margin_pct: float = 0.0,

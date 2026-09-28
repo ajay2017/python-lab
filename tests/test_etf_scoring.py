@@ -18,6 +18,7 @@ from stock_analyzer.etf_scoring import (
     etf_composite,
     etf_recommendation,
     etf_aum_thin,
+    cost_urgency_high,
 )
 
 pytestmark = pytest.mark.fast
@@ -138,3 +139,21 @@ def test_etf_aum_thin_above_floor_is_not_thin():
 
 def test_etf_aum_thin_none_input_returns_false():
     assert etf_aum_thin(None) is False
+
+
+# ── cost_urgency_high ────────────────────────────────────────────────────────
+
+def test_cost_urgency_high_just_below_hold_floor_is_true():
+    assert cost_urgency_high(COMPOSITE_HOLD - 1) is True
+
+
+def test_cost_urgency_high_exactly_at_hold_floor_is_false():
+    assert cost_urgency_high(COMPOSITE_HOLD) is False
+
+
+def test_cost_urgency_high_above_hold_floor_is_false():
+    assert cost_urgency_high(COMPOSITE_HOLD + 1) is False
+
+
+def test_cost_urgency_high_none_input_returns_false():
+    assert cost_urgency_high(None) is False
