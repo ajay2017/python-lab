@@ -58,4 +58,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Run pytest
-        run: pytest tests/ -v
+        # -n auto (pytest-xdist, added to requirements-dev.txt 2026-09-28):
+        # measured 474.37s serial -> ~190s parallel on the real suite, same
+        # pass count. CI always installs requirements-dev.txt fresh, so xdist
+        # is guaranteed present here (unlike the local hook, which checks
+        # first since an existing .venv may predate this dependency).
+        # --dist=loadgroup: same balancing as the default `load`, but also
+        # honours @pytest.mark.xdist_group so tests/test_check_antipatterns.py's
+        # real-repo-scan cache actually lands on one worker instead of being
+        # silently defeated by `load`'s ignorance of the marker (without this,
+        # -n auto alone only reached 306s -- the grouping fix is most of the win).
+        run: pytest tests/ -v -n auto --dist=loadgroup

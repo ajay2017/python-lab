@@ -10,6 +10,38 @@ CLAUDE.md, plus a regression-test gate on `git commit`/`git push`
 What this CANNOT do: prove a reviewer subagent actually ran. It verifies a
 correctly-formatted citation is present. See CLAUDE.md "Review & test economy"
 for the honesty caveat and the SubagentStop-hook upgrade path.
+
+Pipeline-efficiency pass (2026-09-28, docs/plans/test-suite-optimization.md +
+that day's CI/CD analysis session). Three changes here attack real, measured
+waste in this same gate without weakening what it proves:
+  - pytest now runs under `pytest-xdist` (-n auto --dist=loadgroup) whenever
+    the venv has it installed, falling back to a correct serial run otherwise
+    (a missing plugin is an environment gap, not a reason to fail the gate).
+    Measured on this machine the day this shipped: 6397 tests, 474.37s serial
+    vs ~190s parallel, IDENTICAL pass count both ways -- a real ~2.5x cut.
+    First attempt (`-n auto` alone, default `--dist=load`) only reached
+    306.45s: it silently defeated an in-process cache 5 slow tests in
+    tests/test_check_antipatterns.py relied on (each real-repo AST scan is
+    genuinely expensive, and a per-process cache can't be shared across
+    xdist's separate worker processes without `--dist=loadgroup` +
+    `@pytest.mark.xdist_group`, which is what actually closed the gap from
+    306s to ~190s -- see that test file's own comments). Disclosed as
+    measured, not assumed, per this project's own doc-integrity standard.
+  - The pytest and antipattern subprocesses are now started together and only
+    then waited on, so their wall-clock cost overlaps instead of stacking
+    (previously fully sequential within one commit or push). Costs nothing:
+    the antipattern scan's own ceiling is ~60s, almost always far less, so by
+    the time pytest's own wait returns its result is already sitting there.
+  - A `git push` immediately following a commit that already passed both
+    gates, with no further edits, no longer re-runs them. `git write-tree`'s
+    SHA is recorded after a successful *plain* commit (no `-a`/`--amend` --
+    write-tree reflects the INDEX only, which isn't provably what those two
+    forms actually commit) and compared against `HEAD^{tree}` at push time.
+    A match means byte-identical tree content, which for this deterministic,
+    network-free suite means an identical verdict -- re-running proves
+    nothing new. Any mismatch (further edits, an -a/--amend commit, a commit
+    from outside this hook) falls back to the original always-verify
+    behaviour, unchanged.
 """
 import datetime
 import json
@@ -21,7 +53,7 @@ import sys
 
 # Seconds the full pytest suite may take before the hook calls it a hang. Sized
 # at ~3x the WORST observed runtime so a merely-growing suite never blocks a
-# commit as a false hang. See _run_pytest.
+# commit as a false hang. See _finish_pytest.
 #
 # Re-tuned 2026-08-28: 300 was set against ~110s / 3573 tests on 2026-08-15.
 # The suite is now 4500 tests, and observed runs that day ranged 75-130s (the
@@ -38,14 +70,28 @@ import sys
 # under two weeks and re-tuning a timeout weekly is its own failure mode. The
 # cost of the larger value is bounded and one-directional: a GENUINE hang wastes
 # 7.5 minutes once, rather than a false one blocking work indefinitely.
+#
+# 2026-09-28 note, not yet acted on: this run against 6397 tests measured
+# 474.37s serial / ~190s parallel with -n auto --dist=loadgroup (see module
+# docstring) — comfortably back over a 2x margin against 450, so the parallel
+# change if anything widened this margin rather than thinning it. Left
+# unchanged here anyway because re-tuning a threshold from one measurement is
+# exactly the guessing this file's own history warns against; revisit if a
+# future session observes parallel runs actually approaching 450s.
 _PYTEST_TIMEOUT_SEC = 450
 
 # Durable record of a pytest-gate fail-open (2026-08-27 finding): the single
-# stderr line _gate_on_pytest prints when ok is None is easy to miss and
+# stderr line _finish_pytest prints when ok is None is easy to miss and
 # leaves no trace once the terminal scrolls -- which is how a fail-open can
 # go unnoticed (see the 77205a5 incident). Gitignored: a machine-local
 # diagnostic, not repo content.
 _VENV_FAIL_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv_fail_open.log")
+
+# Records the last `git write-tree` / `HEAD^{tree}` SHA that already passed
+# whichever of the pytest/antipattern gates a PLAIN commit determined it
+# needed. Gitignored (machine-local, and content-addressed so it's only ever
+# useful on the checkout that produced it).
+_VERIFIED_TREE_MARKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".last_verified_tree.json")
 
 
 def _log_venv_fail_open(detail: str) -> None:
@@ -85,6 +131,7 @@ def main() -> None:
         staged = _get_staged_files(command)
         triggered = _gate_files_staged(staged)
         message = _commit_message_text(command)
+        tokens = _tokens(command)
 
         # An unresolvable message (editor-driven commit, `-F -` heredoc, a
         # mis-encoded file) fails CLOSED for the citation gate but OPEN for the
@@ -132,108 +179,312 @@ def main() -> None:
                 )
                 sys.exit(2)
 
-        # Regression-test gate (docs/testing-strategy.md): block the commit if
-        # `pytest tests/` fails, scoped to commits that actually touch tested
-        # code so an unrelated docs-only commit isn't slowed down. A missing/
-        # broken test environment does NOT block -- that's an infra gap, not a
-        # code problem -- it just warns.
-        if _touches_tested_code(staged):
-            _gate_on_pytest("commit", "committing")
+        # Regression-test + recurring-defect gates (docs/testing-strategy.md):
+        # block the commit if `pytest tests/` fails or check_antipatterns.py
+        # finds a new instance, scoped to commits that actually touch
+        # in-scope code so an unrelated docs-only commit isn't slowed down.
+        # Started together (not one-after-the-other) so their wall-clock cost
+        # overlaps -- see the module docstring's 2026-09-28 note.
+        need_pytest = _touches_tested_code(staged)
+        need_antipattern = _touches_scanned_code(staged)
+        if need_pytest or need_antipattern:
+            results = _run_gates_concurrently(need_pytest, need_antipattern)
+            _apply_gate_results(results, "commit", "committing")
 
-        # Recurring-defect gate (scripts/check_antipatterns.py): block a commit
-        # that introduces a NEW instance of a bug-class our audits keep
-        # re-finding (offline-sentinel collapse, dynamic unsafe_allow_html,
-        # naive utcnow/date.today). Only when in-scope source is staged.
-        if _touches_scanned_code(staged):
-            _gate_on_antipatterns("commit", "committing")
+        # Everything this commit needed (if anything) just passed. Record the
+        # tree so an immediately-following `git push` with no further edits
+        # doesn't pay for the identical pytest+antipattern run a second time
+        # -- only for a PLAIN commit (write-tree reflects the index only, which
+        # `-a`/`--amend` don't provably match). See module docstring.
+        if _is_plain_commit(tokens):
+            tree = _write_tree()
+            if tree:
+                _write_verified_tree(tree)
 
     # Always re-check before push, regardless of which files are in the
     # commits being pushed -- push sends whatever HEAD currently is, so one
     # suite run against the working tree covers it. Catches the case where a
     # commit landed before this gate existed, or from another session/tool.
+    # EXCEPT: if HEAD's tree is byte-identical to the tree a commit-time run
+    # already verified in full, running again proves nothing new (see module
+    # docstring) -- skip and say so.
     if is_push:
-        _gate_on_pytest("push", "pushing")
-        _gate_on_antipatterns("push", "pushing")
+        head_tree = _head_tree()
+        verified_tree = _read_verified_tree()
+        if head_tree and verified_tree and head_tree == verified_tree:
+            print(
+                "INFO (workflow gates): HEAD's tree already passed the pytest+antipattern "
+                "gates at commit time and nothing has changed since -- skipping a second, "
+                "identical full run. Any further edit, an -a/--amend commit, or a commit "
+                "from outside this hook changes the tree and forces a full re-run.",
+                file=sys.stderr,
+            )
+        else:
+            results = _run_gates_concurrently(True, True)
+            _apply_gate_results(results, "push", "pushing")
+            if head_tree:
+                _write_verified_tree(head_tree)
 
     sys.exit(0)
 
 
-def _gate_on_pytest(noun: str, gerund: str) -> None:
-    ok, detail = _run_pytest()
-    if ok is False:
-        print(
-            f"BLOCKED (regression suite failing): `pytest tests/` did not pass.\n"
-            f"{detail}\n"
-            f"Fix the failure (or update the test if this is a deliberate policy "
-            f"change) before {gerund}.",
-            file=sys.stderr,
-        )
+def _apply_gate_results(results: dict, noun: str, gerund: str) -> None:
+    """Prints BLOCKED/WARNING messages for gate results already computed
+    (by _run_gates_concurrently) and exits 2 if anything blocks. Decoupled
+    from execution so the same reporting logic serves the commit and push
+    paths without duplicating message text."""
+    blocking = False
+
+    if "pytest" in results:
+        ok, detail = results["pytest"]
+        if ok is False:
+            print(
+                f"BLOCKED (regression suite failing): `pytest tests/` did not pass.\n"
+                f"{detail}\n"
+                f"Fix the failure (or update the test if this is a deliberate policy "
+                f"change) before {gerund}.",
+                file=sys.stderr,
+            )
+            blocking = True
+        elif ok is None:
+            # Fail-CLOSED (2026-08-27, superseding the prior warn-only behaviour):
+            # a suite that couldn't run at all is not a softer case than one that
+            # ran and failed -- it's the SAME "I have zero signal" state, and this
+            # project's own stated position is that the deterministic gates ARE
+            # the real pre-deploy safety net.
+            print(
+                f"BLOCKED (no verified environment): could not run the regression suite -- "
+                f"this {noun} cannot proceed.\n"
+                f"{detail}\n"
+                f"The app's only pre-deploy safety net cannot verify this change at all before "
+                f"{gerund} -- not \"probably fine\", genuinely unknown.\n"
+                f"Fix: run `pip install -r requirements-dev.txt` in a `.venv` reachable from "
+                f"here (the main checkout's .venv is used automatically from a git worktree), "
+                f"then retry.",
+                file=sys.stderr,
+            )
+            blocking = True
+
+    if "antipattern" in results:
+        ok, detail = results["antipattern"]
+        if ok is False:
+            print(
+                f"BLOCKED (new anti-pattern introduced): scripts/check_antipatterns.py "
+                f"found a NEW instance of a recurring bug-class.\n"
+                f"{detail}\n"
+                f"Fix at the source (see the script's guidance), or — if genuinely "
+                f"acceptable — regenerate the baseline deliberately "
+                f"(python scripts/check_antipatterns.py --init) before {gerund}.",
+                file=sys.stderr,
+            )
+            blocking = True
+        elif ok is None:
+            print(f"WARNING: could not run the anti-pattern gate ({detail}) -- not blocking {noun}.", file=sys.stderr)
+
+    if blocking:
         sys.exit(2)
-    elif ok is None:
-        # Fail-CLOSED (2026-08-27, superseding the prior warn-only behaviour):
-        # a suite that couldn't run at all is not a softer case than one that
-        # ran and failed -- it's the SAME "I have zero signal" state, and this
-        # project's own stated position is that the deterministic gates ARE
-        # the real pre-deploy safety net. Made safe to flip by first fixing
-        # the actual common trigger (a git worktree has no .venv of its own,
-        # since .venv/ is gitignored by design) with the _find_python()
-        # fallback above -- so what remains here is genuinely "no verified
-        # Python exists anywhere reachable", not a routine worktree hiccup.
-        # Investigated and ruled out before flipping: a subprocess decode
-        # failure on this codebase's non-ASCII test output (cp1252 is this
-        # machine's default locale) could in principle produce this same
-        # `None` state for a reason unrelated to code correctness -- tested
-        # directly with a real failing assertion containing a non-ASCII
-        # character and it decoded cleanly, so that risk did not materialize.
-        print(
-            f"BLOCKED (no verified environment): could not run the regression suite -- "
-            f"this {noun} cannot proceed.\n"
-            f"{detail}\n"
-            f"The app's only pre-deploy safety net cannot verify this change at all before "
-            f"{gerund} -- not \"probably fine\", genuinely unknown.\n"
-            f"Fix: run `pip install -r requirements-dev.txt` in a `.venv` reachable from "
-            f"here (the main checkout's .venv is used automatically from a git worktree), "
-            f"then retry.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
 
 
-def _gate_on_antipatterns(noun: str, gerund: str) -> None:
-    ok, detail = _run_antipatterns()
-    if ok is False:
-        print(
-            f"BLOCKED (new anti-pattern introduced): scripts/check_antipatterns.py "
-            f"found a NEW instance of a recurring bug-class.\n"
-            f"{detail}\n"
-            f"Fix at the source (see the script's guidance), or — if genuinely "
-            f"acceptable — regenerate the baseline deliberately "
-            f"(python scripts/check_antipatterns.py --init) before {gerund}.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    elif ok is None:
-        print(f"WARNING: could not run the anti-pattern gate ({detail}) -- not blocking {noun}.", file=sys.stderr)
+def _run_gates_concurrently(need_pytest: bool, need_antipattern: bool) -> dict:
+    """Starts whichever of the pytest/antipattern gates are needed at (almost)
+    the same time, so their wall-clock cost overlaps instead of stacking. The
+    two are independent subprocesses with no shared state; the antipattern
+    scan's own ceiling (~60s, usually far less) is well under pytest's, so
+    nothing is lost even when pytest fails slowly -- by the time pytest's own
+    wait returns, the antipattern process has almost always already finished.
+
+    Returns {'pytest': (ok, detail), 'antipattern': (ok, detail)} for
+    whichever gates were requested; missing keys mean "not requested," not
+    "passed" -- callers must gate on `need_pytest`/`need_antipattern`, not on
+    key presence.
+    """
+    pytest_proc = pytest_start_err = None
+    anti_proc = anti_start_err = None
+    if need_pytest:
+        pytest_proc, pytest_start_err = _start_pytest()
+    if need_antipattern:
+        anti_proc, anti_start_err = _start_antipatterns()
+
+    results: dict = {}
+    if need_pytest:
+        results["pytest"] = _finish_pytest(pytest_proc, pytest_start_err)
+    if need_antipattern:
+        results["antipattern"] = _finish_antipatterns(anti_proc, anti_start_err)
+    return results
 
 
-def _run_antipatterns() -> tuple:
-    """Returns (True, "") when clean, (False, detail) on a new instance,
-    (None, detail) when the gate couldn't run (missing script/python)."""
+def _xdist_available(py: str) -> bool:
+    """Whether pytest-xdist is importable in this interpreter -- checked live
+    rather than assumed from requirements-dev.txt, since a .venv created
+    before pytest-xdist was added won't have it until the next
+    `pip install -r requirements-dev.txt`. Missing it is an environment gap,
+    not a code problem, so the gate falls back to a correct serial run
+    instead of failing `-n auto` as a pytest usage error."""
+    try:
+        r = subprocess.run([py, "-c", "import xdist"], capture_output=True, timeout=15)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _pytest_args(py: str) -> list:
+    args = [py, "-m", "pytest", "tests/", "-q"]
+    if _xdist_available(py):
+        # --dist=loadgroup: behaves exactly like the default `load` balancing
+        # for the vast majority of (ungrouped) tests, but additionally honours
+        # `@pytest.mark.xdist_group(...)` so a handful of tests that share an
+        # in-process cache (tests/test_check_antipatterns.py's real-repo scan)
+        # land on the same worker instead of each re-paying that cost --
+        # `-n auto` alone (--dist=load, the xdist default) ignores the marker
+        # entirely and silently defeats that caching (found 2026-09-28).
+        args += ["-n", "auto", "--dist=loadgroup"]
+    return args
+
+
+def _start_process(args: list):
+    try:
+        return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except Exception:
+        return None
+
+
+def _finish_process(proc, timeout: int):
+    """Waits on an already-started Popen up to `timeout` seconds. Returns
+    (returncode, stdout, stderr); returncode is None on a timeout (stderr is
+    the sentinel "__timeout__") or a wait-time error (stderr carries detail)."""
+    if proc is None:
+        return None, "", "process failed to start"
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return proc.returncode, stdout or "", stderr or ""
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.communicate(timeout=5)
+        except Exception:
+            pass
+        return None, "", "__timeout__"
+    except Exception as e:
+        return None, "", f"error: {e}"
+
+
+def _start_pytest():
+    """Starts the pytest gate without waiting on it. Returns (Popen | None,
+    detail-if-None)."""
+    py = _find_python()
+    if not py:
+        detail = ".venv python not found -- run `pip install -r requirements-dev.txt` in .venv"
+        _log_venv_fail_open(detail)
+        return None, detail
+    return _start_process(_pytest_args(py)), None
+
+
+def _finish_pytest(proc, start_detail: str | None):
+    """Returns (True, "") on pass, (False, detail) on failure or timeout,
+    (None, detail) when the suite couldn't be invoked at all (missing venv).
+
+    A timeout blocks deliberately (it is NOT downgraded to a warning): at
+    _PYTEST_TIMEOUT_SEC the suite has a large margin over its normal runtime
+    (see that constant's own comment for the measured baseline), so exceeding
+    it means a genuine hang, worth stopping a commit for.
+    """
+    if proc is None:
+        return None, start_detail
+    rc, out, err = _finish_process(proc, _PYTEST_TIMEOUT_SEC)
+    if rc is None:
+        if err == "__timeout__":
+            return False, (
+                f"pytest timed out after {_PYTEST_TIMEOUT_SEC}s -- investigate a hang "
+                "before proceeding (see _PYTEST_TIMEOUT_SEC's comment for the measured baseline)"
+            )
+        detail = f"could not invoke pytest ({err})"
+        _log_venv_fail_open(detail)
+        return None, detail
+    if rc == 0:
+        return True, ""
+    tail = "\n".join((out or "").strip().splitlines()[-15:])
+    return False, tail
+
+
+def _start_antipatterns():
     script = os.path.join(os.getcwd(), "scripts", "check_antipatterns.py")
     if not os.path.isfile(script):
         return None, "scripts/check_antipatterns.py not found"
     py = _find_python() or sys.executable  # pure stdlib -- any python works
+    return _start_process([py, script]), None
+
+
+def _finish_antipatterns(proc, start_detail: str | None):
+    """Returns (True, "") when clean, (False, detail) on a new instance,
+    (None, detail) when the gate couldn't run (missing script/python)."""
+    if proc is None:
+        return None, start_detail
+    rc, out, err = _finish_process(proc, 60)
+    if rc is None:
+        if err == "__timeout__":
+            return None, "anti-pattern gate timed out after 60s"
+        return None, f"could not invoke the gate ({err})"
+    if rc == 0:
+        return True, ""
+    return False, "\n".join((out or "").strip().splitlines()[-20:])
+
+
+def _is_plain_commit(tokens: list) -> bool:
+    """True when this commit carries neither `-a`/`--all` nor `--amend` --
+    the only case where `git write-tree` (which reflects the current INDEX)
+    is provably the tree the resulting commit will actually have. `-a`
+    stages tracked-but-unstaged changes as part of the commit itself, and
+    `--amend` combines the index with HEAD's own commit in a way this hook
+    doesn't reproduce -- both fall back to always-verify-on-push instead of
+    risking a false "already verified" match."""
+    return not _has_flag(tokens, "a", "--all") and "--amend" not in tokens
+
+
+def _write_tree() -> str | None:
+    """The SHA `git commit` would give the resulting tree for a PLAIN commit
+    of the current index. None on any git error -- callers must treat that as
+    "don't record a verification," never as an empty-but-valid tree."""
+    try:
+        r = subprocess.run(["git", "write-tree"], capture_output=True, text=True, timeout=10)
+        out = r.stdout.strip()
+        return out if r.returncode == 0 and out else None
+    except Exception:
+        return None
+
+
+def _head_tree() -> str | None:
+    """The current HEAD commit's tree SHA. None if there's no HEAD yet (a
+    brand-new repo) or on any git error -- callers must treat that as
+    "can't compare, fall back to a full run," never as a match."""
     try:
         r = subprocess.run(
-            [py, script], capture_output=True, text=True, timeout=60,
+            ["git", "rev-parse", "--verify", "HEAD^{tree}"], capture_output=True, text=True, timeout=10,
         )
-    except subprocess.TimeoutExpired:
-        return None, "anti-pattern gate timed out after 60s"
-    except Exception as e:
-        return None, f"could not invoke the gate ({e})"
-    if r.returncode == 0:
-        return True, ""
-    return False, "\n".join((r.stdout or "").strip().splitlines()[-20:])
+        out = r.stdout.strip()
+        return out if r.returncode == 0 and out else None
+    except Exception:
+        return None
+
+
+def _read_verified_tree() -> str | None:
+    try:
+        with open(_VERIFIED_TREE_MARKER, encoding="utf-8") as f:
+            tree = json.load(f).get("tree")
+        return tree if isinstance(tree, str) and tree else None
+    except Exception:
+        return None
+
+
+def _write_verified_tree(tree: str) -> None:
+    """Records that `tree` (a git tree SHA) already passed whichever of the
+    pytest/antipattern gates were determined necessary for it. Best-effort --
+    a failure to write must never block or fail a commit/push; it just means
+    the next push re-verifies in full, the original, safe default."""
+    try:
+        with open(_VERIFIED_TREE_MARKER, "w", encoding="utf-8") as f:
+            json.dump({"tree": tree, "verified_at": datetime.datetime.now().isoformat()}, f)
+    except Exception:
+        pass
 
 
 def _git_names(*args: str) -> list[str]:
@@ -551,44 +802,6 @@ def _find_python() -> str | None:
         pass
 
     return None
-
-
-def _run_pytest() -> tuple:
-    """Returns (True, "") on pass, (False, detail) on failure OR timeout,
-    (None, detail) when the suite couldn't be invoked at all (missing venv).
-
-    A timeout blocks deliberately (it is NOT downgraded to a warning): at
-    _PYTEST_TIMEOUT_SEC the suite has ~3x its normal runtime, so exceeding it
-    means a genuine hang, which is worth stopping a commit for.
-
-    The timeout was raised from 120s to 300s on 2026-08-15 after a real
-    near-miss: the suite had grown to 3573 tests / ~107s, leaving only ~13s of
-    headroom before a PASSING suite would start blocking every commit as a
-    false 'hang'. Re-check this margin whenever the suite grows substantially.
-    """
-    py = _find_python()
-    if not py:
-        detail = ".venv python not found -- run `pip install -r requirements-dev.txt` in .venv"
-        _log_venv_fail_open(detail)
-        return None, detail
-    try:
-        r = subprocess.run(
-            [py, "-m", "pytest", "tests/", "-q"],
-            capture_output=True, text=True, timeout=_PYTEST_TIMEOUT_SEC,
-        )
-    except subprocess.TimeoutExpired:
-        return False, (f"pytest timed out after {_PYTEST_TIMEOUT_SEC}s -- investigate a hang "
-                       "before proceeding (normal runtime is ~100s, ~130s under load, "
-                       "for 4500 tests as of 2026-08-28)")
-    except Exception as e:
-        detail = f"could not invoke pytest ({e})"
-        _log_venv_fail_open(detail)
-        return None, detail
-
-    if r.returncode == 0:
-        return True, ""
-    tail = "\n".join((r.stdout or "").strip().splitlines()[-15:])
-    return False, tail
 
 
 if __name__ == "__main__":

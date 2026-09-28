@@ -19,6 +19,46 @@ _spec = importlib.util.spec_from_file_location("check_antipatterns", _SCRIPT)
 ca = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ca)
 
+# `ca.scan()` walks and AST-parses the entire real repo (app.py + stock_analyzer/)
+# -- genuinely expensive, and this file has (had) FOUR independent call sites
+# that each paid that cost fresh: this module-level cache + the `xdist_group`
+# marks below make it one real scan, shared. Found 2026-09-28 via
+# `pytest --durations`: these were the 5 slowest individual tests in the whole
+# suite (~266s combined), and pytest-xdist parallelism made it worse, not
+# better -- each worker is a separate process, so a per-class cache (see
+# TestPolicyConstCollectorAgainstTheRealRepo's old `_CACHE`, which only ever
+# helped when all its tests happened to land in the same process) silently
+# stopped paying off for whichever of its own three tests landed on a
+# different worker. `xdist_group` pins every consumer to one worker so this
+# cache is actually shared, not just theoretically shared.
+_REAL_SCAN_CACHE: dict = {}
+
+
+def _real_scan():
+    if "scan" not in _REAL_SCAN_CACHE:
+        _REAL_SCAN_CACHE["scan"] = ca.scan()
+    return _REAL_SCAN_CACHE["scan"]
+
+
+# Same idea for app.py's parsed AST specifically -- two more call sites parsed
+# the same 44k-line file independently rather than via ca.scan() (they need
+# the raw tree, not scan()'s aggregated counters).
+_APP_PY_TREE_CACHE: dict = {}
+
+
+def _app_py_tree():
+    if "tree" not in _APP_PY_TREE_CACHE:
+        src = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8-sig")
+        _APP_PY_TREE_CACHE["tree"] = ast.parse(src)
+    return _APP_PY_TREE_CACHE["tree"]
+
+
+# All real-repo-scanning tests share one xdist worker so the two caches above
+# are actually effective under `pytest -n auto` (a per-process cache can't be
+# shared across worker processes otherwise). Purely a scheduling hint -- it
+# changes nothing about what any test asserts.
+_REAL_REPO_GROUP = pytest.mark.xdist_group(name="antipattern_real_repo_scan")
+
 
 def _rules(code: str) -> set:
     v = ca._Visitor(code)
@@ -116,10 +156,11 @@ class TestBaselineRoundTrip:
         loaded = ca._load_baseline()
         assert loaded["a.py"][("NAIVE_UTCNOW", "datetime.utcnow()")] == 2
 
+    @_REAL_REPO_GROUP
     def test_real_repo_is_green_against_committed_baseline(self):
         # The committed baseline must cover the current tree — a red default
         # would make the gate meaningless. Same invariant CI runs.
-        scanned = ca.scan()
+        scanned = _real_scan()
         baseline = ca._load_baseline()
         new = []
         for rel, ctr in scanned.items():
@@ -319,14 +360,14 @@ class TestPolicyConstCollectorAgainstTheRealRepo:
     can catch a collector that has quietly stopped collecting.
     """
 
-    # scan() walks the whole package; cached so three assertions cost one pass.
-    _CACHE = {}
-
+    # scan() walks the whole package; shared with every other real-repo test
+    # in this module via _real_scan() (module-level cache + xdist_group --
+    # see the comment above _REAL_SCAN_CACHE for why the class-local version
+    # of this that used to live here stopped paying off under `-n auto`).
     def _scan(self):
-        if "r" not in self._CACHE:
-            self._CACHE["r"] = ca.scan()
-        return self._CACHE["r"]
+        return _real_scan()
 
+    @_REAL_REPO_GROUP
     def test_the_rule_still_finds_real_instances_in_app_py(self):
         """The general fix for silent-fail-open on this rule: if app.py ever
         reports ZERO policy decisions, the collector broke — the file has ~92
@@ -339,6 +380,7 @@ class TestPolicyConstCollectorAgainstTheRealRepo:
             "not that the debt was paid off."
         )
 
+    @_REAL_REPO_GROUP
     def test_the_collector_resolves_aliased_imports(self):
         """`from ... import X as _Y` — dropping `asname` silently loses most of
         the rule's reach in app.py with no other test failing.
@@ -348,12 +390,7 @@ class TestPolicyConstCollectorAgainstTheRealRepo:
         passed happily while the real collector was mutated — the vacuous-test
         trap, inside the test written to prevent it. That is also why the
         collector had to be extracted from scan() to be callable at all."""
-        import ast as _ast
-        import pathlib
-        tree = _ast.parse(
-            (pathlib.Path(ca.ROOT) / "app.py").read_text(encoding="utf-8-sig")
-        )
-        consts = ca.policy_constants(tree)
+        consts = ca.policy_constants(_app_py_tree())
         assert "COMPOSITE_BUY" in consts, "plain import not collected"
         aliased = {c for c in consts if c.startswith("_")}
         assert len(aliased) > 20, (
@@ -362,6 +399,7 @@ class TestPolicyConstCollectorAgainstTheRealRepo:
             "losing them silently removes most of the rule's reach."
         )
 
+    @_REAL_REPO_GROUP
     def test_the_pure_logic_package_stays_unflagged_in_a_real_scan(self):
         """Scope, against the real tree rather than a synthetic snippet: a rule
         that crept into stock_analyzer/ would push decisions the wrong way."""
@@ -471,15 +509,16 @@ class TestUnsafeHtmlEscapingExemption:
         code = "from stock_analyzer.util import get_or_offline, stop_recovery_state\n"
         assert ca.escaping_names(ast.parse(code)) == frozenset()
 
+    @_REAL_REPO_GROUP
     def test_collector_finds_the_real_aliases_in_app_py(self):
         """Against the REAL file, not a snippet — the scar from the vacuous
         alias test that re-implemented the collector and so could never fail.
         This is also how the third alias `_sh` was discovered."""
-        src = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8-sig")
-        names = ca.escaping_names(ast.parse(src))
+        names = ca.escaping_names(_app_py_tree())
         assert names, "collector went dark against the real app.py"
         assert "_md_bold" in names and "_safe_html" in names
 
+    @_REAL_REPO_GROUP
     def test_live_count_equals_the_committed_baseline_exactly(self):
         """A gate whose broken state is GREEN is worse than no gate: the check
         only fails on `n > allowed`, so it is structurally blind to a SHRINK —
@@ -495,7 +534,7 @@ class TestUnsafeHtmlEscapingExemption:
         It is also the symmetric half of the existing green-vs-baseline test,
         which only looks upward."""
         live = sum(
-            n for counter in ca.scan().values()
+            n for counter in _real_scan().values()
             for (rule, _), n in counter.items()
             if rule == "UNSAFE_HTML_DYNAMIC"
         )

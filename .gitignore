@@ -1,5 +1,7 @@
 .venv/
 .claude/hooks/.venv_fail_open.log
+.claude/hooks/.last_verified_tree.json
+.claude/hooks/.verify_hook_test_marker.json
 __pycache__/
 *.pyc
 *.pyo

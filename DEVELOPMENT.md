@@ -270,10 +270,46 @@ fails — see [docs/testing-strategy.md](docs/testing-strategy.md) §2 for the
 exact behavior and its caveats (Claude Code sessions only, takes effect after
 a session restart per memory `feedback_hook_enforcement`).
 
+**2026-09-28 CI/CD efficiency pass — three changes to that same hook, a
+different lever than the Tier 1 marker above (execution time, not
+collection/selection time):**
+- The hook's own pytest invocation now runs under `pytest-xdist`
+  (`-n auto --dist=loadgroup`) whenever it's importable in the resolved
+  `.venv` — falls back to a correct serial run otherwise (a `.venv` that
+  predates `pip install -r requirements-dev.txt` picking up `pytest-xdist`
+  is an environment gap, not a reason to fail the gate). Measured on the
+  real suite: **474.37s serial vs ~190s parallel, 6397 passed both ways** —
+  a real ~2.5x cut. `-n auto` alone (the xdist default `--dist=load`) only
+  reached 306.45s: it silently defeated an in-process cache that 5 slow
+  tests in `tests/test_check_antipatterns.py` relied on to avoid re-scanning
+  the whole repo 4+ times — those tests were also consolidated onto one
+  shared cache and pinned to one xdist worker (`@pytest.mark.xdist_group`),
+  which is what actually closed the gap from 306s to ~190s.
+- The hook's pytest and antipattern-scan subprocesses now start together and
+  are only then waited on, so their wall-clock cost overlaps instead of
+  stacking. Verified: running both concurrently took 301.3s, essentially the
+  antipattern scan's cost fully absorbed rather than added on top.
+- A `git push` immediately following a commit that already passed both
+  gates, with no further edits, now **skips re-running them** — `git
+  write-tree`'s SHA is recorded after a plain commit (no `-a`/`--amend`) and
+  compared against `HEAD^{tree}` at push time; a match means byte-identical
+  content, and for this deterministic, network-free suite that means an
+  identical verdict. Any mismatch falls back to the original, always-verify
+  behavior. This was the single largest duplication in the pipeline: the
+  common commit-then-push workflow previously paid for the full suite twice,
+  back to back, against the same tree.
+
+None of this touches what the gate proves — same tests, same antipattern
+rules, same fail-closed-on-uncertainty posture. Full detail and rationale in
+`.claude/hooks/pre_tool_checks.py`'s own module docstring and
+`docs/plans/test-suite-optimization.md`'s 2026-09-28 addendum.
+
 A GitHub Actions workflow (`.github/workflows/tests.yml`) also runs this on
 push/PR touching `stock_analyzer/**` or `tests/**` — it's a pre-push safety
 net (red ❌ on the commit), not a deploy gate; neither Streamlit Cloud nor
-Railway consults GitHub Actions.
+Railway consults GitHub Actions. CI's own `pytest` step also runs `-n auto`
+now — CI always installs `requirements-dev.txt` fresh, so no fallback check
+is needed there.
 
 pytest only covers `stock_analyzer/`'s pure logic — it does NOT cover `app.py`
 UI, live data providers, Supabase, cron jobs, or whether the recommendations

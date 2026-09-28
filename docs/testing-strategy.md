@@ -74,7 +74,8 @@ in `.claude/settings.json`) intercepts `git commit`/`git push` tool calls and:
   if it doesn't pass.
 - On `push`, always runs the suite first and **blocks the push** the same way
   — this covers a commit that landed before the gate existed, or from another
-  session/tool, so a known-failing suite can never reach `origin/main`.
+  session/tool, so a known-failing suite can never reach `origin/main`. **Since
+  2026-09-28, this re-run is skipped when it would be redundant** — see below.
 - **Recurring-defect gate (added 2026-08-04):** on `commit` when a staged file
   is `app.py`/`cron_runner.py`/under `stock_analyzer/`, and always on `push`,
   runs `scripts/check_antipatterns.py` and **blocks** (exit 2) if a change
@@ -88,8 +89,38 @@ in `.claude/settings.json`) intercepts `git commit`/`git push` tool calls and:
   acceptable — regenerate the baseline deliberately
   (`python scripts/check_antipatterns.py --init`).
 - Fails open on infra problems (missing `.venv`, pytest not installed, a
-  120s timeout, a missing gate script) — warns but does not block, since that's
+  450s timeout, a missing gate script) — warns but does not block, since that's
   an environment gap, not a code problem.
+
+**2026-09-28 CI/CD efficiency pass — three changes here, none weakening what
+the gate proves** (full detail: `.claude/hooks/pre_tool_checks.py`'s module
+docstring, `docs/plans/test-suite-optimization.md`'s addendum):
+1. **Parallel execution.** The hook's pytest invocation adds
+   `-n auto --dist=loadgroup` (`pytest-xdist`) whenever it's importable in
+   the resolved `.venv`, falling back to serial otherwise. Measured on the
+   real suite: **474.37s serial vs ~190s parallel, 6397 passed both ways** —
+   a genuine ~2.5x cut. `-n auto` alone (default `--dist=load`) only reached
+   306.45s: it silently defeated an in-process cache 5 slow real-repo-scanning
+   tests in `tests/test_check_antipatterns.py` relied on, since a per-process
+   cache can't be shared across xdist's separate worker processes without
+   `--dist=loadgroup` + `@pytest.mark.xdist_group` pinning those tests to one
+   worker — closing that gap accounted for most of the total win.
+2. **Concurrent gates.** The pytest and antipattern-scan subprocesses now
+   start together and are waited on afterward, so their cost overlaps
+   instead of stacking within one commit or push, at no cost to either
+   result's correctness.
+3. **Skip a provably-redundant push-time re-run.** After a *plain* commit
+   (no `-a`/`--amend`) passes whatever it needed, the hook records `git
+   write-tree`'s SHA. At push time, if `HEAD^{tree}` matches that recorded
+   SHA — i.e. the tree is byte-identical to what was already verified —
+   the hook skips re-running pytest/antipatterns and says so (an `INFO`
+   line), since re-running a deterministic, network-free suite against
+   identical content can't produce a different verdict. Any edit after the
+   commit, an `-a`/`--amend` commit, or a commit from outside this hook
+   changes the tree and falls back to the original always-verify behavior.
+   This closed the pipeline's largest measured duplication: the common
+   commit-then-push workflow previously ran the full suite twice, back to
+   back, against the same tree.
 
 **Caveat, learned the hard way from the rule #4 citation hook**
 (memory `feedback_hook_enforcement`): a hook edit takes effect for Claude Code

@@ -3,3 +3,11 @@
 #   pip install -r requirements.txt -r requirements-dev.txt
 pytest>=8.0.0,<9.0
 pytest-cov>=5.0.0,<6.0
+# Parallel test execution (2026-09-28 CI/CD efficiency pass). Measured on the
+# real suite: 6397 tests, 474.37s serial vs ~190s with `-n auto --dist=loadgroup`,
+# identical pass count -- see .claude/hooks/pre_tool_checks.py's module
+# docstring and docs/plans/test-suite-optimization.md. The hook and CI both
+# check for this import before adding `-n auto`, so a .venv that hasn't run
+# this install yet still gets a correct (just slower) serial run instead of
+# a pytest usage error.
+pytest-xdist>=3.5,<4.0
