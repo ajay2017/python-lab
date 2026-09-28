@@ -33289,7 +33289,20 @@ elif page == "🎖️ Recommendation Outcomes":
         "floor not yet being met, by design, not a fault."
     )
 
-    _ro_rows = db.load_rec_events()
+    # Day-scoped, cross-page session_state cache: db.load_rec_events() takes
+    # no args (always the full table) and this page has no filter/widget that
+    # changes it, so every rerun -- including one triggered by an unrelated
+    # widget elsewhere on this page -- re-read the whole table unconditionally.
+    # `is None` as the miss-check is deliberate, not an oversight: the loader
+    # returns None specifically as an offline sentinel (DB unreachable), so a
+    # failed read is never cached as if it were a real result -- it keeps
+    # retrying on the next rerun instead of freezing an outage banner for the
+    # rest of the day. Shared with the identical call further below (recs
+    # outcomes performance section) via the same key.
+    _rec_events_cache_key = f"_rec_events_full_cache_{_today_et().isoformat()}"
+    if st.session_state.get(_rec_events_cache_key) is None:
+        st.session_state[_rec_events_cache_key] = db.load_rec_events()
+    _ro_rows = st.session_state[_rec_events_cache_key]
     if _ro_rows is None:
         st.warning("⚪ Could not read the recommendation-outcomes ledger — the database may be unreachable.")
     elif not _ro_rows:
@@ -33304,7 +33317,15 @@ elif page == "🎖️ Recommendation Outcomes":
         # Portfolio-level risk-metric history for the trim types' realized-
         # metric leg (rebal_trim/beta_trim) and diversify_add's Leg B —
         # reused verbatim, never a second correlation/beta computation.
-        _ro_snap_df = db.load_portfolio_risk_snapshots()
+        # Same day-scoped cross-page cache treatment as _rec_events_cache_key
+        # above -- db.load_portfolio_risk_snapshots() with no args is always
+        # the identical full-table query; shared with the 🛡️ Leverage &
+        # Margin Cushion / 📊 Portfolio Risk Trend charts (💰 Account) and the
+        # recs-outcomes performance section further below.
+        _pr_snap_cache_key = f"_portfolio_risk_snapshots_full_cache_{_today_et().isoformat()}"
+        if st.session_state.get(_pr_snap_cache_key) is None:
+            st.session_state[_pr_snap_cache_key] = db.load_portfolio_risk_snapshots()
+        _ro_snap_df = st.session_state[_pr_snap_cache_key]
         _ro_snap_by_date: dict = {}
         if _ro_snap_df is not None and not _ro_snap_df.empty:
             for _, _sr in _ro_snap_df.iterrows():
@@ -34766,7 +34787,15 @@ elif page == "💰 Account":
 
         _lev_hist = None
         try:
-            _lev_hist = db.load_account_daily_snapshots()
+            # Day-scoped session_state cache — this chart's own Weekly/
+            # Monthly/All-data radio (rendered below) triggers a full page
+            # rerun on every click, which previously re-read the entire
+            # table from Supabase each time even though it's written at
+            # most once per day by the EOD cron.
+            _acct_snap_cache_key = f"_account_daily_snapshots_full_cache_{_today_et().isoformat()}"
+            if st.session_state.get(_acct_snap_cache_key) is None:
+                st.session_state[_acct_snap_cache_key] = db.load_account_daily_snapshots()
+            _lev_hist = st.session_state[_acct_snap_cache_key]
         except Exception:
             pass
 
@@ -34871,7 +34900,14 @@ elif page == "💰 Account":
 
         _risk_hist = None
         try:
-            _risk_hist = db.load_portfolio_risk_snapshots()
+            # Same day-scoped, cross-page cache as _ro_snap_df above (🎖️
+            # Recommendation Outcomes) — identical no-args full-table query,
+            # shared key so whichever surface renders first this session
+            # populates it and the other reuses it rather than re-fetching.
+            _pr_snap_cache_key = f"_portfolio_risk_snapshots_full_cache_{_today_et().isoformat()}"
+            if st.session_state.get(_pr_snap_cache_key) is None:
+                st.session_state[_pr_snap_cache_key] = db.load_portfolio_risk_snapshots()
+            _risk_hist = st.session_state[_pr_snap_cache_key]
         except Exception:
             pass
 
@@ -36164,7 +36200,14 @@ elif page == "💰 Account":
                     # 🎖️ Recommendation Outcomes (risk snapshots/trades/
                     # protective tickers), app.py ~L32060-32101/~L32207-32277.
                     _perf_trades_df = db.load_trades_or_none()
-                    _perf_rec_rows = db.load_rec_events()
+                    # Same day-scoped, cross-page cache as 🎖️ Recommendation
+                    # Outcomes / 🛑 The Road Not Taken use for this identical
+                    # no-args full-table query — whichever surface renders
+                    # first this session populates it, this one reuses it.
+                    _perf_rec_cache_key = f"_rec_events_full_cache_{_today_et().isoformat()}"
+                    if st.session_state.get(_perf_rec_cache_key) is None:
+                        st.session_state[_perf_rec_cache_key] = db.load_rec_events()
+                    _perf_rec_rows = st.session_state[_perf_rec_cache_key]
                     _perf_gate_rows = db.load_gate_suppressions()
                     _perf_acct_snap_df = db.load_account_daily_snapshots(_perf_start, _perf_end)
                     _perf_risk_snap_df = db.load_portfolio_risk_snapshots(_perf_start, _perf_end)
@@ -36200,7 +36243,14 @@ elif page == "💰 Account":
                     # B) — same reuse as 🎖️ Recommendation Outcomes; distinct
                     # from `_perf_risk_snap_df` above, which is period-scoped
                     # for the risk_drift section only.
-                    _perf_rec_risk_snap_df = db.load_portfolio_risk_snapshots()
+                    # Same day-scoped, cross-page cache as the other no-args
+                    # db.load_portfolio_risk_snapshots() call sites (🎖️
+                    # Recommendation Outcomes, 💰 Account's Portfolio Risk
+                    # Trend chart) — shared key, whichever renders first wins.
+                    _perf_rec_risk_cache_key = f"_portfolio_risk_snapshots_full_cache_{_today_et().isoformat()}"
+                    if st.session_state.get(_perf_rec_risk_cache_key) is None:
+                        st.session_state[_perf_rec_risk_cache_key] = db.load_portfolio_risk_snapshots()
+                    _perf_rec_risk_snap_df = st.session_state[_perf_rec_risk_cache_key]
                     _perf_rec_risk_snap_by_date: dict = {}
                     if _perf_rec_risk_snap_df is not None and not _perf_rec_risk_snap_df.empty:
                         for _, _prr in _perf_rec_risk_snap_df.iterrows():
