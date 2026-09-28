@@ -4,6 +4,8 @@
 **Author:** Ajay Kumar
 **Design pass:** Opus `planner` (Opus 4.8, 1M context), against a three-agent parallel research pass over the live codebase (schema/write-patterns, existing maintenance/health-check infra, orphan/duplicate/growth risk).
 
+**Status (2026-09-28, Phase 0 started):** SQL verification pack written — `docs/sql/data-maintenance-phase0.sql`, 4 read-only queries (Q1: PK/unique constraints on the 6 bare-`.upsert()` tables named in F3; Q2: confirm zero FK constraints exist anywhere, scoping F5; Q3: the real `account_flows` index situation; Q4: manual-row count + existing-duplicate check on `account_flows`). Owner runs these in the Supabase SQL editor and pastes results back — a coding session has no DB credentials, same boundary as every other SQL pack in this repo (`docs/plans/data-integrity.md`'s Step 0). Nothing else started.
+
 **Status:** DESIGN COMPLETE, NOTHING BUILT. Verdict: **PROCEED WITH CHANGES** — scoped far tighter than the original request. Four owner decisions are open (below) before Phase 0 can start. No code written, no constant changed, no DB row touched.
 
 > Status convention: newer status lines are prepended ABOVE this one as work lands (`feedback_living_doc_status_prepended`). Read the topmost line first.
