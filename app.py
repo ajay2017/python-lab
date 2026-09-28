@@ -22692,8 +22692,21 @@ elif page == "📈 Analysis":
         if not _sc_port.empty and ticker in _sc_port["Ticker"].values:
             _sc_held = _sc_port[_sc_port["Ticker"] == ticker].iloc[0].to_dict()
 
-        _sc_is_sell = r["rec"]["label"] in ("Sell", "Strong Sell")
-        _sc_is_buy  = r["rec"]["label"] in ("Buy", "Strong Buy")
+        # ETF/fund Phase 2 follow-up (2026-09-28): these gate the R:R column
+        # below (_sc_rr) — for an ETF with a real verdict, they must key off
+        # etf_rec's label, not the raw equity rec['label'] (fabricated-neutral
+        # -tainted and structurally always "Hold" for a fund), or a real
+        # Buy/Strong Buy ETF row would silently show R:R "—" despite the
+        # Signal column (below, already etf_ok-aware) correctly saying Buy.
+        # Stocks are unaffected — asset_type != "etf" always takes the `else`
+        # branch below, byte-identical to before this change.
+        _sc_etf_ok = (r.get("asset_type") == "etf") and bool(r.get("etf_available", False))
+        if _sc_etf_ok:
+            _sc_is_sell = r["etf_rec"]["label"] in ("Sell", "Strong Sell")
+            _sc_is_buy  = r["etf_rec"]["label"] in ("Buy", "Strong Buy")
+        else:
+            _sc_is_sell = r["rec"]["label"] in ("Sell", "Strong Sell")
+            _sc_is_buy  = r["rec"]["label"] in ("Buy", "Strong Buy")
 
         # "Position / Entry Zone" column — held: show holding; buy: show entry zone
         if _sc_held:
@@ -22743,7 +22756,7 @@ elif page == "📈 Analysis":
         # Detailed Analysis banner below on whether a ticker is withheld or what
         # verdict it shows.
         _sc_fund_ok = r.get("fundamentals_available", True) and r.get("val_available", True)
-        _sc_etf_ok = (r.get("asset_type") == "etf") and bool(r.get("etf_available", False))
+        # _sc_etf_ok already computed above, right after `earn_label` — reused here.
         rows.append({
             "Ticker":           ticker,
             "Price":            f"${price:.2f}" if price else "N/A",
@@ -22844,6 +22857,20 @@ elif page == "📈 Analysis":
     for tab, (ticker, r) in zip(ticker_tabs, results.items()):
         with tab:
             rec = r["rec"]
+            # ETF/fund Phase 2 follow-up (2026-09-28): reassign the LOCAL `rec`
+            # (never the shared, possibly-cached bundle `r`) so every one of
+            # the ~dozen downstream reads further in this same loop — Trade
+            # Plan branch selection, exit-urgency flags, entry-quality
+            # messaging, Trade Journal integration, the Gate Suppression
+            # Ledger write — sees the real ETF verdict instead of the
+            # equity-only composite the "Detailed Analysis" banner above
+            # already stopped using. `_da_display_total` is the matching
+            # composite number for the same reason; never write into
+            # `r["total"]`/`r["rec"]` themselves.
+            _da_etf_ok = (r.get("asset_type") == "etf") and bool(r.get("etf_available", False))
+            if _da_etf_ok:
+                rec = r["etf_rec"]
+            _da_display_total = r["etf_total"] if _da_etf_ok else r["total"]
             df = r["df"]
             price = r["current_price"]
             targets = r["targets"]
@@ -22882,7 +22909,7 @@ elif page == "📈 Analysis":
             # names the actual missing piece for each case rather than always
             # claiming "fundamental data".
             _da_fund_ok = bool(r.get("fundamentals_available", True) and r.get("val_available", True))
-            _da_etf_ok = (r.get("asset_type") == "etf") and bool(r.get("etf_available", False))
+            # _da_etf_ok already computed above, right after `rec` — reused here.
             if not _da_fund_ok and not _da_etf_ok:
                 if r.get("asset_type") == "etf":
                     # A fund's fundamentals gate is never the issue (it's
@@ -23006,97 +23033,98 @@ elif page == "📈 Analysis":
                         f"cross-check source (keeps the composite stable)."
                     )
 
-                # ── Upgrade / Downgrade trigger computation ───────────────────────────
-                # Pure display — reads pillar scores already in `r`; no scoring changes.
-                # numeric_or, not `or` — a pillar that genuinely scored 0.0 is the
-                # most bearish reading there is, and `or 50` inverts it to neutral.
-                # Load-bearing here: _others below subtracts _pscore * _pw from the
-                # REAL composite, so a fabricated 50 corrupts the arithmetic, not
-                # just the label (see stock_analyzer.util.numeric_or).
-                _composite = _numeric_or(r.get("total"), 0)
-                _t_sc   = _numeric_or(r.get("t_score"), 50)
-                _bq_sc  = _numeric_or(r.get("bq_score", r.get("f_score")), 50)
-                _val_sc = _numeric_or(r.get("val_score"), 50)
-                _s_sc   = _numeric_or(r.get("s_score"), 50)
-                _verdict_ladder = [
-                    ("Strong Buy", COMPOSITE_STRONG_BUY),
-                    ("Buy",        COMPOSITE_BUY),
-                    ("Hold",       COMPOSITE_HOLD),
-                    ("Sell",       COMPOSITE_SELL),
-                ]
-                _current_tier = next(
-                    (i for i, (_, thr) in enumerate(_verdict_ladder) if _composite >= thr),
-                    len(_verdict_ladder),
-                )
-                # _pillars defined before downgrade block (downgrade reuses max-weight pillar)
-                _pillars = [
-                    ("Technical",        _t_sc,   COMPOSITE_WEIGHTS["technical"]),
-                    ("Business Quality", _bq_sc,  COMPOSITE_WEIGHTS["business_quality"]),
-                    ("Valuation",        _val_sc, COMPOSITE_WEIGHTS["valuation"]),
-                    ("Sentiment",        _s_sc,   COMPOSITE_WEIGHTS["sentiment"]),
-                ]
-                _upgrade_info   = None
-                _downgrade_info = None
-                if _current_tier > 0:
-                    _up_label, _up_threshold = _verdict_ladder[_current_tier - 1]
-                    _gap_up = round(_up_threshold - _composite, 1)
-                    _pillar_triggers = []
-                    for _pname, _pscore, _pw in _pillars:
-                        _others = _composite - _pscore * _pw
-                        _needed = (_up_threshold - _others) / _pw
-                        _needed = round(_needed, 1)
-                        if 0 <= _needed <= 100 and _needed > _pscore:
-                            _pillar_triggers.append((_pname, _pscore, _needed, round(_needed - _pscore, 1)))
-                    _pillar_triggers.sort(key=lambda x: x[3])
-                    _upgrade_info = {"label": _up_label, "gap": _gap_up, "triggers": _pillar_triggers}
-                if _current_tier < len(_verdict_ladder):
-                    _current_threshold = _verdict_ladder[_current_tier][1]
-                    _buffer            = round(_composite - _current_threshold, 1)
-                    _max_wt_pillar     = max(_pillars, key=lambda x: x[2])
-                    _downgrade_info = {
-                        "buffer":                _buffer,
-                        "current_threshold":     _current_threshold,
-                        "current_label":         _verdict_ladder[_current_tier][0],
-                        "most_impactful_pillar": _max_wt_pillar[0],
-                        "most_impactful_score":  _max_wt_pillar[1],
-                        "most_impactful_weight": _max_wt_pillar[2],
-                    }
-                with st.expander("📈 What would change this signal?", expanded=False):
-                    _exp_c1, _exp_c2 = st.columns(2)
-                    with _exp_c1:
-                        if _upgrade_info:
-                            st.markdown(f"**⬆ To reach {_upgrade_info['label']}**")
-                            st.markdown(
-                                f"Composite needs **+{_upgrade_info['gap']} pts** "
-                                f"(currently {_composite:.1f})"
-                            )
-                            if _upgrade_info["triggers"]:
-                                for _pname, _pcur, _pneeded, _pgain in _upgrade_info["triggers"][:2]:
-                                    st.markdown(
-                                        f"<small>• {_pname}: {_pcur:.0f} → "
-                                        f"**{_pneeded:.0f}** (+{_pgain:.0f} pts)</small>",
-                                        unsafe_allow_html=True,
-                                    )
-                        else:
-                            st.markdown("**⬆ Already at Strong Buy**")
-                            st.markdown("No upgrade available — highest signal tier reached.")
-                    with _exp_c2:
-                        if _downgrade_info:
-                            st.markdown(f"**⬇ To drop from {_downgrade_info['current_label']}**")
-                            st.markdown(
-                                f"**{_downgrade_info['buffer']} pts** above the "
-                                f"{_downgrade_info['current_label']} floor "
-                                f"({_downgrade_info['current_threshold']})"
-                            )
-                            st.markdown(
-                                f"<small>• {_downgrade_info['most_impactful_pillar']} "
-                                f"({_downgrade_info['most_impactful_score']:.0f}/100) "
-                                f"carries {_downgrade_info['most_impactful_weight']:.0%} weight — "
-                                f"most impactful if it deteriorates</small>",
-                                unsafe_allow_html=True,
-                            )
-                        else:
-                            st.markdown("**⬇ Already at lowest tier**")
+                if not _da_etf_ok:
+                    # ── Upgrade / Downgrade trigger computation ───────────────────────────
+                    # Pure display — reads pillar scores already in `r`; no scoring changes.
+                    # numeric_or, not `or` — a pillar that genuinely scored 0.0 is the
+                    # most bearish reading there is, and `or 50` inverts it to neutral.
+                    # Load-bearing here: _others below subtracts _pscore * _pw from the
+                    # REAL composite, so a fabricated 50 corrupts the arithmetic, not
+                    # just the label (see stock_analyzer.util.numeric_or).
+                    _composite = _numeric_or(r.get("total"), 0)
+                    _t_sc   = _numeric_or(r.get("t_score"), 50)
+                    _bq_sc  = _numeric_or(r.get("bq_score", r.get("f_score")), 50)
+                    _val_sc = _numeric_or(r.get("val_score"), 50)
+                    _s_sc   = _numeric_or(r.get("s_score"), 50)
+                    _verdict_ladder = [
+                        ("Strong Buy", COMPOSITE_STRONG_BUY),
+                        ("Buy",        COMPOSITE_BUY),
+                        ("Hold",       COMPOSITE_HOLD),
+                        ("Sell",       COMPOSITE_SELL),
+                    ]
+                    _current_tier = next(
+                        (i for i, (_, thr) in enumerate(_verdict_ladder) if _composite >= thr),
+                        len(_verdict_ladder),
+                    )
+                    # _pillars defined before downgrade block (downgrade reuses max-weight pillar)
+                    _pillars = [
+                        ("Technical",        _t_sc,   COMPOSITE_WEIGHTS["technical"]),
+                        ("Business Quality", _bq_sc,  COMPOSITE_WEIGHTS["business_quality"]),
+                        ("Valuation",        _val_sc, COMPOSITE_WEIGHTS["valuation"]),
+                        ("Sentiment",        _s_sc,   COMPOSITE_WEIGHTS["sentiment"]),
+                    ]
+                    _upgrade_info   = None
+                    _downgrade_info = None
+                    if _current_tier > 0:
+                        _up_label, _up_threshold = _verdict_ladder[_current_tier - 1]
+                        _gap_up = round(_up_threshold - _composite, 1)
+                        _pillar_triggers = []
+                        for _pname, _pscore, _pw in _pillars:
+                            _others = _composite - _pscore * _pw
+                            _needed = (_up_threshold - _others) / _pw
+                            _needed = round(_needed, 1)
+                            if 0 <= _needed <= 100 and _needed > _pscore:
+                                _pillar_triggers.append((_pname, _pscore, _needed, round(_needed - _pscore, 1)))
+                        _pillar_triggers.sort(key=lambda x: x[3])
+                        _upgrade_info = {"label": _up_label, "gap": _gap_up, "triggers": _pillar_triggers}
+                    if _current_tier < len(_verdict_ladder):
+                        _current_threshold = _verdict_ladder[_current_tier][1]
+                        _buffer            = round(_composite - _current_threshold, 1)
+                        _max_wt_pillar     = max(_pillars, key=lambda x: x[2])
+                        _downgrade_info = {
+                            "buffer":                _buffer,
+                            "current_threshold":     _current_threshold,
+                            "current_label":         _verdict_ladder[_current_tier][0],
+                            "most_impactful_pillar": _max_wt_pillar[0],
+                            "most_impactful_score":  _max_wt_pillar[1],
+                            "most_impactful_weight": _max_wt_pillar[2],
+                        }
+                    with st.expander("📈 What would change this signal?", expanded=False):
+                        _exp_c1, _exp_c2 = st.columns(2)
+                        with _exp_c1:
+                            if _upgrade_info:
+                                st.markdown(f"**⬆ To reach {_upgrade_info['label']}**")
+                                st.markdown(
+                                    f"Composite needs **+{_upgrade_info['gap']} pts** "
+                                    f"(currently {_composite:.1f})"
+                                )
+                                if _upgrade_info["triggers"]:
+                                    for _pname, _pcur, _pneeded, _pgain in _upgrade_info["triggers"][:2]:
+                                        st.markdown(
+                                            f"<small>• {_pname}: {_pcur:.0f} → "
+                                            f"**{_pneeded:.0f}** (+{_pgain:.0f} pts)</small>",
+                                            unsafe_allow_html=True,
+                                        )
+                            else:
+                                st.markdown("**⬆ Already at Strong Buy**")
+                                st.markdown("No upgrade available — highest signal tier reached.")
+                        with _exp_c2:
+                            if _downgrade_info:
+                                st.markdown(f"**⬇ To drop from {_downgrade_info['current_label']}**")
+                                st.markdown(
+                                    f"**{_downgrade_info['buffer']} pts** above the "
+                                    f"{_downgrade_info['current_label']} floor "
+                                    f"({_downgrade_info['current_threshold']})"
+                                )
+                                st.markdown(
+                                    f"<small>• {_downgrade_info['most_impactful_pillar']} "
+                                    f"({_downgrade_info['most_impactful_score']:.0f}/100) "
+                                    f"carries {_downgrade_info['most_impactful_weight']:.0%} weight — "
+                                    f"most impactful if it deteriorates</small>",
+                                    unsafe_allow_html=True,
+                                )
+                            else:
+                                st.markdown("**⬇ Already at lowest tier**")
 
             # Source links
             st.markdown(
@@ -23486,7 +23514,7 @@ elif page == "📈 Analysis":
                         _lo = r.get("entry_lo")
                         st.warning(
                             f"⚖️ **Strong stock, weak entry here.** {rec['label']} reflects "
-                            f"quality (composite {r['total']:.0f}), but the **entry R:R is "
+                            f"quality (composite {_da_display_total:.0f}), but the **entry R:R is "
                             f"{rr_val:.1f}:1** — below the {RR_ENTRY_MIN:.0f}:1 target. At "
                             f"\\${price:.2f} you'd risk **\\${_risk_ps:.2f}/sh** (to the \\${r['stop']:.2f} "
                             f"stop) to make **\\${_reward_ps:.2f}/sh** (to the \\${targets['base']:.2f} "
@@ -23666,7 +23694,7 @@ elif page == "📈 Analysis":
                             try:
                                 from stock_analyzer.gate_ledger import build_analysis_stop_suppression_row
                                 _an_gl_row = build_analysis_stop_suppression_row(
-                                    ticker=ticker, price=price, composite_score=r.get("total"),
+                                    ticker=ticker, price=price, composite_score=_da_display_total,
                                     stop=_sa_stop, gap_pct=_br_gap, sector=r.get("sector"),
                                     rec_date=_today_et(), source="app",
                                 )
@@ -23698,9 +23726,10 @@ elif page == "📈 Analysis":
                             "<b style='font-size:1.05em;color:#f59e0b'>⚠️ Under a Reduce/Exit call — "
                             "not a place to add</b>"
                             f"<br><span style='color:#fcd34d'>Today's Brief flags this position: "
-                            f"<b>{_rc_label}</b>.{(' ' + _rc_why) if _rc_why else ''}</span>"
+                            f"<b>{_safe_html(_rc_label)}</b>. {_safe_html(_rc_why)}</span>"
                             f"<br><span style='color:#fcd34d'>This protects the POSITION and overrides "
-                            f"the Buy composite <b>for adding</b>: the composite (<b>{r['total']:.1f}</b>) "
+                            f"the Buy composite <b>for adding</b>: the composite "
+                            f"(<b>{_safe_html(f'{_da_display_total:.1f}')}</b>) "
                             f"rates the STOCK — it rewards the oversold setup — but your exit discipline "
                             f"says the trend has turned. Add-on sizing is suppressed.</span>"
                             "<br><small style='color:#fcd34d'>See Today's Brief for the full directive. "
@@ -24036,7 +24065,7 @@ elif page == "📈 Analysis":
                 # the user can still override action / shares / price in the form.
                 st.markdown("---")
                 _ap_signal_ctx = (
-                    f"{rec['label']} · Composite {r['total']:.0f}/100"
+                    f"{rec['label']} · Composite {_da_display_total:.0f}/100"
                 )
                 _ap_held_shares = (
                     float(_sa_holding.get("Shares", 0)) if _sa_holding else None
@@ -24117,7 +24146,7 @@ elif page == "📈 Analysis":
                 with _ap_c3:
                     st.caption(
                         f"Opens Trade Journal pre-filled with **{rec['label']} · "
-                        f"{r['total']:.0f}/100** as the signal context."
+                        f"{_da_display_total:.0f}/100** as the signal context."
                     )
 
             # ── Chart ─────────────────────────────────────────────────────
@@ -25240,6 +25269,12 @@ elif page == "📈 Analysis":
                  f"Portfolio: {_brief_pv_str} · Moderate Risk\n\n---"]
         for ticker, r in results.items():
             price = r["current_price"]
+            # ETF/fund Phase 2 follow-up (2026-09-28): this loop doesn't share
+            # scope with the per-ticker tabs loop above, so it needs its own
+            # display-override pair — same pattern, never mutating `r` itself.
+            _ap_etf_ok = (r.get("asset_type") == "etf") and bool(r.get("etf_available", False))
+            _ap_display_rec = r["etf_rec"] if _ap_etf_ok else r["rec"]
+            _ap_display_total = r["etf_total"] if _ap_etf_ok else r["total"]
             targets = r["targets"]
             ps = (position_sizing(
                       portfolio_value, MODERATE_RISK_PCT, price, r["stop"], SINGLE_NAME_CEILING,
@@ -25249,7 +25284,7 @@ elif page == "📈 Analysis":
             rr_v = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
             rm = r["risk_metrics"]
             lines += [
-                f"### {ticker} — {r['rec']['icon']} {r['rec']['label']} ({r['total']}/100)",
+                f"### {ticker} — {_ap_display_rec['icon']} {_ap_display_rec['label']} ({_ap_display_total}/100)",
                 f"**Price**: \\${price:.2f}" if price else "",
                 (f"**Trade**: Buy {ps['shares']} @ \\${r['entry_lo']:.2f}–\\${r['entry_hi']:.2f} · "
                  f"Stop \\${r['stop']:.2f} · Target \\${targets['base']:.2f} · R:R {rr_v:.1f}:1"
@@ -25261,7 +25296,7 @@ elif page == "📈 Analysis":
                  f"Max DD {rm['max_drawdown']:.1f}% · Beta {rm['beta']:.2f}"
                  if rm.get("beta") else
                  f"**Risk**: Sharpe {rm['sharpe']:.2f} · Max DD {rm['max_drawdown']:.1f}%"),
-                f"**Rationale**: {r['rec']['rationale']}", "",
+                f"**Rationale**: {_ap_display_rec['rationale']}", "",
             ]
         brief = "\n".join(lines)
         st.markdown(brief)

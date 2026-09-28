@@ -543,12 +543,72 @@ HTML is genuinely escaped (`_safe_html`/`_md_bold`, not just gate-shaped),
 verified the ETF withhold-wording tweak ("expense ratio unavailable")
 accurately names the real failure mode rather than reusing stock language
 that doesn't fit. Full suite 6397 passed. Memory
-`feedback_handoff_needs_the_runnable_artifact`-adjacent lesson for a future
-session: **when a phase's design explicitly assumes "the existing render
-paths already cover this," verify that claim against every REAL render call
-site, not just the one the design pass happened to trace** — `app.py` has no
-test suite to catch a missed consumer, so this class of gap is invisible to
-everything except a live screenshot.
+[[feedback_verify_render_paths_not_assumed]]: **when a phase's design
+explicitly assumes "the existing render paths already cover this," verify
+that claim against every REAL render call site, not just the one the design
+pass happened to trace** — `app.py` has no test suite to catch a missed
+consumer, so this class of gap is invisible to everything except a live
+screenshot.
+
+**SECOND FOLLOW-ON, same day, found by re-checking the SAME screenshot more
+carefully:** the first fix above patched the visible banner but deliberately
+used a separate parallel `elif etf_ok:` block rather than reassigning the
+shared `rec = r["rec"]` local variable the REST of the per-ticker tab's
+~2000 lines also reads directly — so the top banner correctly showed "Buy
+70.6/100" for SPY, but the SAME tab's "Trade Plan" section below it
+contradicted it with "Mixed signals — not a high-conviction entry," still
+driven by the unfixed raw `rec["label"]`. Investigation found roughly a
+dozen more affected reads in the SAME loop (Trade Plan branch selection,
+exit-urgency flags, entry-quality messaging, Trade Journal integration), an
+equity-pillar-specific "What would change this signal?" expander with no
+ETF equivalent, a SEPARATE independent bug in the Scorecard (its R:R column
+still gated on the raw equity label even after the first fix corrected its
+Score/Signal columns), a SEPARATE independent "📋 Analysis Summary"
+export loop with the identical bug, and — the one genuine data-integrity
+finding — a Gate Suppression Ledger (G-18) DB write persisting the WRONG
+(fabricated stock) composite score for an ETF's stop-suppression event into
+a real historical grading table.
+
+**Fixed by reassigning at the source** (right after `rec = r["rec"]`:
+`_da_etf_ok` computed once, `rec` reassigned to `r["etf_rec"]` only when
+true, a new local `_da_display_total` for direct `r["total"]` reads) rather
+than patching each read site individually — this automatically fixed every
+downstream `rec[...]` consumer for free. The bundle dict `r["total"]`/
+`r["rec"]` themselves are NEVER mutated (verified by the reviewer) — only
+fresh per-iteration locals are reassigned, preserving Phase 2's own
+anti-mutation design (overwriting the cached bundle would leak the ETF score
+into every OTHER reader of that same cached object on a later rerun). The
+equity-pillar expander is wrapped in `if not _da_etf_ok:` and suppressed
+entirely for a fund, rather than showing fabricated-neutral pillar "analysis."
+The Gate Suppression Ledger write now sources `composite_score=
+_da_display_total`. The Scorecard and export-loop bugs each got their own
+independent, scope-isolated fix (`_sc_etf_ok`, `_ap_etf_ok`/
+`_ap_display_rec`/`_ap_display_total`).
+
+**A real escaping gap surfaced and closed along the way, not routed around:**
+the fix's own new interpolations tripped `check_antipatterns.py`'s
+`UNSAFE_HTML_DYNAMIC` rule on a PRE-EXISTING (already-baselined) unescaped
+f-string it happened to touch. Rather than accept the implementer's flagged
+open question by blindly re-keying the baseline, the lead actually closed the
+escaping gap (`_safe_html` on every interpolated value, restructured to avoid
+a ternary the gate's own AST rule can't credit — see `check_antipatterns.py`'s
+`_is_dynamic_html` docstring for exactly why a ternary/BinOp wrapping an
+escaper call earns no credit) and then deliberately regenerated the baseline
+via `--init` — confirmed via `git diff --stat` to be an exact 1-line deletion
+(the newly-escaped instance dropping out), nothing else moved.
+
+Second Opus reviewer pass: SHIP, 0 blocking. Confirmed the bundle-mutation
+guarantee holds, confirmed every downstream consumer resolves correctly,
+confirmed the G-18 write is a precise one-argument fix with no schema change,
+confirmed the equity-pillar expander's internal logic is byte-identical
+(only re-indented under the new guard), confirmed the escaping fix is
+genuinely safe (re-derived the rendered output by hand for both the empty-
+and populated-`_rc_why` cases) rather than gate-shaped, confirmed the
+baseline diff is exactly the one expected line. One non-blocking note, left
+as-is: the "📋 Analysis Summary" export's "Trade" line still uses
+stock-style entry-zone/stop math alongside the now-ETF-aware verdict header
+— pre-existing, not introduced by this fix, worth a glance in a future pass.
+Full suite 6397 passed.
 
 ## Phase 3a — implementation record
 
