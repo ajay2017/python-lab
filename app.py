@@ -23513,7 +23513,9 @@ elif page == "📈 Analysis":
                         _reward_ps = targets["base"] - price
                         _lo = r.get("entry_lo")
                         st.warning(
-                            f"⚖️ **Strong stock, weak entry here.** {rec['label']} reflects "
+                            ("⚖️ **Strong fund, weak entry here.** " if _da_etf_ok
+                             else "⚖️ **Strong stock, weak entry here.** ")
+                            + f"{rec['label']} reflects "
                             f"quality (composite {_da_display_total:.0f}), but the **entry R:R is "
                             f"{rr_val:.1f}:1** — below the {RR_ENTRY_MIN:.0f}:1 target. At "
                             f"\\${price:.2f} you'd risk **\\${_risk_ps:.2f}/sh** (to the \\${r['stop']:.2f} "
@@ -23842,7 +23844,7 @@ elif page == "📈 Analysis":
                                 _gc_earn_days = None  # past earnings date
                     except Exception:
                         pass
-                    _gate_bq_ok     = (
+                    _gate_bq_ok     = _da_etf_ok or (
                         r.get("bq_available", r.get("fundamentals_available", True))
                         and r.get("val_available", True)
                     )
@@ -23854,7 +23856,7 @@ elif page == "📈 Analysis":
                     _gate_cols = st.columns(5)
                     _gate_rows = [
                         ("Data Quality",  _gate_bq_ok,
-                         "BQ + Valuation metrics available"),
+                         "Expense ratio available" if _da_etf_ok else "BQ + Valuation metrics available"),
                         (f"R/R ≥ {RR_ENTRY_MIN:.0f}×", _gate_rr_ok,
                          f"R/R = {rr_val:.1f}×" if rr_val else "R/R unavailable"),
                         ("Concentration", _gate_conc_ok,

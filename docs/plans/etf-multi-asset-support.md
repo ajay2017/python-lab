@@ -874,12 +874,43 @@ caption). Five Opus reviewer passes across the phases that touched
 blocking on Phases 1, 2, 3a, 3b); Phase 4 correctly used the deterministic
 gates alone.
 
+**THIRD follow-on, same day 2026-09-28** — a further screenshot (scrolled
+further down the SAME SPY tab) found the "Gate checks" row's "Data Quality"
+tile showing a red ✗ ("BQ + Valuation metrics available") directly under
+the already-fixed "Buy 70.6/100" banner — the same bug class a third time,
+in code the first two fixes' `rec[`/`r["total"]` greps didn't cover, since
+this reads `bq_available`/`val_available` directly. A broader grep for those
+two flags across the whole of `app.py` found 4 raw reads: this one real
+contradiction (fixed) and 3 lower-severity display-completeness gaps
+(a Rebalancer action-plan message, the Portfolio Overview "Score Breakdown"
+tiles, and the Analysis page's "Deep Dive" pillar tiles — all three show an
+honest "❔ Withheld" for an ETF's Business Quality/Valuation, just never show
+its real Cost pillar instead). **Owner explicitly chose to defer the 3
+lower-severity sites to a later pass** rather than let scope keep expanding
+— they're incomplete, not wrong, so no urgency. Fixed: `_gate_bq_ok =
+_da_etf_ok or (the original expression)`, reusing the SAME `_da_etf_ok`
+from the second fix (so a stock's behavior is provably byte-identical), plus
+an ETF-appropriate detail string ("Expense ratio available") and a small
+wording fix ("Strong fund" vs "Strong stock" in the adjacent R:R-quality
+warning). Opus reviewer (fourth pass): SHIP, 0 blocking — confirmed the gate
+now correctly evaluates True for a real ETF regardless of the structurally-
+False equity flags (closing the actual contradiction, not just the wording),
+confirmed the stock path reduces to exactly the original expression, and
+confirmed the 3 deferred sites are untouched. Full suite 6397 passed, no new
+`constants.py` value.
+
 **Genuinely still open, deliberately out of scope for every phase above, no
 trigger date:**
 - **ETF new-pick/Grow Today eligibility** — a real, unscoped policy question
   (needs a discovery universe + threshold recalibration decision), explicitly
   declined for Phase 4 by the owner. Pick up only via a fresh explicit ask.
+- **3 display-completeness sites** (Rebalancer action-plan message, Portfolio
+  Overview Score Breakdown tiles, Analysis Deep Dive pillar tiles) — an ETF
+  correctly shows "withheld" for pillars that don't apply to it, but never
+  shows its real Cost pillar in their place. Not wrong, just incomplete;
+  deferred by explicit owner choice 2026-09-28, no trigger date.
 
 The `etf_lookthrough_cache` DDL (Phase 3a) was applied by the owner
-2026-09-27, closing the last non-blocking item from any phase. Nothing else
-from the original architecture review remains unaddressed.
+2026-09-27, closing that non-blocking item. Nothing else from the original
+architecture review remains unaddressed beyond the two deliberately-deferred
+items above.
