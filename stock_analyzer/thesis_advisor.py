@@ -269,6 +269,45 @@ def run_batch_review(
     return results
 
 
+def already_reviewed_today(ticker: str, reviews_df, today_et: date) -> bool:
+    """True if `reviews_df` (as returned by db.load_thesis_reviews()) already
+    holds a row for `ticker` whose `reviewed_at` (a UTC ISO timestamp) falls
+    on `today_et`'s ET calendar date.
+
+    Makes the weekly thesis cron lane idempotent against a duplicate firing.
+    Live production data confirmed 2026-09-29 that this lane can fire more
+    than once on the same Sunday (24 tickers found with a near-duplicate
+    review roughly an hour apart, across 5 separate weeks) with nothing to
+    stop it — every extra firing silently paid for a second LLM call and
+    wrote a second near-identical row per open position. This check is the
+    fix: skip a ticker already reviewed today, whatever the duplicate
+    firing's actual cause turns out to be.
+
+    A row with a missing or unparseable `reviewed_at` is never treated as a
+    match — fails toward "not yet reviewed today" so a malformed historical
+    row can never accidentally suppress a legitimate review.
+    """
+    import pytz
+
+    if reviews_df is None or getattr(reviews_df, "empty", True):
+        return False
+    t = str(ticker or "").strip().upper()
+    if not t:
+        return False
+    et = pytz.timezone("America/New_York")
+    same_ticker = reviews_df[reviews_df["ticker"].astype(str).str.upper() == t]
+    for raw in same_ticker.get("reviewed_at", []):
+        try:
+            ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts.astimezone(et).date() == today_et:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 # ── Thesis authoring (F-5) ──────────────────────────────────────────────────
 #
 # Generative complement to the reviewer above. Given the engine's evidence for a

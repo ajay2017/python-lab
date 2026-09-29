@@ -630,3 +630,63 @@ def test_generate_earnings_thesis_update_exception_returns_none():
     _install_fake_anthropic(raise_exc=RuntimeError("boom"))
     result = ta.generate_earnings_thesis_update("AAPL", "t", {"eps_beat": True}, api_key="fake")
     assert result is None
+
+
+# ── already_reviewed_today (2026-09-29 cron idempotency fix) ─────────────────
+# Real production finding: the weekly thesis cron lane can fire more than
+# once on the same Sunday with nothing to stop it -- 24 tickers found with a
+# near-duplicate review roughly an hour apart, across 5 separate weeks.
+
+def _reviews_df(rows):
+    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["ticker", "reviewed_at"])
+
+
+def test_already_reviewed_today_true_for_same_day_utc_row():
+    today = date(2026, 9, 27)  # a Sunday
+    df = _reviews_df([{"ticker": "AAPL", "reviewed_at": "2026-09-27T22:51:57.378684+00:00"}])
+    assert ta.already_reviewed_today("AAPL", df, today) is True
+
+
+def test_already_reviewed_today_false_for_a_different_day():
+    df = _reviews_df([{"ticker": "AAPL", "reviewed_at": "2026-09-20T22:51:57+00:00"}])
+    assert ta.already_reviewed_today("AAPL", df, date(2026, 9, 27)) is False
+
+
+def test_already_reviewed_today_false_for_a_different_ticker():
+    df = _reviews_df([{"ticker": "MSFT", "reviewed_at": "2026-09-27T22:51:57+00:00"}])
+    assert ta.already_reviewed_today("AAPL", df, date(2026, 9, 27)) is False
+
+
+def test_already_reviewed_today_case_insensitive_ticker_match():
+    df = _reviews_df([{"ticker": "aapl", "reviewed_at": "2026-09-27T22:51:57+00:00"}])
+    assert ta.already_reviewed_today("AAPL", df, date(2026, 9, 27)) is True
+
+
+def test_already_reviewed_today_utc_midnight_boundary_shifts_et_date():
+    """A UTC timestamp just after midnight can still be the PREVIOUS day in
+    ET (UTC-4/5) -- must compare the ET calendar date, not the raw UTC date,
+    or a review that legitimately happened late Sunday ET (already after
+    midnight UTC, now Monday UTC) would wrongly read as 'not reviewed
+    today' and let the lane review it a second time."""
+    # 2026-09-28 02:30 UTC == 2026-09-27 22:30 ET (EDT, UTC-4) -- still Sunday in ET.
+    df = _reviews_df([{"ticker": "AAPL", "reviewed_at": "2026-09-28T02:30:00+00:00"}])
+    assert ta.already_reviewed_today("AAPL", df, date(2026, 9, 27)) is True
+    assert ta.already_reviewed_today("AAPL", df, date(2026, 9, 28)) is False
+
+
+def test_already_reviewed_today_empty_df_returns_false():
+    assert ta.already_reviewed_today("AAPL", pd.DataFrame(), date(2026, 9, 27)) is False
+    assert ta.already_reviewed_today("AAPL", None, date(2026, 9, 27)) is False
+
+
+def test_already_reviewed_today_malformed_timestamp_never_matches():
+    """An unparseable reviewed_at must fail toward 'not reviewed today', not
+    crash and not accidentally match -- a malformed historical row can never
+    suppress a legitimate review."""
+    df = _reviews_df([{"ticker": "AAPL", "reviewed_at": "not-a-timestamp"}])
+    assert ta.already_reviewed_today("AAPL", df, date(2026, 9, 27)) is False
+
+
+def test_already_reviewed_today_missing_reviewed_at_column_returns_false():
+    df = pd.DataFrame([{"ticker": "AAPL"}])
+    assert ta.already_reviewed_today("AAPL", df, date(2026, 9, 27)) is False

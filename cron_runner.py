@@ -1909,6 +1909,27 @@ def _run_thesis(now_et, force: bool) -> int:
         _log("thesis: no open positions have a user thesis yet — skip.")
         return 0
 
+    # Idempotency guard (2026-09-29 fix) -- see thesis_advisor.already_reviewed_today's
+    # own docstring for the live production finding that motivated this: this
+    # lane can fire more than once on the same Sunday with nothing to stop
+    # it, and every extra firing silently paid for a second LLM call and
+    # wrote a second near-identical row per position. One read, reused for
+    # every candidate below rather than one query per ticker.
+    _existing_reviews = db.load_thesis_reviews()
+    _already_done = [
+        t for t in buys_with_thesis["ticker"].astype(str).str.upper().tolist()
+        if _ta.already_reviewed_today(t, _existing_reviews, today)
+    ]
+    if _already_done:
+        _log(f"thesis: {len(_already_done)} position(s) already reviewed today, "
+             f"skipping (duplicate lane firing?): {', '.join(_already_done)}")
+        buys_with_thesis = buys_with_thesis[
+            ~buys_with_thesis["ticker"].astype(str).str.upper().isin(_already_done)
+        ]
+    if buys_with_thesis.empty:
+        _log("thesis: all open positions with a thesis were already reviewed today — skip.")
+        return 0
+
     _log(f"thesis: reviewing {len(buys_with_thesis)} position(s): "
          + ", ".join(buys_with_thesis["ticker"].astype(str).str.upper()))
 
