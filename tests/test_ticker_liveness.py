@@ -625,6 +625,36 @@ def test_maintenance_lane_unavailable_roster_degrades_to_empty_dict_not_fallback
     )
 
 
+def test_maintenance_lane_survives_early_raise_before_ru_du_bound(monkeypatch):
+    """2026-09-28 Opus review finding: sub-job ③ (data-quality checks) reads
+    `_ru_du`, which sub-job ⓪ only assigns AFTER its imports and the
+    sector_universe resolve succeed. If resolve_universe_or_none RAISES on
+    its very first call (sector_universe), `_ru_du` is never bound, and
+    sub-job ③'s `(_ru_du or {})` would previously throw a bare NameError --
+    caught by ③'s own try/except and misattributed as a "data_quality" lane
+    failure, when the real cause is sub-job ⓪'s roster resolution. Fixed by
+    initializing `_ru_du = None` unconditionally before sub-job ⓪'s try
+    block. Asserts the failure is attributed to "liveness" (the real cause),
+    never "data_quality" or a raw NameError/'_ru_du' string."""
+    import cron_runner as cr
+    from stock_analyzer import reference_data as rd
+    from stock_analyzer import data_maintenance as _dm
+
+    def _boom(name):
+        raise RuntimeError(f"simulated resolve failure for {name}")
+    monkeypatch.setattr(rd, "resolve_universe_or_none", _boom)
+    monkeypatch.setattr(_dm, "run_all_checks", lambda *_a, **_kw: [])
+    monkeypatch.setattr(cr.db, "load_watchlist_or_none", lambda: [])
+    _maintenance_env(monkeypatch, cr)
+
+    cr.main()
+
+    detail = cr._LAST_LANE_FAILURE_DETAIL or ""
+    assert "liveness" in detail, f"expected the real cause (liveness) in: {detail!r}"
+    assert "data_quality" not in detail, f"misattributed to sub-job ③: {detail!r}"
+    assert "_ru_du" not in detail, f"a raw NameError leaked through: {detail!r}"
+
+
 def test_run_maintenance_source_no_longer_reads_rosters_directly():
     """Literal import-isolation check, complementing the behavioral proofs
     above: asserts against the real source text of the real function that

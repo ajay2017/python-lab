@@ -807,3 +807,59 @@ def defense_facet_badge(
         "value_color": "#57d98a" if protect_alpha < 0 else "#fca5a5",
         "basis":       f"{n_mature} flagged · avg vs SPY after the warning",
     }
+
+
+def is_duplicate_account_flow(
+    candidate: dict, recent_rows: "list[dict]", window_sec: int,
+) -> bool:
+    """Pure decision function behind `db.add_account_flow`'s write-time dedup
+    guard (F2a, docs/plans/data-maintenance-framework.md). Separates the
+    DECISION (is this a duplicate) from the I/O (the caller does the DB read
+    and the insert), per this repo's "extract the decision" convention.
+
+    True when `recent_rows` (as returned by
+    `db.load_account_flows_for_dedup_check()`) contains a MANUAL row
+    (`snaptrade_txn_id` falsy/None) with the identical `(flow_date,
+    flow_type, amount, note)` as `candidate`, whose own `created_at` is
+    within `window_sec` seconds of right now. This targets the real risk — a
+    double-clicked submit button inserting the same form twice, near-
+    simultaneously — without blocking a genuinely repeated flow entered long
+    afterward (e.g. two real $500 deposits made days apart). A row carrying
+    a non-null `snaptrade_txn_id` is never treated as a match target — that
+    is a different, legitimate write path (`db.save_account_flows`) with its
+    own dedup guard (the partial unique index on `snaptrade_txn_id`).
+
+    `candidate` is the about-to-be-inserted record shape (`flow_date`,
+    `flow_type`, `amount`, `note` — no `created_at` yet, it hasn't been
+    written). A row whose `created_at` can't be parsed is skipped rather
+    than treated as a match — an unparseable timestamp can't establish
+    recency, and per this repo's offline-sentinel convention, "can't tell"
+    must never collapse to an affirmative "duplicate"/"safe" reading.
+    """
+    from stock_analyzer import market_time
+    import pandas as pd
+
+    cand_date = str(candidate.get("flow_date"))
+    cand_type = str(candidate.get("flow_type"))
+    cand_amount = float(candidate.get("amount") or 0.0)
+    cand_note = candidate.get("note")
+
+    now_utc = pd.Timestamp(market_time.now_et()).tz_convert("UTC")
+
+    for row in recent_rows or []:
+        if row.get("snaptrade_txn_id"):
+            continue  # broker-sourced row — never a dedup match target
+        if str(row.get("flow_date")) != cand_date:
+            continue
+        if str(row.get("flow_type")) != cand_type:
+            continue
+        if abs(float(row.get("amount") or 0.0) - cand_amount) > 1e-6:
+            continue
+        if row.get("note") != cand_note:
+            continue
+        created = pd.to_datetime(row.get("created_at"), utc=True, errors="coerce")
+        if pd.isna(created):
+            continue  # can't establish recency — never a silent match
+        if abs((now_utc - created).total_seconds()) <= window_sec:
+            return True
+    return False

@@ -1006,6 +1006,27 @@ REFERENCE_HORIZON_MIN_DAYS = {
     "nyse_calendar":       365,    # extending 3 years of holidays is a rare chore
 }
 
+# Data-maintenance / data-quality framework (docs/plans/data-maintenance-
+# framework.md, Phase 1). Both values owner-approved 2026-09-28 (see the
+# plan's "Four owner decisions — RESOLVED" section), not picked unilaterally.
+#
+# Orphan-cache grace period: a ticker no longer held/watchlisted/in the
+# discovery universe whose cache row (bundle_cache, fundamentals_cache, etc.)
+# is older than this is flagged as an orphan candidate by
+# data_maintenance.check_orphan_cache_rows(). Matches the existing
+# REFERENCE_SHELF_LIFE_DAYS convention (90 days) rather than inventing a new
+# cadence. Detection-only in Phase 1 — nothing is deleted yet.
+DATA_MAINT_ORPHAN_CACHE_GRACE_DAYS = 90
+
+# add_account_flow's write-time dedup guard (F2a): an insert is rejected as a
+# likely double-click duplicate only if an existing row with the SAME
+# (flow_date, flow_type, amount, note) — among manual rows only,
+# snaptrade_txn_id IS NULL — was itself inserted within this many seconds.
+# Scoped to a short window deliberately: an unconditional-forever exact-match
+# key would incorrectly block a genuinely repeated flow (e.g. two real $500
+# deposits made days apart).
+ACCOUNT_FLOW_DEDUP_WINDOW_SEC = 10
+
 # ⚙️ App Settings (docs/plans/app-settings.md, Commit 2 of 3) — the large-drop /
 # newly-emptied-bucket confirmation gate on a reference-table save
 # (`reference_data.decide_large_drop_confirmation`).

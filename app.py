@@ -33704,6 +33704,25 @@ elif page == "🩺 System Trust":
         tech_key="key",
     )
 
+    _sysh_section(
+        "##### ⑦ Data quality — orphan-cache / duplicate-insert findings",
+        _health.get("quality", []), noun="data-quality checks",
+        all_ok_text="No orphaned cache rows or accidental duplicates found",
+        partial_text="No findings — {n_ok}/{n} checks confirmed clean",
+        none_confirmed_text="nothing was verified this run — most often the database "
+                            "is unreadable, so this check had nothing to read "
+                            "(see ③ Data providers below)",
+        tech_key="key",
+    )
+    st.caption(
+        "docs/plans/data-maintenance-framework.md, Phase 1 — **chores, not "
+        "faults.** A finding here is a standing accumulation (an orphaned "
+        "research cache, a double-clicked form) cleaned up on the owner's own "
+        "schedule, never an incident. Runs weekly from the Saturday "
+        "maintenance cron lane (email-on-finding only) and on-demand here. "
+        "Detection only — nothing here deletes or changes a row."
+    )
+
     _sysh_ca = _health.get("computed_at")
     if _sysh_ca:
         st.caption(f"Computed {str(_sysh_ca)[:19].replace('T', ' ')} ET · cached ~5 min · Refresh to re-probe.")

@@ -89,6 +89,7 @@ from stock_analyzer.notify import (
     render_alert_email, render_test_email, render_pullback_email,
     render_daily_action_email, render_intraday_entry_email, send_email_resend,
     render_db_outage_email, render_liveness_email, render_watchlist_entries_email,
+    render_data_quality_email,
 )
 
 _ET = pytz.timezone("America/New_York")
@@ -2366,11 +2367,14 @@ def _run_maintenance(now_et, force: bool) -> int:
     infrastructure picks up — the takeaway recorded in memory
     `project_railway_migration`.
 
-    Runs Saturday to stay clear of the Sunday thesis lane's LLM work. Both
-    jobs are isolated so one's failure can't suppress the other, matching the
-    thesis lane's discipline. MEASUREMENT-ONLY: neither job feeds a gate, a
-    recommendation, or the composite score — they fill in historical anchor
-    values on rows that already exist or should exist.
+    Runs Saturday to stay clear of the Sunday thesis lane's LLM work. Each
+    sub-job is isolated so one's failure can't suppress the others, matching
+    the thesis lane's discipline. MEASUREMENT-ONLY: no sub-job feeds a gate,
+    a recommendation, or the composite score — ①/② fill in historical anchor
+    values on rows that already exist or should exist; ③ (added 2026-09-28,
+    docs/plans/data-maintenance-framework.md Phase 1) only DETECTS orphaned
+    cache rows / duplicate inserts / stuck state transitions and emails a
+    report — it deletes or changes nothing.
     """
     global _LAST_LANE_FAILURE_DETAIL
     _LAST_LANE_FAILURE_DETAIL = None
@@ -2381,6 +2385,14 @@ def _run_maintenance(now_et, force: bool) -> int:
 
     rc = 0
     failures: list[str] = []
+    # Bound here, unconditionally, so sub-job ③ below can safely read it via
+    # `(_ru_du or {})` even if sub-job ⓪'s own try block raises before ever
+    # reaching the line that assigns it (an import failure or the
+    # sector_universe resolve, both of which precede it) — without this,
+    # that early raise would leave _ru_du unbound, and ③'s reference to it
+    # would throw a NameError, misattributed as a "data_quality" lane failure
+    # rather than the real ⓪-side cause (2026-09-28 Opus review finding).
+    _ru_du: "dict | None" = None
 
     # ⓪ ticker-liveness sweep — MUST remain before sub-jobs ① and ②.
     #
@@ -2520,6 +2532,63 @@ def _run_maintenance(now_et, force: bool) -> int:
     except Exception as exc:
         _log(f"maintenance/vol: UNCAUGHT — {str(exc)[:160]}")
         failures.append(f"vol_predictions: {str(exc)[:160]}")
+        rc = 1
+
+    # ③ data-quality / maintenance findings (F1 orphan-cache, F2a-c
+    #    duplicate-insert, F4 state-transition — docs/plans/data-maintenance-
+    #    framework.md, Phase 1). DETECTION ONLY — nothing here deletes or
+    #    changes a row. Mirrors sub-job ⓪'s posture exactly: a finding is a
+    #    standing chore, not a lane failure, so it must NEVER be appended to
+    #    `failures` (that would set rc=1 → the 🩺 System Trust cron-heartbeat
+    #    reads "failed" over a run that behaved exactly as designed). Only an
+    #    uncaught exception from the check machinery itself is a real
+    #    failures.append(...) case.
+    try:
+        from stock_analyzer import data_maintenance as _dm
+        from stock_analyzer import db as _dq_db
+
+        _dq_held_df = _dq_db.load_holdings_or_none()
+        _dq_held = (
+            set(_dq_held_df["Ticker"].astype(str).str.upper())
+            if _dq_held_df is not None else set()
+        )
+        _dq_wl = _dq_db.load_watchlist_or_none()
+        _dq_watchlist = (
+            {str(t).strip().upper() for t in _dq_wl} if _dq_wl is not None else set()
+        )
+        # Reuse sub-job ⓪'s already-resolved discovery_universe payload
+        # rather than a second fetch (`_ru_du` is set above, before ①/②).
+        _dq_discovery = {
+            str(t).strip().upper()
+            for bucket in (_ru_du or {}).values()
+            for t in bucket
+        }
+
+        _dq_findings = _dm.run_all_checks(_dq_held, _dq_watchlist, _dq_discovery)
+        _dq_warn = [f for f in _dq_findings if f.get("severity") == "warn"]
+        _dq_unknown = [f for f in _dq_findings if f.get("severity") in ("unknown", "down")]
+
+        # Email only on a finding — an all-clean run is silent, same posture
+        # as the liveness sub-job above.
+        if _dq_warn or _dq_unknown:
+            _dq_subj, _dq_html = render_data_quality_email(
+                findings=_dq_findings, built_at=now_et.isoformat(),
+            )
+            _send_email("data_quality", _dq_subj, _dq_html)
+            _log(
+                f"maintenance: data-quality email sent — "
+                f"warn={len(_dq_warn)} unknown={len(_dq_unknown)}"
+            )
+        else:
+            _log(
+                f"maintenance: data-quality clean — {len(_dq_findings)} "
+                "check(s), no findings"
+            )
+    except Exception as exc:
+        # An exception HERE means the check machinery itself broke — that IS
+        # a lane failure, distinct from "the check found something".
+        _log(f"maintenance/data_quality: UNCAUGHT — {str(exc)[:160]}")
+        failures.append(f"data_quality: {str(exc)[:160]}")
         rc = 1
 
     if failures:

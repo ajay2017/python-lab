@@ -10,13 +10,16 @@ run (the "who watches the watcher" constraint from
 docs/plans/system-proprioception.md). Every value is read live at call time from
 a store that already exists.
 
-Six checks:
+Seven checks:
   ① cron liveness      — reads `cron_heartbeat` (written by each cron_runner lane)
   ② data-store health  — existence (a missing table = the DDL-catcher) + freshness
   ③ provider health    — reads `api_health` (session-scoped provider call stats)
   ④ in-session caches   — which session_state producer caches populated this run
   ⑤ reference shelf life — is any hand-maintained reference table overdue for refresh
   ⑥ write outcomes      — did today's interactive ledger writes actually save
+  ⑦ data quality        — orphan-cache / duplicate-insert / state-transition
+                           findings from `data_maintenance.py` (Phase 1, detection
+                           only — docs/plans/data-maintenance-framework.md)
 
 Severity vocabulary:
   "ok"      (🟢) — healthy / fresh.
@@ -879,8 +882,53 @@ def check_reference_data() -> list[dict]:
     return out
 
 
+# ── ⑦ data-quality / maintenance findings ─────────────────────────────────────
+def check_data_quality(session_state: Any = None) -> list[dict]:
+    """Thin adapter over `data_maintenance.run_all_checks()` into this
+    module's row shape (F1 orphan-cache / F2a-c duplicate-insert / F4
+    state-transition findings, docs/plans/data-maintenance-framework.md,
+    Phase 1). AWARENESS ONLY, and reported OFF the Home chip AND off
+    chip_severity/pipeline (see compute_health) — an accumulating orphaned
+    cache row or an accidental duplicate paste is a standing chore to clean
+    up, not an incident to react to; same reasoning as check ⑤'s exclusion.
+
+    Resolves held/watchlist/discovery-universe tickers the same defensive
+    way `cron_runner.py`'s own sub-job ⓪ does: a failed resolution degrades
+    to an empty set for THAT roster only, never aborts the whole check.
+    `session_state` is accepted for signature parity with the other checks
+    but not read directly — nothing here needs it.
+    """
+    try:
+        from stock_analyzer import db
+        from stock_analyzer import data_maintenance
+        from stock_analyzer.reference_data import resolve_universe_or_none
+
+        held_df = db.load_holdings_or_none()
+        held = (
+            set(held_df["Ticker"].astype(str).str.upper())
+            if held_df is not None else set()
+        )
+
+        wl = db.load_watchlist_or_none()
+        watchlist = {str(t).strip().upper() for t in wl} if wl is not None else set()
+
+        du_payload, _, _du_err = resolve_universe_or_none("discovery_universe")
+        discovery = (
+            {str(t).strip().upper() for bucket in du_payload.values() for t in bucket}
+            if du_payload is not None else set()
+        )
+
+        return data_maintenance.run_all_checks(held, watchlist, discovery)
+    except Exception as exc:
+        return [{
+            "key": "data_quality_error", "label": "Data-quality checks",
+            "severity": "unknown",
+            "detail": f"could not run — {str(exc)[:160]}",
+        }]
+
+
 def compute_health(session_state: Any = None) -> dict:
-    """Run all six checks and roll up a chip severity. Never raises.
+    """Run all seven checks and roll up a chip severity. Never raises.
 
     `chip_severity` is the worst of checks ①②③⑥ (cron / data stores /
     providers / write outcomes). Two checks are reported on the page but
@@ -895,6 +943,13 @@ def compute_health(session_state: Any = None) -> dict:
         today — and they would learn to ignore the chip that ALSO says "a cron
         lane has died." Desensitizing the safety instrument costs far more than
         the drift being reported.
+
+    A 7th check, ⑦ data-quality / maintenance findings (`check_data_quality`,
+    F1/F2a-c/F4), is ALSO excluded from the chip and `pipeline`, for the same
+    "standing chore, not an incident" reasoning as ⑤ — an orphaned cache row
+    or an accidental duplicate paste accumulates over weeks and is cleaned up
+    on the owner's own schedule, not something the Home chip should ever
+    flip amber over.
 
     Returns "ok" | "warn" | "down"; the Home chip renders only for
     "warn"/"down"."""
@@ -916,16 +971,17 @@ def compute_health(session_state: Any = None) -> dict:
     caches = _safe(check_caches, session_state)
     reference = _safe(check_reference_data)
     writes = _safe(check_write_outcomes, session_state)
+    quality = _safe(check_data_quality, session_state)
 
-    # NB: `reference` and `caches` are deliberately absent from `pipeline` —
-    # see the docstring. The guarantee is structural, not merely test-asserted:
-    # neither list is ever appended below, so no severity either produces can
-    # reach chip_severity/n_warn/n_down regardless of how degraded it reads.
-    # `writes` is, by contrast, DELIBERATELY
-    # INCLUDED: unlike ④/⑤ it is a same-session pass/fail signal, not a
-    # cold-load cache (④) or a standing chore (⑤) — it can legitimately emit
-    # warn/down for a real swallowed write failure, which is precisely the
-    # class of problem the Home chip exists to surface.
+    # NB: `reference`, `caches` and `quality` are deliberately absent from
+    # `pipeline` — see the docstring. The guarantee is structural, not merely
+    # test-asserted: none of these three lists is ever appended below, so no
+    # severity any of them produces can reach chip_severity/n_warn/n_down
+    # regardless of how degraded it reads. `writes` is, by contrast,
+    # DELIBERATELY INCLUDED: unlike ④/⑤/⑦ it is a same-session pass/fail
+    # signal, not a cold-load cache (④) or a standing chore (⑤/⑦) — it can
+    # legitimately emit warn/down for a real swallowed write failure, which
+    # is precisely the class of problem the Home chip exists to surface.
     pipeline = [x["severity"] for x in lanes] + \
                [x["severity"] for x in stores] + \
                [x["severity"] for x in providers] + \
@@ -942,6 +998,7 @@ def compute_health(session_state: Any = None) -> dict:
         "caches": caches,
         "reference": reference,
         "writes": writes,
+        "quality": quality,
         "chip_severity": chip,
         "n_down": n_down,
         "n_warn": n_warn,

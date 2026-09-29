@@ -405,6 +405,8 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `DB_OUTAGE_SAFE_PAGES` | `("🩺 System Trust", "📖 User Guide")` | The only pages that still render when the initial Supabase load has failed; every other page is hard-stopped behind an outage banner rather than shown with an empty portfolio, which would read as "you hold nothing". A **hard-suppression boundary**, which is why it lives in `constants.py` rather than as a tuple in `app.py`: `tests/` cannot import `app.py`, so this is the only place the "don't strand the user without a diagnostic" invariant can be mechanically pinned. Both entries render **no portfolio state**, so neither can misrepresent the book while the DB is unreadable; 🩺 System Trust in particular is the page that diagnoses this exact outage, and stopping before it is reachable would make the fix hide its own diagnostic. **Do not add a page here that reads holdings/trades/watchlist.** Companion `DB_RELOAD_RETRY_SEC` (30s auto-retry cooldown) is allowlisted rather than tabled — it is operational plumbing that gates an outage re-probe, never a pick. |
 | `TICKER_LIVENESS_MIN_BATCH_HEALTH_PCT` | `90.0` | Minimum share of the reference rosters (`SECTOR_UNIVERSE` ∪ `DISCOVERY_UNIVERSE` ∪ `_SECTOR_CANDIDATES`, ~230 unique) that must resolve in the weekly liveness sweep before its dead-ticker verdict is trusted. Below it the sweep reports `"inconclusive"` and says so in the email rather than reporting a false clean bill of health. A **batch-health floor** rather than confirmation across weeks, because the false positive being defended against (provider rate-limited/down) hits the whole batch at once and is therefore measurable inside one run — confirming across runs would need persistence, coupling a roster-rot check to the very DB whose outage F-239 addressed, and would delay a true finding by a week. 90% tolerates ~23 simultaneous misses; observed normal jitter is one (2026-08-16 = 99.6%). **Observability knob, NOT an investment threshold** — it gates whether a chore email is sent, never whether a pick is made or a gate fires. |
 | `REFERENCE_HORIZON_MIN_DAYS` | `{macro_event_calendar: 90, nyse_calendar: 365}` | Minimum remaining runway (days) on a *forward-dated* table before check ⑤ flags it. Converts an expiry cliff into advance notice — the pre-existing `MARKET_CALENDAR_LAST_YEAR` mechanism only warns *after* the calendar has run out. The macro horizon is derived **per event series** (earliest series expiry), never the global max, so one freshly-extended series can't mask five expiring ones. **Observability only.** |
+| `DATA_MAINT_ORPHAN_CACHE_GRACE_DAYS` | `90` | Data-maintenance framework (`stock_analyzer/data_maintenance.py`, Phase 1, `docs/plans/data-maintenance-framework.md`) — a ticker no longer held/watchlisted/in the discovery universe whose row in one of 8 per-ticker cache tables (`bundle_cache`, `fundamentals_cache`, `etf_lookthrough_cache`, `sector_cache`, `sentiment_llm_cache`, `thesis_erosion_cache`, `debate_cache`, `price_xcheck_history`) is older than this is flagged as an orphan-cache candidate by `check_orphan_cache_rows()`. Matches the existing `REFERENCE_SHELF_LIFE_DAYS` 90-day convention. **Detection-only in Phase 1 — nothing is deleted.** Owner-approved 2026-09-28. |
+| `ACCOUNT_FLOW_DEDUP_WINDOW_SEC` | `10` | `add_account_flow`'s write-time dedup guard (F2a, same plan doc) — an insert is rejected as a likely double-click duplicate only when an existing MANUAL row (`snaptrade_txn_id IS NULL`) with the identical `(flow_date, flow_type, amount, note)` was itself inserted within this many seconds. Scoped to a short window deliberately: an unconditional-forever exact-match key would incorrectly block a genuinely repeated flow (e.g. two real $500 deposits made days apart). Never blocks against a broker-synced row. Owner-approved 2026-09-28. |
 | `REFERENCE_TABLE_LARGE_DROP_CONFIRM_PCT` | `30.0` | ⚙️ App Settings (Commit 2) — `reference_data.decide_large_drop_confirmation()`'s threshold for asking an extra confirmation click before a reference-table save proceeds: total ticker count drops by *strictly more than* this percentage, OR any bucket goes from ≥1 ticker to 0 (that second trigger is unconditional, not gated by this percentage). **Observability knob, NOT an investment threshold** — the save is already blocked by structure-lock and provider-resolution validation before this gate is ever consulted; it only decides whether an otherwise-valid edit needs one extra click. Boundary is the same "== is still normal" shape as `TICKER_LIVENESS_MIN_BATCH_HEALTH_PCT` — a drop of exactly 30% does not trigger it. |
 | `BUNDLE_CACHE_MAX_AGE_DAYS` | 5 | Max age of a last-known-good bundle that `load_all` will serve when all history/bundle providers are down (`bundle_cache` table). Beyond this, fail loud rather than show very stale signals. Mild policy flavour. |
 | `SPLIT_DETECT_LOOKBACK_DAYS` / `SPLIT_DETECT_MIN_DISTORTION` / `SPLIT_DETECT_MAX_ADJ_DISTANCE` | 730 / 0.35 / 0.60 | `split_detector.py` — data-integrity tuning, not an investment threshold. Only investigate a ticker if `\|cost vs price\|` gap exceeds `MIN_DISTORTION`; fetch `LOOKBACK_DAYS` of yfinance split history; confirm a detected split only if the adjusted cost lands within `MAX_ADJ_DISTANCE` of current price. Were module-local literals (2026-08-04 audit finding) |
@@ -2340,7 +2342,7 @@ caught by Opus review before ship.
 Pure-ish diagnostic module for the owner-only 🩺 System Trust page (System
 Proprioception Phase 1). **INFORMS ONLY — every function is read-only and feeds
 no gate, recommendation, composite, or threshold.** Pull-based / render-time:
-nothing depends on its own background job. SIX never-raising checks — ① cron
+nothing depends on its own background job. SEVEN never-raising checks — ① cron
 liveness (`cron_heartbeat`), ② data-store existence + freshness (the "DDL-catcher":
 a provably-missing table reads red/"down"; the inventory maps each cron lane to
 the stores it writes and whether the write is unconditional-daily or conditional),
@@ -2391,6 +2393,75 @@ still reads "red" internally and is still correctly skipped as a validator. The
 🩺 System Trust page's top-of-page banner (`app.py`) was changed the same day to
 state the actual failing check(s)' label + detail text instead of a generic
 "a data provider is still actively erroring" paragraph.
+
+**⑦ Data quality (added 2026-09-28, F-235 update)** — `check_data_quality()` is a
+thin wrapper resolving held/watchlist/discovery tickers (same degrade-per-roster
+posture as `cron_runner.py`'s maintenance sub-job ⓪ — an unresolvable roster
+becomes an empty set for THAT roster only, never aborts the check) and delegating
+to `stock_analyzer/data_maintenance.py::run_all_checks()` — see that module's own
+section below. **Excluded from `pipeline`/`chip_severity`**, same reasoning as ⑤:
+an orphan-cache accumulation is a standing chore that stays true for weeks, not a
+transient fault the chip exists to interrupt someone about.
+
+### `stock_analyzer/data_maintenance.py`
+
+Detection-only check registry backing 🩺 System Trust check ⑦ and the Saturday
+`maintenance` cron lane's sub-job ③ (Phase 1 of
+`docs/plans/data-maintenance-framework.md`). **Zero writes or deletes anywhere in
+this module** — a hard-coded `_PROTECTED_TABLES` frozenset (`recommendations`,
+`exit_signals`, `gate_suppressions`, `rec_events`, `score_history`,
+`model_predictions`, `analyst_target_snapshots`, `judgment_opinions`,
+`judgment_grades`, `analyst_coverage` — every table that's the evidence base for a
+track-record/calibration feature elsewhere in the app) plus `assert_not_protected`/
+`would_delete_from` guard functions enforce this structurally, ready for a future
+remediation phase rather than bolted on after the fact. Five checks, each
+returning `list[dict]` rows shaped like `system_health.py`'s own convention
+(`key`/`label`/`severity`/`detail`/`count`), `severity` in `ok`/`warn`/`unknown`:
+
+- **Orphan cache rows** — 8 ticker-keyed cache tables (`bundle_cache`,
+  `fundamentals_cache`, `etf_lookthrough_cache`, `sector_cache`,
+  `sentiment_llm_cache`, `thesis_erosion_cache`, `debate_cache`,
+  `price_xcheck_history`) via the new `db.load_ticker_last_touched(table, date_col)`
+  reader (returns `None` on any failure — the offline sentinel, never `[]`
+  collapsed from a real failure). A ticker is flagged when it's in none of
+  holdings/watchlist/discovery-universe AND its most-recent row across the table
+  is older than `DATA_MAINT_ORPHAN_CACHE_GRACE_DAYS` (90). The only check whose
+  target is a plausible future auto-remediation candidate — these rows are
+  regenerable on next research and feed no decision once expired.
+- **`account_flows` duplicates** — backstop for the write-time guard below;
+  reads via the new `db.load_account_flows_for_dedup_check()` (also `None`-capable,
+  unlike `load_account_flows()` which collapses failure to `[]` and doesn't carry
+  `snaptrade_txn_id` at all). Groups manual (`snaptrade_txn_id` NULL) rows by
+  `(flow_date, flow_type, amount, note)`; a broker-sourced row is never a match
+  target.
+- **`analyst_coverage` duplicates** — flag-for-review only, forever. Groups by
+  `(ticker, article_date, raw_text)`, comparing `raw_text` only when truthy on
+  BOTH sides — the documented `COALESCE(x,'')`-equality trap from
+  `docs/plans/data-integrity.md`'s D9 finding (two NULL `raw_text` rows must never
+  be treated as "matching"). Two rows sharing `(ticker, article_date)` with
+  genuinely different `raw_text` (the legitimate multi-firm-per-article case D9
+  already confirmed) are never flagged. Uses `db.load_analyst_coverage_or_none()`
+  (not the plain, offline-sentinel-collapsing `load_analyst_coverage()`).
+- **`thesis_reviews` duplicates** — same null-safety rule, keyed on
+  `(ticker, inputs_hash)` (a more precise natural key than a synthetic one — two
+  reviews sharing an `inputs_hash` are the same underlying inputs re-reviewed).
+- **`snaptrade_pending_imports` anomalies** — flags a `snaptrade_txn_id` queued
+  more than once among `status="pending"` rows.
+
+`run_all_checks()` wraps each check in its own try/except so one raising degrades
+to a single `unknown` finding naming which check failed, never poisoning the
+others — mirrors `cron_runner.py::_run_maintenance`'s own per-sub-job isolation.
+
+**Companion write-time fix, same phase:** `db.add_account_flow` (the manual
+"Add Flow" entry path) now calls `stock_analyzer/util.py::is_duplicate_account_flow`
+before inserting — rejects an insert matching an existing manual row's
+`(flow_date, flow_type, amount, note)` within `ACCOUNT_FLOW_DEDUP_WINDOW_SEC` (10)
+seconds of its `created_at`, closing the exact re-inflation-of-`net_contributed_capital`
+bug class already fixed for the broker-sourced writer (`save_account_flows`) on
+2026-08-24. Fails safe by construction: a failed/`None` read from
+`load_account_flows_for_dedup_check()` is treated by the pure decision function as
+"no recent rows" (`for row in recent_rows or []`), so the guard degrades to a
+silent no-op — never blocks, never raises, never corrupts a legitimate insert.
 
 **`tests/test_system_health_inventory_completeness.py` (added 2026-09-21)** is a
 structural guard on check ②'s `_INVENTORY`, added after the 2026-09-21 code audit

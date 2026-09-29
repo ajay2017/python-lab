@@ -1850,6 +1850,29 @@ def _json_safe(obj):
         return None
 
 
+def load_ticker_last_touched(table_name: str, date_col: str) -> "list[dict] | None":
+    """Generic reader for the data-maintenance orphan-cache sweep (F1) --
+    returns [{"ticker": ..., "last_touched": <raw date/timestamp string>}, ...]
+    for every row's ticker+date_col in `table_name`. NOT deduped or
+    aggregated -- caller computes the most-recent-per-ticker. Returns None
+    on any failure (offline sentinel: no creds, table missing, exception) --
+    never an empty list collapsed from a real failure. `table_name`/`date_col`
+    must come from data_maintenance.py's own fixed registry, never external
+    input -- this function does not validate them.
+
+    Not paginated: every table this is used for is narrow (2 selected
+    columns) and confirmed small (low hundreds of rows total across all 8,
+    per the 2026-09 DB architecture review) -- revisit if that changes.
+    """
+    if not has_db():
+        return None
+    try:
+        rows = _client().table(table_name).select(f"ticker,{date_col}").execute().data
+        return rows if rows is not None else []
+    except Exception:
+        return None
+
+
 def save_bundle_cache(ticker: str, bundle: dict) -> bool:
     """Write-through the last-known-good raw bundle (history + info) so load_all
     can serve aged-but-real data when providers are down. Read-only viewers
@@ -5114,11 +5137,47 @@ def load_account_flows() -> list[dict]:
         return []
 
 
+def load_account_flows_for_dedup_check() -> "list[dict] | None":
+    """Read account_flows including snaptrade_txn_id, for the data-maintenance
+    duplicate detector (F2a backstop) to isolate manual entries
+    (snaptrade_txn_id IS NULL) from broker-synced ones. None on any failure
+    (offline sentinel) -- distinct from load_account_flows(), which collapses
+    a failure to [] and doesn't carry snaptrade_txn_id at all.
+    """
+    if not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("account_flows")
+            .select("id,flow_date,flow_type,amount,note,snaptrade_txn_id,created_at")
+            .order("flow_date", desc=False).order("id", desc=False)
+            .execute().data
+        )
+        return rows if rows is not None else []
+    except Exception:
+        return None
+
+
 def add_account_flow(flow_date: str, flow_type: str, amount: float,
                      note: str | None = None) -> bool:
     """Insert one cash-flow row (baseline / deposit / withdrawal). `amount` is
     stored POSITIVE (the type carries the sign). USER data → honours the
-    read-only viewer guard. Best-effort; swallows failures."""
+    read-only viewer guard. Best-effort; swallows failures.
+
+    Write-time dedup guard (F2a, docs/plans/data-maintenance-framework.md):
+    before inserting, checks recent MANUAL rows (snaptrade_txn_id IS NULL)
+    for an exact (flow_date, flow_type, amount, note) match whose own
+    created_at is within ACCOUNT_FLOW_DEDUP_WINDOW_SEC seconds of now.
+    account_flows' own CREATE TABLE statement (this file, ~line 416-423)
+    defines `created_at timestamptz not null default now()`, so this reads a
+    real column rather than approximating recency via `id` order. A match is
+    rejected as a likely double-click duplicate (returns False,
+    indistinguishable from any other rejected/failed write to existing
+    callers). A genuinely repeated flow entered outside the window (e.g. two
+    real deposits made days apart) is NOT blocked. Never blocks against a
+    broker-synced row (those always carry a non-null snaptrade_txn_id) — see
+    stock_analyzer.util.is_duplicate_account_flow for the pure decision
+    logic this delegates to."""
     if is_readonly(): return False  # read-only viewer: no-op
     if not has_db():
         return False
@@ -5129,6 +5188,12 @@ def add_account_flow(flow_date: str, flow_type: str, amount: float,
             "amount":    abs(float(amount)),
             "note":      (str(note) if note else None),
         }
+        from stock_analyzer.constants import ACCOUNT_FLOW_DEDUP_WINDOW_SEC
+        recent = load_account_flows_for_dedup_check()
+        if recent is not None:
+            from stock_analyzer.util import is_duplicate_account_flow
+            if is_duplicate_account_flow(record, recent, ACCOUNT_FLOW_DEDUP_WINDOW_SEC):
+                return False
         _client().table("account_flows").insert(record).execute()
         return True
     except Exception:

@@ -1627,3 +1627,121 @@ def render_liveness_email(
       </div>
     </body></html>"""
     return subject, body
+
+
+def render_data_quality_email(findings: "list[dict]", built_at: str) -> "tuple[str, str]":
+    """Email (subject, html) for the weekly data-maintenance / data-quality
+    sweep (docs/plans/data-maintenance-framework.md Phase 1;
+    `stock_analyzer.data_maintenance.run_all_checks`).
+
+    Called from the Saturday maintenance cron lane ONLY when at least one
+    finding row is warn/down/unknown — never on an all-"ok" run, mirroring
+    `render_liveness_email`'s posture exactly (a chore email, not a nag on
+    every clean run).
+
+    Chore/awareness only — never gates a recommendation, never suppresses a
+    pick, never deletes/changes a row (Phase 1 is detection-only, no
+    remediation path exists yet).
+
+    STYLING: dark-on-light (same as render_liveness_email / render_db_
+    outage_email) — see render_liveness_email's own docstring for why
+    (email clients strip <body> styling, leaving near-white text invisible
+    on a white background). Do NOT align this to a different convention
+    without re-testing in a real inbox.
+
+    Pure string building: no DB, no Streamlit, no network.
+    """
+    from stock_analyzer.util import safe_html as _sh
+
+    warn = [f for f in (findings or []) if f.get("severity") == "warn"]
+    unknown = [f for f in (findings or []) if f.get("severity") in ("unknown", "down")]
+    n_warn, n_unknown = len(warn), len(unknown)
+
+    # ── Subject ───────────────────────────────────────────────────────────────
+    if n_warn and n_unknown:
+        subject = (
+            f"DRISHTA · Maintenance: {n_warn} data-quality finding{'s' if n_warn != 1 else ''}"
+            f" + {n_unknown} check{'s' if n_unknown != 1 else ''} could not run"
+        )
+    elif n_warn:
+        subject = (
+            f"DRISHTA · Maintenance: {n_warn} data-quality finding{'s' if n_warn != 1 else ''}"
+            " — orphaned cache rows / duplicates found"
+        )
+    elif n_unknown:
+        subject = (
+            f"DRISHTA · Maintenance: {n_unknown} data-quality check"
+            f"{'s' if n_unknown != 1 else ''} could not run"
+        )
+    else:
+        # Unreachable via cron_runner, which only calls this when there IS a
+        # finding — guarded anyway so a future caller can't ship a nonsense
+        # "0 findings" subject.
+        subject = "DRISHTA · Maintenance: data-quality report"
+
+    def _rows_html(items: "list[dict]", border: str, text_color: str, sub_color: str) -> str:
+        rows = ""
+        for f in items:
+            label = _sh(str(f.get("label") or f.get("key") or ""))
+            detail = _sh(str(f.get("detail") or ""))
+            rows += f"""
+            <div style="border-bottom:1px solid {border};padding:8px 0">
+              <div style="color:{text_color};font-weight:700;font-size:13px">{label}</div>
+              <div style="color:{sub_color};font-size:12px;margin-top:2px">{detail}</div>
+            </div>"""
+        return rows
+
+    warn_html = ""
+    if warn:
+        rows = _rows_html(warn, "#fecaca", "#991b1b", "#7f1d1d")
+        warn_html = f"""
+        <div style="margin:0 0 14px 0">
+          <div style="color:#b91c1c;font-weight:700;font-size:13px;margin-bottom:6px">
+            {n_warn} finding{'s' if n_warn != 1 else ''} to review
+          </div>
+          <div style="background:#fef2f2;border:1px solid #fecaca;
+                      border-radius:4px;padding:10px 14px">
+            {rows}
+          </div>
+          <div style="color:#52525b;font-size:12px;margin-top:8px">
+            Report-only — nothing was deleted or changed. Review at your own
+            pace on 🩺 System Trust → ⑦ Data quality.
+          </div>
+        </div>"""
+
+    unknown_html = ""
+    if unknown:
+        rows = _rows_html(unknown, "#e4e4e7", "#3f3f46", "#52525b")
+        unknown_html = f"""
+        <div style="margin:0 0 14px 0">
+          <div style="color:#71717a;font-weight:700;font-size:13px;margin-bottom:6px">
+            {n_unknown} check{'s' if n_unknown != 1 else ''} could not run
+          </div>
+          <div style="background:#fafaf9;border:1px solid #e4e4e7;
+                      border-radius:4px;padding:10px 14px">
+            {rows}
+          </div>
+        </div>"""
+
+    body = f"""<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f4f4f5">
+      <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #d4d4d8;
+                  border-radius:8px;padding:22px;font-family:Arial,Helvetica,sans-serif">
+        <div style="color:#18181b;font-size:18px;font-weight:700">
+          DRISHTA · Weekly Data-Quality Check
+        </div>
+        <div style="color:#52525b;font-size:12px;margin-top:4px;margin-bottom:16px">
+          Chore report · built {_sh(str(built_at))[:19]} ET ·
+          detection only, never gates a recommendation
+        </div>
+        {warn_html}
+        {unknown_html}
+        <div style="color:#71717a;font-size:11px;margin-top:16px;
+                    border-top:1px solid #e4e4e7;padding-top:10px">
+          Saturday maintenance lane · runs weekly. You are receiving this
+          because at least one check found something (or could not run) —
+          silence is indistinguishable from health. Nothing here deletes or
+          changes a row — Phase 1 is detection-only.
+        </div>
+      </div>
+    </body></html>"""
+    return subject, body
