@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<!--
+  MOCKUP — 🧵 Thesis (new standalone nav page, RESEARCH group)
+  Status: PRE-APPROVAL. Static HTML only, no code written yet.
+  Design source: planner (Opus) pass, 2026-09-29 — PROCEED WITH CHANGES verdict.
+  Owner decisions already locked before this mockup: standalone page (not an AI Insights
+  tab); the two new diff thresholds live in constants.py; defaults accepted
+  (THESIS_DELTA_COMPOSITE_PTS=5.0, THESIS_DELTA_EROSION_PTS=10.0).
+  Content below is illustrative example data for one ticker — nothing here is
+  live-computed. See the planner hand-back for the full spec (schema, diff invariants,
+  review routing).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DRISHTA — 🧵 Thesis mockup</title>
+<style>
+  :root{
+    --bg:#0e1117; --card:#111827; --line:#374151; --line-soft:#1f2937;
+    --txt:#f9fafb; --dim:#9ca3af; --mid:#d1d5db;
+    --grn:#22c55e; --grn-d:#052e16; --grn-mid:#16a34a;
+    --red:#ef4444; --red-d:#450a0a;
+    --amb:#f59e0b; --amb-d:#422006;
+    --blu:#60a5fa; --blu-d:#0c1e3a; --blu-mid:#2563eb;
+    --pur:#a78bfa; --pur-d:#2e1065;
+    --teal:#2dd4bf; --teal-d:#042f2e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);padding:28px 32px 80px;
+       font-family:"Source Sans Pro",-apple-system,Segoe UI,Roboto,sans-serif;
+       font-size:15px;line-height:1.5}
+  .layout{max-width:1280px;margin:0 auto;display:flex;gap:28px;align-items:flex-start}
+  .wrap{max-width:920px;flex:1}
+
+  .mocknote{background:#1e1b4b;border-left:4px solid #818cf8;border-radius:8px;
+       padding:10px 14px;margin-bottom:24px;color:#c7d2fe;font-size:.86em}
+  .mocknote strong{color:#e0e7ff}
+
+  /* ── sidebar nav mock (RESEARCH group, showing placement) ── */
+  .sidebar{width:220px;flex-shrink:0;background:#0a0e17;border:1px solid var(--line);
+       border-radius:10px;padding:14px 10px;position:sticky;top:20px}
+  .sb-group{margin-bottom:4px}
+  .sb-group-head{color:#22c55e;font-size:.72em;font-weight:800;letter-spacing:.08em;
+       text-transform:uppercase;padding:8px 10px 4px}
+  .sb-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;
+       font-size:.88em;color:var(--mid);cursor:pointer}
+  .sb-item.active{background:#16321f;color:#86efac;font-weight:700}
+  .sb-item.new-item{background:#1a1330;color:#c4b5fd;border:1px dashed var(--pur)}
+  .sb-item.new-item::after{content:"NEW";margin-left:auto;background:var(--pur);color:#fff;
+       font-size:.6em;font-weight:800;padding:1px 5px;border-radius:4px}
+  .sb-dim{opacity:.55}
+
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       padding:16px 18px;margin-bottom:14px}
+  .panel-title{font-weight:700;font-size:.88em;color:var(--dim);text-transform:uppercase;
+       letter-spacing:.07em;margin-bottom:12px;display:flex;align-items:center;
+       justify-content:space-between;gap:8px}
+  .panel-title .ttl-left{display:flex;align-items:center;gap:8px}
+  .panel-meta{color:#6b7280;font-size:.78em;font-weight:500;text-transform:none;
+       letter-spacing:0}
+
+  .banner{border-radius:8px;padding:10px 13px;margin-bottom:14px;font-size:.87em;
+       display:flex;align-items:flex-start;gap:8px}
+  .banner-blu{background:var(--blu-d);border:1px solid #1e3a8a;color:#93c5fd}
+  .banner-amb{background:var(--amb-d);border:1px solid #78350f;color:#fde68a}
+  .banner-grn{background:var(--grn-d);border:1px solid #14532d;color:#86efac}
+  .banner-note{background:#1f2937;border:1px solid var(--line);color:var(--dim)}
+
+  /* ── provenance tag legend + badges ── */
+  .tag-legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--dim);font-size:.78em;
+       margin-bottom:16px;padding:9px 13px;background:#0a0f1a;border:1px solid var(--line-soft);
+       border-radius:8px}
+  .tag{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:5px;
+       font-size:.86em;font-weight:600;white-space:nowrap}
+  .tag-fact{background:#0c2a1f;color:#4ade80;border:1px solid #14532d}
+  .tag-derived{background:#0c1e3a;color:#60a5fa;border:1px solid #1e3a8a}
+  .tag-analyst{background:#2e2306;color:#facc15;border:1px solid #713f12}
+  .tag-ai{background:#2e1065;color:#c4b5fd;border:1px solid #6d28d9}
+  .tag-user{background:#1f2937;color:#e5e7eb;border:1px solid var(--line)}
+
+  .ev-line{display:flex;align-items:flex-start;gap:8px;padding:5px 0;font-size:.92em;
+       color:var(--mid)}
+  .ev-line .tag{margin-top:1px;flex-shrink:0}
+
+  .stat-row{display:flex;gap:22px;flex-wrap:wrap;align-items:baseline;margin-bottom:2px}
+  .stat{color:var(--dim);font-size:.86em}
+  .stat b{color:var(--txt);font-size:1.02em}
+  .pos{color:var(--grn)} .neg{color:var(--red)} .neu{color:var(--mid)}
+
+  .divider{border:none;border-top:1px solid var(--line);margin:4px 0 14px}
+
+  .disclosed{color:#6b7280;font-size:.88em;font-style:italic;padding:6px 0}
+
+  .expander{background:#0a0f1a;border:1px solid var(--line-soft);border-radius:8px;
+       margin-top:4px;overflow:hidden}
+  .expander-head{padding:10px 13px;font-size:.86em;color:var(--dim);cursor:pointer;
+       display:flex;align-items:center;justify-content:space-between;gap:6px}
+  .expander-head .chev{color:#6b7280}
+  .expander-body{padding:0 13px 13px;font-size:.87em;color:var(--mid)}
+  .delta-line{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:.92em}
+  .delta-line .tag{flex-shrink:0}
+  .baseline-note{color:#6b7280;font-size:.8em;margin-top:8px;padding-top:8px;
+       border-top:1px solid var(--line-soft)}
+
+  select.ticker-sel{background:#1f2937;color:var(--txt);border:1px solid var(--line);
+       border-radius:7px;padding:7px 12px;font-size:.94em;font-weight:600}
+  .chip{display:inline-block;padding:2px 9px;border-radius:12px;font-size:.76em;
+       font-weight:700;background:#16321f;color:#86efac;border:1px solid var(--grn-mid)}
+</style>
+</head>
+<body>
+<div class="wrap" style="max-width:1280px;margin:0 auto">
+
+<div class="mocknote">
+  <strong>PRE-APPROVAL MOCKUP</strong> — new standalone 🧵 Thesis page (RESEARCH nav
+  group, next to 📈 Analysis / 📋 Watchlist). Shows: nav placement, the consolidated card
+  (thesis + F-1 review + Red Team + Debate + Analyst Coverage + Pre-Mortem), provenance
+  tagging on every evidence line, the disclosed tension-vs-engine banner, disclosed
+  "not available" states, and the collapsed "what changed since last review" panel.
+  Read-only, awareness-only — nothing here writes a recommendation or a gate. Example
+  data is illustrative; nothing on this page is live-computed. Full spec:
+  planner hand-back, 2026-09-29 (PROCEED WITH CHANGES).
+</div>
+
+<div class="layout">
+
+  <!-- ══════════════════════════════════════════════
+       SIDEBAR — placement in the RESEARCH group
+  ══════════════════════════════════════════════ -->
+  <div class="sidebar">
+    <div class="sb-group">
+      <div class="sb-group-head">🏠 Main</div>
+      <div class="sb-item sb-dim">🏠 Home</div>
+      <div class="sb-item sb-dim">🧑‍⚖️ The Judge</div>
+      <div class="sb-item sb-dim">🧾 Summary</div>
+    </div>
+    <div class="sb-group">
+      <div class="sb-group-head">🔍 Research</div>
+      <div class="sb-item sb-dim">📈 Analysis</div>
+      <div class="sb-item sb-dim">⚖️ Compare</div>
+      <div class="sb-item sb-dim">📋 Watchlist</div>
+      <div class="sb-item new-item active">🧵 Thesis</div>
+      <div class="sb-item sb-dim">🌐 Macro</div>
+    </div>
+    <div class="sb-group">
+      <div class="sb-group-head">🗂️ Portfolio</div>
+      <div class="sb-item sb-dim">🥧 Portfolio Overview</div>
+      <div class="sb-item sb-dim">🔗 Risk Analysis</div>
+    </div>
+    <div class="sb-group">
+      <div class="sb-group-head">🧠 AI</div>
+      <div class="sb-item sb-dim">🧠 AI Insights</div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════
+       MAIN CONTENT
+  ══════════════════════════════════════════════ -->
+  <div class="wrap">
+
+  <div class="panel-title" style="margin-bottom:14px">
+    <div class="ttl-left" style="text-transform:none;letter-spacing:0;font-size:1.3em;color:var(--txt);font-weight:800">
+      🧵 Thesis
+    </div>
+    <select class="ticker-sel"><option>NVDA</option></select>
+  </div>
+
+  <div class="tag-legend">
+    <span><span class="tag tag-fact">📊 fact</span> raw provider data</span>
+    <span><span class="tag tag-derived">🧮 derived</span> computed by the app</span>
+    <span><span class="tag tag-analyst">🏦 analyst opinion</span> saved external research</span>
+    <span><span class="tag tag-ai">🤖 AI inference</span> LLM narration/judgment</span>
+    <span><span class="tag tag-user">🖊 your words</span> user-authored</span>
+  </div>
+
+  <!-- ── header: engine composite + position ── -->
+  <div class="panel">
+    <div class="stat-row">
+      <span class="stat">Ticker <b>NVDA</b> <span class="chip">HELD</span></span>
+      <span class="stat">Engine composite <b class="pos">72</b> (Buy)</span>
+      <span class="stat">Your position <b>40&nbsp;sh</b> · <b class="pos">+14%</b></span>
+    </div>
+  </div>
+
+  <!-- ── tension banner (pure display, only when disagreement exists) ── -->
+  <div class="banner banner-amb">
+    ⚠️ <div><strong>Tension, disclosed:</strong> Wall St. consensus is Strong Buy
+    (avg PT $180) while the engine composite sits at 72 (Buy) — below the Strong Buy
+    band. Neither reading overrides the other; this is the same disclosed-disagreement
+    framing already used on 🏦 Analyst Coverage.</div>
+  </div>
+
+  <!-- ── your thesis ── -->
+  <div class="panel">
+    <div class="panel-title">
+      <div class="ttl-left">🖊 Your Thesis</div>
+      <div class="panel-meta">source: ai_edited · authored 2026-08-02</div>
+    </div>
+    <div class="ev-line"><span class="tag tag-user">🖊</span>
+      "Data-center demand compounds through at least 2 more capex cycles. Breaks if a
+      hyperscaler guides capex down two quarters running."</div>
+  </div>
+
+  <!-- ── F-1 review ── -->
+  <div class="panel">
+    <div class="panel-title">
+      <div class="ttl-left">🤖 Thesis Review (F-1)</div>
+      <div class="panel-meta">WEAKENING · reviewed 2026-09-28 (Sunday cron)</div>
+    </div>
+    <div class="ev-line"><span class="tag tag-ai">🤖</span>
+      "Momentum has rolled over versus SPY though fundamentals still hold up."</div>
+    <div class="divider"></div>
+    <div style="color:#6b7280;font-size:.8em;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:.05em">Evidence it used</div>
+    <div class="ev-line"><span class="tag tag-fact">📊</span> Revenue growth +22%, profit margin 51%</div>
+    <div class="ev-line"><span class="tag tag-derived">🧮</span> Price below SMA-50; 1-mo −6%; RSI 41</div>
+    <div class="ev-line"><span class="tag tag-fact">📊</span> 3 recent headlines (sentiment mixed)</div>
+    <div class="ev-line"><span class="tag tag-analyst">🏦</span> Consensus Strong Buy, avg PT $180 (as of 2026-09-15)</div>
+  </div>
+
+  <!-- ── Red Team ── -->
+  <div class="panel">
+    <div class="panel-title">
+      <div class="ttl-left">🧮 Red Team</div>
+      <div class="panel-meta">erosion 46/100 · "Eroding" · scored today</div>
+    </div>
+    <div class="ev-line"><span class="tag tag-derived">🧮</span>
+      Components — tier WATCH · RS −4.2pp vs SPY (20 sessions) · Δcomposite −3.1 · PT flat</div>
+    <div class="ev-line"><span class="tag tag-ai">🤖</span>
+      Counter-case: "RS −4.2pp vs SPY over 20 sessions undercuts the momentum leg of the
+      original thesis."</div>
+  </div>
+
+  <!-- ── Debate ── -->
+  <div class="panel">
+    <div class="panel-title">
+      <div class="ttl-left">🤖 Debate</div>
+      <div class="panel-meta">contested · bull 58 / bear 55 · entry debate · 2026-09-12</div>
+    </div>
+    <div class="ev-line"><span class="tag tag-ai">🤖</span>
+      Key dispute: "whether the capex cycle has peaked."</div>
+  </div>
+
+  <!-- ── Analyst Coverage ── -->
+  <div class="panel">
+    <div class="panel-title">
+      <div class="ttl-left">🏦 Analyst Coverage</div>
+      <div class="panel-meta">saved 2026-09-15</div>
+    </div>
+    <div class="ev-line"><span class="tag tag-analyst">🏦</span>
+      Strong Buy · avg PT $180 (4 firms)</div>
+    <div class="ev-line"><span class="tag tag-fact">📊</span>
+      Price at article date: $171.20</div>
+  </div>
+
+  <!-- ── Pre-Mortem ── -->
+  <div class="panel">
+    <div class="panel-title">
+      <div class="ttl-left">🖊 Pre-Mortem (at entry)</div>
+      <div class="panel-meta">logged 2026-08-02</div>
+    </div>
+    <div class="ev-line"><span class="tag tag-ai">🤖</span>
+      Case against (generated): "Momentum-driven; reverts hard if market breadth narrows."</div>
+    <div class="ev-line"><span class="tag tag-user">🖊</span>
+      Your precommitment: "I'm wrong if data-center bookings decelerate two quarters running."</div>
+  </div>
+
+  <!-- ── a disclosed "not available" example (different ticker/state) ── -->
+  <div class="panel" style="opacity:.85">
+    <div class="panel-title">
+      <div class="ttl-left">🤖 Debate</div>
+    </div>
+    <div class="disclosed">No debate on record for this ticker.</div>
+  </div>
+  <div class="panel" style="opacity:.85">
+    <div class="panel-title">
+      <div class="ttl-left">🧮 Red Team</div>
+    </div>
+    <div class="disclosed">Erosion not computed today — open the Red Team tab to score it.</div>
+  </div>
+
+  <!-- ── What changed since last review (collapsed by default) ── -->
+  <div class="expander">
+    <div class="expander-head">
+      <span>▸ What changed since last review</span>
+      <span class="chev">2026-09-21 → 2026-09-28</span>
+    </div>
+    <div class="expander-body" style="display:block">
+      <div class="delta-line"><span class="tag tag-derived">🧮</span>
+        Composite <b>75 → 72</b> <span class="neg">(−3, crossed Strong Buy → Buy)</span></div>
+      <div class="delta-line"><span class="tag tag-derived">🧮</span>
+        Erosion <b>38 → 46</b> <span class="neg">("Softening" → "Eroding")</span></div>
+      <div class="delta-line"><span class="tag tag-analyst">🏦</span>
+        New analyst coverage saved 2026-09-15 (previously none)</div>
+      <div class="delta-line"><span class="tag tag-derived">🧮</span>
+        Regime: Risk-On → Risk-Off (neutral)</div>
+      <div class="baseline-note">Diffed against the immediately-prior review only. A field
+        that was uncomputed on either side (e.g. erosion not scored that day) is never
+        reported as a delta.</div>
+    </div>
+  </div>
+
+  <!-- ── example of the "not enough history yet" baseline state ── -->
+  <div class="expander" style="margin-top:14px;opacity:.8">
+    <div class="expander-head">
+      <span>▸ What changed since last review</span>
+    </div>
+    <div class="expander-body" style="display:block">
+      <div class="disclosed">Baseline captured — first change report after the next
+        review. (Shown for a ticker with only one review on record so far.)</div>
+    </div>
+  </div>
+
+  <div class="banner banner-note" style="margin-top:18px">
+    ℹ️ This page is a read-only consolidation of five features that already exist
+    elsewhere in the app (Thesis Authoring/Review, Red Team, Debate, Analyst Coverage,
+    Pre-Mortem). It reads the same rows those pages read — it never recomputes an
+    erosion score, a debate verdict, or a composite independently — and it never gates,
+    ranks, or suppresses a recommendation.
+  </div>
+
+  </div>
+</div>
+</div>
+</body>
+</html>

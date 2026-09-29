@@ -3079,6 +3079,7 @@ with st.sidebar:
             ("Analysis", "📈 Analysis",               ":material/trending_up:"),
             ("Compare",  "⚖️ Compare",                ":material/compare_arrows:"),
             ("Watchlist","📋 Watchlist",               ":material/bookmarks:"),
+            ("Thesis",   "🧵 Thesis",                  ":material/description:"),
             ("Macro",    "🌐 Macro",                    ":material/public:"),
             ("System Trust", "🩺 System Trust",        ":material/health_and_safety:"),
             ("App Settings", "⚙️ App Settings",        ":material/tune:"),
@@ -26231,6 +26232,356 @@ elif page == "📋 Watchlist":
                             if st.button("Cancel", key=f"_wl_del_no_{_ticker}"):
                                 st.session_state.pop(_del_key, None)
                                 st.rerun()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE — THESIS (Chunk A: read-only consolidation card)
+# ═════════════════════════════════════════════════════════════════════════════
+# Pulls together 5 already-shipped features into one per-ticker card:
+# Thesis Authoring/Review (F-1/F-5), Thesis Red Team, Multi-Agent Debate,
+# Analyst Coverage, Pre-Mortem. Computes NOTHING new — every value here is
+# read from the same rows/session-state those features already
+# produce/store; this page never gates, ranks, or recomputes a
+# score/verdict independently. All rendering below uses plain Streamlit
+# primitives (st.container/st.caption/st.markdown WITHOUT
+# unsafe_allow_html) since thesis text, pre-mortem commitments and LLM
+# narratives are free-form text — no HTML-escaping surface to review here
+# by construction. See docs/mockups/2026-09-29-thesis-card-mockup.html for
+# the approved layout and stock_analyzer/thesis_card.py for the pure
+# assembly logic.
+elif page == "🧵 Thesis":
+    _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
+    st.title("🧵 Thesis")
+    st.caption(
+        "Read-only consolidation of five features that already exist elsewhere "
+        "in the app (Thesis Authoring/Review, Red Team, Debate, Analyst "
+        "Coverage, Pre-Mortem). It reads the same rows those pages read — it "
+        "never recomputes an erosion score, a debate verdict, or a composite "
+        "independently — and it never gates, ranks, or suppresses a "
+        "recommendation."
+    )
+
+    from stock_analyzer import thesis_card as _tc
+
+    # Ticker universe = held ∪ watchlist (same pattern as 🔔 Catalyst Watch's
+    # "Tracked universe" build, minus the curated sector universe — this page
+    # only ever shows a ticker the owner already has a position or watchlist
+    # entry for).
+    _tc_watch = {str(t).upper() for t in st.session_state.get("watchlist", [])}
+    _tc_held_known = st.session_state.get("_last_held_tickers")
+    _tc_held = {str(t).upper() for t in (_tc_held_known or [])}
+    _tc_universe = sorted(_tc_held | _tc_watch)
+
+    if not _tc_universe:
+        st.info(
+            "No tickers to show yet — add a position or a watchlist entry to "
+            "use this page."
+        )
+    else:
+        _tc_sel = st.selectbox("Ticker", _tc_universe, key="_thesis_page_ticker")
+
+        st.caption(
+            f"{_tc.TAG_EMOJI[_tc.TAG_FACT]} fact &nbsp;&nbsp;"
+            f"{_tc.TAG_EMOJI[_tc.TAG_DERIVED]} derived &nbsp;&nbsp;"
+            f"{_tc.TAG_EMOJI[_tc.TAG_ANALYST]} analyst opinion &nbsp;&nbsp;"
+            f"{_tc.TAG_EMOJI[_tc.TAG_AI]} AI inference &nbsp;&nbsp;"
+            f"{_tc.TAG_EMOJI[_tc.TAG_USER]} your words"
+        )
+
+        # ── Gather already-fetched/already-computed data. No new computation
+        # happens below — every value is read from an existing cache, an
+        # existing db.py loader, or an existing session_state key. ──────────
+
+        # Position/composite header — reads the same _port_df_enriched every
+        # other page reads; None means Home hasn't built it this session yet
+        # (cold session), NOT "no position."
+        _tc_pdf = st.session_state.get("_port_df_enriched")
+        _tc_portfolio_loaded = _tc_pdf is not None
+        _tc_position_row = None
+        if _tc_pdf is not None and not _tc_pdf.empty:
+            _tc_prow = _tc_pdf[_tc_pdf["Ticker"] == _tc_sel]
+            if not _tc_prow.empty:
+                _tc_r = _tc_prow.iloc[0]
+                _tc_position_row = {
+                    "composite":      _tc_r.get("Score"),
+                    "shares":         _tc_r.get("Shares"),
+                    "unrealized_pct": _tc_r.get("P&L (%)"),
+                }
+
+        # Thesis + Pre-Mortem — same trade-lookup pattern AI Insights already
+        # uses (most recent BUY row for this ticker; thesis + premortem
+        # fields live on the same row).
+        _tc_trade_row = None
+        if "trades_df" in st.session_state and not st.session_state.trades_df.empty:
+            _tc_tdf = st.session_state.trades_df
+            _tc_buys = _tc_tdf[
+                (_tc_tdf["action"] == "BUY")
+                & (_tc_tdf["ticker"].astype(str).str.upper() == _tc_sel)
+            ].copy()
+            if not _tc_buys.empty:
+                _tc_buys["_sort_ts"] = pd.to_datetime(
+                    _tc_buys["traded_at"], errors="coerce", utc=True, format="ISO8601"
+                )
+                _tc_buys = _tc_buys.sort_values("_sort_ts", ascending=False)
+                _tc_brow = _tc_buys.iloc[0]
+                _tc_trade_row = {
+                    "user_thesis":                 _tc_brow.get("user_thesis"),
+                    "thesis_source":                _tc_brow.get("thesis_source"),
+                    "trade_date":                   str(_tc_brow.get("traded_at", ""))[:10],
+                    "premortem_case_against":       _tc_brow.get("premortem_case_against"),
+                    "premortem_commitment":         _tc_brow.get("premortem_commitment"),
+                    "premortem_trigger_price":      _tc_brow.get("premortem_trigger_price"),
+                    "premortem_trigger_direction":  _tc_brow.get("premortem_trigger_direction"),
+                }
+
+        # F-1 Thesis Review — most recent row for this ticker. Table already
+        # orders by reviewed_at desc, so the first matching row is newest.
+        _tc_review_df = db.load_thesis_reviews()
+        _tc_review_row = None
+        if not _tc_review_df.empty:
+            _tc_rev_t = _tc_review_df[
+                _tc_review_df["ticker"].astype(str).str.upper() == _tc_sel
+            ]
+            if not _tc_rev_t.empty:
+                _tc_review_row = _tc_rev_t.iloc[0].to_dict()
+
+        # Thesis Red Team — today's score only. None = not scored today
+        # (normal — only written when the owner opens the Red Team tab).
+        _tc_erosion = db.load_thesis_erosion_cache(_tc_sel, str(_today_et()))
+
+        # Multi-Agent Debate — most recent row across BOTH debate_types; a
+        # same-date tie prefers the exit debate, same priority rule the D3
+        # Signal Coherence Auditor already uses.
+        _tc_deb_df = db.load_debate_verdicts([_tc_sel])
+        _tc_debate_row = None
+        if not _tc_deb_df.empty:
+            _tc_deb_df = _tc_deb_df.copy()
+            _tc_deb_df["_priority"] = (_tc_deb_df["debate_type"] == "exit").astype(int)
+            _tc_deb_sorted = _tc_deb_df.sort_values(
+                by=["debate_date", "_priority"], ascending=[False, False]
+            )
+            _tc_top = _tc_deb_sorted.iloc[0]
+            _tc_debate_row = {
+                "verdict":     _tc_top.get("verdict"),
+                "debate_type": _tc_top.get("debate_type"),
+                "debate_date": _tc_top.get("debate_date"),
+            }
+            _tc_full = db.load_debate_cache(
+                _tc_sel, str(_tc_top.get("debate_type")), str(_tc_top.get("debate_date"))
+            )
+            if _tc_full:
+                _tc_debate_row["key_dispute"]     = _tc_full.get("key_dispute")
+                _tc_debate_row["bull_case_score"] = _tc_full.get("bull_case_score")
+                _tc_debate_row["bear_case_score"] = _tc_full.get("bear_case_score")
+
+        # Analyst Coverage — None (offline) / {} (checked, zero rows) /
+        # populated dict, three distinct states, never collapsed.
+        _tc_ac_df = db.load_analyst_coverage_or_none(ticker=_tc_sel, limit=1)
+        if _tc_ac_df is None:
+            _tc_analyst_row = None
+        elif _tc_ac_df.empty:
+            _tc_analyst_row = {}
+        else:
+            _tc_analyst_row = _tc_ac_df.iloc[0].to_dict()
+
+        _tc_card = _tc.assemble_thesis_card(
+            ticker=_tc_sel,
+            position_row=_tc_position_row,
+            trade_row=_tc_trade_row,
+            thesis_review_row=_tc_review_row,
+            erosion=_tc_erosion,
+            debate_row=_tc_debate_row,
+            analyst_row=_tc_analyst_row,
+            portfolio_loaded=_tc_portfolio_loaded,
+        )
+
+        # ── Disclosed tension banner (pure display, only when a real
+        # disagreement exists across the three independent readings) ───────
+        _tc_side = _tc.analyst_side_detailed(
+            _tc_analyst_row.get("consensus_rating") if _tc_analyst_row else None
+        )
+        _tc_composite = (
+            _tc_card["header"].get("composite") if _tc_card["header"].get("available") else None
+        )
+        _tc_f1_verdict = (
+            _tc_card["f1_review"].get("status") if _tc_card["f1_review"].get("available") else None
+        )
+        _tc_debate_verdict = (
+            _tc_card["debate"].get("verdict") if _tc_card["debate"].get("available") else None
+        )
+        _tc_tension = _tc.detect_tension(_tc_composite, _tc_side, _tc_f1_verdict, _tc_debate_verdict)
+        if _tc_tension:
+            st.warning(f"⚠️ Tension, disclosed: {_tc_tension}")
+
+        # ── Header: position + engine composite ─────────────────────────────
+        with st.container(border=True):
+            _tc_hdr = _tc_card["header"]
+            if _tc_hdr.get("available"):
+                _tc_hc1, _tc_hc2, _tc_hc3 = st.columns(3)
+                _tc_hc1.metric("Ticker", _tc_sel)
+                _tc_comp = _tc_hdr.get("composite")
+                _tc_hc2.metric(
+                    f"{_tc.TAG_EMOJI[_tc_hdr['composite_tag']]} Engine composite",
+                    f"{_tc_comp:.0f}" if _tc_comp is not None and pd.notna(_tc_comp) else "—",
+                )
+                _tc_shares = _tc_hdr.get("shares")
+                _tc_pnl = _tc_hdr.get("unrealized_pct")
+                _tc_hc3.metric(
+                    f"{_tc.TAG_EMOJI[_tc_hdr['shares_tag']]} Your position",
+                    f"{_tc_shares:.0f} sh" if _tc_shares is not None and pd.notna(_tc_shares) else "—",
+                    delta=f"{_tc_pnl:+.1f}%" if _tc_pnl is not None and pd.notna(_tc_pnl) else None,
+                )
+            else:
+                st.markdown(f"**Ticker:** {_tc_sel}")
+                st.caption(_tc_hdr.get("reason", ""))
+
+        # ── Your Thesis ───────────────────────────────────────────────────
+        with st.container(border=True):
+            st.markdown("**🖊 Your Thesis**")
+            _tc_th = _tc_card["thesis"]
+            if _tc_th.get("available"):
+                _tc_meta = []
+                if _tc_th.get("thesis_source"):
+                    _tc_meta.append(f"source: {_tc_th['thesis_source']}")
+                if _tc_th.get("trade_date"):
+                    _tc_meta.append(f"authored {_tc_th['trade_date']}")
+                if _tc_meta:
+                    st.caption(" · ".join(_tc_meta))
+                st.markdown(f"{_tc.TAG_EMOJI[_tc_th['tag']]} {_tc_th['text']}")
+            else:
+                st.caption(_tc_th.get("reason", ""))
+
+        # ── F-1 Thesis Review ────────────────────────────────────────────
+        with st.container(border=True):
+            st.markdown("**🤖 Thesis Review (F-1)**")
+            _tc_f1 = _tc_card["f1_review"]
+            if _tc_f1.get("available"):
+                _tc_rv_meta = str(_tc_f1.get("status") or "—")
+                if _tc_f1.get("reviewed_at"):
+                    _tc_rv_meta += f" · reviewed {str(_tc_f1['reviewed_at'])[:10]}"
+                st.caption(_tc_rv_meta)
+                if _tc_f1.get("summary"):
+                    st.markdown(f"{_tc.TAG_EMOJI[_tc_f1['summary_tag']]} {_tc_f1['summary']}")
+                st.caption(_tc_f1.get("note", ""))
+            else:
+                st.caption(_tc_f1.get("reason", ""))
+
+        # ── Red Team ──────────────────────────────────────────────────────
+        with st.container(border=True):
+            st.markdown("**🧮 Red Team**")
+            _tc_rt = _tc_card["red_team"]
+            if _tc_rt.get("available"):
+                st.caption(
+                    f"erosion {_tc_rt.get('erosion_score')}/100 · "
+                    f"\"{_tc_rt.get('erosion_label')}\" · scored today"
+                )
+                _tc_comps = _tc_rt.get("components")
+                if _tc_comps:
+                    st.markdown(
+                        f"{_tc.TAG_EMOJI[_tc_rt['components_tag']]} "
+                        f"Components — tier {_tc_comps.get('tier') or '—'} · "
+                        f"RS {_tc_comps.get('rs_vs_spy')} pp vs SPY · "
+                        f"Δcomposite {_tc_comps.get('comp_delta')} · "
+                        f"PT pts {_tc_comps.get('pt_pts')}"
+                    )
+                _tc_ce = _tc_rt.get("counter_evidence")
+                if isinstance(_tc_ce, list):
+                    if _tc_ce:
+                        for _tc_ce_item in _tc_ce:
+                            st.markdown(f"{_tc.TAG_EMOJI[_tc_rt['counter_evidence_tag']]} {_tc_ce_item}")
+                    else:
+                        st.caption("No grounded counter-evidence returned.")
+            else:
+                st.caption(_tc_rt.get("reason", ""))
+
+        # ── Debate ────────────────────────────────────────────────────────
+        with st.container(border=True):
+            st.markdown("**🤖 Debate**")
+            _tc_db = _tc_card["debate"]
+            if _tc_db.get("available"):
+                st.caption(
+                    f"{_tc_db.get('verdict') or '—'} · "
+                    f"{_tc_db.get('debate_type') or '—'} debate · "
+                    f"{_tc_db.get('debate_date') or '—'}"
+                )
+                if _tc_db.get("key_dispute"):
+                    st.markdown(
+                        f"{_tc.TAG_EMOJI[_tc_db['key_dispute_tag']]} "
+                        f"Key dispute: {_tc_db['key_dispute']}"
+                    )
+                if _tc_db.get("bull_case_score") is not None or _tc_db.get("bear_case_score") is not None:
+                    st.caption(
+                        f"bull {_tc_db.get('bull_case_score')} / "
+                        f"bear {_tc_db.get('bear_case_score')}"
+                    )
+            else:
+                st.caption(_tc_db.get("reason", ""))
+
+        # ── Analyst Coverage ─────────────────────────────────────────────
+        with st.container(border=True):
+            st.markdown("**🏦 Analyst Coverage**")
+            _tc_ac = _tc_card["analyst_coverage"]
+            if _tc_ac.get("available"):
+                if _tc_ac.get("article_date"):
+                    st.caption(f"saved {_tc_ac['article_date']}")
+                _tc_pt_val = _tc_ac.get("avg_pt")
+                st.markdown(
+                    f"{_tc.TAG_EMOJI[_tc_ac['consensus_tag']]} "
+                    f"{_tc_ac.get('consensus_rating') or '—'} · "
+                    f"avg PT {_tc_pt_val if _tc_pt_val is not None else '—'} "
+                    f"({_tc_ac.get('analysts') or '—'} firms)"
+                )
+                if _tc_ac.get("price_at_article_date") is not None:
+                    st.markdown(
+                        f"{_tc.TAG_EMOJI[_tc_ac['price_tag']]} "
+                        f"Price at article date: {_tc_ac['price_at_article_date']}"
+                    )
+            else:
+                st.caption(_tc_ac.get("reason", ""))
+
+        # ── Pre-Mortem (at entry) ────────────────────────────────────────
+        with st.container(border=True):
+            st.markdown("**🖊 Pre-Mortem (at entry)**")
+            _tc_pm = _tc_card["pre_mortem"]
+            if _tc_pm.get("available"):
+                if _tc_pm.get("trade_date"):
+                    st.caption(f"logged {_tc_pm['trade_date']}")
+                if _tc_pm.get("case_against"):
+                    _tc_pm_lbl = {
+                        "pillar":    "📊 Pillar concern",
+                        "portfolio": "📦 Portfolio impact",
+                        "macro":     "🌐 Macro / earnings",
+                    }
+                    for _tc_pmi in _tc_pm["case_against"]:
+                        if not isinstance(_tc_pmi, dict):
+                            continue
+                        _tc_pma = _tc_pmi.get("argument")
+                        if not _tc_pma:
+                            continue
+                        _tc_pml = _tc_pm_lbl.get(
+                            _tc_pmi.get("angle"), str(_tc_pmi.get("angle", "")).title()
+                        )
+                        st.markdown(f"{_tc.TAG_EMOJI[_tc_pm['case_against_tag']]} {_tc_pml}: {_tc_pma}")
+                if _tc_pm.get("commitment"):
+                    st.markdown(
+                        f"{_tc.TAG_EMOJI[_tc_pm['commitment_tag']]} "
+                        f"Your precommitment: {_tc_pm['commitment']}"
+                    )
+            else:
+                st.caption(_tc_pm.get("reason", ""))
+
+        # ── What changed since last review ───────────────────────────────
+        # Chunk A ships no diff logic — always the same static disclosed
+        # message. A real diff (THESIS_DELTA_COMPOSITE_PTS/
+        # THESIS_DELTA_EROSION_PTS) is a later, separately-reviewed chunk.
+        with st.expander("▸ What changed since last review", expanded=False):
+            st.caption(_tc.CHANGE_TRACKING_NOTE)
+
+        st.caption(
+            "ℹ️ This page is a read-only consolidation of five features that "
+            "already exist elsewhere in the app. It never gates, ranks, or "
+            "suppresses a recommendation."
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
