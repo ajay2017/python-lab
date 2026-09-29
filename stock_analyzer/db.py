@@ -2139,7 +2139,8 @@ def update_trade_realized_pnl(trade_id: int, realized_pnl: float,
 # ── Thesis Reviews (AI Insights — F-1) ───────────────────────────────────────
 
 _THESIS_REVIEW_COLS = ["id", "ticker", "trade_date", "reviewed_at",
-                       "status", "summary", "inputs_hash", "created_at"]
+                       "status", "summary", "inputs_hash", "created_at",
+                       "evidence_snapshot"]
 
 
 def load_thesis_reviews() -> pd.DataFrame:
@@ -2166,6 +2167,47 @@ def load_thesis_reviews() -> pd.DataFrame:
         return empty
 
 
+def load_thesis_reviews_or_none(ticker: "str | None" = None) -> "pd.DataFrame | None":
+    """Same query as load_thesis_reviews(), but distinguishes a genuine
+    zero-row result (returns an empty DataFrame) from a failed load --
+    missing credentials or a raised exception during the query (returns
+    None). load_thesis_reviews() itself cannot make this distinction (its
+    except branch returns the same empty DataFrame either way), which is
+    fine for its existing callers (cron_runner.py's weekly idempotency
+    check, thesis_advisor.already_reviewed_today -- both only care whether
+    a row exists, not whether "zero rows" means offline or genuinely none)
+    but unsafe for the 🧵 Thesis page (Chunk B), which must distinguish "DB
+    offline" from "no review on record yet for this ticker" rather than
+    collapsing both into the same disclosed reason -- the offline-sentinel-
+    collapse bug class.
+
+    load_thesis_reviews() itself is left completely unmodified by this
+    addition -- this is a new, additive sibling only.
+
+    Optional server-side `ticker` filter narrows to one ticker (case-
+    insensitive, matching the uppercase convention every writer already
+    saves) instead of the caller filtering client-side. Ordered by
+    reviewed_at desc, same as load_thesis_reviews().
+    """
+    empty = pd.DataFrame(columns=_THESIS_REVIEW_COLS)
+    if not has_db():
+        return None
+    try:
+        q = _client().table("thesis_reviews").select("*")
+        if ticker:
+            q = q.eq("ticker", ticker.strip().upper())
+        rows = q.order("reviewed_at", desc=True).execute().data
+        if not rows:
+            return empty
+        df = pd.DataFrame(rows)
+        for col in _THESIS_REVIEW_COLS:
+            if col not in df.columns:
+                df[col] = None
+        return df
+    except Exception:
+        return None
+
+
 def save_thesis_review(record: dict) -> bool:
     if is_readonly():
         return False
@@ -2175,6 +2217,37 @@ def save_thesis_review(record: dict) -> bool:
         _client().table("thesis_reviews").insert(record).execute()
         return True
     except Exception as e:
+        _err_str = str(e)
+        _low = _err_str.lower()
+        # Graceful degradation: evidence_snapshot (Chunk B — F-1 change-
+        # tracking foundation) may not exist yet in Supabase (DDL not
+        # applied). Mirrors save_trade()'s single-generation drop-and-retry
+        # pattern (~line 2074) — this table has exactly ONE optional column
+        # today, so save_recommendations()'s heavier _COL_GENERATIONS
+        # cascade (built for several independently-added columns) is not
+        # warranted here. Matches on the column name appearing in the error
+        # OR PostgREST's generic missing-column wording ("does not exist" /
+        # "could not find the" / PGRST204) — the same two signals
+        # save_recommendations()'s _col_missing() checks, since a bare
+        # substring match on the column name alone is not guaranteed to
+        # survive a future PostgREST wording change (see that function's
+        # own 2026-08-07 finding).
+        _optional = ("evidence_snapshot",)
+        _named_in_error = any(c in _err_str for c in _optional)
+        _generic_missing_col = (
+            "does not exist" in _low
+            or "could not find the" in _low
+            or "pgrst204" in _low
+        )
+        if (_named_in_error or _generic_missing_col) and any(c in record for c in _optional):
+            _to_drop = {c for c in _optional if c in record}
+            try:
+                _client().table("thesis_reviews").insert(
+                    {k: v for k, v in record.items() if k not in _to_drop}
+                ).execute()
+                return True
+            except Exception as e2:
+                e = e2
         from stock_analyzer import api_health as _ah
         _record_db_error(str(e)[:120])
         return False

@@ -119,6 +119,7 @@ REASON_NOT_HELD = (
 )
 REASON_NO_THESIS = "No thesis saved for this ticker's most recent buy."
 REASON_NO_REVIEW = "No thesis review on record for this ticker."
+REASON_REVIEW_OFFLINE = "Thesis review data unavailable — data offline"
 REASON_EROSION_NOT_SCORED = (
     "Erosion not computed today — open the Red Team tab (🧠 AI Insights) "
     "to score it."
@@ -186,6 +187,12 @@ def _assemble_thesis(trade_row: "dict | None") -> dict:
 
 
 def _assemble_f1_review(thesis_review_row: "dict | None") -> dict:
+    # Three-state contract, deliberately NOT collapsed (CLAUDE.md offline-
+    # sentinel rule), mirroring _assemble_analyst_coverage exactly: None =
+    # load failed/offline, {} = checked, zero rows (no review yet for this
+    # ticker), populated dict = a real saved thesis_reviews row.
+    if thesis_review_row is None:
+        return _unavailable(REASON_REVIEW_OFFLINE)
     if not thesis_review_row:
         return _unavailable(REASON_NO_REVIEW)
     return {
@@ -308,8 +315,10 @@ def assemble_thesis_card(
         `portfolio_loaded`).
     `trade_row`: the most recent BUY trade row for this ticker (thesis +
         pre-mortem fields live on the same row) or None.
-    `thesis_review_row`: the most recent thesis_reviews row for this ticker
-        or None.
+    `thesis_review_row`: None (load failed/offline), {} (checked, zero rows
+        for this ticker), or the most recent thesis_reviews row (a populated
+        dict) — three distinct states, never collapsed (same contract as
+        `analyst_row` below).
     `erosion`: today's thesis_erosion_cache row for this ticker, or None if
         not scored today (a normal, expected state — not an error).
     `debate_row`: the most recent debate_cache row (across both debate

@@ -26334,16 +26334,21 @@ elif page == "🧵 Thesis":
                     "premortem_trigger_direction":  _tc_brow.get("premortem_trigger_direction"),
                 }
 
-        # F-1 Thesis Review — most recent row for this ticker. Table already
-        # orders by reviewed_at desc, so the first matching row is newest.
-        _tc_review_df = db.load_thesis_reviews()
-        _tc_review_row = None
-        if not _tc_review_df.empty:
-            _tc_rev_t = _tc_review_df[
-                _tc_review_df["ticker"].astype(str).str.upper() == _tc_sel
-            ]
-            if not _tc_rev_t.empty:
-                _tc_review_row = _tc_rev_t.iloc[0].to_dict()
+        # F-1 Thesis Review — most recent row for this ticker. None (offline)
+        # / {} (checked, zero rows) / populated dict, three distinct states,
+        # never collapsed — same tri-state contract as Analyst Coverage below
+        # (Chunk B, closing the gap Chunk A deferred: the ambient
+        # load_thesis_reviews() + client-side filter this used to use
+        # couldn't tell "DB offline" from "no review for this ticker" apart).
+        # Table is already ordered by reviewed_at desc, so the first row is
+        # newest.
+        _tc_review_df = db.load_thesis_reviews_or_none(ticker=_tc_sel)
+        if _tc_review_df is None:
+            _tc_review_row = None
+        elif _tc_review_df.empty:
+            _tc_review_row = {}
+        else:
+            _tc_review_row = _tc_review_df.iloc[0].to_dict()
 
         # Thesis Red Team — today's score only. None = not scored today
         # (normal — only written when the owner opens the Red Team tab).
@@ -39420,6 +39425,50 @@ elif page == "🧠 AI Insights":
                                 if _result is None:
                                     st.error("AI review failed — LLM offline or API key invalid.")
                                 else:
+                                    # Chunk B evidence-snapshot capture (raw
+                                    # capture only — no diff logic here; Chunk C
+                                    # reads this back later). Only built once
+                                    # the review actually succeeded, so a
+                                    # failed/offline LLM call doesn't pay for
+                                    # the extra lookups below. Every field
+                                    # independently None-safe; reuses whatever's
+                                    # already cheaply in session_state/db this
+                                    # render — no new fetch is added just for
+                                    # this snapshot beyond what the sibling Red
+                                    # Team tab already does in this same page.
+                                    _snap_pdf = st.session_state.get("_port_df_enriched")
+                                    _snap_composite = None
+                                    if _snap_pdf is not None and not _snap_pdf.empty:
+                                        _snap_prow = _snap_pdf[_snap_pdf["Ticker"] == _ticker]
+                                        if not _snap_prow.empty:
+                                            _snap_composite = _snap_prow.iloc[0].get("Score")
+                                    _snap_erosion = _ai_db.load_thesis_erosion_cache(_ticker, str(_today_et()))
+                                    if _snap_erosion is None:
+                                        # load_thesis_erosion_cache's own contract already
+                                        # collapses "not scored today" and "offline" into the
+                                        # same None (see its docstring) -- an explicit `is
+                                        # None` check here (not `or {}`) avoids the
+                                        # OFFLINE_SENTINEL_COLLAPSE antipattern shape while
+                                        # preserving identical behavior: both cases correctly
+                                        # read as "erosion_score/erosion_label unknown" below,
+                                        # which build_snapshot treats as a normal, expected
+                                        # state, not an error.
+                                        _snap_erosion = {}
+                                    _snap_pt_snapshots_df = db.load_analyst_target_snapshots(days_back=15)
+                                    _snap_pt_signal = detect_pt_cut(_snap_pt_snapshots_df, _ticker)
+                                    _snapshot = _ta.build_snapshot(
+                                        evidence=_ev,
+                                        composite=_snap_composite,
+                                        erosion_score=_snap_erosion.get("erosion_score"),
+                                        erosion_label=_snap_erosion.get("erosion_label"),
+                                        pt_signal=_snap_pt_signal,
+                                        analyst_latest=(
+                                            {"latest_article_date": _ac_consensus.get("as_of"),
+                                             "consensus_rating": _ac_consensus.get("consensus_rating")}
+                                            if _ac_consensus else None
+                                        ),
+                                        regime=st.session_state.get("_market_tone_cache"),
+                                    )
                                     _trade_date = _trade_date_by_ticker.get(_ticker) or str(date.today())
                                     _saved = _ai_db.save_thesis_review({
                                         "ticker":      _ticker,
@@ -39428,6 +39477,7 @@ elif page == "🧠 AI Insights":
                                         "status":      _result["status"],
                                         "summary":     _result["summary"],
                                         "inputs_hash": _ta.inputs_hash(_ev_inputs),
+                                        "evidence_snapshot": _snapshot,
                                     })
                                     if _saved:
                                         st.success(f"Review saved — {_result['status']}")
@@ -39503,6 +39553,11 @@ elif page == "🧠 AI Insights":
                                             "status":      _ckpt_status,
                                             "summary":     f"[Earnings checkpoint {_er_rdate}] {_ckpt_rat}",
                                             "inputs_hash": f"earnings_{_er_rdate}",
+                                            # This checkpoint path (generate_earnings_thesis_update)
+                                            # has no evidence bundle computed at all — a deliberate,
+                                            # disclosed Chunk B gap, not a fabricated bundle built
+                                            # just to fill this field.
+                                            "evidence_snapshot": None,
                                         })
                                         if _saved_ckpt:
                                             st.success(f"Thesis updated to {_ckpt_status}.")

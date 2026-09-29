@@ -1933,8 +1933,20 @@ def _run_thesis(now_et, force: bool) -> int:
     _log(f"thesis: reviewing {len(buys_with_thesis)} position(s): "
          + ", ".join(buys_with_thesis["ticker"].astype(str).str.upper()))
 
+    # Chunk B evidence-snapshot capture: today's erosion score/label for
+    # every candidate in ONE round-trip (batch loader), not one call per
+    # ticker — mirrors the existing Home "Thesis Under Pressure" batching
+    # precedent (audit H9). Never raises; a missing/failed lookup degrades
+    # to {} and every ticker's own snapshot below reads None for
+    # erosion_score/erosion_label independently — one ticker's miss can
+    # never affect another's.
+    _snapshot_erosion = db.load_thesis_erosion_cache_batch(
+        buys_with_thesis["ticker"].astype(str).str.upper().tolist(), str(today)
+    )
+
     # Build positions list for batch review
     positions = []
+    snapshot_map: dict = {}
     for _, row in buys_with_thesis.iterrows():
         ticker = str(row["ticker"]).upper()
         # Bundle evidence via the shared extractor (same path as the app's
@@ -1973,11 +1985,47 @@ def _run_thesis(now_et, force: bool) -> int:
             ),
         })
 
+        # Chunk B evidence-snapshot capture (raw capture only — no diff
+        # logic here; Chunk C, separately built and reviewed, reads this
+        # back later). pt_signal and regime are deliberately left None in
+        # this cron lane: detect_pt_cut needs its own
+        # load_analyst_target_snapshots() fetch per ticker, and this lane
+        # has no live macro-regime computation reachable from
+        # headless_alert_engine._build_context — adding either would add
+        # new I/O cost/risk to a live protective cron lane for a Chunk-B
+        # nice-to-have snapshot field, out of scope for this chunk.
+        _erosion_row = _snapshot_erosion.get(ticker)
+        if _erosion_row is None:
+            # A missing ticker here already means "no scored row today" per
+            # load_thesis_erosion_cache_batch's own contract (which itself
+            # collapses "offline" and "nothing to report" into the same {}
+            # at the batch level -- see that function's docstring). An
+            # explicit `is None` check here (not `or {}`) avoids the
+            # OFFLINE_SENTINEL_COLLAPSE antipattern shape while preserving
+            # identical behavior -- this ticker's erosion fields correctly
+            # read as unknown/None below, independent of every other
+            # ticker's own lookup.
+            _erosion_row = {}
+        snapshot_map[ticker] = _ta.build_snapshot(
+            evidence=ev,
+            composite=held_data.get(ticker, {}).get("total"),
+            erosion_score=_erosion_row.get("erosion_score"),
+            erosion_label=_erosion_row.get("erosion_label"),
+            pt_signal=None,
+            analyst_latest=(
+                {"latest_article_date": _ac_cons_cron.get("as_of"),
+                 "consensus_rating": _ac_cons_cron.get("consensus_rating")}
+                if _ac_cons_cron else None
+            ),
+            regime=None,
+        )
+
     results = _ta.run_batch_review(positions, api_key=api_key)
     _log(f"thesis: LLM returned {len(results)} review(s).")
 
     saved = 0
     for rec in results:
+        rec["evidence_snapshot"] = snapshot_map.get(rec["ticker"])
         if db.save_thesis_review(rec):
             saved += 1
             _log(f"  {rec['ticker']}: {rec['status']} — saved.")

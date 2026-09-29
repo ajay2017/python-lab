@@ -484,6 +484,54 @@ def test_bundle_evidence_malformed_empty_bundle_degrades_gracefully():
     }
 
 
+# ─── build_snapshot (Chunk B — evidence-snapshot capture) ────────────────────
+
+def test_build_snapshot_all_none_gives_valid_schema_v1_never_raises():
+    snap = ta.build_snapshot(
+        evidence=None, composite=None, erosion_score=None, erosion_label=None,
+        pt_signal=None, analyst_latest=None, regime=None,
+    )
+    assert snap == {
+        "schema_v": 1,
+        "evidence": {"technical": {}, "fundamentals": {}, "news_headlines": []},
+        "composite": None,
+        "erosion_score": None,
+        "erosion_label": None,
+        "pt_signal": None,
+        "analyst": None,
+        "regime": None,
+    }
+
+
+def test_build_snapshot_each_field_populated_individually_preserved():
+    evidence = {"technical": {"rsi": 62.0}, "fundamentals": {"revenue_growth": 12.0},
+                "news_headlines": ["h1"]}
+    pt_signal = {"ticker": "AAPL", "direction": "cut", "pct_change": -0.08}
+    analyst_latest = {"latest_article_date": "2026-09-15", "consensus_rating": "Buy"}
+    snap = ta.build_snapshot(
+        evidence=evidence, composite=72.5, erosion_score=46.0,
+        erosion_label="Eroding", pt_signal=pt_signal,
+        analyst_latest=analyst_latest, regime="bull",
+    )
+    assert snap["schema_v"] == 1
+    assert snap["evidence"] == evidence
+    assert snap["composite"] == 72.5
+    assert snap["erosion_score"] == 46.0
+    assert snap["erosion_label"] == "Eroding"
+    assert snap["pt_signal"] == pt_signal
+    assert snap["analyst"] == analyst_latest
+    assert snap["regime"] == "bull"
+
+
+def test_build_snapshot_evidence_none_falls_back_to_empty_shape_not_none():
+    snap = ta.build_snapshot(
+        evidence=None, composite=80.0, erosion_score=None, erosion_label=None,
+        pt_signal=None, analyst_latest=None, regime=None,
+    )
+    assert snap["evidence"] == {"technical": {}, "fundamentals": {}, "news_headlines": []}
+    assert snap["composite"] == 80.0  # unaffected by the evidence fallback
+
+
 # ─── generate_earnings_thesis_update ─────────────────────────────────────────
 
 def test_generate_earnings_thesis_update_guards_no_anthropic_import():

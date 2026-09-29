@@ -116,6 +116,33 @@ def test_f1_review_populated():
     assert "reason" not in rv
 
 
+def test_f1_review_three_states_not_collapsed():
+    """Chunk B: offline (None) vs. checked-no-review-yet ({}) vs. a real
+    saved review row must be three distinct, correctly-labeled outcomes —
+    same tri-state contract as analyst_coverage below."""
+    offline = tc.assemble_thesis_card("NVDA", thesis_review_row=None)
+    assert offline["f1_review"]["available"] is False
+    assert offline["f1_review"]["reason"] == tc.REASON_REVIEW_OFFLINE
+
+    no_rows = tc.assemble_thesis_card("NVDA", thesis_review_row={})
+    assert no_rows["f1_review"]["available"] is False
+    assert no_rows["f1_review"]["reason"] == tc.REASON_NO_REVIEW
+
+    populated = tc.assemble_thesis_card(
+        "NVDA", thesis_review_row={
+            "status": "INTACT", "summary": "Thesis holds.",
+            "reviewed_at": "2026-09-28T10:00:00",
+        },
+    )
+    rv = populated["f1_review"]
+    assert rv["available"] is True
+    assert rv["status"] == "INTACT"
+    assert "reason" not in rv
+
+    # the two unavailable reasons must be genuinely different messages
+    assert offline["f1_review"]["reason"] != no_rows["f1_review"]["reason"]
+
+
 def test_red_team_populated_preserves_none_vs_empty_counter_evidence():
     erosion_no_counter = {
         "erosion_score": 46.0, "erosion_label": "Eroding",

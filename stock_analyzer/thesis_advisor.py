@@ -559,6 +559,43 @@ def bundle_evidence(bundle: dict) -> dict:
     }
 
 
+def build_snapshot(
+    evidence: "dict | None",
+    composite: "float | None",
+    erosion_score: "float | None",
+    erosion_label: "str | None",
+    pt_signal: "dict | None",
+    analyst_latest: "dict | None",
+    regime: "str | None",
+) -> dict:
+    """Assemble the evidence-snapshot dict persisted alongside a
+    thesis_reviews row (Chunk B — capture only). Chunk C, built and
+    reviewed separately, is what later reads this back and diffs it against
+    a newer snapshot to answer "what changed since last review" on the 🧵
+    Thesis page — nothing here compares, ranks, or interprets anything.
+
+    Pure, no I/O, never raises. Every field is independently None-safe, so a
+    thin/all-None call still returns a valid schema_v=1 dict rather than an
+    error — a position with no erosion score today, no PT-cut signal, no
+    saved analyst coverage, and no known regime is a normal, expected state,
+    not a partial failure.
+
+    `schema_v` lets Chunk C (or any future reader) branch on shape without
+    guessing from field presence alone — bump it if this shape ever changes
+    in a way a reader must know about.
+    """
+    return {
+        "schema_v": 1,
+        "evidence": evidence or {"technical": {}, "fundamentals": {}, "news_headlines": []},
+        "composite": composite,
+        "erosion_score": erosion_score,
+        "erosion_label": erosion_label,
+        "pt_signal": pt_signal,
+        "analyst": analyst_latest,
+        "regime": regime,
+    }
+
+
 # ── Phase 2 — Earnings Thesis Checkpoint ─────────────────────────────────────
 
 _EARNINGS_CHECKPOINT_PROMPT = """You are a disciplined portfolio analyst helping an investor check whether their investment thesis still holds after a quarterly earnings report.
