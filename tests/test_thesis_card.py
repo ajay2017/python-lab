@@ -202,7 +202,11 @@ def test_analyst_coverage_three_states_not_collapsed():
 
     populated = tc.assemble_thesis_card(
         "NVDA", analyst_row={
-            "consensus_rating": "Strong Buy", "avg_pt": 180.0, "analysts": 4,
+            "consensus_rating": "Strong Buy", "avg_pt": 180.0,
+            "analysts": [
+                {"firm": "Baird", "rating": "Buy", "price_target": 190},
+                {"firm": "Goldman Sachs", "rating": "Buy", "price_target": 170},
+            ],
             "article_date": "2026-09-15", "price_at_article_date": 171.20,
         },
     )
@@ -210,10 +214,25 @@ def test_analyst_coverage_three_states_not_collapsed():
     assert ac["available"] is True
     assert ac["consensus_rating"] == "Strong Buy"
     assert ac["avg_pt"] == 180.0
+    # the raw per-firm list must never reach the render layer directly --
+    # only a count (n_firms) does, so a firm's raw dict can't leak onto the
+    # card as literal text (the real bug this pins: a live screenshot showed
+    # "avg PT 370.0 ([{'firm': 'Bank of America', ...}] firms)" on screen).
+    assert ac["n_firms"] == 2
+    assert "analysts" not in ac
     assert "reason" not in ac
 
     # the two unavailable reasons must be genuinely different messages
     assert offline["analyst_coverage"]["reason"] != no_rows["analyst_coverage"]["reason"]
+
+
+def test_count_analysts_handles_json_string_and_bad_input():
+    assert tc._count_analysts([{"firm": "A"}, {"firm": "B"}]) == 2
+    assert tc._count_analysts([]) == 0
+    assert tc._count_analysts(None) == 0
+    assert tc._count_analysts('[{"firm": "A"}]') == 1
+    assert tc._count_analysts("not json") == 0
+    assert tc._count_analysts(4) == 0
 
 
 def test_pre_mortem_populated_and_missing():

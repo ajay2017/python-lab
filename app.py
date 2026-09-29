@@ -26530,16 +26530,26 @@ elif page == "🧵 Thesis":
                 if _tc_ac.get("article_date"):
                     st.caption(f"saved {_tc_ac['article_date']}")
                 _tc_pt_val = _tc_ac.get("avg_pt")
+                try:
+                    _tc_pt_str = f"${float(_tc_pt_val):.2f}" if _tc_pt_val is not None else "—"
+                except (TypeError, ValueError):
+                    _tc_pt_str = "—"
+                _tc_n_firms = _tc_ac.get("n_firms") or 0
+                _tc_firm_word = "firm" if _tc_n_firms == 1 else "firms"
                 st.markdown(
                     f"{_tc.TAG_EMOJI[_tc_ac['consensus_tag']]} "
                     f"{_tc_ac.get('consensus_rating') or '—'} · "
-                    f"avg PT {_tc_pt_val if _tc_pt_val is not None else '—'} "
-                    f"({_tc_ac.get('analysts') or '—'} firms)"
+                    f"avg PT {_tc_pt_str} "
+                    f"({_tc_n_firms} {_tc_firm_word})"
                 )
                 if _tc_ac.get("price_at_article_date") is not None:
+                    try:
+                        _tc_price_str = f"${float(_tc_ac['price_at_article_date']):.2f}"
+                    except (TypeError, ValueError):
+                        _tc_price_str = "—"
                     st.markdown(
                         f"{_tc.TAG_EMOJI[_tc_ac['price_tag']]} "
-                        f"Price at article date: {_tc_ac['price_at_article_date']}"
+                        f"Price at article date: {_tc_price_str}"
                     )
             else:
                 st.caption(_tc_ac.get("reason", ""))

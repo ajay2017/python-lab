@@ -250,6 +250,23 @@ def _assemble_debate(debate_row: "dict | None") -> dict:
     }
 
 
+def _count_analysts(raw) -> int:
+    """`analyst_coverage.analysts` is a jsonb list of one dict per firm — count
+    the firms, never render the raw list. Defensive against a JSON-string
+    payload (some Supabase client paths return jsonb as a string rather than
+    an already-deserialized list), mirroring the `_pj`/`_pj_cron` parse
+    helpers already used for this exact same column elsewhere in this
+    codebase (app.py's on-demand thesis review site, cron_runner.py's
+    `_run_thesis`)."""
+    if isinstance(raw, str):
+        import json
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return 0
+    return len(raw) if isinstance(raw, list) else 0
+
+
 def _assemble_analyst_coverage(analyst_row: "dict | None") -> dict:
     # Three-state contract, deliberately NOT collapsed (CLAUDE.md offline-
     # sentinel rule): None = load failed/offline, {} = checked, zero rows,
@@ -263,7 +280,7 @@ def _assemble_analyst_coverage(analyst_row: "dict | None") -> dict:
         "consensus_rating":       analyst_row.get("consensus_rating"),
         "consensus_tag":          tag_for("analyst_coverage", "consensus_rating"),
         "avg_pt":                 analyst_row.get("avg_pt"),
-        "analysts":               analyst_row.get("analysts"),
+        "n_firms":                _count_analysts(analyst_row.get("analysts")),
         "thesis":                 analyst_row.get("thesis"),
         "article_date":           analyst_row.get("article_date"),
         "price_at_article_date":  analyst_row.get("price_at_article_date"),
