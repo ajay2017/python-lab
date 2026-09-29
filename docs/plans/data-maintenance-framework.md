@@ -10,7 +10,15 @@
 - **Q3 — `account_flows` uniqueness confirmed exactly as `db.py`'s own comment claimed.** Two indexes: `account_flows_pkey` (`UNIQUE (id)`, the surrogate key only) and `account_flows_txn_id_unique` (`UNIQUE (snaptrade_txn_id) WHERE (snaptrade_txn_id IS NOT NULL)` — a **partial** index). A manually-entered flow always has `snaptrade_txn_id = NULL`, so it is structurally invisible to the only real uniqueness guard on this table. Nothing else stands in for it. **F2a confirmed as a genuine, currently-unguarded gap** — Decision 1's write-time dedup guard is free to add a new key without colliding with either existing index.
 - **Q4 — Decision 1's blast radius is trivial today.** 1 manual row, 0 broker-synced rows (the SnapTrade flow sync hasn't populated this table in this account yet), 0 existing duplicate groups. **No backfill/cleanup pass is needed alongside the write-time guard** — it's pure prevention going forward, not prevention-plus-remediation.
 
-**Net effect on Phase 1's scope:** F3 drops out entirely (closed, confirmed safe). F5 stays exactly as scoped (advisory-only forever). F2a (the `account_flows` gap) is now the single most concretely-confirmed finding in the whole document, and its fix (Decision 1) carries zero cleanup burden — only the key-definition choice remains open.
+**Net effect on Phase 1's scope:** F3 drops out entirely (closed, confirmed safe). F5 stays exactly as scoped (advisory-only forever). F2a (the `account_flows` gap) is now the single most concretely-confirmed finding in the whole document, and its fix (Decision 1, resolved below) carries zero cleanup burden.
+
+**Status (2026-09-28, all four owner decisions RESOLVED — Phase 1 is now fully scoped):**
+1. **`account_flows` dedup key** — exact match on `(flow_date, flow_type, amount, note)`, scoped to inserts within a short time window of an existing identical row (new constant `ACCOUNT_FLOW_DEDUP_WINDOW_SEC = 10`). Chosen specifically because the real risk is a double-click submitting the same form twice (near-simultaneous, identical in every field) — an unconditional-forever exact-match key would incorrectly block a genuinely repeated flow (e.g. two real $500 deposits made days apart), which this time-window scoping avoids.
+2. **Orphan-cache grace period** — `DATA_MAINT_ORPHAN_CACHE_GRACE_DAYS = 90`, matching the existing reference-shelf-life convention.
+3. **Detection-only observation window** — 8 weekly Saturday `_run_maintenance` runs (~2 months) of clean detection-only operation before F1's orphan-cache auto-remediation may ever be enabled. Tracked at build time via a dated trigger (e.g. a named constant holding the earliest-eligible date, set once Phase 1 actually ships and its first clean run is confirmed) rather than a runtime counter — simpler and matches how this repo's other gated-phase triggers are recorded (dated notes in `docs/plans/*.md`, not application state).
+4. **Trend-tracking table** — **no**, not in Phase 1. Findings ride the existing cron log + a new System Trust check. Revisit only as an optional, separately-approved Phase 3 if longitudinal trend data later turns out to matter.
+
+**Nothing built yet — these are the resolved inputs Phase 1's implementation will use.** New constants (`ACCOUNT_FLOW_DEDUP_WINDOW_SEC`, `DATA_MAINT_ORPHAN_CACHE_GRACE_DAYS`) still need to be walked through with the owner at actual write time per Hard Rule #1 (already effectively done here, but the values must be transcribed into `constants.py` + `docs/architecture.md`'s constants table at build time, not assumed to already exist).
 
 **Status (2026-09-28, Phase 0 started):** SQL verification pack written — `docs/sql/data-maintenance-phase0.sql`, 4 read-only queries (Q1: PK/unique constraints on the 6 bare-`.upsert()` tables named in F3; Q2: confirm zero FK constraints exist anywhere, scoping F5; Q3: the real `account_flows` index situation; Q4: manual-row count + existing-duplicate check on `account_flows`). Owner runs these in the Supabase SQL editor and pastes results back — a coding session has no DB credentials, same boundary as every other SQL pack in this repo (`docs/plans/data-integrity.md`'s Step 0). Nothing else started.
 
@@ -76,12 +84,14 @@ Of the 7 categories requested, only ~2.5 have a real, evidenced finding. Stating
 
 ---
 
-## Four owner decisions needed before Phase 0
+## Four owner decisions — RESOLVED 2026-09-28
 
-1. **`account_flows` (F2a) — fix at write-time, or detect after the fact?** Recommended: **both** — a real dedup guard on `add_account_flow` (the actual fix, since it prevents the double-count rather than reporting it after a figure is already skewed) plus a periodic detector as backstop for rows already in the table. Open question: what's the dedup key for a *manual* entry (no `snaptrade_txn_id` to key on)? Candidate: `(flow_date, flow_type, amount, note)` — but a genuine same-day, same-amount deposit should probably still be allowed. **This is a UX/policy call, not an engineering one.**
-2. **Orphan-cache grace period (F1).** How many days unused + not-in-any-roster before a cache row counts as orphaned? Proposed default: 90 days (matching the existing reference-shelf-life convention already used elsewhere), as a new named constant — but the number is the owner's to set, same as every other threshold in this repo.
-3. **Detection-only observation window.** How long should the framework run in report-only mode, with zero deletion, before *any* auto-remediation (even F1) is ever enabled?
-4. **Longitudinal trend tracking — worth a new table?** A `data_quality_findings` table is the only thing that would let the owner answer "is data quality improving month over month?" It also runs against this app's own repeatedly-stated caution about adding a table when nothing similar exists yet. Default: **no**, not in Phase 1 — findings ride the existing cron log + a System Trust check instead. Revisit as an optional Phase 3 only if trend data is actually wanted.
+1. ~~**`account_flows` (F2a) — fix at write-time, or detect after the fact?**~~ **RESOLVED: both**, with the dedup key set to **exact match on `(flow_date, flow_type, amount, note)`, scoped to a short time window** (`ACCOUNT_FLOW_DEDUP_WINDOW_SEC = 10`) of an existing identical row — not an unconditional-forever exact match, so a genuinely repeated flow entered days apart is never blocked. Phase 0 confirmed the blast radius is trivial (1 manual row, 0 existing duplicates), so no backfill/cleanup pass is needed alongside the guard.
+2. ~~**Orphan-cache grace period (F1).**~~ **RESOLVED: 90 days**, new constant `DATA_MAINT_ORPHAN_CACHE_GRACE_DAYS = 90` — matches the existing reference-shelf-life convention.
+3. ~~**Detection-only observation window.**~~ **RESOLVED: 8 weekly Saturday runs (~2 months)** of clean detection-only operation before F1's auto-remediation may be enabled — tracked via a dated trigger recorded once Phase 1 ships and its first clean run is confirmed, not a runtime counter.
+4. ~~**Longitudinal trend tracking — worth a new table?**~~ **RESOLVED: no**, not in Phase 1. Findings ride the existing cron log + a new System Trust check. Revisit only as an optional, separately-approved Phase 3 if trend data later turns out to matter.
+
+**Phase 1 is now fully scoped and unblocked.**
 
 ---
 
@@ -127,7 +137,7 @@ Of the 7 categories requested, only ~2.5 have a real, evidenced finding. Stating
 
 - ~~**Phase 0 — owner-run, no app code.**~~ **DONE 2026-09-28.** Confirmed the actual Postgres PK/FK constraints on the 6 bare-`.upsert()` tables (closed F3, no fix needed) and the real `account_flows` uniqueness situation (confirmed F2a's gap is real, with trivial current blast radius — 1 manual row, 0 duplicates). See the top status line for full results.
 - **Phase 1 — the detection-only framework.** New `stock_analyzer/data_maintenance.py` (check registry: F1, F2a/b/c, F4; F3 report-only if Phase 0 warrants), the protected-table allowlist, offline-sentinel discipline, full test coverage per above. Wired into (a) an isolated sub-job in `_run_maintenance`, (b) `system_health.check_data_quality()`. No remediation, no new table. New constants named + constants-doc-synced. `db.py`/`cron_runner.py`/`system_health.py` are `_GATE_FILES` → mandatory Opus `reviewer` citation.
-- **Phase 1b (parallel, small, high-value)** — the `add_account_flow` write-time dedup guard (Decision 1), once the key is chosen. `db.py` change → Opus reviewer required.
+- **Phase 1b (parallel, small, high-value)** — the `add_account_flow` write-time dedup guard, key resolved (Decision 1: `(flow_date, flow_type, amount, note)` within `ACCOUNT_FLOW_DEDUP_WINDOW_SEC`). `db.py` change → Opus reviewer required.
 - **Phase 2 — gated.** Enable F1's auto-remediation only after Phase 1 has run clean for the approved observation window (Decision 3). Owner-invoked-with-confirm first; auto-on-Saturday only if the owner then separately approves it. `db.py` delete path → Opus reviewer required.
 - **Phase 3 — optional, only if Decision 4 = yes.** A `data_quality_findings` trend-tracking table. Own DDL, own `db.py` write path, own mandatory Opus review. Not built speculatively.
 
