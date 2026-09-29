@@ -3095,6 +3095,38 @@ Supabase (same convention as every other optional table in this file) — until 
 no-ops and `load` returns `None`, and both the cron step and the readout page degrade to a
 logged no-op / "not enough data yet" state, never a crash or a fabricated zero.
 
+### 6.50 `etf_lookthrough_cache` table
+
+```sql
+CREATE TABLE IF NOT EXISTS public.etf_lookthrough_cache (
+    ticker     text PRIMARY KEY,
+    payload    jsonb,
+    updated_at timestamptz
+);
+alter table public.etf_lookthrough_cache enable row level security;
+drop policy if exists "Allow all (service role)" on public.etf_lookthrough_cache;
+create policy "Allow all (service role)" on public.etf_lookthrough_cache
+    for all to service_role using (true) with check (true);
+```
+
+ETF/multi-asset Phase 3a (F-282, 2026-09-27) — persistent cache for a held ETF's real sector
+look-through + top-~10 holdings, sourced from `stock_analyzer/data.py::fetch_etf_lookthrough()`
+(`yfinance`'s `funds_data` API). One row per ticker, upserted on `ticker` via
+`stock_analyzer/db.py::save_etf_lookthrough_cache()`; read via `load_etf_lookthrough_cache()`,
+which returns `None` on any failure — a cache miss or offline DB falls through to a live
+re-fetch, never a crash. Cache-checked **first** (`bundle_loader.load_bundle`), valid for
+`ETF_LOOKTHROUGH_CACHE_MAX_AGE_DAYS` (30 days) — the opposite order from
+`FUNDAMENTALS_CACHE_MAX_AGE_DAYS`'s live-first pattern, since a fund's sector composition
+moves far more slowly than a stock's fundamentals. Awareness-only — feeds
+`portfolio.real_sector_exposure_with_lookthrough()`, never the hard `SECTOR_CEILING` gate.
+**RLS gap found + fixed 2026-09-29:** the DDL as originally applied 2026-09-27
+(`docs/plans/etf-multi-asset-support.md:731-740`) omitted the `enable row level security` +
+policy lines present on every other table in this file, flagged by a Supabase security-linter
+alert ("RLS Disabled in Public") two days later. This section — the table's first entry in
+this catalog — and the plan doc's own DDL fence were both corrected same day; the corrected
+SQL above still needs to be re-run by hand in Supabase (`alter table` on an already-RLS-enabled
+table is idempotent; `drop policy if exists` makes the policy line safe to re-run too).
+
 Persisted via `stock_analyzer/db.py::save_rec_events(rows)`; read via `load_rec_events()`,
 which returns `None` (never `[]`) on any read failure — this offline-sentinel contract is
 load-bearing, since the whole feature's point is distinguishing "ledger genuinely empty"

@@ -738,7 +738,13 @@ CREATE TABLE IF NOT EXISTS public.etf_lookthrough_cache (
     payload    jsonb,
     updated_at timestamptz
 );
+alter table public.etf_lookthrough_cache enable row level security;
+drop policy if exists "Allow all (service role)" on public.etf_lookthrough_cache;
+create policy "Allow all (service role)" on public.etf_lookthrough_cache
+    for all to service_role using (true) with check (true);
 ```
+
+**2026-09-29 correction:** the DDL as originally applied 2026-09-27 (above, minus the three RLS lines) omitted the RLS statements entirely, which a Supabase security-linter alert ("RLS Disabled in Public") caught two days later — the table was reachable via the anon/publishable key with no policy denying it. The three lines above are now part of this fence (matching every other table's convention, `docs/architecture.md:891`) and still need to be **run by hand in Supabase** — no agent has live production credentials, same as the original DDL. This table also never got its own `### 6.5x` entry in `docs/architecture.md`'s central schema catalog (§6) — unlike every sibling table — which is likely why the missing RLS wasn't caught by the doc-template pattern other tables get; fixed same day as `### 6.50`.
 
 Before this was applied, `load_etf_lookthrough_cache`/`save_etf_lookthrough_cache`
 degraded to `None`/`False` (the `_client().table("etf_lookthrough_cache")` call
