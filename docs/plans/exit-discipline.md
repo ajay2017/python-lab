@@ -4,7 +4,7 @@
 - Phase 1 (3-tier WATCH/TRIM/EXIT deterioration): SHIPPED.
 - Phase 2 (risk-off de-risk): SHIPPED 2026-06-23.
 - Phase 3 (email cron protective alerts): SHIPPED 2026-06-24 (commits `9add28f`→`cb37862`; own plan `email-alerts-cron.md`).
-- **PARKED:** deterioration-card hysteresis — needs a new policy constant + day-over-day state; revisit only if a flicker is actually observed (see body note below).
+- **PARKED (re-analyzed 2026-09-29, verdict unchanged — DO NOT BUILD yet):** deterioration-card hysteresis — see body note below for the full analysis. Re-park trigger changed from "someone eyeballs a flicker" to "a measured flicker rate" (Phase 0.5, not yet built).
 - **DEFERRED:** Action Log Phase B (log the trim/exit UI).
 
 Approved 2026-06-22 (Phase 1 scope, user-chosen). Trigger = drawdown-from-peak + trend break, 3-tier WATCH/TRIM/EXIT.
@@ -193,10 +193,23 @@ whipsaw/taxes. Most risk stays managed at entry (sizing + concentration caps).
   sector-overlay selection (names in the leading-down sectors) — **DEFERRED**.
 - ~~**Phase 3** — out-of-app email alerts (GitHub Actions cron)~~ — **SHIPPED 2026-06-24** (see `email-alerts-cron.md`).
 - No auto-execution — directives only; the user decides.
-- **Hysteresis** on deterioration cards — **PARKED** until a flicker is actually
-  observed. NOT a simple UX polish: requires a new policy constant (asymmetric
-  clear-band buffer → `constants.py`, a policy decision to set with the user) and
-  per-ticker day-over-day tier state (none today — cards recompute each run). Do
-  not build without triggering observation + explicit user discussion.
+- **Hysteresis on deterioration cards — RE-ANALYZED 2026-09-29 (owner re-ask, not an observed flicker). Opus `planner` verdict: DO NOT BUILD the stateful mechanism yet; build a cheap measurement instead.**
+
+  **The old "per-ticker day-over-day tier state (none today)" premise is FALSE — corrected here.** `cron_runner.py::_run_premarket` (lines ~366-399) has captured one `exit_signals` row per fired tier per ticker per trading day, unconditionally, since 2026-07-21 (`db.save_exit_signals_batch`, idempotent on `(ticker, signal_date, signal_type)`) — `stock_analyzer/exit_velocity.py` already reads this exact table for a different purpose (WATCH-tier deterioration-velocity detection). **The data gap is closed. It just doesn't create a need to build the mechanism** — that's a separate question, and the planner's re-analysis answered it "not yet."
+
+  **Why NOT to build it now, even with data available:** TRIM/EXIT are already heavily damped (the 2-of-3-below-MA confirmation is itself two-sided trend hysteresis; the deep-EXIT shortcut needs a 12%+ swing, not ordinary noise) — and the trailing-peak mechanic itself (`peak = close.tail(window).max()`, sticky upward) is *already* a free asymmetric clear-band on `dd_from_peak_pct`, which the original 2026-06-28 parking note never credited. That leaves only **WATCH** (awareness-only, lowest stakes) as plausibly flicker-prone. Against that speculative, low-stakes upside: building stateful hysteresis touches `exit_advisor.py`+`daily_briefing.py` (both `_GATE_FILES`, mandatory Opus review) and needs a new owner-approved constant — real cost to fix a toggle nobody has reported in 3+ months.
+
+  **What to build instead (Phase 0.5, not yet built, mechanical/no-review-needed):** `scripts/deterioration_flicker_scan.py`, a read-only diagnostic (sibling to `exit_ladder_replay.py`/`exit_early_cost_analysis.py`) that measures the REAL flicker rate per tier from the existing `exit_signals` history, cross-checked against `cron_heartbeat` so an outage day is never miscounted as "confirmed clear." Turns the re-park trigger from "eyeball it" into "measured rate" — same discipline as Entry Timing's n=20 gate.
+
+  **Contingent mechanism spec, fully worked out so it doesn't need re-designing IF Phase 0.5 ever shows real flicker** (Phase 1, needs its own explicit go-ahead + Opus review):
+  - Extend the pure `classify_deterioration_tier` with an additive `prev_tier: str | None = None` param — default reproduces today's behavior exactly (existing callers, e.g. `candidate_deterioration_flag`, untouched).
+  - Buffer applies ONLY to the `dd_from_peak_pct` comparison (not the discrete legs — those already have their own damping): `dd >= (arm_T − DETERIORATION_CLEAR_BUFFER_PCT)` when `prev_tier` is at or above `T`. Proposed default `DETERIORATION_CLEAR_BUFFER_PCT = 1.5` (percentage points) — **not final, owner sign-off required per Hard Rule #1**.
+  - Scope to **WATCH only** (recommended) — narrowest, can never suppress an Act-Today call. Widen to TRIM only if Phase 0.5 shows TRIM-specific flicker.
+  - **Deep-EXIT shortcut explicitly EXEMPTED** — a 12%+ swing doesn't flicker, and stickiness there would just create stale urgency after real danger has passed.
+  - The impure `prev_tier` resolver lives in a NEW module (`stock_analyzer/deterioration_hysteresis.py`), deliberately outside `exit_advisor.py`'s pure core and outside the `_GATE_FILES` review surface where possible — resolves a 3-state result (ACTIVE / CLEAR / UNKNOWN) from `exit_signals` + `cron_heartbeat`, never collapsing `None`→CLEAR.
+  - **Unknown-yesterday-state → treat as "was active" (sticky).** Safe specifically because the buffer only ever makes a tier MORE persistent, never less — structurally incapable of manufacturing a false all-clear even under a data gap. The **monotonic-stickiness invariant** (`classify_deterioration_tier(prev_tier=X)` never returns a weaker result than `prev_tier=None` for identical inputs) is the load-bearing safety property and needs its own test, not just this reasoning.
+  - Required test invariants (Phase 1): the monotonic-stickiness invariant; exact buffer-edge boundaries (at `arm`, at `arm − buffer + ε`, at `arm − buffer − ε`, both with and without `prev_tier`); deep-EXIT non-stickiness (clears immediately once `dd` recovers, no lag); settling-grace still wins over the buffer for a young position; the data-gap fail-safe under all three UNKNOWN triggers; the resolver's offline-sentinel contract; byte-for-byte backward compatibility with `prev_tier=None`.
+
+  Full design session: Opus `planner` pass, 2026-09-29 (memory `project_exit_discipline`'s 2026-09-29 entry has the complete reasoning). Do not re-derive this design from scratch on a future pickup — it's already fully specified above; only Phase 0.5's measurement result determines whether Phase 1 is worth building at all.
 - ~~**Material-add re-anchor wiring** (Phase 1.1)~~ — SHIPPED (see above).
 - Action Log Phase B (log the trim/exit, stop re-nagging) — **DEFERRED**.
