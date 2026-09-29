@@ -257,6 +257,39 @@ def test_analyst_coverage_none_is_unknown_not_ok(monkeypatch):
     assert rows[0]["severity"] == "unknown"
 
 
+def test_analyst_coverage_does_not_flag_same_text_different_firms(monkeypatch):
+    """Real production finding (2026-09-28, first live run): the D9-confirmed
+    legitimate multi-firm-per-article case can ALSO share IDENTICAL raw_text
+    (one extraction emits one row per firm, same source text) -- grouping on
+    raw_text alone re-flagged this exact already-closed population (e.g.
+    CRCL 2026-08-03: TD Cowen vs Morgan Stanley). `analysts` must be part of
+    the key so two rows differing only in firm/rating/target are never
+    flagged, even with byte-identical raw_text."""
+    df = pd.DataFrame([
+        {"ticker": "CRCL", "article_date": "2026-08-03", "raw_text": "same source article",
+         "analysts": [{"firm": "TD Cowen", "rating": "Buy", "price_target": 82}]},
+        {"ticker": "CRCL", "article_date": "2026-08-03", "raw_text": "same source article",
+         "analysts": [{"firm": "Morgan Stanley", "rating": "Underweight", "price_target": 38}]},
+    ])
+    monkeypatch.setattr(db, "load_analyst_coverage_or_none", lambda **kw: df)
+    rows = dm.check_analyst_coverage_duplicates()
+    assert rows[0]["severity"] == "ok"
+
+
+def test_analyst_coverage_flags_same_text_and_same_firm(monkeypatch):
+    """The genuine accidental-re-paste case: SAME text, SAME firm/rating --
+    an exact match on every field, not just raw_text -- must still flag."""
+    df = pd.DataFrame([
+        {"ticker": "AAPL", "article_date": "2026-09-01", "raw_text": "same source article",
+         "analysts": [{"firm": "Goldman", "rating": "Buy", "price_target": 250}]},
+        {"ticker": "AAPL", "article_date": "2026-09-01", "raw_text": "same source article",
+         "analysts": [{"firm": "Goldman", "rating": "Buy", "price_target": 250}]},
+    ])
+    monkeypatch.setattr(db, "load_analyst_coverage_or_none", lambda **kw: df)
+    rows = dm.check_analyst_coverage_duplicates()
+    assert rows[0]["severity"] == "warn"
+
+
 # ── check 4 — thesis_reviews duplicates (F2c) ────────────────────────────────
 
 def test_thesis_reviews_flags_identical_inputs_hash(monkeypatch):
@@ -277,6 +310,37 @@ def test_thesis_reviews_does_not_flag_two_null_hash_rows(monkeypatch):
     monkeypatch.setattr(db, "load_thesis_reviews", lambda: df)
     rows = dm.check_thesis_reviews_duplicates()
     assert rows[0]["severity"] == "ok"
+
+
+def test_thesis_reviews_does_not_flag_earnings_checkpoint_marker(monkeypatch):
+    """Real production finding (2026-09-28, first live run): app.py's
+    earnings-checkpoint save_thesis_review call site writes a deliberately
+    coarse inputs_hash literal, f"earnings_{report_date}" -- NOT a content
+    hash -- so every genuine, distinct earnings-checkpoint review of the
+    SAME report shares it by design. Grouping on it flagged 24 tickers'
+    worth of entirely legitimate reviews. Must never flag rows whose
+    inputs_hash carries this marker prefix, however many share it."""
+    df = pd.DataFrame([
+        {"ticker": "V", "inputs_hash": "earnings_2026-08-15"},
+        {"ticker": "V", "inputs_hash": "earnings_2026-08-15"},
+        {"ticker": "V", "inputs_hash": "earnings_2026-08-15"},
+    ])
+    monkeypatch.setattr(db, "load_thesis_reviews", lambda: df)
+    rows = dm.check_thesis_reviews_duplicates()
+    assert rows[0]["severity"] == "ok"
+
+
+def test_thesis_reviews_still_flags_a_genuine_repeated_content_hash(monkeypatch):
+    """Regression guard for the fix above: a genuine 16-hex-char content
+    hash (the manual "Review Thesis" path's real format) repeated for the
+    same ticker must still flag -- only the "earnings_" marker is excluded."""
+    df = pd.DataFrame([
+        {"ticker": "MSFT", "inputs_hash": "a1b2c3d4e5f6a7b8"},
+        {"ticker": "MSFT", "inputs_hash": "a1b2c3d4e5f6a7b8"},
+    ])
+    monkeypatch.setattr(db, "load_thesis_reviews", lambda: df)
+    rows = dm.check_thesis_reviews_duplicates()
+    assert rows[0]["severity"] == "warn"
 
 
 # ── check 5 — pending broker imports (F4) ────────────────────────────────────

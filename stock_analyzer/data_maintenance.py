@@ -242,11 +242,23 @@ def check_account_flows_duplicates() -> "list[dict]":
 # ── Check 3 — analyst_coverage duplicates (F2b) ──────────────────────────────
 def check_analyst_coverage_duplicates() -> "list[dict]":
     """F2b — flag-for-review only, forever (never auto-merged). Groups by
-    (ticker, article_date, raw_text) and flags a group with 2+ rows as a
-    likely accidental duplicate paste of the SAME article. Two rows sharing
-    only (ticker, article_date) with DIFFERENT raw_text are the legitimate
-    multi-firm-per-article case (confirmed by docs/plans/data-integrity.md's
-    D9 investigation) and are never flagged.
+    (ticker, article_date, raw_text, analysts) and flags a group with 2+
+    rows as a likely accidental duplicate paste of the SAME article BY THE
+    SAME FIRM(S). `analysts` (a list[dict] of firm/rating/price_target) is
+    part of the key, not just raw_text — a live production finding
+    (2026-09-28, first real run of this check) caught a real bug in the
+    original design: docs/plans/data-integrity.md's D9 investigation found
+    the legitimate multi-firm-per-article case can ALSO share IDENTICAL
+    raw_text (one article extraction emits one row per firm mentioned,
+    split by firm, so two rows for the SAME article can have the SAME
+    source text and DIFFERENT analyst content) — grouping on raw_text alone
+    re-flagged that exact already-closed D9 population (e.g. CRCL
+    2026-08-03: TD Cowen vs Morgan Stanley, same article, different firms)
+    as false-positive "duplicates". Two rows sharing (ticker, article_date,
+    raw_text) but with DIFFERENT `analysts` content are the legitimate
+    multi-firm case and are never flagged — only an EXACT match on all four
+    fields (the same firm's same rating extracted from the same text twice)
+    is a genuine accidental re-paste.
 
     IMPORTANT null-safety note (a documented, previously-hit mistake in this
     repo — see D9's "process note"): a row is only ever compared when its
@@ -264,6 +276,7 @@ def check_analyst_coverage_duplicates() -> "list[dict]":
     """
     from stock_analyzer import db
     import pandas as pd
+    import json
 
     key, label = "analyst_coverage_duplicates", "Duplicate analyst_coverage pastes"
     df = db.load_analyst_coverage_or_none(ticker=None, days=None, limit=None)
@@ -281,10 +294,18 @@ def check_analyst_coverage_duplicates() -> "list[dict]":
             raw = row.get("raw_text")
             if pd.isna(raw) or not str(raw).strip():
                 continue  # NULL/empty raw_text never matches anything — the COALESCE trap
+            # `analysts` is part of the key (see docstring) so two rows from
+            # the SAME article but DIFFERENT firms (identical raw_text, by
+            # design) are never conflated with a genuine re-paste.
+            try:
+                analysts_key = json.dumps(row.get("analysts"), sort_keys=True, default=str)
+            except (TypeError, ValueError):
+                analysts_key = repr(row.get("analysts"))
             gk = (
                 str(row.get("ticker") or "").strip().upper(),
                 str(row.get("article_date") or ""),
                 str(raw),
+                analysts_key,
             )
             groups[gk] = groups.get(gk, 0) + 1
 
@@ -316,6 +337,20 @@ def check_thesis_reviews_duplicates() -> "list[dict]":
     inputs_hash on both sides are ever compared (same null-safety rule as
     check 3 — a NULL inputs_hash never matches another NULL).
 
+    EXCLUDES the earnings-checkpoint write path's `inputs_hash` values
+    (literally `f"earnings_{report_date}"`, app.py's second
+    `save_thesis_review` call site) from the duplicate population — a live
+    production finding (2026-09-28, first real run of this check) caught a
+    real bug in the original design: unlike the manual "Review Thesis" path's
+    genuine content hash (`thesis_advisor.inputs_hash()`, a 16-hex-char
+    sha256 digest), the earnings-checkpoint key is a DELIBERATELY coarse,
+    non-unique marker (ticker + report date only) — every real, distinct
+    earnings-checkpoint review of the SAME report shares it BY DESIGN, so
+    grouping on it flagged 24 tickers' worth of entirely legitimate reviews
+    as false-positive "duplicates". Recognized by the literal `"earnings_"`
+    prefix (`thesis_advisor.inputs_hash()` only ever emits lowercase hex, so
+    this is unambiguous, not a fragile guess).
+
     Same LIMITATION as check 3: `db.load_thesis_reviews()` collapses a read
     failure to the same empty DataFrame as "genuinely no rows yet" — no
     offline-sentinel distinction is available here either.
@@ -332,7 +367,10 @@ def check_thesis_reviews_duplicates() -> "list[dict]":
             ih = row.get("inputs_hash")
             if pd.isna(ih) or not str(ih).strip():
                 continue
-            gk = (str(row.get("ticker") or "").strip().upper(), str(ih))
+            ih = str(ih)
+            if ih.startswith("earnings_"):
+                continue  # deliberately coarse checkpoint marker, not a content hash
+            gk = (str(row.get("ticker") or "").strip().upper(), ih)
             groups[gk] = groups.get(gk, 0) + 1
 
     dupes = {k: v for k, v in groups.items() if v >= 2}
