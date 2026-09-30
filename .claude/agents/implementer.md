@@ -16,8 +16,12 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 # caught. A full ID does not auto-update — the tradeoff is that this line must
 # be bumped by hand when a newer Sonnet ships, which is the correct direction
 # for a project that would rather be stale-and-known than newer-and-unverified.
-# Bumped claude-sonnet-5 -> claude-sonnet-5-5 on 2026-09-30 (owner decision).
-model: claude-sonnet-5-5
+# 2026-09-30: bumped to claude-sonnet-5-5, then REVERTED the same day. Two
+# implementer runs under the 5-5 pin reported Opus 5.5 (the lead's model),
+# which is the documented fallback for a blocked full ID: the managed
+# allowlist admits claude-sonnet-5 but evidently not 5-5. Re-bump only once
+# a fresh-session MODEL: check shows 5-5 actually resolving.
+model: claude-sonnet-5
 color: blue
 ---
 

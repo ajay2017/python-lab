@@ -6,7 +6,7 @@ tokens. The savings come from **delegating the easy parts down** to cheaper mode
 while the lead orchestrates and the Opus reviewer guards the decision logic.
 
 > **Model pins (2026-09-30, owner decision):** `planner` + `reviewer` =
-> **`claude-opus-5-5`**, `implementer` = **`claude-sonnet-5-5`**,
+> **`claude-opus-5-5`**, `implementer` = **`claude-sonnet-5`** (a 5-5 pin fell back to the lead's model, so it was reverted the same day),
 > `test-runner` + `doc-writer` = **`haiku`** (Haiku 4.5). The lead is whatever the
 > session runs (Opus 5.5 as of 2026-09-30; the 2026-07-22 "Sonnet 5 lead" note is
 > superseded). The pins are exact IDs because the `opus` alias inherited the lead's
@@ -47,7 +47,7 @@ while the lead orchestrates and the Opus reviewer guards the decision logic.
 | `planner` | **claude-opus-5-5** | DESIGN pass for money-moving work *before code exists*: gate/threshold/scoring-formula changes, cross-feature coordination, a new decision surface, multi-phase features. Read-only; returns a plan + design verdict with the threshold/coordination decisions called out. The `opus` pin means policy design gets Opus scrutiny **regardless of the session model** — the design-side counterpart to `reviewer`. |
 | `Plan` | **plan** (built-in) | Read-only architectural scaffolding with **no policy content**: structural layout of a new page, DB table design, session-state wiring. Returns a spec; the lead decides on any policy content inside it. **Inherits the session model (no pin)** — so use it only for structure separable from gate/threshold policy; policy design goes to `planner` above. |
 | `reviewer` | **claude-opus-5-5** | A focused review pass on changes touching decision logic / constants — read-only, returns SHIP / FIX-FIRST. This is a correctness premium (~67% cost uplift over the Sonnet 5 lead) that is always worth paying before committing anything that moves money. |
-| `implementer` | **claude-sonnet-5-5** | A scoped, already-decided edit: wire a constant, add a render block, mechanical refactor, clear-repro fix. Same tier as lead — value is scope isolation and context hygiene, not dollar savings. |
+| `implementer` | **claude-sonnet-5** | A scoped, already-decided edit: wire a constant, add a render block, mechanical refactor, clear-repro fix. Same tier as lead — value is scope isolation and context hygiene, not dollar savings. |
 | `test-runner` | **haiku** | Verification checklist (`py_compile` → targeted pytest → `check_constants_documented.py` → full suite), report-only. **Optional/gap-only** as of 2026-08-04 — the pytest hook + `tests/test_repo_hygiene.py` already cover this deterministically for free; invoke only when the hook can't be relied on, or as a cheap pre-filter before an expensive review on a big change. |
 | `doc-writer` | **haiku** | Cheap mechanical write-ups: a constants-table row, a Known-Behaviours row, an F/gate row, a code comment. Strong-saving lane (~67% vs Sonnet 5 lead at list price). |
 
