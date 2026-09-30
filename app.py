@@ -9651,6 +9651,12 @@ if page == "🏠 Home":
                             _bqsc = _hb.get("bq_score", _hb.get("f_score"))
                             _vsc  = _hb.get("val_score")
                             _ssc  = _hb.get("s_score")
+                            # Unmeasured pillar = fabricated 50: show it as
+                            # not measured and never let it be "capped by".
+                            _bq_ok  = bool(_hb.get("bq_available", _hb.get("fundamentals_available", True)))
+                            _val_ok = bool(_hb.get("val_available", True))
+                            if not _bq_ok:  _bqsc = None
+                            if not _val_ok: _vsc  = None
                             _hist = _hb.get("df") if _hb.get("df") is not None else _hb.get("history")
                             _cl = (
                                 _hist["Close"]
@@ -9666,8 +9672,12 @@ if page == "🏠 Home":
                                 _bits.append(f"P&L {_tc['pnl_pct']:+.1f}%")
                             _pill = []
                             if isinstance(_tsc,  (int, float)): _pill.append(f"tech {_tsc:.0f}")
+                            # A fund has no bq/val leg by design — omit, don't flag.
+                            _is_fund = _hb.get("asset_type") == "etf" and bool(_hb.get("etf_available", False))
                             if isinstance(_bqsc, (int, float)): _pill.append(f"bq {_bqsc:.0f}")
+                            elif not _bq_ok and not _is_fund: _pill.append("bq not measured")
                             if isinstance(_vsc,  (int, float)): _pill.append(f"val {_vsc:.0f}")
+                            elif not _val_ok and not _is_fund: _pill.append("val not measured")
                             if isinstance(_ssc,  (int, float)): _pill.append(f"sentiment {_ssc:.0f}")
                             if _pill: _bits.append(" ".join(_pill))
                             _r1w = trailing_return(_cl, 5) if _cl is not None else None
@@ -9676,8 +9686,13 @@ if page == "🏠 Home":
                             if _r1w is not None: _mom.append(f"1wk {_r1w:+.1f}%")
                             if _r1m is not None: _mom.append(f"1mo {_r1m:+.1f}%")
                             if _mom: _bits.append(" ".join(_mom))
-                            _PILLAR_LABELS = {"business_quality": "Business Quality", "valuation": "Valuation", "technicals": "Technical", "sentiment": "Sentiment"}
-                            _pm = {"business_quality": _bqsc, "valuation": _vsc, "technicals": _tsc, "sentiment": _ssc}
+                            _PILLAR_LABELS = {"business_quality": "Business Quality", "valuation": "Valuation", "technicals": "Technical", "sentiment": "Sentiment", "cost": "Cost"}
+                            if _is_fund:
+                                # A fund's composite is technical + cost only
+                                # (ETF_COMPOSITE_WEIGHTS) — "capped by" must name one of those.
+                                _pm = {"technicals": _tsc, "cost": _hb.get("etf_cost_score")}
+                            else:
+                                _pm = {"business_quality": _bqsc, "valuation": _vsc, "technicals": _tsc, "sentiment": _ssc}
                             _pv = {k: v for k, v in _pm.items() if isinstance(v, (int, float))}
                             if _pv:
                                 _wk = min(_pv, key=_pv.get)
@@ -13907,6 +13922,11 @@ elif page == "📡 Signals & Advice":
                     and bool(r_data.get("etf_available", False))
                 )
                 _rbc_cost = r_data.get("etf_cost_score")
+                # A pillar with no inputs is a FABRICATED neutral 50 (see
+                # util.pillar_tile); these gate every place below that would
+                # otherwise print or reason from it as a measurement.
+                _rbc_bq_ok  = bool(r_data.get("bq_available", r_data.get("fundamentals_available", True)))
+                _rbc_val_ok = bool(r_data.get("val_available", True))
                 fin     = r_data.get("financials", {})
                 rev     = r_data.get("revisions", {})
                 earn    = r_data.get("earnings")
@@ -13941,17 +13961,26 @@ elif page == "📡 Signals & Advice":
                             _val_score = r_data.get("val_score", 50)
                             if _rbc_etf_ok:
                                 _rbc_dims = [
-                                    ("Technical", t_score,    f"{ETF_COMPOSITE_WEIGHTS['technical']*100:.0f}%", "RSI"),
-                                    ("Cost",      _rbc_cost,  f"{ETF_COMPOSITE_WEIGHTS['cost']*100:.0f}%", ""),
+                                    ("Technical", t_score,    f"{ETF_COMPOSITE_WEIGHTS['technical']*100:.0f}%", True),
+                                    ("Cost",      _rbc_cost,  f"{ETF_COMPOSITE_WEIGHTS['cost']*100:.0f}%", True),
                                 ]
                             else:
                                 _rbc_dims = [
-                                    ("Technical",        t_score,    "25%", "RSI"),
-                                    ("Business Quality", _bq_score,  "35%", ""),
-                                    ("Valuation",        _val_score, "30%", "FCF Yield"),
-                                    ("Sentiment",        s_score,    "10%", ""),
+                                    ("Technical",        t_score,    "25%", True),
+                                    ("Business Quality", _bq_score,  "35%", _rbc_bq_ok),
+                                    ("Valuation",        _val_score, "30%", _rbc_val_ok),
+                                    ("Sentiment",        s_score,    "10%", True),
                                 ]
-                            for dim, sc, weight, tip_key in _rbc_dims:
+                            for dim, sc, weight, _dim_ok in _rbc_dims:
+                                if not _dim_ok:
+                                    st.markdown(
+                                        f"<div style='margin-bottom:5px'>"
+                                        f"<span style='font-size:0.8em;color:#aaa'>❔ {_safe_html(dim)} ({_safe_html(weight)})</span>"
+                                        "<span style='float:right;font-size:0.8em;color:#888'>not measured</span>"
+                                        f"</div>",
+                                        unsafe_allow_html=True,
+                                    )
+                                    continue
                                 clr  = "#00C851" if sc >= 60 else ("#ffbb33" if sc >= 44 else "#ff4444")
                                 icon_s = "✅" if sc >= 60 else ("⚠️" if sc >= 44 else "❌")
                                 bar_w = int(sc)
@@ -13966,7 +13995,13 @@ elif page == "📡 Signals & Advice":
                                 )
 
                             # Primary driver diagnosis
-                            if not _rbc_etf_ok and t_score is not None and _bq_score is not None:
+                            if not _rbc_etf_ok and not _rbc_bq_ok:
+                                st.caption(
+                                    "Business quality wasn't measured for this ticker (no "
+                                    "fundamentals data), so this can't say whether the weakness "
+                                    "is a thesis change or a technical-only dip."
+                                )
+                            elif not _rbc_etf_ok and t_score is not None and _bq_score is not None:
                                 gap_tf = t_score - _bq_score
                                 if gap_tf < -15:
                                     driver = "🔴 **Business quality deterioration** is the primary driver — this is a thesis-change signal, act with more urgency."
@@ -14142,7 +14177,12 @@ elif page == "📡 Signals & Advice":
                         }
                         _rbc_bq_score = r_data.get("bq_score", f_score)
                         if f_sigs_all:
-                            st.markdown(f"📊 **Business Quality · {_rbc_bq_score:.0f}/100** — raw values from Yahoo Finance")
+                            # Unmeasured: withhold the score, but still list what
+                            # was captured — those values stay true either way.
+                            if not _rbc_bq_ok:
+                                st.markdown("📊 **Business Quality · ❔ not measured** — what was captured from Yahoo Finance")
+                            else:
+                                st.markdown(f"📊 **Business Quality · {_rbc_bq_score:.0f}/100** — raw values from Yahoo Finance")
                             for k, v in f_sigs_all.items():
                                 is_bad = any(w in v.lower() for w in
                                             ["declin", "expensive", "loss", "burn", "high lev", "contract", "modest", "thin", "slow"])
@@ -21981,6 +22021,10 @@ elif page == "🔍 Market Scanner":
                 _ev_bq_score   = float(_ev_comp_data.get("bq_score", _ev_comp_data.get("f_score") or 0) or 0) if _ev_comp_data else None
                 _ev_val_score  = float(_ev_comp_data.get("val_score") or 0) if _ev_comp_data else None
                 _ev_sent_score = float(_ev_comp_data.get("s_score") or 0) if _ev_comp_data else None
+                # Unmeasured pillar = fabricated 50 (util.pillar_tile) — carried
+                # so the breakdown below says "not measured" instead of a score.
+                _ev_bq_ok  = bool(_ev_comp_data.get("bq_available", _ev_comp_data.get("fundamentals_available", True))) if _ev_comp_data else True
+                _ev_val_ok = bool(_ev_comp_data.get("val_available", True)) if _ev_comp_data else True
                 _bndl     = _ev_bundle_map.get(_ev_t, {})
                 _ev_info  = _bndl.get("info", {})
                 _ev_revs  = _bndl.get("revisions", {})
@@ -22063,6 +22107,7 @@ elif page == "🔍 Market Scanner":
                     "comp_score": _ev_comp_score, "comp_label": _ev_comp_label,
                     "tech_score": _ev_tech_score, "bq_score": _ev_bq_score,
                     "val_score": _ev_val_score, "sent_score": _ev_sent_score,
+                    "bq_ok": _ev_bq_ok,        "val_ok": _ev_val_ok,
                 })
 
             st.subheader("📊 Signal Evidence — Top 10")
@@ -22162,11 +22207,16 @@ elif page == "🔍 Market Scanner":
                         _comp_clr = "#22c55e" if _comp_sc >= 68 else "#f59e0b" if _comp_sc >= 60 else "#ef4444"
                         _comp_breakdown = ""
                         if _t_sc is not None and _bq_sc is not None and _s_sc is not None:
+                            _bq_txt  = f"{_bq_sc:.0f}" if _evr.get("bq_ok", True) else "not measured"
+                            _val_txt = (
+                                f"{_val_sc:.0f}" if (_evr.get("val_ok", True) and _val_sc is not None)
+                                else "not measured"
+                            )
                             _comp_breakdown = (
                                 f"<span style='color:#6b7280;font-size:0.78em'>"
                                 f" (Technical {_t_sc:.0f}×25% + "
-                                f"Business Quality {_bq_sc:.0f}×35% + "
-                                f"Valuation {(_val_sc or 50):.0f}×30% + "
+                                f"Business Quality {_bq_txt}×35% + "
+                                f"Valuation {_val_txt}×30% + "
                                 f"Sentiment {_s_sc:.0f}×10%)</span>"
                             )
                         _comp_line = (
