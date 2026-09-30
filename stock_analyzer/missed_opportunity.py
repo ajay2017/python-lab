@@ -43,7 +43,7 @@ from stock_analyzer.constants import (
 )
 from stock_analyzer.recommendations_history import distinct_missed
 
-_MIN_MISSED_TICKERS  = 3   # corpus floor — matches predictive_analytics.py's min_n=3
+_MIN_MISSED_TICKERS  = 3   # corpus floor — originally matched predictive_analytics.py's min_n=3 (those lenses moved to PREDICTIVE_MIN_BAND_N on 2026-09-30; this floor unchanged)
 _MIN_PATTERN_TICKERS = 2   # per-pattern floor — safe now that predicate verification exists
 
 _PRICE_BANDS = [

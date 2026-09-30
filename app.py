@@ -8749,20 +8749,17 @@ if page == "🏠 Home":
                 if _gp.get("is_mover"):
                     st.caption(
                         "⏱️ This pick's momentum is running well ahead of its composite "
-                        "score — in your history, similar Extreme-divergence picks have "
-                        "often looked calm early but underperformed SPY by the time the "
-                        "position matured. See 📊 Predictive Analytics → ⏱️ Entry Timing "
-                        "for current numbers. Awareness only — doesn't change this "
-                        "recommendation."
+                        "score. See 📊 Predictive Analytics → ⏱️ Entry Timing for how "
+                        "similar Extreme-divergence picks have done in your history. "
+                        "Awareness only — doesn't change this recommendation."
                     )
                 else:
                     st.caption(
                         f"⏱️ Momentum ({_gp['score']:.0f}) is running well ahead of the "
-                        f"composite score ({_comp_sc:.0f}) — in your history, similar "
-                        f"Extreme-divergence picks have often looked calm early but "
-                        f"underperformed SPY by the time the position matured. See "
-                        f"📊 Predictive Analytics → ⏱️ Entry Timing for current numbers. "
-                        f"Awareness only — doesn't change this recommendation."
+                        f"composite score ({_comp_sc:.0f}). See 📊 Predictive Analytics "
+                        f"→ ⏱️ Entry Timing for how similar Extreme-divergence picks have "
+                        f"done in your history. Awareness only — doesn't change this "
+                        f"recommendation."
                     )
 
             # Personalized Discovery — flags when this pick resembles the
@@ -31996,9 +31993,9 @@ elif page == "📊 Predictive Analytics":
     _pac_banner     = threshold_banner(_pac_bands, _pac_thresh, PREDICTIVE_MIN_BAND_N)
     _pac_sectors    = calibration_by_sector(_pac_reps, min_n=PREDICTIVE_MIN_BAND_N - 2)
     _pac_avm        = acted_vs_missed_comparison(_pac_reps)
-    _pac_conv       = by_conviction(_pac_reps, min_n=3)
-    _pac_rtype      = by_rec_type_stats(_pac_reps_by_type, min_n=3)
-    _pac_sec_alph   = by_sector_alpha(_pac_reps, min_n=3)
+    _pac_conv       = by_conviction(_pac_reps, min_n=PREDICTIVE_MIN_BAND_N)
+    _pac_rtype      = by_rec_type_stats(_pac_reps_by_type, min_n=PREDICTIVE_MIN_BAND_N)
+    _pac_sec_alph   = by_sector_alpha(_pac_reps, min_n=PREDICTIVE_MIN_BAND_N)
     _pac_by_verdict = calibration_by_verdict(_pac_reps, min_n=0)
     _pac_sent_align = sentiment_alignment_summary(_pac_by_verdict, min_n=PREDICTIVE_MIN_BAND_N)
 
@@ -32360,7 +32357,7 @@ elif page == "📊 Predictive Analytics":
                     delta_color="normal",
                 )
         else:
-            st.info("Not enough tickers per conviction tier yet (need ≥ 3 each).")
+            st.info(f"Not enough tickers per conviction tier yet (need ≥ {PREDICTIVE_MIN_BAND_N} each).")
 
         st.divider()
 
@@ -32408,7 +32405,7 @@ elif page == "📊 Predictive Analytics":
                     delta_color="normal",
                 )
         else:
-            st.info("Not enough tickers per recommendation type yet (need ≥ 3 each).")
+            st.info(f"Not enough tickers per recommendation type yet (need ≥ {PREDICTIVE_MIN_BAND_N} each).")
 
     # ── TAB 4 — Sector Alpha ───────────────────────────────────────────────────
     with _pa_tab4:
@@ -32468,7 +32465,7 @@ elif page == "📊 Predictive Analytics":
                         f"Hit rate {_sa_worst['p_positive_alpha']:.0%} · {_sa_worst['n']} tickers"
                     )
         else:
-            st.info("Not enough tickers per sector yet (need ≥ 3 each).")
+            st.info(f"Not enough tickers per sector yet (need ≥ {PREDICTIVE_MIN_BAND_N} each).")
 
         # ── Sector × Score heatmap ─────────────────────────────────────────────
         st.subheader("Sector × Score Tier Heatmap")
@@ -38481,7 +38478,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **A "📉 …" caption on a New Position pick (or, since 2026-09-17, a scanner-pick row under "More Buy Candidates" below) discloses the stock's own recent technical weakness** (down materially from a recent high, below its 50-day trend) — this describes the stock's chart, not a position you hold, since you don't own it yet. It never suppresses the pick — the composite still rates it a buy — it's shown so you can enter with full context rather than being surprised hours later if the same weakness triggers a loss-protection card once you do own it. The same caption also appears on 📋 Watchlist's ENTER_NOW cards for the identical reason.
 
-**⏱️ Entry Timing caution.** A card may show a small caption when momentum is running well ahead of the composite score for that specific pick — in your own history, similar cases have often looked calm in the first few days but underperformed by the time the position matured. This never changes the recommendation or blocks anything; it's the same pattern the 📊 Predictive Analytics → ⏱️ Entry Timing tab tracks in full, with current numbers.
+**⏱️ Entry Timing caution.** A card may show a small caption when momentum is running well ahead of the composite score for that specific pick. It points you to the 📊 Predictive Analytics → ⏱️ Entry Timing tab, which shows how similar picks have actually done in your history. The caption itself makes no claim about the outcome, because that pattern has changed as data accumulated. This never changes the recommendation or blocks anything; it's the same pattern the 📊 Predictive Analytics → ⏱️ Entry Timing tab tracks in full, with current numbers.
 
 **This list recomputes live — it is *not* a fixed morning list.** Every time Home refreshes, prices re-score and every gate re-evaluates, so a name can appear and later drop off *within the same day*. That is expected, not an error. Three cues make it legible: **(a) a firmness badge** — a pick "at the line" (amber) is clearing the entry bar by only a few points and a normal intraday move could flip it below; a "firm" pick is comfortably clear. **(b) a "was showing earlier today" footer** — if a name surfaced earlier but is no longer clearing this pass, it's listed with *why* (its composite re-priced below the bar, a sector cap, a macro event, or a fresh Reduce/Exit call), so a name leaving the list is never silent. These are **not** retractions or buy signals — the earlier read was correct for its moment. **(c) a pre-market note** — before the 9:30 ET open, prices are provisional and picks may re-price at the open. Every name that surfaced today is also kept permanently on the 📜 Recommendations History page.
 

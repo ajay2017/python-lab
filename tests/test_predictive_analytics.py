@@ -819,13 +819,13 @@ def test_by_conviction_groups_and_sorts_desc():
         [_row(ticker=f"A{i}", conviction="High", alpha_pct=5.0) for i in range(3)]
         + [_row(ticker=f"B{i}", conviction="Low", alpha_pct=1.0) for i in range(3)]
     )
-    out = pa.by_conviction(rows)
+    out = pa.by_conviction(rows, min_n=3)
     assert [b["conviction"] for b in out] == ["High", "Low"]
 
 
 def test_by_conviction_blank_defaults_unknown():
     rows = [_row(ticker=f"A{i}", conviction="", alpha_pct=1.0) for i in range(3)]
-    out = pa.by_conviction(rows)
+    out = pa.by_conviction(rows, min_n=3)
     assert out[0]["conviction"] == "Unknown"
 
 
@@ -843,13 +843,13 @@ def test_by_conviction_avg_alpha_is_never_none_for_a_real_bucket():
     # of the upstream filter, so avg_alpha can never legitimately compute to
     # None here — noted rather than forced with a fabricated case.
     rows = [_row(ticker=f"A{i}", conviction="High", alpha_pct=1.0) for i in range(3)]
-    out = pa.by_conviction(rows)
+    out = pa.by_conviction(rows, min_n=3)
     assert out[0]["avg_alpha"] is not None
 
 
 def test_by_rec_type_stats_unmapped_type_falls_back_to_itself():
     rows = [_row(ticker=f"A{i}", rec_type="mystery_type", alpha_pct=1.0) for i in range(3)]
-    out = pa.by_rec_type_stats(rows)
+    out = pa.by_rec_type_stats(rows, min_n=3)
     assert out[0]["label"] == "mystery_type"
 
 
@@ -859,7 +859,7 @@ def test_by_rec_type_stats_mapped_labels():
         + [_row(ticker=f"B{i}", rec_type="add_winner", alpha_pct=1.0) for i in range(3)]
         + [_row(ticker=f"C{i}", rec_type="buy_candidate", alpha_pct=1.0) for i in range(3)]
     )
-    out = pa.by_rec_type_stats(rows)
+    out = pa.by_rec_type_stats(rows, min_n=3)
     labels = {r["rec_type"]: r["label"] for r in out}
     assert labels["new_pick"] == "New Position"
     assert labels["add_winner"] == "Add to Winner"
@@ -871,7 +871,7 @@ def test_by_rec_type_stats_sorted_desc_by_avg_alpha():
         [_row(ticker=f"A{i}", rec_type="new_pick", alpha_pct=1.0) for i in range(3)]
         + [_row(ticker=f"B{i}", rec_type="add_winner", alpha_pct=9.0) for i in range(3)]
     )
-    out = pa.by_rec_type_stats(rows)
+    out = pa.by_rec_type_stats(rows, min_n=3)
     assert [r["rec_type"] for r in out] == ["add_winner", "new_pick"]
 
 
@@ -888,7 +888,7 @@ def test_by_sector_alpha_groups_sorts_and_filters():
 
 def test_by_sector_alpha_blank_defaults_unknown():
     rows = [_row(ticker=f"A{i}", sector=None, alpha_pct=1.0) for i in range(3)]
-    out = pa.by_sector_alpha(rows)
+    out = pa.by_sector_alpha(rows, min_n=3)
     assert out[0]["sector"] == "Unknown"
 
 
@@ -1320,3 +1320,17 @@ def test_band_narrative_illustrating_ticker_omitted_when_none():
     band = _band(day1_alpha=0.5, day5_alpha=0.2, day20_alpha=0.1, day20_n=2)
     text = pa.band_narrative(band, illustrating_ticker=None)
     assert "-shaped case" not in text
+
+
+def test_signal_breakdown_lenses_default_to_the_standard_band_floor():
+    """Owner decision 2026-09-30: the conviction / rec-type / sector lenses use
+    the page's standard PREDICTIVE_MIN_BAND_N floor (was a bare 3), so no
+    directive can fire on a 3-ticker slice."""
+    import inspect
+    from stock_analyzer import predictive_analytics as pa
+    from stock_analyzer.constants import PREDICTIVE_MIN_BAND_N
+    for fn in (pa.by_conviction, pa.by_rec_type_stats, pa.by_sector_alpha):
+        assert inspect.signature(fn).parameters["min_n"].default == PREDICTIVE_MIN_BAND_N
+    rows = [{"outcome_maturing": False, "alpha_pct": 1.0, "sector": "AI & Cloud",
+             "conviction": "high", "rec_type": "new_pick", "ticker": f"T{i}"} for i in range(4)]
+    assert pa.by_sector_alpha(rows) == []

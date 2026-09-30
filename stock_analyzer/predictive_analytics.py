@@ -912,7 +912,7 @@ _REC_TYPE_LABELS = {
 }
 
 
-def by_conviction(enriched: list[dict], min_n: int = 3) -> list[dict]:
+def by_conviction(enriched: list[dict], min_n: int = PREDICTIVE_MIN_BAND_N) -> list[dict]:
     """
     Group mature graded outcomes by conviction level (BUY / Strong BUY / other).
 
@@ -942,7 +942,7 @@ def by_conviction(enriched: list[dict], min_n: int = 3) -> list[dict]:
     return [r for r in rows if r["n"] >= min_n]
 
 
-def by_rec_type_stats(enriched: list[dict], min_n: int = 3) -> list[dict]:
+def by_rec_type_stats(enriched: list[dict], min_n: int = PREDICTIVE_MIN_BAND_N) -> list[dict]:
     """
     Group mature graded outcomes by rec_type.
 
@@ -975,7 +975,7 @@ def by_rec_type_stats(enriched: list[dict], min_n: int = 3) -> list[dict]:
 
 # ── Sector Alpha (Tab 4) ───────────────────────────────────────────────────────
 
-def by_sector_alpha(enriched: list[dict], min_n: int = 3) -> list[dict]:
+def by_sector_alpha(enriched: list[dict], min_n: int = PREDICTIVE_MIN_BAND_N) -> list[dict]:
     """
     Group mature graded outcomes by sector regardless of score band.
 

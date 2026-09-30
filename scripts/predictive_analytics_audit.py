@@ -358,7 +358,7 @@ def s4_signal(enriched, pop) -> None:
 
 
 def s5_sector(enriched, pop) -> None:
-    _hdr("§5 SECTOR ALPHA (min_n 3)")
+    _hdr(f"§5 SECTOR ALPHA (min_n {PREDICTIVE_MIN_BAND_N})")
     print("[A]:"); _print_group(pa.by_sector_alpha(enriched), "sector")
     print("[C]:"); _print_group(pa.by_sector_alpha(pop["reps"]), "sector")
 
