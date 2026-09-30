@@ -1057,24 +1057,48 @@ _DEFAULT_WATCHLIST = ["NVDA", "AMD", "INTC", "MU"]
 # a non-owner write succeed (2026-08-04 audit finding). `_READONLY` remains
 # only as the fallback for callers outside a Streamlit session (the headless
 # cron never calls set_readonly() at all, so it's always False there).
+# Scope, stated honestly: the session_state read only happens on a thread with
+# a ScriptRunContext. app.py's ThreadPoolExecutor workers (bundle loads) carry
+# none, so a write reached from a worker reads the process-wide `_READONLY` —
+# unchanged by the 2026-09-30 ctx check, which only stopped the headless path
+# logging a warning per call. Attach add_script_run_ctx to those executors if a
+# user-data writer is ever reached from one.
 _READONLY = False
+
+
+def _has_script_ctx() -> bool:
+    """True only inside a live Streamlit script run. Checked BEFORE touching
+    st.session_state because, outside one (the headless cron), every access
+    logs a red `missing ScriptRunContext!` warning — ~20 per premarket run,
+    one per DB write, burying real failures in the Railway logs. Without a
+    context session_state is an empty stand-in anyway, so skipping it changes
+    nothing: the `_READONLY` fallback was already the answer there."""
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        return get_script_run_ctx(suppress_warning=True) is not None
+    except Exception:
+        return False
+
 
 def set_readonly(flag: bool) -> None:
     global _READONLY
     _READONLY = bool(flag)
+    if not _has_script_ctx():
+        return  # no active Streamlit session (e.g. headless cron) — fallback stands
     try:
         import streamlit as _st
         _st.session_state["_db_readonly"] = bool(flag)
     except Exception:
-        pass  # no active Streamlit session (e.g. headless cron) — fallback stands
+        pass
 
 def is_readonly() -> bool:
-    try:
-        import streamlit as _st
-        if "_db_readonly" in _st.session_state:
-            return bool(_st.session_state["_db_readonly"])
-    except Exception:
-        pass
+    if _has_script_ctx():
+        try:
+            import streamlit as _st
+            if "_db_readonly" in _st.session_state:
+                return bool(_st.session_state["_db_readonly"])
+        except Exception:
+            pass
     return _READONLY
 
 

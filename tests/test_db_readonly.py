@@ -55,14 +55,21 @@ def test_set_readonly_true_then_false_via_module_fallback():
     assert db.is_readonly() is False
 
 
-def test_set_readonly_writes_to_session_state_not_just_the_global():
+@pytest.fixture
+def _live_ctx(monkeypatch):
+    """Simulate running inside a real Streamlit script run — the fake module
+    below has no runtime, so _has_script_ctx() would otherwise say headless."""
+    monkeypatch.setattr(db, "_has_script_ctx", lambda: True)
+
+
+def test_set_readonly_writes_to_session_state_not_just_the_global(_live_ctx):
     fake_state = _FakeSessionState()
     sys.modules["streamlit"] = _FakeStreamlit(fake_state)
     db.set_readonly(True)
     assert fake_state["_db_readonly"] is True
 
 
-def test_is_readonly_prefers_session_state_over_stale_module_global():
+def test_is_readonly_prefers_session_state_over_stale_module_global(_live_ctx):
     """The exact race this fix closes: two 'sessions' sharing one process —
     session A's module-global write must not leak into session B's
     session-state-scoped read."""
@@ -72,11 +79,32 @@ def test_is_readonly_prefers_session_state_over_stale_module_global():
     assert db.is_readonly() is False  # session state wins, not the stale global
 
 
-def test_is_readonly_falls_back_to_global_when_session_state_key_absent():
+def test_is_readonly_falls_back_to_global_when_session_state_key_absent(_live_ctx):
     db._READONLY = True
     fake_state = _FakeSessionState()  # key never set for this session
     sys.modules["streamlit"] = _FakeStreamlit(fake_state)
     assert db.is_readonly() is True
+
+
+
+def test_headless_never_touches_session_state():
+    """Outside a script run (the cron) session_state must not be read or
+    written: every access logs a `missing ScriptRunContext!` warning, ~20 per
+    premarket run. The module global is the answer there, as it always was.
+    (The fake module means no real context lookup happens here; the real path
+    is covered by tests/test_db_readonly_headless_log.py.)"""
+    class _Exploding(dict):
+        def __contains__(self, k):
+            raise AssertionError("session_state read with no script context")
+
+        def __setitem__(self, k, v):
+            raise AssertionError("session_state written with no script context")
+
+    sys.modules["streamlit"] = _FakeStreamlit(_Exploding())
+    db.set_readonly(True)
+    assert db.is_readonly() is True
+    db.set_readonly(False)
+    assert db.is_readonly() is False
 
 
 # ─── Structural guard-coverage test (2026-08-28) ──────────────────────────────
