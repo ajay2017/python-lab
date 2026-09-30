@@ -1692,3 +1692,48 @@ def test_default_rec_types_scope_excludes_enter_now_rows_from_new_pick_surfaces(
     viz = rh.report_viz_snapshot(rows)  # default rec_types=("new_pick",)
     assert viz["flow"]["n_total"] == 1
     assert all(m["ticker"] != "BBB" for m in viz["missed"])
+
+
+# ─── match_recs_to_trades: weights_version / asset_type pass-through ────────
+# Predictive Analytics (2026-09-30) scopes on both; they must reach the
+# enriched rows raw, None when the column is absent, and survive
+# compute_outcomes.
+
+def test_match_recs_to_trades_passes_through_weights_version_and_asset_type():
+    recs = _recs_df([
+        {**_rec_row(id_=1, ticker="AAA"), "weights_version": 2, "asset_type": "stock"},
+        {**_rec_row(id_=2, ticker="SPY"), "weights_version": 1, "asset_type": "etf"},
+    ])
+    matched = rh.match_recs_to_trades(recs, _trades_df([]))
+    by_tk = {m["ticker"]: m for m in matched}
+    assert by_tk["AAA"]["weights_version"] == 2
+    assert by_tk["AAA"]["asset_type"] == "stock"
+    assert by_tk["SPY"]["weights_version"] == 1
+    assert by_tk["SPY"]["asset_type"] == "etf"
+
+
+def test_match_recs_to_trades_weights_version_and_asset_type_none_when_absent():
+    recs = _recs_df([_rec_row(ticker="AAA")])   # legacy shape: neither column
+    matched = rh.match_recs_to_trades(recs, _trades_df([]))
+    assert matched[0]["weights_version"] is None
+    assert matched[0]["asset_type"] is None
+
+
+def test_match_recs_to_trades_nan_weights_version_is_none_not_nan():
+    # A NULL in an int column arrives from pandas as float NaN next to 2.0.
+    recs = _recs_df([
+        {**_rec_row(id_=1, ticker="AAA"), "weights_version": 2},
+        {**_rec_row(id_=2, ticker="BBB"), "weights_version": None},
+    ])
+    matched = rh.match_recs_to_trades(recs, _trades_df([]))
+    by_tk = {m["ticker"]: m for m in matched}
+    assert by_tk["AAA"]["weights_version"] == 2
+    assert isinstance(by_tk["AAA"]["weights_version"], int)
+    assert by_tk["BBB"]["weights_version"] is None
+
+
+def test_compute_outcomes_preserves_weights_version_and_asset_type():
+    m = {**_matched(ticker="AAA"), "weights_version": 2, "asset_type": "etf"}
+    out = rh.compute_outcomes([m], {"AAA": 55.0}, date(2026, 2, 1))
+    assert out[0]["weights_version"] == 2
+    assert out[0]["asset_type"] == "etf"

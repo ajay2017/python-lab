@@ -357,8 +357,8 @@ def test_personal_alpha_threshold_no_eligible_bands_returns_none():
 
 def test_personal_alpha_threshold_simple_all_good_suffix():
     bands = [
-        {"band_floor": 60, "n": 10, "p_positive_alpha": 0.6},
-        {"band_floor": 65, "n": 10, "p_positive_alpha": 0.7},
+        {"band_floor": 60, "n": 10, "p_positive_alpha": 0.6, "avg_alpha": 1.0},
+        {"band_floor": 65, "n": 10, "p_positive_alpha": 0.7, "avg_alpha": 1.0},
     ]
     assert pa.personal_alpha_threshold(bands, min_n=5) == 60
 
@@ -369,19 +369,19 @@ def test_personal_alpha_threshold_poisoned_suffix_returns_none():
     # suffix to hold, so no i qualifies and the result must be None, not the
     # first band's floor.
     bands = [
-        {"band_floor": 60, "n": 10, "p_positive_alpha": 0.6},
-        {"band_floor": 65, "n": 10, "p_positive_alpha": 0.7},
-        {"band_floor": 70, "n": 10, "p_positive_alpha": 0.3},
+        {"band_floor": 60, "n": 10, "p_positive_alpha": 0.6, "avg_alpha": 1.0},
+        {"band_floor": 65, "n": 10, "p_positive_alpha": 0.7, "avg_alpha": 1.0},
+        {"band_floor": 70, "n": 10, "p_positive_alpha": 0.3, "avg_alpha": 1.0},
     ]
     assert pa.personal_alpha_threshold(bands, min_n=5) is None
 
 
 def test_personal_alpha_threshold_recovers_at_a_higher_floor():
     bands = [
-        {"band_floor": 60, "n": 10, "p_positive_alpha": 0.6},
-        {"band_floor": 65, "n": 10, "p_positive_alpha": 0.7},
-        {"band_floor": 70, "n": 10, "p_positive_alpha": 0.3},
-        {"band_floor": 75, "n": 10, "p_positive_alpha": 0.9},
+        {"band_floor": 60, "n": 10, "p_positive_alpha": 0.6, "avg_alpha": 1.0},
+        {"band_floor": 65, "n": 10, "p_positive_alpha": 0.7, "avg_alpha": 1.0},
+        {"band_floor": 70, "n": 10, "p_positive_alpha": 0.3, "avg_alpha": 1.0},
+        {"band_floor": 75, "n": 10, "p_positive_alpha": 0.9, "avg_alpha": 1.0},
     ]
     assert pa.personal_alpha_threshold(bands, min_n=5) == 75
 
@@ -407,11 +407,12 @@ def _has_source(directives, source_tab):
 
 # Score Calibration
 
-def test_synthesize_directives_score_calibration_thresh_not_none_action():
+def test_synthesize_directives_score_calibration_thresh_not_none_watch():
+    # D2 (2026-09-30): demoted from "action" to a "watch" observation.
     out = _synth(thresh=70)
     matches = _has_source(out, "🎯 Score Calibration")
     assert len(matches) == 1
-    assert matches[0]["type"] == "action"
+    assert matches[0]["type"] == "watch"
     assert "70" in matches[0]["text"]
 
 
@@ -438,10 +439,12 @@ def test_synthesize_directives_score_calibration_no_bands_no_directive():
 
 # Discretion Value
 
-def test_synthesize_directives_decision_quality_acting_action():
+def test_synthesize_directives_decision_quality_acting_watch():
+    # Demoted from "action" to "watch" (owner decision 2026-09-30): this page
+    # is a retrospective diagnostic; the live gates own entry and sizing.
     out = _synth(avm={"edge": "acting", "edge_pp": 0.5})
     matches = _has_source(out, "⚖️ Discretion Value")
-    assert matches[0]["type"] == "action"
+    assert matches[0]["type"] == "watch"
 
 
 def test_synthesize_directives_acting_states_both_sample_sizes():
@@ -514,10 +517,11 @@ def test_synthesize_directives_decision_quality_neutral_and_insufficient_context
 
 # Sector Alpha
 
-def test_synthesize_directives_sector_alpha_best_positive_action():
+def test_synthesize_directives_sector_alpha_best_positive_watch():
+    # D2 (2026-09-30): demoted from "action" to a "watch" observation.
     out = _synth(sec_alph=[_sband("Tech", 5.0, 10)])
     matches = _has_source(out, "🌐 Sector Alpha")
-    assert matches[0]["type"] == "action"
+    assert matches[0]["type"] == "watch"
     assert "Tech" in matches[0]["text"]
 
 
@@ -531,14 +535,15 @@ def test_synthesize_directives_sector_alpha_worst_below_neg3_extra_caution():
     sec_alph = [_sband("Tech", 5.0, 10), _sband("Energy", -3.0001, 5)]
     out = _synth(sec_alph=sec_alph)
     matches = _has_source(out, "🌐 Sector Alpha")
-    assert [m["type"] for m in matches] == ["action", "caution"]
+    # Sorted caution before watch (the best-sector card is now "watch").
+    assert [m["type"] for m in matches] == ["caution", "watch"]
 
 
 def test_synthesize_directives_sector_alpha_worst_exactly_neg3_no_caution():
     sec_alph = [_sband("Tech", 5.0, 10), _sband("Energy", -3.0, 5)]
     out = _synth(sec_alph=sec_alph)
     matches = _has_source(out, "🌐 Sector Alpha")
-    assert [m["type"] for m in matches] == ["action"]
+    assert [m["type"] for m in matches] == ["watch"]
 
 
 # Signal Breakdown
@@ -546,7 +551,7 @@ def test_synthesize_directives_sector_alpha_worst_exactly_neg3_no_caution():
 def test_synthesize_directives_signal_breakdown_rtype_gap_at_1_0_fires():
     out = _synth(rtype=[_rtband("New Position", 3.0), _rtband("Opportunity Watch", 2.0)])
     matches = _has_source(out, "🏷️ Signal Breakdown")
-    assert any(m["type"] == "action" for m in matches)
+    assert any(m["type"] == "watch" for m in matches)
 
 
 def test_synthesize_directives_signal_breakdown_rtype_gap_just_below_1_0_no_fire():
@@ -558,7 +563,7 @@ def test_synthesize_directives_signal_breakdown_rtype_gap_just_below_1_0_no_fire
 def test_synthesize_directives_signal_breakdown_conv_gap_at_1_5_fires():
     out = _synth(conv=[_convband("Strong BUY", 4.5), _convband("BUY", 3.0)])
     matches = _has_source(out, "🏷️ Signal Breakdown")
-    assert any(m["type"] == "action" for m in matches)
+    assert any(m["type"] == "watch" for m in matches)
 
 
 def test_synthesize_directives_signal_breakdown_conv_gap_just_below_1_5_no_fire():
@@ -598,7 +603,7 @@ def test_synthesize_directives_context_zero_thin_omits_clause():
     out = _synth(bands=bands, min_n=5)
     ctx = _has_source(out, "all models")[0]
     assert "still below" not in ctx["text"]
-    assert ctx["text"].startswith("Based on 10 graded outcomes.")
+    assert ctx["text"].startswith("Based on 10 graded tickers.")
 
 
 def test_synthesize_directives_context_always_appended_exactly_once():
@@ -608,10 +613,11 @@ def test_synthesize_directives_context_always_appended_exactly_once():
 
 # Sentiment alignment
 
-def test_synthesize_directives_sentiment_confirmed_wins_at_2pp_action():
+def test_synthesize_directives_sentiment_confirmed_wins_at_2pp_watch():
+    # Demoted from "action" to "watch" (owner decision 2026-09-30).
     out = _synth(sentiment_alignment={"conclusion": "confirmed_wins", "edge_pp": 2.0})
     matches = _has_source(out, "🧭 Sentiment Alignment")
-    assert matches[0]["type"] == "action"
+    assert matches[0]["type"] == "watch"
 
 
 def test_synthesize_directives_sentiment_confirmed_wins_below_2pp_no_directive():
@@ -668,22 +674,41 @@ def test_synthesize_directives_entry_timing_none_default_no_crash():
 
 # Final ordering
 
-def test_synthesize_directives_final_order_action_caution_watch_context():
+def test_synthesize_directives_final_order_caution_watch_context():
     out = _synth(
-        thresh=70,  # -> action
-        avm={"edge": "passing", "edge_pp": 1.0},  # -> caution
-        sec_alph=[_sband("Tech", 0.0, 10)],  # -> watch
+        avm={"edge": "acting", "edge_pp": 1.0},  # -> watch
+        sec_alph=[_sband("Tech", 0.0, 10), _sband("Energy", -5.0, 5)],  # -> watch + caution
     )
     types = _types(out)
-    assert types == ["action", "caution", "watch", "context"]
+    assert types == ["caution", "watch", "watch", "context"]
+
+
+def test_synthesize_directives_never_emits_action_across_rich_input():
+    """No directive is "action" any more (D2 + the Discretion/Sentiment
+    demotion, 2026-09-30): every branch that used to issue one is fed here."""
+    bands = [
+        _cband(n=10, avg_alpha=2.0, band_floor=65),
+        _cband(n=10, avg_alpha=3.0, band_floor=70),
+    ]
+    out = _synth(
+        bands=bands, thresh=65,
+        avm={"edge": "acting", "edge_pp": 5.0, "acted": {"n": 10}, "missed": {"n": 40}},
+        conv=[_convband("Strong BUY", 6.0), _convband("BUY", 1.0)],
+        rtype=[_rtband("New Position", 5.0), _rtband("Add to Winner", 1.0)],
+        sec_alph=[_sband("Tech", 5.0, 10), _sband("Energy", -5.0, 5)],
+        sentiment_alignment={"conclusion": "confirmed_wins", "edge_pp": 4.0},
+        entry_timing_bands=[{"band_label": "Extreme", "day20_n": 6, "day20_alpha": -3.0}],
+    )
+    assert len(out) >= 7
+    assert "action" not in _types(out)
 
 
 def test_synthesize_directives_sorted_relative_order_with_multiple_per_type():
     bands = [_cband(n=10, avg_alpha=-2.0, band_floor=60)]  # -> watch (all_neg)
     out = _synth(
         bands=bands, thresh=None,
-        avm={"edge": "acting", "edge_pp": 1.0},  # -> action
-        sec_alph=[_sband("Tech", 5.0, 10), _sband("Energy", -5.0, 5)],  # -> action + caution
+        avm={"edge": "acting", "edge_pp": 1.0},  # -> watch
+        sec_alph=[_sband("Tech", 5.0, 10), _sband("Energy", -5.0, 5)],  # -> watch + caution
         sentiment_alignment={"conclusion": "no_edge", "edge_pp": None},  # -> watch
     )
     order_map = {"action": 0, "caution": 1, "watch": 2, "context": 3}
@@ -1081,11 +1106,33 @@ def test_by_divergence_band_day1_present_day5_absent_independent():
     assert band["day5_alpha"] is None
 
 
-def test_by_divergence_band_day20_excludes_maturing_even_if_alpha_present():
-    rows = [_dband_row(divergence=5.0, outcome_maturing=True, alpha_pct=9.0)]
+def test_by_divergence_band_day20_ignores_to_today_alpha_pct():
+    # D6 (2026-09-30): Day+20 is a true fixed-horizon forward alpha read from
+    # `day20_alpha`. A row with a (to-today) alpha_pct but no day20_alpha
+    # contributes nothing to the Day+20 leg.
+    rows = [_dband_row(divergence=5.0, outcome_maturing=False, alpha_pct=9.0)]
     out = pa.by_divergence_band(rows, aligned_max=1.0, diverging_max=3.0)
     assert out[0]["day20_n"] == 0
     assert out[0]["day20_alpha"] is None
+
+
+def test_by_divergence_band_day20_reads_day20_alpha():
+    rows = [
+        {**_dband_row(divergence=5.0, alpha_pct=99.0), "day20_alpha": -4.0},
+        {**_dband_row(divergence=6.0, alpha_pct=99.0), "day20_alpha": 2.0},
+    ]
+    out = pa.by_divergence_band(rows, aligned_max=1.0, diverging_max=3.0)
+    assert out[0]["day20_n"] == 2
+    assert out[0]["day20_alpha"] == pytest.approx(-1.0)
+
+
+def test_by_divergence_band_is_thin_flags_per_horizon():
+    rows = [{**_dband_row(divergence=5.0, day1_alpha=1.0), "day20_alpha": 1.0}
+            for _ in range(3)]
+    out = pa.by_divergence_band(rows, aligned_max=1.0, diverging_max=3.0, min_n=3)
+    assert out[0]["day1_is_thin"] is False
+    assert out[0]["day5_is_thin"] is True
+    assert out[0]["day20_is_thin"] is False
 
 
 def test_by_divergence_band_p_positive_alpha_none_when_day20_n_zero():
@@ -1097,8 +1144,8 @@ def test_by_divergence_band_p_positive_alpha_none_when_day20_n_zero():
 
 def test_by_divergence_band_p_positive_alpha_computed_when_day20_present():
     rows = [
-        _dband_row(divergence=5.0, outcome_maturing=False, alpha_pct=1.0),
-        _dband_row(divergence=6.0, outcome_maturing=False, alpha_pct=-1.0),
+        {**_dband_row(divergence=5.0), "day20_alpha": 1.0},
+        {**_dband_row(divergence=6.0), "day20_alpha": -1.0},
     ]
     out = pa.by_divergence_band(rows, aligned_max=1.0, diverging_max=3.0)
     assert out[0]["day20_n"] == 2

@@ -165,17 +165,20 @@ def test_by_divergence_band_buckets_by_threshold():
     assert labels["Extreme"]["day1_alpha"] == -15
 
 
-def test_by_divergence_band_pct_red_and_day20_reuses_mature_alpha():
+def test_by_divergence_band_pct_red_and_day20_reads_true_forward_alpha():
+    # D6 (2026-09-30): Day+20 reads the fixed-horizon `day20_alpha`, NOT the
+    # to-today alpha_pct (which is deliberately set to a different value here
+    # so reusing it would fail this test).
     rows = [
-        _band_row(divergence=30, day1_alpha=-5, alpha_pct=-3, maturing=False),
-        _band_row(divergence=35, day1_alpha=5,  alpha_pct=8,  maturing=False),
-        _band_row(divergence=40, day1_alpha=-2, alpha_pct=None, maturing=True),  # excluded from day20
+        {**_band_row(divergence=30, day1_alpha=-5, alpha_pct=99), "day20_alpha": -3},
+        {**_band_row(divergence=35, day1_alpha=5,  alpha_pct=99), "day20_alpha": 8},
+        _band_row(divergence=40, day1_alpha=-2, alpha_pct=99),  # no day20_alpha -> excluded from day20
     ]
     bands = by_divergence_band(rows, aligned_max=15, diverging_max=25)
     extreme = next(b for b in bands if b["band_label"] == "Extreme")
     assert extreme["day1_n"] == 3
     assert extreme["day1_pct_red"] == round(2 / 3, 3)
-    assert extreme["day20_n"] == 2   # the maturing row is excluded
+    assert extreme["day20_n"] == 2   # the row without day20_alpha is excluded
     assert extreme["day20_alpha"] == round((-3 + 8) / 2, 2)
     assert extreme["p_positive_alpha"] == 0.5   # 1 of 2 day20 outcomes positive
 

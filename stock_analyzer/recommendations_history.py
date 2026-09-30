@@ -300,9 +300,43 @@ def match_recs_to_trades(recs_df, trades_df) -> list[dict]:
             "thesis":           str(r.get("thesis", "") or ""),
             "acted_on":         trade is not None,
             "acted_trade":      trade,
+            # Additive pass-throughs (None when the column is absent / NULL).
+            # Predictive Analytics scopes on these: weights_version so a
+            # composite from an older weight regime is never banded with a
+            # current one, asset_type so an ETF (a different composite
+            # formula) is never banded with a stock. Kept RAW here — the
+            # None-vs-current / None-vs-stock decisions belong to the
+            # consumer (predictive_analytics.prepare_population), not to
+            # this matcher.
+            "weights_version":  _opt_int(r.get("weights_version")),
+            "asset_type":       _opt_str(r.get("asset_type")),
         })
     _dedup_acted_credit(matched)
     return matched
+
+
+def _opt_int(v) -> int | None:
+    """None/NaN/unparseable -> None, else int. A pandas int column with a
+    NULL in it arrives as float64 (2.0 / NaN), so this normalizes both."""
+    if v is None:
+        return None
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    if x != x:   # NaN
+        return None
+    return int(x)
+
+
+def _opt_str(v) -> str | None:
+    """None/NaN/blank -> None, else the stripped string."""
+    if v is None:
+        return None
+    if isinstance(v, float) and v != v:
+        return None
+    s = str(v).strip()
+    return s or None
 
 
 # ── Outcome computation ─────────────────────────────────────────────────────

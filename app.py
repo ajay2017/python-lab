@@ -31677,9 +31677,12 @@ elif page == "📊 Predictive Analytics":
         by_divergence_band,
         find_illustrating_case,
         band_narrative,
+        prepare_population,
+        threshold_banner,
     )
     from stock_analyzer.constants import (
         REC_SCORE_MIN_DAYS,
+        COMPOSITE_WEIGHTS_VERSION,
         PREDICTIVE_MIN_BAND_N,
         PREDICTIVE_SCORE_BAND_SIZE,
         ENTRY_TIMING_DEDUP_WINDOW_DAYS,
@@ -31718,12 +31721,22 @@ elif page == "📊 Predictive Analytics":
 
     if st.session_state.get("_pac_enriched") is None:
         with st.spinner("Loading all-time recommendations and pricing data — this may take a moment…"):
-            _pac_recs_df   = db.load_recommendations()
+            _pac_recs_df   = db.load_recommendations_or_none()
             _pac_trades_df = st.session_state.get("trades_df")
             if _pac_trades_df is None:
                 _pac_trades_df = db.load_trades()
 
-        if _pac_recs_df is None or _pac_recs_df.empty:
+        # None = the load FAILED (distinct from a genuinely empty table below) —
+        # never read a failed load as "no recommendations yet".
+        if _pac_recs_df is None:
+            st.warning(
+                "⚠️ Couldn't load recommendations from the database, so this page "
+                "can't grade anything right now. Try **🔄 Refresh data** in a moment; "
+                "if it persists, check 🩺 System Trust."
+            )
+            st.stop()
+
+        if _pac_recs_df.empty:
             st.info(
                 "No recommendations recorded yet. As Today's Brief surfaces "
                 "picks day after day this page will fill in."
@@ -31757,9 +31770,45 @@ elif page == "📊 Predictive Analytics":
     else:
         _pac_enriched = st.session_state["_pac_enriched"]
 
+    # ── Page population — scope + weights-version + ETF filters, then collapse
+    # to one row per ticker, applied ONCE so every lens reads the same set.
+    # `_pac_enriched` in session_state stays RAW on purpose: Behavioral
+    # Fingerprint's opening-window pattern reads it directly.
+    _pac_pop = prepare_population(_pac_enriched)
+    _pac_reps         = _pac_pop["reps"]
+    _pac_reps_by_type = _pac_pop["reps_by_type"]
+
+    _pac_scope_bits = [f"{_pac_pop['n_excluded_version']:,} older-weights rows"]
+    if _pac_pop["n_excluded_version_none"]:
+        _pac_scope_bits.append(
+            f"{_pac_pop['n_excluded_version_none']:,} rows with no recorded weights version"
+        )
+    # asset_type is not yet stamped on recommendation rows by any writer, so
+    # a 0 here means "none tagged", not "checked and found none".
+    if _pac_pop["n_excluded_etf"] > 0:
+        _pac_scope_bits.append(f"{_pac_pop['n_excluded_etf']:,} ETF rows")
+    else:
+        _pac_scope_bits.append("ETF rows: none tagged (asset type isn't recorded on recommendations yet)")
+    _pac_scope_bits.append(
+        f"{_pac_pop['n_excluded_out_of_scope_rows']:,} awareness-only Buy Candidate rows "
+        "(see 📜 Recommendations History for the all-types view)"
+    )
+    _pac_anchor_note = (
+        f" {_pac_pop['n_out_of_scope_anchor']:,} ticker(s) are represented by a buy you "
+        "made on a Buy Candidate day (your fill is the evidence, so it anchors the ticker)."
+        if _pac_pop["n_out_of_scope_anchor"] else ""
+    )
+    st.caption(
+        "Scope: gated BUY calls (New Position / Add to Winner / Watchlist Enter Now), "
+        f"scored under the current composite weights (v{COMPOSITE_WEIGHTS_VERSION}); "
+        f"each ticker counted once. {_pac_pop['n_raw_rows']:,} daily rows → "
+        f"{_pac_pop['n_tickers_graded']:,} graded tickers; excluded: "
+        + ", ".join(_pac_scope_bits) + "." + _pac_anchor_note
+    )
+
     # ── Page-level coverage strip ──────────────────────────────────────────────
     _pac_n_total  = len(_pac_enriched)
-    _pac_n_graded = total_graded(_pac_enriched)
+    _pac_n_graded = _pac_pop["n_tickers_graded"]
     _pac_n_mature = sum(1 for r in _pac_enriched if not r.get("outcome_maturing"))
     _pac_n_pending = _pac_n_total - _pac_n_mature
 
@@ -31783,16 +31832,18 @@ elif page == "📊 Predictive Analytics":
     _pac_bm2.metric(
         "Outcomes available", f"{_pac_n_mature:,}",
         help=(
-            f"Recommendations {REC_SCORE_MIN_DAYS}+ days old — enough time for a "
+            f"Recommendation rows (all types) {REC_SCORE_MIN_DAYS}+ days old — enough time for a "
             f"price outcome to be meaningful. The remaining {_pac_n_pending} were posted "
             f"in the last {REC_SCORE_MIN_DAYS} days and are excluded until their results window closes."
         ),
     )
     _pac_bm3.metric(
-        "Used in this analysis", f"{_pac_n_graded:,}",
+        "Distinct tickers graded", f"{_pac_n_graded:,}",
         help=(
-            "Recommendations with a complete outcome: price data and a market "
-            "comparison (SPY) both available. This is the working dataset for all tabs below."
+            "Distinct tickers in scope (see the Scope line above) with a complete "
+            "outcome: price data and a market comparison (SPY) both available. Each "
+            "ticker counts once, at its first surfacing — this is the working dataset "
+            "for the tabs below."
         ),
     )
 
@@ -31855,7 +31906,8 @@ elif page == "📊 Predictive Analytics":
                 "should be zero"
             )
         st.caption(
-            f"⚖️ Of {_pac_ung['n_mature']:,} matured recommendations, "
+            f"⚖️ Of {_pac_ung['n_mature']:,} matured recommendation rows (all types, "
+            f"before the scope filter and per-ticker collapse), "
             f"**{_pac_ung['n_graded']:,}** could be scored and "
             f"**{_pac_ung['n_ungraded']:,}** could not: " + "; ".join(_ung_bits) + "."
         )
@@ -31918,7 +31970,7 @@ elif page == "📊 Predictive Analytics":
                 "coverage limit rather than a skew."
             )
             st.warning(
-                f"⚠️ **More matured recommendations were dropped for fixable or unknown "
+                f"⚠️ **More matured recommendation rows were dropped for fixable or unknown "
                 f"reasons ({_pac_ung['n_droppable']:,}) than were scored "
                 f"({_pac_ung['n_graded']:,}).** The figures on this page describe the "
                 f"minority that could be scored.{_ung_bias_note} Treat the averages as "
@@ -31929,27 +31981,39 @@ elif page == "📊 Predictive Analytics":
     if _pac_n_graded < _pac_min_required:
         st.info(
             f"📅 Not enough outcome history yet — the analysis needs at least "
-            f"**{_pac_min_required} recommendations with tracked outcomes** (you have {_pac_n_graded}). "
+            f"**{_pac_min_required} distinct tickers with tracked outcomes** in scope (you have {_pac_n_graded}). "
             f"As the app surfaces more picks and their results windows close "
             f"({REC_SCORE_MIN_DAYS}+ days old, price data available), this page will fill in."
         )
         st.stop()
 
     # ── Pre-compute all models once ────────────────────────────────────────────
-    _pac_bands      = calibration_by_score_band(_pac_enriched, band_size=PREDICTIVE_SCORE_BAND_SIZE)
+    # Every lens reads the collapsed population: `_pac_reps` (one row per
+    # ticker), except the per-type breakdown, which reads `_pac_reps_by_type`
+    # (one row per (ticker, rec_type)).
+    _pac_bands      = calibration_by_score_band(_pac_reps, band_size=PREDICTIVE_SCORE_BAND_SIZE)
     _pac_thresh     = personal_alpha_threshold(_pac_bands, min_n=PREDICTIVE_MIN_BAND_N)
-    _pac_sectors    = calibration_by_sector(_pac_enriched, min_n=PREDICTIVE_MIN_BAND_N - 2)
-    _pac_avm        = acted_vs_missed_comparison(_pac_enriched)
-    _pac_conv       = by_conviction(_pac_enriched, min_n=3)
-    _pac_rtype      = by_rec_type_stats(_pac_enriched, min_n=3)
-    _pac_sec_alph   = by_sector_alpha(_pac_enriched, min_n=3)
-    _pac_by_verdict = calibration_by_verdict(_pac_enriched, min_n=0)
+    _pac_banner     = threshold_banner(_pac_bands, _pac_thresh, PREDICTIVE_MIN_BAND_N)
+    _pac_sectors    = calibration_by_sector(_pac_reps, min_n=PREDICTIVE_MIN_BAND_N - 2)
+    _pac_avm        = acted_vs_missed_comparison(_pac_reps)
+    _pac_conv       = by_conviction(_pac_reps, min_n=3)
+    _pac_rtype      = by_rec_type_stats(_pac_reps_by_type, min_n=3)
+    _pac_sec_alph   = by_sector_alpha(_pac_reps, min_n=3)
+    _pac_by_verdict = calibration_by_verdict(_pac_reps, min_n=0)
     _pac_sent_align = sentiment_alignment_summary(_pac_by_verdict, min_n=PREDICTIVE_MIN_BAND_N)
 
     # Entry Timing bands — only present once the user has opened the tab and
     # clicked "Analyze" at least once this session (heavy per-ticker forward
     # price fetch, so it's opt-in rather than computed on every page load).
-    _et_cache_for_directive = st.session_state.get("_entry_timing_cache")
+    # A cache built before Day+20 became a true fixed-horizon fetch has rows
+    # without `day20_alpha` — treated as absent (force a re-Analyze) rather
+    # than banding a Day+20 column that would silently read empty.
+    _et_cache_stored = st.session_state.get("_entry_timing_cache")
+    _et_cache_is_stale = (
+        _et_cache_stored is not None
+        and any("day20_alpha" not in _r for _r in _et_cache_stored)
+    )
+    _et_cache_for_directive = None if _et_cache_is_stale else _et_cache_stored
     _pac_entry_timing_bands = (
         by_divergence_band(
             _et_cache_for_directive,
@@ -31976,57 +32040,23 @@ elif page == "📊 Predictive Analytics":
         # the original "*...*" emphasis syntax.
         return f"  *(evidence → {_pd['source_tab']})*" if _pd["source_tab"] != "all models" else ""
 
-    def _pac_src_note_html(_pd: dict) -> str:
-        # For the raw HTML action card below: CommonMark does not re-run
-        # inline markdown emphasis on text inside an HTML block, so "*...*"
-        # would render as literal asterisks instead of italics -- plain text,
-        # italicized via the wrapping div's CSS font-style instead.
-        return f"(evidence → {_pd['source_tab']})" if _pd["source_tab"] != "all models" else ""
-
-    # Partition: actions get the prominent side-by-side treatment; the final
-    # "Based on N graded outcomes" context line (source_tab == "all models",
-    # always last per synthesize_directives' sort) stays a plain footnote as
-    # before; everything else (caution/watch/other context) collapses into a
-    # single expander so 5+ same-weight colored bars don't read as one flat list.
-    _pac_actions  = [d for d in _pac_directives if d["type"] == "action"]
+    # No directive is "action" any more (2026-09-30 owner decision: this page
+    # is a retrospective diagnostic; the live gates own entry and sizing), so
+    # the old side-by-side action cards + collapsed "Also worth noting"
+    # expander would have hidden EVERY directive behind a click. Caution and
+    # watch observations now render directly; the "Based on N graded tickers"
+    # context line (source_tab == "all models", always last) stays a footnote.
     _pac_footnote = next((d for d in _pac_directives if d["source_tab"] == "all models"), None)
-    _pac_others   = [
-        d for d in _pac_directives
-        if d["type"] != "action" and d is not _pac_footnote
-    ]
+    _pac_others   = [d for d in _pac_directives if d is not _pac_footnote]
 
-    if _pac_actions:
-        # A single CSS-grid block (not st.columns, which puts each column in
-        # its own independent DOM node and can't equalize height across them)
-        # so cards in the same row genuinely share a height, matching the
-        # approved mockup instead of drifting per-card with text length.
-        _pac_ncols = min(len(_pac_actions), 3)
-        _pac_cards_html = "".join(
-            "<div style='background:#052e16;border-left:4px solid #4ade80;border-radius:8px;"
-            "padding:14px 16px;display:flex;flex-direction:column;"
-            "font-size:0.92em;line-height:1.5;color:#dcfce7'>"
-            f"<div><b style='color:#fff'>Action:</b> {_pd['text']}</div>"
-            f"<div style='margin-top:auto;padding-top:10px;font-style:italic;opacity:0.85'>"
-            f"{_pac_src_note_html(_pd)}</div>"
-            "</div>"
-            for _pd in _pac_actions
-        )
-        st.markdown(
-            f"<div style='display:grid;grid-template-columns:repeat({_pac_ncols},1fr);"
-            f"gap:10px;margin-bottom:8px'>{_pac_cards_html}</div>",
-            unsafe_allow_html=True,
-        )
-
-    if _pac_others:
-        with st.expander(f"📎 Also worth noting ({len(_pac_others)})", expanded=False):
-            for _pd in _pac_others:
-                _src_note = _pac_src_note(_pd)
-                if _pd["type"] == "caution":
-                    st.warning(f"**Caution:** {_pd['text']}{_src_note}")
-                elif _pd["type"] == "watch":
-                    st.info(f"**Watch:** {_pd['text']}{_src_note}")
-                else:
-                    st.caption(f"ℹ️ {_pd['text']}{_src_note}")
+    for _pd in _pac_others:
+        _src_note = _pac_src_note(_pd)
+        if _pd["type"] == "caution":
+            st.warning(f"**Caution:** {_pd['text']}{_src_note}")
+        elif _pd["type"] == "watch":
+            st.info(f"**Watch:** {_pd['text']}{_src_note}")
+        else:
+            st.caption(f"ℹ️ {_pd['text']}{_src_note}")
 
     if _pac_footnote:
         st.caption(f"ℹ️ {_pac_footnote['text']}")
@@ -32050,36 +32080,28 @@ elif page == "📊 Predictive Analytics":
             "not just in theory, but in your personal history?"
         )
 
-        if _pac_thresh is not None:
-            _pac_thresh_n = sum(b["n"] for b in _pac_bands if b["band_floor"] >= _pac_thresh)
-            _pac_thresh_alpha = next(
-                (b["avg_alpha"] for b in _pac_bands if b["band_floor"] == _pac_thresh), None
-            )
-            st.success(
-                f"**Your personal alpha threshold: composite ≥ {_pac_thresh}**  \n"
-                f"Every score band from {_pac_thresh} upward has delivered positive "
-                f"alpha in your history ({_pac_thresh_n} outcomes"
-                + (f"; avg alpha at this band: {_pac_thresh_alpha:+.1f}pp vs SPY"
-                   if _pac_thresh_alpha is not None else "")
-                + ").  \nThis is where the engine's signal has actually worked for *you*."
-            )
+        # Headline text (counts, qualifying bands, thin bands above the floor)
+        # is built by the pure `threshold_banner`; it returns None when there
+        # is no threshold, or when it can't truthfully say "beat SPY".
+        if _pac_banner is not None:
+            st.success(_pac_banner["text"])
         else:
             st.info(
-                "📊 **Personal threshold: not yet determinable.**  \n"
-                f"Either no score band has ≥ {PREDICTIVE_MIN_BAND_N} outcomes yet, "
-                "or alpha hasn't been consistently positive above any single floor. "
-                "More history will sharpen this."
+                "📊 **Personal threshold: not yet determinable** — no score band yet "
+                "both beat SPY on average AND in at least half of its tickers, with "
+                f"≥{PREDICTIVE_MIN_BAND_N} tickers. More history will sharpen this."
             )
 
         st.subheader("Calibration Curve — Avg Alpha by Score Band")
         st.caption(
             "Height = average alpha (your return minus SPY over the same window). "
-            f"Bands with fewer than {PREDICTIVE_MIN_BAND_N} outcomes shown in grey — indicative only."
+            f"Bands with fewer than {PREDICTIVE_MIN_BAND_N} tickers shown in grey — indicative only. "
+            "Each ticker counts once, at its first surfacing."
         )
         if _pac_bands:
             _pac_bar_colors = []
             for _b in _pac_bands:
-                if _b["n"] < PREDICTIVE_MIN_BAND_N:
+                if _b["is_thin"]:
                     _pac_bar_colors.append("#666666")
                 elif (_b["avg_alpha"] or 0) >= 0:
                     _pac_bar_colors.append("#00C851")
@@ -32090,15 +32112,16 @@ elif page == "📊 Predictive Analytics":
                 x=[_b["band_label"] for _b in _pac_bands],
                 y=[_b["avg_alpha"] if _b["avg_alpha"] is not None else 0 for _b in _pac_bands],
                 marker_color=_pac_bar_colors,
-                text=[f"{_b['n']} outcomes" for _b in _pac_bands],
+                text=[f"{_b['n']} tickers" for _b in _pac_bands],
                 textposition="inside",
                 insidetextanchor="middle",
-                customdata=[[_b["p_positive_alpha"], _b["n_acted"], _b["n_missed"]]
+                customdata=[[_b["p_positive_alpha"], _b["n_acted"], _b["n_missed"], _b["n"]]
                             for _b in _pac_bands],
                 hovertemplate=(
                     "<b>%{x}</b><br>"
                     "Avg alpha: %{y:+.2f}pp<br>"
                     "P(positive alpha): %{customdata[0]:.0%}<br>"
+                    "Tickers: %{customdata[3]}<br>"
                     "Acted: %{customdata[1]} · Missed: %{customdata[2]}<extra></extra>"
                 ),
             ))
@@ -32132,8 +32155,10 @@ elif page == "📊 Predictive Analytics":
 
         with st.expander("📋 Full outcome history", expanded=False):
             st.caption(
-                f"Each row is one recommendation with a closed results window "
-                f"({REC_SCORE_MIN_DAYS}+ days old, price data available).  "
+                f"Each row is one ticker in scope — its representative surfacing (your "
+                f"acted row if you bought it, else its first gradable one) — with a closed "
+                f"results window ({REC_SCORE_MIN_DAYS}+ days old, price data available). "
+                f"'Surfacings' = how many daily in-scope rows that ticker had.  "
                 f"Recommendations from the last {REC_SCORE_MIN_DAYS} days are not shown here — "
                 f"their results are still pending and will appear automatically once enough "
                 f"time has passed.  Outcome % = price change since the recommendation date.  "
@@ -32150,8 +32175,9 @@ elif page == "📊 Predictive Analytics":
                     "Outcome %":   (f"{r['outcome_pct']:+.1f}%" if r.get("outcome_pct") is not None else "—"),
                     "Alpha pp":    (f"{r['alpha_pct']:+.1f}" if r.get("alpha_pct") is not None else "—"),
                     "Days held":   r.get("days_since"),
+                    "Surfacings":  _pac_pop["surfacings_by_ticker"].get(r["ticker"]),
                 }
-                for r in _pac_enriched
+                for r in _pac_reps
                 if not r.get("outcome_maturing") and r.get("alpha_pct") is not None
             ]
             if _pac_raw_rows:
@@ -32175,7 +32201,11 @@ elif page == "📊 Predictive Analytics":
         # 2026-09-24 app review E4: this reads the full rec set with no date
         # filter -- state that plainly so a reader doesn't assume it shares
         # a window with Recommendations History's own selectable range.
-        st.caption("Window: all-time — every matured BUY call, no date filter.")
+        st.caption(
+            "Window: all-time — every matured gated BUY call in scope, one per ticker, "
+            "no date filter. These numbers can differ from 🧾 Summary's Engine Track "
+            "Record, which scores New Positions only."
+        )
 
         _avm_acted  = _pac_avm["acted"]
         _avm_missed = _pac_avm["missed"]
@@ -32231,27 +32261,44 @@ elif page == "📊 Predictive Analytics":
                 f"{_avm_missed['p_positive_alpha']:.0%}" if _avm_missed["p_positive_alpha"] is not None else "—",
                 help="% of missed recommendations that would have beaten SPY",
             )
+        st.caption(
+            "Acted outcomes are marked from your fill to today's price, as if still "
+            "held — not realized P&L. Counts are distinct tickers."
+        )
 
         # ── Acted vs Missed alpha by score band ────────────────────────────────
         st.subheader("Acted vs Missed Alpha — by Score Band")
         st.caption("Do the bands where you chose to act align with where your alpha is strongest?")
 
         _dq_band_labels, _dq_act_y, _dq_mis_y = [], [], []
+        _dq_act_n, _dq_mis_n = [], []
         for _b in _pac_bands:
             if _b["avg_alpha_acted"] is not None or _b["avg_alpha_missed"] is not None:
                 _dq_band_labels.append(_b["band_label"])
                 _dq_act_y.append(_b["avg_alpha_acted"] if _b["avg_alpha_acted"] is not None else 0)
                 _dq_mis_y.append(_b["avg_alpha_missed"] if _b["avg_alpha_missed"] is not None else 0)
+                _dq_act_n.append(_b["n_acted"])
+                _dq_mis_n.append(_b["n_missed"])
 
         if _dq_band_labels:
             _dq_fig = go.Figure()
             _dq_fig.add_trace(go.Bar(
                 name="Acted", x=_dq_band_labels, y=_dq_act_y,
                 marker_color="#00C851", opacity=0.85,
+                customdata=[[_n] for _n in _dq_act_n],
+                hovertemplate=(
+                    "<b>%{x}</b> · Acted<br>Avg alpha: %{y:+.2f}pp<br>"
+                    "n: %{customdata[0]} tickers<extra></extra>"
+                ),
             ))
             _dq_fig.add_trace(go.Bar(
                 name="Passed", x=_dq_band_labels, y=_dq_mis_y,
                 marker_color="#4A90D9", opacity=0.85,
+                customdata=[[_n] for _n in _dq_mis_n],
+                hovertemplate=(
+                    "<b>%{x}</b> · Passed<br>Avg alpha: %{y:+.2f}pp<br>"
+                    "n: %{customdata[0]} tickers<extra></extra>"
+                ),
             ))
             _dq_fig.add_hline(
                 y=0, line_dash="dash", line_color="rgba(255,255,255,0.4)", line_width=1
@@ -32283,7 +32330,7 @@ elif page == "📊 Predictive Analytics":
                     "#00C851" if (_c["avg_alpha"] or 0) >= 0 else "#ff4444"
                     for _c in _pac_conv
                 ],
-                text=[f"{_c['n']} outcomes" for _c in _pac_conv],
+                text=[f"{_c['n']} tickers" for _c in _pac_conv],
                 textposition="inside",
                 insidetextanchor="middle",
                 customdata=[[_c["p_positive_alpha"]] for _c in _pac_conv],
@@ -32308,17 +32355,21 @@ elif page == "📊 Predictive Analytics":
                 _cc.metric(
                     _cd["conviction"],
                     f"{_cd['avg_alpha']:+.1f}pp" if _cd["avg_alpha"] is not None else "—",
-                    f"{_cd['n']} outcomes · {_cd['p_positive_alpha']:.0%} hit rate"
-                    if _cd["p_positive_alpha"] is not None else f"{_cd['n']} outcomes",
+                    f"{_cd['n']} tickers · {_cd['p_positive_alpha']:.0%} hit rate"
+                    if _cd["p_positive_alpha"] is not None else f"{_cd['n']} tickers",
                     delta_color="normal",
                 )
         else:
-            st.info("Not enough outcomes per conviction tier yet (need ≥ 3 each).")
+            st.info("Not enough tickers per conviction tier yet (need ≥ 3 each).")
 
         st.divider()
 
         # ── Rec Type ───────────────────────────────────────────────────────────
         st.subheader("By Recommendation Type")
+        st.caption(
+            "Each ticker counts once per type — a ticker that surfaced as both a New "
+            "Position and an Add to Winner appears once in each."
+        )
         if _pac_rtype:
             _rt_fig = go.Figure(go.Bar(
                 x=[_r["label"] for _r in _pac_rtype],
@@ -32327,7 +32378,7 @@ elif page == "📊 Predictive Analytics":
                     "#00C851" if (_r["avg_alpha"] or 0) >= 0 else "#ff4444"
                     for _r in _pac_rtype
                 ],
-                text=[f"{_r['n']} outcomes" for _r in _pac_rtype],
+                text=[f"{_r['n']} tickers" for _r in _pac_rtype],
                 textposition="inside",
                 insidetextanchor="middle",
                 customdata=[[_r["p_positive_alpha"]] for _r in _pac_rtype],
@@ -32352,12 +32403,12 @@ elif page == "📊 Predictive Analytics":
                 _rtc.metric(
                     _rtd["label"],
                     f"{_rtd['avg_alpha']:+.1f}pp" if _rtd["avg_alpha"] is not None else "—",
-                    f"{_rtd['n']} outcomes · {_rtd['p_positive_alpha']:.0%} hit rate"
-                    if _rtd["p_positive_alpha"] is not None else f"{_rtd['n']} outcomes",
+                    f"{_rtd['n']} tickers · {_rtd['p_positive_alpha']:.0%} hit rate"
+                    if _rtd["p_positive_alpha"] is not None else f"{_rtd['n']} tickers",
                     delta_color="normal",
                 )
         else:
-            st.info("Not enough outcomes per recommendation type yet (need ≥ 3 each).")
+            st.info("Not enough tickers per recommendation type yet (need ≥ 3 each).")
 
     # ── TAB 4 — Sector Alpha ───────────────────────────────────────────────────
     with _pa_tab4:
@@ -32377,7 +32428,7 @@ elif page == "📊 Predictive Analytics":
                 x=[_s["sector"] for _s in _pac_sec_alph],
                 y=[_s["avg_alpha"] if _s["avg_alpha"] is not None else 0 for _s in _pac_sec_alph],
                 marker_color=_sa_colors,
-                text=[f"{_s['n']} outcomes" for _s in _pac_sec_alph],
+                text=[f"{_s['n']} tickers" for _s in _pac_sec_alph],
                 textposition="inside",
                 insidetextanchor="middle",
                 customdata=[[_s["p_positive_alpha"], _s["avg_outcome_pct"]] for _s in _pac_sec_alph],
@@ -32407,23 +32458,23 @@ elif page == "📊 Predictive Analytics":
                     st.success(
                         f"**Strongest sector: {_sa_best['sector']}**  \n"
                         f"Avg alpha {_sa_best['avg_alpha']:+.1f}pp · "
-                        f"Hit rate {_sa_best['p_positive_alpha']:.0%} · {_sa_best['n']} outcomes"
+                        f"Hit rate {_sa_best['p_positive_alpha']:.0%} · {_sa_best['n']} tickers"
                     )
             with _sa_col2:
                 if (_sa_worst["avg_alpha"] or 0) < 0:
                     st.warning(
                         f"**Weakest sector: {_sa_worst['sector']}**  \n"
                         f"Avg alpha {_sa_worst['avg_alpha']:+.1f}pp · "
-                        f"Hit rate {_sa_worst['p_positive_alpha']:.0%} · {_sa_worst['n']} outcomes"
+                        f"Hit rate {_sa_worst['p_positive_alpha']:.0%} · {_sa_worst['n']} tickers"
                     )
         else:
-            st.info("Not enough outcomes per sector yet (need ≥ 3 each).")
+            st.info("Not enough tickers per sector yet (need ≥ 3 each).")
 
         # ── Sector × Score heatmap ─────────────────────────────────────────────
         st.subheader("Sector × Score Tier Heatmap")
         st.caption(
             "Does a higher score improve alpha within each sector? "
-            f"Cells with fewer than {PREDICTIVE_MIN_BAND_N - 2} outcomes hidden."
+            f"Cells with fewer than {PREDICTIVE_MIN_BAND_N - 2} tickers hidden."
         )
         if _pac_sectors:
             _pac_band_order = ["< 65", "65–74", "75+"]
@@ -32432,7 +32483,7 @@ elif page == "📊 Predictive Analytics":
                 _row = {"Sector": _sec}
                 for _band in _pac_band_order:
                     cell = _pac_sectors.get(_sec, {}).get(_band)
-                    _row[_band] = f"{cell['avg_alpha']:+.1f}pp ({cell['n']} outcomes)" if cell else "—"
+                    _row[_band] = f"{cell['avg_alpha']:+.1f}pp ({cell['n']} tickers)" if cell else "—"
                 _pac_hm_data.append(_row)
 
             _pac_hm_df = _pa_pd.DataFrame(_pac_hm_data).set_index("Sector")
@@ -32456,7 +32507,7 @@ elif page == "📊 Predictive Analytics":
             )
         else:
             st.info(
-                f"No sector cells have ≥ {PREDICTIVE_MIN_BAND_N - 2} outcomes yet."
+                f"No sector cells have ≥ {PREDICTIVE_MIN_BAND_N - 2} tickers yet."
             )
 
     # ── TAB 5 — Sentiment Alignment ───────────────────────────────────────────
@@ -32475,6 +32526,7 @@ elif page == "📊 Predictive Analytics":
         _sa_edge_pp     = _pac_sent_align.get("edge_pp")
         _sa_conf_n      = _pac_sent_align.get("confirmed_n", 0)
         _sa_other_n     = _pac_sent_align.get("other_n", 0)
+        _sa_n_unknown   = _pac_sent_align.get("n_unknown", 0)
 
         if _sa_conclusion == "confirmed_wins":
             st.success(
@@ -32493,9 +32545,16 @@ elif page == "📊 Predictive Analytics":
         else:
             st.info(
                 f"📅 **Not enough data yet.** Both Confirmed and non-Confirmed groups need "
-                f"at least **{PREDICTIVE_MIN_BAND_N} graded recommendations** to compare "
+                f"at least **{PREDICTIVE_MIN_BAND_N} graded tickers** to compare "
                 f"(Confirmed: {_sa_conf_n}, others: {_sa_other_n}).  \n"
                 "Return once more picks have matured past their minimum grading window."
+            )
+
+        if _sa_n_unknown:
+            st.caption(
+                f"{_sa_n_unknown:,} graded ticker(s) have no recorded cross-check verdict "
+                "(Unknown) and are excluded from BOTH sides of this comparison — no "
+                "verdict means they were neither aligned nor misaligned."
             )
 
         # ── Side-by-side: Confirmed vs Non-Confirmed ──────────────────────────
@@ -32526,11 +32585,13 @@ elif page == "📊 Predictive Analytics":
                 f"{_sa_other_alpha:+.1f}pp" if _sa_other_alpha is not None else "—",
             )
             _other_p_pos = None
+            # Unknown excluded here too, matching other_n/other_avg_alpha from
+            # sentiment_alignment_summary.
             _other_alphas = [b["p_positive_alpha"] for b in _pac_by_verdict
-                             if b["verdict"].lower() != "confirmed"
+                             if b["verdict"].lower() not in ("confirmed", "unknown")
                              and b.get("p_positive_alpha") is not None]
             _other_ns     = [b["n"] for b in _pac_by_verdict
-                             if b["verdict"].lower() != "confirmed"
+                             if b["verdict"].lower() not in ("confirmed", "unknown")
                              and b.get("p_positive_alpha") is not None]
             if _other_alphas and _other_ns:
                 _other_p_pos = sum(a * n for a, n in zip(_other_alphas, _other_ns)) / sum(_other_ns)
@@ -32544,20 +32605,20 @@ elif page == "📊 Predictive Analytics":
         st.subheader("Avg Alpha by Verdict")
         st.caption(
             "Each bar shows the average alpha (your return minus SPY over the same window) "
-            "for all graded recommendations with that verdict. Bars in grey have fewer than "
-            f"{PREDICTIVE_MIN_BAND_N} outcomes — indicative only."
+            "for all graded tickers with that verdict. Bars in grey have fewer than "
+            f"{PREDICTIVE_MIN_BAND_N} tickers — indicative only."
         )
         if _pac_by_verdict:
             # "Engine-Confirmed" not bare "Confirmed" — same cross-check-verdict
             # qualifier used on Recommendations History (2026-08-04 UX audit CA4).
             _sv_labels = [
                 ("Engine-Confirmed" if b["verdict"].lower() == "confirmed" else b["verdict"].title())
-                + f" · {b['n']} outcomes"
+                + f" · {b['n']} tickers"
                 for b in _pac_by_verdict
             ]
             _sv_alphas = [b["avg_alpha"] if b["avg_alpha"] is not None else 0 for b in _pac_by_verdict]
             _sv_colors = [
-                "#666666" if b["n"] < PREDICTIVE_MIN_BAND_N
+                "#666666" if b["is_thin"]
                 else ("#00C851" if (b["avg_alpha"] or 0) >= 0 else "#ff4444")
                 for b in _pac_by_verdict
             ]
@@ -32591,7 +32652,7 @@ elif page == "📊 Predictive Analytics":
                 _sv_rows = [
                     {
                         "Verdict":        b["verdict"].title(),
-                        "Recommendations": b["n"],
+                        "Tickers":        b["n"],
                         "Acted":          b["n_acted"],
                         "Avg Alpha (pp)": f"{b['avg_alpha']:+.1f}" if b["avg_alpha"] is not None else "—",
                         "Hit Rate":       f"{b['p_positive_alpha']:.0%}" if b["p_positive_alpha"] is not None else "—",
@@ -32632,7 +32693,9 @@ elif page == "📊 Predictive Analytics":
             with st.spinner(
                 "Fetching forward prices for each divergent pick — this may take a moment…"
             ):
-                _et_new_picks = [r for r in _pac_enriched if r.get("rec_type") == "new_pick"]
+                # Version/ETF-filtered population (same scope rules as every
+                # other tab), new_pick only, then the tab's own episode dedupe.
+                _et_new_picks = [r for r in _pac_pop["scoped_raw"] if r.get("rec_type") == "new_pick"]
                 _et_deduped = dedupe_repeated_tickers(
                     _et_new_picks,
                     window_days=ENTRY_TIMING_DEDUP_WINDOW_DAYS,
@@ -32652,14 +32715,30 @@ elif page == "📊 Predictive Analytics":
                             _et_rec["ticker"], _et_rec["rec_date"], _et_entry_price, 5,
                             _pac_spy_by_date, historical_close_fn=_cached_historical_close,
                         )
+                        # True fixed 20-trading-day horizon (was the to-today
+                        # alpha_pct, which is not a Day+20 number).
+                        _et_rec["day20_alpha"] = forward_alpha_at_horizon(
+                            _et_rec["ticker"], _et_rec["rec_date"], _et_entry_price, 20,
+                            _pac_spy_by_date, historical_close_fn=_cached_historical_close,
+                        )
                     else:
                         _et_rec["day1_alpha"] = None
                         _et_rec["day5_alpha"] = None
+                        _et_rec["day20_alpha"] = None
                     _et_rows.append(_et_rec)
                 st.session_state["_entry_timing_cache"] = _et_rows
                 st.rerun()
 
-        _et_cache = st.session_state.get("_entry_timing_cache")
+        # Same staleness rule as the directive precompute above: rows without
+        # `day20_alpha` predate the true Day+20 fetch → treat as not analyzed.
+        _et_cache = _et_cache_for_directive
+
+        if _et_cache_is_stale:
+            st.caption(
+                "ℹ️ Entry Timing results from earlier this session predate the true "
+                "20-trading-day Day+20 horizon, so they aren't shown — click "
+                "**Analyze Entry Timing** again."
+            )
 
         if _et_cache is None:
             st.info(
@@ -32683,7 +32762,9 @@ elif page == "📊 Predictive Analytics":
                 # Same repeated-ticker case that motivated this tab (AMD, in the
                 # design doc) — but computed live off the CURRENT data, un-deduped,
                 # so the callout below never cites a fixed historical example.
-                _et_new_picks_raw = [r for r in _pac_enriched if r.get("rec_type") == "new_pick"]
+                # Un-deduped (it illustrates repetition), but within the same
+                # version/ETF-filtered population as the bands it annotates.
+                _et_new_picks_raw = [r for r in _pac_pop["scoped_raw"] if r.get("rec_type") == "new_pick"]
                 _et_illustrating = find_illustrating_case(
                     _et_new_picks_raw, diverging_max=ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX,
                 )
@@ -32709,33 +32790,35 @@ elif page == "📊 Predictive Analytics":
 
                 st.subheader("Avg Alpha by Divergence Band and Horizon")
                 st.caption(
-                    "Bars, left→right per band: Day+1 · Day+5 · Day+20. Green = positive "
-                    "alpha, red = negative. Bands with fewer than "
-                    f"{PREDICTIVE_MIN_BAND_N} outcomes at a given horizon are indicative "
-                    "only — check the n in the hover/table below."
+                    "Bars, left→right per band: Day+1 · Day+5 · Day+20 — 1, 5 and 20 NYSE "
+                    "trading days after the call. Green = positive alpha, red = negative, "
+                    f"grey = fewer than {PREDICTIVE_MIN_BAND_N} outcomes at that horizon "
+                    "(indicative only — check the n in the hover/table below)."
                 )
 
                 _et_chart_col, _et_cards_col = st.columns([3, 2])
 
                 with _et_chart_col:
                     _et_horizons = [
-                        ("Day+1", "day1_alpha", "day1_n"),
-                        ("Day+5", "day5_alpha", "day5_n"),
-                        ("Day+20", "day20_alpha", "day20_n"),
+                        ("Day+1", "day1_alpha", "day1_n", "day1_is_thin"),
+                        ("Day+5", "day5_alpha", "day5_n", "day5_is_thin"),
+                        ("Day+20", "day20_alpha", "day20_n", "day20_is_thin"),
                     ]
                     _et_x = [
                         f"{_et_band_meta[b['band_label']]['axis']}<br>n={b['n']}"
                         for b in _et_bands
                     ]
                     _et_fig = go.Figure()
-                    for _h_label, _h_alpha_key, _h_n_key in _et_horizons:
+                    for _h_label, _h_alpha_key, _h_n_key, _h_thin_key in _et_horizons:
                         _h_vals = [b[_h_alpha_key] for b in _et_bands]
                         _et_fig.add_trace(go.Bar(
                             name=_h_label,
                             x=_et_x,
                             y=_h_vals,
                             marker_color=[
-                                (_ET_POS if (v or 0) >= 0 else _ET_NEG) for v in _h_vals
+                                ("#666666" if b[_h_thin_key]
+                                 else (_ET_POS if (v or 0) >= 0 else _ET_NEG))
+                                for b, v in zip(_et_bands, _h_vals)
                             ],
                             text=[f"{v:+.1f}%" if v is not None else "—" for v in _h_vals],
                             textposition="outside",
@@ -32773,7 +32856,7 @@ elif page == "📊 Predictive Analytics":
                             if (_et_illustrating and _et_b["band_label"] == "Extreme")
                             else None
                         )
-                        if (_et_b["day1_n"] >= PREDICTIVE_MIN_BAND_N
+                        if (not _et_b["day1_is_thin"]
                                 and _et_b["day1_pct_red"] is not None):
                             _et_headline = (
                                 f"<div style='font-size:1.6rem;font-weight:700;"
@@ -32833,11 +32916,12 @@ elif page == "📊 Predictive Analytics":
                         f"n shown per horizon — each horizon's own outcome count can differ from "
                         f"'N (deduped)' (the band's total divergent picks) since a forward-close "
                         f"fetch can fail for one horizon and not another, and Day+20 only counts "
-                        f"picks old enough to have matured. Bands/horizons below "
+                        f"picks at least 20 trading days old. Bands/horizons below "
                         f"n={PREDICTIVE_MIN_BAND_N} are still shown — "
-                        f"treat as indicative only. Day+1/Day+5 computed as stock return minus "
-                        f"SPY's own Day+1/Day+5 return — never raw %, to avoid mistaking a broad "
-                        f"market move for an entry-timing signal."
+                        f"treat as indicative only. Day+1/Day+5/Day+20 are each a fixed horizon "
+                        f"(1/5/20 NYSE trading days after the call), computed as stock return minus "
+                        f"SPY's own return over the same window — never raw %, and never "
+                        f"'to today', to avoid mistaking a broad market move for an entry-timing signal."
                     )
 
                 if _et_illustrating is not None:
@@ -38778,7 +38862,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **📋 Watchlist** — names you're tracking, with enter-now flags. Defaults to a **🎯 Actionable** filter (just the Enter Now / Near Entry names) rather than showing everything at once — other chips (Hold / Waiting / Remove / All), a ticker search box, and a sort dropdown are there to look further. Old, forgotten names that just became actionable get a "👁️ actionable again" callout.
 - **🧵 Thesis** — read-only consolidation of five features per ticker: your saved **Thesis** (what you believed at entry), **F-1 Review** (AI verdict: Intact / Weakening / Broken), **Thesis Red Team** (erosion score + counter-evidence), **Multi-Agent Debate** (Bull/Bear/Judge verdict), **Analyst Coverage** (saved research + consensus), and **Pre-Mortem** (your stated risk case + breached triggers). Every evidence line carries a **provenance tag** (📊 fact / 🧮 derived / 🏦 analyst opinion / 🤖 AI inference / 🖊 your words) so you always know what kind of claim you're looking at. Missing data is disclosed honestly (e.g. "No debate on record," "Erosion not computed today") rather than silently omitted. A **tension banner** surfaces when the engine composite, F-1 verdict, analyst consensus, and debate verdict genuinely disagree with each other — awareness only, never a gate. **"What changed since last review"** now shows a real diff comparing your two most recent evidence snapshots, reporting material composite moves, erosion shifts, analyst price-target cuts, newly-saved research, market-regime changes, and F-1 verdict changes; when insufficient history exists or no change crossed a threshold, it discloses that honestly instead. Awareness only; never gates or recommends.
 - **🌐 Macro** — market regime, VIX, SPY trend, cross-asset pulse, and economic calendar context. Tone-flip conditions are shown here.
-- **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Six live lenses — Score Calibration, Discretion Value, Signal Breakdown, Sector Alpha, Sentiment Alignment, and Entry Timing — plus a synthesis panel that turns the data into 2–5 actionable directives. Entry Timing asks a narrower question: does momentum running far ahead of the composite score at the moment a pick fires predict a rough first few days? Opt-in (click "Analyze") since it fetches forward prices per pick. Awareness only; never gates. **Read the coverage line at the top before trusting any figure on this page.** It states how many matured recommendations could actually be scored and — for those that could not — exactly why, one reason at a time: sold positions (excluded by design, since realized P&L spans a holding period no single market window can benchmark), recommendations with no current price, ones with no entry price logged, and ones the SPY benchmark couldn't cover. The missing-price bucket is the one worth watching: a failed price lookup tends to happen on delisted, acquired or renamed tickers, so those exclusions are **not random** and the names are listed so you can see them. If more matured recommendations were dropped than scored, an amber note says so — every average on the page describes only the ones that could be scored.
+- **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Six live lenses — Score Calibration, Discretion Value, Signal Breakdown, Sector Alpha, Sentiment Alignment, and Entry Timing — plus a synthesis panel ("What This Means For You") that turns the data into short **watch / caution observations** about your own history, never size-up/skip instructions (the live gates own entry and sizing). **Scope, stated on a line under the title:** only gated BUY calls (New Position / Add to Winner / Watchlist Enter Now) scored under the *current* composite weights; awareness-only Buy Candidate rows, rows scored under older weights (or with no recorded weights version), and ETFs are excluded and counted. **Every count is distinct tickers**, each at its first surfacing (your acted row if you bought it) — a name the scanner re-surfaced for 20 days counts once, not 20 times. The **personal threshold** on Score Calibration is the lowest composite floor where every band at or above it with enough tickers beat SPY *both* on average *and* in at least half of its tickers; thinner bands above it are listed as "not counted". Outcomes run from the call to today's price, and acted outcomes are marked from your fill to today, as if still held — not realized P&L. Entry Timing asks a narrower question: does momentum running far ahead of the composite score at the moment a pick fires predict a rough first few days? Its Day+1 / Day+5 / Day+20 are fixed horizons (1, 5 and 20 trading days after the call). Opt-in (click "Analyze") since it fetches forward prices per pick. Awareness only; never gates. **Read the coverage line at the top before trusting any figure on this page.** It states how many matured recommendations could actually be scored and — for those that could not — exactly why, one reason at a time: sold positions (excluded by design, since realized P&L spans a holding period no single market window can benchmark), recommendations with no current price, ones with no entry price logged, and ones the SPY benchmark couldn't cover. The missing-price bucket is the one worth watching: a failed price lookup tends to happen on delisted, acquired or renamed tickers, so those exclusions are **not random** and the names are listed so you can see them. If more matured recommendations were dropped than scored, an amber note says so — every average on the page describes only the ones that could be scored.
 - **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, a **🧭 Sector Gaps** pointer (sectors you're underweight/unheld that could genuinely diversify this book, linking to the full Diversification Advisor), and Analytics (relative strength, sector rotation, rankings, and a **Portfolio vs. S&P 500** real-sector benchmark tilt — uses each holding's actual market sector, not this app's thematic groupings) for your current holdings.
 - **🏆 Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
 - **🎯 My Edge** — six retrospective-only tabs, no recommendations or gates: **📐 Benchmark Mirror** (money-weighted return vs. a shadow SPY/QQQ portfolio using your real cash flows), **🔬 Workflow ROI**, **📅 Decision Quality**, **🧬 Behavioral Fingerprint** (sample-gated Buy-side and Exit Signal Response patterns), **🪞 Investor Mirror** (conviction alignment, disposition-effect checks, Sizing Alpha, and Premature-Exit Cost), and **🧭 Self vs Engine** (Buy-side and Sell-side alpha comparing your own calls to the engine's). Answers "am I beating passive," "does prep pay off," "am I improving" — never scores anything that feeds a recommendation elsewhere.

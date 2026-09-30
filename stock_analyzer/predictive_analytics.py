@@ -11,7 +11,156 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any, Callable
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_STRONG_BUY
+from stock_analyzer.constants import (
+    COMPOSITE_BUY,
+    COMPOSITE_STRONG_BUY,
+    COMPOSITE_WEIGHTS_VERSION,
+    PREDICTIVE_MIN_BAND_N,
+)
+
+
+# ── Page population (scope + version + ETF filters, then collapse) ─────────────
+# Gated BUY calls only. `buy_candidate` is awareness-only (never gated), so it
+# is excluded from this page's grading and disclosed as excluded; 📜
+# Recommendations History keeps the all-types view.
+ACTIONABLE_REC_TYPES = ("new_pick", "add_winner", "enter_now")
+
+
+def _is_graded(r: dict) -> bool:
+    return not r.get("outcome_maturing") and r.get("alpha_pct") is not None
+
+
+def collapse_by_ticker_rec_type(
+    enriched: list[dict],
+    rec_types: tuple = ACTIONABLE_REC_TYPES,
+) -> list[dict]:
+    """
+    One representative row per (ticker, rec_type) for rec_types in scope —
+    the per-type sibling of `recommendations_history.collapse_recs_by_ticker`
+    (which is per-ticker only), mirroring
+    `rec_events_readout.collapse_by_rec_ticker`'s (rec_type, ticker) key.
+    Feeds `by_rec_type_stats`, where one ticker legitimately belongs to more
+    than one type but must never count twice within one type.
+
+    Pool = the group's acted rows if any, else the whole group. Anchor, in
+    order: earliest GRADED row (not outcome_maturing and alpha_pct not None)
+    → earliest priced row (outcome_pct not None) → earliest dated row → the
+    pool's first row. Earliest-graded first so a young/ungraded first
+    surfacing doesn't knock a ticker out of the graded population when a
+    later surfacing of the same call is gradable.
+
+    Rows missing ticker or with rec_type out of scope are ignored. Returns
+    shallow copies (input not mutated); order not guaranteed.
+    """
+    groups: dict[tuple, list[dict]] = {}
+    for r in enriched:
+        tk = r.get("ticker")
+        rt = r.get("rec_type")
+        if not tk or rt not in rec_types:
+            continue
+        groups.setdefault((tk, rt), []).append(r)
+
+    def _earliest(rows: list[dict]) -> dict | None:
+        dated = [x for x in rows if x.get("rec_date") is not None]
+        if dated:
+            return min(dated, key=lambda x: x["rec_date"])
+        return rows[0] if rows else None
+
+    out: list[dict] = []
+    for grp in groups.values():
+        acted = [x for x in grp if x.get("acted_on")]
+        pool = acted if acted else grp
+        rep = (
+            _earliest([x for x in pool if _is_graded(x)])
+            or _earliest([x for x in pool if x.get("outcome_pct") is not None])
+            or _earliest(pool)
+        )
+        out.append(dict(rep))
+    return out
+
+
+def prepare_population(
+    enriched: list[dict],
+    rec_types: tuple = ACTIONABLE_REC_TYPES,
+    weights_version: int = COMPOSITE_WEIGHTS_VERSION,
+) -> dict:
+    """
+    Build the Predictive Analytics page's single graded population, applied
+    ONCE at page level so every tab reads the same thing.
+
+    1. Version + ETF filters over ALL rec_types (buy_candidate rows are kept
+       at this stage so cross-type acted detection still sees a buy made on a
+       buy_candidate day). A row is kept only when `weights_version ==
+       weights_version` exactly — a None version is EXCLUDED and counted
+       separately, never assumed current. `asset_type` "etf" (normalized) is
+       excluded; None/anything else = stock.
+    2. `reps` = `recommendations_history.collapse_recs_by_ticker(filtered,
+       rec_types)` — one row per ticker (unchanged function).
+    3. `reps_by_type` = `collapse_by_ticker_rec_type(filtered, rec_types)`.
+
+    Returns:
+        reps                          list[dict]  one per ticker in scope
+        reps_by_type                  list[dict]  one per (ticker, rec_type) in scope
+        scoped_raw                    list[dict]  filtered rows with rec_type in scope
+        n_raw_rows                    int  len(enriched)
+        n_raw_graded                  int  graded rows in scoped_raw
+        n_tickers_graded              int  graded reps (== distinct graded tickers)
+        n_excluded_version            int  rows with a non-None, non-current version
+        n_excluded_version_none       int  rows with version None
+        n_excluded_etf                int  ETF rows (that passed the version filter)
+        n_excluded_out_of_scope_rows  int  version/ETF-passing rows outside rec_types
+        n_out_of_scope_anchor         int  reps whose anchor row's rec_type is out of scope
+        surfacings_by_ticker          dict {ticker: in-scope row count}
+
+    Does not mutate its input (collapse functions return copies; filtering
+    only builds new lists).
+    """
+    from stock_analyzer.asset_type import ASSET_TYPE_ETF, normalize
+    from stock_analyzer.recommendations_history import collapse_recs_by_ticker
+
+    n_excl_version = 0
+    n_excl_version_none = 0
+    n_excl_etf = 0
+    filtered: list[dict] = []
+    for r in enriched:
+        wv = r.get("weights_version")
+        if wv is None:
+            n_excl_version_none += 1
+            continue
+        if wv != weights_version:
+            n_excl_version += 1
+            continue
+        if normalize(r.get("asset_type")) == ASSET_TYPE_ETF:
+            n_excl_etf += 1
+            continue
+        filtered.append(r)
+
+    scoped_raw = [r for r in filtered if r.get("rec_type") in rec_types]
+    n_out_of_scope_rows = len(filtered) - len(scoped_raw)
+
+    reps = collapse_recs_by_ticker(filtered, rec_types=rec_types)
+    reps_by_type = collapse_by_ticker_rec_type(filtered, rec_types)
+
+    surfacings: dict[str, int] = {}
+    for r in scoped_raw:
+        tk = r.get("ticker")
+        if tk:
+            surfacings[tk] = surfacings.get(tk, 0) + 1
+
+    return {
+        "reps":                         reps,
+        "reps_by_type":                 reps_by_type,
+        "scoped_raw":                   scoped_raw,
+        "n_raw_rows":                   len(enriched),
+        "n_raw_graded":                 sum(1 for r in scoped_raw if _is_graded(r)),
+        "n_tickers_graded":             sum(1 for r in reps if _is_graded(r)),
+        "n_excluded_version":           n_excl_version,
+        "n_excluded_version_none":      n_excl_version_none,
+        "n_excluded_etf":               n_excl_etf,
+        "n_excluded_out_of_scope_rows": n_out_of_scope_rows,
+        "n_out_of_scope_anchor":        sum(1 for r in reps if r.get("rec_type") not in rec_types),
+        "surfacings_by_ticker":         surfacings,
+    }
 
 
 # ── Signal Calibration ─────────────────────────────────────────────────────────
@@ -19,6 +168,7 @@ from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_STRONG_BUY
 def calibration_by_score_band(
     enriched: list[dict],
     band_size: int = 5,
+    min_n: int = PREDICTIVE_MIN_BAND_N,
 ) -> list[dict]:
     """
     Fine-grained calibration: group mature, alpha-priced outcomes into
@@ -40,6 +190,11 @@ def calibration_by_score_band(
     avg_alpha_acted   float | None
     avg_alpha_missed  float | None
     avg_outcome_pct   float | None  — raw outcome (not SPY-adjusted)
+    is_thin           bool  — n < ``min_n`` (indicative only; computed here so
+                              the renderer never compares against the constant)
+
+    Feed it the page's collapsed ``reps`` (one row per ticker) so ``n`` counts
+    distinct tickers, not daily re-surfacings.
     """
     buckets: dict[int, dict] = {}
 
@@ -95,6 +250,7 @@ def calibration_by_score_band(
             "avg_alpha_acted":  round(sum(aa) / len(aa), 2) if aa else None,
             "avg_alpha_missed": round(sum(am) / len(am), 2) if am else None,
             "avg_outcome_pct":  round(sum(op) / len(op), 2) if op else None,
+            "is_thin":          n < min_n,
         })
     return rows
 
@@ -162,6 +318,7 @@ def calibration_by_sector(
 def calibration_by_verdict(
     enriched: list[dict],
     min_n: int = 0,
+    thin_n: int = PREDICTIVE_MIN_BAND_N,
 ) -> list[dict]:
     """
     Group graded outcomes by cross-check verdict to measure whether
@@ -179,6 +336,8 @@ def calibration_by_verdict(
         avg_alpha         float | None
         avg_composite     float | None
         avg_outcome_pct   float | None
+        is_thin           bool  — n < ``thin_n`` (``min_n`` is a pre-existing
+                                  unused parameter, left as-is)
     """
     buckets: dict[str, dict] = {}
     for r in enriched:
@@ -221,6 +380,7 @@ def calibration_by_verdict(
             "avg_alpha":        round(sum(alphas) / len(alphas), 2) if alphas else None,
             "avg_composite":    round(sum(comps) / len(comps), 1) if comps else None,
             "avg_outcome_pct":  round(sum(outs) / len(outs), 2) if outs else None,
+            "is_thin":          b["n"] < thin_n,
         })
 
     # Sort: Confirmed/confirmed first, then by n desc
@@ -244,10 +404,18 @@ def sentiment_alignment_summary(
         edge_pp              float | None   (confirmed - other; positive = Confirmed wins)
         confirmed_n          int
         other_n              int
+        n_unknown            int   — rows with an empty/"Unknown" verdict, excluded
+                                     from BOTH sides (no verdict was recorded, so
+                                     they are neither aligned nor misaligned)
         conclusion           str — 'confirmed_wins' | 'no_edge' | 'insufficient_data'
     """
-    conf = next((b for b in by_verdict if b["verdict"].lower() == "confirmed"), None)
-    others = [b for b in by_verdict if b["verdict"].lower() != "confirmed"]
+    def _is_unknown(b: dict) -> bool:
+        return str(b.get("verdict") or "").strip().lower() in ("", "unknown")
+
+    n_unknown = sum(b["n"] for b in by_verdict if _is_unknown(b))
+    known = [b for b in by_verdict if not _is_unknown(b)]
+    conf = next((b for b in known if b["verdict"].lower() == "confirmed"), None)
+    others = [b for b in known if b["verdict"].lower() != "confirmed"]
 
     conf_alpha = conf["avg_alpha"] if conf else None
     conf_n     = conf["n"] if conf else 0
@@ -279,8 +447,19 @@ def sentiment_alignment_summary(
         "edge_pp":             edge_pp,
         "confirmed_n":         conf_n,
         "other_n":             other_n,
+        "n_unknown":           n_unknown,
         "conclusion":          conclusion,
     }
+
+
+def _band_beats_spy(b: dict) -> bool:
+    """D1 (owner decision 2026-09-30): a band "works" only when it beat SPY
+    BOTH more often than not (p_positive_alpha >= 0.5) AND on average
+    (avg_alpha > 0, strict). Hit rate alone let a band with a -1.7pp mean
+    read as "consistently positive"."""
+    p = b.get("p_positive_alpha")
+    a = b.get("avg_alpha")
+    return p is not None and a is not None and p >= 0.5 and a > 0
 
 
 def personal_alpha_threshold(
@@ -289,25 +468,104 @@ def personal_alpha_threshold(
 ) -> int | None:
     """
     From ``calibration_by_score_band`` output, find the lowest ``band_floor``
-    where every band at or above that floor satisfies BOTH:
+    such that every ELIGIBLE band (n >= ``min_n``) at or above that floor
+    satisfies BOTH:
 
-    * n >= ``min_n``
     * p_positive_alpha >= 0.5
+    * avg_alpha > 0 (strict)
 
-    This is the score level above which the engine has consistently delivered
-    positive alpha in this user's personal history. Returns None when data
-    is insufficient or no such threshold exists.
+    Thin bands (n < ``min_n``) are ignored for eligibility — they neither
+    qualify nor poison a floor — and are disclosed by ``threshold_banner``'s
+    ``thin_above`` instead. Returns None when data is insufficient or no such
+    threshold exists.
     """
     eligible = [
         b for b in sorted(bands, key=lambda x: x["band_floor"])
-        if b["n"] >= min_n and b["p_positive_alpha"] is not None
+        if b["n"] >= min_n and b.get("p_positive_alpha") is not None
     ]
     if not eligible:
         return None
     for i, b in enumerate(eligible):
-        if all(x["p_positive_alpha"] >= 0.5 for x in eligible[i:]):
+        if all(_band_beats_spy(x) for x in eligible[i:]):
             return b["band_floor"]
     return None
+
+
+def threshold_banner(
+    bands: list[dict],
+    thresh: int | None,
+    min_n: int,
+) -> dict | None:
+    """
+    The Score Calibration headline for a found ``thresh`` (from
+    ``personal_alpha_threshold`` on the same ``bands``/``min_n``). Returns
+    None when ``thresh`` is None — the caller renders its own
+    "no threshold yet" fallback.
+
+    Returns:
+        floor               int
+        qualifying          list[str]  labels of bands >= floor with n >= min_n
+        k                   int        len(qualifying)
+        n_tickers           int        sum of n over qualifying only
+        weighted_avg_alpha  float | None  n-weighted avg_alpha over qualifying
+        min_hit_rate        float | None  lowest p_positive_alpha over qualifying
+        thin_above          list[str]  labels of bands >= floor with n < min_n
+        text                str        markdown
+
+    Defensive invariant: if any qualifying band fails the D1 criterion
+    (should be impossible for a thresh from personal_alpha_threshold, but a
+    caller could pass a mismatched pair), no "beat SPY" text is produced —
+    returns None rather than a false claim.
+    """
+    if thresh is None:
+        return None
+    above = sorted(
+        (b for b in bands if b.get("band_floor") is not None and b["band_floor"] >= thresh),
+        key=lambda x: x["band_floor"],
+    )
+    qual = [b for b in above if b["n"] >= min_n]
+    thin = [b for b in above if b["n"] < min_n]
+    if not qual or not all(_band_beats_spy(b) for b in qual):
+        return None
+
+    k = len(qual)
+    n_tickers = sum(b["n"] for b in qual)
+    weighted = round(sum(b["n"] * b["avg_alpha"] for b in qual) / n_tickers, 2) if n_tickers else None
+    min_hit = min(b["p_positive_alpha"] for b in qual)
+    labels = [b["band_label"] for b in qual]
+    thin_labels = [b["band_label"] for b in thin]
+
+    if k >= 2:
+        text = (
+            f"**Where the engine has worked for you: composite ≥ {thresh}.** "
+            f"Each of the {k} bands at or above {thresh} with ≥{min_n} tickers "
+            f"({', '.join(labels)}) beat SPY on average and more often than not "
+            f"({n_tickers} tickers; avg alpha {weighted:+.1f}pp, lowest hit rate {min_hit:.0%})."
+        )
+    else:
+        b = qual[0]
+        text = (
+            f"**Only one band at or above {thresh} ({b['band_label']}) has enough "
+            f"tickers to read** ({b['n']}); it beat SPY on average "
+            f"({b['avg_alpha']:+.1f}pp, hit rate {b['p_positive_alpha']:.0%}). "
+            f"One band is a lead, not a pattern."
+        )
+    if thin_labels:
+        text += f" Not counted (fewer than {min_n} tickers): {', '.join(thin_labels)}."
+    # Blank line, not a single newline: a lone newline does not break a line
+    # in Streamlit markdown.
+    text += "\n\nCounts are distinct tickers, each at its first surfacing. Outcomes run from the call to today's price."
+
+    return {
+        "floor":              thresh,
+        "qualifying":         labels,
+        "k":                  k,
+        "n_tickers":          n_tickers,
+        "weighted_avg_alpha": weighted,
+        "min_hit_rate":       min_hit,
+        "thin_above":         thin_labels,
+        "text":               text,
+    }
 
 
 def synthesize_directives(
@@ -336,6 +594,11 @@ def synthesize_directives(
         source_tab — which tab holds the supporting evidence
 
     Ordered: action → caution → watch → context.
+
+    Feed it the page's COLLAPSED outputs (one row per ticker / per
+    (ticker, rec_type)); ``n_graded`` is the count of graded distinct tickers.
+    Threshold / sector-best / rec-type / conviction readouts are "watch"
+    observations, never "action" (D2, 2026-09-30).
     """
     directives: list[dict] = []
 
@@ -343,12 +606,17 @@ def synthesize_directives(
     thick_bands = [b for b in bands if b["n"] >= min_n]
     all_neg     = thick_bands and all((b["avg_alpha"] or 0) <= 0 for b in thick_bands)
 
+    # D2 (owner decision 2026-09-30): the threshold, sector, rec-type and
+    # conviction readouts are OBSERVATIONS about this user's history, typed
+    # "watch" and worded without skip/size/lean/prioritise imperatives. A
+    # retrospective on a thin, to-today sample is not a basis for an action.
     if thresh is not None:
         directives.append({
-            "type": "action",
+            "type": "watch",
             "text": (
-                f"Your alpha turns consistently positive at composite ≥ {thresh}. "
-                f"Treat signals below {thresh} as speculative — consider reducing size or skipping."
+                f"Composite ≥ {thresh} has done better in your history — every "
+                f"band at or above it with enough tickers beat SPY on average and "
+                f"more often than not."
             ),
             "source_tab": "🎯 Score Calibration",
         })
@@ -399,8 +667,10 @@ def synthesize_directives(
     )
 
     if edge == "acting" and edge_pp is not None and edge_pp >= 0.5:
+        # "watch", not "action" (owner decision 2026-09-30): this page is a
+        # retrospective diagnostic; the live gates own entry and sizing.
         directives.append({
-            "type": "action",
+            "type": "watch",
             "text": (
                 f"Your discretion is adding {edge_pp:.1f}pp of alpha{basis} — you're filtering "
                 f"signal from noise effectively. Don't feel pressure to act on every signal; "
@@ -436,12 +706,11 @@ def synthesize_directives(
 
         if (best["avg_alpha"] or 0) > 0:
             directives.append({
-                "type": "action",
+                "type": "watch",
                 "text": (
-                    f"Your strongest sector is {best['sector']} "
-                    f"({best['avg_alpha']:+.1f}pp avg alpha, {best['n']} outcomes). "
-                    f"When composites are borderline, prioritise signals here — "
-                    f"this is where the engine has worked best for you."
+                    f"{best['sector']} has done better in your history "
+                    f"({best['avg_alpha']:+.1f}pp avg alpha, {best['n']} tickers) — "
+                    f"the sector where the engine's calls have worked best for you so far."
                 ),
                 "source_tab": "🌐 Sector Alpha",
             })
@@ -461,7 +730,7 @@ def synthesize_directives(
                 "type": "caution",
                 "text": (
                     f"Signals in {worst['sector']} have cost the most alpha "
-                    f"({worst['avg_alpha']:+.1f}pp avg, {worst['n']} outcomes). "
+                    f"({worst['avg_alpha']:+.1f}pp avg, {worst['n']} tickers). "
                     f"Be more skeptical of engine signals here until the pattern reverses."
                 ),
                 "source_tab": "🌐 Sector Alpha",
@@ -473,11 +742,11 @@ def synthesize_directives(
         if (rt_best["avg_alpha"] is not None and rt_worst["avg_alpha"] is not None
                 and rt_best["avg_alpha"] - rt_worst["avg_alpha"] >= 1.0):
             directives.append({
-                "type": "action",
+                "type": "watch",
                 "text": (
-                    f"{rt_best['label']} signals outperform {rt_worst['label']} "
-                    f"by {rt_best['avg_alpha'] - rt_worst['avg_alpha']:.1f}pp. "
-                    f"Lean into {rt_best['label']} signals — that's where your alpha edge is strongest."
+                    f"{rt_best['label']} signals have done better in your history, "
+                    f"outperforming {rt_worst['label']} by "
+                    f"{rt_best['avg_alpha'] - rt_worst['avg_alpha']:.1f}pp."
                 ),
                 "source_tab": "🏷️ Signal Breakdown",
             })
@@ -487,12 +756,11 @@ def synthesize_directives(
         if (cv_best["avg_alpha"] is not None and cv_worst["avg_alpha"] is not None
                 and cv_best["avg_alpha"] - cv_worst["avg_alpha"] >= 1.5):
             directives.append({
-                "type": "action",
+                "type": "watch",
                 "text": (
-                    f"{cv_best['conviction']} signals outperform {cv_worst['conviction']} "
-                    f"by {cv_best['avg_alpha'] - cv_worst['avg_alpha']:.1f}pp. "
-                    f"Use conviction tier as a sizing signal — larger positions on "
-                    f"{cv_best['conviction']} when score and sector also align."
+                    f"{cv_best['conviction']} signals have done better in your history, "
+                    f"outperforming {cv_worst['conviction']} by "
+                    f"{cv_best['avg_alpha'] - cv_worst['avg_alpha']:.1f}pp."
                 ),
                 "source_tab": "🏷️ Signal Breakdown",
             })
@@ -502,10 +770,10 @@ def synthesize_directives(
     directives.append({
         "type": "context",
         "text": (
-            f"Based on {n_graded} graded outcomes"
+            f"Based on {n_graded} graded tickers"
             + (
                 f" — {thin_count} score band{'s' if thin_count != 1 else ''} still "
-                f"below the {min_n}-outcome confidence floor"
+                f"below the {min_n}-ticker confidence floor"
                 if thin_count > 0 else ""
             )
             + ". Patterns will sharpen as recommendations mature over the coming weeks."
@@ -518,11 +786,10 @@ def synthesize_directives(
         edge = sentiment_alignment.get("edge_pp")
         if sentiment_alignment["conclusion"] == "confirmed_wins" and edge is not None and edge >= 2.0:
             directives.append({
-                "type": "action",
+                "type": "watch",
                 "text": (
-                    f"Sentiment alignment adds {edge:+.1f}pp of alpha in your history — "
-                    f"favour Engine-Confirmed-verdict picks over Conflicted or Unverified ones "
-                    f"when conviction is similar."
+                    f"Engine-Confirmed picks have beaten Conflicted/Unverified ones by "
+                    f"{edge:+.1f}pp of alpha in your history."
                 ),
                 "source_tab": "🧭 Sentiment Alignment",
             })
@@ -562,7 +829,7 @@ def synthesize_directives(
                     f"New Position picks where momentum ran far ahead of the composite "
                     f"score (Extreme divergence) have often looked calm in the first few "
                     f"days but underperformed SPY by {_et_extreme['day20_alpha']:+.1f}pp "
-                    f"on average by the time the outcome matured — the real cost has "
+                    f"on average by Day+20 — the real cost has "
                     f"tended to show up late, not at entry. Worth a second look before "
                     f"sizing up on a hot-momentum, barely-qualifying pick."
                 ),
@@ -641,6 +908,7 @@ _REC_TYPE_LABELS = {
     "new_pick":      "New Position",
     "add_winner":    "Add to Winner",
     "buy_candidate": "Opportunity Watch",
+    "enter_now":     "Watchlist Enter Now",
 }
 
 
@@ -887,6 +1155,7 @@ def by_divergence_band(
     rows: list[dict],
     aligned_max: float,
     diverging_max: float,
+    min_n: int = PREDICTIVE_MIN_BAND_N,
 ) -> list[dict]:
     """
     Group deduped new_pick rows into three positive-divergence bands and
@@ -896,10 +1165,12 @@ def by_divergence_band(
       - `divergence`   (from `divergence_at_entry`) — rows with divergence
         <= 0 or None are excluded; only momentum-ahead-of-composite is in
         scope for this analysis.
-      - `day1_alpha` / `day5_alpha` (from `forward_alpha_at_horizon`, may be
-        None where the forward fetch failed).
-      - `alpha_pct` / `outcome_maturing` (already on every row from
-        `compute_outcomes`) — reused as the Day+20/mature-outcome leg.
+      - `day1_alpha` / `day5_alpha` / `day20_alpha` (from
+        `forward_alpha_at_horizon` at 1 / 5 / 20 trading days, may be None
+        where the forward fetch failed or the horizon hasn't elapsed).
+        Day+20 is a TRUE fixed-horizon forward alpha (D6, 2026-09-30) — it
+        used to reuse the to-today `alpha_pct`, which is not a Day+20
+        number. A row without `day20_alpha` contributes nothing to Day+20.
 
     Bands (using the ENTRY_TIMING_DIVERGENCE_* constants as aligned_max /
     diverging_max):
@@ -911,11 +1182,11 @@ def by_divergence_band(
       band_label, n (rows with any horizon data),
       day1_alpha, day1_pct_red, day1_n,
       day5_alpha, day5_pct_red, day5_n,
-      day20_alpha, p_positive_alpha, day20_n
-    Per-horizon stats are None until that horizon has >= 1 data point; the
-    caller is responsible for greying out any horizon whose *_n falls below
-    PREDICTIVE_MIN_BAND_N (same convention as calibration_by_score_band,
-    which also returns thin bands rather than dropping them).
+      day20_alpha, p_positive_alpha, day20_n,
+      day1_is_thin, day5_is_thin, day20_is_thin  (bool, *_n < ``min_n``)
+    Per-horizon stats are None until that horizon has >= 1 data point. Thin
+    horizons are flagged, not dropped (same convention as
+    calibration_by_score_band); the caller greys them via *_is_thin.
     """
     def _band_for(div: float) -> str:
         if div <= aligned_max:
@@ -938,8 +1209,8 @@ def by_divergence_band(
             b["_day1"].append(float(r["day1_alpha"]))
         if r.get("day5_alpha") is not None:
             b["_day5"].append(float(r["day5_alpha"]))
-        if not r.get("outcome_maturing") and r.get("alpha_pct") is not None:
-            b["_day20"].append(float(r["alpha_pct"]))
+        if r.get("day20_alpha") is not None:
+            b["_day20"].append(float(r["day20_alpha"]))
 
     def _stats(vals: list[float]) -> dict:
         n = len(vals)
@@ -967,6 +1238,9 @@ def by_divergence_band(
             "day20_alpha":      d20["avg"],
             "p_positive_alpha": (round(1 - d20["pct_red"], 3) if d20["pct_red"] is not None else None),
             "day20_n":          d20["n"],
+            "day1_is_thin":     d1["n"] < min_n,
+            "day5_is_thin":     d5["n"] < min_n,
+            "day20_is_thin":    d20["n"] < min_n,
         })
     return out
 
