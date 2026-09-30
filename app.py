@@ -32029,13 +32029,29 @@ elif page == "📊 Predictive Analytics":
     st.divider()
     st.markdown("### 📋 What This Means For You")
     st.caption(
-        "Synthesized from all four models. Click a tab to see the evidence behind each directive."
+        "Synthesized from the six tabs below. Use a card's **View evidence** button "
+        "to open the tab it comes from."
     )
 
-    def _pac_src_note(_pd: dict) -> str:
-        # For plain st.warning/st.info calls, which DO run markdown -- keep
-        # the original "*...*" emphasis syntax.
-        return f"  *(evidence → {_pd['source_tab']})*" if _pd["source_tab"] != "all models" else ""
+    # Tab labels double as the evidence-link targets: each directive's
+    # `source_tab` is one of these strings exactly. The tabs are keyed and
+    # stateful (on_change="rerun", st.tabs in Streamlit 1.57), so a button's
+    # on_click callback can select one. Callbacks run before the script, which
+    # is the only point where a widget-keyed value may be written.
+    _PA_TAB_LABELS = [
+        "🎯 Score Calibration",
+        "⚖️ Discretion Value",
+        "🏷️ Signal Breakdown",
+        "🌐 Sector Alpha",
+        "🧭 Sentiment Alignment",
+        "⏱️ Entry Timing",
+    ]
+    _PA_TAB_KEY = "_pa_active_tab"
+    if st.session_state.get(_PA_TAB_KEY) not in (None, *_PA_TAB_LABELS):
+        st.session_state.pop(_PA_TAB_KEY, None)  # a renamed label must not break st.tabs
+
+    def _pa_goto_tab(_label: str) -> None:
+        st.session_state[_PA_TAB_KEY] = _label
 
     # No directive is "action" any more (2026-09-30 owner decision: this page
     # is a retrospective diagnostic; the live gates own entry and sizing), so
@@ -32046,14 +32062,27 @@ elif page == "📊 Predictive Analytics":
     _pac_footnote = next((d for d in _pac_directives if d["source_tab"] == "all models"), None)
     _pac_others   = [d for d in _pac_directives if d is not _pac_footnote]
 
-    for _pd in _pac_others:
-        _src_note = _pac_src_note(_pd)
-        if _pd["type"] == "caution":
-            st.warning(f"**Caution:** {_pd['text']}{_src_note}")
-        elif _pd["type"] == "watch":
-            st.info(f"**Watch:** {_pd['text']}{_src_note}")
-        else:
-            st.caption(f"ℹ️ {_pd['text']}{_src_note}")
+    # Two cards per row (the side-by-side layout the page had before), each
+    # with a button that opens its evidence tab below.
+    for _row_start in range(0, len(_pac_others), 2):
+        _row_cols = st.columns(2)
+        for _ci, _pd in enumerate(_pac_others[_row_start:_row_start + 2]):
+            with _row_cols[_ci]:
+                if _pd["type"] == "caution":
+                    st.warning(f"**Caution:** {_pd['text']}")
+                elif _pd["type"] == "watch":
+                    st.info(f"**Watch:** {_pd['text']}")
+                else:
+                    st.caption(f"ℹ️ {_pd['text']}")
+                if _pd["source_tab"] in _PA_TAB_LABELS:
+                    st.button(
+                        f"View evidence → {_pd['source_tab']}",
+                        key=f"_pa_ev_{_row_start + _ci}",
+                        on_click=_pa_goto_tab,
+                        args=(_pd["source_tab"],),
+                        type="tertiary",
+                        help="Opens this tab in the tab bar below.",
+                    )
 
     if _pac_footnote:
         st.caption(f"ℹ️ {_pac_footnote['text']}")
@@ -32061,14 +32090,9 @@ elif page == "📊 Predictive Analytics":
     st.divider()
 
     # ── 6 live tabs ─────────────────────────────────────────────────────────────
-    _pa_tab1, _pa_tab2, _pa_tab3, _pa_tab4, _pa_tab5, _pa_tab6 = st.tabs([
-        "🎯 Score Calibration",
-        "⚖️ Discretion Value",
-        "🏷️ Signal Breakdown",
-        "🌐 Sector Alpha",
-        "🧭 Sentiment Alignment",
-        "⏱️ Entry Timing",
-    ])
+    _pa_tab1, _pa_tab2, _pa_tab3, _pa_tab4, _pa_tab5, _pa_tab6 = st.tabs(
+        _PA_TAB_LABELS, key=_PA_TAB_KEY, on_change="rerun",
+    )
 
     # ── TAB 1 — Score Calibration ─────────────────────────────────────────────
     with _pa_tab1:
