@@ -131,24 +131,24 @@ REASON_NO_PREMORTEM = (
     "No pre-mortem logged at entry (pre-mortem applies to live Buys only)."
 )
 
-# F-1 Thesis Review has no persisted structured evidence breakdown today
-# (bundle_evidence()'s technical/fundamentals/news facts are not stored on
-# the thesis_reviews table) — disclose that plainly rather than fabricate an
-# itemized list the mockup's example data implied but the schema doesn't
-# actually carry yet.
+# The F-1 section renders the review's verdict + summary only. An itemized
+# evidence breakdown was never built (snapshots are captured since Chunk B,
+# but only the diff reads them) and nothing is queued for it — so this note
+# states what the summary IS rather than promising a future breakdown.
 EVIDENCE_NOTE_F1 = (
-    "Detailed evidence breakdown will appear here once change-tracking "
-    "snapshots begin capturing (coming in a later phase)."
+    "The summary is the AI's own reading of the evidence at review time — "
+    "the underlying figures aren't itemized here."
 )
 
-# Chunk A shipped no diff logic and showed this unconditionally. Chunk C
-# (thesis_advisor.diff_snapshots) now shows a real diff once >=2 reviews
-# with captured snapshots exist for the ticker; this string is reused for
-# the "not enough history yet" case (0/1 reviews, or the older review
-# predates Chunk B's capture) rather than inventing new copy for that state.
+# Shown when the diff can't run: fewer than 2 reviews for this ticker, or
+# either of the two newest lacks a snapshot (pre-Chunk-B rows, or the
+# earnings-checkpoint path, which never captures one). Watchlist-only tickers
+# never get F-1 reviews, so for them this is permanent — the parenthetical
+# says why rather than implying it will fill in on its own.
 CHANGE_TRACKING_NOTE = (
-    "Change tracking starts once evidence snapshots begin capturing "
-    "(coming in a later phase)."
+    "Not enough history yet — a change report needs two reviews of this "
+    "ticker with captured evidence (the weekly Sunday review adds one for "
+    "held positions that have a thesis)."
 )
 
 
