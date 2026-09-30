@@ -26262,6 +26262,7 @@ elif page == "🧵 Thesis":
     )
 
     from stock_analyzer import thesis_card as _tc
+    from stock_analyzer import thesis_advisor as _tc_ta
 
     # Ticker universe = held ∪ watchlist (same pattern as 🔔 Catalyst Watch's
     # "Tracked universe" build, minus the curated sector universe — this page
@@ -26586,11 +26587,39 @@ elif page == "🧵 Thesis":
                 st.caption(_tc_pm.get("reason", ""))
 
         # ── What changed since last review ───────────────────────────────
-        # Chunk A ships no diff logic — always the same static disclosed
-        # message. A real diff (THESIS_DELTA_COMPOSITE_PTS/
-        # THESIS_DELTA_EROSION_PTS) is a later, separately-reviewed chunk.
+        # Chunk C — a real diff (thesis_advisor.diff_snapshots) once >=2
+        # reviews with captured evidence_snapshot rows exist for this
+        # ticker; otherwise the same disclosed "not enough history yet"
+        # message Chunk A always showed. _tc_review_df is already fetched
+        # above (F-1 Thesis Review section) and already ordered
+        # reviewed_at desc — reused here, not re-queried.
         with st.expander("▸ What changed since last review", expanded=False):
-            st.caption(_tc.CHANGE_TRACKING_NOTE)
+            _tc_diff_ok = (
+                _tc_review_df is not None
+                and len(_tc_review_df) >= 2
+                and _tc_review_df.iloc[1].get("evidence_snapshot") is not None
+                and _tc_review_df.iloc[0].get("evidence_snapshot") is not None
+            )
+            if not _tc_diff_ok:
+                st.caption(_tc.CHANGE_TRACKING_NOTE)
+            else:
+                _tc_curr_row = _tc_review_df.iloc[0]
+                _tc_prev_row = _tc_review_df.iloc[1]
+                _tc_changes = _tc_ta.diff_snapshots(
+                    prev_snapshot=_tc_prev_row.get("evidence_snapshot"),
+                    curr_snapshot=_tc_curr_row.get("evidence_snapshot"),
+                    prev_status=_tc_prev_row.get("status"),
+                    curr_status=_tc_curr_row.get("status"),
+                )
+                st.caption(
+                    f"{str(_tc_prev_row.get('reviewed_at') or '')[:10]} → "
+                    f"{str(_tc_curr_row.get('reviewed_at') or '')[:10]}"
+                )
+                if _tc_changes:
+                    for _tc_chg in _tc_changes:
+                        st.markdown(f"{_tc.TAG_EMOJI[_tc_chg['tag']]} {_tc_chg['message']}")
+                else:
+                    st.caption("No material change since the last review.")
 
         st.caption(
             "ℹ️ This page is a read-only consolidation of five features that "

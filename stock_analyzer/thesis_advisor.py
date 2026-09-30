@@ -22,7 +22,19 @@ import hashlib
 import json
 from datetime import date, datetime, timezone
 
-from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
+from stock_analyzer.constants import (
+    LLM_REQUEST_TIMEOUT_SEC,
+    COMPOSITE_STRONG_BUY,
+    COMPOSITE_BUY,
+    COMPOSITE_HOLD,
+    COMPOSITE_SELL,
+    PT_TARGET_CUT_WARN_PCT,
+    THESIS_DELTA_COMPOSITE_PTS,
+    THESIS_DELTA_EROSION_PTS,
+)
+# thesis_card.py does not import this module (verified), so this direction
+# is safe -- no import cycle.
+from stock_analyzer.thesis_card import TAG_DERIVED, TAG_ANALYST, TAG_AI
 
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
@@ -594,6 +606,205 @@ def build_snapshot(
         "analyst": analyst_latest,
         "regime": regime,
     }
+
+
+def _composite_band(value: "float | None") -> "str | None":
+    """Classify a composite score into the same Strong Buy / Buy / Hold /
+    Sell / Strong Sell bands scoring.recommendation() uses -- read-only
+    against the shared constants.py thresholds, never a private copy of the
+    numbers. Returns None only when `value` is None; any other malformed
+    input (e.g. a non-numeric string) is the caller's problem, not something
+    this classifier should swallow, since it's only ever called from
+    diff_snapshots() on values already read out of a persisted snapshot."""
+    if value is None:
+        return None
+    v = float(value)
+    if v >= COMPOSITE_STRONG_BUY:
+        return "strong_buy"
+    if v >= COMPOSITE_BUY:
+        return "buy"
+    if v >= COMPOSITE_HOLD:
+        return "hold"
+    if v >= COMPOSITE_SELL:
+        return "sell"
+    return "strong_sell"
+
+
+_BAND_LABEL = {
+    "strong_buy":  "Strong Buy",
+    "buy":         "Buy",
+    "hold":        "Hold",
+    "sell":        "Sell",
+    "strong_sell": "Strong Sell",
+}
+
+
+def _finite_float(v) -> "float | None":
+    """float(v), but NaN/inf and anything unparseable both collapse to None
+    -- a NaN composite/erosion score is not a valid measurement to diff
+    against, and should be treated exactly like a missing one (not-
+    comparable), not fed into a band/threshold comparison that would
+    silently produce a fabricated 'Strong Sell' or similar reading."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f != f or f in (float("inf"), float("-inf")):  # f != f is the NaN check
+        return None
+    return f
+
+
+def _parse_date_safe(s: "str | None"):
+    """Best-effort ISO-date parse (first 10 chars). Returns None on any
+    malformed/missing input -- callers must treat None as "not comparable,"
+    never as a sentinel date."""
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(str(s)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def diff_snapshots(
+    prev_snapshot: "dict | None",
+    curr_snapshot: dict,
+    prev_status: "str | None" = None,
+    curr_status: "str | None" = None,
+) -> list:
+    """Chunk C -- compare two thesis_reviews.evidence_snapshot dicts (Chunk B)
+    and return every MATERIAL change since the prior review, as a list of
+    render-ready items: {"field": str, "tag": str, "message": str}.
+
+    Pure, no I/O, never raises -- any missing/malformed field is treated as
+    "not comparable" (no delta for that field), never as a crash or a
+    fabricated change. Returns ALL applicable deltas, not just the first
+    match -- this is a different shape from thesis_card.detect_tension(),
+    which deliberately returns only its single highest-priority hit. Do not
+    assume the two functions behave the same way.
+
+    `prev_snapshot is None` (no snapshot on the prior review -- the very
+    first review ever, or a legacy pre-Chunk-B row with no capture) always
+    returns [] immediately. This must NEVER be read as "everything changed."
+
+    `prev_status`/`curr_status` are the two reviews' own `status` column
+    values (INTACT/WEAKENING/BROKEN) -- read from the caller's review rows,
+    NOT from inside either snapshot dict (the snapshot schema never carried
+    verdict/status).
+    """
+    if prev_snapshot is None:
+        return []
+
+    changes: list = []
+    prev = prev_snapshot
+    curr = curr_snapshot or {}
+
+    # ── 1. Composite ─────────────────────────────────────────────────────
+    p_comp = prev.get("composite")
+    c_comp = curr.get("composite")
+    if p_comp is not None and c_comp is not None:
+        p_comp_f = _finite_float(p_comp)
+        c_comp_f = _finite_float(c_comp)
+        if p_comp_f is not None and c_comp_f is not None:
+            p_band = _composite_band(p_comp_f)
+            c_band = _composite_band(c_comp_f)
+            band_crossed = p_band != c_band
+            moved_enough = abs(c_comp_f - p_comp_f) >= THESIS_DELTA_COMPOSITE_PTS
+            if band_crossed or moved_enough:
+                if band_crossed:
+                    msg = (
+                        f"Composite moved from {p_comp_f:.0f} to {c_comp_f:.0f} "
+                        f"({_BAND_LABEL.get(p_band, p_band)} → {_BAND_LABEL.get(c_band, c_band)})."
+                    )
+                else:
+                    msg = (
+                        f"Composite moved from {p_comp_f:.0f} to {c_comp_f:.0f} "
+                        f"({c_comp_f - p_comp_f:+.0f} pts)."
+                    )
+                changes.append({"field": "composite", "tag": TAG_DERIVED, "message": msg})
+
+    # ── 2. Erosion ───────────────────────────────────────────────────────
+    p_ero_score = prev.get("erosion_score")
+    c_ero_score = curr.get("erosion_score")
+    p_ero_label = prev.get("erosion_label")
+    c_ero_label = curr.get("erosion_label")
+    if p_ero_score is not None and c_ero_score is not None and p_ero_label is not None and c_ero_label is not None:
+        p_ero_f = _finite_float(p_ero_score)
+        c_ero_f = _finite_float(c_ero_score)
+        if p_ero_f is not None and c_ero_f is not None:
+            label_changed = p_ero_label != c_ero_label
+            moved_enough = (not label_changed) and abs(c_ero_f - p_ero_f) >= THESIS_DELTA_EROSION_PTS
+            if label_changed or moved_enough:
+                msg = (
+                    f"Erosion moved from {p_ero_f:.0f} ('{p_ero_label}') to "
+                    f"{c_ero_f:.0f} ('{c_ero_label}')."
+                )
+                changes.append({"field": "erosion", "tag": TAG_DERIVED, "message": msg})
+
+    # ── 3. PT-cut signal -- newly crossed only, not a sustained cut ───────
+    # Explicit `is None` checks rather than `... or {}` -- a real-but-empty
+    # pt_signal dict and a missing one both correctly degrade to
+    # "no pct_change to read," so the OFFLINE_SENTINEL_COLLAPSE shape does
+    # not apply here in practice, but the antipattern gate's static check
+    # can't see that, so write it the guarded way anyway.
+    c_pt = curr.get("pt_signal")
+    c_pct = c_pt.get("pct_change") if c_pt is not None else None
+    if c_pct is not None:
+        c_pct_f = _finite_float(c_pct)
+        c_pct_pts = c_pct_f * 100.0 if c_pct_f is not None else None
+        if c_pct_pts is not None and c_pct_pts <= PT_TARGET_CUT_WARN_PCT:
+            p_pt = prev.get("pt_signal")
+            p_pct = p_pt.get("pct_change") if p_pt is not None else None
+            p_pct_f = _finite_float(p_pct) if p_pct is not None else None
+            p_pct_pts = p_pct_f * 100.0 if p_pct_f is not None else None
+            was_already_cut = p_pct_pts is not None and p_pct_pts <= PT_TARGET_CUT_WARN_PCT
+            if not was_already_cut:
+                changes.append({
+                    "field": "pt_signal",
+                    "tag": TAG_ANALYST,
+                    "message": (
+                        "A new analyst price-target cut crossed the warning "
+                        f"threshold ({c_pct_pts:.1f}%)."
+                    ),
+                })
+
+    # ── 4. New analyst coverage ────────────────────────────────────────
+    c_an = curr.get("analyst")
+    if c_an is not None:
+        c_an_date = _parse_date_safe(c_an.get("latest_article_date"))
+        if c_an_date is not None:
+            p_an = prev.get("analyst")
+            p_an_date = _parse_date_safe(p_an.get("latest_article_date")) if p_an else None
+            if p_an is None or (p_an_date is not None and c_an_date > p_an_date):
+                changes.append({
+                    "field": "analyst",
+                    "tag": TAG_ANALYST,
+                    "message": f"New analyst coverage saved ({c_an_date.isoformat()}).",
+                })
+
+    # ── 5. Regime ────────────────────────────────────────────────────────
+    p_regime = prev.get("regime")
+    c_regime = curr.get("regime")
+    if p_regime is not None and c_regime is not None and p_regime != c_regime:
+        changes.append({
+            "field": "regime",
+            "tag": TAG_DERIVED,
+            "message": f"Market tone shifted from {p_regime} to {c_regime}.",
+        })
+
+    # ── 6. F-1 verdict change (reads the two review rows' own status column,
+    #      never anything inside the snapshot dicts) ──────────────────────
+    if prev_status is not None and curr_status is not None and prev_status != curr_status:
+        changes.append({
+            "field": "status",
+            "tag": TAG_AI,
+            "message": (
+                f"Thesis verdict changed from {prev_status} "
+                f"to {curr_status}."
+            ),
+        })
+
+    return changes
 
 
 # ── Phase 2 — Earnings Thesis Checkpoint ─────────────────────────────────────

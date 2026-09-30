@@ -572,6 +572,15 @@ PT_TARGET_LOOKBACK_DAYS   = 5      # trading-day window for the comparison
 PT_TARGET_CUT_WARN_PCT    = -7.0   # consensus target_mean drop over the window = warning
 PT_TARGET_CUT_DANGER_PCT  = -15.0  # consensus target_mean drop over the window = danger
 
+# 🧵 Thesis page "what changed since last review" diff (Chunk C —
+# thesis_advisor.diff_snapshots). A boundary crossing (composite Buy/Sell
+# band, or erosion label) is ALWAYS material regardless of these values —
+# they only decide whether a same-band/same-label MOVE is big enough to
+# report on its own. Investment-policy values — Opus review required per
+# CLAUDE.md hard rule #4; do not retune without a fresh review.
+THESIS_DELTA_COMPOSITE_PTS = 5.0   # composite move (points) big enough to report as "changed"
+THESIS_DELTA_EROSION_PTS   = 10.0  # Red Team erosion-score move (0-100 scale) big enough to report as "changed"
+
 # ── Universe-ranking tier bands (ranking.tier_label) ─────────────────────────
 # Percentile bands classifying a holding's rank vs the scanned universe.
 # Display classification only — never gates or scores. Named per 2026-07-29

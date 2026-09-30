@@ -532,6 +532,271 @@ def test_build_snapshot_evidence_none_falls_back_to_empty_shape_not_none():
     assert snap["composite"] == 80.0  # unaffected by the evidence fallback
 
 
+# ─── _composite_band (Chunk C) ───────────────────────────────────────────────
+
+def test_composite_band_none_maps_to_none():
+    assert ta._composite_band(None) is None
+
+
+def test_composite_band_boundaries():
+    assert ta._composite_band(ta.COMPOSITE_STRONG_BUY) == "strong_buy"
+    assert ta._composite_band(ta.COMPOSITE_STRONG_BUY - 0.01) == "buy"
+    assert ta._composite_band(ta.COMPOSITE_BUY) == "buy"
+    assert ta._composite_band(ta.COMPOSITE_BUY - 0.01) == "hold"
+    assert ta._composite_band(ta.COMPOSITE_HOLD) == "hold"
+    assert ta._composite_band(ta.COMPOSITE_HOLD - 0.01) == "sell"
+    assert ta._composite_band(ta.COMPOSITE_SELL) == "sell"
+    assert ta._composite_band(ta.COMPOSITE_SELL - 0.01) == "strong_sell"
+    assert ta._composite_band(0) == "strong_sell"
+
+
+# ─── diff_snapshots (Chunk C — "what changed since last review") ────────────
+
+def _snap(**kw):
+    """Minimal valid snapshot dict builder for diff tests — every field
+    defaults to None/schema-valid so a test only has to name what it cares
+    about."""
+    base = {
+        "schema_v": 1,
+        "evidence": {"technical": {}, "fundamentals": {}, "news_headlines": []},
+        "composite": None,
+        "erosion_score": None,
+        "erosion_label": None,
+        "pt_signal": None,
+        "analyst": None,
+        "regime": None,
+    }
+    base.update(kw)
+    return base
+
+
+def test_diff_snapshots_prev_none_returns_empty_list_never_everything_changed():
+    curr = _snap(composite=90.0, erosion_score=80.0, erosion_label="Breaking",
+                 regime="bear")
+    assert ta.diff_snapshots(None, curr, prev_status="INTACT", curr_status="BROKEN") == []
+
+
+def test_diff_snapshots_no_change_returns_empty_list():
+    prev = _snap(composite=70.0)
+    curr = _snap(composite=70.0)
+    assert ta.diff_snapshots(prev, curr) == []
+
+
+# composite
+
+def test_diff_composite_band_crossing_fires_even_sub_threshold_move():
+    prev = _snap(composite=64.5)   # hold
+    curr = _snap(composite=65.5)   # buy — crosses COMPOSITE_BUY=65, only 1.0pt move
+    out = ta.diff_snapshots(prev, curr)
+    assert len(out) == 1
+    assert out[0]["field"] == "composite"
+    assert out[0]["tag"] == ta.TAG_DERIVED
+    assert "Buy" in out[0]["message"]
+
+
+def test_diff_composite_exact_threshold_move_fires_no_band_cross():
+    # 66 -> 71: both inside the Buy band [COMPOSITE_BUY, COMPOSITE_STRONG_BUY)
+    # -- confirms this fires on MAGNITUDE alone, not a band crossing.
+    prev = _snap(composite=66.0)
+    curr = _snap(composite=66.0 + ta.THESIS_DELTA_COMPOSITE_PTS)
+    assert 66.0 + ta.THESIS_DELTA_COMPOSITE_PTS < ta.COMPOSITE_STRONG_BUY  # guard the test's own premise
+    out = ta.diff_snapshots(prev, curr)
+    assert len(out) == 1 and out[0]["field"] == "composite"
+
+
+def test_diff_composite_sub_threshold_move_no_band_cross_does_not_fire():
+    prev = _snap(composite=66.0)
+    curr = _snap(composite=66.0 + ta.THESIS_DELTA_COMPOSITE_PTS - 0.01)
+    assert ta.diff_snapshots(prev, curr) == []
+
+
+def test_diff_composite_none_on_either_side_not_comparable():
+    prev = _snap(composite=None)
+    curr = _snap(composite=90.0)
+    assert ta.diff_snapshots(prev, curr) == []
+    prev2 = _snap(composite=90.0)
+    curr2 = _snap(composite=None)
+    assert ta.diff_snapshots(prev2, curr2) == []
+
+
+def test_diff_composite_nan_treated_as_not_comparable():
+    prev = _snap(composite=float("nan"))
+    curr = _snap(composite=90.0)
+    assert ta.diff_snapshots(prev, curr) == []
+
+
+# erosion
+
+def test_diff_erosion_label_change_fires_regardless_of_point_magnitude():
+    prev = _snap(erosion_score=40.0, erosion_label="Softening")
+    curr = _snap(erosion_score=41.0, erosion_label="Eroding")  # 1pt move, label changed
+    out = ta.diff_snapshots(prev, curr)
+    assert len(out) == 1 and out[0]["field"] == "erosion" and out[0]["tag"] == ta.TAG_DERIVED
+
+
+def test_diff_erosion_exact_threshold_move_same_label_fires():
+    prev = _snap(erosion_score=30.0, erosion_label="Softening")
+    curr = _snap(erosion_score=30.0 + ta.THESIS_DELTA_EROSION_PTS, erosion_label="Softening")
+    out = ta.diff_snapshots(prev, curr)
+    assert len(out) == 1 and out[0]["field"] == "erosion"
+
+
+def test_diff_erosion_sub_threshold_move_same_label_does_not_fire():
+    prev = _snap(erosion_score=30.0, erosion_label="Softening")
+    curr = _snap(erosion_score=30.0 + ta.THESIS_DELTA_EROSION_PTS - 0.01, erosion_label="Softening")
+    assert ta.diff_snapshots(prev, curr) == []
+
+
+def test_diff_erosion_none_on_either_side_not_comparable():
+    prev = _snap(erosion_score=None, erosion_label=None)
+    curr = _snap(erosion_score=60.0, erosion_label="Eroding")
+    assert ta.diff_snapshots(prev, curr) == []
+    prev2 = _snap(erosion_score=60.0, erosion_label="Eroding")
+    curr2 = _snap(erosion_score=None, erosion_label=None)
+    assert ta.diff_snapshots(prev2, curr2) == []
+
+
+# pt-cut
+
+def test_diff_pt_cut_transition_into_cut_territory_fires():
+    prev = _snap(pt_signal={"direction": "flat", "pct_change": -0.02})   # -2%, not a cut
+    curr = _snap(pt_signal={"direction": "cut", "pct_change": -0.09})    # -9%, crosses -7% warn
+    out = ta.diff_snapshots(prev, curr)
+    assert len(out) == 1
+    assert out[0]["field"] == "pt_signal"
+    assert out[0]["tag"] == ta.TAG_ANALYST
+
+
+def test_diff_pt_cut_sustained_cut_does_not_refire():
+    prev = _snap(pt_signal={"direction": "cut", "pct_change": -0.10})  # already past -7%
+    curr = _snap(pt_signal={"direction": "cut", "pct_change": -0.12})  # still past -7%
+    assert ta.diff_snapshots(prev, curr) == []
+
+
+def test_diff_pt_cut_no_signal_does_not_fire():
+    prev = _snap(pt_signal=None)
+    curr = _snap(pt_signal={"direction": "flat", "pct_change": -0.01})
+    assert ta.diff_snapshots(prev, curr) == []
+
+
+def test_diff_pt_cut_first_ever_cut_with_prev_pt_signal_none_fires():
+    prev = _snap(pt_signal=None)
+    curr = _snap(pt_signal={"direction": "cut", "pct_change": -0.08})
+    out = ta.diff_snapshots(prev, curr)
+    assert len(out) == 1 and out[0]["field"] == "pt_signal"
+
+
+# analyst coverage
+
+def test_diff_new_analyst_coverage_first_ever_fires():
+    prev = _snap(analyst=None)
+    curr = _snap(analyst={"latest_article_date": "2026-09-15", "consensus_rating": "Buy"})
+    out = ta.diff_snapshots(prev, curr)
+    assert len(out) == 1
+    assert out[0]["field"] == "analyst"
+    assert out[0]["tag"] == ta.TAG_ANALYST
+    assert "2026-09-15" in out[0]["message"]
+
+
+def test_diff_new_analyst_coverage_later_date_fires():
+    prev = _snap(analyst={"latest_article_date": "2026-09-01", "consensus_rating": "Buy"})
+    curr = _snap(analyst={"latest_article_date": "2026-09-15", "consensus_rating": "Buy"})
+    out = ta.diff_snapshots(prev, curr)
+    assert len(out) == 1 and out[0]["field"] == "analyst"
+
+
+def test_diff_analyst_coverage_same_date_does_not_fire():
+    prev = _snap(analyst={"latest_article_date": "2026-09-15", "consensus_rating": "Buy"})
+    curr = _snap(analyst={"latest_article_date": "2026-09-15", "consensus_rating": "Buy"})
+    assert ta.diff_snapshots(prev, curr) == []
+
+
+def test_diff_analyst_coverage_unparseable_date_does_not_fire():
+    prev = _snap(analyst=None)
+    curr = _snap(analyst={"latest_article_date": "not-a-date"})
+    assert ta.diff_snapshots(prev, curr) == []
+
+
+# regime
+
+def test_diff_regime_change_fires():
+    prev = _snap(regime="bull")
+    curr = _snap(regime="bear")
+    out = ta.diff_snapshots(prev, curr)
+    assert len(out) == 1 and out[0]["field"] == "regime" and out[0]["tag"] == ta.TAG_DERIVED
+
+
+def test_diff_regime_unchanged_does_not_fire():
+    prev = _snap(regime="bull")
+    curr = _snap(regime="bull")
+    assert ta.diff_snapshots(prev, curr) == []
+
+
+def test_diff_regime_none_on_either_side_not_comparable():
+    prev = _snap(regime=None)
+    curr = _snap(regime="bear")
+    assert ta.diff_snapshots(prev, curr) == []
+    prev2 = _snap(regime="bear")
+    curr2 = _snap(regime=None)
+    assert ta.diff_snapshots(prev2, curr2) == []
+
+
+# F-1 verdict (status) — separate params, not inside the snapshot dict
+
+def test_diff_status_change_fires():
+    prev = _snap()
+    curr = _snap()
+    out = ta.diff_snapshots(prev, curr, prev_status="INTACT", curr_status="WEAKENING")
+    assert len(out) == 1
+    assert out[0]["field"] == "status"
+    assert out[0]["tag"] == ta.TAG_AI
+    assert "INTACT" in out[0]["message"] and "WEAKENING" in out[0]["message"]
+
+
+def test_diff_status_unchanged_does_not_fire():
+    prev = _snap()
+    curr = _snap()
+    assert ta.diff_snapshots(prev, curr, prev_status="INTACT", curr_status="INTACT") == []
+
+
+def test_diff_status_none_on_either_side_does_not_fire():
+    prev = _snap()
+    curr = _snap()
+    assert ta.diff_snapshots(prev, curr, prev_status=None, curr_status="WEAKENING") == []
+    assert ta.diff_snapshots(prev, curr, prev_status="INTACT", curr_status=None) == []
+
+
+# multiple simultaneous deltas
+
+def test_diff_multiple_rules_fire_simultaneously_all_returned_not_just_first():
+    prev = _snap(composite=50.0, erosion_score=20.0, erosion_label="Intact",
+                 pt_signal=None, analyst=None, regime="bull")
+    curr = _snap(composite=90.0, erosion_score=80.0, erosion_label="Breaking",
+                 pt_signal={"direction": "cut", "pct_change": -0.10},
+                 analyst={"latest_article_date": "2026-09-20"}, regime="bear")
+    out = ta.diff_snapshots(prev, curr, prev_status="INTACT", curr_status="BROKEN")
+    fields = {c["field"] for c in out}
+    assert fields == {"composite", "erosion", "pt_signal", "analyst", "regime", "status"}
+    assert len(out) == 6
+
+
+def test_diff_snapshots_never_raises_on_malformed_fields():
+    # Both sides present (non-None) wherever possible, so every parsing
+    # guard (_finite_float / pct_change*100 / _parse_date_safe) is actually
+    # exercised on a genuinely unparseable value, not short-circuited away
+    # by an early "is None" check.
+    prev = _snap(composite="not-a-number", erosion_score="bad", erosion_label="X",
+                 pt_signal={"pct_change": "bad"}, analyst={"latest_article_date": "also-bad"},
+                 regime=123)
+    curr = _snap(composite=50.0, erosion_score=60.0, erosion_label="X",
+                 pt_signal={"pct_change": -0.09}, analyst={"latest_article_date": "not-a-date"},
+                 regime=456)
+    # Must not raise -- every malformed field degrades to "not comparable"
+    # rather than crashing the page.
+    out = ta.diff_snapshots(prev, curr, prev_status="INTACT", curr_status="INTACT")
+    assert isinstance(out, list)
+
+
 # ─── generate_earnings_thesis_update ─────────────────────────────────────────
 
 def test_generate_earnings_thesis_update_guards_no_anthropic_import():

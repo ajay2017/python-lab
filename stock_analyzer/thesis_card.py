@@ -141,7 +141,11 @@ EVIDENCE_NOTE_F1 = (
     "snapshots begin capturing (coming in a later phase)."
 )
 
-# Chunk A deliberately ships no diff logic — always the same static message.
+# Chunk A shipped no diff logic and showed this unconditionally. Chunk C
+# (thesis_advisor.diff_snapshots) now shows a real diff once >=2 reviews
+# with captured snapshots exist for the ticker; this string is reused for
+# the "not enough history yet" case (0/1 reviews, or the older review
+# predates Chunk B's capture) rather than inventing new copy for that state.
 CHANGE_TRACKING_NOTE = (
     "Change tracking starts once evidence snapshots begin capturing "
     "(coming in a later phase)."
