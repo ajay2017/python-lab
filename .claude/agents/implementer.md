@@ -16,7 +16,8 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 # caught. A full ID does not auto-update — the tradeoff is that this line must
 # be bumped by hand when a newer Sonnet ships, which is the correct direction
 # for a project that would rather be stale-and-known than newer-and-unverified.
-model: claude-sonnet-5
+# Bumped claude-sonnet-5 -> claude-sonnet-5-5 on 2026-09-30 (owner decision).
+model: claude-sonnet-5-5
 color: blue
 ---
 

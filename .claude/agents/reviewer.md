@@ -13,7 +13,16 @@ description: >
   and reports, it does not edit. Give it the diff/files and the intent; it
   returns a verdict (ship / fix-first) with specific findings.
 tools: Read, Grep, Glob, Bash
-model: opus
+# EXACT ID, not the `opus` alias (2026-09-30). Per the sub-agents docs, a
+# family alias inherits the LEAD's exact model when the lead is in that family,
+# and otherwise follows ANTHROPIC_DEFAULT_OPUS_MODEL, which Accenture's managed
+# config sets to claude-opus-4-8. So `opus` gave Opus 5.5 only while the lead
+# happened to be Opus 5.5; a Sonnet-led session got Opus 4.8. The org allowlist
+# entry `claude-opus-5` admits 5.5 via prefix match. If a full ID is ever
+# BLOCKED it falls back to the lead's model (possibly Sonnet), not to another
+# Opus. The MODEL: line in the citation is what exposes that, so read it.
+# Bump by hand when a newer Opus ships.
+model: claude-opus-5-5
 color: red
 ---
 
@@ -69,10 +78,9 @@ in priority order:
 
 ## Output
 
-Your `model:` frontmatter pin is the generic alias `opus`, not a fixed version
-— it auto-follows whatever Opus release the account currently resolves that
-alias to (see `feedback_commit_model_attribution`, `project_model_routing_drift_2026_07`
-memories). Always start your reply with the specific model you were actually
+Your `model:` frontmatter pins an exact Opus ID, but a blocked ID silently
+falls back to the lead's model, so the pin is not proof of what you ran as
+(see the `feedback_agent_model_version_pin` memory). Always start your reply with the specific model you were actually
 invoked as (from your own system prompt / self-identification), so the caller
 can cite it accurately in the commit body per CLAUDE.md hard rule #4 — never
 assume or hardcode a version like "Opus 4.8".

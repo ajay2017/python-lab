@@ -5,10 +5,15 @@ so a wrong recommendation or a silently-broken gate costs far more than model
 tokens. The savings come from **delegating the easy parts down** to cheaper models
 while the lead orchestrates and the Opus reviewer guards the decision logic.
 
-> **Lead model (2026-07-22):** formally set to **Sonnet 5** (main session).
-> The `reviewer` remains pinned to **Opus** — that gate is non-negotiable
-> regardless of what the lead is. See `docs/cost-routing.md` for the decision
-> rationale and updated economics.
+> **Model pins (2026-09-30, owner decision):** `planner` + `reviewer` =
+> **`claude-opus-5-5`**, `implementer` = **`claude-sonnet-5-5`**,
+> `test-runner` + `doc-writer` = **`haiku`** (Haiku 4.5). The lead is whatever the
+> session runs (Opus 5.5 as of 2026-09-30; the 2026-07-22 "Sonnet 5 lead" note is
+> superseded). The pins are exact IDs because the `opus` alias inherited the lead's
+> model, or fell to the org's `ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8` under
+> a Sonnet lead, which made the review version depend on the session. With the
+> pins, the review gate no longer depends on the lead. See `docs/cost-routing.md`
+> for economics.
 
 > **Workflow enforcement (2026-08-15).** The plan → build → review split is no
 > longer convention-only. `pre_tool_checks.py` now blocks a commit that (a) stages
@@ -38,16 +43,19 @@ while the lead orchestrates and the Opus reviewer guards the decision logic.
 
 | Tier | Model | Does the work that is… |
 |------|-------|------------------------|
-| **Lead** | Sonnet 5 (main session) | Orchestration: design, threshold/gate/coordination decisions, subtle debugging, planning, final review. Capable enough for this role; Opus stays as the mandatory review gate before anything that touches decision logic. |
-| `planner` | **opus** | DESIGN pass for money-moving work *before code exists*: gate/threshold/scoring-formula changes, cross-feature coordination, a new decision surface, multi-phase features. Read-only; returns a plan + design verdict with the threshold/coordination decisions called out. The `opus` pin means policy design gets Opus scrutiny **regardless of the session model** — the design-side counterpart to `reviewer`. |
+| **Lead** | session model (Opus 5.5 as of 2026-09-30) | Orchestration: design, threshold/gate/coordination decisions, subtle debugging, planning, final review. Capable enough for this role; Opus stays as the mandatory review gate before anything that touches decision logic. |
+| `planner` | **claude-opus-5-5** | DESIGN pass for money-moving work *before code exists*: gate/threshold/scoring-formula changes, cross-feature coordination, a new decision surface, multi-phase features. Read-only; returns a plan + design verdict with the threshold/coordination decisions called out. The `opus` pin means policy design gets Opus scrutiny **regardless of the session model** — the design-side counterpart to `reviewer`. |
 | `Plan` | **plan** (built-in) | Read-only architectural scaffolding with **no policy content**: structural layout of a new page, DB table design, session-state wiring. Returns a spec; the lead decides on any policy content inside it. **Inherits the session model (no pin)** — so use it only for structure separable from gate/threshold policy; policy design goes to `planner` above. |
-| `reviewer` | **opus** | A focused review pass on changes touching decision logic / constants — read-only, returns SHIP / FIX-FIRST. This is a correctness premium (~67% cost uplift over the Sonnet 5 lead) that is always worth paying before committing anything that moves money. |
-| `implementer` | **sonnet** | A scoped, already-decided edit: wire a constant, add a render block, mechanical refactor, clear-repro fix. Same tier as lead — value is scope isolation and context hygiene, not dollar savings. |
+| `reviewer` | **claude-opus-5-5** | A focused review pass on changes touching decision logic / constants — read-only, returns SHIP / FIX-FIRST. This is a correctness premium (~67% cost uplift over the Sonnet 5 lead) that is always worth paying before committing anything that moves money. |
+| `implementer` | **claude-sonnet-5-5** | A scoped, already-decided edit: wire a constant, add a render block, mechanical refactor, clear-repro fix. Same tier as lead — value is scope isolation and context hygiene, not dollar savings. |
 | `test-runner` | **haiku** | Verification checklist (`py_compile` → targeted pytest → `check_constants_documented.py` → full suite), report-only. **Optional/gap-only** as of 2026-08-04 — the pytest hook + `tests/test_repo_hygiene.py` already cover this deterministically for free; invoke only when the hook can't be relied on, or as a cheap pre-filter before an expensive review on a big change. |
 | `doc-writer` | **haiku** | Cheap mechanical write-ups: a constants-table row, a Known-Behaviours row, an F/gate row, a code comment. Strong-saving lane (~67% vs Sonnet 5 lead at list price). |
 
-Model is set per agent via the `model:` frontmatter (`opus` / `sonnet` /
-`haiku`). The lead can also override it per-invocation when needed.
+Model is set per agent via the `model:` frontmatter: an exact ID for the Opus
+and Sonnet lanes, and the `haiku` alias for the Haiku lanes. Resolution order,
+first match wins (sub-agents docs): per-call `model` → frontmatter →
+`CLAUDE_CODE_SUBAGENT_MODEL` → the lead's model. So a per-call `model: "opus"`
+would OVERRIDE the exact pin with the alias; don't pass one to `reviewer`/`planner`.
 
 ## The workflow: PLAN → ROUTE → BUILD → [VERIFY] → REVIEW → COMMIT
 
@@ -139,7 +147,7 @@ the Anthropic Console / subscription usage view.
 
 ## TL;DR
 
-Sonnet 5 leads and orchestrates; the **free deterministic gates** (pytest hook +
+The lead orchestrates; the **free deterministic gates** (pytest hook +
 antipattern + repo-hygiene checks) verify every change automatically; Opus
 `reviewer` reviews **decision/data-affecting** changes before they ship (skipped
 for docs/tests/mechanical when the gates are green); Haiku `test-runner` is kept

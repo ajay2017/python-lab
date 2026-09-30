@@ -14,7 +14,16 @@ description: >
   it returns a step-by-step plan with the threshold/coordination decisions
   called out.
 tools: Read, Grep, Glob, Bash
-model: opus
+# EXACT ID, not the `opus` alias (2026-09-30). Per the sub-agents docs, a
+# family alias inherits the LEAD's exact model when the lead is in that family,
+# and otherwise follows ANTHROPIC_DEFAULT_OPUS_MODEL, which Accenture's managed
+# config sets to claude-opus-4-8. So `opus` gave Opus 5.5 only while the lead
+# happened to be Opus 5.5; a Sonnet-led session got Opus 4.8. The org allowlist
+# entry `claude-opus-5` admits 5.5 via prefix match. If a full ID is ever
+# BLOCKED it falls back to the lead's model (possibly Sonnet), not to another
+# Opus. The MODEL: line in the citation is what exposes that, so read it.
+# Bump by hand when a newer Opus ships.
+model: claude-opus-5-5
 color: purple
 ---
 
