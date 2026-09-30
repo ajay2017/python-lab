@@ -114,9 +114,14 @@ REASON_NO_PORTFOLIO = (
     "engine's live composite"
 )
 REASON_NOT_HELD = (
-    "Not currently held — this ticker has no live position or composite "
-    "to show here (only held tickers get a position header)."
+    "Not currently held — no live position to show here (only held "
+    "tickers get a position header)."
 )
+# Thesis and Pre-Mortem both live on the ticker's most recent BUY row. When
+# there is no BUY at all (a watchlist-only ticker), say that rather than
+# "no thesis saved for this ticker's most recent buy," which implies a buy
+# that never happened.
+REASON_NO_BUY = "No buy on record for this ticker."
 REASON_NO_THESIS = "No thesis saved for this ticker's most recent buy."
 REASON_NO_REVIEW = "No thesis review on record for this ticker."
 REASON_REVIEW_OFFLINE = "Thesis review data unavailable — data offline"
@@ -177,7 +182,7 @@ def _assemble_header(ticker: str, position_row: "dict | None",
 
 def _assemble_thesis(trade_row: "dict | None") -> dict:
     if not trade_row:
-        return _unavailable(REASON_NO_THESIS)
+        return _unavailable(REASON_NO_BUY)
     text = trade_row.get("user_thesis")
     if not text or not str(text).strip():
         return _unavailable(REASON_NO_THESIS)
@@ -294,7 +299,7 @@ def _assemble_analyst_coverage(analyst_row: "dict | None") -> dict:
 
 def _assemble_pre_mortem(trade_row: "dict | None") -> dict:
     if not trade_row:
-        return _unavailable(REASON_NO_PREMORTEM)
+        return _unavailable(REASON_NO_BUY)
     case_against = trade_row.get("premortem_case_against")
     commitment = trade_row.get("premortem_commitment")
     has_case = isinstance(case_against, list) and len(case_against) > 0

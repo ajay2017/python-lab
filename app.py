@@ -26406,8 +26406,26 @@ elif page == "🧵 Thesis":
         _tc_side = _tc.analyst_side_detailed(
             _tc_analyst_row.get("consensus_rating") if _tc_analyst_row else None
         )
+        # No position header (watchlist-only ticker, or a cold session): read
+        # the engine composite from the same load_all(period="6mo") cache the
+        # 📋 Watchlist page fills via _parallel_load_all — same cache key, so
+        # usually a hit, and the number can't disagree with that page. Gated
+        # through analyst_intel.trustworthy_composite so a withheld / stale /
+        # fabricated-neutral-50 composite is never shown or fed to the tension
+        # banner. Any failure → None → no banner, never a fabricated claim.
+        _tc_nh_composite = None
+        if not _tc_card["header"].get("available"):
+            try:
+                from stock_analyzer import analyst_intel as _tc_ai
+                with st.spinner(f"Loading engine composite for {_tc_sel}…"):
+                    _tc_nh_composite = _tc_ai.trustworthy_composite(
+                        load_all(_tc_sel, period="6mo")
+                    )
+            except Exception:
+                _tc_nh_composite = None
         _tc_composite = (
-            _tc_card["header"].get("composite") if _tc_card["header"].get("available") else None
+            _tc_card["header"].get("composite") if _tc_card["header"].get("available")
+            else _tc_nh_composite
         )
         _tc_f1_verdict = (
             _tc_card["f1_review"].get("status") if _tc_card["f1_review"].get("available") else None
@@ -26440,6 +26458,11 @@ elif page == "🧵 Thesis":
             else:
                 st.markdown(f"**Ticker:** {_tc_sel}")
                 st.caption(_tc_hdr.get("reason", ""))
+                if _tc_nh_composite is not None:
+                    st.markdown(
+                        f"{_tc.TAG_EMOJI[_tc.TAG_DERIVED]} Engine composite: "
+                        f"**{_tc_nh_composite:.0f}**"
+                    )
 
         # ── Your Thesis ───────────────────────────────────────────────────
         with st.container(border=True):
@@ -26593,7 +26616,7 @@ elif page == "🧵 Thesis":
         # message Chunk A always showed. _tc_review_df is already fetched
         # above (F-1 Thesis Review section) and already ordered
         # reviewed_at desc — reused here, not re-queried.
-        with st.expander("▸ What changed since last review", expanded=False):
+        with st.expander("What changed since last review", expanded=False):
             _tc_diff_ok = (
                 _tc_review_df is not None
                 and len(_tc_review_df) >= 2

@@ -101,6 +101,16 @@ def test_thesis_blank_string_is_treated_as_missing():
     assert card["thesis"]["reason"] == tc.REASON_NO_THESIS
 
 
+def test_no_buy_row_says_no_buy_not_no_thesis():
+    # A watchlist-only ticker has no BUY row at all — the card must not say
+    # "no thesis saved for this ticker's most recent buy" (implies a buy that
+    # never happened). A BUY with a blank thesis still gets REASON_NO_THESIS.
+    card = tc.assemble_thesis_card("COIN", trade_row=None)
+    assert card["thesis"]["reason"] == tc.REASON_NO_BUY
+    assert card["pre_mortem"]["reason"] == tc.REASON_NO_BUY
+    assert tc.REASON_NO_BUY != tc.REASON_NO_THESIS
+
+
 def test_f1_review_populated():
     card = tc.assemble_thesis_card(
         "NVDA", thesis_review_row={
