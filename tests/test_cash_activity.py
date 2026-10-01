@@ -68,6 +68,43 @@ def test_a_reclassified_fee_charts_as_margin_interest():
     assert ca.chart_category(promoted) == "Margin interest"
 
 
+# ─── range_start / period_start / period_label ───────────────────────────
+
+from datetime import date
+
+
+def test_last_12_months_is_twelve_whole_month_buckets():
+    assert ca.range_start("Last 12 months", date(2026, 10, 1)) == date(2025, 11, 1)
+    assert ca.range_start("Last 12 months", date(2026, 12, 31)) == date(2026, 1, 1)
+    assert ca.range_start("Last 12 months", date(2026, 11, 15)) == date(2025, 12, 1)
+
+
+def test_range_start_snaps_to_a_whole_first_bucket():
+    """Nov 2025 would make "Q4 2025" a 2-month bucket and "2025" an
+    11-month-short year — snap back so every bucket shown is whole."""
+    today = date(2026, 10, 1)
+    assert ca.range_start("Last 12 months", today, "Quarterly") == date(2025, 10, 1)
+    assert ca.range_start("Last 12 months", today, "Yearly") == date(2025, 1, 1)
+    assert ca.range_start("This year", today, "Quarterly") == date(2026, 1, 1)
+
+
+def test_this_year_and_all_time():
+    assert ca.range_start("This year", date(2026, 10, 1)) == date(2026, 1, 1)
+    assert ca.range_start("All time", date(2026, 10, 1)) is None
+
+
+@pytest.mark.parametrize("d,grouping,start,label", [
+    (date(2026, 9, 24), "Monthly", date(2026, 9, 1), "Sep 2026"),
+    (date(2026, 9, 24), "Quarterly", date(2026, 7, 1), "Q3 2026"),
+    (date(2026, 1, 5), "Quarterly", date(2026, 1, 1), "Q1 2026"),
+    (date(2026, 12, 31), "Quarterly", date(2026, 10, 1), "Q4 2026"),
+    (date(2026, 9, 24), "Yearly", date(2026, 1, 1), "2026"),
+])
+def test_period_bucketing(d, grouping, start, label):
+    assert ca.period_start(d, grouping) == start
+    assert ca.period_label(start, grouping) == label
+
+
 # ─── zero_aligned_ranges ─────────────────────────────────────────────────
 
 def _zero_frac(r):

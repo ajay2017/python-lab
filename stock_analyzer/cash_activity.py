@@ -13,9 +13,51 @@ Awareness only: nothing here feeds account_flows, Modified Dietz, or any gate.
 from __future__ import annotations
 
 import math
+from datetime import date as _date
 
 # Display order, bottom-to-top within a month's stack.
 CATEGORIES = ("Dividend", "Interest earned", "Margin interest", "Fee")
+
+# Chart controls (owner choice, 2026-10-01). Weekly is deliberately absent:
+# interest and dividends post monthly, so weekly bars would be mostly empty.
+GROUPINGS = ("Monthly", "Quarterly", "Yearly")
+RANGES = ("Last 12 months", "This year", "All time")
+
+
+def range_start(range_label: str, today: _date, grouping: str = "Monthly") -> "_date | None":
+    """First date included by a range choice; None means no lower bound.
+    "Last 12 months" starts on the 1st of the month 11 months back, so the
+    current month plus the 11 before it are whole buckets. The start is then
+    snapped back to its `grouping` bucket, so the first quarter or year shown
+    is never a partial one labelled as if it were whole."""
+    if range_label == "This year":
+        start = _date(today.year, 1, 1)
+    elif range_label == "Last 12 months":
+        y, m = today.year, today.month - 11
+        if m < 1:
+            y, m = y - 1, m + 12
+        start = _date(y, m, 1)
+    else:
+        return None
+    return period_start(start, grouping)
+
+
+def period_start(d: _date, grouping: str) -> _date:
+    """Bucket start for `d`: the 1st of its month, quarter, or year."""
+    if grouping == "Yearly":
+        return _date(d.year, 1, 1)
+    if grouping == "Quarterly":
+        return _date(d.year, 3 * ((d.month - 1) // 3) + 1, 1)
+    return _date(d.year, d.month, 1)
+
+
+def period_label(p: _date, grouping: str) -> str:
+    """Axis label for a bucket start from `period_start`."""
+    if grouping == "Yearly":
+        return str(p.year)
+    if grouping == "Quarterly":
+        return f"Q{(p.month - 1) // 3 + 1} {p.year}"
+    return p.strftime("%b %Y")
 
 
 def chart_category(ev: dict) -> "str | None":

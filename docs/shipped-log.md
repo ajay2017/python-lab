@@ -9,6 +9,13 @@ Cross-reference: many entries here have a fuller, dedicated memory file (see `ME
 ---
 
 **Recently shipped (do not re-chase):**
+- **💵 Cash Activity View by / Range controls, 2026-10-01.**
+  - Owner-chosen options: Monthly / Quarterly / Yearly, and Last 12 months / This year / All time. Weekly was declined because income posts monthly.
+  - The range start snaps to a whole first bucket.
+  - Realized P&L rolls up the same monthly figures onto the same axis. Q3 2026 shows $472 over 84 trades, matching the Reports tile.
+  - Also fixed a latent bug: the chart loaded only 270 days, and the YTD captions read that same frame, so from about Oct 5 they would have silently dropped January's Gold fee and margin interest. All events are now loaded and YTD is always Jan 1 → today.
+  - The User Guide entry was updated; it also still carried the stale "SnapTrade doesn't relay income" claim.
+  - Display-only, no `_GATE_FILES` touch, deterministic gates only.
 - **Broker `FEE` charges counted as margin interest — owner decision, 2026-10-01 (follow-on to the entry below).**
   - The owner confirmed the only genuine fee is the annual Gold fee, so new `broker_sync.canonical_income_events` (dedup, then this rule) promotes live, ticker-less, negative `FEE` rows to interest, read-time only. The real case is 9/24's −$61.01.
   - A live `FEE` matching a statement `GOLD` row is dropped as that fee's twin, which also closes the GOLD-vs-FEE cross-bucket double count. The near-duplicate panel skips that pair.

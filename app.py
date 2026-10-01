@@ -36563,8 +36563,10 @@ elif page == "💰 Account":
             # ── Cash Activity — income events trend (display/trend ONLY; never
             #    feeds account_flows / Modified Dietz — see plan doc) ────────────
             st.markdown("#### 💵 Cash Activity")
-            _snap_income_since = (_today_et() - timedelta(days=270)).isoformat()
-            _snap_income = db.load_snaptrade_income_events(since_date=_snap_income_since)
+            # Load ALL events (a small table). The chart range is applied
+            # below; loading only the last 270 days used to make the YTD
+            # captions silently lose January once the year passed ~9 months.
+            _snap_income = db.load_snaptrade_income_events()
             # Read-side defense (F-268 cross-path dedup follow-on, 2026-09-11):
             # a manual CSV statement import and the live SnapTrade cron can
             # both have captured the SAME real dividend/interest/fee event
@@ -36582,17 +36584,34 @@ elif page == "💰 Account":
                 st.caption("No dividend/interest/fee events synced yet.")
             else:
                 _sii_chart_priv = st.session_state.get("_privacy", True)
+                from stock_analyzer import cash_activity as _sii_ca
+                _sii_c1, _sii_c2 = st.columns(2)
+                with _sii_c1:
+                    _sii_group = st.radio(
+                        "View by", list(_sii_ca.GROUPINGS), horizontal=True, key="_cash_act_group",
+                    )
+                with _sii_c2:
+                    _sii_range = st.radio(
+                        "Range", list(_sii_ca.RANGES), horizontal=True, key="_cash_act_range",
+                    )
+                _sii_start = _sii_ca.range_start(_sii_range, _today_et(), _sii_group)
+
                 _sii_df = pd.DataFrame(_snap_income)
                 _sii_df["event_date"] = pd.to_datetime(_sii_df["event_date"])
-                _sii_df["month"] = _sii_df["event_date"].dt.to_period("M").dt.to_timestamp()
                 # Signed, and interest split into charged vs earned before
                 # summing, so a Gold credit can't hide that month's margin
                 # interest (June 2026 used to show $7.08 for a $36.59 charge).
-                from stock_analyzer import cash_activity as _sii_ca
                 _sii_df["category"] = [_sii_ca.chart_category(_r) for _r in _snap_income]
+                _sii_df["period"] = [_sii_ca.period_start(_d.date(), _sii_group) for _d in _sii_df["event_date"]]
+                # _sii_df stays complete (the YTD captions read it); only the
+                # chart is cut to the chosen range.
+                _sii_chart_df = (
+                    _sii_df if _sii_start is None
+                    else _sii_df[_sii_df["event_date"].dt.date >= _sii_start]
+                )
                 _sii_piv = (
-                    _sii_df.dropna(subset=["category"])
-                    .groupby(["month", "category"])["amount"]
+                    _sii_chart_df.dropna(subset=["category"])
+                    .groupby(["period", "category"])["amount"]
                     .sum().unstack(fill_value=0.0)
                 )
 
@@ -36612,16 +36631,24 @@ elif page == "💰 Account":
                 _sii_ext = _sii_ext_fn(_sii_trades_df)
                 _sii_monthly_pnl = _sii_trend_fn(_sii_ext) if not _sii_ext.empty else pd.DataFrame()
                 if not _sii_monthly_pnl.empty:
-                    _sii_pnl_idx = pd.to_datetime(_sii_monthly_pnl["month_str"])
-                    _sii_pnl_series = pd.Series(
-                        _sii_monthly_pnl["pnl"].values, index=_sii_pnl_idx
-                    ).reindex(_sii_piv.index, fill_value=0.0)
-                    _sii_pnl_trades = pd.Series(
-                        _sii_monthly_pnl["trade_count"].values, index=_sii_pnl_idx
-                    ).reindex(_sii_piv.index, fill_value=0)
+                    # Same monthly figures, rolled up into the chosen buckets
+                    # and cut to the same range as the bars.
+                    _sii_mp = _sii_monthly_pnl.assign(
+                        _m_start=pd.to_datetime(_sii_monthly_pnl["month_str"]).dt.date,
+                    )
+                    if _sii_start is not None:
+                        _sii_mp = _sii_mp[_sii_mp["_m_start"] >= _sii_start]
+                    _sii_mp = _sii_mp.assign(
+                        period=[_sii_ca.period_start(_d, _sii_group) for _d in _sii_mp["_m_start"]],
+                    ).groupby("period")[["pnl", "trade_count"]].sum()
                 else:
-                    _sii_pnl_series = pd.Series(0.0, index=_sii_piv.index)
-                    _sii_pnl_trades = pd.Series(0, index=_sii_piv.index)
+                    _sii_mp = pd.DataFrame(columns=["pnl", "trade_count"])
+                # One axis for both: every bucket with income OR closed trades.
+                _sii_periods = sorted(set(_sii_piv.index) | set(_sii_mp.index))
+                _sii_piv = _sii_piv.reindex(_sii_periods, fill_value=0.0)
+                _sii_pnl_series = _sii_mp["pnl"].reindex(_sii_periods, fill_value=0.0).astype(float)
+                _sii_pnl_trades = _sii_mp["trade_count"].reindex(_sii_periods, fill_value=0).astype(int)
+                _sii_x = [_sii_ca.period_label(_p, _sii_group) for _p in _sii_periods]
 
                 import plotly.graph_objects as _sii_pgo
                 from plotly.subplots import make_subplots as _sii_subplots
@@ -36634,7 +36661,7 @@ elif page == "💰 Account":
                     if _cat in _sii_piv.columns:
                         _sii_vals = _sii_piv[_cat]
                         _sii_fig.add_trace(_sii_pgo.Bar(
-                            x=_sii_piv.index, y=_sii_vals,
+                            x=_sii_x, y=_sii_vals,
                             name=_cat, marker_color=_sii_colors[_cat],
                             text=(
                                 ["••••••" if abs(v) >= 2 else "" for v in _sii_vals]
@@ -36661,7 +36688,7 @@ elif page == "💰 Account":
                 ]
                 _sii_pnl_textpos = ["bottom center" if v < 0 else "top center" for v in _sii_pnl_series]
                 _sii_fig.add_trace(_sii_pgo.Scatter(
-                    x=_sii_piv.index, y=_sii_pnl_series,
+                    x=_sii_x, y=_sii_pnl_series,
                     name="Realized P&L (trades)",
                     mode="lines+markers+text",
                     line=dict(color="#a78bfa", width=2),
@@ -36706,7 +36733,11 @@ elif page == "💰 Account":
                     range=list(_sii_pnl_rng), zeroline=False,
                     secondary_y=True,
                 )
+                # Labels like "2026" / "Q3 2026" must stay categories, not be
+                # parsed as numbers or dates.
+                _sii_fig.update_xaxes(type="category")
                 st.plotly_chart(_sii_fig, width="stretch")
+                # YTD always means Jan 1 → today, whatever range the chart shows.
                 _sii_ytd = _sii_df[_sii_df["event_date"].dt.year == _today_et().year]
                 _sii_div_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "dividend", "amount"].sum()
                 _sii_int_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "interest", "amount"].sum()
@@ -36757,9 +36788,9 @@ elif page == "💰 Account":
                 # Owner decision 2026-10-01: broker-synced "FEE" charges are
                 # counted as margin interest (canonical_income_events). Say so,
                 # so the relabel is never silent.
-                # Whole chart window, not just YTD, so a promoted row from last
-                # year that still plots is still listed.
-                _sii_rfees = _sii_ca.reclassified_broker_fees(_snap_income)
+                # The chart's selected range, not just YTD, so every promoted
+                # row that plots is listed.
+                _sii_rfees = _sii_ca.reclassified_broker_fees(_sii_chart_df.to_dict("records"))
                 if _sii_rfees:
                     _sii_rf_list = ", ".join(
                         _sii_signed(float(_rf.get("amount") or 0)) + " on " + str(_rf.get("event_date"))[:10]
@@ -39000,7 +39031,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 **7. ⚡ Broker Sync (optional) — automates the two manual habits above for Robinhood.** Open the 💰 Account page's **"🔌 Brokerage Trend"** tab for the "⚡ Broker Sync" section, which connects Robinhood via **SnapTrade** (a middleman service — the app never sees your Robinhood login). Once connected, a background job keeps your **cash balance** current automatically (the "Cash as of" line at the top of the Account page shows when it last synced), and shows:
 - **Position drift** — a live comparison of what Robinhood actually holds vs. what's logged in this app (three buckets: Robinhood-only, App-only, quantity mismatches). Awareness only — it never edits your trades or holdings for you; you reconcile it yourself the same way you always have.
 - **Pending trade imports** — buy/sell activity Robinhood reports that couldn't be auto-matched to a trade you already logged (the match requires an exact date and price, so a manually-logged trade with a slightly different date often lands here even though nothing's actually missing). This is a **different, stricter check than Position Drift above** — a row can appear here even when that ticker's drift is completely clean, and the page will tell you so. Each pending row now shows **"App: X sh logged · Robinhood: Y sh held"** directly beneath the transaction so you can tally without visiting the Portfolio page: matching counts confirm it's likely already logged with a slightly different date or price; differing counts flag it as a real gap. Nothing is written automatically: each row has a **"Log This Trade →"** button that opens the Trade Journal with ticker/shares/price/date already locked in from the real fill — you still choose a trigger reason and write the required pre-mortem (labeled "Retrospective" since the trade already happened), same as any other Buy. A ✗ button lets you back out of a locked import at any point without logging it. If it's already logged, use **"Already logged"** instead to clear the row without touching your trades.
-- **Cash Activity** — a monthly trend of dividends, interest, and fees, purely for visibility (it never feeds your Growth/Return numbers above — those stay driven by the deposits/withdrawals you log). The 💵 Cash Activity chart pulls from your **SnapTrade broker sync** when available; if SnapTrade doesn't receive dividend/interest/fee details from your broker (a known gap with Robinhood), you can **manually upload your Robinhood statement** via the "📥 Import from Robinhood Statement" expander below the chart — download a CSV from your broker's Statements page and paste it to backfill the months that were missed. A **Realized P&L (trades)** line is overlaid on the same chart, showing how much your closed trades actually made or lost each month — the same avg-cost figure your 📒 Trade Journal's Monthly Realized P&L Trend already shows, so the two never disagree. Hover any month to see dividends, interest, fees, and realized P&L together in one tooltip. A **"📋 Last statement import"** caption shows how current your statement upload is and how many broker-synced events haven't been cross-checked against one yet; a **"⚠️ possible unreconciled duplicate(s)"** expander appears only if the app finds a broker-sync event and a statement event that look like the same real transaction but weren't automatically recognized as one — worth a manual look, never something the app merges or hides on its own.
+- **Cash Activity** — a trend of dividends, interest, and fees, purely for visibility (it never feeds your Growth/Return numbers above — those stay driven by the deposits/withdrawals you log). Pick **View by** (Monthly / Quarterly / Yearly) and **Range** (Last 12 months / This year / All time); the YTD lines under the chart always cover Jan 1 to today whatever you pick. Bars are signed: dividends and interest earned above zero, **margin interest** and fees below, so a Gold credit never hides that month's margin interest. The broker sync labels margin interest as a "fee"; since your only genuine fee is the annual Gold fee, those charges are counted as margin interest and listed under the chart. The chart pulls from your **SnapTrade broker sync**; your **Robinhood statement** is the source of truth, so upload it via the "📥 Import from Robinhood Statement" expander below the chart (download a CSV from your broker's Statements page) and its rows replace any matching broker-synced ones. A **Realized P&L (trades)** line is overlaid on the same chart, showing how much your closed trades actually made or lost each month — the same avg-cost figure your 📒 Trade Journal's Monthly Realized P&L Trend already shows, so the two never disagree. Hover any month to see dividends, interest, fees, and realized P&L together in one tooltip. A **"📋 Last statement import"** caption shows how current your statement upload is and how many broker-synced events haven't been cross-checked against one yet; a **"⚠️ possible unreconciled duplicate(s)"** expander appears only if the app finds a broker-sync event and a statement event that look like the same real transaction but weren't automatically recognized as one — worth a manual look, never something the app merges or hides on its own.
 
 Setup is a one-time, three-step process shown on the page itself (it needs a free SnapTrade Personal API Key and one Railway environment variable pair — not something done from inside the app in one click). Broker Sync **supplements** the manual habits above — you can still enter cash by hand and log trades manually any time, connected or not.
 

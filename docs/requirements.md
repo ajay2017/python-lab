@@ -432,6 +432,11 @@ Historical daily margin and leverage tracking.
 - **Four categories.** Bars are now Dividend / Interest earned / Margin interest / Fee, with interest split by sign (the same convention `capital_vs_margin` confirmed). Charges stack below zero (`barmode="relative"`), and the bar axis and the realized-P&L axis share one zero line.
 - **New module.** The logic lives in the pure `stock_analyzer/cash_activity.py` (`chart_category`, `zero_aligned_ranges`, `reclassified_broker_fees`).
 - **YTD caption signs.** It printed interest with a hardcoded "+", so a net −$243.77 read as "+$243.77". All four figures now carry their real sign.
+- **View by / Range controls (owner choice, same day).** View by is Monthly / Quarterly / Yearly. Weekly was left out because interest and dividends post monthly. Range is Last 12 months / This year / All time.
+  - The range start snaps back to a whole first bucket, so a partial quarter or year is never labelled as whole.
+  - The bars and the realized-P&L line share one bucketed axis, and that line rolls up the same monthly `build_monthly_trend` figures.
+  - All income events are loaded now. The old 270-day load made the YTD captions silently drop January once the year passed ~9 months. YTD is always Jan 1 → today, independent of the range.
+  - Helpers: `cash_activity.range_start`, `period_start`, `period_label`.
 - **Broker FEE charges are margin interest (owner decision, same day, after the first fix shipped).** The account's only genuine fee is the annual Gold fee (statement `GOLD`). So `broker_sync.canonical_income_events` (dedup, then this rule) counts every live-synced, ticker-less, negative `FEE` row as margin interest.
   - **Gold fee protection:** a live `FEE` that matches a statement `GOLD` row (same cents, within the date tolerance) is that Gold fee, so only the statement row is kept, as a fee.
   - **Where it applies:** both Cash Activity and Capital vs Margin (Interest Paid, Net Value Margin Added) read the canonical list.
