@@ -9,6 +9,11 @@ Cross-reference: many entries here have a fuller, dedicated memory file (see `ME
 ---
 
 **Recently shipped (do not re-chase):**
+- **Broker `FEE` charges counted as margin interest — owner decision, 2026-10-01 (follow-on to the entry below).**
+  - The owner confirmed the only genuine fee is the annual Gold fee, so new `broker_sync.canonical_income_events` (dedup, then this rule) promotes live, ticker-less, negative `FEE` rows to interest, read-time only. The real case is 9/24's −$61.01.
+  - A live `FEE` matching a statement `GOLD` row is dropped as that fee's twin, which also closes the GOLD-vs-FEE cross-bucket double count. The near-duplicate panel skips that pair.
+  - Used by Cash Activity and Capital vs Margin, so Interest Paid now includes the charge. Relabelled rows are listed on the page.
+  - Reverses the 2026-09-23 "lone live FEE stays a fee" default, which `dedupe_income_events` itself still pins.
 - **💵 Cash Activity made truthful (F-268 follow-on), 2026-10-01.** Found in the owner's Q3 return review.
   - Bars were `abs()` values netted by `event_type`, so charges read as income and June's $36.59 margin interest showed as $7.08 after a Gold credit. They are now signed and split into Dividend / Interest earned / Margin interest / Fee, with aligned zero lines (new pure `stock_analyzer/cash_activity.py`).
   - The YTD caption's hardcoded "+" on interest is fixed.

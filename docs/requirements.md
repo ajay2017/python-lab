@@ -430,9 +430,13 @@ Historical daily margin and leverage tracking.
 **Signed bars, split interest, and the split-dividend dedup, 2026-10-01.** Found in a live review of the owner's Q3 numbers:
 - **Signed, categorised bars.** The chart used to plot `abs()` values grouped by `event_type`. A margin-interest charge looked like income, and a Gold Plan Credit was netted into that month's interest: June 2026 showed $7.08 for a real −$36.59 charge against a +$29.45 credit.
 - **Four categories.** Bars are now Dividend / Interest earned / Margin interest / Fee, with interest split by sign (the same convention `capital_vs_margin` confirmed). Charges stack below zero (`barmode="relative"`), and the bar axis and the realized-P&L axis share one zero line.
-- **New module.** The logic lives in the pure `stock_analyzer/cash_activity.py` (`chart_category`, `zero_aligned_ranges`, `unconfirmed_broker_fees`).
+- **New module.** The logic lives in the pure `stock_analyzer/cash_activity.py` (`chart_category`, `zero_aligned_ranges`, `reclassified_broker_fees`).
 - **YTD caption signs.** It printed interest with a hardcoded "+", so a net −$243.77 read as "+$243.77". All four figures now carry their real sign.
-- **Unconfirmed broker FEE rows.** A ticker-less broker-synced `FEE` row with no statement match is disclosed as probably being margin interest, but it is not reclassified, since a real fee can arrive the same way. Importing that month's statement resolves it.
+- **Broker FEE charges are margin interest (owner decision, same day, after the first fix shipped).** The account's only genuine fee is the annual Gold fee (statement `GOLD`). So `broker_sync.canonical_income_events` (dedup, then this rule) counts every live-synced, ticker-less, negative `FEE` row as margin interest.
+  - **Gold fee protection:** a live `FEE` that matches a statement `GOLD` row (same cents, within the date tolerance) is that Gold fee, so only the statement row is kept, as a fee.
+  - **Where it applies:** both Cash Activity and Capital vs Margin (Interest Paid, Net Value Margin Added) read the canonical list.
+  - **Disclosure, not silence:** Cash Activity lists every relabelled row on the chart, and Capital vs Margin's Interest Paid states how many relabelled charges (and their total) it includes.
+  - **No DB change:** the DB keeps the raw label. `dedupe_income_events` on its own still leaves a lone `FEE` as a fee (the 2026-09-23 default), and that default is now overridden only through the canonical step.
 - **Split-dividend dedup.** `broker_sync._find_split_parts` closes a 1-to-2 dedup gap: one live `DIVIDEND` that equals a statement CDIV + MDIV pair for the same ticker (shares lent against the margin loan). Real case: NVDA, Sep 2026, $1.25 = $0.75 + $0.50, previously double-counted. Applied in `dedupe_income_events`, `classify_transactions` (write time) and `reconciliation_freshness`.
 
 ### 3.2 Today's Brief (Daily Briefing)

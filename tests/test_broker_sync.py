@@ -1285,6 +1285,97 @@ def test_write_side_live_rows_are_never_split_parts():
     assert len(out["income_events"]) == 1
 
 
+# ─── canonical_income_events — owner rule 2026-10-01: broker FEE charges are
+# margin interest; the annual Gold fee (statement GOLD) stays a fee. ────────
+
+def test_canonical_lone_broker_fee_charge_counts_as_margin_interest():
+    """The real 2026-09-24 row: no statement import yet for September."""
+    live_fee = _ev(None, "fee", "FEE", -61.01, "2026-09-24", "a39c851e-0645")
+    out = bs.canonical_income_events([live_fee])
+    assert len(out) == 1
+    assert out[0]["event_type"] == "interest"
+    assert out[0]["reclassified_from"] == "fee"
+    part = cvm.interest_partition(out)
+    assert part["sum_neg_magnitude"] == pytest.approx(61.01)
+
+
+def test_canonical_fee_matched_to_statement_mint_keeps_the_statement_row():
+    csv_mint = _ev(None, "interest", "MINT", -61.01, "2026-09-24", "csv:2026-09-24:MINT::-6101")
+    live_fee = _ev(None, "fee", "FEE", -61.01, "2026-09-24", "a39c851e-0645")
+    out = bs.canonical_income_events([live_fee, csv_mint])
+    assert len(out) == 1
+    assert out[0]["snaptrade_txn_id"] == "csv:2026-09-24:MINT::-6101"
+    assert "reclassified_from" not in out[0]
+
+
+def test_canonical_gold_fee_via_both_paths_counts_once_as_a_fee():
+    gold = _ev(None, "fee", "GOLD", -50.00, "2026-01-05", "csv:2026-01-05:GOLD::-5000")
+    live_fee = _ev(None, "fee", "FEE", -50.00, "2026-01-06", "live-gold")
+    for order in ([gold, live_fee], [live_fee, gold]):
+        out = bs.canonical_income_events(order)
+        assert len(out) == 1
+        assert out[0]["raw_code"] == "GOLD" and out[0]["event_type"] == "fee"
+
+
+def test_canonical_gold_twin_outside_tolerance_is_not_a_match():
+    gold = _ev(None, "fee", "GOLD", -50.00, "2026-01-05", "csv:2026-01-05:GOLD::-5000")
+    far = (pd.Timestamp("2026-01-05") + pd.Timedelta(days=INCOME_EVENT_DEDUP_DATE_TOL_DAYS + 1)).date().isoformat()
+    live_fee = _ev(None, "fee", "FEE", -50.00, far, "live-x")
+    out = bs.canonical_income_events([gold, live_fee])
+    assert len(out) == 2
+    assert {e["event_type"] for e in out} == {"fee", "interest"}
+
+
+def test_canonical_one_gold_row_absorbs_only_one_live_fee():
+    gold = _ev(None, "fee", "GOLD", -50.00, "2026-01-05", "csv:2026-01-05:GOLD::-5000")
+    a = _ev(None, "fee", "FEE", -50.00, "2026-01-03", "live-a")
+    b = _ev(None, "fee", "FEE", -50.00, "2026-01-07", "live-b")
+    out = bs.canonical_income_events([gold, a, b])
+    assert len(out) == 2
+    assert sum(1 for e in out if e.get("reclassified_from") == "fee") == 1
+
+
+@pytest.mark.parametrize("row", [
+    _ev("SAP", "fee", "FEE", -0.12, "2026-09-01", "live-adr"),      # ticker-level fee
+    _ev(None, "fee", "FEE", 5.00, "2026-09-01", "live-refund"),     # a refund, not a charge
+    _ev(None, "fee", "TAX", -3.00, "2026-09-01", "live-tax"),       # a different code
+    _ev(None, "fee", "GOLD", -50.00, "2026-01-05", "csv:2026-01-05:GOLD::-5000"),
+])
+def test_canonical_leaves_everything_else_alone(row):
+    out = bs.canonical_income_events([row])
+    assert out == [row]
+
+
+def test_canonical_does_not_mutate_input_and_dedupe_keeps_the_old_default():
+    live_fee = _ev(None, "fee", "FEE", -61.01, "2026-09-24", "a39c851e-0645")
+    before = dict(live_fee)
+    bs.canonical_income_events([live_fee])
+    assert live_fee == before
+    assert bs.dedupe_income_events([live_fee])[0]["event_type"] == "fee"
+
+
+def test_near_duplicate_check_skips_the_gold_fee_twin_the_canonical_rule_resolves():
+    gold = _ev(None, "fee", "GOLD", -50.00, "2026-01-05", "csv:2026-01-05:GOLD::-5000")
+    live_fee = _ev(None, "fee", "FEE", -50.00, "2026-01-06", "live-gold")
+    assert bs.find_unreconciled_near_duplicates([gold, live_fee]) == []
+
+
+def test_near_duplicate_check_still_flags_a_second_live_fee_near_one_gold_row():
+    """Only the pair the canonical rule actually consumed is skipped — a
+    second live $50 charge near the same GOLD row is a real anomaly."""
+    gold = _ev(None, "fee", "GOLD", -50.00, "2026-01-05", "csv:2026-01-05:GOLD::-5000")
+    a = _ev(None, "fee", "FEE", -50.00, "2026-01-03", "live-a")
+    b = _ev(None, "fee", "FEE", -50.00, "2026-01-07", "live-b")
+    pairs = bs.find_unreconciled_near_duplicates([gold, a, b])
+    assert [p["live_event"]["snaptrade_txn_id"] for p in pairs] == ["live-b"]
+
+
+def test_freshness_counts_a_gold_fee_twin_as_reconciled():
+    gold = _ev(None, "fee", "GOLD", -50.00, "2026-01-05", "csv:2026-01-05:GOLD::-5000")
+    live_fee = _ev(None, "fee", "FEE", -50.00, "2026-01-06", "live-gold")
+    assert bs.reconciliation_freshness([gold, live_fee])["unreconciled_live_count"] == 0
+
+
 def test_freshness_counts_split_matched_live_row_as_reconciled():
     out = bs.reconciliation_freshness([_nvda_live(), _nvda_cdiv(), _nvda_mdiv()])
     assert out["unreconciled_live_count"] == 0

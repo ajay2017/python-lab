@@ -35740,7 +35740,9 @@ elif page == "💰 Account":
         # floor detection, so deduping first (which keeps the CSV row and
         # drops its live-sync twin) could remove the only broker-synced-dated
         # candidate for that event and silently shift the go-live date.
-        _cvm_income = broker_sync.dedupe_income_events(_cvm_income)
+        # canonical = dedup + the owner's "broker FEE charges are margin
+        # interest" rule (2026-10-01), so Interest Paid includes them.
+        _cvm_income = broker_sync.canonical_income_events(_cvm_income)
         # F-267: window to [golive, anchor date] BEFORE any downstream sum
         # (interest_partition, weekly_interest_charged, drawdown_decomposition,
         # and the fingerprint's len() below) — the reconstruction window is
@@ -35911,6 +35913,21 @@ elif page == "💰 Account":
                 "each other; every verdict below that depends on a total interest "
                 "figure uses the confirmed 'charged' side."
             )
+            # Owner rule 2026-10-01 (broker_sync.canonical_income_events):
+            # broker-synced "fee" charges count as margin interest here too, so
+            # this verdict surface must say so rather than rely on Cash Activity.
+            from stock_analyzer import cash_activity as _cvm_ca
+            _cvm_rf = _cvm_ca.reclassified_broker_fees(_cvm_income)
+            if _cvm_rf:
+                _cvm_rf_total = sum(abs(float(_r.get("amount") or 0)) for _r in _cvm_rf)
+                st.caption(
+                    f"ⓘ The *charged* figure includes {len(_cvm_rf)} broker-synced "
+                    f"\"fee\" charge(s) ({_cvm_dm(_cvm_rf_total)}) counted as margin "
+                    "interest — the broker sync labels margin interest as a fee, and your "
+                    "only genuine fee is the annual Gold fee. If one of these is that Gold "
+                    "fee (about 50 dollars, early January), import that month's statement "
+                    "to restore it as a fee."
+                )
 
             if not _cvm_gate["show_spanning_verdicts"] or len(_cvm_series) < 2:
                 if _cvm_gate["show_spanning_verdicts"]:
@@ -36560,7 +36577,7 @@ elif page == "💰 Account":
             # reconciliation_freshness computes its own match logic
             # independent of what dedupe_income_events already did.
             _snap_income_raw = list(_snap_income)
-            _snap_income = broker_sync.dedupe_income_events(_snap_income)
+            _snap_income = broker_sync.canonical_income_events(_snap_income)
             if not _snap_income:
                 st.caption("No dividend/interest/fee events synced yet.")
             else:
@@ -36737,23 +36754,22 @@ elif page == "💰 Account":
                     f"**-{_m(f'\\${_sii_int_charged:,.2f}')}** charged (margin interest) "
                     "— shown separately, never netted, so a credit can't mask a charge."
                 )
-                # A broker-synced "FEE" with no statement match may be margin
-                # interest (the sync labels it that way on this account), but
-                # a real fee can arrive the same way, so it is disclosed, not
-                # reclassified.
-                _sii_ufees = _sii_ca.unconfirmed_broker_fees(_sii_ytd.to_dict("records"))
-                if _sii_ufees:
-                    _sii_uf_list = ", ".join(
-                        _sii_signed(float(_uf.get("amount") or 0)) + " on " + str(_uf.get("event_date"))[:10]
-                        for _uf in _sii_ufees
+                # Owner decision 2026-10-01: broker-synced "FEE" charges are
+                # counted as margin interest (canonical_income_events). Say so,
+                # so the relabel is never silent.
+                # Whole chart window, not just YTD, so a promoted row from last
+                # year that still plots is still listed.
+                _sii_rfees = _sii_ca.reclassified_broker_fees(_snap_income)
+                if _sii_rfees:
+                    _sii_rf_list = ", ".join(
+                        _sii_signed(float(_rf.get("amount") or 0)) + " on " + str(_rf.get("event_date"))[:10]
+                        for _rf in _sii_rfees
                     )
                     st.caption(
-                        f"ⓘ Broker-synced **fee(s)** not yet matched to a statement: {_sii_uf_list}. "
-                        "The broker sync also reports margin interest as a fee, so these may be "
-                        "margin interest, in which case the **charged** figure above is understated "
-                        "by them. If it's margin interest, importing that month's statement replaces "
-                        "it automatically; if it's still listed here after importing, it's a genuine "
-                        "fee (check the possible-duplicate list below)."
+                        f"ⓘ Counted as **margin interest** on this chart: {_sii_rf_list}. The broker "
+                        "sync labels margin interest as a \"fee\"; your account's only genuine fee is "
+                        "the annual Gold fee. If one of these is that Gold fee (about 50 dollars, early "
+                        "January), import that month's statement to restore it as a fee."
                     )
                 if not db.is_readonly():
                     st.caption(

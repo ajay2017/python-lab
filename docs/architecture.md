@@ -2793,8 +2793,14 @@ statement CDIV + MDIV pair for the same ticker (`_find_split_parts`: exactly one
 cash and one manufactured part, cents summing exactly, each within the date
 tolerance). Only statement rows can be parts, and they are consumed on match.
 Suppressed write-time rows are logged as `"<TYPE> (cross-path split
-duplicate)"`. The chart-side display helpers live in
-`stock_analyzer/cash_activity.py`. **The Modified-Dietz invariant this function exists to protect:**
+duplicate)"`. **`canonical_income_events()` (2026-10-01, owner decision)** is
+what display and sum consumers read (Cash Activity, Capital vs Margin). It runs
+`dedupe_income_events()` and then counts any live-synced, ticker-less, negative
+`FEE` row as margin interest (`event_type="interest"`,
+`reclassified_from="fee"`), because the account's only genuine fee is the annual
+Gold fee. The exception is a live `FEE` that matches a statement `GOLD` row:
+that is the Gold fee's twin and is dropped. The DB keeps the raw label. The
+chart-side display helpers live in `stock_analyzer/cash_activity.py`. **The Modified-Dietz invariant this function exists to protect:**
 `account.py`'s `net_contributed_capital` reads `account_flows`, and a
 dividend/interest
 credit is performance, not a contribution — routing it there would silently

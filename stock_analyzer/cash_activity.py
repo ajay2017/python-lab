@@ -41,26 +41,13 @@ def chart_category(ev: dict) -> "str | None":
     return None
 
 
-def unconfirmed_broker_fees(events: "list[dict]") -> "list[dict]":
-    """Broker-synced, ticker-less raw_code='FEE' rows in `events`.
-
-    Pass the list AFTER broker_sync.dedupe_income_events. Any such row still
-    present has no matching statement row. On this account the broker sync
-    reports margin interest as FEE (confirmed 2026-09-12, 3-for-3 against the
-    statement's MINT rows). But a genuine fee such as the Gold annual charge
-    could also arrive as FEE, so the row is NOT reclassified here. The page
-    only says it may be margin interest; importing that month's statement
-    resolves it, because the dedup keeps the statement's MINT row. Pure."""
-    out = []
-    for ev in events or []:
-        if str(ev.get("snaptrade_txn_id") or "").startswith("csv:"):
-            continue
-        if str(ev.get("raw_code") or "").strip().upper() != "FEE":
-            continue
-        if str(ev.get("ticker") or "").strip():
-            continue
-        out.append(ev)
-    return out
+def reclassified_broker_fees(events: "list[dict]") -> "list[dict]":
+    """Rows that broker_sync.canonical_income_events counted as margin
+    interest even though the broker sync labelled them 'FEE' (owner
+    decision 2026-10-01; the only genuine fee on this account is the annual
+    Gold fee). The page lists them so the relabel is visible, not silent.
+    Pure."""
+    return [ev for ev in (events or []) if ev.get("reclassified_from") == "fee"]
 
 
 def _finite(x) -> float:

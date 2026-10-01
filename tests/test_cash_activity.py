@@ -45,26 +45,27 @@ def test_june_2026_no_longer_nets_to_seven_dollars():
     assert totals == {"Margin interest": -36.59, "Interest earned": 29.51}
 
 
-# ─── unconfirmed_broker_fees ─────────────────────────────────────────────
+# ─── reclassified_broker_fees ────────────────────────────────────────────
 
-def test_ticker_less_live_fee_is_flagged():
-    fee = _ev("fee", -61.01, "FEE", txn_id="a39c851e")
-    assert ca.unconfirmed_broker_fees([fee]) == [fee]
-
-
-def test_statement_rows_and_ticker_fees_and_other_codes_are_not_flagged():
+def test_only_rows_marked_reclassified_are_listed():
+    promoted = {**_ev("interest", -61.01, "FEE", txn_id="a39c851e"), "reclassified_from": "fee"}
     events = [
+        promoted,
         _ev("fee", -50.0, "GOLD", txn_id="csv:2026-01-05:GOLD::-5000"),
-        _ev("fee", -61.01, "FEE", txn_id="csv:weird"),
-        _ev("fee", -0.12, "FEE", ticker="SAP", txn_id="live-adr"),
         _ev("interest", -39.69, "MINT", txn_id="csv:2026-08-25:MINT::-3969"),
+        {**_ev("dividend", 1.0, "CDIV"), "reclassified_from": float("nan")},  # pandas fill
     ]
-    assert ca.unconfirmed_broker_fees(events) == []
+    assert ca.reclassified_broker_fees(events) == [promoted]
 
 
-def test_unconfirmed_fees_empty_input():
-    assert ca.unconfirmed_broker_fees([]) == []
-    assert ca.unconfirmed_broker_fees(None) == []
+def test_reclassified_fees_empty_input():
+    assert ca.reclassified_broker_fees([]) == []
+    assert ca.reclassified_broker_fees(None) == []
+
+
+def test_a_reclassified_fee_charts_as_margin_interest():
+    promoted = {**_ev("interest", -61.01, "FEE"), "reclassified_from": "fee"}
+    assert ca.chart_category(promoted) == "Margin interest"
 
 
 # ─── zero_aligned_ranges ─────────────────────────────────────────────────

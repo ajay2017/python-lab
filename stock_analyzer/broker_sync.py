@@ -1310,6 +1310,90 @@ def dedupe_income_events(events: list[dict]) -> list[dict]:
     return [ev for i, ev in enumerate(events) if i not in dropped]
 
 
+def _is_broker_fee_charge(ev: dict) -> bool:
+    """A live-synced, ticker-less, negative raw_code='FEE' row."""
+    if str(ev.get("snaptrade_txn_id") or "").startswith("csv:"):
+        return False
+    if str(ev.get("raw_code") or "").strip().upper() != "FEE":
+        return False
+    if str(ev.get("ticker") or "").strip():
+        return False
+    cents = _income_signed_cents(ev)
+    return cents is not None and cents < 0
+
+
+def _gold_fee_twins(deduped: "list[dict]") -> "dict[int, dict]":
+    """{id(live FEE row): statement GOLD row} for every live FEE charge that
+    is the same real Gold fee as a statement row: ticker-less, same signed
+    cents, within INCOME_EVENT_DEDUP_DATE_TOL_DAYS. Each GOLD row absorbs at
+    most one live row, in list order. `deduped` must be the output of
+    dedupe_income_events (it returns the original dict objects, so id() is
+    stable for callers holding the raw list). The single pairing used by
+    canonical_income_events, find_unreconciled_near_duplicates and
+    reconciliation_freshness, so the three can't disagree."""
+    statement_fees = [
+        e for e in deduped
+        if _is_csv_sourced(e)
+        and str(e.get("raw_code") or "").strip().upper() in _RH_FEE_CODES
+        and not str(e.get("ticker") or "").strip()
+    ]
+    used: set = set()
+    twins: "dict[int, dict]" = {}
+    for ev in deduped:
+        if not _is_broker_fee_charge(ev):
+            continue
+        cents = _income_signed_cents(ev)
+        d = _income_parse_date(ev.get("event_date"))
+        if d is None:
+            continue
+        for k, f in enumerate(statement_fees):
+            if k in used or _income_signed_cents(f) != cents:
+                continue
+            fd = _income_parse_date(f.get("event_date"))
+            if fd is not None and abs((fd - d).days) <= INCOME_EVENT_DEDUP_DATE_TOL_DAYS:
+                used.add(k)
+                twins[id(ev)] = f
+                break
+    return twins
+
+
+def canonical_income_events(events: "list[dict]") -> "list[dict]":
+    """The income-event list every display/sum consumer should read:
+    `dedupe_income_events`, then the owner's broker-FEE rule.
+
+    OWNER DECISION, 2026-10-01: on this account the only genuine fee is the
+    annual Robinhood Gold fee (statement code GOLD). Every other ticker-less
+    charge the live sync sends as raw_code='FEE' is margin interest (3-for-3
+    matched to statement MINT rows on 2026-09-12, plus 9/24's $61.01 on the
+    usual monthly cadence). So an unmatched live FEE charge is counted as
+    interest (the margin-interest charge leg, by sign) instead of waiting
+    for a statement import. This reverses the 2026-09-23 "a lone live FEE
+    stays a fee" default, which `dedupe_income_events` itself still keeps.
+
+    The Gold fee is protected the other way: a live FEE charge that matches
+    a statement GOLD row (same cents, within the date tolerance) is a
+    duplicate of that fee. The live row is dropped and the GOLD row is kept,
+    so an annual fee arriving via both paths is counted once, as a fee.
+
+    Reclassified rows are new dicts carrying `reclassified_from="fee"` so the
+    page can say what it did; `event_type`/`raw_code` in the DB are never
+    changed. Pure; never mutates input."""
+    deduped = dedupe_income_events(events)
+    twins = _gold_fee_twins(deduped)
+    out: list[dict] = []
+    for ev in deduped:
+        if not _is_broker_fee_charge(ev):
+            out.append(ev)
+            continue
+        if id(ev) in twins:
+            continue  # the statement GOLD row already counts this fee
+        promoted = dict(ev)
+        promoted["event_type"] = "interest"
+        promoted["reclassified_from"] = "fee"
+        out.append(promoted)
+    return out
+
+
 def _is_csv_sourced(ev: dict) -> bool:
     """True when an income event originated from the manual CSV statement
     import, identified by its deterministic `csv:{date}:{code}:{ticker}:
@@ -1350,6 +1434,7 @@ def find_unreconciled_near_duplicates(events: "list[dict]") -> "list[dict]":
 
     csv_rows = [ev for ev in events if _is_csv_sourced(ev)]
     live_rows = [ev for ev in events if not _is_csv_sourced(ev)]
+    twins = _gold_fee_twins(dedupe_income_events(events))
     pairs: "list[dict]" = []
     for csv_ev in csv_rows:
         csv_cents = _income_signed_cents(csv_ev)
@@ -1369,6 +1454,8 @@ def find_unreconciled_near_duplicates(events: "list[dict]") -> "list[dict]":
                 continue
             if _income_dedup_bucket_key(csv_ev) == _income_dedup_bucket_key(live_ev):
                 continue  # already correctly recognized as the same event
+            if twins.get(id(live_ev)) is csv_ev:
+                continue  # this exact pair is resolved by the Gold-fee twin rule
             pairs.append({"csv_event": csv_ev, "live_event": live_ev})
     return pairs
 
@@ -1404,8 +1491,11 @@ def reconciliation_freshness(events: "list[dict]") -> "dict | None":
         if last_import is None or ts > last_import:
             last_import = ts
 
+    twins = _gold_fee_twins(dedupe_income_events(events))
     unreconciled = 0
     for live_ev in live_rows:
+        if id(live_ev) in twins:
+            continue  # cross-checked against the statement's GOLD row
         key = _income_dedup_bucket_key(live_ev)
         matched = any(
             _income_dedup_bucket_key(csv_ev) == key
