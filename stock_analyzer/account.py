@@ -336,6 +336,32 @@ def annualization_caveat(days: int | None, is_levered: bool = False) -> str | No
     return None
 
 
+# Display-caveat floor for a thin net-equity base relative to gross book, NOT an
+# investment-policy threshold (same rationale as _ANNUALIZE_CAVEAT_MAX_DAYS above
+# and risk.py's _ZERO_VOL_EPS) — kept local rather than in constants.py because it
+# can only add explanatory context to a number, never move a decision.
+_THIN_NET_EQUITY_RATIO_PCT = 40.0
+
+
+def thin_equity_caveat(net_equity: float | None, gross_book: float | None) -> str | None:
+    """Explanatory caption for when net equity is thin relative to gross book —
+    ordinary day-to-day price moves on the book translate into outsized swings on
+    the much smaller net-equity denominator used for MWR/annualization. Returns
+    None when inputs are missing/non-positive or the ratio is at/above the floor
+    (never fabricates a ratio from a missing input)."""
+    if net_equity is None or gross_book is None or gross_book <= 0 or net_equity <= 0:
+        return None
+    ratio_pct = net_equity / gross_book * 100
+    if ratio_pct >= _THIN_NET_EQUITY_RATIO_PCT:
+        return None
+    return (
+        f"⚠️ Net equity (${net_equity:,.0f}) is only {ratio_pct:.0f}% of your gross "
+        f"stock book (${gross_book:,.0f}) — ordinary day-to-day price moves translate "
+        "into much bigger swings in the % figures above. Lean on the dollar gap, not "
+        "the annualized rate, until this ratio recovers."
+    )
+
+
 def build_equity_timeseries(snapshots_df, flows: list[dict]) -> dict | None:
     """Pair daily equity totals (from daily_snapshots) with a forward-filled NCC
     step function (from account_flows) for a capital-trend chart.

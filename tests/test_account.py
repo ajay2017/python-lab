@@ -6,6 +6,7 @@ look far more dramatic than the underlying period return warrants.
 """
 from stock_analyzer.account import (
     annualization_caveat, _ANNUALIZE_CAVEAT_MAX_DAYS,
+    thin_equity_caveat, _THIN_NET_EQUITY_RATIO_PCT,
     compute_account_snapshot, leverage_series_for_chart,
 )
 import pandas as pd
@@ -50,6 +51,48 @@ def test_short_unlevered_and_short_levered_messages_differ():
     unlevered = annualization_caveat(30, is_levered=False)
     levered = annualization_caveat(30, is_levered=True)
     assert unlevered != levered
+
+
+# ── thin_equity_caveat ───────────────────────────────────────────────────────
+# Added alongside a My Edge / Benchmark Mirror review (2026-10-01): when net
+# equity is thin relative to gross book, ordinary price moves on the book
+# produce outsized swings in the % figures computed on net equity.
+
+def test_missing_inputs_return_none():
+    assert thin_equity_caveat(None, 10000.0) is None
+    assert thin_equity_caveat(5000.0, None) is None
+    assert thin_equity_caveat(None, None) is None
+
+
+def test_non_positive_inputs_return_none():
+    assert thin_equity_caveat(0.0, 10000.0) is None
+    assert thin_equity_caveat(-500.0, 10000.0) is None
+    assert thin_equity_caveat(5000.0, 0.0) is None
+
+
+def test_ratio_at_floor_returns_none():
+    # "< floor" is the thin condition — the boundary itself is not thin
+    gross = 10000.0
+    net = gross * (_THIN_NET_EQUITY_RATIO_PCT / 100.0)
+    assert thin_equity_caveat(net, gross) is None
+
+
+def test_ratio_just_below_floor_returns_message():
+    gross = 10000.0
+    net = gross * (_THIN_NET_EQUITY_RATIO_PCT / 100.0) - 1.0
+    msg = thin_equity_caveat(net, gross)
+    assert msg is not None
+    assert "$10,000" in msg
+    assert "%" in msg
+
+
+def test_ratio_well_above_floor_returns_none():
+    assert thin_equity_caveat(9000.0, 10000.0) is None
+
+
+def test_net_equity_above_gross_book_returns_none():
+    # No margin debit at all (net equity can't exceed book without one) — not thin
+    assert thin_equity_caveat(10500.0, 10000.0) is None
 
 
 # ── compute_account_snapshot ────────────────────────────────────────────────

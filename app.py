@@ -43194,6 +43194,9 @@ elif page == "🎯 My Edge":
                 "raw alpha and near-zero beta-adjusted alpha."
             )
             st.caption(f"📐 \"Your Return\" is measured on **{_me_val_basis}**.")
+            _me_thin_caveat = _me_acct.thin_equity_caveat(_me_port_val, _me_equity)
+            if _me_thin_caveat:
+                st.caption(_me_thin_caveat)
             if _me_actual_ann is not None:
                 _me_levered = _me_cash is not None and _me_cash < 0
                 _me_caveat = _me_acct.annualization_caveat(_me_actual_mwr["days"], is_levered=_me_levered)
@@ -43412,8 +43415,12 @@ elif page == "🎯 My Edge":
                 _me_analyst_cnt   = int(_me_classified["analyst_flag"].sum())
                 _me_earnings_cnt  = int(_me_classified["earnings_flag"].sum())
 
-            # Tracking started dates
-            _TRACKING_STARTED = "2026-06-28"
+            # Tracking started dates — 2026-07-01 (owner decision, 2026-10-01): the
+            # real data shows a genuine thesis as early as 2026-06-23 (and a literal
+            # "this is a test line" placeholder on 2026-06-04), but those are the
+            # feature's first days of ramp-up/experimentation, not a settled habit —
+            # 07-01 draws a clean line after that initial week.
+            _TRACKING_STARTED = "2026-07-01"
             _me_buys_since    = _me_trades_df[
                 (_me_trades_df["action"] == "BUY") &
                 (_me_trades_df["traded_at"].astype(str) >= _TRACKING_STARTED)
@@ -43439,8 +43446,8 @@ elif page == "🎯 My Edge":
                 st.warning(
                     f"⚠️ Most trades ({_me_buy_count - _me_since_count} of {_me_buy_count}) "
                     f"predate in-app prep tracking (started {_TRACKING_STARTED}). "
-                    "Those land in **Cold Entry** by definition — not because prep wasn't done. "
-                    "Results are most meaningful for trades since that date."
+                    "Coverage Funnel below still includes them; Tier Comparison and Trade "
+                    "Scatter exclude them (see note below) so results are meaningful."
                 )
 
             # Compute Workflow ROI
@@ -43448,6 +43455,34 @@ elif page == "🎯 My Edge":
                 _me_classified, _me_trades_df,
                 spy_prices=_me_prices if _me_prices else None,
             )
+
+            # Scope the PERFORMANCE comparison (Tier Comparison / Trade Scatter) to
+            # trades since prep tracking began. A BUY dated before _TRACKING_STARTED
+            # cannot structurally carry a thesis/analyst/earnings signal (those
+            # features didn't exist yet), so leaving it in silently blends two
+            # different eras of trading into "Cold Entry" while the other three tiers
+            # are 100% post-tracking by construction — an apples-to-oranges
+            # comparison with nothing on screen disclosing it. Live-data review
+            # (2026-10-01): pre-tracking Cold Entry trades averaged +5.2% pnl_pct
+            # (n=46) vs -0.8% (n=21) for trades where prep was genuinely available
+            # and skipped — the "Cold Entry beats Thorough" headline was entirely a
+            # mix-effect artifact of the older trades, not evidence that skipping
+            # prep helps. Coverage Funnel (below) is deliberately NOT scoped this
+            # way — it's an all-time adoption picture, not a performance claim.
+            _me_roi_excluded_n = 0
+            if not _me_roi_df.empty:
+                _me_tracking_cutoff = date.fromisoformat(_TRACKING_STARTED)
+                _me_roi_before      = len(_me_roi_df)
+                _me_roi_df          = _me_roi_df[_me_roi_df["trade_date"] >= _me_tracking_cutoff]
+                _me_roi_excluded_n  = _me_roi_before - len(_me_roi_df)
+            if _me_roi_excluded_n > 0:
+                st.caption(
+                    f"📅 Tier Comparison and Trade Scatter below are scoped to closed trades "
+                    f"bought since prep tracking began ({_TRACKING_STARTED}) — "
+                    f"{_me_roi_excluded_n} older closed trade{'s' if _me_roi_excluded_n != 1 else ''} "
+                    "excluded so every tier is compared on the same footing. Full all-time "
+                    "history (including those trades) is in Coverage Funnel."
+                )
 
             # Controls — view selector + metric picker side by side
             _me_wf_ctrl_l, _me_wf_ctrl_r = st.columns([3, 1])
@@ -43695,13 +43730,14 @@ elif page == "🎯 My Edge":
                     with st.expander("Why so many Cold Entry trades?"):
                         st.markdown(
                             "In-app prep tracking was added progressively:\n\n"
-                            "- **Thesis authoring** started: 2026-06-28\n"
+                            f"- **Thesis authoring** started: {_TRACKING_STARTED}\n"
                             "- **Analyst coverage** started: 2026-07-04\n"
                             "- **Earnings context** started: 2026-07-13\n\n"
                             "Trades before those dates can't have those signals recorded "
                             "— they land in Cold Entry by system limitation, not because "
-                            "the research wasn't done. Use the 📊 Tier Comparison view "
-                            "to focus on what the data can actually tell you."
+                            "the research wasn't done. Tier Comparison and Trade Scatter "
+                            "already exclude trades before the thesis-authoring date above "
+                            "so you're comparing like with like."
                         )
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -43774,6 +43810,7 @@ elif page == "🎯 My Edge":
 
                 # Trend: 3-period rolling average change
                 _me_trend_str = "—"
+                _me_trend_sub = ""
                 if len(_me_grades) >= 3:
                     _me_last3_avg  = sum(g["composite_score"] for g in _me_grades[-3:]) / 3
                     _me_prior3_avg = sum(g["composite_score"] for g in _me_grades[-6:-3]) / 3 if len(_me_grades) >= 6 else None
@@ -43786,6 +43823,11 @@ elif page == "🎯 My Edge":
                             if _me_delta3 < -2 else
                             "→ Stable (last 3 periods)"
                         )
+                if _me_trend_str == "—":
+                    # A bare dash with no explanation reads as broken, not as
+                    # "not enough history yet" — this compares the last 3
+                    # periods against the 3 before that, so it needs 6 total.
+                    _me_trend_sub = f"Needs 6 periods to compare — have {len(_me_grades)}"
 
                 _me_gk1, _me_gk2, _me_gk3 = st.columns(3)
                 _me_best_letter  = _me_best["grade_letter"]
@@ -43813,7 +43855,7 @@ elif page == "🎯 My Edge":
                     (
                         _me_gk3, "TREND",
                         _me_trend_str,
-                        "",
+                        _me_trend_sub,
                         _me_trend_col,
                     ),
                 ]:
