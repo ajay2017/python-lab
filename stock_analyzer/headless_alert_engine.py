@@ -34,6 +34,7 @@ from stock_analyzer.stress_test import SCENARIOS, run_scenario, assess_fragility
 from stock_analyzer.tax_advisor import _build_open_lots
 from stock_analyzer.daily_briefing import deterioration_signals, build_daily_briefing, _position_size_for_render
 from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
+from stock_analyzer.sector_fit import sector_gate_context
 from stock_analyzer.recommendations_history import build_enter_now_rows
 from stock_analyzer.trade_economics import trade_economics
 from stock_analyzer.util import bq_score_or_none, val_score_or_none, sentiment_value_or_none
@@ -620,6 +621,7 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
         "sp500_pct":        grow.get("sp500_pct", market_context.get("sp500_pct")),
         "bar":              _bar,
         "sector_blocked":   len(grow.get("sector_blocked_picks", []) or []),
+        "sector_unknown":   len(grow.get("sector_unknown_picks", [])),
         "macro_blocked":    len(grow.get("macro_blocked_picks", []) or []),
         "composite_short":  len(grow.get("composite_skipped", []) or []),
         "composite_unavail": len(grow.get("composite_unavailable", []) or []),
@@ -803,13 +805,23 @@ def compute_watchlist_entries(
         except Exception as e:
             errors.append(f"{t}: bundle load failed ({e})")
             continue
-        sector = str(data.get("sector") or "") if isinstance(data, dict) else ""
+        _provider_sector = data.get("sector") if isinstance(data, dict) else None
         # Both maps keyed UPPER, per build_enter_now_rows' documented contract.
         # Provably a no-op for sector_map today (db.save_watchlist upper-cases
         # every ticker at write, db.py:3827), but the raw key contradicted both
         # the contract and the app-side sibling at app.py:23882 — aligning them
         # stops a latent cron-only divergence.
         _t_key = str(t).upper()
+        # sector_gate_context (2026-09-30, sector_gate_spec.md Hole 1 fix):
+        # port_df["Sector"] is curated via portfolio.resolve_sector, but this
+        # loop used to sum the RAW provider label (e.g. "Technology") against
+        # it — a curated-mapped ticker (e.g. a "Semiconductors" name) then had
+        # its weight summed into the wrong bucket, so the hard
+        # `>= SECTOR_CEILING` downgrade below could never fire. Same helper as
+        # the interactive app path, so cron and app can never classify a
+        # ticker differently.
+        _sctx = sector_gate_context(t, _provider_sector, port_df)
+        sector = _sctx["sector"]
         sector_map[_t_key] = sector
         # `if k in data`, NOT `data.get(k)`: materialising an ABSENT key as None
         # would break the consumer's `get("bq_score", get("f_score"))` fallback,
@@ -830,16 +842,11 @@ def compute_watchlist_entries(
         else:
             _entry = {}
         bundle_map[_t_key] = _entry
-        sec_wt = 0.0
-        if sector and port_df is not None and not port_df.empty and "Sector" in port_df.columns:
-            gcol = "Gate Weight (%)" if "Gate Weight (%)" in port_df.columns else "Weight (%)"
-            try:
-                sec_wt = float(port_df[port_df["Sector"] == sector][gcol].sum())
-            except Exception:
-                sec_wt = 0.0
         pctx = {
-            "sector_of_ticker":  sector,
-            "sector_weight_pct": sec_wt,
+            "sector_of_ticker":    _sctx["sector"] if _sctx["classified"] else "",
+            "sector_weight_pct":   _sctx["weight_pct"],
+            "sector_classified":   _sctx["classified"],
+            "sector_label_source": _sctx["label_source"],
             "portfolio_beta":    portfolio_beta,
             # NOT replicated headlessly — these are session-only Risk Advisor /
             # Grow Today state, not part of any headless computation. Omitting

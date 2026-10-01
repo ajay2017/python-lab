@@ -18,6 +18,8 @@ from datetime import date
 
 import pytest
 
+from datetime import timedelta
+
 from stock_analyzer.constants import (
     ADD_WINNER_COOLDOWN_DAYS,
     ADD_WINNER_MIN_GAP_PCT,
@@ -30,8 +32,10 @@ from stock_analyzer.constants import (
     SECTOR_CEILING,
     SECTOR_ELEVATED,
     SINGLE_NAME_CEILING,
+    UNCLASSIFIED_SECTOR,
     WEAK_CONVICTION_SCORE,
 )
+from stock_analyzer.macro_calendar import HIGH as _MACRO_HIGH
 from stock_analyzer.daily_briefing import (
     SIZING_FORMULA_VERSION,
     _act_today,
@@ -407,6 +411,24 @@ def test_add_to_winner_gets_elevated_sector_warning_not_suppressed():
     assert item["sector_elevated_warning"] is not None
 
 
+def test_buy_candidates_scanner_pick_placeholder_sector_breach_excluded():
+    """D3 sibling fix (sector_gate_spec.md, 2026-09-30): _buy_candidates'
+    scanner-pick sector gate used to check the RAW scanner row Sector
+    ("Watchlist" for every watchlist extra, scanner.py), which could never
+    match a real breached bucket. gate_sector now falls back to the
+    composite bundle's own provider sector when the row label is a
+    placeholder, so a breach is actually caught (silent continue -- this
+    list has no suppressed-candidates bucket to record into)."""
+    port_df = make_port_df([{"ticker": "HELD", "weight": SECTOR_CEILING + 5.0, "sector": "Financials"}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Watchlist"}])
+    composites = {
+        "NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "sector": "Financials",
+                "fundamentals_available": True, "val_available": True},
+    }
+    items = _buy_candidates(port_df, scanner, [], {}, _TODAY, composites=composites)
+    assert find_item(items, "NEW") is None
+
+
 # ── _grow_today: sector concentration (the reported SHOP live-brief bug) ────
 
 def test_grow_today_new_pick_suppressed_at_sector_hard_cap():
@@ -435,6 +457,124 @@ def test_grow_today_new_pick_no_warning_below_elevated_band():
     pick = find_item(grow["new_picks"], "NEW")
     assert pick is not None
     assert pick["sector_elevated_warning"] is None
+
+
+# ── _grow_today: sector_gate_context (Hole 2 fix, sector_gate_spec.md, ──────
+# 2026-09-30). scanner.py tags every watchlist extra's row "Sector" as the
+# display-only placeholder "Watchlist" -- the macro gate and G-16 used to
+# compare THAT literal string against a real sector and could never match.
+# gate_sector now falls back to the composite bundle's own provider sector
+# (composites[ticker]["sector"]) when the row label is a placeholder.
+
+def test_grow_today_unmapped_watchlist_extra_sector_blocked_by_real_sector():
+    port_df = make_port_df([{"ticker": "HELD", "weight": SECTOR_CEILING + 5.0, "sector": "Financials"}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Watchlist"}])
+    composites = {
+        "NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "sector": "Financials",
+                "fundamentals_available": True, "val_available": True},
+    }
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"}, composites=composites)
+    assert find_item(grow["new_picks"], "NEW") is None
+    blocked = find_item(grow["sector_blocked_picks"], "NEW")
+    assert blocked is not None
+    assert blocked["sector"] == "Financials"
+    assert blocked["gate_id"] == "G-16"
+
+
+def test_grow_today_unmapped_watchlist_extra_macro_blocked_by_real_sector():
+    macro_events = [{
+        "impact": _MACRO_HIGH, "date": (_TODAY + timedelta(days=1)).isoformat(),
+        "category": "Inflation", "event": "CPI Inflation",
+    }]
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0, "sector": "Healthcare"}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Watchlist"}])
+    composites = {
+        "NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "sector": "Financials",
+                "fundamentals_available": True, "val_available": True},
+    }
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       composites=composites, macro_events=macro_events)
+    assert find_item(grow["new_picks"], "NEW") is None
+    assert find_item(grow["sector_blocked_picks"], "NEW") is None
+    blocked = find_item(grow["macro_blocked_picks"], "NEW")
+    assert blocked is not None
+    assert blocked["sector"] == "Financials"
+
+
+def test_grow_today_mapped_extra_unchanged_curated_sector_still_wins():
+    """A curated-mapped ticker's placeholder row label must not change its
+    classification -- TICKER_SECTORS always wins, exactly as before this fix."""
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0, "sector": "Healthcare"}])
+    scanner = _scanner_df([{"ticker": "NVDA", "score": COMPOSITE_BUY + 10, "sector": "Watchlist"}])
+    composites = {
+        "NVDA": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "sector": "Technology",
+                 "fundamentals_available": True, "val_available": True},
+    }
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"}, composites=composites)
+    pick = find_item(grow["new_picks"], "NVDA")
+    assert pick is not None
+    assert pick["sector"] == "Semiconductors"
+
+
+def test_grow_today_blank_bundle_sector_is_sector_unknown_not_blocked():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0, "sector": "Healthcare"}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Watchlist"}])
+    composites = {
+        "NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+                "fundamentals_available": True, "val_available": True},
+    }
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"}, composites=composites)
+    assert find_item(grow["new_picks"], "NEW") is None
+    assert find_item(grow["sector_blocked_picks"], "NEW") is None
+    unknown = find_item(grow["sector_unknown_picks"], "NEW")
+    assert unknown is not None
+    assert unknown["sector"] == UNCLASSIFIED_SECTOR
+
+
+# ── _grow_today: sector_unknown ordering invariant -- composite/ETF gates ───
+# always win over the sector-unknown abstention (it is checked LAST, after
+# every ETF/stale/fundamentals/composite gate).
+
+def test_grow_today_blank_sector_etf_goes_to_composite_unavailable_not_sector_unknown():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "SPY", "score": COMPOSITE_BUY + 10, "sector": "Watchlist"}])
+    composites = {
+        "SPY": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+                "fundamentals_available": True, "val_available": True,
+                "asset_type": "etf"},
+    }
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"}, composites=composites)
+    assert find_item(grow["composite_unavailable"], "SPY") is not None
+    assert find_item(grow["sector_unknown_picks"], "SPY") is None
+
+
+def test_grow_today_blank_sector_no_composite_goes_to_composite_unavailable():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Watchlist"}])
+    # No composites dict at all -- _comp_data stays {} and _composite_score is None.
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"})
+    assert find_item(grow["composite_unavailable"], "NEW") is not None
+    assert find_item(grow["sector_unknown_picks"], "NEW") is None
+
+
+def test_grow_today_blank_sector_below_buy_composite_goes_to_composite_skipped():
+    # Deliberately NO "rec" key in the bundle: _cross_reference's own
+    # composite-vs-technical conflict check (signal_reconciliation.
+    # lookup_composite) keys off the composite's REC LABEL alone ("Hold"/
+    # "Sell" always reads as conflicted, independent of the scanner's own
+    # momentum signal) -- carrying a real "Hold" label here would resolve
+    # to xref verdict "conflicted" instead, which `continue`s BEFORE this
+    # test's target gate. A bundle with "total" but no "rec" (e.g. a
+    # composite that failed to attach a label) avoids that collision.
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Watchlist"}])
+    composites = {
+        "NEW": {"total": COMPOSITE_BUY - 10,
+                "fundamentals_available": True, "val_available": True},
+    }
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"}, composites=composites)
+    assert find_item(grow["composite_skipped"], "NEW") is not None
+    assert find_item(grow["sector_unknown_picks"], "NEW") is None
 
 
 # ── _grow_today: ETF/fund new-pick exclusion (ETF-support Phase 2) ──────────
@@ -559,6 +699,7 @@ def test_build_daily_briefing_top_level_keys_exclude_grow_today_fields():
     }
     grow_only_keys = (
         "tone", "sp500_pct", "new_picks", "sector_blocked_picks",
+        "sector_unknown_picks",
         "macro_blocked_picks", "composite_skipped", "composite_unavailable",
     )
     for key in grow_only_keys:
@@ -583,8 +724,8 @@ def test_build_daily_briefing_bear_tone_grow_today_omits_sp500_pct():
     grow = brief["grow_today"]
     assert grow["tone"] == "bear"
     assert "sp500_pct" not in grow
-    for key in ("new_picks", "sector_blocked_picks", "macro_blocked_picks",
-                "composite_skipped", "composite_unavailable"):
+    for key in ("new_picks", "sector_blocked_picks", "sector_unknown_picks",
+                "macro_blocked_picks", "composite_skipped", "composite_unavailable"):
         assert key in grow, f"{key!r} missing from the bear-branch return"
 
 

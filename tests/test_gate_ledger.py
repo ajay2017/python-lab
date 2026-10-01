@@ -490,6 +490,34 @@ def test_watchlist_sector_lookup_missing_ticker_is_none():
     assert result[0]["sector"] is None
 
 
+def test_watchlist_g05_row_carries_the_curated_label_not_the_raw_provider_one():
+    """sector_gate_spec.md (2026-09-30, Hole 1 fix): the caller's sector_map is
+    now built from sector_fit.sector_gate_context, so a curated-mapped ticker's
+    G-05 row must carry the CURATED label ("Semiconductors"), never the raw
+    provider label ("Technology") the pre-fix code stored."""
+    import pandas as pd
+    from stock_analyzer.sector_fit import sector_gate_context
+
+    port_df = pd.DataFrame([{
+        "Ticker": "HELD1", "Sector": "Semiconductors",
+        "Weight (%)": 40.0, "Gate Weight (%)": 40.0,
+    }])
+    ctx = sector_gate_context("NVDA", "Technology", port_df)  # raw provider label in
+    assert ctx["sector"] == "Semiconductors"
+    assert ctx["label_source"] == "curated"
+
+    recs = [_wl_card(
+        "NEAR_ENTRY", ticker="NVDA", suppression_kind="sector",
+        gate_value=ctx["weight_pct"], gate_threshold=35.0,
+    )]
+    result = build_watchlist_suppression_rows(
+        recs, rec_date=REC_DATE, source="app",
+        sector_by_ticker={"NVDA": ctx["sector"]},
+    )
+    assert result[0]["sector"] == "Semiconductors"
+    assert result[0]["sector"] != "Technology"
+
+
 # ── build_rebalance_suppression_rows ─────────────────────────────────────────
 
 def _rb_item(ticker="AAPL", price=100.0, composite_score=70.0, sector="Tech", reason="test"):

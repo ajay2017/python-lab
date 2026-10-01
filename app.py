@@ -312,6 +312,7 @@ from stock_analyzer.account import (
 from stock_analyzer import api_health as _ah
 from stock_analyzer import grow_dropoff as _grow_dropoff
 from stock_analyzer import ticker_history as _ticker_history
+from stock_analyzer import sector_fit
 from stock_analyzer.util import safe_html as _safe_html
 from stock_analyzer.util import md_bold_to_html as _md_bold
 from stock_analyzer.util import factor_tilt_state as _factor_tilt_state
@@ -5599,7 +5600,7 @@ if page == "🏠 Home":
     # and silently degrades — e.g. the rebalance trim PLAN fell back to the
     # basis-only list because a cached brief predated the trim_target_*/
     # market_value/price fields. See memory project_home_synth_memoization.
-    _SYNTH_SCHEMA_VER = 7  # bumped: bundle now carries corr_coverage (F-246)
+    _SYNTH_SCHEMA_VER = 8  # bumped: grow_today now carries sector_unknown_picks (sector_gate_spec.md, 2026-09-30)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -7977,15 +7978,13 @@ if page == "🏠 Home":
                 # Build portfolio context so the 5th bullet is portfolio-aware
                 _qr_held_row = port_df[port_df["Ticker"] == _t]
                 _qr_is_held  = not _qr_held_row.empty
-                _qr_sector   = _qr_raw.get("sector", "")
-                # Concentration gate basis (equity, 2026-07-09 — reqs G-19):
-                # sum the Gate Weight (%) column (== equity Weight) so the entry
-                # caution matches the hard gate.
-                _qr_gcol = "Gate Weight (%)" if "Gate Weight (%)" in port_df.columns else "Weight (%)"
-                _qr_sec_wt   = (
-                    float(port_df[port_df["Sector"] == _qr_sector][_qr_gcol].sum())
-                    if _qr_sector else 0.0
-                )
+                # sector_gate_context (sector_gate_spec.md, 2026-09-30, Hole 1
+                # fix) — same helper Watchlist/cron use, so a curated-mapped
+                # ticker's weight is summed against its real bucket, not
+                # whatever raw provider label load_all() happened to return.
+                _qr_sctx = sector_fit.sector_gate_context(_t, _qr_raw.get("sector"), port_df)
+                _qr_sector = _qr_sctx["sector"] if _qr_sctx["classified"] else ""
+                _qr_sec_wt = _qr_sctx["weight_pct"]
                 # Sector-level Act Today awareness — when the user asks about
                 # a ticker in a sector where OTHER positions are flagged for
                 # action, that signals sector stress even if THIS ticker
@@ -8170,6 +8169,12 @@ if page == "🏠 Home":
         blocked_adds  = grow.get("risk_blocked_adds", [])
         conc_blocked  = grow.get("concentration_blocked_adds", [])
         sector_blocked = (grow.get("sector_blocked_adds", []) or []) + (grow.get("sector_blocked_picks", []) or [])
+        # D1 (sector_gate_spec.md, 2026-09-30) — distinct from sector_blocked
+        # above (a KNOWN sector already over cap): this is "couldn't check,"
+        # a pick whose sector couldn't be classified at all. Never None from
+        # _grow_today (both the bull/flat and bear-branch returns always set
+        # this key to a list), so the plain two-arg default is safe here.
+        sector_unknown = grow.get("sector_unknown_picks", [])
         cooldown_adds = grow.get("cooldown_adds", [])
         deterioration_blocked = grow.get("deterioration_blocked_adds", [])
         macro_blocked = grow.get("macro_blocked_picks", [])
@@ -8903,6 +8908,7 @@ if page == "🏠 Home":
                     "sector_blocked_picks":  grow.get("sector_blocked_picks", []),
                     "macro_blocked_picks":   macro_blocked,
                     "composite_unavailable": comp_unavail,
+                    "sector_unknown_picks":  sector_unknown,
                 }
                 _do_reduce_calls = st.session_state.get("_reduce_calls")
 
@@ -9095,9 +9101,9 @@ if page == "🏠 Home":
         # "trim this sector". The protect-capital signal wins (the ESTC case).
         if sector_blocked:
             _sb_rows = "".join(
-                f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
-                f"({b.get('sector','?')} · Score {b.get('score',0):.0f}) — "
-                f"{b.get('reason','sector over hard cap')}</div>"
+                f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{_safe_html(b['ticker'])}</b> "
+                f"({_safe_html(b.get('sector','?'))} · Score {b.get('score',0):.0f}) — "
+                f"{_safe_html(b.get('reason','sector over hard cap'))}</div>"
                 for b in sector_blocked[:4]
             )
             st.markdown(
@@ -9112,6 +9118,19 @@ if page == "🏠 Home":
                 "Risk Advisor is recommending you trim. A Strong Buy here is a KEEP, not an add."
                 "</div></div>",
                 unsafe_allow_html=True,
+            )
+
+        # Sector unknown (D1, sector_gate_spec.md, 2026-09-30) — a pick whose
+        # sector couldn't be classified at all (not in TICKER_SECTORS, no
+        # usable row/provider label) is held back rather than recommended
+        # with an unchecked sector/macro gate. "Couldn't check," not
+        # "checked and breached" (that's the sector_blocked banner above).
+        if sector_unknown:
+            _su_tickers = ", ".join(str(b.get("ticker", "?")) for b in sector_unknown)
+            st.warning(
+                f"🧭 Sector unknown — {len(sector_unknown)} pick(s) held back: "
+                "the sector ceiling and macro sector checks couldn't run, so "
+                f"these aren't recommended today: {_su_tickers}"
             )
 
         # Risk Advisor suppressed an add-to-winner — surface the conflict so the
@@ -10464,7 +10483,8 @@ if page == "🏠 Home":
                     "macro_blocked_picks", "composite_unavailable",
                     "deterioration_blocked_adds", "cooldown_adds",
                     "sector_blocked_adds", "concentration_blocked_adds",
-                    "risk_blocked_adds"):
+                    "risk_blocked_adds", "sector_blocked_picks",
+                    "sector_unknown_picks"):
             for _gp_item in (_db_grow.get(_gk, []) or []):
                 _gt = _gp_item.get("ticker")
                 if _gt:
@@ -23971,11 +23991,16 @@ elif page == "📈 Analysis":
                         _gc_ticker_row = _gc_port[_gc_port["Ticker"] == ticker]
                         if not _gc_ticker_row.empty:
                             _gc_tw = _f(_gc_ticker_row.iloc[0].get(_gc_wcol))
-                        _gc_sec = r.get("sector", "")
-                        if _gc_sec and _gc_sec != UNCLASSIFIED_SECTOR:
-                            _gc_sec_rows = _gc_port[_gc_port["Sector"] == _gc_sec]
-                            if not _gc_sec_rows.empty:
-                                _gc_sw = float(_gc_sec_rows[_gc_wcol].sum())
+                        # sector_gate_context (sector_gate_spec.md, 2026-09-30,
+                        # D3 sibling fix) — same curated-first/provider-
+                        # fallback resolution every other sector gate uses,
+                        # instead of the raw r.get("sector") this compared
+                        # directly. _gc_sw stays None (unknown) only when the
+                        # sector itself couldn't be classified at all.
+                        _gc_sctx = sector_fit.sector_gate_context(ticker, r.get("sector"), _gc_port)
+                        _gc_sec  = _gc_sctx["sector"] if _gc_sctx["classified"] else ""
+                        if _gc_sctx["classified"]:
+                            _gc_sw = _gc_sctx["weight_pct"]
                     _gc_earn_str  = r.get("earnings", "")
                     _gc_earn_days = None
                     try:
@@ -25686,18 +25711,23 @@ elif page == "📋 Watchlist":
     for _wt, _wd in _wl_data.items():
         if _wd is None:
             continue
-        # Per-ticker portfolio fit: this ticker's sector weight in the book
-        _wl_sector = str(_wd.get("sector", "")) if isinstance(_wd, dict) else ""
-        _wl_sector_map[str(_wt).upper()] = _wl_sector
-        _wl_sec_wt = 0.0
-        if _wl_sector and not _wl_port_df.empty and "Sector" in _wl_port_df.columns:
-            # Concentration gate basis (equity, 2026-07-09 — reqs G-19): sum the
-            # Gate Weight (%) column (== equity Weight).
-            _wl_gcol = "Gate Weight (%)" if "Gate Weight (%)" in _wl_port_df.columns else "Weight (%)"
-            _wl_sec_wt = float(_wl_port_df[_wl_port_df["Sector"] == _wl_sector][_wl_gcol].sum())
+        # Per-ticker portfolio fit: sector_gate_context (sector_gate_spec.md,
+        # 2026-09-30, Hole 1 fix) — the SAME helper the cron lane
+        # (headless_alert_engine.compute_watchlist_entries) calls, so this
+        # page and the cron can never classify a ticker differently. Used to
+        # sum the RAW provider sector label against port_df["Sector"], which
+        # is curated via portfolio.resolve_sector — a curated-mapped ticker's
+        # weight landed in the wrong bucket and the hard >= SECTOR_CEILING
+        # downgrade could never fire.
+        _wl_ctx = sector_fit.sector_gate_context(
+            _wt, _wd.get("sector") if isinstance(_wd, dict) else None, _wl_port_df,
+        )
+        _wl_sector_map[str(_wt).upper()] = _wl_ctx["sector"]
         _wl_pctx = {
-            "sector_of_ticker":        _wl_sector,
-            "sector_weight_pct":       _wl_sec_wt,
+            "sector_of_ticker":        _wl_ctx["sector"] if _wl_ctx["classified"] else "",
+            "sector_weight_pct":       _wl_ctx["weight_pct"],
+            "sector_classified":       _wl_ctx["classified"],
+            "sector_label_source":     _wl_ctx["label_source"],
             "portfolio_beta":          _wl_port_beta,
             "active_high_risk_alerts": _wl_high_alerts,
             "grow_today_sectors":      _wl_grow_sectors,
@@ -26082,15 +26112,23 @@ elif page == "📋 Watchlist":
             # was issued but portfolio-level risk state warrants caution / blocking.
             _pcaution = _wr.get("portfolio_caution")
             if _pcaution:
+                # Keyed on suppression_kind, not the title text: a sector_unknown
+                # downgrade is a check that couldn't run, never a "breach".
+                _sup_kind = _wr.get("suppression_kind")
+                _is_unknown = _action == "NEAR_ENTRY" and _sup_kind == "sector_unknown"
+                # Breach card only (its title says "Portfolio Fit Blocks Entry"); other
+                # NEAR_ENTRY kinds such as "rr" can carry a soft caution and must stay amber.
                 _is_hard = _action == "NEAR_ENTRY" and "Portfolio Fit" in _wr.get("title", "")
-                _pc_bg   = "#3f1d1d" if _is_hard else "#3b2a0a"
-                _pc_brd  = "#ef4444" if _is_hard else "#f59e0b"
+                _pc_bg   = "#3f1d1d" if (_is_hard or _is_unknown) else "#3b2a0a"
+                _pc_brd  = "#ef4444" if (_is_hard or _is_unknown) else "#f59e0b"
                 _pc_lbl  = (
+                    "🧭 Portfolio Fit — Sector Check Couldn't Run"
+                    if _is_unknown else
                     "🚫 Portfolio Fit — Hard Limit Breached"
                     if _is_hard else
                     "⚠️ Portfolio Fit — Caution"
                 )
-                _pc_txt_c = "#fca5a5" if _is_hard else "#fcd34d"
+                _pc_txt_c = "#fca5a5" if (_is_hard or _is_unknown) else "#fcd34d"
                 st.markdown(
                     f"<div style='padding:10px 14px;background:{_pc_bg};"
                     f"border-radius:6px;border-left:4px solid {_pc_brd};margin:6px 0 10px'>"
@@ -38531,6 +38569,8 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **Data freshness gate:** candidates require fresh fundamentals (≤ 2 calendar days old) and data not served from a cache fallback. If data is stale, the signal is held back and shown as **"Pending Verification"** with a **Refresh** button instead — once you refresh and it clears the composite gate (≥ 65), it surfaces.
 
+**🧭 Sector unknown banner:** a pick whose sector couldn't be classified at all (not on the curated sector map, and no usable sector label from the data provider either) is held back with a **"Sector unknown"** notice rather than recommended — the sector-cap and macro-sector gates can't check something they can't classify, so it's treated as a reason to pause, not a green light.
+
 **Two entry triggers in "New Positions to Initiate":** curated scanner picks that passed the momentum gate show **"Momentum X/100"** in the header, while movers surfaced from the discovery universe show **"Breakout today"** with the day-change badge (e.g. "+7.6% today"). Both types pass the same portfolio-level gates (composite ≥ 65, sector diversity, concentration limits, macro event check).
 
 **A "📉 …" caption on a New Position pick (or, since 2026-09-17, a scanner-pick row under "More Buy Candidates" below) discloses the stock's own recent technical weakness** (down materially from a recent high, below its 50-day trend) — this describes the stock's chart, not a position you hold, since you don't own it yet. It never suppresses the pick — the composite still rates it a buy — it's shown so you can enter with full context rather than being surprised hours later if the same weakness triggers a loss-protection card once you do own it. The same caption also appears on 📋 Watchlist's ENTER_NOW cards for the identical reason.
@@ -38913,7 +38953,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
-- **📋 Watchlist** — names you're tracking, with enter-now flags. Defaults to a **🎯 Actionable** filter (just the Enter Now / Near Entry names) rather than showing everything at once — other chips (Hold / Waiting / Remove / All), a ticker search box, and a sort dropdown are there to look further. Old, forgotten names that just became actionable get a "👁️ actionable again" callout.
+- **📋 Watchlist** — names you're tracking, with enter-now flags. Defaults to a **🎯 Actionable** filter (just the Enter Now / Near Entry names) rather than showing everything at once — other chips (Hold / Waiting / Remove / All), a ticker search box, and a sort dropdown are there to look further. Old, forgotten names that just became actionable get a "👁️ actionable again" callout. A **Ready to Enter** card can carry a soft caption noting the sector was classified only from the data provider's own label (the ticker isn't on the curated sector map) — the sector-cap check still ran, just against a less exact bucket.
 - **🧵 Thesis** — read-only consolidation of five features per ticker: your saved **Thesis** (what you believed at entry), **F-1 Review** (AI verdict: Intact / Weakening / Broken), **Thesis Red Team** (erosion score + counter-evidence), **Multi-Agent Debate** (Bull/Bear/Judge verdict), **Analyst Coverage** (saved research + consensus), and **Pre-Mortem** (your stated risk case + breached triggers). Every evidence line carries a **provenance tag** (📊 fact / 🧮 derived / 🏦 analyst opinion / 🤖 AI inference / 🖊 your words) so you always know what kind of claim you're looking at. Missing data is disclosed honestly (e.g. "No debate on record," "Erosion not computed today") rather than silently omitted. A **tension banner** surfaces when the engine composite, F-1 verdict, analyst consensus, and debate verdict genuinely disagree with each other — awareness only, never a gate. **"What changed since last review"** now shows a real diff comparing your two most recent evidence snapshots, reporting material composite moves, erosion shifts, analyst price-target cuts, newly-saved research, market-regime changes, and F-1 verdict changes; when insufficient history exists or no change crossed a threshold, it discloses that honestly instead. Awareness only; never gates or recommends.
 - **🌐 Macro** — market regime, VIX, SPY trend, cross-asset pulse, and economic calendar context. Tone-flip conditions are shown here.
 - **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Six live lenses — Score Calibration, Discretion Value, Signal Breakdown, Sector Alpha, Sentiment Alignment, and Entry Timing — plus a synthesis panel ("What This Means For You") that turns the data into short **watch / caution observations** about your own history, never size-up/skip instructions (the live gates own entry and sizing). **Scope, stated on a line under the title:** only gated BUY calls (New Position / Add to Winner / Watchlist Enter Now) scored under the *current* composite weights; awareness-only Buy Candidate rows, rows scored under older weights (or with no recorded weights version), and ETFs are excluded and counted. **Every count is distinct tickers**, each at its first surfacing (your acted row if you bought it) — a name the scanner re-surfaced for 20 days counts once, not 20 times. The **personal threshold** on Score Calibration is the lowest composite floor where every band at or above it with enough tickers beat SPY *both* on average *and* in at least half of its tickers; thinner bands above it are listed as "not counted". Outcomes run from the call to today's price, and acted outcomes are marked from your fill to today, as if still held — not realized P&L. Entry Timing asks a narrower question: does momentum running far ahead of the composite score at the moment a pick fires predict a rough first few days? Its Day+1 / Day+5 / Day+20 are fixed horizons (1, 5 and 20 trading days after the call). Opt-in (click "Analyze") since it fetches forward prices per pick. Awareness only; never gates. **Read the coverage line at the top before trusting any figure on this page.** It states how many matured recommendations could actually be scored and — for those that could not — exactly why, one reason at a time: sold positions (excluded by design, since realized P&L spans a holding period no single market window can benchmark), recommendations with no current price, ones with no entry price logged, and ones the SPY benchmark couldn't cover. The missing-price bucket is the one worth watching: a failed price lookup tends to happen on delisted, acquired or renamed tickers, so those exclusions are **not random** and the names are listed so you can see them. If more matured recommendations were dropped than scored, an amber note says so — every average on the page describes only the ones that could be scored.

@@ -67,7 +67,8 @@ def derive_dropoffs(
     grow_buckets:
         The Grow Today output dict (from daily_briefing._grow_today()). Keys
         read: ``composite_skipped``, ``sector_blocked_picks``,
-        ``macro_blocked_picks``, ``composite_unavailable``.
+        ``macro_blocked_picks``, ``composite_unavailable``,
+        ``sector_unknown_picks``.
     reduce_calls:
         Dict of {ticker_upper: item} from session_state["_reduce_calls"].
         Pass None when the Brief was offline — the None path falls through to
@@ -90,7 +91,8 @@ def derive_dropoffs(
             reason_code          (str)  — one of:
                                     reduce_call | composite_below_bar |
                                     sector_blocked | macro_blocked |
-                                    composite_unavailable | unattributed
+                                    composite_unavailable | sector_unknown |
+                                    unattributed
             reason_text          (str)  — human-readable sentence
             has_confident_reason (bool) — False only on 'unattributed'
 
@@ -124,6 +126,12 @@ def derive_dropoffs(
         for _item in grow_buckets.get("composite_unavailable", [])
         if _item.get("ticker")
     }
+
+    _sector_unknown_map: dict[str, dict] = {}
+    for _item in grow_buckets.get("sector_unknown_picks", []):
+        _t = str(_item.get("ticker", "")).upper()
+        if _t:
+            _sector_unknown_map[_t] = _item
 
     # Build deduplicated surfaced-today map: earliest row per ticker.
     # Caller is expected to pass min-by-surfaced_at rows, but this layer also
@@ -160,7 +168,8 @@ def derive_dropoffs(
 
         # Reason attribution priority:
         # reduce_calls → composite_skipped → sector_blocked_picks
-        # → macro_blocked_picks → composite_unavailable → unattributed
+        # → macro_blocked_picks → composite_unavailable → sector_unknown_picks
+        # → unattributed
         if reduce_calls is not None and _t in reduce_calls:
             _reason_code   = "reduce_call"
             _reason_text   = f"a Reduce/Exit call is now active on {_t}"
@@ -198,6 +207,19 @@ def derive_dropoffs(
         elif _t in _comp_unavail_set:
             _reason_code   = "composite_unavailable"
             _reason_text   = "fundamentals momentarily unavailable this pass"
+            _has_confident = True
+
+        elif _t in _sector_unknown_map:
+            # Lowest-priority named reason (2026-09-30, sector_gate_spec.md):
+            # mirrors _grow_today's own gate ordering, where the sector-unknown
+            # check is the LAST gate a pick can fall into, after every ETF/
+            # stale/fundamentals/composite check above has already passed it.
+            _ui = _sector_unknown_map[_t]
+            _reason_code   = "sector_unknown"
+            _reason_text   = _ui.get(
+                "reason",
+                "sector unknown — the sector ceiling and macro sector checks couldn't run",
+            )
             _has_confident = True
 
         else:

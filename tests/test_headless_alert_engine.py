@@ -1040,3 +1040,127 @@ def test_compute_eod_pullback_none_on_calm_market():
     with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx):
         result = hae.compute_eod(TODAY, pullback_threshold=-3.0)
     assert result["pullback"] is None
+
+
+# ── compute_watchlist_entries: sector_gate_context parity (Hole 1 fix, ───────
+# sector_gate_spec.md, 2026-09-30) ────────────────────────────────────────────
+# The cron lane used to sum the RAW provider sector label (bundle["sector"])
+# against port_df["Sector"], which is curated via portfolio.resolve_sector —
+# so a curated-mapped ticker's weight landed in the wrong bucket and the hard
+# >= SECTOR_CEILING downgrade could never fire. Both tests below pass `ctx`
+# directly (compute_watchlist_entries' own documented short-circuit) so only
+# the per-ticker loop itself is exercised, not a real _build_context.
+
+_MAPPED_TICKER = "NVDA"       # real TICKER_SECTORS -> "Semiconductors" mapping
+_MAPPED_SECTOR = "Semiconductors"
+
+
+def _watchlist_bundle(**overrides):
+    base = {
+        "total": 80.0, "rec": {"label": "Strong Buy"}, "current_price": 100.0,
+        "entry_lo": 95.0, "entry_hi": 100.0, "stop": 90.0,
+        "targets": {"base": 130.0}, "earnings": None,
+        # Raw PROVIDER label -- deliberately NOT the curated "Semiconductors"
+        # bucket. The pre-fix code summed THIS against port_df["Sector"].
+        "sector": "Technology",
+        "fundamentals_available": True, "val_available": True,
+    }
+    base.update(overrides)
+    return base
+
+
+def _watchlist_patches(bundle, *, exit_signals=None, prior_recs=None, save_side_effect=None):
+    return [
+        patch("stock_analyzer.headless_alert_engine.db.load_holdings_or_none",
+              return_value=pd.DataFrame({"Ticker": []})),
+        patch("stock_analyzer.headless_alert_engine.fetch_risk_free_rate", return_value=0.045),
+        patch("stock_analyzer.headless_alert_engine.load_bundle", return_value=bundle),
+        patch("stock_analyzer.headless_alert_engine.db.load_exit_signals_or_none",
+              return_value=exit_signals if exit_signals is not None else pd.DataFrame()),
+        patch("stock_analyzer.headless_alert_engine.db.load_recommendations_or_none",
+              return_value=prior_recs if prior_recs is not None else pd.DataFrame()),
+        patch("stock_analyzer.headless_alert_engine.db.save_recommendations",
+              side_effect=save_side_effect) if save_side_effect else
+        patch("stock_analyzer.headless_alert_engine.db.save_recommendations",
+              return_value={"error": None}),
+    ]
+
+
+def test_compute_watchlist_entries_mapped_semis_at_ceiling_absent_from_qualifying_and_email():
+    """A curated-mapped ticker whose curated sector is already AT the hard
+    ceiling must be downgraded to NEAR_ENTRY -- absent from both the
+    enter_now capture ('qualifying') and the emailed 'entries' list."""
+    port_df = pd.DataFrame([{
+        "Ticker": "HELD1", "Sector": _MAPPED_SECTOR,
+        "Weight (%)": 40.0, "Gate Weight (%)": 40.0, "Market Value": 40000.0,
+    }])
+    ctx = {"ok": True, "errors": [], "port_df": port_df,
+           "spy_6mo": None, "port_risk": {"beta": 1.0}}
+    bundle = _watchlist_bundle()
+    captured_rows: list = []
+
+    def _fake_save(rows):
+        captured_rows.extend(rows)
+        return {"error": None}
+
+    patches = _watchlist_patches(bundle, save_side_effect=_fake_save)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        result = hae.compute_watchlist_entries(today=TODAY, watchlist=[_MAPPED_TICKER], ctx=ctx)
+
+    assert result["entries"] == []
+    assert captured_rows == []
+
+
+def test_compute_watchlist_entries_enter_now_capture_uses_curated_sector():
+    """build_enter_now_rows must receive the CURATED sector (sector_map keyed
+    from sector_gate_context's resolved value), never the raw provider label
+    that was previously stored."""
+    port_df = pd.DataFrame([{
+        "Ticker": "HELD1", "Sector": "Healthcare",
+        "Weight (%)": 2.0, "Gate Weight (%)": 2.0, "Market Value": 2000.0,
+    }])
+    ctx = {"ok": True, "errors": [], "port_df": port_df,
+           "spy_6mo": None, "port_risk": {"beta": 1.0}}
+    bundle = _watchlist_bundle()
+    captured_rows: list = []
+
+    def _fake_save(rows):
+        captured_rows.extend(rows)
+        return {"error": None}
+
+    patches = _watchlist_patches(bundle, save_side_effect=_fake_save)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        result = hae.compute_watchlist_entries(today=TODAY, watchlist=[_MAPPED_TICKER], ctx=ctx)
+
+    assert len(result["entries"]) == 1
+    assert result["entries"][0]["ticker"] == _MAPPED_TICKER
+    assert captured_rows, "expected an enter_now capture row"
+    assert captured_rows[0]["sector"] == _MAPPED_SECTOR
+    assert captured_rows[0]["sector"] != "Technology"  # the raw provider label
+
+
+def test_compute_watchlist_entries_app_cron_parity_same_helper_same_ctx():
+    """App (app.py) and cron (this module) must classify a ticker identically
+    because both call sector_fit.sector_gate_context -- verified here by
+    calling the helper directly with the SAME inputs the cron loop builds and
+    confirming it matches what the loop actually used for its gate decision."""
+    from stock_analyzer.sector_fit import sector_gate_context
+    port_df = pd.DataFrame([{
+        "Ticker": "HELD1", "Sector": _MAPPED_SECTOR,
+        "Weight (%)": 40.0, "Gate Weight (%)": 40.0, "Market Value": 40000.0,
+    }])
+    direct_ctx = sector_gate_context(_MAPPED_TICKER, "Technology", port_df)
+    assert direct_ctx["sector"] == _MAPPED_SECTOR
+    assert direct_ctx["classified"] is True
+    assert direct_ctx["label_source"] == "curated"
+    assert direct_ctx["weight_pct"] == 40.0
+
+    ctx = {"ok": True, "errors": [], "port_df": port_df,
+           "spy_6mo": None, "port_risk": {"beta": 1.0}}
+    bundle = _watchlist_bundle()
+    patches = _watchlist_patches(bundle)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        result = hae.compute_watchlist_entries(today=TODAY, watchlist=[_MAPPED_TICKER], ctx=ctx)
+
+    # Same hard-breach outcome the directly-computed context predicts.
+    assert result["entries"] == []

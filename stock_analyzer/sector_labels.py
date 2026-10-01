@@ -48,6 +48,16 @@ SECTOR_LABEL_ALIASES: dict[str, str] = {
 _NOT_A_SECTOR = {"", "watchlist", "none", "nan", "unknown"}
 
 
+def is_placeholder_sector(label: str | None) -> bool:
+    """True when `label` is not a real sector at all (blank, "Watchlist",
+    "nan", "None", "Unknown" — case/whitespace-insensitive), vs. a genuine
+    (even if uncurated) sector name. Shared by `sector_fit.gate_sector` so a
+    gate's fallback chain (row label -> provider label -> unclassified) uses
+    the exact same placeholder vocabulary this module's own `canonical_sector`
+    already uses for display (sector_gate_spec.md, 2026-09-30)."""
+    return str(label or "").strip().lower() in _NOT_A_SECTOR
+
+
 def canonical_sector(ticker: str | None, stored: str | None) -> str:
     """Curated label for `ticker`, else the aliased `stored` label, else
     UNCLASSIFIED_SECTOR for a placeholder, else `stored` stripped."""

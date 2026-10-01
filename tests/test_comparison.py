@@ -9,8 +9,20 @@ import pytest
 
 from stock_analyzer import comparison as cmp
 from stock_analyzer.constants import SECTOR_CEILING, SECTOR_ELEVATED
+from stock_analyzer.portfolio import TICKER_SECTORS
 
 pytestmark = pytest.mark.fast
+
+# Not real tickers -- must never collide with a real curated TICKER_SECTORS
+# entry, so these fixtures exercise the PROVIDER-label fallback path
+# (sector_fit.gate_sector), not the curated-map-always-wins path.
+_UNMAPPED_A = "ZZZQC"
+_UNMAPPED_B = "ZZZQD"
+
+
+def test_unmapped_fixtures_really_are_unmapped():
+    assert _UNMAPPED_A not in TICKER_SECTORS
+    assert _UNMAPPED_B not in TICKER_SECTORS
 
 
 # ── _f ────────────────────────────────────────────────────────────────────
@@ -336,11 +348,17 @@ def test_portfolio_fit_already_held_note():
 
 
 def test_portfolio_fit_sector_ceiling_breached():
+    # Unmapped tickers (D3 fix, sector_gate_spec.md 2026-09-30): sector_fit
+    # resolves via the curated TICKER_SECTORS map first, which always wins
+    # over a bundle's own "sector" field — using a real curated ticker here
+    # (e.g. AAPL -> "Consumer Tech") would silently ignore the "Tech" label
+    # this fixture sets, and test nothing about the provider-label path.
     port_df = pd.DataFrame({
         "Ticker": ["X", "Y"], "Weight (%)": [20.0, 20.0], "Market Value": [1000.0, 1000.0],
         "Sector": ["Tech", "Tech"], "Gate Weight (%)": [20.0, 20.0],
     })
-    result = cmp._portfolio_fit({"sector": "Tech"}, {"sector": "Energy"}, "AAPL", "XOM", port_df)
+    result = cmp._portfolio_fit({"sector": "Tech"}, {"sector": "Energy"},
+                                 _UNMAPPED_A, _UNMAPPED_B, port_df)
     assert "hard ceiling" in result["a"]
     assert str(SECTOR_CEILING)[:2] in result["a"]
     assert result["b"] == ""
@@ -351,7 +369,7 @@ def test_portfolio_fit_sector_elevated_but_not_breached():
         "Ticker": ["X"], "Weight (%)": [28.0], "Market Value": [1000.0],
         "Sector": ["Tech"], "Gate Weight (%)": [28.0],
     })
-    result = cmp._portfolio_fit({"sector": "Tech"}, {}, "AAPL", "MSFT", port_df)
+    result = cmp._portfolio_fit({"sector": "Tech"}, {}, _UNMAPPED_A, _UNMAPPED_B, port_df)
     assert "elevated" in result["a"]
     assert "hard ceiling" not in result["a"]
 
@@ -361,7 +379,7 @@ def test_portfolio_fit_sector_below_elevated_no_note():
         "Ticker": ["X"], "Weight (%)": [10.0], "Market Value": [1000.0],
         "Sector": ["Tech"], "Gate Weight (%)": [10.0],
     })
-    result = cmp._portfolio_fit({"sector": "Tech"}, {}, "AAPL", "MSFT", port_df)
+    result = cmp._portfolio_fit({"sector": "Tech"}, {}, _UNMAPPED_A, _UNMAPPED_B, port_df)
     assert result["a"] == ""
 
 
@@ -369,15 +387,31 @@ def test_portfolio_fit_falls_back_to_weight_column_without_gate_weight():
     port_df = pd.DataFrame({
         "Ticker": ["X"], "Weight (%)": [40.0], "Market Value": [1000.0], "Sector": ["Tech"],
     })
-    result = cmp._portfolio_fit({"sector": "Tech"}, {}, "AAPL", "MSFT", port_df)
+    result = cmp._portfolio_fit({"sector": "Tech"}, {}, _UNMAPPED_A, _UNMAPPED_B, port_df)
     assert "hard ceiling" in result["a"]
 
 
 def test_portfolio_fit_combines_held_and_sector_notes():
     port_df = pd.DataFrame({
-        "Ticker": ["AAPL"], "Weight (%)": [40.0], "Market Value": [1000.0], "Sector": ["Tech"],
+        "Ticker": [_UNMAPPED_A], "Weight (%)": [40.0], "Market Value": [1000.0], "Sector": ["Tech"],
     })
-    result = cmp._portfolio_fit({"sector": "Tech"}, {}, "AAPL", "MSFT", port_df)
+    result = cmp._portfolio_fit({"sector": "Tech"}, {}, _UNMAPPED_A, _UNMAPPED_B, port_df)
     assert "Already held" in result["a"]
     assert "hard ceiling" in result["a"]
     assert " · " in result["a"]
+
+
+def test_portfolio_fit_curated_mapped_ticker_ignores_mismatched_bundle_label():
+    """The curated TICKER_SECTORS map always wins over a bundle's own
+    "sector" field (D1 precedence) — a real mapped ticker's note must be
+    driven by its CURATED sector, not whatever label the bundle carries."""
+    aapl_sector = TICKER_SECTORS["AAPL"]
+    port_df = pd.DataFrame({
+        "Ticker": ["X"], "Weight (%)": [40.0], "Market Value": [1000.0],
+        "Sector": [aapl_sector], "Gate Weight (%)": [40.0],
+    })
+    # Bundle claims a totally different (and placeholder-ish) sector label;
+    # it must be ignored in favour of the curated "Consumer Tech" bucket.
+    result = cmp._portfolio_fit({"sector": "Watchlist"}, {}, "AAPL", _UNMAPPED_B, port_df)
+    assert "hard ceiling" in result["a"]
+    assert aapl_sector in result["a"]

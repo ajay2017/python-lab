@@ -516,6 +516,140 @@ def test_g06_beta_both_legs_required_portfolio_beta_alone_not_enough():
     assert rec["suppression_kind"] is None
 
 
+# ─── Hole 1 fix: sector_classified / sector_label_source (D1/D2, 2026-09-30) ─
+# sector_gate_spec.md — the Watchlist sector ceiling used to sum the RAW
+# provider sector label against port_df["Sector"], which is curated via
+# portfolio.resolve_sector, so a mapped name's weight landed in the wrong
+# bucket and the hard >= SECTOR_CEILING downgrade could never fire.
+
+def test_sector_classified_false_downgrades_with_kind_sector_unknown():
+    ctx = {"sector_classified": False, "sector_weight_pct": 0.0}
+    rec = build_watchlist_recommendation("XYZ", _base_data(), portfolio_ctx=ctx)
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["suppression_kind"] == "sector_unknown"
+    assert rec["gate_value"] is None
+    assert rec["gate_threshold"] == pytest.approx(SECTOR_CEILING)
+
+
+def test_sector_unknown_card_never_claims_a_breach_or_advises_a_position():
+    """Review FIX-FIRST 2026-09-30: the unknown-sector downgrade reused the
+    breach card ("would breach a portfolio risk limit", "trim the
+    over-concentrated sector", "open ... a small half/quarter position").
+    Nothing was breached, and owner decision D1 is "not recommended today"."""
+    ctx = {"sector_classified": False, "sector_weight_pct": 0.0}
+    rec = build_watchlist_recommendation("XYZ", _base_data(), portfolio_ctx=ctx)
+    text = " ".join(str(rec.get(k) or "") for k in ("title", "summary", "detail")).lower()
+    for banned in ("would breach", "limit breached", "trim", "half", "quarter", "small position", "portfolio fit blocks"):
+        assert banned not in text, banned
+    assert "couldn't run" in text
+
+
+def test_sector_classified_true_does_not_trigger_unknown_gate():
+    ctx = {"sector_classified": True, "sector_weight_pct": 5.0, "sector_of_ticker": "Energy"}
+    rec = build_watchlist_recommendation("XYZ", _base_data(), portfolio_ctx=ctx)
+    assert rec["action"] == "ENTER_NOW"
+    assert rec["suppression_kind"] is None
+
+
+def test_sector_classified_default_true_for_legacy_callers():
+    """A ctx with no sector_classified key at all (every pre-this-change
+    caller/test) must be completely unaffected -- default True."""
+    ctx = {"sector_weight_pct": 5.0, "sector_of_ticker": "Energy"}
+    rec = build_watchlist_recommendation("XYZ", _base_data(), portfolio_ctx=ctx)
+    assert rec["action"] == "ENTER_NOW"
+    assert rec["suppression_kind"] is None
+
+
+def test_sector_unknown_not_in_watchlist_kind_ledger_map():
+    """gate_ledger._WATCHLIST_KIND deliberately has no 'sector_unknown' entry
+    -- it's a data abstention, not a ledgered policy gate ('never guess a gate
+    id'). build_watchlist_suppression_rows must therefore emit NO row for it."""
+    from stock_analyzer.gate_ledger import build_watchlist_suppression_rows, _WATCHLIST_KIND
+    assert "sector_unknown" not in _WATCHLIST_KIND
+
+    ctx = {"sector_classified": False}
+    rec = build_watchlist_recommendation("XYZ", _base_data(), portfolio_ctx=ctx)
+    assert rec["suppression_kind"] == "sector_unknown"
+    rows = build_watchlist_suppression_rows(
+        [rec], rec_date="2026-09-30", source="app", sector_by_ticker={"XYZ": "Other"}
+    )
+    assert rows == []
+
+
+def test_regression_old_raw_ctx_weight_zero_gives_enter_now_helper_ctx_differs():
+    """Pins the bug this fix closes: the OLD raw-provider-label path summed a
+    mapped ticker's weight against the WRONG bucket, landing at weight 0.0 and
+    letting ENTER_NOW through even at a real sector breach. The NEW helper
+    (sector_fit.sector_gate_context, exercised via headless/app callers) feeds
+    the CORRECT curated weight and must downgrade instead."""
+    _raw_ctx = {"sector_weight_pct": 0.0, "sector_of_ticker": "Technology"}
+    raw_rec = build_watchlist_recommendation("XYZ", _base_data(), portfolio_ctx=_raw_ctx)
+    assert raw_rec["action"] == "ENTER_NOW"
+
+    _helper_ctx = {
+        "sector_weight_pct": SECTOR_CEILING, "sector_of_ticker": "Semiconductors",
+        "sector_classified": True, "sector_label_source": "curated",
+    }
+    helper_rec = build_watchlist_recommendation("XYZ", _base_data(), portfolio_ctx=_helper_ctx)
+    assert helper_rec["action"] == "NEAR_ENTRY"
+    assert helper_rec["suppression_kind"] == "sector"
+
+
+# ─── Grow-overlap soft caution must never match UNCLASSIFIED_SECTOR/"" ───────
+
+def test_grow_overlap_fires_for_a_real_classified_sector():
+    ctx = {"sector_of_ticker": "Semiconductors", "grow_today_sectors": {"Semiconductors"}}
+    gate = _portfolio_risk_gate(1.0, ctx)
+    assert gate is not None
+    assert gate["severity"] == "soft"
+    assert "Semiconductors" in gate["reason"]
+
+
+def test_grow_overlap_never_fires_on_blank_sector_vs_other_bucket():
+    from stock_analyzer.constants import UNCLASSIFIED_SECTOR
+    ctx = {"sector_of_ticker": "", "grow_today_sectors": {UNCLASSIFIED_SECTOR}}
+    gate = _portfolio_risk_gate(1.0, ctx)
+    assert gate is None
+
+
+def test_grow_overlap_never_fires_when_sector_of_ticker_is_unclassified():
+    from stock_analyzer.constants import UNCLASSIFIED_SECTOR
+    ctx = {"sector_of_ticker": UNCLASSIFIED_SECTOR, "grow_today_sectors": {UNCLASSIFIED_SECTOR}}
+    gate = _portfolio_risk_gate(1.0, ctx)
+    assert gate is None
+
+
+# ─── D2: soft caption when the sector came from the provider label only ─────
+
+def test_d2_caption_appears_for_provider_label_source():
+    ctx = {
+        "sector_weight_pct": 5.0, "sector_of_ticker": "Industrials",
+        "sector_label_source": "provider",
+    }
+    gate = _portfolio_risk_gate(1.0, ctx)
+    assert gate is not None
+    assert gate["severity"] == "soft"
+    assert "provider label" in gate["reason"]
+    assert "Industrials" in gate["reason"]
+    assert "curated sector map" in gate["reason"]
+
+
+def test_d2_caption_absent_for_curated_label_source():
+    ctx = {
+        "sector_weight_pct": 5.0, "sector_of_ticker": "Semiconductors",
+        "sector_label_source": "curated",
+    }
+    gate = _portfolio_risk_gate(1.0, ctx)
+    assert gate is None, "a curated-only classification must carry no D2 caption"
+
+
+def test_d2_caption_absent_when_label_source_key_missing():
+    """Legacy callers that never set sector_label_source must be unaffected."""
+    ctx = {"sector_weight_pct": 5.0, "sector_of_ticker": "Technology"}
+    gate = _portfolio_risk_gate(1.0, ctx)
+    assert gate is None
+
+
 def test_wait_entry_when_price_far_above_zone():
     rec = build_watchlist_recommendation(
         "XYZ", _base_data(current_price=120.0, entry_lo=90.0, entry_hi=100.0)

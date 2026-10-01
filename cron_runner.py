@@ -1622,6 +1622,7 @@ def _run_scan(now_et, force: bool) -> int:
             if d.get("macro_blocked"):     _drop.append(f"{d['macro_blocked']} macro-gated")
             if d.get("composite_short"):   _drop.append(f"{d['composite_short']} below Buy(65)")
             if d.get("composite_unavail"): _drop.append(f"{d['composite_unavail']} no composite")
+            if d.get("sector_unknown"):    _drop.append(f"{d['sector_unknown']} sector unknown")
             if _drop:
                 _why += " · dropped: " + ", ".join(_drop)
         else:

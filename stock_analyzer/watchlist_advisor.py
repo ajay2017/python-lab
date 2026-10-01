@@ -29,6 +29,7 @@ from stock_analyzer.constants import (
     COMPOSITE_HOLD,
     RR_ENTRY_MIN,
     EARNINGS_IMMINENT_DAYS,
+    UNCLASSIFIED_SECTOR,
 )
 from stock_analyzer import exit_advisor
 
@@ -127,6 +128,36 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None) -> dict | None
             "gate_threshold": SECTOR_CEILING,
         }
 
+    # ── Hard breach: sector unknown (D1, sector_gate_spec.md, 2026-09-30) ───
+    # `sector_classified is False` means the ticker is not in TICKER_SECTORS
+    # AND neither a usable row label nor the provider's own label resolved —
+    # the sector ceiling check above, and Grow Today's macro-sector gate,
+    # could not run AT ALL for this ticker (not "ran and measured 0%").
+    # FAIL CLOSED: treat an unrunnable gate as a reason to pause, same as a
+    # breached one, rather than letting ENTER_NOW fire on an unchecked check.
+    # Default True keeps every legacy caller/test (no sector_classified key at
+    # all) unaffected.
+    #
+    # Deliberately NOT in gate_ledger._WATCHLIST_KIND: this is a data
+    # abstention (we don't know, so we don't guess), not a ledgered policy
+    # gate — the Gate Suppression Ledger only grades gates that evaluated a
+    # real threshold breach, and build_watchlist_suppression_rows' own
+    # `_WATCHLIST_KIND.get(kind)` -> None already skips an unrecognised kind
+    # by design ("never guess a gate id").
+    if portfolio_ctx.get("sector_classified", True) is False:
+        return {
+            "severity": "hard",
+            "kind":     "sector_unknown",
+            "reason": (
+                "This ticker's sector couldn't be classified, so the sector "
+                "concentration ceiling and Grow Today's macro-sector checks "
+                "couldn't run against it — that's a reason to pause, not a "
+                "green light."
+            ),
+            "gate_value":     None,
+            "gate_threshold": SECTOR_CEILING,
+        }
+
     # ── Hard breach: high portfolio beta + critical ticker beta ─────────────
     if (port_beta is not None and ticker_beta is not None
             and port_beta > PORTFOLIO_BETA_CEILING and ticker_beta > TICKER_BETA_CRITICAL):
@@ -193,12 +224,31 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None) -> dict | None
             "flagged for risk; consider sizing down, or clear it in "
             "🔗 Risk Analysis → Action Plan before opening."
         )
-    # Same-sector overlap with Grow Today: following both stacks sector exposure.
-    if sector_name and sector_name in grow_sectors:
+    # Same-sector overlap with Grow Today: following both stacks sector
+    # exposure. Checks the RAW sector_of_ticker (never the "this sector"
+    # display fallback used elsewhere in this function) and explicitly
+    # excludes "" and UNCLASSIFIED_SECTOR — an unclassified ticker must never
+    # be read as "same sector" as anything, including another unclassified
+    # Grow Today pick that also fell back to "Other".
+    _raw_sector = portfolio_ctx.get("sector_of_ticker") or ""
+    if (_raw_sector and _raw_sector != UNCLASSIFIED_SECTOR
+            and _raw_sector in grow_sectors):
         soft.append(
             f"Daily Briefing → Grow Today is also recommending a **{sector_name}** pick today. "
             "Opening both stacks sector exposure — pick the higher-conviction setup, "
             "or wait a day so each sector trade gets evaluated on its own merits."
+        )
+
+    # D2 (sector_gate_spec.md, 2026-09-30): the sector was classified only via
+    # the provider's own label (ticker not in TICKER_SECTORS) — the ceiling
+    # check above ran, but against a label the curated map has never vetted,
+    # so a sector split across several curated buckets (e.g. "Technology")
+    # could undercount against this one ticker's true peer group.
+    if portfolio_ctx.get("sector_label_source") == "provider":
+        soft.append(
+            f"Sector taken from the provider label ({sector_name}); the curated "
+            "sector ceiling may undercount. Add this ticker to the curated "
+            "sector map for an exact check."
         )
 
     if soft:
@@ -389,6 +439,49 @@ def build_watchlist_recommendation(
         # stock — it must also respect portfolio-level concentration and beta.
         ticker_beta = (data.get("risk_metrics") or {}).get("beta")
         gate        = _portfolio_risk_gate(ticker_beta, portfolio_ctx)
+
+        if gate and gate["severity"] == "hard" and gate["kind"] == "sector_unknown":
+            # Data abstention, NOT a breach (owner decision D1, 2026-09-30):
+            # the ticker's sector couldn't be classified, so the sector-ceiling
+            # check couldn't run. Fail closed: no entry today. The breach card's
+            # "trim the sector / open a small position" advice would be false
+            # here, so this branch has its own copy.
+            return _card(
+                ticker, "NEAR_ENTRY", score, rec_label, price, entry_lo, entry_hi,
+                stop, rr, earn_days,
+                title=f"{ticker} — Setup Ready, But Sector Check Couldn't Run",
+                summary=(
+                    f"Score {score:.0f}/100 and price in entry zone — the stock-level setup is a go. "
+                    "But this ticker's sector couldn't be identified, so the sector-concentration "
+                    "check couldn't run. It isn't recommended today."
+                ),
+                detail=(
+                    f"{gate['reason']} "
+                    "Nothing was breached; the check simply had no sector to test. "
+                    "It will re-evaluate automatically once the sector is known (for example, "
+                    "after the ticker is added to the curated sector map)."
+                ),
+                conditions_met=[
+                    f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
+                    f"Signal: {rec_label}",
+                    f"Price {'in' if in_zone else 'near'} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
+                    f"R:R {rr:.1f}:1 — above 2:1 minimum" if rr else "Risk/reward acceptable",
+                ],
+                conditions_missing=[
+                    "Sector unknown — the sector-concentration check couldn't run",
+                ],
+                institutional_lens=(
+                    "A portfolio-fit check that can't run is not a pass. When a required input "
+                    "is missing, the disciplined default is to wait rather than enter on an "
+                    "unverified fit."
+                ),
+                portfolio_caution=gate["reason"],
+                # No gate id is ledgered for this kind (gate_ledger._WATCHLIST_KIND
+                # has no "sector_unknown" entry): a data abstention, not a policy gate.
+                suppression_kind=gate["kind"],
+                gate_value=gate.get("gate_value"),
+                gate_threshold=gate.get("gate_threshold"),
+            )
 
         if gate and gate["severity"] == "hard":
             # Hard breach — downgrade to NEAR_ENTRY with explicit portfolio-fit messaging

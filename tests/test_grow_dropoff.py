@@ -88,12 +88,14 @@ def _make_buckets(
     sector_blocked_picks=None,
     macro_blocked_picks=None,
     composite_unavailable=None,
+    sector_unknown_picks=None,
 ):
     return {
         "composite_skipped":     composite_skipped or [],
         "sector_blocked_picks":  sector_blocked_picks or [],
         "macro_blocked_picks":   macro_blocked_picks or [],
         "composite_unavailable": composite_unavailable or [],
+        "sector_unknown_picks":  sector_unknown_picks or [],
     }
 
 
@@ -282,6 +284,36 @@ class TestDeriveDropoffs:
         result = derive_dropoffs(surfaced, set(), buckets, None, set())
         assert result[0]["reason_code"] == "composite_unavailable"
         assert result[0]["has_confident_reason"] is True
+
+    def test_sector_unknown_reason(self):
+        """sector_unknown_picks (D1, sector_gate_spec.md 2026-09-30) attributes
+        as its own reason_code, lowest-priority named reason (after
+        composite_unavailable, before unattributed)."""
+        surfaced = [_make_surfaced("RBLX")]
+        buckets = _make_buckets(
+            sector_unknown_picks=[{
+                "ticker": "RBLX",
+                "sector": "Other",
+                "reason": "Sector unknown — the sector ceiling and macro sector checks couldn't run",
+            }]
+        )
+        result = derive_dropoffs(surfaced, set(), buckets, None, set())
+        assert result[0]["reason_code"] == "sector_unknown"
+        assert "Sector unknown" in result[0]["reason_text"]
+        assert result[0]["has_confident_reason"] is True
+
+    def test_composite_unavailable_wins_over_sector_unknown(self):
+        """composite_unavailable is checked BEFORE sector_unknown_picks in the
+        priority chain — mirrors _grow_today's own gate ordering, where the
+        sector-unknown check only runs after the composite gates already
+        passed a pick."""
+        surfaced = [_make_surfaced("RBLX")]
+        buckets = _make_buckets(
+            composite_unavailable=[{"ticker": "RBLX", "sector": "Other"}],
+            sector_unknown_picks=[{"ticker": "RBLX", "sector": "Other", "reason": "unknown"}],
+        )
+        result = derive_dropoffs(surfaced, set(), buckets, None, set())
+        assert result[0]["reason_code"] == "composite_unavailable"
 
     # ── deduplication / multiple tickers ─────────────────────────────────────
 

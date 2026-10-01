@@ -21,6 +21,7 @@ from stock_analyzer.constants import (
     COMPARE_BETA_GAP,
     COMPARE_SHARPE_GAP,
 )
+from stock_analyzer.sector_fit import sector_gate_context
 
 
 def _f(val, default=None):
@@ -457,16 +458,16 @@ def _portfolio_fit(bundle_a, bundle_b, ticker_a, ticker_b, port_df) -> dict:
             row = port_df[port_df["Ticker"] == ticker_u].iloc[0]
             weight = float(row.get("Weight (%)", 0) or 0)
             notes.append(f"⚠️ Already held at {weight:.1f}% of portfolio")
-        sector = bundle.get("sector") or ""
-        if sector and "Sector" in port_df.columns:
-            # Concentration gate basis (equity, 2026-07-09 — reqs G-19): sum the
-            # Gate Weight (%) column (== equity Weight as of the equity-basis
-            # policy) so this entry-fit ceiling matches the hard gate; falls back
-            # to "Weight (%)" for non-app callers.
-            _gcol = "Gate Weight (%)" if "Gate Weight (%)" in port_df.columns else "Weight (%)"
-            sector_weight = float(
-                port_df[port_df["Sector"] == sector][_gcol].sum() or 0
-            )
+        # sector_gate_context (D3, sector_gate_spec.md, 2026-09-30): the SAME
+        # curated-first/provider-fallback resolution every other sector gate
+        # uses, instead of the raw provider label bundle.get("sector") this
+        # used previously — a curated-mapped ticker's weight is now summed
+        # against its real bucket, not a possibly-different raw label.
+        # Unclassified never claims a (false) 0% concentration note.
+        _sctx = sector_gate_context(ticker_u, bundle.get("sector"), port_df)
+        if _sctx["classified"]:
+            sector = _sctx["sector"]
+            sector_weight = _sctx["weight_pct"]
             if sector_weight >= SECTOR_CEILING:
                 notes.append(
                     f"🚫 Sector ({sector}) at {sector_weight:.0f}% — "

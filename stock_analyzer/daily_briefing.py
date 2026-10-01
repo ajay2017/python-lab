@@ -80,7 +80,7 @@ from stock_analyzer.signal_reconciliation import (
     lookup_composite,
 )
 from stock_analyzer.position_lifecycle import classify_position_state
-from stock_analyzer.portfolio import resolve_sector
+from stock_analyzer.sector_fit import gate_sector
 from stock_analyzer import exit_advisor
 from stock_analyzer import decision_bucket
 from stock_analyzer.predictive_analytics import divergence_at_entry
@@ -899,6 +899,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "concentration_blocked_adds": [],
             "sector_blocked_adds":        [],
             "sector_blocked_picks":       [],
+            "sector_unknown_picks":       [],
             "macro_blocked_picks":        [],
             "composite_skipped":          [],
             "composite_unavailable":      [],
@@ -918,6 +919,12 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     _unverified_picks: list[dict] = []
     macro_blocked_picks: list[dict] = []
     sector_blocked_picks: list[dict] = []   # new picks suppressed — sector over hard cap
+    # D1 (sector_gate_spec.md, 2026-09-30) — FAIL CLOSED: a pick whose sector
+    # couldn't be classified at all (not in TICKER_SECTORS and no usable row/
+    # provider label) is held out of new_picks entirely, same posture as a
+    # composite fetch failure. No gate_id — this is a data abstention, not a
+    # ledgered policy gate, so it is never added to the gate_ledger key map.
+    sector_unknown_picks: list[dict] = []
     composite_skipped:  list[dict] = []
     # Picks where the composite fetch FAILED (load_all raised / not in cache).
     # Distinct from composite_skipped (where composite loaded but < BUY).
@@ -961,6 +968,12 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         ]
         for _, r in _curated.iterrows():
             d = dict(r)
+            # RANKING-ONLY (2026-09-30): this reads the row's raw "Sector"
+            # label straight from scanner_results, deliberately NOT the
+            # gate_sector-resolved value computed later per-candidate below —
+            # a sort-order nudge toward today's leading sector is a different,
+            # lower-stakes concern than the hard sector-ceiling/macro gates,
+            # which must use the curated/provider-resolved sector instead.
             d["_rank"]       = _f(d.get("Score", 0)) + _sector_bonus(d.get("Sector", ""))
             d["_is_mover"]   = False
             d["_day_change"] = None
@@ -1001,7 +1014,15 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         for row in curated_rows + mover_rows:
             ticker   = str(row["Ticker"])
             price    = _f(row.get("Price", 0))
-            sector   = resolve_sector(ticker, row.get("Sector", ""))
+            # Hoisted ahead of sector resolution (2026-09-30, Hole 2 fix) so
+            # gate_sector can fall back to the REAL provider sector already
+            # sitting in the composite bundle when the row's own "Sector" is
+            # a placeholder (scanner.py tags every watchlist extra
+            # "Watchlist" — display-only, never a real sector). The later
+            # uses of _comp_data below are unchanged.
+            _comp_data = (composites or {}).get(ticker, {})
+            sector   = gate_sector(ticker, row_label=row.get("Sector", ""),
+                                   provider_sector=_comp_data.get("sector"))
             trend    = str(row.get("Trend", ""))
             # Reuses _sector_bonus's own alias-aware match rather than
             # re-implementing the same first-key-wins-only check here --
@@ -1083,7 +1104,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # Validate conviction using full composite score when available.
             # Scanner score measures momentum only; composite includes fundamentals
             # and sentiment — a pick can score 100 on momentum but 63 composite.
-            _comp_data       = (composites or {}).get(ticker, {})
+            # _comp_data itself is hoisted above (before sector resolution).
             _composite_score = _f(_comp_data.get("total")) if _comp_data else None
             _composite_label = str((_comp_data.get("rec") or {}).get("label", "")) if _comp_data else ""
 
@@ -1181,6 +1202,29 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "ticker":         ticker,
                     "sector":         sector,
                     "momentum_score": _f(row.get("Score", 0)),
+                })
+                continue
+
+            # Sector-unknown gate (D1, sector_gate_spec.md, 2026-09-30) — FAIL
+            # CLOSED. Deliberately placed AFTER every ETF/stale/fundamentals/
+            # composite gate above (ordering invariant: those always win) and
+            # BEFORE the conviction tier below, so a pick that already failed
+            # on real data quality is attributed to THAT reason, never masked
+            # by a sector abstention. A ticker that is neither in TICKER_
+            # SECTORS nor carries a usable row/provider label means the
+            # sector ceiling and macro-sector checks above could not run
+            # against it at all — that is a reason to withhold the
+            # recommendation, not a green light. No gate_id: a data
+            # abstention, not a ledgered policy gate.
+            if sector == UNCLASSIFIED_SECTOR:
+                sector_unknown_picks.append({
+                    "ticker":          ticker,
+                    "sector":          sector,
+                    "score":           _f(row.get("Score", 0)),
+                    "reason":          "Sector unknown — the sector ceiling and macro sector checks couldn't run",
+                    "price":           price,
+                    "composite_score": _composite_score,
+                    "momentum_score":  _f(row.get("Score"), None),
                 })
                 continue
 
@@ -1645,6 +1689,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "cooldown_adds":              cooldown_adds,
         "deterioration_blocked_adds": deterioration_blocked_adds,
         "sector_blocked_picks":       sector_blocked_picks,
+        "sector_unknown_picks":       sector_unknown_picks,
         "macro_blocked_picks":        macro_blocked_picks,
         "composite_skipped":          composite_skipped,
         "composite_unavailable":      composite_unavailable,
@@ -2235,16 +2280,32 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
 
         for _, row in top_picks.iterrows():
             ticker = str(row["Ticker"])
-            sector = str(row.get("Sector", "—"))
+            # Hoisted ahead of sector resolution (D3 sibling fix,
+            # sector_gate_spec.md, 2026-09-30) so gate_sector can fall back to
+            # the REAL provider sector already sitting in the composite
+            # bundle when the scanner row's own "Sector" is a placeholder
+            # (e.g. scanner.py's "Watchlist" tag for watchlist extras).
+            _comp_data = (composites or {}).get(ticker, {})
+            sector = gate_sector(ticker, row_label=row.get("Sector"),
+                                 provider_sector=_comp_data.get("sector"))
             # Sector concentration gate — same rationale as _grow_today: don't
             # surface a fresh position in a sector already over the hard cap.
+            # Silent on purpose — unlike _grow_today's sector_blocked_picks
+            # bucket, this candidate list has no suppressed-candidates record
+            # to append into.
             if sector in _breached_sectors:
+                continue
+            # D1 (2026-09-30): an unknown sector only blocks this candidate
+            # when a composite actually exists to judge it against — with no
+            # composite at all there's nothing to gate on, so the
+            # pre-existing behaviour (surface it, sector unresolved) is kept
+            # rather than newly suppressing it.
+            if sector == UNCLASSIFIED_SECTOR and _comp_data:
                 continue
             xref   = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today,
                                       composites=composites)
             # Pre-purchase deterioration warning — same warn-only pattern as
             # _grow_today's new_picks (2026-09-11 ON incident follow-up).
-            _comp_data = (composites or {}).get(ticker, {})
             _cand_det = exit_advisor.candidate_deterioration_flag(
                 ticker, _comp_data.get("df"), spy_df,
                 price=_f(row.get("Price"), None), atr=_f(_comp_data.get("atr")),
