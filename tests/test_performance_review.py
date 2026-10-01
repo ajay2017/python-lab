@@ -347,17 +347,19 @@ def test_return_vs_spy_carries_realized_only_basis_and_caption():
     rvs = review["return_vs_spy"]
     assert rvs["status"] == "ok"
     assert rvs["basis"] == "realized_only"
-    assert "not included" in rvs["caption"]
+    assert "excluded" in rvs["caption"]
     assert rvs["realized_pnl_total"] == pytest.approx(50.0)
     assert rvs["n_realized_trades"] == 1
     assert rvs["spy_period_return_pct"] is not None
     # cost basis of the closed lot = 5 shares * $10 = $50; realized P&L $50
-    # -> realized_return_pct = 100.0%, directly comparable to SPY's own %.
+    # -> realized_return_pct = 100.0%, a cycled-capital return — NOT
+    # comparable to SPY's own % (that comparison is the removed delta).
     assert rvs["total_cost_basis"] == pytest.approx(50.0)
     assert rvs["realized_return_pct"] == pytest.approx(100.0)
-    assert rvs["delta_vs_spy_pp"] == pytest.approx(
-        rvs["realized_return_pct"] - rvs["spy_period_return_pct"]
-    )
+    # 2026-10-01 reframe: no vs-SPY delta is computed on this figure anymore —
+    # it's a per-trade/turnover return, not directly comparable to SPY's own
+    # period return (the real defect this reframe fixes).
+    assert "delta_vs_spy_pp" not in rvs
 
 
 def test_realized_return_pct_is_none_without_cost_basis_data():
@@ -377,7 +379,7 @@ def test_realized_return_pct_is_none_without_cost_basis_data():
     assert rvs["realized_pnl_total"] == pytest.approx(50.0)
     assert rvs["total_cost_basis"] == pytest.approx(0.0)
     assert rvs["realized_return_pct"] is None
-    assert rvs["delta_vs_spy_pp"] is None
+    assert "delta_vs_spy_pp" not in rvs
 
 
 def test_realized_return_pct_uses_total_cost_basis_across_multiple_lots():
@@ -398,6 +400,28 @@ def test_realized_return_pct_uses_total_cost_basis_across_multiple_lots():
     assert rvs["total_cost_basis"] == pytest.approx(180.0)
     assert rvs["realized_pnl_total"] == pytest.approx(90.0)
     assert rvs["realized_return_pct"] == pytest.approx(50.0)
+
+
+def test_caption_no_longer_implies_a_direct_spy_comparison():
+    """2026-10-01 regression: the real Q3 2026 case this reframe fixes — the
+    caption/markdown must say this is NOT the account's return and NOT
+    directly comparable to SPY's own period return, so it can't be mistaken
+    for a verdict the way the removed delta badge was."""
+    rows = [
+        _trade_row(1, "ABC", "BUY", 5, 10.0, when=date(2026, 1, 1)),
+        _trade_row(2, "ABC", "SELL", 5, 20.0, cost_basis=10.0, realized_pnl=50.0,
+                   when=date(2026, 1, 10)),
+    ]
+    kw = _base_kwargs(
+        trades=_trades_df(rows), spy_prices_by_date=_spy_series(date(2026, 1, 1), 40),
+    )
+    review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
+    caption = review["return_vs_spy"]["caption"]
+    assert "not your account" in caption.lower()
+    assert "not directly comparable" in caption.lower()
+    md = pr.format_review_markdown(review)
+    assert "Vs. SPY" not in md
+    assert "delta" not in md.lower()
 
 
 def test_return_vs_spy_offline_when_either_loader_missing():

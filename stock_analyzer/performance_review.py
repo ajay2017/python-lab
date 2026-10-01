@@ -24,11 +24,22 @@ matching:
             OUTPUT frame filtered by its own `_dt` column — never on a
             pre-filtered input `trades` frame, or a SELL's nearest-preceding-
             BUY hold-day match (which may sit before the window) breaks.
-  - `return_vs_spy` is the one new comparison: SPY's period return (via
-            `benchmark_mirror.price_on_or_before`) shown next to realized
-            trade P&L closed inside the window — explicitly labeled
-            `basis="realized_only"`, since unrealized moves on positions
-            still open during the window are excluded.
+  - `return_vs_spy` shows SPY's period return (via
+            `benchmark_mirror.price_on_or_before`) alongside the return on
+            capital CYCLED through trades closed inside the window —
+            explicitly labeled `basis="realized_only"`, since unrealized
+            moves on positions still open during the window are excluded.
+            **2026-10-01 reframe: these two figures are deliberately NOT
+            presented as a comparison anymore** (no `delta_vs_spy_pp` is
+            computed). The cycled-capital figure's denominator sums cost
+            basis across every closed lot, so capital reused across several
+            round trips is counted once per trade — on real data this made
+            the figure read closer to an average per-trade return than a
+            period return, and a vs-SPY delta badge on it gave the OPPOSITE
+            verdict from the account's real return (see memory
+            `project_q3_2026_return_review`). A real account-level return
+            vs SPY is designed, not built (memory
+            `project_performance_review_return_tile_redesign`).
   - `leverage_drift`/`risk_drift` are a first-vs-last-in-window read of the
             already-recorded `account_daily_snapshots`/`portfolio_risk_
             snapshots` columns — no recomputation, and specifically NOT
@@ -396,14 +407,20 @@ def build_review(
         _realized_pnl_total = (
             0.0 if _tb_status != "ok" else round(float(_tb_windowed["realized_pnl"].sum()), 2)
         )
-        # Realized return %, so the comparison to SPY's % is actually
-        # apples-to-apples rather than a dollar figure next to a percentage
-        # (a real gap the owner caught live 2026-09-18 — the two numbers
-        # weren't on the same footing before this). Denominator is the total
-        # cost basis of the shares actually closed this window — an "owned"
-        # figure derived purely from the same trades the numerator covers,
-        # not account equity (which would reopen the deposits/withdrawals
-        # ambiguity this feature already declined to touch).
+        # Return on capital CYCLED through closed trades, not a quarterly
+        # account return. 2026-10-01 reframe: the owner's real Q3 account
+        # return (confirmed against a Robinhood statement) was +19.44%,
+        # while this figure showed +0.49% "vs SPY -2.03pp" — because the
+        # denominator is the SUMMED cost basis of every closed lot, which
+        # double/triple/N-counts the same recycled capital on each round
+        # trip (84 trades on ~$5-8k of capital summed to ~$95k of "deployed"
+        # cost basis that quarter). So this is closer to an average
+        # per-trade return than a period return, and is NOT directly
+        # comparable to SPY's own period return — a vs-SPY delta badge
+        # (the field used to be called delta_vs_spy_pp) is deliberately NOT
+        # computed here anymore; a real account-level figure, where one is
+        # available, is a separate piece of work (see memory
+        # project_performance_review_return_tile_redesign), not this module.
         if _tb_status == "ok":
             _total_cost_basis = float((_tb_windowed["cost_basis"] * _tb_windowed["shares"]).sum())
         else:
@@ -412,10 +429,6 @@ def build_review(
             round(_realized_pnl_total / _total_cost_basis * 100, 2)
             if _total_cost_basis > 0 else None
         )
-        _delta_vs_spy_pp = (
-            round(_realized_return_pct - _spy_ret, 2)
-            if _realized_return_pct is not None and _spy_ret is not None else None
-        )
         return_vs_spy = {
             "status": "empty" if _n_realized == 0 else "ok",
             "basis": "realized_only",
@@ -423,13 +436,14 @@ def build_review(
             "realized_pnl_total": _realized_pnl_total,
             "realized_return_pct": _realized_return_pct,
             "total_cost_basis": round(_total_cost_basis, 2),
-            "delta_vs_spy_pp": _delta_vs_spy_pp,
             "n_realized_trades": _n_realized,
             "caption": (
-                "SPY's period return vs your REALIZED return on the capital "
-                "actually deployed in trades closed inside this window only — "
-                "unrealized moves on positions still open during the window are "
-                "not included, and this is not your whole-account return."
+                "This is your average return on the capital cycled through "
+                "closed trades this period — not your account's return. "
+                "Capital reused across several round trips this period is "
+                "counted once per trade, so it is NOT directly comparable to "
+                "SPY's own period return above; unrealized moves on positions "
+                "still open during the window are excluded entirely."
             ),
         }
 
@@ -571,7 +585,7 @@ def format_review_markdown(review: "dict | None") -> str:
 
     # Return vs SPY
     rvs = review.get("return_vs_spy", {})
-    lines.append("## Return vs SPY (realized only)")
+    lines.append("## Return on capital cycled through closed trades")
     if rvs.get("status") == "offline":
         lines.append("_Offline — trade history or SPY history could not be loaded._")
     elif rvs.get("status") == "empty":
@@ -582,16 +596,14 @@ def format_review_markdown(review: "dict | None") -> str:
     else:
         _spy = rvs.get("spy_period_return_pct")
         _rr = rvs.get("realized_return_pct")
-        _delta = rvs.get("delta_vs_spy_pp")
         lines.append(f"- SPY period return: {_spy:+.2f}%" if _spy is not None else "- SPY period return: unavailable")
         lines.append(
-            f"- Your realized return: {_rr:+.2f}% on ${rvs.get('total_cost_basis', 0.0):,.2f} deployed"
-            if _rr is not None else "- Your realized return: unavailable (no cost-basis data)"
+            f"- Return on capital cycled through closed trades: {_rr:+.2f}% "
+            f"on ${rvs.get('total_cost_basis', 0.0):,.2f} cycled"
+            if _rr is not None else "- Return on capital cycled: unavailable (no cost-basis data)"
         )
         lines.append(f"- Realized trade P&L closed in period: ${rvs.get('realized_pnl_total', 0.0):,.2f} "
                      f"({rvs.get('n_realized_trades', 0)} trade(s))")
-        if _delta is not None:
-            lines.append(f"- Vs. SPY: {'+' if _delta >= 0 else ''}{_delta:.2f} percentage points")
         lines.append(f"- {rvs.get('caption', '')}")
     lines.append("")
 

@@ -1,6 +1,11 @@
 # 📄 Reports — Design Plan
 
-**Status: BOTH PHASES SHIPPED 2026-09-18.** Phase 1 (Tax Report) and Phase 2 (Performance
+**Status: BOTH PHASES SHIPPED 2026-09-18; Performance Review's "Return vs SPY" tile
+REFRAMED 2026-10-01 after a live Q3 2026 review found it misleading (see "2026-10-01
+owner decisions" section below) — a follow-on true account-return block is DESIGNED,
+not built, gated on an owner-run data audit. Nothing else queued.**
+
+**BOTH PHASES SHIPPED 2026-09-18.** Phase 1 (Tax Report) and Phase 2 (Performance
 Review) both built by `implementer`, both verified against the full suite (5923 passed after
 Phase 2) and their own voluntary Opus `reviewer` pass (both SHIP, 0 blocking — see the ship
 records below). Requirements: `docs/requirements.md` F-276/F-276b; architecture:
@@ -417,3 +422,58 @@ multi-year tax comparison; scheduling the quarterly review as an emailed report 
 
 All of the above is unit-testable because the logic lives in `tax_report.py` /
 `performance_review.py`, not in `app.py` (which no test imports).
+
+## 2026-10-01 owner decisions — Return-vs-SPY tile reframe
+
+A live review of the owner's real Q3 2026 found the shipped `return_vs_spy` tile
+misleading, not just hard to read: `realized_return_pct`'s denominator sums cost basis
+across EVERY closed lot in the window, so capital reused across several round trips is
+counted once per trade (the real Q3 had 84 trades on ~$5-8k of capital, summing to ~$95k
+of "deployed" cost basis). That makes the figure closer to an average per-trade return
+than a period return, and the `delta_vs_spy_pp` badge compared it directly to SPY's
+period return as if it were the account's own — the real result flipped the verdict
+(tile: +0.49%, "-2.03pp vs SPY"; real account return, confirmed against a Robinhood
+statement: **+19.44%**).
+
+**Part A (reframe) — SHIPPED same day, no further owner decision needed beyond
+wording.** `delta_vs_spy_pp` removed from the output dict entirely (not hidden in the
+render — a lingering field invites a future render to re-add the badge). Tile relabeled
+"Return on Capital Cycled Through Closed Trades"; caption states explicitly it is not
+the account's return and not directly comparable to SPY's own period return. See
+`docs/requirements.md` F-276b and `docs/shipped-log.md` for the full ship record.
+
+**Part B (a true account-level return-vs-SPY block) — DESIGNED by a `planner` pass,
+NOT built.** Full design + the owner's answers live in memory
+`project_performance_review_return_tile_redesign`; this section records only the status
+and the superseded decision.
+
+- **This supersedes the 2026-09-18 decision above** ("Return vs SPY = option (b)":
+  realized-only, explicitly chosen over a snapshot-lookup option to avoid the
+  deposits/withdrawals ambiguity). The ambiguity is what changed: passing
+  `account_flows` through the already-used `account.money_weighted_return` (Modified
+  Dietz) closes it without reconstruction. The owner approved re-opening it
+  (2026-10-01), conditional on a live-data audit.
+- **Owner-confirmed defaults:** (1) build the true account-return block, gated on the
+  audit passing; (2) a period starting before snapshot coverage begins shows
+  realized-only plus a dated secondary line for whatever sub-range IS covered, never
+  labeled with the period's name; (3) do NOT ship an additive realized+unrealized+carry
+  breakdown — a lot-matching trap means `realized_pnl` (booked against ORIGINAL cost)
+  plus unrealized change can mislabel or flip sign for a position held across the period
+  boundary; ship account-return vs SPY as the one headline, with realized P&L shown
+  separately and captioned as not a component of it.
+- **Audit result so far (owner-run SQL, 2026-10-01): every single day in the ~3-week
+  `account_daily_snapshots` history has a trade on it, several moving 15-45% of net
+  equity.** This is exactly the endpoint-skew risk the design flagged — the EOD cron
+  pairs end-of-day holdings with a possibly-midday cash balance from the broker-sync
+  lane. A blanket "reject any endpoint with a same-day trade" consumer-side guard would
+  therefore withhold a number on nearly every period for this account's trading cadence,
+  which is not really shipping the feature. Still needed before finalizing: the full
+  `account_daily_snapshots` row set (gross_book/cash_balance/net_equity/cash_as_of) and
+  the owner's real Robinhood 9/30 statement total, to size the ACTUAL `net_equity` error
+  rather than inferring it from trade-cash-swing proxies. Not yet resolved whether this
+  pushes the outcome toward deferring until the producer-side cron fix ships, or toward
+  a different (owner-set) validity rule than "any trade that day."
+- **Nothing in Part B is built.** Do not start `app.py`/`performance_review.py` changes
+  for the account-return block until the audit is resolved and the remaining design
+  questions (anchor convention, month-by-month expander, offline/online wiring) are
+  walked through against real data.

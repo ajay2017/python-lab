@@ -37077,8 +37077,17 @@ elif page == "💰 Account":
                     else:
                         st.caption(f"Period: **{_perf_start}** to **{_perf_end}**")
 
-                        # ── Return vs SPY ────────────────────────────────
-                        st.markdown("#### 📈 Return vs SPY (realized only)")
+                        # ── Return on capital cycled through closed trades ──
+                        # 2026-10-01 reframe: this used to show a "vs SPY"
+                        # delta badge, which read as a verdict — the owner's
+                        # real Q3 account return (+19.44%, confirmed against
+                        # a Robinhood statement) was the OPPOSITE sign from
+                        # what that badge implied. No delta is computed or
+                        # shown here anymore. A real account-level return vs
+                        # SPY is DESIGNED but not built — gated on an owner-
+                        # run endpoint-integrity audit (memory
+                        # project_performance_review_return_tile_redesign).
+                        st.markdown("#### 🔁 Return on Capital Cycled Through Closed Trades")
                         _prv = _perf_review["return_vs_spy"]
                         if _prv["status"] == "offline":
                             st.warning(
@@ -37090,23 +37099,26 @@ elif page == "💰 Account":
                             if _prv.get("spy_period_return_pct") is not None:
                                 st.caption(f"SPY period return: {_prv['spy_period_return_pct']:+.2f}%")
                         else:
+                            st.caption(
+                                "⚠️ The two figures below are NOT directly comparable to each "
+                                "other — see the explanation underneath the tiles."
+                            )
                             _prv_c1, _prv_c2, _prv_c3 = st.columns(3)
                             _prv_c1.metric(
                                 "SPY period return",
                                 f"{_prv['spy_period_return_pct']:+.2f}%"
                                 if _prv["spy_period_return_pct"] is not None else "—",
+                                help="Not directly comparable to the figure beside it — see caption below.",
                             )
                             _prv_c2.metric(
-                                "Your realized return",
+                                "Return on capital cycled",
                                 f"{_prv['realized_return_pct']:+.2f}%"
                                 if _prv["realized_return_pct"] is not None else "—",
-                                delta=(
-                                    f"{_prv['delta_vs_spy_pp']:+.2f}pp vs SPY"
-                                    if _prv.get("delta_vs_spy_pp") is not None else None
-                                ),
-                                help="Realized P&L ÷ total cost basis of the shares closed this "
-                                     "period — directly comparable to SPY's own % return, unlike "
-                                     "a bare dollar figure.",
+                                help="Realized P&L ÷ summed cost basis of every closed lot this "
+                                     "period. Capital reused across several round trips is counted "
+                                     "once per trade, so this is closer to an average per-trade "
+                                     "return than a period return — it is NOT your account's return "
+                                     "and not directly comparable to SPY's period return.",
                             )
                             _prv_c3.metric(
                                 "Realized P&L (closed trades)",
@@ -37114,8 +37126,8 @@ elif page == "💰 Account":
                             )
                             if _prv["realized_return_pct"] is None:
                                 st.caption(
-                                    "⚪ Realized return % unavailable — no cost-basis data on "
-                                    "the closed trades this period."
+                                    "⚪ Return on capital cycled unavailable — no cost-basis data "
+                                    "on the closed trades this period."
                                 )
                             st.caption(
                                 f"ℹ️ {_prv['caption']} ({_prv['n_realized_trades']} "
@@ -39039,7 +39051,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 
 **Tax Report:** pick a tax year and see your realized gains/losses split into short-term vs. long-term, reconstructed lot-by-lot in the order you actually bought (FIFO) rather than the single blended average-cost number shown elsewhere in the app. Each closed lot also gets a wash-sale flag (⛔ violation / ⏳ pending / ✅ clean) reusing the same check the Tax lens on 🥧 Portfolio Overview already applies to harvested losses. A reconciliation line compares this report's total to the app's own stored average-cost total — they can legitimately differ on a position you sold in parts at different prices, and the report says so rather than picking one silently. Download the full lot table as CSV or a formatted Markdown report. **This is not tax advice** — it's an informational reconciliation tool; verify every figure against your broker's official 1099-B before filing.
 
-**Performance Review:** pick a period (This Quarter, Last Quarter, This Tax Year, or a custom date range) for a point-in-time, downloadable snapshot: **Return vs SPY** (SPY's own % move over the period next to **your realized return %** — your realized P&L divided by the total cost basis of the shares you closed that period, so it's a genuine like-for-like comparison, not a percentage next to a dollar figure — plus the gap between the two in percentage points; realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎖️ Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); and **Leverage & Margin Cushion Drift** / **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing account and risk-snapshot history). Downloads as CSV or Markdown, same as the Tax Report.
+**Performance Review:** pick a period (This Quarter, Last Quarter, This Tax Year, or a custom date range) for a point-in-time, downloadable snapshot: **SPY's period return** next to your **Return on Capital Cycled Through Closed Trades** (realized P&L divided by the summed cost basis of every closed lot that period — capital reused across several round trips is counted once per trade, so this reads closer to an average per-trade return than a period return, and it's **not directly comparable to SPY's figure above it, and not your account's own return**; realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎖️ Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); and **Leverage & Margin Cushion Drift** / **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing account and risk-snapshot history). Downloads as CSV or Markdown, same as the Tax Report.
 """
             )
 

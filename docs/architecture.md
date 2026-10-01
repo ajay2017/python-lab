@@ -3451,10 +3451,23 @@ window"` in both the pure dict and the rendered caption.
 percentage next to the owner's own figure as a bare dollar amount — not actually comparable, so
 there was no way to read "did I beat the market" off the screen. `realized_return_pct` (realized
 P&L ÷ `total_cost_basis`, the total cost basis of the shares closed this period — a denominator
-owned entirely by the same trades the numerator covers, not account equity) and
-`delta_vs_spy_pp` (`realized_return_pct − spy_period_return_pct`) were added so the two figures
-are genuinely apples-to-apples; both are `None`, never a fabricated `0%`, when the window's
-closed trades carry no cost-basis data.
+owned entirely by the same trades the numerator covers, not account equity) and a
+`delta_vs_spy_pp` badge were added so the two figures looked apples-to-apples.
+
+**Reframed 2026-10-01 — the "apples-to-apples" fix above was itself wrong.** A live review of
+the owner's real Q3 2026 found `realized_return_pct` divides by the SUMMED cost basis of every
+closed lot, which counts the same recycled capital once per round trip (84 trades on ~$5-8k of
+capital summed to ~$95k of "deployed" cost basis) — so it's closer to an average per-trade return
+than a period return, and comparing it to SPY's period return with a delta badge actively
+misleads: the tile showed "+0.49%, -2.03pp vs SPY" while the owner's REAL account return
+(confirmed against a Robinhood statement) was +19.44%, the opposite verdict. `delta_vs_spy_pp` is
+now REMOVED from the dict entirely (not just hidden in the render — a field left in the output
+invites a future render to re-add the badge). The tile is relabeled "Return on Capital Cycled
+Through Closed Trades," and the caption states explicitly that it is not the account's return and
+not directly comparable to SPY's own period return. See memory
+`project_q3_2026_return_review`/`project_performance_review_return_tile_redesign` for the full
+analysis and the follow-on design (gated on an owner-run live-data audit) for a real account-level
+return-vs-SPY block.
 
 **Below-floor framing** (a second owner decision): a period under `REC_OUTCOME_MIN_CALLS`/
 `GATE_LEDGER_MIN_CALLS` etc. shows raw period counts + a descriptive matured-subset mean alpha as
