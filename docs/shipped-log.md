@@ -9,6 +9,7 @@ Cross-reference: many entries here have a fuller, dedicated memory file (see `ME
 ---
 
 **Recently shipped (do not re-chase):**
+- **7 tickers added to `TICKER_SECTORS`, 2026-10-01.** `scripts/predictive_analytics_audit.py`'s new §5 "tickers still unresolved" list (from the 09-30 sector-gate fix) surfaced DECK, ONON, PM, 000660.KS (SK Hynix), PAY, FIVN and NTCT — each had surfaced as a watchlist/scanner pick with no curated entry, so the sector-ceiling and macro-suppression gates couldn't see it. DECK/ONON/PM → Consumer Staples & Retail (precedent NKE/COST/WMT/TGT); 000660.KS → Semiconductors (peer of MU); PAY → Financials (precedent PYPL/XYZ/COIN); FIVN and NTCT → Enterprise Tech, the two genuinely ambiguous calls, confirmed with the owner over AI & Cloud and Cybersecurity respectively. No new sector string added. Opus reviewer SHIP, 0 blocking; full suite 6674 passed.
 - **Two sector-gate holes CLOSED, 2026-09-30.**
   - G-05 (Watchlist ENTER_NOW sector ceiling) now sums weight on the curated sector at every site (Watchlist page, cron email, Home Research, Compare, Analysis) via the new pure `sector_fit.py`. Before, it compared raw provider labels with curated holdings and could almost never fire for mapped tech/semis/financials names.
   - Grow Today and Buy Candidates no longer classify unmapped watchlist extras as "Watchlist" (which skipped macro sector suppression and G-16).

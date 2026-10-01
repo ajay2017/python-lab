@@ -229,6 +229,27 @@ TICKER_SECTORS = {
     "FDX": "Industrials", "HON": "Industrials", "ITW": "Industrials",
     "MMM": "Industrials", "PH": "Industrials", "PWR": "Industrials",
     "UNP": "Industrials", "UPS": "Industrials",
+    # 7 added 2026-10-01: found by scripts/predictive_analytics_audit.py's §5
+    # unresolved-ticker list (sector_fit.py's 2026-09-30 gate fix made this
+    # visible) -- each had surfaced as a watchlist/scanner pick with no entry
+    # here, so it fell back to the raw provider/scanner label and was
+    # invisible to the sector-ceiling and macro-suppression gates, same class
+    # as every prior gap in this dict. DECK/ONON classified alongside NKE
+    # (footwear/apparel, not a store chain) -- confirmed with the owner.
+    "DECK": "Consumer Staples & Retail", "ONON": "Consumer Staples & Retail",
+    # PM (Philip Morris International): classic consumer staple.
+    "PM": "Consumer Staples & Retail",
+    # SK Hynix (Korea Exchange) -- direct memory-chip peer of MU.
+    "000660.KS": "Semiconductors",
+    # Paysafe: a payments processor, same class as PYPL/XYZ/COIN.
+    "PAY": "Financials",
+    # FIVN (Five9, contact-center SaaS) and NTCT (NetScout, network
+    # performance monitoring with a DDoS/security line) both classified
+    # Enterprise Tech -- mature enterprise infrastructure, not a growth/AI-
+    # narrative stock for FIVN, and "what it primarily IS" over its security
+    # product line for NTCT -- confirmed with the owner (both genuinely
+    # ambiguous calls).
+    "FIVN": "Enterprise Tech", "NTCT": "Enterprise Tech",
 }
 
 
