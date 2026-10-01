@@ -361,6 +361,33 @@ def s5_sector(enriched, pop) -> None:
     _hdr(f"§5 SECTOR ALPHA (min_n {PREDICTIVE_MIN_BAND_N})")
     print("[A]:"); _print_group(pa.by_sector_alpha(enriched), "sector")
     print("[C]:"); _print_group(pa.by_sector_alpha(pop["reps"]), "sector")
+    print_sector_label_map(pop["reps"])
+
+
+# Labels with no clean curated equivalent (owner decision 2026-09-30,
+# sector_labels.py): tickers landing here need a TICKER_SECTORS entry.
+_UNRESOLVED_SECTOR_LABELS = ("Other", "Technology", "Consumer Cyclical", "AI & Data Platforms")
+
+
+def print_sector_label_map(reps: list[dict]) -> None:
+    """How stored labels were canonicalised, plus the tickers still unresolved."""
+    from collections import Counter, defaultdict
+    print()
+    print("Sector label canonicalisation (reps): stored label -> canonical label, count")
+    pairs = Counter((str(r.get("sector_raw") or "(blank)"), r.get("sector")) for r in reps)
+    for (raw, canon), n in sorted(pairs.items(), key=lambda kv: (-kv[1], kv[0])):
+        mark = "" if raw == canon else "   (relabelled)"
+        print(f"  {raw:<28} -> {canon:<26} {n:>4}{mark}")
+    todo: dict[str, list[str]] = defaultdict(list)
+    for r in reps:
+        if r.get("sector") in _UNRESOLVED_SECTOR_LABELS:
+            todo[r["sector"]].append(str(r.get("ticker")))
+    if todo:
+        print("Tickers still unresolved (add them to TICKER_SECTORS to classify):")
+        for lab, tks in sorted(todo.items()):
+            print(f"  {lab:<22} {', '.join(sorted(set(tks)))}")
+    else:
+        print("Tickers still unresolved: none")
 
 
 def s6_sentiment(enriched, pop) -> None:

@@ -24,6 +24,9 @@ awareness only — never gates, re-scores, or re-ranks a recommendation.
 
 import pandas as pd
 
+from stock_analyzer.constants import UNCLASSIFIED_SECTOR
+from stock_analyzer.sector_labels import canonical_sector
+
 
 def build_winner_profile(
     closed_lots: pd.DataFrame,
@@ -112,7 +115,9 @@ def build_winner_profile(
             composites.append(float(rec["composite_score"]))
         if rec.get("momentum_score") is not None:
             momentums.append(float(rec["momentum_score"]))
-        if rec.get("sector"):
+        # Unclassified is not a trait a winner can share: "Other" (incl. the
+        # old "Watchlist" placeholder) must never become a top sector.
+        if rec.get("sector") and rec["sector"] != UNCLASSIFIED_SECTOR:
             sectors.append(str(rec["sector"]))
 
     if n < min_n:
@@ -179,7 +184,11 @@ def score_candidate_match(
             matched.append("momentum")
 
     top_sectors = profile.get("top_sectors") or set()
-    if sector and top_sectors and sector in top_sectors:
+    # History sectors are canonical (match_recs_to_trades); put the live pick's
+    # label (resolve_sector: curated, else a raw scanner label) in the same
+    # vocabulary before comparing. Ticker-less: a mapped pick is already curated.
+    sector = canonical_sector(None, sector) if sector else sector
+    if sector and sector != UNCLASSIFIED_SECTOR and top_sectors and sector in top_sectors:
         matched.append("sector")
 
     return {"matched_traits": matched, "n_matched": len(matched)}

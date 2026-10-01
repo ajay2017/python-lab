@@ -12,6 +12,7 @@ from datetime import date, timedelta
 from typing import Any, Callable
 
 from stock_analyzer.constants import (
+    UNCLASSIFIED_SECTOR,
     COMPOSITE_BUY,
     COMPOSITE_STRONG_BUY,
     COMPOSITE_WEIGHTS_VERSION,
@@ -117,6 +118,7 @@ def prepare_population(
     """
     from stock_analyzer.asset_type import ASSET_TYPE_ETF, normalize
     from stock_analyzer.recommendations_history import collapse_recs_by_ticker
+    from stock_analyzer.sector_labels import canonical_sector
 
     n_excl_version = 0
     n_excl_version_none = 0
@@ -133,7 +135,13 @@ def prepare_population(
         if normalize(r.get("asset_type")) == ASSET_TYPE_ETF:
             n_excl_etf += 1
             continue
-        filtered.append(r)
+        # One sector vocabulary for every lens (sector_labels docstring). A
+        # shallow copy, so the caller's cached rows are never mutated; the
+        # stored label is kept as `sector_raw` for the audit.
+        rr = dict(r)
+        rr["sector_raw"] = r.get("sector_raw", r.get("sector"))  # keep the true stored label
+        rr["sector"] = canonical_sector(r.get("ticker"), r.get("sector"))
+        filtered.append(rr)
 
     scoped_raw = [r for r in filtered if r.get("rec_type") in rec_types]
     n_out_of_scope_rows = len(filtered) - len(scoped_raw)
@@ -700,7 +708,12 @@ def synthesize_directives(
         })
 
     # ── Sector Alpha ───────────────────────────────────────────────────────────
-    if sec_alph:
+    # Unclassified buckets ("Other" = Watchlist/blank/unknown, merged by
+    # sector_labels) still show as chart bars, but advice must never name a
+    # non-sector as the best or worst place for engine signals.
+    _named_sec = [s for s in (sec_alph or []) if s.get("sector") not in (UNCLASSIFIED_SECTOR, "Unknown")]
+    if _named_sec:
+        sec_alph = _named_sec
         best  = sec_alph[0]
         worst = sec_alph[-1]
 

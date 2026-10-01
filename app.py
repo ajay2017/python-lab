@@ -32116,7 +32116,9 @@ elif page == "📊 Predictive Analytics":
         st.subheader("Calibration Curve — Avg Alpha by Score Band")
         st.caption(
             "Height = average alpha (your return minus SPY over the same window). "
-            f"Bands with fewer than {PREDICTIVE_MIN_BAND_N} tickers shown in grey — indicative only. "
+            f"Bands with fewer than {PREDICTIVE_MIN_BAND_N} tickers are grey and hatched — indicative only — "
+            "and the axis is scaled to the reliable bands, so a thin band beyond it is clipped and marked "
+            "\"off scale\" with its real value. "
             "Each ticker counts once, at its first surfacing."
         )
         if _pac_bands:
@@ -32129,18 +32131,47 @@ elif page == "📊 Predictive Analytics":
                 else:
                     _pac_bar_colors.append("#ff4444")
 
+            # Scale the y-axis to the RELIABLE bands only. A 2-ticker band can
+            # otherwise set the axis and squash every real band into a sliver
+            # (the 2026-09-30 live chart: 80-84, 2 tickers, -5.1pp, dwarfed
+            # 65-69 with 45). A thin band that falls outside that scale is
+            # clipped at the edge, hatched, and labelled with its real value
+            # and "off scale". The hover always shows the real value.
+            _pac_real_y = [_b["avg_alpha"] if _b["avg_alpha"] is not None else 0 for _b in _pac_bands]
+            _pac_reliable_y = [
+                _b["avg_alpha"] for _b in _pac_bands
+                if not _b["is_thin"] and _b["avg_alpha"] is not None
+            ]
+            _pac_yrange = None
+            if _pac_reliable_y:
+                _pac_lo = min(min(_pac_reliable_y), 0.0)
+                _pac_hi = max(max(_pac_reliable_y), 0.0)
+                _pac_pad = max(_pac_hi - _pac_lo, 1.0) * 0.35
+                _pac_yrange = [_pac_lo - _pac_pad, _pac_hi + _pac_pad]
+            _pac_plot_y, _pac_bar_text = [], []
+            for _b, _y in zip(_pac_bands, _pac_real_y):
+                _txt = f"{_b['n']} tickers"
+                if _b["is_thin"]:
+                    _txt += f" · {_y:+.1f}pp"
+                    if _pac_yrange is not None and not (_pac_yrange[0] <= _y <= _pac_yrange[1]):
+                        _y = _pac_yrange[0] * 0.92 if _y < 0 else _pac_yrange[1] * 0.92
+                        _txt += " (off scale)"
+                _pac_plot_y.append(_y)
+                _pac_bar_text.append(_txt)
+
             _pac_calib_fig = go.Figure(go.Bar(
                 x=[_b["band_label"] for _b in _pac_bands],
-                y=[_b["avg_alpha"] if _b["avg_alpha"] is not None else 0 for _b in _pac_bands],
+                y=_pac_plot_y,
                 marker_color=_pac_bar_colors,
-                text=[f"{_b['n']} tickers" for _b in _pac_bands],
+                marker_pattern_shape=["/" if _b["is_thin"] else "" for _b in _pac_bands],
+                text=_pac_bar_text,
                 textposition="inside",
                 insidetextanchor="middle",
-                customdata=[[_b["p_positive_alpha"], _b["n_acted"], _b["n_missed"], _b["n"]]
-                            for _b in _pac_bands],
+                customdata=[[_b["p_positive_alpha"], _b["n_acted"], _b["n_missed"], _b["n"], _ry]
+                            for _b, _ry in zip(_pac_bands, _pac_real_y)],
                 hovertemplate=(
                     "<b>%{x}</b><br>"
-                    "Avg alpha: %{y:+.2f}pp<br>"
+                    "Avg alpha: %{customdata[4]:+.2f}pp<br>"
                     "P(positive alpha): %{customdata[0]:.0%}<br>"
                     "Tickers: %{customdata[3]}<br>"
                     "Acted: %{customdata[1]} · Missed: %{customdata[2]}<extra></extra>"
@@ -32172,6 +32203,8 @@ elif page == "📊 Predictive Analytics":
                 yaxis_title="Avg Alpha vs SPY (pp)", xaxis_title="Composite Score Band",
                 margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
             )
+            if _pac_yrange is not None:
+                _pac_calib_fig.update_yaxes(range=_pac_yrange)
             st.plotly_chart(_pac_calib_fig, width="stretch")
 
         with st.expander("📋 Full outcome history", expanded=False):

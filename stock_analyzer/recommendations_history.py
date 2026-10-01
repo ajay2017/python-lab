@@ -25,6 +25,7 @@ and conflating distinct decisions.
 from datetime import date
 from collections import defaultdict
 from stock_analyzer.constants import COMPOSITE_STRONG_BUY, COMPOSITE_BUY, COMPOSITE_HOLD
+from stock_analyzer.sector_labels import canonical_sector
 from stock_analyzer.util import (
     bq_score_or_none,
     val_score_or_none,
@@ -294,7 +295,13 @@ def match_recs_to_trades(recs_df, trades_df) -> list[dict]:
             "price_at_surface": _f(r.get("price_at_surface"), None) if r.get("price_at_surface") is not None else None,
             "composite_score":  r.get("composite_score"),
             "momentum_score":   r.get("momentum_score"),
-            "sector":           str(r.get("sector", "") or ""),
+            # One sector vocabulary for every reader (sector_labels.py):
+            # writers stored curated, raw-provider and scanner-bucket labels
+            # (incl. a "Watchlist" placeholder). Canonicalised here, at the
+            # shared read point, so stored data is never rewritten; the
+            # stored label is kept as `sector_raw`.
+            "sector":           canonical_sector(tk, r.get("sector")),
+            "sector_raw":       str(r.get("sector", "") or ""),
             "conviction":       str(r.get("conviction", "") or ""),
             "verdict":          str(r.get("verdict", "") or ""),
             "thesis":           str(r.get("thesis", "") or ""),
