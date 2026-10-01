@@ -9,6 +9,17 @@ Cross-reference: many entries here have a fuller, dedicated memory file (see `ME
 ---
 
 **Recently shipped (do not re-chase):**
+- **💵 Cash Activity made truthful (F-268 follow-on), 2026-10-01.** Found in the owner's Q3 return review.
+  - Bars were `abs()` values netted by `event_type`, so charges read as income and June's $36.59 margin interest showed as $7.08 after a Gold credit. They are now signed and split into Dividend / Interest earned / Margin interest / Fee, with aligned zero lines (new pure `stock_analyzer/cash_activity.py`).
+  - The YTD caption's hardcoded "+" on interest is fixed.
+  - A ticker-less broker-synced `FEE` is disclosed as probably margin interest, not reclassified.
+  - The stale "SnapTrade does not relay income events" import copy is reworded.
+  - `broker_sync._find_split_parts` closes a 1-to-2 dedup gap (one live DIVIDEND = statement CDIV + MDIV; the real NVDA case was $1.25 double-counted) at read time, write time and in the freshness count.
+  - Deliberately NOT changed: classifying an unmatched live `FEE` as margin interest, since a real Gold fee can arrive the same way.
+  - Also fixed: the chart hover now masks values in privacy mode.
+  - Read-time dedup now consumes a statement row that matched 1:1, the same as write time.
+  - Known residual, not fixed (pre-existing): when CDIV == MDIV to the cent, the 1:1 rule merges the two statement rows into each other before the split pass runs, so that dividend still overcounts. The fix is to bar statement-to-statement merges when raw codes differ.
+  - Opus reviewer SHIP, 0 blocking.
 - **7 tickers added to `TICKER_SECTORS`, 2026-10-01.** `scripts/predictive_analytics_audit.py`'s new §5 "tickers still unresolved" list (from the 09-30 sector-gate fix) surfaced DECK, ONON, PM, 000660.KS (SK Hynix), PAY, FIVN and NTCT — each had surfaced as a watchlist/scanner pick with no curated entry, so the sector-ceiling and macro-suppression gates couldn't see it. DECK/ONON/PM → Consumer Staples & Retail (precedent NKE/COST/WMT/TGT); 000660.KS → Semiconductors (peer of MU); PAY → Financials (precedent PYPL/XYZ/COIN); FIVN and NTCT → Enterprise Tech, the two genuinely ambiguous calls, confirmed with the owner over AI & Cloud and Cybersecurity respectively. No new sector string added. Opus reviewer SHIP, 0 blocking; full suite 6674 passed.
 - **Two sector-gate holes CLOSED, 2026-09-30.**
   - G-05 (Watchlist ENTER_NOW sector ceiling) now sums weight on the curated sector at every site (Watchlist page, cron email, Home Research, Compare, Analysis) via the new pure `sector_fit.py`. Before, it compared raw provider labels with curated holdings and could almost never fire for mapped tech/semis/financials names.

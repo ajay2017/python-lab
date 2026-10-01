@@ -570,6 +570,19 @@ def classify_transactions(
                 _ignored_key = f"{ttype} (cross-path duplicate)"
                 ignored[_ignored_key] = ignored.get(_ignored_key, 0) + 1
                 continue
+            # Same payment already imported from a statement as a cash +
+            # manufactured dividend split (see _find_split_parts). Only
+            # statement rows may be the parts; both are consumed.
+            _csv_pos = [i for i, _existing in enumerate(_bucket) if _is_csv_sourced(_existing)]
+            _split = _find_split_parts(
+                candidate, [_bucket[i] for i in _csv_pos], INCOME_EVENT_DEDUP_DATE_TOL_DAYS,
+            )
+            if _split is not None:
+                for _pos in sorted((_csv_pos[_split[0]], _csv_pos[_split[1]]), reverse=True):
+                    _bucket.pop(_pos)
+                _ignored_key = f"{ttype} (cross-path split duplicate)"
+                ignored[_ignored_key] = ignored.get(_ignored_key, 0) + 1
+                continue
             income_events.append(candidate)
 
         elif ttype in _FLOW_TYPES:
@@ -1166,6 +1179,59 @@ def _income_is_duplicate(a: dict, b: dict, tol_days: int) -> bool:
     return abs((date_a - date_b).days) <= tol_days
 
 
+# The one known 1-live-to-2-statement shape. Confirmed 2026-10-01 against the
+# owner's real data: NVDA's Sep dividend arrived via live sync as ONE
+# DIVIDEND row ($1.25, 9/11), while the Robinhood statement split the same
+# payment into CDIV $0.75 (shares held outright) + MDIV $0.50 (substitute
+# payment on shares lent against the margin loan), both dated 9/14. The
+# 1:1 cents match can never pair those, so the dividend was counted twice.
+# Deliberately narrow: exactly one cash + one manufactured part, so two
+# unrelated same-ticker dividends can't be summed into a false match.
+_SPLIT_DIVIDEND_PARTS = frozenset({"cash_dividend", "manufactured_dividend"})
+
+
+def _find_split_parts(live_ev: dict, candidates: "list[dict]", tol_days: int) -> "tuple[int, int] | None":
+    """Indices (a, b) into `candidates` of a cash + manufactured dividend pair
+    that together ARE `live_ev`: same (ticker, dedup bucket), both parts the
+    same sign as `live_ev`, signed cents summing exactly to `live_ev`'s, and
+    each part dated within `tol_days` of it. None when no such pair exists.
+
+    Callers own the cross-path restriction (`live_ev` live-sourced,
+    `candidates` CSV-sourced) and the consume-on-match bookkeeping, matching
+    how `_income_is_duplicate` is used. Pure; never raises."""
+    if not str(live_ev.get("ticker") or "").strip():
+        return None
+    live_cents = _income_signed_cents(live_ev)
+    live_date = _income_parse_date(live_ev.get("event_date"))
+    if not live_cents or live_date is None:
+        return None
+    key = _income_dedup_bucket_key(live_ev)
+
+    def _part(ev):
+        if _income_dedup_bucket_key(ev) != key:
+            return None
+        cents = _income_signed_cents(ev)
+        d = _income_parse_date(ev.get("event_date"))
+        if not cents or d is None or (cents > 0) != (live_cents > 0):
+            return None
+        if abs((d - live_date).days) > tol_days:
+            return None
+        return income_event_subtype(ev.get("raw_code"), ev.get("event_type")), cents
+
+    parts = [_part(ev) for ev in candidates]
+    for a in range(len(parts)):
+        if parts[a] is None:
+            continue
+        for b in range(a + 1, len(parts)):
+            if parts[b] is None:
+                continue
+            if {parts[a][0], parts[b][0]} != _SPLIT_DIVIDEND_PARTS:
+                continue
+            if parts[a][1] + parts[b][1] == live_cents:
+                return a, b
+    return None
+
+
 def dedupe_income_events(events: list[dict]) -> list[dict]:
     """Collapse income-event rows that are the SAME real-world dividend/
     interest/fee event, already captured by BOTH ingestion paths (a manual
@@ -1195,6 +1261,9 @@ def dedupe_income_events(events: list[dict]) -> list[dict]:
         buckets[_income_dedup_bucket_key(ev)].append(i)
 
     dropped: set = set()
+    # Statement rows that already explained a live row 1:1 — never reused as
+    # split parts below, matching classify_transactions' consume-on-match.
+    matched_csv: set = set()
     for idxs in buckets.values():
         if len(idxs) < 2:
             continue
@@ -1212,8 +1281,31 @@ def dedupe_income_events(events: list[dict]) -> list[dict]:
             if i_is_csv and not j_is_csv:
                 dropped.add(match)
                 kept[kept.index(match)] = i
+                matched_csv.add(i)
             else:
                 dropped.add(i)
+                if j_is_csv and not i_is_csv:
+                    matched_csv.add(match)
+
+    # Second pass: a live row that equals TWO surviving statement rows
+    # (cash + manufactured dividend split — see _find_split_parts). The
+    # statement rows win, same tie-break as above; each statement row can
+    # explain at most one live row across both passes.
+    used_parts: set = set(matched_csv)
+    for idxs in buckets.values():
+        live_idx = [i for i in idxs if i not in dropped and not _is_csv_sourced(events[i])]
+        if not live_idx:
+            continue
+        csv_idx = [i for i in idxs if i not in dropped and _is_csv_sourced(events[i])]
+        for i in live_idx:
+            avail = [j for j in csv_idx if j not in used_parts]
+            if len(avail) < 2:
+                break
+            pair = _find_split_parts(events[i], [events[j] for j in avail], INCOME_EVENT_DEDUP_DATE_TOL_DAYS)
+            if pair is None:
+                continue
+            used_parts.update((avail[pair[0]], avail[pair[1]]))
+            dropped.add(i)
 
     return [ev for i, ev in enumerate(events) if i not in dropped]
 
@@ -1319,7 +1411,7 @@ def reconciliation_freshness(events: "list[dict]") -> "dict | None":
             _income_dedup_bucket_key(csv_ev) == key
             and _income_is_duplicate(live_ev, csv_ev, INCOME_EVENT_DEDUP_DATE_TOL_DAYS)
             for csv_ev in csv_rows
-        )
+        ) or _find_split_parts(live_ev, csv_rows, INCOME_EVENT_DEDUP_DATE_TOL_DAYS) is not None
         if not matched:
             unreconciled += 1
 

@@ -36568,8 +36568,14 @@ elif page == "💰 Account":
                 _sii_df = pd.DataFrame(_snap_income)
                 _sii_df["event_date"] = pd.to_datetime(_sii_df["event_date"])
                 _sii_df["month"] = _sii_df["event_date"].dt.to_period("M").dt.to_timestamp()
+                # Signed, and interest split into charged vs earned before
+                # summing, so a Gold credit can't hide that month's margin
+                # interest (June 2026 used to show $7.08 for a $36.59 charge).
+                from stock_analyzer import cash_activity as _sii_ca
+                _sii_df["category"] = [_sii_ca.chart_category(_r) for _r in _snap_income]
                 _sii_piv = (
-                    _sii_df.groupby(["month", "event_type"])["amount"]
+                    _sii_df.dropna(subset=["category"])
+                    .groupby(["month", "category"])["amount"]
                     .sum().unstack(fill_value=0.0)
                 )
 
@@ -36602,24 +36608,32 @@ elif page == "💰 Account":
 
                 import plotly.graph_objects as _sii_pgo
                 from plotly.subplots import make_subplots as _sii_subplots
-                _sii_colors = {"dividend": "#22c55e", "interest": "#3b82f6", "fee": "#ef4444"}
-                _sii_hover_labels = {"dividend": "Dividend", "interest": "Interest", "fee": "Fee"}
+                _sii_colors = {
+                    "Dividend": "#22c55e", "Interest earned": "#2dd4bf",
+                    "Margin interest": "#3b82f6", "Fee": "#ef4444",
+                }
                 _sii_fig = _sii_subplots(specs=[[{"secondary_y": True}]])
-                for _et in ("dividend", "interest", "fee"):
-                    if _et in _sii_piv.columns:
-                        _sii_vals = _sii_piv[_et].abs()
+                for _cat in _sii_ca.CATEGORIES:
+                    if _cat in _sii_piv.columns:
+                        _sii_vals = _sii_piv[_cat]
                         _sii_fig.add_trace(_sii_pgo.Bar(
                             x=_sii_piv.index, y=_sii_vals,
-                            name=_et.title(), marker_color=_sii_colors[_et],
+                            name=_cat, marker_color=_sii_colors[_cat],
                             text=(
-                                ["••••••" if v >= 2 else "" for v in _sii_vals]
+                                ["••••••" if abs(v) >= 2 else "" for v in _sii_vals]
                                 if _sii_chart_priv
-                                else [f"${v:.2f}" if v >= 2 else "" for v in _sii_vals]
+                                else [
+                                    (f"-${abs(v):.2f}" if v < 0 else f"${v:.2f}") if abs(v) >= 2 else ""
+                                    for v in _sii_vals
+                                ]
                             ),
                             textposition="inside",
                             insidetextanchor="middle",
                             textfont=dict(size=11, color="white"),
-                            hovertemplate=f"{_sii_hover_labels[_et]}: $%{{y:,.2f}}<extra></extra>",
+                            hovertemplate=(
+                                f"{_cat}: ••••••<extra></extra>" if _sii_chart_priv
+                                else f"{_cat}: %{{y:$,.2f}}<extra></extra>"
+                            ),
                         ), secondary_y=False)
                 _sii_pnl_text = [
                     (
@@ -36642,10 +36656,21 @@ elif page == "💰 Account":
                     textposition=_sii_pnl_textpos,
                     textfont=dict(size=10, color="#a78bfa"),
                     customdata=_sii_pnl_trades,
-                    hovertemplate="Realized P&L: $%{y:,.2f} (%{customdata} trade(s) closed)<extra></extra>",
+                    hovertemplate=(
+                        "Realized P&L: •••••• (%{customdata} trade(s) closed)<extra></extra>"
+                        if _sii_chart_priv
+                        else "Realized P&L: %{y:$,.2f} (%{customdata} trade(s) closed)<extra></extra>"
+                    ),
                 ), secondary_y=True)
+                # Charges stack below zero, income above; both axes share one
+                # zero line so "below the line" means a loss on either scale.
+                (_sii_bar_rng, _sii_pnl_rng) = _sii_ca.zero_aligned_ranges(
+                    _sii_piv.clip(upper=0).sum(axis=1).min(),
+                    _sii_piv.clip(lower=0).sum(axis=1).max(),
+                    _sii_pnl_series.min(), _sii_pnl_series.max(),
+                )
                 _sii_fig.update_layout(
-                    barmode="stack", height=260,
+                    barmode="relative", height=260,
                     margin=dict(l=0, r=0, t=20, b=0),
                     legend=dict(orientation="h", y=1.15, x=0),
                     hovermode="x unified",
@@ -36653,12 +36678,15 @@ elif page == "💰 Account":
                 )
                 _sii_fig.update_yaxes(
                     showticklabels=not _sii_chart_priv,
-                    tickprefix="$", gridcolor="rgba(128,128,128,0.15)",
+                    tickformat="$,.0f", gridcolor="rgba(128,128,128,0.15)",
+                    range=list(_sii_bar_rng),
+                    zeroline=True, zerolinecolor="rgba(200,200,200,0.5)", zerolinewidth=1,
                     secondary_y=False,
                 )
                 _sii_fig.update_yaxes(
                     showticklabels=not _sii_chart_priv,
-                    tickprefix="$", showgrid=False,
+                    tickformat="$,.0f", showgrid=False,
+                    range=list(_sii_pnl_rng), zeroline=False,
                     secondary_y=True,
                 )
                 st.plotly_chart(_sii_fig, width="stretch")
@@ -36682,11 +36710,16 @@ elif page == "💰 Account":
                 # the trigger for Streamlit's markdown renderer to misparse the
                 # pair as a LaTeX math delimiter instead of plain text (same
                 # class as feedback_streamlit_renderer_mismatch).
+                # Every figure carries its real sign. Interest used to be printed
+                # with a hardcoded "+", so a net -$243.77 (margin interest paid)
+                # read as "+$243.77" income.
+                def _sii_signed(_v):
+                    return f"{'+' if _v >= 0 else '-'}{_m(f'\\${abs(_v):,.2f}')}"
                 st.caption(
-                    f"YTD: **+{_m(f'\\${_sii_div_ytd:,.2f}')}** dividends · "
-                    f"**+{_m(f'\\${abs(_sii_int_ytd):,.2f}')}** interest · "
-                    f"**-{_m(f'\\${abs(_sii_fee_ytd):,.2f}')}** fees · "
-                    f"**{'+' if _sii_pnl_ytd >= 0 else '-'}{_m(f'\\${abs(_sii_pnl_ytd):,.2f}')}** realized P&L"
+                    f"YTD: **{_sii_signed(_sii_div_ytd)}** dividends · "
+                    f"**{_sii_signed(_sii_int_ytd)}** net interest · "
+                    f"**{_sii_signed(_sii_fee_ytd)}** fees · "
+                    f"**{_sii_signed(_sii_pnl_ytd)}** realized P&L"
                 )
                 # "Interest" nets earned (cash interest + Gold credit) against
                 # charged (margin interest) into one figure -- reuses the same
@@ -36704,6 +36737,24 @@ elif page == "💰 Account":
                     f"**-{_m(f'\\${_sii_int_charged:,.2f}')}** charged (margin interest) "
                     "— shown separately, never netted, so a credit can't mask a charge."
                 )
+                # A broker-synced "FEE" with no statement match may be margin
+                # interest (the sync labels it that way on this account), but
+                # a real fee can arrive the same way, so it is disclosed, not
+                # reclassified.
+                _sii_ufees = _sii_ca.unconfirmed_broker_fees(_sii_ytd.to_dict("records"))
+                if _sii_ufees:
+                    _sii_uf_list = ", ".join(
+                        _sii_signed(float(_uf.get("amount") or 0)) + " on " + str(_uf.get("event_date"))[:10]
+                        for _uf in _sii_ufees
+                    )
+                    st.caption(
+                        f"ⓘ Broker-synced **fee(s)** not yet matched to a statement: {_sii_uf_list}. "
+                        "The broker sync also reports margin interest as a fee, so these may be "
+                        "margin interest, in which case the **charged** figure above is understated "
+                        "by them. If it's margin interest, importing that month's statement replaces "
+                        "it automatically; if it's still listed here after importing, it's a genuine "
+                        "fee (check the possible-duplicate list below)."
+                    )
                 if not db.is_readonly():
                     st.caption(
                         "💡 Need this YTD figure broken out by tax year instead, "
@@ -36766,10 +36817,12 @@ elif page == "💰 Account":
                 if not db.is_readonly():
                     with st.expander("📥 Import from Robinhood Statement"):
                         st.caption(
-                            "Robinhood's SnapTrade connector does not relay dividend / "
-                            "interest / fee events. Download your account statement from "
-                            "Robinhood (Account → Statements → Export as CSV), then upload "
-                            "it here. **Re-uploading a full YTD file is safe** — existing "
+                            "The broker sync picks up most dividend / interest / fee "
+                            "events, but labels some differently (margin interest arrives "
+                            "as a fee) and can miss others. Your Robinhood statement is the "
+                            "source of truth: download it (Account → Statements → Export as "
+                            "CSV) and upload it here, and its rows replace any matching "
+                            "broker-synced ones. **Re-uploading a full YTD file is safe** — existing "
                             "rows are skipped automatically, so no need to track which "
                             "months you've already imported."
                         )

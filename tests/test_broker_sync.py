@@ -1160,3 +1160,131 @@ def test_write_side_suppresses_live_fee_matching_existing_csv_mint_row():
     )
     assert out["income_events"] == []
     assert out["ignored"].get("FEE (cross-path duplicate)") == 1
+
+
+# ─── Split dividend: ONE live DIVIDEND == statement CDIV + MDIV ─────────────
+# Real 2026-09 NVDA case: live sync reported $1.25 on 9/11; the statement
+# split it into CDIV $0.75 + MDIV $0.50 on 9/14 (shares lent against margin).
+
+def _nvda_live(amount=1.25, date="2026-09-11", txn_id="live-nvda"):
+    return _ev("NVDA", "dividend", "DIVIDEND", amount, date, txn_id)
+
+
+def _nvda_cdiv(amount=0.75, date="2026-09-14"):
+    return _ev("NVDA", "dividend", "CDIV", amount, date, f"csv:{date}:CDIV:NVDA:{round(amount * 100)}")
+
+
+def _nvda_mdiv(amount=0.50, date="2026-09-14"):
+    return _ev("NVDA", "dividend", "MDIV", amount, date, f"csv:{date}:MDIV:NVDA:{round(amount * 100)}")
+
+
+def test_split_dividend_live_row_dropped_statement_parts_kept():
+    out = bs.dedupe_income_events([_nvda_live(), _nvda_cdiv(), _nvda_mdiv()])
+    assert sorted(e["raw_code"] for e in out) == ["CDIV", "MDIV"]
+    assert round(sum(e["amount"] for e in out), 2) == 1.25
+
+
+def test_split_dividend_order_does_not_matter():
+    out = bs.dedupe_income_events([_nvda_cdiv(), _nvda_mdiv(), _nvda_live()])
+    assert sorted(e["raw_code"] for e in out) == ["CDIV", "MDIV"]
+
+
+def test_split_dividend_sum_mismatch_by_one_cent_is_kept():
+    out = bs.dedupe_income_events([_nvda_live(amount=1.26), _nvda_cdiv(), _nvda_mdiv()])
+    assert len(out) == 3
+
+
+def test_split_dividend_outside_date_tolerance_is_kept():
+    far = (pd.Timestamp("2026-09-14") + pd.Timedelta(days=INCOME_EVENT_DEDUP_DATE_TOL_DAYS + 1)).date().isoformat()
+    out = bs.dedupe_income_events([_nvda_live(), _nvda_cdiv(), _nvda_mdiv(date=far)])
+    assert len(out) == 3
+
+
+def test_two_cash_dividends_never_sum_to_a_split_match():
+    """Only the cash + manufactured shape qualifies — two unrelated CDIV rows
+    that happen to add up must not erase a real live dividend."""
+    out = bs.dedupe_income_events([_nvda_live(), _nvda_cdiv(0.75), _nvda_cdiv(0.50, "2026-09-13")])
+    assert len(out) == 3
+
+
+def test_split_dividend_needs_statement_parts_not_live_parts():
+    live_cdiv_like = _ev("NVDA", "dividend", "DIVIDEND", 0.75, "2026-09-14", "live-a")
+    live_mdiv_like = _ev("NVDA", "dividend", "SUBSTITUTE_DIVIDEND", 0.50, "2026-09-14", "live-b")
+    out = bs.dedupe_income_events([_nvda_live(), live_cdiv_like, live_mdiv_like])
+    assert len(out) == 3
+
+
+def test_split_dividend_different_ticker_is_kept():
+    other = _ev("AMD", "dividend", "DIVIDEND", 1.25, "2026-09-11", "live-amd")
+    out = bs.dedupe_income_events([other, _nvda_cdiv(), _nvda_mdiv()])
+    assert len(out) == 3
+
+
+def test_one_split_pair_explains_only_one_live_row():
+    # 9/11 and 9/17 are too far apart to be 1:1 duplicates of each other, but
+    # both sit within tolerance of the 9/14 statement pair.
+    out = bs.dedupe_income_events([
+        _nvda_live(txn_id="live-1"), _nvda_live(date="2026-09-17", txn_id="live-2"),
+        _nvda_cdiv(), _nvda_mdiv(),
+    ])
+    assert len(out) == 3
+    assert sum(1 for e in out if e["raw_code"] == "DIVIDEND") == 1
+
+
+def test_statement_row_used_by_a_1to1_match_is_not_reused_as_a_split_part():
+    """Read-time must consume like write-time: the CDIV that already
+    explained a live $0.75 can't also help explain a live $1.25."""
+    live_small = _ev("NVDA", "dividend", "DIVIDEND", 0.75, "2026-09-13", "live-small")
+    out = bs.dedupe_income_events([live_small, _nvda_live(), _nvda_cdiv(), _nvda_mdiv()])
+    assert sorted(e["snaptrade_txn_id"] for e in out) == sorted(
+        ["live-nvda", _nvda_cdiv()["snaptrade_txn_id"], _nvda_mdiv()["snaptrade_txn_id"]]
+    )
+
+
+def test_one_to_one_match_still_takes_priority_over_split():
+    """A live row equal to a single statement row pairs 1:1; it must not also
+    consume an unrelated cash+manufactured pair."""
+    single = _nvda_cdiv(1.25, "2026-09-12")
+    out = bs.dedupe_income_events([_nvda_live(), single, _nvda_cdiv(), _nvda_mdiv()])
+    assert len(out) == 3
+    assert "DIVIDEND" not in {e["raw_code"] for e in out}
+
+
+def test_write_side_suppresses_live_dividend_matching_statement_split():
+    out = bs.classify_transactions(
+        [_txn("DIVIDEND", 1.25, trade_date="2026-09-11", ticker="NVDA", txn_id="live-nvda")],
+        pd.DataFrame(),
+        existing_income_events=[_nvda_cdiv(), _nvda_mdiv()],
+    )
+    assert out["income_events"] == []
+    assert out["ignored"].get("DIVIDEND (cross-path split duplicate)") == 1
+
+
+def test_write_side_split_parts_are_consumed():
+    out = bs.classify_transactions(
+        [
+            _txn("DIVIDEND", 1.25, trade_date="2026-09-11", ticker="NVDA", txn_id="live-a"),
+            _txn("DIVIDEND", 1.25, trade_date="2026-09-11", ticker="NVDA", txn_id="live-b"),
+        ],
+        pd.DataFrame(),
+        existing_income_events=[_nvda_cdiv(), _nvda_mdiv()],
+    )
+    assert len(out["income_events"]) == 1
+
+
+def test_write_side_live_rows_are_never_split_parts():
+    existing = [
+        _ev("NVDA", "dividend", "DIVIDEND", 0.75, "2026-09-14", "live-a"),
+        _ev("NVDA", "dividend", "SUBSTITUTE_DIVIDEND", 0.50, "2026-09-14", "live-b"),
+    ]
+    out = bs.classify_transactions(
+        [_txn("DIVIDEND", 1.25, trade_date="2026-09-11", ticker="NVDA", txn_id="live-c")],
+        pd.DataFrame(),
+        existing_income_events=existing,
+    )
+    assert len(out["income_events"]) == 1
+
+
+def test_freshness_counts_split_matched_live_row_as_reconciled():
+    out = bs.reconciliation_freshness([_nvda_live(), _nvda_cdiv(), _nvda_mdiv()])
+    assert out["unreconciled_live_count"] == 0
