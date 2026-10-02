@@ -203,6 +203,7 @@ python-lab/
     ├── earnings_move_forecast.py   Predictive Modeling Phase 2 earnings-move-magnitude helpers (F-234) — resolve_upcoming_earnings, trailing-K median baseline, split-safe realized-move calc, write-eligibility + reschedule detection; quarantined to 🔬 Model Lab
     ├── prediction_scoring.py       Predictive Modeling harness (F-234) — model vs persistence baseline, honest signal grading
     ├── benchmark_mirror.py         Benchmark Mirror shadow portfolio (SPY/QQQ comparison) — money-weighted fair active-vs-passive compare
+    ├── r_multiple.py               R-Multiple measurement — engine-reconstructed vs owner-declared risk per closed episode
     ├── portfolio_qa.py             Portfolio Q&A retrospective Q&A over trade history (💬 Ask tab); parse_question + lookup + narrate_answer
     ├── severity.py                 Canonical severity DISPLAY vocabulary (ACT_NOW / ELEVATED / WATCH / STEADY; display-only, no gate tokens)
     ├── headless_alert_engine.py    Headless alert computation for the cron: protective signals (stops / EXIT / risk-off), reactive pullback, EOD snapshot
@@ -3434,8 +3435,8 @@ equivalence test (`test_recs_delegation_equals_direct_readout_call`/
 the same filtered input and asserts identical output, so this page cannot silently drift from
 🎖️ Recommendation Outcomes / 🛑 The Road Not Taken.
 
-**Six independent sections** (`return_vs_spy`, `trade_behavior`, `recs`, `gates`,
-`leverage_drift`, `risk_drift`), each its own `{"status": "offline"|"empty"|"ok", ...}` —
+**Seven independent sections** (`return_vs_spy`, `trade_behavior`, `recs`, `gates`,
+`leverage_drift`, `risk_drift`, `risk_discipline`), each its own `{"status": "offline"|"empty"|"ok", ...}` —
 `"offline"` iff its underlying loader argument was `None`, `"empty"` iff loaded but nothing falls
 in the window, `"ok"` otherwise. One section's loader failing never forces another section
 offline (tested directly).
@@ -3543,6 +3544,15 @@ start-vs-end delta directly off `account_daily_snapshots`' already-recorded (F-2
 `risk_drift` discloses `corr_coverage_n` at BOTH period endpoints so a listwise sample-size shift
 on the correlation figure is never misread as a real diversification change.
 
+**`risk_discipline`** (F-286, engine lens only — declared lens too new to aggregate): measures
+realized P&L against planned risk per closed episode. Reads from `r_multiple.episode_r_multiple()`,
+which reconstructs the app's own ATR-based entry stop from price history (no lookahead, ≥15-bar
+floor for a genuine ATR(14)). Below `PROTECT_TRACK_MIN_CALLS` resolvable episodes: per-episode
+detail only, no aggregate. At/above floor: adds `mean_r`, `median_r`, `n_losers_worse_than_1r`,
+`pct_losers_worse_than_1r` (descriptive only, explicitly NOT a "stop not honored" classification
+— that needs owner-calibrated constants gated on data maturity). Renders as a 7th section on the
+📄 Reports page with a one-line caption per closed episode on the 🧾 Prior Trades card.
+
 CSV/markdown export (`format_review_csv`/`format_review_markdown`) mirrors `tax_report.py`'s
 formatters. Explicitly checked for, and clear of, the `$`-pairing LaTeX rendering bug that shipped
 in Phase 1's Tax Report the same day (memory `feedback_streamlit_renderer_mismatch`) — every
@@ -3552,6 +3562,21 @@ render markdown/LaTeX.
 No new constant, no `db.py`/`constants.py` touch, not a `_GATE_FILES` member — same footing as
 Phase 1: no mechanical Opus-review trigger, but a voluntary pass was run given the framing risk of
 a wrong return-vs-SPY comparison: SHIP, 0 blocking. Design: `docs/plans/reports.md`.
+
+### `stock_analyzer/r_multiple.py`
+
+Measures a closed trade's realized P&L against the planned risk. Pure measurement module, no
+Streamlit, no DB calls, no gate/recommendation dependency. Two never-blended lenses: **engine**
+(reconstructs ATR-based entry stop from historical price data, no lookahead, requires ≥15 prior
+bars for a genuine ATR(14), never uses `risk._atr_value`'s mean-High-Low fallback) and **declared**
+(reads a per-leg risk plan attached at BUY time). All-or-nothing per episode: any unresolvable leg
+yields `r_multiple=None` with a reason, never a partial number. Four core functions:
+`engine_reference_risk()`, `build_risk_plan()`, `episode_r_multiple()`, `add_flags()`. A companion
+read-only script `scripts/r_multiple_legacy_report.py` (owner-run with their own Supabase
+credentials, modeled on `scripts/exit_ladder_replay.py`) produces full historical reporting. No new
+`constants.py` value — reuses `ATR_STOP_MULT` and `PROTECT_TRACK_MIN_CALLS`. Opus reviewer: SHIP, 0
+blocking (one real finding fixed same commit: the "never blends" guarantee was accidental, hardened
+to be explicit). Full suite 6823 passed.
 
 ---
 
