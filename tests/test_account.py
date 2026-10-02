@@ -82,7 +82,7 @@ def test_ratio_just_below_floor_returns_message():
     net = gross * (_THIN_NET_EQUITY_RATIO_PCT / 100.0) - 1.0
     msg = thin_equity_caveat(net, gross)
     assert msg is not None
-    assert "$10,000" in msg
+    assert "\\$10,000" in msg
     assert "%" in msg
 
 

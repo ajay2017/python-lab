@@ -355,8 +355,8 @@ def thin_equity_caveat(net_equity: float | None, gross_book: float | None) -> st
     if ratio_pct >= _THIN_NET_EQUITY_RATIO_PCT:
         return None
     return (
-        f"⚠️ Net equity (${net_equity:,.0f}) is only {ratio_pct:.0f}% of your gross "
-        f"stock book (${gross_book:,.0f}) — ordinary day-to-day price moves translate "
+        f"⚠️ Net equity (\\${net_equity:,.0f}) is only {ratio_pct:.0f}% of your gross "
+        f"stock book (\\${gross_book:,.0f}) — ordinary day-to-day price moves translate "
         "into much bigger swings in the % figures above. Lean on the dollar gap, not "
         "the annualized rate, until this ratio recovers."
     )
