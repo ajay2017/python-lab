@@ -321,12 +321,23 @@ def _build_episode(
     # ── Fills (chronological) — includes trigger_type per fill for chart markers
     fills: list[dict] = []
     for b in buys:
+        # Each BUY leg's OWN declared risk plan, from that leg's OWN row's
+        # decision_context — never the episode-level `context` (parsed only
+        # from `opening_row` above), which would wrongly hand an ADD leg the
+        # first leg's plan instead of its own (r_multiple.py's own design:
+        # "An ADD... gets its own fresh plan here, never a prior leg's").
+        # Same safe-parse helper as the episode-level `context` field; fails
+        # open to None on any missing/malformed decision_context or absent
+        # risk_plan sub-key, never raises.
+        b_context = _parse_context(_row_get(b["row"], "decision_context"))
+        b_risk_plan = b_context.get("risk_plan") if isinstance(b_context, dict) else None
         fills.append({
             "date":         b["date"],
             "action":       "BUY",
             "shares":       b["shares"],
             "price":        b["price"],
             "trigger_type": _trigger_type_from_row(b["row"]),
+            "risk_plan":    b_risk_plan,
         })
     for s in sells:
         fills.append({

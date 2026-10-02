@@ -3390,7 +3390,19 @@ def _load_recommendations_all_pages(start_date=None, end_date=None) -> list[dict
     then pages through every row via `.range()` (mirrors
     load_model_predictions's loop) instead of a single unbounded `.execute()`.
     Raises on failure -- callers keep their own distinct except-branch
-    contracts (empty DataFrame vs None)."""
+    contracts (empty DataFrame vs None).
+
+    Orders by (surfaced_at desc, id desc) -- 2026-10-02 review finding (H1):
+    `surfaced_at` defaults to now() server-side (see its column default
+    above), so every row written by one save_recommendations() batch call
+    shares an identical timestamp, and `.range()` re-executes the query per
+    page with no guaranteed stable tie order across those separate
+    executions -- the same non-unique-sort-key class already fixed for
+    daily_snapshots/analyst_coverage/rec_events (commit 0f583fe). `id` is
+    the table's own auto-generated primary key (see _REC_COLS above), always
+    unique, so it's a genuine total order alongside surfaced_at -- this
+    changes tie-breaking only among rows sharing the exact same surfaced_at,
+    never reorders rows with distinct timestamps."""
     page_size = _RECOMMENDATIONS_PAGE_SIZE
     all_rows: list = []
     start = 0
@@ -3406,7 +3418,10 @@ def _load_recommendations_all_pages(start_date=None, end_date=None) -> list[dict
         if end_date is not None:
             ed = end_date.isoformat() if hasattr(end_date, "isoformat") else str(end_date)[:10]
             q = q.lte("rec_date", ed)
-        page = q.order("surfaced_at", desc=True).range(start, start + page_size - 1).execute().data
+        page = (
+            q.order("surfaced_at", desc=True).order("id", desc=True)
+            .range(start, start + page_size - 1).execute().data
+        )
         if not page:
             break
         all_rows.extend(page)

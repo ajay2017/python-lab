@@ -7,10 +7,18 @@ Two lenses, never blended:
                history alone (no DDL, no captured data needed). Available
                today.
   "declared" — the owner's own declared stop at entry time, read from a
-               per-leg risk-plan attached to the episode by a capture step
-               that does not exist yet (a future chunk). Until that capture
-               ships, this lens always resolves to "no plan" — this module
-               never invents a declared stop.
+               per-leg risk-plan attached to each BUY fill. Capture (chunk 3,
+               `declared_entry_risk_plan`/`app.py`'s BUY-time write) and the
+               wiring that carries it onto each leg (`ticker_history.py`'s
+               `_build_episode`, fixed 2026-10-02 — audit finding H2; it
+               previously never included the field, so this lens could never
+               resolve regardless of captured data) are both done. No
+               fabrication either way: a leg with no captured plan still
+               resolves to `None`, this module never invents a declared stop.
+               **Not yet surfaced anywhere in the UI** (both `app.py` and
+               `performance_review.py` currently call this with
+               `lens="engine"` only) — that's a display decision, not a data
+               gap.
 
 This is a MEASUREMENT module only: it computes an R-multiple and a few
 factual flags, nothing else. It does not gate, score, recommend, or persist
@@ -341,8 +349,10 @@ def episode_r_multiple(episode: dict, lens: str, ohlc_df: Any) -> dict:
                         EACH buy leg (as-of that leg's own trade date), sums
                         risk dollars across legs.
     lens = "declared" — expects per-leg risk-plan dicts already attached to
-                        each buy leg (future capture chunk's job — not wired
-                        yet, so this always resolves to "no plan" today).
+                        each buy leg (capture + wiring both shipped as of
+                        2026-10-02 — see module docstring; a leg with no
+                        captured plan still resolves to "no plan" honestly,
+                        never fabricated).
 
     All-or-nothing: partial leg coverage NEVER produces a partial/approximate
     number — if any leg's risk can't be resolved, the whole episode's
@@ -386,7 +396,10 @@ def episode_r_multiple(episode: dict, lens: str, ohlc_df: Any) -> dict:
         plan: dict | None = None
         if lens == "declared":
             # Not invented here — only reused if a capture step already
-            # attached one to this leg (future chunk; always absent today).
+            # attached one to this leg. Capture (app.py's BUY-time write)
+            # and the wiring onto each fill (ticker_history._build_episode,
+            # fixed 2026-10-02) are both live; this still reads None for any
+            # leg where no plan was actually captured.
             attached = b.get("risk_plan")
             if isinstance(attached, dict) and attached.get("source") == "declared":
                 rd = _f(attached.get("risk_dollars"))

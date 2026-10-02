@@ -16,6 +16,7 @@ import pytest
 from stock_analyzer.ticker_history import (
     build_ticker_history, build_pnl_series, trades_fingerprint, chart_start_gap,
 )
+from stock_analyzer import r_multiple as _r_multiple
 
 pytestmark = pytest.mark.fast
 
@@ -960,6 +961,104 @@ def test_context_passed_as_dict():
     result = build_ticker_history(_df(rows), "AAA",
                                   today=date(2026, 3, 1))
     assert result["episodes"][0]["context"] == ctx
+
+
+# ─── R-Multiple chunk 3 wiring (2026-10-02 review H2 fix) ─────────────────────
+# Audit finding: every existing declared-lens test in test_r_multiple.py
+# builds its `episode`/`fills` dict BY HAND, which trivially includes a
+# "risk_plan" key the real producer (_build_episode, here) never actually
+# set -- these tests instead go through the REAL build_ticker_history()
+# producer so a regression here is actually caught.
+
+def test_buy_fill_carries_its_own_declared_risk_plan_and_declared_lens_resolves():
+    """A BUY row's decision_context.risk_plan reaches the fill dict, and
+    r_multiple.episode_r_multiple(lens='declared') resolves a real R-multiple
+    from it -- not the 'no declared risk plan captured for any leg' failure
+    this bug produced on every episode, permanently, before the fix."""
+    plan = {"risk_dollars": 50.0, "stop_price": 95.0, "source": "declared"}
+    rows = [
+        _trade_row(id_=1, action="BUY",  shares=10.0, price=100.0,
+                   traded_at="2026-01-05T09:30:00Z",
+                   decision_context={"risk_plan": plan}),
+        _trade_row(id_=2, action="SELL", shares=10.0, price=110.0,
+                   traded_at="2026-02-15T15:00:00Z", realized_pnl=100.0),
+    ]
+    result = build_ticker_history(_df(rows), "AAA", today=date(2026, 3, 1))
+    ep = result["episodes"][0]
+    buy_fill = next(f for f in ep["fills"] if f["action"] == "BUY")
+    assert buy_fill["risk_plan"] == plan
+
+    res = _r_multiple.episode_r_multiple(ep, lens="declared", ohlc_df=None)
+    assert res["r_multiple"] == pytest.approx(2.0)   # 100 realized / 50 risked
+    assert res["legs_planned"] == 1
+    assert res["legs_total"]   == 1
+    assert "reason" not in res
+
+
+def test_add_leg_carries_its_own_risk_plan_not_the_first_legs():
+    """An ADD (a second BUY on an already-held ticker) must carry its OWN
+    decision_context.risk_plan on its own fill -- never the opening leg's
+    plan, which episode-level `context` (parsed only from opening_row) would
+    wrongly supply if reused here."""
+    plan_1 = {"risk_dollars": 50.0, "stop_price": 95.0,  "source": "declared"}
+    plan_2 = {"risk_dollars": 20.0, "stop_price": 100.0, "source": "declared"}
+    rows = [
+        _trade_row(id_=1, action="BUY",  shares=10.0, price=100.0,
+                   traded_at="2026-01-05T09:30:00Z",
+                   decision_context={"risk_plan": plan_1}),
+        _trade_row(id_=2, action="BUY",  shares=5.0, price=105.0,
+                   traded_at="2026-01-20T09:30:00Z",
+                   decision_context={"risk_plan": plan_2}),
+        _trade_row(id_=3, action="SELL", shares=15.0, price=120.0,
+                   traded_at="2026-02-15T15:00:00Z", realized_pnl=275.0),
+    ]
+    result = build_ticker_history(_df(rows), "AAA", today=date(2026, 3, 1))
+    ep = result["episodes"][0]
+    buy_fills = sorted((f for f in ep["fills"] if f["action"] == "BUY"),
+                        key=lambda f: f["date"])
+    assert len(buy_fills) == 2
+    assert buy_fills[0]["risk_plan"] == plan_1
+    assert buy_fills[1]["risk_plan"] == plan_2
+    assert buy_fills[0]["risk_plan"] != buy_fills[1]["risk_plan"]
+
+    res = _r_multiple.episode_r_multiple(ep, lens="declared", ohlc_df=None)
+    assert res["legs_planned"] == 2
+    assert res["legs_total"]   == 2
+    assert res["r_multiple"] == pytest.approx(275.0 / 70.0)   # 50 + 20 risked
+
+
+def test_buy_fill_risk_plan_is_none_when_no_plan_was_captured():
+    """A BUY row with no decision_context, or one with a decision_context
+    that carries no risk_plan sub-key, must report risk_plan=None -- never
+    fabricate a plan where none was captured -- and the declared lens must
+    still correctly report 'no declared risk plan captured for any leg'."""
+    rows = [
+        _trade_row(id_=1, action="BUY",  shares=10.0, price=100.0,
+                   traded_at="2026-01-05T09:30:00Z",
+                   decision_context=None),
+        _trade_row(id_=2, action="SELL", shares=10.0, price=110.0,
+                   traded_at="2026-02-15T15:00:00Z", realized_pnl=100.0),
+    ]
+    result = build_ticker_history(_df(rows), "AAA", today=date(2026, 3, 1))
+    ep = result["episodes"][0]
+    buy_fill = next(f for f in ep["fills"] if f["action"] == "BUY")
+    assert buy_fill["risk_plan"] is None
+
+    res = _r_multiple.episode_r_multiple(ep, lens="declared", ohlc_df=None)
+    assert res["r_multiple"] is None
+    assert res["reason"] == "no declared risk plan captured for any leg"
+
+    # decision_context present but missing the risk_plan sub-key entirely.
+    rows2 = [
+        _trade_row(id_=1, action="BUY",  shares=10.0, price=100.0,
+                   traded_at="2026-01-05T09:30:00Z",
+                   decision_context={"macro": "expansion"}),
+        _trade_row(id_=2, action="SELL", shares=10.0, price=110.0,
+                   traded_at="2026-02-15T15:00:00Z", realized_pnl=100.0),
+    ]
+    result2 = build_ticker_history(_df(rows2), "AAA", today=date(2026, 3, 1))
+    buy_fill2 = next(f for f in result2["episodes"][0]["fills"] if f["action"] == "BUY")
+    assert buy_fill2["risk_plan"] is None
 
 
 def test_vs_spy_pct_computes_correctly_with_spy():
