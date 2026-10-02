@@ -71,6 +71,21 @@ behavioral measures with their own per-trade maturity floors, not sub-window
 measures; period-scoping them would either mislead or just re-show a
 permanent "building" band.
 
+`risk_discipline` (R-multiple chunks 4/5, 2026-10-02): for every CLOSED
+round-trip episode EXITING inside the window, delegates to
+`ticker_history.build_ticker_history` (episode reconstruction) and
+`r_multiple.episode_r_multiple`/`add_flags` ("engine" lens only — the
+"declared" lens is real as of chunk 3 today but has far too few matured
+closed episodes with a captured declared stop to be worth aggregating yet;
+not forced to show). Below `risk_min_calls` (D6: the caller passes
+`PROTECT_TRACK_MIN_CALLS`, reused rather than inventing a second constant
+for the same "not enough data to mean anything" concept) RESOLVABLE
+episodes, only a coverage line + the per-episode list are produced — no
+mean/median/tail-loss aggregate. The count of losing episodes worse than
+-1.0R is purely descriptive, NEVER a "stop not honored"/"stop too wide"
+classification — that call is explicitly out of scope, deferred to a later
+phase gated on owner-decided constants not yet set.
+
 Pure — no Streamlit, no DB, no network I/O. Every dependency (trades, rec
 events, gate suppressions, snapshot frames, SPY history, a historical-close
 fetcher, the protective-call ticker set) is injected by the `app.py` caller.
@@ -78,11 +93,11 @@ fetcher, the protective-call ticker set) is injected by the `app.py` caller.
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Callable
+from typing import Any, Callable
 
 import pandas as pd
 
-from stock_analyzer import gate_ledger_readout, rec_events_readout
+from stock_analyzer import gate_ledger_readout, r_multiple, rec_events_readout, ticker_history
 from stock_analyzer.account import money_weighted_return
 from stock_analyzer.benchmark_mirror import price_on_or_before
 from stock_analyzer.constants import ALERT_EOD_HOUR_ET, NYSE_HOLIDAYS
@@ -405,6 +420,115 @@ def _build_gates_section(
     return {"status": "ok", "by_gate": graded, "enriched_rows": enriched}
 
 
+# ── risk_discipline (R-multiple, chunks 4/5) ────────────────────────────────
+
+def _build_risk_discipline_section(
+    trades: "pd.DataFrame | None",
+    *,
+    period_start: date,
+    period_end: date,
+    today: date,
+    ohlc_by_ticker: "dict[str, Any] | None",
+    risk_min_calls: int,
+) -> dict:
+    """R-multiple (engine lens only, D6/D7) for every CLOSED round-trip
+    episode EXITING inside `[period_start, period_end]` (inclusive both
+    ends — same convention as every other period-scoped section here).
+
+    This function's only new logic is: enumerate the distinct tickers that
+    appear in `trades`, rebuild each ticker's own episode history via
+    `ticker_history.build_ticker_history` (never reimplemented), and filter
+    the CLOSED episodes to this window by `exit_date` — never by
+    `entry_date`, so an episode opened before the window but closed inside
+    it is still counted here (mirrors `_windowed_ext_df`'s own output-side
+    filter). Every R-multiple/flag number itself comes straight from
+    `r_multiple.episode_r_multiple`/`add_flags`.
+
+    `ohlc_by_ticker` is a caller-injected `{ticker: OHLC DataFrame}` map — a
+    ticker missing from it (or mapped to `None`) simply makes every one of
+    that ticker's episodes resolve to "no R" via `episode_r_multiple`'s own
+    None-safe contract (never an exception, never a fabricated number).
+
+    Status in `{"offline", "empty", "ok"}`. `"offline"` only when `trades`
+    itself is `None` (the journal couldn't be read). A loaded-but-thin
+    period (no closed exits in the window) is `"empty"`, never `"offline"`.
+
+    Per D6 (owner decision, 2026-10-02): below `risk_min_calls` RESOLVABLE
+    episodes, only a coverage line + the per-episode list are meaningful —
+    `mean_r`/`median_r`/the tail-loss count all stay `None` and
+    `below_floor` is `True`, so callers show descriptive detail only, no
+    aggregate. The tail-loss count, when shown, is purely descriptive —
+    never a "stop not honored" classification (explicitly out of scope).
+    """
+    if trades is None:
+        return {"status": "offline", "episodes": [], "n_total": 0, "n_resolvable": 0}
+
+    if trades.empty or "ticker" not in trades.columns:
+        return {"status": "empty", "episodes": [], "n_total": 0, "n_resolvable": 0}
+
+    ohlc_by_ticker = ohlc_by_ticker or {}
+    tickers = sorted(
+        t for t in trades["ticker"].astype(str).str.upper().str.strip().unique() if t
+    )
+
+    windowed: "list[dict]" = []
+    for ticker in tickers:
+        hist = ticker_history.build_ticker_history(trades, ticker, today=today)
+        if hist is None:
+            continue
+        for ep in hist["episodes"]:
+            if ep.get("status") != "closed":
+                continue
+            exit_d = _to_date(ep.get("exit_date"))
+            if exit_d is None or not (period_start <= exit_d <= period_end):
+                continue
+            r_res = r_multiple.episode_r_multiple(
+                ep, lens="engine", ohlc_df=ohlc_by_ticker.get(ticker)
+            )
+            flags = r_multiple.add_flags(ep)
+            windowed.append({
+                "ticker":             ticker,
+                "exit_date":          exit_d,
+                "realized_pnl":       _opt(ep.get("realized_pnl")),
+                "r_multiple":         r_res.get("r_multiple"),
+                "reason":             r_res.get("reason"),
+                "added_while_losing": bool(flags.get("added_while_losing", False)),
+            })
+
+    if not windowed:
+        return {"status": "empty", "episodes": [], "n_total": 0, "n_resolvable": 0}
+
+    n_total = len(windowed)
+    r_values = [e["r_multiple"] for e in windowed if e["r_multiple"] is not None]
+    n_resolvable = len(r_values)
+    below_floor = n_resolvable < risk_min_calls
+
+    out = {
+        "status":                   "ok",
+        "episodes":                 windowed,
+        "n_total":                  n_total,
+        "n_resolvable":             n_resolvable,
+        "below_floor":              below_floor,
+        "mean_r":                   None,
+        "median_r":                 None,
+        "n_losers_worse_than_1r":   None,
+        "pct_losers_worse_than_1r": None,
+    }
+    if not below_floor:
+        sorted_r = sorted(r_values)
+        mid = len(sorted_r) // 2
+        median_r = (sorted_r[mid] if len(sorted_r) % 2 == 1
+                    else (sorted_r[mid - 1] + sorted_r[mid]) / 2)
+        losers_worse = sum(1 for r in r_values if r < -1.0)
+        out.update({
+            "mean_r":                   round(sum(r_values) / n_resolvable, 2),
+            "median_r":                 round(median_r, 2),
+            "n_losers_worse_than_1r":   losers_worse,
+            "pct_losers_worse_than_1r": round(losers_worse / n_resolvable * 100, 1),
+        })
+    return out
+
+
 # ── main entry point ─────────────────────────────────────────────────────────
 
 def build_review(
@@ -434,6 +558,8 @@ def build_review(
     gate_horizon_days: int,
     composite_buy: float,
     gate_ids: "tuple[str, ...]",
+    ohlc_by_ticker: "dict[str, Any] | None",
+    risk_min_calls: int,
 ) -> "dict | None":
     """Assemble a point-in-time Performance Review for `[period_start,
     period_end]` (both inclusive, ET-based where the underlying data is a
@@ -441,11 +567,18 @@ def build_review(
 
     Returns `None` only when `period_start > period_end` (an invalid range).
     Otherwise always returns a dict with `period_start`, `period_end`, and
-    six sections — `return_vs_spy`, `trade_behavior`, `recs`, `gates`,
-    `leverage_drift`, `risk_drift` — each independently carrying its own
-    `status` in `{"offline","empty","ok"}`. One section reading `"offline"`
-    (its underlying loader arg was `None`) never forces another section
-    offline — every section is graded from its OWN inputs only.
+    seven sections — `return_vs_spy`, `trade_behavior`, `recs`, `gates`,
+    `leverage_drift`, `risk_drift`, `risk_discipline` — each independently
+    carrying its own `status` in `{"offline","empty","ok"}`. One section
+    reading `"offline"` (its underlying loader arg was `None`) never forces
+    another section offline — every section is graded from its OWN inputs
+    only.
+
+    `ohlc_by_ticker`/`risk_min_calls` feed `risk_discipline` only (see that
+    section's own docstring above) — no default here, deliberately: this
+    module never hardcodes a policy threshold, even as a fallback value, so
+    the caller must pass the real constant (D6: `PROTECT_TRACK_MIN_CALLS`)
+    explicitly, same as every other `*_min_calls` parameter above.
 
     All I/O is caller-injected; this function does no loading of its own.
     """
@@ -583,6 +716,13 @@ def build_review(
         period_start, period_end, spy_prices_by_date,
     )
 
+    # ── risk_discipline (R-multiple, chunks 4/5, 2026-10-02) ────────────────
+    risk_discipline = _build_risk_discipline_section(
+        trades,
+        period_start=period_start, period_end=period_end, today=today,
+        ohlc_by_ticker=ohlc_by_ticker, risk_min_calls=risk_min_calls,
+    )
+
     return {
         "period_start": period_start,
         "period_end": period_end,
@@ -594,6 +734,7 @@ def build_review(
         "gates": gates,
         "leverage_drift": leverage_drift,
         "risk_drift": risk_drift,
+        "risk_discipline": risk_discipline,
     }
 
 
@@ -864,9 +1005,15 @@ def _drift_section(df: "pd.DataFrame | None", start: date, end: date, cols: "tup
 # ── export formatters ────────────────────────────────────────────────────────
 
 def format_review_csv(review: "dict | None") -> pd.DataFrame:
-    """One row per fired call — recs + gates combined, flattened for CSV
-    export. Empty/offline sections contribute no rows (never a crash)."""
-    cols = ["section", "type_id", "ticker", "date", "status", "acted", "alpha_pct", "note"]
+    """One row per fired call — recs + gates + risk_discipline episodes
+    combined, flattened for CSV export. Empty/offline sections contribute no
+    rows (never a crash). `r_multiple`/`added_while_losing` are dedicated
+    columns (not crammed into `alpha_pct`, which is a different quantity —
+    a percentage, not a risk ratio) — every row carries all columns, `None`
+    on whichever ones don't apply to that row's section, so the schema is
+    uniform across sections."""
+    cols = ["section", "type_id", "ticker", "date", "status", "acted", "alpha_pct",
+            "r_multiple", "added_while_losing", "note"]
     review = review or {}
     rows: "list[dict]" = []
 
@@ -885,6 +1032,8 @@ def format_review_csv(review: "dict | None") -> pd.DataFrame:
             "status":   r.get("status"),
             "acted":    r.get("acted"),
             "alpha_pct": alpha,
+            "r_multiple": None,
+            "added_while_losing": None,
             "note":     note,
         })
 
@@ -898,7 +1047,24 @@ def format_review_csv(review: "dict | None") -> pd.DataFrame:
             "status":   r.get("status"),
             "acted":    None,
             "alpha_pct": r.get("alpha_pct"),
+            "r_multiple": None,
+            "added_while_losing": None,
             "note":     "",
+        })
+
+    risk_discipline = review.get("risk_discipline", {})
+    for r in risk_discipline.get("episodes", []):
+        rows.append({
+            "section":  "risk_discipline",
+            "type_id":  "r_multiple_engine",
+            "ticker":   r.get("ticker"),
+            "date":     r.get("exit_date"),
+            "status":   "resolved" if r.get("r_multiple") is not None else "no_r",
+            "acted":    None,
+            "alpha_pct": None,
+            "r_multiple": r.get("r_multiple"),
+            "added_while_losing": r.get("added_while_losing"),
+            "note":     r.get("reason") or "",
         })
 
     if not rows:
@@ -1084,6 +1250,40 @@ def format_review_markdown(review: "dict | None") -> str:
                      f"{rd.get('avg_pairwise_corr_end')} (Δ {rd.get('avg_pairwise_corr_delta')}) "
                      f"— sample size {rd.get('corr_coverage_n_start')} → {rd.get('corr_coverage_n_end')} "
                      "observations; a shift here can reflect sample size, not just a real change.")
+    lines.append("")
+
+    # Risk Discipline (R-Multiple)
+    rk = review.get("risk_discipline", {})
+    lines.append("## Risk Discipline (R-Multiple)")
+    if rk.get("status") == "offline":
+        lines.append("_Offline — trade history could not be loaded._")
+    elif rk.get("status") == "empty":
+        lines.append("_No closed round trips exited in this period._")
+    else:
+        lines.append(
+            f"- R available for {rk.get('n_resolvable', 0)} of {rk.get('n_total', 0)} "
+            "closed episode(s) this period (engine-lens: the app's own ATR-based "
+            "entry stop, reconstructed from price history — your own declared stop "
+            "isn't tracked long enough yet to aggregate)."
+        )
+        if rk.get("below_floor"):
+            lines.append(
+                "  - Below the standalone evaluable floor — per-episode detail "
+                "only below, no mean/median shown."
+            )
+        else:
+            lines.append(f"  - Mean R: {rk['mean_r']:+.2f}   Median R: {rk['median_r']:+.2f}")
+            lines.append(
+                f"  - Losing episodes worse than -1.0R: {rk['n_losers_worse_than_1r']} of "
+                f"{rk['n_resolvable']} resolvable ({rk['pct_losers_worse_than_1r']:.0f}%) — "
+                "descriptive only, not a classification of whether the risk plan was "
+                "\"honored\"."
+            )
+        for ep in rk.get("episodes", []):
+            _r = ep.get("r_multiple")
+            _r_str = f"{_r:+.2f}R" if _r is not None else f"no R ({ep.get('reason', 'unknown')})"
+            _awl = " — added while losing" if ep.get("added_while_losing") else ""
+            lines.append(f"  - **{ep.get('ticker')}** {ep.get('exit_date')}: {_r_str}{_awl}")
     lines += [
         "",
         "---",

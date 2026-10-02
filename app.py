@@ -210,6 +210,7 @@ from stock_analyzer.constants import (
     REC_OUTCOME_MIN_TICKERS,
     REC_OUTCOME_HORIZON_TRADING_DAYS,
     REC_OUTCOME_ACTION_WINDOW_TRADING_DAYS,
+    PROTECT_TRACK_MIN_CALLS,
 )
 from stock_analyzer import gate_registry
 from stock_analyzer import etf_scoring
@@ -25331,6 +25332,33 @@ elif page == "📈 Analysis":
                                     f"{_pt_money(_pt_xa, signed=False)} exit."
                                 )
 
+                            # ── R-multiple (R-multiple chunks 4/5, 2026-10-02) ──
+                            # Awareness only — reuses the already-widened `_pt_px`
+                            # OHLC frame built above for the chart, never a second
+                            # fetch. Wrapped defensively: a malformed episode shape
+                            # must never break the rest of this card, just omit
+                            # this one line. "Engine" lens only (same reasoning as
+                            # performance_review.py's risk_discipline section —
+                            # the "declared" lens is too new to be worth showing).
+                            if not _pt_open:
+                                try:
+                                    from stock_analyzer.constants import ATR_STOP_MULT as _pt_atr_mult
+                                    _pt_rmul = _r_multiple.episode_r_multiple(
+                                        _pt_ep, lens="engine", ohlc_df=_pt_px
+                                    )
+                                    _pt_flags = _r_multiple.add_flags(_pt_ep)
+                                    _pt_r = _pt_rmul.get("r_multiple")
+                                    _pt_r_line = (
+                                        f"📐 {_pt_r:+.2f}R vs app's {_pt_atr_mult:g}×ATR entry stop"
+                                        if _pt_r is not None
+                                        else f"📐 no R: {_pt_rmul.get('reason', 'unknown')}"
+                                    )
+                                    if _pt_flags.get("added_while_losing"):
+                                        _pt_r_line += "  ·  ⚠️ added to this position while it was underwater"
+                                    st.caption(_pt_r_line)
+                                except Exception:
+                                    pass
+
                             # ── What you wrote at the time ──────────────────
                             _pt_j = _pt_ep.get("journal", {})
                             _pt_cx = _pt_ep.get("context")
@@ -37055,6 +37083,40 @@ elif page == "💰 Account":
                     # 🎖️ Recommendation Outcomes (risk snapshots/trades/
                     # protective tickers), app.py ~L32060-32101/~L32207-32277.
                     _perf_trades_df = db.load_trades_or_none()
+
+                    # R-multiple (chunks 4/5) OHLC lookup — only fetched for
+                    # tickers with a SELL inside this window (a cheap pre-
+                    # filter on `trades` itself, same ISO8601/ET parsing idiom
+                    # already used throughout app.py), never the whole trades
+                    # table's ticker universe. `performance_review.py` stays
+                    # pure/I-O-free (its own docstring's redline) — this is the
+                    # caller-injected `{ticker: OHLC DataFrame}` map its
+                    # `risk_discipline` section expects; a ticker missing here
+                    # (or mapped to None) just resolves to "no R" for that
+                    # ticker's episodes, never a crash. "5y" mirrors Prior
+                    # Trades' own widest period rung (app.py ~L24968) — a
+                    # pragmatic fetch-width choice, not a policy threshold.
+                    _perf_ohlc_by_ticker: dict = {}
+                    if _perf_trades_df is not None and not _perf_trades_df.empty:
+                        _perf_sell_tdf = _perf_trades_df.copy()
+                        _perf_sell_tdf["_et_date"] = (
+                            pd.to_datetime(_perf_sell_tdf["traded_at"], utc=True,
+                                           errors="coerce", format="ISO8601")
+                            .dt.tz_convert("America/New_York").dt.date
+                        )
+                        _perf_sell_mask = (
+                            _perf_sell_tdf["action"].astype(str).str.upper().str.contains("SELL")
+                            & _perf_sell_tdf["_et_date"].apply(
+                                lambda d: d is not None and _perf_start <= d <= _perf_end
+                            )
+                        )
+                        _perf_rd_tickers = sorted(set(
+                            _perf_sell_tdf.loc[_perf_sell_mask, "ticker"]
+                            .astype(str).str.upper().str.strip()
+                        ))
+                        for _perf_rd_t in _perf_rd_tickers:
+                            _perf_ohlc_by_ticker[_perf_rd_t] = _cached_ticker_history_px(_perf_rd_t, "5y")
+
                     # Same day-scoped, cross-page cache as 🎖️ Recommendation
                     # Outcomes / 🛑 The Road Not Taken use for this identical
                     # no-args full-table query — whichever surface renders
@@ -37157,6 +37219,8 @@ elif page == "💰 Account":
                         gate_horizon_days=GATE_LEDGER_HORIZON_TRADING_DAYS,
                         composite_buy=COMPOSITE_BUY,
                         gate_ids=tuple(gate_registry.GATE_IDS.keys()),
+                        ohlc_by_ticker=_perf_ohlc_by_ticker,
+                        risk_min_calls=PROTECT_TRACK_MIN_CALLS,
                     )
 
                     if _perf_review is None:
@@ -37492,6 +37556,51 @@ elif page == "💰 Account":
                                 f"{_prd.get('corr_coverage_n_end')} observations — a shift here can "
                                 "reflect sample size, not just a real diversification change."
                             )
+
+                        # ── Risk Discipline (R-Multiple, chunks 4/5) ─────
+                        st.markdown("#### 📐 Risk Discipline (R-Multiple)")
+                        _prk = _perf_review["risk_discipline"]
+                        if _prk["status"] == "offline":
+                            st.warning("⚪ Could not read trade history right now.")
+                        elif _prk["status"] == "empty":
+                            st.info("No closed round trips exited in this period.")
+                        else:
+                            st.caption(
+                                f"R available for {_prk['n_resolvable']} of {_prk['n_total']} "
+                                "closed episode(s) this period — measured against the app's own "
+                                "ATR-based entry stop (\"engine\" lens; your own declared stop "
+                                "isn't tracked long enough yet to aggregate)."
+                            )
+                            if _prk["below_floor"]:
+                                st.caption(
+                                    f"⚪ Below the {PROTECT_TRACK_MIN_CALLS}-call floor used "
+                                    "elsewhere in the app — descriptive per-episode detail only "
+                                    "below, no mean/median shown."
+                                )
+                            else:
+                                _prk_c1, _prk_c2, _prk_c3 = st.columns(3)
+                                _prk_c1.metric("Mean R", f"{_prk['mean_r']:+.2f}R")
+                                _prk_c2.metric("Median R", f"{_prk['median_r']:+.2f}R")
+                                _prk_c3.metric(
+                                    "Losers worse than -1.0R",
+                                    f"{_prk['n_losers_worse_than_1r']} of {_prk['n_resolvable']}",
+                                    help=(
+                                        f"{_prk['pct_losers_worse_than_1r']:.0f}% of resolvable "
+                                        "losing episodes — descriptive only, not a classification "
+                                        "of whether the risk plan was \"honored\"."
+                                    ),
+                                )
+                            with st.expander(f"Per-episode detail ({_prk['n_total']})"):
+                                for _prk_ep in _prk["episodes"]:
+                                    _prk_r = _prk_ep.get("r_multiple")
+                                    _prk_r_txt = (f"{_prk_r:+.2f}R" if _prk_r is not None
+                                                  else f"no R ({_prk_ep.get('reason', 'unknown')})")
+                                    _prk_awl = (" · ⚠️ added while losing"
+                                                if _prk_ep.get("added_while_losing") else "")
+                                    st.caption(
+                                        f"**{_prk_ep.get('ticker')}** · {_prk_ep.get('exit_date')} "
+                                        f"· {_prk_r_txt}{_prk_awl}"
+                                    )
 
                         # ── Export ─────────────────────────────────────────
                         _perf_csv = _perf_review_mod.format_review_csv(_perf_review).to_csv(index=False)

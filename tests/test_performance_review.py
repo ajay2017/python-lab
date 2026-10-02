@@ -61,6 +61,8 @@ def _base_kwargs(**overrides) -> dict:
         gate_min_calls=3, gate_firm_calls=5, gate_min_tickers=3,
         gate_horizon_days=5, composite_buy=65,
         gate_ids=("G-01", "G-23"),
+        ohlc_by_ticker=None,
+        risk_min_calls=3,
     )
     kw.update(overrides)
     return kw
@@ -94,7 +96,8 @@ def test_valid_single_day_range_is_not_none():
 def test_all_six_sections_present_and_offline_when_every_loader_is_none():
     kw = _base_kwargs()
     review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
-    for key in ("return_vs_spy", "trade_behavior", "recs", "gates", "leverage_drift", "risk_drift"):
+    for key in ("return_vs_spy", "trade_behavior", "recs", "gates", "leverage_drift",
+                "risk_drift", "risk_discipline"):
         assert key in review
         assert review[key]["status"] == "offline"
 
@@ -116,6 +119,7 @@ def test_one_offline_section_does_not_force_others_offline():
     assert review["gates"]["status"] == "empty"
     assert review["leverage_drift"]["status"] == "empty"
     assert review["risk_drift"]["status"] == "empty"
+    assert review["risk_discipline"]["status"] == "offline"   # also reads `trades`
 
 
 # ── ET period boundary (trades.traded_at) ───────────────────────────────────
@@ -541,7 +545,10 @@ def test_format_markdown_and_csv_handle_populated_review_without_crashing():
     assert md.count("**") % 2 == 0
     csv_df = pr.format_review_csv(review)
     assert not csv_df.empty
-    assert set(csv_df["section"].unique()) <= {"rec", "gate"}
+    # risk_discipline joined the export (chunks 4/5) -- the fixture's own
+    # ABC round trip closes inside the window, so it contributes a row too
+    # (unresolvable -- no ohlc_by_ticker passed -- but still a row).
+    assert set(csv_df["section"].unique()) <= {"rec", "gate", "risk_discipline"}
 
 
 # ─── account_return (2026-10-01) ─────────────────────────────────────────
@@ -1025,3 +1032,180 @@ def test_markdown_renders_account_return_offline_without_crash():
     review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
     md = pr.format_review_markdown(review)
     assert "could not be loaded" in md
+
+
+# ── risk_discipline (R-multiple, chunks 4/5, 2026-10-02) ────────────────────
+#
+# `_flat_ohlc` mirrors test_r_multiple.py's own fixture (deliberately NOT
+# cross-imported — each test module keeps its own trivial copy, matching the
+# established convention the readout modules themselves use for `_to_date`).
+# half_range=2.5 => True Range = 5.0 every bar => ATR(14) = 5.0 exactly (a
+# constant series), so risk_per_share = ATR_STOP_MULT(2.0) * 5.0 = 10.0 and,
+# at 10 shares, risk_dollars = 100.0 -- deterministic, no approximation.
+
+def _flat_ohlc(start, n_days, close=50.0, half_range=2.5, freq="D"):
+    idx = pd.date_range(start=start, periods=n_days, freq=freq)
+    return pd.DataFrame({
+        "High":  [close + half_range] * n_days,
+        "Low":   [close - half_range] * n_days,
+        "Close": [close] * n_days,
+    }, index=idx)
+
+
+def test_risk_discipline_offline_when_trades_is_none():
+    kw = _base_kwargs(trades=None)
+    review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
+    assert review["risk_discipline"]["status"] == "offline"
+    assert review["risk_discipline"]["episodes"] == []
+
+
+def test_risk_discipline_empty_when_no_closed_episode_exits_in_window():
+    # A BUY with no matching SELL at all -- an open position, never closed.
+    rows = [_trade_row(1, "RDA", "BUY", 10, 100.0, when=date(2026, 1, 10))]
+    kw = _base_kwargs(trades=_trades_df(rows), ohlc_by_ticker={})
+    review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
+    assert review["risk_discipline"]["status"] == "empty"
+    assert review["risk_discipline"]["episodes"] == []
+
+
+def test_risk_discipline_empty_on_a_genuinely_empty_trades_frame():
+    kw = _base_kwargs(trades=_trades_df([]))
+    review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
+    assert review["risk_discipline"]["status"] == "empty"
+
+
+def test_risk_discipline_below_floor_shows_episodes_but_no_aggregate():
+    # One resolvable closed episode, risk_min_calls=2 -> below the floor.
+    rows = [
+        _trade_row(1, "RDA", "BUY",  10, 100.0, when=date(2026, 1, 10)),
+        _trade_row(2, "RDA", "SELL", 10, 120.0, when=date(2026, 1, 20), realized_pnl=200.0),
+    ]
+    ohlc_map = {"RDA": _flat_ohlc(date(2025, 12, 1), 60)}
+    kw = _base_kwargs(trades=_trades_df(rows), ohlc_by_ticker=ohlc_map, risk_min_calls=2)
+    review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
+    rk = review["risk_discipline"]
+    assert rk["status"] == "ok"
+    assert rk["n_total"] == 1
+    assert rk["n_resolvable"] == 1
+    assert rk["below_floor"] is True
+    assert rk["mean_r"] is None
+    assert rk["median_r"] is None
+    assert rk["n_losers_worse_than_1r"] is None
+    assert rk["pct_losers_worse_than_1r"] is None
+    assert len(rk["episodes"]) == 1
+    assert rk["episodes"][0]["r_multiple"] == pytest.approx(2.0)   # 200 / 100
+
+
+def test_risk_discipline_at_floor_includes_aggregate_stats():
+    rows = [
+        _trade_row(1, "RDA", "BUY",  10, 100.0, when=date(2026, 1, 10)),
+        _trade_row(2, "RDA", "SELL", 10, 120.0, when=date(2026, 1, 20), realized_pnl=200.0),
+        _trade_row(3, "RDB", "BUY",  10, 100.0, when=date(2026, 1, 10)),
+        _trade_row(4, "RDB", "SELL", 10, 80.0,  when=date(2026, 1, 22), realized_pnl=-200.0),
+    ]
+    ohlc_map = {
+        "RDA": _flat_ohlc(date(2025, 12, 1), 60),
+        "RDB": _flat_ohlc(date(2025, 12, 1), 60),
+    }
+    kw = _base_kwargs(trades=_trades_df(rows), ohlc_by_ticker=ohlc_map, risk_min_calls=2)
+    review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
+    rk = review["risk_discipline"]
+    assert rk["status"] == "ok"
+    assert rk["below_floor"] is False
+    assert rk["n_resolvable"] == 2
+    # R values: +2.0 (RDA), -2.0 (RDB) -> mean 0.0, median 0.0
+    assert rk["mean_r"] == pytest.approx(0.0)
+    assert rk["median_r"] == pytest.approx(0.0)
+    assert rk["n_losers_worse_than_1r"] == 1   # -2.0 < -1.0
+    assert rk["pct_losers_worse_than_1r"] == pytest.approx(50.0)
+
+
+def test_risk_discipline_exit_date_outside_window_is_excluded():
+    rows = [
+        _trade_row(1, "RDA", "BUY",  10, 100.0, when=date(2025, 11, 1)),
+        _trade_row(2, "RDA", "SELL", 10, 120.0, when=date(2025, 12, 15), realized_pnl=200.0),
+    ]
+    ohlc_map = {"RDA": _flat_ohlc(date(2025, 10, 1), 60)}
+    kw = _base_kwargs(trades=_trades_df(rows), ohlc_by_ticker=ohlc_map)
+    review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
+    assert review["risk_discipline"]["status"] == "empty"
+
+
+def test_risk_discipline_missing_ohlc_resolves_to_none_not_an_exception():
+    rows = [
+        _trade_row(1, "RDC", "BUY",  10, 100.0, when=date(2026, 1, 10)),
+        _trade_row(2, "RDC", "SELL", 10, 120.0, when=date(2026, 1, 20), realized_pnl=200.0),
+    ]
+    # No OHLC entry at all for RDC -- episode_r_multiple's own None-safe
+    # contract must resolve this to None, with a reason, never raise.
+    kw = _base_kwargs(trades=_trades_df(rows), ohlc_by_ticker={})
+    review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
+    rk = review["risk_discipline"]
+    assert rk["status"] == "ok"
+    ep = rk["episodes"][0]
+    assert ep["r_multiple"] is None          # None, never NaN
+    assert ep["r_multiple"] != ep["r_multiple"] or ep["r_multiple"] is None
+    assert isinstance(ep["reason"], str) and ep["reason"]
+    assert rk["n_resolvable"] == 0
+    assert rk["below_floor"] is True
+
+
+def test_risk_discipline_added_while_losing_flag_propagates():
+    rows = [
+        _trade_row(1, "RDD", "BUY",  10, 100.0, when=date(2026, 1, 5)),
+        # Added at 80, below the running avg cost of 100 -> averaging down.
+        _trade_row(2, "RDD", "BUY",  10, 80.0,  when=date(2026, 1, 10)),
+        _trade_row(3, "RDD", "SELL", 20, 110.0, when=date(2026, 1, 20), realized_pnl=300.0),
+    ]
+    ohlc_map = {"RDD": _flat_ohlc(date(2025, 11, 1), 90)}
+    kw = _base_kwargs(trades=_trades_df(rows), ohlc_by_ticker=ohlc_map)
+    review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
+    ep = review["risk_discipline"]["episodes"][0]
+    assert ep["added_while_losing"] is True
+
+
+def test_risk_discipline_csv_has_r_multiple_and_added_while_losing_columns_no_nan_text():
+    rows = [
+        _trade_row(1, "RDA", "BUY",  10, 100.0, when=date(2026, 1, 10)),
+        _trade_row(2, "RDA", "SELL", 10, 120.0, when=date(2026, 1, 20), realized_pnl=200.0),
+        # Unresolvable leg -- no OHLC for RDE at all.
+        _trade_row(3, "RDE", "BUY",  5, 50.0, when=date(2026, 1, 11)),
+        _trade_row(4, "RDE", "SELL", 5, 55.0, when=date(2026, 1, 21), realized_pnl=25.0),
+    ]
+    ohlc_map = {"RDA": _flat_ohlc(date(2025, 12, 1), 60)}
+    kw = _base_kwargs(trades=_trades_df(rows), ohlc_by_ticker=ohlc_map, risk_min_calls=5)
+    review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
+    csv_df = pr.format_review_csv(review)
+    assert "r_multiple" in csv_df.columns
+    assert "added_while_losing" in csv_df.columns
+    rd_rows = csv_df[csv_df["section"] == "risk_discipline"]
+    assert len(rd_rows) == 2
+    csv_text = csv_df.to_csv(index=False)
+    assert "nan" not in csv_text.lower()
+
+
+def test_risk_discipline_markdown_section_renders_without_crash_and_no_nan_text():
+    rows = [
+        _trade_row(1, "RDA", "BUY",  10, 100.0, when=date(2026, 1, 10)),
+        _trade_row(2, "RDA", "SELL", 10, 120.0, when=date(2026, 1, 20), realized_pnl=200.0),
+        _trade_row(3, "RDE", "BUY",  5, 50.0, when=date(2026, 1, 11)),
+        _trade_row(4, "RDE", "SELL", 5, 55.0, when=date(2026, 1, 21), realized_pnl=25.0),
+    ]
+    ohlc_map = {"RDA": _flat_ohlc(date(2025, 12, 1), 60)}
+    kw = _base_kwargs(trades=_trades_df(rows), ohlc_by_ticker=ohlc_map, risk_min_calls=5)
+    review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
+    md = pr.format_review_markdown(review)
+    assert "Risk Discipline" in md
+    assert "no R (" in md
+    assert "nan" not in md.lower()
+    assert "below the standalone evaluable floor" in md.lower()
+
+
+def test_risk_discipline_markdown_offline_and_empty_without_crash():
+    kw_off = _base_kwargs(trades=None)
+    review_off = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw_off)
+    assert "could not be loaded" in pr.format_review_markdown(review_off)
+
+    kw_empty = _base_kwargs(trades=_trades_df([]))
+    review_empty = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw_empty)
+    assert "No closed round trips" in pr.format_review_markdown(review_empty)
