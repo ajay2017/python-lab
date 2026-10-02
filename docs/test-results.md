@@ -18,7 +18,17 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-09-21 (F-278 rapid-reversal mirror + cross-asset stress signals + Research-a-Stock name resolution, then the 2026-09-21 code audit + UX audit fix passes)
+## 1. Latest run — 2026-10-02 (11-day gap closed: ETF/multi-asset initiative, Data Maintenance framework, Thesis Card, R-Multiple, leverage-giveback disclosure, Predictive Analytics correctness fixes, the commit-hook rewrite, and the 2026-10-02 full audit's fixes)
+
+**7021 passed, 0 failed, 19 warnings** (`python -m pytest -q`, full suite, no marker filter; 278-290s across runs this session). Python (local `.venv`). Transcribed from the run, not recalled.
+
+**Coverage: 83%** (`pytest --cov=stock_analyzer --cov-report=term-missing -q`: 25103 statements, 4216 missed) — up from 80% at the 2026-09-18 baseline (22238 statements then).
+
+**+1028 over the 5993 baseline (2026-09-21) below.** This is the exact gap the 2026-10-02 full audit's Medium finding M11 flagged (11 days / ~900 new tests, since corrected to the real transcribed count rather than left as an estimate) — not attributable to this single session, see `docs/shipped-log.md` for the full per-commit history across those 11 days. Tests added/touched directly in the final session closing this gap: `tests/test_pre_tool_checks.py` (new file, 95 tests — the commit/push hook's C2 rewrite, `pre_tool_checks.py`), `tests/test_db_nan_sanitization.py` (new file — audit Critical #1, NaN-composite DB-write sanitization), `tests/test_data_maintenance.py` (+4 — audit M1, None-roster propagation), `tests/test_db_data_maintenance_helpers.py` (+1 — audit M2, `load_ticker_last_touched` pagination), `tests/test_system_health.py` (+4 — audit M3, check ⑦ hot-path exclusion + cache-reuse-both-directions), `tests/test_cron_thesis_evidence_snapshot.py` (+2 — audit M9, composite resolved from `port_df` not raw `held_data` total), plus every chunk's own test file for R-Multiple (F-286), the leverage-giveback disclosure (F-287), the Thesis Card (F-285), and the Data Maintenance framework (F-235 Phase 1/1b) — full per-feature test counts are in their own shipped-log.md entries, not re-derived here.
+
+Full detail: `docs/reviews/2026-10-02-review.md` (the full audit this gap-close responds to); `docs/shipped-log.md` (the complete 11-day per-commit history); memory `project_audit_2026_10_02`.
+
+## 1a. Previous run — 2026-09-21 (F-278 rapid-reversal mirror + cross-asset stress signals + Research-a-Stock name resolution, then the 2026-09-21 code audit + UX audit fix passes)
 
 **5993 passed, 0 failed, 19 warnings** (`python -m pytest -q`, full suite, no marker filter; longest single run 311s). Python (local `.venv`). Transcribed from the run, not recalled.
 
