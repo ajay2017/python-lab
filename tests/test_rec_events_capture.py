@@ -77,10 +77,16 @@ def test_rebal_trim_generator_failure_returns_empty_not_raise(monkeypatch):
 # ── beta_trim ────────────────────────────────────────────────────────────────
 
 def _beta_port_df():
+    # "Score" is real and below WEAK_CONVICTION_SCORE for every row (not
+    # withheld/missing) so these beta_trim-focused fixtures don't also
+    # incidentally trip single_name_concentration's withheld-score path
+    # (BBB sits exactly AT SINGLE_NAME_CEILING) — see the dedicated
+    # "single_name_concentration dedup" tests below for that branch.
     return pd.DataFrame({
         "Ticker":         ["AAA", "BBB", "CCC"],
         "Weight (%)":     [20.0, 15.0, 10.0],
         "Market Value":   [20000.0, 15000.0, 10000.0],
+        "Score":          [40.0, 40.0, 40.0],
     })
 
 
@@ -265,11 +271,34 @@ def test_single_name_conc_does_not_fire_below_conviction():
     assert rows == []
 
 
-def test_single_name_conc_missing_score_defaults_to_excluded_not_fabricated_high():
+def test_single_name_conc_withheld_none_score_still_fires_not_excluded():
+    # 2026-10-02 audit H3 mirror fix: a withheld/None score must NOT be
+    # coerced to a fabricated 0.0 that would always exclude an oversized
+    # holding from capture -- the 15% ceiling is a pure SIZE limit,
+    # independent of whether conviction could be measured at all. This
+    # test previously asserted `rows == []` under the name
+    # "test_single_name_conc_missing_score_defaults_to_excluded_not_
+    # fabricated_high" -- that was the exact fail-open bug this fix closes,
+    # mirroring the live risk_advisor.py card's own fix.
     df = pd.DataFrame({
         "Ticker": ["AAA"], "Weight (%)": [25.0], "Market Value": [25000.0], "Score": [None],
     })
-    assert rec._build_single_name_conc_rows(df, None, FIRED_DATE, "2026-09-15") == []
+    rows = rec._build_single_name_conc_rows(df, None, FIRED_DATE, "2026-09-15")
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "AAA"
+    assert rows[0]["rec_type"] == "single_name_concentration"
+
+
+def test_single_name_conc_withheld_nan_score_also_fires():
+    # NaN (not just a raw None) must take the identical path -- `_safe_float`
+    # returns None for both.
+    df = pd.DataFrame({
+        "Ticker": ["AAA"], "Weight (%)": [25.0], "Market Value": [25000.0],
+        "Score": [float("nan")],
+    })
+    rows = rec._build_single_name_conc_rows(df, None, FIRED_DATE, "2026-09-15")
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "AAA"
 
 
 def test_single_name_conc_dedups_against_rebal_trim_tickers():

@@ -33,7 +33,10 @@ failure can never blank the others (mirrors
   - `single_name_concentration` (2026-09-21 app-review Part 2 #1) —
                      reproduces (does NOT import) `risk_advisor.py`'s
                      conviction-INDEPENDENT single-name-overweight branch
-                     (`risk_advisor.py:883-931`): a ticker over
+                     (`risk_advisor.py::build_risk_advisor_recommendations`'s
+                     single-name-concentration block — cited by name, not a
+                     line range, since that range has already drifted once):
+                     a ticker over
                      `SINGLE_NAME_CEILING` with score >= `WEAK_CONVICTION_
                      SCORE`. DEDUPED against `rebal_trim`'s same-run output
                      (see `build_rec_event_rows`) — a ticker that is BOTH
@@ -357,9 +360,12 @@ def _build_single_name_conc_rows(
     rebal_trim_tickers: "set[str] | None" = None,
 ) -> "list[dict]":
     """One row per ticker over SINGLE_NAME_CEILING with score >=
-    WEAK_CONVICTION_SCORE — reproduces (does NOT import) risk_advisor.py's
-    conviction-independent single-name-overweight branch (risk_advisor.py:
-    883-931), EQUITY-basis only (no gate_denom scaling — see module docstring).
+    WEAK_CONVICTION_SCORE, OR a withheld/unmeasured score — reproduces (does
+    NOT import) risk_advisor.py's conviction-independent single-name-overweight
+    branch (`risk_advisor.py::build_risk_advisor_recommendations`'s
+    single-name-concentration block — cited by name, not a line range, which
+    has already drifted once), EQUITY-basis only (no gate_denom
+    scaling — see module docstring).
 
     `rebal_trim_tickers`: tickers `_build_rebal_trim_rows` already emitted
     THIS SAME RUN — skipped here to avoid crediting one real SELL with two
@@ -384,12 +390,18 @@ def _build_single_name_conc_rows(
         if not ticker or ticker in rebal_trim_tickers or ticker in bought_today:
             continue
         w = _safe_float(row.get("Weight (%)")) or 0.0
-        # Mirrors risk_advisor.py's own coercion here: a missing score
-        # defaults to 0.0, which only ever EXCLUDES a name from firing
-        # (never fabricates a false "high conviction" reading that would
-        # otherwise reach the user).
-        score = _safe_float(row.get("Score")) or 0.0
-        if w < SINGLE_NAME_CEILING or score < WEAK_CONVICTION_SCORE:
+        # None-preserving — a withheld/NaN composite (fundamentals unavailable,
+        # or an ETF with no cost data) must still fire this row, matching the
+        # live card's fix (2026-10-02 audit H3): the ceiling is a pure SIZE
+        # limit, independent of whether conviction could be measured at all.
+        # Coercing a withheld score to 0.0 (the previous behavior here) would
+        # always fail `score < WEAK_CONVICTION_SCORE` and silently EXCLUDE an
+        # oversized withheld holding from capture — the same fail-open the
+        # live card had, just in the historical-grading path instead.
+        score_raw = _safe_float(row.get("Score"))
+        if w < SINGLE_NAME_CEILING:
+            continue
+        if not (score_raw is None or score_raw >= WEAK_CONVICTION_SCORE):
             continue
         excess_pp = w - SINGLE_NAME_CEILING
         rows.append({

@@ -887,31 +887,59 @@ def build_risk_advisor_recommendations(
     # cap is a RISK limit, not a conviction call. Fill exactly that gap (score ≥
     # WEAK_CONVICTION_SCORE so we never double-surface with weak-large). MEDIUM →
     # Portfolio Tune-up (structural/standing, not Act-Today churn).
+    #
+    # Trigger uses `score_raw` (None-preserving), NOT `score` (`_f()`-coerced).
+    # A withheld/NaN composite (fundamentals unavailable, or an ETF with no cost
+    # data) must also fire this card — the 15% ceiling is a pure RISK limit and
+    # doesn't depend on conviction being measurable at all. Using the coerced
+    # `score` here would read a withheld NaN as 0.0, which is BELOW
+    # WEAK_CONVICTION_SCORE and would fail-open (never fire) for an oversized
+    # holding mid-data-outage — exactly the fail-open this fix closes (2026-10-02
+    # audit H3). The sibling weak-large card (daily_briefing.py) skips withheld
+    # rows entirely via "Score Available", so a withheld oversized holding now
+    # fires on exactly this one card, never both.
     for t, tr in tr_map.items():
         w = tr["weight"] * _acct_f        # account-basis (== equity when no margin)
         score = tr["score"]
-        if w >= SINGLE_NAME_CEILING and score >= WEAK_CONVICTION_SCORE:
+        score_raw = tr["score_raw"]
+        _conviction_unmeasured = score_raw is None
+        if w >= SINGLE_NAME_CEILING and (score_raw is None or score_raw >= WEAK_CONVICTION_SCORE):
             excess_pp     = w - SINGLE_NAME_CEILING
             excess_dollar = round(excess_pp / 100.0 * _gd)
+            _conviction_clause = (
+                "Conviction is unmeasured (fundamentals unavailable — a data "
+                "outage or an ETF with no cost data); this is still a SIZE limit."
+                if _conviction_unmeasured else
+                f"Conviction is fine (score {score:.0f}); this is a SIZE limit."
+            )
+            _conviction_root_cause = (
+                "conviction unmeasured"
+                if _conviction_unmeasured else
+                f"score {score:.0f}"
+            )
+            _conviction_label = (
+                "conviction unmeasured"
+                if _conviction_unmeasured else
+                f"score {score:.0f}"
+            )
             recs.append({
                 "priority": "MEDIUM",
                 "type":     "single_name_concentration",
                 "title":    f"{t} {w:.1f}% — Single-Name Overweight",
                 "problem": (
                     f"**{t} is {w:.1f}% of your book** — above the "
-                    f"{SINGLE_NAME_CEILING:.0f}% single-name ceiling. Conviction is fine "
-                    f"(score {score:.0f}); this is a SIZE limit."
+                    f"{SINGLE_NAME_CEILING:.0f}% single-name ceiling. {_conviction_clause}"
                     + f" At this weight one bad "
                     f"print or downgrade on a single name can swing the whole portfolio — "
                     f"roughly **${w / 100.0 * _gd:,.0f}** rides on {t} alone."
                 ),
-                "root_cause": f"{t} weight {w:.1f}% (score {score:.0f} — a size issue, not a quality one).",
+                "root_cause": f"{t} weight {w:.1f}% ({_conviction_root_cause} — a size issue, not a quality one).",
                 "root_tickers": [{
                     "ticker":       t,
                     "value":        round(w, 1),
                     "weight":       w,
                     "market_value": tr["market_value"],
-                    "label":        f"{w:.1f}% weight  ·  score {score:.0f}",
+                    "label":        f"{w:.1f}% weight  ·  {_conviction_label}",
                 }],
                 "recommendation": (
                     f"Trim **{t}** by ~**{excess_pp:.0f}pp (~${excess_dollar:,.0f})** back toward the "

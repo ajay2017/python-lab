@@ -10,13 +10,14 @@ absence. Tests build a small synthetic portfolio via
 tests.conftest.make_risk_advisor_inputs so each case varies only the field(s)
 relevant to the branch under test.
 """
-from datetime import datetime
+from datetime import date, datetime
 
 import pandas as pd
 import pytz
 
 from stock_analyzer.constants import (
     DRAWDOWN_CONTRIB_MAX,
+    LARGE_POSITION_WEIGHT_PCT,
     PORTFOLIO_DRAWDOWN_ACTION_MAX,
     PORTFOLIO_DRAWDOWN_HIGH_MAX,
     PORTFOLIO_DRAWDOWN_OK_MIN,
@@ -34,9 +35,10 @@ from stock_analyzer.constants import (
     TAIL_RATIO_HIGH_MIN,
     WEAK_CONVICTION_SCORE,
 )
+from stock_analyzer.daily_briefing import _review_list
 from stock_analyzer.earnings_advisor import _today_et
 from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
-from tests.conftest import find_rec, make_risk_advisor_inputs
+from tests.conftest import find_item, find_rec, make_risk_advisor_inputs
 import pytest
 
 pytestmark = pytest.mark.fast
@@ -486,6 +488,84 @@ def test_single_name_overweight_weak_conviction_not_flagged_here():
     }]
     recs = _recs(rows)
     assert find_rec(recs, "single_name_concentration") is None
+
+
+def test_single_name_overweight_withheld_nan_score_fires_as_conviction_unmeasured():
+    # 2026-10-02 audit H3: a withheld/NaN composite (fundamentals unavailable,
+    # or an ETF with no cost data) must still fire this card -- the 15%
+    # single-name ceiling is a pure SIZE/RISK limit, independent of whether
+    # conviction could be measured at all. The old `score = tr["score"]`
+    # (`_f()`-coerced) read a withheld NaN as 0.0, which is BELOW
+    # WEAK_CONVICTION_SCORE and so always failed to fire for an oversized
+    # holding mid-data-outage -- exactly the fail-open this fix closes.
+    rows = [{
+        "ticker": "AAA", "weight": SINGLE_NAME_CEILING + 5, "market_value": 20_000.0,
+        "score": float("nan"),
+    }]
+    recs = _recs(rows)
+    rec = find_rec(recs, "single_name_concentration")
+    assert rec is not None
+    assert rec["priority"] == "MEDIUM"
+    # Copy must disclose "unmeasured", never imply a real, measured weak score.
+    assert "unmeasured" in rec["problem"].lower()
+    assert "unmeasured" in rec["root_cause"].lower()
+    assert "unmeasured" in rec["root_tickers"][0]["label"].lower()
+    assert "score 0" not in rec["problem"].lower()
+    assert "score 0" not in rec["root_cause"].lower()
+    assert "score 0" not in rec["root_tickers"][0]["label"].lower()
+
+
+def test_single_name_overweight_withheld_none_score_also_fires():
+    # A raw None (not just a NaN float) must take the identical path --
+    # `score_raw` is built via `_beta_ok`, which returns None for both.
+    rows = [{
+        "ticker": "AAA", "weight": SINGLE_NAME_CEILING + 5, "market_value": 20_000.0,
+        "score": None,
+    }]
+    recs = _recs(rows)
+    assert find_rec(recs, "single_name_concentration") is not None
+
+
+def test_single_name_overweight_withheld_never_double_surfaces_with_weak_large():
+    # Cross-module regression: an oversized withheld holding must fire on
+    # EXACTLY ONE of {risk_advisor's single_name_concentration card,
+    # daily_briefing's weak-large flag} -- never both, never neither. Built
+    # as one shared port_df run through BOTH real functions, rather than
+    # assumed from the audit's own description.
+    weight = SINGLE_NAME_CEILING + 5
+    assert weight > LARGE_POSITION_WEIGHT_PCT  # clears both cards' weight gates
+    port_df = pd.DataFrame([{
+        "Ticker":           "AAA",
+        "Weight (%)":       weight,
+        "Market Value":     20_000.0,
+        "Price":            100.0,
+        "P&L (%)":          0.0,
+        "Score":            float("nan"),
+        "Score Available":  False,
+        "Signal":           "Hold",
+        "Sector":           "Tech",
+        "Gap to Stop (%)":  None,
+        "Shares":           10,
+        "1M Momentum":      0.0,
+        "Stop":             90.0,
+    }])
+    held_data = {"AAA": {"risk_metrics": {
+        "beta": 1.0, "sharpe": 1.0, "sortino": 1.0,
+        "max_drawdown": -5.0, "var_95": -2.0,
+    }}}
+    h_rets = {"AAA": 0.0}
+    port_risk = {
+        "beta": 1.0, "ann_volatility": 15.0, "sharpe": 1.2, "sortino": 1.0,
+        "var_95_pct": None, "cvar_95_pct": None, "max_drawdown": -5.0,
+    }
+
+    recs = build_risk_advisor_recommendations(
+        port_df, held_data, port_risk, h_rets, 100_000.0, None,
+    )
+    assert find_rec(recs, "single_name_concentration") is not None
+
+    items = _review_list(port_df, [], [], {}, date(2026, 7, 27), portfolio_value=100_000.0)
+    assert find_item(items, "AAA") is None
 
 
 # ── beta_repair Phase 1 — characterization test (written BEFORE the refactor) ──
