@@ -857,6 +857,16 @@ _GATE_FILES = {
     # against -- two 2026-07-15 commits shipped without a required citation
     # for precisely this reason).
     "stock_analyzer/beta_repair.py",
+    # Added 2026-10-02 (review M6): CLAUDE.md's own "Review REQUIRED" prose
+    # already covers these three -- a scoring/recommendation formula, a
+    # hard-gate feeder, and the module deciding what gets emailed as a BUY/
+    # protective call -- but the mechanical list had never caught up, so
+    # enforcement was honor-system only (every real commit touching them
+    # this window got a voluntary review anyway; nothing slipped through
+    # yet, per the audit's own note -- this closes the gap before it does).
+    "stock_analyzer/etf_scoring.py",          # the ETF composite formula
+    "stock_analyzer/sector_fit.py",           # feeds the hard SECTOR_CEILING gate (app + cron)
+    "stock_analyzer/headless_alert_engine.py",  # decides the emailed BUY/protective lists
 }
 
 
