@@ -1,9 +1,9 @@
 # 📄 Reports — Design Plan
 
 **Status: BOTH PHASES SHIPPED 2026-09-18; Performance Review's "Return vs SPY" tile
-REFRAMED 2026-10-01 after a live Q3 2026 review found it misleading (see "2026-10-01
-owner decisions" section below) — a follow-on true account-return block is DESIGNED,
-not built, gated on an owner-run data audit. Nothing else queued.**
+REFRAMED 2026-10-01 (Part A), and the true account-return block SHIPPED the same day
+(Part B) once the owner's live-data audit passed (see "2026-10-01 owner decisions"
+section below). Nothing else queued.**
 
 **BOTH PHASES SHIPPED 2026-09-18.** Phase 1 (Tax Report) and Phase 2 (Performance
 Review) both built by `implementer`, both verified against the full suite (5923 passed after
@@ -461,19 +461,26 @@ and the superseded decision.
   plus unrealized change can mislabel or flip sign for a position held across the period
   boundary; ship account-return vs SPY as the one headline, with realized P&L shown
   separately and captioned as not a component of it.
-- **Audit result so far (owner-run SQL, 2026-10-01): every single day in the ~3-week
-  `account_daily_snapshots` history has a trade on it, several moving 15-45% of net
-  equity.** This is exactly the endpoint-skew risk the design flagged — the EOD cron
-  pairs end-of-day holdings with a possibly-midday cash balance from the broker-sync
-  lane. A blanket "reject any endpoint with a same-day trade" consumer-side guard would
-  therefore withhold a number on nearly every period for this account's trading cadence,
-  which is not really shipping the feature. Still needed before finalizing: the full
-  `account_daily_snapshots` row set (gross_book/cash_balance/net_equity/cash_as_of) and
-  the owner's real Robinhood 9/30 statement total, to size the ACTUAL `net_equity` error
-  rather than inferring it from trade-cash-swing proxies. Not yet resolved whether this
-  pushes the outcome toward deferring until the producer-side cron fix ships, or toward
-  a different (owner-set) validity rule than "any trade that day."
-- **Nothing in Part B is built.** Do not start `app.py`/`performance_review.py` changes
-  for the account-return block until the audit is resolved and the remaining design
-  questions (anchor convention, month-by-month expander, offline/online wiring) are
-  walked through against real data.
+- **Audit RESOLVED 2026-10-01, in the account's favor.** Early results (every single
+  day in the ~3-week `account_daily_snapshots` history has a trade on it, several
+  moving 15-45% of net equity) looked like exactly the endpoint-skew risk the design
+  flagged. But chaining a real Robinhood AUGUST statement (8/31 "Portfolio Value"
+  $7,988.88, plus 3 trades the statement itself flags as "not yet reflected" in that
+  closing balance) forward through 10 real trading days of September's real activity
+  landed EXACTLY on the recorded 2026-09-10 `cash_balance` to the penny — and the full
+  September activity log separately matched the recorded day-over-day cash changes to
+  the cent on 11 of 14 testable days (the other 3 explained by one dividend posting a
+  day late). **Conclusion: same-day trades do NOT corrupt the snapshot's `net_equity`
+  for this account** — the blanket "reject any day with a trade" validity rule was
+  dropped (replaced with: `net_equity` present AND `cash_as_of` dated the same ET
+  calendar day as `snapshot_date`, which still catches a genuinely stale cash read).
+- **Part B SHIPPED 2026-10-01.** New "💰 Account Return vs SPY" section, built per the
+  decisions above: `_account_return_section()`/`monthly_account_returns()`/
+  `earliest_valid_account_date()` in `performance_review.py`, wired into `build_review`
+  via two new required kwargs (`account_return_snapshots_df`, `account_flows_rows`,
+  kept separate from the existing period-scoped `account_snapshots_df` `leverage_drift`
+  still uses). A "Since Tracking Began" period preset and a "Month by month" expander
+  were added per D7. No new `constants.py` value. 33 new tests, full suite 6767 passed,
+  antipattern + constants-doc gates green. See `docs/architecture.md`'s
+  `performance_review.py` section for the full build detail and
+  `docs/requirements.md` F-276b for the user-facing description.

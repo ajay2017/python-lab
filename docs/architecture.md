@@ -3466,8 +3466,58 @@ invites a future render to re-add the badge). The tile is relabeled "Return on C
 Through Closed Trades," and the caption states explicitly that it is not the account's return and
 not directly comparable to SPY's own period return. See memory
 `project_q3_2026_return_review`/`project_performance_review_return_tile_redesign` for the full
-analysis and the follow-on design (gated on an owner-run live-data audit) for a real account-level
-return-vs-SPY block.
+analysis behind this reframe and the "Part B" section immediately below for the real account-level
+return-vs-SPY block it set up.
+
+**Part B shipped same day — `account_return` (the real headline).** Once the owner ran the
+gating live-data audit (a real Robinhood August statement chained forward through 10 real trading
+days of September activity landed EXACTLY on the recorded `cash_balance` to the penny, and the
+full month matched to the cent on 11 of 14 testable days), a first-vs-last `account_daily_
+snapshots` lookup plus `account.money_weighted_return()` (the SAME formula 💰 Account / 🎯 My Edge
+already use) became safe to ship — still never `capital_vs_margin`'s backward-reconstruction
+engine, which stays explicitly out of scope for this module.
+
+- `_valid_snapshot_row(row)`: a usable anchor needs `net_equity` present and `cash_as_of` dated
+  the SAME ET calendar date as `snapshot_date` (catches a stale carried-forward cash read).
+  Deliberately does **NOT** reject a day merely because a trade happened on it — the original
+  design's worry (the EOD cron pairs end-of-day holdings with a possibly-midday cash balance) was
+  disproven by the audit above; a blanket same-day-trade rejection would have withheld this
+  feature almost every day for an account that trades this often.
+- `_account_return_section(account_snapshots_df, account_flows_rows, period_start, period_end,
+  spy_prices_by_date)`: d0 is the SPECIFIC NYSE trading session immediately before `period_start`
+  — if missing/invalid, NEVER silently substituted with an earlier date (status becomes
+  `pre_coverage`, with a `secondary` sub-dict giving the same two-point figure over whatever
+  sub-range of the period IS covered, labeled with its own dates, never the period's name). d1
+  searches BACKWARD to the latest valid snapshot on or before `period_end` — this asymmetry is
+  deliberate: d1 answers "as of the most recent close we have good data for" (e.g. today's EOD row
+  not written yet), which is a liveness gap, not a data-quality substitution the way redefining d0
+  would be.
+- **Flow-boundary rule**: deposits/withdrawals are filtered to `d0 < flow_date <= d1` before
+  reaching `account.money_weighted_return()` — a flow dated exactly `d0` is excluded, because the
+  EOD snapshot for `d0` already reflects it; `money_weighted_return`'s own internal `fd < d0` check
+  only excludes strictly-before dates, so the caller must apply the `<=` exclusion itself.
+- `monthly_account_returns(...)`: one row per calendar month FULLY contained in the selected range
+  (a partial edge month is skipped, never clipped to a confusing sub-month figure); each row is an
+  independent call back into `_account_return_section`, so a month's figure always equals what a
+  standalone call over just that month would produce.
+- `earliest_valid_account_date(df)`: new public function backing app.py's "Since Tracking Began"
+  period preset.
+- **Supersedes the 2026-09-18 decision** (above) that picked realized-only specifically to avoid
+  the deposits/withdrawals ambiguity — `money_weighted_return` closes that ambiguity, which is
+  exactly why the owner approved re-opening it this session.
+- **Deliberately NOT built**: a realized+unrealized+carry additive breakdown. `realized_pnl`
+  books against ORIGINAL cost, so a position bought before the period and sold mid-period can book
+  a "realized gain" that contributed ~$0 to the period's actual account return — additive would
+  mislabel the residual or even flip its sign. Account return vs SPY is the one headline; realized
+  P&L stays a separate, explicitly non-additive figure.
+- `app.py` render: a new "💰 Account Return vs SPY" block sits ABOVE "Return on Capital Cycled",
+  which now drops its own SPY tile (and points up to this section instead) only when
+  `account_return.status == "ok"` — every other status renders the original 3-column layout
+  byte-for-byte unchanged, so a user whose account never reaches "ok" sees no behavior change.
+  `build_review` reads the new wide, unscoped `account_return_snapshots_df`/`account_flows_rows`
+  params for this section — kept entirely separate from the EXISTING period-scoped
+  `account_snapshots_df` param `leverage_drift` still uses unchanged.
+- No new `constants.py` value. 33 new tests, full suite 6767 passed.
 
 **Below-floor framing** (a second owner decision): a period under `REC_OUTCOME_MIN_CALLS`/
 `GATE_LEDGER_MIN_CALLS` etc. shows raw period counts + a descriptive matured-subset mean alpha as

@@ -77,13 +77,15 @@ fetcher, the protective-call ticker set) is injected by the `app.py` caller.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Callable
 
 import pandas as pd
 
 from stock_analyzer import gate_ledger_readout, rec_events_readout
+from stock_analyzer.account import money_weighted_return
 from stock_analyzer.benchmark_mirror import price_on_or_before
+from stock_analyzer.constants import ALERT_EOD_HOUR_ET, NYSE_HOLIDAYS
 from stock_analyzer.trade_analytics import (
     build_monthly_trend, build_trigger_breakdown, compute_extended_stats,
 )
@@ -139,6 +141,94 @@ def _et_date_from_parsed(dt) -> "date | None":
         return dt.tz_convert("America/New_York").date()
     except Exception:
         return None
+
+
+def _cash_as_of_et_timestamp(v) -> "pd.Timestamp | None":
+    """Full America/New_York timestamp of a `cash_as_of` timestamptz value
+    (DB rows arrive as ISO strings; may already be a Timestamp in a test
+    fixture)."""
+    if v is None:
+        return None
+    try:
+        ts = pd.Timestamp(v)
+        if pd.isna(ts):
+            return None
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        return ts.tz_convert("America/New_York")
+    except Exception:
+        return None
+
+
+def _is_trading_day(d: date) -> bool:
+    """Weekday AND not an NYSE holiday. Re-implements `data.is_trading_day`'s
+    exact logic locally rather than importing `stock_analyzer.data` (which
+    pulls in yfinance/providers at module level) — this module stays
+    pure/I-O-free per its own docstring."""
+    return d.weekday() < 5 and d.isoformat() not in NYSE_HOLIDAYS
+
+
+def _prior_trading_day(d: date) -> date:
+    """The NYSE session immediately before `d`."""
+    prev = d - timedelta(days=1)
+    while not _is_trading_day(prev):
+        prev -= timedelta(days=1)
+    return prev
+
+
+def _last_trading_day_on_or_before(d: date) -> date:
+    cur = d
+    while not _is_trading_day(cur):
+        cur -= timedelta(days=1)
+    return cur
+
+
+def _next_trading_day(d: date) -> date:
+    """The NYSE session immediately after `d`."""
+    nxt = d + timedelta(days=1)
+    while not _is_trading_day(nxt):
+        nxt += timedelta(days=1)
+    return nxt
+
+
+def _valid_snapshot_row(row) -> bool:
+    """A usable account_daily_snapshots anchor for a real return calculation:
+    `net_equity` present, and `cash_as_of` dated the SAME ET calendar date as
+    `snapshot_date` — never a stale cash balance carried forward from an
+    earlier sync (e.g. 2026-09-23's cash_balance, which the live data showed
+    was correctly unchanged from 9/22 because no trade happened, not because
+    the read was stale; this check still catches a genuinely stale read on a
+    day that SHOULD have moved).
+
+    Does NOT reject a day merely because a trade happened on it. The
+    original design worried the EOD cron pairs end-of-day holdings with a
+    POSSIBLY-midday cash balance, so any same-day trade could skew
+    net_equity. A live 2026-10-01 audit disproved that for a cash read taken
+    AFTER close: chaining a real Robinhood statement (8/31 close) forward
+    through 10 real trading days of real transactions landed on the recorded
+    9/10 cash_balance to the exact penny, and the full September activity
+    log matched the recorded day-over-day cash changes to the cent on 11 of
+    14 days (the other 3 explained by one dividend posting a day late) — see
+    memory `project_performance_review_return_tile_redesign`. **The audit
+    proved "a post-close read reflects that day's trades," not "any read
+    sharing the calendar date does"** — the broker-sync lane fires roughly
+    twice a day (noon and evening ET); if the evening sync fails and the
+    noon one succeeded, `cash_as_of` still shares `snapshot_date`'s ET
+    calendar date while missing the day's afternoon trades entirely, on a
+    ~3x-levered book where one unreflected trade can be a large fraction of
+    net_equity. So the rule below ALSO requires `cash_as_of` to be at or
+    after market close (`ALERT_EOD_HOUR_ET`) in ET on `snapshot_date` —
+    enforcing the premise the evidence actually supports, not assuming a
+    3-week sample covers a failed-evening-sync day too. Module-local
+    data-integrity check, not an investment-policy threshold (same
+    precedent as `account._ANNUALIZE_CAVEAT_MAX_DAYS`)."""
+    if _opt(row.get("net_equity")) is None:
+        return False
+    snap_d = _to_date(row.get("snapshot_date"))
+    cash_ts = _cash_as_of_et_timestamp(row.get("cash_as_of"))
+    if snap_d is None or cash_ts is None:
+        return False
+    return cash_ts.date() == snap_d and cash_ts.hour >= ALERT_EOD_HOUR_ET
 
 
 def _spy_period_return(spy_prices_by_date: "dict | None", start: date, end: date) -> "float | None":
@@ -326,6 +416,8 @@ def build_review(
     rec_events_rows: "list[dict] | None",
     gate_rows: "list[dict] | None",
     account_snapshots_df: "pd.DataFrame | None",
+    account_return_snapshots_df: "pd.DataFrame | None",
+    account_flows_rows: "list[dict] | None",
     risk_snapshots_df: "pd.DataFrame | None",
     spy_prices_by_date: "dict | None",
     historical_close_fn: "Callable[[str, date, date], float | None] | None",
@@ -481,9 +573,21 @@ def build_review(
          "avg_pairwise_corr", "corr_coverage_n"),
     )
 
+    # ── account_return (2026-10-01) ───────────────────────────────────────────
+    account_return = _account_return_section(
+        account_return_snapshots_df, account_flows_rows,
+        period_start, period_end, spy_prices_by_date,
+    )
+    account_return_monthly = monthly_account_returns(
+        account_return_snapshots_df, account_flows_rows,
+        period_start, period_end, spy_prices_by_date,
+    )
+
     return {
         "period_start": period_start,
         "period_end": period_end,
+        "account_return": account_return,
+        "account_return_monthly": account_return_monthly,
         "return_vs_spy": return_vs_spy,
         "trade_behavior": trade_behavior,
         "recs": recs,
@@ -491,6 +595,224 @@ def build_review(
         "leverage_drift": leverage_drift,
         "risk_drift": risk_drift,
     }
+
+
+# ── account_return — real account-level return vs SPY (2026-10-01) ─────────
+#
+# A first-vs-last account_daily_snapshots lookup plus account.
+# money_weighted_return over account_flows — reusing the SAME formula
+# 💰 Account and 🎯 My Edge already use, NEVER the capital_vs_margin backward-
+# reconstruction engine (ruled out for this feature, see module docstring).
+# Owner-approved design, gated on a live-data endpoint-integrity audit that
+# PASSED (see `_valid_snapshot_row`'s docstring and memory
+# `project_performance_review_return_tile_redesign`).
+#
+# d0 is the SPECIFIC NYSE session immediately before the period starts — if
+# its snapshot is missing or invalid, the headline is withheld (never
+# silently substituted with an earlier date, which would silently redefine
+# what period is being measured). d1 is the LATEST valid snapshot on or
+# before the period ends — searching backward here is correct: it answers
+# "as of the most recent close we have good data for" (e.g. today's EOD row
+# not written yet), not a data-quality substitution.
+
+def _valid_snapshots(account_snapshots_df: "pd.DataFrame | None") -> "pd.DataFrame | None":
+    """`account_snapshots_df` filtered to `_valid_snapshot_row` rows, with a
+    parsed `_d` date column, sorted — or None if the input itself is None
+    (offline) or lacks a `snapshot_date` column at all."""
+    if account_snapshots_df is None:
+        return None
+    df = account_snapshots_df.copy()
+    if "snapshot_date" not in df.columns:
+        return df.iloc[0:0]
+    df["_d"] = df["snapshot_date"].apply(_to_date)
+    df = df.dropna(subset=["_d"])
+    if df.empty:
+        return df
+    return df[df.apply(_valid_snapshot_row, axis=1)].sort_values("_d")
+
+
+def earliest_valid_account_date(account_snapshots_df: "pd.DataFrame | None") -> "date | None":
+    """First date with a usable account_daily_snapshots anchor, or None when
+    offline/empty. Exposed so app.py can offer a "Since tracking began"
+    period preset without duplicating the validity rule."""
+    valid = _valid_snapshots(account_snapshots_df)
+    if valid is None or valid.empty:
+        return None
+    return valid["_d"].min()
+
+
+def first_measurable_period_start(account_snapshots_df: "pd.DataFrame | None") -> "date | None":
+    """First `period_start` for which the account-return headline CAN
+    actually compute, or None when no valid snapshot exists. This is the
+    trading day AFTER `earliest_valid_account_date`, never that date
+    itself — the earliest valid day can only ever serve as a d1 anchor
+    (nothing valid exists before it to serve as its own d0). Using the
+    earliest date itself as a period start would always resolve to
+    "pre_coverage" (found in Opus review, 2026-10-01: the "Since Tracking
+    Began" preset could never produce its own headline without this)."""
+    earliest = earliest_valid_account_date(account_snapshots_df)
+    return None if earliest is None else _next_trading_day(earliest)
+
+
+def _two_point_account_return(
+    valid_df: "pd.DataFrame", d0: date, d1: date,
+    account_flows_rows: "list[dict] | None", spy_prices_by_date: "dict | None",
+) -> "dict | None":
+    """MWR + SPY between two dates ALREADY confirmed present in `valid_df`.
+    None if the denominator/MWR isn't computable (e.g. non-positive BMV +
+    weighted flows). Flows are NOT deduped here against a possible manual-
+    entry/broker-sync duplicate of the same real deposit/withdrawal
+    (`data_maintenance.check_account_flows_duplicates` detects that class
+    for manual rows) — a known, shared exposure 💰 Account's own
+    money_weighted_return call already carries, so the two pages at least
+    can't disagree with each other over it; not fixed here as its own,
+    separate change (Opus review, 2026-10-01). Flows are filtered to (d0,
+    d1] — strictly after d0, because d0's own EOD snapshot already reflects
+    a flow dated d0 itself; passing it to money_weighted_return too would
+    double-count it (that
+    function's own `fd < d0` check only excludes strictly-before dates)."""
+    d0_rows = valid_df[valid_df["_d"] == d0]
+    d1_rows = valid_df[valid_df["_d"] == d1]
+    if d0_rows.empty or d1_rows.empty:
+        return None
+    d0_row, d1_row = d0_rows.iloc[0], d1_rows.iloc[-1]
+    bmv, emv = _opt(d0_row.get("net_equity")), _opt(d1_row.get("net_equity"))
+    if bmv is None or emv is None:
+        return None
+    flows_in_window = []
+    for f in (account_flows_rows or []):
+        fd = _to_date(f.get("flow_date"))
+        if fd is not None and d0 < fd <= d1:
+            flows_in_window.append(f)
+    mwr = money_weighted_return(bmv, d0, emv, d1, flows_in_window)
+    if mwr is None:
+        return None
+    levs = [v for v in (_opt(d0_row.get("leverage")), _opt(d1_row.get("leverage"))) if v is not None]
+    return {
+        "d0": d0, "d1": d1,
+        "bmv": round(bmv, 2), "emv": round(emv, 2),
+        "net_flow": mwr["net_flow"], "gain": mwr["gain"],
+        "return_pct": mwr["period_return_pct"],
+        "spy_return_pct": _spy_period_return(spy_prices_by_date, d0, d1),
+        "n_flows": len(flows_in_window),
+        "max_leverage": round(max(levs), 2) if levs else None,
+    }
+
+
+def _account_return_section(
+    account_snapshots_df: "pd.DataFrame | None",
+    account_flows_rows: "list[dict] | None",
+    period_start: date, period_end: date,
+    spy_prices_by_date: "dict | None",
+) -> dict:
+    """Real account-level return vs SPY for `[period_start, period_end]`.
+
+    Status in `{"offline", "pre_coverage", "ok"}`. `"offline"` only when a
+    required loader itself failed (`None`); `"pre_coverage"` covers every
+    other reason the headline can't be shown (no snapshot before
+    period_start, an invalid endpoint, a non-computable MWR) — D2's single
+    withhold-the-headline state, not several visually-distinct ones. When
+    withheld, a `secondary` sub-dict (or `None`) gives the same two-point
+    figure over whatever sub-range of the period IS covered — e.g. a
+    quarter starting before tracking began still shows the tracked portion
+    — labeled with its own dates, never the period's name (owner decision,
+    D2 option b).
+
+    SPY data is NOT required for an "offline"/"ok" distinction — it only
+    affects `spy_return_pct` (None when unavailable, same as the existing
+    cycled-capital tile's own tolerance), so a temporary SPY outage never
+    withholds the account's own real return the way it's entitled to stay
+    independent of other sections per this module's design."""
+    if account_snapshots_df is None or account_flows_rows is None:
+        return {"status": "offline"}
+    if spy_prices_by_date is None:
+        spy_prices_by_date = {}
+
+    valid_df = _valid_snapshots(account_snapshots_df)
+    if valid_df is None or valid_df.empty:
+        return {"status": "pre_coverage", "earliest_valid_date": None, "secondary": None}
+
+    earliest_valid = valid_df["_d"].min()
+    d0_target = _prior_trading_day(period_start)
+    d1_target = _last_trading_day_on_or_before(period_end)
+    d1_candidates = valid_df[valid_df["_d"] <= d1_target]
+    d1 = d1_candidates["_d"].iloc[-1] if not d1_candidates.empty else None
+
+    result = None
+    # Strictly GREATER, not >= -- d1 == d0_target is a ZERO-length window
+    # (e.g. the first day of "This Quarter", before today's own EOD row has
+    # been written, falls back to d1 == yesterday == d0_target). Accepting
+    # it would report a fabricated 0.00% "return" for a period that hasn't
+    # actually closed a single session yet, indistinguishable on screen
+    # from a genuine flat measurement (found in Opus review, 2026-10-01).
+    if d1 is not None and d1 > d0_target and (valid_df["_d"] == d0_target).any():
+        result = _two_point_account_return(valid_df, d0_target, d1, account_flows_rows, spy_prices_by_date)
+    if result is not None:
+        result["status"] = "ok"
+        result["caption"] = (
+            "Your account's actual return, read from your recorded account "
+            f"value on {d0_target.isoformat()} and {d1.isoformat()} (the NYSE "
+            "sessions bracketing this period) and adjusted for any deposits "
+            "or withdrawals in between — this is the real answer to \"did I "
+            "beat the market\", unlike the cycled-capital figure below."
+        )
+        return result
+
+    secondary = None
+    if d1 is not None and earliest_valid < d1:
+        secondary = _two_point_account_return(valid_df, earliest_valid, d1, account_flows_rows, spy_prices_by_date)
+    return {"status": "pre_coverage", "earliest_valid_date": earliest_valid, "secondary": secondary}
+
+
+def monthly_account_returns(
+    account_snapshots_df: "pd.DataFrame | None",
+    account_flows_rows: "list[dict] | None",
+    period_start: date, period_end: date,
+    spy_prices_by_date: "dict | None",
+) -> "list[dict]":
+    """One row per calendar month FULLY contained in `[period_start,
+    period_end]` — a partial month at either edge is skipped, never
+    clipped (a clipped month's return would be a different, confusing
+    quantity). Each row is an independent call back into
+    `_account_return_section`, so a month's figure always equals what a
+    standalone call over just that month would produce — never a second,
+    divergent computation. Always a monthly grain regardless of how much
+    history has accumulated (3 years later this is just 36 rows, not a new
+    threshold to invent). `[]` only when a REQUIRED loader is offline
+    (account_snapshots_df/account_flows_rows) — SPY unavailable doesn't
+    empty this list, matching `_account_return_section`'s own tolerance
+    (an SPY outage never withholds the account's own real return)."""
+    out: "list[dict]" = []
+    if account_snapshots_df is None or account_flows_rows is None:
+        return out
+    y, m = period_start.year, period_start.month
+    while True:
+        m_start = date(y, m, 1)
+        m_end = date(y + (1 if m == 12 else 0), 1 if m == 12 else m + 1, 1) - timedelta(days=1)
+        if m_start > period_end:
+            break
+        if m_start >= period_start and m_end <= period_end:
+            section = _account_return_section(
+                account_snapshots_df, account_flows_rows, m_start, m_end, spy_prices_by_date,
+            )
+            # A month row shows no dates on screen (unlike the headline,
+            # which prints d0/d1 explicitly), so "ok" must mean the WHOLE
+            # month, never a silently narrower sub-range hidden behind the
+            # month's own label. d1 is allowed to search backward past a
+            # missing/invalid session (that's its whole purpose), but for a
+            # COMPLETED month that search must still land exactly on the
+            # month's own last trading day — if it had to reach further
+            # back than that, the month isn't actually fully measurable
+            # (found in Opus review, 2026-10-01).
+            if section.get("status") == "ok" and section.get("d1") != _last_trading_day_on_or_before(m_end):
+                # Not section["d0"] -- that's this MONTH's own anchor, not
+                # the account's earliest valid date; nothing reads this key
+                # on a monthly row today, but None keeps it honest for
+                # whatever future consumer does.
+                section = {"status": "pre_coverage", "earliest_valid_date": None, "secondary": None}
+            out.append({"month": m_start.strftime("%Y-%m"), **section})
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return out
 
 
 def _drift_section(df: "pd.DataFrame | None", start: date, end: date, cols: "tuple[str, ...]") -> dict:
@@ -583,6 +905,38 @@ def format_review_markdown(review: "dict | None") -> str:
         "",
     ]
 
+    # Account return vs SPY — the real headline, when a valid anchor exists
+    ar = review.get("account_return", {})
+    lines.append("## Account Return vs SPY")
+    if ar.get("status") == "offline":
+        lines.append("_Offline — account history or cash-flow history could not be loaded._")
+    elif ar.get("status") == "ok":
+        _ar_spy = ar.get("spy_return_pct")
+        lines.append(f"- Your account's return, {ar['d0']} to {ar['d1']}: {ar['return_pct']:+.2f}%")
+        lines.append(f"- SPY over the same dates: {_ar_spy:+.2f}%" if _ar_spy is not None else "- SPY over the same dates: unavailable")
+        lines.append(f"- Net gain: ${ar['gain']:,.2f} (after {ar['n_flows']} deposit/withdrawal(s) in the ledger)")
+        if ar.get("max_leverage") is not None and ar["max_leverage"] > 1:
+            lines.append(
+                f"- At up to {ar['max_leverage']:.1f}x leverage this period, your return moves "
+                "roughly that many times the book's own move; SPY above is unlevered."
+            )
+        lines.append(f"- {ar.get('caption', '')}")
+    else:
+        lines.append(
+            "_Your daily account history doesn't cover the start of this period, "
+            "so an account-level return can't be shown for the full period._"
+        )
+        _sec = ar.get("secondary")
+        if _sec is not None:
+            _sec_spy = _sec.get("spy_return_pct")
+            lines.append(
+                f"- Tracked history covers {_sec['d0']} to {_sec['d1']}: your account "
+                f"{_sec['return_pct']:+.2f}%"
+                + (f" vs SPY {_sec_spy:+.2f}%" if _sec_spy is not None else "")
+                + " over those specific dates — not the full period."
+            )
+    lines.append("")
+
     # Return vs SPY
     rvs = review.get("return_vs_spy", {})
     lines.append("## Return on capital cycled through closed trades")
@@ -596,7 +950,14 @@ def format_review_markdown(review: "dict | None") -> str:
     else:
         _spy = rvs.get("spy_period_return_pct")
         _rr = rvs.get("realized_return_pct")
-        lines.append(f"- SPY period return: {_spy:+.2f}%" if _spy is not None else "- SPY period return: unavailable")
+        # Suppress this section's OWN (differently-anchored) SPY line
+        # whenever Account Return above already printed one — otherwise
+        # the export disagrees with the screen, which deliberately shows
+        # only one SPY figure per the same rule (2026-10-01 Opus review).
+        if ar.get("status") == "ok":
+            lines.append("- (SPY already shown above, over the same dates as your account return.)")
+        else:
+            lines.append(f"- SPY period return: {_spy:+.2f}%" if _spy is not None else "- SPY period return: unavailable")
         lines.append(
             f"- Return on capital cycled through closed trades: {_rr:+.2f}% "
             f"on ${rvs.get('total_cost_basis', 0.0):,.2f} cycled"

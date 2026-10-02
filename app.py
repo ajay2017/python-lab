@@ -36942,13 +36942,41 @@ elif page == "💰 Account":
                 )
 
                 _perf_today = _today_et()
+
+                # Wide (unscoped), day-cached account_daily_snapshots lookup —
+                # separate from the period-scoped `_perf_acct_snap_df` load
+                # below, which `leverage_drift` still uses unchanged. The new
+                # 💰 Account Return section (2026-10-01) needs to see the
+                # session BEFORE period_start to anchor its start value, which
+                # a period-scoped load can't see. Same cross-page cache
+                # pattern as `_portfolio_risk_snapshots_full_cache_`.
+                _perf_acct_full_cache_key = f"_account_daily_snapshots_full_cache_{_perf_today.isoformat()}"
+                if st.session_state.get(_perf_acct_full_cache_key) is None:
+                    st.session_state[_perf_acct_full_cache_key] = db.load_account_daily_snapshots()
+                _perf_acct_snap_full_df = st.session_state[_perf_acct_full_cache_key]
+                # The trading day AFTER the earliest valid snapshot, never
+                # that date itself -- the earliest valid day has nothing
+                # before it to anchor a return FROM, so using it directly as
+                # period_start would make this preset's own headline always
+                # read "pre_coverage" (found in Opus review, 2026-10-01).
+                _perf_first_measurable = _perf_review_mod.first_measurable_period_start(_perf_acct_snap_full_df)
+
+                _perf_preset_options = ["This Quarter", "Last Quarter", "This Tax Year", "Custom"]
+                if _perf_first_measurable is not None and _perf_first_measurable <= _perf_today:
+                    # Appended, not prepended -- "This Quarter" stays the
+                    # default radio selection, so this addition changes
+                    # nothing about the page's existing default behavior.
+                    _perf_preset_options = _perf_preset_options + ["Since Tracking Began"]
                 _perf_preset = st.radio(
-                    "Period", ["This Quarter", "Last Quarter", "This Tax Year", "Custom"],
+                    "Period", _perf_preset_options,
                     horizontal=True, key="_perf_period_preset",
                 )
                 _perf_q = (_perf_today.month - 1) // 3          # 0-3
                 _perf_q_start_month = _perf_q * 3 + 1
-                if _perf_preset == "This Quarter":
+                if _perf_preset == "Since Tracking Began":
+                    _perf_start = _perf_first_measurable
+                    _perf_end = _perf_today
+                elif _perf_preset == "This Quarter":
                     _perf_start = date(_perf_today.year, _perf_q_start_month, 1)
                     _perf_end = _perf_today
                 elif _perf_preset == "Last Quarter":
@@ -37046,6 +37074,15 @@ elif page == "💰 Account":
                         if _perf_reduce_calls_cache is not None else set()
                     )
 
+                    # Offline sentinel preserved deliberately: the None-returning
+                    # dedup-check loader, never db.load_account_flows() (which
+                    # collapses a load failure to [] and would silently count a
+                    # missed deposit/withdrawal as pure gain).
+                    _perf_flows_cache_key = f"_account_flows_full_cache_{_perf_today.isoformat()}"
+                    if st.session_state.get(_perf_flows_cache_key) is None:
+                        st.session_state[_perf_flows_cache_key] = db.load_account_flows_for_dedup_check()
+                    _perf_flows_rows = st.session_state[_perf_flows_cache_key]
+
                     _perf_review = _perf_review_mod.build_review(
                         period_start=_perf_start,
                         period_end=_perf_end,
@@ -37054,6 +37091,8 @@ elif page == "💰 Account":
                         rec_events_rows=_perf_rec_rows,
                         gate_rows=_perf_gate_rows,
                         account_snapshots_df=_perf_acct_snap_df,
+                        account_return_snapshots_df=_perf_acct_snap_full_df,
+                        account_flows_rows=_perf_flows_rows,
                         risk_snapshots_df=_perf_risk_snap_df,
                         spy_prices_by_date=_perf_spy_by_date,
                         historical_close_fn=_cached_historical_close,
@@ -37077,16 +37116,100 @@ elif page == "💰 Account":
                     else:
                         st.caption(f"Period: **{_perf_start}** to **{_perf_end}**")
 
+                        # ── Account Return vs SPY (2026-10-01) ───────────
+                        # The real headline: a first-vs-last account_daily_
+                        # snapshots lookup + account.money_weighted_return
+                        # (same formula 💰 Account / 🎯 My Edge already use)
+                        # — NEVER the capital_vs_margin backward-reconstruction
+                        # engine (ruled out for this feature). Built after a
+                        # live-data endpoint-integrity audit PASSED: chaining a
+                        # real Robinhood statement forward through 10 real
+                        # trading days landed on the recorded cash balance to
+                        # the exact penny, and a full month's activity matched
+                        # the recorded day-over-day cash changes to the cent on
+                        # 11 of 14 days (memory
+                        # project_performance_review_return_tile_redesign).
+                        st.markdown("#### 💰 Account Return vs SPY")
+                        _ar = _perf_review["account_return"]
+                        if _ar["status"] == "offline":
+                            st.warning(
+                                "⚪ Could not compute — account history or cash-flow "
+                                "history isn't available right now."
+                            )
+                        elif _ar["status"] == "ok":
+                            _ar_c1, _ar_c2, _ar_c3 = st.columns(3)
+                            _ar_c1.metric(
+                                f"Your account, {_ar['d0']} → {_ar['d1']}",
+                                f"{_ar['return_pct']:+.2f}%",
+                            )
+                            _ar_c2.metric(
+                                "SPY, same dates",
+                                f"{_ar['spy_return_pct']:+.2f}%"
+                                if _ar.get("spy_return_pct") is not None else "—",
+                            )
+                            _ar_c3.metric(
+                                "Net gain",
+                                _m(f"${_ar['gain']:,.2f}"),
+                                help=f"After {_ar['n_flows']} deposit/withdrawal(s) found in "
+                                     "your cash-flow ledger this period.",
+                            )
+                            if _ar.get("max_leverage") is not None and _ar["max_leverage"] > 1:
+                                st.caption(
+                                    f"⚠️ At up to {_ar['max_leverage']:.1f}x leverage this period, "
+                                    "your return moves roughly that many times the book's own "
+                                    "move — SPY above is unlevered."
+                                )
+                            st.caption(f"ℹ️ {_ar['caption']}")
+                        else:
+                            st.info(
+                                "⚪ Your daily account history doesn't cover the start of this "
+                                "period, so an account-level return can't be shown for the "
+                                "full period."
+                            )
+                            _ar_sec = _ar.get("secondary")
+                            if _ar_sec is not None:
+                                _ar_sec_spy = _ar_sec.get("spy_return_pct")
+                                st.caption(
+                                    f"Tracked history covers {_ar_sec['d0']} to {_ar_sec['d1']}: "
+                                    f"your account {_ar_sec['return_pct']:+.2f}%"
+                                    + (f" vs SPY {_ar_sec_spy:+.2f}%" if _ar_sec_spy is not None else "")
+                                    + " over those specific dates — not the full period."
+                                )
+
+                        # build_review always sets this key to a list (never
+                        # None/missing) -- a plain index, not `.get(...) or []`,
+                        # which would silently mask a future contract break.
+                        _ar_monthly = _perf_review["account_return_monthly"]
+                        if _ar_monthly:
+                            _ar_monthly_ok_n = sum(1 for _armc in _ar_monthly if _armc.get("status") == "ok")
+                            with st.expander(
+                                f"📅 Month by month ({_ar_monthly_ok_n} of {len(_ar_monthly)} computed)"
+                            ):
+                                st.caption(
+                                    "Each month is computed independently — with any deposits or "
+                                    "withdrawals in the period, these won't exactly compound to "
+                                    "the period total above."
+                                )
+                                for _arm in _ar_monthly:
+                                    if _arm.get("status") == "ok":
+                                        _arm_spy = _arm.get("spy_return_pct")
+                                        st.caption(
+                                            f"**{_arm['month']}** — account {_arm['return_pct']:+.2f}%"
+                                            + (f", SPY {_arm_spy:+.2f}%" if _arm_spy is not None else "")
+                                        )
+                                    else:
+                                        st.caption(f"**{_arm['month']}** — not enough account history that month")
+
                         # ── Return on capital cycled through closed trades ──
                         # 2026-10-01 reframe: this used to show a "vs SPY"
                         # delta badge, which read as a verdict — the owner's
                         # real Q3 account return (+19.44%, confirmed against
                         # a Robinhood statement) was the OPPOSITE sign from
-                        # what that badge implied. No delta is computed or
-                        # shown here anymore. A real account-level return vs
-                        # SPY is DESIGNED but not built — gated on an owner-
-                        # run endpoint-integrity audit (memory
-                        # project_performance_review_return_tile_redesign).
+                        # what that badge implied. No delta is computed here
+                        # anymore. When the real Account Return above is
+                        # available, its own SPY figure is the one SPY number
+                        # shown on the page — this section drops its SPY tile
+                        # rather than show a second, differently-dated one.
                         st.markdown("#### 🔁 Return on Capital Cycled Through Closed Trades")
                         _prv = _perf_review["return_vs_spy"]
                         if _prv["status"] == "offline":
@@ -37096,8 +37219,35 @@ elif page == "💰 Account":
                             )
                         elif _prv["status"] == "empty":
                             st.info("No trades closed in this period.")
-                            if _prv.get("spy_period_return_pct") is not None:
+                            if _ar["status"] != "ok" and _prv.get("spy_period_return_pct") is not None:
                                 st.caption(f"SPY period return: {_prv['spy_period_return_pct']:+.2f}%")
+                        elif _ar["status"] == "ok":
+                            # SPY already shown above, over the account block's
+                            # own (slightly differently anchored) dates.
+                            _prv_c1, _prv_c2 = st.columns(2)
+                            _prv_c1.metric(
+                                "Return on capital cycled",
+                                f"{_prv['realized_return_pct']:+.2f}%"
+                                if _prv["realized_return_pct"] is not None else "—",
+                                help="Realized P&L ÷ summed cost basis of every closed lot this "
+                                     "period. Capital reused across several round trips is counted "
+                                     "once per trade, so this is closer to an average per-trade "
+                                     "return than a period return — it is NOT your account's return.",
+                            )
+                            _prv_c2.metric(
+                                "Realized P&L (closed trades)",
+                                _m(f"${_prv['realized_pnl_total']:,.2f}"),
+                            )
+                            if _prv["realized_return_pct"] is None:
+                                st.caption(
+                                    "⚪ Return on capital cycled unavailable — no cost-basis data "
+                                    "on the closed trades this period."
+                                )
+                            st.caption(
+                                f"ℹ️ {_prv['caption']} ({_prv['n_realized_trades']} trade(s) "
+                                "closed this period.) See Account Return vs SPY above for the "
+                                "real comparison to the market."
+                            )
                         else:
                             st.caption(
                                 "⚠️ The two figures below are NOT directly comparable to each "
@@ -39051,7 +39201,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 
 **Tax Report:** pick a tax year and see your realized gains/losses split into short-term vs. long-term, reconstructed lot-by-lot in the order you actually bought (FIFO) rather than the single blended average-cost number shown elsewhere in the app. Each closed lot also gets a wash-sale flag (⛔ violation / ⏳ pending / ✅ clean) reusing the same check the Tax lens on 🥧 Portfolio Overview already applies to harvested losses. A reconciliation line compares this report's total to the app's own stored average-cost total — they can legitimately differ on a position you sold in parts at different prices, and the report says so rather than picking one silently. Download the full lot table as CSV or a formatted Markdown report. **This is not tax advice** — it's an informational reconciliation tool; verify every figure against your broker's official 1099-B before filing.
 
-**Performance Review:** pick a period (This Quarter, Last Quarter, This Tax Year, or a custom date range) for a point-in-time, downloadable snapshot: **SPY's period return** next to your **Return on Capital Cycled Through Closed Trades** (realized P&L divided by the summed cost basis of every closed lot that period — capital reused across several round trips is counted once per trade, so this reads closer to an average per-trade return than a period return, and it's **not directly comparable to SPY's figure above it, and not your account's own return**; realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎖️ Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); and **Leverage & Margin Cushion Drift** / **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing account and risk-snapshot history). Downloads as CSV or Markdown, same as the Tax Report.
+**Performance Review:** pick a period (Since Tracking Began — once your account history covers enough — This Quarter, Last Quarter, This Tax Year, or a custom date range) for a point-in-time, downloadable snapshot: **Account Return vs SPY** (your real account return, read from your recorded account value just before the period started and at its end, adjusted for any deposits/withdrawals in between, next to SPY's return over those SAME dates — a "Month by month" expander breaks it down by calendar month; shown only when your daily account history covers the start of the period, otherwise withheld with a note on what sub-range IS covered); **Return on Capital Cycled Through Closed Trades** (realized P&L divided by the summed cost basis of every closed lot that period — capital reused across several round trips is counted once per trade, so this reads closer to an average per-trade return than a period return, and it's **not your account's own return**; realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎖️ Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); and **Leverage & Margin Cushion Drift** / **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing account and risk-snapshot history). Downloads as CSV or Markdown, same as the Tax Report.
 """
             )
 
