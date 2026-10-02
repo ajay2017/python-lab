@@ -126,9 +126,9 @@ def _group_max_touch(rows: "list[dict]", date_col: str) -> "dict[str, Any]":
 
 
 def check_orphan_cache_rows(
-    held_tickers: "set[str]",
-    watchlist_tickers: "set[str]",
-    discovery_tickers: "set[str]",
+    held_tickers: "set[str] | None",
+    watchlist_tickers: "set[str] | None",
+    discovery_tickers: "set[str] | None",
 ) -> "list[dict]":
     """F1 — a ticker no longer held/watchlisted/in the discovery universe
     whose most-recent cache row (across 8 per-ticker cache tables) is older
@@ -140,18 +140,37 @@ def check_orphan_cache_rows(
     Returns one row per table in `_ORPHAN_CACHE_TABLES` — "unknown" if that
     table could not be read at all, "warn" if 1+ orphaned tickers were
     found, "ok" if checked and none were found.
+
+    Any of the three roster args being `None` (2026-10-02 review M1: the
+    caller's own holdings/watchlist/discovery-universe read failed this
+    run) means "known" cannot be trusted — a ticker that's actually held
+    right now could be missing from it purely because that one load
+    failed, not because the ticker is genuinely orphaned. Rather than
+    silently treating a failed roster as "empty" (which would misreport
+    every held ticker with an aging cache row as an undisclosed orphan),
+    every table short-circuits to "unknown" for this run.
     """
     from stock_analyzer import db
     from stock_analyzer import market_time
     from stock_analyzer.constants import DATA_MAINT_ORPHAN_CACHE_GRACE_DAYS
 
+    if held_tickers is None or watchlist_tickers is None or discovery_tickers is None:
+        return [
+            {
+                "key": f"orphan_cache_{table}",
+                "label": f"Orphan cache rows — {table}",
+                "severity": "unknown",
+                "detail": (
+                    "could not determine held/watchlisted/discovered tickers "
+                    "this run — skipping orphan check to avoid a false positive"
+                ),
+            }
+            for table in _ORPHAN_CACHE_TABLES
+        ]
+
     known = {
         str(t).strip().upper()
-        for t in (
-            set(held_tickers or set())
-            | set(watchlist_tickers or set())
-            | set(discovery_tickers or set())
-        )
+        for t in (held_tickers | watchlist_tickers | discovery_tickers)
     }
     today = market_time.today_et()
 
@@ -435,15 +454,20 @@ def check_pending_import_anomalies() -> "list[dict]":
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────
 def run_all_checks(
-    held_tickers: "set[str]",
-    watchlist_tickers: "set[str]",
-    discovery_tickers: "set[str]",
+    held_tickers: "set[str] | None",
+    watchlist_tickers: "set[str] | None",
+    discovery_tickers: "set[str] | None",
 ) -> "list[dict]":
     """Run all 5 checks, each isolated in its own try/except (mirrors
     cron_runner.py::_run_maintenance's per-sub-job isolation) so one raising
     can't prevent the others from reporting. A check that raises degrades to
     a single "unknown" finding row naming which check failed, rather than
-    propagating and losing every other check's result."""
+    propagating and losing every other check's result.
+
+    The three roster args may be `None` (2026-10-02 review M1) when the
+    caller's own holdings/watchlist/discovery-universe read failed this
+    run — passed straight through to check_orphan_cache_rows, which is the
+    only one of the 5 checks that consumes them."""
     out: "list[dict]" = []
 
     def _safe(name: str, fn) -> None:

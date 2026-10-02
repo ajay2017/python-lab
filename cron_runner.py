@@ -1881,6 +1881,7 @@ def _run_thesis(now_et, force: bool) -> int:
         return 0
 
     held_data   = ctx.get("held_data", {})
+    _thesis_port_df = ctx.get("port_df")
     open_tickers = set(held_data.keys())
 
     # Load trades and find BUYs with a thesis for open positions
@@ -2007,9 +2008,24 @@ def _run_thesis(now_et, force: bool) -> int:
             # read as unknown/None below, independent of every other
             # ticker's own lookup.
             _erosion_row = {}
+        # 2026-10-02 review M9: held_data[ticker]["total"] is the raw
+        # pre-resolution bundle score (load_bundle's own output) -- it does
+        # NOT go through portfolio.build_portfolio_df's withhold/ETF
+        # resolution, so a withheld holding's fabricated neutral-50 (or an
+        # ETF's stock-pillar-shaped total) could persist into this snapshot
+        # and later disagree with the app-written snapshot (app.py ~40270),
+        # which reads the resolved port_df["Score"] instead. Resolve from
+        # the SAME port_df _build_context already returned, NaN-safe exactly
+        # like the app-side producer, so cron and app can never disagree.
+        _composite = None
+        if _thesis_port_df is not None and not _thesis_port_df.empty:
+            _comp_row = _thesis_port_df[_thesis_port_df["Ticker"] == ticker]
+            if not _comp_row.empty:
+                _comp_raw = _comp_row.iloc[0].get("Score")
+                _composite = None if _pd_cr.isna(_comp_raw) else float(_comp_raw)
         snapshot_map[ticker] = _ta.build_snapshot(
             evidence=ev,
-            composite=held_data.get(ticker, {}).get("total"),
+            composite=_composite,
             erosion_score=_erosion_row.get("erosion_score"),
             erosion_label=_erosion_row.get("erosion_label"),
             pt_signal=None,
@@ -2617,22 +2633,29 @@ def _run_maintenance(now_et, force: bool) -> int:
         from stock_analyzer import data_maintenance as _dm
         from stock_analyzer import db as _dq_db
 
+        # 2026-10-02 review M1: preserve None (not set()/{}) on a failed
+        # read -- a collapsed empty set reads identically to "genuinely not
+        # held/watchlisted/discovered" to check_orphan_cache_rows, so every
+        # held ticker with an aging cache row would be silently misreported
+        # as an undisclosed orphan whenever ANY ONE of these three loads
+        # fails, not just the one that actually failed.
         _dq_held_df = _dq_db.load_holdings_or_none()
         _dq_held = (
             set(_dq_held_df["Ticker"].astype(str).str.upper())
-            if _dq_held_df is not None else set()
+            if _dq_held_df is not None else None
         )
         _dq_wl = _dq_db.load_watchlist_or_none()
         _dq_watchlist = (
-            {str(t).strip().upper() for t in _dq_wl} if _dq_wl is not None else set()
+            {str(t).strip().upper() for t in _dq_wl} if _dq_wl is not None else None
         )
         # Reuse sub-job ⓪'s already-resolved discovery_universe payload
         # rather than a second fetch (`_ru_du` is set above, before ①/②).
-        _dq_discovery = {
-            str(t).strip().upper()
-            for bucket in (_ru_du or {}).values()
-            for t in bucket
-        }
+        # `_ru_du` is already None-preserving (resolve_universe_or_none) --
+        # don't collapse it via `or {}` here, same reasoning as above.
+        _dq_discovery = (
+            {str(t).strip().upper() for bucket in _ru_du.values() for t in bucket}
+            if _ru_du is not None else None
+        )
 
         _dq_findings = _dm.run_all_checks(_dq_held, _dq_watchlist, _dq_discovery)
         _dq_warn = [f for f in _dq_findings if f.get("severity") == "warn"]

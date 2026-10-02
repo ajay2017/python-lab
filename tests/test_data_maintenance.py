@@ -152,6 +152,76 @@ def test_orphan_malformed_date_is_skipped_not_crashed(monkeypatch):
     assert bundle_row["severity"] == "ok"  # unparseable -> can't confirm recency -> not flagged
 
 
+# ── None roster propagation (2026-10-02 review M1) ───────────────────────────
+#
+# A failed holdings/watchlist/discovery-universe read must never collapse to
+# an empty set() here -- that would read identically to "genuinely not held
+# anywhere", silently misreporting a held ticker with an aging cache row as
+# an undisclosed orphan. This is the SAME "unknown" posture the function
+# already uses when a cache TABLE itself can't be read -- extended here to
+# cover a failed ROSTER read too.
+
+def test_orphan_cache_none_held_roster_returns_unknown_never_false_positive(monkeypatch):
+    """A held ticker with a genuinely stale cache row must read 'unknown',
+    not 'warn', when the holdings read itself failed this run -- a warn
+    here would be reporting a currently-held ticker as orphaned purely
+    because one unrelated load failed."""
+    def _loader(table, col):
+        if table != "bundle_cache":
+            return []
+        return [_touch_row("REALLYHELD", DATA_MAINT_ORPHAN_CACHE_GRACE_DAYS + 1, col)]
+    monkeypatch.setattr(db, "load_ticker_last_touched", _loader)
+    rows = dm.check_orphan_cache_rows(None, set(), set())
+    assert len(rows) == len(dm._ORPHAN_CACHE_TABLES)
+    assert all(r["severity"] == "unknown" for r in rows)
+    bundle_row = next(r for r in rows if r["key"] == "orphan_cache_bundle_cache")
+    assert "REALLYHELD" not in bundle_row["detail"]
+
+
+def test_orphan_cache_none_watchlist_or_discovery_roster_also_returns_unknown(monkeypatch):
+    """Any ONE of the three rosters being None is enough to withhold the
+    whole check -- not just the held-tickers one."""
+    monkeypatch.setattr(db, "load_ticker_last_touched", lambda table, col: [])
+    rows_wl = dm.check_orphan_cache_rows(set(), None, set())
+    rows_disc = dm.check_orphan_cache_rows(set(), set(), None)
+    assert all(r["severity"] == "unknown" for r in rows_wl)
+    assert all(r["severity"] == "unknown" for r in rows_disc)
+
+
+def test_orphan_cache_all_rosters_present_still_detects_normally(monkeypatch):
+    """The None-propagation fix must not degrade the ordinary, all-present
+    case -- a real orphan is still flagged when every roster loaded fine."""
+    def _loader(table, col):
+        if table != "bundle_cache":
+            return []
+        return [_touch_row("ORPHANED", DATA_MAINT_ORPHAN_CACHE_GRACE_DAYS + 1, col)]
+    monkeypatch.setattr(db, "load_ticker_last_touched", _loader)
+    rows = dm.check_orphan_cache_rows(set(), set(), set())
+    bundle_row = next(r for r in rows if r["key"] == "orphan_cache_bundle_cache")
+    assert bundle_row["severity"] == "warn"
+    assert "ORPHANED" in bundle_row["detail"]
+
+
+def test_run_all_checks_propagates_none_roster_to_orphan_check(monkeypatch):
+    """run_all_checks must forward a None roster through rather than
+    defaulting it to set() before check_orphan_cache_rows ever sees it."""
+    monkeypatch.setattr(db, "load_ticker_last_touched", lambda table, col: [])
+    monkeypatch.setattr(db, "load_account_flows_for_dedup_check", lambda: [])
+    monkeypatch.setattr(
+        db, "load_analyst_coverage_or_none",
+        lambda **kw: pd.DataFrame(columns=["ticker", "article_date", "raw_text"]),
+    )
+    monkeypatch.setattr(
+        db, "load_thesis_reviews",
+        lambda: pd.DataFrame(columns=["ticker", "inputs_hash"]),
+    )
+    monkeypatch.setattr(db, "load_snaptrade_pending_imports", lambda status="pending": [])
+    rows = dm.run_all_checks(None, set(), set())
+    orphan_rows = [r for r in rows if r["key"].startswith("orphan_cache_")]
+    assert len(orphan_rows) == len(dm._ORPHAN_CACHE_TABLES)
+    assert all(r["severity"] == "unknown" for r in orphan_rows)
+
+
 # ── check 2 — account_flows duplicates ───────────────────────────────────────
 
 def test_account_flows_offline_emits_unknown(monkeypatch):

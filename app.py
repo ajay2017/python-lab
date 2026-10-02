@@ -34308,7 +34308,10 @@ elif page == "🩺 System Trust":
         "at page load — nothing here depends on a background job having run."
     )
     _sysh_refresh = st.button("🔄 Refresh checks", key="_sysh_refresh")
-    _health = _sysh.get_health(force=_sysh_refresh)
+    # include_quality=True: this is the one page that actually renders check
+    # ⑦ (2026-10-02 review M3) — Home's own get_health() call omits it so
+    # that DB scan isn't paid for on every cold load/5-min refresh.
+    _health = _sysh.get_health(force=_sysh_refresh, include_quality=True)
 
     _DOT = {"ok": "🟢", "warn": "🟡", "down": "🔴", "unknown": "⚪"}
     _chip = _health.get("chip_severity", "ok")

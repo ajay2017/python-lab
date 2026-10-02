@@ -21,14 +21,24 @@ class _FakeExecResult:
 class _FakeQueryBuilder:
     def __init__(self, rows):
         self._rows = rows
+        self._range = None
+        self.order_calls: list = []
 
     def select(self, *_a, **_kw):
         return self
 
     def order(self, *_a, **_kw):
+        self.order_calls.append((_a, _kw))
+        return self
+
+    def range(self, start, end):
+        self._range = (start, end)
         return self
 
     def execute(self):
+        if self._range is not None:
+            start, end = self._range
+            return _FakeExecResult(self._rows[start:end + 1])
         return _FakeExecResult(self._rows)
 
 
@@ -40,9 +50,15 @@ class _RaisingQueryBuilder:
 class _FakeClient:
     def __init__(self, rows):
         self._rows = rows
+        # Records every builder .table() hands out -- a pagination test
+        # needs the LAST one built to assert its .order() call args,
+        # mirroring test_db_load_recommendations.py's identical tracking.
+        self.builders: list = []
 
     def table(self, _name):
-        return _FakeQueryBuilder(self._rows)
+        b = _FakeQueryBuilder(self._rows)
+        self.builders.append(b)
+        return b
 
 
 class _RaisingClient:
@@ -78,6 +94,32 @@ def test_load_ticker_last_touched_empty_table_returns_empty_list_not_none(monkey
     monkeypatch.setattr(db, "_client", lambda: _FakeClient([]))
     out = db.load_ticker_last_touched("bundle_cache", "fetched_at")
     assert out == []
+
+
+# ── pagination (2026-10-02 review M2) ────────────────────────────────────────
+#
+# This is a generic reader shared across 8 cache tables, some holding far
+# more than one row per ticker over time (thesis_erosion_cache, debate_cache,
+# price_xcheck_history) -- the prior "confirmed small" docstring claim
+# doesn't hold permanently. A result set wider than one page must still
+# come back whole via `.range()` looping, not silently capped at page 1.
+
+def test_load_ticker_last_touched_paginates_past_page_size(monkeypatch):
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_TICKER_LAST_TOUCHED_PAGE_SIZE", 2)
+    rows = [{"ticker": f"T{i}", "fetched_at": "2026-09-01T00:00:00+00:00"} for i in range(5)]
+    fake = _FakeClient(rows)
+    monkeypatch.setattr(db, "_client", lambda: fake)
+
+    out = db.load_ticker_last_touched("bundle_cache", "fetched_at")
+
+    assert out == rows
+    # Every page's builder ordered by (ticker, date_col) -- a genuine total
+    # order for the single-PK-on-ticker tables, and the best available
+    # tie-break for the multi-row-per-ticker ones (see the function's own
+    # docstring for why a bare `ticker` order alone isn't always unique).
+    for b in fake.builders:
+        assert [args[0] for args, _kw in b.order_calls] == ["ticker", "fetched_at"]
 
 
 # ── load_account_flows_for_dedup_check ───────────────────────────────────────

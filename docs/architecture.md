@@ -2407,13 +2407,28 @@ state the actual failing check(s)' label + detail text instead of a generic
 "a data provider is still actively erroring" paragraph.
 
 **⑦ Data quality (added 2026-09-28, F-235 update)** — `check_data_quality()` is a
-thin wrapper resolving held/watchlist/discovery tickers (same degrade-per-roster
-posture as `cron_runner.py`'s maintenance sub-job ⓪ — an unresolvable roster
-becomes an empty set for THAT roster only, never aborts the check) and delegating
-to `stock_analyzer/data_maintenance.py::run_all_checks()` — see that module's own
+thin wrapper resolving held/watchlist/discovery tickers and delegating to
+`stock_analyzer/data_maintenance.py::run_all_checks()` — see that module's own
 section below. **Excluded from `pipeline`/`chip_severity`**, same reasoning as ⑤:
 an orphan-cache accumulation is a standing chore that stays true for weeks, not a
 transient fault the chip exists to interrupt someone about.
+
+**Corrected 2026-10-02 (review M1):** an unresolvable roster no longer degrades
+to an empty set for THAT roster only — `check_data_quality()` (`system_health.py`)
+and `cron_runner.py`'s maintenance sub-job ③ both now preserve `None` through to
+`data_maintenance.check_orphan_cache_rows`/`run_all_checks`, which short-circuit
+every one of the 8 orphan-cache tables to `severity="unknown"` whenever ANY of
+the three rosters failed to load this run — a collapsed empty set read
+identically to "genuinely not held/watchlisted/discovered anywhere" to the
+orphan check, which would have silently misreported a held ticker with an aging
+cache row as an undisclosed orphan.
+
+**Also corrected 2026-10-02 (review M3):** check ⑦ is no longer computed on
+every `get_health()` call — `compute_health()`/`get_health()` both take an
+`include_quality` flag (default `False`), and only 🩺 System Trust's own call
+site passes `include_quality=True`. Home's hot-path call (cold load + every
+5-minute refresh) no longer pays for this check's DB scan, since its result was
+already excluded from the chip and rendered nowhere except this page.
 
 ### `stock_analyzer/data_maintenance.py`
 

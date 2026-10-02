@@ -637,3 +637,97 @@ def test_write_outcome_failure_escalates_chip_to_down(monkeypatch):
     health = sh.compute_health(session_state=container)
     assert health["chip_severity"] == "down"
     assert health["n_down"] == 1
+
+
+# ── ⑦ data quality: hot-path exclusion (2026-10-02 review M3) ────────────────
+
+def test_compute_health_skips_check_7_by_default(monkeypatch):
+    """Home's hot-path call (no args) must never pay for check ⑦'s DB scan —
+    quality must be None, and check_data_quality must not even be called."""
+    def _boom(_session_state=None):
+        raise AssertionError("check_data_quality must not run when include_quality=False")
+    monkeypatch.setattr(sh, "check_data_quality", _boom)
+    health = sh.compute_health(session_state={})
+    assert health["quality"] is None
+
+
+def test_compute_health_runs_check_7_when_requested(monkeypatch):
+    monkeypatch.setattr(sh, "check_data_quality", lambda _s=None: [
+        {"key": "orphan_cache_bundle_cache", "severity": "ok"},
+    ])
+    health = sh.compute_health(session_state={}, include_quality=True)
+    assert health["quality"] == [{"key": "orphan_cache_bundle_cache", "severity": "ok"}]
+
+
+def test_get_health_cache_built_without_quality_recomputes_when_requested(monkeypatch):
+    """A cache entry Home built (include_quality=False, so quality=None) must
+    not be served to System Trust's include_quality=True call within the
+    same TTL window -- that would silently starve check ⑦ for the rest of
+    the cache lifetime."""
+    calls = {"n": 0}
+
+    def _quality(_s=None):
+        calls["n"] += 1
+        return [{"key": "orphan_cache_bundle_cache", "severity": "ok"}]
+    monkeypatch.setattr(sh, "check_data_quality", _quality)
+    monkeypatch.setattr(sh, "check_cron_liveness", lambda: [])
+    monkeypatch.setattr(sh, "check_data_stores", lambda: [])
+    monkeypatch.setattr(sh, "check_providers", lambda: [])
+    monkeypatch.setattr(sh, "check_caches", lambda _s=None: [])
+    monkeypatch.setattr(sh, "check_reference_data", lambda: [])
+    monkeypatch.setattr(sh, "check_write_outcomes", lambda _s=None: [])
+
+    import sys
+    import types
+    fake_st = types.SimpleNamespace(session_state={})
+    monkeypatch.setitem(sys.modules, "streamlit", fake_st)
+
+    home_call = sh.get_health()  # Home: include_quality defaults False
+    assert home_call["quality"] is None
+    assert calls["n"] == 0
+    assert "_system_health_cache" in fake_st.session_state
+
+    systrust_call = sh.get_health(include_quality=True)  # same TTL window
+    assert systrust_call["quality"] == [{"key": "orphan_cache_bundle_cache", "severity": "ok"}]
+    assert calls["n"] == 1
+
+    # A later Home call within the same TTL window must REUSE the now-
+    # quality-bearing cache entry, not recompute -- the reverse direction
+    # (cheap call after expensive) must never pay twice either.
+    home_again = sh.get_health()
+    assert home_again["quality"] == [{"key": "orphan_cache_bundle_cache", "severity": "ok"}]
+    assert calls["n"] == 1
+
+    # And a second System Trust call must not loop/recompute either.
+    systrust_again = sh.get_health(include_quality=True)
+    assert systrust_again["quality"] == [{"key": "orphan_cache_bundle_cache", "severity": "ok"}]
+    assert calls["n"] == 1
+
+
+def test_check_data_quality_propagates_none_roster_not_empty_set(monkeypatch):
+    """Wiring test for the system_health.py site of 2026-10-02 review M1 --
+    a failed holdings read must reach check_orphan_cache_rows as None, not a
+    collapsed empty set, or a held ticker with an aging cache row would be
+    silently misreported as an undisclosed orphan."""
+    from stock_analyzer import db as real_db
+    from stock_analyzer import reference_data as real_rd
+
+    monkeypatch.setattr(real_db, "load_holdings_or_none", lambda: None)
+    monkeypatch.setattr(real_db, "load_watchlist_or_none", lambda: set())
+    monkeypatch.setattr(real_rd, "resolve_universe_or_none", lambda name: ({}, "fresh", None))
+
+    captured = {}
+
+    def _spy(held, watchlist, discovery):
+        captured["held"] = held
+        captured["watchlist"] = watchlist
+        captured["discovery"] = discovery
+        return [{"key": "orphan_cache_bundle_cache", "severity": "unknown"}]
+    monkeypatch.setattr(
+        "stock_analyzer.data_maintenance.run_all_checks", _spy,
+    )
+
+    rows = sh.check_data_quality({})
+
+    assert captured["held"] is None
+    assert rows == [{"key": "orphan_cache_bundle_cache", "severity": "unknown"}]

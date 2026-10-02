@@ -1874,6 +1874,12 @@ def _json_safe(obj):
         return None
 
 
+_TICKER_LAST_TOUCHED_PAGE_SIZE = 1000
+# -- see _RECOMMENDATIONS_PAGE_SIZE's docstring for the full history. None
+# of the 8 tables this generic reader serves has grown past the cap yet,
+# but the fix is identical and cheap enough to apply ahead of that, not after.
+
+
 def load_ticker_last_touched(table_name: str, date_col: str) -> "list[dict] | None":
     """Generic reader for the data-maintenance orphan-cache sweep (F1) --
     returns [{"ticker": ..., "last_touched": <raw date/timestamp string>}, ...]
@@ -1884,15 +1890,41 @@ def load_ticker_last_touched(table_name: str, date_col: str) -> "list[dict] | No
     must come from data_maintenance.py's own fixed registry, never external
     input -- this function does not validate them.
 
-    Not paginated: every table this is used for is narrow (2 selected
-    columns) and confirmed small (low hundreds of rows total across all 8,
-    per the 2026-09 DB architecture review) -- revisit if that changes.
+    Paginates in `_TICKER_LAST_TOUCHED_PAGE_SIZE`-row pages (`.range()`,
+    mirrors _load_recommendations_all_pages) rather than one unbounded
+    `.execute()` -- 2026-10-02 review finding (M2): this is a generic reader
+    shared across 8 heterogeneous cache tables (`data_maintenance._ORPHAN_
+    CACHE_TABLES`), some with `ticker` as their sole PK (one row per ticker:
+    bundle_cache, fundamentals_cache, sector_cache, etf_lookthrough_cache)
+    and some keyed on (ticker, date_col) with many rows per ticker over time
+    (thesis_erosion_cache, debate_cache, price_xcheck_history, sentiment_llm_
+    cache) -- the prior
+    "confirmed small" claim doesn't hold uniformly or permanently across all
+    8. Orders by (ticker, date_col) -- a genuine total order for the
+    single-PK tables (ticker alone is already unique there), and for the
+    history-style tables ties only if two rows share the exact same ticker
+    AND date_col value, which the cache's own upsert-on-conflict semantics
+    are designed to prevent.
     """
     if not has_db():
         return None
     try:
-        rows = _client().table(table_name).select(f"ticker,{date_col}").execute().data
-        return rows if rows is not None else []
+        page_size = _TICKER_LAST_TOUCHED_PAGE_SIZE
+        all_rows: list = []
+        start = 0
+        while True:
+            page = (
+                _client().table(table_name).select(f"ticker,{date_col}")
+                .order("ticker").order(date_col)
+                .range(start, start + page_size - 1).execute().data
+            )
+            if not page:
+                break
+            all_rows.extend(page)
+            if len(page) < page_size:
+                break
+            start += page_size
+        return all_rows
     except Exception:
         return None
 

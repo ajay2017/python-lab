@@ -894,7 +894,11 @@ def check_data_quality(session_state: Any = None) -> list[dict]:
 
     Resolves held/watchlist/discovery-universe tickers the same defensive
     way `cron_runner.py`'s own sub-job ⓪ does: a failed resolution degrades
-    to an empty set for THAT roster only, never aborts the whole check.
+    to `None` for THAT roster only (2026-10-02 review M1 — a collapsed
+    empty set() here reads identically to "genuinely not held/watchlisted/
+    discovered" to the orphan-cache check, silently misreporting a held
+    ticker with an aging cache row as an undisclosed orphan whenever any
+    ONE of these three reads fails), never aborts the whole check.
     `session_state` is accepted for signature parity with the other checks
     but not read directly — nothing here needs it.
     """
@@ -906,16 +910,16 @@ def check_data_quality(session_state: Any = None) -> list[dict]:
         held_df = db.load_holdings_or_none()
         held = (
             set(held_df["Ticker"].astype(str).str.upper())
-            if held_df is not None else set()
+            if held_df is not None else None
         )
 
         wl = db.load_watchlist_or_none()
-        watchlist = {str(t).strip().upper() for t in wl} if wl is not None else set()
+        watchlist = {str(t).strip().upper() for t in wl} if wl is not None else None
 
         du_payload, _, _du_err = resolve_universe_or_none("discovery_universe")
         discovery = (
             {str(t).strip().upper() for bucket in du_payload.values() for t in bucket}
-            if du_payload is not None else set()
+            if du_payload is not None else None
         )
 
         return data_maintenance.run_all_checks(held, watchlist, discovery)
@@ -927,7 +931,7 @@ def check_data_quality(session_state: Any = None) -> list[dict]:
         }]
 
 
-def compute_health(session_state: Any = None) -> dict:
+def compute_health(session_state: Any = None, include_quality: bool = False) -> dict:
     """Run all seven checks and roll up a chip severity. Never raises.
 
     `chip_severity` is the worst of checks ①②③⑥ (cron / data stores /
@@ -951,6 +955,17 @@ def compute_health(session_state: Any = None) -> dict:
     on the owner's own schedule, not something the Home chip should ever
     flip amber over.
 
+    `include_quality` (2026-10-02 review M3): check ⑦ is a real DB scan
+    (paginated reads across 8 cache tables plus 3 sibling duplicate-insert
+    checks) that is excluded from the chip and shown nowhere except the
+    🩺 System Trust page itself — yet `get_health()` was unconditionally
+    computing and discarding it on every Home cold-load/5-minute refresh.
+    Default `False` so Home's hot-path call skips it entirely; the System
+    Trust page passes `include_quality=True` to actually see it. Returns
+    `None` for "quality" (never `[]`) when skipped — `check_data_quality`
+    itself always returns at least 8 rows on a genuine run, so `None` is
+    an unambiguous "not requested this call", not a collapsed offline read.
+
     Returns "ok" | "warn" | "down"; the Home chip renders only for
     "warn"/"down"."""
     try:
@@ -971,7 +986,7 @@ def compute_health(session_state: Any = None) -> dict:
     caches = _safe(check_caches, session_state)
     reference = _safe(check_reference_data)
     writes = _safe(check_write_outcomes, session_state)
-    quality = _safe(check_data_quality, session_state)
+    quality = _safe(check_data_quality, session_state) if include_quality else None
 
     # NB: `reference`, `caches` and `quality` are deliberately absent from
     # `pipeline` — see the docstring. The guarantee is structural, not merely
@@ -1006,21 +1021,36 @@ def compute_health(session_state: Any = None) -> dict:
     }
 
 
-def get_health(force: bool = False, ttl_sec: int = 300) -> dict:
+def get_health(force: bool = False, ttl_sec: int = 300, include_quality: bool = False) -> dict:
     """Session-memoized compute_health — recompute at most once per `ttl_sec`
     so the Home chip doesn't re-probe the DB on every rerun. Falls back to a
-    direct compute when there's no Streamlit session (tests / headless)."""
+    direct compute when there's no Streamlit session (tests / headless).
+
+    `include_quality` (2026-10-02 review M3) is forwarded to compute_health
+    so Home's hot-path call (no args) never pays for check ⑦'s DB scan,
+    while 🩺 System Trust's call (`include_quality=True`) actually gets it.
+    A cache entry built WITHOUT quality must not be served to a caller that
+    now wants it — tracked via the cached data's own "quality" key (`None`
+    means "not computed", never collapsed via `or`), so Home building the
+    cache first can't silently starve System Trust of check ⑦ for the rest
+    of the TTL window."""
     try:
         import streamlit as st
         from stock_analyzer import market_time
         now = market_time.now_et().timestamp()
         cache = st.session_state.get("_system_health_cache")
+        _cache_has_quality = (
+            isinstance(cache, dict)
+            and isinstance(cache.get("data"), dict)
+            and cache["data"].get("quality") is not None
+        )
         if (not force and isinstance(cache, dict)
-                and (now - cache.get("_ts", 0)) < ttl_sec):
+                and (now - cache.get("_ts", 0)) < ttl_sec
+                and (not include_quality or _cache_has_quality)):
             return cache["data"]
-        data = compute_health(st.session_state)
+        data = compute_health(st.session_state, include_quality=include_quality)
         st.session_state["_system_health_cache"] = {"_ts": now, "data": data}
         return data
     except Exception:
         # No Streamlit session (tests / headless) — compute directly, unmemoized.
-        return compute_health()
+        return compute_health(include_quality=include_quality)

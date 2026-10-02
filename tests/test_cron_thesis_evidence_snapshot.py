@@ -32,13 +32,27 @@ def _held_data(tickers, totals=None):
     }
 
 
+def _port_df(tickers, totals=None):
+    """2026-10-02 review M9 fix: the real composite comes from `port_df`
+    (the withhold/ETF-resolved score, matching the app-side writer), not
+    from `held_data[t]["total"]` (the raw pre-resolution bundle score) --
+    `_build_context`'s real contract includes `port_df` alongside
+    `held_data` (see its own docstring), so the fake context here must too.
+    `totals.get(t)` returning None for an untotaled ticker becomes a real
+    NaN once boxed into a DataFrame column, matching a genuinely withheld
+    composite."""
+    totals = totals or {}
+    return pd.DataFrame([{"Ticker": t, "Score": totals.get(t)} for t in tickers])
+
+
 def _setup(monkeypatch, cr, tickers, totals, erosion_batch):
     import stock_analyzer.headless_alert_engine as hae
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
     monkeypatch.setattr(
         hae, "_build_context",
-        lambda today: {"ok": True, "held_data": _held_data(tickers, totals), "errors": []},
+        lambda today: {"ok": True, "held_data": _held_data(tickers, totals),
+                       "port_df": _port_df(tickers, totals), "errors": []},
     )
     monkeypatch.setattr(cr.db, "load_trades", lambda: _trades_df(tickers))
     monkeypatch.setattr(cr.db, "load_thesis_reviews",
@@ -133,3 +147,84 @@ def test_erosion_batch_lookup_failure_degrades_to_empty_not_raise(monkeypatch):
     assert rc == 0
     assert saved_records[0]["evidence_snapshot"]["erosion_score"] is None
     assert saved_records[0]["evidence_snapshot"]["composite"] == 72.0
+
+
+def test_composite_resolves_from_port_df_not_raw_held_data_total(monkeypatch):
+    """2026-10-02 review M9 regression: held_data[t]["total"] is the raw
+    pre-resolution bundle score, NOT the withhold/ETF-aware composite the
+    app-side writer (app.py ~40270) persists. A withheld holding's raw
+    bundle total could be a fabricated neutral-50 while port_df["Score"]
+    correctly carries NaN -- the cron-written snapshot must agree with the
+    app-written one, so it must read port_df, never held_data[t]["total"]."""
+    import cron_runner as cr
+    from stock_analyzer import thesis_advisor as ta
+
+    now_et = cr.datetime.now(cr._ET).replace(hour=12, minute=0, second=0, microsecond=0)
+    # held_data's raw total (50.0, a fabricated-looking neutral) deliberately
+    # disagrees with port_df's resolved Score (NaN, i.e. withheld) for the
+    # SAME ticker -- proves the snapshot reads the latter, not the former.
+    import stock_analyzer.headless_alert_engine as hae
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setattr(
+        hae, "_build_context",
+        lambda today: {
+            "ok": True,
+            "held_data": {"AAPL": {"history": pd.DataFrame(), "info": {},
+                                    "headlines": [], "total": 50.0}},
+            "port_df": pd.DataFrame([{"Ticker": "AAPL", "Score": float("nan")}]),
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(cr.db, "load_trades", lambda: _trades_df(["AAPL"]))
+    monkeypatch.setattr(cr.db, "load_thesis_reviews",
+                        lambda: pd.DataFrame(columns=["ticker", "reviewed_at"]))
+    monkeypatch.setattr(cr.db, "load_analyst_coverage", lambda **_kw: pd.DataFrame())
+    monkeypatch.setattr(cr.db, "load_thesis_erosion_cache_batch", lambda tickers, score_date: {})
+    monkeypatch.setattr(ta, "run_batch_review", lambda positions, **_kw: [
+        {"ticker": "AAPL", "trade_date": "2026-09-01", "status": "INTACT",
+         "summary": "ok", "reviewed_at": now_et.isoformat(), "inputs_hash": "abc"}
+    ])
+    saved_records = []
+    monkeypatch.setattr(cr.db, "save_thesis_review", lambda rec: saved_records.append(rec) or True)
+
+    cr._run_thesis(now_et, force=True)
+
+    assert saved_records[0]["evidence_snapshot"]["composite"] is None
+
+
+def test_composite_resolves_a_real_value_from_port_df_not_held_data_total(monkeypatch):
+    """Complements the NaN case above with a POSITIVE value -- covers the
+    ETF shape (where port_df["Score"] is etf_total, genuinely different
+    from held_data[t]["total"]'s stock-pillar-shaped raw number) and proves
+    the fix doesn't just always resolve to None."""
+    import cron_runner as cr
+    from stock_analyzer import thesis_advisor as ta
+
+    now_et = cr.datetime.now(cr._ET).replace(hour=12, minute=0, second=0, microsecond=0)
+    import stock_analyzer.headless_alert_engine as hae
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setattr(
+        hae, "_build_context",
+        lambda today: {
+            "ok": True,
+            "held_data": {"SPY": {"history": pd.DataFrame(), "info": {},
+                                   "headlines": [], "total": 50.0}},
+            "port_df": pd.DataFrame([{"Ticker": "SPY", "Score": 63.0}]),
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(cr.db, "load_trades", lambda: _trades_df(["SPY"]))
+    monkeypatch.setattr(cr.db, "load_thesis_reviews",
+                        lambda: pd.DataFrame(columns=["ticker", "reviewed_at"]))
+    monkeypatch.setattr(cr.db, "load_analyst_coverage", lambda **_kw: pd.DataFrame())
+    monkeypatch.setattr(cr.db, "load_thesis_erosion_cache_batch", lambda tickers, score_date: {})
+    monkeypatch.setattr(ta, "run_batch_review", lambda positions, **_kw: [
+        {"ticker": "SPY", "trade_date": "2026-09-01", "status": "INTACT",
+         "summary": "ok", "reviewed_at": now_et.isoformat(), "inputs_hash": "abc"}
+    ])
+    saved_records = []
+    monkeypatch.setattr(cr.db, "save_thesis_review", lambda rec: saved_records.append(rec) or True)
+
+    cr._run_thesis(now_et, force=True)
+
+    assert saved_records[0]["evidence_snapshot"]["composite"] == 63.0
