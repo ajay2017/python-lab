@@ -19,7 +19,7 @@
 - **Part I — Using it day-to-day**
   - I.1 First run (get your data in — the one step that everything else trusts)
   - I.2 The daily loop
-  - I.3 Page-by-page tour (all 28 pages, in nav order)
+  - I.3 Page-by-page tour (all 29 pages, in nav order)
 - **Part II — How it works behind the scenes**
   - II.1 The composite score (4 pillars)
   - II.2 The daily brief & decision buckets
@@ -87,7 +87,7 @@ Pre-market and end-of-day, the **email cron** may have already sent you a protec
 
 ## I.3 Page-by-page tour
 
-28 pages, grouped exactly as the sidebar groups them. For each: *what it's for · when to look · key tabs · what to do.*
+29 pages, grouped exactly as the sidebar groups them. For each: *what it's for · when to look · key tabs · what to do.* **🧵 Thesis (F-285) was missing from this tour until 2026-10-02 (audit finding H5) — added below, in RESEARCH, where it shipped.**
 
 ### Group: MAIN
 
@@ -128,6 +128,8 @@ Pre-market and end-of-day, the **email cron** may have already sent you a protec
 **⚖️ Compare** — *Two tickers side by side* (F-208). Cites specific tie-break evidence (FCF yield, beta, Sharpe gaps) when composites are close; **never fabricates a pick** (F-209) and shows portfolio-fit awareness without gating (F-210).
 
 **📋 Watchlist** — *Names you track but don't hold.* Composite + key metrics per name (F-101); advisor recs REMOVE / HOLD_OFF_EARNINGS / ENTER_NOW (F-102). **ENTER_NOW hard-gates on composite ≥ 65 (F-103) and a portfolio-risk gate (F-104).** Actionable-first layout (F-219); a "Log Planned Trade" prefill (F-106); resurrection nudge for forgotten-but-now-actionable names (F-203). Offline warning when data is unavailable (F-105).
+
+**🧵 Thesis** (F-285, shipped 2026-09-29 — missing from this tour until 2026-10-02, audit finding H5) — *One consolidated per-ticker research card.* Pulls together 5 previously-scattered surfaces that were never visible together: Thesis Authoring / F-1 Review (F-5), Thesis Red Team, Multi-Agent Debate, Analyst Coverage (F-154), and the Pre-Mortem Protocol. Every evidence line is tagged by provenance (fact / derived / analyst-opinion / AI-inference / your-words) — an unrecognized field defaults to the conservative AI-inference tag, never silently to fact. A disclosed, plain-text banner surfaces when the engine composite, the F-1 verdict, saved analyst consensus, and the debate verdict disagree with each other — pure display, never a new score or a suppression. A "what changed since last review" panel runs a real diff against the two most recent evidence snapshots (composite band crossing, Red Team erosion shift, a newly-crossed analyst PT cut, new analyst coverage, a market-tone change, an F-1 verdict change) once enough snapshot history exists; shows "not enough history yet" or "no material change" otherwise — never a fabricated diff. Read-only, narrates and reconciles existing calls, never originates or gates.
 
 **🌐 Macro** — *Regime & sector-rotation awareness.* A manual-load regime read (TLT/SPY/VIX proxy, F-211), sector-rotation playbook + portfolio macro-alignment (F-213). ⚠️ Landmine (F-212): this ETF-proxy read is **not** the FRED-based 7-signal regime detector used elsewhere — don't confuse them.
 
@@ -298,7 +300,7 @@ Per-request timeout `LLM_REQUEST_TIMEOUT_SEC` (=30s); a timeout just yields the 
 
 ## II.11 Persistence (database) & deployment
 
-**Database:** Supabase Postgres, 49 tables (`architecture.md §6.1–6.49`). Core: `holdings`, `watchlist`, `trades` (source of truth), `manual_stops`, `daily_snapshots`, `recommendations`, `analyst_coverage`, `exit_signals`, plus caches (`bundle_cache`, `scanner_cache`, `sector_cache`, `fundamentals_cache`) and feature tables (`thesis_reviews`, `judgment_opinions/_grades`, `debate_cache`, `structural_scan_cache`, etc.).
+**Database:** Supabase Postgres, 50 tables (`architecture.md §6.1–6.50` — corrected 2026-10-02, audit finding M10: `etf_lookthrough_cache` §6.50 was added without bumping this count). Core: `holdings`, `watchlist`, `trades` (source of truth), `manual_stops`, `daily_snapshots`, `recommendations`, `analyst_coverage`, `exit_signals`, plus caches (`bundle_cache`, `scanner_cache`, `sector_cache`, `fundamentals_cache`) and feature tables (`thesis_reviews`, `judgment_opinions/_grades`, `debate_cache`, `structural_scan_cache`, etc.).
 
 - **New columns must be backward-compatible** — `db.load_trades()` backfills `None` for legacy rows; additive columns are dropped-and-retried by the writer until the DDL is applied.
 - **RLS is always on** — every table is `FOR ALL TO service_role`. The Streamlit secret `[supabase] key` must be the **service-role/secret** key. "RLS blocking" errors → swap secrets & reboot, never disable RLS.
