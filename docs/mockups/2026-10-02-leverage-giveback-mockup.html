@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mockup — Leverage-vs-Equity Disclosure (Summary / Book Safety)</title>
+<style>
+  :root {
+    --bg: #0e1117;
+    --card-bg: #11151c;
+    --panel-bg: #171b24;
+    --border: #262b36;
+    --text: #e5e7eb;
+    --muted: #9aa3b2;
+    --amber: #f59e0b;
+    --amber-bg: rgba(245, 158, 11, 0.08);
+    --amber-border: rgba(245, 158, 11, 0.35);
+    --red: #ef4444;
+    --green: #22c55e;
+    --blue: #60a5fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0;
+    padding: 32px 16px 80px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  .meta-banner {
+    background: #1c2333;
+    border: 1px solid #334066;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 28px;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: #c7d2fe;
+  }
+  .meta-banner b { color: #fff; }
+  h1 {
+    font-size: 15px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 36px 0 14px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+  h1 span.tag {
+    float: right;
+    text-transform: none;
+    letter-spacing: normal;
+    font-size: 12px;
+    background: #262b36;
+    padding: 2px 9px;
+    border-radius: 999px;
+    color: var(--muted);
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 22px;
+  }
+  .card-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .metrics-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px;
+    margin-bottom: 4px;
+  }
+  .metric label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .metric .val {
+    font-size: 24px;
+    font-weight: 600;
+  }
+  .metric .val.green { color: var(--green); }
+  .metric .val.red { color: var(--red); }
+  .divider { border-top: 1px solid var(--border); margin: 18px 0; }
+  .disclosure {
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 14.5px;
+    line-height: 1.55;
+  }
+  .disclosure.emphasized {
+    background: var(--amber-bg);
+    border: 1px solid var(--amber-border);
+  }
+  .disclosure.muted-box {
+    background: #141821;
+    border: 1px solid var(--border);
+  }
+  .disclosure .headline { font-weight: 600; }
+  .disclosure .caption {
+    color: var(--muted);
+    font-size: 13px;
+    margin-top: 8px;
+    line-height: 1.5;
+  }
+  .disclosure .caveat {
+    color: #fbbf24;
+    font-size: 12.5px;
+    margin-top: 8px;
+    font-style: italic;
+  }
+  .state-label {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    margin-bottom: 10px;
+  }
+  .state-label.giveback { background: rgba(245,158,11,0.18); color: var(--amber); }
+  .state-label.elevated { background: rgba(96,165,250,0.15); color: var(--blue); }
+  .state-label.calm { background: rgba(34,197,94,0.15); color: var(--green); }
+  .state-label.thin { background: rgba(154,163,178,0.15); color: var(--muted); }
+  .plain-states {
+    margin-top: 10px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .plain-states .disclosure { font-size: 13px; }
+  footer {
+    margin-top: 48px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+  code { background: #1c2129; padding: 1px 5px; border-radius: 4px; font-size: 0.92em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="meta-banner">
+    <b>This is a static mockup for design review — not live data, no code has been written yet.</b><br>
+    <b>Updated 2026-10-02 with your real <code>account_daily_snapshots</code> SQL output</b> —
+    the first draft used 2.69x as the Sep 23 peak leverage, which was actually the Sep 10 figure;
+    the real Sep 23 peak was 2.98x. The split below is now the genuine measured number, not a
+    placeholder: equity-shrinkage (0.44x) was the LARGER contributor, loan-growth (0.31x) the
+    smaller one — the opposite of the first draft's guess. Thresholds confirmed: target
+    <b>2.0x</b>, giveback drawdown <b>&minus;10%</b>, render site <b>Summary only</b> (inside the
+    existing Book Safety card, nothing changes on Home). Only 15 settled trading days of history
+    exist as of Sep 30, so the "N-day high" label reads 15, not the 63-day cap.
+  </div>
+
+  <h1>🧾 Summary — Book Safety <span class="tag">existing card, unchanged</span></h1>
+  <div class="card">
+    <div class="card-title">🛡️ Book Safety</div>
+    <div class="metrics-row">
+      <div class="metric"><label>Leverage</label><div class="val">3.73×</div></div>
+      <div class="metric"><label>Cushion</label><div class="val">$1,566</div></div>
+      <div class="metric"><label>Call Distance</label><div class="val red">&minus;2.4%</div></div>
+      <div class="metric"><label>Maintenance Rate</label><div class="val">25%</div></div>
+    </div>
+  </div>
+
+  <h1>📐 New: Leverage-vs-Equity Disclosure <span class="tag">what's being added</span></h1>
+
+  <div class="card">
+    <span class="state-label giveback">State: giveback (emphasized) — REAL DATA</span>
+    <div class="disclosure emphasized">
+      <div class="headline">📐 Leverage rose while equity fell. At Sep 30 close, settled
+      leverage was 3.73×, up from 2.98× on Sep 23, when equity was at its 15-day high. Equity
+      is 18% below that high ($6,517 vs $7,964). Of the 0.75× rise, 0.44× came from equity
+      shrinking against a loan that was roughly flat, and 0.31× from the loan itself growing
+      ($15,787 → $17,819).</div>
+      <div class="caption">For reference: at the same equity, a stock book about $11,302
+      smaller (or about $5,651 more cash in the account) would put leverage at your 2.0×
+      reference, where a margin call would need roughly a 33% book decline, against 2.4% at
+      this close. Awareness only; this changes no recommendation.</div>
+    </div>
+    <div style="margin-top:10px; font-size:12.5px; color:var(--muted);">
+      ↳ This is the real state that fired for the actual 9/23→9/30 week, computed from your
+      real account_daily_snapshots rows — traced by hand: 9/29 is the first day past the
+      −10% drawdown mark, 9/30 is the second consecutive qualifying day, so this emphasized
+      state correctly activates on 9/30, not earlier. Equity-shrinkage is the LARGER share
+      here (0.44 vs 0.31) — the copy still states both as measured numbers rather than
+      asserting a single cause, since the loan genuinely did grow too.
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:20px;">
+    <span class="state-label elevated">State: elevated, first day past the mark — REAL DATA (Sep 16)</span>
+    <div class="disclosure muted-box">
+      📐 Settled leverage 3.67× at Sep 16 close, above your 2.0× reference. Equity is 35% below
+      its 5-day high (Sep 11). For reference, a book about $8,496 smaller at the same equity
+      (or about $4,248 more cash) would put leverage at 2.0×.
+      <div class="caveat">First settled close past the −10% giveback mark; the full read
+      appears if it holds at the next close.</div>
+    </div>
+    <div style="margin-top:10px; font-size:12.5px; color:var(--muted);">
+      ↳ Real near-miss, traced by hand against the SQL output: Sep 15 doesn't qualify
+      (drawdown only −2%), Sep 16 is the single qualifying day, Sep 17 fully recovers and
+      sets a NEW equity high ($7,909.41) — so drawdown resets to 0% and leverage never gets
+      a second confirming day. The emphasized "giveback" headline correctly never fires for
+      this spike, even though Sep 16 alone was the single most stressed day in the whole
+      window by call-distance (−2.98%, worse than Sep 30's −2.37%). This is the 2-day
+      confirmation design doing exactly what it's meant to do.
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:20px;">
+    <span class="state-label calm">State: not_elevated (calm)</span>
+    <div class="disclosure muted-box">
+      📐 Settled leverage 1.80× at [date] close, at or below your 2.0× reference.
+    </div>
+    <div style="margin-top:10px; font-size:12.5px; color:var(--muted);">
+      ↳ Honest note, not a real example: across all 15 real trading days on record
+      (Sep 10 – Sep 30), leverage never dropped to 2.0× or below — every single day sits
+      between 2.63× and 3.73×. So "not_elevated" hasn't actually been observed yet in this
+      account's real history; the line above is illustrative copy only, shown so the wording
+      can be reviewed even though no real date exists for it today.
+    </div>
+  </div>
+
+  <h1>Secondary states <span class="tag">plain text, no visual emphasis — for copy review only</span></h1>
+  <div class="plain-states">
+    <div class="disclosure muted-box">
+      <span class="state-label thin">unlevered</span><br>
+      (nothing renders — the Book Safety strip above already says "No margin debt")
+    </div>
+    <div class="disclosure muted-box">
+      <span class="state-label thin">insufficient_history</span><br>
+      📐 Leverage-vs-equity read: 3 settled day(s) on record since Sep 28; it starts once 5 are
+      available. Nothing is inferred before then.
+    </div>
+    <div class="disclosure muted-box">
+      <span class="state-label thin">unmeasured</span><br>
+      📐 Leverage-vs-equity read unavailable for Oct 1: the settled cash figure is missing or
+      older than 3 days. This is not the same as "leverage is fine."
+    </div>
+    <div class="disclosure muted-box">
+      <span class="state-label thin">equity_nonpositive</span><br>
+      📐 At Oct 1 close the margin loan was at or above the stock book, so a leverage ratio
+      isn't meaningful. See Book Safety above.
+    </div>
+    <div class="disclosure muted-box">
+      <span class="state-label thin">offline</span><br>
+      📐 Settled account history couldn't be loaded this session, so the leverage-vs-equity
+      read was not evaluated.
+    </div>
+    <div class="disclosure muted-box">
+      <span class="state-label thin">flows_checked = False</span><br>
+      (appended to any state above) Deposits/withdrawals couldn't be checked, so part of this
+      change may be money moved in or out rather than market movement.
+    </div>
+  </div>
+
+  <footer>
+    <b>Things to look at specifically:</b><br>
+    1. Does the "giveback" headline read clearly without implying you did something wrong?<br>
+    2. Is the equity-shrink vs. loan-growth split useful, or too much detail for a daily glance?<br>
+    3. Is the reference line (book-reduction / cash-equivalent / call-distance-at-2x) the right
+    amount of information, or should any part be cut?<br>
+    4. Every figure in the "giveback" and "elevated" (Sep 16) rows is now real, computed by
+    hand from your actual <code>account_daily_snapshots</code> SQL output — only the
+    "not_elevated" row stays illustrative, since that state hasn't occurred yet in real
+    history.<br>
+    5. Real implementation escapes every <code>$</code> as the house <code>\\$</code>
+    convention and wraps dollar figures in <code>_m()</code> for privacy masking — this
+    mockup shows plain <code>$</code> for readability only.
+  </footer>
+
+</div>
+</body>
+</html>

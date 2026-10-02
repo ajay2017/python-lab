@@ -201,6 +201,11 @@ from stock_analyzer.constants import (
     COMPOSITE_FIRMNESS_MARGIN,
     MARGIN_MAINTENANCE_RATE,
     NET_CAPITAL_POSITION_CAP_PCT,
+    LEVERAGE_REFERENCE_TARGET,
+    LEVERAGE_GIVEBACK_DRAWDOWN_PCT,
+    LEVERAGE_GIVEBACK_LOOKBACK_DAYS,
+    LEVERAGE_GIVEBACK_MIN_HISTORY_DAYS,
+    LEVERAGE_GIVEBACK_CONFIRM_DAYS,
     GATE_LEDGER_MIN_CALLS,
     GATE_LEDGER_FIRM_CALLS,
     GATE_LEDGER_MIN_TICKERS,
@@ -217,6 +222,7 @@ from stock_analyzer import etf_scoring
 from stock_analyzer import gate_ledger_readout
 from stock_analyzer import rec_events_readout
 from stock_analyzer import margin as _margin_mod
+from stock_analyzer import leverage_giveback
 from stock_analyzer import capital_vs_margin
 from stock_analyzer import outage_gate as _outage_gate
 from stock_analyzer import act_today_precedence
@@ -11899,6 +11905,94 @@ elif page == "🧾 Summary":
                 "cannot tell an unlevered book from an unmeasured one, and will "
                 "not guess."
             )
+
+        # ── 📐 Leverage-vs-equity giveback disclosure (2026-10-02) ──────────
+        # Awareness only — states a MEASURED SPLIT between equity shrinking
+        # vs. the margin loan itself growing; never asserts a single cause,
+        # never a gate, never feeds risk_advisor/exit_advisor. Every
+        # threshold comparison lives in leverage_giveback.assess() (pure,
+        # boundary-tested) — this block only calls it and renders the
+        # returned dict, so no new comparison against a constants.py value
+        # appears here (keeps check_antipatterns' POLICY_DECISION_IN_RENDER
+        # ratchet from firing). Wrapped in try/except so a failure here can
+        # never break the rest of Summary; renders nowhere else.
+        try:
+            _lgb_today = _today_et()
+            # Same day-scoped cache KEY NAME already used on 💰 Account /
+            # 📊 Performance Review for these two exact reads — sharing the
+            # key (not inventing a new one) means whichever page a session
+            # visits first this day populates it once for all three.
+            _lgb_snap_key = f"_account_daily_snapshots_full_cache_{_lgb_today.isoformat()}"
+            if st.session_state.get(_lgb_snap_key) is None:
+                st.session_state[_lgb_snap_key] = db.load_account_daily_snapshots()
+            _lgb_snaps = st.session_state[_lgb_snap_key]
+
+            # Offline-sentinel-preserving loader (None on failure), never
+            # db.load_account_flows() — same reasoning as Performance
+            # Review's own read of this table: a failed check must not be
+            # read as "no deposits/withdrawals exist".
+            _lgb_flows_key = f"_account_flows_full_cache_{_lgb_today.isoformat()}"
+            if st.session_state.get(_lgb_flows_key) is None:
+                st.session_state[_lgb_flows_key] = db.load_account_flows_for_dedup_check()
+            _lgb_flows = st.session_state[_lgb_flows_key]
+
+            _lgb_result = leverage_giveback.assess(
+                _lgb_snaps, _lgb_flows,
+                target=LEVERAGE_REFERENCE_TARGET,
+                drawdown_pct=LEVERAGE_GIVEBACK_DRAWDOWN_PCT,
+                lookback=LEVERAGE_GIVEBACK_LOOKBACK_DAYS,
+                min_history=LEVERAGE_GIVEBACK_MIN_HISTORY_DAYS,
+                confirm_days=LEVERAGE_GIVEBACK_CONFIRM_DAYS,
+                stale_days=ACCOUNT_CASH_STALE_DAYS,
+                rate=MARGIN_MAINTENANCE_RATE,
+                today=_lgb_today,
+            )
+
+            def _lgb_money_fmt(v):
+                # House "\\$" convention (avoids two bare "$...$" figures in
+                # one line being read as LaTeX by the renderer) + privacy mask.
+                return _m(f"\\${v:,.0f}") if v is not None else "—"
+
+            _lgb_lines = leverage_giveback.disclosure_lines(_lgb_result, _lgb_money_fmt)
+            if _lgb_lines:
+                if _lgb_result.get("state") == "giveback":
+                    # Emphasized treatment — a visually distinct amber box
+                    # nested inside the existing card, matching the approved
+                    # mockup's "disclosure.emphasized" box (and the same
+                    # .st-key-<container> background-injection idiom already
+                    # used for this card's own color strip above).
+                    with st.container(border=True, key="sm_lgb_giveback"):
+                        st.markdown(
+                            "<style>.st-key-sm_lgb_giveback{background:#1f1a10;"
+                            "border:1px solid rgba(245,158,11,0.35) !important}</style>",
+                            unsafe_allow_html=True,
+                        )
+                        for _lgb_kind, _lgb_text in _lgb_lines:
+                            if _lgb_kind == "headline":
+                                st.markdown(f"**{_lgb_text}**")
+                            elif _lgb_kind == "caption":
+                                st.caption(_lgb_text)
+                            else:
+                                st.caption(f"*{_lgb_text}*")
+                else:
+                    # Plain states — a muted caption, same visual weight as
+                    # the "unknown" caption just above.
+                    for _lgb_kind, _lgb_text in _lgb_lines:
+                        if _lgb_kind == "headline":
+                            st.caption(_lgb_text)
+                        elif _lgb_kind == "caption":
+                            st.caption(_lgb_text)
+                        else:
+                            st.caption(f"*{_lgb_text}*")
+        except Exception:
+            # A crash here must not look identical to the "unlevered" state
+            # (which also renders nothing) — reuse disclosure_lines()'s own
+            # offline copy so a real failure is visibly distinguishable from
+            # "you have no margin," never new ad hoc text of its own.
+            for _lgb_kind, _lgb_text in leverage_giveback.disclosure_lines(
+                {"state": "offline"}, lambda v: "—"
+            ):
+                st.caption(_lgb_text)
 
     # ══ ZONE 2 · TODAY ════════════════════════════════════════════════════════
     # ── KPI tiles — cheap, independent recomputation from already-cached

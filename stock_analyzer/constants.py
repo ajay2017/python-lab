@@ -114,6 +114,19 @@ FRAGILITY_PULLBACK_PCT = -10.0   # routine-correction yardstick (~1–2×/yr); m
 # ── Margin maintenance (awareness only — NEVER gates) ────────────────────────
 MARGIN_MAINTENANCE_RATE = 0.25   # estimated Reg T maintenance floor; Robinhood raises this on volatile/concentrated names, so real call threshold is typically CLOSER than this implies — awareness only, read by NO gate or advisor
 
+# ── Leverage-vs-equity giveback disclosure (Summary/Book Safety, 2026-10-02) ─
+# 2 of the 5 below are genuine policy values, EXPLICITLY confirmed by the
+# owner via an AskUserQuestion on 2026-10-02 (LEVERAGE_REFERENCE_TARGET,
+# LEVERAGE_GIVEBACK_DRAWDOWN_PCT); the other 3 are owner-ACCEPTED operational
+# defaults -- seen un-pushed-back-on in the approved mockup, not separately
+# asked about value-by-value. Don't conflate the two classes. Awareness
+# only -- read by no gate, either way.
+LEVERAGE_REFERENCE_TARGET = 2.0          # owner-confirmed 2026-10-02 reference leverage multiple for the Summary disclosure's "book reduction to target" figure. Awareness only -- read by no gate.
+LEVERAGE_GIVEBACK_DRAWDOWN_PCT = -10.0    # owner-confirmed 2026-10-02. Flow-adjusted net-equity drawdown (negative-%, inclusive) that counts as "giving back gains" for the Summary leverage disclosure. Awareness only -- read by no gate.
+LEVERAGE_GIVEBACK_LOOKBACK_DAYS = 63      # owner-accepted operational default. Rolling window (settled account_daily_snapshots rows) used to find the recent equity high. Awareness only -- read by no gate.
+LEVERAGE_GIVEBACK_MIN_HISTORY_DAYS = 5    # owner-accepted operational default. Minimum valid settled rows in the lookback window before the disclosure evaluates at all. Awareness only -- read by no gate.
+LEVERAGE_GIVEBACK_CONFIRM_DAYS = 2        # owner-accepted operational default. Consecutive settled rows that must each meet both conditions before the emphasized "giveback" state fires (guards a same-day cash-sync artifact, not price noise). Awareness only -- read by no gate.
+
 # ── Concentration limits ─────────────────────────────────────────────────────
 SECTOR_CEILING    = 35.0         # hard sector cap (% of portfolio)
 SECTOR_ELEVATED   = 25.0         # soft warn above this
