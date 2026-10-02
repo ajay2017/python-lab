@@ -32,16 +32,87 @@ waste in this same gate without weakening what it proves:
     (previously fully sequential within one commit or push). Costs nothing:
     the antipattern scan's own ceiling is ~60s, almost always far less, so by
     the time pytest's own wait returns its result is already sitting there.
-  - A `git push` immediately following a commit that already passed both
-    gates, with no further edits, no longer re-runs them. `git write-tree`'s
-    SHA is recorded after a successful *plain* commit (no `-a`/`--amend` --
-    write-tree reflects the INDEX only, which isn't provably what those two
-    forms actually commit) and compared against `HEAD^{tree}` at push time.
-    A match means byte-identical tree content, which for this deterministic,
-    network-free suite means an identical verdict -- re-running proves
-    nothing new. Any mismatch (further edits, an -a/--amend commit, a commit
-    from outside this hook) falls back to the original always-verify
+  - A `git push` immediately following a commit that already passed BOTH
+    gates in full, with no further edits, no longer re-runs them. The
+    verified-tree marker is written ONLY when a PLAIN commit (no `-a`/
+    `--amend` -- write-tree reflects the INDEX only, which isn't provably
+    what those two forms actually commit) determined BOTH the pytest and
+    antipattern gates were necessary for it AND both genuinely ran and
+    passed -- never merely because the commit was plain (fixed 2026-10-02,
+    docs/reviews/2026-10-02-review.md Critical #2: a docs-only, or any other
+    gate-skipping, commit used to write this marker too, letting it silently
+    "vouch" for a tree it never actually gated). At push time the marker's
+    tree is compared against `HEAD^{tree}` AND the working tree is checked
+    for any staged-uncommitted/unstaged/untracked file under a tested path
+    (`stock_analyzer/`, `tests/`, `app.py`, `cron_runner.py`) -- a
+    byte-identical tree is necessary but not sufficient, since pytest runs
+    against the WORKING tree on disk, not the index the marker records (the
+    second gap Critical #2 found: "same tree means same verdict" was false
+    whenever uncommitted/untracked files differed from the index). Only when
+    both checks agree does re-running prove nothing new. Any mismatch
+    (further edits, an -a/--amend commit, a commit from outside this hook,
+    or a dirty tested path) falls back to the original always-verify
     behaviour, unchanged.
+
+Bypass hardening (2026-10-02, same review, Medium #5): `git commit -m "..."
+<file>` with `<file>` unstaged now has `<file>` unioned into the effectively-
+staged list (pathspecs are committed directly by git regardless of the
+index -- `_get_staged_files` used to only read the index); and `git -C <dir>
+commit` / `git -c <k>=<v> commit` (a git *global* option between `git` and
+the subcommand) is now recognised as a commit/push invocation, where before
+it matched neither the literal-adjacency regex nor this file's own tokenizer
+and so skipped every gate silently.
+
+FIX-FIRST follow-up (2026-10-02, same review pass, 4 blocking findings on the
+above two changes -- see docs/reviews/2026-10-02-review.md Critical #2 /
+Medium #4 / Medium #5):
+  - `_has_git_subcommand` had REGRESSED past what the literal regex it
+    replaced used to catch: it returned False outright on a `shlex.split`
+    `ValueError` (an apostrophe inside a heredoc/here-string BODY, e.g.
+    `git commit -F - <<'EOF'\n...it's...\nEOF`), on a path-qualified
+    `/usr/bin/git commit`, and on a `bash -c "git commit ..."` wrapper --
+    all of which the OLD literal-adjacency regex matched correctly. Now ORs
+    three independent legs (literal regex, a global-option-tolerant regex,
+    and the tokenized scan) -- any one saying True is enough, so the
+    detector can only get WEAKER if all three miss, not if tokenization
+    alone fails. `_is_plain_commit` likewise now returns False (not
+    provably plain) on empty/unparseable tokens, rather than silently
+    reading "I don't know" as "yes, plain".
+  - The verified-tree marker's write condition had TWO more gaps past the
+    commit-type/both-gates check: (a) at commit time, `write-tree` reflects
+    the INDEX, but pytest runs the WORKING tree -- an unstaged/untracked
+    tested-path change at the moment of commit meant the marker could vouch
+    for a tree the suite never actually ran against; (b) at push time, a
+    full re-run's marker-rewrite was unconditional on "the run was
+    attempted", not on "both gates genuinely passed" -- a WARN-only
+    antipattern outcome (couldn't be invoked) still rewrote the marker as
+    if verified. Both closed: `_should_write_commit_time_marker`/
+    `_should_write_push_time_marker` are the sole gates on each write site.
+  - `-C <dir>` / `--git-dir` / `--work-tree` detection (Medium #5) only
+    fixed WHETHER a redirected commit/push is recognised -- every other
+    helper here (`_get_staged_files`, `_write_tree`, `_head_tree`,
+    `_tested_paths_dirty`, pytest's own `tests/` relative path, the
+    antipattern scan's `os.getcwd()`) still reads the HOOK's own cwd, never
+    the redirected target, so the gates would silently evaluate the WRONG
+    repo. `_cwd_redirect_mismatch` resolves both toplevels via
+    `git ... rev-parse --show-toplevel` and BLOCKS outright (never attempts
+    to gate the other repo) on any mismatch or unresolvable comparison.
+    **Confirmed coverage, NOT exhaustive (2026-10-02 confirmation-pass
+    finding, non-blocking #2):** this genuinely catches `-C <dir>`. It does
+    NOT catch a bare `--git-dir <other>/.git` with no `--work-tree` --
+    `--show-toplevel` resolves to the hook's own cwd in that shape, so the
+    comparison trivially matches and the commit proceeds against the other
+    repo's index while the gates check this one. `cd <dir> && git ...` is
+    the same underlying risk and is also NOT caught. Both are separate,
+    not-yet-built follow-ups -- do not read this function as closing every
+    cwd-redirect shape.
+  - The pathspec-bypass fix only caught a LITERAL repo-relative file-path
+    argument -- a directory (`git commit -m x stock_analyzer`), `.`,
+    `./`-prefixed paths, and `--pathspec-from-file=<file>` all still bypassed
+    the gate exactly as before. `_get_staged_files` now additionally asks
+    GIT what a pathspec/pathspec-file would actually touch
+    (`git diff --name-only HEAD -- <pathspec>`), appended to (never
+    replacing) the literal list.
 """
 import datetime
 import json
@@ -123,8 +194,40 @@ def main() -> None:
         )
         sys.exit(2)
 
-    is_commit = bool(re.search(r"\bgit\s+commit\b", command))
-    is_push = bool(re.search(r"\bgit\s+push\b", command))
+    is_commit = _has_git_subcommand(command, "commit")
+    is_push = _has_git_subcommand(command, "push")
+
+    # cwd/`-C`-redirect mismatch (2026-10-02 review, Blocking 3): every git
+    # helper below reads the HOOK's own cwd, never a `-C`/`--git-dir`/
+    # `--work-tree` redirect target -- so if one is present and points
+    # somewhere else, every subsequent check would silently evaluate the
+    # WRONG repo. Refuse outright rather than attempt to gate the other
+    # directory. See _cwd_redirect_mismatch's docstring for what this does
+    # NOT catch (a plain `cd <dir> &&`).
+    if is_commit and _cwd_redirect_mismatch(_tokens(command, "commit")):
+        print(
+            "BLOCKED (workflow gates): this `git commit` redirects to a different "
+            "working tree than the one this hook is running in (a `-C <dir>` / "
+            "`--git-dir` / `--work-tree` global option) -- every gate here reads "
+            "ITS OWN cwd, so it would silently evaluate the wrong checkout. Run "
+            "this command from inside the target checkout instead.\n"
+            "(Note: `cd <dir> && git commit ...` is the same underlying risk and "
+            "is NOT caught by this check -- a separate, not-yet-built follow-up.)",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if is_push and _cwd_redirect_mismatch(_tokens(command, "push")):
+        print(
+            "BLOCKED (workflow gates): this `git push` redirects to a different "
+            "working tree than the one this hook is running in (a `-C <dir>` / "
+            "`--git-dir` / `--work-tree` global option) -- every gate here reads "
+            "ITS OWN cwd, so it would silently evaluate the wrong checkout. Run "
+            "this command from inside the target checkout instead.\n"
+            "(Note: `cd <dir> && git push ...` is the same underlying risk and "
+            "is NOT caught by this check -- a separate, not-yet-built follow-up.)",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     # Hard rule #4: Commits touching gate files require an Opus review citation
     if is_commit:
@@ -187,16 +290,29 @@ def main() -> None:
         # overlaps -- see the module docstring's 2026-09-28 note.
         need_pytest = _touches_tested_code(staged)
         need_antipattern = _touches_scanned_code(staged)
+        both_gates_passed = False
         if need_pytest or need_antipattern:
             results = _run_gates_concurrently(need_pytest, need_antipattern)
             _apply_gate_results(results, "commit", "committing")
+            # _apply_gate_results exits(2) on any blocking outcome, so reaching
+            # this line means nothing blocked -- but "didn't block" is NOT the
+            # same as "both gates ran and passed" (see _both_gates_passed).
+            both_gates_passed = _both_gates_passed(need_pytest, need_antipattern, results)
 
-        # Everything this commit needed (if anything) just passed. Record the
-        # tree so an immediately-following `git push` with no further edits
-        # doesn't pay for the identical pytest+antipattern run a second time
-        # -- only for a PLAIN commit (write-tree reflects the index only, which
-        # `-a`/`--amend` don't provably match). See module docstring.
-        if _is_plain_commit(tokens):
+        # Record the tree as "verified" ONLY when this commit determined BOTH
+        # gates were necessary for it AND both genuinely ran and passed --
+        # never on a bare plain-commit-type basis alone. A commit that needed
+        # no gate at all (e.g. docs-only), needed only one of the two, or saw
+        # the antipattern gate fail to invoke, must not "vouch" for the tree
+        # at push time (2026-10-02 review, Critical #2). Also still requires a
+        # PLAIN commit (write-tree reflects the index only, which `-a`/
+        # `--amend` don't provably match), AND a working tree with no
+        # unstaged/untracked tested-path change right now -- write-tree
+        # reflects the INDEX, but pytest just ran against the WORKING tree on
+        # disk, so a dirty tested path means this commit's own gate run does
+        # not actually describe the tree about to be recorded (2026-10-02
+        # review FIX-FIRST pass, Blocking 2a). See _should_write_commit_time_marker.
+        if _should_write_commit_time_marker(both_gates_passed, tokens):
             tree = _write_tree()
             if tree:
                 _write_verified_tree(tree)
@@ -204,28 +320,107 @@ def main() -> None:
     # Always re-check before push, regardless of which files are in the
     # commits being pushed -- push sends whatever HEAD currently is, so one
     # suite run against the working tree covers it. Catches the case where a
-    # commit landed before this gate existed, or from another session/tool.
+    # commit landed before this gate existed, or from another session/tool
+    # (true again as of 2026-10-02: a gate-skipping commit can no longer
+    # overwrite the marker to vouch for an ungated tree -- see Critical #2).
     # EXCEPT: if HEAD's tree is byte-identical to the tree a commit-time run
-    # already verified in full, running again proves nothing new (see module
-    # docstring) -- skip and say so.
+    # already verified BOTH gates for in full, AND the working tree has no
+    # staged-uncommitted/unstaged/untracked file under a tested path, running
+    # again proves nothing new (see module docstring) -- skip and say so.
+    # Tree-identity alone is NOT sufficient: pytest runs against the WORKING
+    # tree on disk, not the index `write-tree` recorded, so a dirty tested
+    # path can diverge from what the marker actually verified even with an
+    # unchanged HEAD.
     if is_push:
         head_tree = _head_tree()
         verified_tree = _read_verified_tree()
-        if head_tree and verified_tree and head_tree == verified_tree:
+        dirty = _tested_paths_dirty()
+        if head_tree and verified_tree and head_tree == verified_tree and not dirty:
             print(
                 "INFO (workflow gates): HEAD's tree already passed the pytest+antipattern "
-                "gates at commit time and nothing has changed since -- skipping a second, "
-                "identical full run. Any further edit, an -a/--amend commit, or a commit "
-                "from outside this hook changes the tree and forces a full re-run.",
+                "gates IN FULL at commit time (both gates ran and passed, not merely "
+                "skipped), and no tested path has an uncommitted/untracked change since -- "
+                "skipping a second, identical full run. Any further edit, an -a/--amend "
+                "commit, a commit from outside this hook, or a dirty tested path forces a "
+                "full re-run.",
                 file=sys.stderr,
             )
         else:
             results = _run_gates_concurrently(True, True)
             _apply_gate_results(results, "push", "pushing")
-            if head_tree:
+            # Only vouch for HEAD's tree when both gates GENUINELY ran and
+            # passed -- not merely because the full run was attempted.
+            # `_apply_gate_results` already exits(2) on any blocking outcome,
+            # but a WARN-only antipattern result (ok is None, couldn't be
+            # invoked) does not block, and previously still rewrote the
+            # marker as if verified (2026-10-02 review FIX-FIRST pass,
+            # Blocking 2b). Also require `not dirty` (confirmation-pass
+            # non-blocking #1): pytest here ran against the WORKING tree,
+            # which `dirty` (computed above, before this full run) already
+            # confirmed was NOT clean on a tested path -- without this check,
+            # a dirty-but-passing push would vouch for HEAD's tree even
+            # though HEAD itself, in isolation, was never actually tested
+            # (e.g. the dirt gets reverted/stashed before a retried push,
+            # which would then wrongly skip re-verification).
+            if head_tree and not dirty and _should_write_push_time_marker(results):
                 _write_verified_tree(head_tree)
 
     sys.exit(0)
+
+
+def _both_gates_passed(need_pytest: bool, need_antipattern: bool, results: dict) -> bool:
+    """True ONLY when a commit determined BOTH the pytest and antipattern
+    gates were necessary for it AND both genuinely ran and returned a literal
+    `True` -- not merely "didn't block". `_apply_gate_results` already exits
+    the process on any blocking outcome, but "reached past that call" is a
+    weaker claim than "both gates verified this tree": the antipattern
+    gate's `ok is None` (couldn't be invoked at all, e.g. a missing
+    interpreter) only WARNS, it never blocks, and a commit that only needed
+    ONE of the two gates never ran the other at all. This is the sole
+    condition under which the verified-tree marker may be written (2026-10-02
+    review, Critical #2) -- extracted to its own function so the decision is
+    unit-testable without invoking `main()`/spawning real gate subprocesses."""
+    return (
+        need_pytest and need_antipattern
+        and results.get("pytest", (None, None))[0] is True
+        and results.get("antipattern", (None, None))[0] is True
+    )
+
+
+def _should_write_commit_time_marker(both_gates_passed: bool, tokens: list) -> bool:
+    """Whether a commit-time run may vouch for the tree via `write-tree`.
+
+    Requires ALL THREE: both gates genuinely ran and passed
+    (`both_gates_passed`, see `_both_gates_passed`), a PLAIN commit
+    (`_is_plain_commit` -- `write-tree` reflects the INDEX only, which `-a`/
+    `--amend` don't provably match), AND a working tree with no unstaged/
+    untracked change under a tested path right now
+    (`_tested_paths_dirty(include_staged=False)` -- staged-but-uncommitted
+    changes are deliberately excluded here, since they're exactly what's
+    being committed and are expected to differ from the pre-commit state;
+    only UNSTAGED/UNTRACKED dirt means pytest, which ran against the WORKING
+    tree on disk, saw something `write-tree`'s INDEX snapshot does not
+    record). Extracted to its own function so this decision is unit-testable
+    without invoking `main()` (2026-10-02 review FIX-FIRST pass, Blocking 2a).
+    """
+    return (
+        both_gates_passed
+        and _is_plain_commit(tokens)
+        and not _tested_paths_dirty(include_staged=False)
+    )
+
+
+def _should_write_push_time_marker(results: dict) -> bool:
+    """Whether a push-time full gate run may vouch for HEAD's tree -- only
+    when BOTH gates genuinely ran and passed (`_both_gates_passed`), never
+    merely because the full run was attempted. `_apply_gate_results` already
+    exits(2) on any blocking outcome, so by the time this is checked the
+    push itself has already succeeded past that call; this only governs
+    whether the marker gets (re)written. A WARN-only antipattern outcome
+    (couldn't be invoked at all) does not block the push, but it also did
+    not verify anything, so it must not write a marker either (2026-10-02
+    review FIX-FIRST pass, Blocking 2b)."""
+    return _both_gates_passed(True, True, results)
 
 
 def _apply_gate_results(results: dict, noun: str, gerund: str) -> None:
@@ -436,7 +631,15 @@ def _is_plain_commit(tokens: list) -> bool:
     stages tracked-but-unstaged changes as part of the commit itself, and
     `--amend` combines the index with HEAD's own commit in a way this hook
     doesn't reproduce -- both fall back to always-verify-on-push instead of
-    risking a false "already verified" match."""
+    risking a false "already verified" match.
+
+    Empty/unparseable `tokens` (e.g. `shlex.split` raised `ValueError`) is
+    UNKNOWN, not "no flags present" -- unknown must never be read as
+    provably plain (2026-10-02 review FIX-FIRST pass, Blocking 1): silently
+    returning True here let an unparseable commit still write the
+    verified-tree marker."""
+    if not tokens:
+        return False
     return not _has_flag(tokens, "a", "--all") and "--amend" not in tokens
 
 
@@ -487,6 +690,55 @@ def _write_verified_tree(tree: str) -> None:
         pass
 
 
+# Paths the pytest/antipattern gates actually scan -- mirrors
+# _touches_tested_code/_touches_scanned_code's own definition of "in scope".
+# Used only to decide whether a push-time marker match is still trustworthy
+# (see _tested_paths_dirty); it is deliberately the UNION of both gates'
+# scopes (tests/ included even though the antipattern gate never scans it)
+# since either gate's result could be stale if its own inputs changed.
+_TESTED_PATH_FILES = ("app.py", "cron_runner.py")
+_TESTED_PATH_PREFIXES = ("stock_analyzer/", "tests/")
+
+
+def _is_tested_path(path: str) -> bool:
+    return path in _TESTED_PATH_FILES or any(path.startswith(p) for p in _TESTED_PATH_PREFIXES)
+
+
+def _tested_paths_dirty(include_staged: bool = True) -> bool:
+    """True when a file under a path the gates actually scan has an
+    unstaged or untracked change right now -- i.e. the CURRENT working tree
+    (what `pytest` actually runs against) no longer matches what a
+    commit-time gate run verified, even when `HEAD^{tree}` (the INDEX at
+    commit time) is unchanged. Without this check, "byte-identical tree"
+    silently stood in for "byte-identical working tree", which are
+    different claims whenever an uncommitted edit or a new untracked file
+    exists (2026-10-02 review, Critical #2's second gap).
+
+    `include_staged` controls whether a staged-but-uncommitted change also
+    counts as "dirty" (default True -- the PUSH-time caller's need: a
+    staged file under a tested path means the commit-time marker, if any,
+    can't speak to it). The COMMIT-time caller passes `include_staged=False`
+    (2026-10-02 review FIX-FIRST pass, Blocking 2a): staged changes are
+    exactly what's about to be committed right now, so they are the
+    EXPECTED difference from the pre-commit index, not extra dirt relative
+    to what pytest, which just ran against the working tree, actually saw --
+    counting them would make this permanently True for any real commit and
+    defeat the marker entirely.
+
+    `_git_names` already fails open to `[]` on any git error, matching this
+    module's existing helpers' style (`_write_tree`/`_head_tree` do the
+    same) -- a git-level failure here reads as "nothing dirty found," the
+    same permissive default every other helper in this file already uses.
+    """
+    changed = (
+        _git_names("diff", "--name-only")
+        + _git_names("ls-files", "--others", "--exclude-standard")
+    )
+    if include_staged:
+        changed += _git_names("diff", "--cached", "--name-only")
+    return any(_is_tested_path(f) for f in changed)
+
+
 def _git_names(*args: str) -> list[str]:
     try:
         r = subprocess.run(
@@ -506,7 +758,26 @@ def _get_staged_files(command: str = "") -> list[str]:
     (2026-08-15 review finding; it compounded with `-am` not being recognised
     as `-m`). When -a/--all is present we union in tracked-but-unstaged files
     so the gates see the real contents. `--amend` likewise pulls in HEAD's own
-    files, since the resulting commit carries them.
+    files, since the resulting commit carries them. A pathspec argument on the
+    command itself (`git commit -m "..." <file>`) is unioned in too, since git
+    commits it directly regardless of the index -- `git diff --cached` alone
+    is blind to that case (2026-10-02 review, Medium #5 / bypass 1).
+
+    Widened (2026-10-02 review FIX-FIRST pass, Blocking 4): a literal pathspec
+    ARGUMENT only ever matched when it happened to BE an exact relative file
+    path -- a DIRECTORY (`git commit -m x stock_analyzer`), `.`, a
+    `./`-prefixed path, or a bulk list via `--pathspec-from-file=<file>` all
+    bypassed the gate exactly as before that fix, since none of those equal
+    the real changed file's own path string. Now we additionally ask GIT what
+    a pathspec would actually touch (`git diff --name-only HEAD -- <pathspec>`),
+    appended to -- never replacing -- the literal list below: `_git_names`
+    already fails open to `[]` on any git error, so this can only ADD names,
+    never silently drop the literal fallback. `--pathspec-from-file`'s VALUE
+    is NOT threaded through to `git diff` as the same flag -- confirmed via a
+    real invocation that `git diff` rejects `--pathspec-from-file` outright
+    ("error: invalid option") even though `git commit`/`git add` accept it --
+    so its named file's own LINES are read and fed in as regular pathspec
+    arguments to the same `git diff -- <pathspec>` call instead.
     """
     staged = _git_names("diff", "--cached", "--name-only")
     tokens = _tokens(command)
@@ -514,6 +785,16 @@ def _get_staged_files(command: str = "") -> list[str]:
         staged += _git_names("diff", "--name-only")
     if "--amend" in tokens:
         staged += _git_names("show", "--pretty=", "--name-only", "HEAD")
+
+    pathspecs = _pathspec_args(tokens)
+    pfx_file = _pathspec_from_file_arg(tokens)
+    if pfx_file:
+        pathspecs = pathspecs + _read_pathspec_file(pfx_file)
+
+    staged += pathspecs
+    if pathspecs:
+        staged += _git_names("diff", "--name-only", "HEAD", "--", *pathspecs)
+
     return sorted(set(staged))
 
 
@@ -612,9 +893,128 @@ def _touches_scanned_code(staged: list[str]) -> bool:
 
 _SHELL_SEPARATORS = ("&&", "||", ";", "|", "&")
 
+# Git GLOBAL options (ones that can appear BETWEEN `git` and the subcommand,
+# e.g. `git -C <dir> commit`, `git -c <k>=<v> commit`) that consume a
+# SEPARATE following token as their value. `-C`/`-c` are the two the
+# 2026-10-02 review found bypass every gate here (Medium #5 / bypass 2) --
+# before this fix, `git -C <dir> commit` matched neither the old literal
+# `\bgit\s+commit\b` regex nor this file's own "git" immediately-followed-by
+# "commit" scan, so it silently skipped every check. A few other common
+# value-taking global options are included so the same gap doesn't recur for
+# them.
+_GIT_GLOBAL_OPTS_WITH_VALUE = (
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix",
+    "--config-env",  # added 2026-10-02 review FIX-FIRST pass, non-blocking #1
+)
 
-def _tokens(command: str) -> list:
-    """Tokens of the `git commit` SEGMENT only, not the whole compound command.
+
+def _skip_git_global_opts(toks: list, i: int) -> int:
+    """Given `toks[i] == "git"`, returns the index of the SUBCOMMAND token
+    (e.g. "commit", "push"), skipping over any global options in between --
+    `git -C <dir> commit`, `git -c user.name=x commit`, `git --no-pager
+    commit`, etc. A bare boolean global flag (no value) is skipped one token
+    at a time; `len(toks)` is returned if the command runs out before a
+    subcommand token appears."""
+    j = i + 1
+    while j < len(toks):
+        t = toks[j]
+        if not t.startswith("-"):
+            return j
+        if t in _GIT_GLOBAL_OPTS_WITH_VALUE and j + 1 < len(toks):
+            j += 2
+            continue
+        if any(t.startswith(opt + "=") for opt in _GIT_GLOBAL_OPTS_WITH_VALUE):
+            j += 1
+            continue
+        j += 1
+    return j
+
+
+def _find_subcommand_start(toks: list, subcommand: str) -> int | None:
+    """Index of the `git` token that begins a `git <subcommand>` invocation
+    within `toks`, tolerating global options between `git` and the
+    subcommand. `None` if no such invocation is found. Mirrors the original
+    scan's "last match wins" precedence when `git <subcommand>` appears more
+    than once (e.g. chained/piped commands)."""
+    found = None
+    for i, t in enumerate(toks):
+        if t == "git":
+            sub_i = _skip_git_global_opts(toks, i)
+            if sub_i < len(toks) and toks[sub_i] == subcommand:
+                found = i
+    return found
+
+
+def _literal_subcommand_re(subcommand: str) -> "re.Pattern":
+    """A literal-adjacency regex (`git <subcommand>`), unaffected by shlex's
+    quoting rules -- catches a path-qualified `/usr/bin/git commit`, a
+    `bash -c "git commit ..."` wrapper, and any heredoc/here-string whose
+    BODY contains an apostrophe (which makes `shlex.split` raise
+    `ValueError` on an unterminated quote). None of these need real
+    tokenization; they only need the literal substring to appear somewhere
+    in the raw command text. Its only false-positive mode is matching
+    "git <subcommand>" appearing inside a commit MESSAGE string, which is
+    the safe failure direction -- an unnecessary gate run, never a missed
+    one (2026-10-02 review FIX-FIRST pass, Blocking 1)."""
+    return re.compile(rf"\bgit(?:\.exe)?\b\s+{re.escape(subcommand)}\b")
+
+
+def _tolerant_subcommand_re(subcommand: str) -> "re.Pattern":
+    """Matches `git <subcommand>` across git GLOBAL options (`-C <dir>`,
+    `-c <k>=<v>`, `--no-pager`, etc.) between `git` and the subcommand,
+    WITHOUT needing shlex tokenization -- so it still fires when
+    `shlex.split` can't parse the command at all (the same
+    apostrophe-in-heredoc-body case `_literal_subcommand_re` also covers,
+    kept as a second, overlapping leg since this one additionally tolerates
+    the `-C`/`-c` case the literal regex alone does not). Each `-OPT [VALUE]`
+    pair is matched permissively (a bare option token, optionally followed by
+    a non-dash value token) rather than validated against the real global-
+    option vocabulary -- regex backtracking resolves the ambiguity when a
+    trailing bare flag's optional value-slot could otherwise swallow the
+    subcommand token itself (2026-10-02 review FIX-FIRST pass, Blocking 1)."""
+    return re.compile(
+        rf"\bgit(?:\.exe)?\b(?:\s+-\S+(?:\s+[^\s-]\S*)?)*\s+{re.escape(subcommand)}\b"
+    )
+
+
+def _has_git_subcommand(command: str, subcommand: str) -> bool:
+    """True if `command` contains a `git <subcommand>` invocation.
+
+    Fails CLOSED toward detection (biases toward "yes, this is a
+    commit/push", which only costs an unnecessary gate run) via THREE
+    independent legs, ORed together -- any one saying True is enough:
+      1. `_literal_subcommand_re` -- a plain-text regex, unaffected by
+         shlex's quoting rules.
+      2. `_tolerant_subcommand_re` -- additionally tolerates git global
+         options between `git` and the subcommand, still without real
+         tokenization.
+      3. The tokenized scan (`_find_subcommand_start`) -- the most PRECISE
+         of the three (correctly handles multiple/chained global options,
+         quoted values containing spaces, etc.) but returns nothing useful
+         whenever `shlex.split` can't parse the command at all.
+
+    A prior version of this function used (3) ALONE, which was a real
+    regression (2026-10-02 review FIX-FIRST pass, Blocking 1): it silently
+    stopped detecting a path-qualified `/usr/bin/git commit`, a
+    `bash -c "git commit ..."` wrapper, and any heredoc/here-string whose
+    BODY contains an apostrophe -- all of which the OLD literal-adjacency
+    regex this replaced (2026-10-02 review, Medium #5 / bypass 2) used to
+    catch correctly. Never trust the tokenized leg alone again."""
+    if _literal_subcommand_re(subcommand).search(command):
+        return True
+    if _tolerant_subcommand_re(subcommand).search(command):
+        return True
+    try:
+        toks = shlex.split(command, posix=True)
+    except ValueError:
+        return False
+    return _find_subcommand_start(toks, subcommand) is not None
+
+
+def _tokens(command: str, subcommand: str = "commit") -> list:
+    """Tokens of the `git <subcommand>` SEGMENT only, not the whole compound
+    command (defaults to "commit" -- the only subcommand every other caller
+    in this file actually scopes to).
 
     Scoping matters: option scanning over an entire `A && git commit -m "..."`
     string lets an EARLIER segment's flags win. Verified cases this prevents --
@@ -629,16 +1029,88 @@ def _tokens(command: str) -> list:
     except ValueError:
         return []
 
-    start = 0
-    for i, t in enumerate(toks):
-        if t == "git" and i + 1 < len(toks) and toks[i + 1] == "commit":
-            start = i
-    toks = toks[start:]
+    start = _find_subcommand_start(toks, subcommand)
+    toks = toks[start:] if start is not None else toks
 
     for i, t in enumerate(toks):
         if t in _SHELL_SEPARATORS and i > 0:
             return toks[:i]
     return toks
+
+
+def _git_global_opts(tokens: list) -> list:
+    """The GLOBAL options between `git` and the subcommand in a tokenized
+    `git <subcommand> ...` segment (as `_tokens` returns it) -- e.g. for
+    `["git", "-C", "/some/dir", "commit", "-m", "x"]` returns
+    `["-C", "/some/dir"]`. Empty when `tokens` doesn't start with `git`
+    (including empty/unparseable `tokens`) -- see `_cwd_redirect_mismatch`,
+    which reads "no global options" as "nothing to check", the safe
+    default (2026-10-02 review FIX-FIRST pass, Blocking 3)."""
+    if not tokens or tokens[0] != "git":
+        return []
+    sub_i = _skip_git_global_opts(tokens, 0)
+    return tokens[1:sub_i]
+
+
+def _toplevel(extra_opts: list) -> str | None:
+    """The working-tree root `git <extra_opts> rev-parse --show-toplevel`
+    would resolve to -- lets GIT ITSELF resolve any stacked/relative `-C`/
+    `--git-dir`/`--work-tree` options rather than re-implementing that
+    logic here. None on any failure (git not found, bad `-C` target, not a
+    repo, etc.) -- callers must treat that as "can't confirm, block", never
+    as "no redirect" (2026-10-02 review FIX-FIRST pass, Blocking 3)."""
+    try:
+        r = subprocess.run(
+            ["git", *extra_opts, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=10,
+        )
+        out = r.stdout.strip()
+        return out if r.returncode == 0 and out else None
+    except Exception:
+        return None
+
+
+def _cwd_redirect_mismatch(tokens: list) -> bool:
+    """True when a git global option in `tokens` (e.g. `-C <dir>`,
+    `--git-dir=...`, `--work-tree=...`) redirects git to operate on a
+    DIFFERENT working tree than the one this hook process itself is running
+    in. **Confirmed-covered shape is `-C <dir>` — a bare `--git-dir=<other>`
+    with NO accompanying `--work-tree` is NOT reliably caught**: `rev-parse
+    --show-toplevel` in that shape can still resolve to the hook's OWN cwd
+    (there's no working-tree redirect to detect), so the comparison below
+    can trivially "match" while the actual commit/push still targets the
+    other repo's index (2026-10-02 confirmation-pass non-blocking #2 — the
+    module docstring previously overstated this as fully closed; it isn't).
+    Every other git-querying helper in this file (`_get_staged_files`,
+    `_write_tree`, `_head_tree`, `_tested_paths_dirty`, pytest's own
+    relative `tests/` path, the antipattern scan's `os.getcwd()`) still
+    reads the HOOK's own cwd, never a redirected target -- so if this
+    returns True and the caller proceeds anyway, every gate would silently
+    evaluate the WRONG repo, and a push-time "HEAD's tree already passed...
+    IN FULL" message could even describe the wrong checkout (2026-10-02
+    review FIX-FIRST pass, Blocking 3). Callers must BLOCK on True, not
+    attempt to gate the other directory -- that's the deliberately simple
+    fix here.
+
+    Returns False (no redirect / nothing to check) when there are no global
+    options -- the common case, and the only one `_git_global_opts` can
+    even detect (an unparseable command yields empty tokens, so this is
+    also the same known gap `_has_git_subcommand`'s tokenized leg has: a
+    `cd <dir> && git ...` redirect, or any command whose tokens couldn't be
+    resolved at all, is NOT caught here either -- see the module docstring).
+    Fails CLOSED (True, i.e. "block") when either toplevel can't be
+    resolved, since an unresolvable comparison is not a confirmed match."""
+    extra = _git_global_opts(tokens)
+    if not extra:
+        return False
+    target = _toplevel(extra)
+    here = _toplevel([])
+    if not target or not here:
+        return True
+    t1, t2 = os.path.realpath(target), os.path.realpath(here)
+    if os.name == "nt":
+        t1, t2 = t1.casefold(), t2.casefold()
+    return t1 != t2
 
 
 def _is_short_opt(token: str, letter: str) -> bool:
@@ -660,6 +1132,108 @@ def _has_flag(tokens: list, letter: str, *long_forms: str) -> bool:
         if t in long_forms or re.fullmatch(rf"-[A-Za-z]*{letter}[A-Za-z]*", t):
             return True
     return False
+
+
+# `git commit`'s OWN options (as opposed to the global ones in
+# _GIT_GLOBAL_OPTS_WITH_VALUE, which appear BEFORE the subcommand) that
+# consume a separate following token as their value. Short forms resolved via
+# _is_short_opt (handles clustering, e.g. a trailing `-m` in `-qm`); long
+# forms via the `--opt value` / `--opt=value` convention. Deliberately NOT
+# exhaustive of every git-commit option -- scoped to the value-taking ones,
+# since anything else is either a no-value flag (skip one token) or a
+# positional pathspec (keep).
+_VALUE_SHORT_OPTS = ("m", "F", "c", "C", "t")  # -m/-F/-c/-C/-t all take a value
+_VALUE_LONG_OPTS = (
+    "--message", "--file", "--reuse-message", "--reedit-message",
+    "--fixup", "--author", "--date", "--template", "--cleanup", "--squash",
+    # Added 2026-10-02 (review FIX-FIRST pass, non-blocking #1): these fail
+    # CLOSED today (over-including -- their value-token is skipped as an
+    # option, never mistaken for a pathspec, so missing them was never a
+    # gate-bypass, just noise), but cheap to close in the same pass.
+    "--trailer", "--pathspec-from-file",
+)
+
+
+def _commit_args(tokens: list) -> list:
+    """`tokens` minus the leading `git` + any global options + the `commit`
+    subcommand itself -- i.e. just commit's own options and pathspecs. Empty
+    if `tokens` doesn't actually start with a `git commit` invocation."""
+    if not tokens or tokens[0] != "git":
+        return []
+    sub_i = _skip_git_global_opts(tokens, 0)
+    if sub_i >= len(tokens) or tokens[sub_i] != "commit":
+        return []
+    return tokens[sub_i + 1:]
+
+
+def _pathspec_args(tokens: list) -> list[str]:
+    """Positional (non-option) arguments on a `git commit` invocation --
+    these are PATHSPECS, which git stages and commits directly regardless of
+    the index: `git commit -m "..." <file>` commits `<file>` even when it was
+    never `git add`-ed. `_get_staged_files`'s index-only read (`git diff
+    --cached`) is blind to this, so a commit made entirely this way used to
+    skip the citation gate and pytest/antipattern gates outright (2026-10-02
+    review, Medium #5 / bypass 1)."""
+    args = _commit_args(tokens)
+    out = []
+    i = 0
+    while i < len(args):
+        t = args[i]
+        if t == "--":
+            out.extend(args[i + 1:])
+            break
+        if t.startswith("--"):
+            if t in _VALUE_LONG_OPTS and i + 1 < len(args):
+                i += 2
+            else:
+                i += 1  # bare long flag, or an `--opt=value` form (one token)
+            continue
+        if t.startswith("-") and t != "-":
+            if any(_is_short_opt(t, letter) for letter in _VALUE_SHORT_OPTS) and i + 1 < len(args):
+                i += 2
+            else:
+                i += 1
+            continue
+        out.append(t)
+        i += 1
+    return out
+
+
+def _read_pathspec_file(path: str) -> list[str]:
+    """The pathspec entries named by a `--pathspec-from-file=<path>` value --
+    read directly rather than threaded through to `git diff` as the same
+    flag, since `git diff` rejects `--pathspec-from-file` outright on this
+    project's git version (confirmed via a real invocation: "error: invalid
+    option"), even though `git commit`/`git add` accept it. `-` (stdin) is
+    unresolvable here, same as `_commit_message_text`'s `-F -` case -- the
+    hook has no way to see stdin, so it returns `[]` rather than guessing.
+    Empty on any read error, matching this file's existing fail-open style
+    for anything pathspec-shaped (2026-10-02 review FIX-FIRST pass,
+    Blocking 4)."""
+    if path == "-":
+        return []
+    try:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
+            return [line.strip() for line in f if line.strip()]
+    except Exception:
+        return []
+
+
+def _pathspec_from_file_arg(tokens: list) -> str | None:
+    """The value of `--pathspec-from-file[=<file>]` on a `git commit`
+    invocation, if present -- a bulk pathspec-list file, same bypass class
+    as a positional pathspec argument: git commits whatever it names
+    directly, regardless of the index (2026-10-02 review FIX-FIRST pass,
+    Blocking 4). `--pathspec-from-file` is itself added to `_VALUE_LONG_OPTS`
+    so `_pathspec_args`'s own scan skips over it (and its value) correctly
+    rather than misreading the value as a literal pathspec."""
+    args = _commit_args(tokens)
+    for i, t in enumerate(args):
+        if t.startswith("--pathspec-from-file="):
+            return t.split("=", 1)[1]
+        if t == "--pathspec-from-file" and i + 1 < len(args):
+            return args[i + 1]
+    return None
 
 
 def _read_message_file(path: str) -> str:
