@@ -3583,6 +3583,31 @@ credentials, modeled on `scripts/exit_ladder_replay.py`) produces full historica
 blocking (one real finding fixed same commit: the "never blends" guarantee was accidental, hardened
 to be explicit). Full suite 6823 passed.
 
+### `stock_analyzer/leverage_giveback.py`
+
+States, inside 🧾 Summary's existing Book Safety card only, when account leverage is elevated
+above `LEVERAGE_REFERENCE_TARGET` AND net equity is down past `LEVERAGE_GIVEBACK_DRAWDOWN_PCT`
+(flow-adjusted, inclusive) from its recent settled high. Pure module, no Streamlit, no DB calls —
+`assess(snapshots_df, flows, *, ...)` is the entry point, an 8-state machine
+(`offline`/`insufficient_history`/`unmeasured`/`equity_nonpositive`/`unlevered`/`not_elevated`/
+`elevated`/`giveback`). States a MEASURED SPLIT between how much of a leverage rise came from
+equity shrinking vs. the margin loan growing (`leverage_change_split()`) — never asserts a single
+cause. The emphasized `giveback` state requires `LEVERAGE_GIVEBACK_CONFIRM_DAYS` (2) consecutive
+settled rows to each independently meet both conditions (each measured against the rolling peak
+as of its own date), guarding a same-day broker cash-sync artifact rather than price noise. Every
+numeric field read from a row goes through a `_num()` helper that treats NaN identically to
+`None` — a real pandas DataFrame carries a NULL as NaN, not `None`, and the first review pass
+found every bare `is not None` check silently let NaN through. The displayed call-distance figure
+and the `in_call_now` flag both prefer `margin.call_distance()`'s live recompute over a row's
+possibly-stale stored value, never `abs()`-ing a signed distance (a positive `call_distance_pct`
+means already past the maintenance floor — `abs()` would show that as "room remaining").
+`disclosure_lines(result, money_fmt)` renders the copy; a dedicated test asserts no line ever
+contains "sell"/"reduce"/"trim"/"should"/"consider". No `_GATE_FILES` module imports this module
+(tested against all 19). Two Opus reviewer rounds — first FIX-FIRST/4 blocking, second SHIP/0
+blocking after fixes, plus one more same-class fix applied by the lead directly before commit. 70
+tests. Full suite 6893 passed. Design: `docs/mockups/2026-10-02-leverage-giveback-mockup.html`;
+memory `project_leverage_giveback_disclosure`.
+
 ---
 
 ## 7. Navigation and State Management
