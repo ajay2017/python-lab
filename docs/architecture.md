@@ -3517,7 +3517,7 @@ engine, which stays explicitly out of scope for this module.
   `build_review` reads the new wide, unscoped `account_return_snapshots_df`/`account_flows_rows`
   params for this section — kept entirely separate from the EXISTING period-scoped
   `account_snapshots_df` param `leverage_drift` still uses unchanged.
-- No new `constants.py` value. 33 new tests, full suite 6767 passed.
+- No new `constants.py` value. 47 new tests (across 4 Opus review rounds — see `docs/shipped-log.md` for the two real bugs those rounds caught, including a `spy_return_pct`-withhold fix for when today's SPY close hasn't posted yet), full suite 6781 passed.
 
 **Below-floor framing** (a second owner decision): a period under `REC_OUTCOME_MIN_CALLS`/
 `GATE_LEDGER_MIN_CALLS` etc. shows raw period counts + a descriptive matured-subset mean alpha as

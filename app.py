@@ -37159,6 +37159,11 @@ elif page == "💰 Account":
                                     "your return moves roughly that many times the book's own "
                                     "move — SPY above is unlevered."
                                 )
+                            if _ar.get("spy_d1_price_pending"):
+                                st.caption(
+                                    f"⏳ SPY's close for {_ar['d1']} isn't posted yet — SPY "
+                                    "comparison withheld until after close."
+                                )
                             st.caption(f"ℹ️ {_ar['caption']}")
                         else:
                             st.info(
@@ -37175,6 +37180,11 @@ elif page == "💰 Account":
                                     + (f" vs SPY {_ar_sec_spy:+.2f}%" if _ar_sec_spy is not None else "")
                                     + " over those specific dates — not the full period."
                                 )
+                                if _ar_sec.get("spy_d1_price_pending"):
+                                    st.caption(
+                                        f"⏳ SPY's close for {_ar_sec['d1']} isn't posted yet — "
+                                        "SPY comparison withheld until after close."
+                                    )
 
                         # build_review always sets this key to a list (never
                         # None/missing) -- a plain index, not `.get(...) or []`,

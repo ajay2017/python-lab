@@ -688,12 +688,31 @@ def _two_point_account_return(
     if mwr is None:
         return None
     levs = [v for v in (_opt(d0_row.get("leverage")), _opt(d1_row.get("leverage"))) if v is not None]
+    # d1 is often "today" (e.g. "This Quarter" on the quarter's first day,
+    # or any custom range ending today) — if today's SPY close hasn't
+    # posted yet, `price_on_or_before` silently reuses an earlier close for
+    # BOTH sides, which can print a false "+0.00%" that looks measured but
+    # isn't (confirmed live, 2026-10-01: a real "This Quarter" render showed
+    # exactly this). Only d1 is checked, since d0 is virtually always an
+    # older, already-settled date. WITHHOLD the figure rather than disclose
+    # it — a caption under a still-visible stale number isn't this app's
+    # "recommend nothing rather than wrongly" posture; `spy_return_pct`
+    # becomes None here, same as every other "can't measure this" state,
+    # and the existing None-tolerant renders (app.py's "—", the secondary
+    # caption, the Markdown export) already handle it correctly with no
+    # further change (caught in Opus review, 2026-10-01 — the first version
+    # of this fix disclosed the stale number instead of withholding it).
+    spy_d1_price_pending = bool(spy_prices_by_date) and d1 not in spy_prices_by_date
+    spy_return_pct = (
+        None if spy_d1_price_pending else _spy_period_return(spy_prices_by_date, d0, d1)
+    )
     return {
         "d0": d0, "d1": d1,
         "bmv": round(bmv, 2), "emv": round(emv, 2),
         "net_flow": mwr["net_flow"], "gain": mwr["gain"],
         "return_pct": mwr["period_return_pct"],
-        "spy_return_pct": _spy_period_return(spy_prices_by_date, d0, d1),
+        "spy_return_pct": spy_return_pct,
+        "spy_d1_price_pending": spy_d1_price_pending,
         "n_flows": len(flows_in_window),
         "max_leverage": round(max(levs), 2) if levs else None,
     }
@@ -919,6 +938,11 @@ def format_review_markdown(review: "dict | None") -> str:
             lines.append(
                 f"- At up to {ar['max_leverage']:.1f}x leverage this period, your return moves "
                 "roughly that many times the book's own move; SPY above is unlevered."
+            )
+        if ar.get("spy_d1_price_pending"):
+            lines.append(
+                f"- SPY's close for {ar['d1']} isn't posted yet — SPY comparison "
+                "withheld until after close."
             )
         lines.append(f"- {ar.get('caption', '')}")
     else:

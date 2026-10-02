@@ -761,6 +761,65 @@ def test_account_return_spy_uses_the_same_d0_d1_as_the_account():
     assert out["spy_return_pct"] == pytest.approx(1.0)
 
 
+# ── SPY d1-price-pending disclosure (real 2026-10-01 incident) ─────────────
+#
+# A live "This Quarter" render on 2026-10-01 (the quarter's first day) showed
+# "SPY, same dates: +0.00%" -- confirmed against real yfinance data that
+# 2026-10-01's SPY close was NaN (not yet posted), so price_on_or_before
+# silently reused 9/30's close for BOTH sides. The account figure (+19.00%,
+# built from recorded snapshots) was correct; only the SPY side was a false
+# "measured" reading dressed up as a real comparison.
+
+def test_spy_d1_pending_flagged_and_the_stale_figure_is_withheld():
+    """Opus review, 2026-10-01: the first version of this fix disclosed the
+    STALE number under a caption instead of withholding it -- a caption next
+    to a still-visible wrong figure isn't this app's "recommend nothing
+    rather than wrongly" posture. spy_return_pct must be None, exactly like
+    every other "can't measure this" state."""
+    acct = _snap_df([_snap(_D0, 7339.32), _snap(_D1, 6516.68)])
+    spy = {date(2026, 9, 29): 600.0}  # no 9/30 entry -- "today hasn't closed"
+    out = pr._account_return_section(acct, [], date(2026, 9, 30), date(2026, 9, 30), spy)
+    assert out["spy_d1_price_pending"] is True
+    assert out["spy_return_pct"] is None
+
+
+def test_spy_d1_pending_false_when_d1_close_is_present():
+    acct = _snap_df([_snap(_D0, 7339.32), _snap(_D1, 6516.68)])
+    spy = {date(2026, 9, 29): 600.0, date(2026, 9, 30): 606.0}
+    out = pr._account_return_section(acct, [], date(2026, 9, 30), date(2026, 9, 30), spy)
+    assert out["spy_d1_price_pending"] is False
+
+
+def test_spy_d1_pending_false_when_spy_data_is_entirely_unavailable():
+    """Empty/None SPY data is a totally different, already-disclosed state
+    (spy_return_pct is None) -- it must not ALSO claim a close is "pending\""""
+    acct = _snap_df([_snap(_D0, 7339.32), _snap(_D1, 6516.68)])
+    out = pr._account_return_section(acct, [], date(2026, 9, 30), date(2026, 9, 30), {})
+    assert out["spy_d1_price_pending"] is False
+    assert out["spy_return_pct"] is None
+
+
+def test_spy_d1_pending_flows_into_the_secondary_subrange_too():
+    acct = _snap_df([_snap(_D0, 7339.32), _snap(_D1, 6516.68)])
+    spy = {date(2026, 9, 29): 600.0}  # 9/30 missing
+    out = pr._account_return_section(acct, [], date(2026, 7, 1), date(2026, 9, 30), spy)
+    assert out["status"] == "pre_coverage"
+    assert out["secondary"]["spy_d1_price_pending"] is True
+    assert out["secondary"]["spy_return_pct"] is None
+
+
+def test_markdown_discloses_spy_d1_pending_without_crash():
+    acct = _snap_df([_snap(_D0, 7339.32), _snap(_D1, 6516.68)])
+    kw = _base_kwargs(
+        account_return_snapshots_df=acct, account_flows_rows=[],
+        spy_prices_by_date={date(2026, 9, 29): 600.0},  # 9/30 missing
+    )
+    review = pr.build_review(period_start=date(2026, 9, 30), period_end=date(2026, 9, 30), **kw)
+    md = pr.format_review_markdown(review)
+    assert "isn't posted yet" in md
+    assert md.count("**") % 2 == 0
+
+
 # ── leverage caption data ──────────────────────────────────────────────────
 
 def test_account_return_max_leverage_is_the_higher_of_start_or_end():
