@@ -288,6 +288,7 @@ from stock_analyzer.ranking import rank_holdings_in_universe, sector_alternative
 from stock_analyzer.trades import performance_stats, compute_realized_pnl
 from stock_analyzer import db
 from stock_analyzer import decision_context as _dctx
+from stock_analyzer import r_multiple as _r_multiple
 from stock_analyzer import premortem_advisor as _pm_advisor
 from stock_analyzer import regime_targets as _rgt_mod
 from stock_analyzer import coord_freshness
@@ -28432,39 +28433,6 @@ elif page == "📒 Trade Journal":
                         _thesis_source = "ai_draft" if _final_thesis == _dft else "ai_edited"
                     else:
                         _thesis_source = "manual"
-                # Concept E (Phase 1): freeze the decision context at this
-                # interactive write. Passive, None-safe, no API calls. Flows
-                # into _tj_pending_sell too, so it captures on SELL confirm as
-                # well. Broker/screenshot/split imports assemble their own
-                # record dicts elsewhere and never reach this block.
-                _dc_snapshot = None
-                try:
-                    _dc_pr = st.session_state.get("_port_risk_cache") or {}
-                    _dc_regime = None
-                    for _dc_k, _dc_v in st.session_state.items():
-                        if isinstance(_dc_k, str) and _dc_k.startswith("_macro_regime_") and _dc_v:
-                            _dc_regime = _dc_v
-                            break
-                    _dc_snapshot = _dctx.build_snapshot(
-                        ticker=ticker_input,
-                        action=action,
-                        signal_seen=(st.session_state.get("_tj_signal_seen") or "").strip() or None,
-                        portfolio_value=st.session_state.get("_portfolio_value"),
-                        portfolio_beta=_dc_pr.get("beta"),
-                        highbeta_share=st.session_state.get("_highbeta_share"),
-                        port_df=st.session_state.get("_port_df_enriched"),
-                        macro_regime=_dc_regime,
-                        actions=st.session_state.get("_actions_cache"),
-                    )
-                except Exception:
-                    _dc_snapshot = None
-                # Concept C: only attach a case-against generated for THIS
-                # exact ticker — a stale one from a previously-typed ticker
-                # must never be recorded against a different trade.
-                _pm_case_final = None
-                if action == "BUY" and st.session_state.get("_tj_premortem_case_for") == ticker_input:
-                    _pm_case_final = st.session_state.get("_tj_premortem_case")
-
                 # Pre-Commitment Enforcement (docs/plans/premortem-enforcement.md):
                 # one-shot LLM extraction of a structured, checkable price
                 # trigger from the free-text commitment above — runs exactly
@@ -28476,6 +28444,10 @@ elif page == "📒 Trade Journal":
                 # a "not_checkable" direction as permanently nothing-to-check,
                 # never re-attempted (the trades grid is delete-only, so
                 # there's no edit path that could make a retry meaningful).
+                # Moved ahead of the decision-context snapshot below (was
+                # previously after it) so the R-multiple risk-plan capture,
+                # which needs this trigger, can run before that snapshot is
+                # built and pass its result straight into it.
                 _pmt_trigger_price     = None
                 _pmt_trigger_direction = None
                 if action == "BUY":
@@ -28502,6 +28474,82 @@ elif page == "📒 Trade Journal":
                             _pmt_trigger_direction = _pmt_result["direction"]
                         else:
                             _pmt_trigger_direction = "not_checkable"
+
+                # R-Multiple chunk 3 (declared-stop risk plan, BUY only): the
+                # Pre-Mortem price trigger just extracted above IS the
+                # declared stop (D1 = option A, owner-confirmed) — reused,
+                # never re-derived. Gate + build both live in
+                # `r_multiple.declared_entry_risk_plan` (pure, unit-tested) —
+                # this call site only supplies the retrospective flag
+                # (broker-sourced or manually-backdated BUYs are excluded,
+                # since a stop typed in hindsight isn't a real ahead-of-time
+                # commitment). An ADD on an already-held ticker gets its own
+                # fresh plan here too, never inherited from a prior leg.
+                # Capture-only: never blocks the trade write, never shown to
+                # the owner, never touches manual_stops (a separate, live,
+                # mutable concept).
+                _risk_plan = None
+                try:
+                    _risk_plan = _r_multiple.declared_entry_risk_plan(
+                        action=action,
+                        is_retrospective=(_is_broker_trade or _is_manual_backdated),
+                        trigger_direction=_pmt_trigger_direction,
+                        trigger_price=_pmt_trigger_price,
+                        entry_price=price_val,
+                        shares=shares_val,
+                        as_of_date=_tj_picked_date,
+                    )
+                except Exception:
+                    _risk_plan = None
+
+                # Concept E (Phase 1): freeze the decision context at this
+                # interactive write. Passive, None-safe, no API calls. Flows
+                # into _tj_pending_sell too, so it captures on SELL confirm as
+                # well. Broker/screenshot/split imports assemble their own
+                # record dicts elsewhere and never reach this block.
+                _dc_snapshot = None
+                try:
+                    _dc_pr = st.session_state.get("_port_risk_cache") or {}
+                    _dc_regime = None
+                    for _dc_k, _dc_v in st.session_state.items():
+                        if isinstance(_dc_k, str) and _dc_k.startswith("_macro_regime_") and _dc_v:
+                            _dc_regime = _dc_v
+                            break
+                    _dc_snapshot = _dctx.build_snapshot(
+                        ticker=ticker_input,
+                        action=action,
+                        signal_seen=(st.session_state.get("_tj_signal_seen") or "").strip() or None,
+                        portfolio_value=st.session_state.get("_portfolio_value"),
+                        portfolio_beta=_dc_pr.get("beta"),
+                        highbeta_share=st.session_state.get("_highbeta_share"),
+                        port_df=st.session_state.get("_port_df_enriched"),
+                        macro_regime=_dc_regime,
+                        actions=st.session_state.get("_actions_cache"),
+                        risk_plan=_risk_plan,
+                    )
+                except Exception:
+                    _dc_snapshot = None
+                if _dc_snapshot is None and _risk_plan is not None:
+                    # Minimal fallback (per design) — a successfully-computed
+                    # risk plan must not be lost just because an unrelated
+                    # decision-context field raised upstream; never blocks
+                    # the trade write either way. ticker/action included
+                    # (Opus review, 2026-10-02) so this degraded row still
+                    # carries its own provenance rather than being a bare
+                    # risk_plan with nothing identifying what it's for.
+                    _dc_snapshot = {
+                        "v": _dctx.SCHEMA_VERSION,
+                        "captured_at": datetime.now(timezone.utc).isoformat(),
+                        "ticker": ticker_input,
+                        "action": action,
+                        "risk_plan": _risk_plan,
+                    }
+                # Concept C: only attach a case-against generated for THIS
+                # exact ticker — a stale one from a previously-typed ticker
+                # must never be recorded against a different trade.
+                _pm_case_final = None
+                if action == "BUY" and st.session_state.get("_tj_premortem_case_for") == ticker_input:
+                    _pm_case_final = st.session_state.get("_tj_premortem_case")
 
                 record = {
                     # Generated ONCE here, at staging time — record is reused

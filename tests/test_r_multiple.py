@@ -14,7 +14,7 @@ from stock_analyzer.constants import ATR_STOP_MULT
 from stock_analyzer.ticker_history import build_ticker_history
 from stock_analyzer.r_multiple import (
     engine_reference_risk, build_risk_plan, episode_r_multiple, add_flags,
-    _safe_dict,
+    declared_entry_risk_plan, _safe_dict,
 )
 
 pytestmark = pytest.mark.fast
@@ -255,3 +255,177 @@ def test_declared_lens_reports_no_plan_when_nothing_attached():
     assert res["r_multiple"] is None
     assert res["legs_planned"] == 0
     assert res["legs_total"] == 1
+
+
+# ─── 10. declared_entry_risk_plan — chunk 3 capture gate ────────────────────
+
+_AS_OF = date(2026, 3, 1)
+
+
+def test_capture_gate_attaches_declared_plan_for_a_usable_below_trigger_not_retrospective():
+    plan = declared_entry_risk_plan(
+        action="BUY", is_retrospective=False, trigger_direction="below",
+        trigger_price=90.0, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is not None
+    assert plan["source"] == "declared"
+    assert plan["stop_price"] == pytest.approx(90.0)
+    assert plan["risk_dollars"] == pytest.approx(100.0)   # (100-90)*10
+
+
+def test_capture_gate_sell_action_never_gets_a_plan():
+    plan = declared_entry_risk_plan(
+        action="SELL", is_retrospective=False, trigger_direction="below",
+        trigger_price=90.0, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is None
+
+
+def test_capture_gate_no_trigger_extracted_returns_none():
+    plan = declared_entry_risk_plan(
+        action="BUY", is_retrospective=False, trigger_direction=None,
+        trigger_price=None, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is None
+
+
+def test_capture_gate_not_checkable_direction_returns_none():
+    plan = declared_entry_risk_plan(
+        action="BUY", is_retrospective=False, trigger_direction="not_checkable",
+        trigger_price=None, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is None
+
+
+def test_capture_gate_above_direction_returns_none():
+    # A real extraction result, just the wrong direction for a declared stop.
+    plan = declared_entry_risk_plan(
+        action="BUY", is_retrospective=False, trigger_direction="above",
+        trigger_price=120.0, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is None
+
+
+def test_capture_gate_retrospective_buy_returns_none_even_with_a_usable_trigger():
+    # Broker-sourced or manually-backdated — a stop typed in hindsight isn't
+    # a real ahead-of-time commitment, regardless of how clean the trigger is.
+    plan = declared_entry_risk_plan(
+        action="BUY", is_retrospective=True, trigger_direction="below",
+        trigger_price=90.0, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is None
+
+
+def test_capture_gate_add_on_held_ticker_computes_its_own_fresh_plan():
+    # Simulates two legs of the same ticker — an initial BUY and a later ADD
+    # — each with its own entry/trigger. The ADD's plan must reflect only
+    # its own inputs, never the first leg's.
+    first_leg = declared_entry_risk_plan(
+        action="BUY", is_retrospective=False, trigger_direction="below",
+        trigger_price=90.0, entry_price=100.0, shares=10.0, as_of_date=date(2026, 1, 1),
+    )
+    add_leg = declared_entry_risk_plan(
+        action="BUY", is_retrospective=False, trigger_direction="below",
+        trigger_price=70.0, entry_price=80.0, shares=5.0, as_of_date=date(2026, 2, 1),
+    )
+    assert first_leg["stop_price"] == pytest.approx(90.0)
+    assert add_leg["stop_price"] == pytest.approx(70.0)
+    assert add_leg["risk_dollars"] == pytest.approx(50.0)   # (80-70)*5, independent of first leg
+
+
+def test_capture_gate_add_with_no_fresh_trigger_returns_none_does_not_reuse_prior_leg():
+    # The ADD itself has no usable trigger this time — must be None, never
+    # fall back to reusing an earlier leg's declared stop.
+    add_leg = declared_entry_risk_plan(
+        action="BUY", is_retrospective=False, trigger_direction="not_checkable",
+        trigger_price=None, entry_price=80.0, shares=5.0, as_of_date=date(2026, 2, 1),
+    )
+    assert add_leg is None
+
+
+def test_capture_gate_nan_trigger_price_never_raises_and_returns_none():
+    plan = declared_entry_risk_plan(
+        action="BUY", is_retrospective=False, trigger_direction="below",
+        trigger_price=float("nan"), entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is None
+
+
+def test_capture_gate_malformed_trigger_price_never_raises_and_returns_none():
+    plan = declared_entry_risk_plan(
+        action="BUY", is_retrospective=False, trigger_direction="below",
+        trigger_price="not-a-number", entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is None
+
+
+def test_capture_gate_never_reads_or_writes_manual_stops():
+    # Pure structural guarantee: the function signature has no manual_stops
+    # parameter and the module has no references to it anywhere.
+    import inspect
+    import stock_analyzer.r_multiple as _rm_mod
+    sig = inspect.signature(declared_entry_risk_plan)
+    assert "manual_stops" not in sig.parameters
+    assert "manual_stops" not in inspect.getsource(_rm_mod)
+
+
+def test_capture_gate_never_falls_through_to_the_engine_lens():
+    # Regression guard for "a declared-stop miss must stay None, never
+    # silently become an engine-lens plan". Prove the engine lens WOULD
+    # resolve a plan here (rich prior OHLC history, via build_risk_plan
+    # directly with no declared_stop_price) — then show the capture gate,
+    # given the identical entry/shares/date and no usable trigger, still
+    # returns None rather than reaching for that same engine result.
+    rich_ohlc = _flat_ohlc(date(2026, 1, 1), 40, close=100.0, half_range=0.5)
+    engine_plan = build_risk_plan(100.0, 10.0, rich_ohlc, _AS_OF, declared_stop_price=None)
+    assert engine_plan is not None and engine_plan["source"] == "engine"   # would have fired
+
+    gate_plan = declared_entry_risk_plan(
+        action="BUY", is_retrospective=False, trigger_direction=None,
+        trigger_price=None, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert gate_plan is None   # never reused/reached the engine result above
+
+
+def test_capture_gate_rejects_nan_and_none_trigger_before_calling_build_risk_plan():
+    # Opus review, 2026-10-02: the test above passes trigger_direction=None,
+    # which the direction check rejects BEFORE build_risk_plan is ever
+    # called -- it can't actually exercise "a 'below' direction with an
+    # unusable price reaches build_risk_plan and must still come back None,
+    # not an engine-lens plan". This covers that real path: direction is
+    # "below" (the only direction that proceeds), but the trigger price
+    # itself is NaN / None -- both must be rejected by the new `_f(...) is
+    # None` pre-check, never reaching build_risk_plan at all.
+    for bad_trigger in (float("nan"), None):
+        gate_plan = declared_entry_risk_plan(
+            action="BUY", is_retrospective=False, trigger_direction="below",
+            trigger_price=bad_trigger, entry_price=100.0, shares=10.0,
+            as_of_date=_AS_OF,
+        )
+        assert gate_plan is None
+
+
+def test_capture_gate_rejects_a_non_declared_plan_even_if_build_risk_plan_ever_returns_one(monkeypatch):
+    # Opus review, 2026-10-02: belt-and-suspenders defense-in-depth. Today,
+    # a valid (non-NaN/None) declared_stop_price always keeps build_risk_plan
+    # on its "declared" branch -- it can never itself return an
+    # engine-sourced plan when a real declared stop was passed in. This test
+    # doesn't rely on that staying true: it forces build_risk_plan to return
+    # an engine-sourced plan regardless of inputs, and confirms
+    # declared_entry_risk_plan's own `source == "declared"` re-check refuses
+    # to pass it through -- so even a future change to build_risk_plan's
+    # internal branching couldn't silently leak an engine-lens plan out of
+    # this capture gate under the "declared" label.
+    import stock_analyzer.r_multiple as rm
+
+    def _fake_build_risk_plan(*args, **kwargs):
+        return {"risk_dollars": 50.0, "stop_price": 95.0, "source": "engine",
+                "atr_mult_used": ATR_STOP_MULT}
+
+    monkeypatch.setattr(rm, "build_risk_plan", _fake_build_risk_plan)
+
+    gate_plan = rm.declared_entry_risk_plan(
+        action="BUY", is_retrospective=False, trigger_direction="below",
+        trigger_price=95.0, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert gate_plan is None

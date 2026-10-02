@@ -119,6 +119,24 @@ def test_build_snapshot_actions_empty_list_sets_zero():
 
 # ─── JSON round-trip safety with non-native numeric types ──────────────────
 
+# ─── risk_plan passthrough (R-multiple chunk 3) ─────────────────────────────
+
+def test_build_snapshot_risk_plan_defaults_to_none():
+    snap = build_snapshot(ticker="AAA", action="BUY")
+    assert snap["risk_plan"] is None
+
+
+def test_build_snapshot_risk_plan_dict_passed_through_verbatim():
+    plan = {"risk_dollars": 100.0, "stop_price": 90.0, "source": "declared"}
+    snap = build_snapshot(ticker="AAA", action="BUY", risk_plan=plan)
+    assert snap["risk_plan"] == plan
+
+
+def test_build_snapshot_risk_plan_non_dict_coerced_to_none():
+    snap = build_snapshot(ticker="AAA", action="BUY", risk_plan="not-a-dict")
+    assert snap["risk_plan"] is None
+
+
 def test_build_snapshot_is_plain_json_serializable_with_numpy_and_timestamp_inputs():
     snap = build_snapshot(
         ticker="AAA",

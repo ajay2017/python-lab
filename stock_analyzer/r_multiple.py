@@ -34,6 +34,7 @@ Pure logic — no Streamlit, no DB calls, no network.
 from __future__ import annotations
 
 from datetime import date
+from math import isfinite
 from typing import Any
 
 import pandas as pd
@@ -58,12 +59,18 @@ _SHARES_ZERO_THRESHOLD = 1e-9
 # ── Private helpers ────────────────────────────────────────────────────────
 
 def _f(v: Any, default: float | None = None) -> float | None:
-    """Safe float coercion; returns `default` on None / NaN / non-numeric."""
+    """Safe float coercion; returns `default` on None / NaN / +-inf / non-numeric.
+    +-inf is rejected for the same reason NaN is (Opus review, 2026-10-02):
+    an infinite risk_dollars/risk_pct would serialize as invalid JSON
+    (`Infinity`) and fail a future jsonb write whole-hog. Not reachable
+    through today's UI inputs (a `st.number_input` price/shares can't be
+    inf), but this module's own contract is "never emit a non-finite number",
+    not "never emit one through inputs this module happens to see today"."""
     if v is None:
         return default
     try:
         x = float(v)
-        return default if x != x else x   # NaN guard (NaN != NaN)
+        return x if isfinite(x) else default   # NaN guard + +-inf guard
     except (TypeError, ValueError):
         return default
 
@@ -253,6 +260,75 @@ def build_risk_plan(
         "source":         "engine",
         "atr_mult_used":  engine["atr_mult_used"],
     })
+
+
+def declared_entry_risk_plan(
+    action: str | None,
+    is_retrospective: bool,
+    trigger_direction: str | None,
+    trigger_price: float | None,
+    entry_price: float,
+    shares: float,
+    as_of_date: date,
+) -> dict | None:
+    """
+    Chunk 3 capture gate: decide whether a BUY gets a declared risk plan at
+    all, using the owner's existing Pre-Mortem price trigger as the
+    "declared stop" (D1 = option A, owner-confirmed) — no other input is
+    treated as a declared stop.
+
+    None (no plan attached) whenever:
+      * `action` is not "BUY" (SELL/SPLIT never get a risk plan here), or
+      * `is_retrospective` is True — a broker-sourced or manually-backdated
+        entry is logged after the fact, so a stop typed in hindsight is not
+        a real ahead-of-time commitment, or
+      * `trigger_direction` isn't exactly `"below"` — covers "no trigger
+        extracted", `"not_checkable"`, and any other direction/shape, or
+      * the underlying `build_risk_plan` call itself returns None (e.g. the
+        trigger price is non-numeric, non-positive, or at/above entry).
+
+    `ohlc_df` is deliberately never passed through to `build_risk_plan` (it's
+    always called with `ohlc_df=None`) — this keeps the result strictly on
+    the declared lens; the engine/ATR fallback must never fire here, which
+    would silently turn a genuine "no declared stop" case into a different
+    kind of plan. This isolation is enforced TWICE, deliberately: a missing/
+    non-numeric trigger price is rejected directly (never handed to
+    `build_risk_plan` at all), AND the result is re-checked for
+    `source == "declared"` before being returned. Today `ohlc_df=None` alone
+    is enough to make `build_risk_plan`'s engine fallback return None (no
+    price history to compute an ATR from) — but that's an accident of
+    `engine_reference_risk`'s current behaviour, not a guarantee this
+    function makes on its own. If a future change ever gives
+    `engine_reference_risk` some other fallback (it lives outside
+    `_GATE_FILES`, so such a change wouldn't be review-gated the way this
+    capture path is), this function must still never let an engine-lens plan
+    masquerade as a declared one (Opus review finding, 2026-10-02).
+
+    An ADD (a BUY on an already-held ticker) is just another call with that
+    leg's own entry/shares/date — it always gets its own fresh plan here,
+    never a prior leg's.
+
+    Never raises — any bad/missing input flows through to `build_risk_plan`'s
+    own None-safe guards, or is rejected directly above.
+    """
+    if action != "BUY":
+        return None
+    if is_retrospective:
+        return None
+    if trigger_direction != "below":
+        return None
+    if _f(trigger_price) is None:
+        return None
+    plan = build_risk_plan(
+        entry_price=entry_price,
+        shares=shares,
+        ohlc_df=None,
+        as_of_date=as_of_date,
+        declared_stop_price=trigger_price,
+    )
+    if plan is None or plan.get("source") != "declared":
+        return None
+    return plan
 
 
 def episode_r_multiple(episode: dict, lens: str, ohlc_df: Any) -> dict:

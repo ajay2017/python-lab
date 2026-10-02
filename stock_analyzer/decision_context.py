@@ -58,6 +58,7 @@ def build_snapshot(
     market_tone: str | None = None,
     actions=None,
     captured_at: datetime | None = None,
+    risk_plan: dict | None = None,
 ) -> dict:
     """Return a schema-versioned, JSON-safe decision-context snapshot.
 
@@ -67,6 +68,13 @@ def build_snapshot(
     ``macro_regime`` may be the cached regime dict (from the
     ``_macro_regime_*`` session key) — its ``regime``/``label``/``confidence``
     are extracted — or a bare label string, or None.
+
+    ``risk_plan`` (R-multiple chunk 3, BUY-only): a pre-built, already
+    NaN-safe dict from ``r_multiple.build_risk_plan`` with
+    ``source == "declared"``, or None when no usable declared stop exists.
+    Passed through verbatim — this function does not compute it, so it adds
+    no new failure surface of its own. An additive key, per this module's own
+    "new keys don't need a version bump" invariant.
     """
     # ── Portfolio shape: top sector share + position count (from Market Value)
     top_sector = None
@@ -124,6 +132,7 @@ def build_snapshot(
             "top_sector": top_sector,
         },
         "active_recs": {"act_today_n": act_today_n},
+        "risk_plan": risk_plan if isinstance(risk_plan, dict) else None,
     }
 
     # Strip any non-JSON-serializable types (numpy scalars, Timestamps) so the
