@@ -296,8 +296,13 @@ def compute_protective_alerts(today: date | None = None) -> dict:
 
     # composite_score enrichment for exit_signals capture (all tiers, not just
     # the EXIT-only protective-email scope below) — mirrors app.py:4143-4149.
+    # Values pass through _f() (NaN-safe) rather than the raw Series value: a
+    # withheld holding's Score is an honest NaN (portfolio.py:589-634), and a
+    # raw NaN reaching save_exit_signals_batch's upsert raises inside
+    # httpx's JSON encoder (allow_nan=False), silently dropping the ENTIRE
+    # batch for every held ticker that day — see 2026-10-02 review C1.
     composite_map = (
-        port_df.set_index("Ticker")["Score"].to_dict()
+        {k: _f(v) for k, v in port_df.set_index("Ticker")["Score"].to_dict().items()}
         if "Ticker" in port_df.columns and "Score" in port_df.columns
         else {}
     )

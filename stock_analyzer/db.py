@@ -2237,6 +2237,14 @@ def save_thesis_review(record: dict) -> bool:
         return False
     if not has_db():
         return False
+    # Sanitize immediately before the write: evidence_snapshot can carry a
+    # NaN composite (a withheld holding's honest-NaN Score, portfolio.py:
+    # 589-634) buried in a nested dict, which raises inside httpx's JSON
+    # encoder (allow_nan=False) before any network call — the except block
+    # below doesn't match that error, so the review is silently never
+    # persisted even though the user already saw it and an LLM call was
+    # already paid for. See 2026-10-02 review C1.
+    record = _json_safe(record)
     try:
         _client().table("thesis_reviews").insert(record).execute()
         return True
@@ -3513,10 +3521,23 @@ def save_exit_signals_batch(signals: list[dict]) -> bool:
     if not has_db():
         return False
 
+    # Sanitize BEFORE the pre-read coalesce merge below, not after (Opus
+    # review, 2026-10-02 confirmation pass on review C1's own fix): the
+    # merge's "don't clobber a prior non-null value" check is `s.get(col) is
+    # None`, and a raw NaN is not None, so sanitizing afterward let a NaN
+    # skip the merge entirely and then get coerced straight to NULL —
+    # silently overwriting a same-day non-null value a PRIOR build already
+    # saved. Sanitizing first means a NaN already reads as None by the time
+    # the merge runs, so it correctly qualifies for "fill from the existing
+    # row" like any other missing value. Side benefit: `_json_safe` returns
+    # new dicts, so the merge loop below no longer mutates the caller's own
+    # `signals` list in place.
+    _safe_signals = [_json_safe(s) for s in signals]
+
     try:
-        tickers = sorted({str(s["ticker"]) for s in signals if s.get("ticker")})
-        dates   = sorted({str(s["signal_date"]) for s in signals if s.get("signal_date")})
-        types   = sorted({str(s["signal_type"]) for s in signals if s.get("signal_type")})
+        tickers = sorted({str(s["ticker"]) for s in _safe_signals if s.get("ticker")})
+        dates   = sorted({str(s["signal_date"]) for s in _safe_signals if s.get("signal_date")})
+        types   = sorted({str(s["signal_type"]) for s in _safe_signals if s.get("signal_type")})
         if tickers and dates and types:
             cols = "ticker,signal_date,signal_type," + ",".join(_EXIT_SIGNAL_NULLABLE_COLS)
             existing_rows = (
@@ -3530,7 +3551,7 @@ def save_exit_signals_batch(signals: list[dict]) -> bool:
                 (r.get("ticker"), str(r.get("signal_date")), r.get("signal_type")): r
                 for r in existing_rows
             }
-            for s in signals:
+            for s in _safe_signals:
                 key = (s.get("ticker"), str(s.get("signal_date")), s.get("signal_type"))
                 existing = existing_by_key.get(key)
                 if not existing:
@@ -3544,7 +3565,7 @@ def save_exit_signals_batch(signals: list[dict]) -> bool:
 
     try:
         _client().table("exit_signals").upsert(
-            signals,
+            _safe_signals,
             on_conflict="ticker,signal_date,signal_type",
         ).execute()
         return True

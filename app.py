@@ -6418,8 +6418,16 @@ if page == "🏠 Home":
             # forward from this point.  Background write — never raises.
             _exit_signals_to_save = []
             _port_df_for_exit = st.session_state.get("_port_df_enriched")
+            # NaN-safe: a withheld holding's Score is an honest NaN
+            # (portfolio.py:589-634), and a raw NaN reaching
+            # save_exit_signals_batch's upsert raises inside httpx's JSON
+            # encoder (allow_nan=False), silently dropping the ENTIRE batch
+            # for every held ticker that day — see 2026-10-02 review C1.
             _composite_map = (
-                _port_df_for_exit.set_index("Ticker")["Score"].to_dict()
+                {
+                    k: (None if pd.isna(v) else float(v))
+                    for k, v in _port_df_for_exit.set_index("Ticker")["Score"].to_dict().items()
+                }
                 if _port_df_for_exit is not None
                 and "Ticker" in _port_df_for_exit.columns
                 and "Score" in _port_df_for_exit.columns
@@ -40254,7 +40262,16 @@ elif page == "🧠 AI Insights":
                                     if _snap_pdf is not None and not _snap_pdf.empty:
                                         _snap_prow = _snap_pdf[_snap_pdf["Ticker"] == _ticker]
                                         if not _snap_prow.empty:
-                                            _snap_composite = _snap_prow.iloc[0].get("Score")
+                                            # NaN-safe: a withheld holding's Score is an
+                                            # honest NaN (portfolio.py:589-634) that would
+                                            # otherwise flow into evidence_snapshot and
+                                            # raise inside httpx's JSON encoder on save
+                                            # (allow_nan=False) — see 2026-10-02 review C1.
+                                            _snap_composite_raw = _snap_prow.iloc[0].get("Score")
+                                            _snap_composite = (
+                                                None if pd.isna(_snap_composite_raw)
+                                                else float(_snap_composite_raw)
+                                            )
                                     _snap_erosion = _ai_db.load_thesis_erosion_cache(_ticker, str(_today_et()))
                                     if _snap_erosion is None:
                                         # load_thesis_erosion_cache's own contract already

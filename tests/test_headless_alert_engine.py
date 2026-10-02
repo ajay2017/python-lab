@@ -564,6 +564,37 @@ def test_protective_alerts_composite_score_enrichment():
     assert result["all_deterioration_signals"][0]["composite_score"] == 72.0
 
 
+def test_protective_alerts_composite_score_nan_becomes_none_not_nan():
+    # Regression test for 2026-10-02 review C1: a withheld holding's Score
+    # is an honest NaN (portfolio.py:589-634). A raw NaN composite_score
+    # reaching save_exit_signals_batch's upsert raises inside httpx's JSON
+    # encoder (allow_nan=False), silently dropping the entire day's batch
+    # for every held ticker -- composite_map must coerce it to None first.
+    ctx = _ok_ctx([_port_row("AAPL", gap_to_stop=5.0)])
+    ctx["port_df"].loc[0, "Score"] = float("nan")
+    det = [{"ticker": "AAPL", "tier": "WATCH", "dd_from_peak_pct": -8, "trend_ma": 50,
+            "exit_floor": -20, "pnl_pct": -5, "weight_pct": 10}]
+    result = _run_protective_alerts(ctx, det=det)
+    written = result["all_deterioration_signals"][0]["composite_score"]
+    assert written is None  # not a bare NaN -- `nan is None` is False
+
+
+def test_protective_alerts_risk_off_composite_score_nan_becomes_none():
+    # gap_to_stop=5.0 (no stop breach) so AAPL isn't already in `reduced` --
+    # keeps this isolated to the risk-off enrichment path only.
+    ctx = _ok_ctx([_port_row("AAPL", gap_to_stop=5.0)])
+    ctx["port_df"].loc[0, "Score"] = float("nan")
+    risk_off = [{"ticker": "AAPL", "action": "TRIM — Risk-Off", "directive": "trim",
+                 "why": "beta ceiling", "trigger": "risk-off", "weight": 15, "pnl_pct": 2}]
+    result = _run_protective_alerts(ctx, risk_off=risk_off)
+    assert any(a["kind"] == "risk_off_derisk" and a["ticker"] == "AAPL"
+               for a in result["alerts"])
+    # composite_score is attached to the risk_off dict itself (same object
+    # list returned by assess_risk_off_derisk), not surfaced on the alert --
+    # confirm via the underlying list the engine enriched in place.
+    assert risk_off[0]["composite_score"] is None
+
+
 def test_protective_alerts_analyst_target_snapshot_built_and_skips_stale():
     ctx = _ok_ctx(
         [_port_row("AAPL", gap_to_stop=5.0), _port_row("MSFT", gap_to_stop=5.0)],
