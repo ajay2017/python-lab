@@ -15625,7 +15625,7 @@ elif page == "🔗 Risk Analysis":
                         if _rec.get("root_cause"):
                             st.markdown(
                                 f"<div style='color:#bbb;font-size:0.88em;margin-bottom:8px'>"
-                                f"{_rec['root_cause']}</div>",
+                                f"{_md_bold(_rec['root_cause'])}</div>",
                                 unsafe_allow_html=True,
                             )
                         if _rec.get("root_tickers"):
@@ -20218,7 +20218,7 @@ elif page == "🥧 Portfolio Overview":
                                         st.markdown("**Thesis Status**")
                                         st.markdown(
                                             f"<div style='color:#bbb;font-size:0.88em'>"
-                                            f"{_prec['root_cause']}</div>",
+                                            f"{_md_bold(_prec['root_cause'])}</div>",
                                             unsafe_allow_html=True,
                                         )
 
