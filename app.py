@@ -15665,7 +15665,7 @@ elif page == "🔗 Risk Analysis":
                                 f"border-left:4px solid #00C851'>"
                                 f"<span style='font-size:0.72em;color:#00C851;font-weight:700;"
                                 f"letter-spacing:0.09em;text-transform:uppercase'>Expected Outcome</span><br>"
-                                f"<span style='color:#ccc;font-size:0.88em'>{_rec['expected_outcome']}</span>"
+                                f"<span style='color:#ccc;font-size:0.88em'>{_md_bold(_rec['expected_outcome'])}</span>"
                                 f"</div>",
                                 unsafe_allow_html=True,
                             )
@@ -20244,7 +20244,7 @@ elif page == "🥧 Portfolio Overview":
                                             f"font-weight:700;letter-spacing:0.09em;"
                                             f"text-transform:uppercase'>Expected Outcome</span><br>"
                                             f"<span style='color:#ccc;font-size:0.88em'>"
-                                            f"{_prec['expected_outcome']}</span>"
+                                            f"{_md_bold(_prec['expected_outcome'])}</span>"
                                             f"</div>",
                                             unsafe_allow_html=True,
                                         )
