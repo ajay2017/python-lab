@@ -697,7 +697,7 @@ def _write_verified_tree(tree: str) -> None:
 # scopes (tests/ included even though the antipattern gate never scans it)
 # since either gate's result could be stale if its own inputs changed.
 _TESTED_PATH_FILES = ("app.py", "cron_runner.py")
-_TESTED_PATH_PREFIXES = ("stock_analyzer/", "tests/")
+_TESTED_PATH_PREFIXES = ("stock_analyzer/", "tests/", ".claude/hooks/")
 
 
 def _is_tested_path(path: str) -> bool:
@@ -867,6 +867,20 @@ _GATE_FILES = {
     "stock_analyzer/etf_scoring.py",          # the ETF composite formula
     "stock_analyzer/sector_fit.py",           # feeds the hard SECTOR_CEILING gate (app + cron)
     "stock_analyzer/headless_alert_engine.py",  # decides the emailed BUY/protective lists
+    # Added 2026-10-02 (review M4, owner decision): this hook is the single
+    # choke-point enforcing every gate above -- Critical #2 (the push-gate
+    # marker bug) shipped here and took 3 implementation rounds to fully
+    # close, which is exactly the "a mistake here silently defeats
+    # everything else" risk a reviewer pass is cheapest insurance against.
+    # Gating itself on itself is intentional, not circular -- but a citation
+    # requirement is a DIFFERENT guarantee from "pytest actually ran": the
+    # citation check (below) runs BEFORE the pytest/antipattern gates (later
+    # in main()), and this path wasn't covered by _touches_tested_code/
+    # _TESTED_PATH_PREFIXES or tests.yml's CI filters, so a hook-only commit
+    # ran zero tests anywhere until both were widened in the same commit
+    # that added this entry (2026-10-02 review FIX-FIRST pass on this very
+    # change -- see _touches_tested_code's own docstring for the full story).
+    ".claude/hooks/pre_tool_checks.py",
 }
 
 
@@ -885,10 +899,20 @@ def _touches_tested_code(staged: list[str]) -> bool:
     CI (.github/workflows/tests.yml path filters omitted them too, fixed in the
     same commit), so the single push-time run was the only execution -- in the
     local .venv, which does not match production's pinned dependency set.
+
+    .claude/hooks/ added 2026-10-02 (review M4 follow-up): this hook was just
+    added to _GATE_FILES, so its own commits now require a review citation --
+    but a citation requirement alone is NOT the same guarantee as "pytest
+    actually ran." Without this line, a hook-only commit triggered zero gates
+    here (this exact path wasn't in _TESTED_PATH_PREFIXES either) AND zero in
+    CI (tests.yml's path filters didn't cover it), so the hook that enforces
+    every other gate could ship with no test run at all -- the same shape of
+    false reassurance Critical #2 found in a different corner of this file.
     """
     return any(
         f == "app.py" or f == "cron_runner.py"
         or f.startswith("stock_analyzer/") or f.startswith("tests/")
+        or f.startswith(".claude/hooks/")
         for f in staged
     )
 

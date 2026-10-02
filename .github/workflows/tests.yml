@@ -23,6 +23,11 @@ on:
       # running a single check, and could only be verified on some later,
       # unrelated code push.
       - ".github/workflows/**"
+      # Same reasoning, extended 2026-10-02 (review M4 follow-up): the local
+      # commit/push hook (.claude/hooks/pre_tool_checks.py) is now itself a
+      # _GATE_FILES member, but this path wasn't covered here either -- a
+      # hook-only commit would have run no test anywhere, local or CI.
+      - ".claude/hooks/**"
   pull_request:
     paths:
       - "app.py"
@@ -38,6 +43,11 @@ on:
       # running a single check, and could only be verified on some later,
       # unrelated code push.
       - ".github/workflows/**"
+      # Same reasoning, extended 2026-10-02 (review M4 follow-up): the local
+      # commit/push hook (.claude/hooks/pre_tool_checks.py) is now itself a
+      # _GATE_FILES member, but this path wasn't covered here either -- a
+      # hook-only commit would have run no test anywhere, local or CI.
+      - ".claude/hooks/**"
   workflow_dispatch: {}
 
 jobs:

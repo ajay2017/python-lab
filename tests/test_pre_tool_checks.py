@@ -536,6 +536,30 @@ class TestIsTestedPath:
         assert not hook._is_tested_path("docs/requirements.md")
         assert not hook._is_tested_path("scripts/check_antipatterns.py")
 
+    def test_matches_the_hook_directory_itself(self):
+        """2026-10-02 review M4: the hook was just added to _GATE_FILES, so
+        a hook-only commit must be treated as a tested path too -- a
+        citation requirement alone isn't the same guarantee as "pytest
+        actually ran" (see _touches_tested_code's own docstring)."""
+        assert hook._is_tested_path(".claude/hooks/pre_tool_checks.py")
+        assert hook._is_tested_path(".claude/hooks/hook_liveness_check.py")
+
+
+class TestTouchesTestedCode:
+    """_touches_tested_code is what actually decides whether pytest runs for
+    a given commit -- a SEPARATE inline check from _is_tested_path above
+    (feeds the push-time dirty-check instead), so each needs its own
+    coverage; neither implies the other stays in sync."""
+
+    def test_hook_only_commit_touches_tested_code(self):
+        assert hook._touches_tested_code([".claude/hooks/pre_tool_checks.py"])
+
+    def test_hook_only_commit_does_not_touch_scanned_code(self):
+        """The hook isn't an antipattern-gate TARGET (it's not app.py/
+        cron_runner.py/stock_analyzer/) -- a hook-only commit should run
+        pytest but not the antipattern scan."""
+        assert not hook._touches_scanned_code([".claude/hooks/pre_tool_checks.py"])
+
 
 # ---------------------------------------------------------------------------
 # Medium #4: the citation-trailer regex and commit-type detection
@@ -711,3 +735,34 @@ class TestMainMarkerWiring:
         code = self._invoke_main(monkeypatch, "git push origin main")
         assert code == 0
         assert "tree" not in written
+
+
+# ── _GATE_FILES integrity (2026-10-02 review, non-blocking finding on the
+# hook-self-gating commit) ───────────────────────────────────────────────────
+#
+# No test previously asserted anything about _GATE_FILES's own CONTENTS --
+# every other test exercises the generic membership-check logic against a
+# fabricated path. A typo'd or stale-renamed entry (e.g. after a module is
+# renamed/moved) would silently stop gating that file forever, with nothing
+# here to catch it.
+
+class TestGateFilesIntegrity:
+    _REPO_ROOT = _HOOK_PATH.parent.parent.parent
+
+    def test_every_gate_files_entry_is_a_real_tracked_file(self):
+        result = subprocess.run(
+            ["git", "ls-files"], cwd=self._REPO_ROOT,
+            capture_output=True, text=True, check=True,
+        )
+        tracked = set(result.stdout.splitlines())
+        untracked_or_typo = [p for p in hook._GATE_FILES if p not in tracked]
+        assert untracked_or_typo == [], (
+            f"_GATE_FILES contains path(s) git doesn't track: {untracked_or_typo} "
+            "-- a typo or a stale rename would silently stop gating that file"
+        )
+
+    def test_hook_itself_is_a_gate_files_member(self):
+        """Pins the 2026-10-02 review M4 decision: the hook must require a
+        review citation on its own future changes, same as any other
+        decision-engine-core/DB-write file."""
+        assert ".claude/hooks/pre_tool_checks.py" in hook._GATE_FILES
