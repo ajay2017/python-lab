@@ -58,10 +58,19 @@ def expense_ratio_score(net_expense_ratio_pct: float | None) -> float | None:
     is a real drag, not a disqualifier — floors at 25, never 0). Linear
     interpolation between the two bands. `None` input -> `None` output —
     never fabricate a cost score for a fund with no expense-ratio data.
+
+    A NaN input also -> `None` (2026-10-02 review, H3 follow-up): every
+    comparison against a NaN float is False, so a NaN used to silently fall
+    through both band checks into the linear-interpolation arithmetic,
+    which propagates NaN rather than raising — the exact "fabricate a cost
+    score" this docstring already promised never to do, just not caught at
+    the `None`-only check above.
     """
     if net_expense_ratio_pct is None:
         return None
     r = float(net_expense_ratio_pct)
+    if r != r:  # NaN
+        return None
     if r <= ETF_EXPENSE_RATIO_CHEAP_PCT:
         return 100.0
     if r >= ETF_EXPENSE_RATIO_EXPENSIVE_PCT:
@@ -77,10 +86,29 @@ def etf_available(etf_facts: dict | None) -> bool:
     drive a verdict — the same "manufactured buy on technicals alone" risk
     this app avoids elsewhere. `etf_facts=None` or missing
     `net_expense_ratio` -> `False`.
+
+    A NaN `net_expense_ratio` also -> `False` (2026-10-02 review, H3's own
+    follow-up finding): `is not None` alone lets a NaN through, since
+    `float('nan') is not None` is True. `expense_ratio_score` did NOT have
+    a NaN guard of its own before this same pass (fixed alongside this
+    function) -- every comparison against a NaN float is False, so a NaN
+    used to silently fall through its band logic to a NaN cost_score, which
+    then poisoned `etf_composite` into a NaN composite that read as neither
+    a clean score nor an honest withhold (the same "fabricated-looking
+    value" class this app withholds for everywhere else). `v != v` is the
+    property-based NaN check (true only for NaN) -- no import needed.
     """
     if not etf_facts:
         return False
-    return etf_facts.get("net_expense_ratio") is not None
+    ratio = etf_facts.get("net_expense_ratio")
+    if ratio is None:
+        return False
+    return bool(ratio == ratio)  # False only for NaN. bool() normalizes a
+    # numpy scalar's own __eq__ result (np.bool_) to the real bool this
+    # function's signature declares -- `ratio` is always a plain Python
+    # value here (yfinance's .info is a JSON-sourced dict, never a pandas
+    # column), so a pd.NA input (which bool() can't coerce) isn't a
+    # realistic shape to defend against at this call site.
 
 
 def etf_composite(technical_score: float, cost_score: float) -> float:

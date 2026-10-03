@@ -165,25 +165,30 @@ def test_orphan_cache_none_held_roster_returns_unknown_never_false_positive(monk
     """A held ticker with a genuinely stale cache row must read 'unknown',
     not 'warn', when the holdings read itself failed this run -- a warn
     here would be reporting a currently-held ticker as orphaned purely
-    because one unrelated load failed."""
+    because one unrelated load failed. Collapsed to ONE row (2026-10-02
+    review M1's own optional follow-up), not one per table -- a failed
+    roster is a single fact, not 8 independent findings."""
     def _loader(table, col):
         if table != "bundle_cache":
             return []
         return [_touch_row("REALLYHELD", DATA_MAINT_ORPHAN_CACHE_GRACE_DAYS + 1, col)]
     monkeypatch.setattr(db, "load_ticker_last_touched", _loader)
     rows = dm.check_orphan_cache_rows(None, set(), set())
-    assert len(rows) == len(dm._ORPHAN_CACHE_TABLES)
-    assert all(r["severity"] == "unknown" for r in rows)
-    bundle_row = next(r for r in rows if r["key"] == "orphan_cache_bundle_cache")
-    assert "REALLYHELD" not in bundle_row["detail"]
+    assert len(rows) == 1
+    assert rows[0]["severity"] == "unknown"
+    assert "REALLYHELD" not in rows[0]["detail"]
 
 
 def test_orphan_cache_none_watchlist_or_discovery_roster_also_returns_unknown(monkeypatch):
     """Any ONE of the three rosters being None is enough to withhold the
-    whole check -- not just the held-tickers one."""
+    whole check -- not just the held-tickers one. `all(...)` on its own
+    would pass trivially if this ever regressed to returning an empty
+    list, so pin the real collapsed shape explicitly too."""
     monkeypatch.setattr(db, "load_ticker_last_touched", lambda table, col: [])
     rows_wl = dm.check_orphan_cache_rows(set(), None, set())
     rows_disc = dm.check_orphan_cache_rows(set(), set(), None)
+    assert len(rows_wl) == len(rows_disc) == 1
+    assert rows_wl[0]["key"] == rows_disc[0]["key"] == "orphan_cache_rosters_unavailable"
     assert all(r["severity"] == "unknown" for r in rows_wl)
     assert all(r["severity"] == "unknown" for r in rows_disc)
 
@@ -218,7 +223,7 @@ def test_run_all_checks_propagates_none_roster_to_orphan_check(monkeypatch):
     monkeypatch.setattr(db, "load_snaptrade_pending_imports", lambda status="pending": [])
     rows = dm.run_all_checks(None, set(), set())
     orphan_rows = [r for r in rows if r["key"].startswith("orphan_cache_")]
-    assert len(orphan_rows) == len(dm._ORPHAN_CACHE_TABLES)
+    assert len(orphan_rows) == 1  # collapsed, see test_orphan_cache_none_held_roster...
     assert all(r["severity"] == "unknown" for r in orphan_rows)
 
 

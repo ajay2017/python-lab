@@ -538,7 +538,18 @@ def _pytest_args(py: str) -> list:
 
 def _start_process(args: list):
     try:
-        return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # encoding/errors explicit (2026-10-02 review M4 follow-up, see
+        # feedback_subprocess_text_mode_locale_codec): text=True alone
+        # decodes with the LOCALE codec (cp1252 on Windows), which can
+        # crash on a pytest failure message containing non-ASCII bytes --
+        # these call sites only decide pass/fail on returncode today, so a
+        # crash here wouldn't flip a verdict, but it would lose the actual
+        # failure detail printed to the user. Applied to all subprocess
+        # call sites in this file for the same reason, not just this one.
+        return subprocess.Popen(
+            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            encoding="utf-8", errors="replace",
+        )
     except Exception:
         return None
 
@@ -648,7 +659,10 @@ def _write_tree() -> str | None:
     of the current index. None on any git error -- callers must treat that as
     "don't record a verification," never as an empty-but-valid tree."""
     try:
-        r = subprocess.run(["git", "write-tree"], capture_output=True, text=True, timeout=10)
+        r = subprocess.run(
+            ["git", "write-tree"], capture_output=True, text=True, timeout=10,
+            encoding="utf-8", errors="replace",
+        )
         out = r.stdout.strip()
         return out if r.returncode == 0 and out else None
     except Exception:
@@ -662,6 +676,7 @@ def _head_tree() -> str | None:
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--verify", "HEAD^{tree}"], capture_output=True, text=True, timeout=10,
+            encoding="utf-8", errors="replace",
         )
         out = r.stdout.strip()
         return out if r.returncode == 0 and out else None
@@ -743,6 +758,7 @@ def _git_names(*args: str) -> list[str]:
     try:
         r = subprocess.run(
             ["git", *args], capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="replace",
         )
         return r.stdout.strip().splitlines() if r.returncode == 0 else []
     except Exception:
@@ -1097,6 +1113,7 @@ def _toplevel(extra_opts: list) -> str | None:
         r = subprocess.run(
             ["git", *extra_opts, "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=10,
+            encoding="utf-8", errors="replace",
         )
         out = r.stdout.strip()
         return out if r.returncode == 0 and out else None
@@ -1400,6 +1417,7 @@ def _find_python() -> str | None:
         r = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
             capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="replace",
         )
         if r.returncode == 0 and r.stdout.strip():
             main_root = os.path.dirname(os.path.abspath(r.stdout.strip()))

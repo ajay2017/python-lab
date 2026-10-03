@@ -766,3 +766,48 @@ class TestGateFilesIntegrity:
         review citation on its own future changes, same as any other
         decision-engine-core/DB-write file."""
         assert ".claude/hooks/pre_tool_checks.py" in hook._GATE_FILES
+
+
+class TestSubprocessEncodingExplicit:
+    """2026-10-02 review M4 follow-up (see feedback_subprocess_text_mode_
+    locale_codec): every text-mode subprocess call in this file must pair
+    an explicit encoding= -- without it, Python decodes with the LOCALE
+    codec (cp1252 on Windows), which can crash on real git output
+    containing non-ASCII bytes (this repo's own commit messages routinely
+    do). A structural scan over the hook's own source, not one test per
+    call site, so a future 7th call site added without encoding= is caught
+    automatically rather than needing someone to remember this convention.
+
+    Known scope limits (2026-10-02 review confirmation pass) -- this file
+    today only ever calls `subprocess.run`/`subprocess.Popen` via a bare,
+    unaliased `import subprocess`, and only ever uses `text=True` (never
+    `universal_newlines=True`, `check_output`/`check_call`, or an aliased
+    import like `import subprocess as sp`) -- this scan covers exactly
+    that real shape. It would NOT catch a future call site using one of
+    those other forms; widen it then, not speculatively now."""
+
+    def test_every_text_true_subprocess_call_pairs_an_explicit_encoding(self):
+        import ast
+
+        tree = ast.parse(_HOOK_PATH.read_text(encoding="utf-8"))
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            is_subprocess_call = (
+                isinstance(func, ast.Attribute)
+                and func.attr in ("run", "Popen")
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "subprocess"
+            )
+            if not is_subprocess_call:
+                continue
+            kwarg_names = {kw.arg for kw in node.keywords if kw.arg}
+            is_text_mode = "text" in kwarg_names or "universal_newlines" in kwarg_names
+            if is_text_mode and "encoding" not in kwarg_names:
+                offenders.append(node.lineno)
+        assert offenders == [], (
+            f"subprocess call(s) at line(s) {offenders} use text=True with no "
+            "explicit encoding= -- add encoding=\"utf-8\", errors=\"replace\""
+        )

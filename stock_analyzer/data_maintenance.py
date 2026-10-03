@@ -139,7 +139,9 @@ def check_orphan_cache_rows(
 
     Returns one row per table in `_ORPHAN_CACHE_TABLES` — "unknown" if that
     table could not be read at all, "warn" if 1+ orphaned tickers were
-    found, "ok" if checked and none were found.
+    found, "ok" if checked and none were found. EXCEPTION: if any roster
+    arg is `None` (see below), returns a single collapsed row instead of
+    one per table.
 
     Any of the three roster args being `None` (2026-10-02 review M1: the
     caller's own holdings/watchlist/discovery-universe read failed this
@@ -148,25 +150,32 @@ def check_orphan_cache_rows(
     failed, not because the ticker is genuinely orphaned. Rather than
     silently treating a failed roster as "empty" (which would misreport
     every held ticker with an aging cache row as an undisclosed orphan),
-    every table short-circuits to "unknown" for this run.
+    the whole check short-circuits to a single "unknown" row (collapsed
+    2026-10-02, M1's own optional follow-up — a failed roster is one fact,
+    not `len(_ORPHAN_CACHE_TABLES)` independent findings).
     """
     from stock_analyzer import db
     from stock_analyzer import market_time
     from stock_analyzer.constants import DATA_MAINT_ORPHAN_CACHE_GRACE_DAYS
 
     if held_tickers is None or watchlist_tickers is None or discovery_tickers is None:
-        return [
-            {
-                "key": f"orphan_cache_{table}",
-                "label": f"Orphan cache rows — {table}",
-                "severity": "unknown",
-                "detail": (
-                    "could not determine held/watchlisted/discovered tickers "
-                    "this run — skipping orphan check to avoid a false positive"
-                ),
-            }
-            for table in _ORPHAN_CACHE_TABLES
-        ]
+        # ONE row, not one per table (2026-10-02 review, M1's own optional
+        # follow-up): a failed roster read is a SINGLE fact ("couldn't
+        # determine known tickers this run"), not 8 independent findings —
+        # returning 8 identical rows made the data-quality email read "8
+        # checks could not run" for what was really one upstream failure,
+        # noisy without being more informative. Still fully honest: nothing
+        # here claims any of the 8 tables themselves were checked.
+        return [{
+            "key": "orphan_cache_rosters_unavailable",
+            "label": f"Orphan cache rows — all {len(_ORPHAN_CACHE_TABLES)} tables",
+            "severity": "unknown",
+            "detail": (
+                "could not determine held/watchlisted/discovered tickers "
+                f"this run — skipped the orphan check across all "
+                f"{len(_ORPHAN_CACHE_TABLES)} cache tables to avoid a false positive"
+            ),
+        }]
 
     known = {
         str(t).strip().upper()

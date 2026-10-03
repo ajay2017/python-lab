@@ -52,6 +52,15 @@ def test_expense_ratio_score_none_input_returns_none():
     assert expense_ratio_score(None) is None
 
 
+def test_expense_ratio_score_nan_input_returns_none():
+    """2026-10-02 review (H3 follow-up): a NaN ratio fails both band checks
+    (every NaN comparison is False) and used to fall through to the linear-
+    interpolation arithmetic, which propagates NaN rather than raising --
+    the exact "fabricate a cost score" this function's own docstring
+    already promised never to do for a None input."""
+    assert expense_ratio_score(float("nan")) is None
+
+
 # ── etf_available ────────────────────────────────────────────────────────────
 
 def test_etf_available_true_when_net_expense_ratio_present():
@@ -72,6 +81,14 @@ def test_etf_available_false_for_none_input():
 
 def test_etf_available_false_for_empty_dict():
     assert etf_available({}) is False
+
+
+def test_etf_available_false_for_nan_net_expense_ratio():
+    """2026-10-02 review (H3 follow-up): `is not None` alone lets a NaN
+    through -- `float('nan') is not None` is True. A NaN here would
+    silently poison expense_ratio_score/etf_composite into a NaN
+    "fabricated-looking" composite rather than an honest withhold."""
+    assert etf_available({"net_expense_ratio": float("nan")}) is False
 
 
 # ── etf_composite ────────────────────────────────────────────────────────────
