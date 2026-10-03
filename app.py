@@ -18725,10 +18725,37 @@ elif page == "🥧 Portfolio Overview":
             d3.metric("Gap to Stop",
                       f"{_ps_gap:.1f}%" if _ps_gap is not None else "—",
                       help=_tip("Ratchet Stop"))
-            _sb_total = r["etf_total"] if _sb_etf_ok else r["total"]
-            _sb_rec   = r["etf_rec"]  if _sb_etf_ok else r["rec"]
-            d4.metric("Composite Score", f"{_sb_total:.0f}/100", _sb_rec["label"],
-                      help=_tip("Composite Score"))
+            # 2026-10-02 review follow-up (found while reviewing the ETF
+            # etf_available NaN fix): this tile used to read r["total"]/
+            # r["rec"] directly -- the RAW pre-withhold bundle fields,
+            # which fundamentals.py's own module docstring confirms can be
+            # a fabricated neutral-50-ish composite+label for ANY holding
+            # whose fundamentals/valuation (stock) or cost data (ETF) are
+            # unavailable. portfolio.build_portfolio_df already resolves
+            # the correct three-way fund_ok/etf_ok/withheld verdict into
+            # port_df["Score"]/["Signal"] (WITHHELD_SIGNAL when neither) --
+            # _ps_score/_ps_sig above are exactly that, already in scope
+            # for the P&L/Stop/Gap tiles two lines up. Reusing them here
+            # (instead of re-deriving a second, inconsistent withhold
+            # condition) also means this tile can never again disagree
+            # with the "Current signal" caption on the very same row.
+            if _ps_score is not None and pd.notna(_ps_score):
+                # delta_color="off" (review finding): st.metric colors a
+                # delta green/red by whether the string starts with "-" --
+                # "🔴 Sell" doesn't, so without this a Sell signal rendered
+                # with a green up-arrow (pre-existing behavior, the same
+                # bare "Sell" label had the identical quirk; closing it
+                # here since this fix is specifically about this tile
+                # never visually contradicting the signal it's reporting).
+                d4.metric("Composite Score", f"{_ps_score:.0f}/100", _ps_sig,
+                          delta_color="off", help=_tip("Composite Score"))
+            else:
+                d4.metric("Composite Score", "❔ Withheld", "no data",
+                          delta_color="off",
+                          help="A verdict needs either real business-quality/"
+                               "valuation data (stocks) or real cost data "
+                               "(funds) — neither was available, so a score "
+                               "here would be guessing rather than measuring.")
 
             # Score breakdown row
             sb1, sb2, sb3, sb4 = st.columns(4)
