@@ -883,6 +883,12 @@ _GATE_FILES = {
     "stock_analyzer/etf_scoring.py",          # the ETF composite formula
     "stock_analyzer/sector_fit.py",           # feeds the hard SECTOR_CEILING gate (app + cron)
     "stock_analyzer/headless_alert_engine.py",  # decides the emailed BUY/protective lists
+    # Added 2026-10-04 (ETF Phase 2b, docs/plans/etf-multi-asset-support.md
+    # "Phase 2b" section): decides whether an ETF becomes a NEW Grow Today
+    # buy candidate at all -- the macro/AUM/held-group/composite-bar
+    # eligibility gate plus the TRAP-B-safe shadow-composite resolution --
+    # a decision surface from day one, same posture as etf_scoring.py.
+    "stock_analyzer/etf_candidates.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully

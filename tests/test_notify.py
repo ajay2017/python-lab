@@ -273,6 +273,28 @@ def test_render_daily_action_email_other_picks_rendered():
     assert "OTHER SETUPS" in body
 
 
+# ─── footer basis line (ETF-support Phase 2b, Opus-review follow-up) ────────
+# A stock pick clears a momentum gate AND the sector/concentration/macro
+# checks; an ETF pick has no momentum score and runs NO sector gate at all
+# (its card shows "Other" sector by design) -- claiming either check ran for
+# an ETF pick in the email footer would be false.
+
+def test_render_daily_action_email_footer_stock_pick_claims_momentum_and_sector():
+    top_pick = _pick(ticker="AAA")   # no asset_type key -- a stock pick
+    _, body = notify.render_daily_action_email(top_pick, [], [], "2026-01-15 08:00:00")
+    assert "Composite + momentum both confirm" in body
+    assert "tone, sector" in body
+
+
+def test_render_daily_action_email_footer_etf_pick_does_not_claim_momentum_or_sector():
+    top_pick = {**_pick(ticker="SPY"), "asset_type": "etf"}
+    _, body = notify.render_daily_action_email(top_pick, [], [], "2026-01-15 08:00:00")
+    assert "Composite + momentum both confirm" not in body
+    assert "tone, sector" not in body
+    assert "AUM, macro" in body
+    assert "Composite confirms the pick" in body
+
+
 # ─── _exit_check_unavailable_banner / exit_check_unavailable wiring ─────────
 # (2026-09-24 app review, Top-5 #1 / A1 — the fabricated-all-clear fix)
 

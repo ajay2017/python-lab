@@ -779,6 +779,7 @@ def _run_morning_picks(sp_pct, brief_overrides=None):
     ctx = {
         "ok": True, "errors": [], "port_df": pd.DataFrame({"Ticker": ["AAPL"], "Market Value": [1000.0]}),
         "held_data": {"AAPL": {}}, "fragility": None, "spy_6mo": None, "spy_1y": None, "vix": None,
+        "holdings_df": pd.DataFrame({"Ticker": ["AAPL"]}),
     }
     grow = {"tone": "bull", "new_picks": [{"ticker": "NVDA"}], "sp500_pct": sp_pct,
             "sector_blocked_picks": [], "macro_blocked_picks": [],
@@ -821,6 +822,7 @@ def test_morning_picks_bear_tone_sp500_pct_falls_back_to_market_context():
     ctx = {
         "ok": True, "errors": [], "port_df": pd.DataFrame({"Ticker": ["AAPL"], "Market Value": [1000.0]}),
         "held_data": {"AAPL": {}}, "fragility": None, "spy_6mo": None, "spy_1y": None, "vix": None,
+        "holdings_df": pd.DataFrame({"Ticker": ["AAPL"]}),
     }
     # Real bear-branch shape: no "sp500_pct" key at all.
     brief = {"grow_today": {"tone": "bear", "new_picks": []}}
@@ -849,6 +851,7 @@ def test_morning_picks_market_tone_fetch_failure_falls_back_to_flat():
     ctx = {
         "ok": True, "errors": [], "port_df": pd.DataFrame({"Ticker": ["AAPL"], "Market Value": [1000.0]}),
         "held_data": {"AAPL": {}}, "fragility": None, "spy_6mo": None, "spy_1y": None, "vix": None,
+        "holdings_df": pd.DataFrame({"Ticker": ["AAPL"]}),
     }
     brief = {"grow_today": {"tone": "flat", "new_picks": [], "sp500_pct": 0.0}}
     with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
@@ -865,6 +868,7 @@ def test_morning_picks_build_daily_briefing_exception_returns_empty():
     ctx = {
         "ok": True, "errors": [], "port_df": pd.DataFrame({"Ticker": ["AAPL"], "Market Value": [1000.0]}),
         "held_data": {"AAPL": {}}, "fragility": None, "spy_6mo": None, "spy_1y": None, "vix": None,
+        "holdings_df": pd.DataFrame({"Ticker": ["AAPL"]}),
     }
     with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
          patch("stock_analyzer.data.fetch_market_indices", return_value=[]), \
@@ -890,7 +894,12 @@ def _run_morning_picks_with_drift(holdings_df=None, trades_df=None,
     ctx = {
         "ok": True, "errors": [], "port_df": pd.DataFrame({"Ticker": ["AAPL"], "Market Value": [1000.0]}),
         "held_data": {"AAPL": {}}, "fragility": None, "spy_6mo": None, "spy_1y": None, "vix": None,
-        "holdings_df": holdings_df, "trades_df": trades_df,
+        # Default to a realistic non-None holdings_df (the D-G held-ticker set
+        # is now built from this, not held_data.keys()) -- only the one test
+        # that explicitly asserts on the raw object passed to decide_drift_
+        # banner supplies its own.
+        "holdings_df": holdings_df if holdings_df is not None else pd.DataFrame({"Ticker": ["AAPL"]}),
+        "trades_df": trades_df,
     }
     brief = {"grow_today": {"tone": "bull", "new_picks": [{"ticker": "NVDA"}], "sp500_pct": 1.0,
                             "sector_blocked_picks": [], "macro_blocked_picks": [],
@@ -963,6 +972,7 @@ def _run_morning_picks_capturing_bdb(account_cash_rec=None, load_account_cash_si
     ctx = {
         "ok": True, "errors": [], "port_df": pd.DataFrame({"Ticker": ["AAPL"], "Market Value": [1000.0]}),
         "held_data": {"AAPL": {}}, "fragility": None, "spy_6mo": None, "spy_1y": None, "vix": None,
+        "holdings_df": pd.DataFrame({"Ticker": ["AAPL"]}),
     }
     brief = {"grow_today": {"tone": "bull", "new_picks": [], "sp500_pct": 1.0,
                             "sector_blocked_picks": [], "macro_blocked_picks": [],
@@ -1019,6 +1029,46 @@ def test_morning_picks_net_capital_none_on_load_account_cash_failure():
         load_account_cash_side_effect=RuntimeError("db down"),
     )
     assert mock_bdb.call_args.kwargs["net_capital"] is None
+
+
+# ── compute_morning_picks — ETF held-ticker set (ETF-support Phase 2b, ─────
+# Opus-review follow-up) ─────────────────────────────────────────────────────
+# The D-G same-index-duplicate screen-out must be built from the RAW
+# holdings list (ctx["holdings_df"]), never held_data.keys() -- held_data
+# only contains tickers whose price bundle load SUCCEEDED (_build_context
+# silently drops a bundle-load failure). A held ticker whose bundle fails to
+# load must still correctly trigger D-G screen-out for its group siblings.
+
+def test_morning_picks_etf_dg_screen_out_survives_held_bundle_load_failure():
+    ctx = {
+        "ok": True, "errors": [],
+        "port_df": pd.DataFrame({"Ticker": [], "Market Value": []}),
+        "held_data": {},   # SPY's bundle load failed -- empty, even though SPY is held
+        "fragility": None, "spy_6mo": None, "spy_1y": None, "vix": None,
+        "holdings_df": pd.DataFrame({"Ticker": ["SPY"]}),   # the RAW, true holdings
+    }
+    mock_bdb = MagicMock(return_value={"grow_today": {
+        "tone": "bull", "new_picks": [], "sp500_pct": 1.0,
+        "sector_blocked_picks": [], "macro_blocked_picks": [],
+        "composite_skipped": [], "composite_unavailable": [],
+    }})
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
+         patch("stock_analyzer.data.fetch_market_indices", return_value=[]), \
+         patch("stock_analyzer.headless_alert_engine.load_bundle", return_value={}), \
+         patch("stock_analyzer.data.curate_news_items", return_value=[]), \
+         patch("stock_analyzer.macro_calendar.build_macro_calendar", return_value=[]), \
+         patch("stock_analyzer.reference_data.resolve_universe_or_none",
+               return_value=({"Broad Market": ["SPY", "VOO"]}, "2026-01-01", None)), \
+         patch("stock_analyzer.headless_alert_engine.build_daily_briefing", mock_bdb):
+        hae.compute_morning_picks(TODAY, scanner_results=_scanner_df(["NVDA"]))
+    etf_candidates = mock_bdb.call_args.kwargs["etf_candidates"]
+    assert etf_candidates is not None
+    voo = next((c for c in etf_candidates if c.get("ticker") == "VOO"), None)
+    assert voo is not None
+    assert voo.get("kind") == "held_group"
+    assert "SPY" in voo.get("reason", "")
+    # SPY itself (the held member) must NOT appear as a candidate at all.
+    assert not any(c.get("ticker") == "SPY" for c in etf_candidates)
 
 
 # ── compute_eod ────────────────────────────────────────────────────────────

@@ -701,6 +701,7 @@ def test_build_daily_briefing_top_level_keys_exclude_grow_today_fields():
         "tone", "sp500_pct", "new_picks", "sector_blocked_picks",
         "sector_unknown_picks",
         "macro_blocked_picks", "composite_skipped", "composite_unavailable",
+        "etf_screened_out",
     )
     for key in grow_only_keys:
         assert key not in brief, f"{key!r} leaked onto the top-level brief dict"
@@ -725,7 +726,8 @@ def test_build_daily_briefing_bear_tone_grow_today_omits_sp500_pct():
     assert grow["tone"] == "bear"
     assert "sp500_pct" not in grow
     for key in ("new_picks", "sector_blocked_picks", "sector_unknown_picks",
-                "macro_blocked_picks", "composite_skipped", "composite_unavailable"):
+                "macro_blocked_picks", "composite_skipped", "composite_unavailable",
+                "etf_screened_out"):
         assert key in grow, f"{key!r} missing from the bear-branch return"
 
 
@@ -2134,3 +2136,471 @@ def test_grow_today_deterioration_warning_byte_identical_to_pre_refactor_string(
         "this recommendation."
     )
     assert pick["deterioration_warning"] == expected
+
+
+# ── _grow_today: ETF new-pick candidates (ETF-support Phase 2b) ─────────────
+# docs/plans/etf-multi-asset-support.md "Phase 2b" section. These tests cover
+# the integration surface (the ETF block inside _grow_today); the pure
+# eligibility/macro/registry logic itself is unit-tested directly in
+# tests/test_etf_candidates.py.
+
+import copy as _copy
+
+from stock_analyzer.constants import ETF_MAX_PICKS, ETF_AUM_THIN_FLOOR_USD
+from stock_analyzer import asset_type as _asset_type_mod
+from stock_analyzer import gate_ledger as _gate_ledger_mod
+
+
+def _etf_bundle(**overrides):
+    base = {
+        "asset_type":    "etf",
+        "stale_as_of":   None,
+        "etf_available": True,
+        "etf_total":     COMPOSITE_BUY + 20.0,   # clears COMPOSITE_STRONG_BUY (75) by default
+        "etf_rec":       {"label": "Strong Buy", "icon": "🟢", "rationale": "Cheap and trending."},
+        "etf_facts":     {"total_assets": ETF_AUM_THIN_FLOOR_USD + 1.0, "net_expense_ratio": 0.03},
+        "current_price": 450.0,
+        "atr":           0.0,          # 0 -> falls back to bundle's own stop/entry-zone
+        "stop":          400.0,
+        "entry_lo":      440.0,
+        "entry_hi":      460.0,
+        "df":            None,
+        "fetched_at":    "2026-10-04T12:00:00+00:00",
+        # Not a real stock composite -- deliberately absent/different from
+        # etf_total/etf_rec so TRAP-B tests can prove the shadow dict is used,
+        # not this raw bundle, whenever a test needs to set it explicitly.
+    }
+    base.update(overrides)
+    return base
+
+
+def _etf_candidate(ticker="SPY", group="Broad Market", **bundle_overrides):
+    return {"ticker": ticker, "group": group, "bundle": _etf_bundle(**bundle_overrides)}
+
+
+def test_grow_today_etf_pick_included_on_bull_day():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       etf_candidates=[_etf_candidate()])
+    pick = find_item(grow["new_picks"], "SPY")
+    assert pick is not None
+    assert pick["asset_type"] == _asset_type_mod.ASSET_TYPE_ETF
+    assert pick["sector"] == UNCLASSIFIED_SECTOR
+    assert pick["composite_score"] == COMPOSITE_BUY + 20.0
+    assert grow["etf_screened_out"] == []
+    # Reviewer blocking #1: no fabricated momentum reading -- None, not 0.0,
+    # so a renderer can tell "no momentum score exists" from "scored zero"
+    # and skip the Momentum badge instead of printing "Momentum 0/100".
+    assert pick["score"] is None
+    # etf_newpick_eligible's own eligibility floor IS COMPOSITE_STRONG_BUY,
+    # which today equals COMPOSITE_HIGH_CONVICTION, so every eligible ETF
+    # pick derives to "high" -- but it must be DERIVED (same comparison the
+    # stock path uses), never a hardcoded "high" string literal.
+    assert pick["conviction"] == "high"
+
+
+def test_grow_today_etf_pick_one_liner_reworded_for_not_held_new_pick():
+    # reconcile_signals()'s own momentum_available=False "go" wording says
+    # "...there is no separate scanner momentum reading for a position you
+    # already hold" -- correct for the add-to-winner path it was written
+    # for, wrong here: this is a NOT-HELD new ETF pick, not an add. Must be
+    # overwritten with ETF-appropriate wording.
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       etf_candidates=[_etf_candidate()])
+    pick = find_item(grow["new_picks"], "SPY")
+    assert pick is not None
+    one_liner = pick["xref"]["verdict_reconciled"]["one_liner"]
+    assert "already hold" not in one_liner
+    assert "cleared the Strong Buy bar" in one_liner
+
+
+def test_grow_today_etf_negative_news_now_reachable_via_shadow_momentum():
+    # Before the fix, the synthetic scanner_row's "Score" passed into
+    # _cross_reference was a literal 0, which made reconcile_signals()'s own
+    # negative-news SKIP branch (`negative_news and momentum_score >=
+    # COMPOSITE_BUY`) permanently unreachable for every ETF pick -- a
+    # genuinely bad-news day could never flag an otherwise-eligible
+    # broad-market pick. Using the real etf_total as the synthetic
+    # momentum_score keeps that check live without fabricating a visible
+    # "Momentum" line anywhere (Layer 1 is still skipped for a synthetic row).
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    news_items = [
+        {"ticker": "SPY", "compound": -0.9, "headline": "Market selloff deepens broadly"},
+    ]
+    grow = _grow_today(port_df, None, news_items, {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       etf_candidates=[_etf_candidate()])
+    pick = find_item(grow["new_picks"], "SPY")
+    assert pick is not None
+    reconciled = pick["xref"]["verdict_reconciled"]
+    assert reconciled["verdict"] == "skip"
+    assert "Negative News" in reconciled["label"]
+
+
+def test_grow_today_etf_sold_today_sibling_screened_out_as_held_group():
+    # Sold-today-then-sibling-reopens guard: resolve_etf_candidates() (the
+    # caller, upstream of _grow_today) only sees CURRENT holdings, computed
+    # BEFORE today's actions -- a SPY sold today already drops out of "held"
+    # there, so VOO would otherwise sail through as a normal (not D-G)
+    # candidate the same day. _grow_today's own _act_blocked set (which
+    # already includes sold_today) must additionally screen out the rest of
+    # the group once any member is act-blocked.
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(
+        port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+        etf_candidates=[_etf_candidate(ticker="SPY"), _etf_candidate(ticker="VOO")],
+        sold_today={"SPY"},
+    )
+    assert find_item(grow["new_picks"], "SPY") is None
+    assert find_item(grow["new_picks"], "VOO") is None
+    screened = find_item(grow["etf_screened_out"], "VOO")
+    assert screened is not None
+    assert screened["kind"] == "held_group"
+    assert "SPY" in screened["reason"]
+    # SPY itself is silently skipped (same convention as the stock path's
+    # own act-blocked check) -- no screen-out entry for it.
+    assert find_item(grow["etf_screened_out"], "SPY") is None
+
+
+def test_grow_today_etf_eligible_only_on_bull_flat_day_silently_excluded():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "flat"},
+                       etf_candidates=[_etf_candidate()])
+    assert find_item(grow["new_picks"], "SPY") is None
+    # "bull days only" is suppressed noise on a non-bull tone -- no screen-out entry.
+    assert grow["etf_screened_out"] == []
+
+
+def test_grow_today_etf_eligible_only_on_bull_down_day_early_return():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bear", "sp500_pct": -3.0},
+                       etf_candidates=[_etf_candidate()])
+    assert grow["new_picks"] == []
+    assert grow["etf_screened_out"] == []
+
+
+def test_grow_today_etf_available_false_never_surfaced_never_fabricated():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       etf_candidates=[_etf_candidate(etf_available=False)])
+    assert find_item(grow["new_picks"], "SPY") is None
+    screened = find_item(grow["etf_screened_out"], "SPY")
+    assert screened is not None
+    assert screened["kind"] == "ineligible"
+    assert "expense ratio" in screened["reason"]
+
+
+def test_grow_today_etf_stale_cache_ineligible_even_at_high_composite():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(
+        port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+        etf_candidates=[_etf_candidate(stale_as_of="2026-09-01T00:00:00+00:00", etf_total=90.0)],
+    )
+    assert find_item(grow["new_picks"], "SPY") is None
+    screened = find_item(grow["etf_screened_out"], "SPY")
+    assert screened is not None
+    assert "stale" in screened["reason"]
+
+
+def test_grow_today_etf_total_none_or_nan_ineligible():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow_none = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                            etf_candidates=[_etf_candidate(etf_total=None)])
+    assert find_item(grow_none["new_picks"], "SPY") is None
+    grow_nan = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                           etf_candidates=[_etf_candidate(etf_total=float("nan"))])
+    assert find_item(grow_nan["new_picks"], "SPY") is None
+
+
+def test_grow_today_etf_total_assets_none_fails_closed_D_A():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(
+        port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+        etf_candidates=[_etf_candidate(etf_facts={"total_assets": None})],
+    )
+    assert find_item(grow["new_picks"], "SPY") is None
+    screened = find_item(grow["etf_screened_out"], "SPY")
+    assert screened["reason"] == "fund size unknown"
+
+
+def test_grow_today_etf_total_assets_exactly_at_floor_is_eligible():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(
+        port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+        etf_candidates=[_etf_candidate(etf_facts={"total_assets": ETF_AUM_THIN_FLOOR_USD})],
+    )
+    assert find_item(grow["new_picks"], "SPY") is not None
+
+
+def test_grow_today_etf_total_assets_just_below_floor_is_ineligible():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(
+        port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+        etf_candidates=[_etf_candidate(etf_facts={"total_assets": ETF_AUM_THIN_FLOOR_USD - 1.0})],
+    )
+    assert find_item(grow["new_picks"], "SPY") is None
+
+
+def test_grow_today_etf_macro_blocked_surfaces_in_screened_out_not_macro_blocked_picks():
+    # [TRAP C] An ETF macro screen-out must never land in macro_blocked_picks
+    # (gate_ledger's G-07 lane) -- its own alpha is ~0 against itself and
+    # would corrupt that gate's evaluable-verdict math.
+    macro_events = [{
+        "impact": _MACRO_HIGH, "date": _TODAY.isoformat(),
+        "category": "Fed Policy", "event": "FOMC Decision",
+    }]
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       etf_candidates=[_etf_candidate()], macro_events=macro_events)
+    assert find_item(grow["new_picks"], "SPY") is None
+    assert find_item(grow["macro_blocked_picks"], "SPY") is None
+    screened = find_item(grow["etf_screened_out"], "SPY")
+    assert screened is not None
+    assert screened["kind"] == "macro"
+
+    # Confirm the gate ledger itself produces ZERO rows for this screen-out —
+    # etf_screened_out is deliberately absent from gate_ledger._BUCKET_LANES.
+    rows = _gate_ledger_mod.build_suppression_rows(
+        grow, rec_date=_TODAY, source="app", tone="bull", sp500_pct=1.0,
+    )
+    assert not any(r.get("ticker", "").upper() == "SPY" for r in rows)
+
+
+def test_grow_today_etf_macro_blocked_by_sector_keyed_event_not_just_all_sentinel():
+    # [D-M] "block an ETF new-pick on ANY imminent HIGH-impact macro event
+    # with a non-empty affected-sector set, not just the __ALL__ (FOMC/GDP)
+    # sentinel" -- the sibling test above only exercises the __ALL__ branch
+    # (Fed Policy). This proves the full _grow_today-level wiring also blocks
+    # on a sector-KEYED event (a CPI/NFP-class category affecting specific
+    # sectors), not just the unit-tested etf_macro_block_reason() in
+    # isolation (tests/test_etf_candidates.py).
+    macro_events = [{
+        "impact": _MACRO_HIGH, "date": (_TODAY + timedelta(days=1)).isoformat(),
+        "category": "Inflation", "event": "CPI Inflation",
+    }]
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0, "sector": "Healthcare"}])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       etf_candidates=[_etf_candidate()], macro_events=macro_events)
+    assert find_item(grow["new_picks"], "SPY") is None
+    assert find_item(grow["macro_blocked_picks"], "SPY") is None
+    screened = find_item(grow["etf_screened_out"], "SPY")
+    assert screened is not None
+    assert screened["kind"] == "macro"
+
+
+def test_grow_today_etf_held_group_screen_out_dg():
+    port_df = make_port_df([{"ticker": "SPY", "weight": 10.0}])
+    grow = _grow_today(
+        port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+        etf_candidates=[
+            {"ticker": "VOO", "group": "Broad Market", "kind": "held_group",
+             "reason": "already hold SPY (same Broad Market exposure)"},
+            {"ticker": "IVV", "group": "Broad Market", "kind": "held_group",
+             "reason": "already hold SPY (same Broad Market exposure)"},
+        ],
+    )
+    assert grow["new_picks"] == []
+    assert find_item(grow["etf_screened_out"], "VOO")["kind"] == "held_group"
+    assert find_item(grow["etf_screened_out"], "IVV")["kind"] == "held_group"
+
+
+def test_grow_today_etf_trap_b_uses_shadow_composite_not_raw_bundle():
+    # A bundle whose raw equity-style "rec"/"total" look nothing like its real
+    # etf_rec/etf_total -- the pick must use the ETF values and must NOT be
+    # marked "conflicted" by the raw (fabricated-for-equity) composite.
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(
+        port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+        etf_candidates=[_etf_candidate(
+            rec={"label": "Hold"}, total=40.0,
+            etf_rec={"label": "Strong Buy", "icon": "🟢", "rationale": "Cheap and trending."},
+            etf_total=85.0,
+        )],
+    )
+    pick = find_item(grow["new_picks"], "SPY")
+    assert pick is not None
+    assert pick["composite_score"] == 85.0
+    assert pick["composite_label"] == "Strong Buy"
+    assert pick["xref"]["verdict"] != "conflicted"
+
+
+def test_grow_today_etf_bundle_is_not_mutated():
+    bundle = _etf_bundle()
+    before = _copy.deepcopy(bundle)
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    _grow_today(
+        port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+        etf_candidates=[{"ticker": "SPY", "group": "Broad Market", "bundle": bundle}],
+    )
+    assert bundle == before
+
+
+def test_grow_today_etf_sector_unclassified_and_not_flagged_sector_unknown():
+    # A huge "Other"-sector weight must not block the ETF pick, and the ETF
+    # pick must never land in sector_unknown_picks (the D1 abstention is
+    # stock-pool-only; the ETF pool's UNCLASSIFIED_SECTOR assignment is
+    # deliberate and truthful, not a data-quality abstention).
+    port_df = make_port_df([{"ticker": "HELD", "weight": SECTOR_CEILING + 20.0, "sector": UNCLASSIFIED_SECTOR}])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       etf_candidates=[_etf_candidate()])
+    pick = find_item(grow["new_picks"], "SPY")
+    assert pick is not None
+    assert find_item(grow["sector_unknown_picks"], "SPY") is None
+    assert find_item(grow["sector_blocked_picks"], "SPY") is None
+
+
+def test_grow_today_etf_max_picks_cap_enforced():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    candidates = [
+        _etf_candidate(ticker="VOO", etf_total=90.0),
+        _etf_candidate(ticker="IVV", etf_total=85.0),
+        _etf_candidate(ticker="SPY", etf_total=80.0),
+    ]
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       etf_candidates=candidates)
+    etf_picks = [p for p in grow["new_picks"] if p.get("asset_type") == "etf"]
+    assert len(etf_picks) <= ETF_MAX_PICKS
+    assert len(etf_picks) == ETF_MAX_PICKS
+    # Highest composite wins.
+    assert etf_picks[0]["ticker"] == "VOO"
+
+
+def test_grow_today_etf_tie_break_is_deterministic_not_insertion_order():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    same_score = COMPOSITE_BUY + 20.0
+    order_a = [_etf_candidate(ticker="VOO", etf_total=same_score),
+               _etf_candidate(ticker="IVV", etf_total=same_score)]
+    order_b = [_etf_candidate(ticker="IVV", etf_total=same_score),
+               _etf_candidate(ticker="VOO", etf_total=same_score)]
+    grow_a = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"}, etf_candidates=order_a)
+    grow_b = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"}, etf_candidates=order_b)
+    winner_a = [p["ticker"] for p in grow_a["new_picks"] if p.get("asset_type") == "etf"]
+    winner_b = [p["ticker"] for p in grow_b["new_picks"] if p.get("asset_type") == "etf"]
+    assert winner_a == winner_b == ["IVV"]   # alphabetical tie-break
+
+
+def test_grow_today_etf_candidates_none_or_empty_is_byte_identical_regression():
+    # Not a self-comparison: grow_default (no kwarg), grow_none (explicit
+    # None), and grow_empty (explicit []) ALL take the exact same `if
+    # etf_candidates:` falsy branch inside _grow_today -- none of them ever
+    # enters the ETF block's loop body. Comparing them only against EACH
+    # OTHER would pass even if the ETF block had silently broken an unrelated
+    # pre-existing key, since all three calls are computationally identical
+    # no-ops. Each is instead checked independently against a hand-verified
+    # expected baseline shape: every pre-existing key present and unchanged,
+    # etf_screened_out == [], and the stock pick itself carrying none of the
+    # ETF-only fields (no "asset_type"/"etf_group" keys at all on a stock pick).
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Healthcare"}])
+    composites = {"NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    for _etf_kwargs in ({}, {"etf_candidates": None}, {"etf_candidates": []}):
+        grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                           composites=composites, **_etf_kwargs)
+        assert grow["tone"] == "bull"
+        assert grow["message"] is None
+        assert grow["etf_screened_out"] == []
+        for _k in ("add_positions", "risk_blocked_adds", "concentration_blocked_adds",
+                   "sector_blocked_adds", "cooldown_adds", "deterioration_blocked_adds",
+                   "sector_blocked_picks", "sector_unknown_picks", "macro_blocked_picks",
+                   "composite_skipped", "composite_unavailable"):
+            assert grow[_k] == [], f"{_k} should be empty with no ETF/risk/macro inputs"
+        pick = find_item(grow["new_picks"], "NEW")
+        assert pick is not None
+        assert pick["composite_score"] == COMPOSITE_BUY + 10
+        assert pick["sector"] == "Healthcare"
+        assert "asset_type" not in pick
+        assert "etf_group" not in pick
+
+
+def test_grow_today_etf_pool_fires_when_scanner_and_movers_both_empty():
+    # Proves the ETF block's placement OUTSIDE the
+    # `if curated_rows or mover_rows:` wrapper is real -- a day with zero
+    # stock candidates must not silently skip the ETF pool too.
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       movers=None, etf_candidates=[_etf_candidate()])
+    assert find_item(grow["new_picks"], "SPY") is not None
+
+
+def test_grow_today_etf_stock_pool_asset_type_exclusion_guard_unaffected():
+    # REGRESSION: the pre-existing stock-pool ETF exclusion guard (an ETF
+    # appearing in the SCANNER pool) must still work exactly as before, even
+    # with the new etf_candidates kwarg also supplied and populated.
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "QQQ", "score": COMPOSITE_BUY + 10, "sector": "Other"}])
+    composites = {
+        "QQQ": {
+            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+            "fundamentals_available": True, "val_available": True,
+            "asset_type": "etf",
+        }
+    }
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       composites=composites, etf_candidates=[_etf_candidate()])
+    assert find_item(grow["new_picks"], "QQQ") is None
+    assert find_item(grow["composite_unavailable"], "QQQ") is not None
+    # The genuinely-eligible registry ETF candidate still gets picked.
+    assert find_item(grow["new_picks"], "SPY") is not None
+
+
+def test_grow_today_etf_sizing_respects_single_name_ceiling():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(
+        port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+        etf_candidates=[_etf_candidate(current_price=90_000.0, stop=80_000.0,
+                                       entry_lo=85_000.0, entry_hi=95_000.0)],
+    )
+    pick = find_item(grow["new_picks"], "SPY")
+    assert pick is not None
+    assert pick["sizing"].get("ceiling_infeasible") is True
+
+
+def test_grow_today_etf_act_blocked_case_insensitive_match():
+    # Lowercase registry candidate ticker, uppercase sold_today -- the
+    # realistic shape (resolve_etf_candidates already uppercases; build_
+    # daily_briefing already uppercases _sold_today).
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(
+        port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+        etf_candidates=[{"ticker": "spy", "group": "Broad Market", "bundle": _etf_bundle()}],
+        sold_today={"SPY"},
+    )
+    assert find_item(grow["new_picks"], "SPY") is None
+
+
+def test_grow_today_etf_act_blocked_case_insensitive_match_reverse():
+    # The reverse direction -- a lowercase entry in sold_today (defensive;
+    # not how the real producer builds it) must still exclude an uppercase
+    # registry candidate ticker.
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    grow = _grow_today(
+        port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+        etf_candidates=[_etf_candidate(ticker="SPY")],
+        sold_today={"spy"},
+    )
+    assert find_item(grow["new_picks"], "SPY") is None
+
+
+def test_build_daily_briefing_threads_etf_candidates_through_to_grow_today():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0, "sector": "Tech"}])
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+        etf_candidates=[_etf_candidate()],
+    )
+    pick = find_item(brief["grow_today"]["new_picks"], "SPY")
+    assert pick is not None
+    assert pick["asset_type"] == "etf"
+
+
+def test_build_daily_briefing_etf_candidates_default_none_is_byte_identical():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0, "sector": "Tech"}])
+    kwargs = dict(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+    )
+    brief_default = build_daily_briefing(**kwargs)
+    brief_explicit_none = build_daily_briefing(**kwargs, etf_candidates=None)
+    assert brief_default == brief_explicit_none

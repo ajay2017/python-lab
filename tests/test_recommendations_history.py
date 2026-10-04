@@ -1170,6 +1170,36 @@ def test_engine_trust_by_band_edge_comment_insufficient_data():
     assert out[0]["edge_comment"] == "Insufficient outcome data to draw conclusions."
 
 
+def test_engine_trust_by_band_excludes_etf_rows():
+    # ETF-support Phase 2b: an ETF composite is a technical+cost blend with no
+    # fundamentals leg, not comparable to the stock composite this band
+    # breakdown measures trust against -- same filter predictive_analytics.
+    # prepare_population already applies to this exact population.
+    rows = [
+        _erow(ticker="AAA", composite_score=80.0, acted_on=True, alpha_pct=5.0, outcome_maturing=False),
+        {**_erow(ticker="SPY", composite_score=80.0, acted_on=True, alpha_pct=99.0, outcome_maturing=False),
+         "asset_type": "etf"},
+    ]
+    out = rh.engine_trust_by_band(rows)
+    assert len(out) == 1
+    assert out[0]["n_recs"] == 1
+    assert out[0]["avg_alpha_acted"] == 5.0   # not skewed by the ETF's 99.0
+
+
+def test_engine_trust_by_band_etf_asset_type_normalizes_case_and_none():
+    # asset_type.normalize() is case/whitespace-tolerant and treats None/
+    # anything-else as "stock" -- confirm both directions through the real
+    # filter rather than assuming only a lowercase exact "etf" is excluded.
+    rows = [
+        {**_erow(ticker="SPY", composite_score=80.0, acted_on=True, alpha_pct=1.0, outcome_maturing=False),
+         "asset_type": "ETF"},
+        _erow(ticker="AAA", composite_score=80.0, acted_on=True, alpha_pct=2.0, outcome_maturing=False),
+    ]
+    out = rh.engine_trust_by_band(rows)
+    assert out[0]["n_recs"] == 1
+    assert out[0]["avg_alpha_acted"] == 2.0
+
+
 # ─── daily_volume ───────────────────────────────────────────────────────────
 
 def test_daily_volume_groups_by_date_skips_none_and_sorts():
@@ -1270,6 +1300,34 @@ def test_engine_trust_headline_empty_input_returns_building():
     assert out["missed_alpha"] is None
     assert out["n_acted_mature"] == 0
     assert out["since_date"] is None
+
+
+def test_engine_trust_headline_excludes_etf_only_row_falls_back_to_building():
+    # ETF-support Phase 2b: filtered BEFORE the ticker collapse, same as
+    # predictive_analytics.prepare_population's own population for this
+    # exact concern. An all-ETF population behaves identically to an empty one.
+    rows = [
+        {**_erow(ticker="SPY", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+                  outcome_pct=50.0, alpha_pct=50.0), "asset_type": "etf"},
+    ]
+    out = rh.engine_trust_headline(rows, 8, 15)
+    assert out["band"] == "building"
+    assert out["n_acted_mature"] == 0
+    assert out["acted_alpha"] is None
+
+
+def test_engine_trust_headline_etf_row_excluded_from_mixed_population():
+    # The ETF ticker's huge alpha must not leak into the stock population's
+    # acted_alpha/n_acted_mature via the collapse step.
+    rows = [
+        _erow(ticker="AAA", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+              outcome_pct=10.0, alpha_pct=10.0),
+        {**_erow(ticker="SPY", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+                  outcome_pct=90.0, alpha_pct=90.0), "asset_type": "etf"},
+    ]
+    out = rh.engine_trust_headline(rows, 1, 1)
+    assert out["n_acted_mature"] == 1
+    assert out["acted_alpha"] == 10.0
 
 
 def test_engine_trust_headline_no_new_pick_rows_returns_building():

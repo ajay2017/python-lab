@@ -774,6 +774,20 @@ def render_daily_action_email(
           {''.join(rows2)}
         </div>"""
 
+    # Footer basis line: must stay TRUE for what actually gated this specific
+    # pick. A stock pick clears a momentum gate AND the sector/concentration/
+    # macro checks; an ETF pick (ETF-support Phase 2b) has no momentum score
+    # and runs NO sector gate at all (its card shows "Other" sector by
+    # design) — claiming either check ran for an ETF pick would be false.
+    _top_is_etf = top_pick.get("asset_type") == "etf"
+    _footer_basis = (
+        "Composite confirms the pick; AUM, macro, and same-index-duplicate "
+        "checks cleared."
+        if _top_is_etf else
+        "Composite + momentum both confirm the #1 pick; all gates cleared "
+        "(tone, sector, concentration, macro)."
+    )
+
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
       <div style="max-width:640px;margin:0 auto">
         <div style="font-family:Arial,Helvetica,sans-serif;color:#f9fafb;font-size:18px;
@@ -789,8 +803,7 @@ def render_daily_action_email(
         {other_html}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;
                     margin-top:18px;border-top:1px solid #292524;padding-top:10px">
-          Composite + momentum both confirm the #1 pick; all gates cleared (tone, sector,
-          concentration, macro). <b>Check price is still in the entry zone before acting —
+          {_footer_basis} <b>Check price is still in the entry zone before acting —
           intraday moves can leave it.</b> Advisory only — you place the trade. Exit signals
           shown above are from the 8am premarket run; open the app for full context.
         </div>

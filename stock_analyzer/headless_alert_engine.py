@@ -467,6 +467,7 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
                 "reason": ctx.get("reason")}
     errors = list(ctx["errors"])
     port_df, held_data = ctx["port_df"], ctx["held_data"]
+    holdings_df = ctx["holdings_df"]
     spy_6mo, spy_1y, vix, fragility = ctx["spy_6mo"], ctx["spy_1y"], ctx["vix"], ctx["fragility"]
     try:
         portfolio_value = float(port_df["Market Value"].sum()) if not port_df.empty else 0.0
@@ -499,7 +500,19 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
     # Per-pick composites for the top scanner names — mirrors the app's
     # grow-composites loop (load_bundle is what app.load_all wraps). Without these
     # picks fall to "unverified" and never reach the Go set.
-    held_set = {str(t).upper() for t in held_data.keys()}
+    #
+    # Built from the RAW holdings list (holdings_df), not held_data.keys() —
+    # held_data only contains tickers whose price bundle load SUCCEEDED (see
+    # _build_context above: a bundle-load failure is silently dropped, logged
+    # to errors, and the ticker never enters held_data). A held ticker whose
+    # bundle fails to load would otherwise vanish from "held" here, letting
+    # the [D-G] same-index-duplicate ETF screen-out (resolve_etf_candidates
+    # below) miss it entirely and email a sibling fund as a new buy while the
+    # original is still genuinely held. app.py's own held_tickers (~line 4608)
+    # is built the same way, from the raw holdings frame, for the same reason.
+    held_set = {
+        str(t).strip().upper() for t in holdings_df["Ticker"].tolist() if str(t).strip()
+    }
     try:
         rfr = fetch_risk_free_rate()
     except Exception:
@@ -564,6 +577,44 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
     except Exception:
         _f255_net_cap = None
 
+    # ETF new-pick candidate pool (ETF-support Phase 2b) — resolves the
+    # owner-curated etf_registry table + the currently-held book into the
+    # day's not-held ETF candidates, then attaches each one's bundle (the
+    # same load_bundle call every other candidate here already uses — no new
+    # fetch mechanism). A registry resolution failure (table unseeded/DB
+    # offline) resolves to None, which _grow_today treats as a clean no-op —
+    # this lane must never fail the whole morning-picks computation.
+    etf_candidates_for_grow: "list | None" = None
+    try:
+        from stock_analyzer.reference_data import resolve_universe_or_none
+        from stock_analyzer import etf_candidates as _etf_candidates_mod
+        _etf_registry_payload, _, _etf_registry_err = resolve_universe_or_none("etf_registry")
+        _etf_resolved = _etf_candidates_mod.resolve_etf_candidates(_etf_registry_payload, held_set)
+        if _etf_resolved:
+            etf_candidates_for_grow = []
+            for _ec in _etf_resolved:
+                if _ec.get("kind") == "held_group":
+                    etf_candidates_for_grow.append(_ec)
+                    continue
+                _et = str(_ec.get("ticker", "")).strip().upper()
+                if not _et:
+                    continue
+                try:
+                    _eb = load_bundle(_et, "6mo", spy_df=spy_6mo, rfr=rfr)
+                except Exception:
+                    # Append with bundle=None rather than dropping the
+                    # candidate silently -- etf_newpick_eligible(None, tone)
+                    # already correctly returns (False, "ETF data
+                    # unavailable"), so a failed load still surfaces honestly
+                    # in etf_screened_out instead of vanishing with no trace.
+                    _eb = None
+                etf_candidates_for_grow.append({**_ec, "bundle": _eb})
+        elif _etf_registry_err:
+            errors.append(f"etf registry unavailable: {_etf_registry_err}")
+    except Exception as e:
+        errors.append(f"etf candidate resolution failed: {e}")
+        etf_candidates_for_grow = None
+
     try:
         brief = build_daily_briefing(
             port_df=port_df, alert_list=[], risk_recs=[], news_items=news_items,
@@ -572,6 +623,7 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
             grow_composites=grow_composites, movers=[], spy_df=spy_6mo,
             fragility=fragility, spy_trend_df=spy_1y, vix_level=vix,
             net_capital=_f255_net_cap,
+            etf_candidates=etf_candidates_for_grow,
         )
     except Exception as e:
         return {"picks": [], "built_at": built_at,

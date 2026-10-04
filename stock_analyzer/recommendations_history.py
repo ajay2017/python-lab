@@ -1065,9 +1065,18 @@ def engine_trust_by_band(enriched: list[dict]) -> list[dict]:
             return (COMPOSITE_BUY, f"{COMPOSITE_BUY}–{COMPOSITE_STRONG_BUY - 1} (BUY)")
         return (COMPOSITE_STRONG_BUY, f"{COMPOSITE_STRONG_BUY}+ (Strong BUY)")
 
+    # ETF rows excluded (ETF-support Phase 2b) — same filter
+    # predictive_analytics.prepare_population already applies: an ETF
+    # composite is a technical+cost blend with no fundamentals leg, not
+    # comparable to the stock composite this band breakdown measures trust
+    # against. None/anything-else normalizes to "stock" (asset_type.normalize).
+    from stock_analyzer.asset_type import ASSET_TYPE_ETF, normalize as _asset_normalize
+
     buckets: dict[int, dict] = {}
     for r in enriched:
         if r.get("outcome_maturing"):
+            continue
+        if _asset_normalize(r.get("asset_type")) == ASSET_TYPE_ETF:
             continue
         result = _band(r.get("composite_score"))
         if result is None:
@@ -1263,6 +1272,15 @@ def engine_trust_headline(
         "since_date":     None,
         "band":           "building",
     }
+    if not enriched:
+        return _empty
+
+    # ETF rows excluded (ETF-support Phase 2b) — same filter
+    # predictive_analytics.prepare_population already applies to this exact
+    # population. Filtered BEFORE the ticker collapse so an ETF surfacing can
+    # never anchor or otherwise influence a stock ticker's representative row.
+    from stock_analyzer.asset_type import ASSET_TYPE_ETF, normalize as _asset_normalize
+    enriched = [r for r in enriched if _asset_normalize(r.get("asset_type")) != ASSET_TYPE_ETF]
     if not enriched:
         return _empty
 

@@ -5589,6 +5589,51 @@ if page == "🏠 Home":
             pctl_high=PERSONALIZED_DISCOVERY_PROFILE_PCTL_HIGH,
         )
 
+    def _etf_candidates_for_grow():
+        """ETF new-pick candidate pool (ETF-support Phase 2b) — resolves the
+        owner-curated etf_registry table + the currently-held book into the
+        day's not-held ETF candidates, then attaches each one's bundle via
+        the SAME load_all() every other Grow Today candidate already uses
+        (no new fetch mechanism). Deliberately does NOT use
+        _resolve_ref_universe's fail-loud banner: unlike sector_universe/
+        discovery_universe (core scan inputs), an unseeded/offline
+        etf_registry is a quiet, additive no-op — _grow_today already
+        treats `None` that way. Built fresh each call, same posture as
+        _compute_winner_profile (cheap: at most a handful of registry
+        tickers, load_all is cache_data-decorated)."""
+        from stock_analyzer import etf_candidates as _etf_candidates_mod
+        _payload, _as_of, _err = reference_data.resolve_universe_or_none("etf_registry")
+        if _err:
+            # Quiet caption, not _resolve_ref_universe's fail-loud st.error —
+            # this docstring's own "quiet, additive no-op" design intentionally
+            # treats an unseeded/offline registry as inert, but inert must not
+            # mean silently discarding the real error string resolve_universe_
+            # or_none already surfaced (its own docstring requires callers to
+            # not drop this).
+            st.caption(f"ℹ️ ETF registry unavailable ({_err}) — no ETF candidates considered this run.")
+        _resolved = _etf_candidates_mod.resolve_etf_candidates(_payload, held_tickers)
+        if not _resolved:
+            return _resolved   # None (unavailable) or [] (nothing to screen) — pass through as-is
+        _out: list = []
+        for _ec in _resolved:
+            if _ec.get("kind") == "held_group":
+                _out.append(_ec)
+                continue
+            _et = str(_ec.get("ticker", "")).strip().upper()
+            if not _et:
+                continue
+            try:
+                _eb = load_all(_et)
+            except Exception:
+                # Append with bundle=None rather than dropping the candidate
+                # silently -- etf_newpick_eligible(None, tone) already
+                # correctly returns (False, "ETF data unavailable"), so a
+                # failed load still surfaces honestly in etf_screened_out
+                # instead of vanishing with no trace.
+                _eb = None
+            _out.append({**_ec, "bundle": _eb})
+        return _out
+
     # ── Synthesis memoization (perf) ─────────────────────────
     # The heavy synthesis below (alerts -> risk -> grow-composites -> Daily
     # Brief -> rec-log) used to re-run top-to-bottom on EVERY rerun (every tab
@@ -5608,7 +5653,7 @@ if page == "🏠 Home":
     # and silently degrades — e.g. the rebalance trim PLAN fell back to the
     # basis-only list because a cached brief predated the trim_target_*/
     # market_value/price fields. See memory project_home_synth_memoization.
-    _SYNTH_SCHEMA_VER = 8  # bumped: grow_today now carries sector_unknown_picks (sector_gate_spec.md, 2026-09-30)
+    _SYNTH_SCHEMA_VER = 9  # bumped: grow_today now carries etf_screened_out (ETF-support Phase 2b, etf-multi-asset-support.md)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -5724,6 +5769,7 @@ if page == "🏠 Home":
                         winner_profile  = _compute_winner_profile(),
                         trades_df       = st.session_state.get("trades_df"),
                         net_capital     = _f255_net_cap,
+                        etf_candidates  = _etf_candidates_for_grow(),
                     )
                     # Update snapshot so next HIT reads fresh fetched_at values
                     st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
@@ -6055,6 +6101,7 @@ if page == "🏠 Home":
                     winner_profile  = _compute_winner_profile(),
                     trades_df       = st.session_state.get("trades_df"),
                     net_capital     = _f255_net_cap,
+                    etf_candidates  = _etf_candidates_for_grow(),
                 )
                 # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
                 # the Brief header so the user can see how fresh the data is.
@@ -6296,6 +6343,16 @@ if page == "🏠 Home":
                             # portfolio_value it actually sized against — never a
                             # separately re-read total, which could disagree.
                             **_rec_sizing_cols(_p),
+                            # Asset-type plumbing (ETF-support Phase 2b). A stock
+                            # pick has no "asset_type" key on its pick dict today
+                            # -- .get(..., "stock") makes that explicit instead of
+                            # implicitly absent. Reads back equivalently via
+                            # asset_type.normalize() for every existing stock
+                            # pick, though the raw stored value changes: a
+                            # pre-Phase-2b row persisted NULL for this column,
+                            # this writes the literal string "stock" -- not
+                            # byte-identical storage, just an equivalent read-back.
+                            "asset_type":       _p.get("asset_type", "stock"),
                         })
                     for _p in (_gt_today.get("add_positions") or []):
                         _tk = str(_p.get("ticker", ""))
@@ -8196,6 +8253,10 @@ if page == "🏠 Home":
         macro_blocked = grow.get("macro_blocked_picks", [])
         comp_skipped  = grow.get("composite_skipped", [])
         comp_unavail  = grow.get("composite_unavailable", [])
+        # ETF new-pick screen-outs (ETF-support Phase 2b) — never None from
+        # _grow_today (defaults to [] in every return path), so the plain
+        # two-arg default is safe here, same as sector_unknown above.
+        etf_screened = grow.get("etf_screened_out", [])
         # None = could not verify; [] = verified, nothing expired.
         # Do NOT collapse with "or []" — that destroys the sentinel contract.
         _macro_coverage_expired = grow.get("macro_coverage_expired")
@@ -8524,8 +8585,20 @@ if page == "🏠 Home":
                         )
             # else: _macro_coverage_expired == [] — verified, nothing expired; silent.
 
-            # Layer 1 — sort by composite descending, momentum as tiebreaker
-            new_picks.sort(key=lambda p: (-(p.get("composite_score") or 0), -(p.get("score") or 0)))
+            # Layer 1 — sort by composite descending, momentum as tiebreaker.
+            # ETF picks (ETF-support Phase 2b) are structurally sorted AFTER
+            # every stock pick regardless of composite score — an ETF new-pick
+            # always clears COMPOSITE_STRONG_BUY by construction (its own
+            # eligibility bar) while a stock pick only needs COMPOSITE_BUY and
+            # usually lands 65-74, so a raw composite sort would let an ETF
+            # pick crowd out stock ideas for the #1 card position on most bull
+            # days — exactly what the separate ETF_MAX_PICKS allowance exists
+            # to prevent. See the matching fix in cron_runner.py's `hi.sort`.
+            new_picks.sort(key=lambda p: (
+                p.get("asset_type") == "etf",
+                -(p.get("composite_score") or 0),
+                -(p.get("score") or 0),
+            ))
             # Layer 3 — tier count summary: "★ 2 Strong Buy · 3 Buy · sorted by composite ↓"
             _sb_n  = sum(1 for _p in new_picks if ((_p.get("composite_score") or 0) >= COMPOSITE_STRONG_BUY))
             _buy_n = len(new_picks) - _sb_n
@@ -8562,8 +8635,17 @@ if page == "🏠 Home":
 
             # Layer 2 — tier separator: renders once when entering each composite band.
             # After the Layer-1 sort, all Strong Buy cards come first so the separator
-            # appears exactly once per band transition (Strong Buy → Buy).
-            _cur_tier = "strong_buy" if (_comp_sc or 0) >= COMPOSITE_STRONG_BUY else "buy"
+            # appears exactly once per band transition (Strong Buy → Buy). An ETF pick
+            # gets its OWN sub-header rather than falling into strong_buy/buy — its
+            # composite always clears 75, but it renders structurally AFTER every
+            # stock pick (see the Layer-1 sort above), so reusing "strong_buy" here
+            # would make the ★ STRONG BUY separator re-appear a second time below
+            # the Buy section purely because an ETF trails it.
+            _is_etf_pick = _gp.get("asset_type") == "etf"
+            _cur_tier = (
+                "etf" if _is_etf_pick else
+                "strong_buy" if (_comp_sc or 0) >= COMPOSITE_STRONG_BUY else "buy"
+            )
             if _cur_tier != _prev_tier:
                 _prev_tier = _cur_tier
                 if _cur_tier == "strong_buy":
@@ -8576,13 +8658,23 @@ if page == "🏠 Home":
                         "</div>",
                         unsafe_allow_html=True,
                     )
-                else:
+                elif _cur_tier == "buy":
                     st.markdown(
                         "<div style='display:flex;align-items:center;gap:8px;margin:12px 0 4px'>"
                         "<span style='font-size:0.78em;font-weight:700;color:#64748b;"
                         "letter-spacing:0.05em'>BUY</span>"
                         "<div style='flex:1;height:1px;background:#47556955'></div>"
                         "<span style='font-size:0.74em;color:#475569'>composite 65–74</span>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+                else:   # "etf" — additive, always last, never the #1 headline slot
+                    st.markdown(
+                        "<div style='display:flex;align-items:center;gap:8px;margin:12px 0 4px'>"
+                        "<span style='font-size:0.78em;font-weight:700;color:#38bdf8;"
+                        "letter-spacing:0.05em'>📊 BROAD MARKET ETF</span>"
+                        "<div style='flex:1;height:1px;background:#38bdf855'></div>"
+                        "<span style='font-size:0.74em;color:#0c4a6e'>index-fund new pick</span>"
                         "</div>",
                         unsafe_allow_html=True,
                     )
@@ -8600,6 +8692,11 @@ if page == "🏠 Home":
             # that qualified them; for movers the scanner score is irrelevant
             # (movers bypass the momentum gate — they qualified via day change,
             # already shown in the mover badge) so start directly with composite.
+            # An ETF pick (ETF-support Phase 2b) has no independent momentum/
+            # scanner score either — pick["score"] is None by design — so it
+            # takes the same no-momentum-line path as a mover rather than
+            # formatting None and crashing (or, pre-fix, printing a fabricated
+            # "Momentum 0/100" off a placeholder zero).
             _score_as_of_str = None
             if _gp.get("composite_fetched_at"):
                 _ts = datetime.fromisoformat(_gp["composite_fetched_at"])
@@ -8609,7 +8706,7 @@ if page == "🏠 Home":
                     if _ts_et.date() == _today_et()
                     else _ts_et.strftime('%b %-d · %-I:%M %p ET')
                 )
-            if _gp.get("is_mover"):
+            if _gp.get("is_mover") or _is_etf_pick or _gp.get("score") is None:
                 _score_line = ""
             else:
                 _score_line = f"Momentum {_gp['score']:.0f}/100"
@@ -9216,6 +9313,25 @@ if page == "🏠 Home":
                 "</div></div>",
                 unsafe_allow_html=True,
             )
+
+        # ETF new-pick screen-outs (ETF-support Phase 2b) — a visible banner,
+        # never a silent filter, per CLAUDE.md's UI-suppression convention.
+        # "held_group" (D-G: already hold another member of the same index
+        # group) and "macro"/"ineligible" (AUM/stale/composite-below-bar/
+        # bull-days-only) reasons render together in one light-touch,
+        # collapsed section — this is an awareness addition, not a new
+        # decision surface, so it stays visually quiet relative to the
+        # macro-suppression banner above.
+        if etf_screened:
+            # Plain markdown, no unsafe_allow_html -- standard Streamlit
+            # markdown escaping is sufficient for a short bullet list and
+            # avoids hand-rolling HTML for a light-touch awareness section.
+            with st.expander(f"🏷️ ETF candidates screened out ({len(etf_screened)})"):
+                for e in etf_screened[:6]:
+                    _es_group = f" ({e.get('group')})" if e.get("group") else ""
+                    st.markdown(f"• **{e.get('ticker','')}**{_es_group} — {e.get('reason','')}")
+                if len(etf_screened) > 6:
+                    st.caption(f"…and {len(etf_screened) - 6} more.")
 
         # Composite-conflict suppression — momentum was hot but the full
         # composite (Technical + Fundamental + Sentiment) was below the
@@ -10885,6 +11001,13 @@ if page == "🏠 Home":
                     _tp_str = f"{_tp:+.2f}%" if _tp is not None else "—"
                     _comp   = g.get("composite")
                     _comp_s = f"{_comp:.0f}" if isinstance(_comp, (int, float)) else "—"
+                    # ETF-support Phase 2b: an ETF pick carries momentum=None
+                    # (no scanner momentum concept for a registry-sourced
+                    # index fund) -- guard the same way _comp_s is guarded
+                    # above, and drop the segment entirely rather than print
+                    # a dash where a number is expected (2026-10-04 FIX-FIRST).
+                    _mom    = g.get("momentum")
+                    _mom_s  = f"Momentum {_mom:.0f} · " if isinstance(_mom, (int, float)) else ""
                     _card_bg = "#052e16" if g["action_taken"] else "#1e293b"
                     _card_bdr = "#22c55e" if g["action_taken"] else "#475569"
                     _ed_fs   = _fmt_first_seen(g.get("_first_seen_at"))
@@ -10893,7 +11016,7 @@ if page == "🏠 Home":
                         f"border-radius:6px;padding:8px 12px;margin-bottom:6px'>"
                         f"<div style='color:#f9fafb;font-weight:700'>{g['ticker']} "
                         f"<span style='color:#94a3b8;font-size:0.82em;font-weight:400'>"
-                        f"· {g.get('sector','—')} · Momentum {g['momentum']:.0f} · Composite {_comp_s}</span></div>"
+                        f"· {g.get('sector','—')} · {_mom_s}Composite {_comp_s}</span></div>"
                         f"<div style='color:#cbd5e1;font-size:0.85em;margin-top:3px'>{g['outcome']}</div>"
                         f"<div style='color:#94a3b8;font-size:0.78em;margin-top:2px'>"
                         f"Today: <b>{_tp_str}</b></div>"
@@ -39168,7 +39291,7 @@ This is why a name can show up in Grow Today in the morning (bull open) and quie
 
 **"Verdict withheld":** when fundamentals can't be fetched from any data source, the app does **not** invent a neutral score — it withholds the verdict and tells you so, rather than showing a confidently-wrong Hold/Buy. This applies everywhere a held ticker's composite is shown, not just the Analysis page — if a stock is mid-data-outage, you'll see "❔ Verdict Withheld" instead of a score on Home/Watchlist/Summary too, with a banner naming which holdings are affected. Price, weight, stops, and risk metrics still apply normally — only the composite score/signal is withheld.
 
-**ETF verdicts work differently.** A fund/ETF has no earnings, margins, or P/E for the engine to score the way it scores a company — so instead of the 4-pillar equity composite, a held ETF gets its own 2-pillar read: **70% technical trend + 30% cost** (its expense ratio, judged cheap-to-expensive). A cheap fund on a strong uptrend can clear Buy; the same uptrend on an expensive fund is capped lower, because a permanent fee drag is a real cost even when the chart looks good. This still uses the same Strong Buy/Buy/Hold/Sell labels and score bands as stocks. If an ETF's expense ratio itself can't be sourced, it falls back to "Verdict Withheld" like anything else the engine can't measure — technicals alone are never enough to justify a confident Buy/Sell. **Not yet supported in this pass:** ETFs don't yet appear as *new* buy candidates on Grow Today (only ETFs you already hold get a verdict), and sector-concentration checks still treat every ETF as "Other" rather than looking through to what it actually holds — both are on the roadmap.
+**ETF verdicts work differently.** A fund/ETF has no earnings, margins, or P/E for the engine to score the way it scores a company — so instead of the 4-pillar equity composite, a held ETF gets its own 2-pillar read: **70% technical trend + 30% cost** (its expense ratio, judged cheap-to-expensive). A cheap fund on a strong uptrend can clear Buy; the same uptrend on an expensive fund is capped lower, because a permanent fee drag is a real cost even when the chart looks good. This still uses the same Strong Buy/Buy/Hold/Sell labels and score bands as stocks. If an ETF's expense ratio itself can't be sourced, it falls back to "Verdict Withheld" like anything else the engine can't measure — technicals alone are never enough to justify a confident Buy/Sell. **A broad-market index fund (SPY/VOO/IVV today, via the owner-curated ETF registry in ⚙️ App Settings) can also appear as a *new* Grow Today buy candidate** — bull days only, capped at 1 pick/day, and held to a notably higher bar (Strong Buy, not just Buy) since a fund's technical-only composite has no fundamental floor underneath it the way a stock's does. It's also screened out if you already hold another fund tracking the same index (no "buy VOO" suggestion while you hold SPY), and never ranks ahead of a single-name stock pick for the day's headline. **Still not supported:** sector-concentration checks still treat every ETF as "Other" rather than looking through to what it actually holds — look-through exposure is shown separately on 📈 Analytics, but doesn't feed the hard sector cap.
 """
             )
 

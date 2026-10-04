@@ -165,6 +165,15 @@ def _build_new_pick_rows(picks: list[dict], rec_date) -> list[dict]:
             "conviction":       p.get("conviction", ""),
             "verdict":          _verdict or "",
             "thesis":           p.get("thesis", ""),
+            # Asset-type plumbing (ETF-support Phase 2b). A stock pick has no
+            # "asset_type" key on its pick dict today -- .get(..., "stock")
+            # makes that explicit instead of implicitly absent. Reads back
+            # equivalently via asset_type.normalize() for every existing
+            # stock pick, though the raw stored value changes: a pre-Phase-2b
+            # row persisted NULL for this column, this writes the literal
+            # string "stock" -- not byte-identical storage, just an
+            # equivalent read-back.
+            "asset_type":       p.get("asset_type", "stock"),
         }
         # Sizing capture (F-249 Phase 2) — unlike the pillar scores above, this
         # IS available on the cron path: compute_morning_picks runs the same
@@ -187,6 +196,22 @@ def _build_new_pick_rows(picks: list[dict], rec_date) -> list[dict]:
             })
         rows.append(_row)
     return rows
+
+
+def _morning_pick_sort_key(p: dict) -> tuple:
+    """Sort key for the morning-action email's high-conviction pick list
+    (ETF-support Phase 2b, Opus-review follow-up): a STOCK pick always
+    leads, never an ETF one. An ETF new-pick is ALWAYS composite >=
+    COMPOSITE_STRONG_BUY by construction (its own eligibility bar), while a
+    stock pick only needs COMPOSITE_BUY and typically lands 65-74 -- a raw
+    composite sort would let an ETF pick crowd out every stock idea as the
+    #1 email headline on most bull days, exactly what the separate
+    ETF_MAX_PICKS allowance exists to prevent (see docs/plans/
+    etf-multi-asset-support.md "Phase 2b"). `False < True` sorts a stock
+    pick (asset_type != "etf") ahead of an ETF one; composite descending is
+    still the tiebreaker WITHIN each group. Mirrors app.py's matching
+    `new_picks.sort` fix for the Grow Today card ordering."""
+    return (p.get("asset_type") == "etf", -float(p.get("composite_score") or 0))
 
 
 def _log(msg: str) -> None:
@@ -1629,8 +1654,9 @@ def _run_scan(now_et, force: bool) -> int:
             _why = f"tone={_tone} (S&P {_spr})"
         _log(f"no high-conviction buy setups — no email · {_why}.")
     else:
-        # Sort by composite score so the highest-conviction pick leads.
-        hi.sort(key=lambda p: float(p.get("composite_score") or 0), reverse=True)
+        # Sort so a STOCK pick always leads, never an ETF one -- see
+        # _morning_pick_sort_key's own docstring for the full rationale.
+        hi.sort(key=_morning_pick_sort_key)
         top_pick   = hi[0]
         other_picks = hi[1:]
 

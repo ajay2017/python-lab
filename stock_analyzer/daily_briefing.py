@@ -72,6 +72,7 @@ from stock_analyzer.constants import (
     GROW_TODAY_MAX_FUND_AGE_DAYS,
     ATR_STOP_MULT,
     DETERIORATION_TRIM_SUGGESTED_PCT,
+    ETF_MAX_PICKS,
 )
 from stock_analyzer.risk import position_sizing, sizing_unavailable_reason
 from stock_analyzer.targets import entry_zone
@@ -86,6 +87,7 @@ from stock_analyzer import decision_bucket
 from stock_analyzer.predictive_analytics import divergence_at_entry
 from stock_analyzer.personalized_discovery import score_candidate_match
 from stock_analyzer import asset_type
+from stock_analyzer import etf_candidates as etf_candidates_mod
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -717,7 +719,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 winner_profile: dict | None = None,
                 net_capital: float | None = None,
                 sold_today: set | None = None,
-                spy_df=None) -> dict:
+                spy_df=None,
+                etf_candidates: list | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -765,6 +768,18 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                  None (the default) is a fail-safe UNDER-warn, not a crash — RS
                  defaults to 0.0 inside assess_holding, so only WATCH/EXIT can
                  fire, never TRIM.
+    etf_candidates : optional (ETF-support Phase 2b) — list of
+                 {"ticker", "group", "bundle", ...} dicts resolved by
+                 etf_candidates_mod.resolve_etf_candidates() with each
+                 not-held candidate's bundle already attached by the caller
+                 (app.py / headless_alert_engine.py), or a {"kind":
+                 "held_group", "reason": ...} screen-out entry. `None` (the
+                 default, and every caller before Phase 2b) or `[]` is a
+                 clean no-op — byte-identical new_picks/every other return
+                 key to the pre-Phase-2b output, `etf_screened_out == []`.
+                 A SEPARATE candidate pool from curated_rows/mover_rows —
+                 never truncated by or subjected to the equity fundamentals
+                 gate, capped at its own ETF_MAX_PICKS allowance.
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -903,6 +918,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "macro_blocked_picks":        [],
             "composite_skipped":          [],
             "composite_unavailable":      [],
+            "etf_screened_out":           [],
             "deploy_note":                None,
             "risk_banner":                risk_banner,
             # LATE construction: built after every suppression decision so the
@@ -1378,6 +1394,275 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 _pick.get("sector"), winner_profile,
             )
 
+    # ── ETF new-pick candidates (ETF-support Phase 2b) ────────────────────────
+    # Deliberately OUTSIDE the `if curated_rows or mover_rows:` wrapper above —
+    # a day with zero stock candidates must not silently skip the ETF pool too.
+    # A SEPARATE pool from curated_rows/mover_rows: never truncated by, or
+    # subject to, the equity fundamentals/staleness/composite gates those two
+    # pools go through above (an ETF has no fundamentals leg at all — see
+    # etf_scoring.py) — it has its own gate (etf_newpick_eligible) and its own
+    # allowance (ETF_MAX_PICKS), decided entirely in docs/plans/
+    # etf-multi-asset-support.md's "Phase 2b" section. A clean no-op when
+    # `etf_candidates` is falsy (None/[]): etf_screened_out stays [] and
+    # new_picks is untouched, so every pre-Phase-2b caller is byte-identical.
+    etf_screened_out: list[dict] = []
+    if etf_candidates:
+        _etf_eligible: list[dict] = []
+        # Case-insensitive on BOTH sides -- _act_blocked/sold_today are
+        # expected to already be uppercase from their real producers
+        # (decision_bucket.all_flagged_tickers / build_daily_briefing's own
+        # `.upper()` construction of _sold_today), but a defensive uppercase
+        # here means a stray lowercase entry on either side can never slip a
+        # just-sold/already-flagged ticker past this check.
+        _act_blocked_upper = {str(x).upper() for x in _act_blocked}
+        # Sold-today-then-sibling-reopens guard: resolve_etf_candidates() only
+        # sees the CURRENT holdings set (computed by the caller before today's
+        # actions), so a group member sold/acted-on today already drops out of
+        # "held" there -- meaning its untouched siblings would sail through as
+        # normal candidates rather than D-G held_group screen-outs, even
+        # though the position just closed today (the exact same-day
+        # wash-sale-adjacent pattern `sold_today` exists to prevent
+        # elsewhere). Build a group -> acted-ticker map from THIS pool so the
+        # loop below can screen out the rest of a group the instant any
+        # member is act-blocked, without re-deriving group membership.
+        _etf_act_blocked_group_ticker: dict = {}
+        for _ec0 in etf_candidates:
+            _t0 = str(_ec0.get("ticker", "")).strip().upper()
+            if not _t0 or _t0 not in _act_blocked_upper or _ec0.get("kind") == "held_group":
+                continue
+            _g0 = _ec0.get("group")
+            if _g0 and _g0 not in _etf_act_blocked_group_ticker:
+                _etf_act_blocked_group_ticker[_g0] = _t0
+        for _ec in etf_candidates:
+            _et = str(_ec.get("ticker", "")).strip().upper()
+            if not _et:
+                continue
+
+            # [D-G] Already-held-group screen-out — emitted directly by the
+            # caller's resolve_etf_candidates(); no further checks apply.
+            if _ec.get("kind") == "held_group":
+                etf_screened_out.append({
+                    "ticker": _et,
+                    "group":  _ec.get("group"),
+                    "kind":   "held_group",
+                    "reason": _ec.get("reason", ""),
+                })
+                continue
+
+            # Same Act-Today cross-reference block every stock candidate
+            # already respects — silent skip, matching the stock path.
+            if _et in _act_blocked_upper:
+                continue
+
+            # Sold-today sibling screen-out (see map build above) — a
+            # not-yet-blocked ticker whose group sibling WAS acted on today.
+            _etf_act_group = _ec.get("group")
+            if _etf_act_group in _etf_act_blocked_group_ticker:
+                etf_screened_out.append({
+                    "ticker": _et,
+                    "group":  _etf_act_group,
+                    "kind":   "held_group",
+                    "reason": (
+                        f"{_etf_act_blocked_group_ticker[_etf_act_group]} was acted on "
+                        f"today (same {_etf_act_group} exposure)"
+                    ),
+                })
+                continue
+
+            _ebundle = _ec.get("bundle")
+            _eligible, _why = etf_candidates_mod.etf_newpick_eligible(_ebundle, tone)
+            if not _eligible:
+                # Suppress the trivial "bull days only" noise on every
+                # flat/down day — on those tones EVERY candidate fails check
+                # 7 of etf_newpick_eligible trivially, which would spam a
+                # useless reason into the UI daily. Other reasons (macro/AUM/
+                # composite/staleness) still surface, but only on a bull day
+                # (the only tone this feature ever actually fires in).
+                if tone == "bull" and _why != "bull days only":
+                    etf_screened_out.append({
+                        "ticker": _et,
+                        "group":  _ec.get("group"),
+                        "kind":   "ineligible",
+                        "reason": _why,
+                    })
+                continue
+
+            # [D-M] Macro gate — decided on SET MEMBERSHIP, never on whether
+            # the reason text is truthy (fails CLOSED, unlike the stock
+            # path's own `if _macro_block:` check above).
+            _macro_reason = etf_candidates_mod.etf_macro_block_reason(
+                _macro_blocked_sectors, _macro_block_reasons,
+            )
+            if _macro_reason:
+                # Deliberately NOT added to macro_blocked_picks (gate_ledger's
+                # G-07 lane): an ETF's own alpha is ~0 by construction against
+                # itself and would corrupt that gate's evaluable-verdict math.
+                etf_screened_out.append({
+                    "ticker": _et,
+                    "group":  _ec.get("group"),
+                    "kind":   "macro",
+                    "reason": _macro_reason,
+                })
+                continue
+
+            # TRAP B: never let the cross-reference step read the bundle's
+            # own `rec`/`total` directly — for an ETF bundle those are the
+            # FABRICATED equity composite (same bug class Phase 2 already
+            # fixed elsewhere), not the real `etf_rec`/`etf_total`. Build a
+            # small local SHADOW dict and pass THAT instead; the original
+            # bundle dict is never mutated (Phase 2's established
+            # anti-mutation design — tests pin this with a deep-copy
+            # comparison).
+            _etf_total = _ebundle.get("etf_total")
+            # Explicit is-None check (not `... or {}`) -- etf_newpick_eligible
+            # already confirmed etf_total is a real finite value above, and
+            # bundle_loader only ever produces a None etf_rec when etf_total
+            # is itself None, so this is a defensive fallback, not a real
+            # sentinel collapse; written this way anyway to read unambiguously
+            # and stay clear of the OFFLINE_SENTINEL_COLLAPSE antipattern shape.
+            _etf_rec = _ebundle.get("etf_rec")
+            if _etf_rec is None:
+                _etf_rec = {}
+            # The synthetic scanner_row's "Score" feeds reconcile_signals()'s
+            # own `momentum_score` parameter, which — unlike the visible
+            # "Momentum" line (omitted via scanner_row_is_synthetic=True) —
+            # is NOT gated on momentum_available: it still drives branch
+            # conditions, including the protective negative-news skip
+            # (`negative_news and momentum_score >= COMPOSITE_BUY`). Passing a
+            # literal 0 here would make that check permanently unreachable for
+            # every ETF pick, silently disabling the one thing that could
+            # still veto an otherwise-eligible broad-market pick on a
+            # genuinely bad-news day. Using the real etf_total (already
+            # confirmed >= COMPOSITE_STRONG_BUY by etf_newpick_eligible above)
+            # keeps that check live without fabricating a visible momentum
+            # reading anywhere — Layer 1's own "Momentum: ..." string is still
+            # skipped entirely for a synthetic row, so nothing new renders.
+            _shadow_composites = {_et: {"rec": _etf_rec, "total": _etf_total}}
+            _etf_xref = _cross_reference(
+                _et, {"Ticker": _et, "Score": _f(_etf_total, 0), "Signal": ""}, port_df, news_items,
+                held_data, today, earnings_lookup=earnings_lookup,
+                composites=_shadow_composites, is_mover=False,
+                scanner_row_is_synthetic=True,
+            )
+            # Defensive backstop only — should never fire given etf_total
+            # already cleared COMPOSITE_STRONG_BUY in etf_newpick_eligible,
+            # but left in rather than removed per the stock path's own
+            # precedent for this exact check.
+            if _etf_xref["verdict"] == "conflicted":
+                continue
+
+            # reconcile_signals()'s own momentum_available=False "go" wording
+            # ("...there is no separate scanner momentum reading for a
+            # position you already hold") is correct for the add-to-winner
+            # path it was written for, but wrong here: this is a NOT-HELD new
+            # ETF pick, not an add to an existing position. Overwrite with
+            # ETF-appropriate wording for the branch this pool actually
+            # reaches in practice (composite already cleared Strong Buy, no
+            # earnings concept for a fund, so "go" is the realistic outcome
+            # unless negative news or an imminent macro event intervenes —
+            # both already screened above or still correctly worded by
+            # reconcile_signals itself for the "skip"/"caution" tiers).
+            _etf_reconciled = _etf_xref.get("verdict_reconciled")
+            if isinstance(_etf_reconciled, dict) and _etf_reconciled.get("verdict") == "go":
+                _etf_reconciled["one_liner"] = (
+                    f"ETF composite {_f(_etf_total, 0):.0f} ({_etf_rec.get('label', '')}) "
+                    "cleared the Strong Buy bar — "
+                    f"{_etf_rec.get('rationale') or 'technical + cost checks confirm this entry'}."
+                )
+
+            # Sizing — same ATR-stop/entry-zone/_position_size_for_render
+            # sequence the stock new-pick path uses above (price derived from
+            # the SAME bundle as atr/stop here, since an ETF candidate has no
+            # separate live scanner-row quote to diverge from — but the same
+            # ATR-derivation-with-fallback shape is kept for consistency and
+            # so an ATR-unavailable ETF still degrades to the bundle's own
+            # last-close stop/entry-zone rather than silently sizing nothing).
+            _etf_price = _f(_ebundle.get("current_price"))
+            _etf_atr   = _f(_ebundle.get("atr"))
+            _etf_atr_stop = (
+                round(_etf_price - ATR_STOP_MULT * _etf_atr, 2) if _etf_atr > 0 else 0.0
+            )
+            _etf_stop = _etf_atr_stop if _etf_atr_stop > 0 else _f(_ebundle.get("stop"))
+            _etf_lo, _etf_hi = (
+                entry_zone(_etf_price, _etf_atr) if _etf_atr > 0
+                else (_ebundle.get("entry_lo"), _ebundle.get("entry_hi"))
+            )
+            _etf_sizing = (
+                _position_size_for_render(
+                    portfolio_value, _etf_price, _etf_stop, _etf_lo, _etf_hi,
+                    net_capital=net_capital,
+                )
+                if _etf_price > 0 and portfolio_value > 0 else {}
+            )
+            _etf_det = exit_advisor.candidate_deterioration_flag(
+                _et, _ebundle.get("df"), spy_df, price=_etf_price, atr=_etf_atr,
+            )
+            _etf_det_warning = exit_advisor.candidate_deterioration_caption(
+                _etf_det, _et, verdict_phrase="a buy",
+            )
+            _etf_label = str(_etf_rec.get("label", ""))
+            # Derived, not hardcoded -- etf_newpick_eligible's own bar is
+            # COMPOSITE_STRONG_BUY, which today equals COMPOSITE_HIGH_
+            # CONVICTION, so this is always "high" in practice, but deriving
+            # it from the real constant (same comparison the stock path uses
+            # just above) prevents silent drift if either threshold ever
+            # moves independently of the other.
+            _etf_conviction = "high" if _f(_etf_total, 0) >= COMPOSITE_HIGH_CONVICTION else "moderate"
+            _etf_eligible.append({
+                "ticker":               _et,
+                # No independent momentum/scanner score exists for a
+                # registry-sourced ETF candidate -- None (not 0.0) so a
+                # renderer can tell "no momentum reading" from "scored a
+                # literal zero" and skip the Momentum badge rather than
+                # printing a fabricated "Momentum 0/100".
+                "score":                None,
+                "composite_score":      _etf_total,
+                "composite_label":      _etf_label,
+                "composite_fetched_at": _ebundle.get("fetched_at"),
+                "conviction":           _etf_conviction,
+                "sector":               UNCLASSIFIED_SECTOR,   # truthfully — never a fabricated sector
+                "price":                _etf_price,
+                "trend":                "",
+                "scanner_signal":       "",
+                "is_leader":            False,
+                "is_mover":             False,
+                "day_change":           None,
+                "thesis": (
+                    f"ETF composite {_etf_total:.1f} ({_etf_label}) — "
+                    f"{_etf_rec.get('rationale', '')}"
+                ),
+                "sizing":               _etf_sizing,
+                "xref":                 _etf_xref,
+                "divergence":           None,   # momentum/composite divergence concept doesn't apply here
+                "sector_elevated_warning": None,   # "Other" is excluded from the elevated-sector map by construction
+                "deterioration_warning": _etf_det_warning,
+                "asset_type":           asset_type.ASSET_TYPE_ETF,
+                "etf_group":            _ec.get("group"),
+                # An ETF has no "winner profile" match concept (the profile is
+                # built from realized STOCK entries) — None/None/UNCLASSIFIED_
+                # SECTOR makes score_candidate_match() a guaranteed no-op
+                # (every comparison branch requires a non-None value or a
+                # real, non-UNCLASSIFIED sector) rather than reusing this
+                # pick's own real composite/momentum, which could coincidentally
+                # land inside a profile band and imply a match that has no
+                # actual conceptual basis.
+                "personalized_match": score_candidate_match(None, None, UNCLASSIFIED_SECTOR, winner_profile),
+            })
+
+        # Deterministic tie-break — highest composite first, ticker
+        # alphabetical on exact ties (VOO/IVV routinely score identically).
+        _etf_eligible.sort(key=lambda d: (-_f(d.get("composite_score"), 0), d["ticker"]))
+        _etf_already = {p["ticker"] for p in new_picks}
+        _etf_picks_made = 0
+        for _ep in _etf_eligible:
+            if _ep["ticker"] in _etf_already:
+                continue
+            if _etf_picks_made >= ETF_MAX_PICKS:
+                break
+            new_picks.append(_ep)
+            _etf_already.add(_ep["ticker"])
+            _etf_picks_made += 1
+
     # Add-to-winner: held Strong Buy, Score ≥ COMPOSITE_BUY (65), Gap ≥ 8%
     # — only on bull days. Composite bar aligned with new-pick threshold
     # (was 68; raised the bar on adds and lowered the bar on new picks created
@@ -1693,6 +1978,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "macro_blocked_picks":        macro_blocked_picks,
         "composite_skipped":          composite_skipped,
         "composite_unavailable":      composite_unavailable,
+        "etf_screened_out":           etf_screened_out,
         "deploy_note":                deploy_note,
         "risk_banner":                risk_banner,
         "sp500_pct":                  sp500_pct,
@@ -2963,6 +3249,7 @@ def build_daily_briefing(
     winner_profile:  dict | None = None,
     trades_df:       object | None = None,
     net_capital:     float | None = None,
+    etf_candidates:  list | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -2980,6 +3267,11 @@ def build_daily_briefing(
                      through to _grow_today's SEPARATE net-capital sizing cap.
                      None (the default, and every caller before F-255) leaves
                      sizing byte-identical to the pre-F-255 output.
+    etf_candidates:  optional (ETF-support Phase 2b) — passed straight through
+                     to _grow_today's SEPARATE ETF new-pick candidate pool.
+                     None (the default, and every caller before Phase 2b)
+                     leaves new_picks/every other key byte-identical to the
+                     pre-Phase-2b output.
 
     Returns dict with: act_today, buy_candidates, review_list, grow_today.
     """
@@ -3069,7 +3361,8 @@ def build_daily_briefing(
                          winner_profile=winner_profile,
                          net_capital=net_capital,
                          sold_today=_sold_today,
-                         spy_df=spy_df)
+                         spy_df=spy_df,
+                         etf_candidates=etf_candidates)
     # Tune-up beta/sharpe cards restate a trim; if that name is already carrying
     # an Act Today card (incl. the risk-off TRIM appended above) or a Review
     # card, drop the redundant restatement (2026-08-04 audit — same broad

@@ -1,19 +1,23 @@
 # Multi-asset-type support (ETF first) — architecture review + phased plan
 
-**Status: THE ETF/MULTI-ASSET ARCHITECTURE INITIATIVE, AS ORIGINALLY SCOPED,
-IS COMPLETE — Phases 0 through 4 ALL SHIPPED, all 2026-09-27 (F-279 through
-F-284). Phase 3a's `etf_lookthrough_cache` DDL was APPLIED by the owner in
-Supabase 2026-09-27** (not independently verified against a live query in
-this session — the owner's own report is the source for "applied," same
-posture as the Phase 1 DDL confirmation). **One thing remains
-deliberately unscoped, by explicit owner choice, no trigger date: whether
-ETFs should ever become eligible as NEW Grow Today buy candidates** (today
-only existing/held ETFs get a real verdict) was designed as **Phase 2b**,
-same day (2026-09-28) — all 7 decision points approved by the owner, **but
-NOT YET BUILT**; implementation needs its own explicit go-ahead. See the
-"Phase 2b" section below for the full design-of-record, and the final
-"Where the initiative stands now" section at the bottom of this doc for the
-complete picture.
+**Status: THE ENTIRE INITIATIVE IS NOW COMPLETE, INCLUDING PHASE 2B — SHIPPED
+2026-10-04 (F-288).** Phases 0 through 4 shipped 2026-09-27 (F-279 through
+F-284; Phase 3a's `etf_lookthrough_cache` DDL applied by the owner in Supabase
+same day, not independently re-verified in this session). **Phase 2b — ETF
+new-pick eligibility** (the one item every earlier phase deliberately left
+unscoped: letting a broad-market index ETF become eligible as a brand-new
+Grow Today buy candidate, not just get a real verdict once already held) was
+designed 2026-09-28 (all 7 decision points approved) and **built and shipped
+2026-10-04**, after a scoped gap-fill design pass resolved three further
+owner decisions (D-M/D-A/D-G, see the "Phase 2b" section below) and three
+Opus reviewer rounds found and closed real bugs each time (a fabricated
+momentum badge, the ETF pick silently becoming the daily "#1 pick" and
+defeating its own daily-cap's purpose, track-record contamination, a D-G
+fail-open in the cron path, and a real reproduced crash in Evening Debrief).
+See the "Phase 2b" section below for the full design-of-record + shipped
+detail, and the final "Where the initiative stands now" section at the
+bottom of this doc. Full detail: `docs/requirements.md` F-288; memory
+`project_etf_multi_asset_support`.
 Opus `planner` architecture review, then a second `planner` design pass per phase,
 `implementer` built each, Opus `reviewer` before every commit (Phase 0: FIX-FIRST/1
 blocking → fixed same session → SHIP/0 blocking; Phase 1: SHIP/0 blocking, first
@@ -868,6 +872,13 @@ absent for a stock bundle missing both keys entirely).
 
 ## Where the ETF/multi-asset initiative stands now (all phases, final)
 
+**UPDATE 2026-10-04: Phase 2b (F-288, ETF new-pick eligibility) also
+SHIPPED** — see the "SHIPPED 2026-10-04" subsection at the end of the
+"Phase 2b" section above for full detail (gap-fill decisions D-M/D-A/D-G,
+the build, three Opus reviewer rounds). This section below describes
+Phases 0-4 only, as it did before Phase 2b shipped — left as-is rather than
+rewritten, since it's accurate for what it covers.
+
 **Shipped, all 2026-09-27:** Phase 0 (F-279, fundamentals-withhold
 consistency fix — closed a live mis-scoring bug), Phase 1 (F-280, asset-type
 classification + broker capture plumbing, DDL applied to production same
@@ -1002,15 +1013,16 @@ The `etf_lookthrough_cache` DDL (Phase 3a) was applied by the owner
 
 ---
 
-## Phase 2b — ETF new-pick eligibility: DESIGN APPROVED 2026-09-28, NOT YET BUILT
+## Phase 2b — ETF new-pick eligibility: SHIPPED 2026-10-04 (F-288)
 
-The owner explicitly asked to design/plan this — the one item every prior
-phase deferred — before deciding whether to implement it. An Opus `planner`
-pass designed it; the owner then walked through and approved all 7 decision
-points, each at the planner's recommended default, in a structured review
-(mirroring Phase 2's own 10-decision walkthrough). **No code has been
-written. This section is the design-of-record for a future implementation
-session, not a shipped feature.**
+The owner originally asked (2026-09-28) to design/plan this — the one item
+every prior phase deferred — before deciding whether to implement it. An
+Opus `planner` pass designed it; the owner walked through and approved all 7
+decision points below, each at the planner's recommended default, in a
+structured review (mirroring Phase 2's own 10-decision walkthrough). On
+2026-10-04 the owner gave the explicit go-ahead to build. **See "SHIPPED
+2026-10-04" at the end of this section for the gap-fill decisions, the
+build, and three Opus reviewer rounds' worth of real bugs found and fixed.**
 
 ### The decisive finding — why this can't be "just remove the exclusion guard"
 
@@ -1144,8 +1156,126 @@ sequenced — each `_GATE_FILES` commit needs its own mandatory Opus
   new test needed beyond a sanity check).
 - A saved ETF pick's recommendation row stamps `asset_type == "etf"`.
 
-**Trigger to actually build this:** an explicit owner ask to proceed to
-implementation. This design being approved does not itself authorize
-building — matching this project's own established pattern (design and
-build are separate steps, separate sign-offs) throughout this entire
-initiative.
+**Trigger to actually build this (historical — met 2026-10-04):** an
+explicit owner ask to proceed to implementation. This design being approved
+did not itself authorize building — matching this project's own established
+pattern (design and build are separate steps, separate sign-offs)
+throughout this entire initiative.
+
+### SHIPPED 2026-10-04 — gap-fill decisions, the build, and three reviewer rounds
+
+**A real gap in the approved design, found before any code was written.**
+The 7 decisions above were silent on whether the new ETF candidate pool
+should reuse `_grow_today`'s existing macro-gate / sector-breach-gate /
+act-today-conflict machinery that stock picks already go through. A scoped
+`planner` gap-fill pass (not a re-design — the 7 decisions stayed untouched)
+resolved it, after finding that SPY/VOO/IVV have ZERO `TICKER_SECTORS`
+entries — meaning if the ETF pool naively reused the stock path's D1
+sector-unknown fail-closed rule, it would exclude all 3 in-scope tickers,
+killing the feature outright. Three further owner decisions, each approved
+at the recommended default:
+
+- **D-M (macro scope):** block an ETF new-pick on ANY imminent HIGH-impact
+  macro event with a non-empty affected-sector set — not just Robinhood's
+  own `"__ALL__"` (FOMC/GDP) sentinel. Same bar the stock new-pick path
+  already applies (the app already blocks NVDA/semis before a CPI print;
+  recommending SPY — heavily tech-weighted — on CPI eve is the same
+  anti-pattern).
+- **D-A (unknown AUM):** fail CLOSED. `total_assets` being `None`/NaN at
+  pick time makes the candidate ineligible ("fund size unknown") — the
+  OPPOSITE default from `etf_scoring.etf_aum_thin()`'s own awareness-only
+  fail-open-on-unknown posture (correct for ITS purpose; this is a
+  stricter, different, hard NEW-PICK gate).
+- **D-G (same-index duplicates):** if ANY member of a registry group (e.g.
+  "Broad Market": SPY/VOO/IVV) is already held, every OTHER member of that
+  group is screened out too (visibly, in a new `etf_screened_out` list —
+  never silently) — never suggest "buy VOO" while SPY is held. Extended
+  during the fix rounds to also screen out a group sibling the same day a
+  member is SOLD (closes a near-wash-sale-adjacent gap).
+
+**What shipped.** New pure `stock_analyzer/etf_candidates.py` (a new
+`_GATE_FILES` member): `resolve_etf_candidates()` (D-G group resolution,
+reading the `etf_registry` table + held tickers), `etf_newpick_eligible()`
+(a 9-step ordered eligibility check — asset type, stale-cache rejection,
+expense-ratio availability, finite composite, D-A AUM fail-closed, bull-day
+only, `COMPOSITE_STRONG_BUY` bar), `etf_macro_block_reason()` (D-M, decided
+on SET MEMBERSHIP never on whether a reason string is truthy — deliberately
+does NOT copy a pre-existing fail-OPEN bug in the stock path's own
+`if _macro_block:` check). `daily_briefing._grow_today()`/
+`build_daily_briefing()` gained an `etf_candidates` kwarg (default `None` —
+byte-identical to pre-Phase-2b for every existing caller), with the new ETF
+block placed OUTSIDE the stock pools' `if curated_rows or mover_rows:`
+wrapper so a zero-stock-candidate day still produces an ETF pick. A
+"shadow" composite dict (`{"rec": etf_rec, "total": etf_total}`) is passed
+into the existing cross-reference machinery instead of the raw bundle,
+which for an ETF carries the FABRICATED equity composite — the same bug
+class the original Phase 2 corrections fixed elsewhere (never mutates the
+original bundle, pinned by a deep-copy test). ETF screen-outs are
+deliberately kept OUT of `macro_blocked_picks`/`sector_blocked_picks` (and
+`gate_ledger.py`'s G-07/G-16 lanes) — an ETF's own alpha relative to itself
+is ~0 by construction and would corrupt those gates' SPY-relative
+evaluable-verdict math. `cron_runner._build_new_pick_rows`/`app.py` both
+stamp `asset_type="etf"` on a saved ETF pick's `recommendations` row.
+`headless_alert_engine.compute_morning_picks`/`app.py`'s Home build both
+resolve the registry and attach bundles via the existing `load_bundle`
+call (no new fetch mechanism), wrapped so a registry failure never aborts
+the brief.
+
+**Three Opus reviewer rounds, each catching real bugs:**
+
+- **Round 1 — FIX-FIRST, 4 blocking.** (1) The ETF pick set a literal
+  `"score": 0.0`, which rendered as a fabricated **"Momentum 0/100"** badge
+  and routed the cross-reference verdict into a "go" one-liner claiming a
+  multi-factor/held-position analysis that never happened for a not-held
+  ETF; the email footer claimed a sector/momentum check that never ran.
+  Fixed: `score` is now `None` (render sites guard it), the verdict
+  one-liner is overwritten with ETF-appropriate wording, the email footer
+  is conditional on `asset_type`. (2) **The ETF pick would usually become
+  the #1 "top pick" on both the app and the email, defeating the entire
+  reason `ETF_MAX_PICKS` exists** — an ETF pick is always composite ≥75 by
+  construction, while stock picks only need ≥65 and typically land at
+  65-74, so a bull day would headline "buy the index" instead of a
+  single-name idea. Fixed via a new pure `cron_runner._morning_pick_sort_key`
+  helper (stock picks always win the email's `top_pick`/lead position,
+  ETF promoted only when zero stock go-picks exist that day) and `app.py`
+  rendering ETF picks structurally after every stock pick under their own
+  sub-header. (3) **ETF rows were not excluded from
+  `recommendations_history.engine_trust_headline`/`engine_trust_by_band`**
+  (🧾 Summary's Engine Track Record card) — unlike `predictive_analytics.
+  prepare_population`, which already filtered them. An ETF's near-zero
+  self-relative alpha would have pulled the stock-only track record's
+  measured alpha toward zero. Fixed by matching the existing filter. (4)
+  **D-G failed open in the cron path**: the held-ticker set was built from
+  `held_data.keys()`, which silently drops a holding whose price bundle
+  failed to load — so a held SPY with a failed morning fetch could let
+  VOO/IVV (or even SPY itself) get emailed as a new buy. Fixed by building
+  the held set from the raw `holdings_df` instead (matching how `app.py`
+  already did it correctly). Also fixed, non-blocking: the sold-today
+  sibling gap (D-G extended above), silently-dropped registry/bundle-load
+  errors (now surfaced instead of vanishing the candidate with no trace), a
+  `_SYNTH_SCHEMA_VER` bump, a hardcoded `"conviction": "high"` (now
+  derived), and — flagged non-blocking by the reviewer but fixed anyway,
+  high-value — a structurally-unreachable negative-news check for an ETF
+  candidate (the synthetic scanner row passed a literal `0` into a
+  parameter that gates the check at `>= COMPOSITE_BUY`; fixed by passing
+  the real `etf_total` instead, verified not to fabricate a visible
+  momentum reading anywhere).
+- **Round 2 — FIX-FIRST, 1 blocking.** A real, reproduced crash: Evening
+  Debrief's "✅ Go signals (AM)" card (`app.py`) formatted the new `None`
+  momentum score with no guard — `TypeError: unsupported format string
+  passed to NoneType.__format__` — crashing 🏠 Home's Evening Debrief
+  section outright on any bull day an ETF pick cleared the bar. Fixed with
+  the same `isinstance` guard the adjacent composite field already used,
+  dropping the "Momentum" segment entirely rather than printing a dash. A
+  second, textually-identical unguarded site (the "⛔ Skipped / Filtered
+  Out" card) was investigated and confirmed NOT reachable by any
+  ETF-sourced data (it's fed only by the pre-existing stock-only
+  `composite_skipped` bucket) — left as pre-existing, unrelated-to-this-diff
+  debt, not a regression this change introduced.
+- **Round 3 — SHIP, 0 blocking.**
+
+Full suite 7107 passed throughout (up from 7037 pre-Phase-2b). No DDL
+needed (reuses the existing `asset_type` column from Phase 1 and the
+`etf_registry` table from Phase 2). See `docs/requirements.md` F-288;
+memory `project_etf_multi_asset_support` for the complete session-by-session
+narrative.

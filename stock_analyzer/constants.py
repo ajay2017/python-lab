@@ -840,6 +840,15 @@ ETF_COST_SCORE_FLOOR = 25                # an expensive fund's cost score never 
 # awareness captions (e.g. MARGIN_MAINTENANCE_RATE above).
 ETF_AUM_THIN_FLOOR_USD = 50_000_000
 
+# ETF new-pick eligibility (Phase 2b, docs/plans/etf-multi-asset-support.md
+# "Phase 2b" section, owner-approved 2026-09-28) — a SEPARATE daily allowance
+# from GROW_MAX_PICKS_BULL/DEFAULT so an index-fund pick never crowds out a
+# single-name stock idea, and a bull run can't fill the whole pick list with
+# "buy the index." The only genuinely new policy magnitude in Phase 2b — every
+# other decision reuses an existing constant (COMPOSITE_STRONG_BUY as the ETF
+# new-pick composite bar, ETF_AUM_THIN_FLOOR_USD as a hard new-pick gate).
+ETF_MAX_PICKS = 1
+
 # ── Earnings / macro proximity windows (days) ────────────────────────────────
 EARNINGS_IMMINENT_DAYS      = 7  # any trade within this window = caution (binary-event conflict)
 # Tighter "danger" sub-window inside EARNINGS_IMMINENT_DAYS — decide position

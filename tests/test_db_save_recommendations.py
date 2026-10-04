@@ -324,6 +324,62 @@ def test_cron_row_without_sizing_omits_the_columns_entirely():
         assert c not in r
 
 
+# ── asset_type stamping (ETF-support Phase 2b) ──────────────────────────────
+
+def test_cron_new_pick_row_defaults_asset_type_to_stock():
+    """A stock pick has no 'asset_type' key on its pick dict today --
+    .get(..., 'stock') makes that explicit instead of implicitly absent,
+    byte-identical to the pre-Phase-2b row for every existing stock pick."""
+    import cron_runner
+    rows = cron_runner._build_new_pick_rows([{"ticker": "AAPL"}], "2026-08-23")
+    assert rows[0]["asset_type"] == "stock"
+
+
+def test_cron_new_pick_row_stamps_asset_type_etf_when_present():
+    import cron_runner
+    rows = cron_runner._build_new_pick_rows(
+        [{"ticker": "SPY", "asset_type": "etf"}], "2026-08-23",
+    )
+    assert rows[0]["asset_type"] == "etf"
+
+
+# ── _morning_pick_sort_key (ETF-support Phase 2b, Opus-review follow-up) ────
+# A stock pick must always lead the morning-action email's top_pick/
+# other_picks list, never an ETF one -- an ETF new-pick always clears
+# COMPOSITE_STRONG_BUY by construction while a stock pick only needs
+# COMPOSITE_BUY, so a raw composite sort would let an ETF pick crowd out
+# every stock idea for the #1 slot on most bull days.
+
+def test_morning_pick_sort_key_stock_leads_despite_lower_composite():
+    import cron_runner
+    picks = [
+        {"ticker": "SPY", "asset_type": "etf", "composite_score": 90.0},
+        {"ticker": "AAPL", "composite_score": 66.0},
+    ]
+    picks.sort(key=cron_runner._morning_pick_sort_key)
+    assert [p["ticker"] for p in picks] == ["AAPL", "SPY"]
+
+
+def test_morning_pick_sort_key_composite_still_tiebreaks_within_stock_group():
+    import cron_runner
+    picks = [
+        {"ticker": "AAPL", "composite_score": 66.0},
+        {"ticker": "MSFT", "composite_score": 80.0},
+    ]
+    picks.sort(key=cron_runner._morning_pick_sort_key)
+    assert [p["ticker"] for p in picks] == ["MSFT", "AAPL"]
+
+
+def test_morning_pick_sort_key_falls_back_to_etf_when_no_stock_present():
+    import cron_runner
+    picks = [
+        {"ticker": "VOO", "asset_type": "etf", "composite_score": 80.0},
+        {"ticker": "SPY", "asset_type": "etf", "composite_score": 90.0},
+    ]
+    picks.sort(key=cron_runner._morning_pick_sort_key)
+    assert [p["ticker"] for p in picks] == ["SPY", "VOO"]   # highest composite still wins among ETFs
+
+
 # ── Phase 4 data-foundation strategy: weights_version stamp ─────────────────
 #
 # COMPOSITE_WEIGHTS has changed its weight VALUES exactly once in this
