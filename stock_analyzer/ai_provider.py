@@ -98,6 +98,30 @@ def resolve_key(provider_cfg: dict, secrets_getter, environ: dict) -> str:
     return ""
 
 
+def default_eligible_selection(eval_passed_models, secrets_getter, environ: dict):
+    """Returns (provider, model, key) for the first (provider, model) pair —
+    walking AI_PROVIDERS/its "models" dict in definition order, the same
+    order a fresh selectbox would default to — that is BOTH in
+    `eval_passed_models` AND has a resolvable key. Returns (None, None, "")
+    if nothing qualifies (no eval-passed model has a key resolvable from
+    secrets/env).
+
+    Exists so a caller (🔎 Investigator) can compute the same default a user
+    would land on by opening 🩺 System Trust's config section and accepting
+    its defaults — without requiring that page to have actually rendered
+    first in this session. `eval_passed_models` is passed in rather than
+    imported (mirrors this module's own "no app.py imports" + investigator.py's
+    "deliberately does NOT import ai_provider" split) so neither module gains
+    a new dependency on the other."""
+    for provider, cfg in AI_PROVIDERS.items():
+        for model in cfg["models"]:
+            if (provider, model) in eval_passed_models:
+                key = resolve_key(cfg, secrets_getter, environ)
+                if key:
+                    return provider, model, key
+    return None, None, ""
+
+
 # ─── Dispatch ────────────────────────────────────────────────────────────────
 
 LAST_CALL_ERROR: str | None = None

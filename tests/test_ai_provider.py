@@ -17,6 +17,7 @@ from stock_analyzer.ai_provider import (
     capable_models,
     resolve_key,
     call_llm,
+    default_eligible_selection,
 )
 
 pytestmark = pytest.mark.fast
@@ -287,6 +288,82 @@ def test_resolve_key_empty_string_secrets_treated_as_absent():
         environ={"ANTHROPIC_API_KEY": "sk-ant-from-env"},
     )
     assert result == "sk-ant-from-env"
+
+
+# ─── default_eligible_selection ──────────────────────────────────────────────
+# Reproduces the real "No eligible AI model is configured yet" bug: the
+# Investigator tab only ever read `_inv_provider`/`_inv_model` from
+# session_state, which were written ONLY by 🩺 System Trust's own config
+# section actually rendering this session -- so a key that was genuinely
+# resolvable from secrets/env still produced the error if the user hadn't
+# visited that page first. This function computes the same default System
+# Trust's selectbox would land on, independent of whether it ever rendered.
+
+_EVAL_PASSED = frozenset({
+    ("Claude (Anthropic)", "claude-sonnet-4-6"),
+    ("Claude (Anthropic)", "claude-opus-5"),
+})
+
+
+def test_default_eligible_selection_picks_first_eligible_with_a_key():
+    provider, model, key = default_eligible_selection(
+        _EVAL_PASSED,
+        secrets_getter=lambda section, field: (
+            "sk-ant-resolved" if section == "anthropic" else None
+        ),
+        environ={},
+    )
+    assert provider == "Claude (Anthropic)"
+    assert model == "claude-sonnet-4-6"  # first eligible model in dict order
+    assert key == "sk-ant-resolved"
+
+
+def test_default_eligible_selection_falls_through_to_env():
+    provider, model, key = default_eligible_selection(
+        _EVAL_PASSED,
+        secrets_getter=lambda section, field: None,
+        environ={"ANTHROPIC_API_KEY": "sk-ant-from-env"},
+    )
+    assert provider == "Claude (Anthropic)"
+    assert model == "claude-sonnet-4-6"
+    assert key == "sk-ant-from-env"
+
+
+def test_default_eligible_selection_none_eligible_returns_all_none():
+    provider, model, key = default_eligible_selection(
+        frozenset(),
+        secrets_getter=lambda section, field: "sk-ant-resolved",
+        environ={},
+    )
+    assert (provider, model, key) == (None, None, "")
+
+
+def test_default_eligible_selection_eligible_but_no_key_returns_all_none():
+    # An eval-passed model with no resolvable key anywhere must NOT be
+    # returned as "configured" -- that would trade one false negative
+    # (requiring a System Trust visit) for a false positive (claiming a key
+    # exists when call_llm would just fail on it).
+    provider, model, key = default_eligible_selection(
+        _EVAL_PASSED,
+        secrets_getter=lambda section, field: None,
+        environ={},
+    )
+    assert (provider, model, key) == (None, None, "")
+
+
+def test_default_eligible_selection_skips_ineligible_provider_for_eligible_one():
+    # Only OpenAI models are "eligible" here, so the Claude-first iteration
+    # order must not short-circuit on a provider with no eligible model.
+    provider, model, key = default_eligible_selection(
+        frozenset({("OpenAI", "gpt-4o-mini")}),
+        secrets_getter=lambda section, field: (
+            "sk-oai" if section == "openai" else None
+        ),
+        environ={},
+    )
+    assert provider == "OpenAI"
+    assert model == "gpt-4o-mini"
+    assert key == "sk-oai"
 
 
 # ─── call_llm — Claude (Anthropic) ───────────────────────────────────────────

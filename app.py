@@ -43490,6 +43490,23 @@ elif page == "🧠 AI Insights":
             and _inv_api_key
         )
 
+        # Fall back to the same default a visit to 🩺 System Trust would
+        # produce (its selectbox lands on the first eligible provider/model
+        # and auto-resolves the key from secrets/env) rather than requiring
+        # that page to have actually rendered once this session first — see
+        # the "No eligible AI model" bug report: the key was always resolvable
+        # from secrets, the tab just hadn't been told yet because nothing
+        # had written `_inv_provider`/`_inv_model` into session_state.
+        if not _inv_configured:
+            _inv_def_provider, _inv_def_model, _inv_def_key = _inv_aip.default_eligible_selection(
+                _inv.EVAL_PASSED_MODELS,
+                lambda section, field: st.secrets.get(section, {}).get(field),
+                os.environ,
+            )
+            if _inv_def_provider:
+                _inv_provider, _inv_model, _inv_api_key = _inv_def_provider, _inv_def_model, _inv_def_key
+                _inv_configured = True
+
         if not _inv_configured:
             st.info(
                 "No eligible AI model is configured yet — open 🩺 System Trust "
