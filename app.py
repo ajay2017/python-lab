@@ -6880,6 +6880,16 @@ if page == "🏠 Home":
                     f"{_struct_alert_c['combined_weight_pct']:.1f}% combined weight) — "
                     f"new pairing: {_struct_alert_pairs_str}"
                 )
+            # Same nav pattern as the "→ Intelligence" button elsewhere on Home
+            # (e.g. the Portfolio Health diversification card) — st.warning/
+            # st.caption can't hold a clickable link, and the text above only
+            # NAMES the page, so a user has to hunt for it manually without
+            # this. _pending_page is the established indirection (see
+            # "Navigation safety" in CLAUDE.md) -- never assign nav_page
+            # directly, it raises StreamlitAPIException.
+            if st.button("→ 🧩 Intelligence · 🧬 Structural Scan", key="_struct_alert_nav_btn", type="tertiary"):
+                st.session_state["_pending_page"] = "🧩 Intelligence"
+                st.rerun()
         elif _struct_new_clusters is None:
             # D4 fail-open: couldn't check this render (corr_df/baseline
             # unavailable) — distinct from "checked, nothing new" ([]), which
