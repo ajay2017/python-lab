@@ -8,6 +8,49 @@
 
 **P1 (the narrow one-line notices summary above the existing Alerts expander) and P2 (the Act Today top pointer) are deliberately NOT built this pass** — owner decision: see P0 live first, pick these up separately if still wanted. Not blocked on anything; just sequenced after.
 
+## 2026-10-06 (later same day) — P1 + P2 designed, re-verified against post-G-25 code
+
+Picked up once P0 was production-verified (see above). A fresh `planner` pass re-derived both specs against CURRENT code rather than trusting the original 2026-08-29 concept, which was already stale in two ways: G-25 (shipped the same day, `docs/plans/cluster-add-gate.md`) added two new elements inside the exact "⚠️ Alerts" expander P1 targets, and P2's pointer must read `act_today_view()` (P0), not the older `split_defensive()`-based counting the original concept assumed.
+
+**Verdict: PROCEED on both, as two separate commits/deploys — P1 first, a live look, then P2.** No `constants.py`/gate/scoring touch either way; neither new module name collides with `_GATE_FILES`'s exact-path matching. **P2 gets a mandatory Opus `reviewer` pass; P1 doesn't** (optional, cheap to fold in) — P2 is a fourth Home surface displaying a gated decision's count, and P0's own review round already caught a false-all-clear site the build spec had missed at exactly this kind of surface.
+
+**A finding worth noting directly: P2 is worth less than the original framing assumed.** Act Today is reached behind far fewer sections than the stale "13 sections / 2,547 lines" figure claimed (that number and `project_home_redesign` memory's "still buried" line are both now corrected) — the existing "Today's Actions" chip in the Brief's chip row already shows "N Act Today" today. P2's real payoff is specifically during pre-market hours (4:00–9:29 ET weekdays), when the Pre-Market Intel panel pushes that chip below the fold.
+
+**8 owner decisions, 4 confirmed explicitly, 4 taken at the planner's recommended default (all owner-approved via the pattern already established on this feature):**
+- **D1 (P2 clear state):** a calm one-liner ("✅ Nothing to act on today"), not blank — reports one of three distinct states on every render.
+- **D2 (P2 resolved-breach note):** yes, "· N stop breach(es) resolved — monitoring below" — mirrors Summary's own P0 disclosure for the identical situation.
+- **D3 (P2 contents):** chip counts only (EXIT/TRIM/WATCH), matching Summary's approved pill style — no ticker names at the top.
+- **D4 (P1 quiet-day line):** yes, a muted `st.caption` like "· 1 note" even when only low-severity notes fired (the leverage caption fires almost daily) — otherwise several real "couldn't check" disclosures go back to being invisible, the exact problem this feature exists to fix.
+- **D5 (P2 jump link, planner default):** try a static in-page anchor link; fall back to plain text ("see 📋 Today's Brief → Act Today below") if a live click doesn't actually scroll — no existing in-page anchor precedent in this codebase, so this needs a live check either way.
+- **D6 (P1 wording, planner default):** the summary says "notices," never "alerts" — Home already has three different things called "Alerts" (this expander, the Command Center's `n_danger`/`n_warning` metric, and "PRICE ALERTS"); a fourth collision is avoidable.
+- **D7 (top-of-page order, planner default):** P2's Act Today pointer renders first, then P1's notices summary directly above the Alerts expander it summarizes.
+- **D8 (P1 coverage, planner default):** every one of the 16 alert-expander fill sites gets a `_home_notice()` hook, no exceptions (including the held-ticker-load-failure site, which is low-stakes but keeps the "one hook per site" test invariant exact — the thing that will catch the *next* G-25-style addition automatically).
+
+### Build spec
+
+**P1 — new `stock_analyzer/home_notices.py`** (pure, no Streamlit/DB/network):
+- `SOURCE_ORDER` (16 ids, declaration order): `dayshock, xcheck, split, structural, drift, thesis, systrust, heldload, stale, dropped, scorewithheld, outage, leverage, pnldq, crossasset, debrief`. `SOURCE_LABELS` maps each to a short display name. `TIERS = ("error", "warning", "info", "caption")` — a display enum, not a policy value, not in `constants.py`.
+- `summarize_notices(entries) -> dict | None` — `None` for empty/`None` input, **never** renders all-clear wording (several underlying producers have lossy "clean" states, so "nothing to report" must mean "nothing fired," never "nothing checked"). Merges by source keeping the highest tier; an unknown tier counts as `"warning"` (never dropped); returns `{tier, headline, named, n_notes}` — `named` lists error/warning sources (errors first, then `SOURCE_ORDER`), `n_notes` counts distinct info/caption sources.
+- **Critical design property: P1 never reads a cache.** It only records what each of the 16 fill sites *actually rendered*, from inside the exact branch that rendered it — so `_structural_alert_cache`'s three-state shape (already correct post-G-25) flows through automatically with zero new sentinel-handling logic, and the lossy "clean" producers (Day Shock, price cross-check, stock split) can never be misread, because P1 simply never asks them a question they'd answer wrong.
+- `app.py` wiring: `_home_notices = []` (a local, not `session_state`) + `_notices_summary_ph = st.empty()` + a `_home_notice(source, tier)` closure, defined before its first call (`feedback_module_def_order`), wrapped in its own try/except so a bug in the summary itself can never take down a fill site that isn't in a try block. A hook call goes inside each of the 16 sites' own branch (not unconditionally in the block body — 5 of the 16 blocks run on every render even when nothing fires, so an unguarded hook would manufacture a false daily note). The broker-drift site needs `_render_broker_drift()`'s return type widened to `str | None` (its one caller already captures the return).
+- No logic/text/condition of any existing banner changes — this is pure additive instrumentation.
+
+**P2 — new `stock_analyzer/act_today_pointer.py`** (pure):
+- `act_pointer(view) -> dict` returning `{state, n, chips, n_resolved}`. `view` that's `None`, not a dict, or has an unrecognized `state` → `"offline"`, `n=None` (fails loud, never calm). A non-empty `active` list always means `"act"` regardless of what `view["state"]` itself says (belt-and-suspenders against a future inconsistency). `chips` comes from `decision_bucket.bucket_act_by_type()`, EXIT→TRIM→WATCH order, zero-count buckets omitted. **Must never call `split_defensive()` directly** — reuses `act_today_view()`'s own already-computed `_act_view`, enforced by the existing `test_act_today_view_module_is_the_sole_caller_of_split_defensive` test.
+- `app.py` wiring: `_act_ptr_ph = st.empty()` declared first in Home (before `_notices_summary_ph`, per D7), filled immediately after `_act_view = act_today_view(...)` is computed — one `act_today_view()` call total, pinned by an AST test, so this can't reopen `feedback_brief_act_count_source`'s drift class. The outage branch fills the pointer with the existing `_OFFLINE_ACT_MSG` *before* its `st.stop()` call, so the stop path never leaves the pointer blank (a blank pointer could otherwise be misread as "clear" under the D1 calm-one-liner design).
+
+### Tests required (both P1 and P2)
+
+Full list is in the planner's design transcript — condensed: `summarize_notices`'s empty/merge/unknown-tier/ordering behavior plus a simulated 16-source busy day (the logic-level stand-in for a multi-banner day that can't be forced live); `act_pointer`'s offline/clear/act boundary cases built on real `act_today_view()` fixtures (including a recovered stop-breach feeding `n_resolved`); and AST-based wiring tests on `app.py` mirroring `test_act_today_view.py`'s pattern — every declared placeholder has exactly one matching hook call, no hook call sits unconditionally in a block body that runs every render, the outage branch fills the pointer before `st.stop()`, and exactly one `act_today_view(` call exists inside Home.
+
+### Known limitation, disclosed not fixed
+
+The notices summary covers only the "⚠️ Alerts" expander's 16 sites — fail-loud errors drawn elsewhere on Home (e.g. the reference-table error, the global outage gate) are NOT included, and the summary's own wording must not imply total page coverage.
+
+### Memory corrections needed at build time
+
+`project_home_redesign`'s own "Act Today is still buried" line (written 2026-09-25) is now stale per this pass's re-verification — needs correcting, not just appending to. `feedback_brief_act_count_source` still names `split_defensive` as the drift-prone source; P0 replaced that with `act_today_view()`, so the memory's own guidance is one feature out of date.
+
 **Common-case PRODUCTION-VERIFIED 2026-10-06**, same day as ship, via live screenshots of a real TRIM item (SPCX, concentration-driven, not a stop_breach): Home's "Act Today (1)" and Summary's "1 item needs attention [1 TRIM]" showed identical counts and the same composite score (50) — confirms the count-unification holds on a normal render, no regression from the prior per-page computation. No resolved-breach caption rendered on Summary, correctly, since a concentration TRIM isn't subject to the stop-recovery demotion logic. **Still unverified, opportunistic only:** the offline/false-all-clear path needs the Daily Brief build to actually crash on a real run — hasn't happened since ship, can't be forced. Keep this open until seen once live.
 
 ---
