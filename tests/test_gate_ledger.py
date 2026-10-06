@@ -162,6 +162,26 @@ def test_g04_and_g09_split_from_same_bucket():
     assert len(result) == 2
 
 
+# ── G-25: cluster_blocked_adds bucket (docs/plans/cluster-add-gate.md) ──────
+
+def test_g25_cluster_blocked_adds_produces_add_winner_row():
+    """A cluster_blocked_adds item produces one row, lane 'add_winner', with
+    gate_value/gate_threshold populated from the producer's own fields."""
+    grow = {
+        "cluster_blocked_adds": [
+            _make_item("G-25", ticker="AAA", gate_value=0.82, gate_threshold=0.65),
+        ]
+    }
+    result = _rows(grow, tone="bull")
+    assert len(result) == 1
+    row = result[0]
+    assert row["ticker"] == "AAA"
+    assert row["gate_id"] == "G-25"
+    assert row["lane"] == "add_winner"
+    assert row["gate_value"] == 0.82
+    assert row["gate_threshold"] == 0.65
+
+
 # ── item with no gate_id → skipped ───────────────────────────────────────────
 
 def test_item_without_gate_id_is_skipped():

@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from stock_analyzer import structural_scanner
-from stock_analyzer.structural_scanner import blast_radius, detect_new_clusters
+from stock_analyzer.structural_scanner import blast_radius, detect_new_clusters, detect_new_clusters_strict
 
 
 def _corr_df(tickers, pairs):
@@ -246,6 +246,46 @@ def test_detect_new_clusters_never_raises_on_malformed_input():
     assert detect_new_clusters([{"tickers": None}], [], df) == []
     assert detect_new_clusters("not a list", [], df) == []
     assert detect_new_clusters([_cluster(["AAPL", "MSFT"])], "not a list", df) == []
+
+
+# ── detect_new_clusters_strict (G-25, docs/plans/cluster-add-gate.md) ─────────
+# The core was extracted so cluster_add_gate.py could tell "couldn't check"
+# (an exception) apart from "checked, nothing new" ([]). These tests pin that
+# the STRICT core raises on exactly the inputs the public wrapper swallows to
+# [], while detect_new_clusters() itself keeps its unchanged [] contract.
+
+def test_detect_new_clusters_strict_same_result_as_wrapper_on_good_input():
+    # Byte-identical result on well-formed input — the extraction changed
+    # nothing about the core logic, only removed the outer try/except.
+    prior = [_cluster(["AAPL", "MSFT"])]
+    today = [_cluster(["AAPL", "MSFT", "GOOGL"])]
+    df = _corr_df(["AAPL", "MSFT", "GOOGL"], {("AAPL", "MSFT"): 0.9, ("MSFT", "GOOGL"): 0.7})
+    assert detect_new_clusters_strict(today, prior, df) == detect_new_clusters(today, prior, df)
+
+
+def test_detect_new_clusters_strict_raises_where_wrapper_swallows():
+    # The exact malformed-input case the wrapper test above proves returns []
+    # -- the strict core must RAISE on it instead (a string iterated as if it
+    # were a list of cluster dicts -> AttributeError on .get()).
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    today = [_cluster(["AAPL", "MSFT"])]
+    import pytest as _pytest
+    with _pytest.raises(Exception):
+        detect_new_clusters_strict(today, "not a list", df)
+    # The public wrapper still swallows the SAME input to [] -- unchanged
+    # contract, proven side by side so a future edit can't silently change
+    # detect_new_clusters()'s own behavior while "fixing" the strict core.
+    assert detect_new_clusters(today, "not a list", df) == []
+
+
+def test_detect_new_clusters_strict_still_returns_empty_on_clean_no_prior():
+    # Inputs that are well-formed but simply have nothing to flag must still
+    # return [] (not raise) — only genuinely malformed input raises.
+    today = [_cluster(["AAPL", "MSFT"])]
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    assert detect_new_clusters_strict(today, None, df) == []
+    assert detect_new_clusters_strict([], [_cluster(["AAPL", "MSFT"])], df) == []
+    assert detect_new_clusters_strict(today, [], None) == []
 
 
 from stock_analyzer.util import factor_tilt_evidence_line  # noqa: E402

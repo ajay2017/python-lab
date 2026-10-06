@@ -889,6 +889,12 @@ _GATE_FILES = {
     # eligibility gate plus the TRAP-B-safe shadow-composite resolution --
     # a decision surface from day one, same posture as etf_scoring.py.
     "stock_analyzer/etf_candidates.py",
+    # Added 2026-10-06 (G-25, docs/plans/cluster-add-gate.md): decides which
+    # held tickers get their Grow Today "add-to-winner" suggestion suppressed
+    # when a new correlation cluster forms -- a cross-feature coordination
+    # surface (a Home/Intelligence-produced signal gating a Grow Today
+    # recommendation), same posture as etf_candidates.py from day one.
+    "stock_analyzer/cluster_add_gate.py",
     # Added 2026-10-06 (owner-approved, same treatment as etf_candidates.py):
     # the single source of truth for "how many Act Today items are there right
     # now" across every render surface (Home's badge/chip/section headers,

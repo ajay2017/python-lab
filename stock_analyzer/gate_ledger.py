@@ -45,6 +45,11 @@ _BUCKET_LANES: dict[str, str] = {
     "concentration_blocked_adds": "add_winner",
     "cooldown_adds":             "add_winner",
     "deterioration_blocked_adds": "add_winner",
+    # G-25 (2026-10-06, docs/plans/cluster-add-gate.md) -- flows through
+    # grow_today like G-20/G-24, so it gets a labelled bucket entry here
+    # rather than a new standalone builder (unlike G-02/05/06/13/18, which
+    # needed separate builders because they don't flow through grow_today).
+    "cluster_blocked_adds":      "add_winner",
 }
 
 _MAX_REASON_LEN = 300

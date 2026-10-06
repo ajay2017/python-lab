@@ -303,6 +303,7 @@ from stock_analyzer import coord_freshness
 from stock_analyzer import home_risk_synthesis
 from stock_analyzer import portfolio_intelligence
 from stock_analyzer import structural_scanner
+from stock_analyzer import cluster_add_gate
 from stock_analyzer import regime_stress
 from stock_analyzer import catalyst_stress
 from stock_analyzer import thesis_cluster
@@ -5654,7 +5655,28 @@ if page == "🏠 Home":
     # and silently degrades — e.g. the rebalance trim PLAN fell back to the
     # basis-only list because a cached brief predated the trim_target_*/
     # market_value/price fields. See memory project_home_synth_memoization.
-    _SYNTH_SCHEMA_VER = 9  # bumped: grow_today now carries etf_screened_out (ETF-support Phase 2b, etf-multi-asset-support.md)
+    #
+    # G-25 (docs/plans/cluster-add-gate.md) — the structural-scan baseline read
+    # is hoisted HERE, above _synth_sig, so its signature can be folded into
+    # the memo key. Without this, running a fresh Structural Scan (which
+    # changes the baseline) would NOT invalidate an already-memoized Brief,
+    # and a stale cached Brief could keep suppressing an add for a cluster
+    # the owner just acknowledged. Same session-state memo key the pre-G-25
+    # banner code used (`_struct_alert_baseline_{date}`) so the Structural
+    # Scan page's own invalidation pop (app.py, save_structural_scan_cache
+    # call site) still reaches it.
+    _cluster_baseline_key   = f"_struct_alert_baseline_{_today_et()}"
+    if _cluster_baseline_key not in st.session_state:
+        _cbs = db.load_structural_scan_baseline_state(str(_today_et()))
+        if _cbs is not None:
+            # Memoize only a real result -- a None (DB offline/raised) is
+            # deliberately NOT cached, so a transient outage retries on the
+            # next rerun instead of freezing "couldn't check" for the rest
+            # of the day (planner design note, cluster-add-gate.md D4).
+            st.session_state[_cluster_baseline_key] = _cbs
+    _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
+    _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
+    _SYNTH_SCHEMA_VER = 10  # bumped: grow_today now carries cluster_blocked_adds/cluster_gate_checked (G-25, cluster-add-gate.md)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -5669,6 +5691,7 @@ if page == "🏠 Home":
         st.session_state.get("_scanner_ver", 0),
         st.session_state.get("_brief_refresh_nonce", 0),
         st.session_state.get("_brief_auto_refresh_nonce", 0),
+        _cluster_baseline_sig,
         _SYNTH_SCHEMA_VER,
     )
     _synth_cache = st.session_state.get("_home_synth_cache")
@@ -5700,6 +5723,13 @@ if page == "🏠 Home":
         _grow_composites   = _b["_grow_composites"]
         _movers_candidates = _b["_movers_candidates"]
         _daily_brief       = _b["_daily_brief"]
+        # G-25 — restore the SAME live-cluster computation the MISS path
+        # computed once (never a second independent recomputation); the
+        # Structural alert banner below and the already-built _daily_brief's
+        # suppressions must read the identical object. `.get()` not [] — a
+        # bundle memoized before the schema bump lacks the key.
+        _struct_new_clusters = _b.get("_struct_new_clusters")
+        _cluster_add_blocks  = _b.get("_cluster_add_blocks")
         # Re-publish coordination caches (downstream pages read these and may
         # have mutated them since the last rebuild).
         st.session_state["_port_risk_cache"]          = _port_risk
@@ -5771,6 +5801,7 @@ if page == "🏠 Home":
                         trades_df       = st.session_state.get("trades_df"),
                         net_capital     = _f255_net_cap,
                         etf_candidates  = _etf_candidates_for_grow(),
+                        cluster_add_blocks = _cluster_add_blocks,
                     )
                     # Update snapshot so next HIT reads fresh fetched_at values
                     st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
@@ -5834,6 +5865,24 @@ if page == "🏠 Home":
         st.session_state["_div_label_cache"]     = _div_label
         st.session_state["_corr_coverage_cache"] = _corr_cov
         st.session_state["_div_recs_cache"]      = div_recs
+
+        # G-25 (docs/plans/cluster-add-gate.md) — compute today's live new-
+        # cluster read ONCE, here, so the SAME object feeds both the
+        # Structural alert banner (below, after hit/miss converge) and the
+        # Brief about to be built just below (cluster_add_blocks threaded
+        # into build_daily_briefing) — never a second independent
+        # computation of "new clusters" for the same render.
+        if corr_df is not None and not corr_df.empty:
+            _struct_weights = dict(zip(port_df["Ticker"], port_df["Weight (%)"]))
+            _struct_new_clusters = cluster_add_gate.resolve_new_clusters(
+                corr_df, _struct_weights, _cluster_baseline_state
+            )
+        else:
+            _struct_new_clusters = None  # offline -- distinct from "[] checked, found nothing"
+        _cluster_add_blocks = cluster_add_gate.add_block_map(
+            _struct_new_clusters, corr_df, held_tickers,
+            (_cluster_baseline_state or {}).get("scan_date"),
+        )
 
         h_rets = holding_returns(held_data)
 
@@ -6103,6 +6152,7 @@ if page == "🏠 Home":
                     trades_df       = st.session_state.get("trades_df"),
                     net_capital     = _f255_net_cap,
                     etf_candidates  = _etf_candidates_for_grow(),
+                    cluster_add_blocks = _cluster_add_blocks,
                 )
                 # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
                 # the Brief header so the user can see how fresh the data is.
@@ -6612,6 +6662,9 @@ if page == "🏠 Home":
                 "_grow_today_sectors_cache": st.session_state.get("_grow_today_sectors_cache"),
                 "_leading_sectors_cache":    st.session_state.get("_leading_sectors_cache", []),
                 "_daily_brief_offline":      st.session_state.get("_daily_brief_offline", False),
+                # G-25 — see the restore comment in the HIT branch above.
+                "_struct_new_clusters": _struct_new_clusters,
+                "_cluster_add_blocks":  _cluster_add_blocks,
             },
         }
     # Overlay covers the full synthesis (data load + brief build). Clear here
@@ -6747,45 +6800,18 @@ if page == "🏠 Home":
     except Exception:
         pass
 
-    # ── Structural alert banner — AWARENESS ONLY, never gates ────────────────
-    # Diffs today's live correlation_clusters() against the most recent
-    # structural_scan_cache snapshot ON OR BEFORE today (db.
-    # load_structural_scan_baseline() -- "on or before", not strictly "prior",
-    # so the banner self-clears once today's own scan has been generated/
-    # reviewed). Zero new data fetches, zero new LLM calls -- corr_df is
-    # already computed above by the synthesis block; this is a pure-Python
-    # diff. Placed HERE (after the hit/miss synthesis converges), not next to
-    # the earlier Day Shock banner, because corr_df/_corr_df_cache aren't
-    # freshly published for THIS render until the synthesis block above
-    # finishes — placing it earlier would read last render's stale value.
-    # Full design + 3-round Opus review: docs/plans/structural-scanner-phase2.md.
-    if corr_df is not None and not corr_df.empty:
-        _struct_alert_weights = dict(zip(port_df["Ticker"], port_df["Weight (%)"]))
-        _struct_alert_clusters_today = portfolio_intelligence.correlation_clusters(
-            corr_df, _struct_alert_weights
-        )
-        # Memoize just the Supabase round-trip by date (2026-08-04 audit finding
-        # -- was an unconditional DB call on every Home render/warm rerun). The
-        # baseline only changes when the Structural Scanner page saves a new
-        # scan, which explicitly invalidates this key (app.py, save_structural_
-        # scan_cache call site) so the self-clearing behavior in the comment
-        # above still holds within the same day. clusters_today/detect_new_
-        # clusters stay live every render (cheap, local, no I/O).
-        _struct_alert_baseline_key = f"_struct_alert_baseline_{_today_et()}"
-        if _struct_alert_baseline_key not in st.session_state:
-            st.session_state[_struct_alert_baseline_key] = db.load_structural_scan_baseline(str(_today_et()))
-        _struct_alert_baseline = st.session_state[_struct_alert_baseline_key]
-        _struct_alert_baseline_snapshot = (
-            _struct_alert_baseline.get("cluster_snapshot") if _struct_alert_baseline else None
-        )
-        _struct_alert_new_clusters = structural_scanner.detect_new_clusters(
-            _struct_alert_clusters_today, _struct_alert_baseline_snapshot, corr_df
-        )
-    else:
-        _struct_alert_baseline = None
-        _struct_alert_new_clusters = None  # offline -- distinct from "[] checked, found nothing"
-
-    st.session_state["_structural_alert_cache"] = _struct_alert_new_clusters
+    # ── Structural alert banner — NOW ALSO SUPPRESSES (G-25), not pure
+    # awareness anymore ───────────────────────────────────────────────────────
+    # Reads the SAME _struct_new_clusters/_cluster_add_blocks objects the
+    # hit/miss synthesis above already computed (MISS) or restored (HIT) —
+    # never a second independent "new clusters" computation, so the banner
+    # and Grow Today's G-25 suppression can never disagree (docs/plans/
+    # cluster-add-gate.md). _cluster_baseline_state was hoisted above
+    # _synth_sig (G-25) so a fresh scan invalidates the memo; read here only
+    # for display (the scan_date named in the banner). Original awareness-
+    # only design + 3-round Opus review: docs/plans/structural-scanner-
+    # phase2.md.
+    st.session_state["_structural_alert_cache"] = _struct_new_clusters
 
     # ── Coordination freshness stamp (F-260 Phase 1) ─────────────────────────
     # Placed here because this is where the _home_synth_cache hit/miss paths
@@ -6813,16 +6839,39 @@ if page == "🏠 Home":
     _stamp_coord([k for k in _home_keys if k != "_reduce_calls"] if _synth_hit else _home_keys)
 
     with _alert_ph_structural.container():
-        if _struct_alert_new_clusters:
-            _struct_alert_baseline_date = _struct_alert_baseline.get("scan_date")
-            st.warning(
-                f"🧬 **Structural alert — {len(_struct_alert_new_clusters)} new correlation "
-                f"cluster{'s' if len(_struct_alert_new_clusters) != 1 else ''} formed since your "
-                f"last Structural Scan ({_struct_alert_baseline_date})**  \n"
-                "Awareness only — composite scores and gates are unaffected. "
-                "See 🧩 Intelligence → 🧬 Structural Scan for the full picture."
+        if _struct_new_clusters:
+            _cluster_scan_date = (_cluster_baseline_state or {}).get("scan_date")
+            # G-25: name the tickers whose add-to-winner is actually paused —
+            # read from _cluster_add_blocks (the same map Grow Today checks),
+            # not re-derived from the cluster tickers, so the banner can
+            # never name a ticker Grow Today didn't actually suppress.
+            _cb_blocked_tickers = sorted((_cluster_add_blocks or {}).keys())
+            _cluster_header = (
+                f"🧬 **Structural alert — {len(_struct_new_clusters)} new correlation "
+                f"cluster{'s' if len(_struct_new_clusters) != 1 else ''} formed since your "
+                f"last Structural Scan ({_cluster_scan_date})**  \n"
             )
-            for _struct_alert_c in _struct_alert_new_clusters:
+            if _cb_blocked_tickers:
+                st.warning(
+                    _cluster_header +
+                    f"Add-to-winner suggestions on {', '.join(_cb_blocked_tickers)} are paused "
+                    "until you review this cluster in 🧬 Structural Scan — no trim is being "
+                    "recommended. Existing concentration gates (single-name/sector ceilings) "
+                    "are unaffected. See 🧩 Intelligence → 🧬 Structural Scan for the full picture."
+                )
+            else:
+                # _cluster_add_blocks came back empty/None while a cluster
+                # still fired (e.g. add_block_map's own exception path) --
+                # never claim a pause that isn't actually in effect; disclose
+                # the cluster without asserting Grow Today is suppressing
+                # anything (banner and gate reading one shared object, but
+                # honest about this one couldn't-verify edge).
+                st.warning(
+                    _cluster_header +
+                    "Couldn't verify which, if any, add-to-winner suggestions this pauses — "
+                    "review the cluster directly in 🧩 Intelligence → 🧬 Structural Scan."
+                )
+            for _struct_alert_c in _struct_new_clusters:
                 _struct_alert_pairs_str = ", ".join(
                     f"{a}-{b}" for a, b in _struct_alert_c["new_pairs"]
                 )
@@ -6831,6 +6880,11 @@ if page == "🏠 Home":
                     f"{_struct_alert_c['combined_weight_pct']:.1f}% combined weight) — "
                     f"new pairing: {_struct_alert_pairs_str}"
                 )
+        elif _struct_new_clusters is None:
+            # D4 fail-open: couldn't check this render (corr_df/baseline
+            # unavailable) — distinct from "checked, nothing new" ([]), which
+            # renders nothing at all. Never collapsed into a false all-clear.
+            st.caption("🧬 (couldn't check for new correlation pauses this run)")
 
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
@@ -8265,6 +8319,13 @@ if page == "🏠 Home":
         sector_unknown = grow.get("sector_unknown_picks", [])
         cooldown_adds = grow.get("cooldown_adds", [])
         deterioration_blocked = grow.get("deterioration_blocked_adds", [])
+        # G-25 (docs/plans/cluster-add-gate.md) — never None from _grow_today
+        # (defaults to [] in every return path, including the bear-day early
+        # return), so the plain two-arg default is safe here.
+        cluster_blocked = grow.get("cluster_blocked_adds", [])
+        # Distinct from "checked, nothing blocked" — D4 fail-open: baseline
+        # data was unavailable this render, so the gate couldn't run at all.
+        cluster_gate_checked = grow.get("cluster_gate_checked", False)
         macro_blocked = grow.get("macro_blocked_picks", [])
         comp_skipped  = grow.get("composite_skipped", [])
         comp_unavail  = grow.get("composite_unavailable", [])
@@ -9223,6 +9284,37 @@ if page == "🏠 Home":
                 "</div></div>",
                 unsafe_allow_html=True,
             )
+
+        # New correlation cluster (G-25) — a new pair ≥ CORR_HIGH_PAIRS_THRESHOLD
+        # formed since the last acknowledged Structural Scan. Purely a
+        # suppression — no trim/sell recommendation, and the hard concentration
+        # ceilings above are completely unaffected by this gate's own state.
+        if cluster_blocked:
+            _cb_rows = "".join(
+                f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{_safe_html(b['ticker'])}</b> "
+                f"(Score {b.get('score',0):.0f} · P&L {b.get('pnl_pct',0):+.1f}%) — "
+                + ", ".join(
+                    f"{_safe_html(p)} ({c:+.2f})" for p, c in b.get("partners", [])
+                )
+                + f" vs last scan ({_safe_html(str(b.get('baseline_scan_date') or '—'))})</div>"
+                for b in cluster_blocked[:4]
+            )
+            st.markdown(
+                "<div style='background:#422006;border:1px solid #f59e0b;"
+                "border-radius:8px;padding:8px 14px;margin:8px 0'>"
+                "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                "🧬 Add Paused — New Correlation Cluster</div>"
+                + _cb_rows
+                + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                "These pairs crossed the correlation threshold since your last Structural Scan — "
+                "add-to-winner is paused until you review the cluster in 🧩 Intelligence → "
+                "🧬 Structural Scan. No trim is being recommended; existing concentration gates "
+                "are unaffected."
+                "</div></div>",
+                unsafe_allow_html=True,
+            )
+        elif not cluster_gate_checked and tone != "bear":
+            st.caption("🧬 (couldn't check for new correlation pauses this run)")
 
         # Sector hard-cap breach — adds AND new picks in an over-cap sector are
         # suppressed so the Brief never says "add here" while Act Today says
@@ -10671,7 +10763,7 @@ if page == "🏠 Home":
                     "deterioration_blocked_adds", "cooldown_adds",
                     "sector_blocked_adds", "concentration_blocked_adds",
                     "risk_blocked_adds", "sector_blocked_picks",
-                    "sector_unknown_picks"):
+                    "sector_unknown_picks", "cluster_blocked_adds"):
             for _gp_item in (_db_grow.get(_gk, []) or []):
                 _gt = _gp_item.get("ticker")
                 if _gt:
@@ -18310,7 +18402,10 @@ elif page == "🧩 Intelligence":
                                 cluster_snapshot=_ss_clusters,
                                 risk_budget_snapshot=_ss_rb["positions"][:3],
                             )
-                            # Invalidate Home's memoized baseline (app.py ~5099)
+                            # Invalidate Home's memoized baseline (app.py ~5668 --
+                            # also forces _synth_sig's folded baseline_signature()
+                            # to change, so a cached Brief can't keep suppressing
+                            # an ADD for a cluster just acknowledged by this scan)
                             # so its structural-alert banner picks up THIS fresh
                             # scan immediately, not next calendar day.
                             st.session_state.pop(f"_struct_alert_baseline_{_ss_scan_date}", None)
@@ -39645,7 +39740,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **⚔️ Challenge This Exit — "make me the strongest case for holding before I sell this"** When a held name rolls over into a **deterioration TRIM or EXIT** call on Today's Brief, that card gets a **⚔️ Challenge This Exit** button — the mirror image of the entry debate, pointed at the sell decision (which is where panic and premature selling do the most damage). A Bull agent defends *continuing to hold*, anchored on your original buy thesis if you saved one — and it's explicitly forbidden from arguing "hold just because we're underwater." A Bear agent argues the exit, citing the actual deterioration numbers (how far off the peak, sessions below trend, how much it's lagging the market). The debate judge reads it as 🟢 Hold defensible, 🔴 Exit supported, or ⚖️ Contested. Shares the same 3-per-session cap and daily cache as the entry debate. **It's a second opinion only — the exit recommendation stands exactly as shown; the debate never removes the card, changes the tier, or touches the score.**
 
-- **🧬 Structural Scan — "which of my positions are secretly dangerous together?"** On 🧩 Intelligence, click **🧬 Generate structural narrative** to have Haiku synthesize the Correlation Clusters, Risk Budget, and Factor Tilt panels above it into one plain-English explanation of your portfolio's single most dangerous structural pattern — naming the specific tickers and numbers involved rather than a generic warning. The **Blast Radius Map** above the narrative always shows live, without a click: it estimates what a -20% shock to each of your top 3 risk-contributing positions would cost the *whole* portfolio, given how correlated your other holdings are to it. **Directional, not precise** — the cascade estimate is a simplified approximation, exactly as rough as the Factor Tilt estimates beside it. Refreshes once per trading day. **Awareness only: nothing here reorders a panel, resizes a position, or changes the composite score.**
+- **🧬 Structural Scan — "which of my positions are secretly dangerous together?"** On 🧩 Intelligence, click **🧬 Generate structural narrative** to have Haiku synthesize the Correlation Clusters, Risk Budget, and Factor Tilt panels above it into one plain-English explanation of your portfolio's single most dangerous structural pattern — naming the specific tickers and numbers involved rather than a generic warning. The **Blast Radius Map** above the narrative always shows live, without a click: it estimates what a -20% shock to each of your top 3 risk-contributing positions would cost the *whole* portfolio, given how correlated your other holdings are to it. **Directional, not precise** — the cascade estimate is a simplified approximation, exactly as rough as the Factor Tilt estimates beside it. Refreshes once per trading day. **Awareness only: nothing here reorders a panel, resizes a position, or changes the composite score.** One side effect worth knowing: generating a fresh scan also acknowledges any newly-formed correlation cluster 🏠 Home flagged, which lifts that cluster's Grow Today add-to-winner pause (see the Home bullet above) — the narrative itself still never gates anything, but running it is how you clear that pause.
 
 - **🧠 Hidden Same-Bet Detector — "which of my 'diversified' positions are secretly the same bet?"** Below the Structural Scan narrative, click **🧠 Check for hidden shared bets** to have Haiku read your saved buy theses (the ones you wrote when logging a BUY) and look for groups of positions resting on the *same* underlying assumption — even across different sectors, even with low price correlation. Each finding is labeled **⚪ Unverified** (no price-correlation data this session to check against), **🟠 Possible shared assumption — review** (checked — not already flagged by Correlation Clusters, so this is genuinely new information), or **🟡 Confirmed** (checked — also already price-correlated, a second signal agreeing with the first). Needs at least 2 held positions with a saved thesis to run at all — if you haven't been writing theses at BUY, this section will just say so. **Awareness only — a "possible" finding is a prompt to look closer, never a verdict, and never touches a gate or the composite score.**
 
@@ -39735,7 +39830,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
         with st.expander("🗺️ The pages, at a glance", expanded=False):
             st.markdown(
                 """
-- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Awareness only, same as Day Shock.
+- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Unlike Day Shock, this one is NOT purely informational: it pauses Grow Today's "add-to-winner" suggestion on the held tickers at that new pair's endpoints until you review it in a fresh Structural Scan (or the correlation naturally drops back down) — it never recommends a trim, and your existing single-name/sector caps are completely unaffected.
 - **🧾 Summary** — the cockpit: one screen that answers "is the book safe, what must I do today, and is anything drifting" without visiting another page. Six zones, in order of urgency. **① Book Safety** (top, colour-coded) — leverage ×, margin cushion, distance to a margin call, and whether your share counts still match the broker. Awareness only; it never changes a recommendation. It shows a grey **"not verified"** rather than green when your cash balance hasn't been loaded — an unmeasured book and a debt-free book are not the same thing, and it won't guess. Broker drift likewise distinguishes **In sync** (checked, matches), **Clean, dated** (matched when last captured, but that snapshot is old), **Trades pending** (differences explained by trades you logged since), and **Not checked** (unknown). When leverage is elevated above your own reference level **and** equity has fallen meaningfully from its recent high, a note states the measured split — how much of the rise came from equity shrinking versus the margin loan itself growing — plus how much smaller the book (or how much more cash) would bring leverage back to your reference. It never tells you to sell or trim anything; it states the two facts together because nothing else in the app does. **② Today** — 5 KPI tiles: Portfolio Value (+ 45-day sparkline), Unrealized P&L, Today's P&L (Home's Tier-B figure when available, else an honestly-labelled held-mark), **Today's Movers** (the 3 biggest moves either way; a name with no quote is reported unpriced, never as a flat 0%), and Avg Score against the buy threshold. The movers tile **renames itself "Last session's movers"** on a weekend, a holiday, or before the open — the change is measured against the previous close, so it only means "today" once today's session has begun. **③ Act Today** — bucketed as **EXIT · TRIM · WATCH** so you can tell an alarm's *nature* at a glance, then **one row per item** (badge · ticker · why · composite score), worst first. Below it a purple banner names any tickers under an active reduce/exit call whose ADD suggestions are being suppressed app-wide. Same source as Home, so it can never under-report. When there's a live EXIT or TRIM item and this engine's own protective track record is measurably running early, a small note appears above the rows stating the measured number (e.g. "historically run early... average N pp... worth confirming before you act, not a reason to ignore the call") — a factual disclosure of a real, tracked pattern, never a reason by itself to override the call. **④ Portfolio Health** — four cards: Risk Posture (falls back to counting the protective calls in today's Brief when the fragility dial can't be computed, and says "not computed" rather than an all-clear if that's missing too), Thesis Integrity (**names** the weakening tickers, not just a count), Diversification, and Active Vetoes. All four say "not checked" rather than "none" when they genuinely don't know. **⑤ Horizon** — three cards: 🎯 Engine Track Record (whether acting on the app's calls has beaten the S&P, offence and defence, alongside what the calls you *skipped* returned so the headline can't read as pure skill), 🔔 Catalyst Watch (which holdings report and when, flagged 🚫 when the name is also under a reduce call), and 📋 Portfolio Thesis (this week's five standing claims, each marked held or shifted). The full ledger with last week's comparison stays in the collapsed expander below. **"Alert level" there is not the same thing as "Risk Posture" above it** — alert level counts danger-level alerts, risk posture reads the market regime, so the two can legitimately differ. **⑥ Top Positions** — your 6 largest by weight: score coloured by the same Buy/Hold/Sell bands the rest of the app uses, a weight bar scaled to your single-name cap, an inline EXIT/TRIM/CAP badge, and ⚡ on a same-day shock. A footer counts how many rose, fell, or had no quote. The full Holdings table is one click away in an expander. Reads what Home already computed this session — visit 🏠 Home first if this page says it needs today's Brief.
 - **🧑‍⚖️ The Judge** — **BETA, audit authority only: it never gates a recommendation.** Collects each advisor's opinion on a ticker, weights them by their own past accuracy once they clear a minimum sample, and flags **coherence gaps** — a name under an active protective veto that no other risk surface is currently flagging. It reports; it never suppresses or changes a call.
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above). A third tab, **📄 Reports** (owner-only), hosts a Tax Report (realized short-term/long-term gains by tax year, wash-sale flags) and a Performance Review (a point-in-time return-vs-SPY / recs-and-gates / trade-behavior / leverage-and-risk-drift snapshot for a picked period), both with CSV/Markdown export (see the section above).

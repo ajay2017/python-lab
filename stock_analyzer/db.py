@@ -5964,6 +5964,53 @@ def load_structural_scan_baseline(as_of_date: str) -> dict | None:
         return None
 
 
+def load_structural_scan_baseline_state(as_of_date: str) -> dict | None:
+    """Three-state twin of load_structural_scan_baseline(), for G-25's
+    cluster-add gate (cluster_add_gate.py). The existing loader above is
+    UNCHANGED (still correct, still unit-tested on its own contract), but as
+    of G-25 it has no remaining app.py caller -- the Home "Structural alert"
+    banner and the G-25 gate both now read THIS function's result (the same
+    shared object, so the two can never disagree). Left in place rather than
+    deleted since its two-state contract (dict | None) is still a reasonable
+    primitive other future callers could reuse, and deleting a working,
+    tested function isn't this change's job.
+
+    Returns exactly one of:
+      - None                                    -- DB unreachable, the query
+        raised, or the row's cluster_snapshot isn't a list (couldn't check --
+        D4's fail-open sentinel, never collapsed into "no scan has run").
+      - {"status": "none"}                      -- query succeeded, zero rows
+        (no scan has ever been generated).
+      - {"status": "ok", "scan_date": ...,
+         "cluster_snapshot": [...]}              -- a real baseline exists.
+
+    Same "most recent scan on or before as_of_date" semantics as the sibling
+    loader (see its own docstring for why <=, not <). Never raises.
+    """
+    if not as_of_date or not has_db():
+        return None
+    try:
+        rows = (
+            _client()
+            .table("structural_scan_cache")
+            .select("scan_date,cluster_snapshot")
+            .lte("scan_date", as_of_date)
+            .order("scan_date", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not rows:
+            return {"status": "none"}
+        row = rows[0]
+        snapshot = row.get("cluster_snapshot")
+        if not isinstance(snapshot, list):
+            return None  # malformed row -- couldn't check, not "no scan"
+        return {"status": "ok", "scan_date": row.get("scan_date"), "cluster_snapshot": snapshot}
+    except Exception:
+        return None
+
+
 # ── Regime-Aware Adversarial Stress Testing — daily portfolio-level cache ───
 # Persists the compound scenario narrative + indicator watchlist for one ET
 # calendar day. ONE row per scan_date (no ticker key — portfolio-wide

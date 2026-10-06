@@ -309,37 +309,54 @@ def detect_new_clusters(today_clusters, prior_cluster_snapshot, corr_df,
     Never raises -- degrades to [] on any missing/malformed input.
     """
     try:
-        if prior_cluster_snapshot is None or not today_clusters:
-            return []
-        if corr_df is None or getattr(corr_df, "empty", True):
-            return []
-
-        prior_pairs = set()
-        for c in prior_cluster_snapshot:
-            members = sorted(c.get("tickers") or [])
-            for a, b in combinations(members, 2):
-                prior_pairs.add(frozenset((a, b)))
-
-        flagged = []
-        for c in today_clusters:
-            members = sorted(c.get("tickers") or [])
-            new_pairs = []
-            for a, b in combinations(members, 2):
-                if frozenset((a, b)) in prior_pairs:
-                    continue  # already co-clustered as of the baseline
-                if a not in corr_df.index or b not in corr_df.columns:
-                    continue
-                try:
-                    corr_ab = float(corr_df.loc[a, b])
-                except Exception:
-                    continue
-                if corr_ab != corr_ab:  # NaN
-                    continue
-                if corr_ab >= threshold:  # SIGNED, not abs()
-                    new_pairs.append(sorted((a, b)))
-            if new_pairs:
-                flagged.append({**c, "new_pairs": new_pairs})
-
-        return flagged
+        return detect_new_clusters_strict(
+            today_clusters, prior_cluster_snapshot, corr_df, threshold
+        )
     except Exception:
         return []
+
+
+def detect_new_clusters_strict(today_clusters, prior_cluster_snapshot, corr_df,
+                                threshold=CORR_HIGH_PAIRS_THRESHOLD):
+    """Core of detect_new_clusters() -- same contract, NO outer try/except.
+
+    Raises on bad/malformed input instead of swallowing to [] -- added for
+    cluster_add_gate.py's own three-state handling (G-25), where "couldn't
+    check" (None) must come from an explicit caught exception at the
+    CALLER, never a silent [] produced here that would be indistinguishable
+    from "checked, nothing new." detect_new_clusters() above is the
+    unchanged public entry point (identical signature/docstring/tests) --
+    it simply wraps this core in the same try/except it always had.
+    """
+    if prior_cluster_snapshot is None or not today_clusters:
+        return []
+    if corr_df is None or getattr(corr_df, "empty", True):
+        return []
+
+    prior_pairs = set()
+    for c in prior_cluster_snapshot:
+        members = sorted(c.get("tickers") or [])
+        for a, b in combinations(members, 2):
+            prior_pairs.add(frozenset((a, b)))
+
+    flagged = []
+    for c in today_clusters:
+        members = sorted(c.get("tickers") or [])
+        new_pairs = []
+        for a, b in combinations(members, 2):
+            if frozenset((a, b)) in prior_pairs:
+                continue  # already co-clustered as of the baseline
+            if a not in corr_df.index or b not in corr_df.columns:
+                continue
+            try:
+                corr_ab = float(corr_df.loc[a, b])
+            except Exception:
+                continue
+            if corr_ab != corr_ab:  # NaN
+                continue
+            if corr_ab >= threshold:  # SIGNED, not abs()
+                new_pairs.append(sorted((a, b)))
+        if new_pairs:
+            flagged.append({**c, "new_pairs": new_pairs})
+
+    return flagged

@@ -752,6 +752,138 @@ def test_grow_today_add_position_included_when_no_brief_conflict():
     assert find_item(grow["add_positions"], "AAA") is not None
 
 
+# ── G-25: new correlation cluster add-suppression (docs/plans/cluster-add-gate.md) ──
+
+def _cab(ticker="AAA", partner="BBB", corr=0.82, scan_date="2026-10-01"):
+    """One cluster_add_gate.add_block_map()-shaped entry for `ticker`."""
+    return {
+        ticker: {
+            "partners": [(partner, corr)],
+            "max_new_corr": corr,
+            "cluster_tickers": [ticker, partner],
+            "tier": "warning",
+            "combined_weight_pct": 20.0,
+            "baseline_scan_date": scan_date,
+        }
+    }
+
+
+def test_grow_today_cluster_add_blocks_none_is_regression_safe_noop():
+    # The single most important test: the default (None) must leave
+    # add_positions byte-identical to never passing the parameter at all.
+    port_df = make_port_df([_winner_row()])
+    grow_default = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"})
+    grow_explicit_none = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                                      cluster_add_blocks=None)
+    assert grow_default["add_positions"] == grow_explicit_none["add_positions"]
+    assert find_item(grow_default["add_positions"], "AAA") is not None
+    assert grow_default["cluster_blocked_adds"] == []
+    assert grow_default["cluster_gate_checked"] is False
+
+
+def test_grow_today_add_suppressed_by_cluster_add_block():
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       cluster_add_blocks=_cab())
+    assert find_item(grow["add_positions"], "AAA") is None
+    item = find_item(grow["cluster_blocked_adds"], "AAA")
+    assert item is not None
+    assert item["gate_id"] == "G-25"
+    assert item["counterfactual"] is True
+    assert item["gate_value"] == 0.82
+    assert item["partners"] == [("BBB", 0.82)]
+    assert item["baseline_scan_date"] == "2026-10-01"
+    assert grow["cluster_gate_checked"] is True
+
+
+def test_grow_today_cluster_gate_checked_true_when_nothing_blocked():
+    # checked=True + [] is distinct from checked=False (D4 fail-open) -- both
+    # must be independently reachable, never collapsed.
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       cluster_add_blocks={})
+    assert find_item(grow["add_positions"], "AAA") is not None
+    assert grow["cluster_blocked_adds"] == []
+    assert grow["cluster_gate_checked"] is True
+
+
+def test_grow_today_cluster_add_blocks_none_fails_open_uncaptioned():
+    # D4: None means "couldn't check" -- the add proceeds, and
+    # cluster_gate_checked tells the render layer to show the caption.
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       cluster_add_blocks=None)
+    assert find_item(grow["add_positions"], "AAA") is not None
+    assert grow["cluster_blocked_adds"] == []
+    assert grow["cluster_gate_checked"] is False
+
+
+def test_grow_today_cluster_block_does_not_double_suppress_ceiling_block():
+    # A ticker already blocked by the single-name ceiling (G-04) `continue`s
+    # before ever reaching the G-25 check -- it must appear ONLY in
+    # concentration_blocked_adds, never also in cluster_blocked_adds, even
+    # when cluster_add_blocks also names it.
+    port_df = make_port_df([_winner_row(weight=SINGLE_NAME_CEILING + 5.0)])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       cluster_add_blocks=_cab())
+    assert find_item(grow["concentration_blocked_adds"], "AAA") is not None
+    assert find_item(grow["cluster_blocked_adds"], "AAA") is None
+
+
+def test_grow_today_bear_day_always_carries_cluster_keys():
+    # The bear-day early return never evaluates any candidate, but the two
+    # G-25 keys must still be present (always a list, never omitted).
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0,
+                       {"tone": "bear", "sp500_pct": -3.0},
+                       cluster_add_blocks=_cab())
+    assert grow["cluster_blocked_adds"] == []
+    assert grow["cluster_gate_checked"] is True
+
+
+def test_buy_candidates_add_winner_suppressed_by_cluster_add_block():
+    # The SEPARATE leak path: _buy_candidates' own independent add-to-winner
+    # lane needs the identical skip, confirmed during design as a real second
+    # leak (a ticker suppressed in _grow_today would otherwise still surface
+    # here as "ADD — Winning Position").
+    port_df = make_port_df([_winner_row()])
+    items = _buy_candidates(port_df, None, [], {}, _TODAY, cluster_add_blocks=_cab())
+    assert find_item(items, "AAA") is None
+
+
+def test_buy_candidates_add_winner_cluster_add_blocks_none_is_noop():
+    port_df = make_port_df([_winner_row()])
+    items_default = _buy_candidates(port_df, None, [], {}, _TODAY)
+    items_explicit_none = _buy_candidates(port_df, None, [], {}, _TODAY, cluster_add_blocks=None)
+    assert find_item(items_default, "AAA") is not None
+    assert items_default == items_explicit_none
+
+
+def test_build_daily_briefing_threads_cluster_add_blocks_into_both_lanes():
+    port_df = make_port_df([_winner_row()])
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+        cluster_add_blocks=_cab(),
+    )
+    assert find_item(brief["grow_today"]["add_positions"], "AAA") is None
+    assert find_item(brief["grow_today"]["cluster_blocked_adds"], "AAA") is not None
+    assert find_item(brief["buy_candidates"], "AAA") is None
+
+
+def test_build_daily_briefing_cluster_add_blocks_default_none_regression_safe():
+    # Regression-safety net at the build_daily_briefing level too.
+    port_df = make_port_df([_winner_row()])
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+    )
+    assert find_item(brief["grow_today"]["add_positions"], "AAA") is not None
+    assert brief["grow_today"]["cluster_gate_checked"] is False
+
+
 # ── _grow_today: Personalized Discovery annotation ───────────────────────────
 
 _WINNER_PROFILE = {
