@@ -227,6 +227,7 @@ from stock_analyzer import capital_vs_margin
 from stock_analyzer import outage_gate as _outage_gate
 from stock_analyzer import act_today_precedence
 from stock_analyzer import home_notices as _home_notices_mod
+from stock_analyzer import act_today_pointer as _act_pointer_mod
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
     build_tax_analysis, _build_open_lots, holding_period_status, wash_sale_risk,
@@ -4501,6 +4502,25 @@ if page == "🏠 Home":
     # grading harness.
     st.session_state["_judgment_opinions_today"] = []
 
+    # ── Act Today pointer (Home redesign P2, docs/plans/home-redesign.md's
+    # 2026-10-06 "P1 + P2 designed" section) — a one-line pointer at the very
+    # top of Home, reading the SAME act_today_view() result the full Act
+    # Today section below renders from (never a second count/call — see
+    # act_today_pointer.py's own module docstring). Declared first, before
+    # P1's notices summary placeholder (D7), so it is the first content-
+    # bearing element Home ever renders.
+    _act_ptr_ph = st.empty()
+
+    # Shared by BOTH the full-book data-load-outage st.stop() below (which
+    # fires before _act_view can ever be computed) and the narrower
+    # _daily_brief_offline case near _act_view's own computation further
+    # down — same wording either way, so the top pointer and the Act Today
+    # section below it never disagree on how to describe "not checked".
+    _OFFLINE_ACT_MSG = (
+        "⚠️ Today's Brief couldn't be built this run — Act Today was NOT "
+        "checked. Refresh Signals to retry."
+    )
+
     # ── Notices summary (Home redesign P1, docs/plans/home-redesign.md's
     # 2026-10-06 "P1 + P2 designed" section) — a one-line summary above the
     # "⚠️ Alerts" expander below, built from what the expander's own 16 fill
@@ -5155,6 +5175,19 @@ if page == "🏠 Home":
                 if _rl_locked:
                     st.caption(f"⏳ Retry cooling down — available in {_rl_rem}s. "
                                "Hammering it deepens the throttle; give the provider a minute.")
+            # This st.stop() fires before _act_view can ever be computed below
+            # (that needs a built Daily Brief, which needs port_df) — without
+            # this fill, the top-of-page Act Today pointer (P2) would sit
+            # permanently blank on an outage day, which this design's explicit
+            # calm "Nothing to act on today" success state could make read as
+            # an unstated all-clear. Branch-specific wording (reviewer finding,
+            # 2026-10-06) — the shared _OFFLINE_ACT_MSG names "Refresh Signals",
+            # a control that isn't on screen in this data-outage render; point
+            # at the retry button actually shown above instead.
+            _act_ptr_ph.warning(
+                "⚠️ Couldn't load market data for your holdings — Act Today "
+                "was NOT checked. Retry above, or from ⚠️ Alerts below."
+            )
         else:
             st.info(
                 "👋 No holdings yet — log your first BUY on 📒 Trade Journal "
@@ -5164,6 +5197,11 @@ if page == "🏠 Home":
             if st.button("📒 Go to Trade Journal", key="_home_goto_trade_journal"):
                 st.session_state["_pending_page"] = "📒 Trade Journal"
                 st.rerun()
+            # No positions exist to check yet — not an outage, nothing to
+            # retry, and "NOT checked" would misleadingly imply something
+            # failed. Leave the pointer empty rather than reuse either
+            # offline message.
+            _act_ptr_ph.empty()
         st.stop()
 
     # Cache enriched port_df (with Sector) so other pages can use it
@@ -7333,10 +7371,47 @@ if page == "🏠 Home":
     _db_act_n   = _act_view["n_active"]  # None when _db_offline — never 0
     _db_buy_n   = len(_daily_brief["buy_candidates"])
     _db_icon    = " ⚠️" if _db_offline else (" 🔴" if _db_act_n else "")
-    _OFFLINE_ACT_MSG = (
-        "⚠️ Today's Brief couldn't be built this run — Act Today was NOT "
-        "checked. Refresh Signals to retry."
-    )
+    # _OFFLINE_ACT_MSG is declared once, at the very top of Home (before
+    # _act_ptr_ph's own first fill below), so the outage st.stop() far above
+    # (before _act_view can be computed) and this point use identical wording.
+
+    # Fill the top-of-page Act Today pointer (P2) now that _act_view is
+    # computed — act_pointer() never recomputes anything, it only reads this
+    # SAME dict. Never raises, so no try/except needed around the call itself.
+    _act_ptr = _act_pointer_mod.act_pointer(_act_view)
+    if _act_ptr["state"] == "offline":
+        _act_ptr_ph.warning(_OFFLINE_ACT_MSG)
+    elif _act_ptr["state"] == "clear":
+        _act_ptr_clear_msg = "✅ Nothing to act on today"
+        if _act_ptr["n_resolved"]:
+            # "stop breach(es)" literal wording mirrors Summary's own P0
+            # disclosure for the identical situation (app.py's _sm_resolved
+            # caption) — D2.
+            _act_ptr_clear_msg += (
+                f" · {_act_ptr['n_resolved']} stop breach(es) resolved — monitoring below"
+            )
+        _act_ptr_ph.success(_act_ptr_clear_msg)
+    else:
+        _act_ptr_chips = " · ".join(
+            f"{v} {k}" for k, v in _act_ptr["chips"].items()
+        )
+        # Reviewer finding, 2026-10-06: act_pointer()'s override (a non-empty
+        # `active` always means "act") can in principle pair with a view that
+        # also carries `n=None` (the offline shape's n, if `state="offline"`
+        # ever co-occurred with a non-empty active list — not reachable from
+        # today's act_today_view() output, but the render layer shouldn't
+        # silently reconcile it either). Never print "None Act Today" — fall
+        # back to the chip sum, which is always a real int.
+        _act_ptr_n = _act_ptr["n"] if isinstance(_act_ptr["n"], int) else sum(_act_ptr["chips"].values())
+        _act_ptr_msg = f"🔴 **{_act_ptr_n} Act Today**"
+        if _act_ptr_chips:
+            _act_ptr_msg += f" — {_act_ptr_chips}"
+        if _act_ptr["n_resolved"]:
+            _act_ptr_msg += (
+                f", {_act_ptr['n_resolved']} resolved below"
+            )
+        _act_ptr_msg += " — see 📋 Today's Brief → Act Today below"
+        _act_ptr_ph.error(_act_ptr_msg)
     # ═══════════════════════════════════════════════════════════════════════════
     # TODAY'S BRIEF — promoted to a full-width top section (not a tab); see
     # docs/reviews/2026-07-12-UX-review.md finding I1. The "decides, not
@@ -10567,6 +10642,17 @@ if page == "🏠 Home":
                 _render_review_card(_item, _card_idx, in_act=in_act)
             else:
                 _render_act_card(_item, in_act=in_act)
+
+        # Static in-page anchor for the top-of-page Act Today pointer's jump
+        # link (D5) — a bare, non-interpolated string, so it's exempt from
+        # the dynamic-unsafe_allow_html antipattern rule on the same footing
+        # as the dynamic HTML immediately below it. Deliberately not paired
+        # with a literal `<a href='#drishta-act-today'>` link from the
+        # pointer text — no existing in-page-anchor precedent in this
+        # codebase to confirm Streamlit's own scroll behavior actually
+        # honors it, so the pointer uses plain "see ... below" text instead
+        # (lower-risk per the build spec's own judgment call).
+        st.markdown("<div id='drishta-act-today'></div>", unsafe_allow_html=True)
 
         # Act Today — genuine decisions only (resolved stop_breaches demoted below)
         if _db_offline:
@@ -39903,7 +39989,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
         with st.expander("🗺️ The pages, at a glance", expanded=False):
             st.markdown(
                 """
-- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Unlike Day Shock, this one is NOT purely informational: it pauses Grow Today's "add-to-winner" suggestion on the held tickers at that new pair's endpoints until you review it in a fresh Structural Scan (or the correlation naturally drops back down) — it never recommends a trim, and your existing single-name/sector caps are completely unaffected.
+- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. **The very first thing Home shows is a one-line Act Today pointer** — 🔴 "N Act Today" with an EXIT/TRIM/WATCH breakdown, a calm "✅ Nothing to act on today," or an explicit "NOT checked" if the Brief couldn't be built this run — so you know before scrolling past anything else whether there's something to act on, read from the exact same count the full Act Today section below renders from (never a second, independently-computed number). Just below it, a **muted notices line** summarizes the collapsed "⚠️ Alerts" expander beneath it — naming anything that needs a look (e.g. "⚠️ Needs a look: **Broker drift**") or a quiet note count on an otherwise clean day, so a busy morning doesn't require opening the expander to know something's off. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Unlike Day Shock, this one is NOT purely informational: it pauses Grow Today's "add-to-winner" suggestion on the held tickers at that new pair's endpoints until you review it in a fresh Structural Scan (or the correlation naturally drops back down) — it never recommends a trim, and your existing single-name/sector caps are completely unaffected.
 - **🧾 Summary** — the cockpit: one screen that answers "is the book safe, what must I do today, and is anything drifting" without visiting another page. Six zones, in order of urgency. **① Book Safety** (top, colour-coded) — leverage ×, margin cushion, distance to a margin call, and whether your share counts still match the broker. Awareness only; it never changes a recommendation. It shows a grey **"not verified"** rather than green when your cash balance hasn't been loaded — an unmeasured book and a debt-free book are not the same thing, and it won't guess. Broker drift likewise distinguishes **In sync** (checked, matches), **Clean, dated** (matched when last captured, but that snapshot is old), **Trades pending** (differences explained by trades you logged since), and **Not checked** (unknown). When leverage is elevated above your own reference level **and** equity has fallen meaningfully from its recent high, a note states the measured split — how much of the rise came from equity shrinking versus the margin loan itself growing — plus how much smaller the book (or how much more cash) would bring leverage back to your reference. It never tells you to sell or trim anything; it states the two facts together because nothing else in the app does. **② Today** — 5 KPI tiles: Portfolio Value (+ 45-day sparkline), Unrealized P&L, Today's P&L (Home's Tier-B figure when available, else an honestly-labelled held-mark), **Today's Movers** (the 3 biggest moves either way; a name with no quote is reported unpriced, never as a flat 0%), and Avg Score against the buy threshold. The movers tile **renames itself "Last session's movers"** on a weekend, a holiday, or before the open — the change is measured against the previous close, so it only means "today" once today's session has begun. **③ Act Today** — bucketed as **EXIT · TRIM · WATCH** so you can tell an alarm's *nature* at a glance, then **one row per item** (badge · ticker · why · composite score), worst first. Below it a purple banner names any tickers under an active reduce/exit call whose ADD suggestions are being suppressed app-wide. Same source as Home, so it can never under-report. When there's a live EXIT or TRIM item and this engine's own protective track record is measurably running early, a small note appears above the rows stating the measured number (e.g. "historically run early... average N pp... worth confirming before you act, not a reason to ignore the call") — a factual disclosure of a real, tracked pattern, never a reason by itself to override the call. **④ Portfolio Health** — four cards: Risk Posture (falls back to counting the protective calls in today's Brief when the fragility dial can't be computed, and says "not computed" rather than an all-clear if that's missing too), Thesis Integrity (**names** the weakening tickers, not just a count), Diversification, and Active Vetoes. All four say "not checked" rather than "none" when they genuinely don't know. **⑤ Horizon** — three cards: 🎯 Engine Track Record (whether acting on the app's calls has beaten the S&P, offence and defence, alongside what the calls you *skipped* returned so the headline can't read as pure skill), 🔔 Catalyst Watch (which holdings report and when, flagged 🚫 when the name is also under a reduce call), and 📋 Portfolio Thesis (this week's five standing claims, each marked held or shifted). The full ledger with last week's comparison stays in the collapsed expander below. **"Alert level" there is not the same thing as "Risk Posture" above it** — alert level counts danger-level alerts, risk posture reads the market regime, so the two can legitimately differ. **⑥ Top Positions** — your 6 largest by weight: score coloured by the same Buy/Hold/Sell bands the rest of the app uses, a weight bar scaled to your single-name cap, an inline EXIT/TRIM/CAP badge, and ⚡ on a same-day shock. A footer counts how many rose, fell, or had no quote. The full Holdings table is one click away in an expander. Reads what Home already computed this session — visit 🏠 Home first if this page says it needs today's Brief.
 - **🧑‍⚖️ The Judge** — **BETA, audit authority only: it never gates a recommendation.** Collects each advisor's opinion on a ticker, weights them by their own past accuracy once they clear a minimum sample, and flags **coherence gaps** — a name under an active protective veto that no other risk surface is currently flagging. It reports; it never suppresses or changes a call.
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above). A third tab, **📄 Reports** (owner-only), hosts a Tax Report (realized short-term/long-term gains by tax year, wash-sale flags) and a Performance Review (a point-in-time return-vs-SPY / recs-and-gates / trade-behavior / leverage-and-risk-drift snapshot for a picked period), both with CSV/Markdown export (see the section above).

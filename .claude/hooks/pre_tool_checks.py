@@ -903,6 +903,12 @@ _GATE_FILES = {
     # distinction that prevents a crashed Brief build from reading as a false
     # all-clear).
     "stock_analyzer/act_today_view.py",
+    # Added 2026-10-06 (Home redesign P2, docs/plans/home-redesign.md): decides
+    # offline/clear/act for the top-of-page Act Today pointer -- reads
+    # act_today_view()'s already-gated count (never recomputes it) but is
+    # itself the decision surface for what that pointer shows, same posture
+    # as act_today_view.py.
+    "stock_analyzer/act_today_pointer.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully
