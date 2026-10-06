@@ -226,6 +226,7 @@ from stock_analyzer import leverage_giveback
 from stock_analyzer import capital_vs_margin
 from stock_analyzer import outage_gate as _outage_gate
 from stock_analyzer import act_today_precedence
+from stock_analyzer import home_notices as _home_notices_mod
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
     build_tax_analysis, _build_open_lots, holding_period_status, wash_sale_risk,
@@ -1094,7 +1095,7 @@ def _fmt_asof_et(captured_at) -> str:
         return "unknown"
 
 
-def _render_broker_drift(placeholder, verdict) -> None:
+def _render_broker_drift(placeholder, verdict) -> str | None:
     """Render 🏠 Home's app-vs-broker drift banner from a pure verdict.
 
     All the branching lives in `broker_sync.decide_drift_banner`, which is
@@ -1109,12 +1110,16 @@ def _render_broker_drift(placeholder, verdict) -> None:
     settlement lag. Suppressing a buy on a phantom would be a hard failure with
     no recourse; this is a user-fixable data error, so the app routes to the
     fix rather than locking the doors.
+
+    Returns the tier of what was actually rendered ("warning"/"caption"), or
+    `None` on every genuinely silent branch — feeds the home_notices P1 hook
+    at this function's one call site, never computed independently here.
     """
     if not verdict:
-        return
+        return None
     state = verdict.get("state")
     if state == "none":
-        return
+        return None
 
     with placeholder.container():
         if state == "unknown":
@@ -1124,9 +1129,9 @@ def _render_broker_drift(placeholder, verdict) -> None:
             try:
                 from stock_analyzer import snaptrade_client as _sc
                 if not _sc.has_snaptrade():
-                    return
+                    return None
             except Exception:
-                return
+                return None
             if verdict.get("reason") == "check_failed":
                 st.caption(
                     "⚠️ Broker drift **not checked** — the comparison against your broker didn't "
@@ -1137,7 +1142,7 @@ def _render_broker_drift(placeholder, verdict) -> None:
                     "⚠️ Broker drift **not checked** — no broker snapshot available, so "
                     "the app can't confirm Portfolio Value matches your broker."
                 )
-            return
+            return "caption"
 
         _asof = _fmt_asof_et(verdict.get("captured_at"))
         if state == "stale_clean":
@@ -1150,7 +1155,7 @@ def _render_broker_drift(placeholder, verdict) -> None:
                 f"ℹ️ No broker mismatch {_when} — {_why}. Not a clean bill of "
                 "health for right now."
             )
-            return
+            return "caption"
 
         if state == "awaiting_sync":
             # Everything that differs is explained by a trade the user logged
@@ -1163,7 +1168,7 @@ def _render_broker_drift(placeholder, verdict) -> None:
                 f"after the {_asof} broker snapshot, so a difference here is expected. "
                 "Nothing to fix."
             )
-            return
+            return "caption"
 
         # state == "drift"
         _imp   = verdict.get("impact")
@@ -1212,6 +1217,7 @@ def _render_broker_drift(placeholder, verdict) -> None:
               "💰 Account → Broker Sync (full reconciliation)."
             + _stale_note + _partial
         )
+        return "warning"
 
 
 # Shared severity palette for Act Today / Review cards (Home) and the simple
@@ -4495,6 +4501,39 @@ if page == "🏠 Home":
     # grading harness.
     st.session_state["_judgment_opinions_today"] = []
 
+    # ── Notices summary (Home redesign P1, docs/plans/home-redesign.md's
+    # 2026-10-06 "P1 + P2 designed" section) — a one-line summary above the
+    # "⚠️ Alerts" expander below, built from what the expander's own 16 fill
+    # sites actually render this run. A LOCAL list (not session_state — this
+    # is a single-render accumulator, never meant to persist or grow across
+    # reruns). Declared before the expander's own first placeholder so the
+    # summary always renders ABOVE it.
+    _home_notices: list[tuple[str, str]] = []
+    _notices_summary_ph = st.empty()
+
+    def _home_notice(source: str, tier: str) -> None:
+        """Record one fill site's actual rendered tier and refresh the
+        one-line summary above the Alerts expander. Call this ONLY from
+        inside the conditional branch that actually drew something — never
+        unconditionally in a fill site's outer block, which would manufacture
+        a false daily notice. Wrapped end-to-end so a bug here can never take
+        down a fill site that isn't itself inside a try/except."""
+        try:
+            _home_notices.append((source, tier))
+            _summary = _home_notices_mod.summarize_notices(_home_notices)
+            _headline = _home_notices_mod.notices_headline(_summary)
+            if not _summary or not _headline:
+                _notices_summary_ph.empty()
+                return
+            if _summary["tier"] == "error":
+                _notices_summary_ph.error(_headline)
+            elif _summary["tier"] == "warning":
+                _notices_summary_ph.warning(_headline)
+            else:
+                _notices_summary_ph.caption(_headline)
+        except Exception:
+            _notices_summary_ph.caption("⚠️ Notices summary unavailable — open ⚠️ Alerts below")
+
     # ── Unified alert stack (2026-08-04 UX audit I1; widened 2026-09-25) —
     # 15 reserved placeholders so every AMBIENT (background-computed, not
     # click-triggered) notice on Home visually groups into one collapsed
@@ -4570,6 +4609,7 @@ if page == "🏠 Home":
             _sh = _sysh_home.get_health()
             _sh_sev = _sh.get("chip_severity", "ok")
             if _sh_sev in ("warn", "down"):
+                _home_notice("systrust", "error" if _sh_sev == "down" else "warning")
                 if _sh_sev == "down":
                     _sh_msg = (
                         f"🔴 {_sh.get('n_down', 0)} pipeline check(s) failing — an expected data "
@@ -4720,6 +4760,7 @@ if page == "🏠 Home":
             held_data[t] = bundle
 
     if _hd_load_errs:
+        _home_notice("heldload", "caption")
         # No summary st.warning here (2026-09-25) -- a ticker missing from
         # held_data always ends up in build_portfolio_df's own `dropped_holdings`
         # ("no_price_data") a few lines below, since port_df is built FROM
@@ -4746,6 +4787,7 @@ if page == "🏠 Home":
         (t, b.get("stale_as_of")) for t, b in held_data.items() if b.get("stale_as_of")
     )
     if _stale_held:
+        _home_notice("stale", "warning")
         _stale_oldest = min(d for _, d in _stale_held if d)
         _stale_names  = ", ".join(t for t, _ in _stale_held)
         with _alert_ph_stale.container():
@@ -4887,6 +4929,7 @@ if page == "🏠 Home":
 
     with _alert_ph_dayshock.container():
         if _day_shock_cache:
+            _home_notice("dayshock", "warning")
             st.warning(
                 f"⚠️ **Day Shock — {len(_day_shock_cache)} position"
                 f"{'s' if len(_day_shock_cache) != 1 else ''} moved "
@@ -4911,6 +4954,7 @@ if page == "🏠 Home":
                 )
             st.markdown("".join(_shock_rows), unsafe_allow_html=True)
         if _day_shock_excluded:
+            _home_notice("dayshock", "caption")
             st.caption(
                 f"ℹ️ {len(_day_shock_excluded)} position"
                 f"{'s' if len(_day_shock_excluded) != 1 else ''} excluded from Day Shock "
@@ -4968,6 +5012,7 @@ if page == "🏠 Home":
         }
         with _alert_ph_xcheck.container():
             if _xc_bad:
+                _home_notice("xcheck", "error")
                 _xc_lines = []
                 for t, r in _xc_bad.items():
                     _bits = []
@@ -5007,6 +5052,7 @@ if page == "🏠 Home":
                     + "\n\nTreat stops / P&L for these names with caution and verify against your broker."
                 )
             if _xc_quiet:
+                _home_notice("xcheck", "caption")
                 # D23: disclosed, not alarmed. Live-only gap, outside regular
                 # trading hours — two sources plausibly quoting different
                 # things (a pre/post-market tick vs a stale close), not
@@ -5023,6 +5069,7 @@ if page == "🏠 Home":
                     "data fault; re-checked once the market opens."
                 )
             if not _xc_bad and not _xc_quiet and _xc_validator_down:
+                _home_notice("xcheck", "caption")
                 # Cross-check skipped because its validator is the degraded source —
                 # surface why (don't silently drop the integrity readout). Clears on recovery.
                 st.caption(
@@ -5056,12 +5103,14 @@ if page == "🏠 Home":
     _pd_dropped = port_df.attrs.get("dropped_holdings") or []
     _pd_dropped_text = _dropped_holdings_banner_text(_pd_dropped)
     if _pd_dropped_text:
+        _home_notice("dropped", "warning")
         with _alert_ph_dropped.container():
             st.warning(_pd_dropped_text)
 
     _pd_withheld = port_df.attrs.get("score_withheld") or []
     _pd_withheld_text = _score_withheld_banner_text(_pd_withheld)
     if _pd_withheld_text:
+        _home_notice("scorewithheld", "info")
         with _alert_ph_scorewithheld.container():
             st.info(_pd_withheld_text)
 
@@ -5080,6 +5129,7 @@ if page == "🏠 Home":
             # it so _render_portfolio_stale_banner() can warn on those pages
             # too, not just the shares-changed case it already covers.
             st.session_state["_home_data_outage_at"] = _now_et().strftime("%I:%M %p")
+            _home_notice("outage", "error")
             _n = len(held_tickers)
             with _alert_ph_outage.container():
                 st.error(
@@ -5133,6 +5183,8 @@ if page == "🏠 Home":
     _pending_splits = st.session_state.get(_sp_check_key, [])
 
     with _alert_ph_split.container():
+        if _pending_splits:
+            _home_notice("split", "warning")
         for _sp in _pending_splits:
             _sp_key = f"{_sp['ticker']}_{_sp['split_date']}"
             _sp_color = "#f59e0b"
@@ -5490,7 +5542,9 @@ if page == "🏠 Home":
         # "not checked" rather than silence — silence was backwards (the crash
         # case was quieter than the milder "no snapshot yet" case).
         _drift_verdict = {"state": "unknown", "reason": "check_failed"}
-    _render_broker_drift(_alert_ph_drift, _drift_verdict)
+    _drift_notice_tier = _render_broker_drift(_alert_ph_drift, _drift_verdict)
+    if _drift_notice_tier is not None:
+        _home_notice("drift", _drift_notice_tier)
     # Published for the F-250 day-P&L captions below, which defer to this
     # banner for any ticker it already explains (see the qty_drift block).
     st.session_state["_broker_drift_cache"] = _drift_verdict
@@ -6840,6 +6894,7 @@ if page == "🏠 Home":
 
     with _alert_ph_structural.container():
         if _struct_new_clusters:
+            _home_notice("structural", "warning")
             _cluster_scan_date = (_cluster_baseline_state or {}).get("scan_date")
             # G-25: name the tickers whose add-to-winner is actually paused —
             # read from _cluster_add_blocks (the same map Grow Today checks),
@@ -6891,6 +6946,7 @@ if page == "🏠 Home":
                 st.session_state["_pending_page"] = "🧩 Intelligence"
                 st.rerun()
         elif _struct_new_clusters is None:
+            _home_notice("structural", "caption")
             # D4 fail-open: couldn't check this render (corr_df/baseline
             # unavailable) — distinct from "checked, nothing new" ([]), which
             # renders nothing at all. Never collapsed into a false all-clear.
@@ -7060,6 +7116,7 @@ if page == "🏠 Home":
     # render; stale debit is worse than no claim, so suppress on stale too.
     _lev_h = st.session_state.get("_leverage_cache")
     if _lev_h is not None and _lev_h.get("levered") and not _lev_h.get("stale"):
+        _home_notice("leverage", "caption")
         # st.caption renders markdown, and Streamlit turns a $...$ PAIR into
         # LaTeX math. This line carries TWO dollar figures, so unescaped they
         # garbled into an italic math run AND both signs vanished entirely —
@@ -7228,9 +7285,11 @@ if page == "🏠 Home":
             f"after the baseline date and held uncaptured until today's sale."
         )
     if len(_dq_msgs) == 1:
+        _home_notice("pnldq", "caption")
         with _alert_ph_pnldq.container():
             st.caption(_dq_msgs[0])
     elif len(_dq_msgs) > 1:
+        _home_notice("pnldq", "warning")
         # No nested st.expander (Streamlit disallows expander-in-expander,
         # and this now lives inside the top "⚠️ Alerts" one) -- the per-issue
         # captions just render directly below the summary warning.
@@ -8072,6 +8131,7 @@ if page == "🏠 Home":
     from stock_analyzer.constants import CROSS_ASSET_STRESS_BRIEF_SCORE as _CA_BRIEF_MIN
     _ca_brief = _cached_cross_asset()
     if _ca_brief.get("score", 0) >= _CA_BRIEF_MIN:
+        _home_notice("crossasset", "info")
         with _alert_ph_crossasset.container():
             st.info(
                 f"📡 **Cross-asset:** {_ca_brief['summary']} "
@@ -8079,6 +8139,7 @@ if page == "🏠 Home":
                 icon=None,
             )
     elif _ca_brief.get("label") == "—":
+        _home_notice("crossasset", "caption")
         # Total cross-asset outage: the module returns label "—" (never a
         # fabricated "Calm") precisely so blind ≠ calm. Echo that quietly on
         # the Brief so a silent card isn't read as a macro all-clear.
@@ -11000,6 +11061,7 @@ if page == "🏠 Home":
 
         with _alert_ph_thesis.container():
             if _tup_flags:
+                _home_notice("thesis", "warning")
                 st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
                 st.markdown(
                     f"<div style='background:#1e293b;border-left:4px solid #f59e0b;"
@@ -11089,6 +11151,7 @@ if page == "🏠 Home":
             am_baseline_at      = _ed_baseline_at,
         )
     except Exception as _ed_e:
+        _home_notice("debrief", "error")
         with _alert_ph_debrief.container():
             st.error(f"Could not build Evening Debrief: {_ed_e}")
         _ed_data = None
