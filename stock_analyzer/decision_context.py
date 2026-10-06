@@ -59,6 +59,7 @@ def build_snapshot(
     actions=None,
     captured_at: datetime | None = None,
     risk_plan: dict | None = None,
+    risk_plan_skip_reason: str | None = None,
 ) -> dict:
     """Return a schema-versioned, JSON-safe decision-context snapshot.
 
@@ -75,6 +76,16 @@ def build_snapshot(
     Passed through verbatim — this function does not compute it, so it adds
     no new failure surface of its own. An additive key, per this module's own
     "new keys don't need a version bump" invariant.
+
+    ``risk_plan_skip_reason`` (same chunk, diagnostic-only): the reason code
+    from ``r_multiple.declared_entry_risk_plan_with_reason`` when
+    ``risk_plan`` is None — distinguishes an expected, legitimate skip (not a
+    BUY, a retrospective entry, no usable downside trigger, or the risk math
+    itself failing) from a genuine capture-site crash (the caller's own
+    "capture_error:<ExceptionType>" string). Always None when ``risk_plan``
+    is populated — a resolved plan is never paired with a contradicting skip
+    reason. Passed through verbatim, same as ``risk_plan``; another additive
+    key, no version bump needed.
     """
     # ── Portfolio shape: top sector share + position count (from Market Value)
     top_sector = None
@@ -133,6 +144,7 @@ def build_snapshot(
         },
         "active_recs": {"act_today_n": act_today_n},
         "risk_plan": risk_plan if isinstance(risk_plan, dict) else None,
+        "risk_plan_skip_reason": str(risk_plan_skip_reason) if risk_plan_skip_reason else None,
     }
 
     # Strip any non-JSON-serializable types (numpy scalars, Timestamps) so the

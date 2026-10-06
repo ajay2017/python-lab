@@ -14,7 +14,8 @@ from stock_analyzer.constants import ATR_STOP_MULT
 from stock_analyzer.ticker_history import build_ticker_history
 from stock_analyzer.r_multiple import (
     engine_reference_risk, build_risk_plan, episode_r_multiple, add_flags,
-    declared_entry_risk_plan, _safe_dict,
+    declared_entry_risk_plan, declared_entry_risk_plan_with_reason,
+    _declared_skip_reason, _safe_dict,
 )
 
 pytestmark = pytest.mark.fast
@@ -403,6 +404,109 @@ def test_capture_gate_rejects_nan_and_none_trigger_before_calling_build_risk_pla
             as_of_date=_AS_OF,
         )
         assert gate_plan is None
+
+
+# ─── 11. _declared_skip_reason / declared_entry_risk_plan_with_reason ──────
+
+def test_skip_reason_not_buy():
+    assert _declared_skip_reason("SELL", False, "below", 90.0) == "not_buy"
+
+
+def test_skip_reason_retrospective_entry():
+    assert _declared_skip_reason("BUY", True, "below", 90.0) == "retrospective_entry"
+
+
+def test_skip_reason_no_downside_trigger():
+    assert _declared_skip_reason("BUY", False, "not_checkable", None) == "no_downside_trigger"
+    assert _declared_skip_reason("BUY", False, "above", 120.0) == "no_downside_trigger"
+    assert _declared_skip_reason("BUY", False, None, None) == "no_downside_trigger"
+
+
+def test_skip_reason_invalid_trigger_price():
+    assert _declared_skip_reason("BUY", False, "below", None) == "invalid_trigger_price"
+    assert _declared_skip_reason("BUY", False, "below", float("nan")) == "invalid_trigger_price"
+    assert _declared_skip_reason("BUY", False, "below", "not-a-number") == "invalid_trigger_price"
+
+
+def test_skip_reason_none_when_all_checks_pass():
+    assert _declared_skip_reason("BUY", False, "below", 90.0) is None
+
+
+def test_with_reason_happy_path_returns_plan_and_none_reason():
+    plan, reason = declared_entry_risk_plan_with_reason(
+        action="BUY", is_retrospective=False, trigger_direction="below",
+        trigger_price=90.0, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is not None
+    assert plan["source"] == "declared"
+    assert plan["stop_price"] == pytest.approx(90.0)
+    assert plan["risk_dollars"] == pytest.approx(100.0)
+    assert reason is None
+
+
+def test_with_reason_not_buy():
+    plan, reason = declared_entry_risk_plan_with_reason(
+        action="SELL", is_retrospective=False, trigger_direction="below",
+        trigger_price=90.0, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is None
+    assert reason == "not_buy"
+
+
+def test_with_reason_retrospective_entry():
+    plan, reason = declared_entry_risk_plan_with_reason(
+        action="BUY", is_retrospective=True, trigger_direction="below",
+        trigger_price=90.0, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is None
+    assert reason == "retrospective_entry"
+
+
+def test_with_reason_no_downside_trigger():
+    plan, reason = declared_entry_risk_plan_with_reason(
+        action="BUY", is_retrospective=False, trigger_direction="not_checkable",
+        trigger_price=None, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is None
+    assert reason == "no_downside_trigger"
+
+
+def test_with_reason_invalid_trigger_price():
+    plan, reason = declared_entry_risk_plan_with_reason(
+        action="BUY", is_retrospective=False, trigger_direction="below",
+        trigger_price=float("nan"), entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is None
+    assert reason == "invalid_trigger_price"
+
+
+def test_with_reason_risk_calc_failed_when_trigger_at_or_above_entry():
+    # Passes all four early-return checks (real "below" trigger, numeric
+    # price) but build_risk_plan itself can't resolve a valid plan because
+    # the trigger sits at/above the entry price.
+    plan, reason = declared_entry_risk_plan_with_reason(
+        action="BUY", is_retrospective=False, trigger_direction="below",
+        trigger_price=110.0, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is None
+    assert reason == "risk_calc_failed"
+
+
+def test_with_reason_never_calls_build_risk_plan_when_gate_already_skips(monkeypatch):
+    # If _declared_skip_reason fires, build_risk_plan must never be reached
+    # (mirrors the existing engine-lens-isolation guarantee).
+    import stock_analyzer.r_multiple as rm
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("build_risk_plan should not have been called")
+
+    monkeypatch.setattr(rm, "build_risk_plan", _boom)
+    plan, reason = rm.declared_entry_risk_plan_with_reason(
+        action="SELL", is_retrospective=False, trigger_direction="below",
+        trigger_price=90.0, entry_price=100.0, shares=10.0, as_of_date=_AS_OF,
+    )
+    assert plan is None
+    assert reason == "not_buy"
 
 
 def test_capture_gate_rejects_a_non_declared_plan_even_if_build_risk_plan_ever_returns_one(monkeypatch):

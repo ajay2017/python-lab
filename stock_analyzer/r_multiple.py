@@ -270,6 +270,46 @@ def build_risk_plan(
     })
 
 
+def _declared_skip_reason(
+    action: str | None,
+    is_retrospective: bool,
+    trigger_direction: str | None,
+    trigger_price: float | None,
+) -> str | None:
+    """
+    Single source of truth for `declared_entry_risk_plan`'s four early-return
+    checks. Returns a reason code if the capture gate must skip (never build
+    a plan at all), or None if none of the checks fire (meaning: proceed to
+    try `build_risk_plan`).
+
+    Reason codes
+    ------------
+    "not_buy"               `action` is not "BUY" (SELL/SPLIT never get a
+                            risk plan here).
+    "retrospective_entry"   `is_retrospective` is True — a broker-sourced or
+                            manually-backdated entry is logged after the
+                            fact, so a stop typed in hindsight is not a real
+                            ahead-of-time commitment.
+    "no_downside_trigger"   `trigger_direction` isn't exactly "below" —
+                            covers "no trigger extracted", "not_checkable",
+                            and any other direction/shape.
+    "invalid_trigger_price" `trigger_price` is non-numeric / NaN / None —
+                            rejected here, before ever reaching
+                            `build_risk_plan`.
+
+    Never raises.
+    """
+    if action != "BUY":
+        return "not_buy"
+    if is_retrospective:
+        return "retrospective_entry"
+    if trigger_direction != "below":
+        return "no_downside_trigger"
+    if _f(trigger_price) is None:
+        return "invalid_trigger_price"
+    return None
+
+
 def declared_entry_risk_plan(
     action: str | None,
     is_retrospective: bool,
@@ -295,6 +335,9 @@ def declared_entry_risk_plan(
       * the underlying `build_risk_plan` call itself returns None (e.g. the
         trigger price is non-numeric, non-positive, or at/above entry).
 
+    (These four checks are delegated to `_declared_skip_reason` — the single
+    source of truth also used by `declared_entry_risk_plan_with_reason`.)
+
     `ohlc_df` is deliberately never passed through to `build_risk_plan` (it's
     always called with `ohlc_df=None`) — this keeps the result strictly on
     the declared lens; the engine/ATR fallback must never fire here, which
@@ -319,13 +362,7 @@ def declared_entry_risk_plan(
     Never raises — any bad/missing input flows through to `build_risk_plan`'s
     own None-safe guards, or is rejected directly above.
     """
-    if action != "BUY":
-        return None
-    if is_retrospective:
-        return None
-    if trigger_direction != "below":
-        return None
-    if _f(trigger_price) is None:
+    if _declared_skip_reason(action, is_retrospective, trigger_direction, trigger_price) is not None:
         return None
     plan = build_risk_plan(
         entry_price=entry_price,
@@ -337,6 +374,58 @@ def declared_entry_risk_plan(
     if plan is None or plan.get("source") != "declared":
         return None
     return plan
+
+
+def declared_entry_risk_plan_with_reason(
+    action: str | None,
+    is_retrospective: bool,
+    trigger_direction: str | None,
+    trigger_price: float | None,
+    entry_price: float,
+    shares: float,
+    as_of_date: date,
+) -> tuple[dict | None, str | None]:
+    """
+    Same capture gate as `declared_entry_risk_plan`, but also reports WHY a
+    plan was skipped — distinguishing an expected, legitimate skip from a
+    crash, so a caller can store the reason as a diagnostic alongside
+    `risk_plan=None` instead of collapsing both into an identical blob.
+
+    Returns
+    -------
+    (dict, None)
+        A usable declared risk plan — identical to what
+        `declared_entry_risk_plan` would return for the same inputs.
+    (None, str)
+        No plan, with one of these reason codes:
+          "not_buy"               — see `_declared_skip_reason`.
+          "retrospective_entry"   — see `_declared_skip_reason`.
+          "no_downside_trigger"   — see `_declared_skip_reason`.
+          "invalid_trigger_price" — see `_declared_skip_reason`.
+          "risk_calc_failed"      — none of the four checks above fired, but
+                                    `build_risk_plan` itself could not
+                                    resolve a usable declared plan (e.g. the
+                                    trigger price is non-positive or at/above
+                                    entry) — passed the gate, failed the math.
+
+    Never raises — mirrors `declared_entry_risk_plan`'s own None-safe
+    contract; the caller is still expected to guard against unexpected
+    exceptions from upstream inputs (e.g. a malformed `as_of_date`) with its
+    own try/except, same as it does around `declared_entry_risk_plan` today.
+    """
+    reason = _declared_skip_reason(action, is_retrospective, trigger_direction, trigger_price)
+    if reason is not None:
+        return None, reason
+    plan = build_risk_plan(
+        entry_price=entry_price,
+        shares=shares,
+        ohlc_df=None,
+        as_of_date=as_of_date,
+        declared_stop_price=trigger_price,
+    )
+    if plan is not None and plan.get("source") == "declared":
+        return plan, None
+    return None, "risk_calc_failed"
 
 
 def episode_r_multiple(episode: dict, lens: str, ohlc_df: Any) -> dict:

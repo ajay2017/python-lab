@@ -28769,8 +28769,9 @@ elif page == "📒 Trade Journal":
                 # the owner, never touches manual_stops (a separate, live,
                 # mutable concept).
                 _risk_plan = None
+                _risk_plan_skip_reason = None
                 try:
-                    _risk_plan = _r_multiple.declared_entry_risk_plan(
+                    _risk_plan, _risk_plan_skip_reason = _r_multiple.declared_entry_risk_plan_with_reason(
                         action=action,
                         is_retrospective=(_is_broker_trade or _is_manual_backdated),
                         trigger_direction=_pmt_trigger_direction,
@@ -28779,8 +28780,9 @@ elif page == "📒 Trade Journal":
                         shares=shares_val,
                         as_of_date=_tj_picked_date,
                     )
-                except Exception:
+                except Exception as _exc:
                     _risk_plan = None
+                    _risk_plan_skip_reason = f"capture_error:{type(_exc).__name__}"
 
                 # Concept E (Phase 1): freeze the decision context at this
                 # interactive write. Passive, None-safe, no API calls. Flows
@@ -28806,6 +28808,7 @@ elif page == "📒 Trade Journal":
                         macro_regime=_dc_regime,
                         actions=st.session_state.get("_actions_cache"),
                         risk_plan=_risk_plan,
+                        risk_plan_skip_reason=_risk_plan_skip_reason,
                     )
                 except Exception:
                     _dc_snapshot = None
@@ -28817,6 +28820,10 @@ elif page == "📒 Trade Journal":
                     # (Opus review, 2026-10-02) so this degraded row still
                     # carries its own provenance rather than being a bare
                     # risk_plan with nothing identifying what it's for.
+                    # risk_plan_skip_reason is deliberately omitted here —
+                    # this branch only fires when `_risk_plan is not None`,
+                    # so the skip reason is always None anyway; carrying a
+                    # guaranteed-None field would add shape with no signal.
                     _dc_snapshot = {
                         "v": _dctx.SCHEMA_VERSION,
                         "captured_at": datetime.now(timezone.utc).isoformat(),
