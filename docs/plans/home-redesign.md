@@ -8,6 +8,8 @@
 
 **P1 (the narrow one-line notices summary above the existing Alerts expander) and P2 (the Act Today top pointer) are deliberately NOT built this pass** — owner decision: see P0 live first, pick these up separately if still wanted. Not blocked on anything; just sequenced after.
 
+**Common-case PRODUCTION-VERIFIED 2026-10-06**, same day as ship, via live screenshots of a real TRIM item (SPCX, concentration-driven, not a stop_breach): Home's "Act Today (1)" and Summary's "1 item needs attention [1 TRIM]" showed identical counts and the same composite score (50) — confirms the count-unification holds on a normal render, no regression from the prior per-page computation. No resolved-breach caption rendered on Summary, correctly, since a concentration TRIM isn't subject to the stop-recovery demotion logic. **Still unverified, opportunistic only:** the offline/false-all-clear path needs the Daily Brief build to actually crash on a real run — hasn't happened since ship, can't be forced. Keep this open until seen once live.
+
 ---
 
 **Original status, superseded above: DECLINED 2026-08-29 — mockup was built and reviewed, but the user chose not to proceed once the risk analysis below (§ Risks surfaced before build) was laid out. No `app.py` code was touched. The tray/pointer design immediately below is the STALE pre-2026-10-06 proposal, kept for reference only — see the correction above before reading further.**
