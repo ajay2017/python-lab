@@ -243,9 +243,10 @@ from stock_analyzer.severity import ACT_NOW, WATCH as _SEV_WATCH, STEADY, SEVERI
 from stock_analyzer.analyst_targets import detect_pt_cut
 from stock_analyzer.position_lifecycle import lifecycle_badge, classify_position_state
 from stock_analyzer.decision_bucket import (
-    split_defensive, reduce_call_items, suppress_orphans_under_reduce_call,
+    reduce_call_items, suppress_orphans_under_reduce_call,
     bucket_act_by_type,
 )
+from stock_analyzer.act_today_view import act_today_view
 from stock_analyzer import summary_view
 from stock_analyzer.signal_hysteresis import apply_hysteresis
 from stock_analyzer.split_detector import detect_portfolio_splits
@@ -7179,61 +7180,40 @@ if page == "🏠 Home":
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
     # ── Navigation tabs ───────────────────────────────────────────────────────
-    # Split defensive items by URGENCY once (calm-advisor §2B / F-25a) and reuse the
-    # result across EVERY surface that counts "Act Today" — the tab-title 🔴 badge
-    # here, the summary chip, and the Act/Monitoring section headers below — so they
-    # can never disagree. Counting the raw act_today/review_list lists let a promoted
-    # review-list trim read "Act Today (1)" in the section while the badge/chip showed
-    # 0 (and a macro-only day badged 🔴 for an item the split demotes to Awareness).
-    _split_def  = split_defensive(_daily_brief["act_today"], _daily_brief["review_list"])
-
-    # ── Stop-breach live-price re-classification (runs once, before any count) ──
-    # The Brief is memoized on portfolio composition, not price, so a stop_breach
-    # card can reflect yesterday's close while live price has already recovered
-    # above the stop. Re-evaluate each stop_breach against _port_df_enriched
-    # (rebuilt on live prices every render) and demote resolved breaches so the
-    # badge, chip and section header all agree on the post-demotion count.
-    from stock_analyzer.util import stop_recovery_state as _stop_rec_state
+    # act_today_view() is the SINGLE source of truth for "Act Today" across the
+    # whole app (🏠 Home's badge/chip/section headers AND 🧾 Summary's pill) —
+    # it owns the split_defensive() call, the stop-breach live-price
+    # re-classification (a stop_breach card can reflect yesterday's close while
+    # live price has since recovered above the stop), AND the offline/crashed-
+    # Brief distinction (n_active is None, never 0, when the Brief wasn't built
+    # this run — 0 would read as "checked, nothing active"). Counting the raw
+    # act_today/review_list lists let a promoted review-list trim read "Act
+    # Today (1)" in the section while the badge/chip showed 0 (and a macro-only
+    # day badged 🔴 for an item the split demotes to Awareness) — this single
+    # call is what prevents that drift.
     from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT as _STOP_REC_MARGIN
     _pe_live = st.session_state.get("_port_df_enriched")
     _lp_live = st.session_state.get("_live_prices")
     if _lp_live is None:
         _lp_live = {}
-    _resolved_breaches: list[dict] = []
-    _active_act_bucket: list[dict] = []
-    for _ab_item in _split_def["act"]:
-        if _ab_item.get("kind") == "stop_breach":
-            _ab_tk = str(_ab_item.get("ticker", "")).upper()
-            _ab_gap: float | None = None
-            _ab_stop_px: float | None = None
-            if _pe_live is not None and not _pe_live.empty:
-                if "Gap to Stop (%)" in _pe_live.columns:
-                    _ab_row = _pe_live[
-                        _pe_live["Ticker"].astype(str).str.upper() == _ab_tk
-                    ]
-                    if not _ab_row.empty:
-                        _g = _ab_row["Gap to Stop (%)"].iloc[0]
-                        _ab_gap = float(_g) if pd.notna(_g) else None
-                        if "Stop" in _ab_row.columns:
-                            _s = _ab_row["Stop"].iloc[0]
-                            _ab_stop_px = float(_s) if pd.notna(_s) else None
-            _ab_state = _stop_rec_state(_ab_gap, _STOP_REC_MARGIN)
-            _lp_entry = _lp_live.get(_ab_tk)
-            _ab_copy = dict(_ab_item)
-            _ab_copy["_breach_state"] = _ab_state
-            _ab_copy["_live_gap"]     = _ab_gap
-            _ab_copy["_live_px"]      = _lp_entry.get("price") if isinstance(_lp_entry, dict) else None
-            _ab_copy["_live_stop"]    = _ab_stop_px
-            if _ab_state == "recovered":
-                _resolved_breaches.append(_ab_copy)
-            else:
-                _active_act_bucket.append(_ab_copy)
-        else:
-            _active_act_bucket.append(_ab_item)
+    _act_view = act_today_view(
+        daily_brief      = _daily_brief,
+        brief_offline    = st.session_state.get("_daily_brief_offline", False),
+        port_df_enriched = _pe_live,
+        live_prices      = _lp_live,
+        margin_pct       = _STOP_REC_MARGIN,
+    )
+    _db_offline        = _act_view["state"] == "offline"
+    _active_act_bucket = _act_view["active"]
+    _resolved_breaches = _act_view["resolved"]
 
-    _db_act_n   = len(_active_act_bucket)
+    _db_act_n   = _act_view["n_active"]  # None when _db_offline — never 0
     _db_buy_n   = len(_daily_brief["buy_candidates"])
-    _db_icon    = " 🔴" if _db_act_n else ""
+    _db_icon    = " ⚠️" if _db_offline else (" 🔴" if _db_act_n else "")
+    _OFFLINE_ACT_MSG = (
+        "⚠️ Today's Brief couldn't be built this run — Act Today was NOT "
+        "checked. Refresh Signals to retry."
+    )
     # ═══════════════════════════════════════════════════════════════════════════
     # TODAY'S BRIEF — promoted to a full-width top section (not a tab); see
     # docs/reviews/2026-07-12-UX-review.md finding I1. The "decides, not
@@ -7242,6 +7222,14 @@ if page == "🏠 Home":
     # ═══════════════════════════════════════════════════════════════════════════
     st.divider()
     st.subheader(f"📋 Today's Brief{_db_icon}")
+    if _db_offline:
+        st.markdown(
+            f"<div style='background:#451a03;border:1px solid #92400e;"
+            f"border-radius:8px;padding:8px 14px;margin-bottom:8px;color:#fde68a'>"
+            f"{_safe_html(_OFFLINE_ACT_MSG)}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
     from datetime import datetime as _dt
 
     # ── Freshness strip — captured-at timestamp + Lock/Unlock control ─────
@@ -7289,6 +7277,18 @@ if page == "🏠 Home":
                 f"🔒 <b>Today's Setup Locked</b> at {_fmt_et(_b_locked_at)} "
                 f"<span style='color:#93c5fd;font-size:0.85em'>({_fmt_age(_b_locked_at)})</span> — "
                 f"recommendations frozen for the day."
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        elif _db_offline:
+            # A prior successful build can leave a stale _brief_built_at in
+            # session_state even though THIS run's build crashed — showing
+            # that stale timestamp here would misleadingly imply the Brief
+            # on screen is current. Show "build failed" instead.
+            st.markdown(
+                f"<div style='background:#451a03;border:1px solid #92400e;"
+                f"border-radius:8px;padding:8px 14px;color:#fde68a;font-size:0.92em'>"
+                f"<b>Build failed</b> — {_safe_html(_OFFLINE_ACT_MSG)}"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -7964,30 +7964,45 @@ if page == "🏠 Home":
 
     # Action summary chip — counts moved out of the tone chip
     with _act_col:
-        # Counts mirror the post-split buckets (and the Tune-up lane) rendered in
-        # the defensive column below — never the raw act_today/review_list lists —
-        # so the chip can't contradict the section headers.
-        _act_n      = len(_active_act_bucket)
-        _grow_n     = len(_db_grow.get("new_picks", [])) + len(_db_grow.get("add_positions", []))
-        _aware_n    = len(_split_def["aware"])
-        _resolved_n = len(_resolved_breaches)
-        _tuneup_n   = len(_db_tuneup)
-        _act_color  = "#7f1d1d" if _act_n > 0 else "#0f172a"
-        _act_border = "#ef4444" if _act_n > 0 else "#334155"
-        st.markdown(
-            f"<div style='background:{_act_color};border:1px solid {_act_border};"
-            f"border-radius:12px;padding:14px 20px;min-height:165px'>"
-            f"<div style='font-size:0.72em;font-weight:700;letter-spacing:0.08em;"
-            f"text-transform:uppercase;color:#9ca3af;margin-bottom:8px'>Today's Actions</div>"
-            f"<div style='color:#f9fafb;font-size:0.95em;font-weight:600;line-height:1.7'>"
-            f"{'🔴' if _act_n > 0 else '⚪'} {_act_n} Act Today<br>"
-            f"📈 {_grow_n} Grow Today<br>"
-            f"🟡 {_aware_n} monitoring · {_resolved_n} resolved breaches<br>"
-            f"🔧 {_tuneup_n} Portfolio Tune-up"
-            f"</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+        if _db_offline:
+            # Fail LOUD, not calm: a crashed Brief build must never render as
+            # "0 Act Today" (a false all-clear) in this chip.
+            st.markdown(
+                f"<div style='background:#451a03;border:1px solid #92400e;"
+                f"border-radius:12px;padding:14px 20px;min-height:165px'>"
+                f"<div style='font-size:0.72em;font-weight:700;letter-spacing:0.08em;"
+                f"text-transform:uppercase;color:#fde68a;margin-bottom:8px'>Today's Actions</div>"
+                f"<div style='color:#fef3c7;font-size:0.88em;font-weight:600;line-height:1.5'>"
+                f"{_safe_html(_OFFLINE_ACT_MSG)}"
+                f"</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            # Counts mirror the post-split buckets (and the Tune-up lane) rendered in
+            # the defensive column below — never the raw act_today/review_list lists —
+            # so the chip can't contradict the section headers.
+            _act_n      = _act_view["n_active"]
+            _grow_n     = len(_db_grow.get("new_picks", [])) + len(_db_grow.get("add_positions", []))
+            _aware_n    = len(_act_view["aware"])
+            _resolved_n = len(_resolved_breaches)
+            _tuneup_n   = len(_db_tuneup)
+            _act_color  = "#7f1d1d" if _act_n > 0 else "#0f172a"
+            _act_border = "#ef4444" if _act_n > 0 else "#334155"
+            st.markdown(
+                f"<div style='background:{_act_color};border:1px solid {_act_border};"
+                f"border-radius:12px;padding:14px 20px;min-height:165px'>"
+                f"<div style='font-size:0.72em;font-weight:700;letter-spacing:0.08em;"
+                f"text-transform:uppercase;color:#9ca3af;margin-bottom:8px'>Today's Actions</div>"
+                f"<div style='color:#f9fafb;font-size:0.95em;font-weight:600;line-height:1.7'>"
+                f"{'🔴' if _act_n > 0 else '⚪'} {_act_n} Act Today<br>"
+                f"📈 {_grow_n} Grow Today<br>"
+                f"🟡 {_aware_n} monitoring · {_resolved_n} resolved breaches<br>"
+                f"🔧 {_tuneup_n} Portfolio Tune-up"
+                f"</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
     # Cross-asset macro note — shown when ≥ CROSS_ASSET_STRESS_BRIEF_SCORE signals are stressed
     from stock_analyzer.constants import CROSS_ASSET_STRESS_BRIEF_SCORE as _CA_BRIEF_MIN
@@ -9385,12 +9400,15 @@ if page == "🏠 Home":
         # items. Each item keeps its origin card template (_source) but lands in
         # the bucket decision_bucket.classify_bucket assigns. Empty Act bucket =
         # "you're set for today" (derived; no new persistence).
-        # _split_def computed once above (shared with the summary chip) so the
-        # chip counts and these section headers can't drift apart.
-        _act_bucket   = _split_def["act"]
-        _aware_bucket = _split_def["aware"]
-        # _active_act_bucket and _resolved_breaches computed once at line ~6296
-        # (before the badge/chip) so all three count surfaces stay consistent.
+        # _act_view computed once above via act_today_view() (shared with the
+        # summary chip) so the chip counts and these section headers can't
+        # drift apart. _act_bucket here is the pre-demotion union (active +
+        # resolved) — used only for ticker-dedup purposes below, never for a
+        # count surface (those read _active_act_bucket / _db_act_n).
+        _act_bucket   = _act_view["active"] + _act_view["resolved"]
+        _aware_bucket = _act_view["aware"]
+        # _active_act_bucket and _resolved_breaches computed once above (before
+        # the badge/chip) so all three count surfaces stay consistent.
 
         _db_trades = st.session_state.get("trades_df")
 
@@ -10388,10 +10406,18 @@ if page == "🏠 Home":
                 _render_act_card(_item, in_act=in_act)
 
         # Act Today — genuine decisions only (resolved stop_breaches demoted below)
-        _act_label  = (f"🔴 Act Today ({len(_active_act_bucket)})" if _active_act_bucket
-                       else "✅ Act Today — you're set")
-        _act_bg     = "#7f1d1d" if _active_act_bucket else "#14532d"
-        _act_border = "#ef4444" if _active_act_bucket else "#22c55e"
+        if _db_offline:
+            _act_label  = "⚠️ Act Today — NOT CHECKED"
+            _act_bg     = "#451a03"
+            _act_border = "#92400e"
+        elif _active_act_bucket:
+            _act_label  = f"🔴 Act Today ({len(_active_act_bucket)})"
+            _act_bg     = "#7f1d1d"
+            _act_border = "#ef4444"
+        else:
+            _act_label  = "✅ Act Today — you're set"
+            _act_bg     = "#14532d"
+            _act_border = "#22c55e"
         st.markdown(
             f"<div style='background:{_act_bg};border-left:4px solid {_act_border};"
             f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
@@ -10399,7 +10425,20 @@ if page == "🏠 Home":
             f"</div>",
             unsafe_allow_html=True,
         )
-        if not _active_act_bucket:
+        # The offline branch MUST be checked before "not _active_act_bucket" —
+        # act_today_view() returns an empty active list when offline (never a
+        # fabricated one), so without this ordering a crashed Brief build would
+        # fall into the "Nothing to act on" calm branch below: the exact false
+        # all-clear this whole function exists to prevent.
+        if _db_offline:
+            st.markdown(
+                f"<div style='background:#1c1917;border:1px solid #92400e;border-radius:8px;"
+                f"padding:12px 16px;margin-bottom:10px'>"
+                f"<span style='color:#fde68a;font-weight:700'>{_safe_html(_OFFLINE_ACT_MSG)}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        elif not _active_act_bucket:
             _n_aware = len(_aware_bucket) + len(_resolved_breaches)
             st.markdown(
                 f"<div style='background:#052e16;border:1px solid #22c55e;border-radius:8px;"
@@ -10473,20 +10512,36 @@ if page == "🏠 Home":
 
         # Monitoring / Awareness — FYI, nothing to execute
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
-        st.markdown(
-            f"<div style='background:#1e293b;border-left:4px solid #475569;"
-            f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
-            f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
-            f"👁️ Monitoring / Awareness ({len(_aware_bucket)})</span>"
-            f"<span style='color:#94a3b8;font-size:0.82em'> · FYI — no action needed</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-        if not _aware_bucket:
-            st.caption("Nothing to monitor today — every position is steady.")
+        if _db_offline:
+            # Same false-all-clear shape as Act Today above: an empty aware
+            # bucket here means "not checked," not "every position is
+            # steady" — a positive "steady" claim right below the Act Today
+            # section's own "NOT CHECKED" banner would directly contradict
+            # it on the same render.
+            st.markdown(
+                f"<div style='background:#1e293b;border-left:4px solid #92400e;"
+                f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+                f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
+                f"👁️ Monitoring — NOT CHECKED</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            st.caption(_OFFLINE_ACT_MSG)
         else:
-            for _ci, _item in enumerate(_aware_bucket):
-                _render_defensive_card(_item, 1000 + _ci)
+            st.markdown(
+                f"<div style='background:#1e293b;border-left:4px solid #475569;"
+                f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+                f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
+                f"👁️ Monitoring / Awareness ({len(_aware_bucket)})</span>"
+                f"<span style='color:#94a3b8;font-size:0.82em'> · FYI — no action needed</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            if not _aware_bucket:
+                st.caption("Nothing to monitor today — every position is steady.")
+            else:
+                for _ci, _item in enumerate(_aware_bucket):
+                    _render_defensive_card(_item, 1000 + _ci)
 
         # Macro-exposure trim coverage note — one caption when the macro calendar
         # has lapsed.  The review-list item 5 (macro-affected sector trim) goes
@@ -11921,7 +11976,7 @@ elif page == "🧑‍⚖️ The Judge":
 # Brief/Grow Today/Monitoring/Evening Debrief content unchanged. This page
 # only reads what Home's preamble already published to session_state this
 # session (`_port_df_enriched`, `_live_prices`, `_portfolio_value`,
-# `_home_synth_cache`) plus the same pure `split_defensive()` call Home uses
+# `_home_synth_cache`) plus the same pure `act_today_view()` call Home uses
 # for its own Act Today bucket — no new computation of recommendations.
 elif page == "🧾 Summary":
     st.title("🧾 Summary")
@@ -12416,22 +12471,58 @@ elif page == "🧾 Summary":
         )
 
     # ── Act Today — slim pointer. Full card detail lives on 🏠 Home; this
-    # strip signals whether action is needed and links there. Reads the
-    # IDENTICAL split_defensive() call via _home_synth_cache — same source,
-    # same count, never under-reports. See docs/mockups/summary-page-restructure.html.
+    # strip reads the SAME act_today_view() call Home uses (via
+    # _home_synth_cache) — same source, same post-demotion count, so the two
+    # surfaces can no longer drift (the bug this unification closed: Home
+    # demoted a recovered stop-breach out of its count while this strip
+    # counted the raw, pre-demotion split_defensive() bucket directly).
+    # See docs/mockups/summary-page-restructure.html.
     _render_section_label("Act Today")
-    _sm_daily_brief = _sm_bundle.get("_daily_brief")
+    _sm_daily_brief   = _sm_bundle.get("_daily_brief")
+    _sm_brief_offline = _sm_bundle.get("_daily_brief_offline", False)
     # Hoisted so the Risk Posture fallback in Zone 4 can read it. `None` means
-    # the Brief was never built this session — NOT "no protective items", and
-    # the consumer must render "not computed" rather than an all-clear.
+    # the Brief was never built this session OR crashed this run — NOT "no
+    # protective items" — and the consumer must render "not computed" rather
+    # than an all-clear.
     _sm_act_bucket = None
     if _sm_daily_brief is None:
         st.info("Act Today needs today's Brief to be built first — visit 🏠 Home once this "
                 "session, then come back here.")
+    elif _sm_brief_offline:
+        # Fail LOUD, not calm: a crashed Brief build must never render as
+        # "Nothing to act on" — _sm_act_bucket stays None so Zone 4's own
+        # fallback below correctly shows "Not computed" rather than a
+        # fabricated all-clear.
+        st.warning(
+            "⚠️ Today's Brief couldn't be built this run — Act Today was NOT "
+            "checked. Refresh Signals to retry."
+        )
     else:
-        _sm_split      = split_defensive(_sm_daily_brief.get("act_today") or [],
-                                          _sm_daily_brief.get("review_list") or [])
-        _sm_act_bucket = _sm_split["act"]
+        from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT as _SM_STOP_REC_MARGIN
+        _sm_act_view   = act_today_view(
+            daily_brief      = _sm_daily_brief,
+            brief_offline    = False,
+            port_df_enriched = st.session_state.get("_port_df_enriched"),
+            live_prices      = st.session_state.get("_live_prices"),
+            margin_pct       = _SM_STOP_REC_MARGIN,
+        )
+        _sm_act_bucket = _sm_act_view["active"]
+        # Disclose a demoted breach explicitly — _sm_act_bucket is now the
+        # POST-demotion count (same definition as Home), so a resolved
+        # stop_breach silently drops out of "Nothing to act on" with nothing
+        # saying so. Without this, a ticker can show here as "you're clear"
+        # in the same render where the Active Vetoes banner (built from the
+        # PRE-demotion _reduce_calls) still names it as under an active
+        # reduce/exit call — a visible contradiction on one screen.
+        _sm_resolved = _sm_act_view["resolved"]
+        if _sm_resolved:
+            _sm_resolved_tks = ", ".join(sorted(
+                {str(_r.get("ticker", "")).strip().upper() for _r in _sm_resolved} - {""}
+            ))
+            st.caption(
+                f"ℹ️ {len(_sm_resolved)} stop breach(es) resolved — live price "
+                f"recovered above stop: {_sm_resolved_tks} → see 🏠 Home for detail."
+            )
         if not _sm_act_bucket:
             with st.container(border=True, key="sm_act_clear"):
                 st.markdown(
@@ -13019,7 +13110,14 @@ elif page == "🧾 Summary":
                     "<div style='color:#9ca3af;font-size:0.95em'>Not computed</div>",
                     unsafe_allow_html=True,
                 )
-                st.caption("Needs today's Brief — visit 🏠 Home.")
+                # Two distinct reasons collapse to the same None here — say
+                # the right one. A crashed build (Home WAS visited this
+                # session) telling the user to "visit Home" is misleading;
+                # they already did.
+                if _sm_brief_offline:
+                    st.caption("Today's Brief failed to build — Act Today wasn't checked this run.")
+                else:
+                    st.caption("Needs today's Brief — visit 🏠 Home.")
             else:
                 # Fallback reads the ALREADY-DECIDED protective items, via the
                 # same canonical classifier the Act Today chips use — so this

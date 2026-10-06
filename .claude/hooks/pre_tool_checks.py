@@ -889,6 +889,14 @@ _GATE_FILES = {
     # eligibility gate plus the TRAP-B-safe shadow-composite resolution --
     # a decision surface from day one, same posture as etf_scoring.py.
     "stock_analyzer/etf_candidates.py",
+    # Added 2026-10-06 (owner-approved, same treatment as etf_candidates.py):
+    # the single source of truth for "how many Act Today items are there right
+    # now" across every render surface (Home's badge/chip/section headers,
+    # Summary's pill/chips) -- a decision surface from day one (what counts as
+    # an active vs. demoted/resolved item, and the offline-vs-clear
+    # distinction that prevents a crashed Brief build from reading as a false
+    # all-clear).
+    "stock_analyzer/act_today_view.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully
