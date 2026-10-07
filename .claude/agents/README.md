@@ -5,11 +5,30 @@ so a wrong recommendation or a silently-broken gate costs far more than model
 tokens. The savings come from **delegating the easy parts down** to cheaper models
 while the lead orchestrates and the Opus reviewer guards the decision logic.
 
-> **Model pins (2026-09-30, owner decision):** `planner` + `reviewer` =
-> **`claude-opus-5-5`**, `implementer` = **`claude-sonnet-5`** (a 5-5 pin fell back to the lead's model, so it was reverted the same day),
-> `test-runner` + `doc-writer` = **`haiku`** (Haiku 4.5). The lead is whatever the
-> session runs (Opus 5.5 as of 2026-09-30; the 2026-07-22 "Sonnet 5 lead" note is
-> superseded). The pins are exact IDs because the `opus` alias inherited the lead's
+> **Model pins (2026-10-07, owner decision):** `planner` + `reviewer` =
+> **`claude-opus-5-5`**, `implementer` + `doc-writer` = **`claude-sonnet-5`**,
+> `test-runner` = **`haiku`** (Haiku 4.5). `doc-writer` moved off Haiku on
+> 2026-10-07 — the saving was 50%, not the ~67-80% the old ladder claimed, and
+> did not cover this lane's required re-verification; see that agent's frontmatter
+> comment. **All pins verified by a fresh-session `MODEL:` probe, 2026-10-07**
+> (`reviewer` → Opus 5.5, `implementer` → Sonnet 5).
+>
+> **The LEAD is not pinned, and that is now the main exposure.** It is whatever
+> the session runs — Opus 5 observed 2026-10-07, but the **org default is
+> `claude-sonnet-4-6`**, and `claude-opus-5-5` is absent from the org
+> `availableModels` list so it cannot be chosen from the `/model` picker at all.
+> The pins protect design and review; every "done inline as lead" judgment call
+> is unprotected. Fix = an allowlist request to Accenture. Until then
+> **`claude-opus-5` is the best selectable lead** — allowlisted, and what a
+> manually-set session already runs. **Not `opusplan`:** its Opus leg most
+> likely resolves via `ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8` (older than
+> `claude-opus-5`) and it drops to Sonnet for execution, where most inline lead
+> judgment happens. Unverified — a reason for caution, not a measurement.
+> (Note `availableModels` does *not* gate
+> agent frontmatter — the `claude-opus-5-5` pin resolves despite being absent
+> from it. It gates the picker only.)
+>
+> The pins are exact IDs because the `opus` alias inherited the lead's
 > model, or fell to the org's `ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8` under
 > a Sonnet lead, which made the review version depend on the session. With the
 > pins, the review gate no longer depends on the lead. See `docs/cost-routing.md`
@@ -43,16 +62,17 @@ while the lead orchestrates and the Opus reviewer guards the decision logic.
 
 | Tier | Model | Does the work that is… |
 |------|-------|------------------------|
-| **Lead** | session model (Opus 5.5 as of 2026-09-30) | Orchestration: design, threshold/gate/coordination decisions, subtle debugging, planning, final review. Capable enough for this role; Opus stays as the mandatory review gate before anything that touches decision logic. |
+| **Lead** | session model — **unpinned**; Opus 5 observed 2026-10-07, org default is `claude-sonnet-4-6` | Orchestration: design, threshold/gate/coordination decisions, subtle debugging, planning, final review. Capable enough for this role; Opus stays as the mandatory review gate before anything that touches decision logic. |
 | `planner` | **claude-opus-5-5** | DESIGN pass for money-moving work *before code exists*: gate/threshold/scoring-formula changes, cross-feature coordination, a new decision surface, multi-phase features. Read-only; returns a plan + design verdict with the threshold/coordination decisions called out. The `opus` pin means policy design gets Opus scrutiny **regardless of the session model** — the design-side counterpart to `reviewer`. |
 | `Plan` | **plan** (built-in) | Read-only architectural scaffolding with **no policy content**: structural layout of a new page, DB table design, session-state wiring. Returns a spec; the lead decides on any policy content inside it. **Inherits the session model (no pin)** — so use it only for structure separable from gate/threshold policy; policy design goes to `planner` above. |
-| `reviewer` | **claude-opus-5-5** | A focused review pass on changes touching decision logic / constants — read-only, returns SHIP / FIX-FIRST. This is a correctness premium (~67% cost uplift over the Sonnet 5 lead) that is always worth paying before committing anything that moves money. |
+| `reviewer` | **claude-opus-5-5** | A focused review pass on changes touching decision logic / constants — read-only, returns SHIP / FIX-FIRST. **Corrected 2026-10-07: this is no longer a cost premium at all.** Opus 5.5 is $4/$20 — cheaper than Opus 5/4.8/4.7 ($5/$25) and only 1.33× a `claude-sonnet-4-6` lead. Always worth paying before committing anything that moves money. |
 | `implementer` | **claude-sonnet-5** | A scoped, already-decided edit: wire a constant, add a render block, mechanical refactor, clear-repro fix. Same tier as lead — value is scope isolation and context hygiene, not dollar savings. |
 | `test-runner` | **haiku** | Verification checklist (`py_compile` → targeted pytest → `check_constants_documented.py` → full suite), report-only. **Optional/gap-only** as of 2026-08-04 — the pytest hook + `tests/test_repo_hygiene.py` already cover this deterministically for free; invoke only when the hook can't be relied on, or as a cheap pre-filter before an expensive review on a big change. |
-| `doc-writer` | **haiku** | Cheap mechanical write-ups: a constants-table row, a Known-Behaviours row, an F/gate row, a code comment. Strong-saving lane (~67% vs Sonnet 5 lead at list price). |
+| `doc-writer` | **claude-sonnet-5** | Cheap mechanical write-ups: a constants-table row, a Known-Behaviours row, an F/gate row, a code comment. **Moved off `haiku` 2026-10-07** — the real saving was 50% (~$0.05/row), not the ~67% claimed against an Opus-at-$5/$25 lead, and it never covered this lane's mandatory re-verification. Policy-bearing doc edits still stay on the Opus lead. |
 
 Model is set per agent via the `model:` frontmatter: an exact ID for the Opus
-and Sonnet lanes, and the `haiku` alias for the Haiku lanes. Resolution order,
+and Sonnet lanes, and the `haiku` alias for `test-runner` (the only Haiku lane
+left since `doc-writer` moved to Sonnet 5 on 2026-10-07). Resolution order,
 first match wins (sub-agents docs): per-call `model` → frontmatter →
 `CLAUDE_CODE_SUBAGENT_MODEL` → the lead's model. So a per-call `model: "opus"`
 would OVERRIDE the exact pin with the alias; don't pass one to `reviewer`/`planner`.
@@ -73,7 +93,7 @@ would OVERRIDE the exact pin with the alias; don't pass one to `reviewer`/`plann
    - ambiguous / decision-bearing / cross-feature → **keep it on the lead**
    - structural scaffolding (no gate/threshold policy) → **`Plan`** (read-only, returns spec)
    - scoped, decided edit → delegate to **`implementer`** (sonnet — context hygiene)
-   - doc/comment write-up → delegate to **`doc-writer`** (haiku — strong-saving lane)
+   - doc/comment write-up → delegate to **`doc-writer`** (sonnet 5 — 50% vs the Opus gate; policy-bearing doc edits still stay on the lead)
    - broad code search ("find every place that gates on sector") → **`Explore`**
      (built-in, fast read-only fan-out)
 3. **BUILD.** Workers make the edit and `py_compile`-check. They do **not**
@@ -151,7 +171,7 @@ The lead orchestrates; the **free deterministic gates** (pytest hook +
 antipattern + repo-hygiene checks) verify every change automatically; Opus
 `reviewer` reviews **decision/data-affecting** changes before they ship (skipped
 for docs/tests/mechanical when the gates are green); Haiku `test-runner` is kept
-for gap cases only; Haiku `doc-writer` writes up the docs. The Plan agent handles
+for gap cases only; Sonnet `doc-writer` writes up the docs. The Plan agent handles
 structural scaffolding so the lead's context stays clean. The calls that move
 money always pass through the Opus gate — regardless of what model runs the
 session — but nothing else pays for an agent it doesn't need.

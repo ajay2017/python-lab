@@ -24,6 +24,38 @@ dashboard. Read the scope notes before trusting a number.
 
 ## Price ladder (list prices, per 1M tokens)
 
+> **Corrected 2026-10-07 — every row below the table was wrong; read this first.**
+> Prices transcribed from the Claude API model table (cached 2026-09-25), not
+> recalled. Three things the older notes got wrong:
+> 1. **The review gate is no longer a premium.** `reviewer`/`planner` run
+>    **Opus 5.5 at $4 / $20** — *cheaper* than Opus 5, Opus 4.8 and Opus 4.7
+>    (all $5 / $25). The standing "~67% cost uplift, never skip it to save
+>    money" line is obsolete: against a `claude-sonnet-4-6` default lead the
+>    gate costs 1.33×, and against an Opus 5 lead it costs **less than the lead**.
+> 2. **Sonnet 5 is $2 / $10, permanently** — the "intro pricing lapses back to
+>    $3 / $15 after 2026-08-31" warning below never materialised. Sonnet 5.5 is
+>    the same $2 / $10.
+> 3. **Haiku's saving is half what this doc claims.** $1 / $5 vs Sonnet's
+>    $2 / $10 is **0.5× (saves 50%)**, not the ~67-80% computed against an Opus
+>    lead at $5 / $25. On doc rows costing $0.08-$0.14, that is ~$0.05/task —
+>    which does not pay for the lead re-verification this lane has required
+>    (see the hallucination record in the 2026-06-23 and 2026-07-18 rows below,
+>    plus the 2026-10-02 F-286 fabricated test count). **`doc-writer` was moved
+>    to `claude-sonnet-5` on 2026-10-07** (owner decision). This lowers the error
+>    rate on the prose that lane writes; it does **not** relax CLAUDE.md's rule
+>    that policy-bearing doc edits stay on the Opus lead.
+>
+> **Pin verification, 2026-10-07.** A fresh-session `MODEL:` probe confirmed
+> `reviewer` → Opus 5.5 and `implementer` → Sonnet 5; both pins hold. Note the
+> org `availableModels` list does **not** contain `claude-opus-5-5` yet the pin
+> resolved anyway — that list gates the interactive `/model` picker, not agent
+> frontmatter. Fable 5.1 ($10 / $50) was evaluated and **rejected**: Opus 5.5
+> leads it on Anthropic's own agentic-coding/reasoning table at 2.5× less cost.
+>
+> ---
+>
+> <details><summary>Superseded notes (kept for history)</summary>
+>
 > **Corrected 2026-06-05.** An earlier version of this ladder assumed Opus at
 > $15 / $75. Opus 4.8 list price is **$5 / $25**. That collapses the Opus↔Sonnet
 > gap: Sonnet is now **0.6×** Opus (not 0.2×), so delegated build saves ~40%, not
@@ -38,31 +70,59 @@ dashboard. Read the scope notes before trusting a number.
 > (decided 2026-07-15, see note below) — Sonnet 5's marketed edge is coding/
 > agentic throughput, not the judgment-dense plan/threshold/review work Lead
 > does, so the cost delta here doesn't move that call.
+>
+> </details>
 
-| Tier | Role | Model | Input | Output | vs Sonnet 5 lead (list) |
+| Tier | Role | Model | Input | Output | vs the Opus 5.5 gate |
 |---|---|---|---|---|---|
-| Lead | Orchestration, design, commits | Sonnet 5 | $3 ($2 intro thru 2026-08-31) | $15 ($10 intro) | 1× (baseline) |
-| Review gate | `reviewer` agent — SHIP/FIX-FIRST | Opus 4.8 | $5 | $25 | **1.67× — correctness premium** |
-| Build | `implementer` agent — decided edits | Sonnet 5 | $3 ($2 intro) | $15 ($10 intro) | 1× — context hygiene, not savings |
-| Scaffold | `Plan` agent — structural read-only | Sonnet 5 | $3 ($2 intro) | $15 ($10 intro) | 1× — context hygiene |
-| Verify | `test-runner` agent — independent pytest gate | Haiku 4.5 | $1 | $5 | **0.33× (saves ~67%)** |
-| Docs | `doc-writer` agent — doc/comment rows | Haiku 4.5 | $1 | $5 | **0.33× (saves ~67%)** |
+| Lead | Orchestration, design, commits | **session-dependent** — Opus 5 observed 2026-10-07; org default is `claude-sonnet-4-6` | $5 / $3 | $25 / $15 | 1.25× / 0.75× |
+| Design | `planner` agent — design verdict | Opus 5.5 | $4 | $20 | 1× |
+| Review gate | `reviewer` agent — SHIP/FIX-FIRST | Opus 5.5 | $4 | $20 | **1× (baseline)** |
+| Build | `implementer` agent — decided edits | Sonnet 5 | $2 | $10 | 0.5× (saves 50%) |
+| Scaffold | `Plan` agent — structural read-only | session model (no pin) | — | — | inherits lead |
+| Verify | `test-runner` agent — independent pytest gate | Haiku 4.5 | $1 | $5 | 0.25× (saves 75%) |
+| Docs | `doc-writer` agent — doc/comment rows | Sonnet 5 (**moved off Haiku 2026-10-07**) | $2 | $10 | 0.5× (saves 50%) |
 
-> **Intro pricing reminder:** Sonnet 5 intro rates ($2/$10) expire **2026-08-31**.
-> After that, list price ($3/$15) applies — the Haiku saving drops from ~50%
-> to ~67% of Sonnet lead, still the strong-saving lane either way.
+> **The lead is the real exposure, and it is not pinned.** The `planner`/`reviewer`
+> pins hold regardless of the session model, but the lead does the commits, the
+> diff review, the orchestration, and — per this ledger's own rows — a large
+> share of judgment-heavy work marked "done inline as lead." A session started
+> on the org default runs all of that on **Sonnet 4.6, two generations old**.
+> Opus 5.5 at $4 / $20 makes that upgrade only 1.33× the default lead's cost.
+> `claude-opus-5-5` is not in the org `availableModels` list, so it cannot be
+> chosen from the `/model` picker — **the fix is an allowlist request to
+> Accenture**. Until then **`claude-opus-5` is the best selectable lead**.
+> **Do not use `opusplan` as a stopgap:** its Opus leg most likely resolves via
+> `ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8` — an *older* Opus than
+> `claude-opus-5` — and it drops to Sonnet for execution, where most of this
+> ledger's "done inline as lead" rows actually happen. Unverified; flagged as a
+> reason for caution, not a measurement. (An earlier draft of this note called
+> `opusplan` the best stopgap. That was asserted without checking how it
+> resolves under the org's env vars — corrected 2026-10-07.)
 
 **Economics under Sonnet 5 lead (as of 2026-07-22):**
 - **`implementer`**: same tier as lead → delegation value is **scope isolation and
   context hygiene**, not dollar savings. Delegating a large mechanical refactor
   still makes sense to keep the lead context clean; a one-liner is faster inline.
-- **`reviewer`** (Opus 4.8): costs **~67% more** than the Sonnet 5 lead per token.
-  This is a deliberate correctness premium — the Opus gate catches the class of
-  mistake that costs far more than any amount of review tokens. Always justified
-  before committing decision logic. Never skip it to save money.
-- **`doc-writer`** (Haiku): **~67% cheaper** than Sonnet 5 lead at list / **~50%
-  cheaper** during intro window. The strong-saving lane; route all mechanical
-  doc rows here.
+- **`reviewer`** — ~~(Opus 4.8): costs **~67% more** than the Sonnet 5 lead per
+  token.~~ **Superseded 2026-10-07: the premium is gone.** `reviewer` runs
+  **Opus 5.5 at $4 / $20**, which is *cheaper per token than Opus 5 / 4.8 / 4.7*
+  ($5 / $25) and only 1.33× a `claude-sonnet-4-6` lead. The conclusion is
+  unchanged and now easier to defend: the Opus gate catches the class of mistake
+  that costs far more than any amount of review tokens. Always justified before
+  committing decision logic. Never skip it to save money.
+- **`doc-writer`** (Haiku → **Sonnet 5**, 2026-10-07) — ~~**~67% cheaper** than Sonnet 5 lead at list~~
+  **Superseded 2026-10-07: the real figure is ~50% vs the Sonnet build lane**
+  ($1 / $5 against $2 / $10), i.e. roughly **$0.05 saved per doc row**. That
+  does not cover the lead re-verification this lane has always required — see
+  the 2026-06-23 row (wrong constant value, invented function names, fabricated
+  date), the 2026-07-18 row (missing constants-table row tripped the CI gate,
+  with the reviewer explicitly flagging it must not go to Haiku), and the
+  2026-10-02 F-286 pass (fabricated test count, a chart that was never built).
+  **Moved to `claude-sonnet-5` on 2026-10-07** (owner decision) — same price as
+  the build lane, so the routing question is now purely "is this mechanical
+  enough to delegate", not "can we afford the better model". Policy-bearing doc
+  edits (constants tables, gate/requirements rows) still stay on the Opus lead.
 - **`test-runner`** (Haiku, added 2026-07-31): same strong-saving lane as
   `doc-writer` — running a fixed checklist and reporting pass/fail is
   mechanical, not judgment work. Introduced to give every change an
