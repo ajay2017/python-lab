@@ -923,6 +923,19 @@ _GATE_FILES = {
     # that added this entry (2026-10-02 review FIX-FIRST pass on this very
     # change -- see _touches_tested_code's own docstring for the full story).
     ".claude/hooks/pre_tool_checks.py",
+    # Added 2026-10-07 (owner decision, on the second Opus review's advice):
+    # the native-git fallback that enforces the citation + provenance gates
+    # when THIS file's PreToolUse registration is inert -- which it currently
+    # is, because Accenture's managed settings set allowManagedHooksOnly=true
+    # and that blocks every project-declared hook. So git_hook_adapter.py is
+    # presently the ONLY live enforcement entry point, which is precisely the
+    # "a mistake here silently defeats everything else" argument that put
+    # pre_tool_checks.py itself on this list. Earned it the hard way: two
+    # review rounds found six blocking defects in it, including one that
+    # reproduced real repo corruption (git's GIT_INDEX_FILE leaking into a
+    # pytest subprocess whose fixtures then wrote to the real repo) and two
+    # silent-pass bypasses the author's own tests had certified as working.
+    ".claude/hooks/git_hook_adapter.py",
 }
 
 
