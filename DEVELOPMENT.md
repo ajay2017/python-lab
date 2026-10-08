@@ -264,11 +264,30 @@ time. On this machine, fresh `--collect-only` now runs in ~7-28s (not the
 real benefit is smaller than originally assumed.
 
 **As of 2026-07-27 this is also mechanically enforced**, not just documented:
-`.claude/hooks/pre_tool_checks.py` blocks a `git commit` touching
-`stock_analyzer/`/`tests/` (and always blocks `git push`) if `pytest tests/`
-fails — see [docs/testing-strategy.md](docs/testing-strategy.md) §2 for the
-exact behavior and its caveats (Claude Code sessions only, takes effect after
-a session restart per memory `feedback_hook_enforcement`).
+a `git commit` touching `stock_analyzer/`/`tests/` is blocked if `pytest tests/`
+fails, as is any `git push` that adds commits (a deletion-only or empty push
+skips the suite).
+
+> **⚠️ 2026-10-08 — set this up in every clone, or you have NO gates.** This was
+> a Claude Code `PreToolUse` hook until Accenture's managed settings
+> (`allowManagedHooksOnly: true`) made it permanently inert — an exception was
+> requested and **declined**. The gates now run as native git hooks instead,
+> which git invokes directly. `.git/hooks/` is not version-controlled, so a
+> fresh clone or a new worktree starts with none. **First thing after cloning:**
+>
+> ```
+> python .claude/hooks/git_hook_adapter.py --install
+> ```
+>
+> Verify with `ls "$(git rev-parse --git-path hooks)/pre-commit"` (plain
+> `ls .git/hooks/...` errors inside a linked worktree, where `.git` is a file;
+> note the hooks directory is *shared* by all worktrees, so one install covers
+> them — what each worktree still needs is a checkout new enough to contain
+> `git_hook_adapter.py` itself). See
+> [docs/testing-strategy.md](docs/testing-strategy.md) §2 for exactly what each
+> of the three hooks covers and what is still not gated (cherry-pick, revert,
+> rebase, and `--amend`'s text gates), and memory `feedback_hook_enforcement`
+> for the history.
 
 **2026-09-28 CI/CD efficiency pass — three changes to that same hook, a
 different lever than the Tier 1 marker above (execution time, not

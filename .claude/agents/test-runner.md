@@ -2,7 +2,7 @@
 name: test-runner
 description: >
   Haiku-grade verification checklist for DRISHTA. NOT a mandatory per-change
-  stage — the `pre_tool_checks.py` commit/push hook already runs the full suite
+  stage — the native `pre-commit`/`pre-push` git hooks already run the full suite
   deterministically for free, and the suite itself covers py_compile of the
   un-imported entrypoints + the constants-doc check (tests/test_repo_hygiene.py),
   so the old checklist is redundant on a normal change (see CLAUDE.md "Review &
@@ -27,9 +27,13 @@ exactly what happened so the lead can decide what to do next.
 
 Streamlit Cloud auto-redeploys from `main` regardless of CI status — a red
 GitHub Actions run does **not** block a broken change from going live. So the
-*local* pre-push run is the real safety gate. **That gate is now the
-`pre_tool_checks.py` hook, not this agent** — the hook runs the full `pytest`
-suite on every commit/push and blocks (exit 2) on failure, deterministically and
+*local* pre-push run is the real safety gate. **That gate is the native git
+hooks installed by `.claude/hooks/git_hook_adapter.py --install`, not this
+agent** (it was a Claude Code `PreToolUse` hook until 2026-10-08, when
+Accenture declined an exception to `allowManagedHooksOnly` and enforcement moved
+to git itself) — they run the full `pytest`
+suite on any commit touching tested paths and on any push that adds
+commits, and block on failure, deterministically and
 for zero tokens, and the suite covers the two things pytest wouldn't otherwise
 (byte-compiling `app.py`/`cron_runner.py` and the constants-doc check, via
 `tests/test_repo_hygiene.py`). Running this Haiku agent on a normal change just

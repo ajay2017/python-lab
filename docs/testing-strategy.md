@@ -66,9 +66,60 @@ pip install -r requirements-dev.txt   # one-time
 pytest tests/ -v
 ```
 
-**Mechanically enforced, not just documented practice, as of 2026-07-27.**
-`.claude/hooks/pre_tool_checks.py` (a Claude Code `PreToolUse` hook, registered
-in `.claude/settings.json`) intercepts `git commit`/`git push` tool calls and:
+> ### ⚠️ 2026-10-08 — the ENFORCEMENT MECHANISM changed; what it proves did not
+>
+> Everything below described a Claude Code `PreToolUse` hook. **That layer is
+> permanently dead in this org**: Accenture's managed settings set
+> `allowManagedHooksOnly: true`, and the admin **declined** an exception on
+> 2026-10-08, so `.claude/settings.json`'s `hooks.PreToolUse` registration never
+> fires — with no error and no symptom.
+>
+> **The same gates now run as NATIVE GIT HOOKS**, which git invokes and no
+> managed policy can disable. Install per-clone (`.git/hooks/` is outside the
+> work tree, so a fresh clone has none; linked worktrees SHARE the clone's
+> hooks directory and do not need their own install):
+>
+> ```
+> python .claude/hooks/git_hook_adapter.py --install
+> ```
+>
+> | hook | runs |
+> |---|---|
+> | `commit-msg` | `Review =` citation + `Design =`/`Build =` trailers |
+> | `pre-commit` | pytest (path-gated) + `check_antipatterns.py` |
+> | `pre-push` | full pytest on any push that adds commits — against the WORKING TREE, not the pushed commits (prints a MISMATCH warning when they differ) |
+>
+> `pre_tool_checks.py` still owns all the gate LOGIC and is imported by
+> `git_hook_adapter.py`, so *what the gates check* is unchanged. **But the rest
+> of this section predates the move — where it conflicts with the list below,
+> the list below wins:**
+>
+> 1. **pytest now fails CLOSED.** A suite that cannot run (no `.venv`, a
+>    timeout) blocks, superseding the "fails open on infra problems" bullet for
+>    pytest. The antipattern gate still fails open.
+> 2. **The blocking exit code is 1**, not 2 (git hooks, not PreToolUse).
+> 3. **The commit-time scope is wider than §2 says:** `app.py`,
+>    `cron_runner.py` and `.claude/hooks/` also trigger the suite, not just
+>    `stock_analyzer/` and `tests/`.
+> 4. **The §3 "skip a provably-redundant push-time re-run" optimisation does
+>    NOT apply** to the native `pre-push` hook — it has no verified-tree marker
+>    and always runs the suite (unless the push is deletions-only).
+> 5. **`pre-push` verifies the WORKING TREE, not the commits being pushed.** It
+>    prints a MISMATCH warning (and does not block) when they differ. So it is
+>    not a true backstop: `--no-verify` a broken commit, fix the tree without
+>    committing, push, and the broken commit ships green.
+> 6. **The "Caveat" about external terminals is now INVERTED** — these are real
+>    `.git/hooks/` scripts, so a `git commit`/`git push` from any terminal IS
+>    covered. What is no longer covered is Claude Code's own tool layer.
+>
+> **Not gated at all:** cherry-pick / revert / rebase / `am` and clean merge
+> commits (only `pre-push` sees them); a message-only `--amend` (nothing newly
+> staged, so no pytest); and Hard Rule #3's `streamlit run` block, which had no
+> native-git equivalent and is now a text rule only.
+
+**Mechanically enforced, not just documented practice, as of 2026-07-27**
+(mechanism replaced 2026-10-08 — see the box above).
+`.claude/hooks/pre_tool_checks.py` defines the gate logic, and:
 - On `commit`, if any staged file is under `stock_analyzer/` or `tests/`, runs
   `pytest tests/ -q` and **blocks the commit** (exit 2, failure output printed)
   if it doesn't pass.
