@@ -205,7 +205,17 @@ def _build_context(today: date) -> dict:
             # second time. `None` when the risk computation itself failed above
             # (caller must treat a missing/None beta as "couldn't be built",
             # never as "beta is zero").
-            "port_risk": port_risk}
+            "port_risk": port_risk,
+            # Additive (2026-10-09, portfolio-risk-snapshot correlation-
+            # verification follow-on) — the RAW held-ticker list this run
+            # expected, built above BEFORE the per-ticker bundle-load loop
+            # could drop any of them. Deliberately NOT derived from `held_data`
+            # or `port_df` by any caller downstream: both of those have
+            # ALREADY lost a ticker whose bundle failed to load, so deriving
+            # the expected set from either would be circular and always
+            # report "nothing missing". This is the one correct source for
+            # `portfolio.correlation_unchecked()`'s `held_tickers` argument.
+            "held_tickers": held_tickers}
 
 
 def compute_protective_alerts(today: date | None = None) -> dict:
@@ -1166,4 +1176,11 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
             # beta (None when the risk computation itself failed above —
             # callers must treat that as "couldn't be built", never as beta=0,
             # same contract _build_context's own docstring already states).
-            "port_df": ctx.get("port_df"), "port_risk": ctx.get("port_risk")}
+            "port_df": ctx.get("port_df"), "port_risk": ctx.get("port_risk"),
+            # Additive (2026-10-09) — the same raw held-ticker list
+            # `_build_context` returns (see its own comment above); feeds
+            # `risk_metric_history.build_portfolio_risk_snapshot`'s
+            # `held_tickers` kwarg so the EOD cron's correlation write can
+            # detect a ticker missing from `held_data` entirely (circularity
+            # guard — see that function's docstring).
+            "held_tickers": ctx.get("held_tickers")}

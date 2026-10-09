@@ -955,6 +955,17 @@ the user acted on it):
         corr_coverage_n        integer,  -- portfolio.correlation_coverage()'s n_obs; NULL when coverage unavailable
         created_at             timestamptz default now()
     );
+    -- Since 2026-10-09 (correlation-claim-verification follow-on to G-25/
+    -- G-26 -- "screens disclose, records withhold"): avg_pairwise_corr and
+    -- diversification_score are ALSO NULL whenever the EOD cron could not
+    -- VERIFY the correlation reading -- a held ticker missing from the
+    -- matrix entirely, OR a non-empty-but-fully-NaN matrix from a too-thin
+    -- overlapping sample (portfolio.correlation_claim_verified /
+    -- risk_metric_history.build_portfolio_risk_snapshot's `held_tickers`
+    -- kwarg) -- not just the pre-existing <2-usable-histories condition
+    -- above. corr_coverage_n is STILL recorded in that case: it is a true
+    -- fact about held_data's own inputs, not a derived claim, so it is
+    -- never withheld by this check.
     alter table public.portfolio_risk_snapshots enable row level security;
     drop policy if exists "Allow all (service role)" on public.portfolio_risk_snapshots;
     create policy "Allow all (service role)" on public.portfolio_risk_snapshots

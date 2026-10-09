@@ -3077,6 +3077,23 @@ failed write or an un-applied DDL was previously invisible everywhere in the app
 *(Retroactive doc-sync — this table shipped 2026-09-15 as F-273 Phase 1a but never got its
 own architecture.md section; caught while syncing docs for Phase 1b below.)*
 
+**NULL semantics changed 2026-10-09 (F-292) — read this before interpreting a blank row.**
+`avg_pairwise_corr` and `diversification_score` are now ALSO `NULL` when the EOD cron could
+not **verify** the correlation reading, not only on the pre-existing "<2 usable histories"
+condition. Unverified means either a held ticker never entered the matrix (its bundle load
+failed, so `_close_series_map` dropped it) or the overlapping sample was below
+`CORR_MIN_OBS_TRUSTED` — the latter catching a non-empty but entirely-NaN matrix whose
+`diversification_score` fallback would otherwise have scored 50 and read "Well Diversified"
+off zero observations. **`corr_coverage_n` is deliberately still written in that case**: it
+is a true fact about the inputs rather than a derived claim, and it is what distinguishes
+"we could not measure this" from an unexplained blank. The expected-holdings set comes from
+`headless_alert_engine._build_context`'s raw `held_tickers`, threaded through `compute_eod`'s
+payload — **never from `held_data` or `port_df`, both of which have already lost any failed
+load and would make the check circular.** A withheld reading is not a cron failure and never
+reddens the heartbeat. Rows written before 2026-10-09 cannot be distinguished retroactively.
+Downstream, `rec_events`' `diversify_add.metric_before` and `rec_events_readout`'s
+`leg_b_avg_corr_before`/`_after` inherit the same NULLs, which is consistent and None-safe.
+
 ```sql
 create table if not exists public.portfolio_risk_snapshots (
     snapshot_date          date    not null primary key,

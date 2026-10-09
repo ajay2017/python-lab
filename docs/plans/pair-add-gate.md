@@ -339,3 +339,89 @@ commit, two of which are lessons rather than typos:
 plumbed through `headless_alert_engine`, since `held_data` there has already
 lost the failed loads and would be circular), and the three on-screen
 "Well Diversified" surfaces via one shared function.
+
+---
+
+## 8. F-292 — the EOD history write withholds too (2026-10-09, commit 2 of 3)
+
+Same rule as §7, applied to the daily cron: **screens disclose, records
+withhold.** `risk_metric_history.build_portfolio_risk_snapshot` persisted
+`avg_pairwise_corr`/`diversification_score` from whatever matrix it was given,
+so a partial or thin one became an **unflagged** history row. Both are now
+`NULL` when `correlation_claim_verified()` fails.
+
+**`corr_coverage_n` is still recorded on a withheld day.** It is a true fact
+about the inputs rather than a derived claim, and it is the thing that lets a
+later reader distinguish "we could not measure this" from "this row is blank for
+some unknown reason".
+
+### The circularity this commit exists to defeat
+
+In the cron, `held_data` and `port_df` have **already lost** any failed bundle
+load. Deriving the expected ticker set from either is circular — it would always
+report "nothing missing" while looking perfectly correct. The only honest source
+is `headless_alert_engine._build_context`'s own `held_tickers`, built from the
+raw `holdings_df`, which until now was a local that never left the function.
+Plumbing it out through `compute_eod`'s payload is most of this commit.
+
+The `held_tickers=` kwarg deliberately has **no `or` fallback**: an `or` would
+convert a legitimate `None` into `held_data`'s keys and silently restore the
+circularity.
+
+### Operational constraints that shaped it
+
+- **The row's key set must not change.** `db.save_portfolio_risk_snapshot`
+  upserts the whole dict, so one extra key makes PostgREST reject the write,
+  losing the entire day's snapshot and reddening the heartbeat.
+- **A withheld reading is not a failure.** It never appends to `failures` — per
+  that lane's own convention, a legitimately conditional outcome must not light
+  the heartbeat red on a working day.
+- **Per-metric isolation holds:** beta, top-sector and max-single-name are
+  completely unaffected.
+
+### Scope the review surfaced that the brief had missed
+
+`_risk_row` also feeds `rec_events`, so on a withheld day
+`diversify_add.metric_before` and `rec_events_readout`'s
+`leg_b_avg_corr_before`/`_after` are NULL as well. All None-safe, and consistent
+with "records withhold" — that readout's caption already discloses
+`corr_coverage_n` at both ends precisely so a sample-size shift is never misread
+as a real diversification change. Recorded rather than silently inherited.
+
+### Review
+
+Opus reviewer **SHIP, 0 blocking** — and it earned it by running **seven runtime
+mutations** through a scratch pytest plugin rather than reading the tests. Six
+were caught. The one that survived, and what was done about it:
+
+- **M2: adding an `or list(held_data)` fallback in the cron survived every
+  test**, because in all currently-reachable states the two behave identically.
+  So the code comment claiming the missing `or` protected something was
+  asserting an untested property. Fixed with a test that constructs the state
+  the `or` would actually corrupt (a `None` `held_tickers` alongside a
+  **non-empty** `held_data`); **re-mutated afterwards — M2 now fails it.**
+- It also found the row-key-set test pinned a hand-written literal that would
+  not fail if a column were added to the DDL. Now parsed from `db.py`'s own
+  `create table` block; **mutation-verified** by adding a column to the DDL,
+  which fails the new assertion while the old hardcoded test still passes.
+
+**A process note worth keeping:** the first attempt at that DDL mutation proved
+nothing — a `grep -c` returning `0` exits non-zero, which broke the `&&` chain
+so the mutation never applied, and the subsequent green run looked like a pass.
+A test that "passes" for a harness reason is indistinguishable from one that
+passes for the real reason. Verify the mutation actually landed before trusting
+either outcome.
+
+### Still open after this commit
+
+- **Commit 3:** the three on-screen "Well Diversified" surfaces. The 💰 Account
+  Risk Trend caption also needs updating — it currently says a gap means the
+  metric "couldn't be computed", which is now incomplete.
+- **`CORR_MIN_OBS_TRUSTED` lives in `portfolio.py`, not `constants.py`.** It now
+  decides whether a persisted cron write keeps its correlation fields, which is
+  arguably Hard Rule #1 territory. Flagged by review; owner decision pending.
+- **Production watch:** check the first post-deploy Railway `eod` log for the
+  "correlation reading withheld" line. If it fires every day — e.g. a held
+  ticker whose bundle routinely fails — the diversification history goes NULL
+  indefinitely, and that would show up only in logs and chart gaps. The line
+  also fires benignly on fewer-than-2-histories days.

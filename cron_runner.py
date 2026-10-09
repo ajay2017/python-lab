@@ -613,10 +613,22 @@ def _run_eod(now_et, force: bool) -> int:
     # logged distinctly from a successful one so a silent DB-offline day
     # doesn't read like a normal no-op.
     try:
+        # held_tickers=payload.get("held_tickers") deliberately has no `or`
+        # fallback -- an `or` would silently convert a legitimate empty list
+        # (or a cold-start None) into something else and defeat the
+        # None/[]/list three-state contract correlation_unchecked relies on
+        # (2026-10-09, correlation-verification follow-on to G-25/G-26).
+        _risk_diag: dict = {}
         _risk_row = build_portfolio_risk_snapshot(
             now_et.date(), payload.get("port_df"), payload.get("port_risk"),
             payload.get("held_data", {}),
+            held_tickers=payload.get("held_tickers"), diagnostics=_risk_diag,
         )
+        if _risk_diag.get("corr_withheld"):
+            _log(f"portfolio_risk_snapshot: correlation reading withheld as "
+                 f"unverified (unchecked={_risk_diag.get('corr_unchecked')}, "
+                 f"n_obs={_risk_diag.get('corr_n_obs')}, date={today_str}) — "
+                 f"row still written with avg_pairwise_corr/diversification_score NULL.")
         if db.save_portfolio_risk_snapshot(_risk_row):
             _log(f"portfolio_risk_snapshot written (beta={_risk_row['portfolio_beta']}, "
                  f"top_sector={_risk_row['top_sector']}, date={today_str}).")

@@ -306,6 +306,47 @@ def test_build_context_fragility_none_when_beta_missing():
     assert result["fragility"] is None
 
 
+# ── held_tickers (2026-10-09, portfolio-risk-snapshot correlation-
+# verification follow-on) — the RAW expected-holdings list, built BEFORE the
+# per-ticker bundle-load loop can drop any of them. The whole point of
+# plumbing this out is that it must survive a bundle-load failure that
+# `held_data` itself does NOT survive — tested directly below (H7), not just
+# asserted equal to held_data's keys on a happy path. ─────────────────────
+
+def test_build_context_held_tickers_present_on_happy_path():
+    result = _run_build_context(_patch_context_deps(
+        load_holdings=pd.DataFrame({"Ticker": ["AAPL"]}),
+    ))
+    assert result["ok"] is True
+    assert result["held_tickers"] == ["AAPL"]
+
+
+def test_build_context_held_tickers_survives_a_bundle_load_failure():
+    """H7 — the circularity guard: held_tickers must still name a ticker
+    whose bundle load raised, even though held_data (built in the SAME loop)
+    correctly drops it. Deriving the expected set from held_data instead
+    would be circular and always report 'nothing missing'."""
+    def _load_bundle_side_effect(t, period, spy_df=None, rfr=None):
+        if t == "BAD":
+            raise RuntimeError("provider down for BAD")
+        return {"financials": {}}
+
+    cfg = _patch_context_deps(
+        load_holdings=pd.DataFrame({"Ticker": ["AAPL", "BAD"]}),
+        load_bundle_side_effect=_load_bundle_side_effect,
+    )
+    result = _run_build_context(cfg)
+
+    assert result["ok"] is True
+    # held_tickers names BOTH -- the raw expected book.
+    assert result["held_tickers"] == ["AAPL", "BAD"]
+    # held_data has ONLY the one that actually loaded -- the two genuinely
+    # differ, which is the entire point of this test.
+    assert "AAPL" in result["held_data"]
+    assert "BAD" not in result["held_data"]
+    assert any("BAD" in e and "bundle load failed" in e for e in result["errors"])
+
+
 def test_build_context_rfr_fetch_failure_falls_back():
     cfg = _patch_context_deps()
     cfg["rfr_side_effect"] = RuntimeError("rate feed down")
@@ -1121,6 +1162,24 @@ def test_compute_eod_pullback_none_on_calm_market():
     with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx):
         result = hae.compute_eod(TODAY, pullback_threshold=-3.0)
     assert result["pullback"] is None
+
+
+def test_compute_eod_held_tickers_mirrors_build_context_not_held_data():
+    """compute_eod's own "held_tickers" key must carry _build_context's raw
+    list through unchanged -- deliberately NOT derived from held_data's keys
+    (held_data has already lost a ticker whose bundle failed). Constructed so
+    the two genuinely differ, otherwise this test proves nothing."""
+    ctx = {
+        "ok": True, "errors": [],
+        "port_df": pd.DataFrame([{"Ticker": "AAPL", "Price": 200.0, "Shares": 10}]),
+        "held_data": {"AAPL": {}},   # missing "BAD" -- its bundle failed
+        "held_tickers": ["AAPL", "BAD"],
+        "fragility": None, "spy_6mo": None,
+    }
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx):
+        result = hae.compute_eod(TODAY)
+    assert result["held_tickers"] == ["AAPL", "BAD"]
+    assert list(result["held_data"].keys()) == ["AAPL"]
 
 
 # ── compute_watchlist_entries: sector_gate_context parity (Hole 1 fix, ───────

@@ -143,6 +143,66 @@ def test_portfolio_risk_snapshot_write_failure_sets_rc(monkeypatch):
     assert "portfolio_risk_snapshot" in cr._LAST_LANE_FAILURE_DETAIL
 
 
+# ── held_tickers pass-through / correlation-claim-verification follow-on
+# (2026-10-09, "screens disclose, records withhold") ────────────────────────
+
+def test_h8_cron_forwards_held_tickers_not_held_data_keys(monkeypatch):
+    """H8 — the cron must pass held_tickers=payload["held_tickers"] straight
+    through to build_portfolio_risk_snapshot, never held_data's own keys.
+    held_data deliberately lacks "BAD" (its bundle failed upstream) while
+    held_tickers names both — the two genuinely differ here, otherwise this
+    test would pass even if the cron were wired to the wrong source."""
+    captured = {}
+
+    def _capture(snapshot_date, port_df, port_risk, held_data,
+                 held_tickers=None, diagnostics=None):
+        captured["held_tickers"] = held_tickers
+        captured["held_data_keys"] = list((held_data or {}).keys())
+        if isinstance(diagnostics, dict):
+            diagnostics.update(corr_unchecked=None, corr_n_obs=None, corr_withheld=False)
+        return {"portfolio_beta": None, "top_sector": None}
+
+    _patch_defaults(
+        monkeypatch,
+        compute_eod=lambda **_k: _payload(
+            held_data={"AAPL": {}}, held_tickers=["AAPL", "BAD"],
+        ),
+        build_portfolio_risk_snapshot=_capture,
+    )
+    rc = cr._run_eod(NOW, force=True)
+    assert rc == 0
+    assert captured["held_tickers"] == ["AAPL", "BAD"]
+    assert captured["held_data_keys"] == ["AAPL"]
+    assert captured["held_tickers"] != captured["held_data_keys"]
+
+
+def test_h9_withheld_correlation_is_not_a_failure_but_is_logged(monkeypatch, capsys):
+    """H9 — a day whose correlation reading is withheld as unverified must
+    still return rc=0, must NOT add "portfolio_risk_snapshot" to the
+    failures list (a legitimately conditional outcome is not a failure, per
+    that lane's own established convention), and must log exactly why."""
+    def _withheld_build(snapshot_date, port_df, port_risk, held_data,
+                         held_tickers=None, diagnostics=None):
+        if isinstance(diagnostics, dict):
+            diagnostics.update(
+                corr_unchecked=["BAD"], corr_n_obs=0, corr_withheld=True,
+            )
+        return {"portfolio_beta": 1.1, "top_sector": "Tech"}
+
+    _patch_defaults(
+        monkeypatch,
+        compute_eod=lambda **_k: _payload(held_tickers=["AAPL", "BAD"]),
+        build_portfolio_risk_snapshot=_withheld_build,
+    )
+    rc = cr._run_eod(NOW, force=True)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert cr._LAST_LANE_FAILURE_DETAIL is None
+    assert "withheld" in out
+    assert "BAD" in out
+
+
 # ── rec_events ───────────────────────────────────────────────────────────────
 
 def test_rec_events_zero_qualifying_rows_is_not_a_failure(monkeypatch):
@@ -310,3 +370,51 @@ def test_notify_failure_called_once_on_failure_never_on_success(monkeypatch):
     rc2 = _run(monkeypatch, _notify_failure=lambda *a, **k: calls.append(a))
     assert rc2 == 0
     assert calls == []
+
+
+def test_h8b_none_held_tickers_is_forwarded_not_substituted(monkeypatch):
+    """A None held_tickers must reach the builder AS None, never swapped for
+    held_data's keys.
+
+    Opus review 2026-10-09: an `or list(held_data)` fallback in the cron
+    SURVIVED every other test, because in all currently-reachable states the
+    two behave identically -- on the ok path held_tickers is always a
+    non-empty list, and on not-ok paths held_data is absent too. So the
+    comment in cron_runner claiming the missing `or` protects something was
+    asserting an untested property.
+
+    This constructs the state that `or` would actually corrupt: None
+    held_tickers alongside a NON-empty held_data. Under an `or` fallback the
+    builder would receive ["AAPL"] and verify a reading whose expected set was
+    never known -- i.e. silently re-introducing the circularity this whole
+    commit exists to remove. Forwarding None instead makes
+    correlation_unchecked return None and the reading is withheld, which is
+    the honest answer.
+    """
+    captured = {}
+
+    def _capture(snapshot_date, port_df, port_risk, held_data,
+                 held_tickers=None, diagnostics=None):
+        captured["held_tickers"] = held_tickers
+        captured["held_data_keys"] = list((held_data or {}).keys())
+        if isinstance(diagnostics, dict):
+            diagnostics.update(corr_unchecked=None, corr_n_obs=None, corr_withheld=True)
+        return {"portfolio_beta": 1.1, "top_sector": "Tech"}
+
+    _patch_defaults(
+        monkeypatch,
+        compute_eod=lambda **_k: _payload(
+            held_data={"AAPL": {}}, held_tickers=None,
+        ),
+        build_portfolio_risk_snapshot=_capture,
+    )
+    rc = cr._run_eod(NOW, force=True)
+    assert rc == 0
+    # The control: held_data really is non-empty, so an `or` fallback would
+    # have had something to substitute. Without this, the assertion below
+    # could pass simply because there was nothing to fall back to.
+    assert captured["held_data_keys"] == ["AAPL"]
+    assert captured["held_tickers"] is None, (
+        "cron substituted a fallback for a None held_tickers -- that silently "
+        "restores the held_data circularity this commit removes."
+    )
