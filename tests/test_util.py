@@ -29,6 +29,8 @@ from stock_analyzer.util import (
     signals_advice_nav_badge,
     benchmark_mirror_summary_state,
     defense_facet_badge,
+    correlation_unchecked_note,
+    diversification_label_text,
 )
 import pytest
 
@@ -1140,3 +1142,206 @@ class TestDefenseFacetBadge:
         this hypothetical exact-zero tie edge case)."""
         state = defense_facet_badge("firm", 0.0, n_mature=22, min_calls=8)
         assert state["badge"] == "RAN EARLY"
+
+
+class TestCorrelationUncheckedNote:
+    """F-290 disclosure follow-on (Commit 3 of 3, docs/plans/pair-add-gate.md)
+    -- the on-screen companion to `portfolio.correlation_unchecked()`'s own
+    None/[]/list three-state contract. Screens disclose here;
+    `portfolio.correlation_claim_verified()` is the separate, stricter
+    predicate records use to withhold."""
+
+    def test_empty_list_returns_none(self):
+        # Checked, nothing missing -- nothing to disclose.
+        assert correlation_unchecked_note([]) is None
+
+    def test_none_returns_a_distinct_unknown_note(self):
+        # Couldn't check at all this session -- NOT the same state as [].
+        text = correlation_unchecked_note(None)
+        assert text is not None
+        assert text != correlation_unchecked_note([])
+        assert "unknown this session" in text
+        assert "🏠 Home" in text
+
+    def test_none_and_empty_list_are_distinguishable(self):
+        """The load-bearing three-state assertion: `None` must not collapse
+        to falsy-equivalent with `[]` the way a bare `if not x:` check would."""
+        assert correlation_unchecked_note(None) is not None
+        assert correlation_unchecked_note([]) is None
+
+    def test_singular_ticker_wording(self):
+        text = correlation_unchecked_note(["AAA"])
+        assert "AAA" in text
+        assert "was left out" in text
+        assert "its price" in text
+        assert "AAA is" in text
+        assert "they" not in text
+
+    def test_plural_ticker_wording(self):
+        text = correlation_unchecked_note(["AAA", "BBB"])
+        assert "AAA, BBB" in text
+        assert "were left out" in text
+        assert "their price" in text
+        assert "they are" in text
+
+    def test_truncates_past_five_with_plus_n_more(self):
+        tickers = [f"T{i:02d}" for i in range(8)]
+        text = correlation_unchecked_note(tickers)
+        for t in sorted(tickers)[:5]:
+            assert t in text
+        assert "+3 more" in text
+
+    def test_names_the_classification_describes_other_holdings_only(self):
+        text = correlation_unchecked_note(["AAA"])
+        assert "other holdings only" in text
+        assert "not a sign" in text
+        assert "uncorrelated" in text
+
+    def test_couldnt_be_loaded_not_couldnt_be_priced(self):
+        # A ticker with an empty/missing-Close history can still carry a
+        # live current_price shown elsewhere on screen -- "couldn't be
+        # priced" would contradict that number.
+        text = correlation_unchecked_note(["AAA"])
+        assert "price history couldn't be loaded" in text
+        assert "couldn't be priced" not in text
+
+    def test_never_contains_bold_markers_or_dollar_signs(self):
+        for unchecked in (None, [], ["AAA"], ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]):
+            text = correlation_unchecked_note(unchecked)
+            if text is not None:
+                assert "**" not in text
+                assert "$" not in text
+
+    def test_malformed_list_degrades_gracefully(self):
+        text = correlation_unchecked_note([None, 123, "AAA"])
+        assert text is not None
+        assert "AAA" in text
+
+    def test_all_blank_entries_returns_none(self):
+        assert correlation_unchecked_note(["", "  ", None]) is None
+
+
+class TestDiversificationLabelText:
+    """Companion to `correlation_unchecked_note` above -- qualifies the
+    diversification LABEL rather than the fuller caption, reading the SAME
+    `corr_unchecked` input so the two can never disagree about which gap
+    they describe."""
+
+    def test_empty_list_returns_the_label_unchanged(self):
+        assert diversification_label_text("Well Diversified", []) == "Well Diversified"
+
+    def test_none_returns_the_label_unchanged(self):
+        assert diversification_label_text("Well Diversified", None) == "Well Diversified"
+
+    def test_unavailable_label_is_never_qualified(self):
+        # The withheld-state label already says nothing was computed --
+        # appending a footnote to it would be noise, even with a populated
+        # unchecked list (defensive; this combination shouldn't arise in
+        # practice since the producer sets corr_unchecked=None alongside it).
+        assert diversification_label_text("Unavailable", ["AAA"]) == "Unavailable"
+
+    def test_control_asserts_the_exact_unqualified_string(self):
+        # The real control case: a clean, fully-checked read must come back
+        # byte-for-byte identical, not merely "truthy" or "contains".
+        result = diversification_label_text("Moderate", [])
+        assert result == "Moderate"
+        assert "not checked" not in result
+
+    def test_populated_list_appends_a_qualifier_with_the_exact_count(self):
+        assert diversification_label_text("Well Diversified", ["AAA"]) == \
+            "Well Diversified · 1 not checked"
+
+    def test_count_reflects_deduped_distinct_tickers(self):
+        assert diversification_label_text("Moderate", ["AAA", "aaa", "BBB"]) == \
+            "Moderate · 2 not checked"
+
+    def test_pluralisation_scales_with_count(self):
+        one = diversification_label_text("Well Diversified", ["AAA"])
+        two = diversification_label_text("Well Diversified", ["AAA", "BBB"])
+        assert one == "Well Diversified · 1 not checked"
+        assert two == "Well Diversified · 2 not checked"
+        assert one != two
+
+    def test_blank_only_entries_return_the_label_unchanged(self):
+        assert diversification_label_text("Well Diversified", ["", "  "]) == "Well Diversified"
+
+
+class TestDiversificationLabelThinSample:
+    """The `corr_coverage` leg — a BLOCKING review finding (2026-10-09).
+
+    An entirely-NaN matrix (a short/non-overlapping history collapses the
+    listwise intersection) leaves `corr_unchecked == []`, because every
+    ticker genuinely IS a column, while `n_obs` is 0 and
+    `diversification_score`'s `else 0.0` fallback scores 50 -> "Well
+    Diversified". The unchecked-list leg alone therefore left Home and
+    Summary unqualified while Risk Analysis showed "not reliable" from the
+    same matrix. These pin the second leg that closes that.
+    """
+
+    def _floor(self):
+        from stock_analyzer.portfolio import CORR_MIN_OBS_TRUSTED
+        return CORR_MIN_OBS_TRUSTED
+
+    def test_zero_obs_is_qualified_even_with_nothing_unchecked(self):
+        # The exact reproduced defect state.
+        out = util.diversification_label_text("Well Diversified", [], {"n_obs": 0})
+        assert out == "Well Diversified · sample too thin"
+
+    def test_below_floor_is_qualified(self):
+        f = self._floor()
+        out = util.diversification_label_text("Well Diversified", [], {"n_obs": f - 1})
+        assert out == "Well Diversified · sample too thin"
+
+    def test_exactly_at_floor_is_not_qualified(self):
+        # Control, asserting the REAL unqualified string -- without this the
+        # pair above could pass while the function qualified everything.
+        f = self._floor()
+        out = util.diversification_label_text("Well Diversified", [], {"n_obs": f})
+        assert out == "Well Diversified"
+
+    def test_ample_sample_is_not_qualified(self):
+        out = util.diversification_label_text("Well Diversified", [], {"n_obs": 125})
+        assert out == "Well Diversified"
+
+    def test_coverage_none_leaves_label_alone(self):
+        # "couldn't check" is said by correlation_unchecked_note, not here.
+        assert util.diversification_label_text("Well Diversified", [], None) == "Well Diversified"
+
+    def test_bool_n_obs_is_rejected_not_treated_as_one(self):
+        # True == 1 would otherwise read as a 1-observation sample and
+        # qualify. isinstance(x, bool) must reject it before the comparison.
+        out = util.diversification_label_text("Well Diversified", [], {"n_obs": True})
+        assert out == "Well Diversified"
+
+    def test_malformed_n_obs_never_raises_and_leaves_label(self):
+        for bad in ({"n_obs": None}, {"n_obs": "125"}, {}, {"n_obs": float("nan")}):
+            assert util.diversification_label_text("Moderate", [], bad) == "Moderate"
+
+    def test_unavailable_label_is_never_qualified(self):
+        assert util.diversification_label_text("Unavailable", [], {"n_obs": 0}) == "Unavailable"
+
+    def test_both_gaps_true_shows_BOTH_facts(self):
+        """Neither gap suppresses the other.
+
+        The first version of this showed only "sample too thin" when both
+        were true. Review flagged the cost: the "N not checked" fact then
+        vanishes entirely from Home's KPI and Summary's card, which — unlike
+        🔗 Risk Analysis — have no caption beneath them to carry it. Hiding
+        one true fact to make room for a more severe one is still hiding it,
+        which is the opposite of what this whole change is for.
+        """
+        assert util.diversification_label_text("Moderate", ["CCC"], {"n_obs": 0}) == (
+            "Moderate · sample too thin · 1 not checked"
+        )
+        assert util.diversification_label_text(
+            "Moderate", ["C", "D"], {"n_obs": 14}
+        ) == "Moderate · sample too thin · 2 not checked"
+
+    def test_each_gap_alone_shows_only_its_own_clause(self):
+        # Controls for the above: neither clause leaks into the other's case.
+        assert util.diversification_label_text(
+            "Well Diversified", [], {"n_obs": 0}
+        ) == "Well Diversified · sample too thin"
+        assert util.diversification_label_text(
+            "Well Diversified", ["CCC"], {"n_obs": 125}
+        ) == "Well Diversified · 1 not checked"

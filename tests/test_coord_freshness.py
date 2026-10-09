@@ -431,6 +431,21 @@ class TestSurfaceMapCoversTheWidenedRegistry:
         "complete the registry" pass cannot quietly add it."""
         assert "_broker_drift_cache" not in cf.PORTFOLIO_DEPENDENT_KEYS
 
+    def test_corr_unchecked_cache_is_registered_and_reaches_both_consumers(self):
+        """F-290 disclosure follow-on (Commit 3 of 3) — `_corr_unchecked_cache`
+        must be a REGISTERED key (home-produced, decorative tier), carry a
+        `_DIMENSION_LABELS` entry, and reach BOTH the surfaces that actually
+        read it: 🔗 Risk Analysis (its own caption) and 🧾 Summary (the 🧬
+        card's qualified label). A key missing from this registry reads as
+        permanently fresh (CLAUDE.md) — this pins the registration in the
+        same commit that introduced the cache, not as a follow-up.
+        """
+        assert "_corr_unchecked_cache" in cf.PORTFOLIO_DEPENDENT_KEYS
+        assert cf.PORTFOLIO_DEPENDENT_KEYS["_corr_unchecked_cache"]["producer"] == "home"
+        assert "_corr_unchecked_cache" in cf._DIMENSION_LABELS
+        assert "_corr_unchecked_cache" in cf.SURFACE_KEYS["ra"]
+        assert "_corr_unchecked_cache" in cf.SURFACE_KEYS["sm"]
+
     def test_tracked_but_unmapped_keys_are_deliberate_not_forgotten(self):
         """Every tracked key now reaches at least one banner surface. This was
         {_risk_high_alerts_cache, _grow_today_sectors_cache} until 2026-08-28,

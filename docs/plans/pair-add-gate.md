@@ -1,6 +1,6 @@
 # G-26 — Standing Danger-Tier Correlated-Pair Add Suppression
 
-**Status: G-26 SHIPPED 2026-10-08 (`35b5bf4`); F-290 disclosure 2026-10-09 (`0f7bf67`); F-291 persisted-claim guard 2026-10-09 (commit 1 of 3, §7) — commits 2 (EOD history) and 3 (on-screen surfaces) still queued. DEPLOYED AND DORMANT as of 2026-10-09 —
+**Status: G-26 SHIPPED 2026-10-08 (`35b5bf4`); F-290 disclosure 2026-10-09 (`0f7bf67`); F-291 persisted-claim guard (§7), F-292 EOD history (§8) and F-293 on-screen disclosure (§9) ALL SHIPPED 2026-10-09 — the 3-commit sequence is COMPLETE: records withhold, screens disclose. DEPLOYED AND DORMANT as of 2026-10-09 —
 the non-firing path is screenshot-confirmed, the FIRING path is still unobserved
 and cannot be forced (see §4a).** Designed by the Opus
 `planner` (verdict: PROCEED WITH CHANGES — it rejected two details of the
@@ -425,3 +425,84 @@ either outcome.
   ticker whose bundle routinely fails — the diversification history goes NULL
   indefinitely, and that would show up only in logs and chart gaps. The line
   also fires benignly on fewer-than-2-histories days.
+
+---
+
+## 9. F-293 — the screens disclose (2026-10-09, commit 3 of 3)
+
+The sequence is complete: **records withhold** (§7 thesis, §8 EOD history),
+**screens disclose** (here).
+
+Three surfaces assert a diversification classification — 🔗 Risk Analysis,
+🏠 Home's Diversification KPI, 🧾 Summary's 🧬 card — and none of them said when
+the classification could not actually evaluate the whole book. All three now
+render through two shared pure functions (`util.correlation_unchecked_note`,
+`util.diversification_label_text`), so they cannot drift into three different
+answers about one matrix.
+
+**Two independent gaps, and both show when both are true:**
+
+| state | label |
+|---|---|
+| all measured | `Well Diversified` |
+| a holding missing from the matrix | `Well Diversified · 1 not checked` |
+| sample below `CORR_MIN_OBS_TRUSTED` | `Well Diversified · sample too thin` |
+| both | `Moderate · sample too thin · 2 not checked` |
+| coverage unknown | unqualified — "couldn't check" belongs in the caption |
+
+`_corr_unchecked_cache` is published on both Home paths and registered in
+`coord_freshness` (`TIER_DECORATIVE`, both `SURFACE_KEYS["ra"]`/`["sm"]`).
+**That registration is required in the same commit** — a key missing from the
+registry reads as permanently fresh. Risk Analysis deliberately never
+recomputes: its only local expected-ticker set is `list(_ra_hd.keys())`, which
+is circular.
+
+Also fixed a caption §8 had made wrong: the 💰 Account Risk Trend chart said a
+gap meant the metric "couldn't be computed", which since F-292 can also mean
+computed-but-withheld.
+
+### The blocking review finding, and why it is a brief problem not a build problem
+
+Opus reviewer **FIX-FIRST/1 → SHIP/0** on the confirmation pass.
+
+The brief said the all-NaN case was "in scope", but the mechanism it specified —
+qualify the label on `corr_unchecked` — **cannot catch that case**, because
+`corr_unchecked` is `[]` in exactly that state (every ticker genuinely IS a
+column while `n_obs == 0`). So Home and Summary would have shown
+"Well Diversified" while Risk Analysis's existing coverage block showed
+"⛔ not reliable" **from the same matrix** — the precise double-surface
+contradiction the shared function exists to prevent. The build did what was
+asked; the gap was in the asking.
+
+Fixed by passing `corr_coverage` as a second input. A follow-on review note then
+caught that showing only the more severe clause **hid** the "N not checked" fact
+on the two screens that have no caption beneath them — so both clauses now
+render. Hiding one true fact behind another is the opposite of this change's
+purpose.
+
+### The mutation that two existing AST tests missed
+
+Review mutation-tested the wiring guards and found one survivor: moving the
+collapse from the session_state write to the **local** assignment
+(`_corr_unchecked = _crb["corr_unchecked"] or []`). The bare name still reaches
+`session_state`, so both existing tests pass — **and `check_antipatterns` cannot
+see it either**, because its sentinel rule matches a `.get()` CALL, not a
+subscript.
+
+Now pinned by a never-a-`BoolOp` guard, re-mutated to confirm it fails. Worth
+recording that the first attempt at that guard asserted "the value must be a
+Subscript" and failed immediately, because two legitimate sites use `.get()` —
+the property that actually matters was narrower than the shape.
+
+### Deliberately not done
+
+- `isinstance` hardening on inputs the producer cannot emit — a test that can
+  only exercise an impossible input is close to vacuous itself. Reviewer agreed.
+- A `help=` tooltip naming the tickers on Home's KPI — polish, deferred per
+  `feedback_ui_polish`. Reviewer agreed.
+
+### Still unverified in production
+
+None of the three surfaces has rendered a qualifier, and none can be forced —
+it needs a real partial price-history failure or a genuinely thin sample. Real
+`n_obs` has been 69-125. Track it as §4a/§6 track their own.

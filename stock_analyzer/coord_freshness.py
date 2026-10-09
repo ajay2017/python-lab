@@ -181,6 +181,10 @@ PORTFOLIO_DEPENDENT_KEYS: dict[str, dict] = {
     "_risk_pairs_cache":    {"producer": "home", "tier": TIER_DECORATIVE, "why": "derived from _corr_df_cache"},
     "_div_label_cache":     {"producer": "home", "tier": TIER_DECORATIVE, "why": "derived from _corr_df_cache"},
     "_corr_coverage_cache": {"producer": "home", "tier": TIER_DECORATIVE, "why": "describes _corr_df_cache's sample"},
+    "_corr_unchecked_cache": {
+        "producer": "home", "tier": TIER_DECORATIVE,
+        "why": "names held tickers missing from _corr_df_cache",
+    },
 }
 
 FRESH, STALE, ABSENT = "fresh", "stale", "absent"
@@ -354,6 +358,7 @@ _DIMENSION_LABELS = {
     "_risk_pairs_cache": "diversification",
     "_div_label_cache": "diversification",
     "_corr_coverage_cache": "diversification",
+    "_corr_unchecked_cache": "diversification",
     "_acct_gate_cache": "concentration limits",
     "_actions_cache": "rebalance actions",
     "_alert_list_cache": "portfolio alerts",
@@ -412,6 +417,9 @@ SURFACE_KEYS: dict[str, tuple] = {
     # direction: a surface that reads a stale cache and is never told.
     # _leverage_cache added 2026-08-28: the redesigned Safety strip reads it
     # directly to render the Book Safety zone.
+    # _corr_unchecked_cache added 2026-10-09 (F-290 disclosure follow-on):
+    # Summary's 🧬 Diversification card qualifies its label via
+    # util.diversification_label_text, same as 🔗 Risk Analysis's caption.
     # _broker_drift_cache and _day_shock_cache are intentionally NOT listed:
     #   _broker_drift_cache is external broker ground truth — it is refreshed
     #     by the broker sync lane and is not portfolio-epoch-derived, so a
@@ -420,11 +428,12 @@ SURFACE_KEYS: dict[str, tuple] = {
     #     derived computation — its freshness is time-based, not book-based.
     "sm":    ("_alert_list_cache", "_div_label_cache", "_div_score_cache",
               "_dpnl_cache", "_fragility_cache", "_leverage_cache", "_reduce_calls",
-              "_structural_alert_cache"),
+              "_structural_alert_cache", "_corr_unchecked_cache"),
     "aa":    ("_actions_cache", "_alert_list_cache", "_div_recs_cache", "_grow_composites"),
     "ra":    ("_avg_corr_cache", "_corr_coverage_cache", "_corr_df_cache", "_div_label_cache",
               "_div_score_cache", "_fragility_cache", "_leverage_cache", "_pi_factor_tilt_cache",
-              "_port_risk_cache", "_risk_advisor_recs_cache", "_risk_pairs_cache"),
+              "_port_risk_cache", "_risk_advisor_recs_cache", "_risk_pairs_cache",
+              "_corr_unchecked_cache"),
     "pi":    ("_corr_df_cache", "_pi_factor_tilt_cache"),
     "pa":    ("_acct_gate_cache", "_div_recs_cache", "_reduce_calls", "_risk_advisor_recs_cache"),
     "ph":    ("_avg_corr_cache", "_div_score_cache", "_fragility_cache", "_highbeta_share",

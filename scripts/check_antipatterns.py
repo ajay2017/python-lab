@@ -139,7 +139,7 @@ _SENTINEL_KEYS = frozenset({
     "_risk_high_alerts_cache", "_risk_advisor_recs_cache", "_alert_list_cache",
     "_actions_cache", "_div_recs_cache", "_corr_df_cache", "_div_score_cache",
     "_avg_corr_cache", "_risk_pairs_cache", "_div_label_cache",
-    "_corr_coverage_cache", "_grow_today_sectors_cache", "_grow_composites",
+    "_corr_coverage_cache", "_corr_unchecked_cache", "_grow_today_sectors_cache", "_grow_composites",
     "_grow_composites_coverage", "_acct_gate_cache", "_leverage_cache",
     "_reduce_calls", "_day_shock_cache", "_structural_alert_cache", "_dpnl_cache",
     "_leading_sectors_cache", "_market_tone_cache", "_mirror_orphans",

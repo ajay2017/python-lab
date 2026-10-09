@@ -352,6 +352,8 @@ from stock_analyzer.util import catalyst_watch_nav_badge
 from stock_analyzer.util import signals_advice_nav_badge
 from stock_analyzer.util import benchmark_mirror_summary_state
 from stock_analyzer.util import defense_facet_badge
+from stock_analyzer.util import correlation_unchecked_note
+from stock_analyzer.util import diversification_label_text
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -5847,6 +5849,10 @@ if page == "🏠 Home":
         st.session_state["_risk_pairs_cache"]         = risk_pairs
         st.session_state["_div_label_cache"]          = _div_label
         st.session_state["_corr_coverage_cache"]      = _corr_cov
+        # F-290 disclosure follow-on — same restore discipline as _corr_cov
+        # above; `_corr_unchecked` (restored a few lines up from the memoized
+        # bundle) is None/[]/list, never collapsed with `or []`.
+        st.session_state["_corr_unchecked_cache"]     = _corr_unchecked
         st.session_state["_n_danger_cache"]           = n_danger
         st.session_state["_n_warning_cache"]          = n_warning
         st.session_state["_grow_composites"]          = _grow_composites
@@ -5971,6 +5977,11 @@ if page == "🏠 Home":
         st.session_state["_risk_pairs_cache"]    = risk_pairs
         st.session_state["_div_label_cache"]     = _div_label
         st.session_state["_corr_coverage_cache"] = _corr_cov
+        # F-290 disclosure follow-on — same restore discipline as _corr_cov
+        # above; `_corr_unchecked` is the SAME object just computed from
+        # this render's own corr_df (_crb["corr_unchecked"]), never a second
+        # independent computation.
+        st.session_state["_corr_unchecked_cache"] = _corr_unchecked
         st.session_state["_div_recs_cache"]      = div_recs
 
         # G-25 (docs/plans/cluster-add-gate.md) — compute today's live new-
@@ -7185,7 +7196,8 @@ if page == "🏠 Home":
                help=f"{n_danger} danger · {n_warning} Watch — check 📡 Signals & Advice")
     _c5.metric("Avg Score",        f"{avg_score:.0f}/100")
     _c6.metric("Diversification",  f"{div_score:.0f}/100" if div_score is not None else "—",
-               _div_label, delta_color="off")
+               diversification_label_text(_div_label, _corr_unchecked, _corr_cov),
+               delta_color="off")
     # Value = $ amount (masked under privacy); delta = % with explicit sign so
     # Streamlit's arrow/color parser sees the minus (a "$-450" delta string is
     # mis-parsed as positive because the $ prefix hides the sign).
@@ -12654,6 +12666,23 @@ elif page == "🧾 Summary":
     _sm_n_warning = _sm_bundle.get("n_warning", 0)
     _sm_div_score = _sm_bundle.get("div_score")
     _sm_div_label = _sm_bundle.get("_div_label", "")
+    # F-290 disclosure follow-on — .get() not `or []`: None means "couldn't
+    # check this session", [] means "checked, nothing missing". Re-assigned
+    # onto _sm_div_label itself (rather than qualified at the render site
+    # below) so the 🧬 card's f-string source text is untouched — changing
+    # it would re-key check_antipatterns.py's baseline on an unrelated
+    # pre-existing partial-escaping finding a few lines below (_sm_div_score
+    # is interpolated unwrapped in the same markdown call).
+    _sm_corr_unchecked = _sm_bundle.get("_corr_unchecked")
+    # corr_coverage too, not just the missing-ticker list — an entirely-NaN
+    # matrix leaves _corr_unchecked EMPTY (every ticker is a column) while
+    # n_obs is 0, so the unchecked list alone would leave this label reading
+    # "Well Diversified" off zero observations while 🔗 Risk Analysis shows
+    # "⛔ not reliable" from the same matrix (blocking review finding,
+    # 2026-10-09).
+    _sm_div_label = diversification_label_text(
+        _sm_div_label, _sm_corr_unchecked, _sm_bundle.get("corr_coverage")
+    )
     # No RAG banner here (dropped 2026-07-26) — it duplicated Home's identical
     # "Portfolio Command Center" bar and its "Action Required" chip (driven by
     # danger-level Active Alerts, F-169) can legitimately disagree with an
@@ -15525,6 +15554,10 @@ elif page == "🔗 Risk Analysis":
     # matrix actually on screen. None = unknown (producer failed, or a bundle
     # memoized before the schema bump) — never read as "sample is fine".
     _corr_cov           = st.session_state.get("_corr_coverage_cache")
+    # F-290 disclosure follow-on — .get() not `or []`: None means "couldn't
+    # check this session", [] means "checked, nothing missing"; collapsing
+    # the two would read an offline producer as a clean pass.
+    _corr_unchecked     = st.session_state.get("_corr_unchecked_cache")
 
     (_ra_tab_dash, _ra_tab_action, _ra_tab_stress, _ra_tab_mc,
      _ra_tab_rules) = st.tabs([
@@ -16050,6 +16083,14 @@ elif page == "🔗 Risk Analysis":
                     )
                 else:
                     st.caption(f"{_cov_txt}.")
+
+            # F-290 — a DIFFERENT gap than the coverage note above: that block
+            # describes the sample behind a matrix that includes every held
+            # ticker; this names a held ticker that never entered the matrix
+            # at all because its price history failed to load this run.
+            _corr_unchecked_note = correlation_unchecked_note(_corr_unchecked)
+            if _corr_unchecked_note:
+                st.caption(_corr_unchecked_note)
 
             if risk_pairs:
                 st.markdown("**Correlated pairs — reduce diversification benefit:**")
@@ -36511,8 +36552,10 @@ elif page == "💰 Account":
                 st.caption(
                     "A gap in either line means that metric couldn't be computed "
                     "that day (e.g. fewer than 2 usable price histories for "
-                    "correlation, or insufficient data for beta) — never filled "
-                    "in as zero or a neutral midpoint either way."
+                    "correlation, or insufficient data for beta), or that it was "
+                    "computed but withheld as unverified (a held ticker missing "
+                    "from the matrix, or too few overlapping trading days) — "
+                    "never filled in as zero or a neutral midpoint either way."
                 )
 
         # ── 💳 Capital vs Margin ─────────────────────────────────────────────────
