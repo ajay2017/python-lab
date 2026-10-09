@@ -1,6 +1,6 @@
 # G-26 — Standing Danger-Tier Correlated-Pair Add Suppression
 
-**Status: SHIPPED 2026-10-08 (`35b5bf4`), DEPLOYED AND DORMANT as of 2026-10-09 —
+**Status: G-26 SHIPPED 2026-10-08 (`35b5bf4`); F-290 disclosure 2026-10-09 (`0f7bf67`); F-291 persisted-claim guard 2026-10-09 (commit 1 of 3, §7) — commits 2 (EOD history) and 3 (on-screen surfaces) still queued. DEPLOYED AND DORMANT as of 2026-10-09 —
 the non-firing path is screenshot-confirmed, the FIRING path is still unobserved
 and cannot be forced (see §4a).** Designed by the Opus
 `planner` (verdict: PROCEED WITH CHANGES — it rejected two details of the
@@ -247,3 +247,95 @@ for the cache-HIT restore of `_corr_unchecked`, whose deletion would be a
 The caption has never rendered — it needs a real partial price-history failure,
 which cannot be forced. Track it like §4a: a passing suite is not evidence for
 anything that renders in `app.py`.
+
+---
+
+## 7. F-291 — persisted claims withhold (2026-10-09, commit 1 of 3)
+
+F-290 made the blind spot visible on screen. This stops it being written into a
+**durable record**. Shipped as the first of three sequenced, separately-reviewed
+commits.
+
+**The governing rule, worth stating once: screens disclose, records withhold.**
+A caption is corrected by the next render; a graded baseline is not.
+`portfolio_thesis._classify_correlation` persists its verdict via
+`save_portfolio_thesis`, and that row is next week's HELD/SHIFTED comparison
+baseline — the module's own comment already named it "the only claim in this
+module that can poison a durable record", and it guarded the offline-cluster
+case for exactly that reason while never guarding coverage.
+
+**The second defect, which is why there is an `n_obs` floor.** Reproduced in the
+venv with the real functions (AAA/BBB at 60 bars, CCC at 1 bar):
+
+| step | result |
+|---|---|
+| `correlation_matrix` | non-empty 3×3, **entirely NaN** |
+| `diversification_score` | `{'score': 50.0, 'avg_correlation': 0.0, 'risk_pairs': []}` |
+| vs `DIVERSIFY_WELL_PCT` (42) | → label **"Well Diversified"** |
+| `correlation_unchecked` | `[]` — every ticker IS a column |
+| `correlation_coverage` | **`n_obs = 0`** |
+
+So the app can assert "Well Diversified" from zero measurements, and a
+coverage-only guard does not catch it. The cause is
+`diversification_score`'s `avg_corr … else 0.0` fallback turning "no data" into
+"average correlation 0.0".
+
+**What shipped.** `portfolio.correlation_claim_verified(corr_unchecked,
+corr_coverage) -> bool` — true only for an empty list/tuple AND a real `int`
+`n_obs >= CORR_MIN_OBS_TRUSTED`, rejecting `bool`/`None`/`str`/NaN, never
+raising. Deliberately NOT `not corr_unchecked`, which would read `None`
+("couldn't check") as verified. `correlation_unchecked` was also hardened: an
+empty normalized held set now returns `None` rather than a vacuously-clean `[]`.
+Thesis `schema_version` 1 → 2.
+
+**Owner decisions:** include the floor; **strict ordering** (withhold even when a
+new cluster was detected, giving the one-sentence invariant *the correlation
+claim is only ever persisted from a matrix that covered every holding*); keep
+`CORR_MIN_OBS_TRUSTED` in `portfolio.py` as a data-quality call.
+
+### Review
+
+Opus reviewer **SHIP, 0 blocking**. Three non-blocking findings fixed before
+commit, two of which are lessons rather than typos:
+
+1. **The predicate's own docstring stated the inverted rule** — "a non-empty
+   `corr_unchecked` is not sufficient to withhold" when the code withholds on
+   exactly that. The decision function's own contract, so it fell under the
+   doc-integrity rule.
+2. **The type-guard tests were vacuous — the third instance of this class in
+   three commits.** With the real floor at 20, `{"n_obs": True}` passes because
+   `True == 1 < 20`, and `{"n_obs": "125"}` passes because the comparison raises
+   a TypeError the function already swallows. **Deleting the `bool` guard left
+   all seven original cases green.** Fixed by monkeypatching the floor to 1 so
+   only the guard itself can reject `True`; **mutation-verified** — removing the
+   guard now fails the new test while the old ones stay green.
+3. **`numpy.int64` is rejected** (verified). That is the safe direction, but
+   silent: a future refactor of `correlation_coverage` to return a numpy count
+   would turn every weekly claim "unavailable" with no test failing. Pinned with
+   a producer-side `type(...) is int` assertion.
+
+### Known and deliberate
+
+- **One write per ISO week.** A partial-coverage first Summary visit costs that
+  whole week's correlation claim (`not_comparable` the next week). Same shape as
+  the existing offline-cluster guard; a rewrite-on-recovery would mean changing
+  the write guard, out of scope.
+- **Historical rows cannot be distinguished retroactively** — nothing recorded
+  the held set or coverage. `schema_version` 1 means coverage was unverified.
+  No backfill; mutating history to guard against a rare case would discard a
+  mostly-true record.
+- **The thesis prose says "Correlation structure is unavailable this week."
+  without a reason** (missing holding vs thin sample vs offline scan). Commit 3
+  covers the on-screen side.
+- **Still open, separate decision: the gate-side twin.** G-25/G-26 read that same
+  all-NaN matrix as "checked, clean" (`risk_pairs == []`, no clusters), and
+  F-290's caption stays silent. Fixing it at source would collapse
+  `build_correlation_bundle` into its except path and change the gates'
+  "couldn't check" state — it needs its own design pass. **How a 1-bar or
+  non-overlapping history actually arises in production is an unverified
+  hypothesis**; real `n_obs` has been 69-125.
+
+**Commits 2 and 3 still queued:** the EOD history write (needs `held_tickers`
+plumbed through `headless_alert_engine`, since `held_data` there has already
+lost the failed loads and would be circular), and the three on-screen
+"Well Diversified" surfaces via one shared function.

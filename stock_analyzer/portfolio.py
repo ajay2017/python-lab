@@ -1343,11 +1343,15 @@ def sector_benchmark_tilt(real_sector_df: pd.DataFrame) -> pd.DataFrame:
 # Display-only measurement floor — NOT an investment-policy threshold, so it
 # lives here rather than in constants.py, matching the F-230
 # `stress_test._MIN_STRESS_WINDOW_DAYS` / `account._ANNUALIZE_CAVEAT_MAX_DAYS`
-# precedent. It decides only whether a data-quality WARNING is shown next to an
-# awareness reading; it gates no recommendation and changes no score. The value
-# is not newly invented: it reuses the app's existing "≥20 overlapping trading
-# days" empirical-correlation minimum (`portfolio_intelligence.factor_tilt`'s
-# `min_overlap_days`, itself mirroring risk.py's rate-sensitivity floor).
+# precedent. It decides whether a data-quality WARNING is shown next to an
+# awareness reading (gates no recommendation, changes no score) AND, as of
+# `correlation_claim_verified()` below, whether a correlation-derived claim is
+# trustworthy enough to be PERSISTED into a durable record — a data-quality
+# call, not an investment-policy one, which is why it still lives here rather
+# than in constants.py. The value is not newly invented: it reuses the app's
+# existing "≥20 overlapping trading days" empirical-correlation minimum
+# (`portfolio_intelligence.factor_tilt`'s `min_overlap_days`, itself mirroring
+# risk.py's rate-sensitivity floor).
 CORR_MIN_OBS_TRUSTED = 20
 
 
@@ -1445,13 +1449,23 @@ def correlation_unchecked(corr_df, held_tickers) -> "list[str] | None":
 
     Returns
     -------
-    None  -- `corr_df` is None/empty, `held_tickers` is None, or anything
-             raises (couldn't check — fail-open elsewhere, disclose here).
+    None  -- `corr_df` is None/empty, `held_tickers` is None, the normalized
+             held set is empty (nothing left to vacuously pass — see below),
+             or anything raises (couldn't check — fail-open elsewhere,
+             disclose here).
     []    -- every held ticker (uppercased, de-duplicated, blanks dropped) is
               present among `corr_df.columns`.
     list  -- sorted, de-duplicated, uppercase held tickers absent from the
               matrix. A matrix column that isn't held is ignored — this only
               ever reports on HELD tickers.
+
+    An empty normalized held set (`held_tickers=[]`, or entries that are all
+    blank/whitespace) returns `None`, not `[]` — a prior version returned `[]`
+    here ("vacuously, every held ticker is present"), which would wrongly let
+    `correlation_claim_verified()` below treat "nothing to check" as "checked,
+    clean". Unreachable from Home in practice (this only runs when `held_data`
+    is non-empty), but a pure function's contract shouldn't depend on who
+    currently calls it.
 
     Known limitations, deliberately out of scope here (do not read a `[]`
     result as "every pairing was reliably measured"):
@@ -1469,10 +1483,63 @@ def correlation_unchecked(corr_df, held_tickers) -> "list[str] | None":
         if held_tickers is None:
             return None
         held = {str(t).strip().upper() for t in held_tickers if str(t).strip()}
+        if not held:
+            return None
         cols = {str(c).strip().upper() for c in corr_df.columns}
         return sorted(held - cols)
     except Exception:
         return None
+
+
+def correlation_claim_verified(corr_unchecked, corr_coverage) -> bool:
+    """Is a correlation-derived reading trustworthy enough to be PERSISTED
+    into a durable record (vs merely disclosed on screen)?
+
+    This is the one rule every *persisting* site should use — **screens
+    disclose, records withhold** — and it is deliberately STRICTER than
+    F-290's on-screen disclosure (`correlation_unchecked`'s `[]`/`None`/list
+    three-state is fine to show live; it is not, by itself, fine to write
+    into a weekly ledger that becomes next week's grading baseline).
+
+    Returns `True` only when BOTH:
+      - `corr_unchecked` is a `list`/`tuple` of length 0 (every held ticker
+        entered the matrix — a `None` here means "couldn't check", and a
+        non-empty list means a held ticker's price history never loaded);
+      - `corr_coverage` is a dict whose `n_obs` is a real `int` (explicitly
+        NOT `bool` — `True`/`False` are `int` subclasses in Python and would
+        otherwise silently pass as 1/0) that is `>= CORR_MIN_OBS_TRUSTED`.
+
+    An EMPTY `corr_unchecked` is not, by itself, sufficient to VERIFY — which
+    is why the `n_obs` floor is the second condition rather than a nicety. A
+    matrix with full coverage but a thin sample (every held ticker present,
+    but few or no overlapping trading days) can be well-formed and entirely
+    NaN, and `diversification_score`'s `avg_corr … else 0.0` fallback then
+    scores it 50 and labels it "Well Diversified" off ZERO real observations —
+    with `corr_unchecked == []`, because every ticker genuinely is a column.
+    Reproduced in the venv, not hypothetical. Both checks are required
+    together; neither alone closes the hazard this guards against.
+
+    Deliberately NOT implemented as `not corr_unchecked` — that reads `None`
+    ("couldn't check this run") as "checked, nothing missing", which is the
+    exact sentinel-collapse class this module's `None`/`[]`/list contracts
+    exist to prevent.
+
+    Never raises: any exception (malformed input, missing key, wrong type)
+    returns `False` — refusing to persist is always the safe default here.
+    """
+    try:
+        if not isinstance(corr_unchecked, (list, tuple)):
+            return False
+        if len(corr_unchecked) != 0:
+            return False
+        if not isinstance(corr_coverage, dict):
+            return False
+        n_obs = corr_coverage.get("n_obs")
+        if isinstance(n_obs, bool) or not isinstance(n_obs, int):
+            return False
+        return n_obs >= CORR_MIN_OBS_TRUSTED
+    except Exception:
+        return False
 
 
 def _to_tz_naive(s: pd.Series) -> pd.Series:

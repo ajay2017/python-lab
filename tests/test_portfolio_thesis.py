@@ -34,6 +34,13 @@ def _full_bundle(**overrides):
         "rag_label": "Monitor",
         "div_label": "Moderate",
         "structural_new_clusters": [],
+        # Commit 1 of 3 (correlation_claim_verified) — default to a VERIFIED
+        # reading (every held ticker priced, a comfortably-above-floor
+        # sample) so every pre-existing fixture in this file still exercises
+        # a real "diversified"/"elevated"/"concentrated_cluster" verdict
+        # rather than universally degrading to "unavailable".
+        "corr_unchecked": [],
+        "corr_coverage": {"n_obs": 125},
         "holdings_scores": [70, 80, 40, 55, 90, 30, 60, 68],
         "buy_candidates": [],
     }
@@ -106,7 +113,7 @@ def test_compose_thesis_wrong_type_bundle_returns_none_not_raise():
 def test_compose_thesis_valid_bundle_returns_full_shape():
     out = pth.compose_thesis(_full_bundle(), _full_acct_gate(), {}, today=TODAY)
     assert out is not None
-    assert out["v"] == 1
+    assert out["v"] == 2
     assert out["thesis_date"] == TODAY.isoformat()
     assert set(pth.CLAIM_KEYS) <= set(out["claims"].keys())
     assert isinstance(out["prose"], str) and out["prose"]
@@ -248,6 +255,142 @@ def test_correlation_unavailable_when_structural_clusters_wrong_type():
             _full_acct_gate(), {}, today=TODAY,
         )
         assert out["claims"]["correlation_structure"] == "unavailable"
+
+
+# ── correlation_claim_verified gate (Commit 1 of 3) — "screens disclose, ───
+# ── records withhold": a correlation claim is only ever persisted from a ───
+# ── matrix that covered every holding. Each pair below varies exactly ONE ──
+# ── input and asserts the control's ACTUAL value, not merely that the two ──
+# ── differ. ──────────────────────────────────────────────────────────────
+
+def test_correlation_unavailable_when_partner_unpriced_t1_diversified_control():
+    control = pth.compose_thesis(
+        _full_bundle(div_label="Well Diversified"), _full_acct_gate(), {}, today=TODAY,
+    )
+    assert control["claims"]["correlation_structure"] == "diversified"
+
+    treatment = pth.compose_thesis(
+        _full_bundle(div_label="Well Diversified", corr_unchecked=["CCC"]),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+    assert treatment["claims"]["correlation_structure"] == "unavailable"
+
+
+def test_correlation_unavailable_when_partner_unpriced_t2_elevated_control():
+    control = pth.compose_thesis(
+        _full_bundle(div_label="Moderate"), _full_acct_gate(), {}, today=TODAY,
+    )
+    assert control["claims"]["correlation_structure"] == "elevated"
+
+    treatment = pth.compose_thesis(
+        _full_bundle(div_label="Moderate", corr_unchecked=["CCC"]),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+    assert treatment["claims"]["correlation_structure"] == "unavailable"
+
+
+def test_correlation_t3_strict_ordering_unverified_wins_over_new_cluster():
+    """Owner-ratified strict ordering: on a partial-coverage day the claim is
+    "unavailable" even when a new cluster WAS detected -- never
+    "concentrated_cluster". Control (full coverage, same new cluster) still
+    correctly reports the cluster, pinning that the ordering check -- not
+    some other difference -- is what flips the verdict."""
+    bundle_kwargs = dict(
+        div_label="Well Diversified",
+        structural_new_clusters=[{"tickers": ["A", "B"]}],
+    )
+    control = pth.compose_thesis(
+        _full_bundle(**bundle_kwargs, corr_unchecked=[]),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+    assert control["claims"]["correlation_structure"] == "concentrated_cluster"
+
+    treatment = pth.compose_thesis(
+        _full_bundle(**bundle_kwargs, corr_unchecked=["CCC"]),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+    assert treatment["claims"]["correlation_structure"] == "unavailable"
+
+
+def test_correlation_t4_missing_corr_unchecked_or_coverage_key_is_unavailable():
+    full = _full_bundle(div_label="Well Diversified")
+
+    missing_unchecked = dict(full)
+    del missing_unchecked["corr_unchecked"]
+    out = pth.compose_thesis(missing_unchecked, _full_acct_gate(), {}, today=TODAY)
+    assert out["claims"]["correlation_structure"] == "unavailable"
+
+    missing_coverage = dict(full)
+    del missing_coverage["corr_coverage"]
+    out = pth.compose_thesis(missing_coverage, _full_acct_gate(), {}, today=TODAY)
+    assert out["claims"]["correlation_structure"] == "unavailable"
+
+
+def test_correlation_t5_n_obs_boundary():
+    from stock_analyzer.portfolio import CORR_MIN_OBS_TRUSTED
+
+    at_floor = pth.compose_thesis(
+        _full_bundle(div_label="Well Diversified", corr_coverage={"n_obs": CORR_MIN_OBS_TRUSTED}),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+    assert at_floor["claims"]["correlation_structure"] == "diversified"
+
+    below_floor = pth.compose_thesis(
+        _full_bundle(div_label="Well Diversified", corr_coverage={"n_obs": CORR_MIN_OBS_TRUSTED - 1}),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+    assert below_floor["claims"]["correlation_structure"] == "unavailable"
+
+
+def test_correlation_t6_other_four_claims_unaffected_by_coverage_gate():
+    control = pth.compose_thesis(
+        _full_bundle(buy_candidates=[{"ticker": "AAA"}]),
+        _full_acct_gate(), {"AAA": {"reason": "trim"}}, today=TODAY,
+    )
+    treatment = pth.compose_thesis(
+        _full_bundle(buy_candidates=[{"ticker": "AAA"}], corr_unchecked=["CCC"]),
+        _full_acct_gate(), {"AAA": {"reason": "trim"}}, today=TODAY,
+    )
+    for key in ("risk_posture", "concentration", "holdings_health", "action_posture"):
+        assert control["claims"][key] == treatment["claims"][key]
+        assert control["claims"][key] != "unavailable"
+    # Only the correlation claim itself moved.
+    assert control["claims"]["correlation_structure"] != "unavailable"
+    assert treatment["claims"]["correlation_structure"] == "unavailable"
+
+
+def test_correlation_t7_compose_thesis_schema_version_is_2():
+    out = pth.compose_thesis(_full_bundle(), _full_acct_gate(), {}, today=TODAY)
+    assert out["v"] == 2
+
+
+def test_correlation_t8_grade_prior_not_comparable_vs_held():
+    prior = pth.compose_thesis(
+        _full_bundle(div_label="Well Diversified"), _full_acct_gate(), {}, today=TODAY,
+    )
+    assert prior["claims"]["correlation_structure"] == "diversified"
+
+    this_week_partial = pth.compose_thesis(
+        _full_bundle(div_label="Well Diversified", corr_unchecked=["CCC"]),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+    ledger = pth.grade_prior(this_week_partial, prior)
+    assert ledger["correlation_structure"]["status"] == "not_comparable"
+
+    this_week_control = pth.compose_thesis(
+        _full_bundle(div_label="Well Diversified"), _full_acct_gate(), {}, today=TODAY,
+    )
+    ledger_control = pth.grade_prior(this_week_control, prior)
+    assert ledger_control["correlation_structure"]["status"] == "held"
+
+
+def test_correlation_t9_prose_reflects_unavailable_not_diversified():
+    out = pth.compose_thesis(
+        _full_bundle(div_label="Well Diversified", corr_unchecked=["CCC"]),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+    assert "Correlation structure is unavailable this week." in out["prose"]
+    assert "Correlation structure is diversified." not in out["prose"]
 
 
 def test_holdings_health_counts_are_correct():

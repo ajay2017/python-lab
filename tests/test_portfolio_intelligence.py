@@ -4,13 +4,17 @@ and factor-tilt panels. Pure pandas/numpy logic, no I/O. Constants used (from
 stock_analyzer/constants.py): CORR_HIGH_PAIRS_THRESHOLD=0.65,
 CORR_DANGER_PAIRS_THRESHOLD=0.80. Previously zero test coverage.
 """
+import math
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from stock_analyzer import portfolio
 from stock_analyzer import portfolio_intelligence as pi
-from stock_analyzer.constants import CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD
+from stock_analyzer.constants import (
+    CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, DIVERSIFY_WELL_PCT,
+)
 from stock_analyzer.stress_test import _MIN_STRESS_WINDOW_DAYS
 
 pytestmark = pytest.mark.fast
@@ -758,11 +762,23 @@ def test_correlation_unchecked_none_on_held_tickers_none():
     assert portfolio.correlation_unchecked(df, None) is None
 
 
-def test_correlation_unchecked_empty_held_tickers_is_empty_list_not_none():
-    # held_tickers=[] is a real, known-empty answer ("nothing held"), distinct
-    # from held_tickers=None ("couldn't check").
+def test_correlation_unchecked_empty_held_tickers_is_none_not_empty_list():
+    # Commit 1 of 3 (correlation_claim_verified, docs/plans/...): an empty
+    # NORMALIZED held set while corr_df has columns now reads as None
+    # ("couldn't check" -- held_tickers itself wasn't usefully provided),
+    # not [] ("checked, every held ticker present") -- the prior behaviour
+    # would have let the empty-held-set case vacuously pass
+    # correlation_claim_verified's persistence gate. held_tickers=None still
+    # reads as None too (test below), so both "wasn't given" and "given but
+    # empty" now agree.
     df = _corr_df(["AAA", "BBB"], [("AAA", "BBB", 0.5)])
-    assert portfolio.correlation_unchecked(df, []) == []
+    assert portfolio.correlation_unchecked(df, []) is None
+
+
+def test_correlation_unchecked_blank_only_held_tickers_is_none():
+    # All-whitespace/blank entries normalize to the same empty set as [].
+    df = _corr_df(["AAA", "BBB"], [("AAA", "BBB", 0.5)])
+    assert portfolio.correlation_unchecked(df, ["", "   "]) is None
 
 
 def test_correlation_unchecked_normalizes_lowercase_duplicates_and_blanks():
@@ -788,3 +804,162 @@ def test_correlation_unchecked_never_raises_on_malformed_held_tickers():
     # raise — the try/except is the whole point of this guarantee.
     df = _corr_df(["AAA", "BBB"], [("AAA", "BBB", 0.5)])
     assert portfolio.correlation_unchecked(df, object()) is None
+
+
+# ── correlation_claim_verified: is a correlation reading trustworthy enough ──
+# ── to PERSIST (vs merely disclose on screen)? ───────────────────────────────
+# Commit 1 of 3, docs/plans/state-of-portfolio-standing-thesis.md follow-on.
+# "Screens disclose, records withhold" — deliberately stricter than F-290's
+# on-screen `correlation_unchecked` disclosure. Each pair below varies exactly
+# ONE input and asserts the control's actual value, not merely that the two
+# differ (this project has twice shipped a vacuous test of that shape).
+
+def test_correlation_claim_verified_p1_fully_covered_sample_is_true():
+    assert portfolio.correlation_claim_verified([], {"n_obs": 125}) is True
+
+
+def test_correlation_claim_verified_p2_missing_ticker_is_false():
+    assert portfolio.correlation_claim_verified(["CCC"], {"n_obs": 125}) is False
+
+
+def test_correlation_claim_verified_p3_none_corr_unchecked_is_false():
+    """The test that kills a `not x` implementation: `not None` is True, so a
+    buggy `not corr_unchecked` would wrongly read "couldn't check" as
+    verified. Coverage is otherwise perfectly fine here -- only the
+    couldn't-check sentinel is under test."""
+    assert portfolio.correlation_claim_verified(None, {"n_obs": 125}) is False
+
+
+def test_correlation_claim_verified_p4_container_type_variants():
+    assert portfolio.correlation_claim_verified((), {"n_obs": 125}) is True
+    for bad in ("", {}, 0, set()):
+        assert portfolio.correlation_claim_verified(bad, {"n_obs": 125}) is False
+
+
+def test_correlation_claim_verified_p5_n_obs_boundary():
+    floor = portfolio.CORR_MIN_OBS_TRUSTED
+    assert portfolio.correlation_claim_verified([], {"n_obs": floor}) is True
+    assert portfolio.correlation_claim_verified([], {"n_obs": floor - 1}) is False
+
+
+@pytest.mark.parametrize("bad_coverage", [
+    None,
+    {},
+    {"n_obs": None},
+    {"n_obs": "125"},
+    {"n_obs": True},
+    {"n_obs": math.nan},
+])
+def test_correlation_claim_verified_p6_malformed_coverage_is_false_never_raises(bad_coverage):
+    assert portfolio.correlation_claim_verified([], bad_coverage) is False
+
+
+@pytest.mark.parametrize("bad_n_obs", [True, "125"])
+def test_correlation_claim_verified_p6b_type_guards_are_load_bearing(
+    monkeypatch, bad_n_obs
+):
+    """The bool/str guards must be what rejects these, not the floor.
+
+    Opus review 2026-10-09 caught the P6 cases above proving nothing: with the
+    real floor at 20, `True` equals 1 and is already below it, and `"125" >= 20`
+    raises a TypeError the function's own except already swallows. Deleting
+    `isinstance(n_obs, bool)` or the int check leaves P6 passing, so neither
+    guard was actually tested.
+
+    Dropping the floor to 1 removes that cover: `True` (==1) now CLEARS the
+    floor, so only the bool guard can reject it, and a str that would compare
+    successfully is still rejected only by the int check. Mutation-verified:
+    removing either guard fails this test while leaving P6 green.
+    """
+    monkeypatch.setattr(portfolio, "CORR_MIN_OBS_TRUSTED", 1)
+    # Control: the floor really is permissive now, so a pass here is the
+    # guard doing the work rather than the threshold.
+    assert portfolio.correlation_claim_verified([], {"n_obs": 1}) is True
+    assert portfolio.correlation_claim_verified([], {"n_obs": bad_n_obs}) is False
+
+
+def test_correlation_claim_verified_p7_end_to_end_thin_partner_hazard():
+    """Reproduces the real hazard in the venv, through the REAL
+    correlation_matrix/correlation_coverage/diversification_score/
+    correlation_unchecked chain (not a hand-built corr_df): AAA/BBB at 60
+    bars, CCC at 1 bar. `_close_series_map` doesn't drop CCC (it has a real,
+    non-empty Close column), so correlation_unchecked reports [] (nothing
+    MISSING) even though the LISTWISE-intersected sample is zero observations
+    -- a coverage-only guard would NOT catch this; the sample floor is
+    required. Pins that the hazard is real (score clears the "well
+    diversified" bar from zero shared observations) before pinning that the
+    predicate correctly refuses it."""
+    held = {"AAA": {"df": _hist(60)}, "BBB": {"df": _hist(60)}, "CCC": {"df": _hist(1)}}
+    held_tickers = ["AAA", "BBB", "CCC"]
+    corr = portfolio.correlation_matrix(held)
+    cov = portfolio.correlation_coverage(held)
+    div = portfolio.diversification_score(corr)
+    unchecked = portfolio.correlation_unchecked(corr, held_tickers)
+
+    assert not corr.empty
+    assert div["score"] is not None and div["score"] >= DIVERSIFY_WELL_PCT
+    assert unchecked == []
+    assert portfolio.correlation_claim_verified(unchecked, cov) is False
+
+    # Control: drop CCC from both held_data and the held list -- a real,
+    # fully-covered, comfortably-above-floor sample verifies True.
+    held_ok = {"AAA": {"df": _hist(60)}, "BBB": {"df": _hist(60)}}
+    held_tickers_ok = ["AAA", "BBB"]
+    corr_ok = portfolio.correlation_matrix(held_ok)
+    cov_ok = portfolio.correlation_coverage(held_ok)
+    unchecked_ok = portfolio.correlation_unchecked(corr_ok, held_tickers_ok)
+    assert portfolio.correlation_claim_verified(unchecked_ok, cov_ok) is True
+
+
+def test_correlation_claim_verified_p8_held_list_names_an_unpriceable_ticker():
+    # held_data only has AAA/BBB priced, but the held LIST also names CCC
+    # (a real holding whose history never loaded) -- CCC is reported missing.
+    held_data = {"AAA": {"df": _hist(40)}, "BBB": {"df": _hist(40)}}
+    held_tickers = ["AAA", "BBB", "CCC"]
+    corr = portfolio.correlation_matrix(held_data)
+    cov = portfolio.correlation_coverage(held_data)
+    unchecked = portfolio.correlation_unchecked(corr, held_tickers)
+    assert portfolio.correlation_claim_verified(unchecked, cov) is False
+
+    # Control: held list matches held_data exactly -- nothing missing.
+    held_tickers_ok = ["AAA", "BBB"]
+    unchecked_ok = portfolio.correlation_unchecked(corr, held_tickers_ok)
+    assert portfolio.correlation_claim_verified(unchecked_ok, cov) is True
+
+
+def test_correlation_claim_verified_p9_empty_held_list_is_not_verified():
+    # Companion to the hardened correlation_unchecked contract above: a
+    # non-empty matrix with an empty held-tickers list now reads as None
+    # ("couldn't check"), which the predicate must refuse, not vacuously pass.
+    df = _corr_df(["AAA", "BBB"], [("AAA", "BBB", 0.5)])
+    unchecked = portfolio.correlation_unchecked(df, [])
+    assert unchecked is None
+    assert portfolio.correlation_claim_verified(unchecked, {"n_obs": 125}) is False
+
+
+def test_correlation_coverage_n_obs_is_a_plain_int_not_numpy():
+    """Pins the producer's type, because the consumer rejects numpy ints.
+
+    Opus review 2026-10-09: `correlation_claim_verified` requires a real
+    Python `int`, and `numpy.int64(125)` is rejected (verified). That is the
+    SAFE direction -- an unrecognised type withholds rather than asserts --
+    but it is silent: if `correlation_coverage` were ever refactored to
+    return a numpy count, every weekly correlation claim would quietly become
+    "unavailable" and no existing test would fail. This pins the contract at
+    the producer so that refactor breaks loudly here instead.
+    """
+    idx = pd.date_range("2026-07-01", periods=60, freq="B")
+    held = {
+        t: {"df": pd.DataFrame({"Close": np.linspace(100, 120, 60)}, index=idx)}
+        for t in ("AAA", "BBB")
+    }
+    cov = portfolio.correlation_coverage(held)
+    assert cov is not None
+    assert type(cov["n_obs"]) is int, (
+        f"n_obs is {type(cov['n_obs'])!r}, not a plain int -- "
+        "correlation_claim_verified would reject it and silently withhold "
+        "every persisted correlation claim."
+    )
+    # And it really does satisfy the consumer, so this isn't a type check
+    # passing while the real predicate still refuses.
+    assert portfolio.correlation_claim_verified([], cov) is True

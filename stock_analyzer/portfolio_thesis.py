@@ -26,6 +26,7 @@ from datetime import date
 
 from stock_analyzer.constants import COMPOSITE_BUY, SECTOR_CEILING, SINGLE_NAME_CEILING
 from stock_analyzer.market_time import today_et
+from stock_analyzer.portfolio import correlation_claim_verified
 
 # The 5 graded claims, in the fixed order they're rendered/graded. Holding this
 # as a tuple (not re-derived from a dict's key order) keeps compose_thesis's
@@ -85,6 +86,22 @@ def _classify_correlation(bundle: dict) -> str:
     # degrades the WHOLE claim to "unavailable", never a partial verdict.
     new_clusters = bundle.get("structural_new_clusters")
     if not isinstance(new_clusters, (list, tuple)):
+        return "unavailable"
+    # Coverage/sample-floor gate -- same "poison a durable record" reasoning
+    # as the structural-clusters guard above, closing the second half of the
+    # gap: `_close_series_map` can silently drop a held ticker whose history
+    # never loaded (portfolio.correlation_unchecked), and even with full
+    # coverage a too-thin shared sample can produce a well-formed matrix that
+    # clears a diversification threshold from near-zero real observations
+    # (portfolio.CORR_MIN_OBS_TRUSTED). `correlation_claim_verified()` is the
+    # single predicate every persisting site uses for this -- screens
+    # disclose (F-290), records withhold. Placed BEFORE the new-cluster check
+    # below by deliberate ordering: on a partial-coverage day the claim is
+    # "unavailable" even when a new cluster was detected, never
+    # "concentrated_cluster" -- the invariant is one sentence, the
+    # correlation claim is only ever persisted from a matrix that covered
+    # every holding.
+    if not correlation_claim_verified(bundle.get("corr_unchecked"), bundle.get("corr_coverage")):
         return "unavailable"
     if len(new_clusters) > 0:
         return "concentrated_cluster"
@@ -217,6 +234,12 @@ def compose_thesis(
       - "div_label": the bundle's `_div_label` (Well Diversified / Moderate / High Correlation Risk)
       - "structural_new_clusters": the `_structural_alert_cache` list (None when
         offline, [] when checked with nothing new, else the newly-formed clusters)
+      - "corr_unchecked": `portfolio.correlation_unchecked()`'s output (None when
+        couldn't check, [] when every held ticker entered the matrix, else the
+        list of held tickers that didn't) -- together with "corr_coverage",
+        feeds `correlation_claim_verified()`'s persist/withhold decision
+      - "corr_coverage": `portfolio.correlation_coverage()`'s output dict (or
+        None) -- the sample-size half of the same persist/withhold decision
       - "holdings_scores": list of composite Scores for currently held positions
       - "buy_candidates": the Daily Brief's `buy_candidates` list
 
@@ -251,7 +274,11 @@ def compose_thesis(
         prose = _build_prose(claims, engine_trust, today)
         iso_year, iso_week, _ = today.isocalendar()
         return {
-            "v":           1,
+            # v2 (was 1): _classify_correlation now also withholds on a
+            # partial-coverage/thin-sample day via correlation_claim_verified
+            # -- confirmed no reader branches on schema_version/"v" before
+            # bumping (grep across app.py/db.py/tests, 2026-10-09).
+            "v":           2,
             "thesis_date": today.isoformat(),
             "iso_year":    int(iso_year),
             "iso_week":    int(iso_week),

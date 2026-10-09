@@ -13992,6 +13992,8 @@ elif page == "🧾 Summary":
                 "rag_label":               _sm_bundle.get("_rag_label"),
                 "div_label":               _sm_bundle.get("_div_label"),
                 "structural_new_clusters": st.session_state.get("_structural_alert_cache"),
+                "corr_unchecked":          _sm_bundle.get("_corr_unchecked"),
+                "corr_coverage":           _sm_bundle.get("corr_coverage"),
                 "holdings_scores":         _pth_holdings_scores,
                 "buy_candidates":          (
                     _sm_bundle["_daily_brief"].get("buy_candidates")
