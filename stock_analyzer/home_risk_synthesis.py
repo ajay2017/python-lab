@@ -56,6 +56,7 @@ import pandas as pd
 from stock_analyzer.portfolio import (
     correlation_matrix,
     correlation_coverage,
+    correlation_unchecked,
     diversification_score,
     diversification_recommendations,
 )
@@ -83,12 +84,22 @@ def build_correlation_bundle(
     port_df, held_data, portfolio_value,
     sector_candidates: "dict | None" = None,
     discovery_universe: "dict | None" = None,
+    held_tickers: "list | None" = None,
 ) -> dict:
     """Correlation matrix + diversification score/label/recs for Home.
 
     Returns a dict with keys `corr_df`, `div`, `div_score`, `avg_corr`,
-    `risk_pairs`, `div_label`, `corr_coverage`, `div_recs` — the caller
-    republishes these into the matching `_*_cache` session_state keys.
+    `risk_pairs`, `div_label`, `corr_coverage`, `div_recs`, `corr_unchecked`
+    — the caller republishes these into the matching `_*_cache` session_state
+    keys.
+
+    `held_tickers` (disclosure-only follow-on to G-25/G-26, docs/plans/
+    pair-add-gate.md): threaded straight into `portfolio.correlation_unchecked`
+    so the returned `corr_unchecked` names any held ticker missing from the
+    matrix this run. Omitting it (the default) leaves `corr_unchecked` as
+    `None` — "not checked" is the correct sentinel for a caller that didn't
+    ask, not a fabricated `[]`. A crash inside the try block below also
+    leaves it `None`, never `[]`.
 
     `sector_candidates` / `discovery_universe` (App Settings, docs/plans/
     app-settings.md): the resolved reference-table payloads for the
@@ -129,6 +140,11 @@ def build_correlation_bundle(
         _div_label   = ("Well Diversified" if div_score >= DIVERSIFY_WELL_PCT
                         else "Moderate" if div_score >= DIVERSIFY_MODERATE_PCT
                         else "High Correlation Risk")
+        # Disclosure-only (G-25/G-26 follow-on) — computed from the SAME
+        # corr_df this render just built, never a second independent read.
+        # correlation_unchecked() itself returns None when held_tickers is
+        # None, so omitting the kwarg already degrades correctly here.
+        _corr_unchecked = correlation_unchecked(corr_df, held_tickers)
     except Exception:
         corr_df    = pd.DataFrame()
         div        = {"score": None, "avg_correlation": None, "risk_pairs": []}
@@ -136,6 +152,7 @@ def build_correlation_bundle(
         risk_pairs = []
         _div_label = "Unavailable"
         _corr_cov  = None    # offline sentinel — never a fabricated count
+        _corr_unchecked = None  # offline sentinel — never a fabricated []
 
     try:
         div_recs = diversification_recommendations(
@@ -156,6 +173,7 @@ def build_correlation_bundle(
         "div_label": _div_label,
         "corr_coverage": _corr_cov,
         "div_recs": div_recs,
+        "corr_unchecked": _corr_unchecked,
     }
 
 

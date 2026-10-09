@@ -149,3 +149,27 @@ recommendation) — a mandatory Opus `reviewer` pass is required before this shi
 per Hard Rule #4.
 
 Memory: `project_structural_cluster_add_gate` (to be created at ship time).
+
+---
+
+## F-290 (2026-10-09) — G-25 shares a partial-coverage blind spot, now disclosed
+
+**G-25's own behaviour is UNCHANGED by this** — no block map, return contract,
+or suppression decision was touched, and no Gate Suppression Ledger rows are
+added. Recorded here because the blind spot is G-25's as much as G-26's.
+
+`portfolio._close_series_map` silently skips any held ticker whose price history
+is `None`, empty, or missing a `Close` column, so it never enters `corr_df` and
+can never appear in a `risk_pair` or a detected cluster. G-25 therefore reads
+such a ticker as **"checked, and clean"**, and its existing "couldn't check"
+caption does not fire, because from G-25's point of view the check succeeded.
+
+Partner-side only: an unpriceable ticker is never an add candidate itself (it is
+dropped from `port_df` as `no_price_data` before either add lane sees it). The
+real case is a priced, add-eligible A clustering with an unpriceable B.
+
+Fixed as **disclosure only** (F-290): a new `portfolio.correlation_unchecked()`
+feeds `pair_add_gate.unchecked_disclosure()`, which names both gates in its copy
+when both ran. G-25 still fails open here — decided, not overlooked, since
+fail-closed would let one provider hiccup pause every add in the book. Full
+reasoning and the review round: `docs/plans/pair-add-gate.md` §6.

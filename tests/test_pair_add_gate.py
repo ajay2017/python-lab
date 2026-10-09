@@ -15,8 +15,9 @@ from stock_analyzer.pair_add_gate import (
     split_scan_liftable,
     buy_lane_only,
     partners_of,
+    unchecked_disclosure,
 )
-from stock_analyzer.portfolio import diversification_score
+from stock_analyzer.portfolio import diversification_score, correlation_unchecked
 from stock_analyzer.constants import CORR_DANGER_PAIRS_THRESHOLD
 
 pytestmark = pytest.mark.fast
@@ -283,3 +284,122 @@ def test_partners_of_preserves_an_empty_list_distinctly():
     # either -- this pins that it returns a list in both cases.
     assert partners_of({"partners": []}) == []
     assert isinstance(partners_of({"partners": []}), list)
+
+
+# ── unchecked_disclosure (disclosure-only G-25/G-26 follow-on) ───────────────
+# docs/plans/pair-add-gate.md's fail-open blind spot: an unpriceable ticker
+# can never be an add candidate itself, so the real gap is a priced,
+# add-eligible holding whose PARTNER never entered the correlation matrix.
+# This caption names the gap; it never suppresses anything.
+
+def test_unchecked_disclosure_none_when_neither_gate_checked():
+    # Even with a populated unchecked list, the existing 🧬/🔗 "couldn't
+    # check" captions already cover a render where NEITHER gate ran --
+    # stacking a third caption here would be redundant.
+    assert unchecked_disclosure(["AAA"], pair_checked=False, cluster_checked=False) is None
+    assert unchecked_disclosure(None, pair_checked=False, cluster_checked=False) is None
+
+
+def test_unchecked_disclosure_none_when_checked_clean():
+    assert unchecked_disclosure([], pair_checked=True, cluster_checked=False) is None
+    assert unchecked_disclosure([], pair_checked=False, cluster_checked=True) is None
+    assert unchecked_disclosure([], pair_checked=True, cluster_checked=True) is None
+
+
+def test_unchecked_disclosure_couldnt_confirm_text_when_unchecked_is_none_but_a_gate_ran():
+    text = unchecked_disclosure(None, pair_checked=True, cluster_checked=False)
+    assert text is not None
+    assert "couldn't confirm" in text
+    assert "**" not in text and "$" not in text
+
+
+@pytest.mark.parametrize("pair_checked,cluster_checked,expect_phrase", [
+    (True, True, "Correlated-pair and new-cluster add-pause checks"),
+    (True, False, "Correlated-pair add-pause check"),
+    (False, True, "New-cluster add-pause check"),
+])
+def test_unchecked_disclosure_names_which_gate_ran(pair_checked, cluster_checked, expect_phrase):
+    text = unchecked_disclosure(["AAA"], pair_checked=pair_checked, cluster_checked=cluster_checked)
+    assert expect_phrase in text
+
+
+def test_unchecked_disclosure_singular_ticker_wording():
+    text = unchecked_disclosure(["AAA"], pair_checked=True, cluster_checked=False)
+    assert "AAA" in text
+    assert " it " in text or text.count(" it ") >= 1
+    assert "they" not in text
+    assert "is uncorrelated" in text
+
+
+def test_unchecked_disclosure_plural_ticker_wording():
+    text = unchecked_disclosure(["AAA", "BBB"], pair_checked=True, cluster_checked=True)
+    assert "AAA, BBB" in text
+    assert "they" in text
+    assert "are uncorrelated" in text
+
+
+def test_unchecked_disclosure_truncates_past_five_with_plus_n_more():
+    tickers = [f"T{i:02d}" for i in range(8)]
+    text = unchecked_disclosure(tickers, pair_checked=True, cluster_checked=True)
+    for t in sorted(tickers)[:5]:
+        assert t in text
+    assert "+3 more" in text
+
+
+def test_unchecked_disclosure_never_contains_bold_markers_or_dollar_signs():
+    # feedback_streamlit_renderer_mismatch -- this project has no automated
+    # check for the "**bold** prints literally" / "$...$ renders as LaTeX"
+    # class, so the string itself must stay plain.
+    for unchecked in (None, [], ["AAA"], ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]):
+        for pc, cc in ((True, False), (False, True), (True, True)):
+            text = unchecked_disclosure(unchecked, pair_checked=pc, cluster_checked=cc)
+            if text is not None:
+                assert "**" not in text
+                assert "$" not in text
+
+
+def test_unchecked_disclosure_malformed_unchecked_list_degrades_gracefully():
+    # A non-string element inside the list must not raise.
+    text = unchecked_disclosure([None, 123, "AAA"], pair_checked=True, cluster_checked=False)
+    assert text is not None
+    assert "AAA" in text
+
+
+# ── G-26 defect regression (disclosure-only follow-on) ───────────────────────
+# docs/plans/pair-add-gate.md's fail-open blind spot: an unpriceable B never
+# enters corr_df, so the A-B pair can never be computed as danger-tier --
+# add_block_map correctly degrades to {} (fail-open, not suppressing A just
+# because its partner went dark), and correlation_unchecked is what actually
+# names the gap for the render-layer disclosure.
+
+def test_g26_defect_regression_all_priced_blocks_both_endpoints():
+    df = _corr_df(["AAA", "BBB", "CCC"], {("AAA", "BBB"): 0.85})
+    pair = {"t1": "AAA", "t2": "BBB", "corr": 0.85, "level": "danger"}
+    result = add_block_map(df, [pair], [], ["AAA", "BBB", "CCC"])
+    assert set(result.keys()) == {"AAA", "BBB"}
+    assert correlation_unchecked(df, ["AAA", "BBB", "CCC"]) == []
+
+
+def test_g26_defect_regression_b_unpriced_fails_open_and_is_disclosed():
+    # Same book, but BBB never entered corr_df this run (unpriceable) -- the
+    # pair can never be computed, so NO risk_pairs entry for it exists either.
+    df = _corr_df(["AAA", "CCC"], {})  # BBB absent entirely
+    result = add_block_map(df, [], [], ["AAA", "BBB", "CCC"])
+    assert result == {}, "contract unchanged -- fail-open, never a fabricated block"
+    assert correlation_unchecked(df, ["AAA", "BBB", "CCC"]) == ["BBB"]
+
+
+def test_unchecked_disclosure_says_history_not_priced():
+    """The sentence must blame the price HISTORY, not the price.
+
+    Opus review 2026-10-09: `_close_series_map` also drops a ticker whose
+    bundle loaded but whose history is empty / has no Close column, and such
+    a ticker can still carry a live current_price and show a price elsewhere
+    on Home. "couldn't be priced" would then contradict a number already on
+    screen. Pinned because nothing else in this file asserts the wording, and
+    that is exactly how the inaccurate phrasing shipped to review.
+    """
+    for tickers in (["AAPL"], ["AAPL", "MSFT"]):
+        msg = unchecked_disclosure(tickers, True, True)
+        assert "price history" in msg
+        assert "couldn't be priced" not in msg

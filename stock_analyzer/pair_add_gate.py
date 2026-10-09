@@ -209,6 +209,97 @@ def split_scan_liftable(cluster_blocks: "dict | None", pair_blocks: "dict | None
     return sorted(liftable), sorted(also_pair)
 
 
+def unchecked_disclosure(
+    unchecked: "list | None", pair_checked: bool, cluster_checked: bool
+) -> "str | None":
+    """Render-ready disclosure caption for the fail-open correlation blind
+    spot shared by G-25 and G-26 (disclosure-only follow-on,
+    docs/plans/pair-add-gate.md).
+
+    The defect this discloses is entirely PARTNER-SIDE: an unpriceable
+    ticker can never be an add candidate itself (both add lanes iterate
+    port_df, which drops a no-price holding), so the real gap is a PRICED,
+    add-eligible ticker sitting on a danger/new-cluster pair with an
+    unpriceable partner — that partner never enters `corr_df`
+    (`portfolio._close_series_map`), so the pairing can never be detected and
+    the add proceeds with no disclosure. Fail-closed is not an option (see
+    pair_add_gate.py's own module docstring) — this caption is the entire
+    remedy: name the gap, suppress nothing.
+
+    `unchecked` is `portfolio.correlation_unchecked()`'s output (passed
+    through `grow_today["corr_unchecked"]`). `pair_checked` /
+    `cluster_checked` are the existing `pair_gate_checked` /
+    `cluster_gate_checked` render-layer flags — when NEITHER gate was
+    checked this run, the existing 🧬/🔗 "couldn't check" captions already
+    cover it, so this returns None rather than stacking a third, redundant
+    caption.
+
+    Returns
+    -------
+    None -- neither gate was checked this run (already disclosed elsewhere),
+            OR `unchecked == []` (checked, nothing missing).
+    str  -- `unchecked is None` (couldn't confirm, but at least one gate DID
+            run) -> the generic "couldn't confirm" caption; otherwise names
+            up to 5 missing tickers (then "+N more"), singular/plural
+            correctly, and never includes a literal `**` or `$`
+            (feedback_streamlit_renderer_mismatch — this project has no
+            render-mismatch test coverage, so the string itself must stay
+            plain).
+    """
+    if not pair_checked and not cluster_checked:
+        return None
+    if unchecked == []:
+        return None
+
+    both = pair_checked and cluster_checked
+    if both:
+        _what = "Correlated-pair and new-cluster add-pause checks"
+    elif pair_checked:
+        _what = "Correlated-pair add-pause check"
+    else:
+        _what = "New-cluster add-pause check"
+
+    if unchecked is None:
+        return (
+            "🔍 (couldn't confirm every holding was included in the "
+            "correlation add-pause checks this run)"
+        )
+
+    try:
+        tickers = sorted({str(t).upper() for t in unchecked if str(t).strip()})
+    except Exception:
+        tickers = []
+    if not tickers:
+        return None
+
+    _shown = tickers[:5]
+    _more  = len(tickers) - len(_shown)
+    _names = ", ".join(_shown) + (f" +{_more} more" if _more > 0 else "")
+    _plural = len(tickers) > 1
+    # Subject pronoun ("it couldn't be priced") vs. object pronoun ("pairing
+    # involving it/them") vs. the final clause, which names the ticker(s)
+    # again when singular ("AAPL is uncorrelated") but switches to a plain
+    # pronoun when plural ("they are uncorrelated") rather than repeating a
+    # 5+N-ticker list a second time.
+    _subject = "their" if _plural else "its"
+    _object  = "them" if _plural else "it"
+    _final   = "they are" if _plural else f"{_names} is"
+
+    # "price HISTORY couldn't be loaded", NOT "couldn't be priced" (Opus
+    # review, 2026-10-09). _close_series_map also drops a ticker whose bundle
+    # DID load but whose history is empty or has no Close column -- such a
+    # ticker can still carry a live current_price and show a price elsewhere
+    # on Home, so "couldn't be priced" would contradict a number already on
+    # screen. The correlation matrix needs the history, not the last price,
+    # and that is what this sentence must say.
+    return (
+        f"🔍 {_what} didn't include {_names} — {_subject} price history "
+        f"couldn't be loaded this run, so no correlated pairing involving "
+        f"{_object} could be detected. Add suggestions were checked against "
+        f"your other holdings only; this is not a sign {_final} uncorrelated."
+    )
+
+
 def buy_lane_only(pair_blocked_adds: "list | None", buy_lane_skips: "list | None"):
     """Tickers G-26 silently skipped inside `_buy_candidates`' own
     add-to-winner lane that are NOT already disclosed in the

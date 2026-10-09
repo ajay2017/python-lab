@@ -1070,6 +1070,204 @@ def test_build_daily_briefing_pair_buy_lane_skips_populated_on_bear_day():
     assert brief["grow_today"]["pair_buy_lane_skips"] == ["AAA"]
 
 
+# ── Disclosure-only G-25/G-26 follow-on: corr_unchecked passthrough ──────────
+# docs/plans/pair-add-gate.md's fail-open blind-spot fix. corr_unchecked is
+# PURE PASSTHROUGH here -- _grow_today/build_daily_briefing never read it in
+# any skip/suppress decision, they only carry it onto grow_today["corr_
+# unchecked"]. The load-bearing guarantee is the non-suppression invariant
+# below: two otherwise-identical builds, one with corr_unchecked=None and one
+# with a populated list, must produce byte-identical decisions everywhere
+# except that one passthrough key.
+
+def test_grow_today_corr_unchecked_default_is_none():
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"})
+    assert grow["corr_unchecked"] is None
+
+
+def test_grow_today_corr_unchecked_passthrough_populated():
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       corr_unchecked=["BBB"])
+    assert grow["corr_unchecked"] == ["BBB"]
+
+
+def test_grow_today_corr_unchecked_passthrough_empty_list_stays_empty():
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       corr_unchecked=[])
+    assert grow["corr_unchecked"] == []
+
+
+def test_grow_today_bear_day_carries_corr_unchecked():
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0,
+                       {"tone": "bear", "sp500_pct": -3.0},
+                       corr_unchecked=["BBB"])
+    assert grow["corr_unchecked"] == ["BBB"]
+
+
+def test_grow_today_corr_unchecked_never_changes_any_decision():
+    # The key regression guard: identical inputs, differing ONLY in
+    # corr_unchecked, must produce byte-identical add_positions,
+    # pair_blocked_adds, cluster_blocked_adds and every other decision key --
+    # corr_unchecked is read by no skip/suppress branch anywhere in this
+    # function.
+    #
+    # BOTH gates are passed {} (checked-and-clean), NOT _cab()/_pab(). That is
+    # load-bearing and was a real defect in the first version of this test:
+    # _cab()/_pab() both key on "AAA", which is _winner_row()'s ticker and the
+    # only add candidate in this fixture, so both runs produced
+    # add_positions == [] and the comparison was [] == []. An Opus review
+    # proved it vacuous by mutation -- inserting `if corr_unchecked: continue`
+    # into the add loop kills every add, and this test still passed. With {}
+    # the add is LIVE in both runs, so that mutation now fails here.
+    #
+    # {} is also the real defect shape this whole change exists for: AAA is
+    # priced and add-eligible, its partner BBB could not be priced, so no pair
+    # was detected and nothing is blocked -- the add proceeds, and the only
+    # thing that may differ is the disclosure.
+    port_df = make_port_df([_winner_row()])
+    grow_none = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                            cluster_add_blocks={}, pair_add_blocks={},
+                            corr_unchecked=None)
+    grow_unchecked = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                                 cluster_add_blocks={}, pair_add_blocks={},
+                                 corr_unchecked=["BBB"])
+
+    # The independent variable actually varies: a real add is present in BOTH
+    # runs. Without this assertion the comparison below can pass on two empty
+    # lists and prove nothing.
+    assert [a["ticker"] for a in grow_none["add_positions"]] == ["AAA"]
+    assert [a["ticker"] for a in grow_unchecked["add_positions"]] == ["AAA"]
+
+    for key in grow_none:
+        if key == "corr_unchecked":
+            continue
+        assert grow_none[key] == grow_unchecked[key], f"key {key!r} differs"
+    assert grow_none["corr_unchecked"] is None
+    assert grow_unchecked["corr_unchecked"] == ["BBB"]
+    # No unchecked ticker is ever a block-map key (pair_blocked_adds/
+    # cluster_blocked_adds are lists of per-ticker dicts here).
+    for b in grow_unchecked["pair_blocked_adds"]:
+        assert b.get("ticker") != "BBB"
+    for b in grow_unchecked["cluster_blocked_adds"]:
+        assert b.get("ticker") != "BBB"
+
+
+def test_grow_today_corr_unchecked_naming_the_add_candidate_still_doesnt_block():
+    # The adversarial case: the unchecked ticker IS the add candidate itself.
+    # Cannot happen in production (an unpriceable ticker is dropped from
+    # port_df as no_price_data long before this), but it is exactly what a
+    # future "fix" that routes unchecked tickers into a block map would look
+    # like -- so pin that naming AAA here suppresses nothing.
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       cluster_add_blocks={}, pair_add_blocks={},
+                       corr_unchecked=["AAA"])
+    assert [a["ticker"] for a in grow["add_positions"]] == ["AAA"]
+    assert grow["pair_blocked_adds"] == []
+    assert grow["cluster_blocked_adds"] == []
+    assert grow["corr_unchecked"] == ["AAA"]
+
+
+def test_grow_today_corr_unchecked_no_decision_change_when_gates_also_block():
+    # The original (blocked) variant, kept as a SECOND case rather than the
+    # only one: with AAA blocked by both gates the add is correctly absent,
+    # and corr_unchecked still changes nothing about that.
+    port_df = make_port_df([_winner_row()])
+    grow_none = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                            cluster_add_blocks=_cab(), pair_add_blocks=_pab(),
+                            corr_unchecked=None)
+    grow_unchecked = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                                 cluster_add_blocks=_cab(), pair_add_blocks=_pab(),
+                                 corr_unchecked=["BBB"])
+    # Precondition this case depends on -- AAA really is suppressed here, so
+    # this test is knowingly comparing the blocked path, not silently the
+    # empty one.
+    assert grow_none["add_positions"] == []
+    assert [b["ticker"] for b in grow_none["pair_blocked_adds"]] == ["AAA"]
+    for key in grow_none:
+        if key == "corr_unchecked":
+            continue
+        assert grow_none[key] == grow_unchecked[key], f"key {key!r} differs"
+
+
+def test_build_daily_briefing_corr_unchecked_default_none():
+    port_df = make_port_df([_winner_row()])
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+    )
+    assert brief["grow_today"]["corr_unchecked"] is None
+
+
+def test_build_daily_briefing_threads_corr_unchecked_through():
+    port_df = make_port_df([_winner_row()])
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+        corr_unchecked=["BBB"],
+    )
+    assert brief["grow_today"]["corr_unchecked"] == ["BBB"]
+
+
+def test_build_daily_briefing_corr_unchecked_on_bear_day():
+    port_df = make_port_df([_winner_row()])
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY,
+        market_context={"tone": "bear", "sp500_pct": -3.0},
+        corr_unchecked=["BBB"],
+    )
+    assert brief["grow_today"]["corr_unchecked"] == ["BBB"]
+
+
+def test_build_daily_briefing_corr_unchecked_never_changes_any_decision():
+    # Same non-suppression guarantee as the _grow_today-level test above, but
+    # at the full build_daily_briefing level, which also exercises
+    # _buy_candidates' independent add-to-winner lane (buy_candidates key).
+    port_df = make_port_df([_winner_row()])
+    # Both gates checked-and-clean ({}), NOT _cab()/_pab() -- same vacuity
+    # defect as the _grow_today-level test above: those fixtures block "AAA",
+    # the only add candidate, so buy_candidates was [] in both runs and the
+    # comparison proved nothing. See that test's comment for the mutation an
+    # Opus review used to demonstrate it.
+    kwargs = dict(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+        cluster_add_blocks={}, pair_add_blocks={},
+    )
+    brief_none = build_daily_briefing(**kwargs, corr_unchecked=None)
+    brief_unchecked = build_daily_briefing(**kwargs, corr_unchecked=["BBB"])
+
+    # _buy_candidates' independent add-to-winner lane really produced an add in
+    # BOTH runs -- without this the equality assertions below are [] == [].
+    assert ("AAA", "add_winner") in [
+        (c.get("ticker"), c.get("type")) for c in brief_none["buy_candidates"]
+    ]
+    assert ("AAA", "add_winner") in [
+        (c.get("ticker"), c.get("type")) for c in brief_unchecked["buy_candidates"]
+    ]
+
+    assert brief_none["act_today"] == brief_unchecked["act_today"]
+    assert brief_none["review_list"] == brief_unchecked["review_list"]
+    assert brief_none["buy_candidates"] == brief_unchecked["buy_candidates"]
+    assert brief_none["portfolio_tuneup"] == brief_unchecked["portfolio_tuneup"]
+    for key in brief_none["grow_today"]:
+        if key == "corr_unchecked":
+            continue
+        assert brief_none["grow_today"][key] == brief_unchecked["grow_today"][key], (
+            f"grow_today[{key!r}] differs"
+        )
+    assert brief_none["grow_today"]["corr_unchecked"] is None
+    assert brief_unchecked["grow_today"]["corr_unchecked"] == ["BBB"]
+
+
 # ── _grow_today: Personalized Discovery annotation ───────────────────────────
 
 _WINNER_PROFILE = {

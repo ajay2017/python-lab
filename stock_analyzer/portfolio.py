@@ -1402,6 +1402,12 @@ def correlation_coverage(held_data: dict) -> dict | None:
     holding with the shortest history — usually, but not provably, the one
     capping the sample: with disjoint indexes every history can be the same
     length while the intersection is still empty.
+
+    See also `correlation_unchecked()` below, a DIFFERENT diagnostic: this
+    function describes the INPUTS (`held_data`) and is structurally blind to a
+    ticker whose history failed to load at all (it never reaches `held_data`
+    in the first place); `correlation_unchecked` instead names which held
+    tickers are actually missing from the MATRIX itself.
     """
     series = _close_series_map(held_data)
     if len(series) < 2:
@@ -1417,6 +1423,56 @@ def correlation_coverage(held_data: dict) -> dict | None:
         "longest_len": max(lengths.values()),
         "lengths": lengths,
     }
+
+
+def correlation_unchecked(corr_df, held_tickers) -> "list[str] | None":
+    """Which HELD tickers are missing from `corr_df`'s columns — i.e. could
+    not be checked for a correlated-pair/cluster add-pause this run.
+
+    DECISION-ADJACENT, not merely diagnostic: this is read by the G-25/G-26
+    add-pause disclosure caption (pair_add_gate.unchecked_disclosure) so the
+    owner is told when a priced, add-eligible holding's pairing could not be
+    evaluated because its PARTNER never entered the matrix (an unpriceable
+    ticker is never an add candidate itself — see pair_add_gate.py's module
+    docstring for the full defect shape). This function never suppresses
+    anything itself; it only names the gap.
+
+    `_close_series_map` (feeding `correlation_matrix`) silently drops any
+    held ticker whose price history is `None`, empty, or lacks a `Close`
+    column — that ticker simply never becomes a `corr_df` column. A missing
+    held ticker here means its correlation to every other holding is
+    completely unknown this run, not merely under-sampled.
+
+    Returns
+    -------
+    None  -- `corr_df` is None/empty, `held_tickers` is None, or anything
+             raises (couldn't check — fail-open elsewhere, disclose here).
+    []    -- every held ticker (uppercased, de-duplicated, blanks dropped) is
+              present among `corr_df.columns`.
+    list  -- sorted, de-duplicated, uppercase held tickers absent from the
+              matrix. A matrix column that isn't held is ignored — this only
+              ever reports on HELD tickers.
+
+    Known limitations, deliberately out of scope here (do not read a `[]`
+    result as "every pairing was reliably measured"):
+      - a ticker that IS a matrix column but whose correlations are all NaN
+        (e.g. a zero-variance/cash-like series) reads as checked, not
+        unchecked — flagging that too would risk a permanent caption on a
+        benign holding;
+      - partial per-pair NaNs (ticker present, but one specific pairing
+        unreliable) are not detected at all — this function only reports
+        whole-ticker absence from the matrix.
+    """
+    try:
+        if corr_df is None or getattr(corr_df, "empty", True):
+            return None
+        if held_tickers is None:
+            return None
+        held = {str(t).strip().upper() for t in held_tickers if str(t).strip()}
+        cols = {str(c).strip().upper() for c in corr_df.columns}
+        return sorted(held - cols)
+    except Exception:
+        return None
 
 
 def _to_tz_naive(s: pd.Series) -> pd.Series:

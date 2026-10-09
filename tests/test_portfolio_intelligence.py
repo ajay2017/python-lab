@@ -710,3 +710,81 @@ def test_correlation_coverage_interior_nan_costs_exactly_one_row():
     # And it agrees with the matrix's own effective sample.
     prices = pd.DataFrame({"AAA": a["Close"], "BBB": b["Close"]}).dropna()
     assert cov["n_obs"] == len(prices.pct_change().dropna())
+
+
+# ── correlation_unchecked: which HELD tickers never entered the matrix ───────
+# Disclosure-only G-25/G-26 follow-on (docs/plans/pair-add-gate.md). The
+# defect: _close_series_map silently drops any held ticker whose price
+# history is None/empty/lacks a Close column, so that ticker never becomes a
+# corr_df column — a priced partner's pairing to it can then never be
+# detected, and its add-to-winner suggestion proceeds uncaptioned. These pin
+# the diagnostic end to end through the REAL correlation_matrix, not a
+# hand-built corr_df, so the independent variable is always "B dropped from
+# held_data", never two unrelated fixtures.
+
+def test_correlation_unchecked_all_priced_is_empty_list():
+    held = {"AAA": {"df": _hist(40)}, "BBB": {"df": _hist(40)}, "CCC": {"df": _hist(40)}}
+    corr = portfolio.correlation_matrix(held)
+    assert portfolio.correlation_unchecked(corr, ["AAA", "BBB", "CCC"]) == []
+
+
+def test_correlation_unchecked_detects_ticker_dropped_from_held_data():
+    """Independent-variable test: SAME fixture as the all-priced case above,
+    with only B removed from held_data (held_tickers unchanged) — B drops out
+    of corr_df's columns and must be reported."""
+    held = {"AAA": {"df": _hist(40)}, "CCC": {"df": _hist(40)}}  # BBB removed
+    corr = portfolio.correlation_matrix(held)
+    assert portfolio.correlation_unchecked(corr, ["AAA", "BBB", "CCC"]) == ["BBB"]
+
+
+@pytest.mark.parametrize("bad_df", [
+    None,
+    pd.DataFrame(),
+    pd.DataFrame({"Open": [1.0, 2.0, 3.0]}),   # no Close column
+])
+def test_correlation_unchecked_parametrized_unpriceable_b(bad_df):
+    held = {"AAA": {"df": _hist(40)}, "BBB": {"df": bad_df}, "CCC": {"df": _hist(40)}}
+    corr = portfolio.correlation_matrix(held)
+    assert portfolio.correlation_unchecked(corr, ["AAA", "BBB", "CCC"]) == ["BBB"]
+
+
+def test_correlation_unchecked_none_on_empty_or_none_corr_df():
+    assert portfolio.correlation_unchecked(None, ["AAA", "BBB"]) is None
+    assert portfolio.correlation_unchecked(pd.DataFrame(), ["AAA", "BBB"]) is None
+
+
+def test_correlation_unchecked_none_on_held_tickers_none():
+    df = _corr_df(["AAA", "BBB"], [("AAA", "BBB", 0.5)])
+    assert portfolio.correlation_unchecked(df, None) is None
+
+
+def test_correlation_unchecked_empty_held_tickers_is_empty_list_not_none():
+    # held_tickers=[] is a real, known-empty answer ("nothing held"), distinct
+    # from held_tickers=None ("couldn't check").
+    df = _corr_df(["AAA", "BBB"], [("AAA", "BBB", 0.5)])
+    assert portfolio.correlation_unchecked(df, []) == []
+
+
+def test_correlation_unchecked_normalizes_lowercase_duplicates_and_blanks():
+    df = _corr_df(["AAA", "BBB"], [("AAA", "BBB", 0.5)])
+    result = portfolio.correlation_unchecked(df, ["aaa", "AAA", "ccc", "", "  ", "CCC"])
+    assert result == ["CCC"]
+
+
+def test_correlation_unchecked_ignores_matrix_ticker_not_held():
+    # DDD is a matrix column but not a held ticker — never reported.
+    df = _corr_df(["AAA", "BBB", "DDD"], [("AAA", "BBB", 0.5), ("AAA", "DDD", 0.3)])
+    assert portfolio.correlation_unchecked(df, ["AAA", "BBB"]) == []
+
+
+def test_correlation_unchecked_output_is_sorted():
+    df = _corr_df(["AAA"], [])  # ZZZ/MMM never in the matrix
+    result = portfolio.correlation_unchecked(df, ["ZZZ", "AAA", "MMM"])
+    assert result == ["MMM", "ZZZ"]
+
+
+def test_correlation_unchecked_never_raises_on_malformed_held_tickers():
+    # A non-iterable held_tickers must degrade to None (couldn't check), never
+    # raise — the try/except is the whole point of this guarantee.
+    df = _corr_df(["AAA", "BBB"], [("AAA", "BBB", 0.5)])
+    assert portfolio.correlation_unchecked(df, object()) is None

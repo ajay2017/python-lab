@@ -61,7 +61,7 @@ class TestHappyPath:
 
         assert set(bundle) == {
             "corr_df", "div", "div_score", "avg_corr", "risk_pairs",
-            "div_label", "corr_coverage", "div_recs",
+            "div_label", "corr_coverage", "div_recs", "corr_unchecked",
         }
         assert not bundle["corr_df"].empty
         assert isinstance(bundle["div"], dict)
@@ -73,6 +73,31 @@ class TestHappyPath:
         )
         assert bundle["corr_coverage"] is not None
         assert isinstance(bundle["div_recs"], list)
+        # held_tickers wasn't passed -- None is correct ("not checked"), not
+        # a fabricated [].
+        assert bundle["corr_unchecked"] is None
+
+    def test_corr_unchecked_empty_when_held_tickers_all_priced(self):
+        held = _held_data()
+        bundle = hrs.build_correlation_bundle(
+            _port_df(), held, 50_000.0,
+            sector_candidates={}, discovery_universe={},
+            held_tickers=["AAA", "BBB", "CCC"],
+        )
+        assert bundle["corr_unchecked"] == []
+
+    def test_corr_unchecked_names_a_held_ticker_missing_from_held_data(self):
+        # Independent-variable test: same fixture as the happy path above,
+        # with only "DDD" added to held_tickers (never priced) -- everything
+        # else about the bundle (corr_df, div_score, etc.) is untouched.
+        held = _held_data()
+        bundle = hrs.build_correlation_bundle(
+            _port_df(), held, 50_000.0,
+            sector_candidates={}, discovery_universe={},
+            held_tickers=["AAA", "BBB", "CCC", "DDD"],
+        )
+        assert bundle["corr_unchecked"] == ["DDD"]
+        assert not bundle["corr_df"].empty  # the rest of the bundle is unaffected
 
 
 class TestCorrelationChainFailure:
@@ -83,7 +108,9 @@ class TestCorrelationChainFailure:
             hrs, "correlation_matrix",
             lambda held_data: (_ for _ in ()).throw(RuntimeError("boom")),
         )
-        bundle = hrs.build_correlation_bundle(_port_df(), _held_data(), 50_000.0)
+        bundle = hrs.build_correlation_bundle(
+            _port_df(), _held_data(), 50_000.0, held_tickers=["AAA", "BBB", "CCC"],
+        )
 
         assert bundle["corr_df"].empty is True
         assert bundle["div"] == {"score": None, "avg_correlation": None, "risk_pairs": []}
@@ -92,6 +119,11 @@ class TestCorrelationChainFailure:
         assert bundle["risk_pairs"] == []
         assert bundle["div_label"] == "Unavailable"
         assert bundle["corr_coverage"] is None
+        # A real held_tickers list was passed, so a naive implementation
+        # might compute corr_unchecked from the (empty) fallback corr_df and
+        # report every ticker as "unchecked" -- must stay None (couldn't
+        # check at all), never a fabricated populated list.
+        assert bundle["corr_unchecked"] is None
 
     def test_failure_downstream_of_correlation_matrix_still_yields_the_same_sentinel(self, monkeypatch):
         """Same invariant, but the raise happens on `correlation_coverage` —
@@ -107,7 +139,9 @@ class TestCorrelationChainFailure:
             hrs, "correlation_coverage",
             lambda held_data: (_ for _ in ()).throw(RuntimeError("boom")),
         )
-        bundle = hrs.build_correlation_bundle(_port_df(), _held_data(), 50_000.0)
+        bundle = hrs.build_correlation_bundle(
+            _port_df(), _held_data(), 50_000.0, held_tickers=["AAA", "BBB", "CCC"],
+        )
 
         assert bundle["corr_df"].empty is True, (
             "a successfully-computed corr_df must still be RESET to empty — "
@@ -120,6 +154,7 @@ class TestCorrelationChainFailure:
         assert bundle["risk_pairs"] == []
         assert bundle["div_label"] == "Unavailable"
         assert bundle["corr_coverage"] is None
+        assert bundle["corr_unchecked"] is None
 
 
 class TestDiversificationRecommendationsFailure:

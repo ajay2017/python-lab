@@ -171,3 +171,79 @@ writing.**
 - **Locked Brief:** same disclosed limitation as G-25.
 - **The cron path never produces G-26 rows** — it passes no map, and add
   suggestions are never emailed. Matches G-01 and G-25.
+
+---
+
+## 6. F-290 — the shared partial-coverage blind spot, now disclosed (2026-10-09)
+
+**Shipped the day after G-26, as its own reviewed commit.** Found by G-26's Opus
+review and deliberately not bundled into it, because fixing it also touches
+G-25's surface.
+
+**The defect.** `portfolio._close_series_map` silently skips any held ticker
+whose history is `None`, empty, or missing a `Close` column. That ticker never
+enters `corr_df`, so it can never appear in a `risk_pair`, so **both** add-gates
+return "nothing found" for it — indistinguishable from "checked, and clean."
+Neither gate's existing "couldn't check" caption fires, because from each
+gate's point of view the check succeeded.
+
+**The scope correction that shaped the fix.** The planner rejected the original
+framing ("an unpriceable holding reads as clean"). An unpriceable ticker is
+never an add candidate itself — a `None` bundle never reaches `held_data`
+(`app.py` ~4765), and a bundle without `current_price` is dropped by
+`build_portfolio_df` as `no_price_data` (`portfolio.py` ~493-514); both add
+lanes iterate `port_df`. **The blind spot is purely partner-side:** priced,
+add-eligible A sits on a ≥0.80 pair with unpriceable B, and A's add proceeds
+with no disclosure.
+
+**Fail-closed was rejected as incoherent, not merely risky.** Blocking B does
+nothing (B is never an add candidate); blocking everyone who could pair with B
+means one provider hiccup pauses every add in the book.
+
+**What shipped:** `portfolio.correlation_unchecked()` (three-state) +
+`pair_add_gate.unchecked_disclosure()`, produced once in
+`build_correlation_bundle`, carried in the `_home_synth_cache` bundle
+(`_SYNTH_SCHEMA_VER` 11→12) and the Brief as a pure passthrough, rendered as one
+caption. **Neither gate's block map or return contract changed** and the Gate
+Suppression Ledger gains no rows. Deliberately NOT an extension of
+`correlation_coverage`, which only sees `held_data` and is therefore
+structurally blind to a fully-failed load.
+
+**Owner decision:** the caption shows whenever a gate ran and any holding was
+unchecked, not only when an add is displayed.
+
+### The review round worth remembering
+
+Opus reviewer: **FIX-FIRST, 1 blocking — and the blocking finding was in the
+TESTS, not the production code.** Both "non-suppression invariant" tests were
+**vacuous**: they passed `pair_add_blocks=_pab()`, which blocks `AAA`, the
+fixture's only add candidate, so both runs compared `add_positions == []`
+against `[]`. The reviewer proved it by mutation — inserting
+`if corr_unchecked: continue` into the add loop kills every add, and **both
+tests still passed.**
+
+Fixed by running the invariant with both gates `{}` (checked-and-clean, which is
+also the real defect shape) and asserting a live add is present in BOTH runs
+before comparing. **Re-mutated after the fix: the same mutation now fails three
+tests.** Two further cases were added — the unchecked ticker naming the add
+candidate itself (pins that a future "fix" routing unchecked tickers into a
+block map would be caught), and the original blocked variant kept as a second
+case with an explicit precondition assertion.
+
+This is [[feedback_hook_enforcement]]'s own "assert the independent variable
+actually varies" rule failing again, in a test written specifically to guard the
+most important property of the change. **A rewritten test is not evidence until
+it has been observed to fail.**
+
+Two non-blocking findings also fixed: the caption said "couldn't be priced",
+which can contradict a price shown elsewhere on Home (a ticker with an empty
+history can still carry a live `current_price`) — now "its price history
+couldn't be loaded this run", with a test pinning it; and an AST guard was added
+for the cache-HIT restore of `_corr_unchecked`, whose deletion would be a
+`NameError` on render rather than a missing caption.
+
+### Still unverified in production
+
+The caption has never rendered — it needs a real partial price-history failure,
+which cannot be forced. Track it like §4a: a passing suite is not evidence for
+anything that renders in `app.py`.

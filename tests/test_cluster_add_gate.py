@@ -14,6 +14,7 @@ from stock_analyzer.cluster_add_gate import (
     resolve_new_clusters,
     add_block_map,
 )
+from stock_analyzer.portfolio import correlation_unchecked
 from stock_analyzer.constants import CORR_HIGH_PAIRS_THRESHOLD
 
 pytestmark = pytest.mark.fast
@@ -247,3 +248,33 @@ def test_add_block_map_never_raises_on_bad_corr_df():
     # degrade to {} (not None -- new_clusters itself was not None).
     result = add_block_map(clusters, pd.DataFrame(), ["AAPL", "MSFT"], "2026-10-01")
     assert result == {}
+
+
+# ── G-25 defect regression (disclosure-only follow-on) ───────────────────────
+# docs/plans/pair-add-gate.md's fail-open blind spot: an unpriceable MSFT
+# never enters corr_df, so the AAPL-MSFT new pairing can never be detected --
+# add_block_map correctly degrades to {} (fail-open), and
+# correlation_unchecked is what actually names the gap for the render-layer
+# disclosure.
+
+def test_g25_defect_regression_all_priced_fires_on_new_pair():
+    df = _corr_df(["AAPL", "MSFT", "GOOGL"], {("AAPL", "MSFT"): 0.9})
+    baseline = {"status": "ok", "scan_date": "2026-10-01", "cluster_snapshot": []}
+    clusters = resolve_new_clusters(df, {"AAPL": 10.0, "MSFT": 10.0, "GOOGL": 10.0}, baseline)
+    assert clusters is not None
+    result = add_block_map(clusters, df, ["AAPL", "MSFT", "GOOGL"], "2026-10-01")
+    assert set(result.keys()) == {"AAPL", "MSFT"}
+    assert correlation_unchecked(df, ["AAPL", "MSFT", "GOOGL"]) == []
+
+
+def test_g25_defect_regression_msft_unpriced_fails_open_and_is_disclosed():
+    # MSFT never entered corr_df this run (unpriceable) -- the new pairing
+    # with AAPL can never be detected, so add_block_map correctly degrades to
+    # {} rather than fabricating a block.
+    df = _corr_df(["AAPL", "GOOGL"], {})  # MSFT absent entirely
+    baseline = {"status": "ok", "scan_date": "2026-10-01", "cluster_snapshot": []}
+    clusters = resolve_new_clusters(df, {"AAPL": 10.0, "GOOGL": 10.0}, baseline)
+    assert clusters is not None
+    result = add_block_map(clusters, df, ["AAPL", "MSFT", "GOOGL"], "2026-10-01")
+    assert result == {}, "contract unchanged -- fail-open, never a fabricated block"
+    assert correlation_unchecked(df, ["AAPL", "MSFT", "GOOGL"]) == ["MSFT"]

@@ -726,7 +726,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 etf_candidates: list | None = None,
                 cluster_add_blocks: dict | None = None,
                 pair_add_blocks: dict | None = None,
-                buy_lane_pair_skips: list | None = None) -> dict:
+                buy_lane_pair_skips: list | None = None,
+                corr_unchecked: list | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -820,6 +821,19 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                  where this function's own add loop never runs at all).
                  `None` when pair_add_blocks itself is None — never
                  recomputed here.
+    corr_unchecked : optional (disclosure-only G-25/G-26 follow-on,
+                 docs/plans/pair-add-gate.md's fail-open-blind-spot fix) —
+                 portfolio.correlation_unchecked() output: the list of held
+                 tickers missing from this render's correlation matrix (an
+                 unpriceable holding's PARTNER could still proceed with an
+                 add suggestion, uncaptioned, unless this is disclosed).
+                 PASSTHROUGH ONLY — this function never reads it in any
+                 skip/suppress decision; it is carried unchanged onto
+                 `grow_today["corr_unchecked"]` on every return path
+                 (including the bear-day early return) purely so the render
+                 layer can show a disclosure caption. `None` (the default,
+                 and every caller before this follow-on) leaves every
+                 existing key byte-identical.
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -976,6 +990,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "pair_blocked_adds":          [],
             "pair_gate_checked":          pair_add_blocks is not None,
             "pair_buy_lane_skips":        buy_lane_pair_skips,
+            # Disclosure-only follow-on — passthrough, unchanged, never read
+            # in any decision above (the add loop never runs on a bear day
+            # anyway, so there is nothing for this to have gated even if it
+            # were read).
+            "corr_unchecked":             corr_unchecked,
             "deploy_note":                None,
             "risk_banner":                risk_banner,
             # LATE construction: built after every suppression decision so the
@@ -2109,6 +2128,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "pair_blocked_adds":         pair_blocked_adds,
         "pair_gate_checked":         pair_add_blocks is not None,
         "pair_buy_lane_skips":       buy_lane_pair_skips,
+        # Disclosure-only follow-on — passthrough, unchanged, never read in
+        # any suppression decision above.
+        "corr_unchecked":            corr_unchecked,
         "sector_blocked_picks":       sector_blocked_picks,
         "sector_unknown_picks":       sector_unknown_picks,
         "macro_blocked_picks":        macro_blocked_picks,
@@ -3436,6 +3458,7 @@ def build_daily_briefing(
     etf_candidates:  list | None = None,
     cluster_add_blocks: dict | None = None,
     pair_add_blocks: dict | None = None,
+    corr_unchecked: list | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -3470,6 +3493,15 @@ def build_daily_briefing(
                      lane, checked BEFORE cluster_add_blocks in both. None
                      (the default, and every caller before G-26) leaves
                      every existing output byte-identical.
+    corr_unchecked:  optional (disclosure-only G-25/G-26 follow-on,
+                     docs/plans/pair-add-gate.md) — portfolio.
+                     correlation_unchecked() output, passed straight through
+                     to _grow_today, which carries it unchanged onto
+                     grow_today["corr_unchecked"]. Never read in any
+                     skip/suppress decision here or in _grow_today — pure
+                     passthrough for a render-layer disclosure caption. None
+                     (the default, and every caller before this follow-on)
+                     leaves every existing output byte-identical.
 
     Returns dict with: act_today, buy_candidates, review_list, grow_today.
     """
@@ -3573,7 +3605,8 @@ def build_daily_briefing(
                          etf_candidates=etf_candidates,
                          cluster_add_blocks=cluster_add_blocks,
                          pair_add_blocks=pair_add_blocks,
-                         buy_lane_pair_skips=_pair_buy_lane_skips)
+                         buy_lane_pair_skips=_pair_buy_lane_skips,
+                         corr_unchecked=corr_unchecked)
     # Tune-up beta/sharpe cards restate a trim; if that name is already carrying
     # an Act Today card (incl. the risk-off TRIM appended above) or a Review
     # card, drop the redundant restatement (2026-08-04 audit — same broad

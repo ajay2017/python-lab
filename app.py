@@ -5770,7 +5770,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 11  # bumped: grow_today now also carries pair_blocked_adds/pair_gate_checked/pair_buy_lane_skips (G-26)
+    _SYNTH_SCHEMA_VER = 12  # bumped: bundle + grow_today now also carry corr_unchecked (G-25/G-26 disclosure follow-on)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -5826,6 +5826,10 @@ if page == "🏠 Home":
         _cluster_add_blocks  = _b.get("_cluster_add_blocks")
         # G-26 — same restore discipline as _cluster_add_blocks above.
         _pair_add_blocks     = _b.get("_pair_add_blocks")
+        # Disclosure-only G-25/G-26 follow-on — same restore discipline;
+        # `.get()` not [] — a bundle memoized before the schema bump lacks
+        # the key, and None (not []) is the honest "not yet known" sentinel.
+        _corr_unchecked      = _b.get("_corr_unchecked")
         # Re-publish coordination caches (downstream pages read these and may
         # have mutated them since the last rebuild).
         st.session_state["_port_risk_cache"]          = _port_risk
@@ -5899,6 +5903,7 @@ if page == "🏠 Home":
                         etf_candidates  = _etf_candidates_for_grow(),
                         cluster_add_blocks = _cluster_add_blocks,
                         pair_add_blocks = _pair_add_blocks,
+                        corr_unchecked  = _corr_unchecked,
                     )
                     # Update snapshot so next HIT reads fresh fetched_at values
                     st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
@@ -5950,11 +5955,16 @@ if page == "🏠 Home":
             port_df, held_data, portfolio_value,
             sector_candidates=_ru_sector_candidates,
             discovery_universe=_ru_discovery_universe,
+            held_tickers=held_tickers,
         )
         corr_df, div, div_score, avg_corr, risk_pairs, _div_label, _corr_cov, div_recs = (
             _crb["corr_df"], _crb["div"], _crb["div_score"], _crb["avg_corr"],
             _crb["risk_pairs"], _crb["div_label"], _crb["corr_coverage"], _crb["div_recs"],
         )
+        # Disclosure-only G-25/G-26 follow-on (docs/plans/pair-add-gate.md) —
+        # computed from the SAME corr_df this render just built, threaded
+        # into build_daily_briefing below as a pure passthrough.
+        _corr_unchecked = _crb["corr_unchecked"]
         st.session_state["_corr_df_cache"]       = corr_df
         st.session_state["_div_score_cache"]     = div_score
         st.session_state["_avg_corr_cache"]      = avg_corr
@@ -6258,6 +6268,7 @@ if page == "🏠 Home":
                     etf_candidates  = _etf_candidates_for_grow(),
                     cluster_add_blocks = _cluster_add_blocks,
                     pair_add_blocks = _pair_add_blocks,
+                    corr_unchecked  = _corr_unchecked,
                 )
                 # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
                 # the Brief header so the user can see how fresh the data is.
@@ -6772,6 +6783,9 @@ if page == "🏠 Home":
                 "_cluster_add_blocks":  _cluster_add_blocks,
                 # G-26 — see the restore comment in the HIT branch above.
                 "_pair_add_blocks":     _pair_add_blocks,
+                # Disclosure-only G-25/G-26 follow-on — see the restore
+                # comment in the HIT branch above.
+                "_corr_unchecked":      _corr_unchecked,
             },
         }
     # Overlay covers the full synthesis (data load + brief build). Clear here
@@ -8507,6 +8521,10 @@ if page == "🏠 Home":
         # [] in every return path" contract as cluster_blocked_adds above.
         pair_blocked = grow.get("pair_blocked_adds", [])
         pair_gate_checked = grow.get("pair_gate_checked", False)
+        # Disclosure-only G-25/G-26 follow-on — None (couldn't check) vs []
+        # (checked, nothing missing) vs a populated list are distinct; never
+        # `or []` here, that would collapse the "couldn't check" sentinel.
+        _corr_unchecked_grow = grow.get("corr_unchecked")
         macro_blocked = grow.get("macro_blocked_picks", [])
         comp_skipped  = grow.get("composite_skipped", [])
         comp_unavail  = grow.get("composite_unavailable", [])
@@ -9554,6 +9572,21 @@ if page == "🏠 Home":
                 st.rerun()
         elif not pair_gate_checked and tone != "bear":
             st.caption("🔗 (couldn't check for correlated-pair add pauses this run)")
+
+        # Disclosure-only G-25/G-26 follow-on (docs/plans/pair-add-gate.md) —
+        # the fail-open blind spot here is entirely PARTNER-SIDE: an
+        # unpriceable ticker can never be an add candidate itself, so the
+        # real gap is a priced, add-eligible holding whose PARTNER never
+        # entered the correlation matrix, letting its add proceed
+        # uncaptioned. This names the gap; it suppresses nothing. Never
+        # tone-gated — _buy_candidates' own add-to-winner lane runs on every
+        # tone, not just bull/flat, so a bear-day render can still have a
+        # relevant gap to disclose.
+        _corr_unchecked_caption = pair_add_gate.unchecked_disclosure(
+            _corr_unchecked_grow, pair_gate_checked, cluster_gate_checked
+        )
+        if _corr_unchecked_caption:
+            st.caption(_corr_unchecked_caption)
 
         # Sector hard-cap breach — adds AND new picks in an over-cap sector are
         # suppressed so the Brief never says "add here" while Act Today says
@@ -40122,7 +40155,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
         with st.expander("🗺️ The pages, at a glance", expanded=False):
             st.markdown(
                 """
-- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. **The very first thing Home shows is a one-line Act Today pointer** — 🔴 "N Act Today" with an EXIT/TRIM/WATCH breakdown, a calm "✅ Nothing to act on today," or an explicit "NOT checked" if the Brief couldn't be built this run — so you know before scrolling past anything else whether there's something to act on, read from the exact same count the full Act Today section below renders from (never a second, independently-computed number). Just below it, a **muted notices line** summarizes the collapsed "⚠️ Alerts" expander beneath it — naming anything that needs a look (e.g. "⚠️ Needs a look: **Broker drift**") or a quiet note count on an otherwise clean day, so a busy morning doesn't require opening the expander to know something's off. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Unlike Day Shock, this one is NOT purely informational: it pauses Grow Today's "add-to-winner" suggestion on the held tickers at that new pair's endpoints until you review it in a fresh Structural Scan (or the correlation naturally drops back down) — it never recommends a trim, and your existing single-name/sector caps are completely unaffected. A **second, separate pause** works alongside it: when two names you hold sit at *danger-tier* correlation (≥0.80) — a standing near-duplicate exposure rather than a newly-formed one — Grow Today's add-to-winner is paused on **both** names, and a "🔗 Add Paused — Standing Correlated Pair" block names the partner and the correlation. This one has **no acknowledge step**: unlike the cluster pause above, a Structural Scan does not clear it, and neither does trimming the weaker name (trimming doesn't change how correlated two stocks are). It lasts while the pair stays that correlated and you hold both. It fires whether or not a trim card exists for that pair on 📡 Signals & Advice — the correlation is the trigger, so a data outage that hides the trim card can't quietly switch the pause off. Still pure suppression: no trim is recommended, and the hard caps are untouched.
+- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. **The very first thing Home shows is a one-line Act Today pointer** — 🔴 "N Act Today" with an EXIT/TRIM/WATCH breakdown, a calm "✅ Nothing to act on today," or an explicit "NOT checked" if the Brief couldn't be built this run — so you know before scrolling past anything else whether there's something to act on, read from the exact same count the full Act Today section below renders from (never a second, independently-computed number). Just below it, a **muted notices line** summarizes the collapsed "⚠️ Alerts" expander beneath it — naming anything that needs a look (e.g. "⚠️ Needs a look: **Broker drift**") or a quiet note count on an otherwise clean day, so a busy morning doesn't require opening the expander to know something's off. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Unlike Day Shock, this one is NOT purely informational: it pauses Grow Today's "add-to-winner" suggestion on the held tickers at that new pair's endpoints until you review it in a fresh Structural Scan (or the correlation naturally drops back down) — it never recommends a trim, and your existing single-name/sector caps are completely unaffected. A **second, separate pause** works alongside it: when two names you hold sit at *danger-tier* correlation (≥0.80) — a standing near-duplicate exposure rather than a newly-formed one — Grow Today's add-to-winner is paused on **both** names, and a "🔗 Add Paused — Standing Correlated Pair" block names the partner and the correlation. This one has **no acknowledge step**: unlike the cluster pause above, a Structural Scan does not clear it, and neither does trimming the weaker name (trimming doesn't change how correlated two stocks are). It lasts while the pair stays that correlated and you hold both. It fires whether or not a trim card exists for that pair on 📡 Signals & Advice — the correlation is the trigger, so a data outage that hides the trim card can't quietly switch the pause off. Still pure suppression: no trim is recommended, and the hard caps are untouched. **And if a holding's price history couldn't be loaded at all**, a 🔍 line under Grow Today names it: that holding was left out of both correlation checks entirely, so no pairing involving it could be detected. It is deliberately *not* treated as a reason to pause anything — but it is also never silently counted as "checked and fine," which is what used to happen.
 - **🧾 Summary** — the cockpit: one screen that answers "is the book safe, what must I do today, and is anything drifting" without visiting another page. Six zones, in order of urgency. **① Book Safety** (top, colour-coded) — leverage ×, margin cushion, distance to a margin call, and whether your share counts still match the broker. Awareness only; it never changes a recommendation. It shows a grey **"not verified"** rather than green when your cash balance hasn't been loaded — an unmeasured book and a debt-free book are not the same thing, and it won't guess. Broker drift likewise distinguishes **In sync** (checked, matches), **Clean, dated** (matched when last captured, but that snapshot is old), **Trades pending** (differences explained by trades you logged since), and **Not checked** (unknown). When leverage is elevated above your own reference level **and** equity has fallen meaningfully from its recent high, a note states the measured split — how much of the rise came from equity shrinking versus the margin loan itself growing — plus how much smaller the book (or how much more cash) would bring leverage back to your reference. It never tells you to sell or trim anything; it states the two facts together because nothing else in the app does. **② Today** — 5 KPI tiles: Portfolio Value (+ 45-day sparkline), Unrealized P&L, Today's P&L (Home's Tier-B figure when available, else an honestly-labelled held-mark), **Today's Movers** (the 3 biggest moves either way; a name with no quote is reported unpriced, never as a flat 0%), and Avg Score against the buy threshold. The movers tile **renames itself "Last session's movers"** on a weekend, a holiday, or before the open — the change is measured against the previous close, so it only means "today" once today's session has begun. **③ Act Today** — bucketed as **EXIT · TRIM · WATCH** so you can tell an alarm's *nature* at a glance, then **one row per item** (badge · ticker · why · composite score), worst first. Below it a purple banner names any tickers under an active reduce/exit call whose ADD suggestions are being suppressed app-wide. Same source as Home, so it can never under-report. When there's a live EXIT or TRIM item and this engine's own protective track record is measurably running early, a small note appears above the rows stating the measured number (e.g. "historically run early... average N pp... worth confirming before you act, not a reason to ignore the call") — a factual disclosure of a real, tracked pattern, never a reason by itself to override the call. **④ Portfolio Health** — four cards: Risk Posture (falls back to counting the protective calls in today's Brief when the fragility dial can't be computed, and says "not computed" rather than an all-clear if that's missing too), Thesis Integrity (**names** the weakening tickers, not just a count), Diversification, and Active Vetoes. All four say "not checked" rather than "none" when they genuinely don't know. **⑤ Horizon** — three cards: 🎯 Engine Track Record (whether acting on the app's calls has beaten the S&P, offence and defence, alongside what the calls you *skipped* returned so the headline can't read as pure skill), 🔔 Catalyst Watch (which holdings report and when, flagged 🚫 when the name is also under a reduce call), and 📋 Portfolio Thesis (this week's five standing claims, each marked held or shifted). The full ledger with last week's comparison stays in the collapsed expander below. **"Alert level" there is not the same thing as "Risk Posture" above it** — alert level counts danger-level alerts, risk posture reads the market regime, so the two can legitimately differ. **⑥ Top Positions** — your 6 largest by weight: score coloured by the same Buy/Hold/Sell bands the rest of the app uses, a weight bar scaled to your single-name cap, an inline EXIT/TRIM/CAP badge, and ⚡ on a same-day shock. A footer counts how many rose, fell, or had no quote. The full Holdings table is one click away in an expander. Reads what Home already computed this session — visit 🏠 Home first if this page says it needs today's Brief.
 - **🧑‍⚖️ The Judge** — **BETA, audit authority only: it never gates a recommendation.** Collects each advisor's opinion on a ticker, weights them by their own past accuracy once they clear a minimum sample, and flags **coherence gaps** — a name under an active protective veto that no other risk surface is currently flagging. It reports; it never suppresses or changes a call.
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above). A third tab, **📄 Reports** (owner-only), hosts a Tax Report (realized short-term/long-term gains by tax year, wash-sale flags) and a Performance Review (a point-in-time return-vs-SPY / recs-and-gates / trade-behavior / leverage-and-risk-drift snapshot for a picked period), both with CSV/Markdown export (see the section above).
