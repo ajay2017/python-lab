@@ -1,6 +1,8 @@
 # G-26 — Standing Danger-Tier Correlated-Pair Add Suppression
 
-**Status: BUILT 2026-10-08, pending Opus review + commit.** Designed by the Opus
+**Status: SHIPPED 2026-10-08 (`35b5bf4`), DEPLOYED AND DORMANT as of 2026-10-09 —
+the non-firing path is screenshot-confirmed, the FIRING path is still unobserved
+and cannot be forced (see §4a).** Designed by the Opus
 `planner` (verdict: PROCEED WITH CHANGES — it rejected two details of the
 original §D6 framing, see §2), built by `implementer` (Sonnet 5), all three open
 policy decisions ratified by the owner the same day. Requirements: `docs/requirements.md`
@@ -112,6 +114,43 @@ being a false promise for a ticker whose pause will survive the scan), and a
 caption on the `PAIR_RISK` trim card in 📡 Signals & Advice.
 
 ---
+
+## 4a. Production observation, 2026-10-09 (deploy day + 1)
+
+**Deployed and DORMANT — the non-firing path is confirmed, the firing path is
+not.** Verified by live screenshot, not inferred:
+
+📡 Signals & Advice → 🧩 Diversification → "Reduce / Rebalance" held exactly
+ONE card (an Enterprise Tech sector REDUCE, 22.2% → 15.0%) before the "Add for
+Diversification" header began. `PAIR_RISK` recs render in that same list
+(`app.py` filters `type in ("REDUCE", "PAIR_RISK")`), so their absence there is
+conclusive: **no pair in the book is at ≥0.80 today.** Max pairwise correlation
+is still under the danger tier, consistent with the 0.77 CRM×SAP measurement
+and with the 2026-10-06 cluster having fired at the 0.65 (warning) tier.
+
+So G-26 correctly suppressed nothing, and the Grow Today banner / partner text
+/ nav-button logic have **never rendered with real data.** Do not read "it
+shipped and the app is fine" as "the feature was seen working" — `app.py` has
+no test coverage, so until a pair actually crosses 0.80 this is a
+100%-test-passing feature that is still only presumed correct on screen. Same
+posture as the ETF Phase 2b checklist. Cannot be forced.
+
+**Still outstanding, and the one check that is diagnostic even on a quiet
+book:** 🏠 Home → Grow Today must NOT show
+`🔗 (couldn't check for correlated-pair add pauses this run)`. Correlation data
+is demonstrably live (the Diversification tab computed pairwise correlations
+the same session), so the gate should return `{}` ("checked, clean") and render
+nothing at all. That caption appearing would mean the gate received `None`
+despite working correlation data — a real wiring bug in how `corr_df` reaches
+it through the Home synthesis cache. **Not yet confirmed either way as of this
+writing.**
+
+**What to check on the first real firing** (all four unobserved):
+1. The row names the PARTNER and the correlation, not just a reason string.
+2. The "→ 📡 Signals & Advice" button appears ONLY when a partner is `named`.
+3. The "🔗 Also paused here … not shown above" caption repeats no ticker
+   already rendered in the Sector Hard Cap or WATCH blocks above it.
+4. Home's Structural banner separates scan-liftable tickers from also-pair ones.
 
 ## 5. Known limitations, stated deliberately
 
