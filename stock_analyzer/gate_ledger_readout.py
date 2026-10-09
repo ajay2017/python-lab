@@ -53,6 +53,7 @@ from datetime import date
 from typing import Callable
 
 from stock_analyzer import gate_registry
+from stock_analyzer.constants import CORR_DANGER_PAIRS_THRESHOLD
 from stock_analyzer.predictive_analytics import _advance_trading_days, forward_alpha_at_horizon
 
 # ── row status tags ─────────────────────────────────────────────────────────
@@ -364,6 +365,31 @@ def readout_footnotes(gate_id: str) -> "list[str]":
             "the table is first-writer-wins, so an intraday flat→bull tone flip "
             "keeps the morning's non-binding row and discards the later binding "
             "one. A low count here must not be read as ‘the gate rarely binds.’",
+        ]
+    if gate_id == "G-26":
+        return [
+            "This gate only records when no EARLIER gate (G-20/G-24/G-16/"
+            "G-01/G-04/G-09) already matched the same ticker in that render "
+            "— a name caught by an earlier gate never reaches this one, so a "
+            "low G-26 count does not mean standing danger-tier pairs are rare.",
+            "G-25 cedes any pair that is ALSO at danger tier to this gate "
+            "from G-26's ship date (2026-10-08) onward — a new cluster "
+            f"pairing that happens to already be ≥ {CORR_DANGER_PAIRS_THRESHOLD:.2f} "
+            "records here, never under G-25.",
+        ]
+    if gate_id == "G-25":
+        return [
+            "From G-26's ship date (2026-10-08) onward this gate CEDES any "
+            f"pair already at ≥ {CORR_DANGER_PAIRS_THRESHOLD:.2f} to G-26, which is "
+            "checked first — so a drop in this gate's count from that date "
+            "is a re-attribution, not evidence that new clusters stopped "
+            "forming. Rows written BEFORE that date were never subject to "
+            "the cede and are directly comparable only among themselves.",
+            "One ticker can legitimately hold BOTH a G-25 and a G-26 row "
+            "from around the 2026-10-08 deploy, because the ledger's upsert "
+            "key includes gate_id — the same day's suppression recorded "
+            "under the old attribution and the new one is not a duplicate "
+            "write bug.",
         ]
     if gate_id == "G-23":
         return [

@@ -74,6 +74,7 @@ from stock_analyzer.constants import (
     DETERIORATION_TRIM_SUGGESTED_PCT,
     ETF_MAX_PICKS,
     CORR_HIGH_PAIRS_THRESHOLD,
+    CORR_DANGER_PAIRS_THRESHOLD,
 )
 from stock_analyzer.risk import position_sizing, sizing_unavailable_reason
 from stock_analyzer.targets import entry_zone
@@ -89,6 +90,7 @@ from stock_analyzer.predictive_analytics import divergence_at_entry
 from stock_analyzer.personalized_discovery import score_candidate_match
 from stock_analyzer import asset_type
 from stock_analyzer import etf_candidates as etf_candidates_mod
+from stock_analyzer import pair_add_gate
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -722,7 +724,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 sold_today: set | None = None,
                 spy_df=None,
                 etf_candidates: list | None = None,
-                cluster_add_blocks: dict | None = None) -> dict:
+                cluster_add_blocks: dict | None = None,
+                pair_add_blocks: dict | None = None,
+                buy_lane_pair_skips: list | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -795,6 +799,27 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                  it to `{}` would be indistinguishable from "checked, nothing
                  new," the offline-sentinel-collapse bug class this project
                  has a dedicated antipattern gate for.
+    pair_add_blocks : optional (G-26, owner decisions 2026-10-08) —
+                 pair_add_gate.add_block_map() output: {TICKER: {...}} for
+                 held tickers sitting at the danger-tier end of a STANDING
+                 correlated pair (CORR_DANGER_PAIRS_THRESHOLD), independent
+                 of whether a PAIR_RISK trim card exists for it. Checked
+                 BEFORE cluster_add_blocks (G-25) — a pair that is both a
+                 new cluster pairing and already at danger tier records
+                 under G-26, never G-25. UNLIKE G-25, this has no
+                 acknowledge/override path: the pause lasts for as long as
+                 the pair stays at danger tier and both names are held.
+                 `None` (the default, and every caller before G-26) leaves
+                 every existing key byte-identical to the pre-G-26 output —
+                 checked `is not None`, never `or {}`.
+    buy_lane_pair_skips : optional — the G-26 skip list `_buy_candidates`
+                 recorded in its own independent add-to-winner lane (via its
+                 `pair_skip_sink` parameter), threaded through so this
+                 function can surface it unchanged as `pair_buy_lane_skips`
+                 in every return path (including the bear-day early return,
+                 where this function's own add loop never runs at all).
+                 `None` when pair_add_blocks itself is None — never
+                 recomputed here.
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -940,6 +965,17 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # gate to have blocked.
             "cluster_blocked_adds":       [],
             "cluster_gate_checked":       cluster_add_blocks is not None,
+            # G-26: same "always present, never omitted" posture as G-25
+            # above — a bear day suppresses every add-to-winner lane outright
+            # (the loop below never runs), so this function's own
+            # pair_blocked_adds bucket is necessarily []. pair_buy_lane_skips
+            # is passed THROUGH unchanged (never recomputed here) — a bear
+            # day's _buy_candidates lane still runs (it is not tone-gated)
+            # and may have already recorded a silent skip before this
+            # function was even called.
+            "pair_blocked_adds":          [],
+            "pair_gate_checked":          pair_add_blocks is not None,
+            "pair_buy_lane_skips":        buy_lane_pair_skips,
             "deploy_note":                None,
             "risk_banner":                risk_banner,
             # LATE construction: built after every suppression decision so the
@@ -1696,6 +1732,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     cooldown_adds:     list[dict] = []     # adds suppressed — recently added (post-act cooldown)
     deterioration_blocked_adds: list[dict] = []  # adds suppressed — active early-deterioration WATCH
     cluster_blocked_adds: list[dict] = []  # adds suppressed — new correlation cluster (G-25)
+    pair_blocked_adds: list[dict] = []  # adds suppressed — standing danger-tier correlated pair (G-26)
     # Deterioration WATCH — SUPPRESS add-to-winner (see docstring; changed
     # 2026-07-21 from annotate-only). Same map shape/intent as _buy_candidates's
     # own copy — as of 2026-07-23 (936dff9) _buy_candidates ALSO suppresses at
@@ -1904,6 +1941,36 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                         "momentum_score":  None,
                     })
                     continue
+                # G-26 — standing danger-tier correlated pair
+                # (CORR_DANGER_PAIRS_THRESHOLD), owner decisions ratified
+                # 2026-10-08. Checked BEFORE G-25: a pair that is BOTH a new
+                # cluster pairing AND already at danger tier records here,
+                # never under G-25. UNLIKE G-25, there is no acknowledge/
+                # override — this pause persists for as long as the pair
+                # stays at danger tier and both names are held; trimming the
+                # weaker name does not lift it on its own. `is not None`,
+                # never `or {}` — None means "couldn't check" (fail-open: the
+                # add proceeds below, uncaptioned), {} / a miss means
+                # "checked, this ticker isn't on a standing danger pair."
+                if pair_add_blocks is not None and ticker.upper() in pair_add_blocks:
+                    _pab = pair_add_blocks[ticker.upper()]
+                    pair_blocked_adds.append({
+                        "ticker":    ticker,
+                        "score":     scr,
+                        "pnl_pct":   _f(row.get("P&L (%)")),
+                        "gap":       gap,
+                        "sector":    sector,
+                        "reason":    pair_add_gate.describe_reason(_pab),
+                        "gate_id":        "G-26",
+                        "counterfactual": True,
+                        "gate_value":     _pab.get("max_corr"),
+                        "gate_threshold": CORR_DANGER_PAIRS_THRESHOLD,
+                        "price":          _f(row.get("Price"), None),
+                        "composite_score": _f(row.get("Score"), None),
+                        "momentum_score":  None,
+                        "partners":          _pab.get("partners", []),
+                    })
+                    continue
                 # G-25 — new correlation cluster since the owner's last
                 # acknowledged Structural Scan. Checked immediately after G-09,
                 # before any other per-candidate computation, per
@@ -2035,6 +2102,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         # blocked" from "couldn't check" (D4 fail-open).
         "cluster_blocked_adds":       cluster_blocked_adds,
         "cluster_gate_checked":       cluster_add_blocks is not None,
+        # G-26 — see pair_add_blocks docstring above. pair_gate_checked is
+        # True only when pair_add_blocks was actually resolved this run (not
+        # None). pair_buy_lane_skips is passed through unchanged from
+        # _buy_candidates' own sink — never recomputed here.
+        "pair_blocked_adds":         pair_blocked_adds,
+        "pair_gate_checked":         pair_add_blocks is not None,
+        "pair_buy_lane_skips":       buy_lane_pair_skips,
         "sector_blocked_picks":       sector_blocked_picks,
         "sector_unknown_picks":       sector_unknown_picks,
         "macro_blocked_picks":        macro_blocked_picks,
@@ -2543,7 +2617,9 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                     deterioration: list | None = None,
                     sold_today: set | None = None,
                     spy_df: object | None = None,
-                    cluster_add_blocks: dict | None = None) -> list[dict]:
+                    cluster_add_blocks: dict | None = None,
+                    pair_add_blocks: dict | None = None,
+                    pair_skip_sink: list | None = None) -> list[dict]:
     """
     Build buy candidate list with multi-signal confidence verdict for each pick.
     act_today: output of _act_today — tickers already flagged are excluded.
@@ -2570,6 +2646,20 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                Position" (a separate leak path, confirmed during design).
                `None` (the default) leaves this lane byte-identical to the
                pre-G-25 output; checked `is not None`, never `or {}`.
+    pair_add_blocks: optional (G-26, owner decisions 2026-10-08) — same
+               add_block_map() output passed to _grow_today, threaded into
+               THIS lane's own independent add-to-winner block too, checked
+               BEFORE cluster_add_blocks (G-25 — same check order as
+               _grow_today's own copy). `None` (the default) leaves this
+               lane byte-identical to the pre-G-26 output; checked
+               `is not None`, never `or {}`.
+    pair_skip_sink: optional mutable list — when a ticker is silently
+               skipped here by G-26 (this lane keeps no suppressed-
+               candidates bucket of its own, same "silent on purpose"
+               posture as every other skip in this loop), its upper-cased
+               ticker is appended so the caller (build_daily_briefing) can
+               surface it as `pair_buy_lane_skips` — disclosure plumbing
+               only, never fed into the Gate Suppression Ledger.
     """
     items: list[dict] = []
     held_tickers = _held_tickers(port_df)
@@ -2710,6 +2800,16 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                 continue
             # Drift-trim conflict — position is drift-overweight; don't add
             if ticker.upper() in _drift_trim_set:
+                continue
+            # G-26 — standing danger-tier correlated pair, checked BEFORE
+            # G-25 (same order as _grow_today's own copy). Silent, same
+            # posture as every other skip in this loop — but recorded into
+            # pair_skip_sink (when supplied) so the caller can still
+            # disclose it on a day _grow_today's own bull-day add loop
+            # never ran (see this function's docstring).
+            if pair_add_blocks is not None and ticker.upper() in pair_add_blocks:
+                if pair_skip_sink is not None:
+                    pair_skip_sink.append(ticker.upper())
                 continue
             # G-25 — same skip as _grow_today's own copy (see its docstring
             # for the sentinel contract). This lane tracks no suppressed-
@@ -3335,6 +3435,7 @@ def build_daily_briefing(
     net_capital:     float | None = None,
     etf_candidates:  list | None = None,
     cluster_add_blocks: dict | None = None,
+    pair_add_blocks: dict | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -3363,6 +3464,12 @@ def build_daily_briefing(
                      winner lane (two separate leak paths, both need the
                      same skip). None (the default, and every caller before
                      G-25) leaves every existing output byte-identical.
+    pair_add_blocks: optional (G-26, owner decisions 2026-10-08) — passed
+                     straight through to BOTH _grow_today's bull-day add
+                     loop and _buy_candidates' own independent add-to-winner
+                     lane, checked BEFORE cluster_add_blocks in both. None
+                     (the default, and every caller before G-26) leaves
+                     every existing output byte-identical.
 
     Returns dict with: act_today, buy_candidates, review_list, grow_today.
     """
@@ -3436,6 +3543,12 @@ def build_daily_briefing(
     )
     if _risk_off:
         act = act + _risk_off
+    # G-26 disclosure plumbing: built BEFORE _buy_candidates runs so its own
+    # add-to-winner lane can record a silent skip into it; read back AFTER
+    # the call (never while _buy_candidates is still running) so _grow_today
+    # receives the complete, final list. None when pair_add_blocks itself is
+    # None — nothing was checked, so there is nothing to report.
+    _pair_buy_lane_skip_sink: list = []
     buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                              act_today=act, review_list=review, risk_recs=risk_recs,
                              earnings_lookup=earnings_lookup,
@@ -3443,7 +3556,10 @@ def build_daily_briefing(
                              deterioration=deterioration,
                              sold_today=_sold_today,
                              spy_df=spy_df,
-                             cluster_add_blocks=cluster_add_blocks)
+                             cluster_add_blocks=cluster_add_blocks,
+                             pair_add_blocks=pair_add_blocks,
+                             pair_skip_sink=_pair_buy_lane_skip_sink)
+    _pair_buy_lane_skips = _pair_buy_lane_skip_sink if pair_add_blocks is not None else None
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, review_list=review, composites=grow_composites or {},
                          risk_recs=risk_recs,
@@ -3455,7 +3571,9 @@ def build_daily_briefing(
                          sold_today=_sold_today,
                          spy_df=spy_df,
                          etf_candidates=etf_candidates,
-                         cluster_add_blocks=cluster_add_blocks)
+                         cluster_add_blocks=cluster_add_blocks,
+                         pair_add_blocks=pair_add_blocks,
+                         buy_lane_pair_skips=_pair_buy_lane_skips)
     # Tune-up beta/sharpe cards restate a trim; if that name is already carrying
     # an Act Today card (incl. the risk-off TRIM appended above) or a Review
     # card, drop the redundant restatement (2026-08-04 audit — same broad

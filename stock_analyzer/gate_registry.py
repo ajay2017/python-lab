@@ -31,4 +31,5 @@ GATE_IDS: dict[str, str] = {
     "G-13": "ENTER_NOW without validated R:R → Watchlist downgraded to NEAR_ENTRY",
     "G-18": "Held position stop breached → Analysis add-to-position sizing suppressed",
     "G-25": "New correlation cluster → add-to-winner suppressed",
+    "G-26": "Standing danger-tier correlated pair → add-to-winner suppressed",
 }

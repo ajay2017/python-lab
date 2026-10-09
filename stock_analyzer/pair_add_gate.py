@@ -1,0 +1,225 @@
+"""G-26 — standing danger-tier correlated pair add-suppression gate.
+
+Pure logic only -- no Streamlit, no DB, no network. Pauses Grow Today's
+(and Buy Candidates') "add-to-winner" suggestion for the two HELD tickers at
+the endpoints of a STANDING danger-tier correlation pair (`"level" ==
+"danger"`, i.e. >= CORR_DANGER_PAIRS_THRESHOLD) -- regardless of whether a
+PAIR_RISK trim call actually exists for that pair. portfolio.py's own
+PAIR_RISK builder skips a pair when either member lacks "Score Available"
+(a fund/ETF, or a stock mid-data-outage), so a MISSING trim card must never
+be read as "the pair is safe" -- the correlation itself is the trigger here,
+independent of whether a trim card could be built for it.
+
+Purely a suppression -- never a trim/sell recommendation. The hard
+concentration ceilings (SINGLE_NAME_CEILING, SECTOR_CEILING) are completely
+unaffected and stay fully live regardless of this gate's own state.
+
+Checked BEFORE G-25 (cluster_add_gate) in both _grow_today and
+_buy_candidates -- a pair that is both a NEW cluster pairing AND already at
+standing danger tier records under G-26, never G-25.
+
+G-26 differs from G-25 in one structural way: it is NOT acknowledge/
+override-able. There is no "last Structural Scan" baseline to diff against
+-- the pause lasts for as long as the pair stays at danger tier and both
+names are held. Trimming the weaker name does NOT lift it on its own; only
+the correlation itself dropping below danger tier (or no longer holding one
+leg) does.
+
+Three-state contract throughout -- NEVER collapse "couldn't check" into
+"checked clean":
+  - None            -- couldn't check (corr_df/risk_pairs unavailable, or
+                       the underlying computation raised).
+  - {}              -- checked; nothing held is on a danger-tier pair.
+  - populated       -- checked; this is firing.
+
+Gate threshold note (verified fact, do not re-derive): portfolio.py's
+diversification_score() stores "corr" ROUNDED to 2dp but sets "level" from
+the UNROUNDED correlation -- a 0.799 pair can display as "0.80" yet still be
+"warning" tier. This module therefore gates on `pair["level"] == "danger"`
+ONLY, never on a numeric `corr >= CORR_DANGER_PAIRS_THRESHOLD` comparison of
+its own -- the "level" field already encodes the correctly-rounded
+comparison, computed from the unrounded value.
+
+Owner decisions ratified 2026-10-08 (design doc: docs/plans/pair-add-gate.md;
+requirements: F-289 + the 2A.3 G-26 row): trigger = the pair itself, not the
+emitted trim call;
+no acknowledge/override; checked before G-25; no new constants.py value
+(reuses CORR_DANGER_PAIRS_THRESHOLD).
+"""
+from __future__ import annotations
+
+_MAX_REASON_LEN = 300  # matches gate_ledger.py's own free-text reason cap
+
+
+def add_block_map(corr_df, risk_pairs, div_recs, held_tickers) -> "dict | None":
+    """Build {TICKER: {"partners": [...], "max_corr": float}} for every HELD
+    ticker sitting at the danger-tier end of a pair where BOTH members are
+    held.
+
+    None  -- corr_df is None/empty, OR risk_pairs isn't a list (couldn't
+             check this render -- fail-open: the caller must treat this as
+             "couldn't verify," never as "checked, clean").
+    {}    -- checked; risk_pairs has no danger-tier pair with both legs held.
+    dict  -- checked; this is firing.
+
+    div_recs is diversification_recommendations()'s output (or None when
+    that stage itself failed) -- used ONLY to classify each partner's
+    trim_call as "named" / "not_named" / "unknown". A None div_recs does
+    NOT disable the gate -- the correlation pairing itself (risk_pairs) is
+    the trigger, independent of whether a trim card could be built for it.
+
+    Each partner dict: {"partner": TICKER, "corr": float, "trim_call":
+    "named"|"not_named"|"unknown", "weaker": TICKER | None}.
+
+    Never raises -- any malformed input degrades to None (couldn't verify),
+    never a fabricated {}.
+    """
+    if corr_df is None or getattr(corr_df, "empty", True):
+        return None
+    if not isinstance(risk_pairs, list):
+        return None
+    try:
+        held = {str(t).upper() for t in (held_tickers or [])}
+
+        # {frozenset({t1, t2}): weaker_ticker} for every PAIR_RISK rec.
+        # None means div_recs itself is unavailable -- every match becomes
+        # trim_call="unknown", NOT "no pairs have a named trim."
+        _named: "dict[frozenset, str | None] | None" = None
+        if isinstance(div_recs, list):
+            _named = {}
+            for rec in div_recs:
+                if not isinstance(rec, dict) or rec.get("type") != "PAIR_RISK":
+                    continue
+                _t1 = str(rec.get("t1", "")).upper()
+                _t2 = str(rec.get("t2", "")).upper()
+                if not _t1 or not _t2:
+                    continue
+                _named[frozenset((_t1, _t2))] = str(rec.get("weaker", "")).upper() or None
+
+        blocks: "dict[str, dict]" = {}
+        for pair in risk_pairs:
+            if not isinstance(pair, dict) or pair.get("level") != "danger":
+                continue
+            a = str(pair.get("t1", "")).upper()
+            b = str(pair.get("t2", "")).upper()
+            if not a or not b or a not in held or b not in held:
+                continue  # both must be held -- never suppressed otherwise
+            try:
+                corr_ab = float(pair.get("corr"))
+            except (TypeError, ValueError):
+                continue
+            if corr_ab != corr_ab:  # NaN
+                continue
+
+            pair_key = frozenset((a, b))
+            if _named is None:
+                trim_call, weaker = "unknown", None
+            elif pair_key in _named:
+                trim_call, weaker = "named", _named[pair_key]
+            else:
+                trim_call, weaker = "not_named", None
+
+            for this_ticker, other_ticker in ((a, b), (b, a)):
+                entry = blocks.setdefault(this_ticker, {
+                    "partners": [],
+                    "max_corr": corr_ab,
+                })
+                entry["partners"].append({
+                    "partner":   other_ticker,
+                    "corr":      corr_ab,
+                    "trim_call": trim_call,
+                    "weaker":    weaker,
+                })
+                if corr_ab > entry["max_corr"]:
+                    entry["max_corr"] = corr_ab
+        return blocks
+    except Exception:
+        return None
+
+
+def partners_of(entry: "dict | None") -> list:
+    """The partner list for ONE add_block_map() entry, always a real list.
+
+    Exists so render sites never need `entry.get("partners") or []` --
+    that idiom is the offline-sentinel-collapse class check_antipatterns.py
+    blocks, and it would be the wrong shape here anyway: a malformed entry
+    should degrade to "no partners to name", not to a falsy value that
+    silently reads the same as an empty one. add_block_map() always builds
+    `partners` as a list, so this is a defensive accessor, not a sentinel.
+    """
+    partners = entry.get("partners") if isinstance(entry, dict) else None
+    return partners if isinstance(partners, list) else []
+
+
+def describe_reason(entry: "dict | None") -> str:
+    """Build the suppression reason string for ONE held ticker's G-26 block
+    entry (an add_block_map() value). <= 300 chars (gate_ledger's own
+    free-text cap). Never raises on a malformed entry -- degrades to a
+    generic sentence.
+    """
+    partners = entry.get("partners") if isinstance(entry, dict) else None
+    if not isinstance(partners, list):
+        partners = []
+    clauses: list[str] = []
+    for p in partners:
+        _trim = p.get("trim_call") if isinstance(p, dict) else None
+        if _trim == "named":
+            clauses.append("the pair's trim call is on 📡 Signals & Advice")
+        elif _trim == "not_named":
+            _partner_raw = p.get("partner", "")
+            _partner = str(_partner_raw).upper() if _partner_raw else "the partner"
+            # Deliberately does NOT say "right now": Score Available is
+            # permanently False for a fund/ETF, so a time-bound phrasing
+            # would read as a transient outage on a pair that will never
+            # produce a trim card. Covers both causes without guessing
+            # which one applies.
+            clauses.append(
+                f"no trim is named because {_partner}'s conviction isn't "
+                "scored (a fund, or a data outage) — paused on the "
+                "correlation alone"
+            )
+        else:  # "unknown" or malformed
+            clauses.append("trim-call status couldn't be read this run")
+    if not clauses:
+        clauses = ["trim-call status couldn't be read this run"]
+    text = "; ".join(clauses) + ". This pause adds no recommendation of its own."
+    return text[:_MAX_REASON_LEN]
+
+
+def split_scan_liftable(cluster_blocks: "dict | None", pair_blocks: "dict | None"):
+    """Split a G-25 `cluster_add_blocks` map's tickers into those that will
+    actually lift once the owner reviews the cluster in 🧬 Structural Scan
+    (`liftable`) vs. those that will STAY paused afterward because they also
+    sit on a standing G-26 danger-tier pair (`also_pair`).
+
+    Returns (liftable, also_pair), both sorted lists of ticker strings.
+
+    `pair_blocks is None` means G-26 couldn't be checked this render --
+    fail-open: every G-25-blocked ticker is reported liftable (we have no
+    evidence any of them won't be), and `also_pair` is empty.
+    """
+    if not cluster_blocks:
+        return [], []
+    cluster_tickers = set(cluster_blocks.keys())
+    if pair_blocks is None:
+        return sorted(cluster_tickers), []
+    pair_tickers = set((pair_blocks or {}).keys())
+    also_pair = cluster_tickers & pair_tickers
+    liftable = cluster_tickers - pair_tickers
+    return sorted(liftable), sorted(also_pair)
+
+
+def buy_lane_only(pair_blocked_adds: "list | None", buy_lane_skips: "list | None"):
+    """Tickers G-26 silently skipped inside `_buy_candidates`' own
+    add-to-winner lane that are NOT already disclosed in the
+    `pair_blocked_adds` bucket (Grow Today's own block) -- i.e. the ones
+    that would otherwise vanish with zero disclosure anywhere (a flat/bear
+    day, where `_grow_today`'s bull-day add loop never ran at all).
+
+    `buy_lane_skips is None` passes straight through as None (the map itself
+    was never checked this render -- nothing to report).
+    """
+    if buy_lane_skips is None:
+        return None
+    already = {str((d or {}).get("ticker", "")).upper() for d in (pair_blocked_adds or [])}
+    return sorted({str(t).upper() for t in buy_lane_skips} - already)

@@ -638,6 +638,13 @@ def test_readout_footnotes_g23_flags_no_instrument():
     assert "instrument" in notes[0].lower() or "market" in notes[0].lower()
 
 
+def test_readout_footnotes_g26_flags_earlier_gate_precedence_and_g25_cession():
+    notes = glr.readout_footnotes("G-26")
+    assert len(notes) == 2
+    assert any("earlier gate" in n.lower() for n in notes)
+    assert any("g-25" in n.lower() for n in notes)
+
+
 def test_readout_footnotes_unknown_gate_returns_empty():
     assert glr.readout_footnotes("G-04") == []
     assert glr.readout_footnotes("G-99") == []

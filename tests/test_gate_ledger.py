@@ -182,6 +182,37 @@ def test_g25_cluster_blocked_adds_produces_add_winner_row():
     assert row["gate_threshold"] == 0.65
 
 
+# ── G-26: pair_blocked_adds bucket (owner decisions 2026-10-08) ─────────────
+
+def test_g26_pair_blocked_adds_produces_add_winner_row():
+    """A pair_blocked_adds item produces one row, lane 'add_winner', with
+    gate_value/gate_threshold populated from the producer's own fields."""
+    grow = {
+        "pair_blocked_adds": [
+            _make_item("G-26", ticker="AAA", gate_value=0.85, gate_threshold=0.80),
+        ]
+    }
+    result = _rows(grow, tone="bull")
+    assert len(result) == 1
+    row = result[0]
+    assert row["ticker"] == "AAA"
+    assert row["gate_id"] == "G-26"
+    assert row["lane"] == "add_winner"
+    assert row["gate_value"] == 0.85
+    assert row["gate_threshold"] == 0.80
+
+
+def test_pair_buy_lane_skips_key_never_produces_a_row():
+    """pair_buy_lane_skips is disclosure plumbing (a plain list of ticker
+    strings, not gate-item dicts) -- it must never be scanned as a bucket."""
+    grow = {
+        "pair_blocked_adds": [],
+        "pair_buy_lane_skips": ["BBB", "CCC"],
+    }
+    result = _rows(grow, tone="bull")
+    assert result == []
+
+
 # ── item with no gate_id → skipped ───────────────────────────────────────────
 
 def test_item_without_gate_id_is_skipped():

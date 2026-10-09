@@ -895,6 +895,13 @@ _GATE_FILES = {
     # surface (a Home/Intelligence-produced signal gating a Grow Today
     # recommendation), same posture as etf_candidates.py from day one.
     "stock_analyzer/cluster_add_gate.py",
+    # Added 2026-10-08 (G-26, owner decisions ratified same day): decides
+    # which held tickers get their Grow Today "add-to-winner" suggestion
+    # paused for a STANDING danger-tier correlated pair, independent of
+    # whether a PAIR_RISK trim card exists for it -- same cross-feature
+    # coordination posture as cluster_add_gate.py, checked BEFORE it in both
+    # _grow_today and _buy_candidates.
+    "stock_analyzer/pair_add_gate.py",
     # Added 2026-10-06 (owner-approved, same treatment as etf_candidates.py):
     # the single source of truth for "how many Act Today items are there right
     # now" across every render surface (Home's badge/chip/section headers,

@@ -884,6 +884,192 @@ def test_build_daily_briefing_cluster_add_blocks_default_none_regression_safe():
     assert brief["grow_today"]["cluster_gate_checked"] is False
 
 
+# ── G-26: standing danger-tier correlated pair (owner decisions 2026-10-08) ──
+
+def _pab(ticker="AAA", partner="BBB", corr=0.85, trim_call="named", weaker=None):
+    """One pair_add_gate.add_block_map()-shaped entry for `ticker`."""
+    return {
+        ticker: {
+            "partners": [{"partner": partner, "corr": corr, "trim_call": trim_call, "weaker": weaker}],
+            "max_corr": corr,
+        }
+    }
+
+
+def test_grow_today_pair_add_blocks_none_is_regression_safe_noop():
+    port_df = make_port_df([_winner_row()])
+    grow_default = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"})
+    grow_explicit_none = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                                      pair_add_blocks=None)
+    assert grow_default["add_positions"] == grow_explicit_none["add_positions"]
+    assert find_item(grow_default["add_positions"], "AAA") is not None
+    assert grow_default["pair_blocked_adds"] == []
+    assert grow_default["pair_gate_checked"] is False
+    assert grow_default["pair_buy_lane_skips"] is None
+
+
+def test_grow_today_add_suppressed_by_pair_add_block():
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       pair_add_blocks=_pab())
+    assert find_item(grow["add_positions"], "AAA") is None
+    item = find_item(grow["pair_blocked_adds"], "AAA")
+    assert item is not None
+    assert item["gate_id"] == "G-26"
+    assert item["counterfactual"] is True
+    assert item["gate_value"] == 0.85
+    assert item["gate_threshold"] == pytest.approx(0.80)
+    assert "📡 Signals & Advice" in item["reason"]
+    assert grow["pair_gate_checked"] is True
+
+
+def test_grow_today_pair_gate_checked_true_when_nothing_blocked():
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       pair_add_blocks={})
+    assert find_item(grow["add_positions"], "AAA") is not None
+    assert grow["pair_blocked_adds"] == []
+    assert grow["pair_gate_checked"] is True
+
+
+def test_grow_today_pair_add_blocks_none_fails_open_uncaptioned():
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       pair_add_blocks=None)
+    assert find_item(grow["add_positions"], "AAA") is not None
+    assert grow["pair_blocked_adds"] == []
+    assert grow["pair_gate_checked"] is False
+
+
+def test_grow_today_bear_day_always_carries_pair_keys():
+    # Bear-day early return never evaluates any candidate -- the three G-26
+    # keys must still be present. pair_buy_lane_skips is passed through
+    # UNCHANGED (never recomputed) from the caller's own buy_lane_pair_skips.
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0,
+                       {"tone": "bear", "sp500_pct": -3.0},
+                       pair_add_blocks=_pab(), buy_lane_pair_skips=["CCC"])
+    assert grow["pair_blocked_adds"] == []
+    assert grow["pair_gate_checked"] is True
+    assert grow["pair_buy_lane_skips"] == ["CCC"]
+
+
+def test_grow_today_check_order_g26_before_g25():
+    # A ticker both on a NEW cluster pairing (G-25) and a standing danger
+    # pair (G-26) must record ONLY under G-26 -- checked first.
+    port_df = make_port_df([_winner_row()])
+    cluster_blocks = {
+        "AAA": {"partners": [("BBB", 0.70)], "max_new_corr": 0.70,
+                "cluster_tickers": ["AAA", "BBB"], "tier": "warning",
+                "combined_weight_pct": 20.0, "baseline_scan_date": "2026-10-01"},
+    }
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       cluster_add_blocks=cluster_blocks, pair_add_blocks=_pab())
+    assert find_item(grow["pair_blocked_adds"], "AAA") is not None
+    assert find_item(grow["cluster_blocked_adds"], "AAA") is None
+
+
+def test_grow_today_g01_wins_over_pair_block():
+    # Risk Advisor trim target `continue`s before G-26 is ever reached.
+    port_df = make_port_df([_winner_row()])
+    risk_recs = [{"priority": "HIGH", "type": "beta", "title": "Beta rec",
+                  "root_tickers": [{"ticker": "AAA"}]}]
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       risk_recs=risk_recs, pair_add_blocks=_pab())
+    assert find_item(grow["risk_blocked_adds"], "AAA") is not None
+    assert find_item(grow["pair_blocked_adds"], "AAA") is None
+
+
+def test_grow_today_g04_wins_over_pair_block():
+    # Single-name ceiling `continue`s before G-26 is ever reached.
+    port_df = make_port_df([_winner_row(weight=SINGLE_NAME_CEILING + 5.0)])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       pair_add_blocks=_pab())
+    assert find_item(grow["concentration_blocked_adds"], "AAA") is not None
+    assert find_item(grow["pair_blocked_adds"], "AAA") is None
+
+
+def test_grow_today_pair_add_blocks_none_does_not_disable_g04_ceiling():
+    # Ceilings must stay independent of this gate's own health.
+    port_df = make_port_df([_winner_row(weight=SINGLE_NAME_CEILING + 5.0)])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       pair_add_blocks=None)
+    assert find_item(grow["concentration_blocked_adds"], "AAA") is not None
+
+
+def test_buy_candidates_add_winner_suppressed_by_pair_add_block():
+    port_df = make_port_df([_winner_row()])
+    items = _buy_candidates(port_df, None, [], {}, _TODAY, pair_add_blocks=_pab())
+    assert find_item(items, "AAA") is None
+
+
+def test_buy_candidates_add_winner_pair_add_blocks_none_is_noop():
+    port_df = make_port_df([_winner_row()])
+    items_default = _buy_candidates(port_df, None, [], {}, _TODAY)
+    items_explicit_none = _buy_candidates(port_df, None, [], {}, _TODAY, pair_add_blocks=None)
+    assert find_item(items_default, "AAA") is not None
+    assert items_default == items_explicit_none
+
+
+def test_buy_candidates_pair_skip_recorded_in_sink():
+    # The disclosure plumbing: a silent skip must still be recorded into the
+    # caller-supplied sink list.
+    port_df = make_port_df([_winner_row()])
+    sink: list = []
+    items = _buy_candidates(port_df, None, [], {}, _TODAY, pair_add_blocks=_pab(), pair_skip_sink=sink)
+    assert find_item(items, "AAA") is None
+    assert sink == ["AAA"]
+
+
+def test_buy_candidates_pair_skip_sink_untouched_when_map_is_none():
+    port_df = make_port_df([_winner_row()])
+    sink: list = []
+    _buy_candidates(port_df, None, [], {}, _TODAY, pair_add_blocks=None, pair_skip_sink=sink)
+    assert sink == []
+
+
+def test_build_daily_briefing_threads_pair_add_blocks_into_both_lanes():
+    port_df = make_port_df([_winner_row()])
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+        pair_add_blocks=_pab(),
+    )
+    assert find_item(brief["grow_today"]["add_positions"], "AAA") is None
+    assert find_item(brief["grow_today"]["pair_blocked_adds"], "AAA") is not None
+    assert find_item(brief["buy_candidates"], "AAA") is None
+
+
+def test_build_daily_briefing_pair_add_blocks_default_none_regression_safe():
+    port_df = make_port_df([_winner_row()])
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+    )
+    assert find_item(brief["grow_today"]["add_positions"], "AAA") is not None
+    assert brief["grow_today"]["pair_gate_checked"] is False
+    assert brief["grow_today"]["pair_buy_lane_skips"] is None
+
+
+def test_build_daily_briefing_pair_buy_lane_skips_populated_on_bear_day():
+    # _buy_candidates is NOT tone-gated, so its add-to-winner lane still runs
+    # (and can still silently skip a G-26 ticker) on a bear day, even though
+    # _grow_today's own bull-only add loop never runs at all -- the skip must
+    # still surface via pair_buy_lane_skips so SOMETHING discloses it.
+    port_df = make_port_df([_winner_row()])
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY,
+        market_context={"tone": "bear", "sp500_pct": -3.0},
+        pair_add_blocks=_pab(),
+    )
+    assert brief["grow_today"]["pair_blocked_adds"] == []
+    assert brief["grow_today"]["pair_buy_lane_skips"] == ["AAA"]
+
+
 # ── _grow_today: Personalized Discovery annotation ───────────────────────────
 
 _WINNER_PROFILE = {

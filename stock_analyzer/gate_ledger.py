@@ -50,6 +50,14 @@ _BUCKET_LANES: dict[str, str] = {
     # rather than a new standalone builder (unlike G-02/05/06/13/18, which
     # needed separate builders because they don't flow through grow_today).
     "cluster_blocked_adds":      "add_winner",
+    # G-26 (2026-10-08, owner decisions ratified same day) — standing
+    # danger-tier correlated pair, checked BEFORE G-25 in daily_briefing.py.
+    # Same "flows through grow_today" shape as cluster_blocked_adds, so it
+    # gets a labelled bucket entry here too, not a new standalone builder.
+    # NOTE: "pair_buy_lane_skips" (the _buy_candidates-only disclosure list)
+    # is DELIBERATELY NOT added here — it is disclosure plumbing, not a
+    # ledger lane, and must never produce a gate_suppressions row.
+    "pair_blocked_adds":         "add_winner",
 }
 
 _MAX_REASON_LEN = 300
