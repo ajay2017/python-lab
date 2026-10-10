@@ -18,7 +18,21 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-10-02 (11-day gap closed: ETF/multi-asset initiative, Data Maintenance framework, Thesis Card, R-Multiple, leverage-giveback disclosure, Predictive Analytics correctness fixes, the commit-hook rewrite, and the 2026-10-02 full audit's fixes)
+## 1. Latest run — 2026-10-09 (the G-26 / correlation-coverage sequence: F-289 through F-294)
+
+**7451 passed, 0 failed, 19 warnings** (`python -m pytest -q`, full suite, no marker filter; 469-480s across runs this session). Local `.venv`. **Transcribed from the run, not recalled** — and run repeatedly through the day, since the native `pre-commit`/`pre-push` hooks execute the full suite on every commit and push.
+
+**Coverage: NOT re-measured this session** — the `--cov` run was not performed, so the 83% figure below is the last real measurement (2026-10-02) and is now 7 days / +430 tests stale. Recorded as unknown rather than carried forward as if current, per this file's own zero-hallucination rule.
+
+**+430 over the 7021 baseline (2026-10-02) below**, across six commits in one day: `35b5bf4` G-26 standing danger-tier pair gate (F-289), `0f7bf67` correlation-unchecked disclosure (F-290), `46711c4` persisted thesis claim withholds (F-291), `43e7cb4` EOD risk-history withholds (F-292), `7dd1896` the three "Well Diversified" screens disclose (F-293), `6946ca7` the gates stop claiming (F-294). New/extended test files: `tests/test_pair_add_gate.py` (new), `tests/test_pair_add_gate_app_wiring.py` (new), `tests/test_corr_unchecked_cache_app_wiring.py` (new), `tests/test_portfolio_thesis_app_wiring.py` (new), plus extensions to `test_daily_briefing.py`, `test_cluster_add_gate.py`, `test_portfolio_intelligence.py`, `test_portfolio_thesis.py`, `test_util.py`, `test_coord_freshness.py`, `test_risk_metric_history.py`, `test_headless_alert_engine.py`, `test_cron_eod_write_failure_propagation.py`.
+
+**Worth knowing about this batch specifically:** four Opus review rounds found defects the green suite did not, and **nine of the tests added during the sequence initially either pinned a regression or were vacuous** (a firing fixture that could no longer be downgraded, so deleting a type guard left the suite green). All were rewritten and mutation-verified. A high pass count in this file is a record of what ran, not evidence that each test is load-bearing — see `docs/plans/pair-add-gate.md` §10.
+
+Full detail: `docs/plans/pair-add-gate.md` §6-§10; `docs/requirements.md` F-289 through F-294; memory `project_pair_add_gate`.
+
+---
+
+## 1a. Previous run — 2026-10-02 (11-day gap closed: ETF/multi-asset initiative, Data Maintenance framework, Thesis Card, R-Multiple, leverage-giveback disclosure, Predictive Analytics correctness fixes, the commit-hook rewrite, and the 2026-10-02 full audit's fixes)
 
 **7021 passed, 0 failed, 19 warnings** (`python -m pytest -q`, full suite, no marker filter; 278-290s across runs this session). Python (local `.venv`). Transcribed from the run, not recalled.
 

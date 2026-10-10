@@ -1,5 +1,7 @@
 # Correlation Under Stress (Pass #1 Deferred Concept D2)
 
+**STATUS CORRECTED 2026-10-09 (doc-drift sweep): F-230 Correlation Under Stress — SHIPPED. The status line below is STALE and describes the pre-build state; authoritative source is `docs/requirements.md` F-230 and CLAUDE.md's queue. Kept rather than deleted so the original design record stays readable.**
+
 **Status:** DESIGNED 2026-08-05 (planner/Opus design pass), decisions locked with user, awaiting mock approval before code.
 
 **Origin:** `docs/plans/next-evolution-strategy.md`'s Deferred Concepts D2 — "The portfolio's correlation structure in calm markets differs from stress... cheap, decision-relevant comparison." Picked up as the next thread after the Engine Track Record arc closed 2026-08-05.

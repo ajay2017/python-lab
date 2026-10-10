@@ -3,6 +3,8 @@
 **Date:** 2026-07-24
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 4.8
+**STATUS CORRECTED 2026-10-09 (doc-drift sweep): D2 Exit Red-Team — SHIPPED. The status line below is STALE and describes the pre-build state; authoritative source is `agentic-intelligence-roadmap-v2.md`'s ROADMAP COMPLETE status line (Phase 1); `debate_agent.py`'s `debate_type="exit"` and app.py's "Challenge This Exit" button. Kept rather than deleted so the original design record stays readable.**
+
 **Status:** SHIP (revised after Opus design review — FIX-FIRST round resolved). Ready for
 implementation.
 

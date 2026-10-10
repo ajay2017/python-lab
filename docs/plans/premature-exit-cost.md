@@ -3,6 +3,8 @@
 **Date:** 2026-07-26
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5
+**STATUS CORRECTED 2026-10-09 (doc-drift sweep): O6 Premature-Exit Cost — SHIPPED. The status line below is STALE and describes the pre-build state; authoritative source is `agentic-intelligence-roadmap-v2.md`'s ROADMAP COMPLETE status line (Phase 4). Kept rather than deleted so the original design record stays readable.**
+
 **Status:** SHIP (revised after Opus design review — FIX-FIRST round resolved). One
 open policy question for the user (the per-bucket floor) flagged below.
 

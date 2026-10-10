@@ -9,3 +9,7 @@ __pycache__/
 .streamlit/secrets.toml
 .coverage
 .pytest_cache/
+
+# Microsoft Office lock files (e.g. ~$Report.docx) -- created whenever a
+# doc in the repo is open in Word/Excel; never intended to be committed.
+~$*

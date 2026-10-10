@@ -3,6 +3,8 @@
 **Date:** 2026-07-26
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5
+**STATUS CORRECTED 2026-10-09 (doc-drift sweep): D3 Signal Coherence Auditor — SHIPPED. The status line below is STALE and describes the pre-build state; authoritative source is `agentic-intelligence-roadmap-v2.md`'s ROADMAP COMPLETE status line (Phase 3). Kept rather than deleted so the original design record stays readable.**
+
 **Status:** SHIP (Opus design review: no blocking findings; 5 non-blocking refinements
 folded into this revision below). Ready for implementation.
 

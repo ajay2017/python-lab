@@ -3,6 +3,8 @@
 **Date:** 2026-07-24
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5
+**STATUS CORRECTED 2026-10-09 (doc-drift sweep): P4 Information Asymmetry — SHIPPED. The status line below is STALE and describes the pre-build state; authoritative source is `agentic-intelligence-roadmap.md` (v1) COMPLETE. Kept rather than deleted so the original design record stays readable.**
+
 **Status:** Plan SHIP 2026-07-24 (2 Opus rounds) — ready for implementation
 
 > **One-line spec:** Persist the already-shipped, already-computed price cross-check

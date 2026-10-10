@@ -6,6 +6,8 @@ composite consensus at the moment a `new_pick` fires** predict a rough first few
 the pick is right over its real weeks-to-months horizon? Distinguishes bad entry timing from
 ordinary short-term noise.
 
+**STATUS CORRECTED 2026-10-09 (doc-drift sweep): the ⏱️ Entry Timing tab — SHIPPED. The status line below is STALE and describes the pre-build state; authoritative source is `docs/requirements.md` (F-247 renders inside it). Kept rather than deleted so the original design record stays readable.**
+
 **Status: SCOPED, NOT STARTED.** This document is the design; no code has been written.
 `constants.py`, `stock_analyzer/predictive_analytics.py`, and `app.py` are all untouched pending
 an explicit go-ahead in a follow-up session.

@@ -3,6 +3,8 @@
 **Date:** 2026-07-24
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5
+**STATUS CORRECTED 2026-10-09 (doc-drift sweep): P5 Regime-Aware Stress Testing — SHIPPED. The status line below is STALE and describes the pre-build state; authoritative source is `agentic-intelligence-roadmap.md` (v1) COMPLETE; `stock_analyzer/regime_stress.py`. Kept rather than deleted so the original design record stays readable.**
+
 **Status:** Plan SHIP 2026-07-24 (3 Opus rounds) — ready for implementation
 
 > **One-line spec:** A new "🎯 Regime-Aware Adversarial Scenario" expander at the bottom

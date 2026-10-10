@@ -3,6 +3,8 @@
 **Date:** 2026-07-23
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 4.6
+**STATUS CORRECTED 2026-10-09 (doc-drift sweep): P2 Multi-Agent Debate — SHIPPED. The status line below is STALE and describes the pre-build state; authoritative source is `agentic-intelligence-roadmap.md` (v1) COMPLETE; `stock_analyzer/debate_agent.py`. Kept rather than deleted so the original design record stays readable.**
+
 **Status:** PLAN — pending Opus review before build
 
 > **One-line spec:** For high-stakes investment decisions (new entry, hold vs. trim),
