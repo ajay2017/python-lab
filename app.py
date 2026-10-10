@@ -6000,6 +6000,7 @@ if page == "🏠 Home":
         _cluster_add_blocks = cluster_add_gate.add_block_map(
             _struct_new_clusters, corr_df, held_tickers,
             (_cluster_baseline_state or {}).get("scan_date"),
+            corr_coverage=_corr_cov,
         )
         # G-26 (owner decisions 2026-10-08) — standing danger-tier correlated
         # pair, computed ONCE here from the SAME corr_df/risk_pairs/div_recs
@@ -6007,7 +6008,9 @@ if page == "🏠 Home":
         # the Structural banner's "also_pair" disclosure and the Brief about
         # to be built just below can never disagree about which pairs are
         # firing. Checked BEFORE G-25 in daily_briefing.py.
-        _pair_add_blocks = pair_add_gate.add_block_map(corr_df, risk_pairs, div_recs, held_tickers)
+        _pair_add_blocks = pair_add_gate.add_block_map(
+            corr_df, risk_pairs, div_recs, held_tickers, corr_coverage=_corr_cov,
+        )
 
         h_rets = holding_returns(held_data)
 

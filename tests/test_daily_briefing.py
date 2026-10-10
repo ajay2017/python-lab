@@ -1268,6 +1268,207 @@ def test_build_daily_briefing_corr_unchecked_never_changes_any_decision():
     assert brief_unchecked["grow_today"]["corr_unchecked"] == ["BBB"]
 
 
+# ── Disclosure-only follow-on: thin-sample corr_coverage guard (G-25/G-26) ───
+# An entirely-NaN correlation matrix (a held ticker with a short/non-
+# overlapping history collapses the listwise intersection to n_obs==0) must
+# not let either add-gate assert "no dangerous pairs" / "no new clusters"
+# from zero measured observations. pair_add_gate.add_block_map and
+# cluster_add_gate.add_block_map now accept an optional corr_coverage kwarg
+# that degrades a thin sample to None (couldn't check) rather than a
+# fabricated {} (checked, clean) -- module-level contract tests live in
+# tests/test_pair_add_gate.py / tests/test_cluster_add_gate.py. This section
+# proves the full pipeline: a control fixture that GENUINELY blocks, re-run
+# with thin coverage, must produce the SAME _grow_today/build_daily_briefing
+# output as explicitly passing {} -- nothing becomes more or less suppressed.
+
+from stock_analyzer import pair_add_gate as _pair_add_gate_mod
+from stock_analyzer import cluster_add_gate as _cluster_add_gate_mod
+from stock_analyzer import portfolio as _portfolio_mod
+
+
+def _thin_corr_df(tickers, pairs):
+    import pandas as pd
+    df = pd.DataFrame(0.0, index=tickers, columns=tickers)
+    for t in tickers:
+        df.loc[t, t] = 1.0
+    for (a, b), c in pairs.items():
+        df.loc[a, b] = c
+        df.loc[b, a] = c
+    return df
+
+
+def test_pair_add_gate_thin_coverage_matches_explicit_empty_dict_in_grow_today():
+    port_df = make_port_df([_winner_row()])
+    df = _thin_corr_df(["AAA", "BBB"], {("AAA", "BBB"): 0.9})
+    danger_pair = {"t1": "AAA", "t2": "BBB", "corr": 0.9, "level": "danger"}
+
+    # Control: a real danger-tier pair genuinely blocks both endpoints -- the
+    # independent variable below actually varies.
+    control_blocks = _pair_add_gate_mod.add_block_map(df, [danger_pair], [], ["AAA", "BBB"])
+    assert set(control_blocks.keys()) == {"AAA", "BBB"}
+    grow_control = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                               pair_add_blocks=control_blocks)
+    assert grow_control["add_positions"] == []
+
+    # THE regression guard. This block asserted the OPPOSITE until an Opus
+    # review caught it (2026-10-09): thin coverage used to discard the map
+    # entirely, so the add went through and the pause vanished. Between 2 and
+    # 19 overlapping observations the matrix holds REAL correlations, so this
+    # fixture is not hypothetical -- a held recent IPO caps the listwise
+    # intersection exactly this way.
+    thin_blocks = _pair_add_gate_mod.add_block_map(
+        df, [danger_pair], [], ["AAA", "BBB"],
+        corr_coverage={"n_obs": _portfolio_mod.CORR_MIN_OBS_TRUSTED - 1},
+    )
+    assert thin_blocks == control_blocks, (
+        "thin coverage discarded a live suppression -- a short price history "
+        "must not switch this gate off."
+    )
+
+    grow_thin = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                            pair_add_blocks=thin_blocks)
+    # The suppression survives end-to-end, identical to the control run.
+    assert grow_thin["add_positions"] == []
+    for key in ("add_positions", "pair_blocked_adds", "cluster_blocked_adds"):
+        assert grow_thin[key] == grow_control[key], f"key {key!r} differs"
+    assert grow_thin["pair_gate_checked"] is True
+
+
+def test_pair_add_gate_thin_coverage_on_an_EMPTY_map_matches_explicit_empty_dict():
+    """The disclosure half: when the map is legitimately EMPTY, thin coverage
+    downgrades it to None -- and that must change nothing except the
+    "couldn't check" flag. A live add is present in both runs so this can
+    never pass as a vacuous [] == [].
+    """
+    port_df = make_port_df([_winner_row()])
+    df = _thin_corr_df(["AAA", "BBB"], {("AAA", "BBB"): 0.9})
+    warning_pair = {"t1": "AAA", "t2": "BBB", "corr": 0.9, "level": "warning"}
+
+    control_blocks = _pair_add_gate_mod.add_block_map(df, [warning_pair], [], ["AAA", "BBB"])
+    assert control_blocks == {}          # control: empty, NOT None
+    thin_blocks = _pair_add_gate_mod.add_block_map(
+        df, [warning_pair], [], ["AAA", "BBB"],
+        corr_coverage={"n_obs": _portfolio_mod.CORR_MIN_OBS_TRUSTED - 1},
+    )
+    assert thin_blocks is None
+
+    grow_none = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                            pair_add_blocks=thin_blocks)
+    grow_empty = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                             pair_add_blocks={})
+
+    assert [a["ticker"] for a in grow_none["add_positions"]] == ["AAA"]
+    assert [a["ticker"] for a in grow_empty["add_positions"]] == ["AAA"]
+    for key in ("add_positions", "pair_blocked_adds", "cluster_blocked_adds"):
+        assert grow_none[key] == grow_empty[key], f"key {key!r} differs"
+    # The only permitted difference: the render-layer "couldn't check" flag.
+    assert grow_none["pair_gate_checked"] is False
+    assert grow_empty["pair_gate_checked"] is True
+
+
+def test_cluster_add_gate_thin_coverage_matches_explicit_empty_dict_in_grow_today():
+    port_df = make_port_df([_winner_row()])
+    df = _thin_corr_df(["AAA", "BBB"], {("AAA", "BBB"): 0.9})
+    clusters = [{
+        "tickers": ["AAA", "BBB"], "size": 2, "avg_internal_corr": 0.9,
+        "combined_weight_pct": 20.0, "tier": "warning",
+        "new_pairs": [["AAA", "BBB"]],
+    }]
+
+    control_blocks = _cluster_add_gate_mod.add_block_map(clusters, df, ["AAA", "BBB"], "2026-10-01")
+    assert set(control_blocks.keys()) == {"AAA", "BBB"}
+    grow_control = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                               cluster_add_blocks=control_blocks)
+    assert grow_control["add_positions"] == []
+
+    # Regression guard (see the pair sibling above): thin coverage must NOT
+    # discard a firing map.
+    thin_firing = _cluster_add_gate_mod.add_block_map(
+        clusters, df, ["AAA", "BBB"], "2026-10-01",
+        corr_coverage={"n_obs": _portfolio_mod.CORR_MIN_OBS_TRUSTED - 1},
+    )
+    assert thin_firing == control_blocks, (
+        "thin coverage discarded a live cluster suppression."
+    )
+    grow_thin = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                            cluster_add_blocks=thin_firing)
+    assert grow_thin["add_positions"] == []
+
+    # The disclosure half: nothing held sits on a new pair, so the map is
+    # legitimately EMPTY -- only then may thin coverage downgrade it.
+    thin_blocks = _cluster_add_gate_mod.add_block_map(
+        clusters, df, ["ZZZ"], "2026-10-01",
+        corr_coverage={"n_obs": _portfolio_mod.CORR_MIN_OBS_TRUSTED - 1},
+    )
+    assert _cluster_add_gate_mod.add_block_map(clusters, df, ["ZZZ"], "2026-10-01") == {}
+    assert thin_blocks is None
+
+    grow_none = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                            cluster_add_blocks=thin_blocks)
+    grow_empty = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                             cluster_add_blocks={})
+
+    assert [a["ticker"] for a in grow_none["add_positions"]] == ["AAA"]
+    assert [a["ticker"] for a in grow_empty["add_positions"]] == ["AAA"]
+
+    for key in ("add_positions", "pair_blocked_adds", "cluster_blocked_adds"):
+        assert grow_none[key] == grow_empty[key], f"key {key!r} differs"
+    assert grow_none["cluster_gate_checked"] is False
+    assert grow_empty["cluster_gate_checked"] is True
+
+
+def test_thin_coverage_matches_explicit_empty_dict_in_build_daily_briefing():
+    # Same invariant at the full build_daily_briefing level (also exercises
+    # _buy_candidates' independent add-to-winner lane, i.e. buy_candidates).
+    port_df = make_port_df([_winner_row()])
+    df = _thin_corr_df(["AAA", "BBB"], {("AAA", "BBB"): 0.9})
+    # Warning tier, so the map is legitimately EMPTY -- the only case thin
+    # coverage may downgrade. A danger-tier pair here would FIRE, and thin
+    # coverage must never discard a firing map (see the two _grow_today
+    # tests above, and the 2026-10-09 blocking review finding).
+    warning_pair = {"t1": "AAA", "t2": "BBB", "corr": 0.9, "level": "warning"}
+    thin_cov = {"n_obs": _portfolio_mod.CORR_MIN_OBS_TRUSTED - 1}
+
+    assert _pair_add_gate_mod.add_block_map(df, [warning_pair], [], ["AAA", "BBB"]) == {}
+    thin_pair_blocks = _pair_add_gate_mod.add_block_map(
+        df, [warning_pair], [], ["AAA", "BBB"], corr_coverage=thin_cov,
+    )
+    assert thin_pair_blocks is None
+
+    kwargs = dict(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+        cluster_add_blocks={},
+    )
+    brief_none = build_daily_briefing(**kwargs, pair_add_blocks=thin_pair_blocks)
+    brief_empty = build_daily_briefing(**kwargs, pair_add_blocks={})
+
+    assert ("AAA", "add_winner") in [
+        (c.get("ticker"), c.get("type")) for c in brief_none["buy_candidates"]
+    ]
+    assert ("AAA", "add_winner") in [
+        (c.get("ticker"), c.get("type")) for c in brief_empty["buy_candidates"]
+    ]
+    assert brief_none["buy_candidates"] == brief_empty["buy_candidates"]
+    # pair_gate_checked and pair_buy_lane_skips are the two render-layer
+    # "couldn't check" disclosure fields that legitimately differ between
+    # None (couldn't check) and {} (checked, clean) -- same established
+    # difference the pre-existing None-vs-omitted regression tests above
+    # already pin (e.g. test_grow_today_pair_add_blocks_none_is_regression_
+    # safe_noop asserts pair_buy_lane_skips is None only on the None path).
+    # Every actual SUPPRESSION-decision key must still match exactly.
+    _disclosure_only_keys = {"pair_gate_checked", "pair_buy_lane_skips"}
+    for key in brief_none["grow_today"]:
+        if key in _disclosure_only_keys:
+            continue
+        assert brief_none["grow_today"][key] == brief_empty["grow_today"][key], (
+            f"grow_today[{key!r}] differs"
+        )
+    assert brief_none["grow_today"]["pair_gate_checked"] is False
+    assert brief_empty["grow_today"]["pair_gate_checked"] is True
+
+
 # ── _grow_today: Personalized Discovery annotation ───────────────────────────
 
 _WINNER_PROFILE = {

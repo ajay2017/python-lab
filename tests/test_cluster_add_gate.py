@@ -14,7 +14,14 @@ from stock_analyzer.cluster_add_gate import (
     resolve_new_clusters,
     add_block_map,
 )
-from stock_analyzer.portfolio import correlation_unchecked
+from stock_analyzer.portfolio import (
+    correlation_unchecked,
+    correlation_matrix,
+    correlation_coverage,
+    diversification_score,
+    CORR_MIN_OBS_TRUSTED,
+)
+from stock_analyzer import portfolio as _portfolio_mod
 from stock_analyzer.constants import CORR_HIGH_PAIRS_THRESHOLD
 
 pytestmark = pytest.mark.fast
@@ -278,3 +285,184 @@ def test_g25_defect_regression_msft_unpriced_fails_open_and_is_disclosed():
     result = add_block_map(clusters, df, ["AAPL", "MSFT", "GOOGL"], "2026-10-01")
     assert result == {}, "contract unchanged -- fail-open, never a fabricated block"
     assert correlation_unchecked(df, ["AAPL", "MSFT", "GOOGL"]) == ["MSFT"]
+
+
+# ── add_block_map: corr_coverage thin-sample guard (disclosure-only) ────────
+# An entirely-NaN correlation matrix (a held ticker with a short/non-
+# overlapping history collapses the listwise intersection) must not let this
+# gate assert "no new cluster" from zero measured observations. Nothing below
+# may change which tickers are suppressed -- only whether the gate returns
+# None (couldn't check) instead of a fabricated {} -- an EMPTY map only.
+# A map that FIRED is always returned untouched.
+
+def _hist(n, start=100.0, step=1.0):
+    import pandas as pd
+    return pd.DataFrame({"Close": [start + step * i for i in range(n)]})
+
+
+def test_corr_coverage_omitted_is_byte_identical_to_before():
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    clusters = [_cluster(["AAPL", "MSFT"], [["AAPL", "MSFT"]])]
+    omitted = add_block_map(clusters, df, ["AAPL", "MSFT"], "2026-10-01")
+    explicit_none = add_block_map(clusters, df, ["AAPL", "MSFT"], "2026-10-01", corr_coverage=None)
+    assert set(omitted.keys()) == {"AAPL", "MSFT"}
+    assert omitted == explicit_none
+
+
+def test_corr_coverage_thin_sample_NEVER_discards_a_real_block():
+    """THE regression guard — this asserted the OPPOSITE until an Opus
+    review caught it (2026-10-09). See the pair_add_gate sibling's docstring
+    for the full reasoning: a thin sample must never lift a live pause,
+    because between 2 and 19 overlapping observations the matrix holds REAL
+    correlations and a cluster can genuinely be detected.
+    """
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    clusters = [_cluster(["AAPL", "MSFT"], [["AAPL", "MSFT"]])]
+    control = add_block_map(clusters, df, ["AAPL", "MSFT"], "2026-10-01")
+    assert set(control.keys()) == {"AAPL", "MSFT"}  # control genuinely blocks
+
+    thin = add_block_map(
+        clusters, df, ["AAPL", "MSFT"], "2026-10-01",
+        corr_coverage={"n_obs": CORR_MIN_OBS_TRUSTED - 1},
+    )
+    assert thin == control, (
+        "a thin sample discarded a live suppression -- that is a gate being "
+        "switched off by a short price history, not a disclosure change."
+    )
+
+
+def test_corr_coverage_thin_sample_downgrades_an_EMPTY_map_to_none():
+    # Nothing held is on a new pair's endpoints, so the map is legitimately
+    # empty -- the only case where "checked, clean" and "couldn't measure"
+    # are indistinguishable.
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    clusters = [_cluster(["AAPL", "MSFT"], [["AAPL", "MSFT"]])]
+    assert add_block_map(clusters, df, ["ZZZ"], "2026-10-01") == {}  # control
+    thin = add_block_map(clusters, df, ["ZZZ"], "2026-10-01",
+                         corr_coverage={"n_obs": CORR_MIN_OBS_TRUSTED - 1})
+    assert thin is None
+
+
+def test_corr_coverage_boundary_at_floor_is_normal_behaviour():
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    clusters = [_cluster(["AAPL", "MSFT"], [["AAPL", "MSFT"]])]
+    result = add_block_map(clusters, df, ["ZZZ"], "2026-10-01",
+                            corr_coverage={"n_obs": CORR_MIN_OBS_TRUSTED})
+    assert result == {}
+
+
+def test_corr_coverage_boundary_one_below_floor_is_none():
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    clusters = [_cluster(["AAPL", "MSFT"], [["AAPL", "MSFT"]])]
+    result = add_block_map(clusters, df, ["ZZZ"], "2026-10-01",
+                            corr_coverage={"n_obs": CORR_MIN_OBS_TRUSTED - 1})
+    assert result is None
+
+
+def test_corr_coverage_n_obs_zero_is_none():
+    # The real all-NaN-matrix case: n_obs == 0.
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    clusters = [_cluster(["AAPL", "MSFT"], [["AAPL", "MSFT"]])]
+    assert add_block_map(clusters, df, ["ZZZ"], "2026-10-01") == {}  # control
+    result = add_block_map(clusters, df, ["ZZZ"], "2026-10-01",
+                            corr_coverage={"n_obs": 0})
+    assert result is None
+
+
+def test_corr_coverage_type_guards_are_load_bearing():
+    # At the REAL floor (CORR_MIN_OBS_TRUSTED == 20): True compares equal to
+    # 1, which IS below 20, so if the explicit bool guard were ever deleted
+    # and True silently treated as the int 1, this would wrongly degrade to
+    # None (thin). The guard must reject it outright instead, leaving the
+    # empty map as {} -- no floor manipulation needed to prove this,
+    # unlike the inverted `>=` check this mirrors (correlation_claim_verified,
+    # portfolio.py), where True==1 already fails that floor either way.
+    # MUST use an EMPTY-map fixture (nothing held on a new pair's endpoint).
+    # Against a firing fixture these assertions are vacuous -- since the fix
+    # a non-empty map is never downgraded, so deleting either guard changes
+    # nothing. An Opus review proved exactly that by mutation (2026-10-09).
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    clusters = [_cluster(["AAPL", "MSFT"], [["AAPL", "MSFT"]])]
+    assert add_block_map(clusters, df, ["ZZZ"], "2026-10-01") == {}   # control
+
+    bool_result = add_block_map(clusters, df, ["ZZZ"], "2026-10-01",
+                                 corr_coverage={"n_obs": True})
+    assert bool_result == {}, (
+        "a bool n_obs must never trigger the thin-sample guard -- True == 1, "
+        "which IS below the floor of 20, so deleting the bool guard would "
+        "turn this into None"
+    )
+
+    # A numeric-looking string would raise TypeError on a bare `<` against an
+    # int if the int-type guard were deleted; the helper sits inside the try,
+    # so that raise would surface as None rather than {}.
+    str_result = add_block_map(clusters, df, ["ZZZ"], "2026-10-01",
+                                corr_coverage={"n_obs": "125"})
+    assert str_result == {}
+
+
+def test_corr_coverage_floor_comparison_is_strict_less_than(monkeypatch):
+    # Companion to the boundary tests above, using a monkeypatched floor of 1
+    # so the comparison itself (not a type guard) is what's under test: a
+    # real n_obs sitting EXACTLY at a low floor must clear it (strict `<`,
+    # never `<=`) -- repeated here at the opposite extreme from the real
+    # floor so a `<=` mutation can't hide at one particular floor value.
+    monkeypatch.setattr(_portfolio_mod, "CORR_MIN_OBS_TRUSTED", 1)
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    clusters = [_cluster(["AAPL", "MSFT"], [["AAPL", "MSFT"]])]
+    result = add_block_map(clusters, df, ["AAPL", "MSFT"], "2026-10-01",
+                            corr_coverage={"n_obs": 1})
+    assert set(result.keys()) == {"AAPL", "MSFT"}, "n_obs==floor must clear it, not be thin"
+
+
+@pytest.mark.parametrize("bad_coverage", [
+    None, {}, [], "x", {"n_obs": None}, {"n_obs": float("nan")}, {"no_n_obs_key": 1},
+])
+def test_corr_coverage_malformed_never_disables_the_gate(bad_coverage):
+    # Empty-map fixture, same reason as the type-guard test above: a firing
+    # map can no longer be downgraded, so only an empty one can detect a
+    # mishandled malformed value (it would surface as None, not {}).
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    clusters = [_cluster(["AAPL", "MSFT"], [["AAPL", "MSFT"]])]
+    assert add_block_map(clusters, df, ["ZZZ"], "2026-10-01") == {}   # control
+    result = add_block_map(clusters, df, ["ZZZ"], "2026-10-01", corr_coverage=bad_coverage)
+    assert result == {}
+
+
+def test_corr_coverage_end_to_end_all_nan_matrix_degrades_to_none():
+    """Reproduces the real hazard in the venv through the REAL
+    correlation_matrix/correlation_coverage/diversification_score chain (not
+    a hand-built corr_df): AAA/BBB at 60 bars, CCC at 1 bar. The listwise
+    intersection collapses to zero shared observations, yet the matrix is
+    non-empty -- a real production render could still feed it into
+    resolve_new_clusters/add_block_map built from zero data.
+    """
+    held = {"AAA": {"df": _hist(60)}, "BBB": {"df": _hist(60)}, "CCC": {"df": _hist(1)}}
+    held_tickers = ["AAA", "BBB", "CCC"]
+    corr = correlation_matrix(held)
+    cov = correlation_coverage(held)
+    div = diversification_score(corr)
+
+    # The hazard is real before asserting the fix.
+    assert not corr.empty
+    assert cov["n_obs"] == 0
+    assert div["risk_pairs"] == []
+
+    baseline = {"status": "ok", "scan_date": "2026-10-01", "cluster_snapshot": []}
+    clusters = resolve_new_clusters(corr, {"AAA": 10.0, "BBB": 10.0, "CCC": 10.0}, baseline)
+    # Every pairwise corr is NaN, so no cluster forms regardless -- but the
+    # gate must ALSO independently refuse to assert "checked, clean" from
+    # this coverage, which is what this test actually pins.
+    result = add_block_map(clusters, corr, held_tickers, "2026-10-01", corr_coverage=cov)
+    assert result is None
+
+    # Control: a real, comfortably-above-floor, genuinely-firing sample is
+    # NOT degraded to None by a healthy coverage reading.
+    held_ok = {"AAA": {"df": _hist(60)}, "BBB": {"df": _hist(60)}}
+    held_tickers_ok = ["AAA", "BBB"]
+    corr_ok = correlation_matrix(held_ok)
+    cov_ok = correlation_coverage(held_ok)
+    assert cov_ok["n_obs"] >= CORR_MIN_OBS_TRUSTED
+    clusters_ok = [_cluster(["AAA", "BBB"], [["AAA", "BBB"]])]
+    result_ok = add_block_map(clusters_ok, corr_ok, held_tickers_ok, "2026-10-01", corr_coverage=cov_ok)
+    assert set(result_ok.keys()) == {"AAA", "BBB"}

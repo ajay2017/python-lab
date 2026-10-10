@@ -17,7 +17,14 @@ from stock_analyzer.pair_add_gate import (
     partners_of,
     unchecked_disclosure,
 )
-from stock_analyzer.portfolio import diversification_score, correlation_unchecked
+from stock_analyzer.portfolio import (
+    diversification_score,
+    correlation_unchecked,
+    correlation_matrix,
+    correlation_coverage,
+    CORR_MIN_OBS_TRUSTED,
+)
+from stock_analyzer import portfolio as _portfolio_mod
 from stock_analyzer.constants import CORR_DANGER_PAIRS_THRESHOLD
 
 pytestmark = pytest.mark.fast
@@ -403,3 +410,205 @@ def test_unchecked_disclosure_says_history_not_priced():
         msg = unchecked_disclosure(tickers, True, True)
         assert "price history" in msg
         assert "couldn't be priced" not in msg
+
+
+# ── add_block_map: corr_coverage thin-sample guard (disclosure-only) ────────
+# An entirely-NaN correlation matrix (a held ticker with a short/non-
+# overlapping history collapses the listwise intersection) must not let this
+# gate assert "no dangerous pairs" from zero measured observations. Nothing
+# below may change which tickers are suppressed -- only whether the gate
+# returns None (couldn't check) instead of a fabricated {} -- an EMPTY map
+# only. A map that FIRED is always returned untouched.
+
+def _hist(n, start=100.0, step=1.0):
+    import pandas as pd
+    return pd.DataFrame({"Close": [start + step * i for i in range(n)]})
+
+
+def test_corr_coverage_omitted_is_byte_identical_to_before():
+    # Back-compat, non-blocking fixture: omitting corr_coverage entirely must
+    # behave exactly as it did before this parameter existed.
+    df = _corr_df(["AAA", "BBB"], {("AAA", "BBB"): 0.70})
+    with_default = add_block_map(df, [_warning_pair(corr=0.70)], [], ["AAA", "BBB"])
+    without_param = add_block_map(df, [_warning_pair(corr=0.70)], [], ["AAA", "BBB"], corr_coverage=None)
+    assert with_default == without_param == {}
+
+
+def test_corr_coverage_omitted_is_byte_identical_to_before_blocking_fixture():
+    # Back-compat, BLOCKING fixture -- the real suppression must survive
+    # untouched when corr_coverage is simply never passed.
+    df = _corr_df(["AAA", "BBB"], {("AAA", "BBB"): 0.9})
+    omitted = add_block_map(df, [_danger_pair(corr=0.9)], [], ["AAA", "BBB"])
+    explicit_none = add_block_map(df, [_danger_pair(corr=0.9)], [], ["AAA", "BBB"], corr_coverage=None)
+    assert set(omitted.keys()) == {"AAA", "BBB"}
+    assert omitted == explicit_none
+
+
+def test_corr_coverage_thin_sample_NEVER_discards_a_real_block():
+    """THE regression guard. A thin sample must not lift a live pause.
+
+    This test asserted the OPPOSITE until an Opus review caught it
+    (2026-10-09). The thin check originally ran before the map was built and
+    returned None regardless, which REMOVED suppressions that genuinely
+    fire: between 2 and 19 overlapping observations `correlation_matrix`
+    returns REAL correlations, so a danger-tier pair can exist and this map
+    can be non-empty. Reproduced through the real chain at n_obs=11 with a
+    1.0 danger pair — Grow Today would have said "add to AAA" while
+    📡 Signals & Advice showed a PAIR_RISK trim card for the same pair,
+    built from the same risk_pairs.
+
+    Thin coverage may only downgrade an EMPTY map (see the companion test
+    below). A firing map is returned untouched.
+    """
+    df = _corr_df(["AAA", "BBB"], {("AAA", "BBB"): 0.9})
+    pair = [_danger_pair(corr=0.9)]
+    control = add_block_map(df, pair, [], ["AAA", "BBB"])
+    assert set(control.keys()) == {"AAA", "BBB"}  # control genuinely blocks
+
+    thin = add_block_map(
+        df, pair, [], ["AAA", "BBB"],
+        corr_coverage={"n_obs": CORR_MIN_OBS_TRUSTED - 1},
+    )
+    assert thin == control, (
+        "a thin sample discarded a live suppression -- that is a gate being "
+        "switched off by a short price history, not a disclosure change."
+    )
+
+
+def _no_block_inputs():
+    """Inputs that legitimately produce an EMPTY map (warning tier, not
+    danger), so the thin-coverage downgrade is the only variable."""
+    df = _corr_df(["AAA", "BBB"], {("AAA", "BBB"): 0.9})
+    warning = [dict(_danger_pair(corr=0.9), level="warning")]
+    return df, warning, ["AAA", "BBB"]
+
+
+def test_corr_coverage_thin_sample_downgrades_an_EMPTY_map_to_none():
+    # The hazard this guard exists for: an empty map cannot distinguish
+    # "checked, found nothing" from "couldn't measure anything".
+    df, warning, held = _no_block_inputs()
+    assert add_block_map(df, warning, [], held) == {}   # control: empty, not None
+    thin = add_block_map(df, warning, [], held,
+                         corr_coverage={"n_obs": CORR_MIN_OBS_TRUSTED - 1})
+    assert thin is None
+
+
+def test_corr_coverage_boundary_at_floor_is_normal_behaviour():
+    df, warning, held = _no_block_inputs()
+    result = add_block_map(df, warning, [], held,
+                           corr_coverage={"n_obs": CORR_MIN_OBS_TRUSTED})
+    assert result == {}
+
+
+def test_corr_coverage_boundary_one_below_floor_is_none():
+    df, warning, held = _no_block_inputs()
+    result = add_block_map(df, warning, [], held,
+                           corr_coverage={"n_obs": CORR_MIN_OBS_TRUSTED - 1})
+    assert result is None
+
+
+def test_corr_coverage_n_obs_zero_is_none():
+    # The real all-NaN-matrix case: n_obs == 0 with nothing detectable.
+    df, warning, held = _no_block_inputs()
+    result = add_block_map(df, warning, [], held, corr_coverage={"n_obs": 0})
+    assert result is None
+
+
+def test_corr_coverage_type_guards_are_load_bearing():
+    # At the REAL floor (CORR_MIN_OBS_TRUSTED == 20): True compares equal to
+    # 1, which IS below 20, so if the explicit bool guard were ever deleted
+    # and True silently treated as the int 1, this would wrongly degrade to
+    # None (thin). The guard must reject it outright instead, leaving the
+    # empty map as {} -- no floor manipulation needed to prove this,
+    # unlike the inverted `>=` check this mirrors (correlation_claim_verified,
+    # portfolio.py), where True==1 already fails that floor either way.
+    # MUST use an EMPTY-map fixture. With a firing fixture these assertions
+    # are vacuous: since the fix, a non-empty map can never be downgraded at
+    # all, so deleting either guard changes nothing and the test still
+    # passes. An Opus review proved exactly that by mutation (2026-10-09) --
+    # both guard-deletion mutants survived against the old danger-tier
+    # fixture. Only on an empty map can the guards change the outcome.
+    df, warning, held = _no_block_inputs()
+    assert add_block_map(df, warning, [], held) == {}   # control: empty, not None
+
+    bool_result = add_block_map(df, warning, [], held, corr_coverage={"n_obs": True})
+    assert bool_result == {}, (
+        "a bool n_obs must never trigger the thin-sample guard -- True == 1, "
+        "which IS below the floor of 20, so deleting the bool guard would "
+        "turn this into None"
+    )
+
+    # A numeric-looking string would raise TypeError on a bare `<` against an
+    # int if the int-type guard were deleted; the helper sits inside the
+    # try, so that raise would surface as None rather than {}.
+    str_result = add_block_map(df, warning, [], held, corr_coverage={"n_obs": "125"})
+    assert str_result == {}
+
+
+def test_corr_coverage_floor_comparison_is_strict_less_than(monkeypatch):
+    # Companion to the boundary tests above, using a monkeypatched floor of 1
+    # so the comparison itself (not a type guard) is what's under test: a
+    # real n_obs sitting EXACTLY at a low floor must clear it (strict `<`,
+    # never `<=`) -- this is the same invariant the CORR_MIN_OBS_TRUSTED/
+    # CORR_MIN_OBS_TRUSTED-1 boundary tests already pin at the real floor,
+    # repeated here at the opposite extreme so a `<=` mutation can't hide at
+    # one particular floor value.
+    monkeypatch.setattr(_portfolio_mod, "CORR_MIN_OBS_TRUSTED", 1)
+    df = _corr_df(["AAA", "BBB"], {("AAA", "BBB"): 0.9})
+    pair = [_danger_pair(corr=0.9)]
+    result = add_block_map(df, pair, [], ["AAA", "BBB"], corr_coverage={"n_obs": 1})
+    assert set(result.keys()) == {"AAA", "BBB"}, "n_obs==floor must clear it, not be thin"
+
+
+@pytest.mark.parametrize("bad_coverage", [
+    None, {}, [], "x", {"n_obs": None}, {"n_obs": float("nan")}, {"no_n_obs_key": 1},
+])
+def test_corr_coverage_malformed_never_disables_the_gate(bad_coverage):
+    # Empty-map fixture for the same reason as the type-guard test above:
+    # against a firing map this can no longer detect anything, since a
+    # non-empty map is never downgraded. Here a mishandled malformed value
+    # would surface as None instead of {}.
+    df, warning, held = _no_block_inputs()
+    assert add_block_map(df, warning, [], held) == {}   # control
+    result = add_block_map(df, warning, [], held, corr_coverage=bad_coverage)
+    assert result == {}
+
+
+def test_corr_coverage_end_to_end_all_nan_matrix_degrades_to_none():
+    """Reproduces the real hazard in the venv through the REAL
+    correlation_matrix/correlation_coverage/diversification_score chain (not
+    a hand-built corr_df): AAA/BBB at 60 bars, CCC at 1 bar. The listwise
+    intersection collapses to zero shared observations, yet the matrix is
+    non-empty and risk_pairs is empty (every correlation is NaN, so
+    diversification_score's own pair loop skips every cell) -- a real
+    production render would see risk_pairs=[] and read this gate's old {}
+    return as "checked, nothing dangerous," built from zero data.
+    """
+    held = {"AAA": {"df": _hist(60)}, "BBB": {"df": _hist(60)}, "CCC": {"df": _hist(1)}}
+    held_tickers = ["AAA", "BBB", "CCC"]
+    corr = correlation_matrix(held)
+    cov = correlation_coverage(held)
+    div = diversification_score(corr)
+
+    # The hazard is real before asserting the fix.
+    assert not corr.empty
+    assert cov["n_obs"] == 0
+    assert div["risk_pairs"] == []
+
+    result = add_block_map(corr, div["risk_pairs"], [], held_tickers, corr_coverage=cov)
+    assert result is None
+
+    # Control: drop CCC -- a real, comfortably-above-floor sample (AAA/BBB
+    # are identical price series, so their correlation is exactly 1.0,
+    # genuinely danger-tier) is NOT degraded to None by a healthy coverage
+    # reading. The gate still fires for real, exactly as it would have
+    # before this parameter existed.
+    held_ok = {"AAA": {"df": _hist(60)}, "BBB": {"df": _hist(60)}}
+    held_tickers_ok = ["AAA", "BBB"]
+    corr_ok = correlation_matrix(held_ok)
+    cov_ok = correlation_coverage(held_ok)
+    div_ok = diversification_score(corr_ok)
+    assert cov_ok["n_obs"] >= CORR_MIN_OBS_TRUSTED
+    assert div_ok["risk_pairs"] != []
+    result_ok = add_block_map(corr_ok, div_ok["risk_pairs"], [], held_tickers_ok, corr_coverage=cov_ok)
+    assert set(result_ok.keys()) == {"AAA", "BBB"}

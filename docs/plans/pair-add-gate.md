@@ -506,3 +506,80 @@ the property that actually matters was narrower than the shape.
 None of the three surfaces has rendered a qualifier, and none can be forced —
 it needs a real partial price-history failure or a genuinely thin sample. Real
 `n_obs` has been 69-125. Track it as §4a/§6 track their own.
+
+---
+
+## 10. F-294 — the gate-side twin (2026-10-09)
+
+The last piece. §6-§9 made the screens honest and the records cautious; this
+stops the two GATES claiming they checked a matrix that held nothing
+measurable.
+
+**The defect.** On an entirely-NaN matrix `diversification_score` returns
+`risk_pairs: []` and `detect_new_clusters` finds nothing, so both
+`add_block_map`s built an EMPTY map and `*_gate_checked` read **True**. The app
+asserted "no dangerous pairs, no new clusters" from **zero shared
+observations**, and their own "couldn't check" captions stayed silent.
+F-290's coverage check structurally cannot catch this: `correlation_unchecked`
+is `[]` there, because every ticker genuinely IS a column.
+
+**Why it is disclosure-only.** All four suppression sites guard with
+`X is not None and ticker.upper() in X` (`daily_briefing.py` 1974, 2000, 2832,
+2848) and the flags are literally `X is not None` (:981, :991, :2123, :2129).
+So `None` and `{}` suppress identically — the only observable difference is
+the caption. That made the fix far smaller than first scoped: no touching
+`diversification_score` or `correlation_matrix`.
+
+### The blocking review finding — ordering, and why it is not a detail
+
+The first implementation put the thin check **before** the map was built and
+returned `None` regardless of what the map would have held. That **removed
+live suppressions.** Between 2 and 19 overlapping observations
+`correlation_matrix` returns REAL correlations, so `risk_pairs` can hold a
+danger-tier pair and the map can be non-empty.
+
+Reproduced through the real chain at **`n_obs = 11`** with a genuine 1.0 danger
+pair: old map `{AAA, BBB}`, new map `None`. On that render Grow Today would say
+"add to AAA" while 📡 Signals & Advice showed a `PAIR_RISK` trim card for the
+same pair, built from the same `risk_pairs` — the double-surface class this
+whole line of work exists to prevent. **Reachable, not hypothetical:** a held
+recent IPO caps the listwise intersection exactly this way, and memory already
+records `n_obs` falling 125 → 69 when SPCX capped it.
+
+**The fix:** the downgrade applies **only to an empty map** —
+`if not blocks and _corr_coverage_too_thin(...): return None`. An empty map is
+the sole case where "checked, found nothing" and "couldn't measure anything"
+are indistinguishable.
+
+### Two process failures worth more than the fix
+
+1. **The lead's own verification found the defect and misread it.** A probe
+   printed `healthy 125 -> ['AAA','BBB']` beside `floor-1 -> None` on the same
+   inputs, and that was reported as a PASS. "A real block degrades to None"
+   **is** the defect. Running the right check is not the same as reading it.
+2. **Five tests PINNED the regression**, asserting the unblocking as correct —
+   worse than no test. Rewritten to assert `thin == control`, with separate
+   empty-map companions.
+
+Then a second round found **four more tests vacuous**: the type-guard and
+malformed-coverage tests still used FIRING fixtures, and since the fix a
+non-empty map can never be downgraded, so deleting either type guard left the
+suite green. The reviewer proved it by mutation; the lead had claimed those
+tests were already moved. Now on empty-map fixtures and mutation-verified both
+ways — deleting the `bool` guard kills 2 tests, deleting the `int` guard kills 8.
+
+**And a mutation that silently did not apply, twice this session.** A
+replacement string that does not match leaves the file untouched, the suite
+green, and the result looks like a pass. **Assert the mutation landed before
+trusting either outcome** — the same class as the earlier `grep -c` exiting
+non-zero and breaking an `&&` chain.
+
+### Deliberately not done
+
+- **Collapsing the three duplicated thin-check helpers** into one
+  `portfolio.correlation_sample_thin()` (also used by
+  `correlation_claim_verified`). The better shape, and the reviewer agreed
+  deferring was right: it would pull `portfolio.py` into a commit that had just
+  had a blocking finding. Separate change.
+- `CORR_MIN_OBS_TRUSTED` stays in `portfolio.py` — owner decision 2026-10-09.
+  It gates no recommendation; it decides whether a gate claims to have checked.

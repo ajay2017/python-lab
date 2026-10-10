@@ -25,8 +25,27 @@ no new constants.py value -- CORR_HIGH_PAIRS_THRESHOLD is reused as-is.
 """
 from __future__ import annotations
 
+from stock_analyzer import portfolio
 from stock_analyzer import portfolio_intelligence
 from stock_analyzer import structural_scanner
+
+
+def _corr_coverage_too_thin(corr_coverage) -> bool:
+    """True iff `corr_coverage` names a real, measured `n_obs` below
+    `portfolio.CORR_MIN_OBS_TRUSTED` -- i.e. the correlation matrix ran but
+    measured too few (or zero) shared observations to trust. Mirrors
+    pair_add_gate._corr_coverage_too_thin exactly (same contract, same
+    rejection rules for bool/None/str/NaN) -- kept as a sibling function
+    here rather than a shared import so each gate module stays independently
+    readable and neither can accidentally import gate-specific state from
+    the other.
+    """
+    if not isinstance(corr_coverage, dict):
+        return False
+    n_obs = corr_coverage.get("n_obs")
+    if not isinstance(n_obs, int) or isinstance(n_obs, bool):
+        return False
+    return n_obs < portfolio.CORR_MIN_OBS_TRUSTED
 
 
 def baseline_signature(state: dict | None) -> tuple:
@@ -91,13 +110,30 @@ def resolve_new_clusters(corr_df, weights: dict | None, baseline_state: dict | N
         return None
 
 
-def add_block_map(new_clusters, corr_df, held_tickers, baseline_scan_date=None) -> dict | None:
+def add_block_map(
+    new_clusters, corr_df, held_tickers, baseline_scan_date=None, corr_coverage=None
+) -> dict | None:
     """Build {TICKER: {...}} for every HELD ticker that is itself an endpoint
     of a verified new pair (D2 scope -- never a transitive cluster member
     with no new direct edge of its own).
 
-    None straight through if new_clusters is None (couldn't check).
+    None straight through if new_clusters is None (couldn't check), OR if
+    NOTHING FIRED (the map would be empty) *and* corr_coverage names a real
+    n_obs below CORR_MIN_OBS_TRUSTED -- a map that DID fire is always
+    returned, never downgraded. The
+    correlation matrix ran but measured too few shared observations to
+    trust (e.g. an entirely-NaN matrix from a short/non-overlapping holding
+    history, n_obs==0), so detect_new_clusters having found nothing must not
+    be read as "checked, no new cluster."
     {} if new_clusters is [] or nothing held is on a new pair's endpoints.
+
+    corr_coverage is optional and additive -- portfolio.correlation_coverage()'s
+    own dict, passed through unchanged (never `or {}`). Omitting it, or
+    passing None/a non-dict/an n_obs that isn't a real int (bool is
+    REJECTED -- True/False are int subclasses -- as are None/str/NaN),
+    leaves behaviour completely unchanged from before this parameter
+    existed -- this check SUPPRESSES NOTHING on its own; it only stops the
+    gate claiming a check it could not actually perform.
 
     Each entry:
         {
@@ -113,6 +149,9 @@ def add_block_map(new_clusters, corr_df, held_tickers, baseline_scan_date=None) 
     """
     if new_clusters is None:
         return None
+    # NOTE: the thin-coverage check is deliberately NOT here -- see the
+    # return at the bottom. Same blocking review finding as its
+    # pair_add_gate sibling: it may only downgrade an EMPTY map.
     try:
         held = {str(t).upper() for t in (held_tickers or [])}
         blocks: dict[str, dict] = {}
@@ -145,6 +184,16 @@ def add_block_map(new_clusters, corr_df, held_tickers, baseline_scan_date=None) 
                     entry["partners"].append((other_ticker, corr_ab))
                     if corr_ab > entry["max_new_corr"]:
                         entry["max_new_corr"] = corr_ab
+        # Thin-coverage downgrade, applied ONLY to an empty map -- mirrors
+        # pair_add_gate's own return, see that module's fuller comment.
+        # Checking before the build discarded maps that genuinely fired
+        # (between 2 and 19 overlapping observations the matrix holds REAL
+        # correlations, so a new cluster can be detected), which would have
+        # REMOVED a live suppression. An empty map is the only case where
+        # "checked, found nothing" and "couldn't measure anything" are
+        # indistinguishable. Blocking review finding, 2026-10-09.
+        if not blocks and _corr_coverage_too_thin(corr_coverage):
+            return None
         return blocks
     except Exception:
         return None

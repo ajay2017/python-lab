@@ -48,19 +48,56 @@ no acknowledge/override; checked before G-25; no new constants.py value
 """
 from __future__ import annotations
 
+from stock_analyzer import portfolio
+
 _MAX_REASON_LEN = 300  # matches gate_ledger.py's own free-text reason cap
 
 
-def add_block_map(corr_df, risk_pairs, div_recs, held_tickers) -> "dict | None":
+def _corr_coverage_too_thin(corr_coverage) -> bool:
+    """True iff `corr_coverage` names a real, measured `n_obs` below
+    `portfolio.CORR_MIN_OBS_TRUSTED` -- i.e. the correlation matrix ran but
+    measured too few (or zero) shared observations to trust (an
+    entirely-NaN matrix from a holding with a short/non-overlapping history
+    collapses the listwise intersection to n_obs==0, yet still produces a
+    non-empty matrix and an empty risk_pairs list).
+
+    `corr_coverage` not a dict, or its "n_obs" not a real `int` (bool is
+    REJECTED -- True/False are int subclasses -- as are None/str/NaN),
+    returns False: an unusable/absent coverage reading must never itself be
+    treated as "thin," only a genuinely measured low n_obs may.
+    """
+    if not isinstance(corr_coverage, dict):
+        return False
+    n_obs = corr_coverage.get("n_obs")
+    if not isinstance(n_obs, int) or isinstance(n_obs, bool):
+        return False
+    return n_obs < portfolio.CORR_MIN_OBS_TRUSTED
+
+
+def add_block_map(corr_df, risk_pairs, div_recs, held_tickers, corr_coverage=None) -> "dict | None":
     """Build {TICKER: {"partners": [...], "max_corr": float}} for every HELD
     ticker sitting at the danger-tier end of a pair where BOTH members are
     held.
 
-    None  -- corr_df is None/empty, OR risk_pairs isn't a list (couldn't
-             check this render -- fail-open: the caller must treat this as
-             "couldn't verify," never as "checked, clean").
+    None  -- corr_df is None/empty, OR risk_pairs isn't a list, OR
+             NOTHING FIRED (the map would be empty) *and* corr_coverage
+             names a real n_obs below CORR_MIN_OBS_TRUSTED -- a map that
+             DID fire is always returned, never downgraded
+             (couldn't check this render -- fail-open: the caller must treat
+             this as "couldn't verify," never as "checked, clean").
     {}    -- checked; risk_pairs has no danger-tier pair with both legs held.
     dict  -- checked; this is firing.
+
+    corr_coverage is optional and additive -- portfolio.correlation_coverage()'s
+    own dict, passed through unchanged (never `or {}`). This is a THIRD
+    "couldn't check" condition alongside the corr_df/risk_pairs guards above:
+    when the correlation matrix ran but measured too few shared observations
+    to trust (e.g. an entirely-NaN matrix, n_obs==0), this gate must not
+    assert "no dangerous pairs" from zero measured data. Omitting
+    corr_coverage, or passing None/a non-dict/an n_obs that isn't a real int,
+    leaves behaviour completely unchanged from before this parameter
+    existed -- this check SUPPRESSES NOTHING on its own; it only stops the
+    gate claiming a check it could not actually perform.
 
     div_recs is diversification_recommendations()'s output (or None when
     that stage itself failed) -- used ONLY to classify each partner's
@@ -78,6 +115,9 @@ def add_block_map(corr_df, risk_pairs, div_recs, held_tickers) -> "dict | None":
         return None
     if not isinstance(risk_pairs, list):
         return None
+    # NOTE: the thin-coverage check is deliberately NOT here. See the return
+    # at the bottom -- it may only downgrade an EMPTY map to "couldn't check",
+    # never discard a map that actually fired.
     try:
         held = {str(t).upper() for t in (held_tickers or [])}
 
@@ -132,6 +172,26 @@ def add_block_map(corr_df, risk_pairs, div_recs, held_tickers) -> "dict | None":
                 })
                 if corr_ab > entry["max_corr"]:
                     entry["max_corr"] = corr_ab
+        # Thin-coverage downgrade, applied ONLY to an empty map.
+        #
+        # This ordering is load-bearing and was a blocking review finding
+        # (2026-10-09). Checking coverage BEFORE building the map discarded
+        # maps that genuinely fired: between 2 and 19 overlapping
+        # observations `correlation_matrix` returns REAL correlations, so
+        # `risk_pairs` can hold a danger-tier pair and this map can be
+        # non-empty. Returning None there would have REMOVED a live
+        # suppression -- Grow Today saying "add to AAA" while 📡 Signals &
+        # Advice shows a PAIR_RISK trim card for the same pair, built from
+        # the same `risk_pairs`. Reproduced at n_obs=11 with a real 1.0
+        # danger pair.
+        #
+        # An EMPTY map is the only ambiguous case: "checked, found nothing"
+        # and "couldn't measure anything" are indistinguishable there, and
+        # on an all-NaN matrix (n_obs == 0) it is the latter. Downgrading
+        # only that case suppresses nothing new and fires the existing
+        # "couldn't check" caption honestly.
+        if not blocks and _corr_coverage_too_thin(corr_coverage):
+            return None
         return blocks
     except Exception:
         return None
