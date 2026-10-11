@@ -1,5 +1,7 @@
 # Signal Reconciliation — momentum_available display flag (add-winner false-corroboration fix)
 
+**STATUS CORRECTED 2026-10-10: SHIPPED 2026-08-27 in commit `0ab17f6` ("fix(brief): stop reconcile_signals claiming two sources agree on adds"). The status line below is STALE and describes the pre-build state — note the unusual cause: this plan doc was CREATED BY THAT SAME COMMIT, alongside the implementation and 155 lines of tests, so it has carried a pre-build header since the day the work landed. Authoritative source is the code: `momentum_available` at `signal_reconciliation.py:72`, wired at `daily_briefing.py:626` as `momentum_available=not scanner_row_is_synthetic`, with the "technical momentum and full-score analysis agree" claim at `signal_reconciliation.py:213` gated behind it. Kept rather than deleted so the original design record stays readable.**
+
 **Status:** DESIGNED, NOT BUILT
 **Designed by:** planner (Opus 4.8, model id claude-opus-4-8[1m]), 2026-08-27
 **Design verdict:** PROCEED (see end of doc)
