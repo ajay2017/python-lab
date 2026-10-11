@@ -5,34 +5,32 @@ so a wrong recommendation or a silently-broken gate costs far more than model
 tokens. The savings come from **delegating the easy parts down** to cheaper models
 while the lead orchestrates and the Opus reviewer guards the decision logic.
 
-> **Model pins (2026-10-07, owner decision):** `planner` + `reviewer` =
-> **`claude-opus-5-5`**, `implementer` + `doc-writer` = **`claude-sonnet-5`**,
-> `test-runner` = **`haiku`** (Haiku 4.5). `doc-writer` moved off Haiku on
-> 2026-10-07 — the saving was 50%, not the ~67-80% the old ladder claimed, and
-> did not cover this lane's required re-verification; see that agent's frontmatter
-> comment. **All pins verified by a fresh-session `MODEL:` probe, 2026-10-07**
-> (`reviewer` → Opus 5.5, `implementer` → Sonnet 5).
+> **Model pins (2026-10-11, owner decision) — THREE ARE UNVERIFIED:**
+> `planner` + `reviewer` = **`claude-opus-5-5`** (verified, in use all session);
+> `implementer` = **`claude-sonnet-5-5`**; `doc-writer` = **`claude-haiku-5-5`**;
+> `test-runner` = **`claude-haiku-5-5`**.
 >
-> **The LEAD is not pinned, and that is now the main exposure.** It is whatever
-> the session runs — Opus 5 observed 2026-10-07, but the **org default is
-> `claude-sonnet-4-6`**, and `claude-opus-5-5` is absent from the org
-> `availableModels` list so it cannot be chosen from the `/model` picker at all.
-> The pins protect design and review; every "done inline as lead" judgment call
-> is unprotected. Fix = an allowlist request to Accenture. Until then
-> **`claude-opus-5` is the best selectable lead** — allowlisted, and what a
-> manually-set session already runs. **Not `opusplan`:** its Opus leg most
-> likely resolves via `ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8` (older than
-> `claude-opus-5`) and it drops to Sonnet for execution, where most inline lead
-> judgment happens. Unverified — a reason for caution, not a measurement.
-> (Note `availableModels` does *not* gate
-> agent frontmatter — the `claude-opus-5-5` pin resolves despite being absent
-> from it. It gates the picker only.)
+> **Agent definitions are frozen at SESSION START**, proven 2026-10-11 — a newly
+> created agent file came back "not found" mid-session, and three mid-session pin
+> edits all reported their session-start values. The three new pins therefore
+> could not be verified in the session that wrote them. Each carries a
+> `MANDATORY PROBE` block; grep for it. **Probe every lane once at the start of
+> the next session.**
 >
-> The pins are exact IDs because the `opus` alias inherited the lead's
-> model, or fell to the org's `ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8` under
-> a Sonnet lead, which made the review version depend on the session. With the
-> pins, the review gate no longer depends on the lead. See `docs/cost-routing.md`
-> for economics.
+> **Distinguishing the two failure modes is the whole diagnostic:** a FROZEN
+> definition reports the session-start pin; a REJECTED pin reports the LEAD's
+> model. A rejected full ID **escalates** to the lead rather than degrading to
+> something cheaper (seen 2026-09-30: a `claude-sonnet-5-5` pin produced Opus
+> 5.5), so a silent failure costs *more*, not less — worst on the two Haiku
+> lanes, budgeted at $0.10/$0.50 and landing on Opus rates.
+>
+> **Prices (from the API reference, not recalled):** Opus 5.5 $4/$20 ·
+> Sonnet 5.5 $2/$10 (identical to Sonnet 5 — the `implementer` bump is free
+> capability) · Haiku 5.5 $0.10/$0.50 vs Haiku 4.5 $1/$5 (10× cheaper, newer,
+> 1M context). That ratio is what reversed the 2026-10-07 decision to move
+> `doc-writer` off Haiku, which had been argued on a 50% saving that was too
+> small to cover this lane's re-verification. The quality half of that decision
+> still stands, so the reversal carries an explicit revert trigger.
 
 > **Workflow enforcement (2026-08-15).** The plan → build → review split is no
 > longer convention-only. `pre_tool_checks.py` now blocks a commit that (a) stages

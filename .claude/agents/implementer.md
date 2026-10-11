@@ -19,9 +19,26 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 # 2026-09-30: bumped to claude-sonnet-5-5, then REVERTED the same day. Two
 # implementer runs under the 5-5 pin reported Opus 5.5 (the lead's model),
 # which is the documented fallback for a blocked full ID: the managed
-# allowlist admits claude-sonnet-5 but evidently not 5-5. Re-bump only once
-# a fresh-session MODEL: check shows 5-5 actually resolving.
-model: claude-sonnet-5
+# allowlist admits claude-sonnet-5 but evidently not 5-5.
+#
+# RE-BUMPED 2026-10-11 (owner decision) -- UNVERIFIED, see the gate below.
+# What changed since 09-30: the bare `haiku` alias was observed resolving to
+# Claude Haiku 5.5, so this org now serves at least one 5.5-generation model.
+# That is NOT evidence about Sonnet 5.5 specifically; it is a reason to retest.
+# Same price either way ($2/$10), so this buys capability, never cost.
+#
+# !! UNVERIFIED -- MANDATORY PROBE ON THE FIRST RUN OF THE NEXT SESSION !!
+# Agent definitions are frozen at SESSION START (proven 2026-10-11: a newly
+# created agent file was "not found" mid-session, and three mid-session pin
+# edits all reported their session-start values). So this line cannot be
+# verified in the session that wrote it.
+#   Probe:  invoke `implementer` with a MODEL-probe-only prompt.
+#   PASS -> it reports Claude Sonnet 5.5 / claude-sonnet-5-5. Keep.
+#   FAIL -> it reports the LEAD's model (e.g. Claude Opus 5). Revert to
+#           `claude-sonnet-5` immediately: a blocked pin ESCALATES to the lead
+#           ($5/$25) rather than degrading to Sonnet 5 ($2/$10), so leaving it
+#           broken silently costs 2.5x on every implementer run.
+model: claude-sonnet-5-5
 color: blue
 ---
 
