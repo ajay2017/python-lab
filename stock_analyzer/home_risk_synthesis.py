@@ -376,3 +376,75 @@ def classify_risk_banner(
     if not _div_leg_verified(div_score, corr_unchecked, corr_coverage):
         return RISK_BANNER_INCOMPLETE_LABEL, RISK_BANNER_INCOMPLETE_COLOR
     return "All Clear", "#00C851"
+
+
+def risk_banner_record_label(
+    n_danger: int, n_warning: int, div_score: "float | None", *,
+    corr_unchecked, corr_coverage,
+) -> "str | None":
+    """The RECORD-grade sibling of `classify_risk_banner` — what the weekly
+    thesis (`portfolio_thesis.compose_thesis`) is allowed to PERSIST as
+    `risk_posture`, as opposed to what the screen chip may DISPLAY this run.
+
+    Project rule: **screens disclose, records withhold.** A caption on Home
+    is corrected by the very next render; a persisted weekly baseline is not
+    — next week's HELD/SHIFTED grade compares against whatever this function
+    returned today, so a fabricated claim here doesn't just mislead once, it
+    corrupts the comparison for a full week.
+
+    `None` means "withhold" — the caller must map it to the thesis's own
+    "unavailable" claim, exactly like every other sentinel in this bundle.
+    `None` is NOT "all clear" and must never be read as one.
+
+    Why this can't just call `classify_risk_banner` and use its result
+    unconditionally: that function's "All Clear"/"Monitor"/"Action Required"
+    for a *verified* reading are exactly right to persist, but its own
+    "Check Incomplete" fourth state is only ever withheld here because
+    `portfolio_thesis._classify_risk_posture` degrades anything outside
+    `_VALID_RAG_LABELS` to "unavailable" by accident (see T11/`test_risk_posture_unavailable_on_unrecognized_label`).
+    That accident covers the fully-unverified div_score case (None score, or
+    a verified-score check that fails) but NOT the gap this function closes:
+    a `Monitor`/`Action Required` driven ONLY by an UNVERIFIED `div_score`
+    (no danger/warning alerts at all) still comes back from
+    `classify_risk_banner` as a real-looking label string — "Monitor" or
+    "Action Required" — which IS in `_VALID_RAG_LABELS` and would persist as
+    a genuine claim despite resting on a matrix F-291's own
+    `correlation_claim_verified` refuses to trust.
+
+    So this function re-derives the verdict directly from the escalation
+    tiers rather than trusting `classify_risk_banner`'s string output:
+
+    - `n_danger > 0` is the ONLY tier that survives an unverified matrix,
+      and it does so unconditionally. It is the top tier of the banner, so
+      the correct label is already fixed by `n_danger` alone regardless of
+      what the (unverified) correlation leg would have contributed — there
+      is no more-severe tier an unverified div_score could have pushed it
+      to. Persisting "Action Required" here is not a judgment call made on
+      unreliable data; it's a judgment call that doesn't need the
+      unreliable data at all.
+
+    - An `n_warning`-only escalation, by contrast, IS withheld (returns
+      `None`) when the div_score leg is unverified. A warning-tier result
+      says "nothing worse than Monitor fired today" — but that is only a LOWER
+      BOUND on an unverified matrix: the true full-coverage div_score could
+      sit below `DIVERSIFY_MODERATE_PCT`, which would have made the honest
+      label `Action Required`. Persisting "Monitor" in that case would be an understatement
+      dressed up as a measurement, which is exactly the class this project's
+      F-290 through F-294 sequence exists to stop.
+
+    - A verified div_score (`_div_leg_verified` true) persists whatever
+      `classify_risk_banner` returns outright — that includes "All Clear",
+      which is only reachable when verified in the first place.
+
+    This never returns `"Check Incomplete"` — a withheld record is `None`;
+    the string is purely a screen-side display state and has no business in
+    a persisted claim.
+    """
+    if _div_leg_verified(div_score, corr_unchecked, corr_coverage):
+        return classify_risk_banner(
+            n_danger, n_warning, div_score,
+            corr_unchecked=corr_unchecked, corr_coverage=corr_coverage,
+        )[0]
+    if n_danger > 0:
+        return "Action Required"
+    return None

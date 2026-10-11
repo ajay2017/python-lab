@@ -230,7 +230,14 @@ def compose_thesis(
     """Compose this week's 5-claim standing thesis from already-decided inputs.
 
     `bundle` carries the claims sourced from Home's synthesis bundle:
-      - "rag_label": the bundle's `_rag_label` (All Clear / Monitor / Action Required)
+      - "rag_label": the bundle's `_rag_record_label` (All Clear / Monitor /
+        Action Required / None) -- the RECORD-grade sibling of the screen
+        chip's `_rag_label`, from `home_risk_synthesis.risk_banner_record_label`.
+        `None` means withheld (an unverified div_score drove a Monitor/Action
+        Required with no DANGER alert to pin the top tier) and must degrade to "unavailable" below, the
+        same as any other value outside `_VALID_RAG_LABELS` -- never the
+        screen-only `_rag_label`, which can show a real-looking label the
+        matrix hasn't actually verified.
       - "div_label": the bundle's `_div_label` (Well Diversified / Moderate / High Correlation Risk)
       - "structural_new_clusters": the `_structural_alert_cache` list (None when
         offline, [] when checked with nothing new, else the newly-formed clusters)
@@ -274,11 +281,15 @@ def compose_thesis(
         prose = _build_prose(claims, engine_trust, today)
         iso_year, iso_week, _ = today.isocalendar()
         return {
-            # v2 (was 1): _classify_correlation now also withholds on a
-            # partial-coverage/thin-sample day via correlation_claim_verified
-            # -- confirmed no reader branches on schema_version/"v" before
-            # bumping (grep across app.py/db.py/tests, 2026-10-09).
-            "v":           2,
+            # v3 (was 2): "rag_label" now feeds risk_banner_record_label's
+            # output, not the screen-only classify_risk_banner label -- a
+            # Monitor/Action-Required persisted on a day that previously
+            # persisted a real-looking label can now correctly land as
+            # "unavailable" instead (Definition-of-Done #8: a reader of an
+            # old row needs to know which rule produced it). Re-confirmed no
+            # production code branches on schema_version/"v" -- only two test
+            # assertions do (grep across app.py/db.py/tests, 2026-10-10).
+            "v":           3,
             "thesis_date": today.isoformat(),
             "iso_year":    int(iso_year),
             "iso_week":    int(iso_week),

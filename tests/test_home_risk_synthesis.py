@@ -378,6 +378,121 @@ class TestClassifyRiskBanner:
             hrs.classify_risk_banner(0, 0, 99.0)
 
 
+class TestRiskBannerRecordLabel:
+    """risk_banner_record_label -- the RECORD-grade sibling of
+    classify_risk_banner (2026-10-10, chunk 2 of the F-290..F-294 sequence's
+    record-side close). This is what the weekly thesis is allowed to
+    PERSIST; classify_risk_banner above remains what the Home screen chip
+    may DISPLAY. The gap this closes: a Monitor/Action-Required driven ONLY
+    by an unverified div_score (no danger/warning alerts) must not persist
+    as a real claim just because the string happens to pass
+    portfolio_thesis._VALID_RAG_LABELS.
+
+    Reuses the exact fixtures pinned in TestClassifyRiskBanner above
+    (VER/THIN0/T19/T20/MISS/UNK) so results are directly comparable to the
+    screen-label behaviour already under test there. Every withhold (None)
+    assertion below pairs with a contrasting non-withheld result in the SAME
+    test, per this repo's anti-vacuous-test rule -- three straight
+    sibling-gate commits (F-291/F-292/F-294) shipped tests that could not
+    actually distinguish the two outcomes.
+    """
+
+    VER   = TestClassifyRiskBanner.VER
+    THIN0 = TestClassifyRiskBanner.THIN0
+    T19   = TestClassifyRiskBanner.T19
+    T20   = TestClassifyRiskBanner.T20
+    MISS  = TestClassifyRiskBanner.MISS
+    UNK   = TestClassifyRiskBanner.UNK
+
+    @pytest.mark.parametrize("n_danger,n_warning,score,expected", [
+        (1, 0, 99.0, "Action Required"),
+        (0, 1, 99.0, "Monitor"),
+        (0, 0, 99.0, "All Clear"),
+    ])
+    def test_r1_verified_record_matches_screen_label_every_tier(
+        self, n_danger, n_warning, score, expected,
+    ):
+        # Kills: a record function that always returns None (or always some
+        # other constant) regardless of a VERIFIED reading.
+        record = hrs.risk_banner_record_label(n_danger, n_warning, score, **self.VER)
+        screen, _ = hrs.classify_risk_banner(n_danger, n_warning, score, **self.VER)
+        assert record == expected == screen
+
+    def test_r2_danger_persists_even_fully_unverified(self):
+        # Kills: withholding on every unverified day, including the top tier
+        # that needs no correlation evidence to already be correct.
+        record = hrs.risk_banner_record_label(1, 0, 99.0, **self.THIN0)
+        assert record == "Action Required"
+        # Contrast, same (fully unverified) fixture: a WARNING-only reading
+        # IS withheld -- isolating "n_danger alone survives" as the reason,
+        # not "THIN0 happens to not withhold."
+        record_warning = hrs.risk_banner_record_label(0, 1, 99.0, **self.THIN0)
+        assert record_warning is None
+
+    def test_r3_div_score_driven_escalation_without_alerts_is_withheld(self):
+        # The score alone clears the DANGER band (div_score < MODERATE_PCT),
+        # which the SCREEN reads as "Action Required" even on an unverified
+        # (T19, n_obs=19) sample -- escalation is honest evidence even from
+        # a partial matrix, per classify_risk_banner's own rule. But there
+        # are NO alerts (n_danger=0, n_warning=1 only), so the record must
+        # withhold it: a thin/partial matrix can be wrong UPWARD, so this
+        # "Action Required" may overstate a book whose true full-coverage
+        # label is only "Monitor". Either way an unverified div_score
+        # alone is not safe to persist as a real claim.
+        score = DIVERSIFY_MODERATE_PCT - 0.01
+        record = hrs.risk_banner_record_label(0, 1, score, **self.T19)
+        assert record is None
+        screen, _ = hrs.classify_risk_banner(0, 1, score, **self.T19)
+        assert screen == "Action Required"
+        # Positive control: the SAME score, VERIFIED, persists for real --
+        # isolating verification status as the only variable.
+        record_verified = hrs.risk_banner_record_label(0, 1, score, **self.VER)
+        assert record_verified == "Action Required"
+
+    def test_r4_monitor_tier_div_score_without_alerts_is_withheld(self):
+        score = DIVERSIFY_WELL_PCT - 0.01
+        record = hrs.risk_banner_record_label(0, 0, score, **self.MISS)
+        assert record is None
+        screen, _ = hrs.classify_risk_banner(0, 0, score, **self.MISS)
+        assert screen == "Monitor"
+        # Positive control: the SAME score, VERIFIED, persists "Monitor" for
+        # real -- proves record == screen is reachable, just not here.
+        record_verified = hrs.risk_banner_record_label(0, 0, score, **self.VER)
+        assert record_verified == "Monitor"
+
+    def test_r5_all_nan_matrix_score_50_is_withheld_not_all_clear(self):
+        # The headline all-NaN failure mode this whole sequence exists for:
+        # a thin/all-NaN matrix makes diversification_score fall back to
+        # exactly 50.0 off ZERO shared observations, clearing
+        # DIVERSIFY_WELL_PCT (42.0). Must not persist "All Clear".
+        record = hrs.risk_banner_record_label(0, 0, 50.0, **self.THIN0)
+        assert record is None
+        # Positive control: same score, verified sample -> genuinely All Clear.
+        record_verified = hrs.risk_banner_record_label(0, 0, 50.0, **self.VER)
+        assert record_verified == "All Clear"
+
+    def test_r5b_unchecked_none_must_not_read_as_checked_clean(self):
+        # corr_unchecked=None means "couldn't check this run" -- must not be
+        # collapsed into the empty-list "checked, nothing missing" case.
+        record = hrs.risk_banner_record_label(0, 0, 99.0, **self.UNK)
+        assert record is None
+        # Positive control: identical alerts/score, verified -> All Clear.
+        record_verified = hrs.risk_banner_record_label(0, 0, 99.0, **self.VER)
+        assert record_verified == "All Clear"
+
+    def test_never_returns_the_screen_only_check_incomplete_string(self):
+        # A withheld record is None; "Check Incomplete" is purely a display
+        # state and has no business in a persisted claim.
+        for n_danger, n_warning, score, fx in (
+            (0, 0, 50.0, self.THIN0),
+            (0, 1, DIVERSIFY_MODERATE_PCT - 0.01, self.T19),
+            (0, 0, DIVERSIFY_WELL_PCT - 0.01, self.MISS),
+            (0, 0, 99.0, self.UNK),
+        ):
+            assert hrs.risk_banner_record_label(n_danger, n_warning, score, **fx) \
+                != hrs.RISK_BANNER_INCOMPLETE_LABEL
+
+
 def _parse_app_py() -> ast.Module:
     src = APP_PY.read_text(encoding="utf-8-sig")
     return ast.parse(src, filename=str(APP_PY))
@@ -425,6 +540,143 @@ def test_app_py_calls_classify_risk_banner_once_with_safe_keyword_names():
         assert not isinstance(val, ast.BoolOp), (
             f"{kw_name}= must not be an `or` fallback -- that launders the "
             "None/offline sentinel into a fabricated verified reading"
+        )
+
+
+def test_app_py_summary_reads_record_label_not_screen_label():
+    """AST wiring test, 2026-10-10 chunk 2 -- the Summary page's thesis
+    dict must feed `compose_thesis` the RECORD-grade label
+    (`_sm_bundle.get("_rag_record_label")`), never the screen-only
+    `_rag_label` chip label and never an `or` fallback between the two
+    (either of which would launder a withheld record back into a
+    fabricated real claim). Also confirms the synth-cache bundle dict
+    literal actually defines the `_rag_record_label` key this reader
+    depends on, so the two can never silently drift apart.
+    """
+    tree = _parse_app_py()
+
+    pth_bundle_dicts = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "_pth_bundle"
+        and isinstance(node.value, ast.Dict)
+    ]
+    assert len(pth_bundle_dicts) == 1, (
+        f"expected exactly one `_pth_bundle = {{...}}` dict literal, found "
+        f"{len(pth_bundle_dicts)}"
+    )
+    pth_dict = pth_bundle_dicts[0]
+    rag_label_values = [
+        v for k, v in zip(pth_dict.keys, pth_dict.values)
+        if isinstance(k, ast.Constant) and k.value == "rag_label"
+    ]
+    assert len(rag_label_values) == 1, (
+        "expected exactly one \"rag_label\" key in the _pth_bundle dict literal"
+    )
+    rag_val = rag_label_values[0]
+    assert not isinstance(rag_val, ast.BoolOp), (
+        "\"rag_label\" must not be an `or` fallback -- that would launder "
+        "a withheld record label back into a fabricated real one"
+    )
+    assert (
+        isinstance(rag_val, ast.Call)
+        and isinstance(rag_val.func, ast.Attribute)
+        and rag_val.func.attr == "get"
+        and isinstance(rag_val.func.value, ast.Name)
+        and rag_val.func.value.id == "_sm_bundle"
+        and len(rag_val.args) == 1
+        and isinstance(rag_val.args[0], ast.Constant)
+        and rag_val.args[0].value == "_rag_record_label"
+    ), (
+        "\"rag_label\" must read `_sm_bundle.get(\"_rag_record_label\")` "
+        f"exactly, found {ast.dump(rag_val)}"
+    )
+
+    # The PRODUCER end. Asserting only that the key EXISTS is too weak: a
+    # one-line mutation storing the screen label under it
+    # (`"_rag_record_label": _rag_label`) silently undoes the whole change
+    # and was found to survive this file in review (2026-10-10, chunk 2
+    # FIX-FIRST). The VALUE must be the record-grade local.
+    record_key_values = [
+        v
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Dict)
+        for k, v in zip(node.keys, node.values)
+        if isinstance(k, ast.Constant) and k.value == "_rag_record_label"
+    ]
+    assert len(record_key_values) == 1, (
+        f"expected exactly one dict literal defining \"_rag_record_label\", "
+        f"found {len(record_key_values)}"
+    )
+    stored = record_key_values[0]
+    assert isinstance(stored, ast.Name) and stored.id == "_rag_record_label", (
+        "the \"_rag_record_label\" bundle key must store the bare record-grade "
+        f"local `_rag_record_label`, found {ast.dump(stored)} -- storing "
+        "`_rag_label` there would persist the SCREEN label as a real claim"
+    )
+
+
+def test_app_py_computes_record_label_via_the_record_function():
+    """AST wiring test, PRODUCER end (2026-10-10 chunk 2 FIX-FIRST).
+
+    The consumer-end test above pins what Summary READS. This pins what
+    app.py WRITES. Without it, `_rag_record_label = _rag_label` -- never
+    calling `risk_banner_record_label` at all -- survives the whole suite,
+    because app.py has no import-level test coverage and the consumer test
+    only checks the name it reads, not how that name was produced.
+
+    Same keyword-safety rule as the classify_risk_banner call site: the two
+    correlation arguments must be bare Names, never an `or` fallback that
+    would launder the offline sentinel into a verified reading.
+    """
+    tree = _parse_app_py()
+    calls = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "risk_banner_record_label"
+    ]
+    assert len(calls) == 1, (
+        f"expected exactly one risk_banner_record_label call site, found "
+        f"{len(calls)} (lines {[c.lineno for c in calls]})"
+    )
+    call = calls[0]
+
+    assigns = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Assign) and n.value is call
+    ]
+    assert len(assigns) == 1, (
+        "the risk_banner_record_label call must be assigned directly to a name"
+    )
+    targets = assigns[0].targets
+    assert (
+        len(targets) == 1
+        and isinstance(targets[0], ast.Name)
+        and targets[0].id == "_rag_record_label"
+    ), (
+        "risk_banner_record_label's result must be bound to "
+        f"`_rag_record_label`, found {ast.dump(assigns[0])}"
+    )
+
+    kw_by_name = {kw.arg: kw.value for kw in call.keywords}
+    for kw_name, expected_name in (
+        ("corr_unchecked", "_corr_unchecked"), ("corr_coverage", "_corr_cov"),
+    ):
+        assert kw_name in kw_by_name, (
+            f"risk_banner_record_label call is missing the {kw_name}= keyword"
+        )
+        val = kw_by_name[kw_name]
+        assert not isinstance(val, ast.BoolOp), (
+            f"{kw_name}= must not be an `or` fallback -- that launders the "
+            "None/offline sentinel into a fabricated verified reading"
+        )
+        assert isinstance(val, ast.Name) and val.id == expected_name, (
+            f"{kw_name}= must be the bare name `{expected_name}`, found "
+            f"{ast.dump(val)} at line {call.lineno}"
         )
 
 

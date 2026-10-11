@@ -114,7 +114,7 @@ def test_compose_thesis_wrong_type_bundle_returns_none_not_raise():
 def test_compose_thesis_valid_bundle_returns_full_shape():
     out = pth.compose_thesis(_full_bundle(), _full_acct_gate(), {}, today=TODAY)
     assert out is not None
-    assert out["v"] == 2
+    assert out["v"] == 3
     assert out["thesis_date"] == TODAY.isoformat()
     assert set(pth.CLAIM_KEYS) <= set(out["claims"].keys())
     assert isinstance(out["prose"], str) and out["prose"]
@@ -172,6 +172,51 @@ def test_risk_posture_unavailable_when_fed_the_real_incomplete_banner_label():
         _full_bundle(rag_label=real_label), _full_acct_gate(), {}, today=TODAY,
     )
     assert out["claims"]["risk_posture"] == "unavailable"
+
+
+def test_risk_posture_unavailable_when_fed_the_real_withheld_record_label():
+    """2026-10-10, chunk 2 of the F-290..F-294 sequence's record-side close
+    — `home_risk_synthesis.risk_banner_record_label` (NOT `classify_risk_
+    banner`) is what `app.py` now feeds into `bundle["rag_label"]`. A
+    Monitor-tier result driven ONLY by an unverified div_score (no alerts at
+    all) must come back `None` from the record function and degrade to
+    "unavailable" here -- never persist "Monitor" as a real claim just
+    because that string happens to pass `_VALID_RAG_LABELS`.
+
+    Anti-vacuous positive control, same inputs minus the thin sample: the
+    SCREEN label for these same alert counts/score is genuinely "Monitor"
+    (proving the inputs really do escalate), and a VERIFIED version of the
+    same record call persists "Monitor" for real -- isolating verification
+    status, not the escalation itself, as what triggers withholding.
+    """
+    _n_danger, _n_warning, _score = 0, 1, 99.0
+    _unverified = {"corr_unchecked": [], "corr_coverage": {"n_obs": 0}}
+    _verified   = {"corr_unchecked": [], "corr_coverage": {"n_obs": 125}}
+
+    screen_label, _ = hrs.classify_risk_banner(
+        _n_danger, _n_warning, _score, **_unverified,
+    )
+    assert screen_label == "Monitor"
+
+    record_label = hrs.risk_banner_record_label(
+        _n_danger, _n_warning, _score, **_unverified,
+    )
+    assert record_label is None
+
+    out = pth.compose_thesis(
+        _full_bundle(rag_label=record_label), _full_acct_gate(), {}, today=TODAY,
+    )
+    assert out["claims"]["risk_posture"] == "unavailable"
+
+    # Positive control: the SAME inputs, verified, persist "Monitor" for real.
+    record_label_verified = hrs.risk_banner_record_label(
+        _n_danger, _n_warning, _score, **_verified,
+    )
+    assert record_label_verified == "Monitor"
+    out_verified = pth.compose_thesis(
+        _full_bundle(rag_label=record_label_verified), _full_acct_gate(), {}, today=TODAY,
+    )
+    assert out_verified["claims"]["risk_posture"] == "Monitor"
 
 
 def test_correlation_unavailable_when_div_label_missing():
@@ -385,9 +430,9 @@ def test_correlation_t6_other_four_claims_unaffected_by_coverage_gate():
     assert treatment["claims"]["correlation_structure"] == "unavailable"
 
 
-def test_correlation_t7_compose_thesis_schema_version_is_2():
+def test_correlation_t7_compose_thesis_schema_version_is_3():
     out = pth.compose_thesis(_full_bundle(), _full_acct_gate(), {}, today=TODAY)
-    assert out["v"] == 2
+    assert out["v"] == 3
 
 
 def test_correlation_t8_grade_prior_not_comparable_vs_held():

@@ -1,4 +1,4 @@
-﻿import os
+import os
 import json
 import uuid
 import streamlit as st
@@ -5772,7 +5772,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 13  # bumped: classify_risk_banner's "All Clear" now means verified coverage, not just a clean score -- a memo built under the old rule must not be served as if it carried the new meaning
+    _SYNTH_SCHEMA_VER = 14  # bumped: bundle now also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -6054,6 +6054,19 @@ if page == "🏠 Home":
 
 
         _rag_label, _rag_color = home_risk_synthesis.classify_risk_banner(
+            n_danger, n_warning, div_score,
+            corr_unchecked=_corr_unchecked, corr_coverage=_corr_cov,
+        )
+        # Chunk 2 of the F-290..F-294 sequence's record-side close: the
+        # weekly thesis must persist a STRICTER verdict than the screen chip
+        # shows. A Monitor/Action-Required driven only by an unverified
+        # div_score (and no DANGER alert to pin the top tier) must not persist
+        # as a real claim -- see
+        # home_risk_synthesis.risk_banner_record_label's docstring. No `or`
+        # fallback of any kind: `None` means withhold and must reach the
+        # thesis composer as `None`, never get laundered into a fabricated
+        # label here.
+        _rag_record_label = home_risk_synthesis.risk_banner_record_label(
             n_danger, n_warning, div_score,
             corr_unchecked=_corr_unchecked, corr_coverage=_corr_cov,
         )
@@ -6784,6 +6797,13 @@ if page == "🏠 Home":
                 "_highbeta_share": st.session_state.get("_highbeta_share"),
                 "_risk_advisor_recs": _risk_advisor_recs,
                 "_rag_label": _rag_label, "_rag_color": _rag_color,
+                # Record-grade sibling of _rag_label -- what the weekly
+                # thesis may PERSIST, not what the chip displays. Home never
+                # renders this value itself (it's Summary-only), so no
+                # memo-HIT-path restore is needed above -- Summary reads it
+                # straight out of this bundle, same as every other
+                # Summary-only key here.
+                "_rag_record_label": _rag_record_label,
                 "_macro_events": _macro_events, "_market_context": _market_context,
                 "_daily_brief": _daily_brief,
                 "_grow_composites":   st.session_state.get("_grow_composites", {}),
@@ -14022,7 +14042,7 @@ elif page == "🧾 Summary":
                 if not port_df.empty and "Score" in port_df.columns else None
             )
             _pth_bundle = {
-                "rag_label":               _sm_bundle.get("_rag_label"),
+                "rag_label":               _sm_bundle.get("_rag_record_label"),
                 "div_label":               _sm_bundle.get("_div_label"),
                 "structural_new_clusters": st.session_state.get("_structural_alert_cache"),
                 "corr_unchecked":          _sm_bundle.get("_corr_unchecked"),
