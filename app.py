@@ -5772,7 +5772,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 12  # bumped: bundle + grow_today now also carry corr_unchecked (G-25/G-26 disclosure follow-on)
+    _SYNTH_SCHEMA_VER = 13  # bumped: classify_risk_banner's "All Clear" now means verified coverage, not just a clean score -- a memo built under the old rule must not be served as if it carried the new meaning
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -6055,6 +6055,7 @@ if page == "🏠 Home":
 
         _rag_label, _rag_color = home_risk_synthesis.classify_risk_banner(
             n_danger, n_warning, div_score,
+            corr_unchecked=_corr_unchecked, corr_coverage=_corr_cov,
         )
 
         # Load macro calendar (cached per ET date — FRED key optional but recommended)

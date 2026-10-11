@@ -51,12 +51,15 @@ exists specifically to short-circuit before that call happens.
 """
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from stock_analyzer.portfolio import (
     correlation_matrix,
     correlation_coverage,
     correlation_unchecked,
+    correlation_claim_verified,
     diversification_score,
     diversification_recommendations,
 )
@@ -65,6 +68,13 @@ from stock_analyzer.risk import compute_portfolio_risk_metrics
 from stock_analyzer.stress_test import SCENARIOS, run_scenario, assess_fragility
 from stock_analyzer.concentration import high_beta_share
 from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
+
+# Display strings for classify_risk_banner's new neutral fourth state — NOT
+# decision thresholds, so these deliberately do NOT live in constants.py
+# (that file is reserved for gate/threshold values the owner sets as
+# investment policy; this is just label/color text).
+RISK_BANNER_INCOMPLETE_LABEL = "Check Incomplete"
+RISK_BANNER_INCOMPLETE_COLOR = "#9ca3af"
 
 
 def _f(v, default=0.0):
@@ -292,8 +302,23 @@ def build_risk_bundle(
     }
 
 
+def _div_leg_verified(div_score, corr_unchecked, corr_coverage) -> bool:
+    """Is `div_score` both a real finite number AND backed by a correlation
+    matrix that actually covered every held ticker with a trustworthy sample
+    (`portfolio.correlation_claim_verified`)? Used only to gate the "All
+    Clear" state below — never the two escalation legs, which must fire on
+    ANY evidence of danger/warning regardless of verification status."""
+    try:
+        if div_score is None or not math.isfinite(float(div_score)):
+            return False
+    except (TypeError, ValueError):
+        return False
+    return correlation_claim_verified(corr_unchecked, corr_coverage)
+
+
 def classify_risk_banner(
-    n_danger: int, n_warning: int, div_score: "float | None",
+    n_danger: int, n_warning: int, div_score: "float | None", *,
+    corr_unchecked, corr_coverage,
 ) -> "tuple[str, str]":
     """Home's top-of-page risk-banner RAG classification: (label, hex color).
 
@@ -307,9 +332,47 @@ def classify_risk_banner(
     42/30 bounds to named constants made the comparison newly detectable as
     a policy decision living in render code): same logic, byte-identical to
     the inline block it replaced.
+
+    FOURTH STATE (added after the commit chain closing F-291/F-292/F-293/
+    F-294, 2026-10-09/10): an all-NaN correlation matrix — a held ticker with
+    a short/non-overlapping price history collapses the listwise
+    intersection to zero shared observations — makes `diversification_score`
+    fall back to `avg_corr = 0.0` and score exactly 50.0, which clears
+    `DIVERSIFY_WELL_PCT` (42.0) and would otherwise render a green "All
+    Clear" off ZERO real observations. In that exact failure mode
+    `corr_unchecked == []` too (every ticker genuinely IS a column in the
+    matrix — it just has no usable data), so a coverage-only guard cannot
+    catch it; only the `n_obs` floor inside `correlation_claim_verified`
+    does.
+
+    The owner-ratified screen rule this encodes: **escalation is honest
+    evidence even from a partial/unverified matrix; "All Clear" is an
+    affirmative claim that requires full, trustworthy coverage.** So both
+    escalation legs below read `div_score` exactly as before — a thin or
+    partial matrix must still be able to say "Action Required"/"Monitor" if
+    the number it produced is bad enough. Only the un-escalated fall-through
+    is gated on verification, via `_div_leg_verified`, and downgraded to a
+    neutral `RISK_BANNER_INCOMPLETE_LABEL`/`_COLOR` rather than a fabricated
+    "All Clear".
+
+    ORDERING IS LOAD-BEARING: the verification check runs AFTER both
+    escalation `if` blocks, never before. Checking it first would silently
+    remove live escalations on a partial matrix — reproduced as a blocking
+    review finding on the sibling gate F-294 (`pair_add_gate.py`) the week
+    before this fix, where coverage-first ordering removed real suppressions
+    whenever `n_obs` was thin but a pair was still genuinely dangerous. The
+    same shape applies here: a thin/unverified matrix can still carry a
+    correlation reading bad enough to clear `DIVERSIFY_MODERATE_PCT`/
+    `DIVERSIFY_WELL_PCT`, and that reading must still escalate.
+
+    `corr_unchecked`/`corr_coverage` are keyword-only with NO default — a
+    call site that forgets to pass them must raise `TypeError` immediately,
+    never silently fall back to the old (score-only) behaviour.
     """
     if n_danger > 0 or (div_score is not None and div_score < DIVERSIFY_MODERATE_PCT):
         return "Action Required", "#ff4444"
     if n_warning > 0 or (div_score is not None and div_score < DIVERSIFY_WELL_PCT):
         return "Monitor", "#ffbb33"
+    if not _div_leg_verified(div_score, corr_unchecked, corr_coverage):
+        return RISK_BANNER_INCOMPLETE_LABEL, RISK_BANNER_INCOMPLETE_COLOR
     return "All Clear", "#00C851"

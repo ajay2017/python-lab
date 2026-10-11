@@ -17,6 +17,7 @@ from datetime import date
 import pytest
 
 from stock_analyzer import portfolio_thesis as pth
+from stock_analyzer import home_risk_synthesis as hrs
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
     PORTFOLIO_THESIS_BASELINE_LOOKBACK_DAYS,
@@ -144,6 +145,31 @@ def test_risk_posture_unavailable_when_rag_label_missing_others_still_resolve():
 def test_risk_posture_unavailable_on_unrecognized_label():
     out = pth.compose_thesis(
         _full_bundle(rag_label="Something Else"), _full_acct_gate(), {}, today=TODAY,
+    )
+    assert out["claims"]["risk_posture"] == "unavailable"
+
+
+def test_risk_posture_unavailable_when_fed_the_real_incomplete_banner_label():
+    """2026-10-10 — classify_risk_banner's new 4th state
+    (RISK_BANNER_INCOMPLETE_LABEL, "Check Incomplete") is not one of
+    pth._VALID_RAG_LABELS ({"All Clear", "Monitor", "Action Required"}), so
+    _classify_risk_posture falls through to "unavailable" -- correct, but
+    only by accident (the label was never added to _VALID_RAG_LABELS on
+    purpose). Feeds the REAL classify_risk_banner output through rather than
+    a hardcoded string, so a future rename of the label constant fails this
+    test instead of silently breaking the fallthrough it relies on.
+
+    Do NOT add the incomplete label to _VALID_RAG_LABELS to "properly"
+    support it -- "unavailable" is the correct, intended claim for an
+    unverified correlation reading; this test exists to PIN the accident,
+    not to invite fixing it.
+    """
+    real_label, _ = hrs.classify_risk_banner(
+        0, 0, 50.0, corr_unchecked=[], corr_coverage={"n_obs": 0},
+    )
+    assert real_label == hrs.RISK_BANNER_INCOMPLETE_LABEL
+    out = pth.compose_thesis(
+        _full_bundle(rag_label=real_label), _full_acct_gate(), {}, today=TODAY,
     )
     assert out["claims"]["risk_posture"] == "unavailable"
 

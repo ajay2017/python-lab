@@ -7,6 +7,9 @@ own. The point of the lift is that the offline-sentinel discipline (failure
 returns `None`/empty shapes, never a fabricated value) can finally be asserted
 directly instead of only verified by inline reading.
 """
+import ast
+from pathlib import Path
+
 import pandas as pd
 from unittest.mock import MagicMock
 
@@ -15,6 +18,9 @@ from stock_analyzer.constants import DIVERSIFY_WELL_PCT, DIVERSIFY_MODERATE_PCT
 import pytest
 
 pytestmark = pytest.mark.fast
+
+ROOT = Path(__file__).resolve().parent.parent
+APP_PY = ROOT / "app.py"
 
 
 def _hist(n, start=100.0, step=1.0):
@@ -221,38 +227,205 @@ class TestClassifyRiskBanner:
     classification (2026-09-01, a POLICY_DECISION_IN_RENDER antipattern-gate
     finding — promoting the 42/30 bounds to named constants made the
     comparison newly detectable as a policy decision living in render code).
-    Either signal (alert counts or div_score) can independently escalate."""
+    Either signal (alert counts or div_score) can independently escalate.
+
+    2026-10-10 addendum: classify_risk_banner now also requires a VERIFIED
+    correlation reading (portfolio.correlation_claim_verified) before it will
+    return "All Clear" — an all-NaN matrix (a held ticker with a short/non-
+    overlapping history) makes diversification_score fall back to exactly
+    50.0 off ZERO shared observations, which used to clear DIVERSIFY_WELL_PCT
+    and render a fabricated green banner. The two escalation legs are
+    UNCHANGED by this — they must still fire off any bad-enough div_score
+    regardless of verification status. Every "Check Incomplete" test below
+    pairs its inputs with the verified (**VER) equivalent in the SAME test,
+    per this repo's anti-vacuous-test rule: three straight sibling-gate
+    commits (F-291/F-292/F-294) shipped tests that could not actually
+    distinguish the old and new behaviour."""
+
+    # Shared coverage/unchecked fixtures threaded through every call below.
+    VER   = {"corr_unchecked": [],      "corr_coverage": {"n_obs": 125}}
+    THIN0 = {"corr_unchecked": [],      "corr_coverage": {"n_obs": 0}}
+    T19   = {"corr_unchecked": [],      "corr_coverage": {"n_obs": 19}}
+    T20   = {"corr_unchecked": [],      "corr_coverage": {"n_obs": 20}}
+    MISS  = {"corr_unchecked": ["BBB"], "corr_coverage": {"n_obs": 125}}
+    UNK   = {"corr_unchecked": None,    "corr_coverage": {"n_obs": 125}}
 
     def test_any_danger_alert_is_action_required_regardless_of_div_score(self):
-        label, color = hrs.classify_risk_banner(1, 0, 99.0)
+        label, color = hrs.classify_risk_banner(1, 0, 99.0, **self.VER)
         assert (label, color) == ("Action Required", "#ff4444")
 
     def test_div_score_below_moderate_is_action_required_with_no_alerts(self):
-        label, _ = hrs.classify_risk_banner(0, 0, DIVERSIFY_MODERATE_PCT - 0.01)
+        label, _ = hrs.classify_risk_banner(0, 0, DIVERSIFY_MODERATE_PCT - 0.01, **self.VER)
         assert label == "Action Required"
 
     def test_any_warning_alert_is_monitor_regardless_of_div_score(self):
-        label, color = hrs.classify_risk_banner(0, 1, 99.0)
+        label, color = hrs.classify_risk_banner(0, 1, 99.0, **self.VER)
         assert (label, color) == ("Monitor", "#ffbb33")
 
     def test_div_score_between_moderate_and_well_is_monitor_with_no_alerts(self):
-        label, _ = hrs.classify_risk_banner(0, 0, DIVERSIFY_WELL_PCT - 0.01)
+        label, _ = hrs.classify_risk_banner(0, 0, DIVERSIFY_WELL_PCT - 0.01, **self.VER)
         assert label == "Monitor"
 
     def test_no_alerts_and_well_diversified_is_all_clear(self):
-        label, color = hrs.classify_risk_banner(0, 0, DIVERSIFY_WELL_PCT)
+        label, color = hrs.classify_risk_banner(0, 0, DIVERSIFY_WELL_PCT, **self.VER)
         assert (label, color) == ("All Clear", "#00C851")
 
-    def test_none_div_score_with_no_alerts_is_all_clear(self):
-        # div_score can be the offline sentinel (corr matrix unavailable) —
-        # must not crash on a None comparison and must not fabricate a bad
-        # reading purely from a missing score.
-        label, color = hrs.classify_risk_banner(0, 0, None)
-        assert (label, color) == ("All Clear", "#00C851")
+    def test_unverified_none_div_score_with_no_alerts_is_check_incomplete(self):
+        # div_score can be the offline sentinel (corr matrix unavailable).
+        # This REVERSES the pre-2026-10-10 expectation on purpose: a None
+        # div_score means "couldn't check", which is itself the unverified
+        # case -- it must no longer read as an affirmative "All Clear".
+        # Must still never crash on a None comparison.
+        label, color = hrs.classify_risk_banner(0, 0, None, **self.VER)
+        assert (label, color) == (
+            hrs.RISK_BANNER_INCOMPLETE_LABEL, hrs.RISK_BANNER_INCOMPLETE_COLOR,
+        )
+        # Positive control: identical alerts + fixture, a real finite score
+        # -> All Clear. Proves VER is not what produced the result above.
+        assert hrs.classify_risk_banner(0, 0, 99.0, **self.VER)[0] == "All Clear"
 
     def test_danger_outranks_warning(self):
-        label, _ = hrs.classify_risk_banner(1, 5, 99.0)
+        label, _ = hrs.classify_risk_banner(1, 5, 99.0, **self.VER)
         assert label == "Action Required"
+
+    def test_all_nan_matrix_score_50_is_check_incomplete_not_all_clear(self):
+        # The headline case this fix exists for: a thin/all-NaN matrix makes
+        # diversification_score fall back to exactly 50.0, which clears
+        # DIVERSIFY_WELL_PCT (42.0). n_obs == 0 is the real-world shape.
+        label, color = hrs.classify_risk_banner(0, 0, 50.0, **self.THIN0)
+        assert (label, color) == (
+            hrs.RISK_BANNER_INCOMPLETE_LABEL, hrs.RISK_BANNER_INCOMPLETE_COLOR,
+        )
+        # Same inputs, but a verified sample -> genuinely All Clear.
+        label2, color2 = hrs.classify_risk_banner(0, 0, 50.0, **self.VER)
+        assert (label2, color2) == ("All Clear", "#00C851")
+
+    def test_n_obs_boundary_at_corr_min_obs_trusted(self):
+        label, _ = hrs.classify_risk_banner(0, 0, 99.0, **self.T19)
+        assert label == hrs.RISK_BANNER_INCOMPLETE_LABEL
+        label2, _ = hrs.classify_risk_banner(0, 0, 99.0, **self.T20)
+        assert label2 == "All Clear"
+
+    def test_missing_held_ticker_is_check_incomplete_even_with_good_n_obs(self):
+        label, _ = hrs.classify_risk_banner(0, 0, 99.0, **self.MISS)
+        assert label == hrs.RISK_BANNER_INCOMPLETE_LABEL
+        # Positive control: IDENTICAL inputs under a verified fixture
+        # -> All Clear, so verification is the only variable.
+        assert hrs.classify_risk_banner(0, 0, 99.0, **self.VER)[0] == "All Clear"
+
+    def test_unchecked_none_must_not_read_as_checked_clean(self):
+        # corr_unchecked=None means "couldn't check this run" -- must not be
+        # collapsed into the empty-list "checked, nothing missing" case.
+        label, _ = hrs.classify_risk_banner(0, 0, 99.0, **self.UNK)
+        assert label == hrs.RISK_BANNER_INCOMPLETE_LABEL
+        # Positive control: IDENTICAL inputs under a verified fixture
+        # -> All Clear, so verification is the only variable.
+        assert hrs.classify_risk_banner(0, 0, 99.0, **self.VER)[0] == "All Clear"
+
+    def test_nan_div_score_is_check_incomplete_not_all_clear(self):
+        # NaN < 30 and NaN < 42 are both False in Python, so a naive
+        # comparison-only implementation would fall through NaN straight to
+        # "All Clear" -- math.isfinite must catch this.
+        label, _ = hrs.classify_risk_banner(0, 0, float("nan"), **self.VER)
+        assert label == hrs.RISK_BANNER_INCOMPLETE_LABEL
+        # Positive control: identical alerts + fixture, a real finite score
+        # -> All Clear. Isolates isfinite() as the cause above.
+        assert hrs.classify_risk_banner(0, 0, 99.0, **self.VER)[0] == "All Clear"
+
+    def test_ordering_verification_check_runs_after_both_escalations(self):
+        # The load-bearing ordering: an unverified/thin matrix must still be
+        # able to escalate on a bad-enough div_score. Checking verification
+        # FIRST would silently remove these live escalations (the exact
+        # blocking review finding on the sibling gate F-294).
+        label_a, _ = hrs.classify_risk_banner(
+            0, 0, DIVERSIFY_MODERATE_PCT - 0.01, **self.T19,
+        )
+        assert label_a == "Action Required"
+        label_b, _ = hrs.classify_risk_banner(
+            0, 0, DIVERSIFY_WELL_PCT - 0.01, **self.MISS,
+        )
+        assert label_b == "Monitor"
+        # Same two score inputs, verified -> same labels (escalation doesn't
+        # depend on verification status at all).
+        label_a2, _ = hrs.classify_risk_banner(
+            0, 0, DIVERSIFY_MODERATE_PCT - 0.01, **self.VER,
+        )
+        assert label_a2 == label_a == "Action Required"
+        label_b2, _ = hrs.classify_risk_banner(
+            0, 0, DIVERSIFY_WELL_PCT - 0.01, **self.VER,
+        )
+        assert label_b2 == label_b == "Monitor"
+
+    def test_alerts_escalate_even_when_correlation_entirely_unverified(self):
+        label_a, _ = hrs.classify_risk_banner(1, 0, 99.0, **self.THIN0)
+        assert label_a == "Action Required"
+        label_b, _ = hrs.classify_risk_banner(0, 1, 99.0, **self.THIN0)
+        assert label_b == "Monitor"
+
+    def test_incomplete_label_and_color_are_renderer_safe(self):
+        # The chip is interpolated into raw unsafe_allow_html (app.py ~7127)
+        # -- the label must carry no markdown/HTML-special characters, and
+        # the color must be a real 6-digit hex distinct from the other 3.
+        import re
+        label = hrs.RISK_BANNER_INCOMPLETE_LABEL
+        for bad in ("**", "$", "<", ">"):
+            assert bad not in label
+        assert re.fullmatch(r"#[0-9a-fA-F]{6}", hrs.RISK_BANNER_INCOMPLETE_COLOR)
+        assert hrs.RISK_BANNER_INCOMPLETE_COLOR != "#00C851"
+
+    def test_missing_keyword_args_raises_type_error(self):
+        with pytest.raises(TypeError):
+            hrs.classify_risk_banner(0, 0, 99.0)
+
+
+def _parse_app_py() -> ast.Module:
+    src = APP_PY.read_text(encoding="utf-8-sig")
+    return ast.parse(src, filename=str(APP_PY))
+
+
+def test_app_py_calls_classify_risk_banner_once_with_safe_keyword_names():
+    """AST wiring test (app.py has no import-level test coverage otherwise).
+
+    Must find EXACTLY one call site, and it must pass `corr_unchecked=` and
+    `corr_coverage=` as keywords whose values are bare Name nodes
+    (`_corr_unchecked` / `_corr_cov`) -- never an `ast.BoolOp` (an `X or Y`
+    fallback), which would launder the None/offline sentinel into a
+    fabricated "checked, clean" reading. `check_antipatterns.py` cannot see
+    this shape (its sentinel rule matches a `.get(...)` call, not a bare
+    keyword argument), so this is the only guard against a future edit
+    reintroducing an `or []`/`or {}` at the call site.
+    """
+    tree = _parse_app_py()
+    calls = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "classify_risk_banner"
+    ]
+    assert len(calls) == 1, (
+        f"expected exactly one classify_risk_banner call site, found "
+        f"{len(calls)} (lines {[c.lineno for c in calls]})"
+    )
+    call = calls[0]
+    kw_by_name = {kw.arg: kw.value for kw in call.keywords}
+    assert "corr_unchecked" in kw_by_name, (
+        "classify_risk_banner call is missing the corr_unchecked= keyword"
+    )
+    assert "corr_coverage" in kw_by_name, (
+        "classify_risk_banner call is missing the corr_coverage= keyword"
+    )
+    for kw_name, expected_name in (
+        ("corr_unchecked", "_corr_unchecked"), ("corr_coverage", "_corr_cov"),
+    ):
+        val = kw_by_name[kw_name]
+        assert isinstance(val, ast.Name) and val.id == expected_name, (
+            f"{kw_name}= must be the bare name `{expected_name}`, found "
+            f"{ast.dump(val)} at line {call.lineno}"
+        )
+        assert not isinstance(val, ast.BoolOp), (
+            f"{kw_name}= must not be an `or` fallback -- that launders the "
+            "None/offline sentinel into a fabricated verified reading"
+        )
 
 
 # ---------------------------------------------------------------------------
