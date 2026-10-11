@@ -1,6 +1,6 @@
 # G-26 — Standing Danger-Tier Correlated-Pair Add Suppression
 
-**Status: G-26 SHIPPED 2026-10-08 (`35b5bf4`); F-290 disclosure 2026-10-09 (`0f7bf67`); F-291 persisted-claim guard (§7), F-292 EOD history (§8) and F-293 on-screen disclosure (§9) ALL SHIPPED 2026-10-09 — the 3-commit sequence is COMPLETE: records withhold, screens disclose. DEPLOYED AND DORMANT as of 2026-10-09 —
+**Status: F-295 SHIPPED 2026-10-10 (`9670fec` screen, `4299c8a` record) — see §11; it closes `classify_risk_banner`, the last surface §6 listed as sharing this blind spot. G-26 SHIPPED 2026-10-08 (`35b5bf4`); F-290 disclosure 2026-10-09 (`0f7bf67`); F-291 persisted-claim guard (§7), F-292 EOD history (§8) and F-293 on-screen disclosure (§9) ALL SHIPPED 2026-10-09 — the 3-commit sequence is COMPLETE: records withhold, screens disclose. DEPLOYED AND DORMANT as of 2026-10-09 —
 the non-firing path is screenshot-confirmed, the FIRING path is still unobserved
 and cannot be forced (see §4a).** Designed by the Opus
 `planner` (verdict: PROCEED WITH CHANGES — it rejected two details of the
@@ -583,3 +583,80 @@ non-zero and breaking an `&&` chain.
   had a blocking finding. Separate change.
 - `CORR_MIN_OBS_TRUSTED` stays in `portfolio.py` — owner decision 2026-10-09.
   It gates no recommendation; it decides whether a gate claims to have checked.
+
+---
+
+## 11. F-295 — the risk banner, and the posture it persists (2026-10-10)
+
+Two commits. Closes `classify_risk_banner`, named in §6's still-open list as
+"a missing holding can still read 'Well Diversified'". The real mechanism
+turned out to be the OTHER half of that pair — the thin-sample one — and a
+second surface §6 never mentioned.
+
+### 11.1 The defect
+
+An entirely-NaN matrix makes `diversification_score` fall back to
+`avg_corr = 0.0`, scoring exactly **50.0**, which clears `DIVERSIFY_WELL_PCT`
+(42.0). So Home's top-of-page chip rendered **green "All Clear" off zero shared
+observations** — while the Diversification KPI immediately below it, fixed in
+F-293 the day before, already read "sample too thin". One matrix, two
+contradictory readings, same screen.
+
+As in §10, `corr_unchecked` is `[]` in this state, so coverage alone cannot
+catch it. The `n_obs` floor is what catches it.
+
+### 11.2 The rule (owner-ratified)
+
+**Escalation is honest evidence even from a partial matrix; "All Clear" is an
+affirmative claim that requires full coverage.** So both escalation legs are
+untouched and only the all-clear is replaced, by a 4th state **"Check
+Incomplete"** (grey `#9ca3af`).
+
+**The ordering is load-bearing and is §10's lesson applied before it could
+bite:** verification runs AFTER both escalations. Checking it first would
+suppress live findings — exactly the reorder that was a blocking finding in
+§10.
+
+Fail-closed was considered and does NOT transfer from the add-gates: declining
+to say "All Clear" blocks no add, no size, no trade. It costs one neutral chip.
+
+### 11.3 The second surface, which §6 missed
+
+Summary stopped RENDERING this chip on 2026-07-26 — but kept feeding its label
+into `compose_thesis` as the `risk_posture` claim, which
+`db.save_portfolio_thesis` writes as the next week's HELD/SHIFTED baseline. A
+label nobody could see was still being graded a week later.
+
+Chunk 1 closed part of it free: "Check Incomplete" is not in
+`_VALID_RAG_LABELS`, so `_classify_risk_posture` degrades it to "unavailable".
+Chunk 2 closed the rest with `risk_banner_record_label`: only `n_danger > 0`
+survives an unverified matrix (the classifier returns that tier BEFORE reading
+`div_score`, so it is fixed whatever the untrusted leg would have said); an
+`n_warning`-only escalation withholds, because "Monitor" is only a LOWER BOUND
+when the true full-coverage score could sit below `DIVERSIFY_MODERATE_PCT`.
+
+### 11.4 Process notes worth keeping
+
+- **A deleted UI does not delete its data flow.** The chip was removed from
+  Summary 15 months ago; the lead's own call-site trace concluded "this is a
+  screen, so screens-disclose settles it". The `planner` found the persistence
+  path. Grep the VARIABLE, not the render block.
+- **An AST wiring test can pin one end of a wire and look complete.** Chunk 2's
+  test pinned what Summary READS. Two one-line PRODUCER mutations —
+  `"_rag_record_label": _rag_label`, and `_rag_record_label = _rag_label` —
+  silently reverted the entire change and survived the suite, because `app.py`
+  has no import-level coverage. **Pin both ends.** This is a new instance of
+  §10's vacuous-test family, not a repeat: these tests were not vacuous, they
+  were incomplete in a direction nobody had checked.
+- Four comment/docstring corrections came out of review where the assertion was
+  right but the stated REASON was wrong (including "(no alerts)" in three
+  places, which is false — the function also withholds when warning alerts
+  exist). Caught before the doc sync copied the wrong wording outward.
+
+### 11.5 Still unverified
+
+Neither path can be forced: real `n_obs` has been 69-125 with every holding
+present, so the all-NaN case is latent, not active — the same standing as
+F-290's caption, which has still never rendered. The reachable first sighting
+is a **correlation outage** (`div_score is None`), which now shows Check
+Incomplete where it previously showed All Clear. A grey chip is not a bug.
