@@ -285,6 +285,7 @@ from stock_analyzer.portfolio import (
     real_sector_exposure_with_lookthrough, combined_name_exposure,
     classify_book_corr, expected_beta_after_add,
     correlation_sample_state, CORR_SAMPLE_THIN, CORR_SAMPLE_UNKNOWN,
+    correlation_claim_verified,
     beta_diversifying_sectors,
 )
 from stock_analyzer.beta_repair import (
@@ -15254,7 +15255,23 @@ elif page == "📡 Signals & Advice":
                 "the recommendation set) — revisit 🏠 Home to rebuild the Brief."
             )
         elif not div_recs:
-            st.success("✅ No major diversification gaps — your portfolio is well balanced.")
+            # A-M3: an empty set is partly a CORRELATION claim (no PAIR_RISK
+            # trim card), so it only reads "well balanced" when the matrix
+            # behind it was fully measured; otherwise it states only that the
+            # advisor produced no suggestions.
+            _sa_unchecked = st.session_state.get("_corr_unchecked_cache")
+            _sa_cov = st.session_state.get("_corr_coverage_cache")
+            _sa_corr_ok = correlation_claim_verified(_sa_unchecked, _sa_cov)
+            if _sa_corr_ok:
+                st.success("✅ No major diversification gaps — your portfolio is well balanced.")
+            else:
+                st.info(
+                    "The advisor produced no reduce, pair-trim or add suggestions, but that "
+                    "is not a confirmation that the book is well balanced. "
+                    + (correlation_record_withheld_note(
+                        _sa_unchecked, _sa_cov,
+                        subject="The correlation check behind this result isn't verified") or "")
+                )
         else:
             reduce_recs = [r for r in div_recs if r["type"] in ("REDUCE", "PAIR_RISK")]
             add_recs    = [r for r in div_recs if r["type"] == "ADD"]
@@ -16167,7 +16184,19 @@ elif page == "🔗 Risk Analysis":
                     else:
                         st.warning(f"🟡 {msg}")
             else:
-                st.success("✅ No highly correlated pairs — your portfolio is well diversified.")
+                # A-M3: the success line contradicted the ⛔ "not reliable" error
+                # above it on a thin sample; it now needs a verified matrix.
+                _ra_corr_ok = correlation_claim_verified(_corr_unchecked, _corr_cov)
+                if _ra_corr_ok:
+                    st.success("✅ No highly correlated pairs — your portfolio is well diversified.")
+                else:
+                    st.info(
+                        "No pair crossed the correlation threshold, but that isn't a verified "
+                        "result. "
+                        + (correlation_record_withheld_note(
+                            _corr_unchecked, _corr_cov,
+                            subject="This “no correlated pairs” reading isn't verified") or "")
+                    )
 
             tickers_list = corr_df.index.tolist()
             z_vals = corr_df.values.tolist()
@@ -17475,8 +17504,26 @@ elif page == "🔗 Risk Analysis":
                                 st.caption("⚠ Factor exposure has not been loaded this session, so the narrative below will be written without it — that is an absence of evidence, not a finding that your factor concentration is low. Load it on 🧩 Intelligence → Factor Tilt first if you want it included.")
                             elif _ft_state == "unusable":
                                 st.caption("⚠ Factor exposure was loaded but produced no usable per-factor correlation, so the narrative below is written without it. Treat your factor concentration as unknown rather than low.")
+                            # A-M1: the scenario is persisted for the day and is built
+                            # from the matrix's blast radius + clusters, so it is only
+                            # generated on a fully-measured matrix. Plain .get() -- a
+                            # None must stay None, never `or []`.
+                            _rs_unchecked = st.session_state.get("_corr_unchecked_cache")
+                            _rs_cov = st.session_state.get("_corr_coverage_cache")
+                            _rs_record_ok = correlation_claim_verified(_rs_unchecked, _rs_cov)
+                            if not _rs_record_ok:
+                                st.caption(
+                                    (correlation_record_withheld_note(
+                                        _rs_unchecked, _rs_cov,
+                                        subject="This scenario can't be run or saved right now") or "")
+                                    + " Nothing is saved, and the 🔥 stress test above (position "
+                                    "beta and sector shocks — it doesn't read the holdings' "
+                                    "correlation matrix) is unaffected."
+                                )
+                            # `and _rs_record_ok`: a click that triggered this rerun still
+                            # returns True even if the button now renders disabled.
                             if st.button("🎯 Generate regime-aware scenario", key="_rs_gen_btn",
-                                         disabled=st.session_state.get("_readonly", False)):
+                                         disabled=st.session_state.get("_readonly", False) or not _rs_record_ok) and _rs_record_ok:
                                 with st.spinner("Synthesizing regime-aware scenario…"):
                                     _rs_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
                                     _rs_factor_cache = st.session_state.get("_pi_factor_tilt_cache")
@@ -17484,7 +17531,7 @@ elif page == "🔗 Risk Analysis":
                                         _rs_blast, _rs_clusters, _rs_regime, _rs_cross_asset, _rs_factor_cache
                                     )
                                     _rs_result = regime_stress.generate_regime_scenario(_rs_evidence, _rs_api_key)
-                                if _rs_result and _rs_result.get("scenario_narrative"):
+                                if _rs_result and _rs_result.get("scenario_narrative") and _rs_record_ok:
                                     db.save_regime_scenario_cache(
                                         scan_date=_rs_scan_date,
                                         scenario_narrative=_rs_result["scenario_narrative"],
@@ -17554,25 +17601,53 @@ elif page == "🔗 Risk Analysis":
                         _cs_scan_date = str(_cs_today)
                         _cs_cached = db.load_catalyst_stress_cache(_cs_scan_date)
 
+                        # A-M1/A-M3: the persisted narrative AND the "nothing overlaps"
+                        # claim both rest on the matrix's blast radius + clusters, so
+                        # both need a fully-measured matrix. Plain .get() -- a None
+                        # must stay None, never `or []`.
+                        _cs_unchecked = st.session_state.get("_corr_unchecked_cache")
+                        _cs_cov = st.session_state.get("_corr_coverage_cache")
+                        _cs_record_ok = correlation_claim_verified(_cs_unchecked, _cs_cov)
+
                         if _cs_cached and _cs_cached.get("narrative"):
                             st.markdown(_cs_cached["narrative"])
                             st.caption(f"Computed {_cs_scan_date} ET.")
                         elif not _cs_ranked["macro"] and not _cs_ranked["earnings"]:
-                            st.caption(
-                                "No upcoming HIGH-impact macro event or held-position earnings "
-                                f"report within {CATALYST_STRESS_WINDOW_DAYS} days overlaps your "
-                                "current structural weak points."
-                            )
+                            if _cs_record_ok:
+                                st.caption(
+                                    "No upcoming HIGH-impact macro event or held-position earnings "
+                                    f"report within {CATALYST_STRESS_WINDOW_DAYS} days overlaps your "
+                                    "current structural weak points."
+                                )
+                            else:
+                                st.info(
+                                    "No upcoming event overlapped your structural weak points "
+                                    "in the ranking, but that is not a clean result: which names count as "
+                                    "weak points depends on the correlation matrix. "
+                                    + (correlation_record_withheld_note(
+                                        _cs_unchecked, _cs_cov,
+                                        subject="The correlation check behind this result isn't verified") or "")
+                                )
                         else:
+                            # A-M1: same guard as the regime scenario above (flag
+                            # computed once, higher up, shared with the clean claim).
+                            if not _cs_record_ok:
+                                st.caption(
+                                    (correlation_record_withheld_note(
+                                        _cs_unchecked, _cs_cov,
+                                        subject="This stress narrative can't be run or saved right now") or "")
+                                    + " Nothing is saved."
+                                )
+                            # `and _cs_record_ok`: see the regime scenario above.
                             if st.button("📅 Generate catalyst-specific stress", key="_cs_gen_btn",
-                                         disabled=st.session_state.get("_readonly", False)):
+                                         disabled=st.session_state.get("_readonly", False) or not _cs_record_ok) and _cs_record_ok:
                                 with st.spinner("Synthesizing catalyst-specific stress…"):
                                     _cs_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
                                     _cs_evidence = catalyst_stress.build_catalyst_stress_inputs(
                                         _cs_ranked, _cs_blast, _cs_clusters
                                     )
                                     _cs_result = catalyst_stress.generate_catalyst_narrative(_cs_evidence, _cs_api_key)
-                                if _cs_result and _cs_result.get("narrative"):
+                                if _cs_result and _cs_result.get("narrative") and _cs_record_ok:
                                     db.save_catalyst_stress_cache(
                                         scan_date=_cs_scan_date,
                                         narrative=_cs_result["narrative"],
@@ -18319,8 +18394,20 @@ elif page == "🧩 Intelligence":
             _pi_weights_map = dict(zip(_pi_pdf["Ticker"], _pi_pdf["Weight (%)"]))
             _pi_clusters = portfolio_intelligence.correlation_clusters(_pi_corr_df, _pi_weights_map)
 
+            # A-M3: "no clusters" is only a finding on a fully-measured matrix.
+            _pi_unchecked = st.session_state.get("_corr_unchecked_cache")
+            _pi_cov = st.session_state.get("_corr_coverage_cache")
+            _pi_corr_ok = correlation_claim_verified(_pi_unchecked, _pi_cov)
             if not _pi_clusters:
-                st.success("No correlated clusters detected — your positions move fairly independently of each other.")
+                if _pi_corr_ok:
+                    st.success("No correlated clusters detected — your positions move fairly independently of each other.")
+                else:
+                    st.info(
+                        "No cluster crossed the threshold, but that isn't a verified result. "
+                        + (correlation_record_withheld_note(
+                            _pi_unchecked, _pi_cov,
+                            subject="This “no correlated clusters” reading isn't verified") or "")
+                    )
             else:
                 for _pi_c in _pi_clusters:
                     _pi_names   = ", ".join(_pi_c["tickers"])
@@ -18787,9 +18874,18 @@ elif page == "🧩 Intelligence":
                 _ss_blast = structural_scanner.blast_radius(_ss_corr_df, _ss_rb["positions"])
 
                 st.markdown("**💥 Blast Radius Map**")
+                _ss_corr_ok = correlation_claim_verified(_ss_unchecked, _ss_cov)
                 if not _ss_blast:
                     st.caption("Not enough correlated positions to estimate a cascade this session.")
                 else:
+                    # A-M3: blast_radius returns one entry per shocked position
+                    # regardless of correlation; an unmeasured matrix only empties
+                    # each entry's contributing_tickers, so the unverified-matrix
+                    # disclosure goes ABOVE the columns, not on the empty-list case.
+                    if not _ss_corr_ok:
+                        st.info(correlation_record_withheld_note(
+                            _ss_unchecked, _ss_cov,
+                            subject="These cascade estimates rest on an unverified correlation matrix") or "")
                     _ss_cols = st.columns(len(_ss_blast))
                     for _ss_col, _ss_b in zip(_ss_cols, _ss_blast):
                         with _ss_col:
@@ -18803,8 +18899,10 @@ elif page == "🧩 Intelligence":
                                     for c in _ss_b["contributing_tickers"][:3]
                                 )
                                 st.caption(f"Cascades via: {_ss_contrib_str}")
-                            else:
+                            elif _ss_corr_ok:
                                 st.caption("No strongly-correlated names to cascade through.")
+                            else:
+                                st.caption("No correlated names found — not verified.")
 
                 st.divider()
 
