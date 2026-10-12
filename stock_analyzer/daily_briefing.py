@@ -3220,7 +3220,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     # Action policy:
     #   - Compute user's exposure to affected sectors from port_df.
     #   - If exposure > MACRO_AFFECTED_TRIM_THRESHOLD_PCT → recommend trimming
-    #     the lowest-conviction holding in the affected sectors by
+    #     the lowest-conviction holding in the affected sectors (the largest
+    #     one when no affected score is measured -- audit B-M6) by
     #     MACRO_AFFECTED_TRIM_REDUCTION_PP percentage points of portfolio.
     #   - Else → WATCH (exposure within tolerance).
     for ev in (macro_events or []):
@@ -3277,10 +3278,35 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 "that hit a concentrated sector you can actually prune."
             )
         elif exposure_pct > MACRO_AFFECTED_TRIM_THRESHOLD_PCT and not _macro_eligible.empty and portfolio_value > 0:
-            # Find lowest-conviction-score holding in the affected sectors.
-            weakest = _macro_eligible.sort_values("Score", ascending=True).iloc[0]
+            # Find lowest-conviction-score holding in the affected sectors
+            # (or, with none measured, the largest -- see below).
+            # 2026-10-11 audit B-M6: rank ONLY measured scores. A withheld
+            # score is NaN (fundamentals unavailable -- see
+            # portfolio.build_portfolio_df's "Score Available"); sort_values
+            # puts NaN last, so a partly-withheld sector already picked a
+            # measured name, but an ALL-withheld one picked an arbitrary row
+            # and _f(NaN) rendered it as a measured "score 0". With no
+            # measured name the trim still fires (protection must not go
+            # quiet mid-outage, same posture as the H3 concentration card),
+            # on the LARGEST affected position, and says why (owner decision
+            # 2026-10-12).
+            _measured_mask = _macro_eligible["Score"].notna()
+            if "Score Available" in _macro_eligible.columns:
+                _measured_mask &= _macro_eligible["Score Available"].fillna(False).astype(bool)
+            _macro_measured = _macro_eligible[_measured_mask]
+            _conviction_unmeasured = _macro_measured.empty
+            if _conviction_unmeasured:
+                # Ticker as the tie-break so the same book always gets the
+                # same call (weights are rounded to 0.1, so ties are real).
+                weakest = _macro_eligible.sort_values(
+                    ["Weight (%)", "Ticker"], ascending=[False, True], kind="stable",
+                ).iloc[0]
+            else:
+                weakest = _macro_measured.sort_values(
+                    ["Score", "Ticker"], ascending=[True, True], kind="stable",
+                ).iloc[0]
             weak_ticker = str(weakest["Ticker"])
-            weak_score  = _f(weakest["Score"])
+            weak_score  = None if _conviction_unmeasured else _f(weakest["Score"])
             weak_weight = _f(weakest["Weight (%)"])
             weak_price  = _f(weakest["Price"])
             # Trim by MACRO_AFFECTED_TRIM_REDUCTION_PP percentage points of portfolio
@@ -3307,11 +3333,19 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 "to_exposure":    new_exposure,
                 "reduction_pp":   reduction_pp,
                 "weakest_score":  weak_score,
+                "conviction_unmeasured": _conviction_unmeasured,
             }
             why = (
                 f"Affected-sector exposure {exposure_pct:.1f}% > "
                 f"{MACRO_AFFECTED_TRIM_THRESHOLD_PCT:.0f}% trim threshold. "
-                f"Trimming weakest holding first preserves higher-conviction names."
+                + (
+                    "Conviction is unmeasured for every affected holding not "
+                    "already in Act Today (fundamentals unavailable), so the "
+                    "weakest name can't be ranked — trimming the largest "
+                    "remaining affected position instead."
+                    if _conviction_unmeasured else
+                    "Trimming weakest holding first preserves higher-conviction names."
+                )
             )
         elif (exposure_pct > MACRO_AFFECTED_TRIM_THRESHOLD_PCT and not sector_rows.empty
               and _macro_eligible.empty):

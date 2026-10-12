@@ -1381,9 +1381,16 @@ def _fmt_action(action: dict) -> tuple[str, str, str]:
                 f"Trim {action['from_weight']:.1f}% → {action['target_weight']:.1f}% "
                 f"({action['trim_shares']} shares ≈ ${action['trim_dollars']:,.0f}).")
     if t == "PROTECTIVE_TRIM":
+        # B-M6: `weakest_score` is None when every affected holding's score
+        # was withheld -- the producer then picked the LARGEST position, so
+        # "weakest in sector" would be false as well as the number.
+        _pt_basis = (
+            "largest affected position — conviction unmeasured"
+            if action.get("conviction_unmeasured") or action.get("weakest_score") is None
+            else f"weakest in sector, score {action['weakest_score']:.0f}"
+        )
         return (_HOME_ELEVATED, "ACT",
-                f"Trim {action['trim_ticker']} (weakest in sector, score "
-                f"{action['weakest_score']:.0f}) by {action['trim_shares']} shares "
+                f"Trim {action['trim_ticker']} ({_pt_basis}) by {action['trim_shares']} shares "
                 f"(≈${action['trim_dollars']:,.0f}). Sector exposure: "
                 f"{action['from_exposure']:.1f}% → {action['to_exposure']:.1f}%.")
     if t == "DETERIORATION_WATCH":
@@ -13050,7 +13057,13 @@ elif page == "🧾 Summary":
             _sm_scores: dict = {}
             try:
                 for _, _sr in port_df.iterrows():
-                    _sm_scores[str(_sr["Ticker"]).strip().upper()] = float(_sr["Score"])
+                    # A withheld score is NaN; `_rs is not None` below would
+                    # pass it and render a literal "nan" composite (audit
+                    # B-M6 review). Keep only measured scores, so a withheld
+                    # name takes the existing no-composite branch.
+                    _sm_v = float(_sr["Score"])
+                    if _sm_v == _sm_v and bool(_sr.get("Score Available", True)):
+                        _sm_scores[str(_sr["Ticker"]).strip().upper()] = _sm_v
             except Exception:
                 _sm_scores = {}
             with st.container(border=True, key="sm_act_urgent"):
