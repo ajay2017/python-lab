@@ -634,6 +634,17 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
             fragility=fragility, spy_trend_df=spy_1y, vix_level=vix,
             net_capital=_f255_net_cap,
             etf_candidates=etf_candidates_for_grow,
+            # 2026-10-11 audit B-H1: the app has always passed trades_df here,
+            # which is what builds build_daily_briefing's sold-today set and
+            # unions it into _act_blocked. This call never did, so on the cron
+            # path a name SOLD THIS MORNING (now not held, therefore eligible)
+            # could be emailed as "#1 ENTRY TODAY: buy X" and persisted as a
+            # new_pick row. Both the scan and intraday lanes reach this one call
+            # via compute_morning_picks, so this single kwarg fixes both emails
+            # and this window's ETF same-day-sibling screen-out. Passed bare: a
+            # None trades_df is the documented "no history" input and yields an
+            # empty sold-today set, exactly as on the app side.
+            trades_df=ctx.get("trades_df"),
         )
     except Exception as e:
         return {"picks": [], "built_at": built_at,

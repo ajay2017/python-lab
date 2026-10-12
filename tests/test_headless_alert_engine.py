@@ -923,6 +923,128 @@ def test_morning_picks_build_daily_briefing_exception_returns_empty():
     assert any("build_daily_briefing failed" in e for e in result["errors"])
 
 
+# ── compute_morning_picks — sold-today parity (2026-10-11 audit B-H1) ──────
+# build_daily_briefing builds its sold-today set from `trades_df` and unions it
+# into `_act_blocked`, so a name sold this morning cannot come back as a new
+# pick. The app always passed trades_df; this cron call never did, so the
+# EMAILED buy-list could say "#1 ENTRY TODAY: buy X" for a name sold at 09:35.
+# The suppression itself is already covered on the briefing side
+# (test_daily_briefing.py::test_build_daily_briefing_sold_today_suppressed_via_
+# trades_df and siblings) -- the defect was purely that the cron never wired the
+# input through, so these tests pin the wiring and the class.
+
+def _morning_picks_brief_mock(ctx):
+    """Run compute_morning_picks against `ctx` with build_daily_briefing
+    replaced by a MagicMock, and return that mock so a test can read the
+    exact kwargs the cron passed. Same I/O patch set as _run_morning_picks."""
+    brief = {"grow_today": {"tone": "bull", "new_picks": [], "sp500_pct": 0.5,
+                            "sector_blocked_picks": [], "macro_blocked_picks": [],
+                            "composite_skipped": [], "composite_unavailable": []}}
+    mock_bdb = MagicMock(return_value=brief)
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
+         patch("stock_analyzer.data.fetch_market_indices",
+               return_value=[{"short": "S&P 500", "change_pct": 0.5},
+                             {"short": "NASDAQ", "change_pct": 0.5}]), \
+         patch("stock_analyzer.headless_alert_engine.load_bundle", return_value={}), \
+         patch("stock_analyzer.data.curate_news_items", return_value=[]), \
+         patch("stock_analyzer.macro_calendar.build_macro_calendar", return_value=[]), \
+         patch("stock_analyzer.headless_alert_engine.build_daily_briefing", mock_bdb):
+        hae.compute_morning_picks(TODAY, scanner_results=_scanner_df(["NVDA"]))
+    return mock_bdb
+
+
+def _base_picks_ctx(trades_df):
+    return {
+        "ok": True, "errors": [], "port_df": pd.DataFrame({"Ticker": ["AAPL"], "Market Value": [1000.0]}),
+        "held_data": {"AAPL": {}}, "fragility": None, "spy_6mo": None, "spy_1y": None, "vix": None,
+        "holdings_df": pd.DataFrame({"Ticker": ["AAPL"]}),
+        "trades_df": trades_df,
+    }
+
+
+def test_morning_picks_passes_ctx_trades_df_through_to_the_brief():
+    # The SAME object must arrive -- identity, not equality, so a test can't be
+    # satisfied by some other frame that merely happens to compare equal.
+    trades = pd.DataFrame({"ticker": ["NVDA"], "action": ["SELL"],
+                           "traded_at": ["2026-07-27T13:35:00+00:00"]})
+    mock_bdb = _morning_picks_brief_mock(_base_picks_ctx(trades))
+    assert mock_bdb.call_count == 1
+    assert "trades_df" in mock_bdb.call_args.kwargs, (
+        "the cron's build_daily_briefing call dropped trades_df -- its "
+        "sold-today block will never run on the emailed buy-list"
+    )
+    assert mock_bdb.call_args.kwargs["trades_df"] is trades
+
+
+def test_morning_picks_passes_none_trades_df_through_unchanged():
+    # A ctx whose trades load failed carries trades_df=None. That must reach the
+    # brief as None -- never be swapped for an empty frame or dropped -- since
+    # None is the documented "no history" input on the app side too.
+    mock_bdb = _morning_picks_brief_mock(_base_picks_ctx(None))
+    assert "trades_df" in mock_bdb.call_args.kwargs
+    assert mock_bdb.call_args.kwargs["trades_df"] is None
+
+
+# Kwargs the APP passes to build_daily_briefing that the CRON deliberately does
+# not, each with the reason it cannot change what the cron emails. The test
+# below asserts the app-only set EQUALS this exactly, so adding a new kwarg to
+# the app's call forces a decision: wire it into the cron too, or justify it
+# here. B-H1 (a missing trades_df) was one instance of what this catches.
+#
+# Be precise about the limit: this is kwarg-NAME parity only. Two calls can pass
+# the same name with different VALUES and pass this test. Known value gaps the
+# 2026-10-11 B-H1 review traced: the cron passes risk_recs=[] / alert_list=[] /
+# movers=[] (the first two only affect HELD names so cannot change a new pick;
+# movers=[] only yields fewer picks, the cautious direction), and the cron
+# builds news from scanner bundles where the app uses its sidebar news -- that
+# one CAN differ on a pick (audit B-M7). Name parity is necessary, not sufficient.
+_APP_ONLY_BRIEF_KWARGS = {
+    # G-25 / G-26 pause ADD-TO-WINNER suggestions for HELD names. The cron emails
+    # only new_picks (never add-to-winner), so these cannot change the email.
+    # (They do mean cron-sourced gate-ledger rows never record G-25/G-26 -- a
+    # known Low in docs/reviews/2026-10-11-review.md, not an email defect.)
+    "cluster_add_blocks",
+    "pair_add_blocks",
+    # Disclosure-only: echoed into grow_today["corr_unchecked"] for a caption.
+    "corr_unchecked",
+    # F-226 personalized-discovery badge (personalized_match); display only.
+    "winner_profile",
+}
+
+
+def _brief_call_kwargs(path):
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / path).read_text(encoding="utf-8-sig")
+    calls = []
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Call):
+            f = node.func
+            name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)
+            if name == "build_daily_briefing":
+                calls.append({kw.arg for kw in node.keywords})
+    return calls
+
+
+def test_cron_and_app_build_daily_briefing_kwargs_stay_in_parity():
+    app_calls = _brief_call_kwargs("app.py")
+    cron_calls = _brief_call_kwargs("stock_analyzer/headless_alert_engine.py")
+    assert app_calls, "found no build_daily_briefing call in app.py"
+    assert len(cron_calls) == 1, (
+        f"expected exactly one cron build_daily_briefing call, found {len(cron_calls)}"
+    )
+    app_kwargs = set().union(*app_calls)
+    app_only = app_kwargs - cron_calls[0]
+    assert app_only == _APP_ONLY_BRIEF_KWARGS, (
+        f"app-only kwargs drifted. Unexpected: {sorted(app_only - _APP_ONLY_BRIEF_KWARGS)}; "
+        f"no longer app-only: {sorted(_APP_ONLY_BRIEF_KWARGS - app_only)}. Wire a new "
+        "kwarg into the cron call, or add it to _APP_ONLY_BRIEF_KWARGS WITH the "
+        "reason it cannot change what the cron emails."
+    )
+    # trades_df specifically must never drift back into the app-only set.
+    assert "trades_df" in cron_calls[0]
+
+
 # ── compute_morning_picks — book_drift (F-252 follow-up, 2026-08-24) ────────
 # The emailed picks' suggested sizes are computed from `portfolio_value`,
 # which can silently disagree with the broker. Unlike the interactive app,
