@@ -1,2 +1,10 @@
 [deploy]
 startCommand = "python cron_runner.py"
+# Never auto-restart a cron run that exits non-zero (owner decision
+# 2026-10-12, D-M2 review NB-1). Since D-M1/D-M2 the lanes report real
+# failures with rc 1, and each failure already sends the cron-failure
+# email -- that email is the recovery signal. A blind instant retry would
+# mostly hit the same DB/provider outage, re-send the email, and on the
+# Sunday thesis lane re-pay for LLM reviews whose saves failed. A
+# transient blip is covered by the lane's next scheduled run.
+restartPolicyType = "never"
