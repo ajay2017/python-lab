@@ -377,7 +377,7 @@ circularity.
   losing the entire day's snapshot and reddening the heartbeat.
 - **A withheld reading is not a failure.** It never appends to `failures` — per
   that lane's own convention, a legitimately conditional outcome must not light
-  the heartbeat red on a working day.
+  the heartbeat red on a working day. **Update 2026-10-12 (3A′, owner decision):** that guarantee now holds only on a FULLY PRICED book. When the withheld reading is caused by a holding that could not be priced, the EOD lane treats it as a partial price outage: it skips the `account_daily_snapshots` row, blanks the risk row's beta / top-sector / concentration fields, and FAILS the run with a failure email naming the unpriced tickers. A withheld reading on a fully priced book (e.g. a thin overlapping sample) is still not a failure.
 - **Per-metric isolation holds:** beta, top-sector and max-single-name are
   completely unaffected.
 

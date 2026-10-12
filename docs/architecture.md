@@ -3094,7 +3094,7 @@ is a true fact about the inputs rather than a derived claim, and it is what dist
 `headless_alert_engine._build_context`'s raw `held_tickers`, threaded through `compute_eod`'s
 payload — **never from `held_data` or `port_df`, both of which have already lost any failed
 load and would make the check circular.** A withheld reading is not a cron failure and never
-reddens the heartbeat. Rows written before 2026-10-09 cannot be distinguished retroactively.
+reddens the heartbeat. **Update 2026-10-12 (3A′, owner decision):** that guarantee now holds only on a FULLY PRICED book. When the withheld reading is caused by a holding that could not be priced, the EOD lane treats it as a partial price outage: it skips the `account_daily_snapshots` row, blanks the risk row's beta / top-sector / concentration fields, and FAILS the run with a failure email naming the unpriced tickers. A withheld reading on a fully priced book (e.g. a thin overlapping sample) is still not a failure. Rows written before 2026-10-09 cannot be distinguished retroactively.
 Downstream, `rec_events`' `diversify_add.metric_before` and `rec_events_readout`'s
 `leg_b_avg_corr_before`/`_after` inherit the same NULLs, which is consistent and None-safe.
 
