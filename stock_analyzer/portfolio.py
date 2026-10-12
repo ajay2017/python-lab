@@ -1,5 +1,6 @@
 import math
 import pandas as pd
+import numbers
 import numpy as np
 
 from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_UNDERSIZED_PCT, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS, EARNINGS_IMMINENT_DAYS, EARNINGS_CRITICAL_DAYS, REDEPLOY_CORR_DIVERSIFIER_MAX, REDEPLOY_CORR_CORRELATED_MIN
@@ -1355,6 +1356,38 @@ def sector_benchmark_tilt(real_sector_df: pd.DataFrame) -> pd.DataFrame:
 CORR_MIN_OBS_TRUSTED = 20
 
 
+CORR_SAMPLE_TRUSTED, CORR_SAMPLE_THIN, CORR_SAMPLE_UNKNOWN = "trusted", "thin", "unknown"
+
+
+def correlation_sample_state(corr_coverage) -> str:
+    """The ONE answer to "is the correlation sample thin?" -- every gate,
+    label, caption and persisting site must route through this rather than
+    comparing `n_obs` to `CORR_MIN_OBS_TRUSTED` itself (five copies had
+    drifted on None / np.int64 / bool).
+
+    Returns one of three states, never raises:
+      - CORR_SAMPLE_UNKNOWN -- `corr_coverage` is not a dict, `n_obs` is
+        missing, is a bool / np.bool_ (True/False are int subclasses and
+        would read as 1/0), or is not a `numbers.Integral` (None, str, NaN
+        and `25.0` are all rejected). An unusable reading is NEVER "thin".
+      - CORR_SAMPLE_THIN    -- a real measured `n_obs` below the floor.
+      - CORR_SAMPLE_TRUSTED -- a real measured `n_obs` at or above the floor.
+
+    The floor is read from the module global at call time.
+    """
+    try:
+        if not isinstance(corr_coverage, dict):
+            return CORR_SAMPLE_UNKNOWN
+        n_obs = corr_coverage.get("n_obs")
+        if isinstance(n_obs, (bool, np.bool_)) or not isinstance(n_obs, numbers.Integral):
+            return CORR_SAMPLE_UNKNOWN
+        if int(n_obs) < CORR_MIN_OBS_TRUSTED:
+            return CORR_SAMPLE_THIN
+        return CORR_SAMPLE_TRUSTED
+    except Exception:
+        return CORR_SAMPLE_UNKNOWN
+
+
 def _close_series_map(held_data: dict) -> dict:
     """{ticker: Close series} — the inputs the correlation matrix is built from.
 
@@ -1532,12 +1565,7 @@ def correlation_claim_verified(corr_unchecked, corr_coverage) -> bool:
             return False
         if len(corr_unchecked) != 0:
             return False
-        if not isinstance(corr_coverage, dict):
-            return False
-        n_obs = corr_coverage.get("n_obs")
-        if isinstance(n_obs, bool) or not isinstance(n_obs, int):
-            return False
-        return n_obs >= CORR_MIN_OBS_TRUSTED
+        return correlation_sample_state(corr_coverage) == CORR_SAMPLE_TRUSTED
     except Exception:
         return False
 

@@ -466,3 +466,25 @@ def test_corr_coverage_end_to_end_all_nan_matrix_degrades_to_none():
     clusters_ok = [_cluster(["AAA", "BBB"], [["AAA", "BBB"]])]
     result_ok = add_block_map(clusters_ok, corr_ok, held_tickers_ok, "2026-10-01", corr_coverage=cov_ok)
     assert set(result_ok.keys()) == {"AAA", "BBB"}
+
+
+# ── C1: the gate delegates to portfolio.correlation_sample_state ────────────
+
+def test_gate_empty_map_follows_portfolio_sample_state(monkeypatch):
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    clusters = [_cluster(["AAPL", "MSFT"], [["AAPL", "MSFT"]])]
+    monkeypatch.setattr(_portfolio_mod, "correlation_sample_state", lambda c: "thin")
+    assert add_block_map(clusters, df, ["ZZZ"], "2026-10-01", corr_coverage={"n_obs": 125}) is None
+    monkeypatch.setattr(_portfolio_mod, "correlation_sample_state", lambda c: "trusted")
+    assert add_block_map(clusters, df, ["ZZZ"], "2026-10-01", corr_coverage={"n_obs": 125}) == {}
+    monkeypatch.setattr(_portfolio_mod, "correlation_sample_state", lambda c: "unknown")
+    assert add_block_map(clusters, df, ["ZZZ"], "2026-10-01", corr_coverage={"n_obs": 125}) == {}
+
+
+def test_gate_firing_map_is_never_changed_by_a_thin_state(monkeypatch):
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    clusters = [_cluster(["AAPL", "MSFT"], [["AAPL", "MSFT"]])]
+    control = add_block_map(clusters, df, ["AAPL", "MSFT"], "2026-10-01", corr_coverage={"n_obs": 125})
+    assert control  # a live, non-empty map
+    monkeypatch.setattr(_portfolio_mod, "correlation_sample_state", lambda c: "thin")
+    assert add_block_map(clusters, df, ["AAPL", "MSFT"], "2026-10-01", corr_coverage={"n_obs": 125}) == control

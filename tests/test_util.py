@@ -1345,3 +1345,11 @@ class TestDiversificationLabelThinSample:
         assert util.diversification_label_text(
             "Well Diversified", ["CCC"], {"n_obs": 125}
         ) == "Well Diversified · 1 not checked"
+
+
+def test_diversification_label_text_accepts_numpy_integer_n_obs():
+    import numpy as np
+    thin = diversification_label_text("Well Diversified", [], {"n_obs": np.int64(5)})
+    ok = diversification_label_text("Well Diversified", [], {"n_obs": np.int64(125)})
+    assert "sample too thin" in thin
+    assert "sample too thin" not in ok

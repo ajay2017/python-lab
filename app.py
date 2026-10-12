@@ -283,6 +283,7 @@ from stock_analyzer.portfolio import (
     trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
     real_sector_exposure_with_lookthrough, combined_name_exposure,
     classify_book_corr, CORR_MIN_OBS_TRUSTED, expected_beta_after_add,
+    correlation_sample_state, CORR_SAMPLE_THIN, CORR_SAMPLE_UNKNOWN,
     beta_diversifying_sectors,
 )
 from stock_analyzer.beta_repair import (
@@ -16101,7 +16102,8 @@ elif page == "🔗 Risk Analysis":
             # sample produces near-zero correlations that read as real
             # diversification. Surfaced because "Well Diversified" is a claim
             # the user acts on. Awareness only; gates nothing.
-            if _corr_cov is None:
+            _corr_sample = correlation_sample_state(_corr_cov)
+            if _corr_sample == CORR_SAMPLE_UNKNOWN:
                 st.caption(
                     "Sample size behind these correlations is **unknown** this session — "
                     "reload from 🏠 Home to recompute it. Treat the figures above as "
@@ -16119,7 +16121,7 @@ elif page == "🔗 Risk Analysis":
                         f"({_corr_cov['shortest_len']} bars vs {_corr_cov['longest_len']} "
                         "for the longest), which is usually what caps the sample"
                     )
-                if _corr_cov["n_obs"] < CORR_MIN_OBS_TRUSTED:
+                if _corr_sample == CORR_SAMPLE_THIN:
                     st.error(
                         f"⛔ {_cov_txt}. That is below the {CORR_MIN_OBS_TRUSTED} "
                         "observations this app requires anywhere else before it will "
@@ -17876,18 +17878,24 @@ elif page == "🔗 Risk Analysis":
                     rp for rp in risk_pairs
                     if str(rp["t1"]).upper() in _fs_up and str(rp["t2"]).upper() in _fs_up
                 ]
-                _fs_thin = bool(_corr_cov and _corr_cov["n_obs"] < CORR_MIN_OBS_TRUSTED)
+                _fs_sample = correlation_sample_state(_corr_cov)
                 if _fs_corr is None:
                     _fs_msg += (
                         " Correlation between them is unavailable this session, so the "
                         "clustering read here is sector-only."
                     )
-                elif _fs_thin:
+                elif _fs_sample == CORR_SAMPLE_THIN:
                     _fs_msg += (
                         f" Their mean pairwise correlation reads **{_fs_corr:+.2f}**, but "
                         f"it rests on only {_corr_cov['n_obs']} shared daily returns — too "
                         "thin to trust, so draw no conclusion from it either way "
                         "(see 📊 Dashboard)."
+                    )
+                elif _fs_sample == CORR_SAMPLE_UNKNOWN:
+                    _fs_msg += (
+                        f" Their mean pairwise correlation reads **{_fs_corr:+.2f}**, but "
+                        "the sample size behind it is unknown this session — draw no "
+                        "conclusion from it either way."
                     )
                 elif _fs_dupes and _fs_max is not None:
                     # Gated on _fs_dupes, NOT on `_fs_max >= threshold`. `_fs_max`

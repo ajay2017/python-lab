@@ -1740,3 +1740,62 @@ class TestLiquidationReachesTheExistingSizingRefusal:
         value still in place, nothing refuses."""
         from stock_analyzer.risk import sizing_unavailable_reason
         assert sizing_unavailable_reason(portfolio_value=24500.0, entry=100.0, stop=90.0) is None
+
+
+# ── correlation_sample_state: the ONE thin-sample predicate (C1 refactor) ───
+
+_NAN = float("nan")
+
+
+@pytest.mark.parametrize("cov,expected", [
+    (None, "unknown"), ("abc", "unknown"), ({}, "unknown"),
+    ({"n_obs": None}, "unknown"), ({"n_obs": "125"}, "unknown"),
+    ({"n_obs": _NAN}, "unknown"), ({"n_obs": 25.0}, "unknown"),
+    ({"n_obs": 0}, "thin"), ({"n_obs": 19}, "thin"),
+    ({"n_obs": 20}, "trusted"), ({"n_obs": 125}, "trusted"),
+    ({"n_obs": np.int64(125)}, "trusted"), ({"n_obs": np.int64(5)}, "thin"),
+])
+def test_correlation_sample_state_table(cov, expected):
+    assert portfolio.correlation_sample_state(cov) == expected
+
+
+def test_correlation_sample_state_bool_guard_is_load_bearing(monkeypatch):
+    # With the floor at 1, True==1 would read "trusted" and False==0 "thin"
+    # unless the bool guard rejects them -- at floor 20 this would be vacuous.
+    monkeypatch.setattr(portfolio, "CORR_MIN_OBS_TRUSTED", 1)
+    assert portfolio.correlation_sample_state({"n_obs": 5}) == "trusted"   # contrast
+    assert portfolio.correlation_sample_state({"n_obs": 0}) == "thin"      # contrast
+    for b in (True, False, np.bool_(True), np.bool_(False)):
+        assert portfolio.correlation_sample_state({"n_obs": b}) == "unknown"
+
+
+def test_correlation_sample_state_floor_is_strict_less_than_and_live(monkeypatch):
+    monkeypatch.setattr(portfolio, "CORR_MIN_OBS_TRUSTED", 7)
+    assert portfolio.correlation_sample_state({"n_obs": 7}) == "trusted"
+    assert portfolio.correlation_sample_state({"n_obs": 6}) == "thin"
+
+
+@pytest.mark.parametrize("unchecked", [None, [], ["X"], (), "abc"])
+@pytest.mark.parametrize("cov", [
+    None, {}, {"n_obs": None}, {"n_obs": True}, {"n_obs": 0}, {"n_obs": 19},
+    {"n_obs": 20}, {"n_obs": 125}, {"n_obs": 25.0}, {"n_obs": np.int64(125)},
+])
+def test_correlation_claim_verified_equivalence_sweep(unchecked, cov):
+    def legacy(u, c):
+        if not isinstance(u, (list, tuple)) or len(u) != 0:
+            return False
+        if not isinstance(c, dict):
+            return False
+        n = c.get("n_obs")
+        if isinstance(n, bool) or not isinstance(n, int):
+            return False
+        return n >= portfolio.CORR_MIN_OBS_TRUSTED
+    got = portfolio.correlation_claim_verified(unchecked, cov)
+    if isinstance(cov, dict) and isinstance(cov.get("n_obs"), np.int64):
+        # the ONE intended difference: np.int64 is now a real integer
+        assert got == (isinstance(unchecked, (list, tuple)) and len(unchecked) == 0
+                       and cov["n_obs"] >= 20)
+    else:
+        assert got == legacy(unchecked, cov)
+    # positive contrast so the sweep is never all-False
+    assert portfolio.correlation_claim_verified([], {"n_obs": 125}) is True

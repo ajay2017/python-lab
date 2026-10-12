@@ -53,27 +53,6 @@ from stock_analyzer import portfolio
 _MAX_REASON_LEN = 300  # matches gate_ledger.py's own free-text reason cap
 
 
-def _corr_coverage_too_thin(corr_coverage) -> bool:
-    """True iff `corr_coverage` names a real, measured `n_obs` below
-    `portfolio.CORR_MIN_OBS_TRUSTED` -- i.e. the correlation matrix ran but
-    measured too few (or zero) shared observations to trust (an
-    entirely-NaN matrix from a holding with a short/non-overlapping history
-    collapses the listwise intersection to n_obs==0, yet still produces a
-    non-empty matrix and an empty risk_pairs list).
-
-    `corr_coverage` not a dict, or its "n_obs" not a real `int` (bool is
-    REJECTED -- True/False are int subclasses -- as are None/str/NaN),
-    returns False: an unusable/absent coverage reading must never itself be
-    treated as "thin," only a genuinely measured low n_obs may.
-    """
-    if not isinstance(corr_coverage, dict):
-        return False
-    n_obs = corr_coverage.get("n_obs")
-    if not isinstance(n_obs, int) or isinstance(n_obs, bool):
-        return False
-    return n_obs < portfolio.CORR_MIN_OBS_TRUSTED
-
-
 def add_block_map(corr_df, risk_pairs, div_recs, held_tickers, corr_coverage=None) -> "dict | None":
     """Build {TICKER: {"partners": [...], "max_corr": float}} for every HELD
     ticker sitting at the danger-tier end of a pair where BOTH members are
@@ -190,8 +169,13 @@ def add_block_map(corr_df, risk_pairs, div_recs, held_tickers, corr_coverage=Non
         # on an all-NaN matrix (n_obs == 0) it is the latter. Downgrading
         # only that case suppresses nothing new and fires the existing
         # "couldn't check" caption honestly.
-        if not blocks and _corr_coverage_too_thin(corr_coverage):
-            return None
+        if not blocks:
+            _sample = portfolio.correlation_sample_state(corr_coverage)
+            if _sample == portfolio.CORR_SAMPLE_THIN:
+                return None
+            if _sample == portfolio.CORR_SAMPLE_UNKNOWN:
+                return blocks  # {} -- unusable coverage is never "thin"
+            return blocks      # {} -- trusted sample, genuinely nothing fired
         return blocks
     except Exception:
         return None

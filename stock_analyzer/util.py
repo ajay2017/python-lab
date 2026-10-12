@@ -983,15 +983,11 @@ def diversification_label_text(
     # Gap 2 — thin/empty sample. Evaluated FIRST because it can be true while
     # corr_unchecked is empty, which is the exact case that shipped
     # unqualified and got caught in review.
-    _thin = False
-    if isinstance(corr_coverage, dict):
-        _n_obs = corr_coverage.get("n_obs")
-        if isinstance(_n_obs, int) and not isinstance(_n_obs, bool):
-            # Imported here, not at module scope, to avoid a util <-> portfolio
-            # import cycle. Keeping the comparison inside stock_analyzer/ is
-            # also what keeps POLICY_DECISION_IN_RENDER from flagging it.
-            from stock_analyzer.portfolio import CORR_MIN_OBS_TRUSTED
-            _thin = _n_obs < CORR_MIN_OBS_TRUSTED
+    # Imported here, not at module scope, to avoid a util <-> portfolio
+    # import cycle. thin -> qualifier; unknown/trusted -> none.
+    from stock_analyzer import portfolio as _portfolio
+    _thin = (_portfolio.correlation_sample_state(corr_coverage)
+             == _portfolio.CORR_SAMPLE_THIN)
 
     if not corr_unchecked:
         return f"{div_label} · sample too thin" if _thin else div_label

@@ -30,24 +30,6 @@ from stock_analyzer import portfolio_intelligence
 from stock_analyzer import structural_scanner
 
 
-def _corr_coverage_too_thin(corr_coverage) -> bool:
-    """True iff `corr_coverage` names a real, measured `n_obs` below
-    `portfolio.CORR_MIN_OBS_TRUSTED` -- i.e. the correlation matrix ran but
-    measured too few (or zero) shared observations to trust. Mirrors
-    pair_add_gate._corr_coverage_too_thin exactly (same contract, same
-    rejection rules for bool/None/str/NaN) -- kept as a sibling function
-    here rather than a shared import so each gate module stays independently
-    readable and neither can accidentally import gate-specific state from
-    the other.
-    """
-    if not isinstance(corr_coverage, dict):
-        return False
-    n_obs = corr_coverage.get("n_obs")
-    if not isinstance(n_obs, int) or isinstance(n_obs, bool):
-        return False
-    return n_obs < portfolio.CORR_MIN_OBS_TRUSTED
-
-
 def baseline_signature(state: dict | None) -> tuple:
     """Collapse a load_structural_scan_baseline_state() result into a small,
     hashable signature so it can be folded into app.py's `_synth_sig` memo
@@ -192,8 +174,13 @@ def add_block_map(
         # REMOVED a live suppression. An empty map is the only case where
         # "checked, found nothing" and "couldn't measure anything" are
         # indistinguishable. Blocking review finding, 2026-10-09.
-        if not blocks and _corr_coverage_too_thin(corr_coverage):
-            return None
+        if not blocks:
+            _sample = portfolio.correlation_sample_state(corr_coverage)
+            if _sample == portfolio.CORR_SAMPLE_THIN:
+                return None
+            if _sample == portfolio.CORR_SAMPLE_UNKNOWN:
+                return blocks  # {} -- unusable coverage is never "thin"
+            return blocks      # {} -- trusted sample, genuinely nothing fired
         return blocks
     except Exception:
         return None
