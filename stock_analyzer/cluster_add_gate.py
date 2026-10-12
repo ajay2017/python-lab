@@ -184,3 +184,29 @@ def add_block_map(
         return blocks
     except Exception:
         return None
+
+
+def baseline_write_allowed(corr_unchecked, corr_coverage) -> bool:
+    """May a 🧬 Structural Scan snapshot be SAVED as G-25's baseline today?
+
+    True only when `portfolio.correlation_claim_verified` is True: every held
+    ticker entered the correlation matrix AND the overlapping sample is
+    trusted (the strict "records withhold" rule, F-291). Never raises -- any
+    failure is False.
+
+    Why this exists: the saved `cluster_snapshot` becomes the baseline
+    `resolve_new_clusters` diffs against. On an unverified matrix (e.g. 2
+    shared bars, where any two same-direction names correlate at exactly 1.0)
+    the clusters can be spurious, and saving them would record spurious pairs
+    as "acknowledged" so G-25 never fires for them later, while the save's
+    memo pop would also lift live add-pauses (audit A-H1, owner decision D3).
+
+    Lives here -- a `_GATE_FILES` member -- so any change to this decision is
+    forced through review. It can ONLY ever prevent a pause from being
+    LIFTED; it never removes or creates a suppression, so it is
+    fail-conservative by construction.
+    """
+    try:
+        return bool(portfolio.correlation_claim_verified(corr_unchecked, corr_coverage))
+    except Exception:
+        return False

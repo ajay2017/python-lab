@@ -360,6 +360,7 @@ from stock_analyzer.util import benchmark_mirror_summary_state
 from stock_analyzer.util import defense_facet_badge
 from stock_analyzer.util import correlation_unchecked_note
 from stock_analyzer.util import diversification_label_text
+from stock_analyzer.util import correlation_record_withheld_note
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -18757,6 +18758,12 @@ elif page == "🧩 Intelligence":
             _ss_weights = dict(zip(_pi_pdf["Ticker"], _pi_pdf["Weight (%)"]))
             _ss_rb = portfolio_intelligence.risk_budget(_pi_hd, _ss_weights)
             _ss_clusters = portfolio_intelligence.correlation_clusters(_ss_corr_df, _ss_weights)
+            # A-H1: saving this scan makes its clusters G-25's baseline and
+            # lifts live add-pauses, so it is only allowed on a fully-measured
+            # matrix. Plain .get() -- a None must stay None, never `or []`.
+            _ss_unchecked = st.session_state.get("_corr_unchecked_cache")
+            _ss_cov = st.session_state.get("_corr_coverage_cache")
+            _ss_record_ok = cluster_add_gate.baseline_write_allowed(_ss_unchecked, _ss_cov)
 
             if not _ss_rb["positions"]:
                 st.info("Not enough price history across your positions to compute a structural scan this session.")
@@ -18806,8 +18813,18 @@ elif page == "🧩 Intelligence":
                         st.caption("⚠ Factor exposure has not been loaded this session, so the narrative below will be written without it — that is an absence of evidence, not a finding that your factor concentration is low. Load it on 🧩 Intelligence → Factor Tilt first if you want it included.")
                     elif _ft_state == "unusable":
                         st.caption("⚠ Factor exposure was loaded but produced no usable per-factor correlation, so the narrative below is written without it. Treat your factor concentration as unknown rather than low.")
+                    if not _ss_record_ok:
+                        st.caption(
+                            (correlation_record_withheld_note(
+                                _ss_unchecked, _ss_cov,
+                                subject="This scan can't be run or saved today") or "")
+                            + " Add-to-winner pauses from a new correlation cluster stay "
+                            "in place until a scan can be saved on a fully-measured day."
+                        )
+                    # `and _ss_record_ok`: a click that triggered this rerun still
+                    # returns True even if the button now renders disabled.
                     if st.button("🧬 Generate structural narrative", key="_ss_gen_narrative_btn",
-                                 disabled=st.session_state.get("_readonly", False)):
+                                 disabled=st.session_state.get("_readonly", False) or not _ss_record_ok) and _ss_record_ok:
                         with st.spinner("Synthesizing structural narrative…"):
                             _ss_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
                             _ss_factor_cache = st.session_state.get("_pi_factor_tilt_cache")
@@ -18817,7 +18834,7 @@ elif page == "🧩 Intelligence":
                             _ss_narrative = structural_scanner.generate_structural_narrative(
                                 _ss_evidence, _ss_api_key
                             )
-                        if _ss_narrative:
+                        if _ss_narrative and _ss_record_ok:
                             db.save_structural_scan_cache(
                                 scan_date=_ss_scan_date,
                                 narrative=_ss_narrative,

@@ -10,9 +10,19 @@ import pytest
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+# One parse per file, shared: app.py is ~44K lines and a single ast.parse
+# measured 37.7s on 2026-10-12. Re-parsing per test pushed the pre-commit
+# suite past its 450s timeout. Same fix as test_check_antipatterns.py:
+# a module-level cache, plus an xdist_group so every test here lands on one
+# worker and the cache is actually shared. Read-only use of the trees.
+pytestmark = pytest.mark.xdist_group(name="corr_sample_state_wiring_ast")
+_TREES: dict = {}
+
 
 def _tree(rel):
-    return ast.parse((_ROOT / rel).read_text(encoding="utf-8"))
+    if rel not in _TREES:
+        _TREES[rel] = ast.parse((_ROOT / rel).read_text(encoding="utf-8"))
+    return _TREES[rel]
 
 
 def _names(node):

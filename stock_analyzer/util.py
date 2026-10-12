@@ -8,6 +8,7 @@ gate/decision path gets its own review).
 from __future__ import annotations
 
 import html as _html
+import numbers
 import re as _re
 from typing import Any
 
@@ -1008,3 +1009,73 @@ def diversification_label_text(
     if _thin:
         return f"{div_label} · sample too thin · {n} not checked"
     return f"{div_label} · {n} not checked"
+
+
+def correlation_record_withheld_note(corr_unchecked, corr_coverage, *, subject: str) -> "str | None":
+    """Why a correlation-derived RECORD is being withheld, or None when it isn't.
+
+    Returns None EXACTLY when `portfolio.correlation_claim_verified` is True
+    (it is called, not re-derived), so this note and the gate that withholds
+    the write can never disagree. Otherwise one plain sentence naming WHY,
+    with BOTH clauses when both gaps hold (F-293: never let the more severe
+    gap hide the other). `subject` is the sentence's lead-in naming what is
+    withheld and how, e.g. "This scan can't be run or saved today" -- the
+    reasons follow a colon. Each reason carries a remedy where one exists:
+    the short-history ticker, but only when it PROVABLY caps a thin sample;
+    Home's 🔄 Refresh Signals when the reading couldn't be confirmed (a plain
+    Home revisit would re-serve the memoized failure). No dollar signs:
+    Streamlit renders paired ones as LaTeX.
+    """
+    # Function-local import: util <-> portfolio import cycle.
+    from stock_analyzer import portfolio as _portfolio
+    if _portfolio.correlation_claim_verified(corr_unchecked, corr_coverage):
+        return None
+
+    reasons = []
+    if not isinstance(corr_unchecked, (list, tuple)):
+        reasons.append("couldn't confirm every holding was included")
+    elif len(corr_unchecked) > 0:
+        try:
+            names = sorted({str(t).strip().upper() for t in corr_unchecked
+                            if t is not None and str(t).strip()})
+        except Exception:
+            names = []
+        if names:
+            shown = ", ".join(names[:5])
+            if len(names) > 5:
+                shown += f" +{len(names) - 5} more"
+            _verb = "holding is" if len(names) == 1 else "holdings are"
+            reasons.append(f"{len(names)} {_verb} missing from the correlation matrix ({shown})")
+        else:
+            reasons.append("some holdings are missing from the correlation matrix")
+
+    state = _portfolio.correlation_sample_state(corr_coverage)
+    if state == _portfolio.CORR_SAMPLE_THIN:
+        _thin = (f"only {int(corr_coverage['n_obs'])} shared daily returns "
+                 f"(needs {_portfolio.CORR_MIN_OBS_TRUSTED})")
+        # Name a ticker as THE cap only when that is provable: the listwise
+        # intersection can never exceed the shortest history, so the shortest
+        # one is the cap exactly when shortest_len == n_obs + 1. When histories
+        # are merely MISALIGNED (equal lengths, partial overlap) no single
+        # ticker caps it, and naming the shortest one would be a false claim.
+        _short = corr_coverage.get("shortest_ticker")
+        _slen = corr_coverage.get("shortest_len")
+        if (isinstance(_short, str) and _short.strip()
+                and isinstance(_slen, numbers.Integral) and not isinstance(_slen, bool)
+                and int(_slen) == int(corr_coverage["n_obs"]) + 1):
+            _thin += f", capped by {_short.strip().upper()}'s short price history"
+        else:
+            _thin += ", because the holdings' price histories only overlap on those days"
+        reasons.append(_thin)
+    elif state == _portfolio.CORR_SAMPLE_UNKNOWN:
+        reasons.append("couldn't confirm the sample size")
+
+    if not reasons:  # defensive: verifier said no but no clause matched
+        reasons.append("the correlation reading could not be verified")
+    note = f"{subject}: " + " and ".join(reasons) + "."
+    if not isinstance(corr_unchecked, (list, tuple)) or state == _portfolio.CORR_SAMPLE_UNKNOWN:
+        # NOT "revisit Home": Home memoizes the failed bundle and a revisit
+        # takes the memo-hit path, republishing the same None. Refresh Signals
+        # bumps _scanner_ver, which forces the miss that actually recomputes.
+        note += " Open 🏠 Home and click 🔄 Refresh Signals to recompute it."
+    return note
