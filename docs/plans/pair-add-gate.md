@@ -660,3 +660,34 @@ present, so the all-NaN case is latent, not active — the same standing as
 F-290's caption, which has still never rendered. The reachable first sighting
 is a **correlation outage** (`div_score is None`), which now shows Check
 Incomplete where it previously showed All Clear. A grey chip is not a bug.
+
+### 11.6 Two loose ends from the F-295 reviews — DECIDED 2026-10-11, not built
+
+Both were raised as non-blocking by the F-295 Opus reviews and left open. The
+2026-10-11 incremental audit (`docs/reviews/2026-10-11-review.md`) sharpened
+both calls rather than overturning them.
+
+**1. A tooltip on the grey "Check Incomplete" chip — DECLINED.** The chip has no
+explanation of its own, but the Diversification KPI directly beneath it carries
+the reason ("· sample too thin" / "· N not checked") in every reachable case. The
+audit located where the genuinely confusing contradictions actually are, and it
+is not the chip: 🔗 Risk Analysis renders a green "No highly correlated pairs —
+well diversified" box **directly under** its own ⛔ "not reliable" error, and 🧩
+Intelligence says "No correlated clusters detected" with no coverage disclosure
+at all. Those are the screens to fix; a tooltip on the one surface that is
+already honest would be effort in the wrong place. **Trigger to revisit:** a grey
+chip is actually seen and its meaning is not clear from the screen around it.
+(The User Guide also has no entry for the 4th state — recorded as a Low in the
+audit, unchanged by this decision.)
+
+**2. The `numpy.int64` guard in `correlation_claim_verified` — DECLINED as a
+standalone patch.** Still unreachable: `correlation_coverage` builds `n_obs` as a
+Python int (`max(0, len(prices) - 1)`), confirmed again by the audit's data-layer
+reviewer. And it fails closed (a numpy int would read as unverified, never as a
+false all-clear). The audit found the thin-sample predicate exists in **five**
+copies, not the three §10 records — and that they disagree on
+`corr_coverage=None`. **The right home for the `numbers.Integral` fix is the
+collapse of those five copies into one helper**, which settles the `None`
+semantics and the integer type together. Patching one copy in isolation would
+add a sixth variant. **Trigger:** that consolidation, whenever it is picked up.
+
