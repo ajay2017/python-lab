@@ -182,6 +182,9 @@ def test_a_provider_outage_is_not_reported_as_a_db_outage(monkeypatch):
     _run_premarket(monkeypatch, reason="no_bundles",
                    emails=emails, heartbeats=heartbeats)
     assert emails == []
+    # ...but it IS a failure (D-M2 follow-up, 2026-10-12): no stop was
+    # checked, so the heartbeat must go red rather than read as a clean day.
+    assert ("premarket", "failed") in heartbeats
 
 
 # ── dedup must fail OPEN ──────────────────────────────────────────────────────

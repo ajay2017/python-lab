@@ -288,7 +288,7 @@ def _notify_failure(mode: str, detail: str) -> None:
             f"<p>The <b>{mode}</b> cron lane failed.</p>"
             f"<p><b>Error:</b> {detail or '(no detail captured)'}</p>"
             f"<p>Check the <code>cron-{mode}</code> Railway service's Deploy Logs "
-            f"for the full traceback.</p>"
+            f"for details.</p>"
         )
         _send_email("cron-failure", subject, html)
     except Exception as exc:
@@ -364,6 +364,14 @@ def _run_test_email(now_et) -> int:
 
 
 def _run_premarket(now_et, force: bool) -> int:
+    # 2026-10-11 audit D-M2: this lane returned 0 unconditionally, so every
+    # write below could fail with the heartbeat still green. Same contract as
+    # `_run_eod`: genuine failures accumulate in `failures`, flip the return
+    # code, set _LAST_LANE_FAILURE_DETAIL (reset here so a prior run's
+    # string can't be misread as this one's) and send the failure email.
+    global _LAST_LANE_FAILURE_DETAIL
+    _LAST_LANE_FAILURE_DETAIL = None
+    failures: list[str] = []
     today_str = now_et.date().isoformat()
     if not force:
         if not is_trading_day(now_et.date()):
@@ -385,6 +393,23 @@ def _run_premarket(now_et, force: bool) -> int:
     alerts = payload.get("alerts", [])
     for e in payload.get("errors", []):
         _log(f"engine note: {e}")
+    # A total PRICE outage (holdings read fine, nothing could be priced) is
+    # not a quiet day: no stop, deterioration or risk-off check ran at all,
+    # yet `alerts` is [] exactly as on a clean scan, so it used to log
+    # "nothing to act on", save dedup state as a legitimately empty run and
+    # report green. Owner decision 2026-10-12: fail the lane (standard
+    # failure email, red heartbeat) and do NOT save dedup state. In EDT the
+    # 09:00 ET slot then retries; in EST 08:00 ET is the only slot that runs
+    # (the 07:00 one is too early), so an EST outage means no protective scan
+    # that day -- only the failure email. Same two reasons D-M1 guards in
+    # `_run_eod`.
+    _price_outage_reason = payload.get("reason")
+    _price_outage = _price_outage_reason in ("no_bundles", "empty_port_df")
+    if _price_outage:
+        failures.append(f"price_outage: {_price_outage_reason} -- protective scan ran "
+                        f"without prices; stops / exits NOT checked")
+        _log(f"PROTECTIVE SCAN RAN WITHOUT PRICES ({_price_outage_reason}) — "
+             f"stops and exits were NOT checked; this is not a clean day.")
     _log(f"computed {len(alerts)} protective alert(s): "
          + (", ".join(f"{a.get('kind')}/{a.get('ticker')}" for a in alerts) or "(none)"))
 
@@ -422,6 +447,7 @@ def _run_premarket(now_et, force: bool) -> int:
         else:
             _log(f"exit_signals: WRITE FAILED for {len(exit_signal_rows)} row(s), "
                  f"date={today_str} — see warnings log.")
+            failures.append("exit_signals")
 
     # Analyst-target consensus snapshot — log-only Phase 1, no alert wired yet.
     # Reuses the bundles already loaded for the checks above (zero extra API cost).
@@ -432,6 +458,7 @@ def _run_premarket(now_et, force: bool) -> int:
         else:
             _log(f"analyst_target_snapshots: WRITE FAILED for {len(target_rows)} row(s), "
                  f"date={today_str} — see warnings log.")
+            failures.append("analyst_target_snapshots")
 
     # Score history capture — roadmap B1, log-only, no readout/gate yet.
     # Reuses the bundles already loaded above (zero extra API cost).
@@ -442,6 +469,7 @@ def _run_premarket(now_et, force: bool) -> int:
         else:
             _log(f"score_history: WRITE FAILED for {len(score_history_rows)} row(s), "
                  f"date={today_str} — see warnings log.")
+            failures.append("score_history")
 
     # Velocity check — detect WATCH tickers whose composite score is accelerating
     # toward TRIM. Silently skips when exit_signals has < 2 days of WATCH history
@@ -505,7 +533,9 @@ def _run_premarket(now_et, force: bool) -> int:
     )
     fp = _fingerprint(_fp_input)
     sent = False
-    if not alerts and not velocity_alerts and not split_withheld:
+    if _price_outage:
+        _log("no protective email — the scan could not run (see failure email).")
+    elif not alerts and not velocity_alerts and not split_withheld:
         _log("nothing to act on — no email.")
     elif fp == state.get("last_fingerprint") and not force:
         _log(f"unchanged since last send (fp={fp}) — no email (anti-spam).")
@@ -516,7 +546,11 @@ def _run_premarket(now_et, force: bool) -> int:
         )
         sent = _send_email("protective", subject, html)
 
-    if sent or (not alerts and not velocity_alerts and not split_withheld):
+    if _price_outage:
+        # Not a legitimately empty run: leave dedup state alone so a later
+        # slot (EDT only -- see above) that CAN price the book sends normally.
+        _log("state NOT saved — the scan did not run; a later slot (if any today) can retry.")
+    elif sent or (not alerts and not velocity_alerts and not split_withheld):
         # Save dedup state ONLY on a real send or a legitimately empty run — so a
         # transient Resend failure is retried by the later DST slot rather than
         # silently suppressed (matches buy-lane dedup contract).
@@ -526,8 +560,12 @@ def _run_premarket(now_et, force: bool) -> int:
             _log("state NOT saved (DB offline / table missing) — dedup degrades to always-send.")
     else:
         _log("email not sent — state NOT saved so later slot can retry.")
-    _log(f"premarket done · sent={sent}")
-    return 0
+    if failures:
+        _LAST_LANE_FAILURE_DETAIL = "; ".join(failures)
+        _notify_failure("premarket", _LAST_LANE_FAILURE_DETAIL)
+    _log(f"premarket done · sent={sent}"
+         + (f" · FAILURES={len(failures)}" if failures else ""))
+    return 1 if failures else 0
 
 
 def _run_eod(now_et, force: bool) -> int:
@@ -1534,8 +1572,15 @@ def _run_scan(now_et, force: bool) -> int:
     dedicated "Watchlist Ready to Enter" email — otherwise only discoverable by
     opening 📋 Watchlist). Post-open gated (today's price action must be real).
     Persist is inert until the scanner_cache table exists; both emails are inert
-    without RESEND_API_KEY. Exits 0 except when Supabase is unreadable (see
-    _handle_db_unavailable)."""
+    without RESEND_API_KEY. Exits non-zero when Supabase is unreadable (see
+    _handle_db_unavailable) or when one of its writes fails (D-M2)."""
+    # 2026-10-11 audit D-M2: same failure contract as `_run_eod` -- a write
+    # that SHOULD have succeeded and didn't flips the return code and the
+    # heartbeat, instead of being log-only. Collected and reported at the
+    # end so the buy-list and watchlist emails below still go out first.
+    global _LAST_LANE_FAILURE_DETAIL
+    _LAST_LANE_FAILURE_DETAIL = None
+    failures: list[str] = []
     today_str = now_et.date().isoformat()
     if not force:
         if not is_trading_day(now_et.date()):
@@ -1574,6 +1619,7 @@ def _run_scan(now_et, force: bool) -> int:
         _log(f"scan: persisted {n} results (date={today_str}).")
     else:
         _log(f"scan: NOT persisted ({n} results; DB offline / table missing / read-only).")
+        failures.append("scanner_cache")
 
     # ── Morning buy-list email — high-conviction New Positions to Initiate ──────
     sent = False
@@ -1591,9 +1637,13 @@ def _run_scan(now_et, force: bool) -> int:
     # attribute that to market conditions, which is confidently wrong under an outage.
     # Checked before the error-log loop so no misleading engine notes print either.
     if payload.get("reason") == "db_unavailable":
-        return _handle_db_unavailable(
+        _rc = _handle_db_unavailable(
             "scan", now_et,
             "; ".join(payload.get("errors", [])) or "holdings unreadable")
+        if failures:   # keep an earlier write failure visible (D-M2 review NB-2)
+            _LAST_LANE_FAILURE_DETAIL = (f"{_LAST_LANE_FAILURE_DETAIL}; also: "
+                                         f"{'; '.join(failures)}")[:300]
+        return _rc
     for e in payload.get("errors", []):
         _log(f"engine note: {e}")
     picks = payload.get("picks", [])
@@ -1619,10 +1669,15 @@ def _run_scan(now_et, force: bool) -> int:
             _log(f"rec log: saved={_rec_save_result.get('saved', 0)}/"
                  f"{_rec_save_result.get('attempted', 0)} new_pick row(s)"
                  + (f" — {_rec_save_result.get('error')}" if _rec_save_result.get("error") else ""))
+            # `error` is the failure signal, not saved < attempted: the upsert
+            # ignores duplicates by design, so a short count can be normal.
+            if _rec_save_result.get("error"):
+                failures.append(f"recommendations: {str(_rec_save_result['error'])[:120]}")
         else:
             _log("rec log: no new_pick rows to save today.")
     except Exception as _rec_log_err:
         _log(f"rec log: FAILED — {str(_rec_log_err)[:120]} — continuing (email unaffected).")
+        failures.append(f"recommendations: {str(_rec_log_err)[:120]}")
 
     # ── Gate Suppression Ledger (W5 capture — cron source) ────────────────────
     # Persist which gates fired today so restraint can be graded later.
@@ -1647,8 +1702,15 @@ def _run_scan(now_et, force: bool) -> int:
         _log(f"gate ledger: saved={_gl_result.get('saved', 0)}/"
              f"{_gl_result.get('attempted', 0)} suppression row(s)"
              + (f" — {_gl_result.get('error')}" if _gl_result.get("error") else ""))
+        # The "compat:" path (an old client without ignore_duplicates) writes
+        # every row and reports it as an `error` note -- a success, not a
+        # failure (db.save_gate_suppressions; D-M2 review NB-3).
+        _gl_err_msg = _gl_result.get("error")
+        if _gl_err_msg and not str(_gl_err_msg).startswith("compat"):
+            failures.append(f"gate_suppressions: {str(_gl_err_msg)[:120]}")
     except Exception as _gl_err:
         _log(f"gate ledger: FAILED — {str(_gl_err)[:120]} — continuing (email unaffected).")
+        failures.append(f"gate_suppressions: {str(_gl_err)[:120]}")
 
     # High-conviction = the green "✅ Go — Composite Confirms" set. Key on the SAME
     # field the Home badge reads — the reconciliation engine's verdict
@@ -1745,9 +1807,13 @@ def _run_scan(now_et, force: bool) -> int:
             today=now_et.date(), scanner_go_tickers=_wle_scanner_go, ctx=_scan_ctx,
         )
         if _wle_payload.get("reason") == "db_unavailable":
-            return _handle_db_unavailable(
+            _rc = _handle_db_unavailable(
                 "watchlist-entries", now_et,
                 "; ".join(_wle_payload.get("errors", [])) or "watchlist/holdings unreadable")
+            if failures:   # keep an earlier write failure visible (D-M2 review NB-2)
+                _LAST_LANE_FAILURE_DETAIL = (f"{_LAST_LANE_FAILURE_DETAIL}; also: "
+                                             f"{'; '.join(failures)}")[:300]
+            return _rc
         for e in _wle_payload.get("errors", []):
             _log(f"watchlist-entries engine note: {e}")
         # Already ruled out `entries is None` (the db_unavailable branch above
@@ -1788,8 +1854,12 @@ def _run_scan(now_et, force: bool) -> int:
         _log(f"watchlist-entries: FAILED — {str(_wle_err)[:120]} — continuing "
              "(buy-list email unaffected).")
 
-    _log(f"scan done · persisted={n} · buy_sent={sent} · watchlist_entries_sent={_wle_sent}")
-    return 0
+    if failures:
+        _LAST_LANE_FAILURE_DETAIL = "; ".join(failures)
+        _notify_failure("scan", _LAST_LANE_FAILURE_DETAIL)
+    _log(f"scan done · persisted={n} · buy_sent={sent} · watchlist_entries_sent={_wle_sent}"
+         + (f" · FAILURES={len(failures)}" if failures else ""))
+    return 1 if failures else 0
 
 
 def _run_intraday(now_et, force: bool) -> int:
@@ -1908,6 +1978,13 @@ def _run_intraday(now_et, force: bool) -> int:
 def _run_thesis(now_et, force: bool) -> int:
     """Sunday evening: AI thesis review for all open positions with a user thesis.
     One LLM call per position. Inert without ANTHROPIC_API_KEY."""
+    # 2026-10-11 audit D-M2: a failed save_thesis_review used to be log-only
+    # (a paid LLM review lost while the lane returned 0). Now it fails the
+    # lane. NB main()'s thesis wrapper treats a sub-job's non-zero return as
+    # an outage that already emailed, so this function sends its own
+    # failure email -- otherwise the heartbeat would go red with no message.
+    global _LAST_LANE_FAILURE_DETAIL
+    _LAST_LANE_FAILURE_DETAIL = None
     if not force and now_et.weekday() != 6:   # 6 = Sunday
         _log("thesis: not Sunday — skip.")
         return 0
@@ -2107,8 +2184,14 @@ def _run_thesis(now_et, force: bool) -> int:
         else:
             _log(f"  {rec['ticker']}: {rec['status']} — save FAILED (DB offline?).")
 
-    _log(f"thesis done · reviewed={len(results)} · saved={saved}")
-    return 0
+    _failed = len(results) - saved
+    if _failed:
+        _LAST_LANE_FAILURE_DETAIL = (f"thesis_reviews: {_failed} of {len(results)} "
+                                     f"paid review(s) not saved")
+        _notify_failure("thesis", _LAST_LANE_FAILURE_DETAIL)
+    _log(f"thesis done · reviewed={len(results)} · saved={saved}"
+         + (f" · FAILED={_failed}" if _failed else ""))
+    return 1 if _failed else 0
 
 
 def _run_debrief(now_et, force: bool) -> int:
@@ -2418,7 +2501,8 @@ def _run_monthly_report(now_et, force: bool) -> int:
 
 
 # Set by a lane that handles its own sub-job failures and signals them via a
-# non-zero RETURN rather than by raising (currently only _run_maintenance).
+# non-zero RETURN rather than by raising (_run_maintenance, _run_eod and --
+# since D-M2, 2026-10-12 -- _run_premarket, _run_scan and _run_thesis).
 # main() reads it so the heartbeat carries a reason, not a bare "failed".
 # Lanes that raise are unaffected — main()'s except-branch records their detail
 # directly from the exception.
