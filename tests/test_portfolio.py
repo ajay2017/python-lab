@@ -1202,6 +1202,7 @@ def test_diversification_recommendations_never_repeats_a_ticker_across_shared_bu
     recs = p.diversification_recommendations(
         port_df, pd.DataFrame(), {"risk_pairs": []},
         sector_candidates={}, discovery_universe=discovery_universe,
+        corr_coverage=None,
     )
     add_recs = {r["sector"]: set(r["candidates"]) for r in recs if r["type"] == "ADD"}
     defense_candidates = add_recs.get("Defense", set())
@@ -1246,7 +1247,7 @@ def test_diversification_reduce_excludes_score_withheld_from_weakest_candidates(
     })
     recs = diversification_recommendations(
         port_df, pd.DataFrame(), {"risk_pairs": []},
-        sector_candidates={}, discovery_universe={},
+        sector_candidates={}, discovery_universe={}, corr_coverage=None,
     )
     reduce_recs = [r for r in recs if r["type"] == "REDUCE"]
     assert reduce_recs, "the overweight sector must still produce a REDUCE rec"
@@ -1278,7 +1279,7 @@ def test_diversification_reduce_weakest_empty_when_sector_is_entirely_score_with
     })
     recs = diversification_recommendations(
         port_df, pd.DataFrame(), {"risk_pairs": []},
-        sector_candidates={}, discovery_universe={},
+        sector_candidates={}, discovery_universe={}, corr_coverage=None,
     )
     reduce_recs = [r for r in recs if r["type"] == "REDUCE"]
     assert reduce_recs
@@ -1315,7 +1316,7 @@ def test_diversification_pair_risk_skips_pair_when_either_side_score_withheld():
     }
     recs = diversification_recommendations(
         port_df, pd.DataFrame(), div_result,
-        sector_candidates={}, discovery_universe={},
+        sector_candidates={}, discovery_universe={}, corr_coverage={"n_obs": 60},
     )
     pair_recs = [r for r in recs if r["type"] == "PAIR_RISK"]
     pairs_seen = {(r["t1"], r["t2"]) for r in pair_recs}

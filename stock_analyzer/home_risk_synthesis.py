@@ -170,6 +170,9 @@ def build_correlation_bundle(
             sector_candidates=sector_candidates,
             discovery_universe=discovery_universe,
             portfolio_value=portfolio_value,
+            # audit A-H2: the SAME coverage computed beside this matrix
+            # (None on the except path above -> PAIR_RISK_WITHHELD).
+            corr_coverage=_corr_cov,
         )
     except Exception:
         div_recs = None  # offline sentinel, not [] — matches sibling cache contract

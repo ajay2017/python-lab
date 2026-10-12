@@ -311,6 +311,9 @@ def _build_diversify_add_rows(
             sector_candidates=sector_candidates or {},
             discovery_universe=discovery_universe or {},
             portfolio_value=portfolio_value if portfolio_value else 50_000.0,
+            # div_result={} above carries no risk_pairs, so no PAIR_RISK /
+            # PAIR_RISK_WITHHELD rec can be built and no sample is consulted.
+            corr_coverage=None,
         )
     except Exception:
         return []

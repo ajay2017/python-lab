@@ -2061,6 +2061,8 @@ def diversification_recommendations(
     sector_candidates: "dict[str, list[str]]",
     discovery_universe: "dict[str, list[str]]",
     portfolio_value: float = 50_000.0,
+    *,
+    corr_coverage,
 ) -> list[dict]:
     """
     Returns structured REDUCE, PAIR_RISK, and ADD recommendation dicts.
@@ -2071,8 +2073,22 @@ def diversification_recommendations(
     `diversifying_candidate_pool`, see that function's docstring for the
     resolved-payload contract (a resolved payload on success, or an explicit
     `{}` on an unavailable resolution — never a bare `None`).
+
+    `corr_coverage` (audit A-H2): REQUIRED, keyword-only, NO default -- a
+    caller that forgets it must raise TypeError rather than silently pass
+    None. It is `correlation_coverage()`'s dict for the matrix `div_result`
+    was built from. A danger-tier pair whose sample is not trusted
+    (`correlation_sample_state` != TRUSTED -- thin, or unknown) is CONVERTED
+    to a `PAIR_RISK_WITHHELD` info rec instead of a PAIR_RISK "trim the
+    weaker" SELL call: at n_obs=2 any two same-direction names correlate at
+    exactly 1.0, and a realised sale must not rest on that. Withholds on
+    SAMPLE SIZE ONLY -- deliberately not on `corr_unchecked` (a missing,
+    unrelated holding does not make the A x B reading less sound).
+    `risk_pairs`, REDUCE and ADD recs are untouched. Pass None only when
+    `div_result` carries no pairs.
     """
     recs = []
+    _sample = correlation_sample_state(corr_coverage)
     if port_df.empty:
         return recs
 
@@ -2142,6 +2158,21 @@ def diversification_recommendations(
             # ("recommend nothing rather than recommend wrongly"), skip the
             # pair; its correlation itself is still visible via the
             # correlation matrix / structural scan surfaces.
+            continue
+        if _sample != CORR_SAMPLE_TRUSTED:
+            # Thin / unknown sample: CONVERT, never drop -- the pair is still
+            # disclosed (and G-26's add-pause still fires off risk_pairs),
+            # but no sale is recommended off a correlation this noisy.
+            _n = corr_coverage.get("n_obs") if isinstance(corr_coverage, dict) else None
+            recs.append({
+                "type":            "PAIR_RISK_WITHHELD",
+                "urgency":         "info",
+                "t1": t1, "t2": t2,
+                "corr":            rp["corr"],
+                "withheld_reason": "thin_sample" if _sample == CORR_SAMPLE_THIN else "sample_unknown",
+                "n_obs":           int(_n) if _sample == CORR_SAMPLE_THIN else None,
+                "min_obs":         CORR_MIN_OBS_TRUSTED,
+            })
             continue
         s1, s2 = float(r1["Score"].iloc[0]), float(r2["Score"].iloc[0])
         weaker   = t1 if s1 <= s2 else t2

@@ -59,7 +59,14 @@ def _assigned_from_state(tree, local):
     for n in ast.walk(tree):
         if isinstance(n, ast.Assign) and any(
                 isinstance(t, ast.Name) and t.id == local for t in n.targets):
-            if isinstance(n.value, ast.Call) and "correlation_sample_state" in _names(n.value.func):
+            if (isinstance(n.value, ast.Call)
+                    and "correlation_sample_state" in _names(n.value.func)
+                    # C1 review X1/X2: the argument must be EXACTLY the
+                    # coverage local -- `correlation_sample_state(None)` or
+                    # `({"n_obs": 999})` used to pass this check.
+                    and len(n.value.args) == 1 and not n.value.keywords
+                    and isinstance(n.value.args[0], ast.Name)
+                    and n.value.args[0].id == "_corr_cov"):
                 return True
     return False
 
@@ -145,3 +152,78 @@ def test_monkeypatching_the_portfolio_name_still_moves_the_floor(monkeypatch):
     assert portfolio.correlation_sample_state({"n_obs": 5}) == portfolio.CORR_SAMPLE_THIN
     monkeypatch.setattr(portfolio, "CORR_MIN_OBS_TRUSTED", 1)
     assert portfolio.correlation_sample_state({"n_obs": 5}) == portfolio.CORR_SAMPLE_TRUSTED
+
+
+def test_assigned_from_state_requires_the_coverage_local_as_sole_argument():
+    ok = ast.parse("s = correlation_sample_state(_corr_cov)")
+    assert _assigned_from_state(ok, "s")
+    for bad in ("s = correlation_sample_state(None)",
+                's = correlation_sample_state({"n_obs": 999})',
+                "s = correlation_sample_state(other)",
+                "s = correlation_sample_state(_corr_cov, extra)",
+                "s = correlation_sample_state(corr_coverage=_corr_cov)",
+                "s = correlation_sample_state()"):
+        assert not _assigned_from_state(ast.parse(bad), "s"), bad
+
+
+def _chain_tests(top):
+    """Flatten an if/elif chain into its ordered list of test expressions."""
+    out, node = [], top
+    while isinstance(node, ast.If):
+        out.append(node.test)
+        node = node.orelse[0] if len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If) else None
+    return out
+
+
+def _sample_branches_precede_dupes(tree, local="_fs_sample", dupes="_fs_dupes"):
+    """Longest if/elif chain testing `local == THIN` AND `local == UNKNOWN`:
+    both must appear BEFORE the first test naming `dupes`. Returns the list
+    of (thin_idx, unknown_idx, dupes_idx) for every such chain."""
+    found = []
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.If):
+            continue
+        tests = _chain_tests(n)
+        idx = {}
+        for i, t in enumerate(tests):
+            if _is_eq_test(t, local, "CORR_SAMPLE_THIN"):
+                idx.setdefault("thin", i)
+            elif _is_eq_test(t, local, "CORR_SAMPLE_UNKNOWN"):
+                idx.setdefault("unknown", i)
+            elif dupes in _names(t):
+                idx.setdefault("dupes", i)
+        if "thin" in idx and "unknown" in idx and "dupes" in idx:
+            found.append((idx["thin"], idx["unknown"], idx["dupes"]))
+    return found
+
+
+def test_f245_thin_and_unknown_branches_precede_the_duplicated_pair_claim():
+    """C1 review X3: a reorder letting a thin sample reach the "one bet
+    stopping out twice" claim must fail."""
+    chains = _sample_branches_precede_dupes(_tree("app.py"))
+    assert chains, "F-245 if/elif chain not found"
+    for thin, unknown, dupes in chains:
+        assert thin < dupes and unknown < dupes, (thin, unknown, dupes)
+
+
+def _src(*lines):
+    return chr(10).join(lines) + chr(10)
+
+
+def test_chain_order_detector_rejects_a_reordered_chain():
+    good = ast.parse(_src(
+        "if a is None:", "  pass",
+        "elif s == CORR_SAMPLE_THIN:", "  pass",
+        "elif s == CORR_SAMPLE_UNKNOWN:", "  pass",
+        "elif d:", "  pass",
+    ))
+    bad = ast.parse(_src(
+        "if a is None:", "  pass",
+        "elif d:", "  pass",
+        "elif s == CORR_SAMPLE_THIN:", "  pass",
+        "elif s == CORR_SAMPLE_UNKNOWN:", "  pass",
+    ))
+    gres = _sample_branches_precede_dupes(good, local="s", dupes="d")
+    bres = _sample_branches_precede_dupes(bad, local="s", dupes="d")
+    assert gres and all(t < d and u < d for t, u, d in gres)
+    assert bres and not all(t < d and u < d for t, u, d in bres), "reordered chain must be rejected"

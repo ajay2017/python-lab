@@ -360,7 +360,7 @@ from stock_analyzer.util import signals_advice_nav_badge
 from stock_analyzer.util import benchmark_mirror_summary_state
 from stock_analyzer.util import defense_facet_badge
 from stock_analyzer.util import correlation_unchecked_note
-from stock_analyzer.util import diversification_label_text
+from stock_analyzer.util import diversification_label_text, pair_trim_withheld_note
 from stock_analyzer.util import correlation_record_withheld_note
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
@@ -5780,7 +5780,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 14  # bumped: bundle now also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 15  # bumped: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -15258,6 +15258,10 @@ elif page == "📡 Signals & Advice":
         else:
             reduce_recs = [r for r in div_recs if r["type"] in ("REDUCE", "PAIR_RISK")]
             add_recs    = [r for r in div_recs if r["type"] == "ADD"]
+            # A-H2: a danger-tier pair whose correlation sample is thin/unknown
+            # is NOT a trim call. A div_recs holding ONLY these is non-empty,
+            # so it never reaches the green "well balanced" branch above.
+            withheld_recs = [r for r in div_recs if r.get("type") == "PAIR_RISK_WITHHELD"]
 
             if reduce_recs:
                 st.subheader("🔻 Reduce / Rebalance")
@@ -15314,6 +15318,16 @@ elif page == "📡 Signals & Advice":
                                 f"{CORR_DANGER_PAIRS_THRESHOLD:.2f}, the Daily Brief pauses "
                                 "add-to-winner suggestions on both names."
                             )
+
+            if withheld_recs:
+                st.subheader("Correlated pairs — trim withheld")
+                for rec in withheld_recs:
+                    _wh_note = pair_trim_withheld_note(rec)
+                    if _wh_note is None:
+                        continue
+                    with st.container(border=True):
+                        st.markdown(f"🟡 **{rec['t1']} × {rec['t2']}** — {rec['corr']:.2f} correlation")
+                        st.caption(_wh_note)
 
             if add_recs:
                 st.subheader("➕ Add for Diversification")

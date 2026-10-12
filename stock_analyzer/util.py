@@ -1079,3 +1079,33 @@ def correlation_record_withheld_note(corr_unchecked, corr_coverage, *, subject: 
         # bumps _scanner_ver, which forces the miss that actually recomputes.
         note += " Open 🏠 Home and click 🔄 Refresh Signals to recompute it."
     return note
+
+
+def pair_trim_withheld_note(rec) -> "str | None":
+    """Render-ready note for ONE `PAIR_RISK_WITHHELD` rec (audit A-H2), or
+    None for anything else (a PAIR_RISK rec, a non-dict, a malformed rec).
+
+    Pure and plain-text: no `$` (Streamlit renders `$...$` as LaTeX) and no
+    markdown bold. States plainly that NO trim is recommended and that the
+    Daily Brief's add pause on both names stays in force (G-26 keys on the
+    pair's own danger-tier correlation, not on a trim card).
+    """
+    if not isinstance(rec, dict) or rec.get("type") != "PAIR_RISK_WITHHELD":
+        return None
+    t1, t2 = rec.get("t1"), rec.get("t2")
+    if not isinstance(t1, str) or not isinstance(t2, str) or not t1 or not t2:
+        return None
+    n_obs, min_obs = rec.get("n_obs"), rec.get("min_obs")
+    if (rec.get("withheld_reason") == "thin_sample"
+            and isinstance(n_obs, int) and not isinstance(n_obs, bool)
+            and isinstance(min_obs, int) and not isinstance(min_obs, bool)):
+        why = (f"the correlation rests on only {n_obs} shared daily returns, "
+               f"needs {min_obs}")
+    else:
+        why = "the size of the correlation sample couldn't be confirmed"
+    return (
+        f"{t1} and {t2} look highly correlated, but {why}. "
+        "No trim is recommended from a reading this noisy; the Daily Brief "
+        "keeps add-to-winner suggestions on both names paused while the pair "
+        "is flagged."
+    )

@@ -80,12 +80,15 @@ def add_block_map(corr_df, risk_pairs, div_recs, held_tickers, corr_coverage=Non
 
     div_recs is diversification_recommendations()'s output (or None when
     that stage itself failed) -- used ONLY to classify each partner's
-    trim_call as "named" / "not_named" / "unknown". A None div_recs does
+    trim_call as "named" / "withheld" / "not_named" / "unknown". "withheld"
+    = a PAIR_RISK_WITHHELD rec exists (the pair's sample is thin/unknown, so
+    no trim is recommended; audit A-H2). A None div_recs does
     NOT disable the gate -- the correlation pairing itself (risk_pairs) is
     the trigger, independent of whether a trim card could be built for it.
 
     Each partner dict: {"partner": TICKER, "corr": float, "trim_call":
-    "named"|"not_named"|"unknown", "weaker": TICKER | None}.
+    "named"|"withheld"|"not_named"|"unknown", "weaker": TICKER | None}
+    (weaker is None for every state but "named").
 
     Never raises -- any malformed input degrades to None (couldn't verify),
     never a fabricated {}.
@@ -104,14 +107,21 @@ def add_block_map(corr_df, risk_pairs, div_recs, held_tickers, corr_coverage=Non
         # None means div_recs itself is unavailable -- every match becomes
         # trim_call="unknown", NOT "no pairs have a named trim."
         _named: "dict[frozenset, str | None] | None" = None
+        # Pairs whose trim was WITHHELD for a thin/unknown correlation sample
+        # (PAIR_RISK_WITHHELD, audit A-H2): the pair is real and still pauses
+        # adds here, but no trim call exists to point at.
+        _withheld: "set[frozenset]" = set()
         if isinstance(div_recs, list):
             _named = {}
             for rec in div_recs:
-                if not isinstance(rec, dict) or rec.get("type") != "PAIR_RISK":
+                if not isinstance(rec, dict) or rec.get("type") not in ("PAIR_RISK", "PAIR_RISK_WITHHELD"):
                     continue
                 _t1 = str(rec.get("t1", "")).upper()
                 _t2 = str(rec.get("t2", "")).upper()
                 if not _t1 or not _t2:
+                    continue
+                if rec.get("type") == "PAIR_RISK_WITHHELD":
+                    _withheld.add(frozenset((_t1, _t2)))
                     continue
                 _named[frozenset((_t1, _t2))] = str(rec.get("weaker", "")).upper() or None
 
@@ -135,6 +145,8 @@ def add_block_map(corr_df, risk_pairs, div_recs, held_tickers, corr_coverage=Non
                 trim_call, weaker = "unknown", None
             elif pair_key in _named:
                 trim_call, weaker = "named", _named[pair_key]
+            elif pair_key in _withheld:
+                trim_call, weaker = "withheld", None
             else:
                 trim_call, weaker = "not_named", None
 
@@ -169,6 +181,11 @@ def add_block_map(corr_df, risk_pairs, div_recs, held_tickers, corr_coverage=Non
         # on an all-NaN matrix (n_obs == 0) it is the latter. Downgrading
         # only that case suppresses nothing new and fires the existing
         # "couldn't check" caption honestly.
+        #
+        # Corrected rationale (audit A-H2): removing a possibly-real pause is
+        # the FAIL-OPEN direction -- a thin-sample danger pair is exactly the
+        # case that must keep pausing adds. The pair is still disclosed, as a
+        # withheld trim ("withheld" trim_call), rather than discarded.
         if not blocks:
             _sample = portfolio.correlation_sample_state(corr_coverage)
             if _sample == portfolio.CORR_SAMPLE_THIN:
@@ -209,6 +226,14 @@ def describe_reason(entry: "dict | None") -> str:
         _trim = p.get("trim_call") if isinstance(p, dict) else None
         if _trim == "named":
             clauses.append("the pair's trim call is on 📡 Signals & Advice")
+        elif _trim == "withheld":
+            # Kept short: three partners must fit under _MAX_REASON_LEN.
+            # Neutral on WHY (thin vs unconfirmed): this text is persisted
+            # into gate-ledger rows, so it must be true for both states.
+            clauses.append(
+                "the trim call is withheld (sample too thin or "
+                "unconfirmed for a sale)"
+            )
         elif _trim == "not_named":
             _partner_raw = p.get("partner", "")
             _partner = str(_partner_raw).upper() if _partner_raw else "the partner"
