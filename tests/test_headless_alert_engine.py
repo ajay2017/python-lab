@@ -255,11 +255,15 @@ def test_build_context_all_bundles_fail_to_load():
     assert result["ok"] is False
     assert "no holdings could be loaded" in result["errors"]
     assert any("bundle load failed" in e for e in result["errors"])
+    # cron_runner._run_eod's D-M1 guard keys on this exact string; pin the
+    # producer end so a rename can't silently disarm it.
+    assert result["reason"] == "no_bundles"
 
 
 def test_build_context_port_df_empty_after_load():
     result = _run_build_context(_patch_context_deps(build_portfolio_df=pd.DataFrame()))
     assert result["ok"] is False
+    assert result["reason"] == "empty_port_df"  # D-M1 guard key, see above
     assert "portfolio frame empty after load" in result["errors"]
 
 
@@ -1335,6 +1339,10 @@ def _watchlist_patches(bundle, *, exit_signals=None, prior_recs=None, save_side_
     return [
         patch("stock_analyzer.headless_alert_engine.db.load_holdings_or_none",
               return_value=pd.DataFrame({"Ticker": []})),
+        # Readable, empty trade log: the sold-today check (2026-10-11 audit
+        # follow-up) fails CLOSED on None, so it must be stubbed explicitly.
+        patch("stock_analyzer.headless_alert_engine.db.load_trades_or_none",
+              return_value=pd.DataFrame()),
         patch("stock_analyzer.headless_alert_engine.fetch_risk_free_rate", return_value=0.045),
         patch("stock_analyzer.headless_alert_engine.load_bundle", return_value=bundle),
         patch("stock_analyzer.headless_alert_engine.db.load_exit_signals_or_none",
@@ -1366,7 +1374,7 @@ def test_compute_watchlist_entries_mapped_semis_at_ceiling_absent_from_qualifyin
         return {"error": None}
 
     patches = _watchlist_patches(bundle, save_side_effect=_fake_save)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
         result = hae.compute_watchlist_entries(today=TODAY, watchlist=[_MAPPED_TICKER], ctx=ctx)
 
     assert result["entries"] == []
@@ -1391,7 +1399,7 @@ def test_compute_watchlist_entries_enter_now_capture_uses_curated_sector():
         return {"error": None}
 
     patches = _watchlist_patches(bundle, save_side_effect=_fake_save)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
         result = hae.compute_watchlist_entries(today=TODAY, watchlist=[_MAPPED_TICKER], ctx=ctx)
 
     assert len(result["entries"]) == 1
@@ -1421,7 +1429,7 @@ def test_compute_watchlist_entries_app_cron_parity_same_helper_same_ctx():
            "spy_6mo": None, "port_risk": {"beta": 1.0}}
     bundle = _watchlist_bundle()
     patches = _watchlist_patches(bundle)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
         result = hae.compute_watchlist_entries(today=TODAY, watchlist=[_MAPPED_TICKER], ctx=ctx)
 
     # Same hard-breach outcome the directly-computed context predicts.

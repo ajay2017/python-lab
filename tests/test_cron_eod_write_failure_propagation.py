@@ -12,6 +12,8 @@ tickers for sentiment, etc.) — those must NEVER be misread as a failure.
 """
 import datetime
 
+import pytest
+
 import cron_runner as cr
 
 NOW = datetime.datetime(2026, 9, 21, 17, 30)
@@ -418,3 +420,62 @@ def test_h8b_none_held_tickers_is_forwarded_not_substituted(monkeypatch):
         "cron substituted a fallback for a None held_tickers -- that silently "
         "restores the held_data circularity this commit removes."
     )
+
+
+# ── 2026-10-11 audit D-M1: a price-provider outage must not write a fake book ─
+#
+# On `no_bundles` / `empty_port_df` the holdings WERE read but could not be
+# priced, so `snapshot_rows` is [] exactly as on a genuinely empty book. Steps
+# 1b-1d used to run anyway and persist gross_book=0 / net_equity=-debit as a
+# real day of leverage history, with the lane reporting green.
+
+def _spy_book_writes(monkeypatch):
+    calls = {"account": 0, "risk": 0, "rec_events": 0}
+    monkeypatch.setattr(cr, "compute_account_snapshot",
+                        lambda *_a, **_k: calls.__setitem__("account", calls["account"] + 1)
+                        or {"gross_book": 0.0, "leverage": None})
+    monkeypatch.setattr(cr, "build_portfolio_risk_snapshot",
+                        lambda *_a, **_k: calls.__setitem__("risk", calls["risk"] + 1)
+                        or {"portfolio_beta": None, "top_sector": None})
+    monkeypatch.setattr(cr, "build_rec_event_rows",
+                        lambda *_a, **_k: calls.__setitem__("rec_events", calls["rec_events"] + 1)
+                        or [])
+    return calls
+
+
+
+@pytest.mark.parametrize("reason", ["no_bundles", "empty_port_df"])
+def test_price_outage_skips_book_writes_and_fails_the_lane(monkeypatch, reason):
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: _payload(
+        reason=reason, errors=["no holdings could be loaded"],
+    ))
+    calls = _spy_book_writes(monkeypatch)
+    saved = []
+    monkeypatch.setattr(cr.db, "save_account_daily_snapshot",
+                        lambda *a, **_k: saved.append(a) or True)
+    rc = cr._run_eod(NOW, force=True)
+    assert rc == 1
+    assert calls == {"account": 0, "risk": 0, "rec_events": 0}
+    assert saved == []
+    assert f"price_outage: {reason}" in cr._LAST_LANE_FAILURE_DETAIL
+
+
+def test_no_holdings_is_a_real_book_and_still_writes(monkeypatch):
+    """An all-cash account is a genuine state, not an outage: the account
+    snapshot must still be written and the lane stays green."""
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: _payload(
+        reason="no_holdings", errors=["no holdings"],
+    ))
+    calls = _spy_book_writes(monkeypatch)
+    rc = cr._run_eod(NOW, force=True)
+    assert rc == 0
+    assert cr._LAST_LANE_FAILURE_DETAIL is None
+    assert calls == {"account": 1, "risk": 1, "rec_events": 1}
+
+
+def test_normal_run_still_reaches_every_book_write(monkeypatch):
+    """No reason on the payload (the ordinary path) must be unaffected."""
+    _patch_defaults(monkeypatch)
+    calls = _spy_book_writes(monkeypatch)
+    assert cr._run_eod(NOW, force=True) == 0
+    assert calls == {"account": 1, "risk": 1, "rec_events": 1}
