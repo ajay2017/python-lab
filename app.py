@@ -21939,6 +21939,10 @@ elif page == "🏆 Health":
         hb_share     = _ph_hb_share,
         fragility    = _ph_fragility,
         port_risk    = _ph_port_risk,
+        # A-M2: the sample behind `_avg_corr_cache`. Raw .get(), never
+        # `or {}` -- None must stay "unknown" so the sub-score is withheld.
+        corr_coverage  = st.session_state.get("_corr_coverage_cache"),
+        corr_unchecked = st.session_state.get("_corr_unchecked_cache"),
     )
 
     _ph_overall = _ph_result["overall"]
@@ -22032,7 +22036,10 @@ elif page == "🏆 Health":
             "Measures how independently your holdings move day-to-day. "
             "Scored 0–100 on the equity correlation range: 0.0 avg correlation = 100, "
             "0.5 = 50, 1.0 = 0. High correlation means positions fall together "
-            "in a selloff even if sector labels look different."
+            "in a selloff even if sector labels look different. Not scored when "
+            "the holdings share too few trading days for the correlation to be "
+            "trusted, or that sample size couldn't be confirmed — a matrix with "
+            "no usable data would otherwise read as a perfect 100."
         ),
         "factor_exposure": (
             "A high-beta, fragile book amplifies market moves in both directions. "
@@ -22075,7 +22082,16 @@ elif page == "🏆 Health":
             )
         elif _ph_dim == "diversification":
             _ph_ac = _ph_d.get("avg_corr")
-            _ph_ctx = f"Avg correlation {_ph_ac:.2f}" if _ph_ac is not None else "No data"
+            _ph_wr = _ph_d.get("withheld_reason")
+            _ph_unc = _ph_d.get("corr_unchecked")
+            if _ph_wr:
+                _ph_ctx = f"Not scored — {_ph_wr}"
+            elif _ph_ac is not None:
+                _ph_ctx = f"Avg correlation {_ph_ac:.2f}" + (
+                    f" · {len(_ph_unc)} holding(s) not in the matrix" if _ph_unc else ""
+                )
+            else:
+                _ph_ctx = "No data"
         elif _ph_dim == "factor_exposure":
             _ph_sev = _ph_d.get("severity") or "unknown"
             _ph_hbs = _ph_d.get("hb_share")
@@ -22224,14 +22240,22 @@ elif page == "🏆 Health":
                 st.rerun()
 
     if _ph_result["n_available"] < 5:
+        # A-M2: a dimension can now be missing because its data was judged
+        # unreliable, not only because Home hasn't loaded it -- name the
+        # real reason for each instead of blaming Home for all of them.
         _ph_missing = [
-            _ph_dlabels[k]
+            _ph_dlabels[k] + (
+                f" — {v['detail']['withheld_reason']}"
+                if "withheld_reason" in v["detail"] else ""
+            )
             for k, v in _ph_subs.items()
             if v["score"] is None
         ]
         st.info(
-            f"Some dimensions are unavailable until Home finishes loading: "
-            f"{', '.join(_ph_missing)}. The grade reflects only the dimensions with data.",
+            f"Not scored: {'; '.join(_ph_missing)}. A dimension without a reason "
+            f"listed isn't available this session (Home hasn't loaded it, or its "
+            f"data source was offline). The grade averages only the dimensions "
+            f"that were scored.",
             icon="ℹ️",
         )
 

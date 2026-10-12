@@ -16,6 +16,10 @@ import math
 
 import pandas as pd
 
+from stock_analyzer.portfolio import (
+    CORR_SAMPLE_THIN, CORR_SAMPLE_TRUSTED, correlation_sample_state,
+)
+
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
@@ -167,9 +171,35 @@ def _sector_balance_score(port_df: pd.DataFrame) -> dict:
     }
 
 
-def _diversification_score_sub(div_score_val: float | None, avg_corr: float | None) -> dict:
+def _diversification_score_sub(
+    div_score_val: float | None,
+    avg_corr: float | None,
+    corr_coverage=None,
+    corr_unchecked=None,
+) -> dict:
     if avg_corr is None and div_score_val is None:
         return {"score": None, "detail": {}}
+    # 2026-10-11 audit A-M2: an all-NaN / too-thin matrix reaches here as
+    # avg_corr = 0.0 (diversification_score's `else 0.0` fallback), which
+    # the rescale below turns into a PERFECT 100 -- the best sub-score the
+    # metric can emit, fed into the A-F grade, from zero real observations.
+    # Owner decision 2026-10-12: WITHHOLD the sub-score (the grade then
+    # averages the dimensions that were measured, and says so) unless the
+    # sample is trusted. Coverage not passed reads as UNKNOWN, never as
+    # fine. Same classifier every other correlation surface uses.
+    _sample = correlation_sample_state(corr_coverage)
+    if _sample != CORR_SAMPLE_TRUSTED:
+        _n_obs = corr_coverage.get("n_obs") if isinstance(corr_coverage, dict) else None
+        return {
+            "score": None,
+            "detail": {
+                "withheld_reason": (
+                    f"correlation sample too thin ({_n_obs} shared days)"
+                    if _sample == CORR_SAMPLE_THIN else
+                    "correlation sample size unknown"
+                ),
+            },
+        }
     # The pre-computed div_score uses (1 − corr) / 2 × 100, calibrated for the
     # full −1 to +1 correlation range. Equity pairwise correlations rarely go
     # negative, so that formula compresses all realistic values into 0–50.
@@ -183,6 +213,11 @@ def _diversification_score_sub(div_score_val: float | None, avg_corr: float | No
         "score": score,
         "detail": {
             "avg_corr": round(avg_corr, 3) if avg_corr is not None else None,
+            # Screens disclose (F-293): holdings missing from the matrix are
+            # named, not withheld. None = couldn't check, [] = all present.
+            "corr_unchecked": (
+                list(corr_unchecked) if isinstance(corr_unchecked, (list, tuple)) else None
+            ),
         },
     }
 
@@ -447,9 +482,16 @@ def compute_health_score(
     hb_share: float | None,
     fragility: dict | None,
     port_risk: dict | None,
+    corr_coverage=None,
+    corr_unchecked=None,
 ) -> dict:
     """
     Compute five sub-scores + overall portfolio construction grade.
+
+    `corr_coverage` / `corr_unchecked` are the published `_corr_coverage_cache`
+    / `_corr_unchecked_cache` describing the matrix behind `avg_corr`. The
+    diversification sub-score is withheld unless that sample is trusted
+    (audit A-M2) -- omitting `corr_coverage` therefore withholds it.
 
     Returns:
         overall        float | None   — average of available sub-scores (0–100)
@@ -464,7 +506,9 @@ def compute_health_score(
     sub_scores = {
         "concentration":   _concentration_score(port_df),
         "sector_balance":  _sector_balance_score(port_df),
-        "diversification": _diversification_score_sub(div_score_val, avg_corr),
+        "diversification": _diversification_score_sub(
+            div_score_val, avg_corr, corr_coverage, corr_unchecked,
+        ),
         "factor_exposure": _factor_exposure_score(fragility, hb_share, port_beta),
         "signal_integrity": _signal_integrity_score(port_df),
     }

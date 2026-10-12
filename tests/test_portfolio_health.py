@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 import pytest
 
+from stock_analyzer import portfolio as ph_portfolio
 from stock_analyzer import portfolio_health as ph
 from tests.conftest import make_port_df
 
@@ -183,30 +184,111 @@ def test_sector_balance_score_falls_back_to_gate_weight_column():
 
 # ── _diversification_score_sub ────────────────────────────────────────────
 
+# A sample comfortably above CORR_MIN_OBS_TRUSTED (read live, never hardcoded).
+_TRUSTED = {"n_obs": ph_portfolio.CORR_MIN_OBS_TRUSTED + 100}
+
 def test_diversification_score_none_when_both_inputs_none():
     assert ph._diversification_score_sub(None, None)["score"] is None
 
 
 def test_diversification_score_uses_avg_corr_when_present():
-    result = ph._diversification_score_sub(div_score_val=42.0, avg_corr=0.0)
+    result = ph._diversification_score_sub(div_score_val=42.0, avg_corr=0.0, corr_coverage=_TRUSTED)
     assert result["score"] == 100.0  # uncorrelated -> max score
     assert result["detail"]["avg_corr"] == 0.0
 
 
 def test_diversification_score_avg_corr_midpoint():
-    result = ph._diversification_score_sub(None, avg_corr=0.5)
+    result = ph._diversification_score_sub(None, avg_corr=0.5, corr_coverage=_TRUSTED)
     assert result["score"] == 50.0
 
 
 def test_diversification_score_avg_corr_clamped_to_zero_above_1():
-    result = ph._diversification_score_sub(None, avg_corr=1.5)
+    result = ph._diversification_score_sub(None, avg_corr=1.5, corr_coverage=_TRUSTED)
     assert result["score"] == 0.0
 
 
 def test_diversification_score_falls_back_to_div_score_val_when_no_corr():
-    result = ph._diversification_score_sub(div_score_val=37.5, avg_corr=None)
+    result = ph._diversification_score_sub(div_score_val=37.5, avg_corr=None, corr_coverage=_TRUSTED)
     assert result["score"] == 37.5
     assert result["detail"]["avg_corr"] is None
+
+
+# 2026-10-11 audit A-M2: an all-NaN / thin matrix reaches the Health Score
+# as avg_corr = 0.0 (diversification_score's `else 0.0` fallback), which the
+# (1 - corr) x 100 rescale turned into a PERFECT 100 feeding the A-F grade.
+# Owner decision 2026-10-12: withhold the sub-score unless the sample is
+# trusted; the grade averages the measured dimensions and says so.
+
+@pytest.mark.parametrize("n_obs", [0, 1, 2, 3, 5, 19])
+def test_diversification_withheld_on_thin_sample_at_audit_reproduction_points(n_obs):
+    """The audit proved 100.0 at exactly these n_obs values."""
+    if n_obs >= ph_portfolio.CORR_MIN_OBS_TRUSTED:
+        pytest.skip("floor moved below this reproduction point")
+    result = ph._diversification_score_sub(50.0, 0.0, corr_coverage={"n_obs": n_obs})
+    assert result["score"] is None
+    assert "too thin" in result["detail"]["withheld_reason"]
+    assert str(n_obs) in result["detail"]["withheld_reason"]
+
+
+@pytest.mark.parametrize("coverage", [None, {}, {"n_obs": None}, {"n_obs": True}, {"n_obs": 25.0}, "x"])
+def test_diversification_withheld_when_sample_size_unknown(coverage):
+    """Coverage not passed, or unusable, is UNKNOWN -- never 'fine'."""
+    result = ph._diversification_score_sub(50.0, 0.0, corr_coverage=coverage)
+    assert result["score"] is None
+    assert result["detail"]["withheld_reason"] == "correlation sample size unknown"
+
+
+def test_diversification_scored_exactly_at_the_floor():
+    floor = ph_portfolio.CORR_MIN_OBS_TRUSTED
+    assert ph._diversification_score_sub(None, 0.5, corr_coverage={"n_obs": floor})["score"] == 50.0
+    assert ph._diversification_score_sub(None, 0.5, corr_coverage={"n_obs": floor - 1})["score"] is None
+
+
+def test_diversification_div_score_fallback_is_gated_too():
+    """The avg_corr=None branch reads div_score_val -- the same matrix."""
+    result = ph._diversification_score_sub(37.5, None, corr_coverage={"n_obs": 0})
+    assert result["score"] is None
+
+
+def test_diversification_missing_holdings_are_disclosed_not_withheld():
+    """Screens disclose (F-293): a trusted sample with a holding missing
+    from the matrix still scores, and names the holding."""
+    result = ph._diversification_score_sub(
+        None, 0.4, corr_coverage=_TRUSTED, corr_unchecked=["NEWIPO"],
+    )
+    assert result["score"] == 60.0
+    assert result["detail"]["corr_unchecked"] == ["NEWIPO"]
+
+
+@pytest.mark.parametrize("unchecked, expected", [
+    (None, None),            # couldn't check -- stays unknown, never "all present"
+    ([], []),                # checked, every holding present
+    (("A", "B"), ["A", "B"]),
+    ({"A"}, None),           # not the published list/tuple contract
+])
+def test_diversification_corr_unchecked_normalisation(unchecked, expected):
+    result = ph._diversification_score_sub(
+        None, 0.4, corr_coverage=_TRUSTED, corr_unchecked=unchecked,
+    )
+    assert result["detail"]["corr_unchecked"] == expected
+
+
+def test_compute_health_score_thin_matrix_cannot_lift_the_grade():
+    """End-to-end: the withheld dimension drops out of n_available and the
+    average, so a fabricated 100 can no longer raise the overall grade."""
+    df = make_port_df([
+        {"ticker": "AAPL", "weight": 50.0, "sector": "Tech", "score": 70.0},
+        {"ticker": "XOM", "weight": 50.0, "sector": "Energy", "score": 70.0},
+    ])
+    kw = dict(div_score_val=50.0, avg_corr=0.0, hb_share=10.0,
+              fragility={"severity": "calm"}, port_risk={"beta": 1.0})
+    thin = ph.compute_health_score(df, corr_coverage={"n_obs": 0}, **kw)
+    trusted = ph.compute_health_score(df, corr_coverage=_TRUSTED, **kw)
+    assert thin["sub_scores"]["diversification"]["score"] is None
+    assert trusted["sub_scores"]["diversification"]["score"] == 100.0
+    assert thin["n_available"] == trusted["n_available"] - 1 == 4
+    assert thin["overall"] < trusted["overall"]
+    assert all(i["dimension"] != "diversification" for i in thin["improvements"])
 
 
 # ── _factor_exposure_score ─────────────────────────────────────────────────
@@ -409,6 +491,7 @@ def test_compute_health_score_averages_available_sub_scores():
     result = ph.compute_health_score(
         df, div_score_val=None, avg_corr=0.2, hb_share=10.0,
         fragility={"severity": "calm"}, port_risk={"beta": 1.0},
+        corr_coverage=_TRUSTED,
     )
     assert result["n_available"] == 5
     assert result["overall"] is not None
@@ -429,6 +512,7 @@ def test_compute_health_score_fragility_offline_drops_n_available_to_4():
     result = ph.compute_health_score(
         df, div_score_val=None, avg_corr=0.2, hb_share=10.0,
         fragility=None, port_risk={"beta": 1.0},
+        corr_coverage=_TRUSTED,
     )
     assert result["n_available"] == 4
     assert result["sub_scores"]["factor_exposure"]["score"] is None
@@ -439,6 +523,7 @@ def test_compute_health_score_improvements_sorted_by_worst_first():
     result = ph.compute_health_score(
         df, div_score_val=None, avg_corr=0.9, hb_share=70.0,
         fragility={"severity": "fragile"}, port_risk={"beta": 1.6},
+        corr_coverage=_TRUSTED,
     )
     scores = [s["score"] for s in result["improvements"]]
     assert scores == sorted(scores)

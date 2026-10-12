@@ -437,7 +437,7 @@ SURFACE_KEYS: dict[str, tuple] = {
     "pi":    ("_corr_df_cache", "_pi_factor_tilt_cache"),
     "pa":    ("_acct_gate_cache", "_div_recs_cache", "_reduce_calls", "_risk_advisor_recs_cache"),
     "ph":    ("_avg_corr_cache", "_div_score_cache", "_fragility_cache", "_highbeta_share",
-              "_port_risk_cache"),
+              "_port_risk_cache", "_corr_coverage_cache", "_corr_unchecked_cache"),
     "macro": (),
     "an":    ("_mirror_orphans", "_mirror_overexp", "_mirror_overhangs", "_port_risk_cache",
               "_reduce_calls"),
