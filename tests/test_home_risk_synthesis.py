@@ -9,6 +9,7 @@ directly instead of only verified by inline reading.
 """
 import ast
 from pathlib import Path
+from tests._ast_cache import parse_file_cached
 
 import pandas as pd
 from unittest.mock import MagicMock
@@ -494,8 +495,7 @@ class TestRiskBannerRecordLabel:
 
 
 def _parse_app_py() -> ast.Module:
-    src = APP_PY.read_text(encoding="utf-8-sig")
-    return ast.parse(src, filename=str(APP_PY))
+    return parse_file_cached(APP_PY)
 
 
 def test_app_py_calls_classify_risk_banner_once_with_safe_keyword_names():

@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from tests._ast_cache import parse_file_cached
 
 from stock_analyzer.act_today_pointer import act_pointer
 from stock_analyzer.act_today_view import act_today_view
@@ -255,8 +256,7 @@ def test_module_uses_bucket_act_by_type():
 # ── AST-based wiring tests on app.py ─────────────────────────────────────────
 
 def _parse_app_py() -> ast.Module:
-    src = APP_PY.read_text(encoding="utf-8-sig")
-    return ast.parse(src, filename=str(APP_PY))
+    return parse_file_cached(APP_PY)
 
 
 def _home_if_node(tree: ast.Module) -> ast.If | None:

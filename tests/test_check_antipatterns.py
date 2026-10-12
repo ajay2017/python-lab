@@ -11,6 +11,7 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
+from tests._ast_cache import parse_file_cached
 
 pytestmark = pytest.mark.fast
 
@@ -48,8 +49,7 @@ _APP_PY_TREE_CACHE: dict = {}
 
 def _app_py_tree():
     if "tree" not in _APP_PY_TREE_CACHE:
-        src = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8-sig")
-        _APP_PY_TREE_CACHE["tree"] = ast.parse(src)
+        _APP_PY_TREE_CACHE["tree"] = parse_file_cached(Path(__file__).resolve().parent.parent / "app.py")
     return _APP_PY_TREE_CACHE["tree"]
 
 

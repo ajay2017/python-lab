@@ -19,6 +19,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from tests._ast_cache import parse_file_cached
 
 pytestmark = pytest.mark.fast
 
@@ -27,8 +28,7 @@ APP_PY = ROOT / "app.py"
 
 
 def _parse_app_py() -> ast.Module:
-    src = APP_PY.read_text(encoding="utf-8-sig")
-    return ast.parse(src, filename=str(APP_PY))
+    return parse_file_cached(APP_PY)
 
 
 def _is_session_state_subscript(node: ast.expr, key: str) -> bool:

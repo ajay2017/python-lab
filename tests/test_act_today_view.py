@@ -10,6 +10,7 @@ Two things this file guards:
 """
 import ast
 from pathlib import Path
+from tests._ast_cache import parse_file_cached
 
 import pandas as pd
 import pytest
@@ -207,8 +208,7 @@ def test_non_breach_item_never_demoted_regardless_of_gap():
 def _split_defensive_call_sites(path: Path) -> list[str]:
     """Call nodes only -- used to prove act_today_view.py genuinely INVOKES
     split_defensive (an any-reference hit alone wouldn't prove that)."""
-    src = path.read_text(encoding="utf-8-sig")
-    tree = ast.parse(src, filename=str(path))
+    tree = parse_file_cached(path)
     hits = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -230,8 +230,7 @@ def _split_defensive_any_reference(path: Path) -> list[str]:
     a Call-only scan would pass on an aliased import that's never called
     under its original name, which is exactly the kind of fork this module
     exists to close."""
-    src = path.read_text(encoding="utf-8-sig")
-    tree = ast.parse(src, filename=str(path))
+    tree = parse_file_cached(path)
     hits = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id == "split_defensive":
@@ -366,7 +365,7 @@ def test_locked_snapshot_servable_truth_table(snapshot, expected):
 # thing standing between the decision above and the render code using it.
 
 def _app_tree():
-    return ast.parse(APP_PY.read_text(encoding="utf-8-sig"), filename=str(APP_PY))
+    return parse_file_cached(APP_PY)
 
 
 def _calls_named(tree, name):

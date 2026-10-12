@@ -7,6 +7,7 @@ import ast
 import pathlib
 
 import pytest
+from tests._ast_cache import parse_file_cached
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -21,7 +22,7 @@ _TREES: dict = {}
 
 def _tree(rel):
     if rel not in _TREES:
-        _TREES[rel] = ast.parse((_ROOT / rel).read_text(encoding="utf-8"))
+        _TREES[rel] = parse_file_cached(_ROOT / rel)
     return _TREES[rel]
 
 

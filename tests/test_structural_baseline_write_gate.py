@@ -9,6 +9,7 @@ import pathlib
 import numpy as np
 import pandas as pd
 import pytest
+from tests._ast_cache import parse_file_cached
 
 from stock_analyzer import portfolio, portfolio_intelligence, structural_scanner
 from stock_analyzer.cluster_add_gate import baseline_write_allowed
@@ -180,7 +181,7 @@ _APP_TREE: dict = {}
 
 def _app():
     if "tree" not in _APP_TREE:
-        _APP_TREE["tree"] = ast.parse((_ROOT / "app.py").read_text(encoding="utf-8"))
+        _APP_TREE["tree"] = parse_file_cached(_ROOT / "app.py")
     return _APP_TREE["tree"]
 
 

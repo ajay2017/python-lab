@@ -22,6 +22,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from tests._ast_cache import parse_file_cached
 
 from stock_analyzer.home_notices import (
     SOURCE_LABELS,
@@ -179,8 +180,7 @@ _UNCONDITIONAL_SOURCES = ("dayshock", "xcheck", "split", "structural", "thesis")
 
 
 def _parse_app_py() -> ast.Module:
-    src = APP_PY.read_text(encoding="utf-8-sig")
-    return ast.parse(src, filename=str(APP_PY))
+    return parse_file_cached(APP_PY)
 
 
 def _is_home_notice_call(node: ast.AST) -> bool:

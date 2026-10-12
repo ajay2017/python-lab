@@ -1015,9 +1015,9 @@ _APP_ONLY_BRIEF_KWARGS = {
 def _brief_call_kwargs(path):
     import ast
     from pathlib import Path
-    src = (Path(__file__).resolve().parents[1] / path).read_text(encoding="utf-8-sig")
+    from tests._ast_cache import parse_file_cached  # shared parse; app.py is ~15s+ per parse
     calls = []
-    for node in ast.walk(ast.parse(src)):
+    for node in ast.walk(parse_file_cached(Path(__file__).resolve().parents[1] / path)):
         if isinstance(node, ast.Call):
             f = node.func
             name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)
