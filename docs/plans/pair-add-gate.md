@@ -1,6 +1,6 @@
 # G-26 — Standing Danger-Tier Correlated-Pair Add Suppression
 
-**STATUS CORRECTED 2026-10-12 — read before the older text below.** `CORR_MIN_OBS_TRUSTED` now lives in `stock_analyzer/constants.py` (value unchanged at 20, owner decision D1). Where §6/§10/§11 below say it "lives in" / "stays in" `portfolio.py`, or that the move is "pending", that is superseded; `portfolio.py` re-exports the same object. The thin-sample check is now ONE predicate, `portfolio.correlation_sample_state` (`35c89ad`), replacing the five copies (including both gates' `_corr_coverage_too_thin`). A 🧬 Structural Scan can no longer be saved as G-25's baseline off an unverified matrix (`028fef4`, audit A-H1). Still to come: PAIR_RISK trim withholding on a thin sample, with a 4th G-26 `trim_call` state "withheld" (audit A-H2).
+**STATUS CORRECTED 2026-10-12 — read before the older text below.** `CORR_MIN_OBS_TRUSTED` now lives in `stock_analyzer/constants.py` (value unchanged at 20, owner decision D1). Where §6/§10/§11 below say it "lives in" / "stays in" `portfolio.py`, or that the move is "pending", that is superseded; `portfolio.py` re-exports the same object. The thin-sample check is now ONE predicate, `portfolio.correlation_sample_state` (`35c89ad`), replacing the five copies (including both gates' `_corr_coverage_too_thin`). A 🧬 Structural Scan can no longer be saved as G-25's baseline off an unverified matrix (`028fef4`, audit A-H1). ~~Still to come: PAIR_RISK trim withholding~~ — **SHIPPED 2026-10-12 (`4ab3949`, F-297), see §12**, with the regime/catalyst narratives and five "all clear" screens following as F-298 (`ad629a6`).
 
 **Status: F-295 SHIPPED 2026-10-10 (`9670fec` screen, `4299c8a` record) — see §11; it closes `classify_risk_banner`, the last surface §6 listed as sharing this blind spot. G-26 SHIPPED 2026-10-08 (`35b5bf4`); F-290 disclosure 2026-10-09 (`0f7bf67`); F-291 persisted-claim guard (§7), F-292 EOD history (§8) and F-293 on-screen disclosure (§9) ALL SHIPPED 2026-10-09 — the 3-commit sequence is COMPLETE: records withhold, screens disclose. DEPLOYED AND DORMANT as of 2026-10-09 —
 the non-firing path is screenshot-confirmed, the FIRING path is still unobserved
@@ -693,3 +693,17 @@ collapse of those five copies into one helper**, which settles the `None`
 semantics and the integer type together. Patching one copy in isolation would
 add a sixth variant. **Trigger:** that consolidation, whenever it is picked up.
 
+**CLOSED 2026-10-12:** that consolidation landed as `portfolio.correlation_sample_state` (`35c89ad`), which rejects `bool`/`np.bool_` and anything not a `numbers.Integral`, and reads a `None` coverage as `"unknown"` — never `"thin"`.
+
+## 12. Audit 2026-10-11 follow-through — the records and the trim (2026-10-12)
+
+Four commits closed the surfaces §6 listed as sharing the blind spot and still open. Detail lives in `docs/requirements.md` F-296/F-297/F-298; this section records the decisions.
+
+- **One predicate (`35c89ad`).** `portfolio.correlation_sample_state` → `trusted`/`thin`/`unknown` replaced the five copies, including both gates' `_corr_coverage_too_thin`. `CORR_MIN_OBS_TRUSTED` (20) moved to `constants.py` (`dd5c800`, owner D1) because it now decides records and a SELL, so the old "display-only" rationale no longer held.
+- **F-296 — Structural Scan baseline (`028fef4`, A-H1).** `cluster_add_gate.baseline_write_allowed` = `correlation_claim_verified`. Owner D3: on an unverified day the scan can't be run or saved, so G-25 pauses can't be acknowledged then. Fail-conservative: the check can only stop a pause being LIFTED.
+- **F-297 — `PAIR_RISK` trim (`4ab3949`, A-H2).** On a `thin`/`unknown` sample the trim is converted to `PAIR_RISK_WITHHELD`, never dropped, and G-26's partner `trim_call` gains `withheld`. **This deliberately runs the opposite way to §10's rule:** §10 says verification may only downgrade an EMPTY add-gate map, because removing a pause on a doubtful reading lets an add through. For a SELL the asymmetry flips — a spurious trim is a realised sale — so the conservative move is to withhold it. Both rules are "never act on noise in the costly direction". Owner D2: reuse the floor. Owner D4: withhold on sample size only, not on missing holdings.
+- **F-298 — narratives and screens (`ad629a6`, A-M1/A-M3).** The regime and catalyst narratives withhold like the scan. Five green correlation "all clear" lines now disclose instead.
+
+**Process note worth keeping.** Across these commits, review caught **my own new caption text** making false claims seven-plus times ("capped by X", "Revisit Home", "adds to both names", "no correlated pair crossed the threshold", a disclosure on the wrong branch, and more). Disclosure text is a claim too, and `app.py` has no test for it. Check every new sentence against the exact branch it renders in.
+
+**Still open:** NB-4, a 🏠 Home jump button for withheld pairs (deferred; it needs its own wording). The D5 Rebalancer / Analysis add lanes are unchanged.

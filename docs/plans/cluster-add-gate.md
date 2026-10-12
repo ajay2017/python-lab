@@ -1,5 +1,7 @@
 # New-correlation-cluster add-suppression gate (G-25)
 
+**STATUS UPDATE 2026-10-12 — read first:** D1's acknowledge step is now CONDITIONAL. A 🧬 Structural Scan can only be run and saved as the G-25 baseline when the correlation matrix is fully measured (`cluster_add_gate.baseline_write_allowed`, `028fef4`, audit A-H1, owner decision D3; `docs/requirements.md` F-296). On an unverified day the button is disabled and a pause cannot be cleared, so a thin-sample scan can never "acknowledge" spurious pairs.
+
 **Status: SHIPPED 2026-10-06.** Designed (Opus `planner`, all 7 owner decisions confirmed same day) → built (`implementer`, Sonnet 5) → Opus `reviewer` round 1: FIX-FIRST, 1 blocking (three places still claimed the Structural alert banner was "awareness only" — the in-app User Guide, `docs/requirements.md` F-218, `docs/user-manual.md` — stale the moment this shipped; plus 6 non-blocking findings), all fixed same session → round 2: SHIP, 0 blocking. Full suite 7176 passed throughout; antipattern/constants-doc gates green. Memory `project_structural_cluster_add_gate`.
 
 ## Origin

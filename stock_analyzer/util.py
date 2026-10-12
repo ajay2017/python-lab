@@ -1019,7 +1019,7 @@ def correlation_record_withheld_note(corr_unchecked, corr_coverage, *, subject: 
     the write can never disagree. Otherwise one plain sentence naming WHY,
     with BOTH clauses when both gaps hold (F-293: never let the more severe
     gap hide the other). `subject` is the sentence's lead-in naming what is
-    withheld and how, e.g. "This scan can't be run or saved today" -- the
+    withheld and how, e.g. "This scan can't be run or saved right now" -- the
     reasons follow a colon. Each reason carries a remedy where one exists:
     the short-history ticker, but only when it PROVABLY caps a thin sample;
     Home's 🔄 Refresh Signals when the reading couldn't be confirmed (a plain

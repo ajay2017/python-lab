@@ -18,7 +18,15 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-10-09 (the G-26 / correlation-coverage sequence: F-289 through F-294)
+## 1. Latest run — 2026-10-12 (the 2026-10-11 audit's five Highs + A-M1/A-M3: F-296 through F-298)
+
+**7676 passed, 0 failed, 19 warnings** (`python -m pytest -q -p no:cacheprovider`, full suite, no marker filter; 237s). Local `.venv`. **Transcribed from the run, not recalled.**
+
+**Coverage: NOT re-measured** — no `--cov` run this session, so 83% (2026-10-02) remains the last real measurement and is now 10 days / +655 tests stale.
+
+**+225 over the 7451 baseline (2026-10-09) below.** That span includes F-295 (2026-10-10) as well as today's nine commits (`5401896` through `ad629a6`; see `docs/shipped-log.md`). **The runtime is the notable number:** 237s, against 469-480s on 2026-10-09. The cause is `45b076a`'s shared, content-keyed AST cache (`tests/_ast_cache.py`), which parses the ~47K-line `app.py` once instead of once per test file. A single uncached parse measured 37.7s. The pre-commit hook hit its 450s pytest timeout twice today: once from CPU contention with an orphaned pytest run, and once from new tests that re-parsed `app.py`. Only the second is what the cache fixes.
+
+## 1a. Previous run — 2026-10-09 (the G-26 / correlation-coverage sequence: F-289 through F-294)
 
 **7451 passed, 0 failed, 19 warnings** (`python -m pytest -q`, full suite, no marker filter; 469-480s across runs this session). Local `.venv`. **Transcribed from the run, not recalled** — and run repeatedly through the day, since the native `pre-commit`/`pre-push` hooks execute the full suite on every commit and push.
 
