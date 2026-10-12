@@ -249,7 +249,12 @@ from stock_analyzer.decision_bucket import (
     reduce_call_items, suppress_orphans_under_reduce_call,
     bucket_act_by_type,
 )
-from stock_analyzer.act_today_view import act_today_view
+from stock_analyzer.act_today_view import (
+    act_today_view,
+    offline_brief_stub,
+    brief_lock_allowed,
+    locked_snapshot_servable,
+)
 from stock_analyzer import summary_view
 from stock_analyzer.signal_hysteresis import apply_hysteresis
 from stock_analyzer.split_detector import detect_portfolio_splits
@@ -6258,7 +6263,9 @@ if page == "🏠 Home":
         _brief_use_lock   = (
             st.session_state.get("_brief_locked", False)
             and _brief_locked_for == _today_et()
-            and _brief_snapshot is not None
+            # Not merely `is not None`: an offline stub is a dict, so it passed
+            # that test and was served as a real Brief (audit B-H2).
+            and locked_snapshot_servable(_brief_snapshot)
         )
         if _brief_use_lock:
             _daily_brief = _brief_snapshot
@@ -6323,7 +6330,10 @@ if page == "🏠 Home":
             st.session_state["_daily_brief_offline"]      = True
             # Provide a minimal empty dict so downstream code doesn't crash, but
             # session_state flag tells consumers to render the offline UI state.
-            _daily_brief = {"act_today": [], "buy_candidates": [], "review_list": [], "grow_today": {}}
+            # Built by offline_brief_stub() so the dict ITSELF carries an
+            # offline marker -- the flag alone could be flipped back to False by
+            # a path that serves this stub (2026-10-11 audit B-H2, Brief Lock).
+            _daily_brief = offline_brief_stub()
             # No reduce calls known while the Brief is offline — consumers fail
             # open (show sizing), consistent with the Brief itself being offline.
             st.session_state["_reduce_calls"] = {}
@@ -7691,13 +7701,23 @@ if page == "🏠 Home":
                     st.session_state.get("_brief_refresh_nonce", 0) + 1
                 st.rerun()
         else:
+            # `_daily_brief is None` alone let an OFFLINE Brief be locked: by here
+            # the crash path has already swapped None for the stub (audit B-H2).
+            # Raw .get() on purpose -- None must refuse. Computed ONCE and used
+            # for both the disabled state and the click guard below, because a
+            # Streamlit button that triggered a rerun still returns True on that
+            # rerun even if it now renders disabled -- so a click whose rerun is
+            # a crashed build would otherwise store the stub regardless.
+            _brief_lock_ok = brief_lock_allowed(
+                _daily_brief, st.session_state.get("_daily_brief_offline")
+            )
             if st.button(
                 "🔒 Lock Setup",
                 key="_brief_lock_btn",
                 help="Freeze today's recommendations. Lock expires at end of trading day.",
                 width="stretch",
-                disabled=_daily_brief is None,
-            ):
+                disabled=not _brief_lock_ok,
+            ) and _brief_lock_ok:
                 st.session_state["_brief_locked"]          = True
                 st.session_state["_brief_locked_snapshot"] = _daily_brief
                 st.session_state["_brief_locked_for_date"] = _today_et()
@@ -11368,7 +11388,10 @@ if page == "🏠 Home":
     _ed_baseline_brief: dict | None
     _ed_baseline_source = "none"
     _ed_baseline_at     = None
-    if st.session_state.get("_brief_locked_snapshot") and \
+    # locked_snapshot_servable: an offline stub must never become the AM
+    # baseline the debrief compares against (audit B-H2 -- the `elif` below
+    # already guarded the LIVE brief on the offline flag; this branch didn't).
+    if locked_snapshot_servable(st.session_state.get("_brief_locked_snapshot")) and \
             st.session_state.get("_brief_locked_for_date") == _today_et():
         _ed_baseline_brief  = st.session_state.get("_brief_locked_snapshot")
         _ed_baseline_source = "locked"

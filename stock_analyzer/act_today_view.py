@@ -37,6 +37,89 @@ from stock_analyzer import decision_bucket
 from stock_analyzer.util import stop_recovery_state
 
 
+# ── The offline Brief stub, made identifiable (2026-10-11 audit B-H2) ──────
+#
+# Bug 1 above was closed by reading the separate ``_daily_brief_offline``
+# session FLAG. The stub dict itself carried nothing that said "I am offline",
+# so any path that served it while that flag read False turned it straight
+# back into a false all-clear. Brief Lock was such a path: the Lock button was
+# disabled only when the brief was ``None`` -- but the crash path has already
+# swapped ``None`` for this stub by then, so Lock was clickable on an offline
+# Brief. The next render served the locked stub, took the success branch, set
+# the flag False, and Home's pointer read "Nothing to act on today" with every
+# protective veto gone for the rest of the trading day.
+#
+# The fix is layered so no single check is load-bearing:
+#   1. the stub carries an explicit marker (``offline_brief_stub``);
+#   2. ``act_today_view`` treats a marked brief as offline EVEN IF the flag
+#      says otherwise -- so no path, present or future, can make it read clear;
+#   3. the Lock button and both snapshot-serving sites refuse a marked brief,
+#      closing the laundering path itself.
+#
+# A snapshot locked BEFORE this fix carries no marker, but none can reach a
+# post-fix render: lock state lives in ``st.session_state`` and every Railway
+# redeploy starts a fresh process, so the deploy that ships this wipes it.
+OFFLINE_BRIEF_MARKER = "_brief_offline_stub"
+
+
+def offline_brief_stub() -> dict:
+    """The minimal Brief served when ``build_daily_briefing()`` raised.
+
+    Same keys downstream code reads (so nothing crashes on a missing key),
+    plus the marker. The single place this shape is built -- ``app.py`` must
+    not construct the stub inline (pinned in tests/test_act_today_view.py).
+    """
+    return {
+        "act_today": [],
+        "buy_candidates": [],
+        "review_list": [],
+        "grow_today": {},
+        OFFLINE_BRIEF_MARKER: True,
+    }
+
+
+def is_offline_brief(brief) -> bool:
+    """True only for a brief built by ``offline_brief_stub``.
+
+    Compared with ``is True``, not truthiness, so a real brief that happened
+    to carry some unrelated value under this key cannot read as offline.
+    """
+    return isinstance(brief, dict) and brief.get(OFFLINE_BRIEF_MARKER) is True
+
+
+def brief_lock_allowed(brief, brief_offline) -> bool:
+    """May this render's Brief be frozen by Brief Lock?
+
+    Only a genuinely built Brief. ``brief_offline`` must be EXPLICITLY False:
+    ``None`` means the offline state was never established this render, and
+    the safe answer to "freeze this for the whole day?" is no. Both the flag
+    and the marker are checked, so either alone is enough to refuse.
+    """
+    return (
+        brief is not None
+        and brief_offline is False
+        and not is_offline_brief(brief)
+    )
+
+
+def locked_snapshot_servable(snapshot) -> bool:
+    """May a stored Brief Lock snapshot be served in place of a fresh build?
+
+    Refuses a marked offline stub, so a stub can never be re-laundered as a
+    real Brief -- by the Lock serve path or by Evening Debrief's AM baseline.
+
+    Requires a NON-EMPTY dict. The two callers this replaced disagreed: the
+    Lock serve path tested ``is not None`` (accepting ``{}``) while Evening
+    Debrief tested truthiness (rejecting it). A shared helper takes the
+    stricter of the two, so neither caller loosens.
+    """
+    return (
+        isinstance(snapshot, dict)
+        and bool(snapshot)
+        and not is_offline_brief(snapshot)
+    )
+
+
 def act_today_view(
     daily_brief: dict | None,
     brief_offline: bool,
@@ -69,7 +152,9 @@ def act_today_view(
       n_active  : int, or None when state == "offline" (NOT checked this run
                   — never 0, which would mean "checked, nothing active")
     """
-    if brief_offline or daily_brief is None:
+    # is_offline_brief: the B-H2 backstop. A marked stub is offline even when
+    # the flag reads False -- the flag is exactly what a laundering path flips.
+    if brief_offline or daily_brief is None or is_offline_brief(daily_brief):
         return {
             "state": "offline",
             "active": [],
