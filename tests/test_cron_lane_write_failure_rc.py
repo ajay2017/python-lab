@@ -308,3 +308,102 @@ def test_main_thesis_mode_lost_review_reds_the_heartbeat_with_one_email(monkeypa
     assert (lane, status) == ("thesis", "failed")
     assert "thesis_reviews" in detail
     assert len(notified) == 1 and notified[0][0] == "thesis"
+
+
+# ── 2026-10-12 owner decision (D-M2 review NB-8): blind runs fail ────────────
+
+def _scan_until_results(monkeypatch, scan_fn):
+    from datetime import date as _date
+    from stock_analyzer import reference_data as rd
+    from stock_analyzer import scanner as real_scanner
+    monkeypatch.setattr(cr, "is_trading_day", lambda _d: True)
+    monkeypatch.setattr(rd, "resolve_universe_or_none",
+                        lambda name: ({"Tech": ["AAPL"]}, _date(2026, 9, 1), None))
+    monkeypatch.setattr(real_scanner, "scan_sectors", scan_fn)
+    notified = _spy_notify(monkeypatch)
+    return cr._run_scan(cr.datetime.now(cr._ET), force=True), notified
+
+
+def test_scan_with_no_results_is_a_blind_run_and_fails(monkeypatch):
+    rc, notified = _scan_until_results(monkeypatch, lambda *a, **k: pd.DataFrame())
+    assert rc == 1
+    assert "scan_blind" in cr._LAST_LANE_FAILURE_DETAIL
+    assert notified == [("scan", cr._LAST_LANE_FAILURE_DETAIL)]
+
+
+def test_scan_whose_scanner_raises_is_a_blind_run_and_fails(monkeypatch):
+    def _boom(*a, **k):
+        raise RuntimeError("provider down")
+    rc, notified = _scan_until_results(monkeypatch, _boom)
+    assert rc == 1
+    assert "provider down" in cr._LAST_LANE_FAILURE_DETAIL
+    assert len(notified) == 1
+
+
+def _thesis_ctx(monkeypatch, ctx_fn):
+    import stock_analyzer.headless_alert_engine as hae
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setattr(hae, "_build_context", ctx_fn)
+    notified = _spy_notify(monkeypatch)
+    now_et = cr.datetime.now(cr._ET).replace(hour=19, minute=0, second=0, microsecond=0)
+    return cr._run_thesis(now_et, force=True), notified
+
+
+@pytest.mark.parametrize("reason", ["no_bundles", "empty_port_df"])
+def test_thesis_on_a_price_outage_is_a_blind_run_and_fails(monkeypatch, reason):
+    rc, notified = _thesis_ctx(monkeypatch, lambda today: {
+        "ok": False, "reason": reason, "errors": ["no holdings could be loaded"]})
+    assert rc == 1
+    assert "thesis_blind" in cr._LAST_LANE_FAILURE_DETAIL
+    assert len(notified) == 1
+
+
+def test_thesis_context_exception_is_a_blind_run_and_fails(monkeypatch):
+    def _boom(today):
+        raise RuntimeError("ctx boom")
+    rc, notified = _thesis_ctx(monkeypatch, _boom)
+    assert rc == 1
+    assert "ctx boom" in cr._LAST_LANE_FAILURE_DETAIL
+    assert len(notified) == 1
+
+
+def test_thesis_with_an_empty_book_stays_quiet(monkeypatch):
+    rc, notified = _thesis_ctx(monkeypatch, lambda today: {
+        "ok": False, "reason": "no_holdings", "errors": ["no holdings"]})
+    assert rc == 0
+    assert notified == []
+
+
+def _thesis_with_llm(monkeypatch, results, tickers=("AAPL", "MSFT")):
+    import stock_analyzer.headless_alert_engine as hae
+    from stock_analyzer import thesis_advisor as ta
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setattr(hae, "_build_context", lambda today: {
+        "ok": True, "errors": [],
+        "held_data": {t: {"history": pd.DataFrame(), "info": {}, "headlines": []} for t in tickers},
+    })
+    monkeypatch.setattr(cr.db, "load_trades", lambda: pd.DataFrame([
+        {"ticker": t, "action": "BUY", "user_thesis": "thesis",
+         "traded_at": "2026-09-01T10:00:00+00:00"} for t in tickers]))
+    monkeypatch.setattr(cr.db, "load_thesis_reviews",
+                        lambda: pd.DataFrame(columns=["ticker", "reviewed_at"]))
+    monkeypatch.setattr(cr.db, "load_analyst_coverage", lambda **_kw: pd.DataFrame())
+    monkeypatch.setattr(ta, "run_batch_review", lambda positions, **_kw: list(results))
+    monkeypatch.setattr(cr.db, "save_thesis_review", lambda rec: True)
+    notified = _spy_notify(monkeypatch)
+    now_et = cr.datetime.now(cr._ET).replace(hour=19, minute=0, second=0, microsecond=0)
+    return cr._run_thesis(now_et, force=True), notified
+
+
+def test_thesis_where_every_llm_call_failed_is_a_blind_run_and_fails(monkeypatch):
+    rc, notified = _thesis_with_llm(monkeypatch, results=[])
+    assert rc == 1
+    assert "every LLM review call failed" in cr._LAST_LANE_FAILURE_DETAIL
+    assert "2 position(s)" in cr._LAST_LANE_FAILURE_DETAIL
+    assert len(notified) == 1
+
+
+def test_thesis_where_some_llm_calls_failed_does_not_fail(monkeypatch):
+    rc, notified = _thesis_with_llm(monkeypatch, results=[{"ticker": "AAPL", "status": "intact"}])
+    assert rc == 0
+    assert notified == []

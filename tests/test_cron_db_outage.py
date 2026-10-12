@@ -439,7 +439,9 @@ def test_scan_lane_passes_resolved_universe_to_scan_sectors_not_hardcoded_dict(m
 
     rc = cr._run_scan(cr.datetime.now(cr._ET), force=True)
 
-    assert rc == 0
+    # An empty scan is a blind run since 2026-10-12 (D-M2 review NB-8):
+    # the lane fails. This test's point is the universe wiring below.
+    assert rc == 1
     assert captured["sectors"] == ["FakeSector"]
     assert captured["universe"] == fake_payload
 

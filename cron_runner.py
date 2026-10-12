@@ -622,6 +622,51 @@ def _run_eod(now_et, force: bool) -> int:
         failures.append(f"price_outage: {_book_outage_reason} -- account/risk/rec_events "
                         f"snapshots skipped")
 
+    # PARTIAL price outage (D-M1 review follow-up; owner decision 3A',
+    # 2026-10-12): some holdings read fine but could not be priced, so
+    # `rows` silently omits them and every book-derived number below is
+    # understated (one missing ~$3k name turns 3.15x leverage into ~4.4x).
+    # "Records withhold": skip the account row (gross_book is NOT NULL, so
+    # it can't be blanked without a DDL change, and the cash alone says
+    # nothing), blank the risk row's book-derived fields, and fail the
+    # lane. Any missing holding counts -- no tolerance, so no new constant.
+    # `held_tickers` is the raw book from _build_context, captured BEFORE
+    # any price fetch; if it is absent, coverage can't be verified and the
+    # book is treated as unverified too (same rule as risk_metric_history).
+    # The PRICED set comes from port_df, not snapshot_rows: build_portfolio_df
+    # keeps a real price for every holding it could price, but stores
+    # int(shares), so a sub-1-share lot has Shares == 0 and compute_eod's
+    # `sh > 0` filter drops it from snapshot_rows -- reading that as
+    # "unpriced" would flag a fractional DRIP lot every day (review
+    # blocking #2). snapshot_rows is added too, as a strict subset.
+    _priced = {str(r.get("ticker", "")).upper() for r in payload.get("snapshot_rows", [])}
+    _pdf = payload.get("port_df")
+    if _pdf is not None and not getattr(_pdf, "empty", True) \
+            and "Ticker" in _pdf.columns and "Price" in _pdf.columns:
+        import pandas as _pd_eod
+        _px = _pd_eod.to_numeric(_pdf["Price"], errors="coerce")
+        _priced |= {str(t).strip().upper() for t in _pdf.loc[_px > 0, "Ticker"]}
+    _held_raw = payload.get("held_tickers")
+    if _book_outage or _book_outage_reason == "no_holdings":
+        # Total outage is handled above; `no_holdings` is a real empty book
+        # (D-M1) -- compute_eod returns early without held_tickers there, so
+        # it must not read as "coverage unverified" (review blocking #1).
+        _unpriced: "list | None" = []
+    elif isinstance(_held_raw, (list, tuple)):
+        _unpriced = sorted({str(t).strip().upper() for t in _held_raw if str(t).strip()} - _priced)
+    else:
+        _unpriced = None
+    _partial_outage = _unpriced is None or bool(_unpriced)
+    if _partial_outage:
+        _what = ("held-ticker list unavailable, coverage unverified" if _unpriced is None
+                 else f"{len(_unpriced)} holding(s) unpriced: {', '.join(_unpriced[:8])}"
+                      + (" ..." if len(_unpriced) > 8 else ""))
+        failures.append(f"partial_price_outage: {_what} -- account snapshot skipped, "
+                        f"risk-row book metrics withheld. To recover today's rows once "
+                        f"prices load, re-run the eod lane the same evening with "
+                        f"ALERT_FORCE=1 (the writes are idempotent by date)")
+        _log(f"PARTIAL PRICE OUTAGE — {_what}; not recording an understated book.")
+
     # 1. Today's-P&L baseline: write today's snapshot (idempotent upsert). Makes
     # the baseline deterministic even on days the app isn't opened post-close.
     rows = payload.get("snapshot_rows", [])
@@ -644,21 +689,27 @@ def _run_eod(now_et, force: bool) -> int:
         # — history/awareness only. A failed write is logged distinctly from a
         # successful one so a silent DB-offline day doesn't read like a normal
         # no-op (see model_predictions steps below for the same convention).
-        try:
-            _acct_cash_rec = db.load_account_cash()
-            _acct_row = compute_account_snapshot(
-                now_et.date(), rows, _acct_cash_rec,
-                MARGIN_MAINTENANCE_RATE, ACCOUNT_CASH_STALE_DAYS, now_et,
-            )
-            if db.save_account_daily_snapshot(_acct_row):
-                _log(f"account_daily_snapshot written (gross_book=${_acct_row['gross_book']:,.0f}, "
-                     f"leverage={_acct_row['leverage']}, date={today_str}).")
-            else:
-                _log(f"account_daily_snapshot NOT written (DB offline / table missing, date={today_str}).")
-                failures.append("account_daily_snapshot")
-        except Exception as e:
-            _log(f"account_daily_snapshot FAILED — {str(e)[:120]} — continuing.")
-            failures.append(f"account_daily_snapshot: {str(e)[:120]}")
+        if _partial_outage:
+            # 3A' (see above): an understated gross_book can't be stored as
+            # NULL, and the cash alone says nothing -- skip the day's row.
+            _log(f"account_daily_snapshot SKIPPED — partial price outage; not writing "
+                 f"an understated book (date={today_str}).")
+        else:
+            try:
+                _acct_cash_rec = db.load_account_cash()
+                _acct_row = compute_account_snapshot(
+                    now_et.date(), rows, _acct_cash_rec,
+                    MARGIN_MAINTENANCE_RATE, ACCOUNT_CASH_STALE_DAYS, now_et,
+                )
+                if db.save_account_daily_snapshot(_acct_row):
+                    _log(f"account_daily_snapshot written (gross_book=${_acct_row['gross_book']:,.0f}, "
+                         f"leverage={_acct_row['leverage']}, date={today_str}).")
+                else:
+                    _log(f"account_daily_snapshot NOT written (DB offline / table missing, date={today_str}).")
+                    failures.append("account_daily_snapshot")
+            except Exception as e:
+                _log(f"account_daily_snapshot FAILED — {str(e)[:120]} — continuing.")
+                failures.append(f"account_daily_snapshot: {str(e)[:120]}")
 
         # 1c. Portfolio-level risk-metric history (Recommendation-Outcomes-
         # Measurement Phase 1a — docs/plans/recommendation-outcomes-measurement.md
@@ -682,6 +733,20 @@ def _run_eod(now_et, force: bool) -> int:
                 payload.get("held_data", {}),
                 held_tickers=payload.get("held_tickers"), diagnostics=_risk_diag,
             )
+            if _partial_outage:
+                # 3A': beta, top sector and concentration were computed on a
+                # book missing some holdings. All four columns are nullable.
+                # The correlation fields are judged separately by the builder:
+                # withheld when a holding's bundle failed (it is then missing
+                # from the matrix), but a bundle that loaded history without a
+                # current price stays in the matrix, so that reading can still
+                # verify and persist -- correctly, since its returns are real.
+                # corr_coverage_n stays: it is a true fact about the inputs.
+                for _k in ("portfolio_beta", "top_sector", "top_sector_pct",
+                           "max_single_name_pct"):
+                    _risk_row[_k] = None
+                _log(f"portfolio_risk_snapshot: book-derived metrics withheld — partial "
+                     f"price outage (date={today_str}).")
             if _risk_diag.get("corr_withheld"):
                 _log(f"portfolio_risk_snapshot: correlation reading withheld as "
                      f"unverified (unchecked={_risk_diag.get('corr_unchecked')}, "
@@ -1609,12 +1674,19 @@ def _run_scan(now_et, force: bool) -> int:
             list(_su_payload.keys()), period="6mo", universe=_su_payload,
         )
     except Exception as e:
+        # A blind run, not a quiet one (owner decision 2026-10-12, D-M2 review
+        # NB-8): no buy list, no watchlist check, no cold-load cache today.
         _log(f"scan: scan_sectors error — {str(e)[:120]}")
-        return 0
+        _LAST_LANE_FAILURE_DETAIL = f"scan_blind: scan_sectors raised {str(e)[:160]}"
+        _notify_failure("scan", _LAST_LANE_FAILURE_DETAIL)
+        return 1
     n = 0 if results_df is None or results_df.empty else len(results_df)
     if n == 0:
         _log("scan: no results (provider miss from datacenter IP?) — nothing persisted.")
-        return 0
+        _LAST_LANE_FAILURE_DETAIL = ("scan_blind: the sector scan returned no results "
+                                     "(price provider miss?) -- no buy list or watchlist check today")
+        _notify_failure("scan", _LAST_LANE_FAILURE_DETAIL)
+        return 1
     if db.save_scanner_cache(results_df, now_et.date(), source="cron"):
         _log(f"scan: persisted {n} results (date={today_str}).")
     else:
@@ -2003,7 +2075,11 @@ def _run_thesis(now_et, force: bool) -> int:
         ctx = _build_context(today)
     except Exception as e:
         _log(f"thesis: _build_context failed — {str(e)[:120]}")
-        return 0
+        # A blind run, not a quiet one (owner decision 2026-10-12, D-M2
+        # review NB-8): the weekly review simply didn't happen.
+        _LAST_LANE_FAILURE_DETAIL = f"thesis_blind: _build_context raised {str(e)[:160]}"
+        _notify_failure("thesis", _LAST_LANE_FAILURE_DETAIL)
+        return 1
 
     if not ctx.get("ok"):
         # _build_context sets reason="db_unavailable" when holdings can't be read —
@@ -2013,6 +2089,13 @@ def _run_thesis(now_et, force: bool) -> int:
                 "thesis", now_et,
                 "; ".join(ctx.get("errors", [])) or "holdings unreadable")
         _log(f"thesis: context load failed — {'; '.join(ctx.get('errors', []))}")
+        # `no_holdings` is a real empty book (nothing to review, stay quiet);
+        # a price outage means the review couldn't run.
+        if ctx.get("reason") in ("no_bundles", "empty_port_df"):
+            _LAST_LANE_FAILURE_DETAIL = (f"thesis_blind: price outage ({ctx.get('reason')}) "
+                                         f"-- weekly thesis review did not run")
+            _notify_failure("thesis", _LAST_LANE_FAILURE_DETAIL)
+            return 1
         return 0
 
     held_data   = ctx.get("held_data", {})
@@ -2185,13 +2268,23 @@ def _run_thesis(now_et, force: bool) -> int:
             _log(f"  {rec['ticker']}: {rec['status']} — save FAILED (DB offline?).")
 
     _failed = len(results) - saved
-    if _failed:
+    # run_batch_review drops a position whose LLM call failed, so zero
+    # results for a non-empty batch means NO review happened at all (owner
+    # decision 2026-10-12, D-M2 review NB-8). A partial drop is logged above
+    # by count but does not fail the run.
+    _all_llm_failed = bool(positions) and not results
+    if _all_llm_failed:
+        _LAST_LANE_FAILURE_DETAIL = (f"thesis_blind: every LLM review call failed "
+                                     f"({len(positions)} position(s), 0 reviews)")
+        _notify_failure("thesis", _LAST_LANE_FAILURE_DETAIL)
+    elif _failed:
         _LAST_LANE_FAILURE_DETAIL = (f"thesis_reviews: {_failed} of {len(results)} "
                                      f"paid review(s) not saved")
         _notify_failure("thesis", _LAST_LANE_FAILURE_DETAIL)
     _log(f"thesis done · reviewed={len(results)} · saved={saved}"
-         + (f" · FAILED={_failed}" if _failed else ""))
-    return 1 if _failed else 0
+         + (f" · FAILED={_failed}" if _failed else "")
+         + (" · ALL LLM CALLS FAILED" if _all_llm_failed else ""))
+    return 1 if (_failed or _all_llm_failed) else 0
 
 
 def _run_debrief(now_et, force: bool) -> int:

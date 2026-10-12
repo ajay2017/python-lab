@@ -130,6 +130,11 @@ _INVENTORY: tuple[_Store, ...] = (
     # populated even when cash_balance/leverage/cushion are NULL (stale/missing
     # cash). 2026-09-21 audit Medium #1: this table shipped 11 days before this
     # row did, with zero System Trust visibility in between.
+    # Since 2026-10-12 NOT unconditional: the EOD lane deliberately SKIPS this
+    # row when any holding can't be priced (D-M1 total outage; 3A' partial
+    # outage) rather than store an understated book, and fails the run. So a
+    # stale/amber freshness reading here can be an honest skipped day -- the
+    # eod lane's own red heartbeat names which.
     _Store("account_daily_snapshots",  "Account leverage/cushion snapshot", "eod", "daily", True, "snapshot_date", 19),
     # Conditional writes — EXISTENCE only (the DDL-catcher); absence is legitimate.
     _Store("exit_signals",              "Protective exit scan",          "premarket", "daily",   False),

@@ -30,6 +30,14 @@ def _payload(**overrides):
         "errors": [],
     }
     payload.update(overrides)
+    # Default: the book is exactly what got priced (no partial outage), the
+    # same shape compute_eod returns on a healthy run. Tests exercising the
+    # 2026-10-12 partial-outage guard pass held_tickers explicitly.
+    # Mirrors compute_eod exactly: on a non-ok `reason` it returns early with
+    # NO held_tickers key (review blocking #1 -- an always-injected default
+    # hid an all-cash book failing the lane).
+    if "held_tickers" not in overrides and "reason" not in overrides:
+        payload["held_tickers"] = [r["ticker"] for r in payload["snapshot_rows"]]
     return payload
 
 
@@ -172,7 +180,10 @@ def test_h8_cron_forwards_held_tickers_not_held_data_keys(monkeypatch):
         build_portfolio_risk_snapshot=_capture,
     )
     rc = cr._run_eod(NOW, force=True)
-    assert rc == 0
+    # Since 2026-10-12 (3A') an unpriced holding is a partial price outage:
+    # the lane fails. The forwarding contract this test pins is unchanged.
+    assert rc == 1
+    assert "partial_price_outage" in cr._LAST_LANE_FAILURE_DETAIL
     assert captured["held_tickers"] == ["AAPL", "BAD"]
     assert captured["held_data_keys"] == ["AAPL"]
     assert captured["held_tickers"] != captured["held_data_keys"]
@@ -191,9 +202,18 @@ def test_h9_withheld_correlation_is_not_a_failure_but_is_logged(monkeypatch, cap
             )
         return {"portfolio_beta": 1.1, "top_sector": "Tech"}
 
+    # Every holding priced (2026-10-12): an UNPRICED holding is now a partial
+    # price outage and fails the lane on its own (see the 3A' tests below).
+    # What stays non-failing is F-292's other case -- the book is fully
+    # priced but the correlation reading is still withheld (e.g. a thin
+    # overlapping sample). That is the case this test now pins.
     _patch_defaults(
         monkeypatch,
-        compute_eod=lambda **_k: _payload(held_tickers=["AAPL", "BAD"]),
+        compute_eod=lambda **_k: _payload(
+            snapshot_rows=[{"ticker": "AAPL", "shares": 10, "close_price": 200.0},
+                           {"ticker": "BAD", "shares": 5, "close_price": 50.0}],
+            held_tickers=["AAPL", "BAD"],
+        ),
         build_portfolio_risk_snapshot=_withheld_build,
     )
     rc = cr._run_eod(NOW, force=True)
@@ -411,7 +431,9 @@ def test_h8b_none_held_tickers_is_forwarded_not_substituted(monkeypatch):
         build_portfolio_risk_snapshot=_capture,
     )
     rc = cr._run_eod(NOW, force=True)
-    assert rc == 0
+    # 2026-10-12 (3A'): an unknown book can't be verified as fully priced.
+    assert rc == 1
+    assert "coverage unverified" in cr._LAST_LANE_FAILURE_DETAIL
     # The control: held_data really is non-empty, so an `or` fallback would
     # have had something to substitute. Without this, the assertion below
     # could pass simply because there was nothing to fall back to.
@@ -479,3 +501,126 @@ def test_normal_run_still_reaches_every_book_write(monkeypatch):
     calls = _spy_book_writes(monkeypatch)
     assert cr._run_eod(NOW, force=True) == 0
     assert calls == {"account": 1, "risk": 1, "rec_events": 1}
+
+
+
+# ── 2026-10-12 (D-M1 review follow-up, owner decision 3A'): PARTIAL outage ──
+#
+# Some holdings read fine but could not be priced. Skip the account row
+# (gross_book is NOT NULL; an understated book must not be stored), blank
+# the risk row's book-derived fields, fail the lane.
+
+def _partial_payload(**overrides):
+    return _payload(
+        snapshot_rows=[{"ticker": "AAPL", "shares": 10, "close_price": 200.0}],
+        held_tickers=["AAPL", "MSFT"],
+        **overrides,
+    )
+
+
+def test_partial_outage_skips_account_row_blanks_risk_book_fields_and_fails(monkeypatch):
+    saved_risk = []
+    _patch_defaults(
+        monkeypatch,
+        compute_eod=lambda **_k: _partial_payload(),
+        build_portfolio_risk_snapshot=lambda *_a, **_k: {
+            "portfolio_beta": 1.4, "top_sector": "Tech", "top_sector_pct": 80.0,
+            "max_single_name_pct": 60.0, "avg_pairwise_corr": None,
+            "diversification_score": None, "corr_coverage_n": 120,
+        },
+    )
+    acct_called = []
+    monkeypatch.setattr(cr, "compute_account_snapshot",
+                        lambda *_a, **_k: acct_called.append(1) or {"gross_book": 2000.0, "leverage": 9.9})
+    monkeypatch.setattr(cr.db, "save_portfolio_risk_snapshot",
+                        lambda row: saved_risk.append(dict(row)) or True)
+    rc = cr._run_eod(NOW, force=True)
+    assert rc == 1
+    assert "partial_price_outage" in cr._LAST_LANE_FAILURE_DETAIL
+    assert "MSFT" in cr._LAST_LANE_FAILURE_DETAIL
+    assert acct_called == [], "an understated account row must not even be built"
+    assert len(saved_risk) == 1
+    row = saved_risk[0]
+    for k in ("portfolio_beta", "top_sector", "top_sector_pct", "max_single_name_pct"):
+        assert row[k] is None, k
+    assert row["corr_coverage_n"] == 120, "a true fact about the inputs is kept"
+
+
+def test_fully_priced_book_still_writes_account_and_risk_rows(monkeypatch):
+    saved_risk = []
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: _payload(
+        snapshot_rows=[{"ticker": "AAPL", "shares": 10, "close_price": 200.0}],
+        held_tickers=["aapl "],          # case / whitespace normalised
+    ))
+    acct_called = []
+    monkeypatch.setattr(cr, "compute_account_snapshot",
+                        lambda *_a, **_k: acct_called.append(1) or {"gross_book": 2000.0, "leverage": 1.0})
+    monkeypatch.setattr(cr, "build_portfolio_risk_snapshot",
+                        lambda *_a, **_k: {"portfolio_beta": 1.1, "top_sector": "Tech"})
+    monkeypatch.setattr(cr.db, "save_portfolio_risk_snapshot",
+                        lambda row: saved_risk.append(dict(row)) or True)
+    assert cr._run_eod(NOW, force=True) == 0
+    assert acct_called == [1]
+    assert saved_risk[0]["portfolio_beta"] == 1.1
+
+
+def test_partial_outage_detail_caps_a_long_ticker_list(monkeypatch):
+    held = [f"T{i}" for i in range(12)]
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: _payload(
+        snapshot_rows=[], held_tickers=held))
+    assert cr._run_eod(NOW, force=True) == 1
+    assert "12 holding(s) unpriced" in cr._LAST_LANE_FAILURE_DETAIL
+    assert "..." in cr._LAST_LANE_FAILURE_DETAIL
+    # sorted as text: T0, T1, T10, T11, T2..T5 are the first 8 shown
+    assert "T5" in cr._LAST_LANE_FAILURE_DETAIL and "T9" not in cr._LAST_LANE_FAILURE_DETAIL
+
+
+def test_real_no_holdings_payload_still_writes_and_stays_green(monkeypatch):
+    """The exact shape compute_eod returns for an all-cash book: no
+    held_tickers key. Must NOT read as 'coverage unverified' (blocking #1)."""
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: {
+        "snapshot_rows": [], "pullback": None, "built_at": "x",
+        "errors": ["no holdings"], "reason": "no_holdings"})
+    calls = _spy_book_writes(monkeypatch)
+    assert cr._run_eod(NOW, force=True) == 0
+    assert cr._LAST_LANE_FAILURE_DETAIL is None
+    assert calls["account"] == 1
+
+
+@pytest.mark.parametrize("reason", ["no_bundles", "empty_port_df"])
+def test_real_total_outage_payload_counts_once_not_as_partial(monkeypatch, reason):
+    """No held_tickers key, as compute_eod returns it. Exactly one
+    price_outage entry; the partial guard must not double-count."""
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: {
+        "snapshot_rows": [], "pullback": None, "built_at": "x",
+        "errors": ["no holdings could be loaded"], "reason": reason})
+    assert cr._run_eod(NOW, force=True) == 1
+    detail = cr._LAST_LANE_FAILURE_DETAIL
+    assert detail.count("price_outage") == 1
+    assert "partial_price_outage" not in detail
+
+
+def test_sub_one_share_lot_priced_in_port_df_is_not_a_partial_outage(monkeypatch):
+    """build_portfolio_df stores int(shares), so a 0.4-share lot drops out of
+    snapshot_rows although it WAS priced. The priced set must come from
+    port_df (blocking #2), or a DRIP remnant would go red every day."""
+    import pandas as pd
+    port_df = pd.DataFrame([{"Ticker": "AAPL", "Price": 200.0, "Shares": 10},
+                            {"Ticker": "BKNG", "Price": 4800.0, "Shares": 0}])
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: _payload(
+        snapshot_rows=[{"ticker": "AAPL", "shares": 10, "close_price": 200.0}],
+        held_tickers=["AAPL", "BKNG"], port_df=port_df))
+    calls = _spy_book_writes(monkeypatch)
+    assert cr._run_eod(NOW, force=True) == 0
+    assert calls["account"] == 1
+
+
+def test_a_holding_with_no_price_in_port_df_is_still_a_partial_outage(monkeypatch):
+    import pandas as pd
+    port_df = pd.DataFrame([{"Ticker": "AAPL", "Price": 200.0, "Shares": 10},
+                            {"Ticker": "BKNG", "Price": float("nan"), "Shares": 1}])
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: _payload(
+        snapshot_rows=[{"ticker": "AAPL", "shares": 10, "close_price": 200.0}],
+        held_tickers=["AAPL", "BKNG"], port_df=port_df))
+    assert cr._run_eod(NOW, force=True) == 1
+    assert "BKNG" in cr._LAST_LANE_FAILURE_DETAIL
