@@ -254,10 +254,11 @@ def main() -> None:
                 print(
                     f"BLOCKED (Hard rule #4): Staged gate file(s) {triggered} require an Opus review before commit.\n"
                     "Invoke the `reviewer` subagent first, then cite its verdict in the commit body as:\n"
-                    "  Review = Opus reviewer (<resolved model>): SHIP|FIX-FIRST, N blocking; <notes>\n"
-                    "e.g.  Review = Opus reviewer (Opus 5): SHIP, 0 blocking; verified offline sentinels\n"
-                    "The model, verdict and blocking count are all required -- copy the reviewer's own\n"
-                    "MODEL: line rather than assuming a version.\n"
+                    "  Review = Opus reviewer (<resolved model>): SHIP, 0 blocking; <notes>\n"
+                    "e.g.  Review = Opus reviewer (Opus 5.5): SHIP, 0 blocking; verified offline sentinels\n"
+                    "On its own line; the model must be an Opus (copy the reviewer's own MODEL: line);\n"
+                    "the final verdict must be SHIP, 0 blocking -- after a FIX-FIRST, send the fix back\n"
+                    "for a confirming round rather than citing FIX-FIRST.\n"
                     "(`--amend --no-edit` cannot be verified since the message is unreadable here --\n"
                     "re-supply the existing body via `-F` if HEAD already carries a valid citation.)",
                     file=sys.stderr,
@@ -943,6 +944,15 @@ _GATE_FILES = {
     # pytest subprocess whose fixtures then wrote to the real repo) and two
     # silent-pass bypasses the author's own tests had certified as working.
     ".claude/hooks/git_hook_adapter.py",
+    # Added 2026-10-12 (audit C-M6, owner decision on Open question 3). Each
+    # was reviewed only when a commit happened to touch another gate file:
+    # structural_scanner.py holds G-25's actual decision
+    # (`detect_new_clusters_strict`; cluster_add_gate delegates to it),
+    # portfolio_thesis.py persists the weekly thesis claim, and
+    # risk_metric_history.py persists the EOD risk row.
+    "stock_analyzer/structural_scanner.py",
+    "stock_analyzer/portfolio_thesis.py",
+    "stock_analyzer/risk_metric_history.py",
 }
 
 
@@ -1400,11 +1410,32 @@ def _commit_message_text(command: str) -> str:
 #   • the verdict→count span uses `[\s\S]{0,120}?`, not `[^\n]*?` -- at 72-col
 #     wrapping "SHIP,\n0 blocking" is as likely as "SHIP, 0 blocking", and a
 #     newline-intolerant span made passing a lottery decided by line width.
+#
+# Tightened 2026-10-12 (audit C-M2 + owner decision on C-M3 / Open question 2):
+#   • the citation must START a line -- it can no longer hide mid-sentence;
+#   • the resolved model must name an Opus (`\bopus\b`) and must not be the
+#     literal `<resolved model>` placeholder -- Hard Rule #4 says a non-Opus
+#     MODEL line does not satisfy the rule, and this used to be honor-system;
+#   • the FINAL verdict must be `SHIP, 0 blocking`. A lone FIX-FIRST no longer
+#     counts (owner, 2026-10-12): the fix goes back to the reviewer for a
+#     confirming round, so the author never certifies their own fix. That
+#     also kills `SHIP, 4 blocking`. A body citing FIX-FIRST and then a SHIP
+#     round still passes -- one qualifying line is enough.
+#   The model group still allows nested parens ("Opus 4.8 (1M context)"),
+#   but may not run across a `):` -- otherwise one line such as
+#   "(Opus 5.5): FIX-FIRST, 1 blocking; fixed (self-verified): SHIP, 0
+#   blocking" would self-certify a fix (confirming-round review, 2026-10-12).
+#   `\s*,?\s*` still lets "SHIP,\n0 blocking" wrap at 72 columns.
 _REVIEW_CITATION_RE = re.compile(
-    r"Review\s*=\s*Opus reviewer\s*\(\s*[^\n]+\s*\)\s*:\s*"
-    r"(?:SHIP|FIX-FIRST)\b[\s\S]{0,120}?\b\d+\s+blocking\b",
-    re.IGNORECASE,
+    r"^[ \t]*Review\s*=\s*Opus reviewer\s*\((?P<model>(?:(?!\)\s*:)[^\n])+)\)\s*:\s*"
+    r"SHIP\b\s*(?:,\s*)?0\s+blocking\b",
+    re.IGNORECASE | re.MULTILINE,
 )
+_OPUS_MODEL_RE = re.compile(r"\bopus\b", re.IGNORECASE)
+# An honest fallback note -- "(Opus pin fell back to claude-sonnet-4-6)" --
+# names Opus but says the review did NOT run on one. Reject any model text
+# naming another family, so copying such a MODEL: line fails mechanically.
+_NON_OPUS_FAMILY_RE = re.compile(r"\b(?:sonnet|haiku|fable)\b", re.IGNORECASE)
 
 # Feature commits must state who designed and who built, so the plan/build/review
 # split is auditable in git history forever rather than living only in a session
@@ -1414,11 +1445,18 @@ _REVIEW_CITATION_RE = re.compile(
 #   Build  = implementer (Sonnet 5)           |  Build  = lead -- <why no implementer>
 _DESIGN_TRAILER_RE = re.compile(r"^\s*Design\s*=\s*\S+", re.MULTILINE | re.IGNORECASE)
 _BUILD_TRAILER_RE = re.compile(r"^\s*Build\s*=\s*\S+", re.MULTILINE | re.IGNORECASE)
-_FEAT_COMMIT_RE = re.compile(r"^\s*feat[(!:]", re.IGNORECASE)
+# `\s*` before the scope (audit C-M4): `feat (home): ...` used to skip the
+# provenance check entirely.
+_FEAT_COMMIT_RE = re.compile(r"^\s*feat\s*[(!:]", re.IGNORECASE)
 
 
 def _has_review_citation(message: str) -> bool:
-    return bool(_REVIEW_CITATION_RE.search(message))
+    for m in _REVIEW_CITATION_RE.finditer(message):
+        model = m.group("model")
+        if (_OPUS_MODEL_RE.search(model) and "<" not in model
+                and not _NON_OPUS_FAMILY_RE.search(model)):
+            return True
+    return False
 
 
 def _is_feature_commit(message: str) -> bool:

@@ -36,6 +36,31 @@ def test_fe3c78e_is_in_the_exempt_set():
     assert "fe3c78e8d60bab8d83a2e656fd63279d8c13ee34" in hlc._PRE_RULE_EXEMPT
 
 
+@pytest.mark.parametrize("sha", [
+    "4299c8a338deddc9a033d8238da9644ed813aaa2",
+    "0f7bf672b2aad3896cb4fcdcae253a68f1ed42f5",
+    "8c689b83b65f7871af9237b350d965c39cb6f2a8",
+])
+def test_fix_first_era_commits_are_in_the_exempt_set(sha):
+    """2026-10-12: a final citation must now be `SHIP, 0 blocking`. These
+    three cited only `FIX-FIRST, 1 blocking`, the accepted format when they
+    were made; without the exemption the liveness check flags them falsely."""
+    assert sha in hlc._PRE_RULE_EXEMPT
+
+
+def test_fix_first_era_commit_is_not_flagged_under_the_new_rule(monkeypatch, capsys):
+    sha = "4299c8a338deddc9a033d8238da9644ed813aaa2"
+    monkeypatch.setattr(hlc, "_recent_commits", lambda: [
+        _commit(sha, "fix(x): y\n\nReview = Opus reviewer (Opus 5.5): FIX-FIRST, 1 blocking; fixed",
+                ["stock_analyzer/portfolio_thesis.py"]),
+    ])
+    assert not hlc._ptc._has_review_citation("Review = Opus reviewer (Opus 5.5): FIX-FIRST, 1 blocking")
+    with pytest.raises(SystemExit) as exc:
+        hlc.main()
+    assert exc.value.code == 0
+    assert "violate" not in capsys.readouterr().out
+
+
 def test_exempt_commit_touching_a_gate_file_with_no_citation_is_not_flagged(monkeypatch, capsys):
     sha = "fe3c78e8d60bab8d83a2e656fd63279d8c13ee34"
     monkeypatch.setattr(hlc, "_recent_commits", lambda: [

@@ -21,12 +21,14 @@
 # ── Enforced by .claude/hooks/pre_tool_checks.py (it will BLOCK the commit) ──
 #   • Touching constants / a gate / a scoring formula / a DB-write path
 #     (db.py, cron_runner.py, system_health.py, …) requires:
-#       Review = Opus reviewer (<resolved model>): SHIP|FIX-FIRST, N blocking; <notes>
-#     e.g. Review = Opus reviewer (Opus 5): SHIP, N blocking; sentinels verified
+#       Review = Opus reviewer (<resolved model>): SHIP, 0 blocking; <notes>
+#     (on its own line; an Opus model; after a FIX-FIRST get a confirming SHIP round)
+#     e.g. Review = Opus reviewer (Opus 5.5): SHIP, 0 blocking; sentinels verified
 #     Copy the model from the reviewer's own MODEL: line — don't guess a version.
-#     NOTE: the example above deliberately says "N blocking", not a digit. `-F`
-#     does NOT strip these # lines (git's cleanup=whitespace), so a real digit
-#     here would make a template-seeded message satisfy the gate by itself.
+#     NOTE: `-F` does NOT strip these # lines (git's cleanup=whitespace), yet
+#     they can't satisfy the gate by themselves: the hook strips comment lines
+#     before checking, and the citation must START a line, which a `#` line
+#     never does (tests/test_pre_tool_checks.py pins this template).
 #
 #   • Any `feat(` commit requires BOTH provenance trailers:
 #       Design = planner (Opus 5): <verdict>   |   Design = lead — <why no planner>

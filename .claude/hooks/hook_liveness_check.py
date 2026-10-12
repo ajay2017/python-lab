@@ -62,7 +62,19 @@ _GIT_TIMEOUT_SEC = 10
 # noise: a real liveness failure during that same window would read
 # identically to "oh, that's just fe3c78e" and be dismissed unexamined --
 # the exact alarm-fatigue failure mode this check exists to avoid.
-_PRE_RULE_EXEMPT = {"fe3c78e8d60bab8d83a2e656fd63279d8c13ee34"}
+#
+# Same reason, second rule change (2026-10-12, audit C-M3 owner decision):
+# a final citation must now read `SHIP, 0 blocking`. These three commits'
+# only citation was `FIX-FIRST, 1 blocking`, which was the accepted format
+# when they were made -- re-judging them against the new rule would be the
+# same known-false alarm. Exactly these three change verdict across the
+# last 80 commits (checked by diffing old vs new rule in the review).
+_PRE_RULE_EXEMPT = {
+    "fe3c78e8d60bab8d83a2e656fd63279d8c13ee34",
+    "4299c8a338deddc9a033d8238da9644ed813aaa2",
+    "0f7bf672b2aad3896cb4fcdcae253a68f1ed42f5",
+    "8c689b83b65f7871af9237b350d965c39cb6f2a8",
+}
 
 
 def _recent_commits() -> list:

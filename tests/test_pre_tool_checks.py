@@ -590,9 +590,94 @@ class TestReviewCitationRegex:
         msg = "Review = Opus reviewer (Opus 4.8 (1M context)): SHIP, 0 blocking"
         assert hook._has_review_citation(msg) is True
 
-    def test_accepts_fix_first_verdict(self):
+    # ── 2026-10-12: audit C-M2 + owner decision on C-M3 (Open question 2) ──
+
+    def test_rejects_lone_fix_first_as_final_citation(self):
+        """Owner decision: the fix goes back for a confirming SHIP round, so
+        the author never certifies their own fix. (Was accepted until now.)"""
         msg = "Review = Opus reviewer (Opus 5): FIX-FIRST, 1 blocking; fixed same commit"
+        assert hook._has_review_citation(msg) is False
+
+    def test_accepts_fix_first_followed_by_a_confirming_ship_round(self):
+        msg = ("fix(x): y\n\n"
+               "Review = Opus reviewer (Opus 5.5): FIX-FIRST, 1 blocking; round 1\n"
+               "Review = Opus reviewer (Opus 5.5): SHIP, 0 blocking; round 2 confirms the fix")
         assert hook._has_review_citation(msg) is True
+
+    @pytest.mark.parametrize("verdict", ["SHIP, 4 blocking", "SHIP, 1 blocking"])
+    def test_rejects_ship_with_blocking_findings(self, verdict):
+        assert hook._has_review_citation(f"Review = Opus reviewer (Opus 5): {verdict}") is False
+
+    @pytest.mark.parametrize("model", ["", " ", "<resolved model>", "Sonnet 4.6",
+                                       "claude-sonnet-5-5", "Haiku 5.5",
+                                       # an unfilled placeholder that happens to
+                                       # say "Opus" -- only the `<` guard stops it
+                                       "<Opus model>", "<resolved Opus model>"])
+    def test_rejects_a_model_that_is_not_an_opus(self, model):
+        assert hook._has_review_citation(
+            f"Review = Opus reviewer ({model}): SHIP, 0 blocking; notes") is False
+
+    @pytest.mark.parametrize("model", ["Opus 5.5", "claude-opus-5-5",
+                                       "Opus 5.5 / claude-opus-5-5", "opus"])
+    def test_accepts_real_opus_model_spellings(self, model):
+        assert hook._has_review_citation(
+            f"Review = Opus reviewer ({model}): SHIP, 0 blocking; notes") is True
+
+    def test_rejects_a_citation_buried_mid_sentence(self):
+        msg = ("fix(x): y\n\nAs the last commit said, Review = Opus reviewer "
+               "(Opus 5): SHIP, 0 blocking, so this one is fine too.")
+        assert hook._has_review_citation(msg) is False
+
+    def test_accepts_an_indented_citation_line(self):
+        assert hook._has_review_citation(
+            "  Review = Opus reviewer (Opus 5.5): SHIP, 0 blocking; notes") is True
+
+    # ── confirming-round review findings (2026-10-12) ──
+
+    @pytest.mark.parametrize("model", ["not Opus — Sonnet 4.6",
+                                       "Opus pin fell back to claude-sonnet-4-6",
+                                       "Opus requested, ran as Haiku 5.5",
+                                       "opus? no: fable 5.1"])
+    def test_rejects_an_honest_fallback_note_naming_another_family(self, model):
+        assert hook._has_review_citation(
+            f"Review = Opus reviewer ({model}): SHIP, 0 blocking") is False
+
+    @pytest.mark.parametrize("line", [
+        "Review = Opus reviewer (Sonnet 4.6): FIX-FIRST, 2 blocking; later (Opus 5): SHIP, 0 blocking",
+        "Review = Opus reviewer (Opus 5.5): FIX-FIRST, 1 blocking; fixed (self-verified): SHIP, 0 blocking",
+    ])
+    def test_model_group_cannot_run_across_a_verdict(self, line):
+        """One line must not smuggle a FIX-FIRST past the rule by carrying a
+        second `(...): SHIP, 0 blocking` later on the same line."""
+        assert hook._has_review_citation(line) is False
+
+    def test_a_later_qualifying_line_still_passes_after_a_non_qualifying_one(self):
+        """Pins finditer over search: the first match is a non-Opus model."""
+        msg = ("Review = Opus reviewer (Sonnet 4.6): SHIP, 0 blocking\n"
+               "Review = Opus reviewer (Opus 5.5): SHIP, 0 blocking")
+        assert hook._has_review_citation(msg) is True
+
+    def test_the_real_commit_template_cannot_satisfy_the_gate(self):
+        template = (Path(__file__).resolve().parent.parent / ".gitmessage.txt").read_text(
+            encoding="utf-8")
+        assert hook._has_review_citation(template) is False
+        # Even with every comment marker removed, the placeholder line fails.
+        uncommented = "\n".join(l.lstrip("#") for l in template.splitlines())
+        assert hook._has_review_citation(uncommented) is False
+
+    def test_crlf_message_passes_and_a_quoted_line_does_not(self):
+        assert hook._has_review_citation(
+            "fix(x): y\r\n\r\nReview = Opus reviewer (Opus 5.5): SHIP,\r\n0 blocking; ok\r\n") is True
+        assert hook._has_review_citation(
+            "> Review = Opus reviewer (Opus 5.5): SHIP, 0 blocking") is False
+
+    @pytest.mark.parametrize("verdict, ok", [
+        ("SHIP 0 blocking", True), ("ship, 0 blocking", True),
+        ("SHIP, 00 blocking", False), ("SHIP, 10 blocking", False),
+    ])
+    def test_verdict_spacing_and_count_variants(self, verdict, ok):
+        assert hook._has_review_citation(
+            f"Review = Opus reviewer (Opus 5.5): {verdict}") is ok
 
 
 class TestProvenanceTrailers:
@@ -601,6 +686,15 @@ class TestProvenanceTrailers:
 
     def test_non_feature_commit_not_detected(self):
         assert hook._is_feature_commit("fix(x): correct a thing") is False
+
+    @pytest.mark.parametrize("subject", ["feat (home): x", "feat  (home): x",
+                                         "feat !: x", "feat: x", "feat!: x"])
+    def test_feature_commit_with_space_before_scope_is_detected(self, subject):
+        """Audit C-M4: `feat (home):` used to skip Hard Rule #5 entirely."""
+        assert hook._is_feature_commit(subject) is True
+
+    def test_a_word_starting_with_feat_is_not_a_feature_commit(self):
+        assert hook._is_feature_commit("feature-flag cleanup: x") is False
 
     def test_both_trailers_missing(self):
         assert set(hook._missing_provenance_trailers("feat(x): y")) == {"Design", "Build"}

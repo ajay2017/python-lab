@@ -355,6 +355,16 @@ def _parse_push_refs():
     return refs
 
 
+def _peel_commit(sha: str) -> str:
+    """The commit `sha` points at (peeling an annotated tag), or `sha` itself
+    if git can't resolve it -- an unresolvable sha then compares unequal to
+    HEAD and warns, which is the safe direction for a warning."""
+    try:
+        return _git_lines("rev-parse", f"{sha}^{{commit}}")[0]
+    except Exception:
+        return sha
+
+
 def _push_tree_mismatch(refs: list, ptc) -> list:
     """Reasons a PASSING suite would not actually describe the pushed commits.
 
@@ -381,12 +391,16 @@ def _push_tree_mismatch(refs: list, ptc) -> list:
     except Exception:
         head = ""
     if head:
-        # Branches only. An annotated tag's local sha is the TAG OBJECT's, never
-        # a commit sha, so comparing it to HEAD warns on every tag push -- a
-        # false alarm, and a warning that cries wolf stops being read.
+        # Tags are skipped: an annotated tag's local sha is the TAG OBJECT's,
+        # and a tag push ships no new code, so warning on it would cry wolf.
+        # Everything else is compared by the COMMIT it points at (audit C-M1,
+        # 2026-10-12). This used to keep only `refs/heads/` local refs, but
+        # for `git push origin HEAD~2:refs/heads/older` git reports the local
+        # ref as the expression `HEAD~2` -- so the one push most likely to
+        # ship something other than HEAD printed no warning at all.
         off_head = sorted({
             ref for ref, sha in refs
-            if ref.startswith("refs/heads/") and sha != head
+            if not ref.startswith("refs/tags/") and _peel_commit(sha) != head
         })
         if off_head:
             reasons.append(
@@ -684,8 +698,9 @@ def _run_gates(argv: list[str]) -> int:
             "Hard Rule #4 -- decision-engine / DB-write file(s) staged with no "
             "Opus review citation:\n    " + "\n    ".join(gated) + "\n"
             "  Add to the commit body:\n"
-            "    Review = Opus reviewer (<resolved model>): SHIP|FIX-FIRST, "
-            "N blocking; <notes>"
+            "    Review = Opus reviewer (<resolved model>): SHIP, 0 blocking; <notes>\n"
+            "  on its own line, naming an Opus model; after a FIX-FIRST, send the\n"
+            "  fix back for a confirming round rather than citing FIX-FIRST."
         )
 
     if ptc._is_feature_commit(message):
