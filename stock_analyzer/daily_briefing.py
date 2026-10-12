@@ -3567,20 +3567,13 @@ def build_daily_briefing(
     # a just-exited position never immediately re-surfaces as a BUY in the same
     # session (the exit advisor stops watching a ticker the moment it leaves the
     # portfolio, so _act_blocked alone has no memory of the exit).
-    _sold_today: set[str] = set()
-    if trades_df is not None and not getattr(trades_df, "empty", True):
-        try:
-            import pandas as _pd
-            _ta = _pd.to_datetime(trades_df["traded_at"], utc=True, errors="coerce",
-                                  format="ISO8601")
-            _ta_date = _ta.dt.tz_convert("America/New_York").dt.date
-            _mask = (trades_df["action"].str.upper() == "SELL") & (_ta_date == today)
-            _sold_today = {
-                str(t).upper() for t in trades_df.loc[_mask, "ticker"]
-                if _pd.notna(t) and t
-            }
-        except Exception:
-            pass
+    # The parsing rule is shared with the 📋 Watchlist page and the cron's
+    # "Ready to Enter" email (stock_analyzer/sold_today.py) so all three
+    # agree on what "sold today" means. This caller keeps its long-standing
+    # posture of reading "couldn't check" (None) as "nothing sold".
+    from stock_analyzer.sold_today import tickers_sold_on
+    _sold_today_or_none = tickers_sold_on(trades_df, today)
+    _sold_today: set[str] = set() if _sold_today_or_none is None else _sold_today_or_none
 
     act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                         deterioration=deterioration,

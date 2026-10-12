@@ -59,7 +59,7 @@ def _run_watchlist_entries(
     watchlist=("AAPL",), held_rows=None, cards=None, ctx=None,
     prior_df=_UNSET, exit_signals_df=_UNSET, scanner_go_tickers=None,
     watchlist_side_effect=None, holdings_side_effect=None, bundle=None,
-    exit_signals_side_effect=None,
+    exit_signals_side_effect=None, trades_df=_UNSET, trades_side_effect=None,
 ):
     cards = cards if cards is not None else {t: _wl_card(t) for t in watchlist}
     ctx = ctx if ctx is not None else {
@@ -73,6 +73,10 @@ def _run_watchlist_entries(
     # to simulate the check-FAILED case (2026-09-24 app review, J1) --
     # load_exit_signals_or_none()'s own documented `None`-on-failure contract.
     exit_signals_df = pd.DataFrame() if exit_signals_df is _UNSET else exit_signals_df
+    # Readable, empty trade log by default. Pass trades_df=None (or a
+    # trades_side_effect) for the check-FAILED case, which suppresses all
+    # emailed entries (sold-today exclusion, 2026-10-11 audit follow-up).
+    trades_df = pd.DataFrame() if trades_df is _UNSET else trades_df
 
     def _fake_build_rec(ticker, data, portfolio_ctx=None):
         return cards[ticker]
@@ -97,6 +101,8 @@ def _run_watchlist_entries(
          patch("stock_analyzer.headless_alert_engine.db.save_recommendations",
                side_effect=lambda rows: {"attempted": len(rows), "saved": len(rows), "error": None}) as save_mock, \
          patch("stock_analyzer.headless_alert_engine.is_trading_day", return_value=True), \
+         patch("stock_analyzer.headless_alert_engine.db.load_trades_or_none",
+               return_value=trades_df, side_effect=trades_side_effect), \
          patch("stock_analyzer.headless_alert_engine.db.load_recommendations_or_none",
                return_value=prior_df):
         result = hae.compute_watchlist_entries(
@@ -868,3 +874,60 @@ def test_watchlist_entries_failure_never_aborts_the_scan_lane(monkeypatch):
         monkeypatch, wle_side_effect=_boom,
     )
     assert rc == 0
+
+
+# ── Sold-today exclusion (2026-10-11 audit follow-up to B-H1) ────────────────
+#
+# A watchlist name SOLD this morning is no longer held, so D-C's held check
+# lets it through. It must be captured for grading like any ENTER_NOW but
+# never emailed, and a failed trade-log read suppresses the whole email set
+# (owner decision 2026-10-12), same posture as the protective-call check.
+
+def _sold_today_df(tickers):
+    return pd.DataFrame([
+        {"ticker": t, "action": "SELL", "traded_at": f"{TODAY.isoformat()}T15:00:00+00:00"}
+        for t in tickers
+    ])
+
+
+def test_sold_today_name_is_captured_but_not_emailed():
+    result = _run_watchlist_entries(
+        watchlist=["AAPL", "NVDA"],
+        cards={"AAPL": _wl_card("AAPL"), "NVDA": _wl_card("NVDA")},
+        trades_df=_sold_today_df(["AAPL"]),
+    )
+    assert [c["ticker"] for c in result["entries"]] == ["NVDA"]
+    saved = {r["ticker"] for r in result["_save_mock"].call_args[0][0]}
+    assert saved == {"AAPL", "NVDA"}
+
+
+def test_a_sale_on_an_earlier_day_does_not_block_today():
+    df = pd.DataFrame([{"ticker": "AAPL", "action": "SELL",
+                        "traded_at": f"{PRIOR_DAY.isoformat()}T15:00:00+00:00"}])
+    result = _run_watchlist_entries(watchlist=["AAPL"], trades_df=df)
+    assert [c["ticker"] for c in result["entries"]] == ["AAPL"]
+
+
+def test_trade_log_unavailable_suppresses_every_entry_but_still_captures():
+    result = _run_watchlist_entries(watchlist=["NVDA"], trades_df=None)
+    assert result["entries"] == []
+    assert any("sold-today" in e for e in result["errors"])
+    assert result["_save_mock"].called
+
+
+def test_trade_log_read_raising_suppresses_every_entry():
+    result = _run_watchlist_entries(
+        watchlist=["NVDA"], trades_side_effect=RuntimeError("db down"),
+    )
+    assert result["entries"] == []
+    assert any("trades lookup failed" in e for e in result["errors"])
+
+
+def test_the_cron_reads_the_trade_log_strictly_not_via_ctx():
+    """`ctx["trades_df"]` comes from the lenient load_trades(), which turns a
+    failed read into an empty frame -- reading it would silently disarm the
+    fail-closed rule. The strict reader must be the one consulted."""
+    ctx = {"ok": True, "errors": [], "port_df": pd.DataFrame(), "spy_6mo": None,
+           "port_risk": {"beta": 1.1}, "trades_df": pd.DataFrame()}
+    result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx, trades_df=None)
+    assert result["entries"] == []

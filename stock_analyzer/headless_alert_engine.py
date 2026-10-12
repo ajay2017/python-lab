@@ -37,6 +37,7 @@ from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
 from stock_analyzer.sector_fit import sector_gate_context
 from stock_analyzer.recommendations_history import build_enter_now_rows
 from stock_analyzer.trade_economics import trade_economics
+from stock_analyzer.sold_today import tickers_sold_on
 from stock_analyzer.util import bq_score_or_none, val_score_or_none, sentiment_value_or_none
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_ELEVATED,
@@ -770,6 +771,11 @@ def compute_watchlist_entries(
              from the email-eligible set so the same name never gets two
              independent buy announcements, or a buy announcement while under
              an active protective call.
+      sold-today — a ticker with a SELL in today's trade log (read strictly
+             via `load_trades_or_none`) is excluded from the email-eligible
+             set; it is no longer held, so D-C alone can't catch it. Still
+             captured. Because it IS captured, tomorrow's D-B diff sees it as
+             persisting, so that episode is not announced the next day either.
       D-B  — of the email-eligible set, only tickers NEWLY qualifying versus
              the prior trading day's recorded `enter_now` set are emailed. A
              ticker persisting from yesterday is silent (but was still
@@ -779,8 +785,10 @@ def compute_watchlist_entries(
     Offline contract: `entries` is `None` ONLY when the watchlist or holdings
     read itself fails (`reason="db_unavailable"`) — a genuine producer
     failure. `entries == []` means checked and genuinely nothing new
-    transitioned (including the case where a same-day prior-day lookup
-    failure makes the transition unverifiable — see below).
+    transitioned, OR a suppressing check could not be verified this run --
+    the prior-day lookup (D-B), the protective-call lookup, or the trade log
+    (sold-today) -- each of which appends a "suppressing all entries" note to
+    `errors` rather than risk announcing wrongly.
 
     D-D: the portfolio-fit gate (sector weight from port_df + portfolio beta)
     is best-effort. Sector/concentration reliably runs off port_df; beta is
@@ -996,15 +1004,35 @@ def compute_watchlist_entries(
         errors.append(f"exit_signals lookup failed: {e} — cannot verify protective-call "
                       "status, suppressing all entries")
 
-    # D-C (held) + scanner-Go dedup + protective-call exclusion — applied ONLY
-    # to derive the email-eligible set, never to the capture above.
+    # Sold-today exclusion (2026-10-11 audit follow-up to B-H1). A name the
+    # owner SOLD this morning is no longer held, so D-C's held check lets it
+    # through, and nothing else here remembers the exit -- it could be
+    # emailed as "Ready to Enter" hours after being sold. Same HARD-invariant
+    # posture as the protective check above: read the trade log STRICTLY
+    # (`load_trades_or_none`, not `ctx["trades_df"]`, which comes from the
+    # lenient `load_trades()` and collapses a failed read into an empty
+    # frame), and on a failed read suppress the whole email-eligible set
+    # (owner decision 2026-10-12). Capture above is unaffected.
+    sold_today: "set | None"
+    try:
+        sold_today = tickers_sold_on(db.load_trades_or_none(), today)
+    except Exception as e:
+        sold_today = None
+        errors.append(f"trades lookup failed: {e}")
+    if sold_today is None:
+        errors.append("trades unavailable — cannot verify sold-today status, "
+                      "suppressing all entries")
+
+    # D-C (held) + scanner-Go dedup + protective-call + sold-today exclusion —
+    # applied ONLY to derive the email-eligible set, never to the capture above.
     eligible = (
-        [] if protective_check_failed else
+        [] if protective_check_failed or sold_today is None else
         [
             c for c in qualifying
             if str(c.get("ticker", "")).upper() not in held_set
             and str(c.get("ticker", "")).upper() not in scanner_go
             and str(c.get("ticker", "")).upper() not in protective_tickers
+            and str(c.get("ticker", "")).upper() not in sold_today
         ]
     )
 

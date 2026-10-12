@@ -338,6 +338,7 @@ from stock_analyzer import sector_fit
 from stock_analyzer.util import safe_html as _safe_html
 from stock_analyzer.util import md_bold_to_html as _md_bold
 from stock_analyzer.util import factor_tilt_state as _factor_tilt_state
+from stock_analyzer.sold_today import tickers_sold_on
 from stock_analyzer.util import sizing_cap_lines as _sizing_cap_lines
 from stock_analyzer.util import sizing_unavailable_caption as _sizing_unavailable_caption
 from stock_analyzer.util import get_or_offline as _get_or_offline
@@ -26644,6 +26645,13 @@ elif page == "📋 Watchlist":
     _wl_held: set = set(
         st.session_state.get("holdings_df", pd.DataFrame()).get("Ticker", pd.Series()).tolist()
     )
+    # Tickers SOLD today (2026-10-11 audit follow-up to B-H1) — a name sold
+    # this morning is no longer held, so the held check above can't catch
+    # it. Same shared rule as the Daily Brief and the cron email
+    # (stock_analyzer/sold_today.py). A failed trades read surfaces through
+    # the page-level DB-outage banner (`_db_load_failure`), not here.
+    _wl_sold_today_raw = tickers_sold_on(st.session_state.get("trades_df"), _today_et())
+    _wl_sold_today: set = set() if _wl_sold_today_raw is None else _wl_sold_today_raw
 
     # ── Load data for all watchlist tickers ───────────────────────────────────
     with st.spinner(f"Loading analysis for {len(_wl)} watchlist ticker(s)…"):
@@ -26879,6 +26887,10 @@ elif page == "📋 Watchlist":
             continue
         if _wr["ticker"] in _wl_held:
             continue
+        # A name sold today gets a "don't re-enter" card below, so it must
+        # not be counted as "actionable again" here either.
+        if _wr["action"] == "ENTER_NOW" and _wr["ticker"] in _wl_sold_today:
+            continue
         _wl_added_str = _wl_added_dates.get(_wr["ticker"])
         if not _wl_added_str:
             continue
@@ -26995,6 +27007,20 @@ elif page == "📋 Watchlist":
             if st.button("Go to Today's Brief →", key=f"_wl_goto_home_{_ticker}"):
                 st.session_state["_pending_page"] = "🏠 Home"
                 st.rerun()
+            continue
+
+        # Same override for a name SOLD today: it isn't held any more, so the
+        # check above lets it through, but the Daily Brief already blocks a
+        # same-day re-buy and the cron never emails it. Captured for grading
+        # like any ENTER_NOW; only the card is replaced.
+        if _action == "ENTER_NOW" and _ticker in _wl_sold_today:
+            st.warning(
+                f"**{_ticker} — Sold Today** · "
+                "This watchlist recommendation says ENTER NOW, but you sold this "
+                "position today. A same-day re-entry isn't recommended; if the "
+                "setup still qualifies, the card returns tomorrow.",
+                icon="⚠️",
+            )
             continue
 
         _a_icon   = {
