@@ -17,6 +17,7 @@ for subprocesses.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 
@@ -428,3 +429,388 @@ def test_main_fails_closed_when_a_gate_mode_raises(monkeypatch, capsys):
         adapter.main()
     assert exc.value.code == 1
     assert "NOT a pass" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Snapshot testing (audit C-H1, 2026-10-12): pre-commit gates run in a temporary
+# worktree built from the INDEX, not against whatever is on disk.
+# ---------------------------------------------------------------------------
+
+_REAL_WRITE_TREE = adapter._write_tree
+
+
+@pytest.fixture(autouse=True)
+def _no_real_snapshot_by_default(monkeypatch):
+    """Keep the pre-existing control-flow tests off the real repository: without
+    this every `_run_test_gates("pre-commit")` call above would build (and tear
+    down) a real worktree of the real index. Snapshot tests opt back in with
+    `_use_real_snapshot`."""
+    monkeypatch.setattr(
+        adapter, "_write_tree", lambda: (None, "snapshot disabled in unit test")
+    )
+
+
+def _use_real_snapshot(monkeypatch):
+    monkeypatch.setattr(adapter, "_write_tree", _REAL_WRITE_TREE)
+
+
+def _sg(repo, *args):
+    """Run git in `repo` with git's exported variables removed."""
+    env = {k: v for k, v in os.environ.items() if k not in set(adapter._GIT_ENV_FALLBACK)}
+    r = subprocess.run(
+        ["git", *args], cwd=str(repo), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    return r.stdout.strip()
+
+
+def _scratch_repo(tmp_path, monkeypatch):
+    """A real throwaway repo with one committed file, cwd set into it, and git's
+    inherited variables removed so nothing can reach the real repository."""
+    for name in adapter._GIT_ENV_FALLBACK:
+        monkeypatch.delenv(name, raising=False)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _sg(repo, "init", "-q")
+    _sg(repo, "config", "user.name", "t")
+    _sg(repo, "config", "user.email", "t@example.com")
+    _sg(repo, "config", "commit.gpgsign", "false")
+    (repo / "a.py").write_text("v0\n")
+    _sg(repo, "add", "a.py")
+    _sg(repo, "commit", "-q", "-m", "init")
+    monkeypatch.chdir(repo)
+    return repo
+
+
+def _worktree_paths(repo):
+    return [
+        ln[len("worktree "):]
+        for ln in _sg(repo, "worktree", "list", "--porcelain").splitlines()
+        if ln.startswith("worktree ")
+    ]
+
+
+def _same(a, b):
+    return os.path.normcase(os.path.realpath(str(a))) == os.path.normcase(os.path.realpath(str(b)))
+
+
+def test_snapshot_is_written_before_the_scrub_and_worktree_added_after(monkeypatch, tmp_path):
+    """Same silent-ordering hazard as the staged-list test: `write-tree` needs the
+    inherited GIT_INDEX_FILE (a `-a` commit's temporary index), while `worktree
+    add` must NOT see it (it could write through the in-progress commit's index)."""
+    monkeypatch.setenv("GIT_INDEX_FILE", "/bogus/index")
+    order = []
+    env = {}
+
+    def _wt():
+        order.append("write_tree")
+        env["write_tree"] = "GIT_INDEX_FILE" in os.environ
+        return "TREESHA", ""
+
+    real_scrub = adapter._scrub_git_env
+
+    def _scrub():
+        order.append("scrub")
+        return real_scrub()
+
+    def _add(tree):
+        order.append("add")
+        env["add"] = "GIT_INDEX_FILE" in os.environ
+        assert tree == "TREESHA"
+        return str(tmp_path), str(tmp_path)
+
+    monkeypatch.setattr(adapter, "_write_tree", _wt)
+    monkeypatch.setattr(adapter, "_scrub_git_env", _scrub)
+    monkeypatch.setattr(adapter, "_add_snapshot_worktree", _add)
+    monkeypatch.setattr(adapter, "_remove_snapshot", lambda p, w: order.append("remove"))
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["app.py"])
+    _stub_gates(monkeypatch, {"pytest": (True, ""), "antipattern": (True, "")})
+
+    assert adapter._run_test_gates("pre-commit") == 0
+    assert order == ["write_tree", "scrub", "add", "remove"]
+    assert env["write_tree"] is True, "write-tree ran after the scrub: -a commits snapshot the wrong index"
+    assert env["add"] is False, "worktree add ran with git's index variable still set"
+
+
+def test_snapshot_holds_the_staged_content_not_the_working_tree(monkeypatch, tmp_path):
+    """C-H1 case 1: stage v1, change the disk to v2 without staging."""
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    (repo / "a.py").write_text("v1\n")
+    _sg(repo, "add", "a.py")
+    (repo / "a.py").write_text("v2\n")  # unstaged fix on disk
+
+    tree, why = _REAL_WRITE_TREE()
+    assert tree, why
+    parent, wt = adapter._add_snapshot_worktree(tree)
+    try:
+        with open(os.path.join(wt, "a.py")) as fh:
+            assert fh.read() == "v1\n", "snapshot must hold the STAGED version"
+        assert (repo / "a.py").read_text() == "v2\n", "contrast: the working tree still holds v2"
+    finally:
+        os.chdir(repo)
+        adapter._remove_snapshot(parent, wt)
+
+
+def test_snapshot_omits_untracked_files_but_keeps_tracked_ones(monkeypatch, tmp_path):
+    """C-H1 case 2: a staged test importing an UNTRACKED module must fail in the
+    snapshot, because that module would not be in the commit."""
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    (repo / "untracked_mod.py").write_text("x = 1\n")
+
+    tree, why = _REAL_WRITE_TREE()
+    assert tree, why
+    parent, wt = adapter._add_snapshot_worktree(tree)
+    try:
+        assert os.path.isfile(os.path.join(wt, "a.py")), "contrast: a tracked file IS present"
+        assert not os.path.exists(os.path.join(wt, "untracked_mod.py"))
+        assert (repo / "untracked_mod.py").exists(), "contrast: it is still on disk"
+    finally:
+        adapter._remove_snapshot(parent, wt)
+
+
+def test_gates_run_inside_the_snapshot_and_cwd_is_restored(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    _use_real_snapshot(monkeypatch)
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["app.py"])
+    seen = {}
+    real_add = adapter._add_snapshot_worktree
+
+    def _spy(tree):
+        parent, wt = real_add(tree)
+        seen["wt"] = wt
+        return parent, wt
+
+    monkeypatch.setattr(adapter, "_add_snapshot_worktree", _spy)
+    record = {}
+
+    import pre_tool_checks as ptc
+
+    def _fake(need_pytest, need_antipattern):
+        record["cwd"] = os.getcwd()
+        with open("a.py") as fh:
+            record["a"] = fh.read()
+        return {"pytest": (True, ""), "antipattern": (True, "")}
+
+    monkeypatch.setattr(ptc, "_run_gates_concurrently", _fake)
+    before = os.getcwd()
+    assert adapter._run_test_gates("pre-commit") == 0
+    assert _same(record["cwd"], seen["wt"]) and not _same(record["cwd"], repo)
+    assert record["a"] == "v0\n"
+    assert _same(os.getcwd(), before), "cwd must be restored afterwards"
+
+
+def test_snapshot_is_cleaned_up_even_when_the_gates_raise(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    other = tmp_path / "other_wt"
+    _sg(repo, "worktree", "add", "--detach", str(other))
+    _use_real_snapshot(monkeypatch)
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["app.py"])
+    seen = {}
+    real_add = adapter._add_snapshot_worktree
+
+    def _spy(tree):
+        parent, wt = real_add(tree)
+        seen["parent"], seen["wt"] = parent, wt
+        assert any(_same(wt, p) for p in _worktree_paths(repo)), "contrast: it exists mid-run"
+        return parent, wt
+
+    monkeypatch.setattr(adapter, "_add_snapshot_worktree", _spy)
+    import pre_tool_checks as ptc
+
+    def _boom(*a, **k):
+        raise RuntimeError("gates exploded")
+
+    monkeypatch.setattr(ptc, "_run_gates_concurrently", _boom)
+    before = os.getcwd()
+    with pytest.raises(RuntimeError, match="gates exploded"):
+        adapter._run_test_gates("pre-commit")
+
+    assert _same(os.getcwd(), before)
+    assert not os.path.exists(seen["parent"]), "temp dir must be removed"
+    paths = _worktree_paths(repo)
+    assert not any("drishta-gate-" in p for p in paths)
+    assert any(_same(other, p) for p in paths), "an unrelated worktree must be untouched"
+    assert other.is_dir()
+
+
+def _raw_git(repo, *args):
+    """Like `_sg` but returns the CompletedProcess instead of asserting rc == 0."""
+    env = {k: v for k, v in os.environ.items() if k not in set(adapter._GIT_ENV_FALLBACK)}
+    return subprocess.run(
+        ["git", *args], cwd=str(repo), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env,
+    )
+
+
+def test_a_failed_worktree_add_cleans_up_what_it_registered(monkeypatch, tmp_path):
+    """`worktree add` can register the worktree and THEN fail (or time out).
+    `_add_snapshot_worktree` must remove that registration and its temp dir
+    itself, because the caller never learns the paths."""
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    tree, why = _REAL_WRITE_TREE()
+    assert tree, why
+
+    made = []
+    real_mkdtemp = adapter.tempfile.mkdtemp
+
+    def _spy_mkdtemp(*a, **k):
+        d = real_mkdtemp(*a, **k)
+        made.append(d)
+        return d
+
+    monkeypatch.setattr(adapter.tempfile, "mkdtemp", _spy_mkdtemp)
+    registered_mid_run = []
+    real_git = adapter._git
+
+    def _git_add_then_fail(*args, **kw):
+        r = real_git(*args, **kw)
+        if args[:2] == ("worktree", "add"):
+            assert r.returncode == 0, r.stderr
+            registered_mid_run.extend(p for p in _worktree_paths(repo) if "drishta-gate-" in p)
+            return subprocess.CompletedProcess(r.args, 1, "", "simulated failure after registration")
+        return r
+
+    monkeypatch.setattr(adapter, "_git", _git_add_then_fail)
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        adapter._add_snapshot_worktree(tree)
+
+    assert registered_mid_run, "contrast: the add really did register a worktree"
+    assert not any("drishta-gate-" in p for p in _worktree_paths(repo)), "registration leaked"
+    assert made and not os.path.exists(made[0]), "temp dir leaked"
+
+
+def test_cleanup_never_prunes_an_unrelated_stale_worktree(monkeypatch, tmp_path):
+    """Pins "no `git worktree prune`": a live unrelated worktree can't tell
+    (prune ignores it), so make one STALE (directory deleted) and check that its
+    registration survives our cleanup."""
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    stale = tmp_path / "stale_wt"
+    _sg(repo, "worktree", "add", "--detach", str(stale))
+    shutil.rmtree(stale)
+    dry = _raw_git(repo, "worktree", "prune", "--dry-run", "-v")
+    assert "stale_wt" in (dry.stdout + dry.stderr), "contrast: prune WOULD remove it"
+
+    tree, why = _REAL_WRITE_TREE()
+    assert tree, why
+    parent, wt = adapter._add_snapshot_worktree(tree)
+    adapter._remove_snapshot(parent, wt)
+
+    paths = _worktree_paths(repo)
+    assert not any("drishta-gate-" in p for p in paths), "contrast: ours is gone"
+    assert any("stale_wt" in p for p in paths), "cleanup pruned an unrelated worktree"
+
+
+def test_cleanup_removes_a_locked_snapshot_worktree(monkeypatch, tmp_path):
+    """A `worktree add` killed by its timeout leaves the entry LOCKED; one
+    `--force` refuses that, two remove it."""
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    tree, why = _REAL_WRITE_TREE()
+    assert tree, why
+
+    # Contrast: a single --force really is refused on a locked worktree.
+    p1, w1 = adapter._add_snapshot_worktree(tree)
+    _sg(repo, "worktree", "lock", w1)
+    assert _raw_git(repo, "worktree", "remove", "--force", w1).returncode != 0
+    _sg(repo, "worktree", "remove", "--force", "--force", w1)
+    shutil.rmtree(p1, ignore_errors=True)
+
+    parent, wt = adapter._add_snapshot_worktree(tree)
+    _sg(repo, "worktree", "lock", wt)
+    adapter._remove_snapshot(parent, wt)
+    assert not any("drishta-gate-" in p for p in _worktree_paths(repo)), "locked entry stranded"
+    assert not os.path.exists(parent)
+
+
+@pytest.mark.parametrize("how", ["write_tree_fails", "worktree_add_fails"])
+def test_snapshot_failure_falls_back_to_the_working_tree_loudly(monkeypatch, tmp_path, capsys, how):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    _use_real_snapshot(monkeypatch)
+    if how == "write_tree_fails":
+        monkeypatch.setattr(adapter, "_write_tree", lambda: (None, "boom"))
+    else:
+        def _bad(tree):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(adapter, "_add_snapshot_worktree", _bad)
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["app.py"])
+    import pre_tool_checks as ptc
+
+    cwds = []
+    verdict = {"pytest": (True, ""), "antipattern": (True, "")}
+
+    def _fake(need_pytest, need_antipattern):
+        cwds.append(os.getcwd())
+        return verdict
+
+    monkeypatch.setattr(ptc, "_run_gates_concurrently", _fake)
+
+    assert adapter._run_test_gates("pre-commit") == 0
+    err = capsys.readouterr().err
+    assert len(cwds) == 1 and _same(cwds[0], repo), "gates must still run, in the working tree"
+    assert "WARNING" in err and "could not build a snapshot" in err and "WORKING TREE" in err
+    assert "boom" in err
+
+    # Contrast: the fallback still FAILS CLOSED on a failing suite.
+    verdict["pytest"] = (False, "1 failed")
+    assert adapter._run_test_gates("pre-commit") == 1
+    assert len(cwds) == 2
+    assert "BLOCKED" in capsys.readouterr().err
+
+
+def test_success_line_says_which_tree_was_tested(monkeypatch, tmp_path, capsys):
+    _scratch_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["app.py"])
+    _stub_gates(monkeypatch, {"pytest": (True, ""), "antipattern": (True, "")})
+
+    assert adapter._run_test_gates("pre-commit") == 0  # autouse: snapshot unavailable
+    err = capsys.readouterr().err
+    assert "tested against the WORKING TREE -- snapshot unavailable" in err
+    assert "snapshot of the commit" not in err
+
+    _use_real_snapshot(monkeypatch)
+    assert adapter._run_test_gates("pre-commit") == 0
+    err = capsys.readouterr().err
+    assert "pytest PASSED" in err
+    assert "(scope: 1 staged file(s), tested against a snapshot of the commit)" in err
+    assert "WORKING TREE" not in err
+
+
+def test_pre_push_still_tests_the_working_tree_without_a_snapshot(monkeypatch, tmp_path, capsys):
+    _scratch_repo(tmp_path, monkeypatch)
+    _use_real_snapshot(monkeypatch)
+    monkeypatch.setattr(adapter, "_push_tree_mismatch", lambda refs, ptc: [])
+    _stub_stdin(monkeypatch, "refs/heads/main abc refs/heads/main def\n")
+    called = []
+    monkeypatch.setattr(adapter, "_add_snapshot_worktree", lambda t: called.append(t))
+    _stub_gates(monkeypatch, {"pytest": (True, "")})
+
+    assert adapter._run_test_gates("pre-push") == 0
+    assert called == [], "pre-push must not build a snapshot"
+    assert "scope: the working tree)" in capsys.readouterr().err
+
+
+def test_main_index_and_head_are_untouched_by_a_snapshot_cycle(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    (repo / "a.py").write_text("v1\n")
+    (repo / "b.py").write_text("new\n")
+    _sg(repo, "add", "a.py", "b.py")
+    _use_real_snapshot(monkeypatch)
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["app.py"])
+    _stub_gates(monkeypatch, {"pytest": (True, ""), "antipattern": (True, "")})
+
+    tree_before, head_before = _sg(repo, "write-tree"), _sg(repo, "rev-parse", "HEAD")
+    ran_snapshot = []
+    real_add = adapter._add_snapshot_worktree
+
+    def _spy(t):
+        ran_snapshot.append(1)
+        return real_add(t)
+
+    monkeypatch.setattr(adapter, "_add_snapshot_worktree", _spy)
+
+    assert adapter._run_test_gates("pre-commit") == 0
+    assert ran_snapshot, "contrast: a snapshot cycle really happened"
+    assert _sg(repo, "write-tree") == tree_before
+    assert _sg(repo, "rev-parse", "HEAD") == head_before
+    assert _sg(repo, "diff", "--cached", "--name-only").split() == ["a.py", "b.py"]

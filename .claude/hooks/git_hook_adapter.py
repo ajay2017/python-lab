@@ -19,7 +19,12 @@ policy can switch it off.
   * Hard Rule #4 -- an Opus review citation when a `_GATE_FILES` member is staged
   * Hard Rule #5 -- `Design =` / `Build =` trailers on a `feat(` commit
 
-`pre-commit` -- CODE gates, when the staged set touches the relevant paths:
+`pre-commit` -- CODE gates, when the staged set touches the relevant paths. They
+run in a temporary detached worktree checked out from a snapshot of the INDEX
+(write-tree -> commit-tree -> worktree add), so they test what is being
+committed, not whatever is on disk (audit C-H1). If the snapshot cannot be built
+they fall back to the working tree with a loud stderr WARNING; they never block
+on snapshot plumbing alone (pytest itself still fails closed):
   * the full pytest suite      (`_touches_tested_code`)
   * scripts/check_antipatterns.py  (`_touches_scanned_code`)
 
@@ -123,8 +128,10 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -180,10 +187,10 @@ _GIT_ENV_FALLBACK = (
 _SCISSORS_RE = re.compile(r"^\S+ -+ >8 -+\s*$", re.MULTILINE)
 
 
-def _git(*args: str) -> subprocess.CompletedProcess:
+def _git(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args], capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=30,
+        encoding="utf-8", errors="replace", timeout=timeout,
     )
 
 
@@ -388,6 +395,100 @@ def _push_tree_mismatch(refs: list, ptc) -> list:
     return reasons
 
 
+def _write_tree() -> tuple[str | None, str]:
+    """Snapshot the index being committed as a tree object. -> (tree, reason).
+
+    MUST run BEFORE `_scrub_git_env()`, for the same reason `_changed_files()`
+    must: with `git commit -a` or a pathspec commit, git stages into a TEMPORARY
+    index and points the inherited `GIT_INDEX_FILE` at it. Scrubbing first would
+    snapshot the on-disk index instead -- a tree that is not the commit.
+
+    Never raises: a failure returns (None, <reason>), and the caller falls back
+    to testing the working tree WITH A WARNING rather than blocking on plumbing.
+    """
+    try:
+        r = _git("write-tree")
+        if r.returncode != 0:
+            return None, f"`git write-tree` failed: {r.stderr.strip()}"
+        tree = r.stdout.strip()
+        if not tree:
+            return None, "`git write-tree` returned nothing"
+        return tree, ""
+    except Exception as exc:  # noqa: BLE001 - plumbing failure -> fallback
+        return None, f"`git write-tree` raised {type(exc).__name__}: {exc}"
+
+
+def _add_snapshot_worktree(tree: str) -> tuple[str, str]:
+    """Check `tree` out into a throwaway detached worktree. -> (parent, worktree).
+
+    MUST run AFTER `_scrub_git_env()`: with `GIT_INDEX_FILE` still inherited,
+    `worktree add` could write through the in-progress commit's index.
+
+    The commit object is dangling (no ref), so HEAD, branches and the main index
+    are untouched. The worktree is `<parent>/wt` -- a not-yet-existing child of a
+    fresh mkdtemp directory, since `worktree add` wants to create its target.
+    RAISES on any failure; the caller treats that as "snapshot unavailable".
+    """
+    r = _git(
+        "-c", "user.name=drishta-gate", "-c", "user.email=gate@localhost",
+        "-c", "commit.gpgsign=false",
+        "commit-tree", tree, "-m", "drishta pre-commit gate snapshot",
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"`git commit-tree` failed: {r.stderr.strip()}")
+    sha = r.stdout.strip()
+    if not sha:
+        raise RuntimeError("`git commit-tree` returned nothing")
+
+    parent = tempfile.mkdtemp(prefix="drishta-gate-")
+    wt = os.path.join(parent, "wt")
+    try:
+        r = _git("worktree", "add", "--detach", wt, sha, timeout=180)
+        if r.returncode != 0:
+            raise RuntimeError(f"`git worktree add` failed: {r.stderr.strip()}")
+    except BaseException:
+        _remove_snapshot(parent, wt)
+        raise
+    return parent, wt
+
+
+def _remove_snapshot(parent: str | None, wt: str | None) -> None:
+    """Remove OUR worktree and temp dir. NEVER raises, NEVER fails the gate.
+
+    Deliberately no `git worktree prune`: this repo has other live worktrees
+    (`.claude/worktrees/`) and cleanup must touch only the one we made. No
+    junctions or symlinks anywhere -- Windows `rmtree` has historically followed
+    them and could delete the real `.venv`. Must be called from OUTSIDE `wt`
+    (a process cannot remove its own cwd on Windows).
+
+    `--force` TWICE: a `worktree add` killed by its timeout mid-checkout leaves
+    the registration LOCKED ("initializing"), which a single `--force` refuses
+    (git: "use 'remove -f -f'"). The rmtree below would then delete the
+    directory and strand a locked entry in `.git/worktrees/` that `prune` never
+    clears. Safe to force that hard: `wt` is always our own mkdtemp child.
+    """
+    if wt and os.path.isdir(wt):
+        try:
+            r = _git("worktree", "remove", "--force", "--force", wt, timeout=120)
+            if r.returncode != 0 and os.path.isdir(wt):
+                print(
+                    f"[native git hook: pre-commit] note: could not remove the "
+                    f"snapshot worktree {wt}: {r.stderr.strip()}",
+                    file=sys.stderr,
+                )
+        except Exception as exc:  # noqa: BLE001 - cleanup must not fail the gate
+            print(
+                f"[native git hook: pre-commit] note: snapshot worktree cleanup "
+                f"raised {type(exc).__name__}: {exc} ({wt})",
+                file=sys.stderr,
+            )
+    if parent:
+        try:
+            shutil.rmtree(parent, ignore_errors=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _run_test_gates(mode: str) -> int:
     """The CODE gates: pytest and the antipattern scan.
 
@@ -398,6 +499,8 @@ def _run_test_gates(mode: str) -> int:
     import pre_tool_checks as ptc  # noqa: E402 - path set above
 
     mismatch: list = []
+    tree: str | None = None
+    tree_reason = ""
 
     if mode == "pre-commit":
         # RESOLVED BEFORE THE SCRUB, deliberately: `git diff --cached` needs the
@@ -417,6 +520,10 @@ def _run_test_gates(mode: str) -> int:
             )
             return 0
         scope = f"{len(changed)} staged file(s)"
+        # ALSO BEFORE THE SCRUB, same reason: a `-a` commit's TEMPORARY index is
+        # only reachable through the inherited GIT_INDEX_FILE. Failure -> None,
+        # and the working-tree fallback below (loudly).
+        tree, tree_reason = _write_tree()
     else:
         refs = _parse_push_refs()
         if refs is None:
@@ -441,7 +548,49 @@ def _run_test_gates(mode: str) -> int:
         mismatch = _push_tree_mismatch(refs, ptc)
 
     _scrub_git_env()
-    results = ptc._run_gates_concurrently(need_pytest, need_antipattern)
+
+    # Test a SNAPSHOT of the commit, not the working tree (audit C-H1): files on
+    # disk can differ from the index (a staged-then-fixed-on-disk file, or a
+    # staged test importing an untracked module), so a green run against the
+    # tree said nothing about what is actually committed. Built AFTER the scrub.
+    orig_cwd = os.getcwd()
+    parent = wt = None
+    if mode == "pre-commit":
+        reason = tree_reason
+        if tree:
+            try:
+                parent, wt = _add_snapshot_worktree(tree)
+                os.chdir(wt)
+            except Exception as exc:  # noqa: BLE001 - never block on plumbing
+                reason = f"{type(exc).__name__}: {exc}"
+                try:
+                    os.chdir(orig_cwd)
+                except Exception:  # noqa: BLE001
+                    pass
+                _remove_snapshot(parent, wt)
+                parent = wt = None
+        if wt:
+            scope += ", tested against a snapshot of the commit"
+        else:
+            print(
+                "[native git hook: pre-commit] WARNING: could not build a "
+                f"snapshot of this commit ({reason or 'unknown'}); testing the "
+                "WORKING TREE instead, which may not match what you are "
+                "committing.",
+                file=sys.stderr,
+            )
+            scope += ", tested against the WORKING TREE -- snapshot unavailable"
+
+    try:
+        # `_start_process` passes no cwd, so the gate children inherit this one;
+        # `_run_gates_concurrently` waits on both before returning.
+        results = ptc._run_gates_concurrently(need_pytest, need_antipattern)
+    finally:
+        if wt:
+            try:
+                os.chdir(orig_cwd)
+            finally:
+                _remove_snapshot(parent, wt)
 
     failures: list[str] = []
     ran: list[str] = []
