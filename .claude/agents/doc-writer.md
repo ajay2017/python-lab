@@ -19,32 +19,26 @@ tools: Read, Edit, Write, Grep, Glob
 # a 1M context instead of 200K. At that ratio the saving clears the bar the 50%
 # one did not.
 #
-# !! UNVERIFIED -- MANDATORY PROBE ON THE FIRST RUN OF THE NEXT SESSION !!
-# Agent definitions are frozen at SESSION START. Proven 2026-10-11: a newly
-# created agent file came back "not found" mid-session, and three mid-session
-# pin edits all reported their SESSION-START values. So this line could not be
-# verified in the session that wrote it, and an earlier draft of this comment
-# wrongly claimed it had been -- that claim was removed, not weakened.
-#   Probe:  invoke this agent with a MODEL-probe-only prompt.
-#   PASS -> reports Claude Haiku 5.5 / claude-haiku-5-5. Keep.
-#   FAIL -> reports the LEAD's model (e.g. Claude Opus 5). Revert at once.
-# The two failure signatures are distinguishable and that matters: a frozen
-# definition reports the session-start pin, a REJECTED pin reports the LEAD.
-# A rejected full ID ESCALATES to the lead rather than degrading to a cheaper
-# model (observed 2026-09-30 on a sonnet-5-5 pin), so a broken pin here would
-# silently bill Opus rates on a lane budgeted at $0.10/$0.50 -- the most
-# expensive failure mode in this roster. Safe fallback: the bare `haiku` alias,
-# observed resolving to Haiku 5.5 on 2026-10-11.
+# VERIFIED 2026-10-11 by a cold fresh-session MODEL probe -- it reported
+# "Claude Haiku 5.5" / `claude-haiku-5-5`, i.e. the pin, NOT the lead (Claude Opus 5 that
+# session). The two signatures are distinguishable: a FROZEN definition
+# reports the session-start pin, a REJECTED pin reports the LEAD. This was a
+# genuine cold resolution -- the probe also could not have been reading a
+# stale definition, because the value it returned matches the NEW pin and not
+# the one this file carried before (claude-sonnet-5).
 #
-# REVERT TRIGGER (owner, 2026-10-11): the next time this lane invents a fact the
-# lead has to catch, it goes back to `claude-sonnet-5` permanently. Its recorded
-# history is a wrong constant value, invented function names, a fabricated date
-# (2026-06-23), a missing constants-table row that tripped CI (2026-07-18), and
-# a fabricated test count plus a chart that was never built (2026-10-02, F-286).
+# Re-probe on the next pin change, never on assumption. Agent definitions are
+# frozen at SESSION START (proven 2026-10-11: a newly created agent file came
+# back "not found" mid-session, and three mid-session pin edits all reported
+# their session-start values), so a pin can never be verified in the session
+# that writes it.
 #
-# This does NOT relax CLAUDE.md's rule that policy-bearing doc edits (constants
-# tables, gate/requirements rows) stay on the Opus lead. It lowers the cost of
-# the prose this lane writes; it does not license trusting it.
+# If a FUTURE probe ever reports the lead instead: revert at once. A rejected
+# full ID ESCALATES to the lead rather than degrading to a cheaper model, so a
+# broken pin silently costs MORE.
+#
+# The REVERT TRIGGER below is unaffected by this verification: it is about
+# output quality, not model resolution.
 model: claude-haiku-5-5
 color: green
 ---

@@ -5,32 +5,37 @@ so a wrong recommendation or a silently-broken gate costs far more than model
 tokens. The savings come from **delegating the easy parts down** to cheaper models
 while the lead orchestrates and the Opus reviewer guards the decision logic.
 
-> **Model pins (2026-10-11, owner decision) — THREE ARE UNVERIFIED:**
-> `planner` + `reviewer` = **`claude-opus-5-5`** (verified, in use all session);
-> `implementer` = **`claude-sonnet-5-5`**; `doc-writer` = **`claude-haiku-5-5`**;
+> **Model pins (2026-10-11, owner decision) — ALL VERIFIED:**
+> `planner` + `reviewer` = **`claude-opus-5-5`**; `implementer` =
+> **`claude-sonnet-5-5`**; `doc-writer` = **`claude-haiku-5-5`**;
 > `test-runner` = **`claude-haiku-5-5`**.
 >
-> **Agent definitions are frozen at SESSION START**, proven 2026-10-11 — a newly
-> created agent file came back "not found" mid-session, and three mid-session pin
-> edits all reported their session-start values. The three new pins therefore
-> could not be verified in the session that wrote them. Each carries a
-> `MANDATORY PROBE` block; grep for it. **Probe every lane once at the start of
-> the next session.**
+> **Verified 2026-10-11** by a cold fresh-session MODEL probe of all three
+> changed lanes — each reported its own pin, none reported the lead (Claude
+> Opus 5 that session). This **overturns the 2026-09-30 record**:
+> `claude-sonnet-5-5` resolves correctly. `availableModels` lists none of the
+> three 5.5-generation IDs and all three resolve — it gates the `/model`
+> picker, not agent frontmatter.
 >
-> **Distinguishing the two failure modes is the whole diagnostic:** a FROZEN
-> definition reports the session-start pin; a REJECTED pin reports the LEAD's
-> model. A rejected full ID **escalates** to the lead rather than degrading to
-> something cheaper (seen 2026-09-30: a `claude-sonnet-5-5` pin produced Opus
-> 5.5), so a silent failure costs *more*, not less — worst on the two Haiku
-> lanes, budgeted at $0.10/$0.50 and landing on Opus rates.
+> **Agent definitions are frozen at SESSION START**, proven 2026-10-11 — a
+> newly created agent file came back "not found" mid-session, and three
+> mid-session pin edits all reported their session-start values. **So change a
+> pin, then probe on the NEXT session; a pin cannot be verified in the session
+> that writes it.**
+>
+> **The two failure signatures are the whole diagnostic:** a FROZEN definition
+> reports the session-start pin; a REJECTED pin reports the LEAD's model. A
+> rejected full ID **escalates** to the lead rather than degrading to something
+> cheaper, so a silent failure costs *more* — worst on the two Haiku lanes,
+> budgeted at $0.10/$0.50 and landing on Opus rates.
 >
 > **Prices (from the API reference, not recalled):** Opus 5.5 $4/$20 ·
-> Sonnet 5.5 $2/$10 (identical to Sonnet 5 — the `implementer` bump is free
+> Sonnet 5.5 $2/$10 (identical to Sonnet 5 — the `implementer` bump was free
 > capability) · Haiku 5.5 $0.10/$0.50 vs Haiku 4.5 $1/$5 (10× cheaper, newer,
-> 1M context). That ratio is what reversed the 2026-10-07 decision to move
-> `doc-writer` off Haiku, which had been argued on a 50% saving that was too
-> small to cover this lane's re-verification. The quality half of that decision
-> still stands, so the reversal carries an explicit revert trigger.
+> 1M context). That ratio reversed the 2026-10-07 decision to move
+> `doc-writer` off Haiku, which had been argued on a 50% saving too small to
+> cover this lane's re-verification. The quality half of that decision still
+> stands, so the reversal carries an explicit revert trigger.
 
 > **Workflow enforcement (2026-08-15).** The plan → build → review split is no
 > longer convention-only. `pre_tool_checks.py` now blocks a commit that (a) stages

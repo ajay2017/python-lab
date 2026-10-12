@@ -27,17 +27,28 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 # That is NOT evidence about Sonnet 5.5 specifically; it is a reason to retest.
 # Same price either way ($2/$10), so this buys capability, never cost.
 #
-# !! UNVERIFIED -- MANDATORY PROBE ON THE FIRST RUN OF THE NEXT SESSION !!
-# Agent definitions are frozen at SESSION START (proven 2026-10-11: a newly
-# created agent file was "not found" mid-session, and three mid-session pin
-# edits all reported their session-start values). So this line cannot be
-# verified in the session that wrote it.
-#   Probe:  invoke `implementer` with a MODEL-probe-only prompt.
-#   PASS -> it reports Claude Sonnet 5.5 / claude-sonnet-5-5. Keep.
-#   FAIL -> it reports the LEAD's model (e.g. Claude Opus 5). Revert to
-#           `claude-sonnet-5` immediately: a blocked pin ESCALATES to the lead
-#           ($5/$25) rather than degrading to Sonnet 5 ($2/$10), so leaving it
-#           broken silently costs 2.5x on every implementer run.
+# VERIFIED 2026-10-11 by a cold fresh-session MODEL probe -- it reported
+# "Sonnet 5.5" / `claude-sonnet-5-5`, i.e. the pin, NOT the lead (Claude Opus 5 that
+# session). The two signatures are distinguishable: a FROZEN definition
+# reports the session-start pin, a REJECTED pin reports the LEAD. This was a
+# genuine cold resolution -- the probe also could not have been reading a
+# stale definition, because the value it returned matches the NEW pin and not
+# the one this file carried before (claude-sonnet-5).
+#
+# Re-probe on the next pin change, never on assumption. Agent definitions are
+# frozen at SESSION START (proven 2026-10-11: a newly created agent file came
+# back "not found" mid-session, and three mid-session pin edits all reported
+# their session-start values), so a pin can never be verified in the session
+# that writes it.
+#
+# If a FUTURE probe ever reports the lead instead: revert at once. A rejected
+# full ID ESCALATES to the lead rather than degrading to a cheaper model, so a
+# broken pin silently costs MORE.
+#
+# NOTE: this OVERTURNS the 2026-09-30 observation above. `claude-sonnet-5-5`
+# resolves correctly as of 2026-10-11. Whether the org allowlist changed or
+# the 09-30 run had another cause is unknown and no longer worth chasing --
+# the pin is verified working, and that is the fact that matters.
 model: claude-sonnet-5-5
 color: blue
 ---
