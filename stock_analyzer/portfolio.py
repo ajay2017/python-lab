@@ -3,7 +3,7 @@ import pandas as pd
 import numbers
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_UNDERSIZED_PCT, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS, EARNINGS_IMMINENT_DAYS, EARNINGS_CRITICAL_DAYS, REDEPLOY_CORR_DIVERSIFIER_MAX, REDEPLOY_CORR_CORRELATED_MIN
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_UNDERSIZED_PCT, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS, EARNINGS_IMMINENT_DAYS, EARNINGS_CRITICAL_DAYS, REDEPLOY_CORR_DIVERSIFIER_MAX, REDEPLOY_CORR_CORRELATED_MIN, CORR_MIN_OBS_TRUSTED
 from stock_analyzer.earnings_advisor import _today_et
 from stock_analyzer import asset_type
 
@@ -1341,19 +1341,13 @@ def sector_benchmark_tilt(real_sector_df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Correlation & Diversification ─────────────────────────────────────────────
 
-# Display-only measurement floor — NOT an investment-policy threshold, so it
-# lives here rather than in constants.py, matching the F-230
-# `stress_test._MIN_STRESS_WINDOW_DAYS` / `account._ANNUALIZE_CAVEAT_MAX_DAYS`
-# precedent. It decides whether a data-quality WARNING is shown next to an
-# awareness reading (gates no recommendation, changes no score) AND, as of
-# `correlation_claim_verified()` below, whether a correlation-derived claim is
-# trustworthy enough to be PERSISTED into a durable record — a data-quality
-# call, not an investment-policy one, which is why it still lives here rather
-# than in constants.py. The value is not newly invented: it reuses the app's
-# existing "≥20 overlapping trading days" empirical-correlation minimum
-# (`portfolio_intelligence.factor_tilt`'s `min_overlap_days`, itself mirroring
-# risk.py's rate-sensitivity floor).
-CORR_MIN_OBS_TRUSTED = 20
+# CORR_MIN_OBS_TRUSTED now lives in constants.py (moved 2026-10-12, value
+# unchanged -- see its comment there for why it stopped being a display-only
+# floor). It is imported into THIS module's namespace on purpose:
+# `correlation_sample_state` reads the module global at call time, so
+# `monkeypatch.setattr(portfolio, "CORR_MIN_OBS_TRUSTED", ...)` keeps working
+# and `portfolio.CORR_MIN_OBS_TRUSTED` stays a valid public name.
+# (imported at the top of this file, in the constants import list)
 
 
 CORR_SAMPLE_TRUSTED, CORR_SAMPLE_THIN, CORR_SAMPLE_UNKNOWN = "trusted", "thin", "unknown"

@@ -1,5 +1,7 @@
 # G-26 — Standing Danger-Tier Correlated-Pair Add Suppression
 
+**STATUS CORRECTED 2026-10-12 — read before the older text below.** `CORR_MIN_OBS_TRUSTED` now lives in `stock_analyzer/constants.py` (value unchanged at 20, owner decision D1). Where §6/§10/§11 below say it "lives in" / "stays in" `portfolio.py`, or that the move is "pending", that is superseded; `portfolio.py` re-exports the same object. The thin-sample check is now ONE predicate, `portfolio.correlation_sample_state` (`35c89ad`), replacing the five copies (including both gates' `_corr_coverage_too_thin`). A 🧬 Structural Scan can no longer be saved as G-25's baseline off an unverified matrix (`028fef4`, audit A-H1). Still to come: PAIR_RISK trim withholding on a thin sample, with a 4th G-26 `trim_call` state "withheld" (audit A-H2).
+
 **Status: F-295 SHIPPED 2026-10-10 (`9670fec` screen, `4299c8a` record) — see §11; it closes `classify_risk_banner`, the last surface §6 listed as sharing this blind spot. G-26 SHIPPED 2026-10-08 (`35b5bf4`); F-290 disclosure 2026-10-09 (`0f7bf67`); F-291 persisted-claim guard (§7), F-292 EOD history (§8) and F-293 on-screen disclosure (§9) ALL SHIPPED 2026-10-09 — the 3-commit sequence is COMPLETE: records withhold, screens disclose. DEPLOYED AND DORMANT as of 2026-10-09 —
 the non-firing path is screenshot-confirmed, the FIRING path is still unobserved
 and cannot be forced (see §4a).** Designed by the Opus

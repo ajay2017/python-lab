@@ -42,7 +42,7 @@ def _floor_compares(tree):
 
 @pytest.mark.parametrize("rel", [
     "stock_analyzer/pair_add_gate.py", "stock_analyzer/cluster_add_gate.py",
-    "stock_analyzer/util.py", "app.py",
+    "stock_analyzer/util.py", "app.py", "cron_runner.py",
 ])
 def test_no_compare_against_the_floor_outside_portfolio(rel):
     assert _floor_compares(_tree(rel)) == [], rel
@@ -116,3 +116,31 @@ def test_app_f245_line_pinned_both_ends(needle, const):
     t = _tree("app.py")
     assert _assigned_from_state(t, "_fs_sample")
     assert _guarded_by(t, "_fs_sample", needle, const)
+
+
+def test_floor_has_one_source_in_constants():
+    """C0 (2026-10-12, owner decision D1): CORR_MIN_OBS_TRUSTED lives in
+    constants.py, value unchanged. portfolio re-exports the SAME object, and
+    no other module assigns its own copy (an assignment anywhere else would
+    silently fork the floor that every correlation gate reads)."""
+    from stock_analyzer import constants, portfolio
+    assert constants.CORR_MIN_OBS_TRUSTED == 20
+    assert portfolio.CORR_MIN_OBS_TRUSTED is constants.CORR_MIN_OBS_TRUSTED
+    assigners = []
+    for path in sorted((_ROOT / "stock_analyzer").glob("*.py")) + [_ROOT / "app.py", _ROOT / "cron_runner.py"]:
+        rel = str(path.relative_to(_ROOT)).replace("\\", "/")
+        for n in ast.walk(_tree(rel)):
+            if isinstance(n, (ast.Assign, ast.AnnAssign)):
+                targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+                if any(isinstance(t, ast.Name) and t.id == "CORR_MIN_OBS_TRUSTED" for t in targets):
+                    assigners.append(rel)
+    assert assigners == ["stock_analyzer/constants.py"], assigners
+
+
+def test_monkeypatching_the_portfolio_name_still_moves_the_floor(monkeypatch):
+    """The re-export must stay a module global that correlation_sample_state
+    reads at call time. Contrast: unpatched, 5 is thin."""
+    from stock_analyzer import portfolio
+    assert portfolio.correlation_sample_state({"n_obs": 5}) == portfolio.CORR_SAMPLE_THIN
+    monkeypatch.setattr(portfolio, "CORR_MIN_OBS_TRUSTED", 1)
+    assert portfolio.correlation_sample_state({"n_obs": 5}) == portfolio.CORR_SAMPLE_TRUSTED

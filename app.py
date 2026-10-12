@@ -166,6 +166,7 @@ from stock_analyzer.constants import (
     ECONOMIC_CALENDAR_WINDOW_DAYS,
     CORR_HIGH_PAIRS_THRESHOLD,
     CORR_DANGER_PAIRS_THRESHOLD,
+    CORR_MIN_OBS_TRUSTED,  # imported from constants (not portfolio) so the POLICY_DECISION_IN_RENDER ratchet can see it
     RISK_OFF_VIX_LEVEL,
     RISK_ON_VIX_LEVEL,
     FACTOR_ETF_TICKERS,
@@ -282,7 +283,7 @@ from stock_analyzer.portfolio import (
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
     trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
     real_sector_exposure_with_lookthrough, combined_name_exposure,
-    classify_book_corr, CORR_MIN_OBS_TRUSTED, expected_beta_after_add,
+    classify_book_corr, expected_beta_after_add,
     correlation_sample_state, CORR_SAMPLE_THIN, CORR_SAMPLE_UNKNOWN,
     beta_diversifying_sectors,
 )

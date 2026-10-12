@@ -215,10 +215,28 @@ REDEPLOY_CORR_CORRELATED_MIN  = 0.70   # corr at/above this → "limited benefit
 # ── Portfolio correlation pairs (Risk Analysis "High-Correlation Pairs") ─────
 # Pairwise correlation among YOUR CURRENT HOLDINGS (portfolio.diversification_score)
 # — a different surface from the redeploy-candidate labels above (REDEPLOY_CORR_*).
-# AWARENESS ONLY — never gates/suppresses a recommendation; DANGER also seeds
-# an advisory "consider trimming one side" note (portfolio.diversification_recommendations).
+# NOT awareness-only (corrected 2026-10-12 -- this comment said "never gates"
+# long after it stopped being true): a NEW warning-tier pair pauses Grow
+# Today's add-to-winner suggestion (G-25, cluster_add_gate), a STANDING
+# danger-tier pair pauses it (G-26, pair_add_gate), and DANGER also seeds the
+# "consider trimming one side" PAIR_RISK call (portfolio.diversification_recommendations).
 CORR_HIGH_PAIRS_THRESHOLD   = 0.65   # "warning" tier — pair flagged as meaningfully correlated
 CORR_DANGER_PAIRS_THRESHOLD = 0.80   # "danger" tier — pair flagged as near-duplicate exposure
+
+# Minimum shared daily returns before a correlation reading is TRUSTED.
+# Moved here from portfolio.py 2026-10-12, value unchanged (owner decision D1,
+# audit A-H1/A-H2). It was kept out of this file as a "display-only,
+# gates-no-recommendation" floor; that rationale stopped being true once it
+# decided what may be persisted (the weekly thesis posture, the EOD
+# risk_metric_history row), whether a Structural Scan may be saved as G-25's
+# baseline, whether Home's risk chip may read "All Clear", and whether a
+# correlation add-gate's empty map reads "couldn't check". Changing it is now
+# an investment-policy decision. Read it ONLY via
+# portfolio.correlation_sample_state -- never compare n_obs to it directly.
+# Value reuses the app's existing ">= 20 overlapping trading days" empirical-
+# correlation minimum (portfolio_intelligence.factor_tilt's min_overlap_days,
+# mirroring risk.py's rate-sensitivity floor) rather than inventing a number.
+CORR_MIN_OBS_TRUSTED = 20
 
 # ── Factor Tilt Heatmap (Concept B panel 3 — next-evolution roadmap Phase 2, ─
 # sub-wave 3). Returns-based style analysis proxies (Pearson correlation of
