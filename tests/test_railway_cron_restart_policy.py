@@ -1,7 +1,9 @@
 """Pins railway.cron.toml's restart policy (owner decision 2026-10-12,
-D-M2 review NB-1). Since D-M1/D-M2 the cron lanes return 1 on real
-failures; with Railway's default policy a retry could re-send the failure
-email and re-pay thesis-lane LLM calls. "never" makes one run = one email.
+D-M2 review NB-1). Railway does not restart cron-scheduled services in any
+case (verified in the dashboard 2026-10-12), so this records intent: since
+D-M1/D-M2 the lanes return 1 on real failures, and one failed run must mean
+one failure email, never a retry. Pinned so the intent can't drift if the
+config is reused for a non-cron service.
 """
 import tomllib
 from pathlib import Path

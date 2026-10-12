@@ -1,10 +1,10 @@
 [deploy]
 startCommand = "python cron_runner.py"
-# Never auto-restart a cron run that exits non-zero (owner decision
-# 2026-10-12, D-M2 review NB-1). Since D-M1/D-M2 the lanes report real
-# failures with rc 1, and each failure already sends the cron-failure
-# email -- that email is the recovery signal. A blind instant retry would
-# mostly hit the same DB/provider outage, re-send the email, and on the
-# Sunday thesis lane re-pay for LLM reviews whose saves failed. A
-# transient blip is covered by the lane's next scheduled run.
+# Records intent only. Railway does not restart cron-scheduled services at
+# all ("Services with a cron schedule do not have a restart policy" --
+# Railway dashboard, verified 2026-10-12), so a run that exits non-zero
+# simply ends and the lane runs again at its next scheduled slot. That
+# behaviour is what the D-M1/D-M2 failure contract relies on: each failed
+# run sends ONE cron-failure email and is never retried. Kept explicit so
+# nothing changes if this config is ever reused for a non-cron service.
 restartPolicyType = "never"
