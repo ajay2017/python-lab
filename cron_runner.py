@@ -697,12 +697,21 @@ def _run_eod(now_et, force: bool) -> int:
         else:
             try:
                 _acct_cash_rec = db.load_account_cash()
+                # gross_book from port_df's Market Value (raw shares), not a
+                # re-sum of the int(shares)-truncated rows -- see compute_eod.
                 _acct_row = compute_account_snapshot(
                     now_et.date(), rows, _acct_cash_rec,
                     MARGIN_MAINTENANCE_RATE, ACCOUNT_CASH_STALE_DAYS, now_et,
+                    gross_book=payload.get("gross_book"),
                 )
                 if db.save_account_daily_snapshot(_acct_row):
+                    # Also log the old truncated-share row sum, so the size of
+                    # the 2026-10-12 regime step (X = fractional remainders the
+                    # history used to omit) is measurable from the first run.
+                    _row_sum = sum(float(r.get("shares") or 0) * float(r.get("close_price") or 0)
+                                   for r in rows)
                     _log(f"account_daily_snapshot written (gross_book=${_acct_row['gross_book']:,.0f}, "
+                         f"truncated-share sum=${_row_sum:,.0f}, "
                          f"leverage={_acct_row['leverage']}, date={today_str}).")
                 else:
                     _log(f"account_daily_snapshot NOT written (DB offline / table missing, date={today_str}).")

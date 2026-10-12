@@ -1183,7 +1183,10 @@ def _assess_pullback(spy_6mo, fragility, threshold: float) -> dict | None:
 def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_ALERT_INDEX_PCT) -> dict:
     """End-of-day job inputs: today's snapshot rows (for the Today's-P&L baseline)
     + a reactive pullback read. Returns {"snapshot_rows": [...], "pullback": {...}|None,
-    "built_at": <ET iso>, "errors": [...]}. Never raises.
+    "gross_book": float|None, "built_at": <ET iso>, "errors": [...], plus held_data /
+    port_df / port_risk / held_tickers}. Never raises. `gross_book` is the book's true
+    market value (port_df Market Value, raw shares); `snapshot_rows` keeps the
+    truncated int(shares) Today's-P&L baseline on purpose (see the body).
 
     snapshot_rows shape matches db.save_daily_snapshot: {ticker, shares, close_price}.
     Reuses the SAME _build_context as the protective run (post-close → last close
@@ -1204,8 +1207,25 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
         if t and px and px > 0 and sh and sh > 0:
             snapshot_rows.append({"ticker": t, "shares": sh, "close_price": px})
 
+    # The book's TRUE market value (price x raw shares) -- the same total the
+    # live app uses (`port_df["Market Value"].sum()`). snapshot_rows keeps
+    # build_portfolio_df's int(shares) on purpose: it is the Today's-P&L
+    # baseline, and daily_pnl's drift check relies on both sides of that
+    # comparison being truncated the same way. The account history must not
+    # inherit that truncation, so it gets this total instead (2026-10-12).
+    gross_book = None
+    if "Market Value" in port_df.columns:
+        try:
+            import pandas as _pd_gb   # this module has no top-level pandas import
+            _mv = _pd_gb.to_numeric(port_df["Market Value"], errors="coerce")
+            if _mv.notna().any():
+                gross_book = round(float(_mv.sum(skipna=True)), 2)
+        except Exception:
+            gross_book = None
+
     pullback = _assess_pullback(ctx["spy_6mo"], ctx["fragility"], pullback_threshold)
     return {"snapshot_rows": snapshot_rows, "pullback": pullback,
+            "gross_book": gross_book,
             "built_at": built_at, "errors": list(ctx["errors"]),
             "held_data": ctx.get("held_data", {}),
             # Additive (2026-09-15, portfolio_risk_snapshots capture) — both

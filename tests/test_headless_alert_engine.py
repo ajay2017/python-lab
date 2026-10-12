@@ -1434,3 +1434,58 @@ def test_compute_watchlist_entries_app_cron_parity_same_helper_same_ctx():
 
     # Same hard-breach outcome the directly-computed context predicts.
     assert result["entries"] == []
+
+
+def test_compute_eod_gross_book_uses_market_value_not_truncated_rows():
+    """2026-10-12: build_portfolio_df stores int(shares) but Market Value is
+    price x RAW shares. compute_eod must report the true book (the same total
+    the live app uses) while snapshot_rows keeps the truncated P&L baseline."""
+    ctx = {
+        "ok": True, "errors": [],
+        "port_df": pd.DataFrame([
+            {"Ticker": "AAPL", "Price": 200.0, "Shares": 10, "Market Value": 2120.0},   # 10.6 sh
+            {"Ticker": "BKNG", "Price": 4800.0, "Shares": 0, "Market Value": 1920.0},   # 0.4 sh
+        ]),
+        "held_data": {}, "fragility": None, "spy_6mo": None,
+    }
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx):
+        result = hae.compute_eod(TODAY)
+    assert result["gross_book"] == 4040.0
+    # The P&L baseline is deliberately unchanged (daily_pnl relies on it).
+    assert result["snapshot_rows"] == [{"ticker": "AAPL", "shares": 10.0, "close_price": 200.0}]
+
+
+def test_compute_eod_gross_book_is_none_without_market_value():
+    ctx = {"ok": True, "errors": [],
+           "port_df": pd.DataFrame([{"Ticker": "AAPL", "Price": 200.0, "Shares": 10}]),
+           "held_data": {}, "fragility": None, "spy_6mo": None}
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx):
+        result = hae.compute_eod(TODAY)
+    assert result["gross_book"] is None
+
+
+def test_compute_eod_all_nan_market_value_is_none_not_a_zero_book():
+    """Second line of defence (review 2026-10-12): an all-NaN Market Value must
+    report None (fall back), never 0.0 -- compute_account_snapshot accepts 0.0
+    as a real value and would record a fabricated empty book."""
+    ctx = {"ok": True, "errors": [],
+           "port_df": pd.DataFrame([{"Ticker": "AAPL", "Price": float("nan"), "Shares": 10,
+                                     "Market Value": float("nan")}]),
+           "held_data": {}, "fragility": None, "spy_6mo": None}
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx):
+        result = hae.compute_eod(TODAY)
+    assert result["gross_book"] is None
+
+
+def test_compute_eod_mixed_nan_market_value_skips_the_nan_row():
+    """skipna is intended: a NaN-priced holding is caught upstream by the EOD
+    lane's partial-outage guard (3A'), which skips the account row before an
+    understated gross_book could be written."""
+    ctx = {"ok": True, "errors": [],
+           "port_df": pd.DataFrame([
+               {"Ticker": "AAPL", "Price": 200.0, "Shares": 10, "Market Value": 2000.0},
+               {"Ticker": "BAD", "Price": float("nan"), "Shares": 5, "Market Value": float("nan")}]),
+           "held_data": {}, "fragility": None, "spy_6mo": None}
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx):
+        result = hae.compute_eod(TODAY)
+    assert result["gross_book"] == 2000.0

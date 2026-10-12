@@ -624,3 +624,16 @@ def test_a_holding_with_no_price_in_port_df_is_still_a_partial_outage(monkeypatc
         held_tickers=["AAPL", "BKNG"], port_df=port_df))
     assert cr._run_eod(NOW, force=True) == 1
     assert "BKNG" in cr._LAST_LANE_FAILURE_DETAIL
+
+
+def test_eod_passes_the_true_gross_book_to_the_account_snapshot(monkeypatch):
+    """The cron must forward compute_eod's gross_book (raw-share Market Value),
+    not let compute_account_snapshot re-sum the truncated rows."""
+    seen = {}
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: _payload(
+        snapshot_rows=[{"ticker": "AAPL", "shares": 10, "close_price": 200.0}],
+        gross_book=2120.0))
+    monkeypatch.setattr(cr, "compute_account_snapshot",
+                        lambda *_a, **k: seen.update(k) or {"gross_book": k.get("gross_book"), "leverage": None})
+    assert cr._run_eod(NOW, force=True) == 0
+    assert seen.get("gross_book") == 2120.0

@@ -256,3 +256,36 @@ def test_monthly_resample_runs_without_error():
     df = _lev_df(40)
     out = leverage_series_for_chart(df, "Monthly")
     assert not out.empty
+
+
+# ── gross_book override (2026-10-12): history uses the true book value ───────
+#
+# snapshot_rows carries build_portfolio_df's int(shares), so re-summing it
+# understates each fractional remainder and drops a sub-1-share lot; the
+# live app values the book from port_df["Market Value"] (price x raw shares).
+
+def test_gross_book_override_replaces_the_truncated_row_sum():
+    rows = [{"ticker": "AAPL", "shares": 10, "close_price": 200.0}]   # truly 10.6 sh
+    r = compute_account_snapshot("2026-10-12", rows, None, 0.25, 7, _NOW,
+                                 gross_book=2120.0 + 1920.0)          # + 0.4 sh BKNG
+    assert r["gross_book"] == 4040.0
+
+
+def test_gross_book_override_feeds_net_equity_and_leverage():
+    rec = {"cash_balance": -2000.0, "updated_at": _NOW.isoformat()}
+    r = compute_account_snapshot("2026-10-12", [], rec, 0.25, 7, _NOW, gross_book=6000.0)
+    assert r["net_equity"] == 4000.0
+    assert r["leverage"] == 1.5
+
+
+@pytest.mark.parametrize("bad", [None, "x", float("nan"), float("inf"), -1.0])
+def test_unusable_gross_book_falls_back_to_the_row_sum(bad):
+    rows = [{"ticker": "AAPL", "shares": 10, "close_price": 200.0}]
+    r = compute_account_snapshot("2026-10-12", rows, None, 0.25, 7, _NOW, gross_book=bad)
+    assert r["gross_book"] == 2000.0
+
+
+def test_zero_gross_book_is_accepted_not_treated_as_missing():
+    rows = [{"ticker": "AAPL", "shares": 10, "close_price": 200.0}]
+    r = compute_account_snapshot("2026-10-12", rows, None, 0.25, 7, _NOW, gross_book=0.0)
+    assert r["gross_book"] == 0.0

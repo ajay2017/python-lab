@@ -41,6 +41,7 @@ def compute_account_snapshot(
     rate: float,
     stale_days_limit: int,
     now,
+    gross_book: float | None = None,
 ) -> dict:
     """One day's account-level leverage/margin-cushion snapshot — pure, no I/O.
 
@@ -67,10 +68,27 @@ def compute_account_snapshot(
     own return dict, never re-derived here — call_distance returns None when
     there's no margin debit (cash_balance >= 0, i.e. unlevered), in which case
     both stay None even though cash is fresh and leverage is still computed.
+
+    `gross_book` (optional, 2026-10-12): the book's true market value, when
+    the caller has it. `snapshot_rows` carries the TRUNCATED share counts
+    `portfolio.build_portfolio_df` stores (`int(shares)`), so summing it
+    understates every fractional remainder and drops a sub-1-share lot
+    entirely -- while the live app values the book from
+    `port_df["Market Value"]` (price x raw shares). Passing that total keeps
+    the history in line with what the Account page shows. A missing,
+    non-numeric, negative or non-finite value falls back to the row sum.
     """
     from . import margin as _margin
+    import math as _math
 
-    gross_book = _gross_book_from_rows(snapshot_rows)
+    try:
+        _gb = float(gross_book) if gross_book is not None else None
+    except (TypeError, ValueError):
+        _gb = None
+    if _gb is not None and _math.isfinite(_gb) and _gb >= 0:
+        gross_book = round(_gb, 2)
+    else:
+        gross_book = _gross_book_from_rows(snapshot_rows)
 
     cash_balance = None
     net_equity = None
