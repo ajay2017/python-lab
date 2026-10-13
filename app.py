@@ -5704,7 +5704,7 @@ if page == "🏠 Home":
             pctl_high=PERSONALIZED_DISCOVERY_PROFILE_PCTL_HIGH,
         )
 
-    def _etf_candidates_for_grow():
+    def _etf_candidates_for_grow_unguarded():
         """ETF new-pick candidate pool (ETF-support Phase 2b) — resolves the
         owner-curated etf_registry table + the currently-held book into the
         day's not-held ETF candidates, then attaches each one's bundle via
@@ -5748,6 +5748,25 @@ if page == "🏠 Home":
                 _eb = None
             _out.append({**_ec, "bundle": _eb})
         return _out
+
+    def _etf_candidates_for_grow():
+        """Isolation wrapper -- the ONLY entry point the Brief builds call.
+        Both build_daily_briefing call sites evaluate this as an argument
+        INSIDE their try, so an exception escaping the ETF lane (a malformed
+        registry payload, resolve_etf_candidates, the import) used to fail the
+        whole build for an additive buy-side lane (audit 2026-10-11, Low-B):
+        on the MISS path that took the Brief offline -- protective Act Today
+        included; on the HIT-path freshness rebuild it silently kept the old
+        Brief beside already-refreshed _grow_composites. None is the clean
+        no-op build_daily_briefing already gives an unavailable lane, the
+        same value the cron's compute_morning_picks assigns on the same
+        failure."""
+        try:
+            return _etf_candidates_for_grow_unguarded()
+        except Exception as _etf_exc:
+            st.caption(f"ℹ️ ETF candidate check failed ({type(_etf_exc).__name__}) — "
+                       f"ETF candidates were not checked on this run.")
+            return None
 
     # ── Synthesis memoization (perf) ─────────────────────────
     # The heavy synthesis below (alerts -> risk -> grow-composites -> Daily
