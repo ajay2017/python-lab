@@ -968,8 +968,13 @@ def compute_health(session_state: Any = None, include_quality: bool = False) -> 
     Default `False` so Home's hot-path call skips it entirely; the System
     Trust page passes `include_quality=True` to actually see it. Returns
     `None` for "quality" (never `[]`) when skipped — `check_data_quality`
-    itself always returns at least 8 rows on a genuine run, so `None` is
-    an unambiguous "not requested this call", not a collapsed offline read.
+    itself always returns a NON-EMPTY list when it runs (one row per check:
+    12 on a normal run — one per orphan-cache table plus the 4 duplicate
+    checks — and 5 when the held/watchlist/discovery rosters are offline;
+    a single error row if it raises — corrected
+    2026-10-13, the earlier "at least 8 rows" predated the 2026-10-02 M1
+    roster fix), so `None` is an unambiguous "not requested this call",
+    not a collapsed offline read.
 
     Returns "ok" | "warn" | "down"; the Home chip renders only for
     "warn"/"down"."""

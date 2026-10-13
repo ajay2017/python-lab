@@ -1012,6 +1012,7 @@ the user acted on it):
         for all to service_role using (true) with check (true);
 """
 
+import math
 import os
 import re
 
@@ -1650,7 +1651,14 @@ def _load_daily_snapshots_all_pages(start_date=None, end_date=None) -> list:
     across those separate executions, which can silently skip or duplicate
     a row at a page boundary once this table exceeds one page (Opus review
     finding, 2026-09-23 -- caught before this table's ~923 rows crossed the
-    1000-row page boundary, not after)."""
+    1000-row page boundary, not after).
+
+    Chained `.order()` calls DO combine: postgrest 2.29.0 (pinned via
+    supabase==2.29.0) appends to the existing `order` param, producing
+    `snapshot_date.asc,ticker.asc` -- read from that wheel's
+    base_request_builder.order source 2026-10-13 (audit 2026-10-11 Low-D
+    had flagged it as assumed-not-tested). Same for every two-column sort
+    in this module; re-check on a supabase bump."""
     page_size = _DAILY_SNAPSHOTS_PAGE_SIZE
     all_rows: list = []
     start = 0
@@ -1868,7 +1876,16 @@ def _json_safe(obj):
     import math
     if obj is None or isinstance(obj, bool) or isinstance(obj, (int, str)):
         return obj
+    # pandas' missing-value sentinels -> None. The str() fallback below would
+    # otherwise store the literal '<NA>' / 'NaT' (2026-10-13 review).
+    if obj is pd.NA or obj is pd.NaT:
+        return None
     if isinstance(obj, float):
+        if type(obj) is not float and hasattr(obj, "item"):   # np.float64 etc.
+            try:
+                obj = float(obj.item())
+            except Exception:
+                return None
         return obj if math.isfinite(obj) else None
     if isinstance(obj, dict):
         return {str(k): _json_safe(v) for k, v in obj.items()}
@@ -1883,6 +1900,26 @@ def _json_safe(obj):
         return str(obj)
     except Exception:
         return None
+
+
+
+def _sanitize_for_write(payload, writer: str):
+    """`_json_safe` at a writer's upsert boundary (audit 2026-10-11 Low-D):
+    one NaN/±inf or unencodable value (a numpy int, pd.NA) used to fail the
+    WHOLE request and lose every row in it; now it is stored as NULL. Because
+    that turns a loud failure into a quiet NULL, it WARNS naming every key a
+    non-None value was nulled in, so the day's log still shows it. Accepts a
+    dict or a list of dicts; returns the same shape."""
+    rows = payload if isinstance(payload, list) else [payload]
+    clean = [_json_safe(r) for r in rows]
+    nulled = sorted({
+        str(k) for r, c in zip(rows, clean) if isinstance(r, dict) and isinstance(c, dict)
+        for k, v in r.items() if v is not None and c.get(str(k)) is None
+    })
+    if nulled:
+        import warnings
+        warnings.warn(f"{writer}: non-finite/unencodable value(s) stored as NULL in {nulled}")
+    return clean if isinstance(payload, list) else clean[0]
 
 
 _TICKER_LAST_TOUCHED_PAGE_SIZE = 1000
@@ -3047,7 +3084,7 @@ def save_recommendations(records: list[dict]) -> dict:
             v = float(x) if x is not None else None
         except (TypeError, ValueError):
             return None
-        if v is None or v != v or v <= 0:   # v != v filters NaN
+        if v is None or not math.isfinite(v) or v <= 0:   # NaN AND ±inf (Low-D)
             return None
         return v
 
@@ -3124,6 +3161,12 @@ def save_recommendations(records: list[dict]) -> dict:
         })
     if not payload:
         return {"attempted": 0, "saved": 0, "error": None}
+    # Writer-boundary sanitize (audit 2026-10-11 Low-D): composite_score and
+    # the pillar sub-scores pass through raw from callers, so ONE NaN/±inf
+    # (or a numpy int, which JSON can't encode) used to fail the whole day's
+    # batch. Non-finite -> None (NULL, the same "not measured" every reader
+    # already handles), warned by key; numpy numbers -> native.
+    payload = _sanitize_for_write(payload, "save_recommendations")
 
     # Columns that require an ALTER TABLE DDL before they exist. FIVE GENERATIONS
     # (F-179 sentiment, the 2026-08-01 pillar-score cols, F-249 sizing,
@@ -3293,7 +3336,7 @@ def save_gate_suppressions(rows: list[dict]) -> dict:
             v = float(x) if x is not None else None
         except (TypeError, ValueError):
             return None
-        if v is None or v != v or v <= 0:   # v != v filters NaN
+        if v is None or not math.isfinite(v) or v <= 0:   # NaN AND ±inf (Low-D)
             return None
         return v
 
@@ -3303,7 +3346,7 @@ def save_gate_suppressions(rows: list[dict]) -> dict:
             v = float(x) if x is not None else None
         except (TypeError, ValueError):
             return None
-        if v is None or v != v:   # v != v filters NaN
+        if v is None or not math.isfinite(v):   # NaN AND ±inf (Low-D)
             return None
         return v
 
@@ -3814,8 +3857,10 @@ def save_score_history_batch(rows: list[dict]) -> bool:
     if not has_db():
         return False
     try:
+        # Writer-boundary sanitize (audit 2026-10-11 Low-D): NaN/±inf -> NULL
+        # (warned by key), numpy numbers -> native; see _sanitize_for_write.
         _client().table("score_history").upsert(
-            rows,
+            _sanitize_for_write(rows, "save_score_history_batch"),
             on_conflict="ticker,score_date",
         ).execute()
         return True
@@ -5049,8 +5094,10 @@ def save_account_daily_snapshot(row: dict) -> bool:
     if not row or not row.get("snapshot_date"):
         return False
     try:
+        # Writer-boundary sanitize (audit 2026-10-11 Low-D): NaN/±inf -> NULL
+        # (warned by key), numpy numbers -> native; see _sanitize_for_write.
         _client().table("account_daily_snapshots").upsert(
-            row, on_conflict="snapshot_date",
+            _sanitize_for_write(row, "save_account_daily_snapshot"), on_conflict="snapshot_date",
         ).execute()
         return True
     except Exception as e:
@@ -5107,8 +5154,10 @@ def save_portfolio_risk_snapshot(row: dict) -> bool:
     if not row or not row.get("snapshot_date"):
         return False
     try:
+        # Writer-boundary sanitize (audit 2026-10-11 Low-D): NaN/±inf -> NULL
+        # (warned by key), numpy numbers -> native; see _sanitize_for_write.
         _client().table("portfolio_risk_snapshots").upsert(
-            row, on_conflict="snapshot_date",
+            _sanitize_for_write(row, "save_portfolio_risk_snapshot"), on_conflict="snapshot_date",
         ).execute()
         return True
     except Exception as e:
@@ -5173,7 +5222,7 @@ def save_rec_events(rows: "list[dict]") -> dict:
             v = float(x) if x is not None else None
         except (TypeError, ValueError):
             return None
-        if v is None or v != v:   # NaN check
+        if v is None or not math.isfinite(v):   # NaN AND ±inf (Low-D)
             return None
         return v
 
