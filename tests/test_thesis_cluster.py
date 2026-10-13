@@ -204,13 +204,13 @@ def test_parse_cluster_response_valid_cluster_survives():
 # ─── classify_clusters ────────────────────────────────────────────────────────
 
 def test_classify_clusters_none_validated_clusters_returns_empty():
-    assert tc.classify_clusters(None, None) == []
-    assert tc.classify_clusters([], None) == []
+    assert tc.classify_clusters(None, None, correlation_verified=True) == []
+    assert tc.classify_clusters([], None, correlation_verified=True) == []
 
 
 def test_classify_clusters_none_correlation_result_unverified():
     validated = [{"tickers": ["AAA", "BBB"], "shared_assumption": "x", "quotes": {}}]
-    result = tc.classify_clusters(validated, None)
+    result = tc.classify_clusters(validated, None, correlation_verified=True)
     assert result[0]["state"] == "unverified"
     assert result[0]["corr_subpairs"] == []
 
@@ -218,13 +218,34 @@ def test_classify_clusters_none_correlation_result_unverified():
 def test_classify_clusters_superset_match_confirmed():
     validated = [{"tickers": ["AAA", "BBB"], "shared_assumption": "x", "quotes": {}}]
     corr_result = [{"tickers": ["AAA", "BBB", "CCC"]}]
-    result = tc.classify_clusters(validated, corr_result)
+    result = tc.classify_clusters(validated, corr_result, correlation_verified=True)
     assert result[0]["state"] == "confirmed"
 
 
 def test_classify_clusters_no_superset_possible_with_subpairs():
     validated = [{"tickers": ["AAA", "BBB", "CCC"], "shared_assumption": "x", "quotes": {}}]
     corr_result = [{"tickers": ["AAA", "BBB"]}]  # partial overlap, not a superset
-    result = tc.classify_clusters(validated, corr_result)
+    result = tc.classify_clusters(validated, corr_result, correlation_verified=True)
     assert result[0]["state"] == "possible"
     assert result[0]["corr_subpairs"] == [["AAA", "BBB"]]
+
+
+def test_classify_clusters_unverified_matrix_never_reads_possible():
+    """Audit 2026-10-11 Low-A: an all-NaN / too-thin matrix gives `[]` from
+    correlation_clusters, NOT None -- which used to make every thesis cluster
+    'possible' (a hidden bet prices don't show) from prices that measured
+    nothing. An unverified matrix now reads 'unverified' for every cluster,
+    and never attaches subpairs from it."""
+    validated = [{"tickers": ["AAA", "BBB"], "shared_assumption": "x", "quotes": {}}]
+    for corr_result in ([], [{"tickers": ["AAA", "BBB", "CCC"]}], [{"tickers": ["AAA", "BBB"]}]):
+        result = tc.classify_clusters(validated, corr_result, correlation_verified=False)
+        assert result[0]["state"] == "unverified"
+        assert result[0]["corr_subpairs"] == []
+    # Contrast: the SAME empty result on a verified matrix is a real 'possible'.
+    assert tc.classify_clusters(validated, [], correlation_verified=True)[0]["state"] == "possible"
+
+
+def test_classify_clusters_requires_the_verification_keyword():
+    validated = [{"tickers": ["AAA", "BBB"], "shared_assumption": "x", "quotes": {}}]
+    with pytest.raises(TypeError):
+        tc.classify_clusters(validated, [])

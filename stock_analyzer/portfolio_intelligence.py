@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from stock_analyzer.constants import CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD
-from stock_analyzer.portfolio import _to_tz_naive
+from stock_analyzer.portfolio import _to_tz_naive, correlation_sample_state, CORR_SAMPLE_TRUSTED
 from stock_analyzer.stress_test import _MIN_STRESS_WINDOW_DAYS
 
 
@@ -263,6 +263,54 @@ def correlation_regime_delta(
         }
     except Exception:
         return None
+
+
+# Why F-230's calm-vs-stress comparison must be withheld, if it must. Keys,
+# never prose, so the UI owns wording and the decision stays testable.
+REGIME_WITHHOLD_NO_OVERLAP = "no_overlap"
+REGIME_WITHHOLD_CALM_UNMEASURABLE = "calm_unmeasurable"
+REGIME_WITHHOLD_STRESS_UNMEASURABLE = "stress_unmeasurable"
+REGIME_WITHHOLD_CALM_UNVERIFIED = "calm_unverified"
+REGIME_WITHHOLD_STRESS_TOO_SHORT = "stress_too_short"
+
+
+def regime_delta_withhold_reason(delta, calm_coverage) -> "str | None":
+    """Should F-230's calm-vs-stress comparison be withheld, and why?
+    Returns None when it may be shown. Never raises.
+
+    Both legs are checked (audit 2026-10-11 Low-A, fixed 2026-10-13). The
+    UI used to check only the STRESS window's length (`too_short`), so a
+    calm matrix on a thin or unknown sample was compared as if trusted, and
+    a calm side with no measurable pair was blamed on "this window". It also
+    never checked `avg_stress`, so a stress side with no finite pair would
+    have reached an `f"{None:.2f}"`.
+
+    Order, first match wins -- what can be measured before how far to trust it:
+      no_overlap          -- `delta` is None, or neither side has a pair
+      calm_unmeasurable   -- calm average is None (stress average isn't)
+      stress_unmeasurable -- stress average is None (calm average isn't)
+      calm_unverified     -- `calm_coverage` (the calm matrix's own
+                             correlation_coverage, i.e. `_corr_coverage_cache`)
+                             is not a trusted sample: thin OR unknown
+      stress_too_short    -- `delta["too_short"]` (the stress window)
+    """
+    try:
+        if not isinstance(delta, dict):
+            return REGIME_WITHHOLD_NO_OVERLAP
+        calm, stress = delta.get("avg_calm"), delta.get("avg_stress")
+        if calm is None and stress is None:
+            return REGIME_WITHHOLD_NO_OVERLAP
+        if calm is None:
+            return REGIME_WITHHOLD_CALM_UNMEASURABLE
+        if stress is None:
+            return REGIME_WITHHOLD_STRESS_UNMEASURABLE
+        if correlation_sample_state(calm_coverage) != CORR_SAMPLE_TRUSTED:
+            return REGIME_WITHHOLD_CALM_UNVERIFIED
+        if delta.get("too_short", True):
+            return REGIME_WITHHOLD_STRESS_TOO_SHORT
+        return None
+    except Exception:
+        return REGIME_WITHHOLD_NO_OVERLAP
 
 
 def risk_budget(

@@ -52,7 +52,8 @@ def baseline_signature(state: dict | None) -> tuple:
     return ("offline",)  # malformed/unknown shape -- fail safe, never crash
 
 
-def resolve_new_clusters(corr_df, weights: dict | None, baseline_state: dict | None):
+def resolve_new_clusters(corr_df, weights: dict | None, baseline_state: dict | None, *,
+                         corr_coverage):
     """Return today's newly-formed warning-tier clusters, or None/[] per the
     three-state contract above.
 
@@ -66,6 +67,23 @@ def resolve_new_clusters(corr_df, weights: dict | None, baseline_state: dict | N
              baseline exists but nothing new formed.
     list  -- the clusters flagged by detect_new_clusters_strict (each
              carrying its own "new_pairs").
+
+    `corr_coverage` (keyword-only, NO default -- a forgotten argument must
+    raise, not silently keep the old behaviour) is the SAME matrix's
+    portfolio.correlation_coverage() dict. When the detection finds nothing
+    AND that sample is THIN, the result is None ("couldn't check"), not []
+    (audit 2026-10-11 Low-A, fixed 2026-10-13): on an all-NaN matrix the
+    Structural banner used to publish [] as "checked, nothing new" while
+    add_block_map, from the same matrix, said "couldn't check". This is
+    exactly add_block_map's own rule, mirrored so the two agree:
+    ONLY an empty result is downgraded (clusters that were found are never
+    discarded -- the F-294 lesson), ONLY a THIN sample downgrades (an
+    unknown/unusable coverage leaves [] unchanged, as there), and the
+    "no scan has ever run" [] is untouched (nothing to diff, whatever the
+    matrix). That last case is the ONE pre-existing disagreement: before any
+    Structural Scan baseline exists this returns [] (banner silent) while
+    add_block_map([], ..., thin) still reports None. Unreachable once a scan
+    has been saved, and unchanged by this fix.
     """
     if corr_df is None or getattr(corr_df, "empty", True):
         return None
@@ -84,9 +102,12 @@ def resolve_new_clusters(corr_df, weights: dict | None, baseline_state: dict | N
     try:
         clusters_today = portfolio_intelligence.correlation_clusters(corr_df, weights)
         prior_snapshot = baseline_state.get("cluster_snapshot")
-        return structural_scanner.detect_new_clusters_strict(
+        found = structural_scanner.detect_new_clusters_strict(
             clusters_today, prior_snapshot, corr_df
         )
+        if not found and portfolio.correlation_sample_state(corr_coverage) == portfolio.CORR_SAMPLE_THIN:
+            return None
+        return found
     except Exception:
         # A crash means "couldn't check," not "checked clean" -- None, not [].
         return None

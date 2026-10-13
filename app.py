@@ -6029,7 +6029,8 @@ if page == "🏠 Home":
         if corr_df is not None and not corr_df.empty:
             _struct_weights = dict(zip(port_df["Ticker"], port_df["Weight (%)"]))
             _struct_new_clusters = cluster_add_gate.resolve_new_clusters(
-                corr_df, _struct_weights, _cluster_baseline_state
+                corr_df, _struct_weights, _cluster_baseline_state,
+                corr_coverage=_corr_cov,
             )
         else:
             _struct_new_clusters = None  # offline -- distinct from "[] checked, found nothing"
@@ -18600,14 +18601,43 @@ elif page == "🧩 Intelligence":
                         _pi_corr_df, _cus_stress_corr, _pi_weights_map,
                         n_window_days=_cus_n_days,
                     )
-                    if _cus_delta is None or _cus_delta["avg_calm"] is None:
-                        st.info(
-                            "Not enough overlapping held names traded through "
-                            "this window to compute a stress correlation this "
-                            "session."
-                        )
+                    # Both legs checked (audit 2026-10-11 Low-A): the decision
+                    # lives in portfolio_intelligence, this only words it.
+                    _cus_why = portfolio_intelligence.regime_delta_withhold_reason(
+                        _cus_delta, _pi_cov
+                    )
+                    _cus_info = {
+                        portfolio_intelligence.REGIME_WITHHOLD_NO_OVERLAP: (
+                            "Not enough of your holdings have measurable "
+                            "correlations in both the calm period and this "
+                            "window to compare them this session."
+                        ),
+                        portfolio_intelligence.REGIME_WITHHOLD_CALM_UNMEASURABLE: (
+                            "Your holdings' calm-period correlations have no "
+                            "measurable pair this session, so there is nothing to "
+                            "compare this window against."
+                        ),
+                        portfolio_intelligence.REGIME_WITHHOLD_STRESS_UNMEASURABLE: (
+                            "No pair of your holdings has a measurable correlation "
+                            "over this window, so there is nothing to compare."
+                        ),
+                    }
+                    if _cus_why in _cus_info:
+                        st.info(_cus_info[_cus_why])
                     else:
-                        if _cus_delta["too_short"]:
+                        if _cus_why == portfolio_intelligence.REGIME_WITHHOLD_CALM_UNVERIFIED:
+                            st.warning(
+                                "⚠️ The calm-period correlations this window is "
+                                "compared against rest on too few shared trading "
+                                "days to trust — withholding the comparison (see "
+                                "🔗 Risk Analysis for the sample size)."
+                                if correlation_sample_state(_pi_cov) == CORR_SAMPLE_THIN else
+                                "⚠️ How many trading days the calm-period "
+                                "correlations rest on is unknown this session — "
+                                "withholding the comparison. Revisit 🏠 Home to "
+                                "recompute it."
+                            )
+                        elif _cus_why == portfolio_intelligence.REGIME_WITHHOLD_STRESS_TOO_SHORT:
                             st.warning(
                                 f"⚠️ This window ({_cus_n_days} aligned trading day"
                                 f"{'s' if _cus_n_days != 1 else ''}) is too short "
@@ -18615,6 +18645,10 @@ elif page == "🧩 Intelligence":
                                 "withholding the comparison rather than showing a "
                                 "number a short window would mechanically inflate."
                             )
+                        elif _cus_why is not None:
+                            # A reason key this render doesn't know yet --
+                            # withhold, never fall through to the comparison.
+                            st.warning("⚠️ This comparison can't be shown this session.")
                         else:
                             st.markdown(
                                 f"Avg pairwise correlation: "
@@ -18904,6 +18938,7 @@ elif page == "🧩 Intelligence":
 
         _ss_corr_df = st.session_state.get("_corr_df_cache")
         _ss_clusters = None  # always defined — the Hidden Same-Bet section below
+        _ss_hsb_verified = False  # likewise; set from the SAME matrix below
         # (gated on thesis coverage, not price data) needs to check this even
         # when the correlation-gated branch below never runs this render.
         if _ss_corr_df is None or (hasattr(_ss_corr_df, "empty") and _ss_corr_df.empty):
@@ -18921,6 +18956,7 @@ elif page == "🧩 Intelligence":
             _ss_unchecked = st.session_state.get("_corr_unchecked_cache")
             _ss_cov = st.session_state.get("_corr_coverage_cache")
             _ss_record_ok = cluster_add_gate.baseline_write_allowed(_ss_unchecked, _ss_cov)
+            _ss_hsb_verified = correlation_claim_verified(_ss_unchecked, _ss_cov)
 
             if not _ss_rb["positions"]:
                 st.info("Not enough price history across your positions to compute a structural scan this session.")
@@ -19074,16 +19110,18 @@ elif page == "🧩 Intelligence":
             else:
                 # Classification is computed fresh every render using THIS
                 # session's correlation data — never frozen at generation
-                # time, so a cluster found "unverified" (no price data that
+                # time, so a cluster found "unverified" (no reliable price data that
                 # session) correctly reclassifies once price data is
                 # available later the same day, rather than staying stale.
-                _hsb_classified = thesis_cluster.classify_clusters(_hsb_validated, _ss_clusters)
+                _hsb_classified = thesis_cluster.classify_clusters(
+                    _hsb_validated, _ss_clusters, correlation_verified=_ss_hsb_verified,
+                )
 
                 if not _hsb_classified:
                     st.success("No shared assumption found in your saved theses today.")
                 else:
                     _hsb_state_style = {
-                        "unverified": ("⚪", "Unverified — no price-correlation data this session"),
+                        "unverified": ("⚪", "Unverified — no reliable price-correlation reading this session"),
                         "possible":   ("🟠", "Possible shared assumption — review"),
                         "confirmed":  ("🟡", "Cluster Confirmed — also visible in Correlation Clusters"),
                     }

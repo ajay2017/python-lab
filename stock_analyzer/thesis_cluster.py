@@ -278,7 +278,8 @@ def _parse_cluster_response(raw_json: str, corpus: list[dict]):
 
 # ── Classification (pure Python, zero LLM — cannot hallucinate) ───────────
 
-def classify_clusters(validated_clusters, correlation_clusters_result) -> list[dict]:
+def classify_clusters(validated_clusters, correlation_clusters_result, *,
+                      correlation_verified: bool) -> list[dict]:
     """
     Classify each validated thesis-cluster as 'unverified' / 'possible' /
     'confirmed' against portfolio_intelligence.correlation_clusters()'s
@@ -287,6 +288,13 @@ def classify_clusters(validated_clusters, correlation_clusters_result) -> list[d
       - correlation_clusters_result is None (price-correlation data
         unavailable this session) -> every cluster is 'unverified'
         ("no numbers to check" is never coerced into 'possible'/'hidden').
+      - correlation_verified is False (keyword-only, no default -- the
+        caller passes portfolio.correlation_claim_verified for the SAME
+        matrix) -> also 'unverified' for every cluster. An all-NaN or
+        too-thin matrix yields `[]` from correlation_clusters, NOT None, and
+        `[]` used to make every thesis cluster 'possible' -- "a hidden bet
+        prices don't show" asserted from prices that measured nothing
+        (audit 2026-10-11 Low-A, fixed 2026-10-13).
       - Otherwise: 'confirmed' if some existing price-correlation
         cluster's tickers is a superset of this group's tickers;
         'possible' otherwise. Also attaches 'corr_subpairs' — any
@@ -303,7 +311,7 @@ def classify_clusters(validated_clusters, correlation_clusters_result) -> list[d
         for cluster in validated_clusters:
             tickers = set(cluster["tickers"])
 
-            if correlation_clusters_result is None:
+            if correlation_clusters_result is None or not correlation_verified:
                 state    = "unverified"
                 subpairs = []
             else:

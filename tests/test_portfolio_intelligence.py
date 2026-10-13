@@ -966,3 +966,60 @@ def test_correlation_coverage_n_obs_is_a_plain_int_not_numpy():
     # And it really does satisfy the consumer, so this isn't a type check
     # passing while the real predicate still refuses.
     assert portfolio.correlation_claim_verified([], cov) is True
+
+
+# ── regime_delta_withhold_reason (F-230 both legs, 2026-10-13) ───────────────
+
+
+
+def _rw():
+    from stock_analyzer import portfolio_intelligence as pi
+    return pi
+
+
+def _delta(calm=0.3, stress=0.6, too_short=False):
+    return {"avg_calm": calm, "avg_stress": stress, "too_short": too_short}
+
+
+_TRUST = {"n_obs": 119}
+
+
+@pytest.mark.parametrize("delta, cov, expected", [
+    (None, _TRUST, "no_overlap"),
+    ("not a dict", _TRUST, "no_overlap"),
+    (_delta(None, None), _TRUST, "no_overlap"),
+    (_delta(None, 0.6), _TRUST, "calm_unmeasurable"),
+    (_delta(0.3, None), _TRUST, "stress_unmeasurable"),   # used to reach f"{None:.2f}"
+    (_delta(), {"n_obs": 5}, "calm_unverified"),            # thin calm sample
+    (_delta(), None, "calm_unverified"),                    # unknown calm sample
+    (_delta(too_short=True), _TRUST, "stress_too_short"),
+    (_delta(), _TRUST, None),                               # show it
+])
+def test_regime_delta_withhold_reason(delta, cov, expected):
+    assert _rw().regime_delta_withhold_reason(delta, cov) == expected
+
+
+def test_regime_withhold_order_measurability_before_trust():
+    # A calm side with no pair is "unmeasurable" even on a thin sample, and a
+    # thin calm sample outranks a short stress window -- first match wins.
+    pi = _rw()
+    assert pi.regime_delta_withhold_reason(_delta(None, 0.6), {"n_obs": 5}) == "calm_unmeasurable"
+    assert pi.regime_delta_withhold_reason(_delta(too_short=True), {"n_obs": 5}) == "calm_unverified"
+
+
+def test_regime_withhold_missing_too_short_key_withholds():
+    # Mirrors correlation_regime_delta's own conservative default.
+    d = {"avg_calm": 0.3, "avg_stress": 0.6}
+    assert _rw().regime_delta_withhold_reason(d, _TRUST) == "stress_too_short"
+
+
+def test_regime_withhold_real_chain_stress_side_without_a_pair():
+    """Through the REAL correlation_regime_delta: a stress matrix whose only
+    pair is NaN (one name flat through the window) gives avg_stress None
+    while the calm side is fine -- the case that used to crash the render."""
+    pi = _rw()
+    calm = pd.DataFrame([[1.0, 0.3], [0.3, 1.0]], index=["AAA", "BBB"], columns=["AAA", "BBB"])
+    stress = pd.DataFrame([[1.0, np.nan], [np.nan, np.nan]], index=["AAA", "BBB"], columns=["AAA", "BBB"])
+    d = pi.correlation_regime_delta(calm, stress, {"AAA": 50.0, "BBB": 50.0}, n_window_days=40)
+    assert d["avg_calm"] is not None and d["avg_stress"] is None
+    assert pi.regime_delta_withhold_reason(d, _TRUST) == "stress_unmeasurable"

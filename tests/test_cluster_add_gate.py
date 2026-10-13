@@ -11,7 +11,7 @@ import pytest
 
 from stock_analyzer.cluster_add_gate import (
     baseline_signature,
-    resolve_new_clusters,
+    resolve_new_clusters as _resolve_new_clusters,
     add_block_map,
 )
 from stock_analyzer.portfolio import (
@@ -25,6 +25,16 @@ from stock_analyzer import portfolio as _portfolio_mod
 from stock_analyzer.constants import CORR_HIGH_PAIRS_THRESHOLD
 
 pytestmark = pytest.mark.fast
+
+# resolve_new_clusters' corr_coverage is required (2026-10-13). The tests below
+# predate it and are about the baseline/detection contract, so they run on a
+# TRUSTED sample explicitly; the thin-sample downgrade has its own tests at
+# the bottom, which pass a real coverage.
+_TRUSTED_COV = {"n_obs": 119}
+
+
+def resolve_new_clusters(*args, corr_coverage=_TRUSTED_COV, **kwargs):
+    return _resolve_new_clusters(*args, corr_coverage=corr_coverage, **kwargs)
 
 
 def _corr_df(tickers, pairs):
@@ -449,10 +459,14 @@ def test_corr_coverage_end_to_end_all_nan_matrix_degrades_to_none():
     assert div["risk_pairs"] == []
 
     baseline = {"status": "ok", "scan_date": "2026-10-01", "cluster_snapshot": []}
-    clusters = resolve_new_clusters(corr, {"AAA": 10.0, "BBB": 10.0, "CCC": 10.0}, baseline)
-    # Every pairwise corr is NaN, so no cluster forms regardless -- but the
-    # gate must ALSO independently refuse to assert "checked, clean" from
-    # this coverage, which is what this test actually pins.
+    clusters = resolve_new_clusters(corr, {"AAA": 10.0, "BBB": 10.0, "CCC": 10.0}, baseline,
+                                    corr_coverage=cov)
+    # Every pairwise corr is NaN, so no cluster forms -- and since 2026-10-13
+    # the resolver itself says "couldn't check" (None) rather than [] on this
+    # thin sample, so the Structural banner and this gate agree.
+    assert clusters is None
+    # The gate must ALSO independently refuse to assert "checked, clean" from
+    # this coverage, which is what this test originally pinned.
     result = add_block_map(clusters, corr, held_tickers, "2026-10-01", corr_coverage=cov)
     assert result is None
 
@@ -488,3 +502,55 @@ def test_gate_firing_map_is_never_changed_by_a_thin_state(monkeypatch):
     assert control  # a live, non-empty map
     monkeypatch.setattr(_portfolio_mod, "correlation_sample_state", lambda c: "thin")
     assert add_block_map(clusters, df, ["AAPL", "MSFT"], "2026-10-01", corr_coverage={"n_obs": 125}) == control
+
+
+# ── resolve_new_clusters thin-sample downgrade (2026-10-13) ──────────────────
+
+_BASELINE_OK = {"status": "ok", "scan_date": "2026-10-01", "cluster_snapshot": []}
+
+
+def test_resolver_requires_corr_coverage():
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.1})
+    with pytest.raises(TypeError):
+        _resolve_new_clusters(df, {"AAPL": 10.0, "MSFT": 10.0}, _BASELINE_OK)
+
+
+@pytest.mark.parametrize("cov, expected", [
+    ({"n_obs": 5}, None),       # THIN: nothing found -> couldn't check
+    ({"n_obs": 119}, []),       # trusted: genuinely nothing new
+    (None, []),                 # unknown: unchanged, exactly as add_block_map
+    ({"n_obs": "5"}, []),       # unusable: unchanged, exactly as add_block_map
+])
+def test_resolver_downgrades_an_empty_result_only_on_a_thin_sample(cov, expected):
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.1})
+    got = _resolve_new_clusters(df, {"AAPL": 10.0, "MSFT": 10.0}, _BASELINE_OK, corr_coverage=cov)
+    assert got == expected if expected is not None else got is None
+
+
+def test_resolver_never_discards_a_cluster_it_found_on_a_thin_sample(monkeypatch):
+    # The F-294 lesson: between 2 and 19 observations the matrix holds REAL
+    # correlations, so a found cluster is evidence -- never thrown away.
+    found = [{"tickers": ["AAPL", "MSFT"], "new_pairs": [["AAPL", "MSFT"]]}]
+    import stock_analyzer.cluster_add_gate as cag
+    monkeypatch.setattr(cag.structural_scanner, "detect_new_clusters_strict",
+                        lambda *a, **k: found)
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.9})
+    got = _resolve_new_clusters(df, {"AAPL": 10.0, "MSFT": 10.0}, _BASELINE_OK,
+                                corr_coverage={"n_obs": 5})
+    assert got is found
+
+
+def test_resolver_no_baseline_stays_empty_even_on_a_thin_sample():
+    df = _corr_df(["AAPL", "MSFT"], {("AAPL", "MSFT"): 0.1})
+    assert _resolve_new_clusters(df, {"AAPL": 10.0, "MSFT": 10.0}, {"status": "none"},
+                                 corr_coverage={"n_obs": 5}) == []
+
+
+def test_banner_and_gate_agree_on_a_thin_all_nan_matrix():
+    held = {"AAA": {"df": _hist(60)}, "BBB": {"df": _hist(60)}, "CCC": {"df": _hist(1)}}
+    corr = correlation_matrix(held)
+    cov = correlation_coverage(held)
+    clusters = _resolve_new_clusters(corr, {"AAA": 10.0, "BBB": 10.0, "CCC": 10.0},
+                                     _BASELINE_OK, corr_coverage=cov)
+    gate = add_block_map(clusters, corr, ["AAA", "BBB", "CCC"], "2026-10-01", corr_coverage=cov)
+    assert clusters is None and gate is None
