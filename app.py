@@ -50,7 +50,7 @@ import extra_streamlit_components as stx
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
     fetch_spy, fetch_tlt, fetch_vix, fetch_live_prices, fetch_market_indices, market_status,
-    curate_news_items, fetch_price_history, fetch_risk_free_rate,
+    curate_news_items, curate_brief_news, fetch_price_history, fetch_risk_free_rate,
     crosscheck_price, crosscheck_prices, crosscheck_validator_degraded,
     divergence_widened,
     fetch_earnings_calendar, fetch_next_earnings,
@@ -4857,6 +4857,12 @@ if page == "🏠 Home":
                 st.session_state["_sidebar_news"] = _news
         except Exception:
             pass
+        # The FINAL held list (rescored when the LLM ran) for the Daily Brief
+        # (B-M7). A dedicated key, not _sidebar_news: 🔍 Market Scanner
+        # overwrites that one with scanner news.
+        st.session_state["_brief_held_news"] = _news
+    else:
+        st.session_state.pop("_brief_held_news", None)
 
     # ── Live price strip — fragment auto-refreshes every 60 s ────────────
     # Collapsed by default (2026-09-17 Home decluttering, mockup-approved) so
@@ -5926,7 +5932,10 @@ if page == "🏠 Home":
                         port_df         = port_df,
                         alert_list      = alert_list,
                         risk_recs       = _risk_advisor_recs,
-                        news_items      = st.session_state.get("_sidebar_news", []),
+                        news_items      = curate_brief_news(
+                            held_data, _grow_composites,
+                            held_news=st.session_state.get("_brief_held_news"),
+                        ),
                         macro_events    = _macro_events,
                         held_data       = held_data,
                         scanner_results = st.session_state.get("scanner_results"),
@@ -6314,7 +6323,12 @@ if page == "🏠 Home":
                     port_df         = port_df,
                     alert_list      = alert_list,
                     risk_recs       = _risk_advisor_recs,
-                    news_items      = st.session_state.get("_sidebar_news", []),
+                    # Held news under its own cap + every candidate's own
+                    # headlines (B-M7): the SAME helper the cron's build uses.
+                    news_items      = curate_brief_news(
+                        held_data, st.session_state.get("_grow_composites", {}),
+                        held_news=st.session_state.get("_brief_held_news"),
+                    ),
                     macro_events    = _macro_events,
                     held_data       = held_data,
                     scanner_results = st.session_state.get("scanner_results"),

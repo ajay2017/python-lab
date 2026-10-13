@@ -462,6 +462,10 @@ def _parse_news_item(item: dict) -> tuple[str, str, str, int]:
     return title, publisher, url, ts
 
 
+# Headlines read per ticker from a bundle's news_raw (plumbing, not policy).
+_NEWS_PER_TICKER = 8
+
+
 def curate_news_items(data_by_ticker: dict, max_items: int = 20) -> list[dict]:
     """
     Build curated news from already-fetched load_all() results — zero extra API calls.
@@ -474,7 +478,7 @@ def curate_news_items(data_by_ticker: dict, max_items: int = 20) -> list[dict]:
     items: list[dict] = []
 
     for ticker, r in data_by_ticker.items():
-        for item in (r.get("news_raw") or [])[:8]:
+        for item in (r.get("news_raw") or [])[:_NEWS_PER_TICKER]:
             title, publisher, url, ts = _parse_news_item(item)
             if not title:
                 continue
@@ -505,3 +509,51 @@ def curate_news_items(data_by_ticker: dict, max_items: int = 20) -> list[dict]:
     # Sort by recency first; within the same 30-minute window, prefer higher-tier sources
     items.sort(key=lambda x: (-(x["ts"] // 1800), x["tier"]))
     return items[:max_items]
+
+
+def curate_brief_news(held_data: dict | None, candidates: dict | None,
+                      held_news: list | None = None) -> list[dict]:
+    """The `news_items` both Daily Brief builds pass (app and cron), so they
+    cannot drift (audit 2026-10-11 B-M7, fixed 2026-10-13).
+
+    Two parts, each with its OWN cap, deduplicated by headline:
+      * HELD news -- `held_news` when given (the app passes its FINAL held
+        list, i.e. after the suppress-only LLM rescore when an Anthropic key
+        is set, so Act Today keeps that false-positive filter), else
+        `curate_news_items(held_data)` (the cron, which has never rescored).
+        Act Today's critical-news check and the Review List read only held
+        tickers from this.
+      * CANDIDATE news -- every not-held new-pick candidate's headlines (up
+        to _NEWS_PER_TICKER each, raw VADER), for _cross_reference layer 3
+        and reconcile_signals, which turn a candidate's own negative news
+        into a "Skip — Negative News" call.
+
+    Why not one merged list: curate_news_items keeps the max_items MOST
+    RECENT across every ticker, so merging let fresh candidate headlines
+    push a held stock's negative news out of the 20 -- the cron did exactly
+    that. And the app passed held news only, so a candidate's own negative
+    news never reached the cross-check.
+
+    Known limits: a headline shared by a held and a candidate ticker counts
+    for the held name only (dedup), so the candidate's check misses it. If
+    the candidate part can't be built (malformed news_raw), this returns the
+    held part alone -- the pre-fix behaviour -- rather than raising inside
+    the Brief build and taking Act Today offline with it.
+    """
+    held_data = held_data or {}
+    held = list(held_news) if held_news is not None else curate_news_items(held_data)
+    try:
+        cand_src = {t: b for t, b in (candidates or {}).items()
+                    if t not in held_data and isinstance(b, dict)}
+        if not cand_src:
+            return held
+        cand = curate_news_items(cand_src, max_items=_NEWS_PER_TICKER * len(cand_src))
+        seen = {str(i.get("title", "")).lower()[:70] for i in held}
+        return held + [i for i in cand if i["title"].lower()[:70] not in seen]
+    except Exception as exc:
+        # Logged, not silent: falling back means layer 3 is OFF for every
+        # candidate this build -- the very gap this helper exists to close.
+        import warnings
+        warnings.warn(f"curate_brief_news: candidate news unavailable ({type(exc).__name__}); "
+                      "using held news only")
+        return held

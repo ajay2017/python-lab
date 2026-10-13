@@ -177,3 +177,32 @@ def test_rec_events_rejects_inf_as_well_as_nan(client, bad):
     _assert_json_clean(sent)
     row = sent[0]
     assert row["metric_before"] is None and row["rec_dollars"] == 500.0
+
+
+# ── the two remaining raw writers (2026-10-13 follow-up) ─────────────────────
+
+def test_gate_suppressions_numpy_bool_counterfactual_no_longer_fails_the_batch(client):
+    # lane/counterfactual/tone/sector passed through raw; a numpy bool_
+    # (JSON can't encode it) failed the WHOLE ledger batch.
+    r = db.save_gate_suppressions([{
+        "ticker": "AAA", "gate_id": "G-20", "rec_date": "2026-10-13", "source": "app",
+        "counterfactual": np.bool_(True), "composite_score": 70.0, "sector": "Tech",
+    }])
+    assert r["error"] is None
+    sent = client.sent[-1]
+    _assert_json_clean(sent)
+    assert sent[0]["counterfactual"] is True and type(sent[0]["counterfactual"]) is bool
+    assert sent[0]["sector"] == "Tech"
+
+
+@pytest.mark.parametrize("bad", BAD)
+def test_analyst_target_snapshots_send_no_non_finite_value(client, bad):
+    assert db.save_analyst_target_snapshots_batch([
+        {"ticker": "AAA", "snapshot_date": "2026-10-13", "target_mean": bad,
+         "num_analysts": np.int64(12), "info_source": "yfinance"},
+        {"ticker": "BBB", "snapshot_date": "2026-10-13", "target_mean": 210.5, "num_analysts": 9},
+    ]) is True
+    sent = client.sent[-1]
+    _assert_json_clean(sent)
+    assert sent[0]["target_mean"] is None and sent[0]["num_analysts"] == 12
+    assert type(sent[0]["num_analysts"]) is int and sent[1]["target_mean"] == 210.5

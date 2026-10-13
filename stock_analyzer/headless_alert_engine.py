@@ -544,12 +544,13 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
             continue
 
     # News from the already-loaded bundles (held + composites) so _cross_reference
-    # still suppresses negative-news conflicts — no extra network calls.
+    # still suppresses negative-news conflicts — no extra network calls. Via
+    # the SAME helper as the app's Brief (B-M7). It also keeps held news under
+    # its own cap: merging both into one top-20 let fresh candidate headlines
+    # push a held stock's negative news out of Act Today's critical-news check.
     try:
-        from stock_analyzer.data import curate_news_items
-        _news_src = dict(held_data)
-        _news_src.update(grow_composites)
-        news_items = curate_news_items(_news_src)
+        from stock_analyzer.data import curate_brief_news
+        news_items = curate_brief_news(held_data, grow_composites)
     except Exception:
         news_items = []
 

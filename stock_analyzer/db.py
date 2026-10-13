@@ -3379,6 +3379,11 @@ def save_gate_suppressions(rows: list[dict]) -> dict:
 
     if not payload:
         return {"attempted": 0, "saved": 0, "error": None}
+    # The float fields are coerced above, but lane/counterfactual/tone/sector
+    # pass through raw: a numpy bool_ counterfactual (JSON can't encode it)
+    # failed the WHOLE batch -- lost ledger rows the 12-month retirement
+    # review depends on. Same boundary sanitize as the other writers (Low-D).
+    payload = _sanitize_for_write(payload, "save_gate_suppressions")
 
     # Upsert only. No .insert() fallback — see plan finding F5 and the
     # account_flows unbounded-reinsert bug (2026-08-24).
@@ -3776,8 +3781,10 @@ def save_analyst_target_snapshots_batch(snapshots: list[dict]) -> bool:
     if not has_db():
         return False
     try:
+        # Writer-boundary sanitize (Low-D): NaN/±inf -> NULL (warned by key),
+        # numpy numbers -> native; see _sanitize_for_write.
         _client().table("analyst_target_snapshots").upsert(
-            snapshots,
+            _sanitize_for_write(snapshots, "save_analyst_target_snapshots_batch"),
             on_conflict="ticker,snapshot_date",
         ).execute()
         return True

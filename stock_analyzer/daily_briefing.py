@@ -500,7 +500,7 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         if avg_compound <= NEWS_SENTIMENT_NEGATIVE:
             conflicts.append(
                 f"News sentiment: Negative (avg {avg_compound:+.2f}) — "
-                f"\"{best_headline.get('headline','')[:60]}\""
+                f"\"{(best_headline.get('title') or best_headline.get('headline') or '')[:60]}\""
             )
             sentiment_conflict = True
         elif avg_compound >= NEWS_SENTIMENT_POSITIVE:
@@ -3196,7 +3196,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 and NEWS_SENTIMENT_CRITICAL < sent <= NEWS_SENTIMENT_WARN
                 and ticker not in warned):
             warned.add(ticker)
-            headline_text = item.get("headline", "news")[:80]
+            headline_text = (item.get("title") or item.get("headline") or "news")[:80]
             items.append({
                 "priority": "low",
                 "icon":     "📰",
