@@ -606,3 +606,52 @@ class TestUnsafeHtmlEscapingExemption:
     def test_a_static_format_spec_is_still_fine(self):
         code = _IMPORTS + 'st.markdown(f"<div>{_safe_html(x):>20}</div>", unsafe_allow_html=True)'
         assert "UNSAFE_HTML_DYNAMIC" not in _rules_wired(code)
+
+
+class TestSourceSegmentMatchesStdlib:
+    """_Visitor._source_segment replaced ast.get_source_segment for speed (the
+    stdlib re-splits the whole file on every call -- ~half the scan's runtime
+    on app.py, 2026-10-13). Segments are the BASELINE KEYS, so any drift would
+    either hide real instances or flag baselined ones. Compared node-by-node
+    against the stdlib on inputs chosen to break a naive reimplementation."""
+
+    _SOURCES = [
+        # multi-byte chars before and inside a node (col offsets are BYTES)
+        's = "héllo — ☃"; t = st.session_state.get("ключ") or {}\n',
+        'x = f"{a!r} 🚀 {b:>{w}}"\n',
+        # multi-line nodes, CRLF, lone CR, form feed, tabs, blank lines
+        "def f(a,\r\n      b):\r\n    return (a +\r\n            b)\r\n",
+        "y = (1,\r 2)\r",
+        "\x0cz = [\n\t1,\n\n\t2,\n]\n",
+        'if (st.session_state.get("_k")\n        or []):\n    pass\n',
+    ]
+
+    @staticmethod
+    def _visitor(src):
+        v = ca._Visitor.__new__(ca._Visitor)
+        v.src, v._lines = src, None
+        return v
+
+    @pytest.mark.parametrize("src", _SOURCES)
+    def test_every_node_matches_the_stdlib(self, src):
+        tree = ast.parse(src)
+        v = self._visitor(src)
+        nodes = [n for n in ast.walk(tree) if hasattr(n, "end_col_offset")]
+        assert nodes
+        for n in nodes:
+            assert v._source_segment(n) == ast.get_source_segment(src, n), ast.dump(n)
+
+    def test_node_without_location_returns_none(self):
+        assert self._visitor("x = 1\n")._source_segment(ast.Load()) is None
+
+    def test_matches_on_a_real_target_file(self):
+        path = ca.ROOT / "cron_runner.py"
+        src = path.read_text(encoding="utf-8-sig")
+        tree = ast.parse(src)
+        v = self._visitor(src)
+        # Sparse sample: each stdlib call re-splits the file (the very cost
+        # being avoided), so a dense sample makes this test slow under load.
+        nodes = [n for n in ast.walk(tree) if hasattr(n, "end_col_offset")][::60]
+        assert len(nodes) > 100
+        for n in nodes:
+            assert v._source_segment(n) == ast.get_source_segment(src, n)

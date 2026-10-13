@@ -532,9 +532,72 @@ class TestIsTestedPath:
         assert hook._is_tested_path("stock_analyzer/foo.py")
         assert hook._is_tested_path("tests/test_foo.py")
 
-    def test_does_not_match_docs_or_scripts(self):
+    def test_does_not_match_docs_or_untested_config(self):
+        # docs/architecture.md is out ON PURPOSE (every docs commit would pay
+        # the full suite; CI's docs-check covers it); railway.toml no test reads.
         assert not hook._is_tested_path("docs/requirements.md")
-        assert not hook._is_tested_path("scripts/check_antipatterns.py")
+        assert not hook._is_tested_path("docs/architecture.md")
+        assert not hook._is_tested_path("railway.toml")
+        assert not hook._is_tested_path(".github/workflows/tests.yml")
+
+
+# Listed LITERALLY, not read back from hook._TESTED_CONFIG_FILES -- iterating
+# the tuple would pass vacuously if an entry were deleted from it. The last
+# two exercise the scripts/ prefix: one test-imported script that no named
+# entry lists (backfill_vol_predictions, which also runs in the production
+# cron lane) and one that no test touches (exit_ladder_replay).
+_CONFIG_FILES = (
+    "pytest.ini", "requirements.txt", "requirements-dev.txt", "railway.cron.toml",
+    "scripts/check_antipatterns.py", "scripts/antipattern_baseline.json",
+    "scripts/check_constants_documented.py", "scripts/constants_doc_allowlist.txt",
+    "scripts/backfill_vol_predictions.py", "scripts/exit_ladder_replay.py",
+)
+_SCANNER_FILES = ("scripts/check_antipatterns.py", "scripts/antipattern_baseline.json")
+
+
+class TestConfigFilesRunTheGates:
+    """Audit 2026-10-11 Low-C: an `addopts --deselect` commit to pytest.ini
+    disabled a test with no gate run at all, and an edited antipattern
+    baseline / constants-doc allowlist can absorb a new violation the same
+    way. Each of these must trigger the suite (and the scanner's own files,
+    the scan)."""
+
+    @pytest.mark.parametrize("path", _CONFIG_FILES)
+    def test_config_file_runs_the_suite(self, path):
+        assert hook._touches_tested_code([path])
+
+    @pytest.mark.parametrize("path", _CONFIG_FILES)
+    def test_config_file_counts_as_a_tested_path_for_the_push_marker(self, path):
+        assert hook._is_tested_path(path)
+
+    @pytest.mark.parametrize("path", _SCANNER_FILES)
+    def test_scanner_definition_reruns_the_scan(self, path):
+        assert hook._touches_scanned_code([path])
+
+    @pytest.mark.parametrize("path", ["pytest.ini", "requirements.txt",
+                                      "scripts/constants_doc_allowlist.txt",
+                                      "scripts/exit_ladder_replay.py"])
+    def test_non_scanner_config_does_not_run_the_scan(self, path):
+        assert not hook._touches_scanned_code([path])
+
+    @pytest.mark.parametrize("path", ["app.py", "cron_runner.py", "stock_analyzer/x.py",
+                                      "scripts/check_antipatterns.py",
+                                      "scripts/antipattern_baseline.json"])
+    def test_anything_that_runs_the_scan_also_runs_the_suite(self, path):
+        # _ANTIPATTERN_TIMEOUT_SEC's comment relies on this: no scan-only run.
+        assert hook._touches_scanned_code([path]) and hook._touches_tested_code([path])
+
+    def test_every_config_entry_is_a_real_tracked_file(self):
+        """Same guard as _GATE_FILES': a typo'd or stale-renamed entry would
+        silently stop triggering the gates."""
+        root = _HOOK_PATH.parent.parent.parent
+        tracked = set(subprocess.run(
+            ["git", "ls-files"], cwd=root, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", check=True,
+        ).stdout.splitlines())
+        missing = [p for p in hook._TESTED_CONFIG_FILES if p not in tracked]
+        assert missing == [], f"_TESTED_CONFIG_FILES has untracked path(s): {missing}"
+        assert set(hook._SCANNER_CONFIG_FILES) <= set(hook._TESTED_CONFIG_FILES)
 
     def test_matches_the_hook_directory_itself(self):
         """2026-10-02 review M4: the hook was just added to _GATE_FILES, so

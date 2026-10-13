@@ -30,8 +30,9 @@ waste in this same gate without weakening what it proves:
   - The pytest and antipattern subprocesses are now started together and only
     then waited on, so their wall-clock cost overlaps instead of stacking
     (previously fully sequential within one commit or push). Costs nothing:
-    the antipattern scan's own ceiling is ~60s, almost always far less, so by
-    the time pytest's own wait returns its result is already sitting there.
+    the antipattern scan (~25s; see _ANTIPATTERN_TIMEOUT_SEC) is far shorter
+    than the suite, so by the time pytest's own wait returns its result is
+    already sitting there.
   - A `git push` immediately following a commit that already passed BOTH
     gates in full, with no further edits, no longer re-runs them. The
     verified-tree marker is written ONLY when a PLAIN commit (no `-a`/
@@ -149,7 +150,29 @@ import sys
 # unchanged here anyway because re-tuning a threshold from one measurement is
 # exactly the guessing this file's own history warns against; revisit if a
 # future session observes parallel runs actually approaching 450s.
+#
+# 2026-10-13: one DID -- a pre-commit run timed out at 450s (a false hang:
+# no stray process, and the same suite measured 270s parallel minutes later,
+# 7825 tests, under concurrent load). Fixed at the CAUSE rather than by moving
+# this number: the single slowest test (the real-repo antipattern scan, 184s,
+# which xdist cannot split) spent half its time in ast.get_source_segment
+# re-splitting app.py per call. After that fix: 7860 passed in 191s parallel,
+# slowest test 122s -- back to ~2.4x margin. Left at 450 for the reason above.
 _PYTEST_TIMEOUT_SEC = 450
+
+# The antipattern scan's own limit. It FAILS OPEN on timeout (reported as
+# "SKIPPED" in the pass line, commit allowed), so a too-tight value does not
+# block -- it silently stops guarding. Was a bare 60: on 2026-10-13 the scan
+# measured 57s standalone before the _source_segment fix (25s after), and it
+# runs CONCURRENTLY with the full suite's workers, which is exactly when it is
+# slowest. _run_gates_concurrently starts both together but waits on pytest
+# FIRST, so this timer only starts once pytest's wait returns -- the scan
+# effectively gets pytest's runtime PLUS this. On a normal commit it has long
+# finished by then and the value costs nothing; the only case it is the real
+# wait is pytest returning early (a fast failure / collection error) while the
+# scan hangs -- at most +90s over the old 60. A scan-only run cannot occur:
+# _touches_scanned_code's paths are a subset of _touches_tested_code's.
+_ANTIPATTERN_TIMEOUT_SEC = 150
 
 # Durable record of a pytest-gate fail-open (2026-08-27 finding): the single
 # stderr line _finish_pytest prints when ok is None is easy to miss and
@@ -485,9 +508,10 @@ def _run_gates_concurrently(need_pytest: bool, need_antipattern: bool) -> dict:
     """Starts whichever of the pytest/antipattern gates are needed at (almost)
     the same time, so their wall-clock cost overlaps instead of stacking. The
     two are independent subprocesses with no shared state; the antipattern
-    scan's own ceiling (~60s, usually far less) is well under pytest's, so
-    nothing is lost even when pytest fails slowly -- by the time pytest's own
-    wait returns, the antipattern process has almost always already finished.
+    scan (~25s; ceiling _ANTIPATTERN_TIMEOUT_SEC, timed from AFTER pytest's
+    wait returns) is well under pytest's runtime, so nothing is lost even when
+    pytest fails slowly -- by the time pytest's own wait returns, the
+    antipattern process has almost always already finished.
 
     Returns {'pytest': (ok, detail), 'antipattern': (ok, detail)} for
     whichever gates were requested; missing keys mean "not requested," not
@@ -626,10 +650,10 @@ def _finish_antipatterns(proc, start_detail: str | None):
     (None, detail) when the gate couldn't run (missing script/python)."""
     if proc is None:
         return None, start_detail
-    rc, out, err = _finish_process(proc, 60)
+    rc, out, err = _finish_process(proc, _ANTIPATTERN_TIMEOUT_SEC)
     if rc is None:
         if err == "__timeout__":
-            return None, "anti-pattern gate timed out after 60s"
+            return None, f"anti-pattern gate timed out after {_ANTIPATTERN_TIMEOUT_SEC}s"
         return None, f"could not invoke the gate ({err})"
     if rc == 0:
         return True, ""
@@ -715,9 +739,38 @@ def _write_verified_tree(tree: str) -> None:
 _TESTED_PATH_FILES = ("app.py", "cron_runner.py")
 _TESTED_PATH_PREFIXES = ("stock_analyzer/", "tests/", ".claude/hooks/")
 
+# Config/gate-definition files outside those paths whose change can alter what
+# the suite or the antipattern scan concludes (audit 2026-10-11, Low-C: an
+# `addopts --deselect` commit to pytest.ini silently disabled a test with no
+# gate run at all). The suite tests the antipattern script and asserts the
+# real repo is green against its baseline and that check_constants_documented
+# passes against its allowlist -- so editing any of these is a test-relevant
+# change, and an edited baseline/allowlist is exactly how a new violation
+# could be hidden. Mirrors .github/workflows/tests.yml's path filters, which
+# already cover pytest.ini and both requirements files. railway.cron.toml is
+# pinned by tests/test_railway_cron_restart_policy.py (an owner decision).
+#
+# Deliberately OUT: docs/architecture.md, although check_constants_documented
+# reads it -- otherwise every docs commit would pay the full ~190s suite; CI's
+# docs-check workflow covers it. .github/workflows/** -- no local test reads it.
+_TESTED_CONFIG_FILES = (
+    "pytest.ini", "requirements.txt", "requirements-dev.txt", "railway.cron.toml",
+    "scripts/check_antipatterns.py", "scripts/antipattern_baseline.json",
+    "scripts/check_constants_documented.py", "scripts/constants_doc_allowlist.txt",
+)
+# All of scripts/ (review 2026-10-13): tests import six more of them, two of
+# which (backfill_vol_predictions, backfill_analyst_prices) run in the
+# production maintenance cron lane. Small and rarely committed, so covering the
+# directory is cheaper than keeping a per-file list in sync.
+_TESTED_CONFIG_PREFIXES = ("scripts/",)
+# The subset that defines the antipattern scan itself (what CI's
+# antipatterns-check.yml path filter re-runs it on).
+_SCANNER_CONFIG_FILES = ("scripts/check_antipatterns.py", "scripts/antipattern_baseline.json")
+
 
 def _is_tested_path(path: str) -> bool:
-    return path in _TESTED_PATH_FILES or any(path.startswith(p) for p in _TESTED_PATH_PREFIXES)
+    return (path in _TESTED_PATH_FILES or path in _TESTED_CONFIG_FILES
+            or any(path.startswith(p) for p in _TESTED_PATH_PREFIXES + _TESTED_CONFIG_PREFIXES))
 
 
 def _tested_paths_dirty(include_staged: bool = True) -> bool:
@@ -980,19 +1033,22 @@ def _touches_tested_code(staged: list[str]) -> bool:
     CI (tests.yml's path filters didn't cover it), so the hook that enforces
     every other gate could ship with no test run at all -- the same shape of
     false reassurance Critical #2 found in a different corner of this file.
+
+    _TESTED_CONFIG_FILES/_TESTED_CONFIG_PREFIXES added 2026-10-13 (audit
+    2026-10-11 Low-C) -- see those tuples' comment. Now delegates to
+    _is_tested_path: the two had become the same predicate, and keeping a
+    second inline copy is how they drift apart.
     """
-    return any(
-        f == "app.py" or f == "cron_runner.py"
-        or f.startswith("stock_analyzer/") or f.startswith("tests/")
-        or f.startswith(".claude/hooks/")
-        for f in staged
-    )
+    return any(_is_tested_path(f) for f in staged)
 
 
 def _touches_scanned_code(staged: list[str]) -> bool:
-    """Files the anti-pattern gate scans (mirrors TARGETS in check_antipatterns.py)."""
+    """Files the anti-pattern gate scans (mirrors TARGETS in check_antipatterns.py),
+    plus the scanner's own definition and baseline (_SCANNER_CONFIG_FILES): a
+    baseline edit can absorb a new instance, so it must re-run the scan."""
     return any(
         f == "app.py" or f == "cron_runner.py" or f.startswith("stock_analyzer/")
+        or f in _SCANNER_CONFIG_FILES
         for f in staged
     )
 

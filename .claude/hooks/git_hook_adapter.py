@@ -194,6 +194,33 @@ def _git(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
     )
 
 
+_BLOCK_LOG_NAME = "last-hook-block.log"
+
+
+def _record_block(mode: str, text: str) -> str | None:
+    """Also write a BLOCKED message to `git rev-parse --git-path
+    last-hook-block.log` (`.git/` in the main checkout, `.git/worktrees/<name>/`
+    in a linked worktree), so it survives a caller that filtered or truncated
+    stderr. A 2026-10-12 one-off pre-commit block could not be diagnosed
+    afterwards because its output had been grep-filtered (memory
+    feedback_never_filter_hook_output). Every BLOCKED path in this file calls
+    it. Overwrites: it holds the LAST block only, and a later PASS does not
+    clear it -- read its timestamp. Never committed. Returns the path written,
+    or None -- called only after the verdict is fixed, and must never change it."""
+    try:
+        r = _git("rev-parse", "--git-path", _BLOCK_LOG_NAME)
+        if r.returncode != 0 or not r.stdout.strip():
+            return None
+        path = os.path.abspath(r.stdout.strip())
+        import datetime
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(f"{datetime.datetime.now().isoformat(timespec='seconds')} "
+                     f"[{mode}]\n{text}\n")
+        return path
+    except Exception:  # noqa: BLE001 - diagnostics only, never block on it
+        return None
+
+
 def _git_lines(*args: str) -> list[str]:
     """Run a git query, or RAISE. A silently-empty result disables the gate."""
     r = _git(*args)
@@ -636,13 +663,12 @@ def _run_test_gates(mode: str) -> int:
             ran.append(f"antipattern check SKIPPED ({detail or 'unknown'}) -- fails open")
 
     if failures:
+        text = f"BLOCKED ({mode} gates, scope: {scope}):\n\n" + "\n\n".join(failures)
+        print(text, file=sys.stderr)
+        logged = _record_block(mode, text)
         print(
-            f"BLOCKED ({mode} gates, scope: {scope}):\n\n"
-            + "\n\n".join(failures),
-            file=sys.stderr,
-        )
-        print(
-            f"\n[native git hook: {mode}] Bypass with --no-verify if certain.",
+            f"\n[native git hook: {mode}] Bypass with --no-verify if certain."
+            + (f" Full message saved to {logged}" if logged else ""),
             file=sys.stderr,
         )
         return 1
@@ -676,11 +702,12 @@ def _run_gates(argv: list[str]) -> int:
     # hand-written unit test that skipped the shim entirely. Test THROUGH it.)
     msg_file = argv[2] if len(argv) > 2 else ""
     if not msg_file or not os.path.isfile(msg_file):
-        print(
+        text = (
             f"BLOCKED (workflow gates): commit message file not readable "
-            f"({msg_file!r}); cannot verify the required trailers.",
-            file=sys.stderr,
+            f"({msg_file!r}); cannot verify the required trailers."
         )
+        print(text, file=sys.stderr)
+        _record_block("commit-msg", text)
         return 1
 
     sys.path.insert(0, _HERE)
@@ -714,15 +741,15 @@ def _run_gates(argv: list[str]) -> int:
             )
 
     if failures:
-        print(
-            "\n\n".join("BLOCKED (workflow gates): " + f for f in failures),
-            file=sys.stderr,
-        )
+        text = "\n\n".join("BLOCKED (workflow gates): " + f for f in failures)
+        print(text, file=sys.stderr)
+        logged = _record_block("commit-msg", text)
         print(
             "\n[native git hook: commit-msg] This stage checks TEXT ONLY. The "
             "code gates are pre-commit's job -- which may legitimately have run "
             "nothing (a docs-only commit) or not run at all (a clean merge). "
-            "Bypass with --no-verify.",
+            "Bypass with --no-verify."
+            + (f" Full message saved to {logged}" if logged else ""),
             file=sys.stderr,
         )
         return 1
@@ -763,18 +790,20 @@ def main() -> None:
         except SystemExit:
             raise
         except Exception as exc:  # noqa: BLE001 - FAIL CLOSED, see docstring
-            print(
+            text = (
                 f"BLOCKED (workflow gates): the gate adapter itself failed "
                 f"({type(exc).__name__}: {exc}).\n"
-                "This is NOT a pass. Fix the adapter, or use --no-verify if certain.",
-                file=sys.stderr,
+                "This is NOT a pass. Fix the adapter, or use --no-verify if certain."
             )
+            print(text, file=sys.stderr)
+            # "commit" is the shim's argv name for the commit-msg hook; log
+            # it under the hook's real name, as _run_gates does.
+            _record_block("commit-msg" if mode == "commit" else mode, text)
             sys.exit(1)
 
-    print(
-        f"BLOCKED (workflow gates): unknown adapter invocation {sys.argv[1:]!r}.",
-        file=sys.stderr,
-    )
+    text = f"BLOCKED (workflow gates): unknown adapter invocation {sys.argv[1:]!r}."
+    print(text, file=sys.stderr)
+    _record_block(mode or "unknown", text)
     sys.exit(1)
 
 

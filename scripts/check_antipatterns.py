@@ -115,9 +115,16 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
+
+# Copy of the stdlib's private ast._splitlines_no_ff pattern (mimics the
+# parser's own line breaks, ignoring form feeds) -- copied rather than calling
+# the private function, which a Python upgrade could remove. See
+# _Visitor._source_segment.
+_LINE_RE = re.compile(r"(.*?(?:\r\n|\n|\r|$))")
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "scripts" / "antipattern_baseline.json"
@@ -341,6 +348,7 @@ class _Visitor(ast.NodeVisitor):
     def __init__(self, src: str, rel: str = "", policy_consts: frozenset = frozenset(),
                  escapers: frozenset = frozenset()) -> None:
         self.src = src
+        self._lines: list[str] | None = None  # _source_segment's one-time split
         self.rel = rel
         # Local names bound to util's escaping helpers. Same up-front collection
         # as policy_consts and for the same reason: the rule must not depend on
@@ -365,8 +373,33 @@ class _Visitor(ast.NodeVisitor):
         self._tz_safe_calls: set[int] = set()
 
     def _seg(self, node: ast.AST) -> str:
-        seg = ast.get_source_segment(self.src, node) or ""
+        seg = self._source_segment(node) or ""
         return " ".join(seg.split())  # normalize whitespace/newlines
+
+    def _source_segment(self, node: ast.AST) -> str | None:
+        """ast.get_source_segment(self.src, node) (padded=False), but splitting
+        the source into lines ONCE per file. The stdlib re-splits the whole
+        file on every call; with ~800 calls against app.py's 44k lines that was
+        ~half the scan's runtime (2026-10-13 profile: 30s of 65s), pushing this
+        gate toward its 60s timeout -- where it fails OPEN. Same line splitter
+        (_LINE_RE) and the same byte-offset slicing, so segments -- the
+        baseline keys -- are byte-identical; tests/test_check_antipatterns.py
+        pins that against the stdlib."""
+        start = getattr(node, "lineno", None)
+        end = getattr(node, "end_lineno", None)
+        col_offset = getattr(node, "col_offset", None)
+        end_col_offset = getattr(node, "end_col_offset", None)
+        if start is None or end is None or col_offset is None or end_col_offset is None:
+            return None
+        lineno, end_lineno = start - 1, end - 1
+        if self._lines is None:
+            self._lines = [m[0] for m in _LINE_RE.finditer(self.src)]
+        lines = self._lines
+        if end_lineno == lineno:
+            return lines[lineno].encode()[col_offset:end_col_offset].decode()
+        first = lines[lineno].encode()[col_offset:].decode()
+        last = lines[end_lineno].encode()[:end_col_offset].decode()
+        return first + "".join(lines[lineno + 1:end_lineno]) + last
 
     def visit_Assign(self, node: ast.Assign) -> None:
         # SENTINEL_BARE_TRUTHINESS, part 1: remember `_v = ss.get("<key>")`.

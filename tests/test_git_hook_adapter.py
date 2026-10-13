@@ -34,6 +34,24 @@ import git_hook_adapter as adapter  # noqa: E402
 
 _DANGEROUS = ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE")
 
+_REAL_RECORD_BLOCK = adapter._record_block
+_BLOCKS_RECORDED: list = []
+
+
+@pytest.fixture(autouse=True)
+def _no_real_block_log_by_default(monkeypatch):
+    """Many tests below drive a real BLOCK from the real repo's cwd; without
+    this each one would overwrite the repo's own .git/last-hook-block.log --
+    the very file a real block is meant to leave behind. Calls are captured in
+    _BLOCKS_RECORDED instead; the block-log tests opt back in."""
+    _BLOCKS_RECORDED.clear()
+
+    def _capture(mode, text):
+        _BLOCKS_RECORDED.append((mode, text))
+        return None
+
+    monkeypatch.setattr(adapter, "_record_block", _capture)
+
 
 def _child_git_dir(env=None) -> str:
     """What a freshly-spawned git child resolves as its repo."""
@@ -859,3 +877,107 @@ def test_main_index_and_head_are_untouched_by_a_snapshot_cycle(monkeypatch, tmp_
     assert _sg(repo, "write-tree") == tree_before
     assert _sg(repo, "rev-parse", "HEAD") == head_before
     assert _sg(repo, "diff", "--cached", "--name-only").split() == ["a.py", "b.py"]
+
+
+# ---------------------------------------------------------------------------
+# Block log (2026-10-13): every BLOCKED message is also written to
+# <git dir>/last-hook-block.log, so it survives a caller that filtered stderr
+# (the undiagnosable 2026-10-12 one-off block).
+# ---------------------------------------------------------------------------
+
+def test_record_block_writes_the_last_block_into_the_git_dir(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    path = _REAL_RECORD_BLOCK("pre-commit", "BLOCKED (pre-commit gates): first")
+    git_dir = _sg(repo, "rev-parse", "--absolute-git-dir")
+    assert path is not None
+    assert os.path.normcase(os.path.dirname(path)) == os.path.normcase(os.path.abspath(git_dir))
+    assert os.path.basename(path) == "last-hook-block.log"
+    text = open(path, encoding="utf-8").read()
+    assert "[pre-commit]" in text and "first" in text
+
+    # Holds the LAST block only.
+    _REAL_RECORD_BLOCK("commit-msg", "BLOCKED (workflow gates): second")
+    text = open(path, encoding="utf-8").read()
+    assert "second" in text and "first" not in text and "[commit-msg]" in text
+    # Inside .git/, so it can never be staged.
+    assert _sg(repo, "status", "--porcelain") == ""
+
+
+def test_record_block_outside_a_repo_returns_none_and_never_raises(monkeypatch, tmp_path):
+    for name in adapter._GIT_ENV_FALLBACK:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    not_a_repo = tmp_path / "plain"
+    not_a_repo.mkdir()
+    monkeypatch.chdir(not_a_repo)
+    assert _REAL_RECORD_BLOCK("pre-commit", "BLOCKED x") is None
+
+
+def test_record_block_swallows_a_write_failure(monkeypatch):
+    def _boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr("builtins.open", _boom)
+    assert _REAL_RECORD_BLOCK("pre-commit", "BLOCKED x") is None
+
+
+def test_a_code_gate_block_records_the_full_message(monkeypatch):
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["stock_analyzer/scoring.py"])
+    _stub_gates(monkeypatch, {"pytest": (False, "FAILED tests/test_x.py::test_y"),
+                              "antipattern": (True, "")})
+    assert adapter._run_test_gates("pre-commit") == 1
+    assert len(_BLOCKS_RECORDED) == 1
+    mode, text = _BLOCKS_RECORDED[0]
+    assert mode == "pre-commit"
+    assert "BLOCKED (pre-commit gates" in text and "FAILED tests/test_x.py::test_y" in text
+
+
+def test_a_passing_gate_records_nothing(monkeypatch):
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["stock_analyzer/scoring.py"])
+    _stub_gates(monkeypatch, {"pytest": (True, ""), "antipattern": (True, "")})
+    assert adapter._run_test_gates("pre-commit") == 0
+    assert _BLOCKS_RECORDED == []
+
+
+def test_a_text_gate_block_records_the_full_message(monkeypatch, tmp_path):
+    msg = tmp_path / "COMMIT_EDITMSG"
+    msg.write_text("feat(x): no trailers\n", encoding="utf-8")
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["docs/x.md"])
+    assert adapter._run_gates(["adapter", "commit", str(msg)]) == 1
+    assert len(_BLOCKS_RECORDED) == 1
+    mode, text = _BLOCKS_RECORDED[0]
+    assert mode == "commit-msg" and "Hard Rule #5" in text
+
+
+def test_an_adapter_crash_records_the_block(monkeypatch):
+    def _raise(mode):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(adapter, "_run_test_gates", _raise)
+    monkeypatch.setattr(sys, "argv", ["adapter", "pre-commit"])
+    with pytest.raises(SystemExit) as exc:
+        adapter.main()
+    assert exc.value.code == 1
+    assert len(_BLOCKS_RECORDED) == 1 and "NOT a pass" in _BLOCKS_RECORDED[0][1]
+
+
+def test_an_unreadable_message_file_records_the_block(tmp_path):
+    assert adapter._run_gates(["adapter", "commit", str(tmp_path / "missing")]) == 1
+    assert len(_BLOCKS_RECORDED) == 1
+    assert _BLOCKS_RECORDED[0][0] == "commit-msg" and "not readable" in _BLOCKS_RECORDED[0][1]
+
+
+def test_an_unknown_invocation_records_the_block(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["adapter", "bogus-mode"])
+    with pytest.raises(SystemExit) as exc:
+        adapter.main()
+    assert exc.value.code == 1
+    assert len(_BLOCKS_RECORDED) == 1 and "unknown adapter invocation" in _BLOCKS_RECORDED[0][1]
+
+
+def test_a_commit_msg_crash_is_logged_under_the_hooks_real_name(monkeypatch):
+    def _raise(argv):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(adapter, "_run_gates", _raise)
+    monkeypatch.setattr(sys, "argv", ["adapter", "commit", "msgfile"])
+    with pytest.raises(SystemExit):
+        adapter.main()
+    assert _BLOCKS_RECORDED[0][0] == "commit-msg"
