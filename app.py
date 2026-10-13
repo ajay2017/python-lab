@@ -285,7 +285,7 @@ from stock_analyzer.portfolio import (
     real_sector_exposure_with_lookthrough, combined_name_exposure,
     classify_book_corr, expected_beta_after_add,
     correlation_sample_state, CORR_SAMPLE_THIN, CORR_SAMPLE_UNKNOWN,
-    correlation_claim_verified,
+    correlation_claim_verified, correlation_flat,
     beta_diversifying_sectors,
 )
 from stock_analyzer.beta_repair import (
@@ -361,7 +361,7 @@ from stock_analyzer.util import catalyst_watch_nav_badge
 from stock_analyzer.util import signals_advice_nav_badge
 from stock_analyzer.util import benchmark_mirror_summary_state
 from stock_analyzer.util import defense_facet_badge
-from stock_analyzer.util import correlation_unchecked_note
+from stock_analyzer.util import correlation_unchecked_note, correlation_flat_note
 from stock_analyzer.util import diversification_label_text, pair_trim_withheld_note
 from stock_analyzer.util import correlation_record_withheld_note
 from stock_analyzer.news_intelligence import build_news_intelligence
@@ -11879,7 +11879,8 @@ if page == "🏠 Home":
         _ctx_lines = [
             f"Date: {_now_et().strftime('%A, %B %d, %Y %H:%M ET')}",
             f"Portfolio Value: ${total_val:,.0f}  |  Total P&L: ${total_pnl:,.0f} ({total_pnl_pct:+.1f}%)",
-            f"Avg Conviction: {avg_score:.0f}/100  |  Diversification: {div_score:.0f}/100 ({_div_label})",
+            f"Avg Conviction: {avg_score:.0f}/100  |  Diversification: "
+            + (f"{div_score:.0f}/100 ({_div_label})" if div_score is not None else "unavailable"),
             "", "## HOLDINGS",
         ]
         for _, _pr in port_df.iterrows():
@@ -13731,7 +13732,14 @@ elif page == "🧾 Summary":
                     "<div style='color:#9ca3af;font-size:0.95em'>—</div>",
                     unsafe_allow_html=True,
                 )
-                st.caption("Needs today's Brief — visit 🏠 Home.")
+                # A None score WITH a bundle is no longer "Home hasn't run":
+                # since F-299 (2026-10-13) it also means today's matrix had no
+                # measurable pair, where sending the owner to Home does nothing.
+                if _sm_bundle:
+                    st.caption("Couldn't be computed from today's correlation data — "
+                               "see 🔗 Risk Analysis.")
+                else:
+                    st.caption("Needs today's Brief — visit 🏠 Home.")
             # Was the only one of the four with no nav link, which is both a
             # missing affordance and why this card sat visibly shorter than its
             # neighbours. Points at 🧩 Intelligence rather than 🔗 Risk Analysis
@@ -16153,9 +16161,13 @@ elif page == "🔗 Risk Analysis":
             st.info("Need at least 2 holdings with price history to compute correlations.")
         else:
             dc1, dc2, dc3 = st.columns(3)
-            dc1.metric("Diversification Score", f"{div_score:.0f}/100",
+            # None on a non-empty matrix when no pair has a finite correlation
+            # (diversification_score's no-finite-pair rule, 2026-10-13).
+            dc1.metric("Diversification Score",
+                       f"{div_score:.0f}/100" if div_score is not None else "—",
                        help=_tip("Diversification Score"))
-            dc2.metric("Avg Portfolio Correlation", f"{avg_corr:.2f}",
+            dc2.metric("Avg Portfolio Correlation",
+                       f"{avg_corr:.2f}" if avg_corr is not None else "—",
                        help=_tip("Portfolio Correlation"))
             dc3.metric("High-Correlation Pairs", len(risk_pairs),
                        help=f"Pairs with correlation ≥ {CORR_HIGH_PAIRS_THRESHOLD}")
@@ -16206,6 +16218,16 @@ elif page == "🔗 Risk Analysis":
             _corr_unchecked_note = correlation_unchecked_note(_corr_unchecked)
             if _corr_unchecked_note:
                 st.caption(_corr_unchecked_note)
+            # 2026-10-13 — a holding whose price never moved IS a matrix column
+            # (so held_data's keys are a sound held set here, unlike for the
+            # missing-ticker note above) but carries no correlation; named,
+            # never blocking (owner decision).
+            _corr_flat_note = correlation_flat_note(
+                correlation_flat(corr_df, list(held_data.keys()), _corr_cov),
+                scored=div_score is not None,
+            )
+            if _corr_flat_note:
+                st.caption(_corr_flat_note)
 
             if risk_pairs:
                 st.markdown("**Correlated pairs — reduce diversification benefit:**")

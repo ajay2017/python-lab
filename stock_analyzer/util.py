@@ -932,6 +932,53 @@ def correlation_unchecked_note(corr_unchecked: "list | None") -> "str | None":
     )
 
 
+def correlation_flat_note(corr_flat: "list | None", *, scored: bool) -> "str | None":
+    """On-screen disclosure for `portfolio.correlation_flat()` — held
+    tickers whose daily returns showed no variation over the shared sample
+    (in practice a price that never moves), so they carry no correlation and
+    were left out of the diversification average.
+
+    `scored` (keyword-only, no default) is whether a diversification score
+    exists at all. When the flat names leave no finite pair there is no
+    average and no figures above, so the note must say that instead of
+    "the figures above describe your other holdings" (review 2026-10-13).
+
+    `None` (couldn't tell) and `[]` (none flat) both return None: unlike
+    `correlation_unchecked_note`, there is no "unknown" line here, because a
+    flat holding never blocks verification (owner decision 2026-10-13) — it
+    is extra context, not a gap in the claim. Plain text only — no `**`,
+    no `$` (feedback_streamlit_renderer_mismatch).
+    """
+    if not corr_flat:
+        return None
+    try:
+        tickers = sorted({
+            str(t).strip().upper() for t in corr_flat
+            if t is not None and str(t).strip()
+        })
+    except Exception:
+        tickers = []
+    if not tickers:
+        return None
+    _shown = tickers[:5]
+    _more = len(tickers) - len(_shown)
+    _names = ", ".join(_shown) + (f" +{_more} more" if _more > 0 else "")
+    _plural = len(tickers) > 1
+    _why = (f"{'their daily returns' if _plural else 'its daily returns'} showed no "
+            f"variation over this sample, so no correlation can be measured.")
+    if not scored:
+        return (
+            f"➖ {_names} {'were' if _plural else 'was'} left out — {_why} "
+            f"With {'them' if _plural else 'it'} left out, no pair of holdings "
+            f"remains to measure, so no diversification score is shown."
+        )
+    return (
+        f"➖ {_names} {'were' if _plural else 'was'} left out of the "
+        f"diversification average — {_why} "
+        f"The figures above describe your other holdings."
+    )
+
+
 def diversification_label_text(
     div_label: "str | None",
     corr_unchecked: "list | None",

@@ -938,3 +938,76 @@ class TestSpyOrRfrIoFailureFallback:
         assert bundle["fragility"] is None
         assert bundle["risk_advisor_recs"] is None
         assert bundle["risk_high_alerts"] is None
+
+
+# ── Flat (zero-variance) holding, 2026-10-13 ─────────────────────────────────
+
+class TestFlatHoldingWithOneRealPartner:
+    """AAA moves, FLAT's price never does (e.g. a constant-NAV fund), on a
+    fully trusted 60-bar sample. There is no finite pair, so
+    diversification_score now returns no score. Before 2026-10-13 it scored a
+    fabricated 50.0 that verified, read "Well Diversified" / All Clear, and
+    rescaled to a perfect 100 in the Health score."""
+
+    def _bundle(self):
+        held = {"AAA": _hist(60, start=100.0, step=1.0), "FLAT": _hist(60, start=1.0, step=0.0)}
+        return hrs.build_correlation_bundle(
+            _port_df(("AAA", "FLAT")), held, 20_000.0,
+            sector_candidates={}, discovery_universe={}, held_tickers=["AAA", "FLAT"],
+        )
+
+    def test_no_score_but_the_matrix_and_coverage_survive(self):
+        # Pins the label fix: an unguarded `div_score >= ...` on None would
+        # raise into the except path and blank corr_df AND corr_coverage.
+        b = self._bundle()
+        assert b["div_score"] is None and b["avg_corr"] is None
+        assert b["div_label"] == "Unavailable"
+        assert not b["corr_df"].empty
+        assert isinstance(b["corr_coverage"], dict) and b["corr_coverage"]["n_obs"] == 59
+        assert b["corr_unchecked"] == []
+
+    def test_risk_pill_reads_check_incomplete_not_all_clear(self):
+        b = self._bundle()
+        label, _ = hrs.classify_risk_banner(
+            0, 0, b["div_score"],
+            corr_unchecked=b["corr_unchecked"], corr_coverage=b["corr_coverage"],
+        )
+        assert label == hrs.RISK_BANNER_INCOMPLETE_LABEL
+
+    def test_health_sub_score_is_withheld_not_a_perfect_100(self):
+        from stock_analyzer import portfolio_health as ph
+        b = self._bundle()
+        sub = ph._diversification_score_sub(
+            b["div_score"], b["avg_corr"], b["corr_coverage"], b["corr_unchecked"],
+        )
+        assert sub["score"] is None
+
+
+def test_risk_analysis_renders_the_flat_note_from_correlation_flat():
+    """Both ends of the new Risk Analysis caption (feedback_ast_test_pins_one_end):
+    correlation_flat_note is called on correlation_flat(...)'s result, and
+    the note it returns is what reaches st.caption."""
+    tree = parse_file_cached(APP_PY)
+    notes = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "correlation_flat_note"]
+    assert len(notes) == 1, "expected exactly one correlation_flat_note call in app.py"
+    arg = notes[0].args[0]
+    assert isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name) \
+        and arg.func.id == "correlation_flat"
+    assert len(arg.args) == 3, "correlation_flat needs the coverage to tell flat from thin"
+    kw = {k.arg: k.value for k in notes[0].keywords}
+    assert "scored" in kw, "the note must know whether a score exists (no figures otherwise)"
+    # ...and it must be `<x> is not None`, never a constant: scored=True would
+    # give the 2-holding flat book a sentence about figures that don't exist.
+    sc = kw["scored"]
+    assert isinstance(sc, ast.Compare) and len(sc.ops) == 1 and isinstance(sc.ops[0], ast.IsNot) \
+        and isinstance(sc.comparators[0], ast.Constant) and sc.comparators[0].value is None
+    # ...and that call's result is what _corr_flat_note holds.
+    assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and n.value is notes[0]]
+    assert len(assigns) == 1 and [t.id for t in assigns[0].targets] == ["_corr_flat_note"]
+    captions = [n for n in ast.walk(tree)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "caption" and n.args
+                and isinstance(n.args[0], ast.Name) and n.args[0].id == "_corr_flat_note"]
+    assert captions, "the flat note must reach st.caption"

@@ -312,15 +312,15 @@ def test_h4_all_nan_matrix_from_disjoint_thin_history_is_withheld():
     held = dict(_held_data())   # AAA, BBB: 60 overlapping bars each
     held["CCC"] = _hist(1, start=75.0)   # single, disjoint bar
 
-    # Prove the hazard is real BEFORE this function's fix would mask it:
-    # the raw building blocks really do produce a non-empty, fully-NaN
-    # matrix that scores a fabricated 50.0 if ungated.
+    # The raw building blocks produce a non-empty, fully-NaN matrix. Until
+    # 2026-10-13 that scored a fabricated 50.0; it is now closed at the
+    # source (no finite pair -> no score). The n_obs floor is pinned
+    # independently by test_h4b below, on a thin matrix whose correlations
+    # ARE finite -- the case where only the floor can withhold.
     raw_corr_df = _portfolio.correlation_matrix(held)
     assert not raw_corr_df.empty
     raw_div = _portfolio.diversification_score(raw_corr_df)
-    assert raw_div["score"] == pytest.approx(50.0)
-    from stock_analyzer.constants import DIVERSIFY_WELL_PCT
-    assert raw_div["score"] > DIVERSIFY_WELL_PCT
+    assert raw_div["score"] is None
 
     row = rmh.build_portfolio_risk_snapshot(
         "2026-09-15", _port_df(), {"beta": 1.0}, held,
@@ -338,6 +338,39 @@ def test_h4_all_nan_matrix_from_disjoint_thin_history_is_withheld():
     )
     assert row_clean["avg_pairwise_corr"] is not None
     assert row_clean["diversification_score"] is not None
+
+
+def test_h4b_thin_but_finite_matrix_is_still_withheld_by_the_floor():
+    """Pins the n_obs floor ON ITS OWN. Two overlapping 11-bar histories give
+    REAL, finite correlations (so diversification_score returns a number --
+    the no-finite-pair rule cannot be what withholds) on only 10 shared
+    returns, below CORR_MIN_OBS_TRUSTED. Only correlation_claim_verified's
+    floor stands between that number and a persisted history row."""
+    from stock_analyzer import portfolio as _portfolio
+    held = {"AAA": _hist(11, start=100.0, step=1.0), "BBB": _hist(11, start=50.0, step=-0.3)}
+    corr_df = _portfolio.correlation_matrix(held)
+    assert _portfolio.diversification_score(corr_df)["score"] is not None
+    assert _portfolio.correlation_coverage(held)["n_obs"] == 10
+
+    row = rmh.build_portfolio_risk_snapshot(
+        "2026-09-15", _port_df(), {"beta": 1.0}, held, held_tickers=["AAA", "BBB"],
+    )
+    assert row["avg_pairwise_corr"] is None
+    assert row["diversification_score"] is None
+    assert row["corr_coverage_n"] == 10
+
+
+def test_h4c_flat_holding_with_one_real_partner_records_no_score():
+    """A zero-variance holding (price never moves) alongside ONE real name on
+    a fully trusted sample: correlation_claim_verified passes (every ticker is
+    a column, n_obs is healthy), so before 2026-10-13 this persisted a
+    fabricated 50.0. Now no finite pair -> no score -> NULL row."""
+    held = {"AAA": _hist(60, start=100.0, step=1.0), "FLAT": _hist(60, start=1.0, step=0.0)}
+    row = rmh.build_portfolio_risk_snapshot(
+        "2026-09-15", _port_df(), {"beta": 1.0}, held, held_tickers=["AAA", "FLAT"],
+    )
+    assert row["diversification_score"] is None
+    assert row["avg_pairwise_corr"] is None
 
 
 def test_h5_row_key_set_unchanged_with_and_without_diagnostics():

@@ -1353,3 +1353,47 @@ def test_diversification_label_text_accepts_numpy_integer_n_obs():
     ok = diversification_label_text("Well Diversified", [], {"n_obs": np.int64(125)})
     assert "sample too thin" in thin
     assert "sample too thin" not in ok
+
+
+# ── correlation_flat_note (2026-10-13) ───────────────────────────────────────
+
+from stock_analyzer.util import correlation_flat_note as _cfn
+
+
+@pytest.mark.parametrize("v", [None, [], [None, "  "]])
+@pytest.mark.parametrize("scored", [True, False])
+def test_correlation_flat_note_says_nothing_when_nothing_is_flat(v, scored):
+    # No "unknown" line, unlike correlation_unchecked_note: a flat holding
+    # never blocks verification, so "couldn't tell" isn't a gap to disclose.
+    assert _cfn(v, scored=scored) is None
+
+
+def test_correlation_flat_note_singular_with_a_score():
+    t = _cfn(["spaxx"], scored=True)
+    assert t.startswith("➖ SPAXX was left out of the diversification average")
+    assert "its daily returns showed no variation" in t
+    assert "The figures above describe your other holdings." in t
+
+
+def test_correlation_flat_note_without_a_score_never_claims_figures_exist():
+    # The motivating case: one real name + one flat name leaves no pair, so
+    # there IS no average and no figures above (review 2026-10-13).
+    t = _cfn(["SPAXX"], scored=False)
+    assert "figures above" not in t and "average" not in t
+    assert "no pair of holdings remains to measure" in t
+
+
+def test_correlation_flat_note_plural_and_truncation():
+    t = _cfn(["A", "B", "C", "D", "E", "F", "G"], scored=True)
+    assert "A, B, C, D, E +2 more were left out" in t and "their daily returns" in t
+
+
+def test_correlation_flat_note_requires_scored_keyword():
+    with pytest.raises(TypeError):
+        _cfn(["AAA"])
+
+
+@pytest.mark.parametrize("scored", [True, False])
+def test_correlation_flat_note_is_plain_text(scored):
+    t = _cfn(["AAA", "BBB"], scored=scored)
+    assert "**" not in t and "$" not in t

@@ -1499,7 +1499,9 @@ def correlation_unchecked(corr_df, held_tickers) -> "list[str] | None":
       - a ticker that IS a matrix column but whose correlations are all NaN
         (e.g. a zero-variance/cash-like series) reads as checked, not
         unchecked — flagging that too would risk a permanent caption on a
-        benign holding;
+        benign holding. Since 2026-10-13 such a ticker is DISCLOSED instead by
+        `correlation_flat()` (which never blocks verification), and a matrix
+        whose flat names leave no finite pair gets no diversification score;
       - partial per-pair NaNs (ticker present, but one specific pairing
         unreliable) are not detected at all — this function only reports
         whole-ticker absence from the matrix.
@@ -1514,6 +1516,58 @@ def correlation_unchecked(corr_df, held_tickers) -> "list[str] | None":
             return None
         cols = {str(c).strip().upper() for c in corr_df.columns}
         return sorted(held - cols)
+    except Exception:
+        return None
+
+
+def correlation_flat(corr_df, held_tickers, corr_coverage) -> "list[str] | None":
+    """Which HELD tickers are in `corr_df` but carry NO correlation at all
+    because their price never moved over the shared sample (zero variance —
+    e.g. a constant-NAV fund). DISCLOSURE ONLY (owner decision 2026-10-13):
+    such a holding is left out of the diversification average (its pairs are
+    NaN, and `diversification_score` skips NaN pairs) and is named on screen,
+    but it does NOT by itself block `correlation_claim_verified` — a benign
+    cash-like holding must not pin the book to "Check Incomplete" forever,
+    the cost `correlation_unchecked`'s docstring records as the reason it
+    never flagged these. If the flat names leave no finite pair at all,
+    `diversification_score` returns no score, which withholds on its own.
+
+    Detection: a column's own diagonal is NaN. With at least 2 shared
+    returns that means zero variance (a moving series correlates 1.0 with
+    itself); below that every diagonal is NaN, so the question can't be
+    answered and this returns None rather than calling every holding flat.
+
+    Returns
+    -------
+    None -- `corr_df` None/empty, `held_tickers` None/blank, the sample size
+            unknown or below 2 shared returns, or anything raises.
+    []   -- checked, no held ticker in the matrix is flat.
+    list -- sorted, de-duplicated, uppercase held tickers whose diagonal is
+            NaN. Tickers absent from the matrix are `correlation_unchecked`'s
+            business, never reported here.
+    """
+    try:
+        if corr_df is None or getattr(corr_df, "empty", True):
+            return None
+        if held_tickers is None:
+            return None
+        held = {str(t).strip().upper() for t in held_tickers if str(t).strip()}
+        if not held:
+            return None
+        n_obs = corr_coverage.get("n_obs") if isinstance(corr_coverage, dict) else None
+        # numbers.Integral, matching correlation_sample_state (an np.int64
+        # count must not silently drop the disclosure). No separate bool
+        # guard: True/False are below 2 and already return None here.
+        if not isinstance(n_obs, numbers.Integral) or int(n_obs) < 2:
+            return None
+        flat = set()
+        for c in corr_df.columns:
+            name = str(c).strip().upper()
+            if name in held and c in corr_df.index:
+                v = corr_df.loc[c, c]
+                if pd.isna(v):
+                    flat.add(name)
+        return sorted(flat)
     except Exception:
         return None
 
@@ -1812,6 +1866,19 @@ def diversification_score(corr_df: pd.DataFrame, weights: dict | None = None) ->
     Score 0–100: 100 = fully uncorrelated, 0 = all positions move in lockstep.
     weights: {ticker: weight_pct} — equal-weight assumed when None.
     Returns score, avg_correlation, and a list of risk pair dicts.
+
+    No finite pair → `score`/`avg_correlation` are None, never a number
+    (2026-10-13). This used to fall back to `avg_corr = 0.0` and score exactly
+    50.0 — the metric's best possible reading (a long-only book never scores
+    above 50) — from ZERO measured pairs. Two ways to get there on a
+    non-empty matrix: an all-NaN/too-thin sample (already caught downstream by
+    `correlation_claim_verified`'s n_obs floor) and a zero-variance holding
+    (a price that never moves, e.g. a constant-NAV fund) whose every pair is
+    NaN on a perfectly TRUSTED sample — which no downstream guard caught, so
+    a two-holding book with one flat name read "Well Diversified", verified,
+    and the Health score rescaled the 0.0 to a perfect 100. NaN pairs are
+    skipped, so a flat holding among 3+ names simply drops out of the
+    average; see `correlation_flat()` for the disclosure.
     """
     empty = {"score": None, "avg_correlation": None, "risk_pairs": []}
     if corr_df.empty or len(corr_df) < 2:
@@ -1840,7 +1907,11 @@ def diversification_score(corr_df: pd.DataFrame, weights: dict | None = None) ->
             elif c >= CORR_HIGH_PAIRS_THRESHOLD:
                 risk_pairs.append({"t1": t1, "t2": t2, "corr": round(c, 2), "level": "warning"})
 
-    avg_corr = weighted_sum / weight_sum if weight_sum else 0.0
+    if not weight_sum:
+        # No finite pair at all (see the docstring) — risk_pairs is
+        # necessarily [] too, since every NaN pair was skipped above.
+        return empty
+    avg_corr = weighted_sum / weight_sum
     score = round((1 - avg_corr) / 2 * 100, 1)
 
     return {

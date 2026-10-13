@@ -897,7 +897,10 @@ def test_correlation_claim_verified_p7_end_to_end_thin_partner_hazard():
     unchecked = portfolio.correlation_unchecked(corr, held_tickers)
 
     assert not corr.empty
-    assert div["score"] is not None and div["score"] >= DIVERSIFY_WELL_PCT
+    # The fabricated score is now closed at the SOURCE (2026-10-13: no finite
+    # pair -> no score, where this used to read 50.0 >= DIVERSIFY_WELL_PCT).
+    # The n_obs floor below still refuses on its own -- defense in depth.
+    assert div["score"] is None
     assert unchecked == []
     assert portfolio.correlation_claim_verified(unchecked, cov) is False
 

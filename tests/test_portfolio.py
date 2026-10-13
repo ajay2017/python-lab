@@ -283,9 +283,23 @@ def test_diversification_score_ignores_nan_pairs():
     tickers = ["A", "B"]
     matrix = [[1.0, np.nan], [np.nan, 1.0]]
     result = diversification_score(_corr_df(matrix, tickers))
-    # No valid pair to average -> weight_sum is 0 -> avg_corr falls back to 0.0.
-    assert result["avg_correlation"] == 0.0
+    # No valid pair to average -> no score at all (2026-10-13). This used to
+    # fall back to avg_corr 0.0 and score exactly 50.0 -- the metric's best
+    # possible reading -- from zero measured pairs.
+    assert result["score"] is None
+    assert result["avg_correlation"] is None
     assert result["risk_pairs"] == []
+
+
+def test_diversification_score_skips_a_flat_holding_but_scores_the_rest():
+    # A zero-variance holding's pairs are NaN; with a finite pair present the
+    # score is exactly the finite pair's, the flat name simply drops out.
+    t3 = ["A", "B", "FLAT"]
+    m3 = [[1.0, 0.30, np.nan], [0.30, 1.0, np.nan], [np.nan, np.nan, np.nan]]
+    with_flat = diversification_score(_corr_df(m3, t3))
+    alone = diversification_score(_corr_df([[1.0, 0.30], [0.30, 1.0]], ["A", "B"]))
+    assert with_flat["score"] == alone["score"] == pytest.approx(35.0)
+    assert with_flat["avg_correlation"] == pytest.approx(0.30)
 
 
 # ── real_sector_exposure / sector_benchmark_tilt ──────────────────────────────
@@ -1800,3 +1814,79 @@ def test_correlation_claim_verified_equivalence_sweep(unchecked, cov):
         assert got == legacy(unchecked, cov)
     # positive contrast so the sweep is never all-False
     assert portfolio.correlation_claim_verified([], {"n_obs": 125}) is True
+
+
+# ── correlation_flat (2026-10-13, owner decision: exclude & disclose) ────────
+
+def _flat_matrix():
+    t = ["AAA", "BBB", "FLAT"]
+    m = [[1.0, 0.30, np.nan], [0.30, 1.0, np.nan], [np.nan, np.nan, np.nan]]
+    return _corr_df(m, t)
+
+
+_TRUSTED = {"n_obs": 119}
+
+
+def test_correlation_flat_names_a_held_zero_variance_ticker():
+    assert portfolio.correlation_flat(_flat_matrix(), ["aaa", "BBB", " flat "], _TRUSTED) == ["FLAT"]
+
+
+def test_correlation_flat_returns_empty_when_nothing_is_flat():
+    m = _corr_df([[1.0, 0.3], [0.3, 1.0]], ["AAA", "BBB"])
+    assert portfolio.correlation_flat(m, ["AAA", "BBB"], _TRUSTED) == []
+
+
+def test_correlation_flat_ignores_a_flat_column_that_is_not_held():
+    assert portfolio.correlation_flat(_flat_matrix(), ["AAA", "BBB"], _TRUSTED) == []
+
+
+@pytest.mark.parametrize("cov", [None, {}, {"n_obs": None}, {"n_obs": 1}, {"n_obs": 0},
+                                 {"n_obs": "119"}, {"n_obs": 119.0}])
+def test_correlation_flat_cannot_tell_on_an_unknown_or_sub_2_sample(cov):
+    # Below 2 shared returns EVERY diagonal is NaN, so "flat" is unanswerable --
+    # None, never a list naming every holding. A str/float is not a count.
+    assert portfolio.correlation_flat(_flat_matrix(), ["AAA", "BBB", "FLAT"], cov) is None
+
+
+def test_correlation_flat_accepts_a_numpy_integer_count():
+    # Matches correlation_sample_state's numbers.Integral rule: an np.int64
+    # n_obs must not silently drop the disclosure (review 2026-10-13).
+    assert portfolio.correlation_flat(
+        _flat_matrix(), ["AAA", "BBB", "FLAT"], {"n_obs": np.int64(119)}) == ["FLAT"]
+
+
+@pytest.mark.parametrize("corr_df, held", [(None, ["AAA"]), (pd.DataFrame(), ["AAA"]),
+                                           ("FLATM", None), ("FLATM", []), ("FLATM", ["  "])])
+def test_correlation_flat_none_on_missing_inputs(corr_df, held):
+    corr_df = _flat_matrix() if isinstance(corr_df, str) else corr_df
+    assert portfolio.correlation_flat(corr_df, held, _TRUSTED) is None
+
+
+def test_flat_holding_end_to_end_through_the_real_chain():
+    """Real correlation_matrix/coverage on a book with a never-moving price.
+    The flat name is named, verification is NOT blocked (owner decision), and
+    the score comes from the real pair only."""
+    idx = pd.bdate_range("2026-01-01", periods=120)
+    rng = np.random.default_rng(1)
+    a = pd.Series(100 * np.cumprod(1 + rng.normal(0, .01, 120)), idx)
+    b = pd.Series(100 * np.cumprod(1 + rng.normal(0, .01, 120)), idx)
+    flat = pd.Series(1.0, idx)
+    held = {t: {"df": pd.DataFrame({"Close": s})} for t, s in [("AAA", a), ("BBB", b), ("FLAT", flat)]}
+    corr = portfolio.correlation_matrix(held)
+    cov = portfolio.correlation_coverage(held)
+    tickers = ["AAA", "BBB", "FLAT"]
+    unchecked = portfolio.correlation_unchecked(corr, tickers)
+    assert portfolio.correlation_flat(corr, tickers, cov) == ["FLAT"]
+    assert unchecked == []
+    assert portfolio.correlation_claim_verified(unchecked, cov) is True
+    real_pair = portfolio.diversification_score(corr.loc[["AAA", "BBB"], ["AAA", "BBB"]])
+    assert portfolio.diversification_score(corr)["score"] == real_pair["score"]
+
+    # Two holdings, one flat: verification still passes, but there is no
+    # finite pair, so there is no score (was a fabricated 50.0).
+    held2 = {"AAA": held["AAA"], "FLAT": held["FLAT"]}
+    corr2 = portfolio.correlation_matrix(held2)
+    cov2 = portfolio.correlation_coverage(held2)
+    assert portfolio.correlation_claim_verified(
+        portfolio.correlation_unchecked(corr2, ["AAA", "FLAT"]), cov2) is True
+    assert portfolio.diversification_score(corr2)["score"] is None

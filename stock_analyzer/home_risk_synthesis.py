@@ -147,7 +147,13 @@ def build_correlation_bundle(
         div_score    = div["score"]
         avg_corr     = div["avg_correlation"]
         risk_pairs   = div["risk_pairs"]
-        _div_label   = ("Well Diversified" if div_score >= DIVERSIFY_WELL_PCT
+        # div_score is None on a NON-empty matrix when no pair has a finite
+        # correlation (diversification_score's no-finite-pair rule,
+        # 2026-10-13). Labelled here rather than raising: a TypeError would
+        # fall to the except below and blank corr_df AND _corr_cov, losing
+        # the "sample too thin" disclosure and the matrix for every consumer.
+        _div_label   = ("Unavailable" if div_score is None
+                        else "Well Diversified" if div_score >= DIVERSIFY_WELL_PCT
                         else "Moderate" if div_score >= DIVERSIFY_MODERATE_PCT
                         else "High Correlation Risk")
         # Disclosure-only (G-25/G-26 follow-on) — computed from the SAME
