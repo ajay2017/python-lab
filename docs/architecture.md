@@ -191,6 +191,22 @@ python-lab/
     ├── coord_freshness.py          Freshness bookkeeping for portfolio-dependent coordination caches (F-260 Phase 1)
     ├── outage_gate.py              DB-outage render gate (extracted decision logic, F-243) — allowlist application, scope branching, message text
     ├── act_today_view.py           Single source of truth for the Act Today count every surface reads (Home badge/chip/pointer, Summary). Owns offline-vs-clear: a crashed Daily Brief build is replaced by `offline_brief_stub()` (carries an explicit offline marker), `act_today_view()` reads a marked brief as "offline" REGARDLESS of `_daily_brief_offline`, `brief_lock_allowed()` refuses to Lock an offline Brief and `locked_snapshot_servable()` refuses to serve a marked stub (audit B-H2, 2026-10-12 — Brief Lock had been freezing a crashed Brief into a day-long false "Nothing to act on today"). `_GATE_FILES` member
+    ├── act_today_pointer.py        Home's top-of-page Act Today pointer (Home redesign P2) — `act_pointer()` reads the SAME `act_today_view()` result Home's Act Today section renders, never a second count; offline / clear / act, a non-empty active list always wins. `_GATE_FILES` member
+    ├── home_notices.py             Home's ⚠️ Alerts one-line notices summary (Home redesign P1) — `summarize_notices()` rolls up what each Alerts fill site actually rendered; never reads a cache itself, and `None` means nothing fired, never an all-clear
+    ├── sold_today.py               Which tickers were SOLD on a given ET trading day — the one shared rule read by `daily_briefing`'s new-pick / add-to-winner block, 📋 Watchlist's ENTER NOW card and the cron's Ready-to-Enter email, so a just-exited name can't resurface as a BUY the same day
+    ├── etf_candidates.py           ETF new-pick eligibility (F-288, ETF Phase 2b) — `resolve_etf_candidates` (registry + held book; same-index group screen-out D-G), `etf_newpick_eligible` (ordered checks; unknown AUM fails CLOSED, D-A), `etf_macro_block_reason` (any imminent HIGH macro event blocks, decided on set membership, D-M). `_GATE_FILES` member
+    ├── etf_scoring.py              ETF/fund composite scoring (ETF Phase 2) — a held ETF's verdict without the equity-only business-quality/valuation pillars; see its own section below. `_GATE_FILES` member
+    ├── asset_type.py               Asset-type vocabulary (`stock` / `etf`) — the ONE definition data/bundle_loader/broker_sync/db read (ETF Phase 1); enum labels, not thresholds
+    ├── risk_metric_history.py      Portfolio risk-metric history (Recommendation Outcomes Phase 1a) — `build_portfolio_risk_snapshot` turns the EOD run's port_df/port_risk/held_data into one `portfolio_risk_snapshots` row; NULL-preserving, and withholds unverified correlation readings (F-292). `_GATE_FILES` member
+    ├── rec_events_capture.py       rec_events capture half (Recommendation Outcomes Phase 1b) — five generators, one per rec_type (rebal_trim / beta_trim / diversify_add / single_name_concentration / sector_concentration), run once per EOD; pure, prices injected
+    ├── rec_events_readout.py       rec_events readout half — did those trims/ADDs move the metric they were computed against, and were they acted on; pure, dependencies injected
+    ├── leverage_giveback.py        Leverage-vs-equity giveback disclosure (F-287, Summary / Book Safety) — awareness only, never imported by a `_GATE_FILES` module
+    ├── cash_activity.py            💰 Account → Cash Activity display helpers — keeps charges and credits apart and signed; awareness only, never feeds account_flows / Modified Dietz / a gate
+    ├── trade_economics.py          Trade-level dollar economics — turns an already-decided entry/stop/reward:risk into plain dollars-and-percent arithmetic; display only, deliberately NOT in `risk.py`
+    ├── data_maintenance.py         Database maintenance / data-quality checks (F-235 ⑦, detection only) — orphaned / duplicate rows, stuck states; see its own section below
+    ├── ai_provider.py              Shared multi-provider LLM registry + dispatch, used by 🔎 Portfolio Investigator only
+    ├── investigator.py             🔎 Portfolio Investigator (F-275) — multi-step LLM orchestration over a FIXED, already-reviewed toolbox of pure functions; redlines enforced in code
+    ├── ticker_resolver.py          Company-name → ticker resolution for free-text lookups (Home's Research a Stock box) via yfinance Search; never consulted for input that already looks like a ticker, never raises
     ├── act_today_precedence.py     Held-position banner precedence for add-to-existing flow (stop-breach > reduce call > plain held)
     ├── grow_dropoff.py             Grow Today transparency helpers (firmness badge, drop-off trace; pure logic)
     ├── premortem_advisor.py        Pre-Mortem Protocol (Concept C) — position-specific counterargument + falsifiable pre-commitment
@@ -3655,6 +3671,28 @@ tests. Full suite 6893 passed. Design: `docs/mockups/2026-10-02-leverage-givebac
 memory `project_leverage_giveback_disclosure`.
 
 ---
+
+### `stock_analyzer/etf_candidates.py` (F-288)
+
+ETF new-pick eligibility — ETF-support Phase 2b. `etf_scoring.py` (Phase 2) gives a HELD ETF a composite verdict; this module decides whether an ETF can become a NEW Grow Today buy candidate at all. A separate `_GATE_FILES` module rather than growth inside `daily_briefing.py`/`etf_scoring.py`. Pure, no Streamlit/DB. Three owner decisions are encoded as approved:
+
+- **D-M (macro scope)** — `etf_macro_block_reason` blocks on ANY imminent HIGH-impact macro event with a non-empty affected-sector set, not only the `"__ALL__"` (FOMC/GDP) sentinel. It decides on **set membership**, never on whether a reason string is truthy, so it fails CLOSED where the stock path's `if _macro_block:` would fail open on empty reason text.
+- **D-A (unknown AUM)** — fails CLOSED: `total_assets` missing/NaN is "fund size unknown", the opposite default from `etf_scoring.etf_aum_thin`'s awareness-only fail-open, because this is a hard new-pick gate.
+- **D-G (same-index duplicates)** — `resolve_etf_candidates(registry_payload, held_tickers)` screens out every other member of a registry group once any member is held (never "buy VOO" while SPY is held). `None` registry → returns `None` ("not evaluated"), distinct from `[]` ("evaluated, nothing eligible").
+
+`etf_newpick_eligible(bundle, tone)` runs its checks in a fixed order, first failure wins, data-integrity before policy: data unavailable → not an ETF → stale prices → expense ratio unknown → ETF composite unavailable → fund size unknown / below `ETF_AUM_THIN_FLOOR_USD` (strict `<`) → not a bull day → `etf_total` below `COMPOSITE_STRONG_BUY`. The docstring is the authoritative list. Consumed by `daily_briefing.build_daily_briefing` (`etf_candidates=`), which renders blocked candidates in Grow Today's `etf_screened_out` expander. App side: `app.py`'s `_etf_candidates_for_grow()` is an isolation wrapper — any exception escaping the lane returns `None` with a caption, so it can't take the Brief (and protective Act Today) offline (2026-10-13); the cron's `compute_morning_picks` isolates the same lane.
+
+### `stock_analyzer/act_today_pointer.py` (Home redesign P2)
+
+The one-line Act Today pointer at the very top of 🏠 Home. `act_pointer(view)` takes the dict `act_today_view()` returned THIS render — it never calls `act_today_view()` itself and never imports `decision_bucket.split_defensive` (only `bucket_act_by_type`), so it cannot reintroduce the count drift `act_today_view.py` exists to close; `app.py` has exactly one call site. Returns `{"state", "n", "chips", "n_resolved"}`, resolved in order: an unrecognized `view` → `"offline"` (fail loud, never calm); a non-empty `active` list → ALWAYS `"act"`, whatever `view["state"]` claims; `state == "offline"` → offline; otherwise clear (`n=0`). Never raises. `_GATE_FILES` member.
+
+### `stock_analyzer/home_notices.py` (Home redesign P1)
+
+The one-line summary above Home's collapsed "⚠️ Alerts" expander. Each Alerts fill site records a `(source, tier)` entry from INSIDE the branch that actually drew something; `summarize_notices(entries)` rolls those up into `{"tier", "named", "n_notes"}` — `named` lists error- then warning-tier sources in `SOURCE_ORDER` (never call order), `n_notes` counts the remaining distinct info/caption sources — and `notices_headline` renders plain markdown (no `$`, no raw HTML). **This module never reads a cache**, so a lossy 3-state producer (e.g. `_structural_alert_cache`'s `None`/`[]`/populated) is never asked a question it would answer wrongly. `None` means "nothing fired" — callers must never render all-clear wording for it. Not a `_GATE_FILES` member.
+
+### `stock_analyzer/util.py` — diversification disclosure helpers (F-293)
+
+`correlation_unchecked_note` and `diversification_label_text` are the two shared pure functions the three "Well Diversified" screens (🔗 Risk Analysis caption, 🏠 Home's Diversification KPI, 🧾 Summary's 🧬 card) render through, so they cannot disagree about the same matrix. They disclose two independent gaps, together when both are true: a held ticker missing from the matrix (`_corr_unchecked_cache`) and a sample below `CORR_MIN_OBS_TRUSTED` (`_corr_coverage_cache`). The second exists because an entirely-NaN matrix leaves `corr_unchecked == []`. Screens disclose; the persisting sites withhold instead via `portfolio.correlation_claim_verified` (F-291/F-292).
 
 ## 7. Navigation and State Management
 

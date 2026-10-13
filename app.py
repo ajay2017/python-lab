@@ -40042,6 +40042,12 @@ Once your trades are logged and reconciled (see *First run* above), your daily r
         with st.expander("🏠 Reading Today's Brief", expanded=False):
             st.markdown(
                 """
+**The status pill beside "Portfolio Command Center"** (near the top of Home) sums up the book's risk in one word:
+- **Action Required** (red) — a danger-level alert is active, or the diversification score is below the app's moderate bound.
+- **Monitor** (amber) — a warning-level alert is active, or diversification is below the well-diversified bound.
+- **All Clear** (green) — neither of the above, *and* the correlation check covered every holding on a usable sample.
+- **Check Incomplete** (grey) — no alert or diversification problem was found, but the app couldn't verify the whole book: the correlation reading was unavailable, a holding was missing from the correlation matrix, or the shared price history was too thin to measure. A one-holding portfolio always reads this — there are no pairs to check. It is not a warning, it means *not verified*, so the app won't claim All Clear. Red and amber still fire from a partial check.
+
 The Home brief is split into **offense** (left) and **defense** (right).
 
 **Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape.
