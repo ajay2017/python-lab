@@ -68,7 +68,7 @@ def derive_dropoffs(
         The Grow Today output dict (from daily_briefing._grow_today()). Keys
         read: ``composite_skipped``, ``sector_blocked_picks``,
         ``macro_blocked_picks``, ``composite_unavailable``,
-        ``sector_unknown_picks``.
+        ``sector_unknown_picks``, ``news_skipped``.
     reduce_calls:
         Dict of {ticker_upper: item} from session_state["_reduce_calls"].
         Pass None when the Brief was offline — the None path falls through to
@@ -92,7 +92,7 @@ def derive_dropoffs(
                                     reduce_call | composite_below_bar |
                                     sector_blocked | macro_blocked |
                                     composite_unavailable | sector_unknown |
-                                    unattributed
+                                    skip_verdict | unattributed
             reason_text          (str)  — human-readable sentence
             has_confident_reason (bool) — False only on 'unattributed'
 
@@ -133,6 +133,12 @@ def derive_dropoffs(
         if _t:
             _sector_unknown_map[_t] = _item
 
+    _news_skip_map: dict[str, dict] = {}
+    for _item in grow_buckets.get("news_skipped", []):
+        _t = str(_item.get("ticker", "")).upper()
+        if _t:
+            _news_skip_map[_t] = _item
+
     # Build deduplicated surfaced-today map: earliest row per ticker.
     # Caller is expected to pass min-by-surfaced_at rows, but this layer also
     # guards: if two rows arrive for the same ticker, keep the earlier one.
@@ -169,7 +175,7 @@ def derive_dropoffs(
         # Reason attribution priority:
         # reduce_calls → composite_skipped → sector_blocked_picks
         # → macro_blocked_picks → composite_unavailable → sector_unknown_picks
-        # → unattributed
+        # → news_skipped → unattributed
         if reduce_calls is not None and _t in reduce_calls:
             _reason_code   = "reduce_call"
             _reason_text   = f"a Reduce/Exit call is now active on {_t}"
@@ -219,6 +225,20 @@ def derive_dropoffs(
             _reason_text   = _ui.get(
                 "reason",
                 "sector unknown — the sector ceiling and macro sector checks couldn't run",
+            )
+            _has_confident = True
+
+        elif _t in _news_skip_map:
+            # F-302 (2026-10-14): mirrors _grow_today, where the reconciled-
+            # skip hold-out is the LAST gate, after sector-unknown. Usually
+            # negative news that arrived after the name first surfaced.
+            _ni = _news_skip_map[_t]
+            _current_composite = _ni.get("composite_score")
+            _lbl = str(_ni.get("label") or "").strip()
+            _reason_code   = "skip_verdict"
+            _reason_text   = (
+                f"its signal check now says skip ({_lbl})" if _lbl
+                else "its signal check now says skip"
             )
             _has_confident = True
 

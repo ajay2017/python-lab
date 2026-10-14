@@ -1,0 +1,224 @@
+"""F-302 -- a new pick whose RECONCILED verdict is "skip" is held out of New
+Positions (2026-10-14).
+
+Grow Today's legacy filter dropped only xref["verdict"] == "conflicted", but
+the card renders reconcile_signals()' verdict. A "❌ Skip — Negative News"
+pick has legacy verdict "mixed", so it reached New Positions WITH a share size
+and was rec-logged as a new_pick -- the Engine Track Record then graded a call
+the card itself said to skip. The morning email was already go-only
+(cron_runner), so app and email now agree.
+"""
+import ast
+from datetime import date, timedelta
+from pathlib import Path
+
+import pytest
+
+from stock_analyzer import grow_dropoff
+from stock_analyzer.constants import (
+    ATR_STOP_MULT, COMPOSITE_BUY, MOVER_MAX_PICKS, NEWS_SENTIMENT_NEGATIVE,
+)
+from stock_analyzer.daily_briefing import _grow_today
+from tests._ast_cache import parse_file_cached
+from tests.test_daily_briefing import _scanner_df, make_port_df
+
+pytestmark = pytest.mark.fast
+
+ROOT = Path(__file__).resolve().parent.parent
+_TODAY = date(2026, 10, 14)
+
+
+def _bundle(total=COMPOSITE_BUY + 10, price=100.0, atr=3.0):
+    return {
+        "total": total, "rec": {"label": "Buy"},
+        "fundamentals_available": True,
+        "stop": round(price - ATR_STOP_MULT * atr, 2), "atr": atr,
+        "entry_lo": 99.0, "entry_hi": 101.5,
+    }
+
+
+def _neg_news(ticker, n=3):
+    c = NEWS_SENTIMENT_NEGATIVE - 0.3
+    return [{"ticker": ticker, "title": f"{ticker} slides on probe {i}",
+             "compound": c, "label": "Negative"} for i in range(n)]
+
+
+def _run(scanner_rows, news, composites):
+    port_df = make_port_df([{"ticker": "HELD", "weight": 5.0, "sector": "Tech"}])
+    return _grow_today(port_df, _scanner_df(scanner_rows), news, {}, _TODAY,
+                       100_000.0, {"tone": "bull"}, composites=composites)
+
+
+def _tickers(items):
+    return [i["ticker"] for i in items]
+
+
+def test_control_without_news_is_a_new_pick():
+    g = _run([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Energy"}],
+             [], {"NEW": _bundle()})
+    assert _tickers(g["new_picks"]) == ["NEW"]
+    assert g["new_picks"][0]["xref"]["verdict_reconciled"]["verdict"] != "skip"
+    assert g["news_skipped"] == []
+
+
+def test_negative_news_pick_is_held_out_with_its_reason():
+    g = _run([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Energy"}],
+             _neg_news("NEW"), {"NEW": _bundle()})
+    assert "NEW" not in _tickers(g["new_picks"])
+    assert _tickers(g["news_skipped"]) == ["NEW"]
+    item = g["news_skipped"][0]
+    assert "Negative News" in item["label"]
+    assert item["one_liner"]                          # the reason is carried, not dropped
+    assert item["composite_score"] == COMPOSITE_BUY + 10
+    assert "sizing" not in item                       # never sized
+
+
+def test_a_skipped_curated_pick_frees_its_sector_slot_for_a_caution_pick():
+    # Curated selection is 1-per-sector and draws confirmed before unverified.
+    # A clean same-sector name is "confirmed" and already beat the skip pick,
+    # so the only name the freed slot can go to is another unverified one --
+    # here an earnings-caution pick. Pre-F-302 the skip pick held the slot.
+    rows = [{"ticker": "NEW", "score": COMPOSITE_BUY + 20, "sector": "Energy"},
+            {"ticker": "ALT", "score": COMPOSITE_BUY + 5, "sector": "Energy"}]
+    comps = {"NEW": _bundle(COMPOSITE_BUY + 20), "ALT": _bundle(COMPOSITE_BUY + 5)}
+    port_df = make_port_df([{"ticker": "HELD", "weight": 5.0, "sector": "Tech"}])
+    g = _grow_today(port_df, _scanner_df(rows), _neg_news("NEW"), {}, _TODAY, 100_000.0,
+                    {"tone": "bull"}, composites=comps,
+                    earnings_lookup={"ALT": (_TODAY + timedelta(days=2)).isoformat()})
+    assert _tickers(g["new_picks"]) == ["ALT"]
+    assert g["new_picks"][0]["xref"]["verdict_reconciled"]["verdict"] == "caution"
+    assert _tickers(g["news_skipped"]) == ["NEW"]
+
+
+def _movers(n=4):
+    sectors = ["Energy", "Healthcare", "Financials", "Industrials", "Utilities"]
+    ms = [{"ticker": f"M{i}", "price": 100.0, "sector": sectors[i], "score": COMPOSITE_BUY + 10,
+           "composite_score": 90 - i, "day_change": 6.0} for i in range(n)]
+    return ms, {m["ticker"]: _bundle(90 - i) for i, m in enumerate(ms)}
+
+
+def test_a_skipped_mover_frees_a_mover_slot():
+    # The mover allowance (MOVER_MAX_PICKS) used to be spent on the skip pick;
+    # the next "go" mover now takes it -- which the go-only email also gains.
+    ms, comps = _movers(MOVER_MAX_PICKS + 1)
+    port_df = make_port_df([{"ticker": "HELD", "weight": 5.0, "sector": "Tech"}])
+    clean = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                        composites=comps, movers=ms)
+    last = f"M{MOVER_MAX_PICKS}"
+    assert last not in _tickers(clean["new_picks"]), "precondition: allowance is full"
+    g = _grow_today(port_df, None, _neg_news("M0"), {}, _TODAY, 100_000.0, {"tone": "bull"},
+                    composites=comps, movers=ms)
+    assert "M0" not in _tickers(g["new_picks"]) and last in _tickers(g["new_picks"])
+    assert _tickers(g["news_skipped"]) == ["M0"]
+
+
+@pytest.mark.parametrize("bad", [{"stale_as_of": "2026-10-10"}, {"fundamentals_available": False}])
+def test_a_data_quality_failure_keeps_its_own_reason(bad):
+    # Ordering: the skip hold-out runs AFTER every data-quality gate.
+    g = _run([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Energy"}],
+             _neg_news("NEW"), {"NEW": {**_bundle(), **bad}})
+    assert _tickers(g["composite_unavailable"]) == ["NEW"]
+    assert g["news_skipped"] == []
+
+
+def test_etf_pick_with_negative_news_is_screened_out_not_sized():
+    from tests.test_daily_briefing import _etf_candidate
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    clean = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                        etf_candidates=[_etf_candidate()])
+    assert "SPY" in _tickers(clean["new_picks"]), "precondition: the ETF fixture is a pick"
+    g = _grow_today(port_df, None, _neg_news("SPY"), {}, _TODAY, 100_000.0, {"tone": "bull"},
+                    etf_candidates=[_etf_candidate()])
+    assert "SPY" not in _tickers(g["new_picks"])
+    out = [e for e in g["etf_screened_out"] if e["ticker"] == "SPY"]
+    assert len(out) == 1 and out[0]["kind"] == "skip_verdict"
+    assert "Negative News" in out[0]["reason"]
+
+
+def test_no_new_pick_ever_carries_a_skip_verdict():
+    rows = [{"ticker": t, "score": COMPOSITE_BUY + 10, "sector": s}
+            for t, s in (("AAA", "Energy"), ("BBB", "Healthcare"), ("CCC", "Financials"))]
+    g = _run(rows, _neg_news("AAA") + _neg_news("CCC"), {t: _bundle() for t in ("AAA", "BBB", "CCC")})
+    assert _tickers(g["new_picks"]) == ["BBB"]
+    assert sorted(_tickers(g["news_skipped"])) == ["AAA", "CCC"]
+    for p in g["new_picks"]:
+        assert p["xref"]["verdict_reconciled"]["verdict"] != "skip"
+
+
+def test_bear_day_early_return_carries_the_key():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 5.0, "sector": "Tech"}])
+    g = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bear", "sp500_pct": -2.0})
+    assert g["news_skipped"] == []
+
+
+# ── drop-off attribution ─────────────────────────────────────────────────────
+
+def _drop(buckets):
+    return grow_dropoff.derive_dropoffs(
+        [{"ticker": "NEW", "first_seen_at": "2026-10-14T13:00:00+00:00", "composite_at_surface": 75.0}],
+        set(), buckets, {}, set())
+
+
+def test_dropoff_names_the_skip_verdict():
+    d = _drop({"news_skipped": [{"ticker": "new", "composite_score": 74.0,
+                                 "label": "❌ Skip — Negative News"}]})
+    assert d[0]["reason_code"] == "skip_verdict"
+    assert d[0]["has_confident_reason"] is True
+    assert "Negative News" in d[0]["reason_text"]
+    assert d[0]["current_composite"] == 74.0
+
+
+def test_dropoff_skip_ranks_below_sector_unknown():
+    d = _drop({"news_skipped": [{"ticker": "NEW", "label": "x"}],
+               "sector_unknown_picks": [{"ticker": "NEW", "reason": "sector unknown"}]})
+    assert d[0]["reason_code"] == "sector_unknown"
+
+
+# ── app wiring ───────────────────────────────────────────────────────────────
+
+def _app():
+    return parse_file_cached(ROOT / "app.py")
+
+
+def test_render_reads_the_bucket_from_grow():
+    gets = [n for n in ast.walk(_app()) if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute) and n.func.attr == "get"
+            and isinstance(n.func.value, ast.Name) and n.func.value.id == "grow"
+            and n.args and isinstance(n.args[0], ast.Constant) and n.args[0].value == "news_skipped"]
+    assert len(gets) == 1
+
+
+def test_dropoff_buckets_include_news_skipped():
+    for n in ast.walk(_app()):
+        if (isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
+                and n.targets[0].id == "_do_buckets" and isinstance(n.value, ast.Dict)):
+            pairs = {k.value: v for k, v in zip(n.value.keys, n.value.values)
+                     if isinstance(k, ast.Constant)}
+            v = pairs.get("news_skipped")
+            assert isinstance(v, ast.Name) and v.id == "news_skipped"
+            return
+    pytest.fail("_do_buckets dict not found")
+
+
+def test_buy_candidates_dedup_covers_news_skipped():
+    # Otherwise a held-out Skip reappears under "More Buy Candidates".
+    for n in ast.walk(_app()):
+        if (isinstance(n, ast.For) and isinstance(n.target, ast.Name) and n.target.id == "_gk"
+                and isinstance(n.iter, ast.Tuple)):
+            keys = {e.value for e in n.iter.elts if isinstance(e, ast.Constant)}
+            assert {"news_skipped", "composite_skipped", "new_picks"} <= keys
+            return
+    pytest.fail("_grow_shown key loop not found")
+
+
+def test_the_visible_box_is_rendered():
+    # The box is the visibility guarantee -- deleting it must fail the suite.
+    for n in ast.walk(_app()):
+        if (isinstance(n, ast.If) and isinstance(n.test, ast.Name) and n.test.id == "news_skipped"):
+            calls = {c.func.attr for c in ast.walk(n) if isinstance(c, ast.Call)
+                     and isinstance(c.func, ast.Attribute)}
+            assert "markdown" in calls and "container" in calls
+            text = ast.unparse(n)
+            assert "Signal Check Says Skip" in text and "one_liner" in text
+            return
+    pytest.fail("no `if news_skipped:` render block in app.py")

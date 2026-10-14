@@ -972,6 +972,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "macro_blocked_picks":        [],
             "composite_skipped":          [],
             "composite_unavailable":      [],
+            "news_skipped":               [],
             "etf_screened_out":           [],
             # G-25: always a list, never omitted, even on this early return —
             # a bear day suppresses every add-to-winner lane outright (the
@@ -1024,6 +1025,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # recommendation; the Brief renders an aggregate banner with a Refresh
     # button so the user can retry the data load.
     composite_unavailable: list[dict] = []
+    # Picks whose RECONCILED verdict is "skip" (F-302) -- most often "❌ Skip
+    # — Negative News". Held out of new_picks like composite_skipped.
+    news_skipped: list[dict] = []
 
     # Build ONE candidate pool from two sources so the user sees a single
     # "New Positions to Initiate" list regardless of where a ticker came from:
@@ -1317,6 +1321,29 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "price":           price,
                     "composite_score": _composite_score,
                     "momentum_score":  _f(row.get("Score"), None),
+                })
+                continue
+
+            # Reconciled-skip hold-out (F-302, 2026-10-14). The legacy filter
+            # above drops only xref["verdict"] == "conflicted", but the card
+            # renders reconcile_signals()' verdict -- so a "❌ Skip — Negative
+            # News" pick (legacy "mixed") used to reach New Positions WITH a
+            # share size and get rec-logged as a new_pick, grading the Engine
+            # Track Record on a call the card itself said to skip. The morning
+            # email was already go-only (cron_runner), so it never listed them.
+            # Placed after every data-quality gate so a pick that failed on
+            # real data is still attributed to THAT reason. Held out into a
+            # visible bucket, never silently dropped.
+            _rv = xref.get("verdict_reconciled")
+            if isinstance(_rv, dict) and _rv.get("verdict") == "skip":
+                news_skipped.append({
+                    "ticker":          ticker,
+                    "sector":          sector,
+                    "momentum_score":  _f(row.get("Score", 0)),
+                    "composite_score": _composite_score,
+                    "label":           str(_rv.get("label") or "❌ Skip"),
+                    "one_liner":       str(_rv.get("one_liner") or ""),
+                    "is_mover":        is_mover,
                 })
                 continue
 
@@ -1625,6 +1652,25 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # but left in rather than removed per the stock path's own
             # precedent for this exact check.
             if _etf_xref["verdict"] == "conflicted":
+                continue
+
+            # F-302 — same reconciled-skip hold-out as the stock lane. The
+            # comment above keeps momentum_score live precisely so negative news
+            # can veto an ETF pick; without this the card read "Skip" while the
+            # pick was still sized into new_picks. Routed into this lane's own
+            # visible screen-out bucket, like its macro/AUM/held-group reasons.
+            _etf_rv = _etf_xref.get("verdict_reconciled")
+            if isinstance(_etf_rv, dict) and _etf_rv.get("verdict") == "skip":
+                etf_screened_out.append({
+                    "ticker": _et,
+                    "group":  _ec.get("group"),
+                    "kind":   "skip_verdict",
+                    # Label only: this lane calls reconcile_signals with
+                    # momentum_available=False, whose one-liner is add-to-
+                    # winner wording ("Hold off adding") -- wrong for a
+                    # not-held ETF.
+                    "reason": str(_etf_rv.get("label") or "❌ Skip"),
+                })
                 continue
 
             # reconcile_signals()'s own momentum_available=False "go" wording
@@ -2136,6 +2182,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "macro_blocked_picks":        macro_blocked_picks,
         "composite_skipped":          composite_skipped,
         "composite_unavailable":      composite_unavailable,
+        "news_skipped":               news_skipped,
         "etf_screened_out":           etf_screened_out,
         "deploy_note":                deploy_note,
         "risk_banner":                risk_banner,

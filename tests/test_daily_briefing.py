@@ -2947,11 +2947,13 @@ def test_grow_today_etf_negative_news_now_reachable_via_shadow_momentum():
     ]
     grow = _grow_today(port_df, None, news_items, {}, _TODAY, 100_000.0, {"tone": "bull"},
                        etf_candidates=[_etf_candidate()])
-    pick = find_item(grow["new_picks"], "SPY")
-    assert pick is not None
-    reconciled = pick["xref"]["verdict_reconciled"]
-    assert reconciled["verdict"] == "skip"
-    assert "Negative News" in reconciled["label"]
+    # F-302 (2026-10-14): the skip is still reachable, and it now VETOES the
+    # pick -- held out of new_picks into the lane's visible screen-out list,
+    # instead of being sized with a "Skip" card.
+    assert find_item(grow["new_picks"], "SPY") is None
+    out = [e for e in grow["etf_screened_out"] if e["ticker"] == "SPY"]
+    assert len(out) == 1 and out[0]["kind"] == "skip_verdict"
+    assert "Negative News" in out[0]["reason"]
 
 
 def test_grow_today_etf_sold_today_sibling_screened_out_as_held_group():

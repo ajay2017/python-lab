@@ -8630,6 +8630,9 @@ if page == "🏠 Home":
         macro_blocked = grow.get("macro_blocked_picks", [])
         comp_skipped  = grow.get("composite_skipped", [])
         comp_unavail  = grow.get("composite_unavailable", [])
+        # F-302: cleared every gate but the card's own verdict was "❌ Skip"
+        # (usually Negative News) — held out of New Positions, shown below.
+        news_skipped  = grow.get("news_skipped", [])
         # ETF new-pick screen-outs (ETF-support Phase 2b) — never None from
         # _grow_today (defaults to [] in every return path), so the plain
         # two-arg default is safe here, same as sector_unknown above.
@@ -8714,7 +8717,8 @@ if page == "🏠 Home":
                 with st.expander("🔎 How today's screen funnelled down to picks", expanded=True):
                     _fn_notscored = _fn_universe - _fn_scored
                     _fn_belowbar  = min(len(comp_skipped), _fn_scored - _fn_picks)
-                    _fn_other     = (_fn_scored - _fn_picks) - _fn_belowbar
+                    _fn_newsskip  = min(len(news_skipped), _fn_scored - _fn_picks - _fn_belowbar)
+                    _fn_other     = (_fn_scored - _fn_picks) - _fn_belowbar - _fn_newsskip
                     _fn_labels = [
                         f"Screened ({_fn_universe})",
                         f"Reached composite scoring ({_fn_scored})",
@@ -8722,14 +8726,16 @@ if page == "🏠 Home":
                         f"✅ New Positions to Initiate ({_fn_picks})",
                         f"Composite below Buy bar ({_fn_belowbar})",
                         f"Other filters ({_fn_other})",
+                        f"❌ Skip verdict ({_fn_newsskip})",
                     ]
-                    _fn_ncolor = ["#60a5fa", "#38bdf8", "#475569", "#22c55e", "#f59e0b", "#64748b"]
+                    _fn_ncolor = ["#60a5fa", "#38bdf8", "#475569", "#22c55e", "#f59e0b", "#64748b", "#ef4444"]
                     _fn_links = [
                         (0, 1, _fn_scored,    "rgba(56,189,248,0.45)"),
                         (0, 2, _fn_notscored, "rgba(71,85,105,0.25)"),
                         (1, 3, _fn_picks,     "rgba(34,197,94,0.5)"),
                         (1, 4, _fn_belowbar,  "rgba(245,158,11,0.35)"),
                         (1, 5, _fn_other,     "rgba(100,116,139,0.3)"),
+                        (1, 6, _fn_newsskip,  "rgba(239,68,68,0.35)"),
                     ]
                     _fn_links = [(s, t, v, c) for (s, t, v, c) in _fn_links if v > 0]
                     if _fn_links:
@@ -8761,7 +8767,10 @@ if page == "🏠 Home":
                             f"The funnel above, drawn to scale. Of **{_fn_universe}** names "
                             f"screened, **{_fn_scored}** reached full composite scoring and "
                             f"**{_fn_picks}** cleared every gate into New Positions to Initiate. "
-                            f"**Other filters** = scored names dropped for sector-cap / macro / "
+                            + (f"**❌ Skip verdict** = cleared the gates but its own signal "
+                               f"check said skip (usually negative news) — listed below. "
+                               if _fn_newsskip else "")
+                            + f"**Other filters** = scored names dropped for sector-cap / macro / "
                             f"data / flat-day caution (the banners below name the specifics). "
                             f"Every band is a real count — pure subtraction, nothing fabricated."
                         )
@@ -8864,6 +8873,16 @@ if page == "🏠 Home":
                     )
                 else:
                     _macro_note = ""
+                # F-302: a held-out Skip pick DID clear the buy bar, so it must
+                # not be folded into "none ... cleared the buy threshold".
+                _news_skip_n = len(news_skipped)
+                if _news_skip_n:
+                    _ns_word = "pick" if _news_skip_n == 1 else "picks"
+                    _macro_note += (
+                        f" {_news_skip_n} {_ns_word} that cleared it "
+                        f"{'was' if _news_skip_n == 1 else 'were'} held back on a "
+                        "❌ Skip verdict (see below)."
+                    )
                 # When the emptiness is macro-driven, a re-scan can't un-block
                 # the suppressed names — so don't suggest one (§2B calm).
                 _tail = (
@@ -8872,8 +8891,9 @@ if page == "🏠 Home":
                     "Run Market Scanner for a fresh pass."
                 )
                 st.caption(
-                    f"Today's scan: none of the scored candidates cleared the "
-                    f"buy threshold{_funnel}.{_macro_note} {_tail}"
+                    f"Today's scan: "
+                    + ("no other scored candidate" if _news_skip_n else "none of the scored candidates")
+                    + f" cleared the buy threshold{_funnel}.{_macro_note} {_tail}"
                 )
             elif tone == "bull":
                 st.caption(
@@ -9399,6 +9419,7 @@ if page == "🏠 Home":
                     "macro_blocked_picks":   macro_blocked,
                     "composite_unavailable": comp_unavail,
                     "sector_unknown_picks":  sector_unknown,
+                    "news_skipped":          news_skipped,
                 }
                 _do_reduce_calls = st.session_state.get("_reduce_calls")
 
@@ -9843,6 +9864,44 @@ if page == "🏠 Home":
                 "</div></div>",
                 unsafe_allow_html=True,
             )
+
+        # F-302 — reconciled-skip hold-out. These cleared the composite and the
+        # other buy gates but the card's OWN signal check said "❌ Skip" — usually
+        # negative news on the name. Held out of New Positions so they get no
+        # share size and are never rec-logged as a new_pick (the Engine Track
+        # Record grades only what the app said to buy). Same verdict the
+        # morning email uses: it lists only "go" picks.
+        if news_skipped:
+            def _ns_comp(c):
+                _v = c.get("composite_score")
+                return f"composite {_v:.0f}/100" if isinstance(_v, (int, float)) else "composite n/a"
+            # One fully-escaped st.markdown per line (every interpolation is a
+            # direct _safe_html call) inside a bordered container, so this new
+            # surface adds nothing to the UNSAFE_HTML_DYNAMIC baseline.
+            with st.container(border=True):
+                st.markdown(
+                    "<div style='color:#fca5a5;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                    f"⛔ Screened but Filtered Out ({_safe_html(len(news_skipped))}) — Signal Check Says Skip</div>",
+                    unsafe_allow_html=True,
+                )
+                for c in news_skipped[:5]:
+                    st.markdown(
+                        f"<div style='color:#fca5a5;font-size:0.79em;margin-bottom:2px'>"
+                        f"• <b>{_safe_html(c.get('ticker', ''))}</b> ({_safe_html(c.get('sector') or '—')}) — "
+                        f"{_safe_html(c.get('label') or '❌ Skip')} · {_safe_html(_ns_comp(c))}"
+                        f"{_safe_html((' — ' + c['one_liner']) if c.get('one_liner') else '')}</div>",
+                        unsafe_allow_html=True,
+                    )
+                if len(news_skipped) > 5:
+                    st.caption(f"…and {len(news_skipped) - 5} more.")
+                st.markdown(
+                    "<div style='color:#fecaca;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                    "These cleared the composite and the other buy gates, but the combined "
+                    "signal check said skip — so no position is suggested and nothing is "
+                    "sized. They're re-checked on every pass."
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
 
     # Hoist macro coverage key to module scope BEFORE the columns are created.
     # _render_grow_today assigns _macro_coverage_expired inside the function, so
@@ -11148,7 +11207,8 @@ if page == "🏠 Home":
                     "deterioration_blocked_adds", "cooldown_adds",
                     "sector_blocked_adds", "concentration_blocked_adds",
                     "risk_blocked_adds", "sector_blocked_picks",
-                    "sector_unknown_picks", "cluster_blocked_adds", "pair_blocked_adds"):
+                    "sector_unknown_picks", "cluster_blocked_adds", "pair_blocked_adds",
+                    "news_skipped"):
             for _gp_item in (_db_grow.get(_gk, []) or []):
                 _gt = _gp_item.get("ticker")
                 if _gt:
@@ -40171,6 +40231,8 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 **Data freshness gate:** candidates require fresh fundamentals (≤ 2 calendar days old) and data not served from a cache fallback. If data is stale, the signal is held back and shown as **"Pending Verification"** with a **Refresh** button instead — once you refresh and it clears the composite gate (≥ 65), it surfaces.
 
 **🧭 Sector unknown banner:** a pick whose sector couldn't be classified at all (not on the curated sector map, and no usable sector label from the data provider either) is held back with a **"Sector unknown"** notice rather than recommended — the sector-cap and macro-sector gates can't check something they can't classify, so it's treated as a reason to pause, not a green light.
+
+**⛔ Signal Check Says Skip:** a name can clear the composite and every gate above and still get a **"❌ Skip"** from the combined signal check — most often **"Skip — Negative News"**, when its own recent headlines are clearly negative. Such a name is held out of New Positions: no share size, and it isn't logged as a New Position, so the Engine Track Record doesn't grade picks the app said to skip. It's listed in a **"Screened but Filtered Out — Signal Check Says Skip"** box with the reason (an ETF goes in the *ETF candidates screened out* list instead) and is re-checked on every pass. The morning email already left out Skip picks, so the two now agree on them.
 
 **Two entry triggers in "New Positions to Initiate":** curated scanner picks that passed the momentum gate show **"Momentum X/100"** in the header, while movers surfaced from the discovery universe show **"Breakout today"** with the day-change badge (e.g. "+7.6% today"). Both types pass the same portfolio-level gates (composite ≥ 65, sector diversity, concentration limits, macro event check).
 
