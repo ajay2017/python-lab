@@ -73,11 +73,11 @@ def test_negative_news_pick_is_held_out_with_its_reason():
     assert "sizing" not in item                       # never sized
 
 
-def test_a_skipped_curated_pick_frees_its_sector_slot_for_a_caution_pick():
-    # Curated selection is 1-per-sector and draws confirmed before unverified.
-    # A clean same-sector name is "confirmed" and already beat the skip pick,
-    # so the only name the freed slot can go to is another unverified one --
-    # here an earnings-caution pick. Pre-F-302 the skip pick held the slot.
+def test_curated_skip_and_earnings_wait_are_both_held_out():
+    # F-302 freed a curated skip's 1-per-sector slot, but the only name that
+    # could take it was another unverified pick -- in practice an earnings-
+    # caution one, which F-303 now holds out too. Pre-F-302: ['NEW'] (skip,
+    # sized); between F-302 and F-303: ['ALT'] (caution, sized).
     rows = [{"ticker": "NEW", "score": COMPOSITE_BUY + 20, "sector": "Energy"},
             {"ticker": "ALT", "score": COMPOSITE_BUY + 5, "sector": "Energy"}]
     comps = {"NEW": _bundle(COMPOSITE_BUY + 20), "ALT": _bundle(COMPOSITE_BUY + 5)}
@@ -85,9 +85,9 @@ def test_a_skipped_curated_pick_frees_its_sector_slot_for_a_caution_pick():
     g = _grow_today(port_df, _scanner_df(rows), _neg_news("NEW"), {}, _TODAY, 100_000.0,
                     {"tone": "bull"}, composites=comps,
                     earnings_lookup={"ALT": (_TODAY + timedelta(days=2)).isoformat()})
-    assert _tickers(g["new_picks"]) == ["ALT"]
-    assert g["new_picks"][0]["xref"]["verdict_reconciled"]["verdict"] == "caution"
+    assert g["new_picks"] == []
     assert _tickers(g["news_skipped"]) == ["NEW"]
+    assert _tickers(g["earnings_waiting"]) == ["ALT"]
 
 
 def _movers(n=4):
@@ -293,3 +293,131 @@ def test_composite_skipped_mover_carries_its_breakout_for_the_render():
     # The render branches on it, so a mover never reads "Momentum X/100".
     assert "Breakout" in ast.unparse(next(
         n for n in ast.walk(_app()) if isinstance(n, ast.FunctionDef) and n.name == "_cs_trigger"))
+
+
+# ── F-303: earnings-wait hold-out (owner decision 2026-10-14) ────────────────
+
+def _earn(t, days=2):
+    return {t: (_TODAY + timedelta(days=days)).isoformat()}
+
+
+def test_earnings_imminent_pick_waits_unsized():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 5.0, "sector": "Tech"}])
+    clean = _run([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Energy"}], [], {"NEW": _bundle()})
+    assert _tickers(clean["new_picks"]) == ["NEW"], "precondition"
+    g = _grow_today(port_df, _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Energy"}]),
+                    [], {}, _TODAY, 100_000.0, {"tone": "bull"}, composites={"NEW": _bundle()},
+                    earnings_lookup=_earn("NEW"))
+    assert g["new_picks"] == []
+    item = g["earnings_waiting"][0]
+    assert item["ticker"] == "NEW" and item["earn_days"] == 2
+    assert "Earnings" in item["label"] and "sizing" not in item
+
+
+def test_every_new_pick_left_is_reconciled_go():
+    rows = [{"ticker": t, "score": COMPOSITE_BUY + 10, "sector": s}
+            for t, s in (("AAA", "Energy"), ("BBB", "Healthcare"), ("CCC", "Financials"), ("DDD", "Materials"))]
+    comps = {t: _bundle() for t in ("AAA", "BBB", "CCC", "DDD")}
+    comps["DDD"] = {**_bundle(), "rec": {"label": "Hold"}}
+    g = _grow_today(make_port_df([{"ticker": "HELD", "weight": 5.0, "sector": "Tech"}]),
+                    _scanner_df(rows), _neg_news("AAA"), {}, _TODAY, 100_000.0, {"tone": "bull"},
+                    composites=comps, earnings_lookup=_earn("CCC", 1))
+    assert _tickers(g["new_picks"]) == ["BBB"]
+    assert all(p["xref"]["verdict_reconciled"]["verdict"] == "go" for p in g["new_picks"])
+    assert _tickers(g["earnings_waiting"]) == ["CCC"]
+
+
+def test_etf_with_imminent_earnings_is_screened_out():
+    from tests.test_daily_briefing import _etf_candidate
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    g = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                    etf_candidates=[_etf_candidate()], earnings_lookup=_earn("SPY"))
+    assert "SPY" not in _tickers(g["new_picks"])
+    assert [e["kind"] for e in g["etf_screened_out"] if e["ticker"] == "SPY"] == ["earnings_wait"]
+
+
+def test_dropoff_names_the_earnings_wait_after_skip():
+    d = _drop({"earnings_waiting": [{"ticker": "NEW", "label": "⚠️ Caution — Earnings in 2d"}]})
+    assert d[0]["reason_code"] == "earnings_wait" and "post-print" in d[0]["reason_text"]
+    d = _drop({"earnings_waiting": [{"ticker": "NEW"}], "news_skipped": [{"ticker": "NEW", "label": "x"}]})
+    assert d[0]["reason_code"] == "skip_verdict"
+
+
+def test_app_wires_earnings_waiting():
+    tree = _app()
+    gets = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute) and n.func.attr == "get"
+            and isinstance(n.func.value, ast.Name) and n.func.value.id == "grow"
+            and n.args and isinstance(n.args[0], ast.Constant) and n.args[0].value == "earnings_waiting"]
+    assert len(gets) == 1
+    box = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+           and isinstance(n.test, ast.Name) and n.test.id == "earnings_waiting"]
+    assert len(box) == 1 and "Waiting on Earnings" in ast.unparse(box[0])
+    assert "container" in {c.func.attr for c in ast.walk(box[0])
+                           if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)}
+    src = ast.unparse(tree)
+    assert "'earnings_waiting': earnings_waiting" in src           # _do_buckets
+    assert "'news_skipped', 'earnings_waiting')" in src            # dedup loop
+    # _ns_comp is shared by both boxes, so it must not live inside either if-block.
+    for b in box + [n for n in ast.walk(tree) if isinstance(n, ast.If)
+                    and isinstance(n.test, ast.Name) and n.test.id == "news_skipped"]:
+        assert not any(isinstance(f, ast.FunctionDef) and f.name == "_ns_comp" for f in ast.walk(b))
+
+
+def test_cron_logs_the_earnings_wait_count():
+    eng = parse_file_cached(ROOT / "stock_analyzer" / "headless_alert_engine.py")
+    keys = {k.value for n in ast.walk(eng) if isinstance(n, ast.Dict)
+            for k in n.keys if isinstance(k, ast.Constant)}
+    assert "earnings_waiting" in keys
+    assert 'd.get("earnings_waiting")' in ast.unparse(parse_file_cached(ROOT / "cron_runner.py")).replace("'", '"')
+
+
+# ── Evening Debrief: breakout movers aren't graded as skips ──────────────────
+
+def _debrief(skipped, pct):
+    from stock_analyzer.evening_debrief import _plan_vs_reality
+    brief = {"grow_today": {"new_picks": [], "add_positions": [], "composite_skipped": skipped},
+             "buy_candidates": []}
+    return _plan_vs_reality(brief, [], pct)
+
+
+def test_debrief_excludes_movers_from_the_skip_scorecard():
+    r = _debrief([{"ticker": "MV", "composite_score": 50, "is_mover": True},
+                  {"ticker": "CU", "composite_score": 50, "is_mover": False},
+                  {"ticker": "OLD", "composite_score": 50}],          # legacy brief: no key
+                 {"MV": 6.0, "CU": 3.0, "OLD": -3.0})
+    assert sorted(s["ticker"] for s in r["skip_picks"]) == ["CU", "OLD"]
+    assert r["skip_movers_excluded"] == 1
+
+
+def test_debrief_render_never_says_nothing_filtered_when_movers_were():
+    src = ast.unparse(_app())
+    assert "_ed_pvr.get('skip_movers_excluded', 0)" in src
+    assert "No other composite-filtered names to grade today." in src
+    assert "Nothing was filtered out today." not in src     # the card grades one box only
+    assert "_ed_pvr.get('held_back_other')" in src
+
+
+def test_debrief_counts_the_other_held_back_boxes():
+    from stock_analyzer.evening_debrief import _plan_vs_reality
+    grow = {"new_picks": [], "add_positions": [], "composite_skipped": [],
+            "news_skipped": [{"ticker": "A"}], "earnings_waiting": [{"ticker": "B"}, {"ticker": "C"}],
+            "macro_blocked_picks": []}
+    r = _plan_vs_reality({"grow_today": grow, "buy_candidates": []}, [], {})
+    assert r["skip_picks"] == []
+    assert r["held_back_other"] == {"❌ signal-check skip": 1, "⏳ waiting on earnings": 2}
+
+
+def test_debrief_graded_rows_are_the_else_of_the_empty_state():
+    # The held-back caption once landed between `if not _ed_skips:` and its
+    # `else:`, so Python bound the else to the caption's if and the graded
+    # rows vanished whenever any other box fired (review FIX-FIRST 2026-10-14).
+    tree = _app()
+    loops = [n for n in ast.walk(tree) if isinstance(n, ast.For)
+             and isinstance(n.iter, ast.Name) and n.iter.id == "_ed_skips"]
+    assert len(loops) == 1
+    owner = [n for n in ast.walk(tree) if isinstance(n, ast.If) and loops[0] in n.orelse]
+    assert len(owner) == 1
+    t = owner[0].test
+    assert (isinstance(t, ast.UnaryOp) and isinstance(t.op, ast.Not)
+            and isinstance(t.operand, ast.Name) and t.operand.id == "_ed_skips")

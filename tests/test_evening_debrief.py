@@ -100,12 +100,12 @@ def _brief(new_picks=None, adds=None, skipped=None, buys=None):
 
 def test_plan_vs_reality_none_brief_returns_empty_shape():
     result = ed._plan_vs_reality(None, [], {})
-    assert result == {"go_picks": [], "skip_picks": []}
+    assert result == {"go_picks": [], "skip_picks": [], "skip_movers_excluded": 0, "held_back_other": {}}
 
 
 def test_plan_vs_reality_falsy_empty_dict_brief_returns_empty_shape():
     result = ed._plan_vs_reality({}, [], {})
-    assert result == {"go_picks": [], "skip_picks": []}
+    assert result == {"go_picks": [], "skip_picks": [], "skip_movers_excluded": 0, "held_back_other": {}}
 
 
 # ─── _plan_vs_reality — go-pick dedup precedence ─────────────────────────────
@@ -378,7 +378,7 @@ def test_build_evening_debrief_shape_and_passthrough():
     )
     assert result["am_baseline_source"] == "locked"
     assert result["am_baseline_at"] == "2024-01-01T09:00:00"
-    assert result["plan_vs_reality"] == {"go_picks": [], "skip_picks": []}
+    assert result["plan_vs_reality"] == {"go_picks": [], "skip_picks": [], "skip_movers_excluded": 0, "held_back_other": {}}
     assert len(result["today_trades"]) == 1
     assert "today_summary" in result
     assert "tomorrow_setup" in result

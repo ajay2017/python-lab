@@ -68,7 +68,7 @@ def derive_dropoffs(
         The Grow Today output dict (from daily_briefing._grow_today()). Keys
         read: ``composite_skipped``, ``sector_blocked_picks``,
         ``macro_blocked_picks``, ``composite_unavailable``,
-        ``sector_unknown_picks``, ``news_skipped``.
+        ``sector_unknown_picks``, ``news_skipped``, ``earnings_waiting``.
     reduce_calls:
         Dict of {ticker_upper: item} from session_state["_reduce_calls"].
         Pass None when the Brief was offline — the None path falls through to
@@ -92,7 +92,7 @@ def derive_dropoffs(
                                     reduce_call | composite_below_bar |
                                     sector_blocked | macro_blocked |
                                     composite_unavailable | sector_unknown |
-                                    skip_verdict | unattributed
+                                    skip_verdict | earnings_wait | unattributed
             reason_text          (str)  — human-readable sentence
             has_confident_reason (bool) — False only on 'unattributed'
 
@@ -139,6 +139,12 @@ def derive_dropoffs(
         if _t:
             _news_skip_map[_t] = _item
 
+    _earn_wait_map: dict[str, dict] = {}
+    for _item in grow_buckets.get("earnings_waiting", []):
+        _t = str(_item.get("ticker", "")).upper()
+        if _t:
+            _earn_wait_map[_t] = _item
+
     # Build deduplicated surfaced-today map: earliest row per ticker.
     # Caller is expected to pass min-by-surfaced_at rows, but this layer also
     # guards: if two rows arrive for the same ticker, keep the earlier one.
@@ -175,7 +181,7 @@ def derive_dropoffs(
         # Reason attribution priority:
         # reduce_calls → composite_skipped → sector_blocked_picks
         # → macro_blocked_picks → composite_unavailable → sector_unknown_picks
-        # → news_skipped → unattributed
+        # → news_skipped → earnings_waiting → unattributed
         if reduce_calls is not None and _t in reduce_calls:
             _reason_code   = "reduce_call"
             _reason_text   = f"a Reduce/Exit call is now active on {_t}"
@@ -239,6 +245,18 @@ def derive_dropoffs(
             _reason_text   = (
                 f"its signal check now says skip ({_lbl})" if _lbl
                 else "its signal check now says skip"
+            )
+            _has_confident = True
+
+        elif _t in _earn_wait_map:
+            # F-303: the last hold-out in _grow_today, after the skip checks.
+            _ei = _earn_wait_map[_t]
+            _current_composite = _ei.get("composite_score")
+            _lbl = str(_ei.get("label") or "").strip()
+            _reason_code   = "earnings_wait"
+            _reason_text   = (
+                f"earnings are now imminent — waiting for the post-print setup ({_lbl})" if _lbl
+                else "earnings are now imminent — waiting for the post-print setup"
             )
             _has_confident = True
 

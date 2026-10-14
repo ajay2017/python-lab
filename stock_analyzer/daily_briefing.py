@@ -973,6 +973,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "composite_skipped":          [],
             "composite_unavailable":      [],
             "news_skipped":               [],
+            "earnings_waiting":           [],
             "etf_screened_out":           [],
             # G-25: always a list, never omitted, even on this early return —
             # a bear day suppresses every add-to-winner lane outright (the
@@ -1028,6 +1029,10 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # Picks whose RECONCILED verdict is "skip" (F-302) -- most often "❌ Skip
     # — Negative News". Held out of new_picks like composite_skipped.
     news_skipped: list[dict] = []
+    # Picks whose reconciled verdict is "caution" -- earnings within
+    # EARNINGS_IMMINENT_DAYS, "Wait for the post-print setup" (F-303). Held
+    # out like news_skipped; they come back once the print has passed.
+    earnings_waiting: list[dict] = []
 
     # Build ONE candidate pool from two sources so the user sees a single
     # "New Positions to Initiate" list regardless of where a ticker came from:
@@ -1368,6 +1373,23 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "is_mover":        is_mover,
                 })
                 continue
+            # Earnings-wait hold-out (F-303, owner decision 2026-10-14). The
+            # card says "Wait for the post-print setup", so the app must not
+            # list it as a New Position with a share size -- nor log it as a
+            # new_pick for the Engine Track Record. The go-only emails already
+            # left it out. After this check, every pick left is reconciled "go".
+            if isinstance(_rv, dict) and _rv.get("verdict") == "caution":
+                earnings_waiting.append({
+                    "ticker":          ticker,
+                    "sector":          sector,
+                    "momentum_score":  _f(row.get("Score", 0)),
+                    "composite_score": _composite_score,
+                    "label":           str(_rv.get("label") or "⚠️ Caution"),
+                    "one_liner":       str(_rv.get("one_liner") or ""),
+                    "earn_days":       xref.get("earn_days"),
+                    "is_mover":        is_mover,
+                })
+                continue
 
             # Conviction tier: drives the label shown on the card.
             # "high" requires the same bar as Strong Buy (no looser tier here —
@@ -1692,6 +1714,15 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     # winner wording ("Hold off adding") -- wrong for a
                     # not-held ETF.
                     "reason": str(_etf_rv.get("label") or "❌ Skip"),
+                })
+                continue
+            # F-303 -- same earnings-wait hold-out as the stock lane.
+            if isinstance(_etf_rv, dict) and _etf_rv.get("verdict") == "caution":
+                etf_screened_out.append({
+                    "ticker": _et,
+                    "group":  _ec.get("group"),
+                    "kind":   "earnings_wait",
+                    "reason": str(_etf_rv.get("label") or "⚠️ Caution"),
                 })
                 continue
 
@@ -2205,6 +2236,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "composite_skipped":          composite_skipped,
         "composite_unavailable":      composite_unavailable,
         "news_skipped":               news_skipped,
+        "earnings_waiting":           earnings_waiting,
         "etf_screened_out":           etf_screened_out,
         "deploy_note":                deploy_note,
         "risk_banner":                risk_banner,

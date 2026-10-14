@@ -93,9 +93,21 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
     Returns:
       go_picks    — list of {ticker, am_verdict, action_taken, today_pct, outcome}
       skip_picks  — list of {ticker, momentum, composite, today_pct, would_have_worked}
+      skip_movers_excluded — int: composite-skipped breakout MOVERS left out of
+                    skip_picks (2026-10-14, owner decision). A mover's
+                    today_pct includes the very gain that surfaced it, so
+                    grading it "Missed" would bias the scorecard against the
+                    composite gate. Legacy briefs without `is_mover` grade as
+                    before.
+      held_back_other — {display label: count} for the morning's OTHER held-out
+                    Grow Today buckets (Skip, earnings-wait, macro, sector,
+                    sector-unknown, couldn't-score). Not graded here; counted
+                    so the card never reads as "nothing was filtered" when
+                    those fired. Zero-count buckets are omitted.
     """
     if not brief:
-        return {"go_picks": [], "skip_picks": []}
+        return {"go_picks": [], "skip_picks": [], "skip_movers_excluded": 0,
+                "held_back_other": {}}
 
     grow      = brief.get("grow_today") or {}
     new_picks = grow.get("new_picks")    or []
@@ -176,9 +188,13 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
                          "today_pct": today_pct_val, "outcome": outcome})
 
     skip_picks: list[dict] = []
+    skip_movers_excluded = 0
     for s in skipped:
         tk = str(s.get("ticker", ""))
         if not tk:
+            continue
+        if s.get("is_mover") is True:
+            skip_movers_excluded += 1
             continue
         today_pct_val = intraday_pct.get(tk)
         if today_pct_val is None:
@@ -215,7 +231,27 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
     ))
     skip_picks.sort(key=lambda x: -abs(x.get("today_pct") or 0))
 
-    return {"go_picks": go_picks, "skip_picks": skip_picks}
+    held_back_other: dict[str, int] = {}
+    for _key, _label in _HELD_BACK_OTHER:
+        _items = grow.get(_key)
+        if isinstance(_items, list) and _items:
+            held_back_other[_label] = len(_items)
+
+    return {"go_picks": go_picks, "skip_picks": skip_picks,
+            "skip_movers_excluded": skip_movers_excluded,
+            "held_back_other": held_back_other}
+
+
+# Grow Today buckets the skip scorecard does NOT grade (it reads only
+# composite_skipped), in the order the Brief renders them.
+_HELD_BACK_OTHER = (
+    ("news_skipped",          "❌ signal-check skip"),
+    ("earnings_waiting",      "⏳ waiting on earnings"),
+    ("macro_blocked_picks",   "macro event"),
+    ("sector_blocked_picks",  "sector cap"),
+    ("sector_unknown_picks",  "sector unknown"),
+    ("composite_unavailable", "couldn't be scored"),
+)
 
 
 def _today_summary(trades_today_list: list[dict]) -> dict:
