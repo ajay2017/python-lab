@@ -364,6 +364,7 @@ from stock_analyzer.util import defense_facet_badge
 from stock_analyzer.util import correlation_unchecked_note, correlation_flat_note
 from stock_analyzer.util import diversification_label_text, pair_trim_withheld_note
 from stock_analyzer.util import correlation_record_withheld_note
+from stock_analyzer.util import stop_distance_delta as _stop_distance_delta
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -24847,9 +24848,10 @@ elif page == "📈 Analysis":
                     _hold_stop = (_f(_sa_holding.get("Stop")) if _sa_holding else 0.0) or r["stop"]
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Price", f"${price:.2f}" if price else "N/A")
+                    _hs_delta, _hs_color = _stop_distance_delta(price, _hold_stop)
                     c2.metric("Stop Loss", f"${_hold_stop:.2f}" if _hold_stop else "N/A",
-                              delta=f"-{(price-_hold_stop)/price*100:.1f}%" if price and _hold_stop else None,
-                              delta_color="inverse",
+                              delta=_hs_delta,
+                              delta_color=_hs_color,
                               help=_tip("Protective Stop") if _sa_holding else _tip("ATR Stop"))
                     if _sa_holding:
                         c3.metric("Shares Held", f"{int(_sa_holding.get('Shares', 0)):,}")
@@ -24960,9 +24962,10 @@ elif page == "📈 Analysis":
                     c2.metric("Entry Zone",
                               f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A",
                               help=_tip("Entry Zone"))
+                    _bs_delta, _bs_color = _stop_distance_delta(price, r["stop"])
                     c3.metric("Stop Loss", f"${r['stop']:.2f}" if r["stop"] else "N/A",
-                              delta=f"-{(price-r['stop'])/price*100:.1f}%" if price and r["stop"] else None,
-                              delta_color="inverse", help=_tip("ATR Stop"))
+                              delta=_bs_delta,
+                              delta_color=_bs_color, help=_tip("ATR Stop"))
                     c4.metric("R:R", f"{rr_val:.1f}:1" if rr_val and rr_val > 0 else "N/A",
                               help=_tip("R:R Ratio"))
 

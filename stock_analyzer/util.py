@@ -1156,3 +1156,36 @@ def pair_trim_withheld_note(rec) -> "str | None":
         "keeps add-to-winner suggestions on both names paused while the pair "
         "is flagged."
     )
+
+
+def stop_distance_delta(price, stop) -> "tuple[str | None, str]":
+    """`(delta, delta_color)` for a Stop Loss `st.metric`: how far the stop
+    sits from the current price, signed (stop − price) / price.
+
+    Replaces an inline f"-{(price - stop) / price * 100:.1f}%" with
+    delta_color="inverse", which had two defects. "inverse" painted the
+    always-negative normal case GREEN, i.e. "good news"; and once price fell
+    below the stop the gap was already negative, so the string read "--3.2%".
+
+    - stop below price -> ("-9.9%", "off"): a plain distance, grey; the
+      arrow still points down from the leading "-".
+    - price at/below the stop -> ("+3.2% · price at/below stop", "red").
+    - missing / non-numeric / NaN / non-positive input -> (None, "off"), so
+      the metric renders no delta rather than a fabricated one.
+    """
+    def _num(v):
+        if v is None or isinstance(v, bool):
+            return None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if f == f and f > 0 else None   # f == f rejects NaN
+
+    p, s = _num(price), _num(stop)
+    if p is None or s is None:
+        return None, "off"
+    pct = (s - p) / p * 100
+    if s < p:
+        return f"{pct:.1f}%", "off"
+    return f"{pct:+.1f}% · price at/below stop", "red"

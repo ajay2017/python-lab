@@ -1397,3 +1397,37 @@ def test_correlation_flat_note_requires_scored_keyword():
 def test_correlation_flat_note_is_plain_text(scored):
     t = _cfn(["AAA", "BBB"], scored=scored)
     assert "**" not in t and "$" not in t
+
+
+# ── stop_distance_delta ──────────────────────────────────────────────────────
+
+from stock_analyzer.util import stop_distance_delta as _sdd
+
+
+def test_stop_distance_delta_normal_case_is_grey_and_signed_down():
+    # OKTA, live screenshot 2026-10-14: was a GREEN "-9.9%" (delta_color="inverse").
+    delta, color = _sdd(211.91, 191.03)
+    assert delta == "-9.9%"
+    assert delta.startswith("-")          # st.metric draws ↓ from this
+    assert color == "off"
+
+
+def test_stop_distance_delta_breached_stop_is_red_and_never_double_minus():
+    # The old inline f"-{gap:.1f}%" rendered "--3.2%" here.
+    delta, color = _sdd(100.0, 103.2)
+    assert delta == "+3.2% · price at/below stop"
+    assert "--" not in delta
+    assert color == "red"
+
+
+def test_stop_distance_delta_price_exactly_at_stop_counts_as_breached():
+    delta, color = _sdd(100.0, 100.0)
+    assert delta.startswith("+0.0%") and color == "red"
+
+
+@pytest.mark.parametrize("price,stop", [
+    (None, 90.0), (100.0, None), (float("nan"), 90.0), (100.0, float("nan")),
+    (0, 90.0), (100.0, 0), (-5.0, 90.0), (True, 90.0), ("abc", 90.0),
+])
+def test_stop_distance_delta_unusable_input_renders_no_delta(price, stop):
+    assert _sdd(price, stop) == (None, "off")
