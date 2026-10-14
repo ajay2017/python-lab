@@ -705,6 +705,8 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
         "macro_blocked":    len(grow.get("macro_blocked_picks", []) or []),
         "composite_short":  len(grow.get("composite_skipped", []) or []),
         "composite_unavail": len(grow.get("composite_unavailable", []) or []),
+        # F-302: cleared the gates but the signal check said skip -- held out.
+        "news_skipped":     len(grow.get("news_skipped", [])),
     }
     # Macro calendar coverage — passes through from _grow_today's LATE-built
     # "macro_coverage_expired" key so the email renderers can show the

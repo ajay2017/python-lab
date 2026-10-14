@@ -222,3 +222,74 @@ def test_the_visible_box_is_rendered():
             assert "Signal Check Says Skip" in text and "one_liner" in text
             return
     pytest.fail("no `if news_skipped:` render block in app.py")
+
+
+# ── F-302 follow-up: legacy "conflicted" picks are no longer dropped silently ──
+
+def test_hold_labelled_composite_lands_in_composite_skipped():
+    # Pre-follow-up: legacy "conflicted" -> dropped before the composite gate,
+    # in NO bucket (so "Composite Says No" only ever filled for unlabelled
+    # bundles).
+    g = _run([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Energy"}], [],
+             {"NEW": {**_bundle(COMPOSITE_BUY - 10), "rec": {"label": "Hold"}}})
+    assert _tickers(g["composite_skipped"]) == ["NEW"]
+    assert g["composite_skipped"][0]["composite_label"] == "Hold"
+    assert "NEW" not in _tickers(g["new_picks"]) and g["news_skipped"] == []
+
+
+def test_conflicted_with_bad_data_keeps_the_data_reason():
+    g = _run([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Energy"}], [],
+             {"NEW": {**_bundle(COMPOSITE_BUY - 10), "rec": {"label": "Hold"},
+                      "stale_as_of": "2026-10-10"}})
+    assert _tickers(g["composite_unavailable"]) == ["NEW"]
+    assert g["composite_skipped"] == [] and g["news_skipped"] == []
+
+
+def test_conflicted_residual_is_held_out_visibly():
+    # A low-score mover with negative news AND earnings in 2 days: legacy
+    # "conflicted" (earnings + signal), but reconciled is NOT "skip" -- the
+    # negative-news skip needs momentum >= COMPOSITE_BUY -- so only the
+    # residual branch can catch it. Pre-follow-up it vanished.
+    ms = [{"ticker": "MV", "price": 100.0, "sector": "Energy", "score": COMPOSITE_BUY - 20,
+           "composite_score": 80, "day_change": 6.0}]
+    port_df = make_port_df([{"ticker": "HELD", "weight": 5.0, "sector": "Tech"}])
+    g = _grow_today(port_df, None, _neg_news("MV"), {}, _TODAY, 100_000.0, {"tone": "bull"},
+                    composites={"MV": _bundle(80)}, movers=ms,
+                    earnings_lookup={"MV": (_TODAY + timedelta(days=2)).isoformat()})
+    assert "MV" not in _tickers(g["new_picks"])
+    item = next(i for i in g["news_skipped"] if i["ticker"] == "MV")
+    assert "Conflicted" in item["label"]
+    assert "Earnings" in item["one_liner"] and "News sentiment" in item["one_liner"]
+
+
+def test_no_new_pick_is_ever_legacy_conflicted():
+    rows = [{"ticker": t, "score": COMPOSITE_BUY + 10, "sector": s}
+            for t, s in (("AAA", "Energy"), ("BBB", "Healthcare"), ("CCC", "Financials"))]
+    comps = {"AAA": {**_bundle(), "rec": {"label": "Hold"}}, "BBB": _bundle(), "CCC": _bundle()}
+    g = _grow_today(make_port_df([{"ticker": "HELD", "weight": 5.0, "sector": "Tech"}]),
+                    _scanner_df(rows), _neg_news("CCC"), {}, _TODAY, 100_000.0, {"tone": "bull"},
+                    composites=comps, earnings_lookup={"CCC": (_TODAY + timedelta(days=1)).isoformat()})
+    assert _tickers(g["new_picks"]) == ["BBB"]
+    for p in g["new_picks"]:
+        assert p["xref"]["verdict"] != "conflicted"
+
+
+def test_cron_logs_the_skip_count():
+    eng = parse_file_cached(ROOT / "stock_analyzer" / "headless_alert_engine.py")
+    keys = {k.value for n in ast.walk(eng) if isinstance(n, ast.Dict)
+            for k in n.keys if isinstance(k, ast.Constant)}
+    assert "news_skipped" in keys
+    assert 'd.get("news_skipped")' in ast.unparse(parse_file_cached(ROOT / "cron_runner.py")).replace("'", '"')
+
+
+def test_composite_skipped_mover_carries_its_breakout_for_the_render():
+    ms = [{"ticker": "MV", "price": 100.0, "sector": "Energy", "score": COMPOSITE_BUY - 20,
+           "composite_score": 50, "day_change": 6.0}]
+    port_df = make_port_df([{"ticker": "HELD", "weight": 5.0, "sector": "Tech"}])
+    g = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                    composites={"MV": {**_bundle(COMPOSITE_BUY - 15), "rec": {"label": "Hold"}}}, movers=ms)
+    item = next(i for i in g["composite_skipped"] if i["ticker"] == "MV")
+    assert item["is_mover"] is True and item["day_change"] == 6.0
+    # The render branches on it, so a mover never reads "Momentum X/100".
+    assert "Breakout" in ast.unparse(next(
+        n for n in ast.walk(_app()) if isinstance(n, ast.FunctionDef) and n.name == "_cs_trigger"))

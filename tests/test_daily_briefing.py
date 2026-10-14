@@ -562,10 +562,11 @@ def test_grow_today_blank_sector_below_buy_composite_goes_to_composite_skipped()
     # composite-vs-technical conflict check (signal_reconciliation.
     # lookup_composite) keys off the composite's REC LABEL alone ("Hold"/
     # "Sell" always reads as conflicted, independent of the scanner's own
-    # momentum signal) -- carrying a real "Hold" label here would resolve
-    # to xref verdict "conflicted" instead, which `continue`s BEFORE this
-    # test's target gate. A bundle with "total" but no "rec" (e.g. a
-    # composite that failed to attach a label) avoids that collision.
+    # momentum signal). Until 2026-10-14 a real "Hold" label resolved to
+    # xref verdict "conflicted", which `continue`d silently BEFORE this
+    # gate; since the F-302 follow-up it reaches composite_skipped too
+    # (tests/test_grow_news_skip.py). This unlabelled shape stays as the
+    # original coverage.
     port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
     scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Watchlist"}])
     composites = {

@@ -1178,9 +1178,16 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                                     earnings_lookup=earnings_lookup, composites=composites,
                                     is_mover=is_mover)
 
-            # Skip hard conflicts (applies to everything).
-            if xref["verdict"] == "conflicted":
-                continue
+            # Hard conflicts are never recommended -- but they are no longer
+            # dropped SILENTLY here (F-302 follow-up, 2026-10-14). A legacy
+            # "conflicted" pick runs on through the data-quality and composite
+            # gates below so it lands in the bucket that names its reason: a
+            # Hold/Sell composite is a composite below the Buy bar
+            # (composite_skipped), a stale/missing one is composite_unavailable,
+            # and anything left (e.g. negative news + imminent earnings on a
+            # mover) is held out into news_skipped after the reconciled-skip
+            # check. It can never reach sizing or new_picks.
+            _legacy_conflicted = xref["verdict"] == "conflicted"
             # Flat-day high-conviction suppression — CURATED ONLY. A composite-Buy
             # mover up 5%+ today is itself the "clearer direction" the flat-day
             # caution waits for, so movers are exempt from this gate (they still
@@ -1283,6 +1290,10 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "momentum_score":  _f(row.get("Score", 0)),
                     "composite_score": _composite_score,
                     "composite_label": _composite_label or "Hold",
+                    # Display-only: a mover was caught by today's breakout, not
+                    # a momentum score, so the render must not say "Momentum".
+                    "is_mover":        is_mover,
+                    "day_change":      day_change,
                 })
                 continue
 
@@ -1343,6 +1354,17 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "composite_score": _composite_score,
                     "label":           str(_rv.get("label") or "❌ Skip"),
                     "one_liner":       str(_rv.get("one_liner") or ""),
+                    "is_mover":        is_mover,
+                })
+                continue
+            if _legacy_conflicted:
+                news_skipped.append({
+                    "ticker":          ticker,
+                    "sector":          sector,
+                    "momentum_score":  _f(row.get("Score", 0)),
+                    "composite_score": _composite_score,
+                    "label":           str(xref.get("verdict_label") or "❌ Conflicted"),
+                    "one_liner":       "; ".join(str(c) for c in xref["conflicts"]),
                     "is_mover":        is_mover,
                 })
                 continue

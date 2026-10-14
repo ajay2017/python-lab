@@ -9840,13 +9840,22 @@ if page == "🏠 Home":
         # Buy threshold. Surfaces what was considered AND rejected so the
         # user makes the decision on the Brief itself.
         if comp_skipped:
+            def _cs_trigger(c):
+                # A mover was caught by today's breakout -- its momentum score
+                # can sit well below the bar, so "Momentum X/100 ... contradicts
+                # momentum" would misdescribe it (F-302 follow-up).
+                _dc = c.get("day_change")
+                if c.get("is_mover") and isinstance(_dc, (int, float)):
+                    return f"Breakout {_dc:+.1f}% today", "→ skip (composite doesn't back the breakout)."
+                return (f"Momentum {c.get('momentum_score', 0):.0f}/100",
+                        "→ skip (composite contradicts momentum).")
             _cs_rows = "".join(
                 f"<div style='color:#fca5a5;font-size:0.79em;margin-bottom:2px'>"
-                f"• <b>{c['ticker']}</b> ({c.get('sector','—')}) — "
-                f"Momentum <b>{c.get('momentum_score',0):.0f}/100</b> "
-                f"but composite <b>{c.get('composite_label','Hold')} "
-                f"{c.get('composite_score',0):.1f}/100</b> "
-                "→ skip (composite contradicts momentum)."
+                f"• <b>{_safe_html(c['ticker'])}</b> ({_safe_html(c.get('sector', '—'))}) — "
+                f"<b>{_safe_html(_cs_trigger(c)[0])}</b> "
+                f"but composite <b>{_safe_html(c.get('composite_label', 'Hold'))} "
+                f"{_safe_html(format(c.get('composite_score', 0), '.1f'))}/100</b> "
+                f"{_safe_html(_cs_trigger(c)[1])}"
                 "</div>"
                 for c in comp_skipped[:5]
             )
@@ -40232,7 +40241,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **🧭 Sector unknown banner:** a pick whose sector couldn't be classified at all (not on the curated sector map, and no usable sector label from the data provider either) is held back with a **"Sector unknown"** notice rather than recommended — the sector-cap and macro-sector gates can't check something they can't classify, so it's treated as a reason to pause, not a green light.
 
-**⛔ Signal Check Says Skip:** a name can clear the composite and every gate above and still get a **"❌ Skip"** from the combined signal check — most often **"Skip — Negative News"**, when its own recent headlines are clearly negative. Such a name is held out of New Positions: no share size, and it isn't logged as a New Position, so the Engine Track Record doesn't grade picks the app said to skip. It's listed in a **"Screened but Filtered Out — Signal Check Says Skip"** box with the reason (an ETF goes in the *ETF candidates screened out* list instead) and is re-checked on every pass. The morning email already left out Skip picks, so the two now agree on them.
+**⛔ Signal Check Says Skip:** a name can clear the composite and every gate above and still get a **"❌ Skip"** from the combined signal check — most often **"Skip — Negative News"**, when its own recent headlines are clearly negative. Such a name is held out of New Positions: no share size, and it isn't logged as a New Position, so the Engine Track Record doesn't grade picks the app said to skip. It's listed in a **"Screened but Filtered Out — Signal Check Says Skip"** box with the reason (an ETF goes in the *ETF candidates screened out* list instead) and is re-checked on every pass. A name flagged **"❌ Conflicted"** (e.g. a fast mover with negative news *and* earnings within days) is held out the same way and listed in the same box. The morning email already left out Skip picks, so the two now agree on them.
 
 **Two entry triggers in "New Positions to Initiate":** curated scanner picks that passed the momentum gate show **"Momentum X/100"** in the header, while movers surfaced from the discovery universe show **"Breakout today"** with the day-change badge (e.g. "+7.6% today"). Both types pass the same portfolio-level gates (composite ≥ 65, sector diversity, concentration limits, macro event check).
 
