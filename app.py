@@ -33004,11 +33004,15 @@ elif page == "📜 Recommendations History":
                 "Ticker":    r["ticker"],
                 "Type":      _REC_TYPE_LABELS.get(r["rec_type"], r["rec_type"]),
                 "Sector":    r["sector"] or "—",
+                # pd.notna, not `is not None`: load_recommendations builds a
+                # DataFrame, so a NULL in a column that other rows fill (every
+                # enter_now row's momentum_score, by design) arrives as NaN and
+                # rendered as a literal "nan".
                 "Composite": (
-                    f"{r['composite_score']:.0f}" if r["composite_score"] is not None else "—"
+                    f"{r['composite_score']:.0f}" if _rh_pd.notna(r["composite_score"]) else "—"
                 ),
                 "Momentum":  (
-                    f"{r['momentum_score']:.0f}" if r["momentum_score"] is not None else "—"
+                    f"{r['momentum_score']:.0f}" if _rh_pd.notna(r["momentum_score"]) else "—"
                 ),
                 "Verdict":   r["verdict"] or "—",
                 "Status":    _status_disp,
@@ -46085,7 +46089,10 @@ elif page == "🎯 My Edge":
         with st.container(border=True):
             st.markdown("**📊 Momentum-chasing check**")
             _bf_mom_scored_n = sum(
-                1 for r in _bf_matched_actionable if r.get("momentum_score") is not None
+                # pd.notna: enter_now rows carry momentum_score as NaN (not
+                # None) after the DataFrame round-trip, and the pattern below
+                # already excludes them — count the same way it does.
+                1 for r in _bf_matched_actionable if pd.notna(r.get("momentum_score"))
             )
             _bf_p1 = _bf.momentum_recency_pattern(
                 _bf_matched_actionable, BEHAVIORAL_MIN_SAMPLE_N,
