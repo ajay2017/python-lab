@@ -5688,7 +5688,7 @@ if page == "🏠 Home":
                 "degraded": _chg["degraded"], "improved": _chg["improved"],
             })
 
-    def _compute_winner_profile():
+    def _compute_winner_profile_unguarded():
         """Personalized Discovery — the user's own REALIZED-winner entry
         profile, built fresh each call (cheap: two already-cheap Supabase
         reads + pure functions, no new fetch of any kind). Deliberately
@@ -5709,6 +5709,24 @@ if page == "🏠 Home":
             pctl_low=PERSONALIZED_DISCOVERY_PROFILE_PCTL_LOW,
             pctl_high=PERSONALIZED_DISCOVERY_PROFILE_PCTL_HIGH,
         )
+
+    def _compute_winner_profile():
+        """Isolation wrapper -- the ONLY entry point the Brief builds call.
+        Both build_daily_briefing call sites evaluate this as an argument
+        INSIDE their try, so an exception escaping it (two Supabase reads,
+        build_closed_lots, match_recs_to_trades, build_winner_profile) used
+        to fail the WHOLE build -- protective Act Today included -- for the
+        awareness-only "🧬 Matches your historical winning profile" badge,
+        which never ranks, scores or gates a pick. None is the value the
+        Brief already gets when the profile is withheld below
+        BEHAVIORAL_MIN_SAMPLE_N, so it just means no badge. Same shape as
+        _etf_candidates_for_grow (audit 2026-10-11 Low-B follow-up)."""
+        try:
+            return _compute_winner_profile_unguarded()
+        except Exception as _wp_exc:
+            st.caption(f"ℹ️ Winner-profile match failed ({type(_wp_exc).__name__}) — "
+                       f"the 🧬 winning-profile badge is off on this run.")
+            return None
 
     def _etf_candidates_for_grow_unguarded():
         """ETF new-pick candidate pool (ETF-support Phase 2b) — resolves the
