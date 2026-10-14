@@ -20770,7 +20770,9 @@ elif page == "🥧 Portfolio Overview":
                                         f"{_vel:+.3f}" if _vel is not None else "—",
                                         delta="Improving" if (_vel and _vel > 0.12) else
                                               ("Deteriorating" if (_vel and _vel < -0.12) else None),
-                                        delta_color="normal" if (_vel and _vel > 0) else "inverse")
+                                        delta_color="normal" if (_vel and _vel > 0) else "inverse",
+                                        # A word delta always draws ↑ under "auto".
+                                        delta_arrow="up" if (_vel and _vel > 0) else "down")
                         _sv_m[3].metric("Price 7d",
                                         f"{_p7d:+.1f}%" if _p7d is not None else "—")
 
@@ -21182,7 +21184,9 @@ elif page == "🥧 Portfolio Overview":
                     _km3.metric("Alpha vs SPY (backtest)",
                                 f"{_alpha_sign}{_alpha:.2f}%",
                                 delta=f"{'Outperforming' if _beating else 'Underperforming'}",
-                                delta_color="normal" if _beating else "inverse")
+                                delta_color="normal" if _beating else "inverse",
+                                # A word delta always draws ↑ under "auto".
+                                delta_arrow="up" if _beating else "down")
 
                     # ── Chart ────────────────────────────────────────────────────
                     _perf_fig = go.Figure()
@@ -21271,6 +21275,10 @@ elif page == "🥧 Portfolio Overview":
                         f"${_net_alpha_dollar:+,.0f}",
                         "Outperforming" if _net_alpha_dollar >= 0 else "Underperforming",
                         delta_color="normal" if _net_alpha_dollar >= 0 else "inverse",
+                        # A word delta has no leading "-", so "auto" always drew
+                        # ↑ — red "Underperforming" pointed up. The ternary above
+                        # gets the colour right; this gets the arrow right.
+                        delta_arrow="up" if _net_alpha_dollar >= 0 else "down",
                         help=f"Total extra $ earned (or lost) vs holding SPY at identical weights over {_perf_period}",
                     )
                     _dp2.metric("Alpha Generators",  _n_generators,
@@ -38838,8 +38846,15 @@ elif page == "💰 Account":
                             _pld_c2.metric(
                                 "Cushion",
                                 _m(f"${_pld['cushion_end']:,.0f}") if _pld["cushion_end"] is not None else "—",
-                                delta=(_m(f"${_pld['cushion_delta']:+,.0f}")
-                                       if _pld["cushion_delta"] is not None else None),
+                                # Sign BEFORE the "$": st.metric reads direction
+                                # from the first character, so "$-120" showed a
+                                # shrinking cushion as a green ↑. No delta under
+                                # privacy mode — "••••••" would also read as ↑.
+                                delta=(f"{'-' if _pld['cushion_delta'] < 0 else '+'}"
+                                       f"${abs(_pld['cushion_delta']):,.0f}"
+                                       if _pld["cushion_delta"] is not None
+                                       and not st.session_state.get("_privacy", True)
+                                       else None),
                             )
                             _pld_c3.metric(
                                 "Call distance",
@@ -44957,7 +44972,11 @@ elif page == "🎯 My Edge":
                     "Portfolio vs Shadow ($)",
                     f"${abs(_me_dollar_gap):,.0f} {'ahead' if (_me_dollar_gap or 0) >= 0 else 'behind'}"
                     if _me_dollar_gap is not None else "—",
-                    delta=f"${_me_dollar_gap:+,.0f}" if _me_dollar_gap is not None else None,
+                    # Sign BEFORE the "$": st.metric reads direction from the
+                    # delta string's first character, so "$-755" rendered as a
+                    # green ↑ while the value beside it said "behind".
+                    delta=(f"{'-' if _me_dollar_gap < 0 else '+'}${abs(_me_dollar_gap):,.0f}"
+                           if _me_dollar_gap is not None else None),
                     delta_color="normal",
                     help=f"Your actual portfolio value vs what {_me_bench_ticker} shadow would be worth today",
                 )
