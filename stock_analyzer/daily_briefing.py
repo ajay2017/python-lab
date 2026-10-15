@@ -661,6 +661,20 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
 
 # ── Grow Today ───────────────────────────────────────────────────────────────
 
+def _add_entry_ok(row) -> bool:
+    """The ONE add-to-winner entry rule: a held "Strong Buy" whose composite
+    clears COMPOSITE_BUY and whose gap to stop is at least ADD_WINNER_MIN_GAP_PCT.
+
+    Shared by _grow_today's bull-day add loop AND its adds_paused disclosure
+    (non-bull days), so the two can never disagree about who "would qualify".
+    """
+    return (
+        "Strong Buy" in str(row.get("Signal", ""))
+        and _f(row.get("Score"), 0) >= COMPOSITE_BUY
+        and _f(row.get("Gap to Stop (%)"), 0) >= ADD_WINNER_MIN_GAP_PCT
+    )
+
+
 def _thesis(ticker: str, scanner_row: dict, is_sector_leader: bool) -> str:
     parts = []
     trend  = str(scanner_row.get("Trend", ""))
@@ -744,7 +758,6 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 etf_candidates: list | None = None,
                 cluster_add_blocks: dict | None = None,
                 pair_add_blocks: dict | None = None,
-                buy_lane_pair_skips: list | None = None,
                 corr_unchecked: list | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
@@ -831,14 +844,6 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                  `None` (the default, and every caller before G-26) leaves
                  every existing key byte-identical to the pre-G-26 output —
                  checked `is not None`, never `or {}`.
-    buy_lane_pair_skips : optional — the G-26 skip list `_buy_candidates`
-                 recorded in its own independent add-to-winner lane (via its
-                 `pair_skip_sink` parameter), threaded through so this
-                 function can surface it unchanged as `pair_buy_lane_skips`
-                 in every return path (including the bear-day early return,
-                 where this function's own add loop never runs at all).
-                 `None` when pair_add_blocks itself is None — never
-                 recomputed here.
     corr_unchecked : optional (disclosure-only G-25/G-26 follow-on,
                  docs/plans/pair-add-gate.md's fail-open-blind-spot fix) —
                  portfolio.correlation_unchecked() output: the list of held
@@ -966,6 +971,77 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         _elevated_sectors = {_s for _s, _w in _sector_wt_map.items()
                              if SECTOR_ELEVATED <= _w < SECTOR_CEILING}
 
+    # Deterioration WATCH map (hoisted above the bear early return: the
+    # adds_paused disclosure below reads it, and so does the G-20 pre-pass).
+    _watch_by_ticker: dict = {
+        str(d["ticker"]).upper(): d for d in (deterioration or []) if d.get("tier") == "WATCH"
+    }
+
+    def _add_block_gate(_r) -> "str | None":
+        """THE add-gate decision, in the order the bull loop applies it. Returns
+        None (nothing blocks), "ACT" (flagged elsewhere in today's Brief) or the
+        gate id that holds the add: G-20 WATCH, G-24 cooldown, G-16 sector cap,
+        G-01 risk trim, G-04 single-name ceiling, G-09 drift trim, G-26 danger
+        pair, G-25 new cluster. Shared by the bull add loop (which records the
+        bucket per gate) and adds_paused, so the two cannot diverge."""
+        _t = str(_r["Ticker"])
+        _tu = _t.upper()
+        if _t in _act_blocked:
+            return "ACT"
+        if _tu in _watch_by_ticker:
+            return "G-20"
+        if _recently_added(_t, held_data):
+            return "G-24"
+        if str(_r.get("Sector", "")) in _breached_sectors:
+            return "G-16"
+        if _tu in _trim_set:
+            return "G-01"
+        if _gate_wt(_r) >= SINGLE_NAME_CEILING:
+            return "G-04"
+        if _tu in _drift_trim_set:
+            return "G-09"
+        if pair_add_blocks is not None and _tu in pair_add_blocks:
+            return "G-26"
+        if cluster_add_blocks is not None and _tu in cluster_add_blocks:
+            return "G-25"
+        return None
+
+    def _adds_paused_list() -> list[dict]:
+        """OP-07 disclosure: on a non-bull day, held names that WOULD qualify
+        for an add-to-winner (the shared `_add_entry_ok` rule) and that
+        `_add_block_gate` does not hold. Ticker + composite only -- never a
+        size."""
+        out: list[dict] = []
+        if port_df is None or port_df.empty:
+            return out
+        for _, _r in port_df.iterrows():
+            if not _add_entry_ok(_r) or _add_block_gate(_r) is not None:
+                continue
+            out.append({"ticker": str(_r["Ticker"]), "composite_score": _f(_r.get("Score"), 0)})
+        out.sort(key=lambda x: (-x["composite_score"], x["ticker"]))
+        return out
+
+    def _unevaluated_leads(evaluated: set) -> list[dict]:
+        """Scanner names Grow Today did NOT evaluate today: momentum >=
+        COMPOSITE_BUY, not held, not already flagged, and not in `evaluated`
+        (the working set actually run through the gates). Ticker + momentum
+        only -- they carry NO verdict and are never buy calls."""
+        out: list[dict] = []
+        if scanner_results is None or scanner_results.empty:
+            return out
+        _seen: set = set()
+        for _, _r in scanner_results.iterrows():
+            _t = str(_r["Ticker"])
+            _tu = _t.upper()
+            _m = _f(_r.get("Score"), 0)
+            if (_m < COMPOSITE_BUY or _t in held_tickers or _t in _act_blocked
+                    or _tu in evaluated or _tu in _seen):
+                continue
+            _seen.add(_tu)
+            out.append({"ticker": _t, "momentum_score": _m})
+        out.sort(key=lambda x: (-x["momentum_score"], x["ticker"]))
+        return out
+
     # On bear days — no new entries, return protection message
     if tone == "bear":
         # macro_coverage_expired is built AFTER all suppression decisions so it
@@ -993,6 +1069,14 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "news_skipped":               [],
             "earnings_waiting":           [],
             "etf_screened_out":           [],
+            # Grow Today owns every buy (2026-10-15): on a bear day nothing is
+            # picked, so nothing can be pacing-held or flat-day-held; the
+            # scanner names are ALL unevaluated and the would-qualify adds are
+            # disclosed as paused. Always present, never omitted.
+            "overflow_picks":             [],
+            "flat_day_held":              [],
+            "unevaluated_leads":          _unevaluated_leads(set()),
+            "adds_paused":                _adds_paused_list(),
             # G-25: always a list, never omitted, even on this early return —
             # a bear day suppresses every add-to-winner lane outright (the
             # loop below never runs), so there is nothing for the cluster
@@ -1002,14 +1086,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # G-26: same "always present, never omitted" posture as G-25
             # above — a bear day suppresses every add-to-winner lane outright
             # (the loop below never runs), so this function's own
-            # pair_blocked_adds bucket is necessarily []. pair_buy_lane_skips
-            # is passed THROUGH unchanged (never recomputed here) — a bear
-            # day's _buy_candidates lane still runs (it is not tone-gated)
-            # and may have already recorded a silent skip before this
-            # function was even called.
+            # pair_blocked_adds bucket is necessarily [].
             "pair_blocked_adds":          [],
             "pair_gate_checked":          pair_add_blocks is not None,
-            "pair_buy_lane_skips":        buy_lane_pair_skips,
             # Disclosure-only follow-on — passthrough, unchanged, never read
             # in any decision above (the add loop never runs on a bear day
             # anyway, so there is nothing for this to have gated even if it
@@ -1127,6 +1206,19 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         _seen_ct.add(mt)
     mover_rows.sort(key=lambda d: d.get("_rank", 0), reverse=True)
 
+    # Scanner names that never reached the gates below (flat day: momentum under
+    # the flat-day bar or past the working-set truncation; bull day: only the
+    # truncation). Listed by name with momentum only -- no verdict.
+    unevaluated_leads = _unevaluated_leads(
+        {str(d.get("Ticker", "")).upper() for d in curated_rows}
+        | {str(d.get("Ticker", "")).upper() for d in mover_rows}
+    )
+    # Pacing-only leftovers: cleared EVERY check but lost to the pick cap, the
+    # 1-per-sector rule or the mover cap. Unsized by construction.
+    overflow_picks: list[dict] = []
+    # Curated picks the flat-day check holds back (verdict not fully confirmed).
+    flat_day_held: list[dict] = []
+
     _mover_picks: list[dict] = []
 
     if curated_rows or mover_rows:
@@ -1217,6 +1309,35 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # face the composite gate, macro gate, act-today block below, and are
             # never reached on bear days due to the early return).
             if tone == "flat" and not is_mover and xref["verdict"] not in ("confirmed", "unverified"):
+                # No longer silent (OP-07): name it, say why, and -- only where
+                # the data supports it -- when it could clear. The earnings date
+                # is derivable from xref["earn_days"]; every other verdict has
+                # no single clearing event, so clears_when stays None.
+                _fd_earn = xref.get("earn_days")
+                _fd_comp = _ledger_composite(composites, ticker)
+                _fd_earn_date = None
+                _fd_clears = None
+                # Only a name that would otherwise qualify (trusted composite at
+                # the Buy bar) gets a clearing hint; earn_days == 0 still counts
+                # as imminent, so the hold lifts the day AFTER the date.
+                if (xref["verdict"] == "caution" and _fd_earn is not None
+                        and _fd_comp is not None and _fd_comp >= COMPOSITE_BUY):
+                    _fd_earn_date = (today + timedelta(days=_fd_earn)).isoformat()
+                    _fd_clears = f"after earnings ({_fd_earn_date}), if it still qualifies"
+                _fd_why = str(xref.get("verdict_label") or xref["verdict"])
+                if xref["conflicts"]:
+                    _fd_why += " — " + "; ".join(str(c) for c in xref["conflicts"])
+                flat_day_held.append({
+                    "ticker":          ticker,
+                    "sector":          sector,
+                    "momentum_score":  _f(row.get("Score", 0)),
+                    "composite_score": _fd_comp,
+                    "verdict":         xref["verdict"],
+                    "reason":          _fd_why,
+                    "clears_when":     _fd_clears,
+                    "earnings_date":   _fd_earn_date,
+                    "earn_days":       _fd_earn,
+                })
                 continue
 
             _base_thesis = _thesis(ticker, row, is_leader)
@@ -1552,6 +1673,38 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             if _movers_added >= MOVER_MAX_PICKS:
                 break
 
+        # Pacing leftovers (stocks only; the ETF lane has its own cap). Built
+        # AFTER both selections from picks that cleared every gate, so they are
+        # disjoint from new_picks and from every held-out bucket by
+        # construction. SIZING IS DELIBERATELY NOT COPIED -- "not a second buy
+        # list". Reason code: sector_slot when an already-chosen pick holds the
+        # candidate's sector, else pick_cap; mover_cap for breakouts past
+        # MOVER_MAX_PICKS.
+        _picked_t = {p["ticker"] for p in new_picks}
+
+        def _overflow_item(_p: dict, _why: str) -> dict:
+            return {
+                "ticker":          _p["ticker"],
+                "sector":          _p.get("sector"),
+                "composite_score": _p.get("composite_score"),
+                "momentum_score":  _p.get("score"),
+                "price":           _p.get("price"),
+                "reason":          _why,
+                "verdict":         _p["xref"].get("verdict"),
+                "is_mover":        bool(_p.get("is_mover")),
+            }
+
+        for _pick in _confirmed_picks + _unverified_picks:
+            if _pick["ticker"] in _picked_t:
+                continue
+            _ps = _pick.get("sector", "")
+            overflow_picks.append(_overflow_item(
+                _pick, "sector_slot" if (_ps and _ps in _seen_sectors) else "pick_cap"))
+        for _pick in _mover_picks:
+            if _pick["ticker"] in _picked_t:
+                continue
+            overflow_picks.append(_overflow_item(_pick, "mover_cap"))
+
         # Personalized Discovery — flag which of TODAY's already-gated new_picks
         # resemble the user's own REALIZED winning entries. new_picks ONLY (not
         # add_positions below — an add-to-winner is a call already made once,
@@ -1874,18 +2027,15 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     cluster_blocked_adds: list[dict] = []  # adds suppressed — new correlation cluster (G-25)
     pair_blocked_adds: list[dict] = []  # adds suppressed — standing danger-tier correlated pair (G-26)
     # Deterioration WATCH — SUPPRESS add-to-winner (see docstring; changed
-    # 2026-07-21 from annotate-only). Same map shape/intent as _buy_candidates's
-    # own copy — as of 2026-07-23 (936dff9) _buy_candidates ALSO suppresses at
-    # source rather than annotating, so both add lanes are symmetric: a WATCH
-    # name cannot appear as an add candidate anywhere in the Brief.
-    _watch_by_ticker: dict = {
-        str(d["ticker"]).upper(): d for d in (deterioration or []) if d.get("tier") == "WATCH"
-    }
-    # Pre-populate deterioration_blocked_adds for ALL held WATCH names regardless of
-    # tone so the app.py dedup (_grow_shown) catches them in bear/protect mode.
+    # 2026-07-21 from annotate-only). `_watch_by_ticker` is built above, ahead
+    # of the bear early return, because adds_paused reads it too.
+    # Pre-populate deterioration_blocked_adds for ALL held WATCH names on every
+    # non-bear day (bear returns above this point and carries no such key).
     # In bull mode the inner loop below also catches them (and continues past add);
-    # in bear/protect mode the inner loop is skipped and without this pre-pass WATCH
-    # names leak into _buy_candidates (the FSLR Protect-mode repro, 2026-07-23).
+    # on a flat day the inner loop is skipped, so this pre-pass is what still
+    # writes the flat-day G-20 ledger rows (counterfactual=False) and feeds
+    # the app.py dedup. (Before 2026-10-15 it also kept WATCH names out of the
+    # retired scanner buy-candidates lane -- the FSLR Protect-mode repro, 2026-07-23.)
     if port_df is not None:
         for _, _wr in port_df.iterrows():
             _wt = str(_wr["Ticker"]).upper()
@@ -1914,11 +2064,12 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             sig = str(row.get("Signal", ""))
             gap = _f(row.get("Gap to Stop (%)"), 0)
             scr = _f(row.get("Score"), 0)
-            if "Strong Buy" in sig and scr >= COMPOSITE_BUY and gap >= ADD_WINNER_MIN_GAP_PCT:
+            if _add_entry_ok(row):
                 ticker  = str(row["Ticker"])
                 sector  = str(row.get("Sector", ""))
+                _gate = _add_block_gate(row)
                 # Skip if Act Today already flags this ticker for action
-                if ticker in _act_blocked:
+                if _gate == "ACT":
                     continue
                 # Early-deterioration WATCH — an active WATCH on a held name
                 # (below its trend MA, drawing down from its peak) means the app
@@ -1928,7 +2079,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 # entry-price-agnostic, so this is the principled add gate; the
                 # suppression is surfaced (never silent) via deterioration_blocked_adds.
                 _dw = _watch_by_ticker.get(ticker.upper())
-                if _dw:
+                if _gate == "G-20":
                     # Pre-pass (above) always inserted this ticker first; in bull
                     # mode upgrade counterfactual to True in-place (A2). Reaching
                     # here proves G-20 is the BINDING constraint — the ticker
@@ -1967,7 +2118,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     continue
                 # Post-add cooldown — you already acted on this add recently; let
                 # the new shares settle before nudging to add more (anti-churn).
-                if _recently_added(ticker, held_data):
+                if _gate == "G-24":
                     _dslb = ((held_data or {}).get(ticker) or {}).get("days_since_last_buy")
                     cooldown_adds.append({
                         "ticker":  ticker,
@@ -1990,7 +2141,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     continue
                 # Sector concentration gate — don't add to a position whose sector
                 # is over the hard cap (Risk Advisor is recommending a trim there).
-                if sector in _breached_sectors:
+                if _gate == "G-16":
                     sector_blocked_adds.append({
                         "ticker":  ticker,
                         "sector":  sector,
@@ -2014,7 +2165,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     continue
                 # Skip — and record — if Risk Advisor is recommending trim on this ticker
                 _trim_info = _trim_set.get(ticker.upper())
-                if _trim_info:
+                if _gate == "G-01":
                     risk_blocked_adds.append({
                         "ticker":   ticker,
                         "reason":   _trim_info["reason"],
@@ -2037,7 +2188,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 # creates asymmetric idiosyncratic risk that the institutional
                 # framework caps at SINGLE_NAME_CEILING.
                 _cur_wt = _gate_wt(row)
-                if _cur_wt >= SINGLE_NAME_CEILING:
+                if _gate == "G-04":
                     concentration_blocked_adds.append({
                         "ticker":    ticker,
                         "weight":    _cur_wt,
@@ -2060,7 +2211,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     continue
                 # Drift-trim conflict — Rebalancer would trim this position to
                 # target; the briefing must not simultaneously recommend adding.
-                if ticker.upper() in _drift_trim_set:
+                if _gate == "G-09":
                     concentration_blocked_adds.append({
                         "ticker":    ticker,
                         "weight":    _cur_wt,
@@ -2092,7 +2243,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 # never `or {}` — None means "couldn't check" (fail-open: the
                 # add proceeds below, uncaptioned), {} / a miss means
                 # "checked, this ticker isn't on a standing danger pair."
-                if pair_add_blocks is not None and ticker.upper() in pair_add_blocks:
+                if _gate == "G-26":
                     _pab = pair_add_blocks[ticker.upper()]
                     pair_blocked_adds.append({
                         "ticker":    ticker,
@@ -2118,7 +2269,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 # — None means "couldn't check" (D4 fail-open: the add
                 # proceeds below, uncaptioned), [] / a miss means "checked,
                 # this ticker isn't on a new pair's endpoints."
-                if cluster_add_blocks is not None and ticker.upper() in cluster_add_blocks:
+                if _gate == "G-25":
                     _cab = cluster_add_blocks[ticker.upper()]
                     _cab_partners_str = ", ".join(
                         f"{p}({c:+.2f})" for p, c in (_cab.get("partners", []))
@@ -2244,11 +2395,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "cluster_gate_checked":       cluster_add_blocks is not None,
         # G-26 — see pair_add_blocks docstring above. pair_gate_checked is
         # True only when pair_add_blocks was actually resolved this run (not
-        # None). pair_buy_lane_skips is passed through unchanged from
-        # _buy_candidates' own sink — never recomputed here.
+        # None).
         "pair_blocked_adds":         pair_blocked_adds,
         "pair_gate_checked":         pair_add_blocks is not None,
-        "pair_buy_lane_skips":       buy_lane_pair_skips,
         # Disclosure-only follow-on — passthrough, unchanged, never read in
         # any suppression decision above.
         "corr_unchecked":            corr_unchecked,
@@ -2260,6 +2409,14 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "news_skipped":               news_skipped,
         "earnings_waiting":           earnings_waiting,
         "etf_screened_out":           etf_screened_out,
+        # Grow Today owns every buy (2026-10-15, OP-07 "gate the call, never
+        # the candidate"). None of these four is a gate: overflow_picks are
+        # pacing-held (no size), flat_day_held names the flat-day holds,
+        # unevaluated_leads carry NO verdict, adds_paused is non-bull only.
+        "overflow_picks":             overflow_picks,
+        "flat_day_held":              flat_day_held,
+        "unevaluated_leads":          unevaluated_leads,
+        "adds_paused":                [] if tone == "bull" else _adds_paused_list(),
         "deploy_note":                deploy_note,
         "risk_banner":                risk_banner,
         "sp500_pct":                  sp500_pct,
@@ -2751,269 +2908,6 @@ def _consolidate_act_today(items: list[dict], port_df) -> list[dict]:
     return out
 
 
-# ── Buy Candidates ─────────────────────────────────────────────────────────────
-
-def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
-                    act_today: list | None = None,
-                    review_list: list | None = None,
-                    risk_recs: list | None = None,
-                    earnings_lookup: dict | None = None,
-                    composites: dict | None = None,
-                    deterioration: list | None = None,
-                    sold_today: set | None = None,
-                    spy_df: object | None = None,
-                    cluster_add_blocks: dict | None = None,
-                    pair_add_blocks: dict | None = None,
-                    pair_skip_sink: list | None = None) -> list[dict]:
-    """
-    Build buy candidate list with multi-signal confidence verdict for each pick.
-    act_today: output of _act_today — tickers already flagged are excluded.
-    review_list: output of _review_list — tickers flagged here (e.g. earnings-
-               overweight or weak-large-position TRIM_TO_TARGET) are ALSO
-               excluded from add-to-winner, same as act_today (2026-07-30
-               coordination-gap fix — a review-origin trim wasn't blocking this
-               surface's own independent add-to-winner block, a second instance
-               of the same gap already fixed in _grow_today).
-    risk_recs: Risk Advisor recs — tickers flagged for trim are suppressed from
-               the add-to-winner block to avoid same-ticker capital conflicts.
-    deterioration: output of deterioration_signals() — a held ticker carrying an
-               active WATCH tier is annotated (not suppressed; WATCH is
-               explicitly "no action yet") so an add-to-winner card doesn't read
-               as contradicting the Review lane's early-deterioration tripwire.
-    spy_df: benchmark df for the relative-strength leg of the scanner-pick
-               deterioration warning (see exit_advisor.candidate_deterioration_flag).
-               Scoped to "new_pick" items only — "add_winner" describes an
-               already-held position, not a not-yet-owned candidate.
-    cluster_add_blocks: optional (G-25) — same add_block_map() output passed to
-               _grow_today, threaded into THIS lane's own independent
-               add-to-winner block too — without it, a ticker suppressed in
-               _grow_today would still reappear here as "ADD — Winning
-               Position" (a separate leak path, confirmed during design).
-               `None` (the default) leaves this lane byte-identical to the
-               pre-G-25 output; checked `is not None`, never `or {}`.
-    pair_add_blocks: optional (G-26, owner decisions 2026-10-08) — same
-               add_block_map() output passed to _grow_today, threaded into
-               THIS lane's own independent add-to-winner block too, checked
-               BEFORE cluster_add_blocks (G-25 — same check order as
-               _grow_today's own copy). `None` (the default) leaves this
-               lane byte-identical to the pre-G-26 output; checked
-               `is not None`, never `or {}`.
-    pair_skip_sink: optional mutable list — when a ticker is silently
-               skipped here by G-26 (this lane keeps no suppressed-
-               candidates bucket of its own, same "silent on purpose"
-               posture as every other skip in this loop), its upper-cased
-               ticker is appended so the caller (build_daily_briefing) can
-               surface it as `pair_buy_lane_skips` — disclosure plumbing
-               only, never fed into the Gate Suppression Ledger.
-    """
-    items: list[dict] = []
-    held_tickers = _held_tickers(port_df)
-
-    # Block any ticker already flagged ANYWHERE in today's Brief (act_today OR
-    # review_list) — same canonical set as _grow_today's gate.
-    _act_blocked: set = decision_bucket.all_flagged_tickers(act_today, review_list)
-    # Tickers sold this session must never immediately re-appear as buys.
-    if sold_today:
-        _act_blocked |= sold_today
-
-    # Risk Advisor trim targets — suppress same-ticker add-to-winner conflicts.
-    _trim_set = _trim_targets(risk_recs)
-
-    # Sector concentration — mirrors _grow_today's gate (same rationale: don't
-    # open/add into a sector Risk Advisor is already telling the user to trim).
-    # This surface previously had NO sector awareness at all, a gap wider than
-    # _grow_today's — closed alongside it in the same pass (SHOP whiplash fix).
-    _breached_sectors: set = set()
-    _elevated_sectors: set = set()
-    _sector_wt_map: dict = {}
-    if port_df is not None and not port_df.empty and "Weight (%)" in port_df.columns:
-        _sec_wt = port_df.groupby("Sector")[_gate_wt_col(port_df)].sum()
-        _sector_wt_map = {str(_s): _f(_w, 0) for _s, _w in _sec_wt.items()
-                          if str(_s) != UNCLASSIFIED_SECTOR}
-        _breached_sectors = {_s for _s, _w in _sector_wt_map.items() if _w >= SECTOR_CEILING}
-        _elevated_sectors = {_s for _s, _w in _sector_wt_map.items()
-                             if SECTOR_ELEVATED <= _w < SECTOR_CEILING}
-
-    def _sector_warning(sector: str) -> str | None:
-        if sector not in _elevated_sectors:
-            return None
-        return (
-            f"{sector} sector already at {_sector_wt_map.get(sector, 0):.1f}% "
-            f"(warn level {SECTOR_ELEVATED:.0f}%) — this buy adds to a sector "
-            "Risk Advisor already has flagged for trim."
-        )
-
-    # Drift-trim positions — same suppression as _grow_today
-    _drift_trim_set: set = set()
-    if port_df is not None and not port_df.empty:
-        _n_pos = len(port_df)
-        if _n_pos > 0:
-            _eq_target = 100.0 / _n_pos
-            _trim_floor = _eq_target + 5.0
-            for _, _row in port_df.iterrows():
-                if _f(_row.get("Weight (%)"), 0) > _trim_floor:
-                    _drift_trim_set.add(str(_row["Ticker"]).upper())
-
-    # Deterioration WATCH — SUPPRESS add-to-winner (same policy as _grow_today).
-    # A WATCH ticker must not appear as "ADD — Winning Position" anywhere in the
-    # Brief — it contradicts the Review lane's early-deterioration warning.
-    _watch_by_ticker: dict = {
-        str(d["ticker"]).upper(): d for d in (deterioration or []) if d.get("tier") == "WATCH"
-    }
-
-    # 1 — Scanner picks not in portfolio (Score ≥ COMPOSITE_BUY)
-    if scanner_results is not None and not scanner_results.empty:
-        top_picks = scanner_results[
-            (scanner_results["Score"] >= COMPOSITE_BUY) &
-            (~scanner_results["Ticker"].isin(held_tickers)) &
-            (~scanner_results["Ticker"].isin(_act_blocked))
-        ].copy().sort_values("Score", ascending=False).head(5)
-
-        for _, row in top_picks.iterrows():
-            ticker = str(row["Ticker"])
-            # Hoisted ahead of sector resolution (D3 sibling fix,
-            # sector_gate_spec.md, 2026-09-30) so gate_sector can fall back to
-            # the REAL provider sector already sitting in the composite
-            # bundle when the scanner row's own "Sector" is a placeholder
-            # (e.g. scanner.py's "Watchlist" tag for watchlist extras).
-            _comp_data = (composites or {}).get(ticker, {})
-            sector = gate_sector(ticker, row_label=row.get("Sector"),
-                                 provider_sector=_comp_data.get("sector"))
-            # Sector concentration gate — same rationale as _grow_today: don't
-            # surface a fresh position in a sector already over the hard cap.
-            # Silent on purpose — unlike _grow_today's sector_blocked_picks
-            # bucket, this candidate list has no suppressed-candidates record
-            # to append into.
-            if sector in _breached_sectors:
-                continue
-            # D1 (2026-09-30): an unknown sector only blocks this candidate
-            # when a composite actually exists to judge it against — with no
-            # composite at all there's nothing to gate on, so the
-            # pre-existing behaviour (surface it, sector unresolved) is kept
-            # rather than newly suppressing it.
-            if sector == UNCLASSIFIED_SECTOR and _comp_data:
-                continue
-            xref   = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today,
-                                      composites=composites)
-            # Pre-purchase deterioration warning — same warn-only pattern as
-            # _grow_today's new_picks (2026-09-11 ON incident follow-up).
-            _cand_det = exit_advisor.candidate_deterioration_flag(
-                ticker, _comp_data.get("df"), spy_df,
-                price=_f(row.get("Price"), None), atr=_f(_comp_data.get("atr")),
-            )
-            _cand_det_warning = exit_advisor.candidate_deterioration_caption(
-                _cand_det, ticker, verdict_phrase="a buy",
-            )
-            items.append({
-                "type":           "new_pick",
-                "icon":           "🆕",
-                "ticker":         ticker,
-                "action":         "BUY — Scanner Pick",
-                "price":          _f(row.get("Price"), None),
-                "score":          _f(row.get("Score")),
-                "scanner_signal": str(row.get("Signal", "")),
-                "sector":         sector,
-                "rsi":            _f(row.get("RSI"), None),
-                "mom_1m":         _f(row.get("1M Momentum"), None),
-                "trend":          str(row.get("Trend", "")),
-                "xref":           xref,
-                "sector_elevated_warning": _sector_warning(sector),
-                "deterioration_warning": _cand_det_warning,
-            })
-
-    # 2 — Add-to-winner: held, Strong Buy composite, Score ≥ COMPOSITE_BUY (65),
-    # Gap ≥ 8%, and current weight below the single-name ceiling.
-    for _, row in port_df.iterrows():
-        sig = str(row.get("Signal", ""))
-        gap = _f(row.get("Gap to Stop (%)"), 0)
-        scr = _f(row.get("Score"), 0)
-        if "Strong Buy" in sig and scr >= COMPOSITE_BUY and gap >= ADD_WINNER_MIN_GAP_PCT:
-            ticker = str(row["Ticker"])
-            # Skip if the Brief already flags this ticker anywhere (Act Today
-            # or Review) for any action
-            if ticker in _act_blocked:
-                continue
-            # Post-add cooldown — already acted on this add recently (anti-churn,
-            # mirrors the Grow Today add gate so PATH doesn't linger here either)
-            if _recently_added(ticker, held_data):
-                continue
-            # Skip if Risk Advisor is recommending trim — same-ticker conflict
-            if ticker.upper() in _trim_set:
-                continue
-            # Single-name ceiling — hard suppress; concentration risk overrides signal
-            if _gate_wt(row) >= SINGLE_NAME_CEILING:
-                continue
-            # Drift-trim conflict — position is drift-overweight; don't add
-            if ticker.upper() in _drift_trim_set:
-                continue
-            # G-26 — standing danger-tier correlated pair, checked BEFORE
-            # G-25 (same order as _grow_today's own copy). Silent, same
-            # posture as every other skip in this loop — but recorded into
-            # pair_skip_sink (when supplied) so the caller can still
-            # disclose it on a day _grow_today's own bull-day add loop
-            # never ran (see this function's docstring).
-            if pair_add_blocks is not None and ticker.upper() in pair_add_blocks:
-                if pair_skip_sink is not None:
-                    pair_skip_sink.append(ticker.upper())
-                continue
-            # G-25 — same skip as _grow_today's own copy (see its docstring
-            # for the sentinel contract). This lane tracks no suppressed-
-            # candidates bucket of its own (same "silent on purpose" posture
-            # as the cooldown/trim/ceiling checks just above). NOTE this is
-            # only redundantly disclosed on a BULL day, when _grow_today's own
-            # bull-day add loop also runs and records the same ticker in its
-            # cluster_blocked_adds — on a flat/bear day, _grow_today's add
-            # loop never runs at all, so a ticker skipped here has NO
-            # cluster_blocked_adds row and no Grow Today disclosure block;
-            # the Home Structural-alert banner is the only place the owner
-            # sees why, same as how the cooldown/trim/ceiling skips above
-            # behave on a non-bull day.
-            if cluster_add_blocks is not None and ticker.upper() in cluster_add_blocks:
-                continue
-            _sector = str(row.get("Sector", "—"))
-            # Sector concentration gate — same rationale as _grow_today: don't
-            # add to a position whose sector is already over the hard cap.
-            if _sector in _breached_sectors:
-                continue
-            # Build a minimal scanner_row from portfolio data for cross-reference.
-            # "Signal" and "Score" are kept — they feed reconcile_signals() and
-            # are load-bearing for the protective Negative-News skip gate.
-            # "RSI", "1M Momentum" and "Trend" are omitted: all three are read
-            # ONLY inside the Layer-1 block, which synthetic rows skip. Keeping
-            # them would have re-created the fabricated-value problem this fix
-            # closes ("Trend": sig was tautological anyway - it re-printed the
-            # composite label as if it were a trend reading).
-            _synthetic = {
-                "Signal": sig, "Score": scr,
-            }
-            # Deterioration WATCH — suppress entirely (don't annotate-and-include;
-            # "ADD — Winning Position" next to a Watch contradicts the Review lane).
-            if _watch_by_ticker.get(ticker.upper()):
-                continue
-            xref = _cross_reference(ticker, _synthetic, port_df, news_items, held_data, today,
-                                    earnings_lookup=earnings_lookup, composites=composites,
-                                    scanner_row_is_synthetic=True)
-            items.append({
-                "type":           "add_winner",
-                "icon":           "➕",
-                "ticker":         ticker,
-                "action":         "ADD — Winning Position",
-                "price":          _f(row.get("Price"), None),
-                "score":          scr,
-                "scanner_signal": sig,
-                "sector":         _sector,
-                "trend":          sig,
-                "gap_to_stop":    gap,
-                "pnl_pct":        _f(row.get("P&L (%)")),
-                "xref":           xref,
-                "sector_elevated_warning": _sector_warning(_sector),
-            })
-
-    _verdict_order = {"confirmed": 0, "mixed": 1, "caution": 1, "unverified": 2, "conflicted": 3}
-    items.sort(key=lambda x: (_verdict_order.get(x["xref"]["verdict"], 2), -x["score"]))
-    return items
-
-
 # ── Review Before Close ────────────────────────────────────────────────────────
 
 def _dynamic_overweight_floor(n_positions: int) -> float:
@@ -3056,7 +2950,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     # excludes them so a ticker's negative-news risk shows ONCE, on the
     # higher-priority surface, instead of appearing as a Critical-News ACT here
     # AND a "no action today" WATCH below (the DELL split-brain). Mirrors the
-    # act_today dedup that _buy_candidates and _grow_today already do.
+    # act_today dedup that _grow_today already does.
     _act_tickers = {str(a.get("ticker", "")).upper() for a in (act_today or [])}
     from stock_analyzer.macro_calendar import HIGH as MC_HIGH, affected_sectors as _aff_sectors
 
@@ -3639,17 +3533,14 @@ def build_daily_briefing(
                      leaves new_picks/every other key byte-identical to the
                      pre-Phase-2b output.
     cluster_add_blocks: optional (G-25, docs/plans/cluster-add-gate.md) —
-                     passed straight through to BOTH _grow_today's bull-day
-                     add loop and _buy_candidates' own independent add-to-
-                     winner lane (two separate leak paths, both need the
-                     same skip). None (the default, and every caller before
+                     passed straight through to _grow_today's bull-day add
+                     loop. None (the default, and every caller before
                      G-25) leaves every existing output byte-identical.
     pair_add_blocks: optional (G-26, owner decisions 2026-10-08) — passed
-                     straight through to BOTH _grow_today's bull-day add
-                     loop and _buy_candidates' own independent add-to-winner
-                     lane, checked BEFORE cluster_add_blocks in both. None
-                     (the default, and every caller before G-26) leaves
-                     every existing output byte-identical.
+                     straight through to _grow_today's bull-day add loop,
+                     checked BEFORE cluster_add_blocks. None (the default,
+                     and every caller before G-26) leaves every existing
+                     output byte-identical.
     corr_unchecked:  optional (disclosure-only G-25/G-26 follow-on,
                      docs/plans/pair-add-gate.md) — portfolio.
                      correlation_unchecked() output, passed straight through
@@ -3660,7 +3551,10 @@ def build_daily_briefing(
                      (the default, and every caller before this follow-on)
                      leaves every existing output byte-identical.
 
-    Returns dict with: act_today, buy_candidates, review_list, grow_today.
+    Returns dict with: act_today, review_list, grow_today, portfolio_tuneup.
+    Grow Today owns every new-position and add-to-winner suggestion (the
+    scanner-only "More Buy Candidates" lane was retired
+    2026-10-15 -- docs/plans/grow-today-owns-buys.md).
     """
     ctx    = market_context or {"tone": "flat", "sp500_pct": 0, "nasdaq_pct": 0, "leading_sectors": []}
 
@@ -3710,7 +3604,7 @@ def build_daily_briefing(
     # (single-surface: never double-reduce a name). Only arms when the book is
     # fragile AND the market is in a risk-off regime; otherwise returns []. These
     # are the lowest-priority reduce, so they append to the end of Act Today.
-    # _buy_candidates runs after this block so it sees the complete act list and
+    # _grow_today runs after this block so it sees the complete act list and
     # cannot surface an ADD for a ticker that risk-off just flagged for TRIM.
     # Exclude every ticker carrying ANY review card (not just the 3 TRIM types) —
     # a WATCH-type review card ("not an action yet") must never coexist with a
@@ -3725,23 +3619,6 @@ def build_daily_briefing(
     )
     if _risk_off:
         act = act + _risk_off
-    # G-26 disclosure plumbing: built BEFORE _buy_candidates runs so its own
-    # add-to-winner lane can record a silent skip into it; read back AFTER
-    # the call (never while _buy_candidates is still running) so _grow_today
-    # receives the complete, final list. None when pair_add_blocks itself is
-    # None — nothing was checked, so there is nothing to report.
-    _pair_buy_lane_skip_sink: list = []
-    buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today,
-                             act_today=act, review_list=review, risk_recs=risk_recs,
-                             earnings_lookup=earnings_lookup,
-                             composites=grow_composites or {},
-                             deterioration=deterioration,
-                             sold_today=_sold_today,
-                             spy_df=spy_df,
-                             cluster_add_blocks=cluster_add_blocks,
-                             pair_add_blocks=pair_add_blocks,
-                             pair_skip_sink=_pair_buy_lane_skip_sink)
-    _pair_buy_lane_skips = _pair_buy_lane_skip_sink if pair_add_blocks is not None else None
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, review_list=review, composites=grow_composites or {},
                          risk_recs=risk_recs,
@@ -3755,7 +3632,6 @@ def build_daily_briefing(
                          etf_candidates=etf_candidates,
                          cluster_add_blocks=cluster_add_blocks,
                          pair_add_blocks=pair_add_blocks,
-                         buy_lane_pair_skips=_pair_buy_lane_skips,
                          corr_unchecked=corr_unchecked)
     # Tune-up beta/sharpe cards restate a trim; if that name is already carrying
     # an Act Today card (incl. the risk-off TRIM appended above) or a Review
@@ -3763,5 +3639,5 @@ def build_daily_briefing(
     # flagged basis as the risk-off exclude set, now that `act` includes risk-off).
     _acted_final = decision_bucket.all_flagged_tickers(act, review)
     tuneup = _portfolio_tuneup(risk_recs, acted_tickers=_acted_final)
-    return {"act_today": act, "buy_candidates": buys, "review_list": review,
+    return {"act_today": act, "review_list": review,
             "grow_today": grow, "portfolio_tuneup": tuneup}

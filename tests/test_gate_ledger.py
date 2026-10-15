@@ -202,15 +202,18 @@ def test_g26_pair_blocked_adds_produces_add_winner_row():
     assert row["gate_threshold"] == 0.80
 
 
-def test_pair_buy_lane_skips_key_never_produces_a_row():
-    """pair_buy_lane_skips is disclosure plumbing (a plain list of ticker
-    strings, not gate-item dicts) -- it must never be scanned as a bucket."""
-    grow = {
-        "pair_blocked_adds": [],
-        "pair_buy_lane_skips": ["BBB", "CCC"],
-    }
-    result = _rows(grow, tone="bull")
-    assert result == []
+def test_pacing_and_disclosure_keys_never_produce_a_row():
+    """Grow Today's pacing / no-verdict lists (reversed from the retired
+    pair_buy_lane_skips test, 2026-10-15) are not gates: they must never be
+    scanned as a bucket, even when populated with gate-shaped dicts."""
+    from stock_analyzer import gate_ledger as _gl
+    _new = ("overflow_picks", "flat_day_held", "unevaluated_leads", "adds_paused")
+    for k in _new:
+        assert k not in _gl._BUCKET_LANES
+    item = _make_item("G-07", ticker="BBB")
+    grow = {k: [item] for k in _new}
+    grow["pair_blocked_adds"] = []
+    assert _rows(grow, tone="bull") == []
 
 
 # ── item with no gate_id → skipped ───────────────────────────────────────────

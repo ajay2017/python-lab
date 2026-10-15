@@ -13,7 +13,6 @@ from stock_analyzer.pair_add_gate import (
     add_block_map,
     describe_reason,
     split_scan_liftable,
-    buy_lane_only,
     partners_of,
     unchecked_disclosure,
 )
@@ -251,23 +250,6 @@ def test_split_scan_liftable_splits_overlap():
 def test_split_scan_liftable_empty_cluster_blocks():
     assert split_scan_liftable({}, {"AAA": {}}) == ([], [])
     assert split_scan_liftable(None, {"AAA": {}}) == ([], [])
-
-
-# ── buy_lane_only ─────────────────────────────────────────────────────────────
-
-def test_buy_lane_only_none_passes_through():
-    assert buy_lane_only([], None) is None
-    assert buy_lane_only(None, None) is None
-
-
-def test_buy_lane_only_excludes_already_disclosed():
-    pair_blocked_adds = [{"ticker": "AAA"}]
-    result = buy_lane_only(pair_blocked_adds, ["AAA", "BBB"])
-    assert result == ["BBB"]
-
-
-def test_buy_lane_only_empty_skip_list_is_empty_not_none():
-    assert buy_lane_only([], []) == []
 
 
 # ── partners_of ───────────────────────────────────────────────────────────────

@@ -23,7 +23,6 @@ from stock_analyzer.exit_advisor import classify_deterioration_tier
 from stock_analyzer.pillar_availability import (
     technical_clause, technical_history_short, unmeasured_pillars, verdict_basis,
 )
-from stock_analyzer.daily_briefing import _buy_candidates
 from stock_analyzer.portfolio import rebalance_actions
 from stock_analyzer.portfolio import alerts, build_portfolio_df
 from stock_analyzer.util import score_withheld_banner_text
@@ -497,20 +496,27 @@ def _two_holdings(t_flag):
     return build_portfolio_df(holdings, {"AAA": strong, "BBB": other})
 
 
+def _grow_adds(df):
+    """Grow Today's add-to-winner lane on a bull day (the only add lane since
+    the scanner-only buy-candidates lane was retired 2026-10-15)."""
+    return _grow_today(df, None, [], {}, _TODAY, 100_000.0,
+                       {"tone": "bull"})["add_positions"]
+
+
 def test_held_add_lanes_fire_only_when_technical_measured():
     ok = _two_holdings(True)
-    items = _buy_candidates(ok, None, [], {}, _TODAY)
-    assert (find_item(items, "AAA") or {}).get("type") == "add_winner"   # fires first
+    items = _grow_adds(ok)
+    assert find_item(items, "AAA") is not None                           # fires first
     assert any(a["type"] == "add" and a["ticker"] == "AAA" for a in rebalance_actions(ok))
 
     bad = _two_holdings(False)
-    assert find_item(_buy_candidates(bad, None, [], {}, _TODAY), "AAA") is None
+    assert find_item(_grow_adds(bad), "AAA") is None
     assert not any(a["type"] == "add" and a["ticker"] == "AAA" for a in rebalance_actions(bad))
 
 
 def test_held_add_lanes_legacy_same_as_true():
     legacy = _two_holdings(None)
-    assert (find_item(_buy_candidates(legacy, None, [], {}, _TODAY), "AAA") or {}).get("type") == "add_winner"
+    assert find_item(_grow_adds(legacy), "AAA") is not None
 
 
 # ── review round 3 ──────────────────────────────────────────────────────────

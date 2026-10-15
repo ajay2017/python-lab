@@ -290,7 +290,7 @@ from stock_analyzer.act_today_view import (  # noqa: E402
     offline_brief_stub,
 )
 
-_REAL_BRIEF = {"act_today": [], "buy_candidates": [], "review_list": [],
+_REAL_BRIEF = {"act_today": [], "review_list": [],
                "grow_today": {"tone": "bull"}}
 
 
@@ -299,7 +299,7 @@ def test_offline_brief_stub_is_marked_and_detected():
     assert stub[OFFLINE_BRIEF_MARKER] is True
     assert is_offline_brief(stub)
     # Still carries every key downstream code reads, so nothing crashes on it.
-    for key in ("act_today", "buy_candidates", "review_list", "grow_today"):
+    for key in ("act_today", "review_list", "grow_today"):
         assert key in stub
 
 
@@ -404,7 +404,7 @@ def test_app_builds_the_offline_stub_via_the_helper_never_inline():
     # PRODUCER end. An inline stub literal would carry no marker, silently
     # reopening B-H2 while every consumer test below still passed.
     tree = _app_tree()
-    stub_keys = {"act_today", "buy_candidates", "review_list", "grow_today"}
+    stub_keys = {"act_today", "review_list", "grow_today"}
     inline = [
         node.lineno for node in ast.walk(tree)
         if isinstance(node, ast.Dict)

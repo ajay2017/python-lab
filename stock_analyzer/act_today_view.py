@@ -71,7 +71,6 @@ def offline_brief_stub() -> dict:
     """
     return {
         "act_today": [],
-        "buy_candidates": [],
         "review_list": [],
         "grow_today": {},
         OFFLINE_BRIEF_MARKER: True,

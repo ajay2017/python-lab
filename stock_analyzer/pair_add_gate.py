@@ -1,7 +1,7 @@
 """G-26 — standing danger-tier correlated pair add-suppression gate.
 
 Pure logic only -- no Streamlit, no DB, no network. Pauses Grow Today's
-(and Buy Candidates') "add-to-winner" suggestion for the two HELD tickers at
+"add-to-winner" suggestion for the two HELD tickers at
 the endpoints of a STANDING danger-tier correlation pair (`"level" ==
 "danger"`, i.e. >= CORR_DANGER_PAIRS_THRESHOLD) -- regardless of whether a
 PAIR_RISK trim call actually exists for that pair. portfolio.py's own
@@ -14,8 +14,7 @@ Purely a suppression -- never a trim/sell recommendation. The hard
 concentration ceilings (SINGLE_NAME_CEILING, SECTOR_CEILING) are completely
 unaffected and stay fully live regardless of this gate's own state.
 
-Checked BEFORE G-25 (cluster_add_gate) in both _grow_today and
-_buy_candidates -- a pair that is both a NEW cluster pairing AND already at
+Checked BEFORE G-25 (cluster_add_gate) in _grow_today's add loop -- a pair that is both a NEW cluster pairing AND already at
 standing danger tier records under G-26, never G-25.
 
 G-26 differs from G-25 in one structural way: it is NOT acknowledge/
@@ -367,19 +366,3 @@ def unchecked_disclosure(
         f"{_object} could be detected. Add suggestions were checked against "
         f"your other holdings only; this is not a sign {_final} uncorrelated."
     )
-
-
-def buy_lane_only(pair_blocked_adds: "list | None", buy_lane_skips: "list | None"):
-    """Tickers G-26 silently skipped inside `_buy_candidates`' own
-    add-to-winner lane that are NOT already disclosed in the
-    `pair_blocked_adds` bucket (Grow Today's own block) -- i.e. the ones
-    that would otherwise vanish with zero disclosure anywhere (a flat/bear
-    day, where `_grow_today`'s bull-day add loop never ran at all).
-
-    `buy_lane_skips is None` passes straight through as None (the map itself
-    was never checked this render -- nothing to report).
-    """
-    if buy_lane_skips is None:
-        return None
-    already = {str((d or {}).get("ticker", "")).upper() for d in (pair_blocked_adds or [])}
-    return sorted({str(t).upper() for t in buy_lane_skips} - already)

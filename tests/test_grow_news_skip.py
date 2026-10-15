@@ -200,8 +200,10 @@ def test_dropoff_buckets_include_news_skipped():
     pytest.fail("_do_buckets dict not found")
 
 
-def test_buy_candidates_dedup_covers_news_skipped():
-    # Otherwise a held-out Skip reappears under "More Buy Candidates".
+def test_grow_shown_dedup_covers_news_skipped():
+    # Reversed 2026-10-15 (was test_buy_candidates_dedup_covers_news_skipped):
+    # the "More Buy Candidates" lane is gone, but app.py's _grow_shown still
+    # dedups every other Brief section against Grow Today's held-out buckets.
     for n in ast.walk(_app()):
         if (isinstance(n, ast.For) and isinstance(n.target, ast.Name) and n.target.id == "_gk"
                 and isinstance(n.iter, ast.Tuple)):

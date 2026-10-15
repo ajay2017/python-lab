@@ -54,9 +54,10 @@ _BUCKET_LANES: dict[str, str] = {
     # danger-tier correlated pair, checked BEFORE G-25 in daily_briefing.py.
     # Same "flows through grow_today" shape as cluster_blocked_adds, so it
     # gets a labelled bucket entry here too, not a new standalone builder.
-    # NOTE: "pair_buy_lane_skips" (the _buy_candidates-only disclosure list)
-    # is DELIBERATELY NOT added here — it is disclosure plumbing, not a
-    # ledger lane, and must never produce a gate_suppressions row.
+    # NOTE: grow_today's pacing / no-verdict disclosure lists ("overflow_picks",
+    # "flat_day_held", "unevaluated_leads", "adds_paused") are DELIBERATELY NOT
+    # added here — they are not gates, and must never produce a
+    # gate_suppressions row (pinned in tests/test_gate_ledger.py).
     "pair_blocked_adds":         "add_winner",
 }
 

@@ -83,7 +83,7 @@ def find_rec(recs, rec_type):
 
 
 def make_port_df(rows):
-    """Build a port_df for stock_analyzer.daily_briefing's _buy_candidates()/
+    """Build a port_df for stock_analyzer.daily_briefing's _grow_today()/
     _review_list() — a "safe" default row (no gate/suppression triggered)
     unless a field is overridden. `_gate_wt`/`_gate_wt_col` fall back to
     "Weight (%)" when "Gate Weight (%)" is absent, so it's omitted here.

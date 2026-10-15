@@ -1,7 +1,10 @@
-"""Regression tests for stock_analyzer/daily_briefing.py's Buy Candidates
-suppression funnel and the Review Before Close weak-large-position flag.
+"""Regression tests for stock_analyzer/daily_briefing.py's Grow Today
+add-to-winner suppression funnel, the Grow-Today-owns-every-buy contract
+(overflow_picks / flat_day_held / unevaluated_leads / adds_paused; the
+scanner-only buy-candidates lane was retired 2026-10-15) and the Review Before
+Close weak-large-position flag.
 
-_buy_candidates()'s add-to-winner block is the "mirror image" of risk_advisor's
+_grow_today()'s add-to-winner block is the "mirror image" of risk_advisor's
 single_name_concentration rec: risk_advisor flags an overweight STRONG
 position (score >= WEAK_CONVICTION_SCORE) as a structural risk-limit issue,
 while _review_list's weak-large flag catches an overweight WEAK position
@@ -39,7 +42,6 @@ from stock_analyzer.macro_calendar import HIGH as _MACRO_HIGH
 from stock_analyzer.daily_briefing import (
     SIZING_FORMULA_VERSION,
     _act_today,
-    _buy_candidates,
     _cross_reference,
     _dynamic_overweight_floor,
     _grow_today,
@@ -109,7 +111,7 @@ def test_recently_added_false_at_or_past_cooldown():
     assert _recently_added("AAA", {"AAA": {"days_since_last_buy": ADD_WINNER_COOLDOWN_DAYS}}) is False
 
 
-# ── _buy_candidates: scanner picks ────────────────────────────────────────────
+# ── scanner-pick fixtures (shared) ──────────────────────────────────────────
 
 def _scanner_df(rows):
     import pandas as pd
@@ -125,154 +127,14 @@ def _scanner_df(rows):
     ])
 
 
-def test_scanner_pick_included_with_price_captured():
-    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
-    scanner = _scanner_df([{"ticker": "NEW", "score": 80.0, "price": 42.5}])
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY)
-    item = find_item(items, "NEW")
-    assert item is not None
-    assert item["type"] == "new_pick"
-    assert item["price"] == 42.5  # regression: price_at_surface must never be blank
+# ── Grow Today add-to-winner lane (the only add lane since 2026-10-15) ──────
 
+def _adds(port_df, scanner=None, news=None, held_data=None, **kw):
+    """add_positions from a BULL-day _grow_today (the converted equivalent of
+    the retired scanner-only add lane's tests)."""
+    return _grow_today(port_df, scanner, news or [], held_data or {}, _TODAY,
+                       100_000.0, {"tone": "bull"}, **kw)["add_positions"]
 
-def test_scanner_pick_excluded_when_already_held():
-    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
-    scanner = _scanner_df([{"ticker": "HELD", "score": 80.0}])
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY)
-    assert find_item(items, "HELD") is None
-
-
-def test_scanner_pick_excluded_when_act_blocked():
-    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
-    scanner = _scanner_df([{"ticker": "NEW", "score": 80.0}])
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY, act_today=[{"ticker": "NEW"}])
-    assert find_item(items, "NEW") is None
-
-
-def test_scanner_pick_excluded_when_review_blocked():
-    # 2026-07-30 coordination-gap fix: a review-origin call (e.g. earnings-
-    # overweight TRIM_TO_TARGET) must suppress a new_pick the same way an
-    # act_today card does — previously only act_today was checked here.
-    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
-    scanner = _scanner_df([{"ticker": "NEW", "score": 80.0}])
-    review_list = [{"ticker": "NEW", "action": {"type": "TRIM_TO_TARGET"}}]
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY, review_list=review_list)
-    assert find_item(items, "NEW") is None
-
-
-def test_scanner_pick_excluded_below_composite_buy():
-    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
-    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY - 1}])
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY)
-    assert find_item(items, "NEW") is None
-
-
-# ── _buy_candidates: pre-purchase deterioration warning (2026-09-17) ────────
-# Same warn-only cross-check as _grow_today's new_picks (see the _grow_today
-# precedent tests + _det_candidate_df/_det_spy_df fixtures further below in
-# this file) and Watchlist's ENTER_NOW cards — wired here into the last of
-# the three surfaces, Grow Today's own "More Buy Candidates" feed.
-
-def test_buy_candidates_new_pick_gets_deterioration_warning_not_suppressed():
-    """A deteriorating candidate must still appear in new_pick items,
-    annotated — never suppressed or removed. Same-count regression guard:
-    with the feature exercised, the item count must equal the no-signal case.
-    """
-    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
-    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "price": 90.0}])
-    composites = {
-        "NEW": {
-            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
-            "fundamentals_available": True, "df": _det_candidate_df(),
-        },
-    }
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY,
-                             composites=composites, spy_df=_det_spy_df())
-    item = find_item(items, "NEW")
-    assert item is not None
-    assert item["type"] == "new_pick"
-    assert item["deterioration_warning"] is not None
-    assert "NEW" in item["deterioration_warning"]
-    assert "own recent price action" in item["deterioration_warning"]
-
-    # Same ticker, no deteriorating history (no "df") -> no warning, but the
-    # item still appears — proves the count is unaffected either way.
-    composites_clean = {
-        "NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True},
-    }
-    items_clean = _buy_candidates(port_df, scanner, [], {}, _TODAY,
-                                   composites=composites_clean, spy_df=_det_spy_df())
-    item_clean = find_item(items_clean, "NEW")
-    assert item_clean is not None
-    assert item_clean["deterioration_warning"] is None
-    assert len(items) == len(items_clean)
-
-
-def test_buy_candidates_deterioration_warning_fails_safe_to_watch_without_spy_df():
-    """Without spy_df, rel_strength defaults to 0.0 inside assess_holding, so
-    the TRIM tier (rel_strength < 0) can never fire — a fail-safe UNDER-warn,
-    not a crash. The same candidate must NOT be flagged TRIM here.
-    """
-    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
-    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "price": 90.0}])
-    composites = {
-        "NEW": {
-            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
-            "fundamentals_available": True, "df": _det_candidate_df(),
-        },
-    }
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY,
-                             composites=composites)   # spy_df not passed -> None
-    item = find_item(items, "NEW")
-    assert item is not None
-    if item["deterioration_warning"] is not None:
-        assert "a weakening trend" not in item["deterioration_warning"]  # TRIM phrase
-
-
-def test_buy_candidates_deterioration_warning_flags_trim_with_real_spy_df():
-    """With a real weak-vs-SPY benchmark supplied, the SAME candidate DOES get
-    flagged — proves the spy_df plumbing works end to end, not just that the
-    None case fails safe.
-    """
-    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
-    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "price": 90.0}])
-    composites = {
-        "NEW": {
-            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
-            "fundamentals_available": True, "df": _det_candidate_df(),
-        },
-    }
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY,
-                             composites=composites, spy_df=_det_spy_df())
-    item = find_item(items, "NEW")
-    assert item is not None
-    assert item["deterioration_warning"] is not None
-    assert "a weakening trend" in item["deterioration_warning"]  # TRIM tier phrase
-
-
-def test_buy_candidates_add_winner_never_gets_deterioration_warning():
-    """Scope-isolation guard: the add-to-winner block describes an
-    ALREADY-HELD position, not a not-yet-owned candidate, and must never
-    carry a non-None deterioration_warning — even when the identical
-    deteriorating fixture is attached to that same held ticker's composites
-    entry. Proves the add-to-winner block was deliberately left untouched.
-    """
-    port_df = make_port_df([_winner_row(ticker="AAA")])
-    composites = {
-        "AAA": {
-            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
-            "fundamentals_available": True, "df": _det_candidate_df(),
-        },
-    }
-    items = _buy_candidates(port_df, None, [], {}, _TODAY,
-                             composites=composites, spy_df=_det_spy_df())
-    item = find_item(items, "AAA")
-    assert item is not None
-    assert item["type"] == "add_winner"
-    assert item.get("deterioration_warning") is None
-
-
-# ── _buy_candidates: add-to-winner ────────────────────────────────────────────
 
 def _winner_row(**overrides):
     row = dict(
@@ -283,47 +145,60 @@ def _winner_row(**overrides):
     return row
 
 
-def test_add_to_winner_included_when_all_conditions_met():
-    port_df = make_port_df([_winner_row()])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY)
+def test_add_positions_never_carry_a_deterioration_warning():
+    """Scope isolation (converted from the retired buy-candidates lane): an
+    add-to-winner describes an ALREADY-HELD position and never carries a
+    pre-purchase deterioration_warning, even with a deteriorating bundle."""
+    port_df = make_port_df([_winner_row(ticker="AAA")])
+    composites = {"AAA": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
+                          "fundamentals_available": True, "df": _det_candidate_df()}}
+    items = _adds(port_df, composites=composites, spy_df=_det_spy_df())
     item = find_item(items, "AAA")
     assert item is not None
-    assert item["type"] == "add_winner"
+    assert item.get("deterioration_warning") is None
+
+
+def test_add_to_winner_included_when_all_conditions_met():
+    port_df = make_port_df([_winner_row()])
+    items = _adds(port_df)
+    item = find_item(items, "AAA")
+    assert item is not None
+    assert item["sizing"] is not None  # a held add IS sized (overflow never is)
 
 
 def test_add_to_winner_suppressed_when_gap_too_small():
     port_df = make_port_df([_winner_row(gap_to_stop=ADD_WINNER_MIN_GAP_PCT - 1)])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY)
+    items = _adds(port_df)
     assert find_item(items, "AAA") is None
 
 
 def test_add_to_winner_suppressed_when_signal_not_strong_buy():
     port_df = make_port_df([_winner_row(signal="Buy")])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY)
+    items = _adds(port_df)
     assert find_item(items, "AAA") is None
 
 
 def test_add_to_winner_suppressed_when_act_blocked():
     port_df = make_port_df([_winner_row()])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY, act_today=[{"ticker": "AAA"}])
+    items = _adds(port_df, act_today=[{"ticker": "AAA"}])
     assert find_item(items, "AAA") is None
 
 
 def test_add_to_winner_suppressed_when_review_blocked():
-    # 2026-07-30 coordination-gap fix (BKNG incident): _buy_candidates() has its
+    # 2026-07-30 coordination-gap fix (BKNG incident): the retired second add lane had its
     # own independent add-to-winner block with its own _act_blocked set, which
     # previously only read act_today — a review-origin earnings-overweight-trim
     # never suppressed this surface's own "ADD — Winning Position" pick.
     port_df = make_port_df([_winner_row()])
     review_list = [{"ticker": "AAA", "action": {"type": "TRIM_TO_TARGET"}}]
-    items = _buy_candidates(port_df, None, [], {}, _TODAY, review_list=review_list)
+    items = _adds(port_df, review_list=review_list)
     assert find_item(items, "AAA") is None
 
 
 def test_add_to_winner_suppressed_by_recent_add_cooldown():
     port_df = make_port_df([_winner_row()])
     held_data = {"AAA": {"days_since_last_buy": 2}}
-    items = _buy_candidates(port_df, None, [], held_data, _TODAY)
+    items = _adds(port_df, held_data=held_data)
     assert find_item(items, "AAA") is None
 
 
@@ -333,20 +208,21 @@ def test_add_to_winner_suppressed_by_risk_advisor_trim_conflict():
         "priority": "HIGH", "type": "beta", "title": "Beta rec",
         "root_tickers": [{"ticker": "AAA"}],
     }]
-    items = _buy_candidates(port_df, None, [], {}, _TODAY, risk_recs=risk_recs)
+    items = _adds(port_df, risk_recs=risk_recs)
     assert find_item(items, "AAA") is None
 
 
 def test_add_to_winner_suppressed_at_single_name_ceiling():
     port_df = make_port_df([_winner_row(weight=SINGLE_NAME_CEILING)])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY)
+    items = _adds(port_df)
     assert find_item(items, "AAA") is None
 
 
 def test_add_to_winner_suppressed_by_deterioration_watch():
     port_df = make_port_df([_winner_row()])
-    deterioration = [{"ticker": "AAA", "tier": "WATCH"}]
-    items = _buy_candidates(port_df, None, [], {}, _TODAY, deterioration=deterioration)
+    deterioration = [{"ticker": "AAA", "tier": "WATCH", "dd_from_peak_pct": 12.0,
+                      "peak": 110.0, "trend_ma": DETERIORATION_TREND_MA}]
+    items = _adds(port_df, deterioration=deterioration)
     assert find_item(items, "AAA") is None
 
 
@@ -358,43 +234,13 @@ def test_add_to_winner_suppressed_by_drift_trim_overweight():
         _winner_row(ticker="AAA", weight=60.0),
         {"ticker": "BBB", "weight": 40.0},
     ])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY)
+    items = _adds(port_df)
     assert find_item(items, "AAA") is None
-
-
-# ── _buy_candidates: sector concentration (SHOP whiplash fix) ────────────────
-# _buy_candidates previously had NO sector-concentration awareness at all —
-# closed alongside _grow_today's gate in the same pass (a buy recommended here,
-# hours later flagged for a full sector-cap trim, is the exact whiplash bug).
-
-def test_scanner_pick_suppressed_at_sector_hard_cap():
-    port_df = make_port_df([{"ticker": "HELD", "weight": SECTOR_CEILING + 5.0, "sector": "Tech"}])
-    scanner = _scanner_df([{"ticker": "NEW", "score": 80.0, "sector": "Tech"}])
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY)
-    assert find_item(items, "NEW") is None
-
-
-def test_scanner_pick_gets_elevated_sector_warning_not_suppressed():
-    port_df = make_port_df([{"ticker": "HELD", "weight": SECTOR_ELEVATED + 2.0, "sector": "Tech"}])
-    scanner = _scanner_df([{"ticker": "NEW", "score": 80.0, "sector": "Tech"}])
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY)
-    item = find_item(items, "NEW")
-    assert item is not None
-    assert item["sector_elevated_warning"] is not None
-
-
-def test_scanner_pick_no_warning_below_elevated_band():
-    port_df = make_port_df([{"ticker": "HELD", "weight": SECTOR_ELEVATED - 10.0, "sector": "Tech"}])
-    scanner = _scanner_df([{"ticker": "NEW", "score": 80.0, "sector": "Tech"}])
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY)
-    item = find_item(items, "NEW")
-    assert item is not None
-    assert item["sector_elevated_warning"] is None
 
 
 def test_add_to_winner_suppressed_at_sector_hard_cap():
     port_df = make_port_df([_winner_row(weight=SECTOR_CEILING + 5.0, sector="Tech")])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY)
+    items = _adds(port_df)
     assert find_item(items, "AAA") is None
 
 
@@ -405,28 +251,10 @@ def test_add_to_winner_gets_elevated_sector_warning_not_suppressed():
         _winner_row(weight=10.0, sector="Tech"),
         {"ticker": "BBB", "weight": SECTOR_ELEVATED + 2.0 - 10.0, "sector": "Tech"},
     ])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY)
+    items = _adds(port_df)
     item = find_item(items, "AAA")
     assert item is not None
     assert item["sector_elevated_warning"] is not None
-
-
-def test_buy_candidates_scanner_pick_placeholder_sector_breach_excluded():
-    """D3 sibling fix (sector_gate_spec.md, 2026-09-30): _buy_candidates'
-    scanner-pick sector gate used to check the RAW scanner row Sector
-    ("Watchlist" for every watchlist extra, scanner.py), which could never
-    match a real breached bucket. gate_sector now falls back to the
-    composite bundle's own provider sector when the row label is a
-    placeholder, so a breach is actually caught (silent continue -- this
-    list has no suppressed-candidates bucket to record into)."""
-    port_df = make_port_df([{"ticker": "HELD", "weight": SECTOR_CEILING + 5.0, "sector": "Financials"}])
-    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Watchlist"}])
-    composites = {
-        "NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "sector": "Financials",
-                "fundamentals_available": True, "val_available": True},
-    }
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY, composites=composites)
-    assert find_item(items, "NEW") is None
 
 
 # ── _grow_today: sector concentration (the reported SHOP live-brief bug) ────
@@ -696,7 +524,7 @@ def test_build_daily_briefing_top_level_keys_exclude_grow_today_fields():
         portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
     )
     assert set(brief.keys()) == {
-        "act_today", "buy_candidates", "review_list", "grow_today", "portfolio_tuneup",
+        "act_today", "review_list", "grow_today", "portfolio_tuneup",
     }
     grow_only_keys = (
         "tone", "sp500_pct", "new_picks", "sector_blocked_picks",
@@ -842,25 +670,23 @@ def test_grow_today_bear_day_always_carries_cluster_keys():
     assert grow["cluster_gate_checked"] is True
 
 
-def test_buy_candidates_add_winner_suppressed_by_cluster_add_block():
-    # The SEPARATE leak path: _buy_candidates' own independent add-to-winner
-    # lane needs the identical skip, confirmed during design as a real second
-    # leak (a ticker suppressed in _grow_today would otherwise still surface
-    # here as "ADD — Winning Position").
+def test_add_winner_suppressed_by_cluster_add_block():
+    # Converted 2026-10-15 from the retired second-lane leak-path test: there is
+    # now ONE add lane, and the G-25 skip must hold on it.
     port_df = make_port_df([_winner_row()])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY, cluster_add_blocks=_cab())
+    items = _adds(port_df, cluster_add_blocks=_cab())
     assert find_item(items, "AAA") is None
 
 
-def test_buy_candidates_add_winner_cluster_add_blocks_none_is_noop():
+def test_add_winner_cluster_add_blocks_none_is_noop():
     port_df = make_port_df([_winner_row()])
-    items_default = _buy_candidates(port_df, None, [], {}, _TODAY)
-    items_explicit_none = _buy_candidates(port_df, None, [], {}, _TODAY, cluster_add_blocks=None)
+    items_default = _adds(port_df)
+    items_explicit_none = _adds(port_df, cluster_add_blocks=None)
     assert find_item(items_default, "AAA") is not None
     assert items_default == items_explicit_none
 
 
-def test_build_daily_briefing_threads_cluster_add_blocks_into_both_lanes():
+def test_build_daily_briefing_threads_cluster_add_blocks_into_the_add_lane():
     port_df = make_port_df([_winner_row()])
     brief = build_daily_briefing(
         port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
@@ -870,7 +696,7 @@ def test_build_daily_briefing_threads_cluster_add_blocks_into_both_lanes():
     )
     assert find_item(brief["grow_today"]["add_positions"], "AAA") is None
     assert find_item(brief["grow_today"]["cluster_blocked_adds"], "AAA") is not None
-    assert find_item(brief["buy_candidates"], "AAA") is None
+    assert "buy_candidates" not in brief
 
 
 def test_build_daily_briefing_cluster_add_blocks_default_none_regression_safe():
@@ -906,7 +732,7 @@ def test_grow_today_pair_add_blocks_none_is_regression_safe_noop():
     assert find_item(grow_default["add_positions"], "AAA") is not None
     assert grow_default["pair_blocked_adds"] == []
     assert grow_default["pair_gate_checked"] is False
-    assert grow_default["pair_buy_lane_skips"] is None
+    assert "pair_buy_lane_skips" not in grow_default
 
 
 def test_grow_today_add_suppressed_by_pair_add_block():
@@ -943,16 +769,15 @@ def test_grow_today_pair_add_blocks_none_fails_open_uncaptioned():
 
 
 def test_grow_today_bear_day_always_carries_pair_keys():
-    # Bear-day early return never evaluates any candidate -- the three G-26
-    # keys must still be present. pair_buy_lane_skips is passed through
-    # UNCHANGED (never recomputed) from the caller's own buy_lane_pair_skips.
+    # Bear-day early return never evaluates any candidate -- the G-26 keys
+    # must still be present (pair_buy_lane_skips was retired 2026-10-15).
     port_df = make_port_df([_winner_row()])
     grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0,
                        {"tone": "bear", "sp500_pct": -3.0},
-                       pair_add_blocks=_pab(), buy_lane_pair_skips=["CCC"])
+                       pair_add_blocks=_pab())
     assert grow["pair_blocked_adds"] == []
     assert grow["pair_gate_checked"] is True
-    assert grow["pair_buy_lane_skips"] == ["CCC"]
+    assert "pair_buy_lane_skips" not in grow
 
 
 def test_grow_today_check_order_g26_before_g25():
@@ -998,38 +823,21 @@ def test_grow_today_pair_add_blocks_none_does_not_disable_g04_ceiling():
     assert find_item(grow["concentration_blocked_adds"], "AAA") is not None
 
 
-def test_buy_candidates_add_winner_suppressed_by_pair_add_block():
+def test_add_winner_suppressed_by_pair_add_block():
     port_df = make_port_df([_winner_row()])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY, pair_add_blocks=_pab())
+    items = _adds(port_df, pair_add_blocks=_pab())
     assert find_item(items, "AAA") is None
 
 
-def test_buy_candidates_add_winner_pair_add_blocks_none_is_noop():
+def test_add_winner_pair_add_blocks_none_is_noop():
     port_df = make_port_df([_winner_row()])
-    items_default = _buy_candidates(port_df, None, [], {}, _TODAY)
-    items_explicit_none = _buy_candidates(port_df, None, [], {}, _TODAY, pair_add_blocks=None)
+    items_default = _adds(port_df)
+    items_explicit_none = _adds(port_df, pair_add_blocks=None)
     assert find_item(items_default, "AAA") is not None
     assert items_default == items_explicit_none
 
 
-def test_buy_candidates_pair_skip_recorded_in_sink():
-    # The disclosure plumbing: a silent skip must still be recorded into the
-    # caller-supplied sink list.
-    port_df = make_port_df([_winner_row()])
-    sink: list = []
-    items = _buy_candidates(port_df, None, [], {}, _TODAY, pair_add_blocks=_pab(), pair_skip_sink=sink)
-    assert find_item(items, "AAA") is None
-    assert sink == ["AAA"]
-
-
-def test_buy_candidates_pair_skip_sink_untouched_when_map_is_none():
-    port_df = make_port_df([_winner_row()])
-    sink: list = []
-    _buy_candidates(port_df, None, [], {}, _TODAY, pair_add_blocks=None, pair_skip_sink=sink)
-    assert sink == []
-
-
-def test_build_daily_briefing_threads_pair_add_blocks_into_both_lanes():
+def test_build_daily_briefing_threads_pair_add_blocks_into_the_add_lane():
     port_df = make_port_df([_winner_row()])
     brief = build_daily_briefing(
         port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
@@ -1039,7 +847,7 @@ def test_build_daily_briefing_threads_pair_add_blocks_into_both_lanes():
     )
     assert find_item(brief["grow_today"]["add_positions"], "AAA") is None
     assert find_item(brief["grow_today"]["pair_blocked_adds"], "AAA") is not None
-    assert find_item(brief["buy_candidates"], "AAA") is None
+    assert "buy_candidates" not in brief
 
 
 def test_build_daily_briefing_pair_add_blocks_default_none_regression_safe():
@@ -1051,24 +859,7 @@ def test_build_daily_briefing_pair_add_blocks_default_none_regression_safe():
     )
     assert find_item(brief["grow_today"]["add_positions"], "AAA") is not None
     assert brief["grow_today"]["pair_gate_checked"] is False
-    assert brief["grow_today"]["pair_buy_lane_skips"] is None
-
-
-def test_build_daily_briefing_pair_buy_lane_skips_populated_on_bear_day():
-    # _buy_candidates is NOT tone-gated, so its add-to-winner lane still runs
-    # (and can still silently skip a G-26 ticker) on a bear day, even though
-    # _grow_today's own bull-only add loop never runs at all -- the skip must
-    # still surface via pair_buy_lane_skips so SOMETHING discloses it.
-    port_df = make_port_df([_winner_row()])
-    brief = build_daily_briefing(
-        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
-        macro_events=[], held_data={}, scanner_results=None,
-        portfolio_value=100_000.0, today=_TODAY,
-        market_context={"tone": "bear", "sp500_pct": -3.0},
-        pair_add_blocks=_pab(),
-    )
-    assert brief["grow_today"]["pair_blocked_adds"] == []
-    assert brief["grow_today"]["pair_buy_lane_skips"] == ["AAA"]
+    assert "pair_buy_lane_skips" not in brief["grow_today"]
 
 
 # ── Disclosure-only G-25/G-26 follow-on: corr_unchecked passthrough ──────────
@@ -1229,14 +1020,13 @@ def test_build_daily_briefing_corr_unchecked_on_bear_day():
 
 def test_build_daily_briefing_corr_unchecked_never_changes_any_decision():
     # Same non-suppression guarantee as the _grow_today-level test above, but
-    # at the full build_daily_briefing level, which also exercises
-    # _buy_candidates' independent add-to-winner lane (buy_candidates key).
+    # at the full build_daily_briefing level.
     port_df = make_port_df([_winner_row()])
     # Both gates checked-and-clean ({}), NOT _cab()/_pab() -- same vacuity
     # defect as the _grow_today-level test above: those fixtures block "AAA",
-    # the only add candidate, so buy_candidates was [] in both runs and the
+    # the only add candidate, so add_positions was [] in both runs and the
     # comparison proved nothing. See that test's comment for the mutation an
-    # Opus review used to demonstrate it.
+    # Opus review used to demonstrate it. The add lane is Grow Today's own.
     kwargs = dict(
         port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
         macro_events=[], held_data={}, scanner_results=None,
@@ -1246,18 +1036,13 @@ def test_build_daily_briefing_corr_unchecked_never_changes_any_decision():
     brief_none = build_daily_briefing(**kwargs, corr_unchecked=None)
     brief_unchecked = build_daily_briefing(**kwargs, corr_unchecked=["BBB"])
 
-    # _buy_candidates' independent add-to-winner lane really produced an add in
-    # BOTH runs -- without this the equality assertions below are [] == [].
-    assert ("AAA", "add_winner") in [
-        (c.get("ticker"), c.get("type")) for c in brief_none["buy_candidates"]
-    ]
-    assert ("AAA", "add_winner") in [
-        (c.get("ticker"), c.get("type")) for c in brief_unchecked["buy_candidates"]
-    ]
+    # The add lane really produced an add in BOTH runs -- without this the
+    # equality assertions below are [] == [].
+    assert [a["ticker"] for a in brief_none["grow_today"]["add_positions"]] == ["AAA"]
+    assert [a["ticker"] for a in brief_unchecked["grow_today"]["add_positions"]] == ["AAA"]
 
     assert brief_none["act_today"] == brief_unchecked["act_today"]
     assert brief_none["review_list"] == brief_unchecked["review_list"]
-    assert brief_none["buy_candidates"] == brief_unchecked["buy_candidates"]
     assert brief_none["portfolio_tuneup"] == brief_unchecked["portfolio_tuneup"]
     for key in brief_none["grow_today"]:
         if key == "corr_unchecked":
@@ -1419,8 +1204,7 @@ def test_cluster_add_gate_thin_coverage_matches_explicit_empty_dict_in_grow_toda
 
 
 def test_thin_coverage_matches_explicit_empty_dict_in_build_daily_briefing():
-    # Same invariant at the full build_daily_briefing level (also exercises
-    # _buy_candidates' independent add-to-winner lane, i.e. buy_candidates).
+    # Same invariant at the full build_daily_briefing level.
     port_df = make_port_df([_winner_row()])
     df = _thin_corr_df(["AAA", "BBB"], {("AAA", "BBB"): 0.9})
     # Warning tier, so the map is legitimately EMPTY -- the only case thin
@@ -1445,21 +1229,12 @@ def test_thin_coverage_matches_explicit_empty_dict_in_build_daily_briefing():
     brief_none = build_daily_briefing(**kwargs, pair_add_blocks=thin_pair_blocks)
     brief_empty = build_daily_briefing(**kwargs, pair_add_blocks={})
 
-    assert ("AAA", "add_winner") in [
-        (c.get("ticker"), c.get("type")) for c in brief_none["buy_candidates"]
-    ]
-    assert ("AAA", "add_winner") in [
-        (c.get("ticker"), c.get("type")) for c in brief_empty["buy_candidates"]
-    ]
-    assert brief_none["buy_candidates"] == brief_empty["buy_candidates"]
-    # pair_gate_checked and pair_buy_lane_skips are the two render-layer
-    # "couldn't check" disclosure fields that legitimately differ between
-    # None (couldn't check) and {} (checked, clean) -- same established
-    # difference the pre-existing None-vs-omitted regression tests above
-    # already pin (e.g. test_grow_today_pair_add_blocks_none_is_regression_
-    # safe_noop asserts pair_buy_lane_skips is None only on the None path).
-    # Every actual SUPPRESSION-decision key must still match exactly.
-    _disclosure_only_keys = {"pair_gate_checked", "pair_buy_lane_skips"}
+    assert [a["ticker"] for a in brief_none["grow_today"]["add_positions"]] == ["AAA"]
+    assert [a["ticker"] for a in brief_empty["grow_today"]["add_positions"]] == ["AAA"]
+    # pair_gate_checked is the render-layer "couldn't check" disclosure field
+    # that legitimately differs between None (couldn't check) and {} (checked,
+    # clean). Every actual SUPPRESSION-decision key must still match exactly.
+    _disclosure_only_keys = {"pair_gate_checked"}
     for key in brief_none["grow_today"]:
         if key in _disclosure_only_keys:
             continue
@@ -2131,25 +1906,11 @@ def test_stop_breach_suppresses_deterioration_exit_on_same_ticker():
 # the exit. The sold_today parameter closes this gap by blocking just-sold
 # tickers from re-appearing as new-pick or add-to-winner recommendations.
 
-def test_buy_candidates_scanner_pick_suppressed_by_sold_today():
-    port_df = make_port_df([])
-    scanner = _scanner_df([{"ticker": "SAP", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY, sold_today={"SAP"})
-    assert find_item(items, "SAP") is None
-
-
-def test_buy_candidates_scanner_pick_not_suppressed_without_sold_today():
-    port_df = make_port_df([])
-    scanner = _scanner_df([{"ticker": "SAP", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY)
-    assert find_item(items, "SAP") is not None
-
-
-def test_buy_candidates_add_to_winner_suppressed_by_sold_today():
+def test_add_to_winner_suppressed_by_sold_today():
     # Add-to-winner block: SAP is currently held (so it would normally qualify)
     # but was partially sold today — must be blocked.
     port_df = make_port_df([{"ticker": "SAP", "weight": 5.0, "score": COMPOSITE_BUY + 5}])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY, sold_today={"SAP"})
+    items = _adds(port_df, sold_today={"SAP"})
     assert find_item(items, "SAP") is None
 
 
@@ -2280,7 +2041,7 @@ def test_held_tickers_helpers_tolerate_every_empty_shape():
 
 def test_build_daily_briefing_survives_a_zero_holdings_book():
     """The whole brief must build for a user who holds nothing — this raised
-    KeyError('Ticker') in _grow_today, _act_today, _buy_candidates and
+    KeyError('Ticker') in _grow_today, _act_today and
     _review_list before the fix (latent: upstream guards stopped it reaching
     here in production)."""
     scanner = _scanner_df([{"ticker": "SAP", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
@@ -2303,78 +2064,15 @@ def test_build_daily_briefing_survives_a_zero_holdings_book():
 # The direct-call tests below pin the function-level contract: that
 # scanner_row_is_synthetic=True works correctly when the flag is handed to
 # _cross_reference.  They do NOT verify the wiring at the call site inside
-# _buy_candidates.  The two WIRING tests below (test_add_winner_via_buy_candidates_*)
-# fill that gap — they go through the real producer so a dropped kwarg or a
-# re-added RSI: 0 in the synthetic dict shows up as a test failure.
+# the former buy-candidates lane (retired 2026-10-15; its two WIRING tests
+# were removed with it -- Grow Today's add loop does not call _cross_reference,
+# queued as N2 in docs/plans/grow-today-owns-buys.md).
 
 
 # ── Wiring test A — RSI / key contract through the real producer ─────────────
-def test_add_winner_via_buy_candidates_xref_wiring():
-    """Goes through _buy_candidates (the real producer) rather than calling
-    _cross_reference directly.  Verifies that:
-    1. No RSI clause appears in xref agreed/conflicts (Layer 1 skipped on the
-       real add-winner path).
-    2. The composite score appears in at most one entry (not doubled across
-       layers).
-    3. The item itself carries no truthy rsi / mom_1m keys.
-
-    Mutation guide - VERIFIED, and narrower than it first looks:
-    * Flip the call site (daily_briefing.py ~line 2148) to
-      scanner_row_is_synthetic=False → Layer 1 renders for a synthetic
-      row, so the composite appears in BOTH Layer 1 and Layer 2 and
-      ASSERTION 2 (duplicate score) fails. Combined with restoring
-      "RSI": 0 to the synthetic dict, assertion 1 fails too.
-    * Restoring "RSI": 0 ALONE is INERT and this test still passes -
-      Layer 1 is skipped for synthetic rows, so the key is never read.
-      Do not read that as the guard being weak; it is the flag, not the
-      absent key, that does the work. Stated precisely because an
-      overstated mutation guide is how a future reader over-trusts a test.
-    """
-    scr = float(COMPOSITE_BUY + 20)
-    port_df = make_port_df([_winner_row(score=scr)])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY)
-    item = find_item(items, "AAA")
-    assert item is not None and item["type"] == "add_winner"
-    xref = item["xref"]
-    all_entries = xref["agreed"] + xref["conflicts"]
-    all_text = " ".join(all_entries)
-    # 1 — no RSI in display output
-    assert not re.search(r"\bRSI\b", all_text), (
-        f"RSI appeared in xref via real path: {all_entries}"
-    )
-    # 2 — composite score at most once (Layer 1 omitted, Layer 2 has it once)
-    assert all_text.count(f"{scr:.0f}") <= 1, (
-        f"Score {scr:.0f} appeared >1 times: {all_entries}"
-    )
-    # 3 — item-level key contract
-    assert not item.get("rsi"), f"add_winner item must not carry truthy rsi; got {item.get('rsi')}"
-    assert not item.get("mom_1m"), f"add_winner item must not carry truthy mom_1m; got {item.get('mom_1m')}"
-
-
 # ── Wiring test B — fail-open boundary through the real producer ──────────────
-def test_add_winner_negative_news_skip_via_buy_candidates():
-    """The Negative-News skip gate (signal_reconciliation.py:119) fires when
-    momentum_score >= COMPOSITE_BUY AND news is negative.  For a synthetic
-    add-winner row, momentum_score = scanner_row['Score'] = port_df['Score'].
-    This test goes through _buy_candidates to verify the gate fires on the
-    real path, not just on a hand-constructed dict.
-
-    Mutation guide: change 'Score': 0 in the _synthetic dict inside
-    _buy_candidates (~line 2140) → scan_score = 0 < COMPOSITE_BUY →
-    reconcile_signals returns 'verify', not 'skip' → assertion fails.
-    """
-    news = [{"ticker": "AAA", "compound": NEWS_SENTIMENT_NEGATIVE - 0.1, "headline": "bad"}]
-    port_df = make_port_df([_winner_row(score=float(COMPOSITE_BUY))])
-    items = _buy_candidates(port_df, None, news, {}, _TODAY)
-    item = find_item(items, "AAA")
-    assert item is not None and item["type"] == "add_winner"
-    assert item["xref"]["verdict_reconciled"]["verdict"] == "skip", (
-        f"Expected reconciled skip; got {item['xref']['verdict_reconciled']}"
-    )
-
-
 def _synth_row():
-    """Minimal synthetic dict that matches what _buy_candidates builds."""
+    """Minimal synthetic dict shaped like an add-to-winner scanner row."""
     return {"Signal": "Strong Buy", "Score": float(COMPOSITE_BUY + 15), "Trend": "Strong Buy"}
 
 
@@ -2564,43 +2262,6 @@ def test_real_scanner_row_missing_rsi_omits_rsi_clause():
 
 
 # ── Test 7 — item-key contract ────────────────────────────────────────────────
-def test_add_winner_item_exposes_no_rsi_or_mom1m():
-    """add_winner items must not carry truthy rsi or mom_1m keys — those
-    fields are intentionally absent now that Layer 1 is skipped.
-    """
-    port_df = make_port_df([_winner_row()])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY)
-    item = find_item(items, "AAA")
-    assert item is not None and item["type"] == "add_winner"
-    # Keys either absent entirely or present as None — never truthy
-    assert not item.get("rsi"), f"add_winner must not carry truthy rsi; got {item.get('rsi')}"
-    assert not item.get("mom_1m"), f"add_winner must not carry truthy mom_1m; got {item.get('mom_1m')}"
-
-
-def test_new_pick_item_rsi_is_none_when_source_row_has_no_rsi():
-    """new_pick items must expose rsi=None (not 0.0) when the scanner row
-    lacks the 'RSI' key — the None-preserving _f(..., None) contract.
-    """
-    # Build a scanner df with no RSI column
-    import pandas as pd
-    scanner_no_rsi = pd.DataFrame([{
-        "Ticker": "NEW", "Score": float(COMPOSITE_BUY + 10), "Price": 50.0,
-        "Signal": "Buy", "Sector": "Tech", "Trend": "Uptrend",
-        # '1M Momentum' and 'RSI' deliberately absent
-    }])
-    port_df = make_port_df([{"ticker": "HELD"}])
-    composites = {
-        "NEW": {"rec": {"label": "Buy"}, "total": float(COMPOSITE_BUY + 10),
-                "fundamentals_available": True},
-    }
-    items = _buy_candidates(port_df, scanner_no_rsi, [], {}, _TODAY,
-                            composites=composites)
-    item = find_item(items, "NEW")
-    assert item is not None and item["type"] == "new_pick"
-    assert item["rsi"] is None, f"Expected rsi=None; got {item['rsi']}"
-    assert item["mom_1m"] is None, f"Expected mom_1m=None; got {item['mom_1m']}"
-
-
 # ── momentum_available wiring — docs/plans/signal-reconciliation-momentum-available.md ──
 #
 # The add-winner path's synthetic scanner row makes reconcile_signals compare
@@ -2610,43 +2271,6 @@ def test_new_pick_item_rsi_is_none_when_source_row_has_no_rsi():
 # momentum_available=not scanner_row_is_synthetic into reconcile_signals.
 # These two tests drive the real producer end to end (not the unit function
 # directly) so a dropped kwarg at the wiring site shows up as a failure here.
-
-def test_add_winner_synthetic_path_one_liner_is_honest_about_the_single_source():
-    """Synthetic add-winner path: the reconciled one_liner must say there is
-    no separate scanner momentum reading, and must never claim two sources
-    agree.
-
-    Mutation guide: drop `momentum_available=not scanner_row_is_synthetic` at
-    daily_briefing.py:596 (or hardcode momentum_available=True) — the
-    one_liner reverts to "technical momentum and full-score analysis agree"
-    and this test fails.
-    """
-    port_df = make_port_df([_winner_row()])
-    items = _buy_candidates(port_df, None, [], {}, _TODAY)
-    item = find_item(items, "AAA")
-    assert item is not None and item["type"] == "add_winner"
-    one_liner = item["xref"]["verdict_reconciled"]["one_liner"]
-    assert "no separate scanner momentum reading" in one_liner, one_liner
-    assert "agree" not in one_liner, one_liner
-
-
-def test_new_pick_real_scanner_path_one_liner_still_claims_agreement():
-    """A real scanner new_pick (scanner_row_is_synthetic defaults False) with
-    a confirming composite must still render the "...agree..." one-liner —
-    proves momentum_available defaulted True on the non-synthetic path and
-    the new kwarg didn't leak into surfaces that have a real momentum score.
-    """
-    scanner = _scanner_df([{"ticker": "NEW", "score": float(COMPOSITE_BUY + 10)}])
-    port_df = make_port_df([{"ticker": "HELD"}])
-    composites = {
-        "NEW": {"rec": {"label": "Strong Buy"}, "total": float(COMPOSITE_BUY + 10)},
-    }
-    items = _buy_candidates(port_df, scanner, [], {}, _TODAY, composites=composites)
-    item = find_item(items, "NEW")
-    assert item is not None and item["type"] == "new_pick"
-    one_liner = item["xref"]["verdict_reconciled"]["one_liner"]
-    assert "technical momentum and full-score analysis agree" in one_liner, one_liner
-
 
 # ── _position_size_for_render — portfolio_unknown marker (2026-08-27) ──────────
 
