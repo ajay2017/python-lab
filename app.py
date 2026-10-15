@@ -9315,11 +9315,36 @@ if page == "🏠 Home":
                     f"book, above the {int(SINGLE_NAME_CEILING)}% single-name ceiling. This name "
                     f"is too large for this account at the current cap."
                 )
+            elif _sz.get("capital_infeasible"):
+                # F-255 net-capital cap. one_share_capital_pct is None when net
+                # capital <= 0 (margin-called) — same two arms as notify._sizing_cap_note.
+                if _sz.get("one_share_capital_pct") is not None:
+                    st.caption(
+                        f"📐 No size suggested — one share is ~{_sz['one_share_capital_pct']:.0f}% of your "
+                        f"net capital, above the {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap "
+                        f"(margin-aware)."
+                    )
+                else:
+                    st.caption(
+                        "📐 No size suggested — your net capital after the margin debit is at "
+                        "or below zero."
+                    )
+            elif _sz.get("portfolio_unknown"):
+                st.caption(
+                    "📐 Position sizing unavailable — your portfolio value isn't loaded in this "
+                    "session, so any share count would be a guess. Open 🏠 Home to load it."
+                )
             elif _sz.get("stop_infeasible"):
                 st.caption(
                     f"📐 No size suggested — today's price is at or below this name's "
                     f"${_sz['stop_at']:,.2f} ATR stop, so there is no room between entry and stop "
                     f"to size against."
+                )
+            if _sz.get("capital_capped") and _sz.get("capital_pct") is not None:
+                # F-255: applied AFTER the ceiling cap, so it can stack with it (as in the emails).
+                st.caption(
+                    f"📐 Size also capped at {int(NET_CAPITAL_POSITION_CAP_PCT)}% of net capital "
+                    f"(margin-aware) — now ~{float(_sz['capital_pct']):.0f}% of your actual capital."
                 )
             _ac_cov = _ac_cov_map.get(str(_gp["ticker"]).upper())
             if _ac_cov and (_ac_cov.get("consensus_rating") or _ac_cov.get("avg_pt") is not None):
@@ -9606,10 +9631,35 @@ if page == "🏠 Home":
                     f"📐 No add size suggested — one share is ~{_sz['one_share_pct']:.0f}% of your "
                     f"book, above the {int(SINGLE_NAME_CEILING)}% single-name ceiling."
                 )
+            elif _sz.get("capital_infeasible"):
+                # F-255 net-capital cap. one_share_capital_pct is None when net
+                # capital <= 0 (margin-called) — same two arms as notify._sizing_cap_note.
+                if _sz.get("one_share_capital_pct") is not None:
+                    st.caption(
+                        f"📐 No add size suggested — one share is ~{_sz['one_share_capital_pct']:.0f}% of your "
+                        f"net capital, above the {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap "
+                        f"(margin-aware)."
+                    )
+                else:
+                    st.caption(
+                        "📐 No add size suggested — your net capital after the margin debit is at "
+                        "or below zero."
+                    )
+            elif _sz.get("portfolio_unknown"):
+                st.caption(
+                    "📐 Position sizing unavailable — your portfolio value isn't loaded in this "
+                    "session, so any share count would be a guess. Open 🏠 Home to load it."
+                )
             elif _sz.get("stop_infeasible"):
                 st.caption(
                     f"📐 No add size suggested — price is at or below this name's "
                     f"${_sz['stop_at']:,.2f} ATR sizing stop."
+                )
+            if _sz.get("capital_capped") and _sz.get("capital_pct") is not None:
+                # F-255: applied AFTER the ceiling cap, so it can stack with it (as in the emails).
+                st.caption(
+                    f"📐 Add size also capped at {int(NET_CAPITAL_POSITION_CAP_PCT)}% of net capital "
+                    f"(margin-aware) — now ~{float(_sz['capital_pct']):.0f}% of your actual capital."
                 )
             if _ga.get("sector_elevated_warning"):
                 st.caption(f"⚠️ {_ga['sector_elevated_warning']}")
