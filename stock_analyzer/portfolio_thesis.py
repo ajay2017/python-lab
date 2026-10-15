@@ -126,14 +126,24 @@ def _classify_holdings_health(bundle: dict):
 
 
 def _classify_action_posture(bundle: dict, reduce_calls) -> str:
-    buy_candidates = bundle.get("buy_candidates")
-    if buy_candidates is None or not isinstance(buy_candidates, (list, tuple)):
+    # Keys off Grow Today's GATED buckets, never the retired ungated
+    # `buy_candidates` scanner list (non-empty almost daily, so "deploying" was
+    # close to the default). `overflow_picks` (cleared the checks but not
+    # picked, unsized) is deliberately NOT read: pacing-held names are not a
+    # deployment. grow_today None / missing buckets = not checked ->
+    # "unavailable", never "holding".
+    grow_today = bundle.get("grow_today")
+    if not isinstance(grow_today, dict):
+        return "unavailable"
+    new_picks     = grow_today.get("new_picks")
+    add_positions = grow_today.get("add_positions")
+    if not isinstance(new_picks, (list, tuple)) or not isinstance(add_positions, (list, tuple)):
         return "unavailable"
     if not isinstance(reduce_calls, dict):
         return "unavailable"
     if len(reduce_calls) > 0:
         return "de_risking"
-    if len(buy_candidates) > 0:
+    if len(new_picks) > 0 or len(add_positions) > 0:
         return "deploying"
     return "holding"
 
@@ -199,7 +209,7 @@ def _build_prose(claims: dict, engine_trust, today: date) -> str:
     elif action == "de_risking":
         parts.append("Active reduce call(s) are in place — a de-risking week.")
     elif action == "deploying":
-        parts.append("New deployment candidate(s) are active this week.")
+        parts.append("Grow Today has an active buy or add call this week.")
     else:
         parts.append("No new deployments and no active reduce calls — a hold-and-watch week.")
 
@@ -248,7 +258,8 @@ def compose_thesis(
       - "corr_coverage": `portfolio.correlation_coverage()`'s output dict (or
         None) -- the sample-size half of the same persist/withhold decision
       - "holdings_scores": list of composite Scores for currently held positions
-      - "buy_candidates": the Daily Brief's `buy_candidates` list
+      - "grow_today": the Daily Brief's `grow_today` dict (None when the brief
+        is offline); only its `new_picks` / `add_positions` buckets are read
 
     `acct_gate` carries the concentration inputs: {"max_name_wt", "max_sector_wt"}
     (both %, equity-weight basis — the SAME basis the concentration-discipline
@@ -289,7 +300,12 @@ def compose_thesis(
             # old row needs to know which rule produced it). Re-confirmed no
             # production code branches on schema_version/"v" -- only two test
             # assertions do (grep across app.py/db.py/tests, 2026-10-10).
-            "v":           3,
+            # v4 (was 3): `action_posture` now keys off Grow Today's gated
+            # new_picks/add_positions instead of the ungated `buy_candidates`
+            # scanner list, so a v3 "deploying" is not the same measurement
+            # as a v4 one -- grade_prior returns not_comparable for that
+            # claim only across the v3->v4 boundary.
+            "v":           4,
             "thesis_date": today.isoformat(),
             "iso_year":    int(iso_year),
             "iso_week":    int(iso_week),
@@ -302,6 +318,14 @@ def compose_thesis(
         return None
 
 
+def _row_version(row: dict):
+    """`v` (a composed record) else `schema_version` (a DB row); plain None check."""
+    v = row.get("v")
+    if v is None:
+        v = row.get("schema_version")
+    return v
+
+
 def grade_prior(this_week: dict | None, prior_week: dict | None) -> dict | None:
     """Stability ledger: per-claim HELD / SHIFTED / not_comparable, comparing
     `this_week["claims"]` to `prior_week["claims"]`.
@@ -311,6 +335,11 @@ def grade_prior(this_week: dict | None, prior_week: dict | None) -> dict | None:
 
     Per claim (never a single aggregate pass/fail):
       - either side "unavailable"      -> not_comparable
+      - action_posture across a v<4 -> v>=4 boundary -> not_comparable
+        (reason "version_boundary")
+      - action_posture when the prior record's version is unknown (missing or
+        non-int) -> not_comparable, FAIL CLOSED (reason "version_unknown");
+        every saved row carries a version, so unknown means a wiring gap
       - identical non-"unavailable"    -> held
       - different non-"unavailable"    -> shifted (with from/to)
     """
@@ -324,12 +353,29 @@ def grade_prior(this_week: dict | None, prior_week: dict | None) -> dict | None:
         this_claims  = this_claims if isinstance(this_claims, dict) else {}
         prior_claims = prior_claims if isinstance(prior_claims, dict) else {}
 
+        # action_posture changed meaning at v4 (see compose_thesis). FAIL
+        # CLOSED: a prior whose version is unknown (missing or non-int) is
+        # never graded for this claim -- every saved row has carried a version
+        # (stored as the `schema_version` column, which the app may pass as
+        # either `v` or `schema_version`), so unknown only means a wiring gap.
+        this_ver  = _row_version(this_week)
+        prior_ver = _row_version(prior_week)
+        posture_reason = None
+        if not isinstance(prior_ver, int):
+            posture_reason = "version_unknown"
+        elif isinstance(this_ver, int) and prior_ver < 4 <= this_ver:
+            posture_reason = "version_boundary"
+
         ledger: dict[str, dict] = {}
         for key in CLAIM_KEYS:
             this_v  = this_claims.get(key, "unavailable")
             prior_v = prior_claims.get(key, "unavailable")
             if this_v == "unavailable" or prior_v == "unavailable":
                 status = "not_comparable"
+            elif key == "action_posture" and posture_reason is not None:
+                ledger[key] = {"status": "not_comparable", "from": prior_v, "to": this_v,
+                               "reason": posture_reason}
+                continue
             elif this_v == prior_v:
                 status = "held"
             else:

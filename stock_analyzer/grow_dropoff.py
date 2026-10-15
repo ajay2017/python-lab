@@ -68,7 +68,8 @@ def derive_dropoffs(
         The Grow Today output dict (from daily_briefing._grow_today()). Keys
         read: ``composite_skipped``, ``sector_blocked_picks``,
         ``macro_blocked_picks``, ``composite_unavailable``,
-        ``sector_unknown_picks``, ``news_skipped``, ``earnings_waiting``.
+        ``sector_unknown_picks``, ``news_skipped``, ``earnings_waiting``,
+        ``overflow_picks``, ``flat_day_held``.
     reduce_calls:
         Dict of {ticker_upper: item} from session_state["_reduce_calls"].
         Pass None when the Brief was offline — the None path falls through to
@@ -92,7 +93,8 @@ def derive_dropoffs(
                                     reduce_call | composite_below_bar |
                                     sector_blocked | macro_blocked |
                                     composite_unavailable | sector_unknown |
-                                    skip_verdict | earnings_wait | unattributed
+                                    skip_verdict | earnings_wait | pacing |
+                                    flat_day_hold | unattributed
             reason_text          (str)  — human-readable sentence
             has_confident_reason (bool) — False only on 'unattributed'
 
@@ -145,6 +147,22 @@ def derive_dropoffs(
         if _t:
             _earn_wait_map[_t] = _item
 
+    # Names still ON SCREEN in Grow Today, just not as a sized pick: cleared every
+    # check but lost to pacing (overflow_picks), or held by the flat-day check
+    # (flat_day_held). Without these the trace would call them "re-priced below
+    # the entry bar" while the overflow line beside it says they cleared.
+    _overflow_map: dict[str, dict] = {}
+    for _item in grow_buckets.get("overflow_picks", []):
+        _t = str(_item.get("ticker", "")).upper()
+        if _t:
+            _overflow_map[_t] = _item
+
+    _flat_held_map: dict[str, dict] = {}
+    for _item in grow_buckets.get("flat_day_held", []):
+        _t = str(_item.get("ticker", "")).upper()
+        if _t:
+            _flat_held_map[_t] = _item
+
     # Build deduplicated surfaced-today map: earliest row per ticker.
     # Caller is expected to pass min-by-surfaced_at rows, but this layer also
     # guards: if two rows arrive for the same ticker, keep the earlier one.
@@ -181,7 +199,8 @@ def derive_dropoffs(
         # Reason attribution priority:
         # reduce_calls → composite_skipped → sector_blocked_picks
         # → macro_blocked_picks → composite_unavailable → sector_unknown_picks
-        # → news_skipped → earnings_waiting → unattributed
+        # → news_skipped → earnings_waiting → overflow_picks → flat_day_held
+        # → unattributed
         if reduce_calls is not None and _t in reduce_calls:
             _reason_code   = "reduce_call"
             _reason_text   = f"a Reduce/Exit call is now active on {_t}"
@@ -258,6 +277,20 @@ def derive_dropoffs(
                 f"earnings are now imminent — waiting for the post-print setup ({_lbl})" if _lbl
                 else "earnings are now imminent — waiting for the post-print setup"
             )
+            _has_confident = True
+
+        elif _t in _overflow_map:
+            _oi = _overflow_map[_t]
+            _current_composite = _oi.get("composite_score")
+            _reason_code   = "pacing"
+            _reason_text   = "now held back only by pacing — see Also cleared below"
+            _has_confident = True
+
+        elif _t in _flat_held_map:
+            _fi = _flat_held_map[_t]
+            _current_composite = _fi.get("composite_score")
+            _reason_code   = "flat_day_hold"
+            _reason_text   = "held on today's flat-market check — see below"
             _has_confident = True
 
         else:

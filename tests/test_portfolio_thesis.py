@@ -43,10 +43,17 @@ def _full_bundle(**overrides):
         "corr_unchecked": [],
         "corr_coverage": {"n_obs": 125},
         "holdings_scores": [70, 80, 40, 55, 90, 30, 60, 68],
-        "buy_candidates": [],
+        "grow_today": {"new_picks": [], "add_positions": [], "overflow_picks": []},
     }
     bundle.update(overrides)
     return bundle
+
+
+def _gt(**buckets):
+    """A grow_today dict with every posture-relevant bucket present (empty by default)."""
+    g = {"new_picks": [], "add_positions": [], "overflow_picks": []}
+    g.update(buckets)
+    return g
 
 
 def _full_acct_gate(**overrides):
@@ -114,7 +121,7 @@ def test_compose_thesis_wrong_type_bundle_returns_none_not_raise():
 def test_compose_thesis_valid_bundle_returns_full_shape():
     out = pth.compose_thesis(_full_bundle(), _full_acct_gate(), {}, today=TODAY)
     assert out is not None
-    assert out["v"] == 3
+    assert out["v"] == 4
     assert out["thesis_date"] == TODAY.isoformat()
     assert set(pth.CLAIM_KEYS) <= set(out["claims"].keys())
     assert isinstance(out["prose"], str) and out["prose"]
@@ -242,9 +249,9 @@ def test_holdings_health_unavailable_when_scores_empty_list():
     assert out["claims"]["holdings_health"] == "unavailable"
 
 
-def test_action_posture_unavailable_when_buy_candidates_missing():
+def test_action_posture_unavailable_when_grow_today_missing():
     out = pth.compose_thesis(
-        _full_bundle(buy_candidates=None), _full_acct_gate(), {}, today=TODAY,
+        _full_bundle(grow_today=None), _full_acct_gate(), {}, today=TODAY,
     )
     assert out["claims"]["action_posture"] == "unavailable"
     assert out["claims"]["risk_posture"] != "unavailable"
@@ -415,11 +422,11 @@ def test_correlation_t5_n_obs_boundary():
 
 def test_correlation_t6_other_four_claims_unaffected_by_coverage_gate():
     control = pth.compose_thesis(
-        _full_bundle(buy_candidates=[{"ticker": "AAA"}]),
+        _full_bundle(grow_today=_gt(new_picks=[{"ticker": "AAA"}])),
         _full_acct_gate(), {"AAA": {"reason": "trim"}}, today=TODAY,
     )
     treatment = pth.compose_thesis(
-        _full_bundle(buy_candidates=[{"ticker": "AAA"}], corr_unchecked=["CCC"]),
+        _full_bundle(grow_today=_gt(new_picks=[{"ticker": "AAA"}]), corr_unchecked=["CCC"]),
         _full_acct_gate(), {"AAA": {"reason": "trim"}}, today=TODAY,
     )
     for key in ("risk_posture", "concentration", "holdings_health", "action_posture"):
@@ -430,9 +437,9 @@ def test_correlation_t6_other_four_claims_unaffected_by_coverage_gate():
     assert treatment["claims"]["correlation_structure"] == "unavailable"
 
 
-def test_correlation_t7_compose_thesis_schema_version_is_3():
+def test_correlation_t7_compose_thesis_schema_version_is_4():
     out = pth.compose_thesis(_full_bundle(), _full_acct_gate(), {}, today=TODAY)
-    assert out["v"] == 3
+    assert out["v"] == 4
 
 
 def test_correlation_t8_grade_prior_not_comparable_vs_held():
@@ -475,23 +482,70 @@ def test_holdings_health_counts_are_correct():
 
 def test_action_posture_de_risking_when_reduce_calls_present():
     out = pth.compose_thesis(
-        _full_bundle(buy_candidates=[{"ticker": "AAA"}]),
+        _full_bundle(grow_today=_gt(new_picks=[{"ticker": "AAA"}])),
         _full_acct_gate(), {"AAA": {"reason": "trim"}}, today=TODAY,
     )
     assert out["claims"]["action_posture"] == "de_risking"
 
 
-def test_action_posture_deploying_when_buy_candidates_present_no_reduce():
-    out = pth.compose_thesis(
-        _full_bundle(buy_candidates=[{"ticker": "AAA"}]),
+def test_action_posture_deploying_only_from_gated_grow_today_buckets_no_reduce():
+    # Reversed from `..._deploying_when_buy_candidates_present_no_reduce`: the
+    # retired scanner list no longer drives "deploying"; Grow Today's gated
+    # new_picks / add_positions do.
+    scanner_only = pth.compose_thesis(
+        _full_bundle(buy_candidates=[{"ticker": "AAA"}], grow_today=_gt()),
         _full_acct_gate(), {}, today=TODAY,
     )
-    assert out["claims"]["action_posture"] == "deploying"
+    assert scanner_only["claims"]["action_posture"] == "holding"
+    picks = pth.compose_thesis(
+        _full_bundle(buy_candidates=[{"ticker": "AAA"}],
+                     grow_today=_gt(new_picks=[{"ticker": "AAA"}])),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+    assert picks["claims"]["action_posture"] == "deploying"
+    adds = pth.compose_thesis(
+        _full_bundle(grow_today=_gt(add_positions=[{"ticker": "AAA"}])),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+    assert adds["claims"]["action_posture"] == "deploying"
+
+
+def test_action_posture_overflow_only_is_not_deploying():
+    out = pth.compose_thesis(
+        _full_bundle(grow_today=_gt(overflow_picks=[{"ticker": "AAA"}])),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+    assert out["claims"]["action_posture"] == "holding"
+
+
+def test_action_posture_unavailable_when_grow_today_buckets_missing_or_malformed():
+    for gt in ({}, {"new_picks": []}, {"add_positions": []},
+               {"new_picks": None, "add_positions": []}):
+        out = pth.compose_thesis(
+            _full_bundle(grow_today=gt), _full_acct_gate(), {}, today=TODAY,
+        )
+        assert out["claims"]["action_posture"] == "unavailable"
+
+
+def test_grade_prior_action_posture_not_comparable_across_v3_to_v4_only():
+    this_week = pth.compose_thesis(
+        _full_bundle(grow_today=_gt(new_picks=[{"ticker": "AAA"}])),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+    assert this_week["v"] == 4
+    prior_v3 = {"v": 3, "claims": dict(this_week["claims"])}
+    ledger = pth.grade_prior(this_week, prior_v3)
+    assert ledger["action_posture"]["status"] == "not_comparable"
+    for key in ("risk_posture", "concentration", "correlation_structure", "holdings_health"):
+        assert ledger[key]["status"] == "held"
+    # Control: a v4 prior is graded normally.
+    prior_v4 = {"v": 4, "claims": dict(this_week["claims"])}
+    assert pth.grade_prior(this_week, prior_v4)["action_posture"]["status"] == "held"
 
 
 def test_action_posture_holding_when_neither():
     out = pth.compose_thesis(
-        _full_bundle(buy_candidates=[]), _full_acct_gate(), {}, today=TODAY,
+        _full_bundle(grow_today=_gt()), _full_acct_gate(), {}, today=TODAY,
     )
     assert out["claims"]["action_posture"] == "holding"
 
@@ -500,7 +554,7 @@ def test_action_posture_holding_when_neither():
 
 def test_no_per_ticker_price_or_return_field_in_claims_or_prose():
     out = pth.compose_thesis(
-        _full_bundle(buy_candidates=[{"ticker": "AAA", "price": 123.45}]),
+        _full_bundle(grow_today=_gt(new_picks=[{"ticker": "AAA", "price": 123.45}])),
         _full_acct_gate(), {"BBB": {"reason": "trim", "price": 55.0}}, today=TODAY,
     )
     claims_str = str(out["claims"])
@@ -692,3 +746,69 @@ def test_skip_weekly_write_matches_year_and_week_together_not_either_alone():
     # Same iso_week number from a DIFFERENT iso_year must not false-positive.
     rows = [{"iso_year": 2025, "iso_week": 35, "thesis_date": "2025-08-25"}]
     assert pth.should_skip_weekly_write(rows, 2026, 35) is False
+
+
+def _v4_this_week():
+    return pth.compose_thesis(
+        _full_bundle(grow_today=_gt(new_picks=[{"ticker": "AAA"}])),
+        _full_acct_gate(), {}, today=TODAY,
+    )
+
+
+def test_grade_prior_db_shaped_prior_schema_version_3_not_comparable_for_posture():
+    this_week = _v4_this_week()
+    prior = {"schema_version": 3, "claims": dict(this_week["claims"])}
+    ledger = pth.grade_prior(this_week, prior)
+    assert ledger["action_posture"]["status"] == "not_comparable"
+    assert ledger["action_posture"]["reason"] == "version_boundary"
+    for key in ("risk_posture", "concentration", "correlation_structure", "holdings_health"):
+        assert ledger[key]["status"] == "held"
+        assert "reason" not in ledger[key]
+
+
+def test_grade_prior_versionless_prior_fails_closed_for_posture():
+    this_week = _v4_this_week()
+    ledger = pth.grade_prior(this_week, {"claims": dict(this_week["claims"])})
+    assert ledger["action_posture"]["status"] == "not_comparable"
+    for key in ("risk_posture", "concentration", "correlation_structure", "holdings_health"):
+        assert ledger[key]["status"] == "held"
+
+
+def test_grade_prior_non_int_version_fails_closed_with_version_unknown_reason():
+    this_week = _v4_this_week()
+    for bad in ("4", 4.0):
+        ledger = pth.grade_prior(this_week, {"v": bad, "claims": dict(this_week["claims"])})
+        assert ledger["action_posture"]["status"] == "not_comparable"
+        assert ledger["action_posture"]["reason"] == "version_unknown"
+
+
+def test_grade_prior_reasons_are_distinct():
+    this_week = _v4_this_week()
+    claims = dict(this_week["claims"])
+    assert pth.grade_prior(this_week, {"v": 3, "claims": claims})["action_posture"]["reason"] == "version_boundary"
+    assert pth.grade_prior(this_week, {"claims": claims})["action_posture"]["reason"] == "version_unknown"
+
+
+def test_row_version_v_wins_over_schema_version():
+    this_week = _v4_this_week()
+    claims = dict(this_week["claims"])
+    # v=4 (graded) beats schema_version=3 (would be boundary)
+    ledger = pth.grade_prior(this_week, {"v": 4, "schema_version": 3, "claims": claims})
+    assert ledger["action_posture"]["status"] == "held"
+    # and the reverse: v=3 beats schema_version=4
+    ledger = pth.grade_prior(this_week, {"v": 3, "schema_version": 4, "claims": claims})
+    assert ledger["action_posture"]["reason"] == "version_boundary"
+
+
+def test_grade_prior_v4_prior_graded_normally_via_either_key():
+    this_week = _v4_this_week()
+    for prior in ({"v": 4, "claims": dict(this_week["claims"])},
+                  {"schema_version": 4, "claims": dict(this_week["claims"])}):
+        ledger = pth.grade_prior(this_week, prior)
+        assert ledger["action_posture"]["status"] == "held"
+        assert "reason" not in ledger["action_posture"]
+
+
+def test_prose_deploying_wording():
+    out = _v4_this_week()
+    assert "Grow Today has an active buy or add call this week." in out["prose"]

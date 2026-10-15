@@ -409,3 +409,44 @@ class TestNoRawTimestampsInProse:
         result = derive_dropoffs([_make_surfaced("AAPL", first_seen_at=ts)],
                                  set(), _make_buckets(), None, set())
         assert result[0]["first_seen_at"] == ts
+
+
+# ── overflow / flat-day-held are accounted for (grow-today-owns-buys review) ──
+
+def _ob(**kw):
+    b = _make_buckets()
+    b.update(kw)
+    return b
+
+
+def test_earlier_new_pick_now_in_overflow_gets_pacing_reason_not_unattributed():
+    surfaced = [_make_surfaced("AAA"), _make_surfaced("ZZZ")]   # ZZZ = control
+    buckets = _ob(overflow_picks=[{"ticker": "AAA", "composite_score": 71.0}])
+    res = {r["ticker"]: r for r in derive_dropoffs(surfaced, set(), buckets, None, set())}
+    assert res["AAA"]["reason_code"] == "pacing"
+    assert res["AAA"]["has_confident_reason"] is True
+    assert "pacing" in res["AAA"]["reason_text"]
+    assert "re-priced" not in res["AAA"]["reason_text"]
+    assert res["AAA"]["current_composite"] == 71.0
+    # control: a genuinely re-priced name still reads unattributed
+    assert res["ZZZ"]["reason_code"] == "unattributed"
+
+
+def test_earlier_new_pick_now_flat_day_held_gets_flat_hold_reason():
+    surfaced = [_make_surfaced("BBB"), _make_surfaced("ZZZ")]
+    buckets = _ob(flat_day_held=[{"ticker": "bbb", "composite_score": None}])
+    res = {r["ticker"]: r for r in derive_dropoffs(surfaced, set(), buckets, None, set())}
+    assert res["BBB"]["reason_code"] == "flat_day_hold"
+    assert res["BBB"]["current_composite"] is None
+    assert res["ZZZ"]["reason_code"] == "unattributed"
+
+
+def test_legacy_brief_without_the_new_keys_is_unchanged():
+    res = derive_dropoffs([_make_surfaced("AAA")], set(), _make_buckets(), None, set())
+    assert res[0]["reason_code"] == "unattributed"
+
+
+def test_reduce_call_still_outranks_pacing():
+    buckets = _ob(overflow_picks=[{"ticker": "AAA", "composite_score": 70.0}])
+    res = derive_dropoffs([_make_surfaced("AAA")], set(), buckets, {"AAA": {}}, set())
+    assert res[0]["reason_code"] == "reduce_call"

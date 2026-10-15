@@ -113,15 +113,15 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
     new_picks = grow.get("new_picks")    or []
     adds      = grow.get("add_positions") or []
     skipped   = grow.get("composite_skipped") or []
-    buys      = brief.get("buy_candidates") or []
 
     today_buy_tickers = {
         t["ticker"] for t in trades_today_list
         if "BUY" in t.get("action", "").upper()
     }
 
-    # Go-verdict picks: union of new_picks (high/moderate conviction) + adds +
-    # buy_candidates with confirmed verdict. Dedupe by ticker. `_first_seen_at`
+    # Go-verdict picks: union of new_picks (high/moderate conviction) + adds.
+    # The retired scanner "buy_candidates" list is never graded as a Go pick
+    # (Grow Today owns every buy). Dedupe by ticker. `_first_seen_at`
     # is plumbed through from the source dict so the Evening Debrief Go-pick
     # cards can render the same "⏱ First surfaced" chip the Today's Brief cards
     # show. App.py attaches it from the recommendations table at brief-build
@@ -151,22 +151,6 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
             "composite":       _opt(p.get("score")),
             "source":          "add_winner",
             "thesis":          p.get("thesis", ""),
-            "_first_seen_at":  p.get("_first_seen_at"),
-        })
-    for p in buys:
-        xref = p.get("xref") or {}
-        if xref.get("verdict") != "confirmed":
-            continue
-        tk = str(p.get("ticker", ""))
-        if not tk:
-            continue
-        go_set.setdefault(tk, {
-            "ticker":          tk,
-            "sector":          p.get("sector", ""),
-            "momentum":        _opt(p.get("score")),
-            "composite":       None,
-            "source":          "buy_candidate",
-            "thesis":          "",
             "_first_seen_at":  p.get("_first_seen_at"),
         })
 

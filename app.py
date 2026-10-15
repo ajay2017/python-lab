@@ -316,6 +316,7 @@ from stock_analyzer import portfolio_intelligence
 from stock_analyzer import structural_scanner
 from stock_analyzer import cluster_add_gate
 from stock_analyzer import pair_add_gate
+from stock_analyzer import hold_reasons as _hold_reasons
 from stock_analyzer import regime_stress
 from stock_analyzer import catalyst_stress
 from stock_analyzer import thesis_cluster
@@ -5850,7 +5851,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 15  # bumped: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 16  # bumped: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -6476,7 +6477,7 @@ if page == "🏠 Home":
                 _rec_save_result = {"attempted": 0, "saved": 0, "error": None}
                 try:
                     # Price snapshot resolver: each pick type stores price differently,
-                    # and some buy_candidates don't carry one. Fall back to held-position
+                    # and some picks don't carry one. Fall back to held-position
                     # avg_cost (via port_df) or live-prices cache before giving up. The
                     # column is nullable in the DB so None is safe — but a populated
                     # value makes "would-have-gained" math possible later.
@@ -6668,32 +6669,29 @@ if page == "🏠 Home":
                             # separately re-read total, which could disagree.
                             **_rec_sizing_cols(_p),
                         })
-                    for _p in (_daily_brief.get("buy_candidates") or []):
-                        _bx = _p.get("xref") or {}
-                        _tk = str(_p.get("ticker", ""))
-                        _rec_rows.append({
-                            "ticker":           _tk,
-                            "rec_date":         _today_et(),
-                            "rec_type":         "buy_candidate",
-                            "price_at_surface": _price_for(_tk, _p.get("price")),
-                            "composite_score":  _composite_for(_tk),
-                            "momentum_score":   _p.get("score"),
-                            "sector":           _p.get("sector", ""),
-                            "conviction":       "",
-                            "verdict":          str(_bx.get("verdict") or ""),
-                            "thesis":           "",
-                            "s_score":          _s_score_for(_tk),
-                            "avg_sent":         _avg_sent_for(_tk),
-                            "t_score":          _t_score_for(_tk),
-                            "bq_score":         _bq_score_for(_tk),
-                            "val_score":        _val_score_for(_tk),
-                        })
                     if _rec_rows:
                         _rec_save_result = db.save_recommendations(_rec_rows)
                 except Exception as _rec_save_err:
                     _rec_save_result = {"attempted": 0, "saved": 0,
                                         "error": str(_rec_save_err)[:200]}
                 st.session_state["_rec_log_save_result"] = _rec_save_result
+
+                # "Also cleared every check" names (grow-today-owns-buys D3/N5):
+                # logged as rec_type "overflow_pick" in their OWN save call -- a
+                # PostgREST batch with mixed keys (hold_reason) is rejected whole,
+                # and a failure here must never touch the new_pick batch's result.
+                _ov_save_result = {"attempted": 0, "saved": 0, "error": None}
+                try:
+                    from stock_analyzer.overflow_rows import build_overflow_rec_rows as _bov
+                    # None = key absent (legacy brief): nothing to log, never "none".
+                    _ov_src = _gt_today.get("overflow_picks")
+                    _ov_rows = _bov(_ov_src, _today_et()) if _ov_src is not None else []
+                    if _ov_rows:
+                        _ov_save_result = db.save_recommendations(_ov_rows)
+                except Exception as _ov_save_err:
+                    _ov_save_result = {"attempted": 0, "saved": 0,
+                                       "error": str(_ov_save_err)[:200]}
+                st.session_state["_overflow_rec_save_result"] = _ov_save_result
 
             # ── Gate Suppression Ledger (W5 capture — app source) ─────────────
             # Persists which gates fired this build so restraint can be graded.
@@ -6747,10 +6745,6 @@ if page == "🏠 Home":
                     for _p in (_gt_today.get("add_positions") or []):
                         _p["_first_seen_at"] = _rec_first_seen.get(
                             (str(_p.get("ticker", "")).upper(), "add_winner")
-                        )
-                    for _p in (_daily_brief.get("buy_candidates") or []):
-                        _p["_first_seen_at"] = _rec_first_seen.get(
-                            (str(_p.get("ticker", "")).upper(), "buy_candidate")
                         )
                 except Exception as _rec_load_err:
                     _rec_load_error = str(_rec_load_err)[:200]
@@ -6882,6 +6876,9 @@ if page == "🏠 Home":
         # unconditional locals.
         st.session_state["_home_synth_cache"] = {
             "sig": _synth_sig,
+            # ET date this synthesis was built -- lets cross-page readers (the
+            # Watchlist overflow caption) refuse a brief that is not today's.
+            "date": _today_et().isoformat(),
             "bundle": {
                 "alert_list": alert_list, "n_danger": n_danger, "n_warning": n_warning,
                 "actions": actions, "corr_df": corr_df, "div": div,
@@ -7545,7 +7542,6 @@ if page == "🏠 Home":
     _resolved_breaches = _act_view["resolved"]
 
     _db_act_n   = _act_view["n_active"]  # None when _db_offline — never 0
-    _db_buy_n   = len(_daily_brief["buy_candidates"])
     _db_icon    = " ⚠️" if _db_offline else (" 🔴" if _db_act_n else "")
     # _OFFLINE_ACT_MSG is declared once, at the very top of Home (before
     # _act_ptr_ph's own first fill below), so the outage st.stop() far above
@@ -8160,7 +8156,6 @@ if page == "🏠 Home":
             st.caption(f"Pre-market data unavailable: {_pm_err}")
 
     _db_act    = _daily_brief["act_today"]
-    _db_buys   = _daily_brief["buy_candidates"]
     _db_review = _daily_brief["review_list"]
     _db_grow   = _daily_brief.get("grow_today", {})
     _db_tuneup = _daily_brief.get("portfolio_tuneup", []) or []
@@ -8631,6 +8626,137 @@ if page == "🏠 Home":
             except Exception:
                 return ""
 
+    def _render_grow_pacing_disclosures(grow: dict, tone: str):
+        """Grow Today's no-verdict / no-size disclosure blocks (OP-07, "gate the
+        call, never the candidate"): scanner leads Grow Today did not check, and
+        held names whose add is paused on a non-bull day. NO share size and NO
+        trade button anywhere here. A key MISSING from a legacy cached/locked
+        brief means "not computed" -> render nothing for that block; it is never
+        read as "none". Called on every tone, including the bear early return."""
+        # A name already shown in another Grow Today section is not repeated as a
+        # lead. A key absent from the brief (e.g. a bear-day brief has no
+        # deterioration_blocked_adds) is "not computed", never read as empty.
+        _grow_shown: set = set()
+        for _gk in ("new_picks", "add_positions", "overflow_picks", "flat_day_held",
+                    "composite_skipped", "macro_blocked_picks", "composite_unavailable",
+                    "deterioration_blocked_adds", "cooldown_adds",
+                    "sector_blocked_adds", "concentration_blocked_adds",
+                    "risk_blocked_adds", "sector_blocked_picks",
+                    "sector_unknown_picks", "cluster_blocked_adds", "pair_blocked_adds",
+                    "news_skipped", "earnings_waiting"):
+            _gv = grow.get(_gk)
+            if not isinstance(_gv, list):
+                continue
+            for _gp_item in _gv:
+                _gt = _gp_item.get("ticker") if isinstance(_gp_item, dict) else None
+                if _gt:
+                    _grow_shown.add(str(_gt).upper())
+        _leads = grow.get("unevaluated_leads")
+        if isinstance(_leads, list):
+            _leads = [_l for _l in _leads
+                      if str(_l.get("ticker", "")).upper() not in _grow_shown]
+        if isinstance(_leads, list) and _leads:
+            with st.expander(
+                f"Momentum leads — not checked today ({len(_leads)})",
+                expanded=False, key="_gt_leads_exp",
+            ):
+                st.caption(_hold_reasons.leads_note(tone))
+                for _ld in _leads:
+                    _ld_tk = str(_ld.get("ticker", "")).strip()
+                    if not _ld_tk:
+                        continue
+                    _ld_m = _ld.get("momentum_score")
+                    _lc1, _lc2 = st.columns([4, 2])
+                    _lc1.markdown(
+                        f"**{_ld_tk}**"
+                        + (f" · momentum {_ld_m:.0f}" if isinstance(_ld_m, (int, float)) else "")
+                    )
+                    if _lc2.button(f"▶ Analyze {_ld_tk}", key=f"_gt_lead_{_ld_tk}", width="content"):
+                        st.session_state["_pending_page"]    = "📈 Analysis"
+                        st.session_state["_analysis_ticker"] = _ld_tk
+                        st.rerun()
+        _paused = grow.get("adds_paused")
+        if isinstance(_paused, list) and _paused:
+            _pz_names = [str(_p.get("ticker", "")).strip() for _p in _paused
+                         if str(_p.get("ticker", "")).strip()]
+            if _pz_names:
+                with st.expander(
+                    _hold_reasons.adds_paused_label(tone, len(_pz_names)),
+                    expanded=False, key="_gt_adds_paused_exp",
+                ):
+                    st.caption(_hold_reasons.adds_paused_note(_pz_names))
+
+    def _render_grow_overflow(grow: dict):
+        """'Also cleared every check' line: names that passed EVERY Grow Today
+        check and lost only to pacing. Unsized, no trade button; a ▶ Analyze
+        pointer only. The Watchlist tag states membership, never ENTER_NOW."""
+        _ov = grow.get("overflow_picks")
+        if not isinstance(_ov, list) or not _ov:
+            return
+        _wl_raw = st.session_state.get("watchlist")
+        # Unreadable watchlist -> NO tag (never a false one).
+        _wl_set = ({str(t).upper() for t in _wl_raw}
+                   if isinstance(_wl_raw, (list, tuple, set)) else set())
+        with st.container(border=True):
+            st.markdown(
+                "<div style='font-size:0.86em;font-weight:700;color:#e5e7eb'>"
+                f"{_safe_html(_hold_reasons.OVERFLOW_HEADER)}</div>",
+                unsafe_allow_html=True,
+            )
+            _ov_reasons: list[str] = []
+            for _o in _ov:
+                _o_tk = str(_o.get("ticker", "")).strip()
+                if not _o_tk:
+                    continue
+                _o_c = _o.get("composite_score")
+                _oc1, _oc2 = st.columns([5, 2])
+                _oc1.markdown(
+                    f"**{_o_tk}**"
+                    + (f" · composite {_o_c:.0f}" if isinstance(_o_c, (int, float)) else "")
+                    + (f" · {_hold_reasons.WATCHLIST_TAG}" if _o_tk.upper() in _wl_set else "")
+                )
+                if _oc2.button(f"▶ Analyze {_o_tk}", key=f"_gt_ovf_{_o_tk}", width="content"):
+                    st.session_state["_pending_page"]    = "📈 Analysis"
+                    st.session_state["_analysis_ticker"] = _o_tk
+                    st.rerun()
+                _o_rt = _hold_reasons.reason_text(_o.get("reason"), {"sector": _o.get("sector")})
+                if _o_rt and _o_rt not in _ov_reasons:
+                    _ov_reasons.append(_o_rt)
+            st.caption(" ".join(_ov_reasons + [_hold_reasons.FOOTER]))
+
+    def _render_grow_flat_held(grow: dict):
+        """Flat-day box: curated names held back because their verdict isn't
+        fully confirmed, each with WHY and (when derivable) what would clear it."""
+        _fh = grow.get("flat_day_held")
+        if not isinstance(_fh, list) or not _fh:
+            return
+        # Plain markdown (no raw HTML): `$` is backslash-escaped so a verdict
+        # string with two dollar amounts can't be eaten as LaTeX.
+        def _fh_esc(v):
+            return str(v).replace("$", "\\$")
+        _lines = []
+        for _h in _fh:
+            _h_tk = str(_h.get("ticker", "")).strip()
+            if not _h_tk:
+                continue
+            _h_m = _h.get("momentum_score")
+            _h_c = _h.get("composite_score")
+            _lines.append(
+                f"- **{_h_tk}**"
+                + (f" — momentum {_h_m:.0f}" if isinstance(_h_m, (int, float)) else "")
+                # Trusted composite, or an explicit dash -- a Hold-composite
+                # conflicted name must not read like a near-buy.
+                + (f", composite {_h_c:.0f}" if isinstance(_h_c, (int, float)) else ", composite —")
+                + (f", {_fh_esc(_h.get('reason'))}" if _h.get("reason") else "")
+                + "."
+                + (f" Clears {_fh_esc(_h.get('clears_when'))}." if _h.get("clears_when") else "")
+            )
+        if not _lines:
+            return
+        with st.container(border=True):
+            st.markdown(f"**{_hold_reasons.FLAT_HELD_HEADER}**")
+            st.markdown("\n".join(_lines))
+
     def _render_grow_today(grow: dict, tone: str):
         if not grow:
             return
@@ -8714,6 +8840,7 @@ if page == "🏠 Home":
                 "Tone flips to Neutral or Growth once SPY recovers above its trend line "
                 "and volatility recedes — check today's tone status on the 🌐 Macro page."
             )
+            _render_grow_pacing_disclosures(grow, tone)
             return
 
 
@@ -9470,7 +9597,7 @@ if page == "🏠 Home":
                         st.rerun()
 
         # ── Drop-off trace (panel footer — only for new_pick; never for
-        # add_winner or buy_candidate per spec) ─────────────────────────────
+        # add_winner or overflow_pick per spec) ─────────────────────────────
         # Picks that surfaced as new_pick today but are no longer clearing
         # this pass. Muted grey block — deliberately NOT a pick card. The
         # copy points to the reach funnel for context and explicitly states
@@ -9529,6 +9656,8 @@ if page == "🏠 Home":
                     "sector_unknown_picks":  sector_unknown,
                     "news_skipped":          news_skipped,
                     "earnings_waiting":      earnings_waiting,
+                    "overflow_picks":        grow.get("overflow_picks", []),
+                    "flat_day_held":         grow.get("flat_day_held", []),
                 }
                 _do_reduce_calls = st.session_state.get("_reduce_calls")
 
@@ -9578,6 +9707,10 @@ if page == "🏠 Home":
             except Exception:
                 pass  # never crash the panel over trace logic
 
+        # Flat-day holds + "also cleared" pacing names (OP-07) -- unsized, no trade button.
+        _render_grow_flat_held(grow)
+        _render_grow_overflow(grow)
+
         # Add-to-winner
         if add_pos:
             st.markdown("**➕ Add to Winning Positions**")
@@ -9598,7 +9731,7 @@ if page == "🏠 Home":
                 f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
                 f"<span style='color:#f9fafb;font-weight:700'>{_ga['ticker']}</span>"
                 f"<span style='color:#9ca3af;font-size:0.8em'>{_ga['signal']} · "
-                f"Momentum {_ga['score']:.0f}/100 · P&L {_ga['pnl_pct']:+.1f}%"
+                f"Composite {_ga['score']:.0f}/100 · P&L {_ga['pnl_pct']:+.1f}%"
                 + (f" 🔥 Sector leading" if _ga.get("is_leader") else "")
                 + f"</span>"
                 + _ga_steady_chip
@@ -9835,12 +9968,15 @@ if page == "🏠 Home":
         # unpriceable ticker can never be an add candidate itself, so the
         # real gap is a priced, add-eligible holding whose PARTNER never
         # entered the correlation matrix, letting its add proceed
-        # uncaptioned. This names the gap; it suppresses nothing. Never
-        # tone-gated — _buy_candidates' own add-to-winner lane runs on every
-        # tone, not just bull/flat, so a bear-day render can still have a
-        # relevant gap to disclose.
-        _corr_unchecked_caption = pair_add_gate.unchecked_disclosure(
-            _corr_unchecked_grow, pair_gate_checked, cluster_gate_checked
+        # uncaptioned. This names the gap; it suppresses nothing. Bull-day
+        # gated since grow-today-owns-buys (2026-10-15): the former
+        # second add lane (which ran on every tone) is gone, so on a flat/bear
+        # day no add lane consults the correlation matrix and the caption would
+        # describe a check nothing is relying on.
+        _corr_unchecked_caption = (
+            pair_add_gate.unchecked_disclosure(
+                _corr_unchecked_grow, pair_gate_checked, cluster_gate_checked
+            ) if tone == "bull" else None
         )
         if _corr_unchecked_caption:
             st.caption(_corr_unchecked_caption)
@@ -10083,6 +10219,8 @@ if page == "🏠 Home":
                     "</div>",
                     unsafe_allow_html=True,
                 )
+
+        _render_grow_pacing_disclosures(grow, tone)
 
     # Hoist macro coverage key to module scope BEFORE the columns are created.
     # _render_grow_today assigns _macro_coverage_expired inside the function, so
@@ -11376,210 +11514,12 @@ if page == "🏠 Home":
 
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
-    # ── Buy Candidates — OVERFLOW only, in the left "offense" column ──────
-    # De-duplicated against Grow Today: any ticker already shown there
-    # (made the pick cap, or surfaced in Filtered Out / macro-blocked /
-    # pending) is dropped so the same name never appears twice in the
-    # brief. What remains is the overflow — confirmed/unverified buys
-    # beyond the Grow Today pick cap. Rendered in the right column under
-    # Grow Today so the whole brief stays a clean 2-column offense/defense
-    # split (no full-width banner crossing the page).
-    with _db_col_right:
-        _grow_shown: set = set()
-        # Include the suppressed-add buckets too: a held name the Brief has already
-        # SUPPRESSED as an add (deterioration WATCH, cooldown, sector/single-name
-        # ceiling, risk-trim) must not reappear under "More Buy Candidates" as an
-        # "ADD — Winning Position". _buy_candidates annotates (does not suppress)
-        # WATCH, so without deterioration_blocked_adds here a WATCH add leaks and
-        # recreates the exact double-surface contradiction this change fixes. The
-        # others are defensive (they don't leak today only because _buy_candidates
-        # independently skips them — don't rely on that coupling staying in sync).
-        for _gk in ("new_picks", "add_positions", "composite_skipped",
-                    "macro_blocked_picks", "composite_unavailable",
-                    "deterioration_blocked_adds", "cooldown_adds",
-                    "sector_blocked_adds", "concentration_blocked_adds",
-                    "risk_blocked_adds", "sector_blocked_picks",
-                    "sector_unknown_picks", "cluster_blocked_adds", "pair_blocked_adds",
-                    "news_skipped", "earnings_waiting"):
-            for _gp_item in (_db_grow.get(_gk, []) or []):
-                _gt = _gp_item.get("ticker")
-                if _gt:
-                    _grow_shown.add(str(_gt).upper())
-        _db_buys_unique = [
-            b for b in _db_buys
-            if str(b.get("ticker", "")).upper() not in _grow_shown
-        ]
-
-        # Bucket via effective_verdict_bucket() — NOT the raw legacy xref["verdict"]
-        # — so this header count can never disagree with what each candidate's own
-        # card renders two lines below (which already prefers verdict_reconciled).
-        # See memory project_verdict_divergence for the concrete case this closes.
-        _db_buckets     = [effective_verdict_bucket(b.get("xref", {})) for b in _db_buys_unique]
-        _db_confirmed   = _db_buckets.count("confirmed")
-        _db_unverified  = _db_buckets.count("unverified")
-        _db_conflicted  = _db_buckets.count("conflicted")
-        _db_c2_label    = f"🟢 More Buy Candidates ({len(_db_buys_unique)})"
-        _db_c2_parts    = []
-        if _db_confirmed:  _db_c2_parts.append(f"✅ {_db_confirmed} confirmed")
-        if _db_unverified: _db_c2_parts.append(f"🔍 {_db_unverified} need verification")
-        if _db_conflicted: _db_c2_parts.append(f"⚠️ {_db_conflicted} conflicted")
-        _db_c2_sub = " · ".join(_db_c2_parts)
-        # Freshness stamp — when the candidates came from a persisted scan
-        # (cron post-open, or a prior manual scan) rather than a live in-session
-        # run, say so + when, so the list never reads as silently stale.
-        _scan_meta  = st.session_state.get("_scanner_results_meta") or {}
-        _scan_src   = {"cron": "auto-scan", "app": "your scan"}.get(_scan_meta.get("source"), "scan")
-        _scan_stamp = f"📡 From the {_scan_meta['scan_date']} {_scan_src}." if _scan_meta.get("scan_date") else ""
-        st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
-        _db_c2_subtitle = (
-            "Scanner picks — not yet validated by the full portfolio check. "
-            "Run Analysis before entering. Unlike the picks above, concentration "
-            "limits, sector caps, and macro gates have not been applied — treat "
-            "these as research leads, not direct entry signals."
-            + (f"  {_scan_stamp}" if _scan_stamp else "")
-        )
-        st.markdown(
-            f"<div style='background:#14532d;border-left:4px solid #22c55e;"
-            f"border-radius:8px;padding:10px 16px;margin-bottom:4px'>"
-            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c2_label}</span>"
-            + (f"<span style='color:#86efac;font-size:0.82em'> · {_db_c2_sub}</span>" if _db_c2_sub else "")
-            + f"<div style='color:#86efac;font-size:0.82em;margin-top:4px'>{_db_c2_subtitle}</div>"
-            + f"</div>",
-            unsafe_allow_html=True,
-        )
-        # G-26 — tickers the _buy_candidates lane silently paused on a
-        # standing danger-tier pair that AREN'T already disclosed in Grow
-        # Today's own pair_blocked_adds block above (a flat/bear day, where
-        # that block's bull-day add loop never ran at all).
-        _pb_buy_lane_only = pair_add_gate.buy_lane_only(
-            _db_grow.get("pair_blocked_adds", []), _db_grow.get("pair_buy_lane_skips")
-        )
-        # Subtract the FULL _grow_shown set, not just pair_blocked_adds.
-        # _buy_candidates checks G-26 before its own sector-cap and WATCH
-        # checks, while _grow_today checks G-16/G-20 first — so a
-        # sector-capped or WATCH ticker on a danger pair is already rendered
-        # in one of those blocks above, and listing it here would make this
-        # caption's own "not shown above" claim false.
-        if _pb_buy_lane_only:
-            _pb_buy_lane_only = [
-                _t for _t in _pb_buy_lane_only if str(_t).upper() not in _grow_shown
-            ]
-        if _pb_buy_lane_only:
-            st.caption(
-                "🔗 Also paused here (standing correlated pair, not shown above): "
-                + ", ".join(_pb_buy_lane_only)
-            )
-        if not _db_buys:
-            st.caption(
-                "No scan results yet. The pre-market **auto-scan** populates this "
-                "each trading day (~10:00 AM ET) — or run the Market Scanner now."
-            )
-            if st.button("🔍 Go to Market Scanner", key="_db_to_scanner"):
-                st.session_state["_pending_page"] = "🔍 Market Scanner"
-                st.rerun()
-        elif not _db_buys_unique:
-            st.caption(
-                "All scanner candidates are already reflected in Grow Today above "
-                "(picks, Filtered Out, or pending)."
-            )
-        else:
-            # Collapsed by default (2026-09-25, owner report + screenshot) — the
-            # card list can run long enough that reaching Evening Debrief needed
-            # scrolling past every candidate. The green "More Buy Candidates"
-            # banner above (count + confirmed/unverified/conflicted breakdown)
-            # stays visible unconditionally; only the per-ticker card list below
-            # it collapses. Same `st.expander(..., expanded=False)` pattern as
-            # the Live Prices / Alerts groups above (2026-09-17 Home
-            # decluttering) — a pure display wrap, no data/logic touched.
-            with st.expander(
-                f"📋 View {len(_db_buys_unique)} candidate"
-                f"{'s' if len(_db_buys_unique) != 1 else ''}",
-                expanded=False, key="_db_more_buys_exp",
-            ):
-                for _db_buy in _db_buys_unique:
-                    _xref       = _db_buy.get("xref", {})
-                    _reconciled = _xref.get("verdict_reconciled", {}) or {}
-                    _vcolor     = _reconciled.get("color") or _xref.get("verdict_color", "#86efac")
-                    _vlabel     = _reconciled.get("label") or _xref.get("verdict_label", "")
-                    _v_one      = _reconciled.get("one_liner") or _xref.get("verdict_one_liner", "")
-                    _vagreed    = _xref.get("agreed", [])
-                    _vconflicts = _xref.get("conflicts", [])
-                    _db_bg      = "#1c1917"
-                    # 📊 detail line — shown only when RSI is available (is not None).
-                    # Each clause (RSI, 1M, Trend) is assembled independently so a
-                    # missing value omits its clause rather than printing a placeholder.
-                    # Guard is `is not None` not bare truthiness: RSI 0 is a real value,
-                    # add_winner items carry no rsi key at all (returns None).
-                    _db_rsi   = _db_buy.get("rsi")
-                    _db_m1m   = _db_buy.get("mom_1m")
-                    _db_sig   = _db_buy.get("scanner_signal", "")
-                    _db_tr    = _db_buy.get("trend", "")
-                    if _db_rsi is not None:
-                        _db_detail = (
-                            f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>📊 {_db_sig}"
-                            + f" · RSI {_db_rsi:.0f}"
-                            + (f" · 1M {_db_m1m:+.1f}%" if _db_m1m is not None else "")
-                            + (f" · {_db_tr}" if _db_tr else "")
-                            + "</div>"
-                        )
-                    else:
-                        _db_detail = ""
-                    st.markdown(
-                        f"<div style='background:{_db_bg};border-left:3px solid {_vcolor};"
-                        f"border-radius:6px;padding:10px 14px;margin-bottom:4px'>"
-                        f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
-                        f"<span style='color:#f9fafb;font-weight:700;font-size:0.9em'>"
-                        f"{_db_buy['icon']} {_db_buy['action']} — "
-                        f"<span style='color:#fbbf24'>{_db_buy['ticker']}</span></span>"
-                        # "Score" meant two DIFFERENT numbers in this one card list:
-                        # new_pick carries scanner_results["Score"] (momentum only),
-                        # add_winner carries port_df["Score"] (the 4-pillar composite,
-                        # see F-232). Label by type so the word means exactly one
-                        # thing per row. A blanket rename would have been wrong for
-                        # one of the two paths.
-                        f"<span style='color:#9ca3af;font-size:0.8em'>"
-                        f"{'Composite' if _db_buy.get('type') == 'add_winner' else 'Momentum'} "
-                        f"{_db_buy['score']:.0f}/100"
-                        + (f" · {_db_buy.get('sector','')}" if _db_buy.get('sector') else "")
-                        + f"</span>"
-                        f"<span style='background:{_vcolor}22;border:1px solid {_vcolor};"
-                        f"color:{_vcolor};padding:2px 10px;border-radius:12px;"
-                        f"font-size:0.75em;font-weight:700;white-space:nowrap'>{_vlabel}</span>"
-                        f"</div>"
-                        # Resolution one-liner — replaces the diffuse "Verify" guidance
-                        # block with the explicit reconciled verdict for this ticker.
-                        + (f"<div style='color:{_vcolor};font-size:0.85em;margin-top:5px;"
-                           f"font-weight:600'>→ {_v_one}</div>" if _v_one else "")
-                        + _db_detail
-                        + ("".join(
-                            f"<div style='color:#fca5a5;font-size:0.8em;margin-top:3px'>⚠ {c}</div>"
-                            for c in _vconflicts
-                        ) if _vconflicts else "")
-                        + (f"<div style='color:#6b7280;font-size:0.75em;margin-top:3px'>"
-                           f"✓ {' · '.join(_vagreed[:3])}"
-                           + (f" +{len(_vagreed)-3} more" if len(_vagreed) > 3 else "")
-                           + f"</div>" if _vagreed else "")
-                        + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
-                           f"⏱ First surfaced: {_fmt_first_seen(_db_buy.get('_first_seen_at'))}"
-                           f"</div>" if _db_buy.get("_first_seen_at") else "")
-                        + f"</div>",
-                        unsafe_allow_html=True,
-                    )
-                    if _db_buy.get("sector_elevated_warning"):
-                        st.caption(f"⚠️ {_db_buy['sector_elevated_warning']}")
-                    if _db_buy.get("deterioration_warning"): st.caption(_db_buy["deterioration_warning"])
-                    if st.button(f"▶ Analyze {_db_buy['ticker']}", key=f"_db_buy_{_db_buy['ticker']}",
-                                 width="content"):
-                        st.session_state["_pending_page"]    = "📈 Analysis"
-                        st.session_state["_analysis_ticker"] = _db_buy["ticker"]
-                        st.rerun()
-
     # ── Thesis Under Pressure — Daily Brief annotation (Thesis Red Team
     # Phase 3, F-196). Pure cache read from thesis_erosion_cache — never
     # triggers a compute (that only happens when AI Insights -> Red Team is
     # visited), so this is usually empty on the day's first Home load and
     # only populates once the user has visited that tab today. Awareness
-    # only: never gates, never modifies act_today / buy_candidates /
+    # only: never gates, never modifies act_today /
     # review_list. Dedupes against tickers already shown as deterioration
     # cards above in this same Brief run — erosion_score's tier component is
     # sourced from the same exit_signals detector that fires those cards
@@ -11723,8 +11663,6 @@ if page == "🏠 Home":
             _ed_tickers_needed.add(str(p.get("ticker", "")))
         for s in (_ed_grow.get("composite_skipped") or []):
             _ed_tickers_needed.add(str(s.get("ticker", "")))
-        for b in (_ed_baseline_brief.get("buy_candidates") or []):
-            _ed_tickers_needed.add(str(b.get("ticker", "")))
     _ed_tickers_needed.discard("")
     _ed_intraday_pct = _ed_fetch_intraday(tuple(sorted(_ed_tickers_needed)))
 
@@ -14406,8 +14344,8 @@ elif page == "🧾 Summary":
                 "corr_unchecked":          _sm_bundle.get("_corr_unchecked"),
                 "corr_coverage":           _sm_bundle.get("corr_coverage"),
                 "holdings_scores":         _pth_holdings_scores,
-                "buy_candidates":          (
-                    _sm_bundle["_daily_brief"].get("buy_candidates")
+                "grow_today":              (
+                    _sm_bundle["_daily_brief"].get("grow_today")
                     if _sm_bundle.get("_daily_brief") is not None else None
                 ),
             }
@@ -14469,7 +14407,7 @@ elif page == "🧾 Summary":
                             _pth_prior_claims = json.loads(_pth_prior_claims)
                         except Exception:
                             _pth_prior_claims = {}
-                    _pth_prior_norm = {"claims": _pth_prior_claims}
+                    _pth_prior_norm = {"claims": _pth_prior_claims, "v": _pth_prior_row.get("schema_version")}
 
                 _pth_ledger = _pth.grade_prior(_pth_this_week, _pth_prior_norm)
                 _pth_claims = _pth_this_week["claims"]
@@ -14644,6 +14582,16 @@ elif page == "🧾 Summary":
                                 f"{_pth_labels[_pth_k]} — {_pth_status_badge[_pth_g['status']]} "
                                 f"({_pth_disp(_pth_g['from'])} → {_pth_disp(_pth_g['to'])})"
                             )
+                            if _pth_g.get("reason") == "version_boundary":
+                                st.caption(
+                                    "Action posture was redefined this week (Grow Today calls, "
+                                    "not scanner names), so it isn't graded against last week."
+                                )
+                            elif _pth_g.get("reason") == "version_unknown":
+                                st.caption(
+                                    "Last week's record has no readable version, so action "
+                                    "posture isn't graded."
+                                )
     except Exception:
         pass
 
@@ -27893,6 +27841,42 @@ elif page == "📋 Watchlist":
                         capital_cap_pct=NET_CAPITAL_POSITION_CAP_PCT,
                     ))
 
+            # Overflow disclosure (grow-today-owns-buys N3): a name that cleared
+            # every Grow Today check but lost only to pacing is sized HERE from
+            # the owner's own entry plan -- the daily pick cap does not bind the
+            # Watchlist. Read from the published Home brief; None at any level
+            # (Home not built / brief offline / key absent on a legacy brief) means
+            # "unknown" -> no caption, never a claim that it is not an overflow.
+            if _action == "ENTER_NOW":
+                _wl_synth = _get_or_offline(st.session_state, "_home_synth_cache")
+                # Same-day only: a brief built on an earlier ET day (a long-lived
+                # session) says nothing about today's pick cap.
+                _wl_gt_b = (
+                    _get_or_offline(_get_or_offline(_wl_synth, "bundle"), "_daily_brief")
+                    if _get_or_offline(_wl_synth, "date") == _today_et().isoformat() else None
+                )
+                _wl_gt_g = _get_or_offline(_wl_gt_b, "grow_today")
+                _wl_ovf = _get_or_offline(_wl_gt_g, "overflow_picks")
+                _wl_ovf_hit = next(
+                    (o for o in (_wl_ovf if isinstance(_wl_ovf, list) else [])
+                     if str(o.get("ticker", "")).upper() == str(_ticker).upper()),
+                    None,
+                )
+                if _wl_ovf_hit is not None:
+                    _wl_ovf_code = _wl_ovf_hit.get("reason")
+                    if _wl_ovf_code == _hold_reasons.PICK_CAP:
+                        _wl_ovf_why = "(daily pick limit)"
+                    else:
+                        _wl_ovf_txt = _hold_reasons.reason_text(
+                            _wl_ovf_code, {"sector": _wl_ovf_hit.get("sector")}).rstrip(".")
+                        _wl_ovf_why = f"({_wl_ovf_txt})" if _wl_ovf_txt else "(held back by pacing)"
+                    st.caption(
+                        "Cleared Grow Today's checks today but wasn't one of its picks "
+                        f"{_wl_ovf_why}"
+                        # "sized here" only when the sizing panel actually rendered.
+                        + (" — sized here from your Watchlist entry plan." if _wl_ps else ".")
+                    )
+
             # Detail recommendation.
             # The concrete pointer to the sizing panel lives HERE, not in the
             # advisor, because only the renderer knows whether that panel
@@ -32763,7 +32747,10 @@ elif page == "📜 Recommendations History":
     _REC_TYPE_LABELS = {
         "new_pick": "New Position",
         "add_winner": "Add to Winner",
-        "buy_candidate": "Opportunity Watch",
+        # grow-today-owns-buys: logged, unsized names that cleared every Grow
+        # Today check but lost only to pacing. Excluded by default below.
+        "overflow_pick": "Also cleared (not a pick)",
+        "buy_candidate": "Opportunity Watch (historical)",
         "enter_now": "Ready-to-Enter",
     }
     _rh_c1, _rh_c2, _rh_c3 = st.columns([1.4, 1.2, 1.2])
@@ -32794,10 +32781,31 @@ elif page == "📜 Recommendations History":
             _rh_start, _rh_end = _rh_custom_range[0], _rh_custom_range[1]
         else:
             _rh_start = _rh_end - _rh_td(days=30)
+    # Recs are loaded BEFORE the type filter so the retired buy_candidate label
+    # can carry the real last-surfaced date from the data (never an invented one;
+    # omitted when no such row is in the selected range).
+    with st.spinner("Loading recommendations history…"):
+        _rh_recs_df = db.load_recommendations(start_date=_rh_start, end_date=_rh_end)
+    _rh_bc_retired = None
+    # Only when the range reaches today: a range that stops earlier would make
+    # its own last row look like the retirement date.
+    if (_rh_recs_df is not None and not _rh_recs_df.empty
+            and _rh_end >= _today_et()
+            and {"rec_type", "rec_date"} <= set(_rh_recs_df.columns)):
+        try:
+            _rh_bc_dates = _rh_recs_df.loc[_rh_recs_df["rec_type"] == "buy_candidate", "rec_date"]
+            _rh_bc_dates = [str(_d)[:10] for _d in _rh_bc_dates.dropna()]
+            if _rh_bc_dates:
+                _rh_bc_retired = max(_rh_bc_dates)
+        except Exception:
+            _rh_bc_retired = None
+    if _rh_bc_retired:
+        _REC_TYPE_LABELS["buy_candidate"] = (
+            f"Opportunity Watch (historical — retired {_rh_bc_retired})")
     with _rh_c2:
         _rh_type_filter = st.multiselect(
             "Recommendation type",
-            ["new_pick", "add_winner", "buy_candidate", "enter_now"],
+            ["new_pick", "add_winner", "overflow_pick", "buy_candidate", "enter_now"],
             default=["new_pick", "add_winner", "enter_now"],
             format_func=lambda v: _REC_TYPE_LABELS.get(v, v),
             key="_rh_type_filter",
@@ -32811,8 +32819,7 @@ elif page == "📜 Recommendations History":
         )
 
     # ── Load data ───────────────────────────────────────────────────────────
-    with st.spinner("Loading recommendations history…"):
-        _rh_recs_df   = db.load_recommendations(start_date=_rh_start, end_date=_rh_end)
+    with st.spinner("Loading trades…"):
         _rh_trades_df = st.session_state.get("trades_df")
         if _rh_trades_df is None:
             _rh_trades_df = db.load_trades()
@@ -47423,6 +47430,16 @@ elif page == "🎯 My Edge":
                             f"{_stv_reliable_start} are excluded — recommendation coverage from "
                             "that period is unreliable, not graded either way."
                         )
+
+                    # D5(ii) rule-change disclosure (grow-today-owns-buys): shown
+                    # whenever any graded self trade was reclassified. The retired
+                    # date comes from the recs actually loaded here, else omitted.
+                    _stv_rr_caption = _stv.rule_reclassified_caption(
+                        _stv_summary.get("n_rule_reclassified"),
+                        _stv.last_buy_candidate_date(_stv_recs_df),
+                    )
+                    if _stv_rr_caption:
+                        st.caption(_stv_rr_caption)
 
                     # ── Situational-category breakdown (F-233 V2) ───────────────────
                     # Slices the self-initiated population by the buy-time "what kind

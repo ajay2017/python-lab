@@ -470,7 +470,7 @@ _RETIRED_STRINGS = {"buy_candidates", "pair_buy_lane_skips", "BUY — Scanner Pi
 # references the retired lane in these two files. The later combined commit
 # removes both and empties this set (test_pending_list_only_shrinks then
 # fails in the working tree until it does -- expected).
-_PENDING_OTHER_COMMITS = {"evening_debrief.py", "portfolio_thesis.py"}
+_PENDING_OTHER_COMMITS: set = set()   # emptied: P2/P3 landed (2026-10-15)
 
 
 def _retired_hits(path):

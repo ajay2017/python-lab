@@ -945,3 +945,114 @@ def test_save_record_situational_category_guard_sell_always_none():
     assert _stage("SELL", session_state) is None
     # The BUY branch, same session state, DOES carry it through.
     assert _stage("BUY", session_state) == "Institutional Flow"
+
+
+# ─── grow-today-owns-buys D5: overflow_pick + buy_candidate composite rule ──
+
+from stock_analyzer.constants import COMPOSITE_BUY  # noqa: E402
+
+
+def _bc(ticker="AAA", composite=None, rec_type="buy_candidate", rec_date="2026-08-10"):
+    r = _rec_row(ticker=ticker, rec_date=rec_date, rec_type=rec_type)
+    r["composite_score"] = composite
+    return r
+
+
+def _classify_one(recs, ticker="AAA", traded_at="2026-08-10"):
+    out = stv.classify_buys(
+        _trades_df([_trade_row(ticker=ticker, traded_at=traded_at, id_=1)]),
+        _recs_df(recs), {ticker}, set(),
+        SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS,
+    )
+    assert len(out) == 1
+    return out[0]
+
+
+def test_overflow_pick_match_is_app_aligned():
+    r = _classify_one([_bc(rec_type="overflow_pick", composite=None)])
+    assert r["bucket"] == "app_aligned"
+    assert r["rule_reclassified"] is False
+
+
+def test_buy_candidate_at_bar_is_app_aligned():
+    r = _classify_one([_bc(composite=float(COMPOSITE_BUY))])      # 65.0 boundary
+    assert r["bucket"] == "app_aligned"
+    assert r["rule_reclassified"] is False
+
+
+def test_buy_candidate_just_below_bar_is_self_and_tagged():
+    r = _classify_one([_bc(composite=COMPOSITE_BUY - 0.01)])      # 64.99
+    assert r["bucket"] == "self_in_scope"
+    assert r["rule_reclassified"] is True
+
+
+@pytest.mark.parametrize("bad", [None, float("nan"), "n/a", "80", True, float("inf"), float("-inf")])
+def test_buy_candidate_unusable_composite_is_self_and_tagged(bad):
+    r = _classify_one([_bc(composite=bad)])
+    assert r["bucket"] == "self_in_scope"
+    assert r["rule_reclassified"] is True
+
+
+def test_below_bar_buy_candidate_plus_new_pick_stays_app_aligned_untagged():
+    r = _classify_one([_bc(composite=40.0), _bc(rec_type="new_pick", composite=70.0)])
+    assert r["bucket"] == "app_aligned"
+    assert r["rule_reclassified"] is False
+
+
+def test_trade_with_no_rec_at_all_is_not_tagged():
+    r = _classify_one([])
+    assert r["bucket"] == "self_in_scope"
+    assert r["rule_reclassified"] is False
+
+
+def test_n_rule_reclassified_counts_graded_self_population_exactly():
+    today = date(2026, 9, 1)
+    rows, recs = [], []
+    # 3 matured trades matching only a below-bar / NULL / NaN buy_candidate
+    for i, comp in enumerate([40.0, None, float("nan")]):
+        d = today - timedelta(days=10 + i)
+        rows.append(_trade_row(ticker=f"R{i}", traded_at=d.isoformat(), id_=10 + i, price=100.0))
+        recs.append(_bc(ticker=f"R{i}", composite=comp, rec_date=d.isoformat()))
+    # 1 plain self trade (graded, NOT reclassified) + 1 aligned control
+    d = today - timedelta(days=12)
+    rows.append(_trade_row(ticker="PLAIN", traded_at=d.isoformat(), id_=20, price=100.0))
+    rows.append(_trade_row(ticker="ALIGN", traded_at=d.isoformat(), id_=21, price=100.0))
+    recs.append(_bc(ticker="ALIGN", composite=80.0, rec_date=d.isoformat()))
+    # 1 reclassified but too fresh to grade (inside REC_SCORE_MIN_DAYS)
+    fresh = today - timedelta(days=1)
+    rows.append(_trade_row(ticker="FRESH", traded_at=fresh.isoformat(), id_=30, price=100.0))
+    recs.append(_bc(ticker="FRESH", composite=10.0, rec_date=fresh.isoformat()))
+
+    universe = {"R0", "R1", "R2", "PLAIN", "ALIGN", "FRESH"}
+    classified = stv.classify_buys(
+        _trades_df(rows), _recs_df(recs), universe, set(),
+        SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS)
+    assert sum(1 for c in classified if c["rule_reclassified"]) == 4   # firing control
+    prices = {k: 110.0 for k in universe}
+    spy = _flat_spy(today - timedelta(days=40), today)
+    s = stv.self_vs_engine_summary(classified, prices, spy, today, BEHAVIORAL_MIN_SAMPLE_N)
+    assert s["n_rule_reclassified"] == 3
+    assert s["self_graded"]["n"] == 4            # 3 reclassified + PLAIN
+    assert s["app_aligned"]["n"] == 1
+
+
+def test_rule_reclassified_caption_only_when_n_positive_and_date_from_data():
+    assert stv.rule_reclassified_caption(0, "2026-10-14") == ""
+    assert stv.rule_reclassified_caption(None) == ""
+    assert stv.rule_reclassified_caption("x") == ""
+    c = stv.rule_reclassified_caption(3, "2026-10-14")                 # firing control
+    assert "3 earlier graded buy(s)" in c and "(2026-10-14)" in c
+    assert f"≥ {COMPOSITE_BUY}" in c
+    c2 = stv.rule_reclassified_caption(3, None)                         # date dropped
+    assert "()" not in c2 and "retired," in c2 and "3 earlier graded buy(s)" in c2
+
+
+def test_last_buy_candidate_date_derives_from_data_only():
+    df = _recs_df([
+        _bc(rec_date="2026-10-01"), _bc(rec_date="2026-10-14", ticker="BBB"),
+        _bc(rec_type="new_pick", rec_date="2026-10-20", ticker="CCC"),
+    ])
+    assert stv.last_buy_candidate_date(df) == "2026-10-14"
+    assert stv.last_buy_candidate_date(_recs_df([_bc(rec_type="new_pick")])) is None
+    assert stv.last_buy_candidate_date(None) is None
+    assert stv.last_buy_candidate_date(_recs_df([])) is None

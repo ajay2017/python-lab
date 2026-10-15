@@ -288,6 +288,7 @@ def test_write_outcome_absent_key_is_unknown():
     outcomes = {r["key"]: r for r in sh.check_write_outcomes({})}
     assert outcomes["_rec_log_save_result"]["severity"] == "unknown"
     assert outcomes["_gate_ledger_save_result"]["severity"] == "unknown"
+    assert outcomes["_overflow_rec_save_result"]["severity"] == "unknown"
     # _wl_rec_save_result is written on 📋 Watchlist, not Grow Today — "unknown"
     # here is the EXPECTED common case on any session that hasn't visited it yet.
     assert outcomes["_wl_rec_save_result"]["severity"] == "unknown"
@@ -731,3 +732,14 @@ def test_check_data_quality_propagates_none_roster_not_empty_set(monkeypatch):
 
     assert captured["held"] is None
     assert rows == [{"key": "orphan_cache_bundle_cache", "severity": "unknown"}]
+
+
+def test_overflow_write_outcome_is_graded_independently_of_the_buy_log():
+    container = {
+        "_rec_log_save_result": {"attempted": 2, "saved": 2, "error": None},
+        "_overflow_rec_save_result": {"attempted": 3, "saved": 0, "error": "boom"},
+    }
+    out = {r["key"]: r for r in sh.check_write_outcomes(container)}
+    assert out["_rec_log_save_result"]["severity"] == "ok"           # control
+    assert out["_overflow_rec_save_result"]["severity"] == "down"
+    assert out["_overflow_rec_save_result"]["label"] == "Also-cleared (overflow) log"

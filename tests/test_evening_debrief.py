@@ -94,6 +94,8 @@ def _brief(new_picks=None, adds=None, skipped=None, buys=None):
             "add_positions": adds or [],
             "composite_skipped": skipped or [],
         },
+        # Legacy key the retired scanner lane used to publish; kept so tests
+        # prove it is now ignored.
         "buy_candidates": buys or [],
     }
 
@@ -108,30 +110,26 @@ def test_plan_vs_reality_falsy_empty_dict_brief_returns_empty_shape():
     assert result == {"go_picks": [], "skip_picks": [], "skip_movers_excluded": 0, "held_back_other": {}}
 
 
-# ─── _plan_vs_reality — go-pick dedup precedence ─────────────────────────────
+# ─── _plan_vs_reality — retired scanner list is never graded ─────────────────
+# Reversed 2026-10-15 (grow-today-owns-buys P3): the old tests pinned that a
+# "confirmed" scanner buy_candidate became a Go pick. Grow Today owns every buy
+# now; a stray legacy `buy_candidates` key must be ignored, while a real
+# new_pick is still graded (control).
 
-def test_plan_vs_reality_new_pick_wins_dedup_over_buy_candidate_same_ticker():
-    new_picks = [{"ticker": "AAA", "score": 80, "composite_score": 75, "sector": "Tech", "thesis": "t1"}]
-    buys = [{"ticker": "AAA", "score": 50, "xref": {"verdict": "confirmed"}}]
-    brief = _brief(new_picks=new_picks, buys=buys)
-    result = ed._plan_vs_reality(brief, [], {})
-    assert len(result["go_picks"]) == 1
-    assert result["go_picks"][0]["source"] == "new_pick"
-
-
-def test_plan_vs_reality_buy_candidate_unconfirmed_verdict_excluded():
-    buys = [{"ticker": "BBB", "xref": {"verdict": "pending"}}]
+def test_plan_vs_reality_legacy_buy_candidates_key_is_not_graded():
+    buys = [{"ticker": "BBB", "score": 60, "xref": {"verdict": "confirmed"}}]
     brief = _brief(buys=buys)
     result = ed._plan_vs_reality(brief, [], {})
     assert result["go_picks"] == []
 
 
-def test_plan_vs_reality_buy_candidate_confirmed_verdict_included():
+def test_plan_vs_reality_new_pick_still_graded_beside_scanner_name():
+    new_picks = [{"ticker": "AAA", "score": 80, "composite_score": 75, "sector": "Tech", "thesis": "t1"}]
     buys = [{"ticker": "BBB", "score": 60, "xref": {"verdict": "confirmed"}}]
-    brief = _brief(buys=buys)
+    brief = _brief(new_picks=new_picks, buys=buys)
     result = ed._plan_vs_reality(brief, [], {})
-    assert len(result["go_picks"]) == 1
-    assert result["go_picks"][0]["source"] == "buy_candidate"
+    assert [g["ticker"] for g in result["go_picks"]] == ["AAA"]
+    assert result["go_picks"][0]["source"] == "new_pick"
 
 
 # ─── _plan_vs_reality — go_picks 4-branch outcome + MEANINGFUL_INTRADAY_PCT ──

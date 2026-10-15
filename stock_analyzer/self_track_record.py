@@ -6,7 +6,9 @@ Every BUY trade in the journal is classified into one of four buckets by
 whether a matching app recommendation exists on file within a short lookback
 window before the trade date:
 
-  app_aligned        — a matching new_pick/buy_candidate rec exists within
+  app_aligned        — a matching new_pick / overflow_pick rec (or a historical
+                        buy_candidate whose stored composite_score >=
+                        COMPOSITE_BUY) exists within
                         SELF_TRACK_MATCH_LOOKBACK_DAYS before (inclusive) the
                         trade date. This is the App's own call, not the
                         user's self-initiated instinct — graded here only as
@@ -53,6 +55,7 @@ missed-rec-framing inversion.
 """
 
 from datetime import date, timedelta
+from numbers import Real as _Real
 
 from stock_analyzer.recommendations_history import _to_date
 
@@ -97,16 +100,41 @@ def classify_buys(
     if recs_df is None:
         return None
 
+    from stock_analyzer.constants import COMPOSITE_BUY
+
+    # Two indexes. `rec_index` = app_aligned matches (new_pick, overflow_pick,
+    # and a historical buy_candidate ONLY when its stored composite cleared the
+    # Buy bar). `weak_bc_index` = buy_candidate rows that did NOT clear it
+    # (below-bar, NULL, NaN, non-numeric): the app was steering away from those
+    # names, so a trade matching only them is self-initiated, tagged
+    # rule_reclassified so the page can disclose the rule change.
     rec_index: dict[str, list[date]] = {}
+    weak_bc_index: dict[str, list[date]] = {}
     if len(recs_df) > 0:
         for _, r in recs_df.iterrows():
             rt = str(r.get("rec_type", "") or "").strip()
-            if rt not in ("new_pick", "buy_candidate"):
+            if rt not in ("new_pick", "overflow_pick", "buy_candidate"):
                 continue
             tk = str(r.get("ticker", "") or "").strip().upper()
             rd = _to_date(r.get("rec_date"))
             if not tk or rd is None:
                 continue
+            if rt == "buy_candidate":
+                cs = r.get("composite_score")
+                ok = False
+                # A real number only: a numeric-looking string is NOT a score.
+                # NaN and -inf fail the >= comparison by themselves; only +inf
+                # would pass it, hence the explicit upper guard. (bool is a
+                # Real but 0/1 is below the bar anyway.)
+                if isinstance(cs, _Real):
+                    try:
+                        cf = float(cs)
+                        ok = cf < float("inf") and cf >= COMPOSITE_BUY
+                    except (TypeError, ValueError, OverflowError):
+                        ok = False
+                if not ok:
+                    weak_bc_index.setdefault(tk, []).append(rd)
+                    continue
             rec_index.setdefault(tk, []).append(rd)
 
     out: list[dict] = []
@@ -125,6 +153,8 @@ def classify_buys(
 
         lo = D - timedelta(days=match_lookback_days)
         has_rec = any(lo <= rd <= D for rd in rec_index.get(tk, []))
+        rule_reclassified = (not has_rec) and any(
+            lo <= rd <= D for rd in weak_bc_index.get(tk, []))
         in_scope = tk in universe_set or tk in watchlist_set
 
         if has_rec:
@@ -145,6 +175,7 @@ def classify_buys(
             "shares":      shares,
             "price":       price,
             "bucket":      bucket,
+            "rule_reclassified": rule_reclassified,
             "user_thesis": t.get("user_thesis"),
             "situational_category": t.get("situational_category"),
             # ── fields compute_outcomes() reads (same shape as
@@ -166,6 +197,49 @@ def classify_buys(
             },
         })
     return out
+
+
+def last_buy_candidate_date(recs_df) -> str | None:
+    """ISO date (YYYY-MM-DD) of the newest `buy_candidate` row in `recs_df`, or
+    None when there is none or the frame is unreadable. Derived from data only
+    -- the retirement date is never typed in."""
+    try:
+        if recs_df is None or len(recs_df) == 0:
+            return None
+        if "rec_type" not in recs_df.columns or "rec_date" not in recs_df.columns:
+            return None
+        ds = []
+        for _, r in recs_df.iterrows():
+            if str(r.get("rec_type", "") or "").strip() != "buy_candidate":
+                continue
+            d = _to_date(r.get("rec_date"))
+            if d is not None:
+                ds.append(d)
+        return max(ds).isoformat() if ds else None
+    except Exception:
+        return None
+
+
+def rule_reclassified_caption(n, last_bc_date=None) -> str:
+    """My Edge caption explaining the D5(ii) rule change. "" unless n > 0.
+    `last_bc_date` None -> the parenthetical date clause is dropped, never
+    invented."""
+    from stock_analyzer.constants import COMPOSITE_BUY
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    when = f" ({last_bc_date})" if last_bc_date else ""
+    return (
+        "ℹ️ How app-aligned is counted: a buy counts as the app's call only if "
+        "it matched a New Position or an \"Also cleared\" name — or, before the "
+        f"More Buy Candidates feed was retired{when}, a More Buy Candidates name "
+        f"whose composite was ≥ {COMPOSITE_BUY}. {n} earlier graded buy(s) matched only "
+        "a lower-scored or unscored More Buy Candidates name — names the app was "
+        "steering away from — so they count as self-initiated."
+    )
 
 
 # ── Summary ──────────────────────────────────────────────────────────────────
@@ -200,6 +274,8 @@ def self_vs_engine_summary(
           "n_self_in_scope": int, "n_self_graded": int,
           "n_self_in_scope_graded": int, "n_self_out_of_scope_graded": int,
           "n_coverage_limited": int,
+          "n_rule_reclassified": int,   # graded self trades that matched ONLY a
+                                        # below-bar/unscored buy_candidate
           "app_aligned":  {"n": int, "avg_alpha_pct": float|None, "sufficient": bool},
           "self_graded":  {"n": int, "avg_alpha_pct": float|None, "sufficient": bool},
           "min_sample_n": int,
@@ -271,6 +347,10 @@ def self_vs_engine_summary(
         "n_self_out_of_scope_graded":
             sum(1 for r in buckets["self_out_of_scope"] if _is_graded(r)),
         "n_coverage_limited":   len(buckets["coverage_limited"]),
+        # Same graded self population as self_graded["n"] (never hardcoded).
+        "n_rule_reclassified":
+            sum(1 for r in self_graded_items
+                if _is_graded(r) and r.get("rule_reclassified")),
         "app_aligned":          _graded(buckets["app_aligned"]),
         "self_graded":          _graded(self_graded_items),
         "min_sample_n":         min_sample_n,

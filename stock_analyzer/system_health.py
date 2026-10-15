@@ -304,6 +304,9 @@ _CACHES: tuple[tuple[str, str], ...] = (
 # not surfaced here.
 _WRITE_OUTCOMES: tuple[tuple[str, str], ...] = (
     ("_rec_log_save_result",     "Buy recommendations log"),
+    # grow-today-owns-buys: the "also cleared" (overflow_pick) rows are saved in
+    # their OWN call, so a failure there must not hide behind a green buy log.
+    ("_overflow_rec_save_result", "Also-cleared (overflow) log"),
     ("_gate_ledger_save_result", "Gate suppression ledger"),
     # Written on the Watchlist page, not Grow Today — "unknown" here is the
     # expected common case on any session that hasn't visited 📋 Watchlist yet.
