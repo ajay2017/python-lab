@@ -33031,9 +33031,10 @@ elif page == "📜 Recommendations History":
             st.markdown("### 🎯 Missed Opportunity — New Positions to Initiate you skipped")
             st.caption(
                 "Scoped to **New Positions to Initiate** (names that cleared "
-                "all gates). The awareness only **More Buy Candidates** feed (Conflicted / "
-                "Unverified names the App flags to skip, e.g. a sub-65 composite) is "
-                "**excluded** — skipping those was the correct call, not a miss."
+                "all gates). The retired **More Buy Candidates** feed (Conflicted / "
+                "Unverified names the App flagged to skip, e.g. a sub-65 composite; retired "
+                "2026-10-15) and the unsized **Also cleared** names are **excluded** — "
+                "skipping those was the correct call, not a miss."
             )
             st.markdown(
                 f"<div style='background:#0f172a;border:1px solid #334155;border-radius:8px;"
@@ -40676,7 +40677,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **Two places this happens — don't mix them up:**
 - **🏠 Home → "Refresh Signals"** runs the *full* sweep above — curated **+** watchlist **+** the ~200-name discovery movers — and feeds **Grow Today**.
-- **🔍 Market Scanner page** is a separate *manual* tool: it scans only the curated names you select **+ your watchlist** (~85), ranked by momentum. It does **not** include the discovery sweep. So a breakout in an *untracked* name appears on the **Home brief (Grow Today / More Buy Candidates)** — *not* on the Market Scanner page.
+- **🔍 Market Scanner page** is a separate *manual* tool: it scans only the curated names you select **+ your watchlist** (~85), ranked by momentum. It does **not** include the discovery sweep. So a breakout in an *untracked* name appears on the **Home brief (Grow Today — as a pick, an "Also cleared" name, or a "Momentum lead")** — *not* on the Market Scanner page.
 
 **2. What gets *recommended* (the gates).** Of everything scanned, only names that clear **Composite ≥ 65** *and* pass the gates (sector cap, single-name ceiling, imminent-macro, …) become **Grow Today → "New Positions to Initiate."** The funnel:
 
@@ -40692,13 +40693,17 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **Two entry triggers in "New Positions to Initiate":** curated scanner picks that passed the momentum gate show **"Momentum X/100"** in the header, while movers surfaced from the discovery universe show **"Breakout today"** with the day-change badge (e.g. "+7.6% today"). Both types pass the same portfolio-level gates (composite ≥ 65, sector diversity, concentration limits, macro event check).
 
-**A "📉 …" caption on a New Position pick (or, since 2026-09-17, a scanner-pick row under "More Buy Candidates" below) discloses the stock's own recent technical weakness** (down materially from a recent high, below its 50-day trend) — this describes the stock's chart, not a position you hold, since you don't own it yet. It never suppresses the pick — the composite still rates it a buy — it's shown so you can enter with full context rather than being surprised hours later if the same weakness triggers a loss-protection card once you do own it. The same caption also appears on 📋 Watchlist's ENTER_NOW cards for the identical reason.
+**A "📉 …" caption on a New Position pick discloses the stock's own recent technical weakness** (down materially from a recent high, below its 50-day trend) — this describes the stock's chart, not a position you hold, since you don't own it yet. It never suppresses the pick — the composite still rates it a buy — it's shown so you can enter with full context rather than being surprised hours later if the same weakness triggers a loss-protection card once you do own it. The same caption also appears on 📋 Watchlist's ENTER_NOW cards for the identical reason.
 
 **⏱️ Entry Timing caution.** A card may show a small caption when momentum is running well ahead of the composite score for that specific pick. It points you to the 📊 Predictive Analytics → ⏱️ Entry Timing tab, which shows how similar picks have actually done in your history. The caption itself makes no claim about the outcome, because that pattern has changed as data accumulated. This never changes the recommendation or blocks anything; it's the same pattern the 📊 Predictive Analytics → ⏱️ Entry Timing tab tracks in full, with current numbers.
 
 **This list recomputes live — it is *not* a fixed morning list.** Every time Home refreshes, prices re-score and every gate re-evaluates, so a name can appear and later drop off *within the same day*. That is expected, not an error. Three cues make it legible: **(a) a firmness badge** — a pick "at the line" (amber) is clearing the entry bar by only a few points and a normal intraday move could flip it below; a "firm" pick is comfortably clear. **(b) a "was showing earlier today" footer** — if a name surfaced earlier but is no longer clearing this pass, it's listed with *why* (its composite re-priced below the bar, a sector cap, a macro event, or a fresh Reduce/Exit call), so a name leaving the list is never silent. These are **not** retractions or buy signals — the earlier read was correct for its moment. **(c) a pre-market note** — before the 9:30 ET open, prices are provisional and picks may re-price at the open. Every name that surfaced today is also kept permanently on the 📜 Recommendations History page.
 
-**"More Buy Candidates" are *not* recommendations.** They're momentum names from the *same scan* that did **not** clear the gates — most often *"composite contradicts momentum"* (hot price, but the full Technical + Business Quality + Sentiment picture says Hold). They're shown as **research leads to verify on the Analysis page — not buy calls.** A 🔥 badge marks a candidate that surfaced from the discovery sweep (a fresh breakout outside your tracked list).
+**Grow Today is the only place the app issues a buy.** (Until 2026-10-15 a separate "More Buy Candidates" list showed scanner names labelled "BUY — Scanner Pick" on momentum alone; most of them had a composite below the Buy bar, so it was retired.) Below the sized picks you may see these, none with a share size or a trade button — open any of them with ▶ Analyze:
+- **"✔ Also cleared every check — not one of today's picks"** — names that passed every check but were held back only by pacing: the daily pick limit, the one-per-sector slot or the breakout limit (the reason is named). A 📋 tag shows when the name is on your Watchlist.
+- **"⏸ Flat market — only fully confirmed setups today"** — names held back on a flat day, with their composite and, where it can be known, what would clear them (e.g. after earnings).
+- **"Momentum leads — not checked today"** (collapsed) — hot names Grow Today didn't evaluate today, so they carry no verdict.
+- **"Adds paused on a flat/down day"** (collapsed) — holdings that would qualify for an add-to-winner; adds resume on the next up day.
 
 **What it deliberately does *not* do:** it does **not** scan the entire market. A thin micro-cap up 300% on the day — the kind a broker's *"all stocks > 20% today"* filter shows — won't appear here by design: the app screens *liquid, quality* names and stays a medium-term advisor, not a squeeze-chaser. To check any specific ticker yourself, use **🔍 Research a Stock** on Home or the **📈 Analysis** page — type a company name ("microsoft") instead of a ticker and it resolves the most likely match, disclosing which symbol it picked (and any other close-scoring match, e.g. GOOGL vs GOOG) rather than silently substituting one.
 """
@@ -41323,7 +41328,7 @@ Three chart views: timeline bars with grade-band zones, a metric heatmap showing
 
 **🧬 Behavioral Fingerprint — "What patterns show up in how I actually act on signals?"**
 
-Directional, sample-gated observations over your own Buy-side decisions (new_pick / add_winner recommendations only — the awareness-only "More Buy Candidates" feed is excluded). Three cards:
+Directional, sample-gated observations over your own Buy-side decisions (new_pick / add_winner recommendations only — the retired "More Buy Candidates" feed and the unsized "Also cleared" names are excluded). Three cards:
 
 - **Momentum-chasing check** — do you act more readily on signals for stocks already running hot, or ones that scored well without already being hot?
 - **Conviction-tier follow-through** — do you actually act more on Strong Buy calls than plain Buy calls, as you'd rationally expect?
@@ -46365,8 +46370,8 @@ elif page == "🎯 My Edge":
         st.subheader("🧬 Behavioral Fingerprint")
         st.caption(
             "Directional, sample-gated observations over your own actionable Buy-side "
-            "decisions (new_pick / add_winner recs only — the awareness-only "
-            "'More Buy Candidates' feed is excluded). Exit-side TRIM/EXIT/WATCH/RISK_OFF "
+            "decisions (new_pick / add_winner recs only — the retired 'More Buy Candidates' "
+            "feed and the unsized 'Also cleared' names are excluded). Exit-side TRIM/EXIT/WATCH/RISK_OFF "
             "patterns are covered separately below (Exit Signal Response), built forward "
             "from the exit_signals history persisted since 2026-07-18. "
             "**These are observed correlations in your own past decisions — not verdicts, "
