@@ -43,10 +43,12 @@
 -- impossible-states-cleanup.sql. Re-run Q0 monthly and compare: a check
 -- that rises above its baseline, or a new non-zero check, is a NEW defect.
 -- Every residual below was investigated and explained (Q1/Q2):
---   A3  23  exact-50 pillars. Only WK 2026-10-07 (t 68 -> 50 -> 68) is a
---           fabricated technical 50 (technicals.py fallback, no t_available
---           flag -- open design item). The rest sit on the 4-point t_score
---           lattice, or are real scored-0.0 sentiment / stable bq readings.
+--   A3  23  exact-50 pillars. WK 2026-10-07 (t 68 -> 50 -> 68) is UNPROVEN,
+--           most likely a real full-leg 50 (WK has years of history; a
+--           2026-10-15 check found 0 non-integer t_score rows). The real
+--           hole was short history, fixed by F-304 (t_available). The rest
+--           sit on the 4-point t_score lattice, or are real scored-0.0
+--           sentiment / stable bq readings.
 --   C1  19  enter_now on an EXIT/WATCH name = owner's 2026-09-16 warn-only
 --           design; new_pick + EXIT all <= 2026-09-11 (pre F-39i fix);
 --           add_winner then WATCH later the same day = intraday transition.

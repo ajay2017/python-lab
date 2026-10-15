@@ -1,5 +1,7 @@
 # Score History Capture — persist the daily composite the app already computes and discards
 
+**Status update 2026-10-15: the technical half of finding D3 is RESOLVED by F-304.** Bundles now carry `t_available`; score_history stores `t_score` NULL when it was unmeasured (no column added). Rows before 2026-10-15 could in principle carry a short-history `t_score`; a production check found none. The `t_score NUMERIC -- stored as-is (no availability flag exists; D3)` note in the schema below is historical.
+
 **Status: SHIPPED 2026-09-13 (F-269).** Built by `implementer` per §1a's spec, Opus
 `reviewer`: **SHIP, 0 blocking** (one non-blocking note: the capture loop isn't wrapped in
 its own try/except, matching its already-shipping `analyst_target_snapshots` sibling's

@@ -680,6 +680,11 @@ data.fetch_ticker_bundle(ticker)   ← Yahoo Finance (single session per ticker)
         │                              │
         │                              ▼
         │                    technicals.technical_score() → t_score, t_signals
+        │                    technicals.technical_coverage() → t_available, t_bars
+        │                      (F-304: False below TECHNICAL_MIN_BARS closes or with
+        │                       RSI/MACD/Bollinger/MA Trend missing; the composite
+        │                       stays numeric, pillar_availability.verdict_basis()
+        │                       decides equity / etf / withheld)
         │
         ├── info (company)  →  data.fetch_financials_from_info()
         │                              │
@@ -3094,8 +3099,13 @@ pillar wasn't genuinely measured (`stock_analyzer.util::bq_score_or_none` /
 these exact fabricated neutrals at a different write boundary). **Deliberately NO
 coalesce-on-write** (unlike `save_exit_signals_batch`) — a NULL here means "not measurable
 this run," which *is* the information a future decay analysis needs; coalescing would
-silently resurrect an earlier run's value over a later honest NULL. `t_score` has no
-availability signal in the codebase today (a separate, tracked gap) and is stored as-is.
+silently resurrect an earlier run's value over a later honest NULL. **`t_score` follows the
+same rule since 2026-10-15 (F-304):** `util.t_score_or_none` nulls it when the bundle's
+`t_available` is False (fewer than `TECHNICAL_MIN_BARS` valid closes, or a required leg
+missing). No `t_available` column was added (owner decision, no DDL). In practice a withheld
+name writes no row at all, because its composite is withheld before this loop. Rows before
+2026-10-15 could in principle carry a short-history `t_score`; a 2026-10-15 production check
+found none (0 of 410 rows with a non-integer `t_score`, the signature of a missing leg).
 `bq_available`/`val_available` are stored alongside `composite` specifically so a future
 readout can detect that a composite move was really a pillar-availability flip, not genuine
 score decay. A `stale_as_of`-served bundle (up to 5 days old) produces **no row at all**,
