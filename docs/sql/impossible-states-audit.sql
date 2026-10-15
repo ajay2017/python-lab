@@ -32,6 +32,30 @@
 
 
 -- ---------------------------------------------------------------------
+-- BASELINE — Q0 on 2026-10-14, after ff5ef85 + 3ab4d59 and the owner-run
+-- impossible-states-cleanup.sql. Re-run Q0 monthly and compare: a check
+-- that rises above its baseline, or a new non-zero check, is a NEW defect.
+-- Every residual below was investigated and explained (Q1/Q2):
+--   A3  23  exact-50 pillars. Only WK 2026-10-07 (t 68 -> 50 -> 68) is a
+--           fabricated technical 50 (technicals.py fallback, no t_available
+--           flag -- open design item). The rest sit on the 4-point t_score
+--           lattice, or are real scored-0.0 sentiment / stable bq readings.
+--   C1  19  enter_now on an EXIT/WATCH name = owner's 2026-09-16 warn-only
+--           design; new_pick + EXIT all <= 2026-09-11 (pre F-39i fix);
+--           add_winner then WATCH later the same day = intraday transition.
+--   C2   6  non-binding G-20 pre-pass rows (counterfactual=FALSE) beside a
+--           BUY-type rec; intraday transitions (ON 09-21 16:08 = probable
+--           WATCH flicker, see the hysteresis open item).
+--   C3   2  APP 09-18, MU 09-14: morning cron vs later app composite.
+--   C7   3  09-22/29/30: exactly one share of a same-day buy logged after
+--           the 17:30 cron; the app rewrote the snapshot later.
+--   C8   2  MU 2026-06-25 (pre-fix sweep hole, unrecoverable -- no close
+--           stored); EOG 06-15 (a real sell + rebuy).
+--   D5   3  INTC/QCOM/MU 2026-05-26/28: composite column not yet populated.
+--   Every other check: 0.
+-- ---------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------
 -- Q0 — SUMMARY. Run this first, alone.
 -- ---------------------------------------------------------------------
 SELECT * FROM (
