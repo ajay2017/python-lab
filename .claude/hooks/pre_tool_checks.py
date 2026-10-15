@@ -5,7 +5,8 @@ CLAUDE.md, plus a regression-test gate on `git commit`/`git push`
 
   #3  never run the app locally
   #4  decision-engine-core / DB-write commits need an Opus review citation
-  #5  `feat(` commits need Design = / Build = provenance trailers
+  #5  `feat(` commits need Design = / Build = provenance trailers;
+      `fix(` / `refactor(` / `perf(` commits need a Build = trailer
 
 What this CANNOT do: prove a reviewer subagent actually ran. It verifies a
 correctly-formatted citation is present. See CLAUDE.md "Review & test economy"
@@ -267,8 +268,9 @@ def main() -> None:
             print(
                 "WARNING (workflow gates): could not read this commit's message "
                 "(editor-driven commit, `-F -` heredoc, or an unreadable/mis-encoded "
-                "file), so the feature-provenance check was SKIPPED. Use "
-                "`-F <file>` or `-m` if this is a feat( commit.",
+                "file), so the provenance checks (feat( Design/Build and "
+                "fix(/refactor(/perf( Build) were SKIPPED. Use "
+                "`-F <file>` or `-m` if this is one of those commits.",
                 file=sys.stderr,
             )
 
@@ -305,6 +307,19 @@ def main() -> None:
                     file=sys.stderr,
                 )
                 sys.exit(2)
+
+        # Build attestation (owner decision 2026-10-15): every code-changing
+        # commit type records who built it. Design is NOT required here.
+        if _is_build_attested_commit(message) and _missing_build_trailer(message):
+            print(
+                "BLOCKED (workflow provenance): fix(/refactor(/perf( commit is missing the Build trailer.\n"
+                "Add to the commit body:\n"
+                "  Build  = implementer (<model>)   OR   Build  = lead -- <why no implementer>\n"
+                "Per CLAUDE.md: scoped, decided fixes route through `implementer` (Sonnet) by\n"
+                "default; `lead` is accepted but must be a deliberate, recorded statement.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
 
         # Regression-test + recurring-defect gates (docs/testing-strategy.md):
         # block the commit if `pytest tests/` fails or check_antipatterns.py
@@ -1511,6 +1526,11 @@ _BUILD_TRAILER_RE = re.compile(r"^\s*Build\s*=\s*\S+", re.MULTILINE | re.IGNOREC
 # `\s*` before the scope (audit C-M4): `feat (home): ...` used to skip the
 # provenance check entirely.
 _FEAT_COMMIT_RE = re.compile(r"^\s*feat\s*[(!:]", re.IGNORECASE)
+# fix(/refactor(/perf( commits need a Build trailer only (owner decision
+# 2026-10-15). Deliberately a SEPARATE predicate: hook_liveness_check.py scans
+# recent history through _is_feature_commit/_missing_provenance_trailers, and
+# widening those would retroactively flag every historical fix( commit.
+_BUILD_ATTESTED_COMMIT_RE = re.compile(r"^\s*(?:fix|refactor|perf)\s*[(!:]", re.IGNORECASE)
 
 
 def _has_review_citation(message: str) -> bool:
@@ -1524,6 +1544,14 @@ def _has_review_citation(message: str) -> bool:
 
 def _is_feature_commit(message: str) -> bool:
     return bool(_FEAT_COMMIT_RE.match(message.lstrip("﻿")))
+
+
+def _is_build_attested_commit(message: str) -> bool:
+    return bool(_BUILD_ATTESTED_COMMIT_RE.match(message.lstrip("﻿")))
+
+
+def _missing_build_trailer(message: str) -> bool:
+    return not _BUILD_TRAILER_RE.search(message)
 
 
 def _missing_provenance_trailers(message: str) -> list[str]:

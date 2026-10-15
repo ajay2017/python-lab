@@ -948,6 +948,47 @@ def test_a_text_gate_block_records_the_full_message(monkeypatch, tmp_path):
     assert mode == "commit-msg" and "Hard Rule #5" in text
 
 
+def _commit_msg_run(monkeypatch, tmp_path, text):
+    """Drive the commit-msg path the way the shim does: argv[1] == "commit"."""
+    msg = tmp_path / "COMMIT_EDITMSG"
+    msg.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["docs/x.md"])
+    return adapter._run_gates(["adapter", "commit", str(msg)])
+
+
+@pytest.mark.parametrize("subject", ["fix(x): y", "refactor(x): y", "perf!: y", "fix (s): y"])
+def test_build_attested_commit_without_build_trailer_is_blocked(
+        monkeypatch, tmp_path, capsys, subject):
+    assert _commit_msg_run(monkeypatch, tmp_path, subject + "\n") == 1
+    err = capsys.readouterr().err
+    assert "fix(/refactor(/perf( commit missing Build trailer" in err
+    assert "Design" not in err.split("Hard Rule #5")[1].split("Build  =")[0]
+    assert len(_BLOCKS_RECORDED) == 1 and "missing Build trailer" in _BLOCKS_RECORDED[0][1]
+
+
+@pytest.mark.parametrize("trailer", [
+    "Build = lead -- one-line typo", "Build  = implementer (Sonnet 5.5)"])
+def test_fix_with_build_trailer_and_no_design_passes(monkeypatch, tmp_path, capsys, trailer):
+    assert _commit_msg_run(monkeypatch, tmp_path, f"fix(x): y\n\n{trailer}\n") == 0
+    err = capsys.readouterr().err
+    assert "trailers: checked (Build)" in err
+    assert _BLOCKS_RECORDED == []
+
+
+def test_feat_still_requires_design_and_build_and_reports_it(monkeypatch, tmp_path, capsys):
+    assert _commit_msg_run(monkeypatch, tmp_path, "feat(x): y\n\nBuild = lead -- z\n") == 1
+    assert "feature commit missing Design trailer(s)" in capsys.readouterr().err
+    assert _commit_msg_run(
+        monkeypatch, tmp_path, "feat(x): y\n\nDesign = lead -- z\nBuild = lead -- z\n") == 0
+    assert "trailers: checked (Design + Build)" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("subject", ["docs(x): y", "chore: y", "test(x): y", "fixup! fix(x): y"])
+def test_other_commit_types_need_no_trailer(monkeypatch, tmp_path, capsys, subject):
+    assert _commit_msg_run(monkeypatch, tmp_path, subject + "\n") == 0
+    assert "trailers: N/A (not a feat(/fix(/refactor(/perf( commit)" in capsys.readouterr().err
+
+
 def test_an_adapter_crash_records_the_block(monkeypatch):
     def _raise(mode):
         raise RuntimeError("boom")

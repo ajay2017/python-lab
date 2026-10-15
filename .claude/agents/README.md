@@ -41,7 +41,8 @@ while the lead orchestrates and the Opus reviewer guards the decision logic.
 > longer convention-only. `pre_tool_checks.py` now blocks a commit that (a) stages
 > a decision-engine-core **or DB-write** file without a properly-formatted Opus
 > review citation (resolved model + verdict + blocking count), or (b) is a `feat(`
-> commit missing its `Design =` / `Build =` provenance trailers. `lead` is an
+> commit missing its `Design =` / `Build =` provenance trailers, or (c) is a
+> `fix(`/`refactor(`/`perf(` commit missing `Build =` (2026-10-15). `lead` is an
 > accepted answer on both trailers — the requirement is a deliberate, permanently
 > recorded statement of who designed and who built, so the split is auditable in
 > git history rather than only in a session transcript. Separately — a

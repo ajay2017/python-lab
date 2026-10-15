@@ -771,6 +771,80 @@ class TestProvenanceTrailers:
         assert hook._missing_provenance_trailers(msg) == ["Design"]
 
 
+class TestBuildAttestedCommits:
+    """Owner decision 2026-10-15: fix(/refactor(/perf( commits need a Build
+    trailer (Design is NOT required). feat( is unchanged."""
+
+    @pytest.mark.parametrize("subject", [
+        "fix(x): y", "refactor: y", "perf!: y", "fix (scope): y", "fix  (scope): y",
+        "FIX(x): y", "refactor(x)!: y", "\ufefffix(x): y", "fix!: y", "fix: y",
+    ])
+    def test_recognised_as_build_attested(self, subject):
+        assert hook._is_build_attested_commit(subject) is True
+
+    @pytest.mark.parametrize("subject", [
+        "docs(x): y", "test(x): y", "chore(x): y", "feat(x): y", "build(x): y",
+        "ci(x): y", "revert: y", "fixup! fix(x): y", "fixes(x): y", "fixed: y",
+        "performance(x): y", "refactoring: y", "Merge branch 'x'", "",
+    ])
+    def test_other_types_are_not_build_attested(self, subject):
+        assert hook._is_build_attested_commit(subject) is False
+
+    def test_fix_without_build_trailer_is_missing(self):
+        assert hook._missing_build_trailer("fix(x): y") is True
+
+    @pytest.mark.parametrize("trailer", [
+        "Build = lead -- one-line typo", "Build  = implementer (Sonnet 5.5)",
+    ])
+    def test_fix_with_build_trailer_is_not_missing(self, trailer):
+        assert hook._missing_build_trailer(f"fix(x): y\n\n{trailer}") is False
+
+    def test_a_bare_empty_build_trailer_does_not_count(self):
+        assert hook._missing_build_trailer("fix(x): y\n\nBuild =") is True
+
+    def test_design_is_not_required_for_fix(self):
+        msg = "fix(x): y\n\nBuild = lead -- tiny"
+        assert hook._missing_build_trailer(msg) is False
+        assert hook._is_feature_commit(msg) is False
+
+    def test_liveness_predicate_was_not_widened(self):
+        """hook_liveness_check scans history via _is_feature_commit; widening
+        it would retroactively flag every historical fix( commit."""
+        for subject in ("fix(x): y", "refactor(x): y", "perf(x): y"):
+            assert hook._is_feature_commit(subject) is False
+
+    def test_feat_still_needs_both_trailers(self):
+        assert set(hook._missing_provenance_trailers("feat(x): y")) == {"Design", "Build"}
+        assert hook._missing_provenance_trailers("feat(x): y\n\nBuild = lead -- z") == ["Design"]
+
+    def _main(self, monkeypatch, command):
+        payload = json.dumps({"tool_input": {"command": command}})
+        monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+        monkeypatch.setattr(hook, "_run_gates_concurrently",
+                            lambda *a, **k: {"pytest": (True, ""), "antipattern": (True, "")})
+        with pytest.raises(SystemExit) as exc_info:
+            hook.main()
+        return exc_info.value.code
+
+    def test_main_blocks_fix_without_build_with_the_reason(self, monkeypatch, tmp_git_repo, capsys):
+        code = self._main(monkeypatch, 'git commit -m "fix(x): y"')
+        err = capsys.readouterr().err
+        assert code == 2
+        assert "fix(/refactor(/perf( commit is missing the Build trailer" in err
+
+    def test_main_allows_fix_with_build_and_no_design(self, monkeypatch, tmp_git_repo, capsys):
+        code = self._main(monkeypatch,
+                          'git commit -m "fix(x): y" -m "Build = lead -- one-line typo"')
+        assert code == 0
+        assert "Build trailer" not in capsys.readouterr().err
+
+    def test_main_still_blocks_feat_with_the_feature_message(self, monkeypatch, tmp_git_repo, capsys):
+        code = self._main(monkeypatch, 'git commit -m "feat(x): y"')
+        err = capsys.readouterr().err
+        assert code == 2 and "feature commit is missing" in err
+        assert "fix(/refactor(/perf(" not in err
+
+
 class TestCommitTypeDetection:
     def test_plain_commit_is_plain(self):
         tokens = hook._tokens('git commit -m "x"')
@@ -858,7 +932,8 @@ class TestMainMarkerWiring:
             hook, "_write_verified_tree", lambda tree: written.setdefault("tree", tree)
         )
 
-        code = self._invoke_main(monkeypatch, 'git commit -m "fix(x): y"')
+        code = self._invoke_main(
+            monkeypatch, 'git commit -m "fix(x): y" -m "Build = lead -- test fixture"')
         assert code == 0
         assert "tree" in written
 

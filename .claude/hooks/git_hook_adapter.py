@@ -17,7 +17,8 @@ policy can switch it off.
 ================== WHAT THIS DOES AND DOES NOT COVER ==================
 `commit-msg` -- TEXT gates, on an ordinary `git commit`:
   * Hard Rule #4 -- an Opus review citation when a `_GATE_FILES` member is staged
-  * Hard Rule #5 -- `Design =` / `Build =` trailers on a `feat(` commit
+  * Hard Rule #5 -- `Design =` / `Build =` trailers on a `feat(` commit, and a
+    `Build =` trailer on a `fix(` / `refactor(` / `perf(` commit
 
 `pre-commit` -- CODE gates, when the staged set touches the relevant paths. They
 run in a temporary detached worktree checked out from a snapshot of the INDEX
@@ -272,7 +273,7 @@ def _install() -> int:
         os.chmod(path, 0o755)
         print(f"installed {path}{note}")
     print()
-    print("commit-msg : review citation + provenance trailers (ordinary commit)")
+    print("commit-msg : review citation + provenance trailers (feat/fix/refactor/perf)")
     print("pre-commit : pytest + antipattern check, when staged paths need them")
     print("pre-push   : full pytest suite, for any push that adds commits")
     print()
@@ -740,6 +741,12 @@ def _run_gates(argv: list[str]) -> int:
                 "  Build  = implementer (<model>)         OR  Build  = lead -- <why>"
             )
 
+    if ptc._is_build_attested_commit(message) and ptc._missing_build_trailer(message):
+        failures.append(
+            "Hard Rule #5 -- fix(/refactor(/perf( commit missing Build trailer.\n"
+            "  Build  = implementer (<model>)         OR  Build  = lead -- <why>"
+        )
+
     if failures:
         text = "\n\n".join("BLOCKED (workflow gates): " + f for f in failures)
         print(text, file=sys.stderr)
@@ -763,10 +770,12 @@ def _run_gates(argv: list[str]) -> int:
         f"citation: checked ({len(gated)} gate file(s))" if gated
         else "citation: N/A (no gate files staged)"
     )
-    trailers = (
-        "trailers: checked" if ptc._is_feature_commit(message)
-        else "trailers: N/A (not a feat( commit)"
-    )
+    if ptc._is_feature_commit(message):
+        trailers = "trailers: checked (Design + Build)"
+    elif ptc._is_build_attested_commit(message):
+        trailers = "trailers: checked (Build)"
+    else:
+        trailers = "trailers: N/A (not a feat(/fix(/refactor(/perf( commit)"
     print(
         f"[native git hook: commit-msg] Text gates passed -- {cite}; {trailers}. "
         "Code gates are pre-commit's job (N/A for some commits; not run at all "

@@ -31,6 +31,9 @@
 #     never does (tests/test_pre_tool_checks.py pins this template).
 #
 #   • Any `feat(` commit requires BOTH provenance trailers:
-#       Design = planner (Opus 5): <verdict>   |   Design = lead — <why no planner>
-#       Build  = implementer (Sonnet 5)        |   Build  = lead — <why no implementer>
+#       Design = planner (Opus 5.5): <verdict> |   Design = lead — <why no planner>
+#       Build  = implementer (Sonnet 5.5)      |   Build  = lead — <why no implementer>
 #     "lead" is an accepted answer — the point is a deliberate, recorded statement.
+#   • Any `fix(` / `refactor(` / `perf(` commit requires the Build trailer:
+#       Build  = implementer (Sonnet 5.5)      |   Build  = lead — <why no implementer>
+#     (Design is not required.) Scoped, decided fixes route to `implementer` by default.
