@@ -44,7 +44,9 @@ def _run(monkeypatch, *, exit_signals_ok, analyst_snapshots_ok):
     monkeypatch.setattr(cr.db, "save_exit_signals_batch", lambda *_a, **_k: exit_signals_ok)
     monkeypatch.setattr(cr.db, "save_analyst_target_snapshots_batch",
                          lambda *_a, **_k: analyst_snapshots_ok)
-    return cr._run_premarket(datetime.datetime(2026, 8, 30, 8, 30), force=True)
+    # A Monday: since 2026-10-14 the lane skips the exit_signals write on a
+    # closed day even when forced, and 2026-08-30 was a Sunday.
+    return cr._run_premarket(datetime.datetime(2026, 8, 31, 8, 30), force=True)
 
 
 def test_exit_signals_success_logs_captured(monkeypatch, capsys):

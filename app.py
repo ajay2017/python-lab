@@ -5654,7 +5654,15 @@ if page == "🏠 Home":
                 for _, r in port_df.iterrows()
                 if r["Ticker"] in _lp_map and _lp_map[r["Ticker"]].get("price", 0) > 0
             ]
-            if _snap_rows and db.save_daily_snapshot(_today_et(), _snap_rows):
+            # The sweep's held set comes from raw holdings, not port_df/_snap_rows
+            # -- both have already lost any holding that failed to price, which
+            # used to be swept as if sold (MU, 2026-06-25). None = unknown, so
+            # save_daily_snapshot deletes nothing.
+            _snap_hdf = st.session_state.get("holdings_df")
+            _snap_held = (None if _snap_hdf is None or "Ticker" not in getattr(_snap_hdf, "columns", [])
+                          else [str(t) for t in _snap_hdf["Ticker"].tolist()])
+            if _snap_rows and db.save_daily_snapshot(_today_et(), _snap_rows,
+                                                     held_tickers=_snap_held):
                 st.session_state[_snap_flag] = True
     except Exception:
         pass

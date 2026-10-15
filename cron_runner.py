@@ -441,7 +441,14 @@ def _run_premarket(now_et, force: bool) -> int:
             "below_ma_count": c.get("below_ma_count"),
             "rel_strength": c.get("rel_strength"),
         })
-    if exit_signal_rows:
+    if exit_signal_rows and not is_trading_day(now_et.date()):
+        # Only reachable under ALERT_FORCE=1 (the trading-day gate above is
+        # skipped when forced). db.save_exit_signals_batch drops non-trading-
+        # day rows and returns False -- which must not read as a write
+        # failure, redden the heartbeat and send a failure email.
+        _log(f"exit_signals: {len(exit_signal_rows)} row(s) not recorded -- "
+             f"{today_str} is not a trading day (forced run).")
+    elif exit_signal_rows:
         if db.save_exit_signals_batch(exit_signal_rows):
             _log(f"exit_signals captured ({len(exit_signal_rows)} rows, date={today_str}).")
         else:
@@ -672,7 +679,12 @@ def _run_eod(now_et, force: bool) -> int:
     rows = payload.get("snapshot_rows", [])
     if not rows:
         _log("daily_snapshot skipped — no positions in payload.")
-    elif db.save_daily_snapshot(now_et.date(), rows):
+    # held_tickers is the holdings-table list (compute_eod payload), so a
+    # holding left out of `rows` because it failed to price -- the 3A'
+    # partial-outage case above -- is kept, not swept as sold. Passed
+    # through as-is: None (list unavailable) makes the writer skip the sweep.
+    elif db.save_daily_snapshot(now_et.date(), rows, held_tickers=_held_raw
+                                if isinstance(_held_raw, (list, tuple)) else None):
         _log(f"daily_snapshot written ({len(rows)} positions, date={today_str}).")
     else:
         _log(f"daily_snapshot NOT written ({len(rows)} rows; DB offline / table missing).")

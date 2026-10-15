@@ -1725,11 +1725,30 @@ def load_daily_snapshots_or_none(start_date=None, end_date=None) -> "pd.DataFram
         return None
 
 
-def save_daily_snapshot(snapshot_date, rows: list[dict]) -> bool:
+def _warn_non_trading(writer: str, n: int) -> None:
+    """Leave a log trail when a market-day writer drops weekend/holiday-dated
+    rows (write_guards.split_non_trading_rows) -- a write-side drop, so a
+    warning rather than a UI banner."""
+    if n:
+        import warnings
+        warnings.warn(f"{writer}: {n} row(s) dated on a non-trading day not recorded")
+
+
+def save_daily_snapshot(snapshot_date, rows: list[dict], *,
+                        held_tickers: "list[str] | tuple[str, ...] | None") -> bool:
     """Upsert the snapshot for `snapshot_date` (today's held positions at the
     final, market-closed close price). Sweeps tickers no longer held for that
     date so a same-day exit doesn't linger. Read-only viewers no-op; a missing
-    table degrades to a silent no-op (returns False)."""
+    table degrades to a silent no-op (returns False).
+
+    `held_tickers` (required, keyword-only) is EVERY currently-held ticker,
+    priced or not -- from the holdings table, never from `rows` or port_df,
+    both of which have already lost any holding that failed to price. The
+    sweep deletes only tickers neither written nor held
+    (write_guards.snapshot_sweep_keep): until 2026-10-14 it deleted anything
+    not in `rows`, so one failed price recorded a held position as sold.
+    `None` = "couldn't establish the held set": the rows are still upserted
+    but nothing is deleted."""
     if is_readonly(): return False  # read-only viewer: no-op
     if not has_db():
         return False
@@ -1754,11 +1773,18 @@ def save_daily_snapshot(snapshot_date, rows: list[dict]) -> bool:
         client.table("daily_snapshots").upsert(
             records, on_conflict="snapshot_date,ticker"
         ).execute()
-        # Sweep tickers for THIS date no longer held (idempotent; a partial
-        # failure leaves a stale row, recoverable next write, never destructive).
-        client.table("daily_snapshots").delete().eq(
-            "snapshot_date", _date
-        ).not_.in_("ticker", list(seen)).execute()
+        # Sweep tickers for THIS date that are no longer held (idempotent; a
+        # partial failure leaves a stale row, recoverable next write).
+        from stock_analyzer.write_guards import snapshot_sweep_keep
+        _keep = snapshot_sweep_keep(seen, held_tickers)
+        if _keep is None:
+            import warnings
+            warnings.warn("save_daily_snapshot: held set unknown -- sweep skipped, "
+                          "no rows deleted for " + _date)
+        else:
+            client.table("daily_snapshots").delete().eq(
+                "snapshot_date", _date
+            ).not_.in_("ticker", _keep).execute()
         return True
     except Exception:
         return False
@@ -3078,6 +3104,17 @@ def save_recommendations(records: list[dict]) -> dict:
     if is_readonly(): return {"attempted": 0, "saved": 0, "error": "read-only"}  # read-only viewer: no-op
     if not records or not has_db():
         return {"attempted": 0, "saved": 0, "error": None}
+    # A recommendation dated on a weekend/holiday describes a session that
+    # never happened (the app recorded 250+ of these on weekend visits until
+    # 2026-10-14). Dropped here, at the one write boundary every caller
+    # shares. All-dropped reads as attempted=0 -- "nothing to record", which
+    # System Trust grades ok, never as a failed write.
+    from stock_analyzer.write_guards import split_non_trading_rows
+    records, _non_trading = split_non_trading_rows(records, "rec_date")
+    _warn_non_trading("save_recommendations", _non_trading)
+    if not records:
+        return {"attempted": 0, "saved": 0, "error": None,
+                "skipped_non_trading": _non_trading}
     def _pos_num(x):
         """float(x) if it is a usable positive number, else None."""
         try:
@@ -3329,6 +3366,14 @@ def save_gate_suppressions(rows: list[dict]) -> dict:
         return {"attempted": 0, "saved": 0, "error": "read-only"}
     if not rows or not has_db():
         return {"attempted": 0, "saved": 0, "error": None}
+    # Weekend/holiday-dated suppressions are not market-day calls (same
+    # reasoning and contract as save_recommendations, 2026-10-14).
+    from stock_analyzer.write_guards import split_non_trading_rows
+    rows, _non_trading = split_non_trading_rows(rows, "rec_date")
+    _warn_non_trading("save_gate_suppressions", _non_trading)
+    if not rows:
+        return {"attempted": 0, "saved": 0, "error": None,
+                "skipped_non_trading": _non_trading}
 
     def _pos_num_gs(x):
         """float if strictly positive, else None — mirrors _pos_num / price_at_surface."""
@@ -3625,6 +3670,16 @@ def save_exit_signals_batch(signals: list[dict]) -> bool:
     if not signals:
         return False
     if not has_db():
+        return False
+    # Weekend/holiday-dated exit signals describe no session (2026-10-14).
+    # All-dropped returns False, the same "nothing executed" as an empty
+    # batch above. The cron, the only caller that reads the return, checks
+    # is_trading_day itself before calling (its ALERT_FORCE=1 path can run on
+    # a closed day), so a correct drop never reads there as a failed write.
+    from stock_analyzer.write_guards import split_non_trading_rows
+    signals, _non_trading = split_non_trading_rows(signals, "signal_date")
+    _warn_non_trading("save_exit_signals_batch", _non_trading)
+    if not signals:
         return False
 
     # Sanitize BEFORE the pre-read coalesce merge below, not after (Opus

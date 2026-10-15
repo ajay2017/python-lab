@@ -400,7 +400,9 @@ class _FakeSaveRecsClient:
 
 def _rec_row(ticker="CRM"):
     return {
-        "ticker": ticker, "rec_date": "2026-09-27", "rec_type": "new_pick",
+        # A Monday: save_recommendations drops weekend/holiday-dated rows since
+        # 2026-10-14 (write_guards), and 2026-09-27 was a Sunday.
+        "ticker": ticker, "rec_date": "2026-09-28", "rec_type": "new_pick",
         "price_at_surface": 250.0, "asset_type": "etf",
     }
 

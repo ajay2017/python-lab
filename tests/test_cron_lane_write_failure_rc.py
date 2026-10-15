@@ -407,3 +407,27 @@ def test_thesis_where_some_llm_calls_failed_does_not_fail(monkeypatch):
     rc, notified = _thesis_with_llm(monkeypatch, results=[{"ticker": "AAPL", "status": "intact"}])
     assert rc == 0
     assert notified == []
+
+
+def test_forced_premarket_on_a_closed_day_does_not_fail_on_exit_signals(monkeypatch):
+    """2026-10-14 (write_guards review): save_exit_signals_batch drops
+    weekend/holiday-dated rows and returns False. Under ALERT_FORCE=1 the
+    premarket lane can run on a closed day, so the cron must check the
+    trading day itself -- a correct drop must never fail the lane, redden the
+    heartbeat or send a failure email."""
+    sat = datetime.datetime(2026, 10, 10, 8, 30)
+    called = []
+    monkeypatch.setattr(cr, "compute_protective_alerts", lambda **_k: _pm_payload())
+    monkeypatch.setattr(cr.db, "load_exit_signals_or_none", lambda **_k: None)
+    monkeypatch.setattr(cr.db, "load_alert_state", lambda *_a, **_k: {})
+    monkeypatch.setattr(cr.db, "save_alert_state", lambda *_a, **_k: True)
+    monkeypatch.setattr(cr, "_send_email", lambda *_a, **_k: True)
+    monkeypatch.setattr(cr.db, "save_exit_signals_batch",
+                        lambda *_a, **_k: called.append(1) or False)
+    monkeypatch.setattr(cr.db, "save_analyst_target_snapshots_batch", lambda *_a, **_k: True)
+    monkeypatch.setattr(cr.db, "save_score_history_batch", lambda *_a, **_k: True)
+    notified = _spy_notify(monkeypatch)
+    rc = cr._run_premarket(sat, force=True)
+    assert called == [], "the writer must not be called on a closed day"
+    assert "exit_signals" not in (cr._LAST_LANE_FAILURE_DETAIL or "")
+    assert not any("exit_signals" in d for _l, d in notified)

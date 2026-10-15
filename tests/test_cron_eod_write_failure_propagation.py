@@ -637,3 +637,34 @@ def test_eod_passes_the_true_gross_book_to_the_account_snapshot(monkeypatch):
                         lambda *_a, **k: seen.update(k) or {"gross_book": k.get("gross_book"), "leverage": None})
     assert cr._run_eod(NOW, force=True) == 0
     assert seen.get("gross_book") == 2120.0
+
+
+# ── 2026-10-14: the snapshot sweep's held set (write_guards review) ─────────
+
+def _capture_snapshot(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cr.db, "save_daily_snapshot",
+                        lambda d, rows, **k: seen.update(k, rows=[r["ticker"] for r in rows]) or True)
+    return seen
+
+
+def test_snapshot_sweep_gets_the_holdings_list_not_the_priced_rows(monkeypatch):
+    """held_tickers must be compute_eod's holdings-table list. Rows lack the
+    unpriced MSFT; passing a set built from rows would sweep MSFT as sold --
+    the MU 2026-06-25 defect."""
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: _payload(
+        snapshot_rows=[{"ticker": "AAPL", "shares": 10, "close_price": 200.0}],
+        held_tickers=["AAPL", "MSFT"]))
+    seen = _capture_snapshot(monkeypatch)
+    cr._run_eod(NOW, force=True)
+    assert seen["rows"] == ["AAPL"]
+    assert seen["held_tickers"] == ["AAPL", "MSFT"]
+
+
+def test_snapshot_sweep_held_set_unknown_is_forwarded_as_none(monkeypatch):
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: _payload(
+        snapshot_rows=[{"ticker": "AAPL", "shares": 10, "close_price": 200.0}],
+        held_tickers=None))
+    seen = _capture_snapshot(monkeypatch)
+    cr._run_eod(NOW, force=True)
+    assert "held_tickers" in seen and seen["held_tickers"] is None
