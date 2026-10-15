@@ -645,6 +645,21 @@ def test_readout_footnotes_g26_flags_earlier_gate_precedence_and_g25_cession():
     assert any("g-25" in n.lower() for n in notes)
 
 
+def test_readout_footnotes_g07_discloses_pre_trust_rows_and_row_vs_ticker_counts():
+    notes = glr.readout_footnotes("G-07")
+    assert len(notes) == 1
+    assert "2026-10-15" in notes[0]
+    assert "one row per ticker" in notes[0]
+    assert "**" not in notes[0] and "$" not in notes[0]
+
+
+def test_readout_footnotes_g16_discloses_pre_trust_rows():
+    notes = glr.readout_footnotes("G-16")
+    assert len(notes) == 1
+    assert "2026-10-15" in notes[0]
+    assert "**" not in notes[0] and "$" not in notes[0]
+
+
 def test_readout_footnotes_unknown_gate_returns_empty():
     assert glr.readout_footnotes("G-04") == []
     assert glr.readout_footnotes("G-99") == []

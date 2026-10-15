@@ -391,6 +391,20 @@ def readout_footnotes(gate_id: str) -> "list[str]":
             "under the old attribution and the new one is not a duplicate "
             "write bug.",
         ]
+    _PRE_TRUST_NOTE = (
+        "New-pick rows before 2026-10-15 recorded the composite before it was checked "
+        "for stale data or an unmeasured pillar."
+    )
+    if gate_id == "G-07":
+        return [
+            _PRE_TRUST_NOTE + " The graded ones (composite at or above the "
+            "Buy bar) were all long-listed large caps with no ETFs, so no "
+            "contamination is evident, but they can't be re-verified. The "
+            "matured-call count includes separate app and cron rows for the "
+            "same ticker and day; the alpha average uses one row per ticker.",
+        ]
+    if gate_id == "G-16":
+        return [_PRE_TRUST_NOTE]
     if gate_id == "G-23":
         return [
             "Market-wide restraint (ticker=‘__MARKET__’) — there is no single "
