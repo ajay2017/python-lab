@@ -92,6 +92,7 @@ from stock_analyzer import asset_type
 from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
 from stock_analyzer import etf_candidates as etf_candidates_mod
 from stock_analyzer import pair_add_gate
+from stock_analyzer.analyst_intel import trustworthy_composite
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -104,6 +105,22 @@ def _f(val, default=0.0):
         return default if v != v else v
     except (TypeError, ValueError):
         return default
+
+
+def _ledger_composite(composites, ticker):
+    """Composite to record on a gate-ledger row, or None when the bundle's
+    `total` would not have been trusted for a buy decision (stale, stale
+    fundamentals, or an unmeasured bq/val/technical pillar). Reuses the one
+    shared `analyst_intel.trustworthy_composite` predicate. A None is later counted
+    by the retrospective ledger as a null-composite exclusion, never graded.
+
+    The ETF check is the one leg the Grow Today loop has (its unconditional ETF
+    `continue`) that the shared predicate lacks: an ETF's equity `total` is never
+    a stock-buy composite, even if its fundamentals flags happen to read True."""
+    bundle = (composites or {}).get(ticker)
+    if isinstance(bundle, dict) and bundle.get("asset_type") == asset_type.ASSET_TYPE_ETF:
+        return None
+    return trustworthy_composite(bundle)
 
 
 # Provenance marker for the SIZING FORMULA, persisted alongside every suggested
@@ -1158,7 +1175,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "gate_value":     None,
                     "gate_threshold": MACRO_IMMINENT_DAYS,
                     "price":          price,
-                    "composite_score": _f((composites or {}).get(ticker, {}).get("total"), None),
+                    "composite_score": _ledger_composite(composites, ticker),
                     "momentum_score":  _f(row.get("Score"), None),
                 })
                 continue
@@ -1175,7 +1192,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "gate_value":     _sector_wt_map.get(sector),
                     "gate_threshold": SECTOR_CEILING,
                     "price":          price,
-                    "composite_score": _f((composites or {}).get(ticker, {}).get("total"), None),
+                    "composite_score": _ledger_composite(composites, ticker),
                     "momentum_score":  _f(row.get("Score"), None),
                 })
                 continue
