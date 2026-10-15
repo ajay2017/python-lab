@@ -1006,6 +1006,13 @@ _GATE_FILES = {
     "stock_analyzer/structural_scanner.py",
     "stock_analyzer/portfolio_thesis.py",
     "stock_analyzer/risk_metric_history.py",
+    # Added 2026-10-14 (owner decision, on the ff5ef85 review's flag): the
+    # pure decision db.py applies on its write path -- which daily_snapshots
+    # rows a sweep may DELETE (snapshot_sweep_keep) and which market-day rows
+    # save_recommendations / save_gate_suppressions / save_exit_signals_batch
+    # DROP (split_non_trading_rows). A change to it alone would otherwise
+    # change what db.py deletes without the review db.py itself requires.
+    "stock_analyzer/write_guards.py",
 }
 
 
