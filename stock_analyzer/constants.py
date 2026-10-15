@@ -1264,9 +1264,12 @@ ETF_LOOKTHROUGH_CACHE_MAX_AGE_DAYS = 30
 # market_status() / is_trading_day() in data.py read these so the app stops
 # showing "Market Open" on a holiday (e.g. Juneteenth, 2026-06-19). These are
 # calendar FACTS, not decision gates. Source: official NYSE/ICE 2026–2028
-# holiday & early-closings calendar (verified against nyse.com 2026-06-19);
-# note 2026-07-03 is a 1pm early close — NYSE observes that Saturday-July-4 as a
-# half day, not a full close — and 2028 has no New Year's (Jan 1 is a Saturday).
+# holiday & early-closings calendar (verified against nyse.com 2026-06-19, and
+# re-verified 2026-10-14 after the impossible-states audit found the original
+# transcription wrong: 2026-07-03 is a FULL closure — "Independence Day
+# observed" for Saturday July 4 — not the 1pm early close it was listed as;
+# the 1pm July early close on that page is 2028-07-03). 2028 has no New
+# Year's (Jan 1 is a Saturday).
 #
 # ⚠️ EXTEND BEFORE 2029. When the system year exceeds MARKET_CALENDAR_LAST_YEAR,
 # market_status() returns calendar_stale=True so the UI warns rather than
@@ -1277,7 +1280,7 @@ MARKET_CALENDAR_LAST_YEAR = 2028
 NYSE_HOLIDAYS = frozenset({
     # 2026
     "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
-    "2026-06-19", "2026-09-07", "2026-11-26", "2026-12-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
     # 2027
     "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
     "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
@@ -1288,7 +1291,7 @@ NYSE_HOLIDAYS = frozenset({
 
 # Observed date → early-close hour (ET, 24h float). NYSE trades until 1:00pm.
 NYSE_EARLY_CLOSES = {
-    "2026-07-03": 13.0, "2026-11-27": 13.0, "2026-12-24": 13.0,
+    "2026-11-27": 13.0, "2026-12-24": 13.0,
     "2027-11-26": 13.0,
     "2028-07-03": 13.0, "2028-11-24": 13.0,
 }

@@ -81,6 +81,7 @@ from stock_analyzer.constants import (
 from stock_analyzer.risk_metric_history import build_portfolio_risk_snapshot
 from stock_analyzer.rec_events_capture import build_rec_event_rows
 from stock_analyzer.data import is_trading_day
+from stock_analyzer.util import sentiment_value_or_none
 from stock_analyzer.headless_alert_engine import (
     compute_protective_alerts, compute_eod, compute_morning_picks,
     compute_watchlist_entries, _build_context,
@@ -848,10 +849,14 @@ def _run_eod(now_et, force: bool) -> int:
                 _finnhub_sent = _fsft([_stk]).get(_stk, {})
             except Exception:
                 pass
+            # A bundle with zero headlines carries avg_sent=0.0 / s_score=50.0
+            # -- a fabricated neutral, not a reading (170 such rows were found
+            # 2026-10-14). sentiment_value_or_none withholds it as None, the
+            # same rule recommendations_history already applies.
             _snap_sentiment_rows.append({
                 "ticker":         _stk,
-                "vader_compound": _sb.get("avg_sent"),
-                "vader_score":    _sb.get("s_score"),
+                "vader_compound": sentiment_value_or_none(_sb.get("avg_sent"), _sb),
+                "vader_score":    sentiment_value_or_none(_sb.get("s_score"), _sb),
                 "headline_count": len(_sb.get("headlines") or []),
                 "bullish_pct":    _finnhub_sent.get("bullish_pct"),
                 "bearish_pct":    _finnhub_sent.get("bearish_pct"),

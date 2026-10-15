@@ -268,7 +268,10 @@ def test_sentiment_snapshot_only_malformed_bundles_is_not_a_failure(monkeypatch)
 
 def test_sentiment_snapshot_write_failure_when_rows_present_sets_rc(monkeypatch):
     _patch_defaults(monkeypatch, compute_eod=lambda **_k: _payload(
-        held_data={"AAPL": {"avg_sent": 0.1, "s_score": 0.2, "headlines": []}},
+        # A real reading needs a scored headline: since 2026-10-14 a bundle with
+        # headlines=[] is a fabricated neutral and is withheld as None.
+        held_data={"AAPL": {"avg_sent": 0.1, "s_score": 0.2,
+                            "headlines": [{"title": "x", "score": 0.1}]}},
     ))
     monkeypatch.setattr(cr.db, "save_sentiment_snapshot", lambda *_a, **_k: False)
     rc = cr._run_eod(NOW, force=True)
@@ -668,3 +671,44 @@ def test_snapshot_sweep_held_set_unknown_is_forwarded_as_none(monkeypatch):
     seen = _capture_snapshot(monkeypatch)
     cr._run_eod(NOW, force=True)
     assert "held_tickers" in seen and seen["held_tickers"] is None
+
+
+# ── 2026-10-14: no-headline sentiment is withheld, not stored as neutral ────
+
+def _capture_sentiment(monkeypatch, finnhub):
+    saved = []
+    monkeypatch.setattr("stock_analyzer.news_sentiment.fetch_sentiment_for_tickers",
+                        lambda tickers: {t: dict(finnhub) for t in tickers})
+    monkeypatch.setattr(cr.db, "save_sentiment_snapshot",
+                        lambda d, rows: saved.extend(rows) or True)
+    return saved
+
+
+def test_no_headline_vader_is_null_but_a_finnhub_reading_is_kept(monkeypatch):
+    """analyze_news([]) gives avg_sent 0.0 -> s_score 50.0. That fabricated
+    neutral used to be written as a measured VADER reading (170 prod rows)."""
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: _payload(
+        held_data={"AAPL": {"avg_sent": 0.0, "s_score": 50.0, "headlines": []}}))
+    saved = _capture_sentiment(monkeypatch, {"bullish_pct": 0.6})
+    assert cr._run_eod(NOW, force=True) == 0
+    assert len(saved) == 1
+    assert saved[0]["vader_compound"] is None and saved[0]["vader_score"] is None
+    assert saved[0]["bullish_pct"] == 0.6 and saved[0]["headline_count"] == 0
+
+
+def test_no_headline_and_no_finnhub_writes_nothing_and_is_not_a_failure(monkeypatch):
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: _payload(
+        held_data={"AAPL": {"avg_sent": 0.0, "s_score": 50.0, "headlines": []}}))
+    saved = _capture_sentiment(monkeypatch, {})
+    assert cr._run_eod(NOW, force=True) == 0
+    assert saved == []
+
+
+def test_scored_headlines_still_record_vader(monkeypatch):
+    _patch_defaults(monkeypatch, compute_eod=lambda **_k: _payload(
+        held_data={"AAPL": {"avg_sent": 0.0, "s_score": 50.0,
+                            "headlines": [{"title": "flat news", "score": 0.0}]}}))
+    saved = _capture_sentiment(monkeypatch, {})
+    assert cr._run_eod(NOW, force=True) == 0
+    # A genuinely neutral SCORED day is a real 0.0, not withheld.
+    assert saved[0]["vader_compound"] == 0.0 and saved[0]["vader_score"] == 50.0
