@@ -1199,6 +1199,39 @@ def increment_daily_quota(provider: str) -> None:
         pass
 
 
+def run_impossible_states_q0(closed_dates) -> dict:
+    """Run the impossible-states audit (docs/sql/impossible-states-function.sql,
+    `public.impossible_states_q0(p_closed date[])`) via rpc. READ-ONLY: the
+    function body is a single SELECT.
+
+    Returns {"rows": list[dict] | None, "error": str | None}. `rows is None`
+    = the audit did NOT run (no DB, function not yet applied, call failed),
+    never an empty list, so a caller can't read "couldn't check" as "clean".
+    `closed_dates` is the NYSE closed-day list (constants.NYSE_HOLIDAYS) the
+    weekend/holiday check uses, passed in so the SQL keeps no calendar copy.
+
+    Read-only-guarded although the function only reads: every `.rpc()` caller
+    in this module is held to the guard-or-exempt rule
+    (tests/test_db_readonly.py), and the only callers (System Trust, which a
+    viewer can't open, and the cron, never read-only) lose nothing by it.
+    """
+    if is_readonly():
+        return {"rows": None, "error": "read-only session"}
+    if not has_db():
+        return {"rows": None, "error": "no database configured"}
+    try:
+        res = _client().rpc(
+            "impossible_states_q0",
+            {"p_closed": sorted(str(d)[:10] for d in closed_dates)},
+        ).execute()
+        data = getattr(res, "data", None)
+        if not isinstance(data, list):
+            return {"rows": None, "error": f"unexpected rpc payload: {type(data).__name__}"}
+        return {"rows": data, "error": None}
+    except Exception as exc:
+        return {"rows": None, "error": str(exc)[:200]}
+
+
 def get_daily_quota(provider: str) -> int | None:
     """Return today's call count for provider from Supabase.
     Returns None when DB is unavailable (chip hides the field); 0 when table

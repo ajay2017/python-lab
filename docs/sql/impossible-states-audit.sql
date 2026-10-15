@@ -4,6 +4,13 @@
 -- (that pack covers stale bundles, flow duplicates, orphans, the price
 -- cross-check and the holdings/trades ledger — not repeated here).
 --
+-- AUTOMATED (2026-10-14): Q0 also runs weekly in the Saturday maintenance
+-- cron and on System Trust (memoized ~5 min), as data_maintenance check 6, via
+-- the function in impossible-states-function.sql (GENERATED from Q0 below --
+-- after editing Q0, run scripts/gen_impossible_states_function.py and
+-- re-apply that file). The BASELINE block below is mirrored in
+-- stock_analyzer/impossible_states.py -- update both together.
+--
 -- PURPOSE: find bugs that have ALREADY reached production data, by
 -- looking for rows that should be impossible if the code were correct.
 -- Each check targets one of the recurring bug classes:
@@ -49,6 +56,9 @@
 --   C3   2  APP 09-18, MU 09-14: morning cron vs later app composite.
 --   C7   3  09-22/29/30: exactly one share of a same-day buy logged after
 --           the 17:30 cron; the app rewrote the snapshot later.
+--   C9   5  (added after the baseline run, from Q1's C1 detail) ON 09-11,
+--           APP 08-28, ARM 08-27, GOOG/MRVL 07-31: all before the F-39i fix.
+--           Confirm with the first run of the automated function.
 --   C8   2  MU 2026-06-25 (pre-fix sweep hole, unrecoverable -- no close
 --           stored); EOG 06-15 (a real sell + rebuy).
 --   D5   3  INTC/QCOM/MU 2026-05-26/28: composite column not yet populated.
@@ -118,6 +128,15 @@ SELECT * FROM (
          COUNT(DISTINCT (r.ticker, r.rec_date)), NULL
   FROM recommendations r JOIN exit_signals e ON e.ticker = r.ticker AND e.signal_date = r.rec_date
   WHERE r.rec_type IN ('new_pick', 'add_winner', 'enter_now')
+  UNION ALL
+  -- C9 (added 2026-10-14) splits C1's REGRESSION class out of its by-design
+  -- rows: a NEW-position or add buy on a name under an EXIT/TRIM call the
+  -- same day is the F-39i whiplash class (every pre-fix row is <= 2026-09-11).
+  -- C1 keeps the owner's warn-only enter_now-on-a-WATCH-name design case.
+  SELECT 'C9', 'new_pick/add_winner rec and an EXIT/TRIM signal on the same ticker, same day',
+         COUNT(DISTINCT (r.ticker, r.rec_date)), NULL
+  FROM recommendations r JOIN exit_signals e ON e.ticker = r.ticker AND e.signal_date = r.rec_date
+  WHERE r.rec_type IN ('new_pick', 'add_winner') AND e.signal_type IN ('EXIT', 'TRIM')
   UNION ALL
   -- NB (2026-10-14): for G-20, counterfactual=TRUE marks the BINDING row and
   -- FALSE the pre-pass "recorded, non-binding" row (daily_briefing.py ~1883/
@@ -193,7 +212,7 @@ SELECT * FROM (
         UNION ALL SELECT snapshot_date, created_at FROM account_daily_snapshots) z
   WHERE z.snapshot_date <> (z.created_at AT TIME ZONE 'America/New_York')::date
   UNION ALL
-  SELECT 'D4', 'market-day rows dated on a weekend or a 2026 NYSE holiday',
+  SELECT 'D4', 'market-day rows dated on a weekend or an NYSE closed day',
          COUNT(*), NULL
   FROM (SELECT rec_date AS d FROM recommendations
         UNION ALL SELECT signal_date FROM exit_signals

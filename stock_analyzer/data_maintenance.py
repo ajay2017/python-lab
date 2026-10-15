@@ -461,13 +461,35 @@ def check_pending_import_anomalies() -> "list[dict]":
     }]
 
 
+# ── Check 6 — impossible-states audit (2026-10-14) ───────────────────────────
+def check_impossible_states() -> "list[dict]":
+    """Runs the impossible-states audit's Q0 (28 counts of rows that should
+    not exist if the code were correct: fabricated best-value readings,
+    unverified stored claims, two producers disagreeing, broken identities)
+    and compares each to its 2026-10-14 baseline. This is a different
+    question from checks 1-5 (row-set hygiene), but it has the same surfaces:
+    System Trust ⑦ and the Saturday maintenance email.
+
+    The SQL lives in Postgres (docs/sql/impossible-states-function.sql)
+    because the API client can't run raw SQL. The regression decision is
+    pure and lives in stock_analyzer.impossible_states. Detection only:
+    nothing is written. A run that couldn't execute reads "unknown", never
+    "ok"."""
+    from stock_analyzer import db
+    from stock_analyzer.constants import NYSE_HOLIDAYS
+    from stock_analyzer.impossible_states import classify
+
+    res = db.run_impossible_states_q0(NYSE_HOLIDAYS)
+    return classify(res.get("rows"), res.get("error"))
+
+
 # ── Orchestrator ──────────────────────────────────────────────────────────────
 def run_all_checks(
     held_tickers: "set[str] | None",
     watchlist_tickers: "set[str] | None",
     discovery_tickers: "set[str] | None",
 ) -> "list[dict]":
-    """Run all 5 checks, each isolated in its own try/except (mirrors
+    """Run all 6 checks, each isolated in its own try/except (mirrors
     cron_runner.py::_run_maintenance's per-sub-job isolation) so one raising
     can't prevent the others from reporting. A check that raises degrades to
     a single "unknown" finding row naming which check failed, rather than
@@ -495,4 +517,5 @@ def run_all_checks(
     _safe("analyst_coverage_duplicates", check_analyst_coverage_duplicates)
     _safe("thesis_reviews_duplicates", check_thesis_reviews_duplicates)
     _safe("pending_import_duplicates", check_pending_import_anomalies)
+    _safe("impossible_states", check_impossible_states)
     return out

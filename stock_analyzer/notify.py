@@ -1679,7 +1679,7 @@ def render_data_quality_email(findings: "list[dict]", built_at: str) -> "tuple[s
     elif n_warn:
         subject = (
             f"DRISHTA · Maintenance: {n_warn} data-quality finding{'s' if n_warn != 1 else ''}"
-            " — orphaned cache rows / duplicates found"
+            " — see the findings below"
         )
     elif n_unknown:
         subject = (

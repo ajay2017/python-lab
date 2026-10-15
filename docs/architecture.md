@@ -204,7 +204,8 @@ python-lab/
     ├── leverage_giveback.py        Leverage-vs-equity giveback disclosure (F-287, Summary / Book Safety) — awareness only, never imported by a `_GATE_FILES` module
     ├── cash_activity.py            💰 Account → Cash Activity display helpers — keeps charges and credits apart and signed; awareness only, never feeds account_flows / Modified Dietz / a gate
     ├── trade_economics.py          Trade-level dollar economics — turns an already-decided entry/stop/reward:risk into plain dollars-and-percent arithmetic; display only, deliberately NOT in `risk.py`
-    ├── data_maintenance.py         Database maintenance / data-quality checks (F-235 ⑦, detection only) — orphaned / duplicate rows, stuck states; see its own section below
+    ├── data_maintenance.py         Database maintenance / data-quality checks (F-235 ⑦, detection only) — orphaned / duplicate rows, stuck states, and the impossible-states audit (check 6); see its own section below
+    ├── impossible_states.py        Impossible-states audit baseline + regression decision (`classify`) for data_maintenance check 6 — zero / frozen / accruing per Q0 check id, 2026-10-14 baseline; pure
     ├── ai_provider.py              Shared multi-provider LLM registry + dispatch, used by 🔎 Portfolio Investigator only
     ├── investigator.py             🔎 Portfolio Investigator (F-275) — multi-step LLM orchestration over a FIXED, already-reviewed toolbox of pure functions; redlines enforced in code
     ├── ticker_resolver.py          Company-name → ticker resolution for free-text lookups (Home's Research a Stock box) via yfinance Search; never consulted for input that already looks like a ticker, never raises
@@ -2496,6 +2497,28 @@ returning `list[dict]` rows shaped like `system_health.py`'s own convention
   reviews sharing an `inputs_hash` are the same underlying inputs re-reviewed).
 - **`snaptrade_pending_imports` anomalies** — flags a `snaptrade_txn_id` queued
   more than once among `status="pending"` rows.
+- **Impossible-states audit (check 6, added 2026-10-14)** — a different question
+  from 1-5: not "is the row-set tidy" but "does prod contain rows that should be
+  impossible if the code were correct". Runs Q0 of
+  `docs/sql/impossible-states-audit.sql` (28 counts) through the read-only
+  Postgres function `public.impossible_states_q0(p_closed date[])`
+  (`docs/sql/impossible-states-function.sql`, applied by hand in Supabase, and
+  GENERATED from Q0 by `scripts/gen_impossible_states_function.py` — a test fails
+  if it drifts), called via `db.run_impossible_states_q0`. `p_closed` is
+  `constants.NYSE_HOLIDAYS`, so the SQL carries no calendar copy. The pure
+  `stock_analyzer/impossible_states.py::classify` compares each count with the
+  post-cleanup baseline of 2026-10-14: **zero** checks warn on any row,
+  **frozen** checks (C3, C7, C8, C9, D5 — explained rows that must not grow)
+  warn above their baseline, **accruing** checks (A3, C1, C2 — can grow without
+  a defect and can't be told apart from one by count; A3 still contains the open
+  fabricated-technical-50 fallback) never warn and are reported beside their
+  baseline. The function also returns a `_V` row carrying a hash of Q0's logic,
+  which must equal `impossible_states.Q0_VERSION`, so a function applied before
+  a Q0 edit is reported as stale. Q0's threshold literals (65, 75, 15.05, 20, 7)
+  are pinned to `constants.py` by a test, so a changed constant forces a Q0 edit
+  and re-apply. A run that could not execute (function not applied, rpc
+  failure, read-only session) reads `unknown`, never `ok`. First run of this
+  audit (manual) found five prod defects, fixed in `ff5ef85`/`3ab4d59`.
 
 `run_all_checks()` wraps each check in its own try/except so one raising degrades
 to a single `unknown` finding naming which check failed, never poisoning the

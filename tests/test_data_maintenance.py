@@ -440,7 +440,7 @@ def test_pending_imports_clean_is_ok(monkeypatch):
 # ── isolation: run_all_checks ─────────────────────────────────────────────────
 
 def test_run_all_checks_isolates_a_raising_check(monkeypatch):
-    """One check raising must not prevent the other four from reporting."""
+    """One check raising must not prevent the others from reporting."""
     def _boom(*_a, **_k):
         raise RuntimeError("simulated check failure")
     monkeypatch.setattr(dm, "check_orphan_cache_rows", _boom)
@@ -454,12 +454,16 @@ def test_run_all_checks_isolates_a_raising_check(monkeypatch):
         lambda: pd.DataFrame(columns=["ticker", "inputs_hash"]),
     )
     monkeypatch.setattr(db, "load_snaptrade_pending_imports", lambda status="pending": [])
+    # Check 6 (2026-10-14) would otherwise make a live rpc where creds exist.
+    monkeypatch.setattr(db, "run_impossible_states_q0",
+                        lambda closed: {"rows": None, "error": "test: not run"})
 
     rows = dm.run_all_checks(set(), set(), set())
     keys = {r["key"] for r in rows}
     assert "orphan_cache_error" in keys
     assert any(r["severity"] == "unknown" for r in rows if r["key"] == "orphan_cache_error")
-    # the other four checks still produced their own result rows
+    # the other checks still produced their own result rows
+    assert "impossible_states" in keys
     assert "account_flows_duplicates" in keys
     assert "analyst_coverage_duplicates" in keys
     assert "thesis_reviews_duplicates" in keys
@@ -480,6 +484,8 @@ def test_run_all_checks_never_raises_end_to_end(monkeypatch):
         lambda: pd.DataFrame(columns=["ticker", "inputs_hash"]),
     )
     monkeypatch.setattr(db, "load_snaptrade_pending_imports", lambda status="pending": [])
+    monkeypatch.setattr(db, "run_impossible_states_q0",
+                        lambda closed: {"rows": None, "error": "offline"})
     rows = dm.run_all_checks(set(), set(), set())
     assert isinstance(rows, list) and len(rows) > 0
     assert all(r.get("severity") in ("ok", "warn", "down", "unknown") for r in rows)

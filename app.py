@@ -35775,9 +35775,9 @@ elif page == "🩺 System Trust":
     )
 
     _sysh_section(
-        "##### ⑦ Data quality — orphan-cache / duplicate-insert findings",
+        "##### ⑦ Data quality — row hygiene + impossible-states audit",
         _health.get("quality", []), noun="data-quality checks",
-        all_ok_text="No orphaned cache rows or accidental duplicates found",
+        all_ok_text="No orphaned or duplicate rows, and no impossible states above the audit baseline",
         partial_text="No findings — {n_ok}/{n} checks confirmed clean",
         none_confirmed_text="nothing was verified this run — most often the database "
                             "is unreadable, so this check had nothing to read "
@@ -35785,12 +35785,17 @@ elif page == "🩺 System Trust":
         tech_key="key",
     )
     st.caption(
-        "docs/plans/data-maintenance-framework.md, Phase 1 — **chores, not "
-        "faults.** A finding here is a standing accumulation (an orphaned "
-        "research cache, a double-clicked form) cleaned up on the owner's own "
-        "schedule, never an incident. Runs weekly from the Saturday "
-        "maintenance cron lane (email-on-finding only) and on-demand here. "
-        "Detection only — nothing here deletes or changes a row."
+        "Two kinds of finding. **Row hygiene** (orphaned research caches, "
+        "duplicate rows — docs/plans/data-maintenance-framework.md) is a "
+        "chore, cleaned up on your own schedule. An **impossible-states** "
+        "finding is different: rows that should not exist if the code were "
+        "correct, above the 2026-10-14 baseline "
+        "(docs/sql/impossible-states-audit.sql) — treat it as a likely bug "
+        "(a \"function out of date\" finding instead means: re-apply "
+        "docs/sql/impossible-states-function.sql in Supabase). "
+        "Runs weekly from the Saturday maintenance cron lane (email on a "
+        "finding only) and here. Detection only — nothing here deletes or "
+        "changes a row."
     )
 
     _sysh_ca = _health.get("computed_at")
