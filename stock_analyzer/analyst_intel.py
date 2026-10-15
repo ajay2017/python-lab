@@ -267,7 +267,7 @@ def trustworthy_composite(bundle: dict | None) -> float | None:
     (`calibration_matrix()` above) with a number that never actually
     reflected real fundamentals/valuation data.
 
-    This mirrors ALL THREE trust legs `stock_analyzer/daily_briefing.py`
+    This mirrors ALL trust legs `stock_analyzer/daily_briefing.py`
     (~lines 1087-1119) applies before trusting a bundle's `total` for a new-
     position recommendation — not just the fundamentals/valuation leg this
     docstring previously (incorrectly) claimed was the full parity:
@@ -285,6 +285,10 @@ def trustworthy_composite(bundle: dict | None) -> float | None:
          scored on a fabricated neutral-50 pillar leg (no real data from
          any source) rather than a real measurement. Both default to True
          so a legacy bundle lacking either flag is not rejected.
+      4. `t_available` falsy (added 2026-10-15) — too little price history
+         (or a required leg missing) left the technical pillar unmeasured,
+         so `total` carries a neutral-ish technical leg. Defaults to True,
+         same fail-open rule as leg 3.
 
     Also rejects a `total` outside the valid 0-100 composite range — this is
     a data-sanity/plausibility bound (the composite is defined as a bounded
@@ -315,6 +319,8 @@ def trustworthy_composite(bundle: dict | None) -> float | None:
     if not bundle.get("fundamentals_available", True):
         return None
     if not bundle.get("val_available", True):
+        return None
+    if not bundle.get("t_available", True):
         return None
     return v
 

@@ -92,9 +92,9 @@ def driving_pillar_from_bundle(bundle: dict) -> dict:
     bundle). Never let a fabricated placeholder win `max()` and get NAMED as
     the pillar driving a real recommendation — excluded from the candidate
     pool entirely when unavailable, same policy `util.pillar_tile()` already
-    applies at the RENDER layer. `technical`/`sentiment` carry no such flag
-    (per `pillar_tile`'s own docstring, `technicals.py` never withholds), so
-    they default to available.
+    applies at the RENDER layer. `technical` carries `t_available` since
+    2026-10-15 (too little history); `sentiment` carries no such flag, so it
+    defaults to available.
     """
     if not bundle:
         return {"driving_pillar": None, "driving_signals": []}
@@ -114,6 +114,10 @@ def driving_pillar_from_bundle(bundle: dict) -> dict:
     _available = {
         "fundamentals": bundle.get("bq_available", bundle.get("fundamentals_available", True)),
         "valuation":    bundle.get("val_available", True),
+        # 2026-10-15: a technical score built on too little history is a
+        # neutral-ish placeholder — never NAME it as the driving pillar.
+        # Default True keeps legacy bundles unchanged.
+        "technical":    bundle.get("t_available", True),
     }
     scored = {
         k: v for k, (v, _sig) in _pillars.items()

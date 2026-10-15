@@ -198,6 +198,13 @@ def dropped_holdings_banner_text(dropped: list[dict] | None) -> str | None:
     )
 
 
+def _row_missing(row: dict) -> list:
+    """`row["missing"]` as a list; an absent/None/non-list value (legacy
+    entry) reads as "no specific label", never an error."""
+    m = row.get("missing")
+    return m if isinstance(m, (list, tuple)) else []
+
+
 def score_withheld_banner_text(withheld: list[dict] | None) -> str | None:
     """User-facing message for `portfolio.build_portfolio_df`'s `score_withheld`
     list, or ``None`` when there is nothing to report.
@@ -212,6 +219,26 @@ def score_withheld_banner_text(withheld: list[dict] | None) -> str | None:
     informational tone (not the dropped-holdings warning tone) since nothing
     is actually broken or missing here — matches the withhold already shown
     on the Analysis page (quick_research.py) for the same reason.
+
+    Entries may carry `"missing"` (list of pillar labels from
+    `pillar_availability.unmeasured_pillars`) and `"t_bars"` (price-history
+    sessions seen). Tickers are grouped by CAUSE so each sentence is true for
+    every ticker it names:
+      * fundamentals/valuation (or a legacy entry with no `"missing"`): the
+        original wording; when nothing else is withheld the whole message is
+        the original sentence exactly, including "Price, weight, stops and
+        risk metrics still apply".
+      * Technical missing with too little history (`t_bars` below
+        `TECHNICAL_MIN_BARS`, or unknown): the price history is too short, so
+        the trend-break exit ladder (which needs a 50-bar SMA) cannot assess
+        it either and only its stop and concentration limits protect it. The
+        generic "stops and risk metrics still apply" reassurance is NOT used.
+      * Technical missing with `t_bars` at/above the floor: a required reading
+        could not be computed from recent prices (e.g. a flat or halted
+        quote). No "too short" claim and no ladder caveat — the ladder CAN run
+        there.
+    Singular/plural grammar follows the ticker count. No markdown (may render
+    inside HTML).
     """
     d = withheld or []
     if not d:
@@ -220,6 +247,72 @@ def score_withheld_banner_text(withheld: list[dict] | None) -> str | None:
     if not tickers:
         return None
     n = len(tickers)
+    tech_rows = [
+        row for row in d
+        if row.get("ticker") and "Technical" in _row_missing(row)
+    ]
+    if tech_rows:
+        from stock_analyzer.constants import TECHNICAL_MIN_BARS
+        from stock_analyzer.pillar_availability import technical_history_short
+        # Anything not purely technical (incl. legacy/empty `missing`).
+        other_rows = [
+            row for row in d
+            if row.get("ticker")
+            and (not _row_missing(row)
+                 or any(m != "Technical" for m in _row_missing(row)))
+        ]
+        # Group technical rows by CAUSE so each sentence is true for every
+        # ticker it names: too little history (the exit ladder, which needs a
+        # 50-bar SMA, truly cannot assess it) vs a >= floor history where a
+        # required reading was not computable (the ladder CAN run).
+        short_rows = [r for r in tech_rows if technical_history_short(r.get("t_bars"))]
+        uncomp_rows = [r for r in tech_rows if not technical_history_short(r.get("t_bars"))]
+        sentences: list[str] = []
+        if other_rows:
+            sentences.append(
+                f"{', '.join(str(r['ticker']) for r in other_rows)}: company "
+                "fundamentals aren't available from any provider (e.g. "
+                "funds/ETFs), so a composite score would be a guess rather than "
+                "a measurement — it's withheld here too, matching the Analysis page."
+            )
+        if short_rows:
+            bars: dict[str, int] = {}
+            for row in short_rows:
+                try:
+                    b = int(row.get("t_bars"))
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if b >= 0:
+                    bars[str(row["ticker"])] = b
+            names = [str(r["ticker"]) for r in short_rows]
+            if not bars:
+                span = f"{TECHNICAL_MIN_BARS} sessions needed"
+            elif len(set(bars.values())) == 1 and len(bars) == len(names):
+                span = f"{next(iter(bars.values()))} sessions; {TECHNICAL_MIN_BARS} needed"
+            else:
+                per = ", ".join(f"{t} {b} sessions" for t, b in bars.items())
+                span = f"{per}; {TECHNICAL_MIN_BARS} needed"
+            one = len(names) == 1
+            sentences.append(
+                f"{', '.join(names)}: price history too short ({span}) to "
+                "measure the technical trend, so the "
+                + ("composite is" if one else "composites are")
+                + " withheld, and the trend-break exit ladder can't assess "
+                + ("it" if one else "them") + " either — only "
+                + ("its" if one else "their")
+                + " stop and concentration limits protect "
+                + ("it." if one else "them.")
+            )
+        if uncomp_rows:
+            names = [str(r["ticker"]) for r in uncomp_rows]
+            sentences.append(
+                f"{', '.join(names)}: a required technical reading couldn't be "
+                "computed from recent prices (e.g. a flat or halted quote), so the "
+                + ("composite is" if len(names) == 1 else "composites are")
+                + " withheld."
+            )
+        head = f"ℹ️ {n} holding{'s' if n != 1 else ''} shown without a composite score. "
+        return head + " ".join(sentences)
     return (
         f"ℹ️ {n} holding{'s' if n != 1 else ''} shown without a composite score: "
         f"{', '.join(tickers)}. Company fundamentals aren't available for these "

@@ -89,6 +89,7 @@ from stock_analyzer import decision_bucket
 from stock_analyzer.predictive_analytics import divergence_at_entry
 from stock_analyzer.personalized_discovery import score_candidate_match
 from stock_analyzer import asset_type
+from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
 from stock_analyzer import etf_candidates as etf_candidates_mod
 from stock_analyzer import pair_add_gate
 
@@ -1267,15 +1268,19 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # surface a "new position to initiate" whose Analysis page
             # withholds its verdict (the PINS/HUBS mismatch, and — since
             # 2026-08-04 — the same class for Valuation's own availability flag).
-            # Default True so legacy bundles without either flag aren't gated.
-            if _comp_data and not (
-                _comp_data.get("fundamentals_available", True)
-                and _comp_data.get("val_available", True)
-            ):
+            # Since 2026-10-15 the Technical pillar is held to the same bar
+            # (t_available — too little price history reads a neutral-ish
+            # technical leg too). All three legs are decided by the ONE shared
+            # pillar_availability.verdict_basis (this is the stock new-pick
+            # lane, so anything but "equity" is held out); "missing" names
+            # which pillar(s) so the render can say why. Default True so legacy
+            # bundles without any flag aren't gated.
+            if _comp_data and verdict_basis(_comp_data) != "equity":
                 composite_unavailable.append({
                     "ticker":         ticker,
                     "sector":         sector,
                     "momentum_score": _f(row.get("Score", 0)),
+                    "missing":        unmeasured_pillars(_comp_data),
                 })
                 continue
 
@@ -1621,7 +1626,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             if not _eligible:
                 # Suppress the trivial "bull days only" noise on every
                 # flat/down day — on those tones EVERY candidate fails check
-                # 7 of etf_newpick_eligible trivially, which would spam a
+                # 8 of etf_newpick_eligible trivially, which would spam a
                 # useless reason into the UI daily. Other reasons (macro/AUM/
                 # composite/staleness) still surface, but only on a bull day
                 # (the only tone this feature ever actually fires in).

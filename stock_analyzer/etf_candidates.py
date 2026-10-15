@@ -120,13 +120,17 @@ def etf_newpick_eligible(bundle: "dict | None", tone: str) -> "tuple[bool, str |
       2. asset_type != ETF                      -> "not classified as an ETF"
       3. stale_as_of is not None                -> "prices served from stale cache"
       4. not etf_available                      -> "expense ratio unknown"
-      5. etf_total missing/non-finite           -> "ETF composite unavailable"
-      6. total_assets missing/NaN (D-A)         -> "fund size unknown"
+      5. not t_available (default True)         -> "technical trend unmeasured"
+         (the ETF composite is half technical; too little price history
+         leaves a neutral-ish leg inside etf_total — fails open on a
+         legacy bundle with no flag)
+      6. etf_total missing/non-finite           -> "ETF composite unavailable"
+      7. total_assets missing/NaN (D-A)         -> "fund size unknown"
          total_assets < ETF_AUM_THIN_FLOOR_USD  -> "AUM below floor"
          (strict "<", mirrors etf_aum_thin — a value exactly AT the floor passes)
-      7. tone != "bull"                         -> "bull days only"
-      8. etf_total < COMPOSITE_STRONG_BUY       -> "composite {x} below {y}"
-      9. otherwise                              -> (True, None)
+      8. tone != "bull"                         -> "bull days only"
+      9. etf_total < COMPOSITE_STRONG_BUY       -> "composite {x} below {y}"
+     10. otherwise                              -> (True, None)
     """
     if not bundle:
         return False, "ETF data unavailable"
@@ -139,6 +143,13 @@ def etf_newpick_eligible(bundle: "dict | None", tone: str) -> "tuple[bool, str |
 
     if not bundle.get("etf_available"):
         return False, "expense ratio unknown"
+
+    if not bundle.get("t_available", True):
+        _tb = bundle.get("t_bars")
+        return False, (
+            f"technical trend unmeasured ({_tb} bars)" if _tb is not None
+            else "technical trend unmeasured"
+        )
 
     etf_total = bundle.get("etf_total")
     if etf_total is None:

@@ -32,6 +32,10 @@ from stock_analyzer.constants import (
     UNCLASSIFIED_SECTOR,
 )
 from stock_analyzer import exit_advisor
+from stock_analyzer import asset_type as _asset_type_mod
+from stock_analyzer.pillar_availability import (
+    technical_clause, technical_history_short, verdict_basis, withheld_split,
+)
 
 
 def _f(val, default=0.0):
@@ -305,35 +309,104 @@ def build_watchlist_recommendation(
     earn_days   = _earn_days_until(earn_str)
     earn_soon   = earn_days is not None and 0 <= earn_days <= EARNINGS_IMMINENT_DAYS
 
-    # Data-availability gate: when neither fundamentals nor valuation could be
-    # sourced from any provider, `score` is a fabricated neutral-ish 50/50
-    # blend with zero real signal behind it — issuing REMOVE (score < 44) or
+    # Data-availability gate: when fundamentals, valuation or the technical
+    # trend could not be measured, `score` is a fabricated neutral-ish blend
+    # with zero real signal behind that leg — issuing REMOVE (score < 44) or
     # ENTER_NOW off that would be a data-outage artifact presented as an
-    # investment verdict (2026-08-04 audit finding). Mirrors the Analysis
-    # page's own "Verdict withheld" gate. Default True so legacy bundles
-    # without either flag aren't gated.
-    if not (data.get("fundamentals_available", True) and data.get("val_available", True)):
-        return _card(
-            ticker, "DATA_UNAVAILABLE", score, rec_label, price, entry_lo, entry_hi,
-            stop, None, earn_days,
-            title=f"{ticker} — Can't Assess Right Now (data unavailable)",
-            summary=(
+    # investment verdict (2026-08-04 audit finding; Technical added
+    # 2026-10-15). Mirrors the Analysis page's own "Verdict withheld" gate.
+    # The decision is the ONE shared pillar_availability.verdict_basis; the
+    # card names WHICH pillar(s) are missing. This lane has no ETF branch, so
+    # anything but "equity" is withheld (an ETF keeps landing here as today).
+    # Default True so legacy bundles without any flag aren't gated.
+    if verdict_basis(data) != "equity":
+        _t_missing, _other_missing = withheld_split(data)
+        # An ETF can never get a verdict on this lane (no ETF branch here),
+        # so a "re-check once more sessions have accrued" card would be false
+        # for it: an ETF keeps today's fundamentals/valuation wording.
+        if data.get("asset_type") == _asset_type_mod.ASSET_TYPE_ETF:
+            _t_missing = False
+        _tech_clause = technical_clause(data.get("t_bars"))
+        _hist_short = technical_history_short(data.get("t_bars"))
+        _fund_detail = (
+            f"We couldn't get {ticker}'s fundamental or valuation data from any "
+            "source right now. Rather than issue a Remove or Enter Now call off "
+            "a fabricated neutral score, the app is holding the verdict. "
+            "Re-check in a few minutes — data sources typically recover — or "
+            "verify manually before acting. This is a data gap, not a change "
+            "in the thesis."
+        )
+        if _t_missing and not _other_missing and _hist_short:
+            _title = f"{ticker} — Can't Assess Right Now (price history too short)"
+            _summary = (
+                f"{_tech_clause[0].upper()}{_tech_clause[1:]}, so the composite "
+                "score isn't trustworthy — no REMOVE or ENTER_NOW call is being "
+                "made on it."
+            )
+            _detail = (
+                f"We don't have enough price history for {ticker} to measure its "
+                "trend. Rather than issue a Remove or Enter Now call off a "
+                "fabricated neutral score, the app is holding the verdict. "
+                "Re-check once more trading sessions have accrued, or verify "
+                "manually before acting. This is a data gap, not a change in "
+                "the thesis."
+            )
+            _missing_line = "Price history too short to measure the technical trend"
+        elif _t_missing and not _other_missing:
+            _title = f"{ticker} — Can't Assess Right Now (technical reading unavailable)"
+            _summary = (
+                f"{_tech_clause[0].upper()}{_tech_clause[1:]}, so the composite "
+                "score isn't trustworthy — no REMOVE or ENTER_NOW call is being "
+                "made on it."
+            )
+            _detail = (
+                f"We couldn't compute a required technical reading for {ticker} "
+                "from its recent prices (for example, a flat or halted quote). "
+                "Rather than issue a Remove or Enter Now call off a fabricated "
+                "neutral score, the app is holding the verdict. Re-check later or "
+                "verify manually before acting. This is a data gap, not a change "
+                "in the thesis."
+            )
+            _missing_line = "A required technical reading couldn't be computed from recent prices"
+        elif _t_missing:
+            _title = f"{ticker} — Can't Assess Right Now (data unavailable)"
+            _summary = (
+                "Fundamentals and/or valuation data couldn't be sourced from any "
+                f"provider this session, and also {_tech_clause}, so the "
+                "composite score isn't trustworthy — no REMOVE or ENTER_NOW call "
+                "is being made on it."
+            )
+            _detail = (
+                f"{_fund_detail} "
+                + ("Its price history is also too short to measure the trend."
+                   if _hist_short else
+                   "A required technical reading also couldn't be computed from "
+                   "its recent prices.")
+            )
+            _missing_line = (
+                "Fundamentals and/or valuation data unavailable from all providers, "
+                + ("and price history too short to measure the technical trend"
+                   if _hist_short else
+                   "and a required technical reading couldn't be computed from "
+                   "recent prices")
+            )
+        else:
+            _title = f"{ticker} — Can't Assess Right Now (data unavailable)"
+            _summary = (
                 "Fundamentals and/or valuation data couldn't be sourced from any "
                 "provider this session, so the composite score isn't trustworthy — "
                 "no REMOVE or ENTER_NOW call is being made on it."
-            ),
-            detail=(
-                f"We couldn't get {ticker}'s fundamental or valuation data from any "
-                "source right now. Rather than issue a Remove or Enter Now call off "
-                "a fabricated neutral score, the app is holding the verdict. "
-                "Re-check in a few minutes — data sources typically recover — or "
-                "verify manually before acting. This is a data gap, not a change "
-                "in the thesis."
-            ),
+            )
+            _detail = _fund_detail
+            _missing_line = "Fundamentals and/or valuation data unavailable from all providers"
+        return _card(
+            ticker, "DATA_UNAVAILABLE", score, rec_label, price, entry_lo, entry_hi,
+            stop, None, earn_days,
+            title=_title,
+            summary=_summary,
+            detail=_detail,
             conditions_met=[],
-            conditions_missing=[
-                "Fundamentals and/or valuation data unavailable from all providers",
-            ],
+            conditions_missing=[_missing_line],
             institutional_lens=(
                 "A verdict built on missing data is worse than no verdict at all — "
                 "it looks confident while measuring nothing. The discipline here is "

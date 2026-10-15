@@ -859,7 +859,7 @@ def test_build_portfolio_df_fundamentals_unavailable_withholds_score_and_signal(
     assert pd.isna(row["Score"])
     assert row["Signal"] == WITHHELD_SIGNAL
     assert row["Score Available"] == False
-    assert df.attrs["score_withheld"] == [{"ticker": "ETF1"}]
+    assert df.attrs["score_withheld"] == [{"ticker": "ETF1", "missing": ["Business Quality"], "t_bars": None}]
 
 
 def test_build_portfolio_df_valuation_unavailable_alone_also_withholds():
@@ -873,7 +873,7 @@ def test_build_portfolio_df_valuation_unavailable_alone_also_withholds():
     assert pd.isna(row["Score"])
     assert row["Signal"] == WITHHELD_SIGNAL
     assert row["Score Available"] == False
-    assert df.attrs["score_withheld"] == [{"ticker": "ETF2"}]
+    assert df.attrs["score_withheld"] == [{"ticker": "ETF2", "missing": ["Valuation"], "t_bars": None}]
 
 
 def test_build_portfolio_df_both_flags_true_leaves_score_and_signal_untouched():
@@ -985,7 +985,7 @@ def test_build_portfolio_df_etf_unavailable_still_withholds():
     assert pd.isna(row["Score"])
     assert row["Signal"] == WITHHELD_SIGNAL
     assert row["Score Available"] == False
-    assert df.attrs["score_withheld"] == [{"ticker": "OBSCUREETF"}]
+    assert df.attrs["score_withheld"] == [{"ticker": "OBSCUREETF", "missing": ["Expense ratio"], "t_bars": None}]
 
 
 def test_build_portfolio_df_etf_ok_never_true_for_a_stock_even_if_etf_available_true():

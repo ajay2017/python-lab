@@ -4,6 +4,10 @@ actionable summary for the Daily Briefing "Research a Stock" feature.
 """
 import pandas as pd
 
+from stock_analyzer.pillar_availability import (
+    technical_clause, technical_history_short, unmeasured_pillars, verdict_basis,
+    withheld_split,
+)
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_ELEVATED,
     TICKER_BETA_HIGH,
@@ -199,6 +203,27 @@ def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) 
     )
 
     entry    = _entry_timing(rsi_val, move_1d, move_5d)
+    # Technical pillar unmeasured (too little history, or a required reading
+    # not computable): RSI is None/warm-up-biased there, so a positive entry
+    # call ("Normal Entry Conditions" / "Oversold") would contradict the
+    # withheld verdict and rest on a reading that doesn't exist. The
+    # protective outcomes (high_risk_avoid / wait_pullback) come from real
+    # 1d/5d moves and are kept. Same dict shape as every other outcome (app.py
+    # reads only color/icon/label from it; bullet 3 reads icon/label/explanation).
+    if withheld_split(data)[0] and entry["verdict"] in ("buy_now", "oversold"):
+        entry = {
+            "verdict": "not_assessed",
+            "label": "Entry Timing Not Assessed",
+            "color": "#9ca3af",
+            "bg": "#1f2937",
+            "icon": "❔",
+            "explanation": (
+                "The technical trend couldn't be measured for this name (too "
+                "little price history, or a required reading couldn't be "
+                "computed from recent prices), so there is no entry-timing call. "
+                "Verify the setup manually before acting."
+            ),
+        }
     rec      = data["rec"]
     score    = data["total"]
     price    = data["current_price"]
@@ -213,7 +238,12 @@ def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) 
     # timing below are purely technical and stay valid. (Audit §9 P1.) Also honor the
     # Valuation pillar's own availability flag (2026-08-04 audit finding) — same
     # fabricated-neutral-50 failure mode, just the other 30%-weighted leg.
+    # `fundamentals_available` keeps its bq/val-only meaning (it is returned to
+    # callers). The verdict decision itself is the shared
+    # pillar_availability.verdict_basis, which also requires the Technical
+    # pillar (t_available, 2026-10-15) — a separate local, never conflated.
     fundamentals_available = data.get("fundamentals_available", True) and data.get("val_available", True)
+    _basis = verdict_basis(data)
 
     target     = fins.get("analyst_target")
     upside_pct = float((target - price) / price * 100) if target and price else None
@@ -227,22 +257,46 @@ def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) 
     # fund_ok/etf_ok/withheld split. etf_ok is gated on asset_type == "etf" so a
     # stock (which never has this key, or has it set to something else) can
     # never take this branch.
-    etf_ok = data.get("asset_type") == "etf" and bool(data.get("etf_available", False))
-    if fundamentals_available:
+    if _basis == "equity":
         b1 = f"**Signal: {rec['icon']} {rec['label']} ({score:.0f}/100)** — {rec['rationale']}"
         sig_label, sig_icon, sig_color, sig_score = rec["label"], rec["icon"], rec["color"], score
-    elif etf_ok:
+    elif _basis == "etf":
         etf_rec = data["etf_rec"]
         etf_score = data["etf_total"]
         b1 = f"**Signal: {etf_rec['icon']} {etf_rec['label']} ({etf_score:.0f}/100)** — {etf_rec['rationale']}"
         sig_label, sig_icon, sig_color, sig_score = etf_rec["label"], etf_rec["icon"], etf_rec["color"], etf_score
     else:
-        b1 = (
-            "**Signal: ❔ Verdict withheld** — fundamentals couldn't be sourced "
-            "(company data unavailable from all providers), so a composite score "
-            "would be guessing rather than measuring. Momentum and entry timing "
-            "below are still valid."
+        _t_missing, _other_missing = withheld_split(data)
+        _tech_clause = technical_clause(data.get("t_bars"))
+        # Truthful caveat about the price moves shown below, per cause: a short
+        # history still gives real (if thin) moves; a >= floor history whose
+        # required reading wasn't computable points at a flat/halted quote.
+        _moves_note = (
+            "The price moves below are real but cover only the history available."
+            if technical_history_short(data.get("t_bars")) else
+            "The price moves below are shown as reported — verify the quote is "
+            "actually trading before relying on them."
         )
+        if _t_missing and not _other_missing:
+            b1 = (
+                "**Signal: ❔ Verdict withheld** — "
+                f"{_tech_clause}, so a composite score would be guessing rather "
+                "than measuring. " + _moves_note
+            )
+        elif _t_missing:
+            b1 = (
+                "**Signal: ❔ Verdict withheld** — fundamentals couldn't be sourced "
+                f"(company data unavailable from all providers) and {_tech_clause}, "
+                "so a composite score would be guessing rather than measuring. "
+                + _moves_note
+            )
+        else:
+            b1 = (
+                "**Signal: ❔ Verdict withheld** — fundamentals couldn't be sourced "
+                "(company data unavailable from all providers), so a composite score "
+                "would be guessing rather than measuring. Momentum and entry timing "
+                "below are still valid."
+            )
         sig_label, sig_icon, sig_color, sig_score = "Verdict withheld", "❔", "#dc2626", None
 
     # Bullet 2: momentum snapshot
@@ -255,7 +309,13 @@ def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) 
     b2 = "**Momentum:** " + " · ".join(b2_parts)
 
     # Bullet 3: entry timing
-    b3 = f"**Entry Timing: {entry['icon']} {entry['label']}** — {entry['explanation']}"
+    # The not_assessed label already names "Entry Timing" (it is also the
+    # header badge text in app.py), so it skips the template's own prefix.
+    b3 = (
+        f"**{entry['icon']} {entry['label']}** — {entry['explanation']}"
+        if entry["verdict"] == "not_assessed" else
+        f"**Entry Timing: {entry['icon']} {entry['label']}** — {entry['explanation']}"
+    )
 
     # Bullet 4: key contextual factors (earnings, analyst revisions, price target, short interest)
     b4_parts = []
@@ -309,6 +369,8 @@ def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) 
         "signal_color":   sig_color,
         "signal_icon":    sig_icon,
         "fundamentals_available": fundamentals_available,
+        "verdict_basis":  _basis,
+        "missing":        unmeasured_pillars(data),
         "entry":          entry,
         "bullets":        bullets,
         "move_1d":        move_1d,
