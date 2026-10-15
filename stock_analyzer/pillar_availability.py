@@ -144,3 +144,50 @@ def withheld_split(bundle: "dict | None") -> "tuple[bool, bool]":
     tech = "Technical" in missing
     other = (not tech) or any(m != "Technical" for m in missing)
     return tech, other
+
+
+def withheld_heading(bundle: "dict | None") -> str:
+    """Plain-text phrase naming EXACTLY which pillar(s) are unmeasured, for a
+    "Verdict withheld — <phrase>" heading. "fundamentals" is used only when
+    Business Quality itself is missing (Valuation rides along under it);
+    a Valuation-only gap says "valuation". With no usable label it falls
+    back to today's "fundamentals unavailable"."""
+    missing = unmeasured_pillars(bundle)
+    tech = "Technical" in missing
+    if "Business Quality" in missing:
+        other = "fundamentals"
+    elif "Valuation" in missing:
+        other = "valuation"
+    elif "Expense ratio" in missing:
+        other = "expense ratio"
+    else:
+        other = ""
+    if tech and other:
+        return f"{other} and technical trend unavailable"
+    if tech:
+        return "technical trend not measured"
+    return f"{other or 'fundamentals'} unavailable"
+
+
+def withheld_lead(bundle: "dict | None", ticker: str) -> str:
+    """Plain-text first sentence(s) of the STOCK withheld banner, true for the
+    case: Business Quality missing -> the "couldn't get fundamental data" text;
+    Valuation-only missing (Business Quality measured) -> no objective
+    valuation metric, never a claim that fundamentals couldn't be fetched.
+    Caller escapes. (Technical is appended by the caller via technical_clause.)"""
+    missing = unmeasured_pillars(bundle)
+    if "Business Quality" in missing or "Valuation" not in missing:
+        return (
+            f"We couldn't get {ticker}'s fundamental data from any source right now "
+            "(Yahoo Finance returned nothing and the failover couldn't backfill it). "
+            "The composite needs the Business Quality leg to issue a trustworthy call — "
+            "without it the score defaults to a neutral 50 and produces a misleading "
+            "verdict, so the app is holding the recommendation rather than guessing."
+        )
+    return (
+        f"No objective valuation metric (Forward P/E or FCF Yield) was usable for "
+        f"{ticker} — analyst opinion alone isn't enough to score the Valuation pillar. The composite "
+        "needs the Valuation leg to issue a trustworthy call — without it the score "
+        "defaults to a neutral 50 and produces a misleading verdict, so the app is "
+        "holding the recommendation rather than guessing."
+    )

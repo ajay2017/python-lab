@@ -339,6 +339,8 @@ from stock_analyzer.pillar_availability import (
     verdict_basis as _verdict_basis,
     unmeasured_pillars as _unmeasured_pillars,
     withheld_split as _withheld_split,
+    withheld_heading as _withheld_heading,
+    withheld_lead as _withheld_lead,
     technical_clause as _technical_clause,
 )
 from stock_analyzer.util import safe_html as _safe_html
@@ -24147,14 +24149,9 @@ elif page == "📈 Analysis":
         _sv_fund_ok = _sv_basis == "equity"
         _sv_etf_ok = _sv_basis == "etf"
         if not _sv_fund_ok and not _sv_etf_ok:
-            _sv_t_miss, _sv_o_miss = _withheld_split(_sv_r)
             # Name the real missing pillar: technical-only withhold must not
             # claim fundamentals are unavailable.
-            _sv_cause = (
-                "technical trend not measured" if (_sv_t_miss and not _sv_o_miss)
-                else "fundamentals and technical trend unavailable" if _sv_t_miss
-                else "fundamentals unavailable"
-            )
+            _sv_cause = _withheld_heading(_sv_r)
             st.markdown(
                 "<div style='padding:12px;border-radius:8px;background:#dc262618;"
                 "border-left:5px solid #dc2626;margin-bottom:10px'>"
@@ -24536,20 +24533,13 @@ elif page == "📈 Analysis":
                         "</div>", unsafe_allow_html=True,
                     )
                 else:
-                    _vg_missing = "Business Quality" if not r.get("fundamentals_available", True) else "Valuation"
                     _da_also = (f" Also: {_technical_clause(r.get('t_bars'))}." if _da_t_miss else "")
                     st.markdown(
                         "<div style='padding:12px;border-radius:8px;background:#dc262618;"
                         "border-left:5px solid #dc2626;margin-bottom:10px'>"
                         "<b style='font-size:1.1em;color:#dc2626'>🚫 Verdict withheld — "
-                        "fundamentals unavailable</b>"
-                        f"<br><span style='color:#dc2626'>We couldn't get {_safe_html(ticker)}'s "
-                        "fundamental data from any source right now (Yahoo Finance returned "
-                        "nothing and the failover couldn't backfill it). The composite needs "
-                        f"the {_safe_html(_vg_missing)} leg to issue a trustworthy call — "
-                        "without it the score defaults to a neutral 50 and produces a "
-                        "<b>misleading verdict</b>, so the app is holding the recommendation "
-                        "rather than guessing."
+                        f"{_safe_html(_withheld_heading(r))}</b>"
+                        f"<br><span style='color:#dc2626'>{_safe_html(_withheld_lead(r, ticker))}"
                         f"{_safe_html(_da_also)}</span>"
                         f"<br><small style='color:#dc2626'>⚠️ If {_safe_html(ticker)} appeared under "
                         "<b>New Positions to Initiate</b> in today's Brief, that read used "
@@ -26005,7 +25995,10 @@ elif page == "📈 Analysis":
                     )
                     st.markdown(_dd1_hdr)
                     st.caption(_dd1_cap)
-                    for k, v in r["t_signals"].items():
+                    # Unmeasured Technical: no bullish/bearish warm-up bullets under
+                    # a tile that says "not measured" (same as an unavailable
+                    # Valuation shows only its reason).
+                    for k, v in (r["t_signals"].items() if r.get("t_available", True) else ()):
                         clr = "#00C851" if "bullish" in v.lower() else (
                               "#ff4444" if "bearish" in v.lower() else "#aaa")
                         tip_key = {"RSI": "RSI", "MACD": "MACD"}.get(k, "")

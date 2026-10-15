@@ -544,3 +544,53 @@ def test_quick_research_bullet3_has_no_doubled_entry_timing_phrase():
     assert bad["bullets"][2].count("Entry Timing") == 1
     ok = qr.research_ticker("AAA", _qr_data(t_available=True))
     assert ok["bullets"][2].startswith("**Entry Timing: ")
+
+
+# ── withheld_heading / withheld_lead: name exactly the missing pillar(s) ────
+
+def _pa():
+    from stock_analyzer import pillar_availability as pa
+    return pa
+
+
+def test_withheld_heading_per_case():
+    pa = _pa()
+    assert pa.withheld_heading({"fundamentals_available": False}) == "fundamentals unavailable"
+    assert pa.withheld_heading(
+        {"fundamentals_available": False, "val_available": False}) == "fundamentals unavailable"
+    assert pa.withheld_heading({"val_available": False}) == "valuation unavailable"
+    assert pa.withheld_heading(
+        {"val_available": False, "t_available": False}) == "valuation and technical trend unavailable"
+    assert pa.withheld_heading({"t_available": False}) == "technical trend not measured"
+    assert pa.withheld_heading(
+        {"fundamentals_available": False, "t_available": False}) == "fundamentals and technical trend unavailable"
+    # ETF whose expense ratio is missing
+    assert pa.withheld_heading(
+        {"asset_type": "etf", "etf_available": False}) == "expense ratio unavailable"
+    assert pa.withheld_heading(
+        {"asset_type": "etf", "etf_available": False, "t_available": False}
+    ) == "expense ratio and technical trend unavailable"
+    # no usable label -> today's wording
+    assert pa.withheld_heading(None) == "fundamentals unavailable"
+    assert pa.withheld_heading({}) == "fundamentals unavailable"
+
+
+def test_withheld_lead_valuation_only_does_not_claim_fundamentals_unfetched():
+    pa = _pa()
+    lead = pa.withheld_lead({"val_available": False}, "ACCV")
+    assert "No objective valuation metric (Forward P/E or FCF Yield)" in lead
+    assert "ACCV" in lead
+    assert "fundamental data" not in lead
+    # still true with Technical also missing (tech is appended by the caller)
+    assert "fundamental data" not in pa.withheld_lead(
+        {"val_available": False, "t_available": False}, "ACCV")
+
+
+def test_withheld_lead_business_quality_missing_keeps_fetch_failure_text():
+    pa = _pa()
+    for b in ({"fundamentals_available": False},
+              {"fundamentals_available": False, "val_available": False},
+              {"fundamentals_available": False, "t_available": False}):
+        lead = pa.withheld_lead(b, "XYZ")
+        assert "couldn't get XYZ's fundamental data from any source" in lead
+        assert "Business Quality leg" in lead
