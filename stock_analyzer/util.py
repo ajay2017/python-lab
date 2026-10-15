@@ -394,7 +394,8 @@ def pillar_tile(
 
     A pillar whose inputs were unavailable returns a fabricated neutral 50 —
     `valuation.py` and `fundamentals.py` both do this by design, and
-    `technicals.py` does it with no flag at all. Rendering that as
+    `technicals.py` does it too (its flag is the bundle's ``t_available``, pass
+    that as ``available`` for the Technical tile). Rendering that as
     "**Valuation — 50/100**" under a caption asserting "P/E · FCF Yield · PT
     Upside · Consensus" states two things that are not true: that a
     measurement happened, and that those inputs produced it. A measured 50 and

@@ -335,6 +335,12 @@ from stock_analyzer import api_health as _ah
 from stock_analyzer import grow_dropoff as _grow_dropoff
 from stock_analyzer import ticker_history as _ticker_history
 from stock_analyzer import sector_fit
+from stock_analyzer.pillar_availability import (
+    verdict_basis as _verdict_basis,
+    unmeasured_pillars as _unmeasured_pillars,
+    withheld_split as _withheld_split,
+    technical_clause as _technical_clause,
+)
 from stock_analyzer.util import safe_html as _safe_html
 from stock_analyzer.util import md_bold_to_html as _md_bold
 from stock_analyzer.util import factor_tilt_state as _factor_tilt_state
@@ -8823,20 +8829,50 @@ if page == "🏠 Home":
         # rather than as half-validated cards inside the actionable list.
         # The "decides, not informs" posture: we don't recommend what we
         # can't validate. The user gets one obvious recovery action.
-        if comp_unavail:
-            _unavail_tickers = [p.get("ticker", "") for p in comp_unavail]
+        # 2026-10-15 (impossible-states #5): items carry "missing" (pillar
+        # labels from pillar_availability.unmeasured_pillars). A name held out
+        # ONLY for an unmeasured Technical pillar (short history / uncomputable
+        # reading) is NOT a data-source error and Retry cannot add history, so
+        # it gets its own banner without Retry; everything else (no "missing"
+        # key, empty, bq/val/expense, or a mixed list) keeps today's banner.
+        _unavail_tech_only = [
+            p for p in comp_unavail
+            if isinstance(p.get("missing"), (list, tuple)) and p.get("missing")
+            and all(m == "Technical" for m in p["missing"])
+        ]
+        if _unavail_tech_only:
+            _ut_tickers = [str(p.get("ticker", "")) for p in _unavail_tech_only]
+            _ut_more = f" (+{len(_ut_tickers)-5} more)" if len(_ut_tickers) > 5 else ""
+            st.markdown(
+                "<div style='background:#3b2a0a;border:1px solid #f59e0b;"
+                "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
+                f"<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                f"🔍 Held out {_safe_html(len(_ut_tickers))} candidate"
+                f"{_safe_html('s' if len(_ut_tickers) != 1 else '')} — technical trend not measured</div>"
+                f"<div style='color:#fcd34d;font-size:0.78em'>"
+                f"Affected: <b>{_safe_html(', '.join(_ut_tickers[:5]))}</b>{_safe_html(_ut_more)}</div>"
+                "<div style='color:#fde68a;font-size:0.74em;margin-top:4px;font-style:italic'>"
+                "The price history is too short, or a required technical reading "
+                "couldn't be computed from recent prices, so a composite score would "
+                "be guessing rather than measuring. Retrying won't add history — "
+                "they return once the trend can be measured."
+                "</div></div>",
+                unsafe_allow_html=True,
+            )
+        _unavail_other = [p for p in comp_unavail if p not in _unavail_tech_only]
+        if _unavail_other:
+            _unavail_tickers = [p.get("ticker", "") for p in _unavail_other]
+            _uo_more = f" (+{len(_unavail_tickers)-5} more)" if len(_unavail_tickers) > 5 else ""
             _bn_c1, _bn_c2 = st.columns([5, 1])
             with _bn_c1:
                 st.markdown(
                     "<div style='background:#3b2a0a;border:1px solid #f59e0b;"
                     "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
                     f"<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                    f"🔍 Couldn't score {len(comp_unavail)} candidate"
-                    f"{'s' if len(comp_unavail) != 1 else ''} — data source returned an error</div>"
+                    f"🔍 Couldn't score {_safe_html(len(_unavail_other))} candidate"
+                    f"{_safe_html('s' if len(_unavail_other) != 1 else '')} — data source returned an error</div>"
                     f"<div style='color:#fcd34d;font-size:0.78em'>"
-                    f"Affected: <b>{', '.join(_unavail_tickers[:5])}</b>"
-                    + (f" (+{len(_unavail_tickers)-5} more)" if len(_unavail_tickers) > 5 else "")
-                    + "</div>"
+                    f"Affected: <b>{_safe_html(', '.join(_unavail_tickers[:5]))}</b>{_safe_html(_uo_more)}</div>"
                     "<div style='color:#fde68a;font-size:0.74em;margin-top:4px;font-style:italic'>"
                     "Set aside until data loads — momentum alone isn't enough to recommend. "
                     "Click Retry to try the data fetch again."
@@ -8903,7 +8939,7 @@ if page == "🏠 Home":
                     _funnel_parts.append(f"{_belowbar_n} fell below it")
                 if _couldnt_n:
                     _funnel_parts.append(
-                        f"{_couldnt_n} couldn't be scored (see banner above)"
+                        f"{_couldnt_n} couldn't be scored (see banner(s) above)"
                     )
                 _funnel = f" ({'; '.join(_funnel_parts)})" if _funnel_parts else ""
                 if _macro_n:
@@ -10610,10 +10646,17 @@ if page == "🏠 Home":
                                         risk_reward(_cprice, _cstop, _ctgt)
                                         if (_cprice and _cstop and _ctgt) else None
                                     )
+                                    # A withheld verdict (unmeasured bq/val/technical
+                                    # pillar) leaves a fabricated neutral 50 in
+                                    # `total` and a tainted `rec`: use neither, so
+                                    # the candidate reads as unscored — and carry
+                                    # WHY so the render doesn't say "couldn't load".
+                                    _cb_ok = _verdict_basis(_cb) == "equity"
                                     _quality[_cand] = {
-                                        "score":  _cb.get("total"),
-                                        "signal": (_cb.get("rec") or {}).get("label"),
+                                        "score":  _cb.get("total") if _cb_ok else None,
+                                        "signal": (_cb.get("rec") or {}).get("label") if _cb_ok else None,
                                         "rr":     _crr,
+                                        "withheld": None if _cb_ok else (_unmeasured_pillars(_cb) or ["a pillar"]),
                                     }
                                 _annot = annotate_add_candidates(
                                     _pool, _quality, buy_gate=COMPOSITE_BUY
@@ -10621,6 +10664,7 @@ if page == "🏠 Home":
                                 for _a in _annot:
                                     _a["sector"]  = _sec_name
                                     _a["_bundle"] = _bundles.get(_a["ticker"])
+                                    _a["withheld"] = _quality.get(_a["ticker"], {}).get("withheld")
                                 _cand_rows.extend(_annot)
 
                         # Global re-rank across sectors: gate-passers (composite
@@ -10704,12 +10748,15 @@ if page == "🏠 Home":
                             )
                             _score_txt = (
                                 f"{_c['score']:.0f}/100"
-                                if isinstance(_c["score"], (int, float)) else "score n/a"
+                                if isinstance(_c["score"], (int, float))
+                                else (f"verdict withheld — {', '.join(_c['withheld'])} not measured"
+                                      if _c.get("withheld") else "score n/a")
                             )
                             _rr = _c.get("rr")
                             _rr_txt = (
                                 f" · R:R {_rr:.1f}:1"
-                                if isinstance(_rr, (int, float)) and _rr > 0 else ""
+                                if (isinstance(_rr, (int, float)) and _rr > 0
+                                    and not _c.get("withheld")) else ""
                             )
                             _clean_badge = " · 🏆 cleanest diversifier" if _t == _cleanest else ""
                             st.markdown(
@@ -15647,12 +15694,19 @@ elif page == "📡 Signals & Advice":
                                     risk_reward(_cprice, _cstop, _ctgt)
                                     if (_cprice and _cstop and _ctgt) else None
                                 )
+                                # Withheld verdict (unmeasured bq/val/technical
+                                # pillar): the fabricated-50 `total` / tainted `rec`
+                                # are not used; the reason is carried for the render.
+                                _cb_ok = _verdict_basis(_cb) == "equity"
                                 _div_quality[_cand] = {
-                                    "score":  _cb.get("total"),
-                                    "signal": (_cb.get("rec") or {}).get("label"),
+                                    "score":  _cb.get("total") if _cb_ok else None,
+                                    "signal": (_cb.get("rec") or {}).get("label") if _cb_ok else None,
                                     "rr":     _crr,
+                                    "withheld": None if _cb_ok else (_unmeasured_pillars(_cb) or ["a pillar"]),
                                 }
                         _annotated = annotate_add_candidates(_div_cands, _div_quality)
+                        for _a in _annotated:
+                            _a["withheld"] = _div_quality.get(_a["ticker"], {}).get("withheld")
                         _scored_n  = sum(1 for c in _annotated if c["passes"] is not None)
                         _top       = _annotated[:DIVERSIFY_DISPLAY_TOP]
 
@@ -15734,7 +15788,7 @@ elif page == "📡 Signals & Advice":
 
                         # Show how wide the net was cast vs the curated 4-roster.
                         st.caption(
-                            f"Scanned **{_scored_n}** {rec['sector']} names from the discovery "
+                            f"Scored **{_scored_n}** of {len(_annotated)} {rec['sector']} names from the discovery "
                             f"universe · showing the top **{len(_top)}** by composite "
                             f"(best-first). The roster is always included; gate = "
                             f"composite ≥ {COMPOSITE_BUY:.0f}."
@@ -15792,8 +15846,15 @@ elif page == "📡 Signals & Advice":
                             _div_an_key = f"_div_analyze_{rec['sector']}_{_cand}"
                             with _scol:
                                 if _c["passes"] is None:
-                                    st.metric(_cand, "—", "score unavailable")
-                                    st.caption("Could not load live score")
+                                    if _c.get("withheld"):
+                                        st.metric(_cand, "—", "verdict withheld")
+                                        st.caption(
+                                            f"{', '.join(_c['withheld'])} not measured — "
+                                            "no score is shown for this name"
+                                        )
+                                    else:
+                                        st.metric(_cand, "—", "score unavailable")
+                                        st.caption("Could not load live score")
                                     st.caption(_add_corr_caption(_cand))
                                     st.caption(_add_beta_caption(_cand))
                                     # Jump to the full Analysis scorecard (same
@@ -19906,7 +19967,8 @@ elif page == "🥧 Portfolio Overview":
                           delta_color="off",
                           help="A verdict needs either real business-quality/"
                                "valuation data (stocks) or real cost data "
-                               "(funds) — neither was available, so a score "
+                               "(funds), plus a measured technical trend — at "
+                               "least one was unavailable, so a score "
                                "here would be guessing rather than measuring.")
 
             # Score breakdown row
@@ -19915,9 +19977,16 @@ elif page == "🥧 Portfolio Overview":
             if not _sb_etf_ok:
                 t_contrib  = round(r['t_score']  * _CW["technical"],        1)
                 s_contrib  = round(r['s_score']  * _CW["sentiment"],         1)
-                sb1.metric("Technical",       f"{r['t_score']:.0f}/100", f"+{t_contrib} pts (25%)",
-                           help="RSI · MACD · Bollinger Bands · MA trend · Volume\n\n"
-                                + _tip("RSI"))
+                if r.get("t_available", True):
+                    sb1.metric("Technical",       f"{r['t_score']:.0f}/100", f"+{t_contrib} pts (25%)",
+                               help="RSI · MACD · Bollinger Bands · MA trend · Volume\n\n"
+                                    + _tip("RSI"))
+                else:
+                    # Unmeasured technical pillar (too little history / a leg
+                    # uncomputable) = fabricated 50: withhold like bq/val below.
+                    sb1.metric("Technical", "❔ Withheld", "no data",
+                               delta_color="off",
+                               help=_technical_clause(r.get("t_bars")).capitalize() + ".")
                 # 2026-09-22 app-review follow-up: Business Quality/Valuation can
                 # each be a FABRICATED neutral 50 when unavailable (fundamentals.py/
                 # valuation.py's own documented withhold-to-50 design) — rendering
@@ -19957,11 +20026,16 @@ elif page == "🥧 Portfolio Overview":
                 # part of a fund's score (etf_scoring.py), not merely
                 # withheld, so they render distinctly from "❔ Withheld" via
                 # ETF_PILLAR_NA_SHORT/REASON rather than reusing that wording.
-                _sb_t_contrib = round(r['t_score'] * ETF_COMPOSITE_WEIGHTS["technical"], 1)
-                sb1.metric("Technical", f"{r['t_score']:.0f}/100",
-                           f"+{_sb_t_contrib} pts ({ETF_COMPOSITE_WEIGHTS['technical']*100:.0f}%)",
-                           help="RSI · MACD · Bollinger Bands · MA trend · Volume\n\n"
-                                + _tip("RSI"))
+                if r.get("t_available", True):
+                    _sb_t_contrib = round(r['t_score'] * ETF_COMPOSITE_WEIGHTS["technical"], 1)
+                    sb1.metric("Technical", f"{r['t_score']:.0f}/100",
+                               f"+{_sb_t_contrib} pts ({ETF_COMPOSITE_WEIGHTS['technical']*100:.0f}%)",
+                               help="RSI · MACD · Bollinger Bands · MA trend · Volume\n\n"
+                                    + _tip("RSI"))
+                else:
+                    sb1.metric("Technical", "❔ Withheld", "no data",
+                               delta_color="off",
+                               help=_technical_clause(r.get("t_bars")).capitalize() + ".")
                 _sb_cost_contrib = round(r["etf_cost_score"] * ETF_COMPOSITE_WEIGHTS["cost"], 1)
                 sb2.metric("Cost (expense ratio)", f"{r['etf_cost_score']:.0f}/100",
                            f"+{_sb_cost_contrib} pts ({ETF_COMPOSITE_WEIGHTS['cost']*100:.0f}%)",
@@ -23357,6 +23431,7 @@ elif page == "🔍 Market Scanner":
                 # so the breakdown below says "not measured" instead of a score.
                 _ev_bq_ok  = bool(_ev_comp_data.get("bq_available", _ev_comp_data.get("fundamentals_available", True))) if _ev_comp_data else True
                 _ev_val_ok = bool(_ev_comp_data.get("val_available", True)) if _ev_comp_data else True
+                _ev_t_ok   = bool(_ev_comp_data.get("t_available", True)) if _ev_comp_data else True
                 _bndl     = _ev_bundle_map.get(_ev_t, {})
                 _ev_info  = _bndl.get("info", {})
                 _ev_revs  = _bndl.get("revisions", {})
@@ -23440,6 +23515,7 @@ elif page == "🔍 Market Scanner":
                     "tech_score": _ev_tech_score, "bq_score": _ev_bq_score,
                     "val_score": _ev_val_score, "sent_score": _ev_sent_score,
                     "bq_ok": _ev_bq_ok,        "val_ok": _ev_val_ok,
+                    "t_ok": _ev_t_ok,
                 })
 
             st.subheader("📊 Signal Evidence — Top 10")
@@ -23544,9 +23620,10 @@ elif page == "🔍 Market Scanner":
                                 f"{_val_sc:.0f}" if (_evr.get("val_ok", True) and _val_sc is not None)
                                 else "not measured"
                             )
+                            _t_txt = f"{_t_sc:.0f}" if _evr.get("t_ok", True) else "not measured"
                             _comp_breakdown = (
                                 f"<span style='color:#6b7280;font-size:0.78em'>"
-                                f" (Technical {_t_sc:.0f}×25% + "
+                                f" (Technical {_t_txt}×25% + "
                                 f"Business Quality {_bq_txt}×35% + "
                                 f"Valuation {_val_txt}×30% + "
                                 f"Sentiment {_s_sc:.0f}×10%)</span>"
@@ -24066,14 +24143,23 @@ elif page == "📈 Analysis":
         # checked as a second chance before withholding — same three-way
         # resolution as portfolio.build_portfolio_df. etf_ok is gated on
         # asset_type == "etf" so a stock can never take this branch.
-        _sv_fund_ok = bool(_sv_r.get("fundamentals_available", True) and _sv_r.get("val_available", True))
-        _sv_etf_ok = (_sv_r.get("asset_type") == "etf") and bool(_sv_r.get("etf_available", False))
+        _sv_basis = _verdict_basis(_sv_r)
+        _sv_fund_ok = _sv_basis == "equity"
+        _sv_etf_ok = _sv_basis == "etf"
         if not _sv_fund_ok and not _sv_etf_ok:
+            _sv_t_miss, _sv_o_miss = _withheld_split(_sv_r)
+            # Name the real missing pillar: technical-only withhold must not
+            # claim fundamentals are unavailable.
+            _sv_cause = (
+                "technical trend not measured" if (_sv_t_miss and not _sv_o_miss)
+                else "fundamentals and technical trend unavailable" if _sv_t_miss
+                else "fundamentals unavailable"
+            )
             st.markdown(
                 "<div style='padding:12px;border-radius:8px;background:#dc262618;"
                 "border-left:5px solid #dc2626;margin-bottom:10px'>"
                 f"<b style='font-size:1.1em;color:#dc2626'>🚫 Verdict withheld — "
-                f"fundamentals unavailable for {_sv_ticker}</b></div>",
+                f"{_safe_html(_sv_cause)} for {_safe_html(_sv_ticker)}</b></div>",
                 unsafe_allow_html=True,
             )
         elif _sv_etf_ok:
@@ -24178,7 +24264,13 @@ elif page == "📈 Analysis":
         # Signal column (below, already etf_ok-aware) correctly saying Buy.
         # Stocks are unaffected — asset_type != "etf" always takes the `else`
         # branch below, byte-identical to before this change.
-        _sc_etf_ok = (r.get("asset_type") == "etf") and bool(r.get("etf_available", False))
+        _sc_basis = _verdict_basis(r)
+        _sc_etf_ok = _sc_basis == "etf"
+        if _sc_basis == "withheld":
+            # No verdict issued -> no suggested entry size either (the Signal
+            # column below already reads "🚫 Withheld"; a "→ N suggested" share
+            # count beside it would be a buy-sized call without a verdict).
+            ps = None
         if _sc_etf_ok:
             _sc_is_sell = r["etf_rec"]["label"] in ("Sell", "Strong Sell")
             _sc_is_buy  = r["etf_rec"]["label"] in ("Buy", "Strong Buy")
@@ -24191,7 +24283,9 @@ elif page == "📈 Analysis":
             _avg_cost = _sc_held.get("Avg Cost", 0)
             _sc_position = f"{int(_sc_held.get('Shares', 0))} sh @ ${_avg_cost:.2f} avg"
         else:
-            _sc_position = f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "—"
+            # A withheld name gets no entry zone (no verdict, so no entry call).
+            _sc_position = (f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}"
+                            if (r["entry_lo"] and _sc_basis != "withheld") else "—")
 
         # "Shares" column — held: actual shares; not held: suggested entry.
         # Prefix the suggested branch so a not-held row can't be mistaken for
@@ -24215,7 +24309,7 @@ elif page == "📈 Analysis":
             _sc_cost = "—"
 
         # R:R only meaningful for buy signals
-        _sc_rr = f"{rr_val:.1f}:1" if (rr_val and rr_val > 0 and _sc_is_buy) else "—"
+        _sc_rr = f"{rr_val:.1f}:1" if (rr_val and rr_val > 0 and _sc_is_buy and _sc_basis != "withheld") else "—"
 
         # Pin the Stop column when it's a manual override so the user can see
         # at a glance which tickers have actioned stops vs. ATR-derived ones.
@@ -24233,7 +24327,7 @@ elif page == "📈 Analysis":
         # through to "—"/Withheld — this row must never disagree with Site 3's
         # Detailed Analysis banner below on whether a ticker is withheld or what
         # verdict it shows.
-        _sc_fund_ok = r.get("fundamentals_available", True) and r.get("val_available", True)
+        _sc_fund_ok = _sc_basis == "equity"
         # _sc_etf_ok already computed above, right after `earn_label` — reused here.
         rows.append({
             "Ticker":           ticker,
@@ -24345,7 +24439,12 @@ elif page == "📈 Analysis":
             # already stopped using. `_da_display_total` is the matching
             # composite number for the same reason; never write into
             # `r["total"]`/`r["rec"]` themselves.
-            _da_etf_ok = (r.get("asset_type") == "etf") and bool(r.get("etf_available", False))
+            # 2026-10-15 (impossible-states #5): one shared decision for the
+            # whole Detailed Analysis block — pillar_availability.verdict_basis
+            # also withholds when the TECHNICAL pillar is unmeasured.
+            _da_basis = _verdict_basis(r)
+            _da_etf_ok = _da_basis == "etf"
+            _da_withheld = _da_basis == "withheld"
             if _da_etf_ok:
                 rec = r["etf_rec"]
             _da_display_total = r["etf_total"] if _da_etf_ok else r["total"]
@@ -24386,15 +24485,45 @@ elif page == "📈 Analysis":
             # minimum bar) — the withhold below covers both, with wording that
             # names the actual missing piece for each case rather than always
             # claiming "fundamental data".
-            _da_fund_ok = bool(r.get("fundamentals_available", True) and r.get("val_available", True))
+            _da_fund_ok = _da_basis == "equity"
             # _da_etf_ok already computed above, right after `rec` — reused here.
+            _da_t_miss, _da_o_miss = _withheld_split(r)
             if not _da_fund_ok and not _da_etf_ok:
-                if r.get("asset_type") == "etf":
+                if _da_t_miss and not _da_o_miss:
+                    # Only the Technical pillar is unmeasured (short history or
+                    # an uncomputable reading) — fundamentals/expense ratio are
+                    # fine, so neither legacy banner below would be true.
+                    st.markdown(
+                        "<div style='padding:12px;border-radius:8px;background:#dc262618;"
+                        "border-left:5px solid #dc2626;margin-bottom:10px'>"
+                        "<b style='font-size:1.1em;color:#dc2626'>🚫 Verdict withheld — "
+                        "technical trend not measured</b>"
+                        f"<br><span style='color:#dc2626'>For {_safe_html(ticker)}, "
+                        f"{_safe_html(_technical_clause(r.get('t_bars')))}. A composite "
+                        "score built on an unmeasured technical leg would be guessing "
+                        "rather than measuring, so the app is holding the "
+                        "recommendation.</span>"
+                        "</div>", unsafe_allow_html=True,
+                    )
+                elif r.get("asset_type") == "etf":
                     # A fund's fundamentals gate is never the issue (it's
                     # structurally always "unavailable" — that's the ETF
                     # composite's whole reason to exist). The actual missing
                     # piece here is the expense ratio itself, per
                     # etf_scoring.etf_available's own minimum bar.
+                    # Wording branches on whether the technical trend IS measured:
+                    # with it, "only the technical trend would drive a call" is
+                    # true; without it, it would be false (nothing is measured).
+                    _da_etf_tail = (
+                        "without it, only the technical trend would drive a call, "
+                        "risking a manufactured buy/sell on price action alone, so the "
+                        "app is holding the recommendation rather than guessing."
+                        if not _da_t_miss else
+                        "and the technical trend couldn't be measured either "
+                        f"({_technical_clause(r.get('t_bars'))}), so nothing measured "
+                        "is left to base a call on and the app is holding the "
+                        "recommendation rather than guessing."
+                    )
                     st.markdown(
                         "<div style='padding:12px;border-radius:8px;background:#dc262618;"
                         "border-left:5px solid #dc2626;margin-bottom:10px'>"
@@ -24402,27 +24531,27 @@ elif page == "📈 Analysis":
                         "expense ratio unavailable</b>"
                         f"<br><span style='color:#dc2626'>We couldn't get {_safe_html(ticker)}'s "
                         "expense ratio from any data source right now. A fund's verdict "
-                        "needs that figure to score its cost-quality leg — without it, "
-                        "only the technical trend would drive a call, risking a "
-                        "<b>manufactured buy/sell on price action alone</b>, so the app "
-                        "is holding the recommendation rather than guessing.</span>"
+                        "needs that figure to score its cost-quality leg — "
+                        f"{_safe_html(_da_etf_tail)}</span>"
                         "</div>", unsafe_allow_html=True,
                     )
                 else:
                     _vg_missing = "Business Quality" if not r.get("fundamentals_available", True) else "Valuation"
+                    _da_also = (f" Also: {_technical_clause(r.get('t_bars'))}." if _da_t_miss else "")
                     st.markdown(
                         "<div style='padding:12px;border-radius:8px;background:#dc262618;"
                         "border-left:5px solid #dc2626;margin-bottom:10px'>"
                         "<b style='font-size:1.1em;color:#dc2626'>🚫 Verdict withheld — "
                         "fundamentals unavailable</b>"
-                        f"<br><span style='color:#dc2626'>We couldn't get {ticker}'s "
+                        f"<br><span style='color:#dc2626'>We couldn't get {_safe_html(ticker)}'s "
                         "fundamental data from any source right now (Yahoo Finance returned "
                         "nothing and the failover couldn't backfill it). The composite needs "
-                        f"the {_vg_missing} leg to issue a trustworthy call — "
+                        f"the {_safe_html(_vg_missing)} leg to issue a trustworthy call — "
                         "without it the score defaults to a neutral 50 and produces a "
                         "<b>misleading verdict</b>, so the app is holding the recommendation "
-                        "rather than guessing.</span>"
-                        f"<br><small style='color:#dc2626'>⚠️ If {ticker} appeared under "
+                        "rather than guessing."
+                        f"{_safe_html(_da_also)}</span>"
+                        f"<br><small style='color:#dc2626'>⚠️ If {_safe_html(ticker)} appeared under "
                         "<b>New Positions to Initiate</b> in today's Brief, that read used "
                         "fundamentals that are momentarily missing here — re-check in a "
                         "minute (data sources recover), or verify on your broker before "
@@ -24713,7 +24842,9 @@ elif page == "📈 Analysis":
             if not _sa_port.empty and ticker in _sa_port["Ticker"].values:
                 _sa_holding = _sa_port[_sa_port["Ticker"] == ticker].iloc[0].to_dict()
 
-            _plan_label = "🚪 Exit Plan" if _sa_is_sell else "📋 Trade Plan"
+            # A withheld verdict never labels the tab "Exit Plan" (that label
+            # would come from the fabricated/tainted composite's Sell rating).
+            _plan_label = "🚪 Exit Plan" if (_sa_is_sell and not _da_withheld) else "📋 Trade Plan"
 
             # ── Prior Trades (F-237): build the ticker's own round-trip history
             # BEFORE the tab strip, because the tab label carries the count.
@@ -24741,11 +24872,315 @@ elif page == "📈 Analysis":
                  "🏦 Analyst Coverage", _ph_label]
             )
 
+            def _sa_held_protection(withheld):
+                """Held-position state + banners for the Analysis plan tab: stop-breach,
+                Reduce/Exit call, unverified-context notices. Returns (stop_breached,
+                under_reduce). Shared by the buy branch (withheld=False, output unchanged)
+                and the withheld branch (withheld=True: no composite wording, no add-framing)
+                so price-based protection can never differ between them."""
+                # Stop-breach gate (mirrors Act Today's detector: Gap to Stop ≤ 0,
+                # i.e. price has fallen to/through the stop). A held position whose
+                # stop is breached is a mechanical EXIT — protect-capital overrides
+                # deploy-capital, so the Analysis page must NOT frame it as an add.
+                # The composite still rates the STOCK (it can be a genuine Buy); the
+                # stop protects the POSITION. Gate on the RATCHETED/manual protective
+                # stop the Brief actually acts on (`_sa_holding["Stop"]` = Gap-to-Stop
+                # basis), NOT the raw ATR stop `r["stop"]` — so the breach banner fires
+                # exactly when the Brief flags a breach, not only once price falls the
+                # extra distance to the ATR stop (the F-47 held-stop pattern; ps/R:R
+                # deliberately stay on `r["stop"]` = the ATR fresh-entry basis).
+                _sa_stop = (_f(_sa_holding.get("Stop")) or r.get("stop")) if _sa_holding else r.get("stop")
+                # Mirror the Brief's skip for "Stop Unavailable" rows: when
+                # build_portfolio_df had no ATR stop it writes Stop=None AND
+                # Gap to Stop (%)=None, and the Brief SKIPS the breach test
+                # entirely (daily_briefing: `if gap is None: continue`). Here
+                # _f(None) → 0.0 is falsy, so _sa_stop would otherwise fall
+                # back to the raw ATR bundle r["stop"] and fire a ⛔ banner on
+                # a name the Brief is deliberately silent about. Use pd.isna
+                # (not `is None`): once the DataFrame column is float64 the
+                # None becomes NaN, and `NaN is None` is False — pd.isna is
+                # True for BOTH, matching the Brief's NaN-aware `_f` so the
+                # skip engages in every dtype, not just object columns (F3).
+                _gap_missing = bool(_sa_holding) and pd.isna(_sa_holding.get("Gap to Stop (%)"))
+                # Match the Brief's EXACT breach test — it fires on
+                # round(Gap%, 1) <= 0 (daily_briefing), not the raw inequality —
+                # so a sub-0.05% gap can't split the two surfaces. `price` is now
+                # the live-merged price (the same `_live_prices` snapshot the Brief
+                # used, merged above), so the mirror is price-exact too — bounded
+                # only by the 60s live-price refresh (the strip fragment can advance
+                # `_live_prices` past the frozen synthesis snapshot; inherent to the
+                # fragment/synthesis split, self-heals, directionally fine for a live view).
+                # Precedence (stop-breach > reduce-call > plain-held) lives in
+                # stock_analyzer.act_today_precedence — a pure, unit-tested
+                # module — not inline here (Part 2 #3 of the 2026-08-26 app
+                # review; extracted the same way outage_gate.py was in `1b12779`).
+                _stop_breached = bool(_sa_holding) and act_today_precedence.is_stop_breached(
+                    price, _sa_stop, gap_missing=_gap_missing
+                )
+
+                # Deterioration / reduce-call gate — sibling to the stop-breach
+                # gate: a held name the Daily Brief is telling you to trim/exit
+                # is NOT a place to add, even when its composite still reads
+                # Buy. The composite rates the STOCK (it rewards the oversold
+                # setup); the exit discipline protects the POSITION. Consume the
+                # Brief's PUBLISHED reduce calls (same _is_reduce/_ticker canon
+                # as Opportunity Signals — no recompute drift) so the two
+                # surfaces agree.
+                # 2026-09-21 app review defect #1: a bare `or {}` here let an
+                # unverified _reduce_calls (Daily Brief not yet published this
+                # session, distinct from _sa_port_state/_port_df_enriched
+                # readiness above) silently read as "not under reduce",
+                # letting this branch fall through to the plain "Already
+                # held... sizing below" message (line ~23042) with add-on
+                # sizing NOT suppressed for a position that IS under an
+                # active Reduce/Exit call. Same verified-check pattern as
+                # the already-fixed Hold branch a few hundred lines above
+                # (`_hold_reduce_verified`) and the closed My Edge/Portfolio
+                # Overview findings: _coord_cache_state alone is not enough
+                # since a crashed Daily Brief fail-opens _reduce_calls to {}
+                # rather than None.
+                _sa_reduce_verified = (
+                    _coord_cache_state("_reduce_calls") == "ready"
+                    and not st.session_state.get("_daily_brief_offline", False)
+                )
+                _rc = (
+                    (st.session_state.get("_reduce_calls") or {}).get(str(ticker).upper())
+                    if _sa_reduce_verified else None
+                )
+                _under_reduce = act_today_precedence.held_position_state(
+                    is_holding=bool(_sa_holding), stop_breached=_stop_breached,
+                    has_reduce_call=bool(_rc),
+                ) == act_today_precedence.REDUCE_CALL
+
+                # Say so when the two checks above could not run at all. The
+                # mechanical stop-breach half is immune (it recomputes live),
+                # so this names only what is genuinely unverified.
+                # Home publishes _last_held_tickers BEFORE its empty-book
+                # st.stop(), so an EMPTY list there means "definitively holds
+                # nothing" rather than "could not check". Warning such a user
+                # would claim a blind spot the app does not have -- and tell
+                # them to visit a page that will st.stop() again, leaving the
+                # banner unclearable.
+                _sa_held_known = st.session_state.get("_last_held_tickers")
+                _sa_definitely_flat = (
+                    isinstance(_sa_held_known, (list, tuple, set))
+                    and len(_sa_held_known) == 0
+                )
+                if _sa_port_state != "ready" and not _sa_definitely_flat:
+                    st.warning(
+                        ("⚠ **Holdings context unavailable** — the plan below assumes a "
+                         "**new position**. This session could not check whether you already "
+                         f"hold {ticker}, or whether it is under an active Reduce/Exit call, so "
+                         "neither the add-to-position sizing nor the Reduce suppression could "
+                         "run. Open the 🏠 Home page once to load your holdings, "
+                         "then re-check before acting.")
+                        if not withheld else
+                        ("⚠ **Holdings context unavailable** — this session could not check "
+                         f"whether you already hold {ticker}, or whether it is under an active "
+                         "Reduce/Exit call, so the stop-breach and Reduce/Exit protection that "
+                         "would show here could not run. Open the 🏠 Home page once to load "
+                         "your holdings, then re-check before acting.")
+                    )
+                elif _sa_holding and not _sa_reduce_verified:
+                    # Distinct from the banner above: HOLDINGS are known (this
+                    # position IS confirmed held), but the Daily Brief's
+                    # _reduce_calls hasn't published yet this session (Home was
+                    # visited, the Brief build wasn't, or it crashed) -- so the
+                    # Reduce/Exit cross-check specifically could not run. Without
+                    # this, a held position under an active Reduce/Exit call
+                    # could silently reach the plain "Already held... sizing
+                    # below" message a few lines down with add-on sizing NOT
+                    # suppressed. See the _rc computation above.
+                    st.caption(
+                        "⚪ Reduce/Exit cross-check unavailable this session — this plan may "
+                        "not reflect an active Reduce/Exit call on this position. Open "
+                        "🏠 Home to refresh Today's Brief, then re-check before adding."
+                        if not withheld else
+                        "⚪ Reduce/Exit cross-check unavailable this session — this view may "
+                        "not reflect an active Reduce/Exit call on this position. Open "
+                        "🏠 Home to refresh Today's Brief, then re-check."
+                    )
+
+                if _sa_holding and _stop_breached:
+                    _br_shares   = int(_sa_holding.get("Shares", 0))
+                    # Describe the stop by its ACTUAL type (the held Stop Type: Manual /
+                    # a ratchet tier / ATR Stop) so the banner never labels a ratchet
+                    # stop "ATR" now that _sa_stop is the ratcheted value. Build a
+                    # natural-language label with the word "stop" baked in: a ratchet
+                    # tier ("Protect 25% gain", "Breakeven guard") reads ungrammatically
+                    # as "your Protect 25% gain stop", so render it as a parenthetical
+                    # ("your profit-ratchet stop (Protect 25% gain)"). "Stop Unavailable"
+                    # (build had no stop) falls back to the ATR label — accurate, since
+                    # _sa_stop then falls back to r["stop"] (the ATR stop).
+                    _br_st = str(_sa_holding.get("Stop Type", "") or "").strip()
+                    if not _br_st or _br_st in ("Stop Unavailable", "ATR Stop"):
+                        _br_stoplabel = "ATR stop"
+                    elif _br_st == "Manual":
+                        _br_stoplabel = "manual stop"
+                    else:
+                        _br_stoplabel = f"profit-ratchet stop ({_br_st})"
+                    _br_gap      = ((price - _sa_stop) / price * 100) if price else 0
+                    if withheld:
+                        # No composite exists to "override": same breach facts, no
+                        # Buy-composite sentence, no add-framing.
+                        st.markdown(
+                            "<div style='padding:12px;border-radius:8px;background:#dc262618;"
+                            "border-left:5px solid #dc2626;margin-bottom:10px'>"
+                            "<b style='font-size:1.05em;color:#dc2626'>⛔ Stop breached — exit signal</b>"
+                            f"<br><span style='color:#dc2626'>You hold <b>{_safe_html(_br_shares)} shares</b> and "
+                            f"price <b>${_safe_html(f'{price:.2f}')}</b> is at/below your {_safe_html(_br_stoplabel)} "
+                            f"<b>${_safe_html(f'{_sa_stop:.2f}')}</b> (gap {_safe_html(f'{_br_gap:+.1f}')}%). Your mechanical rule says "
+                            f"<b>sell all {_safe_html(_br_shares)} at next open</b> — the same exit Today's Brief "
+                            "is showing. The verdict is withheld, so no composite is involved — your stop "
+                            "protects the position. No add-on sizing is issued.</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.markdown(
+                            "<div style='padding:12px;border-radius:8px;background:#dc262618;"
+                            "border-left:5px solid #dc2626;margin-bottom:10px'>"
+                            "<b style='font-size:1.05em;color:#dc2626'>⛔ Stop breached — exit signal, "
+                            "not an add</b>"
+                            f"<br><span style='color:#dc2626'>You hold <b>{_br_shares} shares</b> and "
+                            f"price <b>${price:.2f}</b> is at/below your {_br_stoplabel} "
+                            f"<b>${_sa_stop:.2f}</b> (gap {_br_gap:+.1f}%). Your mechanical rule says "
+                            f"<b>sell all {_br_shares} at next open</b> — the same exit Today's Brief "
+                            "is showing. <b>This overrides the Buy composite:</b> the composite rates the "
+                            "stock; your stop protects the position. Add-on sizing is suppressed.</span>"
+                            "<br><small style='color:#dc2626'>If your thesis has genuinely changed and "
+                            "you want to keep holding, move/clear the stop in the Action Log first — "
+                            "don't add into a breach.</small></div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    # ── Gate Suppression Ledger capture: G-18 (roadmap B2,
+                    # 2026-09-13) ────────────────────────────────────────
+                    # Persists this stop-breach suppression (the banner
+                    # above already renders it — G-18's own behavior is
+                    # not new, only its capture is) so this restraint can
+                    # be graded the same way Grow Today's 9 gates already
+                    # are. Own try/except — a failure here must never
+                    # disturb the rendered banner.
+                    if db.has_db() and not st.session_state.get("_readonly", False):
+                        try:
+                            from stock_analyzer.gate_ledger import build_analysis_stop_suppression_row
+                            _an_gl_row = build_analysis_stop_suppression_row(
+                                ticker=ticker, price=price, composite_score=(None if withheld else _da_display_total),
+                                stop=_sa_stop, gap_pct=_br_gap, sector=r.get("sector"),
+                                rec_date=_today_et(), source="app",
+                            )
+                            if _an_gl_row:
+                                _an_gate_ledger_save_result = db.save_gate_suppressions([_an_gl_row])
+                            else:
+                                _an_gate_ledger_save_result = {"attempted": 0, "saved": 0, "error": None}
+                        except Exception as _an_gl_save_err:
+                            _an_gate_ledger_save_result = {"attempted": 0, "saved": 0,
+                                                            "error": str(_an_gl_save_err)[:200]}
+                        st.session_state["_an_gate_ledger_save_result"] = _an_gate_ledger_save_result
+                elif _under_reduce:
+                    # Held name under a Brief Reduce/Exit call (trend/deterioration,
+                    # sell signal, risk-off trim) but stop NOT yet breached — e.g.
+                    # a deterioration EXIT while price is still above the stop.
+                    # Keep the Buy composite visible (it's the honest attractiveness
+                    # read) but suppress the add framing: protect defers to deploy.
+                    _rc_action = _rc.get("action")
+                    if isinstance(_rc_action, str):
+                        _rc_label = _rc_action
+                    elif isinstance(_rc_action, dict):
+                        _rc_label = _rc_action.get("type", "Reduce / Exit")
+                    else:
+                        _rc_label = "Reduce / Exit"
+                    _rc_why    = _rc.get("why") if isinstance(_rc.get("why"), str) else ""
+                    if withheld:
+                        st.markdown(
+                            "<div style='padding:12px;border-radius:8px;background:#f59e0b14;"
+                            "border-left:5px solid #f59e0b;margin-bottom:10px'>"
+                            "<b style='font-size:1.05em;color:#f59e0b'>⚠️ Under a Reduce/Exit call</b>"
+                            f"<br><span style='color:#fcd34d'>Today's Brief flags this position: "
+                            f"<b>{_safe_html(_rc_label)}</b>. {_safe_html(_rc_why)}</span>"
+                            "<br><span style='color:#fcd34d'>This protects the POSITION. The verdict "
+                            "is withheld, so no composite is involved and no add-on sizing is "
+                            "issued.</span>"
+                            "<br><small style='color:#fcd34d'>See Today's Brief for the full directive.</small></div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.markdown(
+                            "<div style='padding:12px;border-radius:8px;background:#f59e0b14;"
+                            "border-left:5px solid #f59e0b;margin-bottom:10px'>"
+                            "<b style='font-size:1.05em;color:#f59e0b'>⚠️ Under a Reduce/Exit call — "
+                            "not a place to add</b>"
+                            f"<br><span style='color:#fcd34d'>Today's Brief flags this position: "
+                            f"<b>{_safe_html(_rc_label)}</b>. {_safe_html(_rc_why)}</span>"
+                            f"<br><span style='color:#fcd34d'>This protects the POSITION and overrides "
+                            f"the Buy composite <b>for adding</b>: the composite "
+                            f"(<b>{_safe_html(f'{_da_display_total:.1f}')}</b>) "
+                            f"rates the STOCK — it rewards the oversold setup — but your exit discipline "
+                            f"says the trend has turned. Add-on sizing is suppressed.</span>"
+                            "<br><small style='color:#fcd34d'>See Today's Brief for the full directive. "
+                            "If your thesis has genuinely changed and you want to keep holding, act on "
+                            "the Brief's call rather than adding into the weakness here.</small></div>",
+                            unsafe_allow_html=True,
+                        )
+                elif _sa_holding and not withheld:
+                    # Pre-compute earnings proximity so we can fold it into this message
+                    # rather than showing a contradictory standalone warning below.
+                    _earn_str = r.get("earnings", "")
+                    _earn_note = ""
+                    try:
+                        if _earn_str:
+                            _earn_d = (datetime.strptime(_earn_str, "%Y-%m-%d").date() - _today_et()).days
+                            if 0 <= _earn_d <= 21:
+                                _earn_note = (
+                                    f" Earnings in **{_earn_d} days** ({_earn_str}) — "
+                                    "consider reduced add-on size or wait until after the report."
+                                )
+                    except Exception:
+                        pass
+                    st.info(
+                        f"**Already held:** {int(_sa_holding.get('Shares', 0))} shares · "
+                        f"P&L {_sa_holding.get('P&L (%)', 0):+.1f}%. "
+                        f"Sizing below is for adding to your existing position.{_earn_note}"
+                    )
+                return _stop_breached, _under_reduce, _rc
+
             # ── Trade Plan / Exit Plan ─────────────────────────────────────
             with plan_tab:
                 rr_val = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
 
-                if _sa_is_sell:
+                if _da_withheld:
+                    # The Exit/Hold/Buy plans below all key off rec["label"] —
+                    # the composite a withheld verdict refuses to stand behind —
+                    # so none of them (entry zone, share count, gate checks) is
+                    # rendered for a withheld name. PRICE-BASED protection for a
+                    # held name (stop, stop-breach, Reduce/Exit call) does not
+                    # depend on the composite and stays live, via the same helper
+                    # the buy branch uses. Visible, never silent.
+                    st.info(
+                        "🚫 **No composite-based plan while the verdict is withheld** — "
+                        "see the red banner at the top of this ticker for why. No entry, "
+                        "add or position size is issued off a composite the app can't "
+                        "stand behind. Your stop and any Reduce/Exit call (where shown "
+                        "below) still apply. The Chart, Risk and Support & Resistance "
+                        "sections show market data only, not a recommendation."
+                    )
+                    if _sa_holding or (_sa_port_state != "ready"):
+                        _wh_br, _, _wh_rc = _sa_held_protection(True)
+                    if _sa_holding:
+                        _hold_stop = (_f(_sa_holding.get("Stop")) or 0.0) or r["stop"]
+                        _wc1, _wc2, _wc3, _wc4 = st.columns(4)
+                        _wc1.metric("Price", f"${price:.2f}" if price else "N/A")
+                        _wh_delta, _wh_color = _stop_distance_delta(price, _hold_stop)
+                        _wc2.metric("Stop Loss", f"${_hold_stop:.2f}" if _hold_stop else "N/A",
+                                    delta=_wh_delta, delta_color=_wh_color,
+                                    help=_tip("Protective Stop"))
+                        _wc3.metric("Shares Held", f"{int(_sa_holding.get('Shares', 0)):,}")
+                        _wc4.metric("P&L",
+                                    f"${_sa_holding.get('P&L ($)', 0):+,.0f}",
+                                    f"{_sa_holding.get('P&L (%)', 0):+.1f}%")
+                        if _hold_stop:  # skip when the engine reports "Stop Unavailable"
+                            _render_stop_ladder(r, _sa_holding, price, under_reduce=bool(_wh_rc) or bool(_wh_br))
+                elif _sa_is_sell:
                     # ── EXIT PLAN ──────────────────────────────────────────
                     if _sa_holding:
                         _sh = _sa_holding
@@ -25015,230 +25450,7 @@ elif page == "📈 Analysis":
                     if _pt_ptr:
                         st.info(_pt_ptr)
 
-                    # Stop-breach gate (mirrors Act Today's detector: Gap to Stop ≤ 0,
-                    # i.e. price has fallen to/through the stop). A held position whose
-                    # stop is breached is a mechanical EXIT — protect-capital overrides
-                    # deploy-capital, so the Analysis page must NOT frame it as an add.
-                    # The composite still rates the STOCK (it can be a genuine Buy); the
-                    # stop protects the POSITION. Gate on the RATCHETED/manual protective
-                    # stop the Brief actually acts on (`_sa_holding["Stop"]` = Gap-to-Stop
-                    # basis), NOT the raw ATR stop `r["stop"]` — so the breach banner fires
-                    # exactly when the Brief flags a breach, not only once price falls the
-                    # extra distance to the ATR stop (the F-47 held-stop pattern; ps/R:R
-                    # deliberately stay on `r["stop"]` = the ATR fresh-entry basis).
-                    _sa_stop = (_f(_sa_holding.get("Stop")) or r.get("stop")) if _sa_holding else r.get("stop")
-                    # Mirror the Brief's skip for "Stop Unavailable" rows: when
-                    # build_portfolio_df had no ATR stop it writes Stop=None AND
-                    # Gap to Stop (%)=None, and the Brief SKIPS the breach test
-                    # entirely (daily_briefing: `if gap is None: continue`). Here
-                    # _f(None) → 0.0 is falsy, so _sa_stop would otherwise fall
-                    # back to the raw ATR bundle r["stop"] and fire a ⛔ banner on
-                    # a name the Brief is deliberately silent about. Use pd.isna
-                    # (not `is None`): once the DataFrame column is float64 the
-                    # None becomes NaN, and `NaN is None` is False — pd.isna is
-                    # True for BOTH, matching the Brief's NaN-aware `_f` so the
-                    # skip engages in every dtype, not just object columns (F3).
-                    _gap_missing = bool(_sa_holding) and pd.isna(_sa_holding.get("Gap to Stop (%)"))
-                    # Match the Brief's EXACT breach test — it fires on
-                    # round(Gap%, 1) <= 0 (daily_briefing), not the raw inequality —
-                    # so a sub-0.05% gap can't split the two surfaces. `price` is now
-                    # the live-merged price (the same `_live_prices` snapshot the Brief
-                    # used, merged above), so the mirror is price-exact too — bounded
-                    # only by the 60s live-price refresh (the strip fragment can advance
-                    # `_live_prices` past the frozen synthesis snapshot; inherent to the
-                    # fragment/synthesis split, self-heals, directionally fine for a live view).
-                    # Precedence (stop-breach > reduce-call > plain-held) lives in
-                    # stock_analyzer.act_today_precedence — a pure, unit-tested
-                    # module — not inline here (Part 2 #3 of the 2026-08-26 app
-                    # review; extracted the same way outage_gate.py was in `1b12779`).
-                    _stop_breached = bool(_sa_holding) and act_today_precedence.is_stop_breached(
-                        price, _sa_stop, gap_missing=_gap_missing
-                    )
-
-                    # Deterioration / reduce-call gate — sibling to the stop-breach
-                    # gate: a held name the Daily Brief is telling you to trim/exit
-                    # is NOT a place to add, even when its composite still reads
-                    # Buy. The composite rates the STOCK (it rewards the oversold
-                    # setup); the exit discipline protects the POSITION. Consume the
-                    # Brief's PUBLISHED reduce calls (same _is_reduce/_ticker canon
-                    # as Opportunity Signals — no recompute drift) so the two
-                    # surfaces agree.
-                    # 2026-09-21 app review defect #1: a bare `or {}` here let an
-                    # unverified _reduce_calls (Daily Brief not yet published this
-                    # session, distinct from _sa_port_state/_port_df_enriched
-                    # readiness above) silently read as "not under reduce",
-                    # letting this branch fall through to the plain "Already
-                    # held... sizing below" message (line ~23042) with add-on
-                    # sizing NOT suppressed for a position that IS under an
-                    # active Reduce/Exit call. Same verified-check pattern as
-                    # the already-fixed Hold branch a few hundred lines above
-                    # (`_hold_reduce_verified`) and the closed My Edge/Portfolio
-                    # Overview findings: _coord_cache_state alone is not enough
-                    # since a crashed Daily Brief fail-opens _reduce_calls to {}
-                    # rather than None.
-                    _sa_reduce_verified = (
-                        _coord_cache_state("_reduce_calls") == "ready"
-                        and not st.session_state.get("_daily_brief_offline", False)
-                    )
-                    _rc = (
-                        (st.session_state.get("_reduce_calls") or {}).get(str(ticker).upper())
-                        if _sa_reduce_verified else None
-                    )
-                    _under_reduce = act_today_precedence.held_position_state(
-                        is_holding=bool(_sa_holding), stop_breached=_stop_breached,
-                        has_reduce_call=bool(_rc),
-                    ) == act_today_precedence.REDUCE_CALL
-
-                    # Say so when the two checks above could not run at all. The
-                    # mechanical stop-breach half is immune (it recomputes live),
-                    # so this names only what is genuinely unverified.
-                    # Home publishes _last_held_tickers BEFORE its empty-book
-                    # st.stop(), so an EMPTY list there means "definitively holds
-                    # nothing" rather than "could not check". Warning such a user
-                    # would claim a blind spot the app does not have -- and tell
-                    # them to visit a page that will st.stop() again, leaving the
-                    # banner unclearable.
-                    _sa_held_known = st.session_state.get("_last_held_tickers")
-                    _sa_definitely_flat = (
-                        isinstance(_sa_held_known, (list, tuple, set))
-                        and len(_sa_held_known) == 0
-                    )
-                    if _sa_port_state != "ready" and not _sa_definitely_flat:
-                        st.warning(
-                            "⚠ **Holdings context unavailable** — the plan below assumes a "
-                            "**new position**. This session could not check whether you already "
-                            f"hold {ticker}, or whether it is under an active Reduce/Exit call, so "
-                            "neither the add-to-position sizing nor the Reduce suppression could "
-                            "run. Open the 🏠 Home page once to load your holdings, "
-                            "then re-check before acting."
-                        )
-                    elif _sa_holding and not _sa_reduce_verified:
-                        # Distinct from the banner above: HOLDINGS are known (this
-                        # position IS confirmed held), but the Daily Brief's
-                        # _reduce_calls hasn't published yet this session (Home was
-                        # visited, the Brief build wasn't, or it crashed) -- so the
-                        # Reduce/Exit cross-check specifically could not run. Without
-                        # this, a held position under an active Reduce/Exit call
-                        # could silently reach the plain "Already held... sizing
-                        # below" message a few lines down with add-on sizing NOT
-                        # suppressed. See the _rc computation above.
-                        st.caption(
-                            "⚪ Reduce/Exit cross-check unavailable this session — this plan may "
-                            "not reflect an active Reduce/Exit call on this position. Open "
-                            "🏠 Home to refresh Today's Brief, then re-check before adding."
-                        )
-
-                    if _sa_holding and _stop_breached:
-                        _br_shares   = int(_sa_holding.get("Shares", 0))
-                        # Describe the stop by its ACTUAL type (the held Stop Type: Manual /
-                        # a ratchet tier / ATR Stop) so the banner never labels a ratchet
-                        # stop "ATR" now that _sa_stop is the ratcheted value. Build a
-                        # natural-language label with the word "stop" baked in: a ratchet
-                        # tier ("Protect 25% gain", "Breakeven guard") reads ungrammatically
-                        # as "your Protect 25% gain stop", so render it as a parenthetical
-                        # ("your profit-ratchet stop (Protect 25% gain)"). "Stop Unavailable"
-                        # (build had no stop) falls back to the ATR label — accurate, since
-                        # _sa_stop then falls back to r["stop"] (the ATR stop).
-                        _br_st = str(_sa_holding.get("Stop Type", "") or "").strip()
-                        if not _br_st or _br_st in ("Stop Unavailable", "ATR Stop"):
-                            _br_stoplabel = "ATR stop"
-                        elif _br_st == "Manual":
-                            _br_stoplabel = "manual stop"
-                        else:
-                            _br_stoplabel = f"profit-ratchet stop ({_br_st})"
-                        _br_gap      = ((price - _sa_stop) / price * 100) if price else 0
-                        st.markdown(
-                            "<div style='padding:12px;border-radius:8px;background:#dc262618;"
-                            "border-left:5px solid #dc2626;margin-bottom:10px'>"
-                            "<b style='font-size:1.05em;color:#dc2626'>⛔ Stop breached — exit signal, "
-                            "not an add</b>"
-                            f"<br><span style='color:#dc2626'>You hold <b>{_br_shares} shares</b> and "
-                            f"price <b>${price:.2f}</b> is at/below your {_br_stoplabel} "
-                            f"<b>${_sa_stop:.2f}</b> (gap {_br_gap:+.1f}%). Your mechanical rule says "
-                            f"<b>sell all {_br_shares} at next open</b> — the same exit Today's Brief "
-                            "is showing. <b>This overrides the Buy composite:</b> the composite rates the "
-                            "stock; your stop protects the position. Add-on sizing is suppressed.</span>"
-                            "<br><small style='color:#dc2626'>If your thesis has genuinely changed and "
-                            "you want to keep holding, move/clear the stop in the Action Log first — "
-                            "don't add into a breach.</small></div>",
-                            unsafe_allow_html=True,
-                        )
-
-                        # ── Gate Suppression Ledger capture: G-18 (roadmap B2,
-                        # 2026-09-13) ────────────────────────────────────────
-                        # Persists this stop-breach suppression (the banner
-                        # above already renders it — G-18's own behavior is
-                        # not new, only its capture is) so this restraint can
-                        # be graded the same way Grow Today's 9 gates already
-                        # are. Own try/except — a failure here must never
-                        # disturb the rendered banner.
-                        if db.has_db() and not st.session_state.get("_readonly", False):
-                            try:
-                                from stock_analyzer.gate_ledger import build_analysis_stop_suppression_row
-                                _an_gl_row = build_analysis_stop_suppression_row(
-                                    ticker=ticker, price=price, composite_score=_da_display_total,
-                                    stop=_sa_stop, gap_pct=_br_gap, sector=r.get("sector"),
-                                    rec_date=_today_et(), source="app",
-                                )
-                                if _an_gl_row:
-                                    _an_gate_ledger_save_result = db.save_gate_suppressions([_an_gl_row])
-                                else:
-                                    _an_gate_ledger_save_result = {"attempted": 0, "saved": 0, "error": None}
-                            except Exception as _an_gl_save_err:
-                                _an_gate_ledger_save_result = {"attempted": 0, "saved": 0,
-                                                                "error": str(_an_gl_save_err)[:200]}
-                            st.session_state["_an_gate_ledger_save_result"] = _an_gate_ledger_save_result
-                    elif _under_reduce:
-                        # Held name under a Brief Reduce/Exit call (trend/deterioration,
-                        # sell signal, risk-off trim) but stop NOT yet breached — e.g.
-                        # a deterioration EXIT while price is still above the stop.
-                        # Keep the Buy composite visible (it's the honest attractiveness
-                        # read) but suppress the add framing: protect defers to deploy.
-                        _rc_action = _rc.get("action")
-                        if isinstance(_rc_action, str):
-                            _rc_label = _rc_action
-                        elif isinstance(_rc_action, dict):
-                            _rc_label = _rc_action.get("type", "Reduce / Exit")
-                        else:
-                            _rc_label = "Reduce / Exit"
-                        _rc_why    = _rc.get("why") if isinstance(_rc.get("why"), str) else ""
-                        st.markdown(
-                            "<div style='padding:12px;border-radius:8px;background:#f59e0b14;"
-                            "border-left:5px solid #f59e0b;margin-bottom:10px'>"
-                            "<b style='font-size:1.05em;color:#f59e0b'>⚠️ Under a Reduce/Exit call — "
-                            "not a place to add</b>"
-                            f"<br><span style='color:#fcd34d'>Today's Brief flags this position: "
-                            f"<b>{_safe_html(_rc_label)}</b>. {_safe_html(_rc_why)}</span>"
-                            f"<br><span style='color:#fcd34d'>This protects the POSITION and overrides "
-                            f"the Buy composite <b>for adding</b>: the composite "
-                            f"(<b>{_safe_html(f'{_da_display_total:.1f}')}</b>) "
-                            f"rates the STOCK — it rewards the oversold setup — but your exit discipline "
-                            f"says the trend has turned. Add-on sizing is suppressed.</span>"
-                            "<br><small style='color:#fcd34d'>See Today's Brief for the full directive. "
-                            "If your thesis has genuinely changed and you want to keep holding, act on "
-                            "the Brief's call rather than adding into the weakness here.</small></div>",
-                            unsafe_allow_html=True,
-                        )
-                    elif _sa_holding:
-                        # Pre-compute earnings proximity so we can fold it into this message
-                        # rather than showing a contradictory standalone warning below.
-                        _earn_str = r.get("earnings", "")
-                        _earn_note = ""
-                        try:
-                            if _earn_str:
-                                _earn_d = (datetime.strptime(_earn_str, "%Y-%m-%d").date() - _today_et()).days
-                                if 0 <= _earn_d <= 21:
-                                    _earn_note = (
-                                        f" Earnings in **{_earn_d} days** ({_earn_str}) — "
-                                        "consider reduced add-on size or wait until after the report."
-                                    )
-                        except Exception:
-                            pass
-                        st.info(
-                            f"**Already held:** {int(_sa_holding.get('Shares', 0))} shares · "
-                            f"P&L {_sa_holding.get('P&L (%)', 0):+.1f}%. "
-                            f"Sizing below is for adding to your existing position.{_earn_note}"
-                        )
+                    _stop_breached, _under_reduce, _ = _sa_held_protection(False)
 
                     # Stop explainer for the held-add case (not breached / not under
                     # a reduce call — those already show a "don't add" banner). Gate
@@ -25512,7 +25724,7 @@ elif page == "📈 Analysis":
                                 st.markdown(f"**R:R** `{rr_val:.1f}:1` — {quality}")
 
                 # ── Shared: consensus warning + earnings + S&R ─────────────
-                if targets and targets.get("above_consensus"):
+                if targets and targets.get("above_consensus") and not _da_withheld:
                     at = targets["analyst_target"]
                     st.warning(
                         f"⚠️ Trading {(price-at)/at*100:.1f}% above analyst consensus (${at:.2f}). "
@@ -25525,7 +25737,10 @@ elif page == "📈 Analysis":
                         if 0 <= days <= 21:
                             # For held tickers on a Buy signal the earnings note is already
                             # merged into the "Already held" info box above — skip the duplicate.
-                            if not _sa_holding:
+                            if _da_withheld:
+                                # No entry/size advice off a withheld verdict.
+                                st.info(f"📅 Earnings in {days} days ({earn})")
+                            elif not _sa_holding:
                                 st.warning(
                                     f"⚠️ Earnings in {days} days ({earn}) — "
                                     "consider reduced position size or waiting until after the report."
@@ -25561,7 +25776,15 @@ elif page == "📈 Analysis":
                 _ap_followed_sell = "yes" if "Sell" in rec["label"] else None
 
                 _ap_c1, _ap_c2, _ap_c3 = st.columns([1, 1, 2])
-                if _sa_is_sell:
+                if _da_withheld:
+                    # No verdict -> no pre-filled "RECOMMENDATION" trade button
+                    # (it would log an attribution to a call never issued).
+                    with _ap_c1:
+                        st.caption(
+                            "🚫 Trade buttons hidden — the verdict is withheld "
+                            "(see the banner at the top of this ticker)."
+                        )
+                elif _sa_is_sell:
                     # Sell signal — primary action is SELL (exit/trim)
                     with _ap_c1:
                         _render_trade_button(
@@ -25631,10 +25854,11 @@ elif page == "📈 Analysis":
                                 width="stretch",
                             )
                 with _ap_c3:
-                    st.caption(
-                        f"Opens Trade Journal pre-filled with **{rec['label']} · "
-                        f"{_da_display_total:.0f}/100** as the signal context."
-                    )
+                    if not _da_withheld:
+                        st.caption(
+                            f"Opens Trade Journal pre-filled with **{rec['label']} · "
+                            f"{_da_display_total:.0f}/100** as the signal context."
+                        )
 
             # ── Chart ─────────────────────────────────────────────────────
             with chart_tab:
@@ -25770,8 +25994,17 @@ elif page == "📈 Analysis":
             with deep_tab:
                 dd1, dd2, dd2v, dd3, dd4 = st.columns(5)
                 with dd1:
-                    st.markdown(f"**Technical — {r['t_score']}/100**")
-                    st.caption("RSI · MACD · MA · Bollinger · Volume")
+                    # Honour t_available the same way bq/val do below: an
+                    # unmeasured technical pillar is a fabricated 50.
+                    _dd1_hdr, _dd1_cap = _pillar_tile(
+                        "Technical",
+                        r["t_score"],
+                        r.get("t_available", True),
+                        "RSI · MACD · MA · Bollinger · Volume",
+                        _technical_clause(r.get("t_bars")).capitalize() + ".",
+                    )
+                    st.markdown(_dd1_hdr)
+                    st.caption(_dd1_cap)
                     for k, v in r["t_signals"].items():
                         clr = "#00C851" if "bullish" in v.lower() else (
                               "#ff4444" if "bearish" in v.lower() else "#aaa")
@@ -26819,7 +27052,9 @@ elif page == "📈 Analysis":
             # ETF/fund Phase 2 follow-up (2026-09-28): this loop doesn't share
             # scope with the per-ticker tabs loop above, so it needs its own
             # display-override pair — same pattern, never mutating `r` itself.
-            _ap_etf_ok = (r.get("asset_type") == "etf") and bool(r.get("etf_available", False))
+            _ap_basis = _verdict_basis(r)
+            _ap_etf_ok = _ap_basis == "etf"
+            _ap_withheld = _ap_basis == "withheld"
             _ap_display_rec = r["etf_rec"] if _ap_etf_ok else r["rec"]
             _ap_display_total = r["etf_total"] if _ap_etf_ok else r["total"]
             targets = r["targets"]
@@ -26830,6 +27065,18 @@ elif page == "📈 Analysis":
                   if price and r["stop"] and price > r["stop"] else None)
             rr_v = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
             rm = r["risk_metrics"]
+            if _ap_withheld:
+                # No verdict -> no signal heading, trade line or rationale in the
+                # exported brief; say so rather than omit the ticker silently.
+                lines += [
+                    f"### {ticker} — 🚫 Verdict withheld",
+                    f"**Price**: \\${price:.2f}" if price else "",
+                    ("**Why**: a pillar of the composite could not be measured "
+                     f"({', '.join(_unmeasured_pillars(r)) or 'data unavailable'}), "
+                     "so no signal or trade is issued.")
+                    , "",
+                ]
+                continue
             lines += [
                 f"### {ticker} — {_ap_display_rec['icon']} {_ap_display_rec['label']} ({_ap_display_total}/100)",
                 f"**Price**: \\${price:.2f}" if price else "",
@@ -39270,6 +39517,7 @@ elif page == "🔔 Catalyst Watch":
                 t for t in _cw_watchlist_tickers
                 if t not in _cw_held and t not in _cw_composites and t in _cw_ec_batch
             ]
+            _cw_withheld = []
             _cw_candidates = _build_candidates(
                 watchlist_tickers=_cw_watchlist_tickers,
                 held_tickers=_cw_held,
@@ -39277,7 +39525,21 @@ elif page == "🔔 Catalyst Watch":
                 earnings_context=_cw_ec_batch,
                 today=_cw_today,
                 lookahead_days=30,
+                withheld_out=_cw_withheld,
             )
+            if _cw_withheld:
+                # Names that passed every other filter but whose composite
+                # rests on an unmeasured pillar (fabricated neutral 50) —
+                # never ranked, and never silently dropped either.
+                st.caption(
+                    f"🚫 {len(_cw_withheld)} name{'s' if len(_cw_withheld) != 1 else ''} held out — "
+                    "verdict withheld, so no composite is used to rank them: "
+                    + ", ".join(
+                        f"{w['ticker']} ({', '.join(w.get('missing') or ['a pillar']) } not measured)"
+                        for w in _cw_withheld
+                    )
+                    + "."
+                )
 
             if not _cw_candidates:
                 if not _cw_ec_batch:

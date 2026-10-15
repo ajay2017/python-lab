@@ -471,3 +471,78 @@ def test_catalyst_candidates_sorted_by_rank_score_descending():
         ["LOW", "HIGH"], set(), composites, ctx, today=TODAY,
     )
     assert [r["ticker"] for r in result] == ["HIGH", "LOW"]
+
+
+# ── impossible-states #5: a withheld verdict is never an entry candidate ────
+
+def _wb(**flags):
+    return {"total": 80.0, **flags}
+
+
+def test_catalyst_candidates_fires_when_technical_measured():
+    ctx = {"AAPL": _ctx()}
+    result = ea.build_earnings_catalyst_candidates(
+        ["AAPL"], set(), {"AAPL": _wb(t_available=True, t_bars=120)}, ctx, today=TODAY,
+    )
+    assert [r["ticker"] for r in result] == ["AAPL"]
+
+
+def test_catalyst_candidates_withholds_unmeasured_technical_and_lists_it():
+    ctx = {"AAPL": _ctx()}
+    out: list = []
+    result = ea.build_earnings_catalyst_candidates(
+        ["AAPL"], set(), {"AAPL": _wb(t_available=False, t_bars=7)}, ctx,
+        today=TODAY, withheld_out=out,
+    )
+    assert result == []
+    assert out == [{"ticker": "AAPL", "missing": ["Technical"], "t_bars": 7}]
+
+
+def test_catalyst_candidates_withheld_for_unmeasured_fundamentals():
+    ctx = {"AAPL": _ctx()}
+    out: list = []
+    result = ea.build_earnings_catalyst_candidates(
+        ["AAPL"], set(), {"AAPL": _wb(fundamentals_available=False)}, ctx,
+        today=TODAY, withheld_out=out,
+    )
+    assert result == []
+    assert out[0]["missing"] == ["Business Quality"]
+
+
+def test_catalyst_candidates_withheld_only_lists_names_past_other_filters():
+    # Held / no-context / bearish names never reach the withhold check, so they
+    # must not be reported as "held out for a withheld verdict".
+    ctx = {"HELD": _ctx(), "BEAR": _ctx(reaction="bearish")}
+    comps = {t: _wb(t_available=False) for t in ("HELD", "BEAR", "NOCTX")}
+    out: list = []
+    ea.build_earnings_catalyst_candidates(
+        ["HELD", "BEAR", "NOCTX"], {"HELD"}, comps, ctx, today=TODAY, withheld_out=out,
+    )
+    assert out == []
+
+
+def test_catalyst_candidates_withheld_out_optional_and_legacy_unchanged():
+    ctx = {"AAPL": _ctx()}
+    # No withheld_out supplied: still withheld, no error.
+    assert ea.build_earnings_catalyst_candidates(
+        ["AAPL"], set(), {"AAPL": _wb(t_available=False)}, ctx, today=TODAY,
+    ) == []
+    # Legacy bundle (no flags at all): behaves exactly as before.
+    out: list = []
+    result = ea.build_earnings_catalyst_candidates(
+        ["AAPL"], set(), {"AAPL": {"total": 70.0}}, ctx, today=TODAY, withheld_out=out,
+    )
+    assert len(result) == 1 and out == []
+
+
+def test_catalyst_candidates_real_verdict_etf_not_listed_as_withheld_nor_ranked():
+    # basis "etf": a real ETF verdict is NOT withheld, so it must not be listed
+    # as such; it is also not an equity earnings-entry candidate (never ranked
+    # on the equity composite's fabricated legs).
+    etf = {"total": 90.0, "asset_type": "etf", "etf_available": True,
+           "etf_total": 80.0, "fundamentals_available": False, "val_available": False}
+    out: list = []
+    result = ea.build_earnings_catalyst_candidates(
+        ["SPY"], set(), {"SPY": etf}, {"SPY": _ctx()}, today=TODAY, withheld_out=out,
+    )
+    assert result == [] and out == []

@@ -10,6 +10,8 @@ during the report itself.
 import pytz as _pytz
 from datetime import date as _date, datetime as _datetime
 
+from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
+
 from stock_analyzer.constants import (
     EARNINGS_IMMINENT_DAYS,
     EARNINGS_URGENCY_SOON_DAYS,
@@ -535,6 +537,7 @@ def build_earnings_catalyst_candidates(
     earnings_context: dict,
     today: _date | None = None,
     lookahead_days: int = 30,
+    withheld_out: list | None = None,
 ) -> list:
     """
     Surfaces watchlist names near earnings with a strong historical setup.
@@ -546,6 +549,14 @@ def build_earnings_catalyst_candidates(
       - recent_reaction_direction != 'bearish'
       - earnings_date within lookahead_days
       - composite score (bundle["total"]) >= COMPOSITE_BUY
+      - the verdict is on the equity basis (pillar_availability.verdict_basis
+        == "equity": business quality, valuation AND technical all measured).
+        A WITHHELD name that clears the filters before this one (held, context,
+        beat rate, reaction, date window, bundle present) is appended to the
+        optional ``withheld_out`` list as {"ticker", "missing", "t_bars"} so
+        the caller can disclose it (never silently dropped); the composite-bar
+        filter has not run for it, so it is not claimed to be a would-be
+        candidate. An ETF with a real verdict is skipped without being listed.
 
     Returns empty list when no candidates pass — normal until CNBC articles
     have been pasted for watchlist names via the Pre-Earnings paste flow.
@@ -584,6 +595,23 @@ def build_earnings_catalyst_candidates(
 
         bundle = composites.get(ticker)
         if bundle is None:
+            continue
+        # An unmeasured pillar (bq/val/technical) leaves a fabricated neutral 50
+        # in `total`; a buy-type surface must not rank on it. Held out VISIBLY:
+        # a withheld name that passed the earlier (context/date) filters is
+        # recorded in `withheld_out` (when the caller supplies one) so the render
+        # can say why it's missing. An ETF with a REAL verdict ("etf" basis) is
+        # skipped silently instead: its `total` is the equity composite (fabricated
+        # legs), so it must not be ranked here, but it is not "withheld" and
+        # earnings-entry candidates are equities by construction.
+        _basis = verdict_basis(bundle)
+        if _basis != "equity":
+            if _basis == "withheld" and withheld_out is not None:
+                withheld_out.append({
+                    "ticker":  ticker,
+                    "missing": unmeasured_pillars(bundle),
+                    "t_bars":  bundle.get("t_bars"),
+                })
             continue
         score = _f(bundle.get("total"), 0.0)
         if score < COMPOSITE_BUY:
