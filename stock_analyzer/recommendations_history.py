@@ -170,7 +170,8 @@ def build_enter_now_rows(recs: list[dict], held_tickers: set, rec_date,
             # than a real measurement. Persisting that as if measured would
             # let F-225 Portfolio Q&A assert "valuation 50" for a name whose
             # valuation was never actually scored. t_score is deliberately
-            # untouched — no t_available flag exists yet (that gap is D3).
+            # untouched here for now — the t_available flag exists (C1,
+            # 2026-10-15) but is deliberately not consumed until C3.
             "s_score":          sentiment_value_or_none(_b.get("s_score"), _b),
             "avg_sent":         sentiment_value_or_none(_b.get("avg_sent"), _b),
             "t_score":          _b.get("t_score"),

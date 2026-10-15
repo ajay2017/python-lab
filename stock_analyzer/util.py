@@ -98,6 +98,18 @@ def val_score_or_none(value: Any, bundle: dict | None) -> Any:
     return value if b.get("val_available", True) else None
 
 
+def t_score_or_none(value: Any, bundle: dict | None) -> Any:
+    """Same contract as :func:`bq_score_or_none`, for the Technical pillar.
+
+    ``value`` unless the bundle says the technical pillar was unmeasured
+    (``t_available`` False — too few bars or a required leg missing; see
+    ``technicals.technical_coverage``). Fail-open: a legacy/narrowed bundle
+    without the key is treated as measured.
+    """
+    b = bundle or {}
+    return value if b.get("t_available", True) else None
+
+
 def sentiment_value_or_none(value: Any, bundle: dict | None) -> Any:
     """Same contract as :func:`bq_score_or_none`, for ``s_score``/``avg_sent``.
 

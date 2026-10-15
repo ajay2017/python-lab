@@ -25,7 +25,8 @@ Three kinds of check, set from the post-cleanup baseline of 2026-10-14:
             C2 is non-binding G-20 rows beside a buy, from intraday
             transitions. A3 is exact-50 pillars: mostly the score lattice, BUT
             it also includes the open fabricated-technical-50 fallback (WK
-            2026-10-07; technicals.py has no t_available flag yet). Never
+            2026-10-07; the bundle's t_available flag exists since 2026-10-15
+            but no record withholds on it yet). Never
             raises a finding. The count is reported next to its baseline on
             System Trust.
 

@@ -1,4 +1,5 @@
 import pandas as pd
+from stock_analyzer.constants import TECHNICAL_MIN_BARS
 from stock_analyzer.indicators import sma, ema, rsi, macd, bbands, obv
 
 
@@ -42,8 +43,37 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# Legs that must be present for the technical pillar to count as measured.
+# Volume is deliberately excluded: four warmed-up legs with no volume data is a
+# real reading. This is leg plumbing, not a policy threshold.
+_REQUIRED_LEGS = ("RSI", "MACD", "Bollinger", "MA Trend")
+
+
+def technical_coverage(df: pd.DataFrame, signals: dict) -> dict:
+    """How much real data stood behind a ``technical_score`` result.
+
+    ``bars`` = finite, non-NaN Close values; ``legs`` = signals computed;
+    ``available`` = enough bars (``TECHNICAL_MIN_BARS``) AND every required leg
+    present. Pure; the score itself is unchanged.
+    """
+    bars = 0
+    if df is not None and "Close" in getattr(df, "columns", ()):
+        close = pd.to_numeric(df["Close"], errors="coerce")
+        bars = int(close.notna().sum() - close.isin([float("inf"), float("-inf")]).sum())
+    sig = signals or {}
+    available = bars >= TECHNICAL_MIN_BARS and all(k in sig for k in _REQUIRED_LEGS)
+    return {"bars": bars, "legs": len(sig), "available": bool(available)}
+
+
 def technical_score(df: pd.DataFrame) -> tuple[float, dict]:
-    """Returns score 0–100 and a dict of signal details. Higher = more bullish."""
+    """Returns score 0–100 and a dict of signal details. Higher = more bullish.
+
+    The returned score is a PLACEHOLDER whenever
+    ``technical_coverage(df, signals)["available"]`` is False: an empty df
+    returns 50.0, and a short history computes from partial legs on indicator
+    warm-up noise. It must never be read as a measurement without the bundle's
+    ``t_available`` flag.
+    """
     signals = {}
     points  = 0
     max_pts = 0

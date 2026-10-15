@@ -527,6 +527,11 @@ DETERIORATION_TRIM_DD_CEILING  = 14.0   # cap on the ATR-scaled TRIM floor (vol 
 DETERIORATION_EXIT_DD_CEILING  = 20.0   # cap on the ATR-scaled EXIT floor
 DETERIORATION_EXIT_DOLLAR_LOSS = 250.0  # unrealized $ loss that escalates TRIM → EXIT
 DETERIORATION_TREND_MA         = 50     # trend reference moving average (close < SMA50 = trend broken)
+# Minimum valid daily closes for the technical pillar to count as MEASURED. Equals the longest
+# indicator lookback (the 50-day SMA in technicals.compute_indicators) and DETERIORATION_TREND_MA;
+# below it the score is computed on indicator warm-up noise (owner decision 2026-10-15,
+# impossible-states bug #5). Investment-policy value.
+TECHNICAL_MIN_BARS             = 50
 DETERIORATION_CONFIRM_DAYS     = 3      # trend-confirmation lookback window (sessions)
 DETERIORATION_CONFIRM_REQUIRED = 2      # sessions below the MA required to confirm TRIM (NOT required for a deep EXIT)
 DETERIORATION_TRIM_SUGGESTED_PCT = 25.0 # suggested reduction % shown in the idiosyncratic-deterioration TRIM directive (display-only quantity — never changes the TRIM/EXIT tier itself; matches RISK_OFF_TRIM_PCT's convention for a "modest reduction")

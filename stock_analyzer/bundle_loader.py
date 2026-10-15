@@ -32,7 +32,7 @@ from stock_analyzer.data import (
 )
 from stock_analyzer import asset_type
 from stock_analyzer import etf_scoring
-from stock_analyzer.technicals import compute_indicators, technical_score
+from stock_analyzer.technicals import compute_indicators, technical_score, technical_coverage
 from stock_analyzer.fundamentals import (
     business_quality_score, fundamental_score,
     upside_potential, count_core_metrics, resolve_fundamentals, CORE_BQ_KEYS,
@@ -88,6 +88,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         _stale_as_of = _cached_bundle["fetched_at"]
     df = compute_indicators(bundle["history"])
     t_score, t_signals = technical_score(df)
+    _t_cov = technical_coverage(df, t_signals)
     financials = fetch_financials_from_info(bundle["info"])
     # ── Persistent last-known-good fundamentals fallback ──────────────────────
     # The fundamental leg is the fragile one: yfinance .info intermittently
@@ -272,6 +273,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
                 db.save_etf_lookthrough_cache(ticker, _etf_lookthrough)
     return {
         "df": df, "t_score": t_score, "t_signals": t_signals,
+        "t_available": _t_cov["available"], "t_bars": _t_cov["bars"],
         # New 4-pillar keys:
         "bq_score":         bq_score,  "bq_signals":   bq_signals,
         "val_score":        val_score, "val_signals":  val_signals,

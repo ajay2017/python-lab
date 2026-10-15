@@ -1648,8 +1648,8 @@ def test_build_enter_now_rows_a_real_measured_50_still_survives():
 
 
 def test_build_enter_now_rows_t_score_is_never_sanitized():
-    # No t_available flag exists yet (that gap is D3) — t_score must pass
-    # through untouched regardless of the other pillars' availability.
+    # The t_available flag exists (C1, 2026-10-15) but this writer doesn't
+    # consume it until C3 — t_score must pass through untouched for now.
     cards = [_wl_card(ticker="AAA")]
     bundles = {"AAA": {"t_score": 50.0, "bq_available": False,
                        "val_available": False, "headlines": []}}
