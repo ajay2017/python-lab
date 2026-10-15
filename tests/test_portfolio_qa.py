@@ -750,6 +750,40 @@ def test_recommendation_outcome_match_returns_pillar_scores():
     assert result["val_score"] == 58
 
 
+def test_recommendation_outcome_null_pillars_in_mixed_frame_narrate_not_nan():
+    # In a frame where ANOTHER row has values, a NULL cell comes back from
+    # to_dict() as float NaN, not None -- it must still read as "not recorded".
+    recs = _recs_df([
+        {"ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+         "composite_score": 75, "conviction": "high", "thesis": None,
+         "t_score": None, "bq_score": None, "val_score": None,
+         "price_at_surface": None},
+        {"ticker": "MSFT", "rec_date": "2026-07-20", "rec_type": "new_pick",
+         "composite_score": 70, "conviction": "high", "thesis": "x",
+         "t_score": 80, "bq_score": 70, "val_score": 58,
+         "price_at_surface": 300.0},
+    ])
+    result = recommendation_outcome("AAPL", "2026-07-20", recs)
+    assert result["t_score"] is None and result["bq_score"] is None
+    assert result["val_score"] is None and result["price_at_surface"] is None
+    text = facts_to_text("rec_outcome", result)
+    assert "nan" not in text.lower()
+    assert text.count("not recorded (not captured for this recommendation, or not measurable at the time)") == 3
+
+def test_rec_outcome_narration_missing_composite_and_conviction_read_not_recorded():
+    # A NULL composite / blank conviction must not narrate as "None" or an empty
+    # value; a real composite of 0 must still print as 0.
+    from stock_analyzer.portfolio_qa import facts_to_text
+    base = {"found": True, "ticker": "AAA",
+            "rec_date": "2026-10-01", "rec_type": "new_pick", "thesis": None}
+    text = facts_to_text("rec_outcome", {**base, "composite_score": None, "conviction": ""})
+    assert "Composite score at surfacing: not recorded" in text
+    assert "Conviction: not recorded" in text
+    zero = facts_to_text("rec_outcome", {**base, "composite_score": 0, "conviction": "high"})
+    assert "Composite score at surfacing: 0" in zero
+    assert "Conviction: high" in zero
+
+
 def test_recommendation_outcome_pre_pillar_persistence_row_has_none_pillars():
     # Simulates a row saved before the 2026-08-01 pillar-persistence change —
     # columns are simply absent from the loaded frame.
@@ -1072,7 +1106,7 @@ def test_facts_to_text_rec_outcome_states_missing_pillars_plainly():
         "price_at_horizon": None, "pct_move": None,
     }
     text = facts_to_text("rec_outcome", facts)
-    assert "not recorded for this recommendation" in text
+    assert "not recorded (not captured for this recommendation, or not measurable at the time)" in text
 
 
 def test_facts_to_text_rec_outcome_formats_prices_with_two_decimals():

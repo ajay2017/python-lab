@@ -713,6 +713,16 @@ def test_score_history_row_built_with_all_pillars():
     assert row["source"] == "cron"
 
 
+def test_score_history_t_unavailable_nulls_t_score():
+    for flag, expected in ((False, None), (True, 55.0)):
+        b = _bundle()
+        b["t_available"] = flag
+        ctx = _ok_ctx([_port_row("AAPL", gap_to_stop=5.0)], held_data={"AAPL": b})
+        row = _run_protective_alerts(ctx)["score_history"][0]
+        assert row["t_score"] == expected
+        assert row["bq_score"] == 70.0  # independent flag
+
+
 def test_score_history_val_unavailable_nulls_val_score_not_the_fabricated_50():
     ctx = _ok_ctx([_port_row("AAPL", gap_to_stop=5.0)],
                   held_data={"AAPL": _bundle(val_score=50.0, val_available=False)})

@@ -38,7 +38,7 @@ from stock_analyzer.sector_fit import sector_gate_context
 from stock_analyzer.recommendations_history import build_enter_now_rows
 from stock_analyzer.trade_economics import trade_economics
 from stock_analyzer.sold_today import tickers_sold_on
-from stock_analyzer.util import bq_score_or_none, val_score_or_none, sentiment_value_or_none
+from stock_analyzer.util import bq_score_or_none, val_score_or_none, sentiment_value_or_none, t_score_or_none
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_ELEVATED,
     PORTFOLIO_BETA_CEILING,
@@ -370,7 +370,7 @@ def compute_protective_alerts(today: date | None = None) -> dict:
             "ticker": t,
             "score_date": today.isoformat(),
             "composite": comp,
-            "t_score":  _f(bundle.get("t_score")),
+            "t_score":  t_score_or_none(_f(bundle.get("t_score")), bundle),
             "bq_score":  bq_score_or_none(_f(bundle.get("bq_score")), bundle),
             "val_score": val_score_or_none(_f(bundle.get("val_score")), bundle),
             "s_score":   sentiment_value_or_none(_f(bundle.get("s_score")), bundle),
@@ -920,15 +920,16 @@ def compute_watchlist_entries(
         # falling through to the default. Narrowing must preserve absence.
         if isinstance(data, dict):
             _entry = {k: data[k] for k in _PILLAR_KEYS if k in data}
-            # D24: carry the three availability SIGNALS, not the fields they
-            # would otherwise require (bq_available/val_available are already
-            # cheap booleans; sentiment_available is computed here instead of
+            # D24: carry the four availability SIGNALS, not the fields they
+            # would otherwise require (bq_available/val_available/t_available
+            # are already cheap booleans; sentiment_available is computed here instead of
             # retaining the full `headlines` list, which this narrowing exists
             # to avoid). bq_score_or_none/val_score_or_none/
-            # sentiment_value_or_none (stock_analyzer.util) read these to null
+            # t_score_or_none/sentiment_value_or_none (stock_analyzer.util) read these to null
             # a fabricated neutral rather than persist it as a measurement.
             _entry["bq_available"] = data.get("bq_available", data.get("fundamentals_available", True))
             _entry["val_available"] = data.get("val_available", True)
+            _entry["t_available"] = data.get("t_available", True)
             _entry["sentiment_available"] = bool(data.get("headlines"))
         else:
             _entry = {}

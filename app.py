@@ -347,6 +347,7 @@ from stock_analyzer.util import pillar_tile as _pillar_tile
 from stock_analyzer.util import ETF_PILLAR_NA_SHORT, ETF_PILLAR_NA_REASON
 from stock_analyzer.util import bq_score_or_none as _bq_or_none
 from stock_analyzer.util import val_score_or_none as _val_or_none
+from stock_analyzer.util import t_score_or_none as _t_or_none
 from stock_analyzer.util import sentiment_value_or_none as _sentiment_or_none
 from stock_analyzer.util import xcheck_is_alarm_worthy as _xcheck_is_alarm_worthy
 from stock_analyzer.util import holdings_write_failed_message as _holdings_write_failed_msg
@@ -6550,11 +6551,14 @@ if page == "🏠 Home":
                     def _t_score_for(_tk: str):
                         _u = str(_tk).upper()
                         _b = _grow_comp_cache.get(_u) or _grow_comp_cache.get(_tk) or {}
-                        _t = _b.get("t_score")
+                        # C3: t_score is unmeasured when t_available is False (too
+                        # little history, or a required reading uncomputable) — null it.
+                        # Gate on the bundle that actually answered, as above.
+                        _t, _src = _b.get("t_score"), _b
                         if _t is None:
                             _b2 = _held_data_cache.get(_u) or _held_data_cache.get(_tk) or {}
-                            _t = _b2.get("t_score")
-                        return _t
+                            _t, _src = _b2.get("t_score"), _b2
+                        return _t_or_none(_t, _src)
                     def _bq_score_for(_tk: str):
                         # D24: bq_score is fabricated (fundamentals.py's
                         # neutral 50) whenever bq_available is False on the

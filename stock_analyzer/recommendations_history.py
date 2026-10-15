@@ -28,6 +28,7 @@ from stock_analyzer.constants import COMPOSITE_STRONG_BUY, COMPOSITE_BUY, COMPOS
 from stock_analyzer.sector_labels import canonical_sector
 from stock_analyzer.util import (
     bq_score_or_none,
+    t_score_or_none,
     val_score_or_none,
     sentiment_value_or_none,
 )
@@ -169,12 +170,14 @@ def build_enter_now_rows(recs: list[dict], held_tickers: set, rec_date,
             # neutral (fundamentals.py / valuation.py / sentiment.py) rather
             # than a real measurement. Persisting that as if measured would
             # let F-225 Portfolio Q&A assert "valuation 50" for a name whose
-            # valuation was never actually scored. t_score is deliberately
-            # untouched here for now — the t_available flag exists (C1,
-            # 2026-10-15) but is deliberately not consumed until C3.
+            # valuation was never actually scored. t_score follows the same
+            # rule via t_available (C1 flag, C3 consumer, 2026-10-15): a
+            # technical score that is unmeasured (too little history, or a
+            # required reading couldn't be computed) is nulled, not
+            # persisted as a measurement. Absent flag -> value kept (legacy).
             "s_score":          sentiment_value_or_none(_b.get("s_score"), _b),
             "avg_sent":         sentiment_value_or_none(_b.get("avg_sent"), _b),
-            "t_score":          _b.get("t_score"),
+            "t_score":          t_score_or_none(_b.get("t_score"), _b),
             "bq_score":         bq_score_or_none(_b.get("bq_score", _b.get("f_score")), _b),
             "val_score":        val_score_or_none(_b.get("val_score"), _b),
             "already_held":     tk_upper in held_upper,

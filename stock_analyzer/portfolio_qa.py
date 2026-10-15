@@ -683,8 +683,11 @@ def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None
 
     Returns {"found": False, "reason": str} when no matching recommendation
     exists — never guesses. On a match, t_score/bq_score/val_score are None
-    for recommendations surfaced before pillar-score persistence shipped —
-    the caller/narration must say so plainly, not infer a reason.
+    when the pillar was not persisted (a recommendation surfaced before
+    pillar-score persistence shipped) OR was deliberately nulled because the
+    pillar was unmeasured at the time (D24 for bq/val, C3 for technical) —
+    the caller/narration must say so plainly, not infer which. A NULL that
+    pandas turned into NaN via to_dict() is normalised back to None.
     """
     horizon_days = horizon_days or QA_REC_OUTCOME_DEFAULT_HORIZON_DAYS
     ticker = str(ticker).upper().strip()
@@ -700,7 +703,14 @@ def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None
     if matches.empty:
         return {"found": False, "reason": "no recommendation on record for that ticker/date"}
 
-    rec = matches.iloc[0].to_dict()
+    # A NULL cell in a mixed frame comes back from to_dict() as float NaN, not
+    # None, and would narrate as "nan" -- normalise every printed field.
+    def _na(v):
+        try:
+            return None if pd.isna(v) else v
+        except (TypeError, ValueError):
+            return v
+    rec = {k: _na(v) for k, v in matches.iloc[0].to_dict().items()}
     result = {
         "found": True,
         "ticker": ticker,
@@ -952,15 +962,15 @@ def facts_to_text(intent: str, facts) -> str:
         lines = [
             f"Ticker: {facts['ticker']}",
             f"Recommendation date: {facts['rec_date']} (type: {facts.get('rec_type')})",
-            f"Composite score at surfacing: {facts.get('composite_score')}",
-            f"Conviction: {facts.get('conviction')}",
+            f"Composite score at surfacing: {facts.get('composite_score') if facts.get('composite_score') is not None else 'not recorded'}",
+            f"Conviction: {facts.get('conviction') or 'not recorded'}",
             f"Thesis note recorded at the time: {facts.get('thesis') or 'none recorded'}",
         ]
         for label, key in (("Technical pillar", "t_score"),
                            ("Business-quality pillar", "bq_score"),
                            ("Valuation pillar", "val_score")):
             v = facts.get(key)
-            lines.append(f"{label}: {v if v is not None else 'not recorded for this recommendation'}")
+            lines.append(f"{label}: {v if v is not None else 'not recorded (not captured for this recommendation, or not measurable at the time)'}")
         if facts.get("price_at_horizon") is not None:
             # price_at_surface/pct_move can each independently be None even
             # when price_at_horizon computed fine (e.g. an older recommendation

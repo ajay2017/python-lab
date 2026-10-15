@@ -208,6 +208,31 @@ def test_cron_capture_persists_pillar_columns_from_the_bundle():
     assert r["avg_sent"] == 0.1
 
 
+def _cron_capture_t_score(**flags):
+    # build_watchlist_recommendation is stubbed (see _run_watchlist_entries), so
+    # an ENTER_NOW card reaches the capture even for a t-unavailable bundle --
+    # this pins the narrowed `_entry` carrying t_available into the writer
+    # (the D24 trap), independent of the upstream withhold.
+    result = _run_watchlist_entries(
+        watchlist=("AAPL",),
+        bundle={"sector": "Technology", "t_score": 50.0, "bq_score": 61.0,
+                "val_score": 44.0, "bq_available": True, "val_available": True,
+                "headlines": [{"headline": "x", "score": 0.2}], **flags},
+    )
+    rows = result["_save_mock"].call_args[0][0]
+    assert len(rows) == 1
+    return rows[0]["t_score"]
+
+
+def test_cron_capture_nulls_t_score_when_t_available_false():
+    assert _cron_capture_t_score(t_available=False) is None
+
+
+def test_cron_capture_keeps_t_score_when_t_available_true_or_absent():
+    assert _cron_capture_t_score(t_available=True) == 50.0
+    assert _cron_capture_t_score() == 50.0
+
+
 def test_cron_capture_preserves_the_legacy_f_score_fallback():
     """The cron path narrows the bundle to just the pillar keys before handing
     it on. That narrowing must preserve ABSENCE, not materialise missing keys

@@ -1647,14 +1647,19 @@ def test_build_enter_now_rows_a_real_measured_50_still_survives():
     assert r["avg_sent"] == 0.0
 
 
-def test_build_enter_now_rows_t_score_is_never_sanitized():
-    # The t_available flag exists (C1, 2026-10-15) but this writer doesn't
-    # consume it until C3 — t_score must pass through untouched for now.
+def test_build_enter_now_rows_t_score_nulled_only_when_t_available_false():
+    # C3: t_score follows t_available. True / absent (legacy) -> value kept;
+    # False -> None, never persisted as a measurement.
     cards = [_wl_card(ticker="AAA")]
-    bundles = {"AAA": {"t_score": 50.0, "bq_available": False,
-                       "val_available": False, "headlines": []}}
-    r = rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {}, bundles)[0]
-    assert r["t_score"] == 50.0
+    def _t(b):
+        return rh.build_enter_now_rows(cards, set(), date(2026, 1, 15), {},
+                                       {"AAA": b})[0]["t_score"]
+    assert _t({"t_score": 50.0, "t_available": True}) == 50.0
+    assert _t({"t_score": 50.0}) == 50.0
+    assert _t({"t_score": 50.0, "t_available": False}) is None
+    # independent of the bq/val flags
+    assert _t({"t_score": 50.0, "bq_available": False,
+               "val_available": False, "headlines": []}) == 50.0
 
 
 def test_build_enter_now_rows_pillar_lookup_is_case_insensitive():

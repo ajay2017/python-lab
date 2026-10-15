@@ -24,9 +24,10 @@ Three kinds of check, set from the post-cleanup baseline of 2026-10-14:
             count. C1 is the owner's warn-only ENTER_NOW-on-a-WATCH-name choice.
             C2 is non-binding G-20 rows beside a buy, from intraday
             transitions. A3 is exact-50 pillars: mostly the score lattice, BUT
-            it also includes the open fabricated-technical-50 fallback (WK
-            2026-10-07; the bundle's t_available flag exists since 2026-10-15
-            but no record withholds on it yet). Never
+            it also includes the WK 2026-10-07 exact-50 technical row, which
+            stays an unproven exact-50 (most likely a real full-leg reading
+            per the 2026-10-15 SQL). Since C3 (2026-10-15) records null an
+            unmeasured technical score via t_available. Never
             raises a finding. The count is reported next to its baseline on
             System Trust.
 
