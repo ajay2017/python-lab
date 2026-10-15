@@ -3170,6 +3170,14 @@ def save_recommendations(records: list[dict]) -> dict:
         except (TypeError, ValueError):
             return None
 
+    # Overflow-pick provenance (grow-today-owns-buys D3/N5). A key is added
+    # ONLY when at least one row in the batch carries a value, so every
+    # pre-existing caller (new_pick, add_winner, ...) still sends row dicts
+    # WITHOUT these keys -- PostgREST rejects an unknown column outright. When
+    # any row carries one, the key goes on EVERY row of the batch (None
+    # elsewhere) so the batch's key set is uniform.
+    _hold_keys = tuple(k for k in ("hold_reason", "rec_budget_state")
+                       if any(x.get(k) is not None for x in records))
     payload = []
     for r in records:
         tk = str(r.get("ticker", "")).strip().upper()
@@ -3229,6 +3237,9 @@ def save_recommendations(records: list[dict]) -> dict:
             # as every other Phase 1 loader.
             "asset_type":          r.get("asset_type"),
         })
+        for _hk in _hold_keys:
+            _hv = r.get(_hk)
+            payload[-1][_hk] = str(_hv)[:200] if _hv is not None else None
     if not payload:
         return {"attempted": 0, "saved": 0, "error": None}
     # Writer-boundary sanitize (audit 2026-10-11 Low-D): composite_score and
@@ -3248,6 +3259,7 @@ def save_recommendations(records: list[dict]) -> dict:
     # silently stop persisting that unrelated data for the entire window until
     # its own DDL is applied, with no error surfaced (saved=N, error=None) to
     # reveal the loss.
+    _HOLD_COLS = frozenset(("hold_reason", "rec_budget_state"))
     _ASSET_TYPE_COLS = frozenset(("asset_type",))
     _WEIGHTS_VERSION_COLS = frozenset(("weights_version",))
     _ENTER_NOW_COLS = frozenset(("already_held",))
@@ -3255,13 +3267,13 @@ def save_recommendations(records: list[dict]) -> dict:
                                    "rec_portfolio_value", "rec_sizing_version"))
     _QA_PILLAR_COLS = frozenset(("t_score", "bq_score", "val_score"))
     _F179_COLS      = frozenset(("s_score", "avg_sent"))
-    _OPTIONAL_COLS  = (_ASSET_TYPE_COLS | _WEIGHTS_VERSION_COLS | _ENTER_NOW_COLS
+    _OPTIONAL_COLS  = (_HOLD_COLS | _ASSET_TYPE_COLS | _WEIGHTS_VERSION_COLS | _ENTER_NOW_COLS
                        | _F249_SIZING_COLS | _QA_PILLAR_COLS | _F179_COLS)
     # NEWEST GENERATION FIRST. The strip cascade peels one generation at a time
     # in this order, so a "rec_shares is missing" error cannot also discard the
     # pillar scores and sentiment that are already working in production. Append
     # new generations to the FRONT, never extend an existing frozenset.
-    _COL_GENERATIONS = (_ASSET_TYPE_COLS, _WEIGHTS_VERSION_COLS, _ENTER_NOW_COLS,
+    _COL_GENERATIONS = (_HOLD_COLS, _ASSET_TYPE_COLS, _WEIGHTS_VERSION_COLS, _ENTER_NOW_COLS,
                         _F249_SIZING_COLS, _QA_PILLAR_COLS, _F179_COLS)
 
     def _upsert(rows):

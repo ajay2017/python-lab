@@ -193,6 +193,9 @@ def build_enter_now_rows(recs: list[dict], held_tickers: set, rec_date,
 # beats add_winner beats buy_candidate. Any unrecognized rec_type sorts last.
 _REC_TYPE_CREDIT_RANK = {
     "new_pick": 0, "enter_now": 1, "add_winner": 2, "buy_candidate": 3,
+    # Unsized "cleared every check, held back only by pacing" record: never
+    # outranks a real pick or entry on the same ticker/day.
+    "overflow_pick": 4,
 }
 
 

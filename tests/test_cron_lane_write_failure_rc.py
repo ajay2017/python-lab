@@ -117,8 +117,11 @@ def test_premarket_empty_book_is_still_a_quiet_green_day(monkeypatch):
 
 # ── scan ─────────────────────────────────────────────────────────────────────
 
+_OMIT = object()   # pass as grow= to leave the "grow" key out of the payload
+
+
 def _run_scan(monkeypatch, *, cache_ok=True, rec_result=None, rec_raises=False,
-              gl_result=None, gl_raises=False):
+              gl_result=None, gl_raises=False, grow={}, rec_log=None, of_result=None):
     from datetime import date as _date
     from stock_analyzer import reference_data as rd
     from stock_analyzer import scanner as real_scanner
@@ -134,10 +137,15 @@ def _run_scan(monkeypatch, *, cache_ok=True, rec_result=None, rec_raises=False,
     monkeypatch.setattr(cr, "compute_morning_picks",
                         lambda **_k: {"picks": [], "errors": [], "built_at": "x",
                                       "diag": {}, "book_drift": None,
-                                      "macro_coverage": None, "grow": {}})
+                                      "macro_coverage": None,
+                                      **({} if grow is _OMIT else {"grow": grow})})
     monkeypatch.setattr(cr, "_build_new_pick_rows", lambda *_a, **_k: [{"ticker": "AAPL"}])
 
     def _save_recs(_rows):
+        if rec_log is not None:
+            rec_log.append(list(_rows))
+        if of_result is not None and _rows and _rows[0].get("rec_type") == "overflow_pick":
+            return of_result
         if rec_raises:
             raise RuntimeError("rec boom")
         return rec_result or {"attempted": 1, "saved": 1, "error": None}

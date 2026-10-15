@@ -1777,6 +1777,28 @@ def _run_scan(now_et, force: bool) -> int:
         _log(f"rec log: FAILED — {str(_rec_log_err)[:120]} — continuing (email unaffected).")
         failures.append(f"recommendations: {str(_rec_log_err)[:120]}")
 
+    # ── Overflow-pick rows (grow-today-owns-buys P3b) ─────────────────────────
+    # Names that cleared every Grow Today check but were held back only by
+    # pacing. Own save call (a distinct key set: hold_reason) and own
+    # try/except so a failure here turns the heartbeat red but can never
+    # touch the new_pick save above or the emails below. A brief without the
+    # key (legacy / compute failure) yields no rows and no DB call.
+    try:
+        from stock_analyzer.overflow_rows import build_overflow_rec_rows
+        _of_grow = payload.get("grow")
+        _of_picks = _of_grow.get("overflow_picks") if isinstance(_of_grow, dict) else None
+        _of_rows = build_overflow_rec_rows(_of_picks, now_et.date())
+        if _of_rows:
+            _of_res = db.save_recommendations(_of_rows)
+            _log(f"rec log: saved={_of_res.get('saved', 0)}/"
+                 f"{_of_res.get('attempted', 0)} overflow_pick row(s)"
+                 + (f" — {_of_res.get('error')}" if _of_res.get("error") else ""))
+            if _of_res.get("error"):
+                failures.append(f"overflow rec log: {str(_of_res['error'])[:120]}")
+    except Exception as _of_err:
+        _log(f"rec log: overflow_pick FAILED — {str(_of_err)[:120]} — continuing.")
+        failures.append(f"overflow rec log: {str(_of_err)[:120]}")
+
     # ── Gate Suppression Ledger (W5 capture — cron source) ────────────────────
     # Persist which gates fired today so restraint can be graded later.
     # source="cron" is in the dedup key: G-01 is structurally unreachable here

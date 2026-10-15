@@ -1800,3 +1800,18 @@ def test_compute_outcomes_preserves_weights_version_and_asset_type():
     out = rh.compute_outcomes([m], {"AAA": 55.0}, date(2026, 2, 1))
     assert out[0]["weights_version"] == 2
     assert out[0]["asset_type"] == "etf"
+
+
+@pytest.mark.parametrize("order", [("overflow_pick", "new_pick"), ("new_pick", "overflow_pick"),
+                                   ("overflow_pick", "enter_now")])
+def test_overflow_pick_never_outranks_a_real_pick_or_entry(order):
+    recs = _recs_df([
+        _rec_row(id_=i + 1, ticker="AAA", rec_date="2026-01-15", rec_type=t)
+        for i, t in enumerate(order)
+    ])
+    trades = _trades_df([_trade_row(
+        ticker="AAA", traded_at="2026-01-15", trigger_type="RECOMMENDATION",
+    )])
+    acted = [r for r in rh.match_recs_to_trades(recs, trades) if r["acted_on"]]
+    assert len(acted) == 1
+    assert acted[0]["rec_type"] != "overflow_pick"
