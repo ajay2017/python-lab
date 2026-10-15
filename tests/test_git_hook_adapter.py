@@ -983,6 +983,25 @@ def test_feat_still_requires_design_and_build_and_reports_it(monkeypatch, tmp_pa
     assert "trailers: checked (Design + Build)" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("text", [
+    "fix(x): y\n\nBuild =\n\nCo-Authored-By: x\n",
+    "feat(x): y\n\nDesign = lead -- z\nBuild =\n\nCo-Authored-By: x\n",
+    "feat(x): y\n\nDesign =\n\nBuild = lead -- z\nCo-Authored-By: x\n",
+])
+def test_empty_trailer_followed_by_other_lines_is_blocked(monkeypatch, tmp_path, capsys, text):
+    assert _commit_msg_run(monkeypatch, tmp_path, text) == 1
+    assert "missing" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("text", [
+    "fix(x): y\n\nBuild=x\n",
+    "fix(x): y\n\n\tBuild = lead -- z\n",
+    "feat(x): y\n\nDesign  = lead -- z\nBuild  = implementer (Sonnet 5.5)\n",
+])
+def test_same_line_trailer_shapes_pass_the_adapter(monkeypatch, tmp_path, capsys, text):
+    assert _commit_msg_run(monkeypatch, tmp_path, text) == 0
+
+
 @pytest.mark.parametrize("subject", ["docs(x): y", "chore: y", "test(x): y", "fixup! fix(x): y"])
 def test_other_commit_types_need_no_trailer(monkeypatch, tmp_path, capsys, subject):
     assert _commit_msg_run(monkeypatch, tmp_path, subject + "\n") == 0

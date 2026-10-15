@@ -1525,8 +1525,11 @@ _NON_OPUS_FAMILY_RE = re.compile(r"\b(?:sonnet|haiku|fable)\b", re.IGNORECASE)
 # not a forced handoff. Both are self-attested, same caveat as the review citation.
 #   Design = planner (Opus 5): <verdict>      |  Design = lead -- <why no planner>
 #   Build  = implementer (Sonnet 5)           |  Build  = lead -- <why no implementer>
-_DESIGN_TRAILER_RE = re.compile(r"^\s*Design\s*=\s*\S+", re.MULTILINE | re.IGNORECASE)
-_BUILD_TRAILER_RE = re.compile(r"^\s*Build\s*=\s*\S+", re.MULTILINE | re.IGNORECASE)
+# [^\S\n] = any whitespace except a newline (a pasted non-breaking space is
+# fine); the trailer value must sit on the SAME line, so an empty `Build =`
+# followed by more text does not pass.
+_DESIGN_TRAILER_RE = re.compile(r"^[^\S\n]*Design[^\S\n]*=[^\S\n]*\S+", re.MULTILINE | re.IGNORECASE)
+_BUILD_TRAILER_RE = re.compile(r"^[^\S\n]*Build[^\S\n]*=[^\S\n]*\S+", re.MULTILINE | re.IGNORECASE)
 # `\s*` before the scope (audit C-M4): `feat (home): ...` used to skip the
 # provenance check entirely.
 _FEAT_COMMIT_RE = re.compile(r"^\s*feat\s*[(!:]", re.IGNORECASE)

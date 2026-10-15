@@ -802,6 +802,37 @@ class TestBuildAttestedCommits:
     def test_a_bare_empty_build_trailer_does_not_count(self):
         assert hook._missing_build_trailer("fix(x): y\n\nBuild =") is True
 
+    @pytest.mark.parametrize("msg", [
+        "fix(x): y\n\nBuild =\n\nCo-Authored-By: x",
+        "fix(x): y\n\nBuild =   \nCo-Authored-By: x",
+        "fix(x): y\n\nBuild\n=\nlead",
+        "fix(x): y\n\nBuild\n= lead",
+        "fix(x): y\n\nBuild =\r\nlead",
+    ])
+    def test_empty_build_trailer_followed_by_other_lines_is_missing(self, msg):
+        assert hook._missing_build_trailer(msg) is True
+
+    def test_empty_trailers_on_feat_do_not_count_even_with_later_text(self):
+        msg = "feat(x): y\n\nDesign =\n\nBuild =\nCo-Authored-By: x"
+        assert set(hook._missing_provenance_trailers(msg)) == {"Design", "Build"}
+        msg = "feat(x): y\n\nDesign = lead -- z\nBuild =\nCo-Authored-By: x"
+        assert hook._missing_provenance_trailers(msg) == ["Build"]
+        msg = "feat(x): y\n\nDesign\n= lead -- z\nBuild = lead -- z"
+        assert hook._missing_provenance_trailers(msg) == ["Design"]
+
+    def test_non_breaking_space_in_a_trailer_still_counts(self):
+        assert hook._missing_build_trailer("fix(x): y\n\nBuild =\u00a0lead -- z") is False
+        assert hook._missing_provenance_trailers("feat(x): y\n\nDesign =\u00a0lead\nBuild = lead") == []
+
+    @pytest.mark.parametrize("trailer", [
+        "Build=x", "Build = lead -- reason", "Build  = implementer (Sonnet 5.5)",
+        "\tBuild = lead -- z", "  build = lead -- z",
+    ])
+    def test_same_line_build_trailer_shapes_still_pass(self, trailer):
+        assert hook._missing_build_trailer(f"fix(x): y\n\n{trailer}") is False
+        msg = f"feat(x): y\n\nDesign=lead -- z\n{trailer}"
+        assert hook._missing_provenance_trailers(msg) == []
+
     def test_design_is_not_required_for_fix(self):
         msg = "fix(x): y\n\nBuild = lead -- tiny"
         assert hook._missing_build_trailer(msg) is False
