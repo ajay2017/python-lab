@@ -43,6 +43,7 @@ This is an explicit operating-mode commitment that drives functional design. It 
 | OP-04 | Cross-feature coordination is mandatory. Two features that make overlapping decisions never silently contradict each other. The pattern is: one publishes state; downstream features read and gate. |
 | OP-05 | Secondary objectives subordinate to investment view. Tax outcomes do not override the investment thesis (HARVEST suppressed on Buy/Strong Buy). Drift-rebalancing does not override active risk reduction (Rebalancer ADD suppressed when Risk Advisor TRIMs the same ticker). |
 | OP-06 | All decision thresholds live in `stock_analyzer/constants.py`. Changes to any value are investment-policy decisions, not code tuning. |
+| OP-07 | **Gate the call, never the candidate** (owner decision 2026-10-15). Every held-back buy candidate stays visible with its reason and what would clear it ("after earnings 10-28", "when the market tone recovers", "budget resets tomorrow"). Visibility is not a recommendation: a held-back name gets no share size and no trade action (an Analyze link at most), and lists of unvetted names stay collapsed by default. A gate's cost (🛑 The Road Not Taken, the overflow measurement) is judged across market regimes, not over one rally, because protective gates look expensive in a rising market and earn their keep in drawdowns. To lean toward growth, change the numbers deliberately (pick limits, the daily new-position budget, the flat-day bar), not the gates. |
 
 ### 2A.2 Decision thresholds (policy)
 
