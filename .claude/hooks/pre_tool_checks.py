@@ -920,6 +920,10 @@ _GATE_FILES = {
     # caps the SUM of a day's new-position sizing across every surface.
     "stock_analyzer/daily_budget.py",
     "stock_analyzer/budget_view.py",
+    # Added 2026-10-16 (docs/plans/shared-entry-check.md, chunk 2): the one
+    # new-entry eligibility decision (stale / tone / macro / news / earnings)
+    # that Grow Today and, from chunks 3-7, Watchlist/Analysis/email share.
+    "stock_analyzer/entry_eligibility.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,

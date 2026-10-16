@@ -6327,12 +6327,8 @@ if page == "🏠 Home":
             _nq_row      = next((i for i in _mkt_indices if i["short"] == "NASDAQ"),  None)
             _sp_pct      = float(_sp_row["change_pct"]) if _sp_row else 0.0
             _nq_pct      = float(_nq_row["change_pct"]) if _nq_row else 0.0
-            from stock_analyzer.constants import MARKET_TONE_BULL_PCT, MARKET_TONE_BEAR_PCT
-            _mkt_tone    = (
-                "bull" if _sp_pct >= MARKET_TONE_BULL_PCT
-                else "bear" if _sp_pct <= MARKET_TONE_BEAR_PCT
-                else "flat"
-            )
+            from stock_analyzer.entry_eligibility import classify_tone as _classify_tone
+            _mkt_tone    = _classify_tone(_sp_pct)
 
             # Leading / lagging sectors from 1-week returns
             _sect_df_ctx  = _fetch_sector_returns()
@@ -6363,9 +6359,11 @@ if page == "🏠 Home":
                 "sp500_pct":       _sp_pct,
                 "nasdaq_pct":      _nq_pct,
                 "leading_sectors": _lead_sectors,
+                # S&P row actually read (a missing row left _sp_pct at 0.0).
+                "tone_available":  _sp_row is not None,
             }
         except Exception:
-            _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
+            _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": [], "tone_available": False}
 
         # Auto-fetch composite scores for top scanner picks so Grow Today conviction
         # labels are accurate without requiring a manual Refresh Signals click.
@@ -6546,7 +6544,7 @@ if page == "🏠 Home":
                 st.session_state["_brief_built_at"] = datetime.now(_pytz.timezone("America/New_York"))
             except Exception:
                 _daily_brief    = None
-                _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
+                _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": [], "tone_available": False}
 
         # Daily new-position budget post-pass — BEFORE the rec-log capture below,
         # so the app-written new_pick / add_winner rows carry the budget-adjusted
@@ -8428,6 +8426,10 @@ if page == "🏠 Home":
             + f"</div>",
             unsafe_allow_html=True,
         )
+        # D1: a failed index read is recorded as "flat" (Grow Today still treats
+        # it so); say so. `.get(...) is False` -- an old context shows nothing.
+        if _market_context.get("tone_available") is False:
+            st.caption("⚠️ Market tone couldn't be read this run — treated as a flat day; the bear-day check didn't run.")
 
     # Fragility gauge — wrapped in a bordered container so it matches the chip style
     with _frag_col:

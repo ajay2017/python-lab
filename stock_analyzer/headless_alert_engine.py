@@ -47,13 +47,12 @@ from stock_analyzer.constants import (
     GROW_CANDIDATE_POOL,
     COMPOSITE_BUY,
     COMPOSITE_BUY_FLAT_DAY,
-    MARKET_TONE_BULL_PCT,
-    MARKET_TONE_BEAR_PCT,
     SNAPTRADE_BALANCE_STALE_HOURS,
     ACCOUNT_CASH_STALE_DAYS,
     DAILY_NEW_POSITION_BUDGET_PCT,
 )
 from stock_analyzer import daily_budget as _daily_budget
+from stock_analyzer.entry_eligibility import classify_tone
 
 _ET = pytz.timezone("America/New_York")
 
@@ -490,7 +489,8 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
     # Market tone (drives the bull-only new-pick gate) — mirrors the app's
     # _market_context assembly (S&P daily move → bull/bear/flat). leading_sectors
     # is left empty headlessly: it only flavours the thesis text, not the gating.
-    market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
+    market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": [],
+                      "tone_available": False}
     try:
         from stock_analyzer.data import fetch_market_indices
         _idx = fetch_market_indices()
@@ -498,14 +498,11 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
         _nq = next((i for i in _idx if i.get("short") == "NASDAQ"), None)
         _sp_pct = float(_sp["change_pct"]) if _sp else 0.0
         market_context = {
-            "tone": (
-                "bull" if _sp_pct >= MARKET_TONE_BULL_PCT
-                else "bear" if _sp_pct <= MARKET_TONE_BEAR_PCT
-                else "flat"
-            ),
+            "tone": classify_tone(_sp_pct),
             "sp500_pct": _sp_pct,
             "nasdaq_pct": float(_nq["change_pct"]) if _nq else 0.0,
             "leading_sectors": [],
+            "tone_available": _sp is not None,
         }
     except Exception as e:
         errors.append(f"market tone fetch failed: {e}")

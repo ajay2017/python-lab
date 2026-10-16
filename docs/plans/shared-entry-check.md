@@ -168,6 +168,69 @@ ship any time after chunk 2.
   question it feeds: should a risk-REDUCING defensive add be deferred on a bear day like any other buy (lead's
   view: no; owner's call).
 
+## Chunk 2 review follow-ups (Opus reviewer SHIP, 0 blocking, 2026-10-16) — fold into chunk 3
+1. `check_stale` with `bundle=None` passes silently → return an `unchecked` note; test.
+2. `resolve_tone_state` accepts a Home ctx that never set `tone_available` → require `is True`, AND add
+   `"tone_available": False` to `compute_daily_brief`'s fallback ctx (`daily_briefing.py` ~3529).
+3. `entry_check` crash → fail closed is the CALLERS' job (chunks 3/5/6): put it in each spec + test it.
+4. (before chunk 5) pin headless `tone_available` with a real `compute_morning_picks` test: fetch raises →
+   False; S&P row missing → False; present → True.
+5. After a `compute_daily_brief` crash, app.py ~6547 overwrites a successfully-read tone with a flat fallback
+   (pre-existing) and now sets `tone_available: False`, so the D1 caption wrongly says the tone "couldn't be
+   read" → keep the already-read `_market_context` in that except block (also removes the fake S&P +0.00%).
+6. (disclose in chunk 5) two pre-existing fabricated-flat paths keep `tone_available: True`: a single-bar
+   series (`yfinance_provider.py` ~261-263, `prev = price` → 0.0%) and a NaN `change_pct`.
+7. AST purity test for `entry_eligibility` (no streamlit / db / app / margin imports, no `now(`/`today(`).
+8. `check_macro` holds on the reason string's truthiness → decide on set membership.
+9. `tests/test_grow_today_golden.py` docstring cites the old clock line (~931, `.time()`).
+
+## Scope sweep result (planner Opus 5.5, 2026-10-16, read-only, HEAD `c72e7b8`)
+Beyond the five surfaces above (+ the 11:30 intraday email, confirmed to re-run `compute_morning_picks` and
+re-read tone live), **seven more places hand out a share count or dollar amount**; four apply neither F-255 nor
+F-306:
+
+| Surface | Hands out | Caps | Entry checks |
+|---|---|---|---|
+| Diversification Advisor ADD (portfolio.py 2268-2296; app ~15860-16057) | sector "Suggested add $X" = gap to `DIVERSIFY_ADD_TARGET_PCT` × gross book (≈ 26% of net capital per sector at 2.63×) + ✅ "genuine entry" banner | none | none |
+| Rebalancer ADD (rebalancer.py 266-420) | shares + $ from drift; custom target can reach 100%; fires on unscored names | none | news warning only |
+| Signals & Advice "High-Conviction Undersized" (portfolio.py 882-899; app ~15697-15735) | Log button pre-fills BUY = the CURRENT holding's share count (doubles the position) | none | none, no `_reduce_calls` |
+| Econ Calendar pre-event OPPORTUNITY (macro_playbook.py 337-340, 440-446) | "N shares (~$X)" = 10% of holding within 14 days of a release | none | inverted vs G-07 |
+| Catalyst Watch earnings HOLD_OR_ADD (earnings_advisor.py 350-369) | "small add 5-10%" (no count); can fire ≤ `EARNINGS_IMMINENT_DAYS` | none | contradicts earnings gate |
+| Watchlist non-ENTER_NOW rows | F-255 sizing panel (no Log button) | F-255 only | none |
+| Analysis non-Buy verdicts | scorecard "→ N suggested" on Sell/Hold; Hold-verdict "📒 Add" prefill; exported brief "Trade: Buy N" for any verdict | F-255 + F-306 | none |
+
+Also: Grow Today adds and Analysis held-name adds apply both caps to the NEW shares only (a name at 14.9% can
+end ~30% of the book) — disclosed in the User Guide, but the largest structural gap at real leverage.
+
+**Corrections to this plan's map:** (1) the Watchlist size panel renders for every row with a size (app ~27957-
+27966, ~28132) — chunk 4 must explicitly withhold it on `ENTRY_HELD`; (2) Analysis sizes Hold/Sell names and
+exports "Trade: Buy N" for any verdict — D7 covered Buy/Strong Buy only; (3) Grow Today adds have NO stale
+check (the table's "—" understated it); (4) `_run_intraday` is a second caller of `compute_morning_picks` —
+chunks 2/5 need a test for it.
+
+**Bear-day defensive adds (open question):** the sweep disagrees with the lead's "don't defer". Evidence: the
+Diversification ADD reduces correlation, not beta, and can suggest beta-raising names; the beta-repair panel
+never sizes anything; and on a margin book an add cannot reduce absolute risk (gross grows against the same
+equity — `beta_repair.py` 41-50's own example: beta 1.88→1.76 while exposure-to-equity 5.90×→6.08×). The
+risk-reducing trade is the trim/swap, which is never deferred. Lead now agrees: defer defensive adds like any
+buy.
+
+**Owner decisions on the sweep (2026-10-16, all accepted):**
+- **S-A — folded into this build:** chunk 4 withholds the Watchlist size panel on `ENTRY_HELD`; chunk 6 gives
+  NO size on any non-Buy verdict in Analysis (scorecard, Hold-verdict "📒 Add" prefill, exported "Trade: Buy
+  N"), not just applies the entry check to Buy/Strong Buy; chunk 7 adds the stale-data check (`data_trust_hold`)
+  to the add path alongside news and an explicit earnings check; chunk 2/5 add a test for `_run_intraday` as
+  a second caller of `compute_morning_picks`.
+- **S-B:** a risk-reducing / defensive add is deferred on a bear day like any other buy (no carve-out).
+- **S-C — done now, before chunk 2:** the Signals & Advice "High-Conviction Undersized" card no longer
+  pre-fills a BUY for the current share count; it routes to Analysis for a sized add. Its "earnings in −Nd"
+  past-date text fixed in the same commit.
+- **S-D — after this build:** one planner design so EVERY surface that hands out a share count or dollar
+  amount goes through the same caps (F-255, `SINGLE_NAME_CEILING`, F-306) and entry checks: Diversification
+  ADD $, Rebalancer ADD (+ its G-25/G-26 gap, CLAUDE.md D5), Econ Calendar OPPORTUNITY, Catalyst Watch
+  HOLD_OR_ADD, Watchlist non-ENTER_NOW rows, Analysis held-name adds, and caps that today apply to the new
+  shares only.
+
 ## Known limits (accepted)
 - Tone from Home's brief is as old as the brief (≤ 30 min auto-refresh, longer if locked); the source time is
   printed so the Watchlist agrees with what Home shows.

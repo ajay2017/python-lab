@@ -23,7 +23,7 @@ Verdict tiers:
   Caution    — earnings within 7 days regardless of other signals (amber)
 """
 
-from datetime import date, datetime as _dt, time as _time, timedelta
+from datetime import date, datetime as _dt, timedelta
 
 import pandas as pd
 
@@ -69,7 +69,6 @@ from stock_analyzer.constants import (
     GROW_MAX_PICKS_BULL,
     GROW_MAX_PICKS_DEFAULT,
     GROW_CANDIDATE_OVERFETCH,
-    GROW_TODAY_MAX_FUND_AGE_DAYS,
     ATR_STOP_MULT,
     DETERIORATION_TRIM_SUGGESTED_PCT,
     ETF_MAX_PICKS,
@@ -92,6 +91,7 @@ from stock_analyzer import asset_type
 from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
 from stock_analyzer import etf_candidates as etf_candidates_mod
 from stock_analyzer import pair_add_gate
+from stock_analyzer.entry_eligibility import data_trust_hold, macro_block_map, macro_hold
 from stock_analyzer.analyst_intel import trustworthy_composite
 
 
@@ -906,45 +906,16 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # Macro gate — hard-suppress new picks in sectors with imminent HIGH-impact
     # macro events. Opening a fresh position into a known binary catalyst is
     # exactly the institutional anti-pattern this gate prevents.
-    from stock_analyzer.macro_calendar import HIGH as _MC_HIGH, affected_sectors as _aff_sectors
-    _macro_blocked_sectors: set = set()
-    _macro_block_reasons:   dict = {}   # sector -> event description
-    for _ev in (macro_events or []):
-        if _ev.get("impact") != _MC_HIGH:
-            continue
-        _d = _days_until(_ev.get("date"), today)
-        if _d is None or _d < 0 or _d > MACRO_IMMINENT_DAYS:
-            continue
-        # Today's events: check whether the release has already resolved.
-        # FOMC (Fed Policy) is conservative — never lift same-day; the
-        # post-announcement volatility window makes it the wrong time to
-        # open new positions regardless of when the decision prints.
-        # All other HIGH events (CPI, NFP, GDP — 08:30 ET pre-market
-        # releases) lift when either (a) FRED confirms the actual is posted
-        # (secondary) or (b) the wall clock has passed the scheduled release
-        # time (primary). Fail-safe: any exception keeps the gate on.
-        if _d == 0 and _ev.get("category") != "Fed Policy":
-            _resolved = bool(_ev.get("released"))          # secondary: FRED
-            if not _resolved and _ev.get("time_et"):       # primary: clock
-                try:
-                    import pytz as _pytz
-                    _now_et = _dt.now(_pytz.timezone("America/New_York")).time()
-                    _resolved = _time.fromisoformat(_ev["time_et"]) <= _now_et
-                except Exception:
-                    pass                                   # keep gate on
-            if _resolved:
-                continue
-        _affected = _aff_sectors(_ev.get("category", ""))
-        if "__ALL__" in _affected:
-            # All sectors affected — block every new pick (rare but intentional)
-            _macro_blocked_sectors = {"__ALL__"}
-            _macro_block_reasons["__ALL__"] = (
-                f"{_ev.get('event','')} ({_ev.get('date')}) — {_d}d away"
-            )
-            break
-        for _s in _affected:
-            _macro_blocked_sectors.add(_s)
-            _macro_block_reasons.setdefault(_s, f"{_ev.get('event','')} ({_ev.get('date')}) — {_d}d away")
+    # Lifted to entry_eligibility (shared new-entry check); clock read stays here.
+    try:
+        import pytz as _pytz
+        _now_et_dt = _dt.now(_pytz.timezone("America/New_York"))
+    except Exception:
+        _now_et_dt = None                                  # keep gate on
+    _macro_map = macro_block_map(macro_events, today, _now_et_dt)
+    # None (macro_events unchecked) reads as "nothing blocked", as it always did.
+    _macro_blocked_sectors: set = set(_macro_map["sectors"]) if _macro_map else set()
+    _macro_block_reasons:   dict = dict(_macro_map["reasons"]) if _macro_map else {}
 
     # Sector concentration gate — sectors already AT/ABOVE the hard cap. Opening
     # or adding to a position in such a sector worsens a breach the Risk Advisor
@@ -1255,11 +1226,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # Macro gate — hard-suppress if sector has an imminent HIGH-impact
             # macro event. Opening into a known binary catalyst is the
             # anti-pattern; surface the suppression so the user knows.
-            _macro_block = None
-            if "__ALL__" in _macro_blocked_sectors:
-                _macro_block = _macro_block_reasons.get("__ALL__")
-            elif sector in _macro_blocked_sectors:
-                _macro_block = _macro_block_reasons.get(sector)
+            _macro_block = macro_hold(sector, _macro_map)
             if _macro_block:
                 macro_blocked_picks.append({
                     "ticker": ticker, "sector": sector,
@@ -1388,21 +1355,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # a new-position recommendation — a deteriorating ticker can appear
             # composite-healthy on 5-day-old fundamentals and then score Sell on a
             # fresh Analysis fetch minutes later (the INTC incident, 2026-07-14).
-            if _comp_data.get("stale_as_of") is not None:
-                composite_unavailable.append({
-                    "ticker":         ticker,
-                    "sector":         sector,
-                    "momentum_score": _f(row.get("Score", 0)),
-                })
-                continue
-
-            # Fundamentals freshness gate: new-position recs require recent
-            # fundamental data. fund_cache_age_days = None means a fresh yfinance
-            # .info fetch was used, which always passes. Stale fundamentals (older
-            # than GROW_TODAY_MAX_FUND_AGE_DAYS) can distort the composite enough
-            # to flip a Sell ticker to a Buy recommendation.
-            _fund_age = _comp_data.get("fund_cache_age_days")
-            if _fund_age is not None and _fund_age > GROW_TODAY_MAX_FUND_AGE_DAYS:
+            if data_trust_hold(_comp_data) is not None:
                 composite_unavailable.append({
                     "ticker":         ticker,
                     "sector":         sector,
