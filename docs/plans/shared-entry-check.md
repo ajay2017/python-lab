@@ -2,8 +2,9 @@
 
 **Status: DESIGNED + OWNER-APPROVED 2026-10-16 (all 12 recommendations, D1-D12, plus additions A1-A4).
 Mockup v1 APPROVED 2026-10-16: `docs/mockups/2026-10-16-shared-entry-check-mockup.html`. Chunk 1 (golden
-master) DONE 2026-10-16 (`tests/test_grow_today_golden.py`, 144 scenarios, 8 mutations all caught); scope
-sweep before chunk 3 in progress.**
+master) DONE 2026-10-16 (`35ea1df`); chunk 2 DONE (`400b01c`, pushed); chunk 3 DONE (advisor ENTRY_HELD +
+G-28/G-29 capture, not wired to any surface yet); next chunk 4. Scope
+sweep DONE (results + owner decisions S-A..S-D below).**
 
 **Chunk 1 findings that bind later chunks:** (1) `_grow_today` takes the tone as an INPUT — the ±0.5 rule
 lives in app.py/headless — so the golden cannot prove `classify_tone`; chunk 2 needs its own −0.5/−0.49 and
@@ -183,6 +184,24 @@ ship any time after chunk 2.
 7. AST purity test for `entry_eligibility` (no streamlit / db / app / margin imports, no `now(`/`today(`).
 8. `check_macro` holds on the reason string's truthiness → decide on set membership.
 9. `tests/test_grow_today_golden.py` docstring cites the old clock line (~931, `.time()`).
+
+## Chunk 3 review follow-ups (Opus reviewer SHIP, 0 blocking, 2026-10-16) — fold into chunk 4
+1. `test_entry_ctx_none_is_byte_identical` compares new code with itself — freeze the 12 fixtures' expected
+   `repr` as a golden (or keep a HEAD-snapshot comparison) BEFORE chunks 4-6 touch the advisor.
+2. `_entry_held_card(...)` / `list(_chk["unchecked"])` sit outside the try: a hold missing a key raises, and
+   the caller's per-ticker except drops the name entirely (fails safe but not OP-07-visible). Wrap so it
+   becomes a check_failed held card, or read hold fields with defaults.
+3. `check_macro` with a None/"" sector passes silently when specific sectors are blocked — chunks 4/5 must
+   pass the curated `sector_gate_context` sector (same as G-05); add an `unchecked` note for a falsy sector.
+4. `check_macro` indexes `bm["sectors"]` — `{}` now raises (→ check_failed); feed only `macro_block_map`
+   output or read with defaults.
+5. Key names differ: eligible card `entry_unchecked`, held card `unchecked` — unify.
+6. ENTRY_HELD drops `portfolio_caution` / `deterioration_warning` — pass them through.
+7. `gate_ledger.build_watchlist_suppression_rows` docstring still says G-05/06/13 / NEAR_ENTRY only.
+8. App wiring (chunk 4): Actionable filter (~27839), held + sold-today overrides (~27938/27954), sizing runs
+   for every row (~28008-28024 → withhold on ENTRY_HELD, S-A), KPI "N held today" (~27746), label/icon/badge.
+   `$`: existing card text renders through `_md_bold` inside raw HTML (safe); any hold text routed through
+   st.info/caption/metric/plain markdown must escape `$`; "S&P" in hold text must go through safe_html.
 
 ## Scope sweep result (planner Opus 5.5, 2026-10-16, read-only, HEAD `c72e7b8`)
 Beyond the five surfaces above (+ the 11:30 intraday email, confirmed to re-run `compute_morning_picks` and

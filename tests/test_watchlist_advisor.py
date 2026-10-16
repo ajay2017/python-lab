@@ -682,7 +682,10 @@ def test_sort_key_puts_enter_now_first():
 
 
 def test_sort_key_puts_near_entry_second():
-    assert sort_key_for_action("NEAR_ENTRY") == 1
+    # Rank is relational, not absolute: ENTRY_HELD (shared-entry-check chunk 3)
+    # sits between ENTER_NOW and NEAR_ENTRY, so NEAR_ENTRY is no longer rank 1.
+    assert (sort_key_for_action("ENTER_NOW") < sort_key_for_action("ENTRY_HELD")
+            < sort_key_for_action("NEAR_ENTRY") < sort_key_for_action("REMOVE"))
 
 
 def test_sort_key_ranks_enter_now_ahead_of_remove_and_hold_off():

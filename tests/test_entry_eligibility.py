@@ -196,3 +196,76 @@ def test_no_local_tone_rule(rel):
             pytest.fail(f"{rel} references {node.id} outside entry_eligibility")
     assert "classify_tone" in src
     assert '"tone_available"' in src
+
+
+# -- chunk 3 follow-ups ----------------------------------------------------------
+def test_stale_check_without_a_bundle_is_unchecked_not_a_silent_pass():
+    r = ee.entry_check(bundle=None)
+    assert r["eligible"]
+    assert {"check": "stale", "why": "no data bundle — the stale-data check couldn't run"} in r["unchecked"]
+    # a real (empty) bundle is a checked pass
+    assert not [u for u in ee.entry_check(bundle={})["unchecked"] if u["check"] == "stale"]
+
+
+def test_resolver_requires_tone_available_true():
+    base = {"tone": "bear", "sp500_pct": -0.8}
+    # flag missing -> falls through to the live read
+    r = ee.resolve_tone_state(base, True, "x", 0.9, True)
+    assert (r["source"], r["tone"]) == ("live", "bull")
+    # missing flag and no live read -> unavailable, never the Home value
+    r = ee.resolve_tone_state(base, True, "x", None, False)
+    assert r["available"] is False and r["tone"] is None
+    # truthy-but-not-True is also rejected
+    r = ee.resolve_tone_state({**base, "tone_available": 1}, True, "x", None, False)
+    assert r["available"] is False
+    r = ee.resolve_tone_state({**base, "tone_available": True}, True, "x", None, False)
+    assert r["source"] == "home"
+
+
+def test_compute_daily_brief_fallback_ctx_marks_tone_unavailable():
+    tree = ast.parse((ROOT / "stock_analyzer" / "daily_briefing.py").read_text(encoding="utf-8"))
+    found = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and isinstance(node.value, ast.BoolOp)
+                and isinstance(node.value.op, ast.Or)
+                and any(isinstance(t, ast.Name) and t.id == "ctx" for t in node.targets)
+                and isinstance(node.value.values[0], ast.Name)
+                and node.value.values[0].id == "market_context"):
+            d = node.value.values[-1]
+            assert isinstance(d, ast.Dict)
+            found.append({k.value: v for k, v in zip(d.keys, d.values)
+                          if isinstance(k, ast.Constant)})
+    assert len(found) == 1
+    assert isinstance(found[0]["tone_available"], ast.Constant) and found[0]["tone_available"].value is False
+
+
+def test_macro_hold_decided_on_membership_not_reason_truthiness():
+    for reasons in ({}, {"Technology": ""}, {"Technology": None}):
+        bm = {"sectors": {"Technology"}, "reasons": reasons}
+        r = ee.entry_check(sector="Technology", macro_map=bm, bundle={})
+        assert not r["eligible"] and r["binding"]["check"] == "macro"
+        assert "imminent HIGH-impact macro event" in r["binding"]["reason"]
+    allm = {"sectors": {"__ALL__"}, "reasons": {}}
+    assert not ee.entry_check(sector="Whatever", macro_map=allm, bundle={})["eligible"]
+    # not in the set -> no hold even though a reason exists for another sector
+    assert ee.entry_check(sector="Energy", bundle={},
+                          macro_map={"sectors": {"Technology"}, "reasons": {"Energy": "x"}})["eligible"]
+
+
+def test_entry_eligibility_is_pure_and_margin_isolated():
+    tree = ast.parse((ROOT / "stock_analyzer" / "entry_eligibility.py").read_text(encoding="utf-8"))
+    banned = ("streamlit", "stock_analyzer.db", "app", "stock_analyzer.margin")
+    for node in ast.walk(tree):
+        names = []
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            names = [mod] + [f"{mod}.{a.name}" for a in node.names]
+        for n in names:
+            for b in banned:
+                assert n != b and not n.startswith(b + "."), f"imports {n}"
+        if isinstance(node, ast.Call):
+            f = node.func
+            nm = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
+            assert nm not in ("now", "today", "utcnow"), f"clock read {nm}()"

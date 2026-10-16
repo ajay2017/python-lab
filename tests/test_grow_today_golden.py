@@ -15,8 +15,9 @@ change the `n2_*` scenarios on purpose):
 Notes
 -----
 * Clock: the only wall-clock read reachable from `_grow_today` is the macro
-  map's same-day release check (`_dt.now(ET).time()`, daily_briefing ~931);
-  it is frozen by patching `daily_briefing._dt` per scenario. `today` is
+  map's same-day release check, read as `_dt.now(ET)` inside daily_briefing's
+  macro-map builder and handed to `entry_eligibility.macro_block_map` as
+  `now_et`; it is frozen by patching `daily_briefing._dt` per scenario. `today` is
   always passed explicitly (reference_shelf/macro_calendar read it from there).
 * Tone: `_grow_today` takes `market_context["tone"]` as an INPUT -- the
   bull/bear/flat classification from sp500_pct lives in app.py / headless

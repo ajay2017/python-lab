@@ -320,6 +320,7 @@ _GATE_MODULES = [
     "stock_analyzer.watchlist_advisor",
     "stock_analyzer.daily_budget",
     "stock_analyzer.budget_view",
+    "stock_analyzer.entry_eligibility",
 ]
 
 

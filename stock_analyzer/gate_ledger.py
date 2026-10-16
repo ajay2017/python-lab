@@ -197,6 +197,11 @@ _WATCHLIST_KIND: dict[str, str] = {
     "sector": "G-05",
     "beta":   "G-06",
     "rr":     "G-13",
+    # Shared new-entry check (docs/plans/shared-entry-check.md chunk 3): carried
+    # by ENTRY_HELD cards only. stale/news/earnings/check_failed holds never
+    # set a suppression_kind, so they never ledger (D3).
+    "entry_macro": "G-28",
+    "entry_tone":  "G-29",
 }
 
 # Short, fixed reason text per suppression_kind — the watchlist card itself
@@ -206,6 +211,15 @@ _WATCHLIST_REASON: dict[str, str] = {
     "sector": "Sector at hard ceiling — ENTER_NOW downgraded to NEAR_ENTRY.",
     "beta":   "Portfolio beta + ticker beta both breached — ENTER_NOW downgraded to NEAR_ENTRY.",
     "rr":     "ENTER_NOW without a validated R:R — downgraded to NEAR_ENTRY.",
+    "entry_macro": "Imminent HIGH macro event in the sector — Watchlist ENTER_NOW held today.",
+    "entry_tone":  "Bear-day market tone — Watchlist ENTER_NOW deferred today.",
+}
+
+# Action each ledgered kind rides on: the three fit gates downgrade to
+# NEAR_ENTRY; the two entry-check kinds ride ENTRY_HELD cards.
+_WATCHLIST_ACTION: dict[str, str] = {
+    "entry_macro": "ENTRY_HELD",
+    "entry_tone":  "ENTRY_HELD",
 }
 
 
@@ -241,10 +255,10 @@ def build_watchlist_suppression_rows(
 
     rows: list[dict] = []
     for card in recs:
-        if card.get("action") != "NEAR_ENTRY":
-            continue
         kind = card.get("suppression_kind")
         if not kind:
+            continue
+        if card.get("action") != _WATCHLIST_ACTION.get(kind, "NEAR_ENTRY"):
             continue
         gate_id = _WATCHLIST_KIND.get(kind)
         if gate_id is None:
@@ -273,7 +287,8 @@ def build_watchlist_suppression_rows(
             "counterfactual":    True,
             "gate_value":        card.get("gate_value"),
             "gate_threshold":    card.get("gate_threshold"),
-            "tone":              None,
+            # G-29 is the bear-day deferral: record the tone it fired on.
+            "tone":              "bear" if kind == "entry_tone" else None,
             "composite_score":   card.get("score"),
             "momentum_score":    None,
             "sector":            sector_by_ticker.get(ticker),

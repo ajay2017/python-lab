@@ -38,7 +38,7 @@ def resolve_tone_state(home_ctx, home_is_today, home_built_at, live_pct, live_ok
     if (
         home_is_today
         and isinstance(home_ctx, dict)
-        and home_ctx.get("tone_available") is not False
+        and home_ctx.get("tone_available") is True
         and home_ctx.get("tone") is not None
     ):
         return {
@@ -170,7 +170,10 @@ def _gid(ctx, name):
 
 def check_stale(ctx):
     b = ctx.get("bundle")
-    h = data_trust_hold({} if b is None else b)
+    if b is None:
+        return {"kind": "unchecked", "check": "stale",
+                "why": "no data bundle — the stale-data check couldn't run"}
+    h = data_trust_hold(b)
     return None if h is None else {"kind": "hold", **h}
 
 
@@ -197,15 +200,23 @@ def check_macro(ctx):
     if bm is None:
         return {"kind": "unchecked", "check": "macro",
                 "why": "macro calendar unavailable — the macro-event check couldn't run"}
-    r = macro_hold(ctx.get("sector"), bm)
-    if r:
-        return {
-            "kind": "hold", "check": "macro", "gate_id": _gid(ctx, "macro"),
-            "reason": f"macro event · {r}",
-            "clears_when": "the release is out",
-            "gate_value": None, "gate_threshold": MACRO_IMMINENT_DAYS,
-        }
-    return None
+    # The hold is decided on SET MEMBERSHIP; the reason string only words it.
+    sectors = bm["sectors"]
+    reasons = bm["reasons"]
+    sector = ctx.get("sector")
+    if "__ALL__" in sectors:
+        r = reasons.get("__ALL__")
+    elif sector in sectors:
+        r = reasons.get(sector)
+    else:
+        return None
+    r = r or "imminent HIGH-impact macro event"
+    return {
+        "kind": "hold", "check": "macro", "gate_id": _gid(ctx, "macro"),
+        "reason": f"macro event · {r}",
+        "clears_when": "the release is out",
+        "gate_value": None, "gate_threshold": MACRO_IMMINENT_DAYS,
+    }
 
 
 def check_news(ctx):

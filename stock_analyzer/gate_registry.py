@@ -32,4 +32,7 @@ GATE_IDS: dict[str, str] = {
     "G-18": "Held position stop breached → Analysis add-to-position sizing suppressed",
     "G-25": "New correlation cluster → add-to-winner suppressed",
     "G-26": "Standing danger-tier correlated pair → add-to-winner suppressed",
+    # Shared new-entry check (chunk 3) — Watchlist ENTER_NOW held by the entry check.
+    "G-28": "Imminent HIGH macro → Watchlist ENTER_NOW held",
+    "G-29": "Bear-day tone → Watchlist ENTER_NOW deferred",
 }

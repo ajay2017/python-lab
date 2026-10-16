@@ -3526,7 +3526,8 @@ def build_daily_briefing(
     scanner-only "More Buy Candidates" lane was retired
     2026-10-15 -- docs/plans/grow-today-owns-buys.md).
     """
-    ctx    = market_context or {"tone": "flat", "sp500_pct": 0, "nasdaq_pct": 0, "leading_sectors": []}
+    ctx    = market_context or {"tone": "flat", "sp500_pct": 0, "nasdaq_pct": 0, "leading_sectors": [],
+                              "tone_available": False}
 
     # Build a unified earnings_lookup from held_data + grow_composites so the
     # earnings-risk check in _cross_reference applies to non-held new picks too.

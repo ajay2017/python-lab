@@ -33,6 +33,7 @@ from stock_analyzer.constants import (
 )
 from stock_analyzer import exit_advisor
 from stock_analyzer import asset_type as _asset_type_mod
+from stock_analyzer import entry_eligibility as _entry_elig
 from stock_analyzer.pillar_availability import (
     technical_clause, technical_history_short, verdict_basis, withheld_split,
 )
@@ -53,6 +54,7 @@ _ACTION_PRIORITY = {
     "HOLD_OFF_EARNINGS":  "MEDIUM",
     "DATA_UNAVAILABLE":   "MEDIUM",
     "ENTER_NOW":          "READY",   # own label — never share "OK" with risk_advisor's "nothing to flag"
+    "ENTRY_HELD":         "MONITOR", # "HELD TODAY": ready on its own numbers, held by a shared entry check
     "NEAR_ENTRY":         "MONITOR",
     "WAIT_ENTRY":         "MONITOR",
     "WAIT_CATALYST":      "MONITOR",
@@ -65,18 +67,19 @@ _ACTION_PRIORITY = {
 # under a wall of earnings-hold cards.
 _ACTION_SORT_RANK = {
     "ENTER_NOW":          0,
-    "NEAR_ENTRY":         1,
-    "REMOVE":             2,
-    "HOLD_OFF_EARNINGS":  3,
-    "DATA_UNAVAILABLE":   4,
-    "WAIT_ENTRY":         5,
-    "WAIT_CATALYST":      6,
+    "ENTRY_HELD":         1,   # directly under ENTER_NOW (shared-entry-check D12)
+    "NEAR_ENTRY":         2,
+    "REMOVE":             3,
+    "HOLD_OFF_EARNINGS":  4,
+    "DATA_UNAVAILABLE":   5,
+    "WAIT_ENTRY":         6,
+    "WAIT_CATALYST":      7,
 }
 
 
 def sort_key_for_action(action: str) -> int:
     """Display-order rank for a watchlist action (lower sorts first)."""
-    return _ACTION_SORT_RANK.get(action, 7)
+    return _ACTION_SORT_RANK.get(action, 8)
 
 
 def _earn_days_until(earn_str: str | None) -> int | None:
@@ -278,9 +281,18 @@ def build_watchlist_recommendation(
     data: dict,
     portfolio_ctx: dict | None = None,
     spy_df=None,
+    entry_ctx: dict | None = None,
 ) -> dict:
     """
     Returns a recommendation dict for a single watchlist candidate.
+
+    entry_ctx (optional, shared-entry-check chunk 3): None is the legacy path
+    (byte-identical output). A dict {"tone_state", "macro_map", "news",
+    "sector"} runs entry_eligibility.entry_check inside the ENTER_NOW branch,
+    AFTER the portfolio-fit hard gates. A held name becomes the new action
+    ENTRY_HELD (never ENTER_NOW, no sizing keys); an eligible one stays
+    ENTER_NOW and gains `entry_unchecked` ("couldn't run" notes). If the check
+    itself raises, fail CLOSED: ENTRY_HELD with hold_kind "check_failed".
 
     portfolio_ctx (optional): {
         "sector_of_ticker": str, "sector_weight_pct": float,
@@ -623,6 +635,31 @@ def build_watchlist_recommendation(
         # it yet). Scoped to this clean pass-through branch only — the
         # hard-breach-downgraded NEAR_ENTRY case above and every other
         # action branch deliberately do not compute this.
+        # Shared new-entry check (chunk 3): AFTER the hard fit gates above, so a
+        # G-05/G-06/G-13 downgrade keeps precedence. Only this branch is
+        # affected (D9) — REMOVE/NEAR_ENTRY/WAIT/HOLD_OFF_EARNINGS are untouched.
+        _entry_unchecked = None
+        if entry_ctx is not None:
+            try:
+                _chk = _entry_elig.entry_check(
+                    bundle=data,
+                    tone_state=entry_ctx.get("tone_state"),
+                    sector=entry_ctx.get("sector"),
+                    macro_map=entry_ctx.get("macro_map"),
+                    news=entry_ctx.get("news"),
+                    earnings_days=earn_days,
+                    gate_ids={"tone": "G-29", "macro": "G-28"},
+                )
+            except Exception:
+                _chk = None   # fail CLOSED: _entry_held_card builds check_failed
+            _held_card = _entry_held_card(
+                ticker, _chk, score, rec_label, price, entry_lo, entry_hi,
+                stop, rr, earn_days, in_zone,
+            )
+            if _held_card is not None:
+                return _held_card
+            _entry_unchecked = list(_chk["unchecked"])
+
         _cand_det = exit_advisor.candidate_deterioration_flag(
             ticker, data.get("df"), spy_df, price=price, atr=data.get("atr"),
         )
@@ -630,7 +667,7 @@ def build_watchlist_recommendation(
             _cand_det, ticker, verdict_phrase="ENTER NOW",
         )
 
-        return _card(
+        _enter_card = _card(
             ticker, "ENTER_NOW", score, rec_label, price, entry_lo, entry_hi,
             stop, rr, earn_days,
             title=f"{ticker} — Ready to Enter",
@@ -699,6 +736,9 @@ def build_watchlist_recommendation(
             portfolio_caution=soft_caution,
             deterioration_warning=_det_warning,
         )
+        if _entry_unchecked is not None:
+            _enter_card["entry_unchecked"] = _entry_unchecked
+        return _enter_card
 
     # ── NEAR ENTRY — price already in zone, R:R not yet validated ───────────
     # ENTER_NOW requires rr is not None and rr >= RR_ENTRY_MIN. When price is
@@ -904,6 +944,7 @@ def _card(
     elif score >= 55:             pts += 20
     elif score >= COMPOSITE_HOLD: pts += 10
     if action in ("ENTER_NOW",):       pts += 35
+    elif action in ("ENTRY_HELD",):    pts += 25   # below ENTER_NOW: held, not ready to act on
     elif action in ("NEAR_ENTRY",):    pts += 25
     elif action in ("WAIT_ENTRY",):    pts += 15
     elif action in ("WAIT_CATALYST",): pts += 5
@@ -938,3 +979,70 @@ def _card(
         "gate_threshold":     gate_threshold,
         "deterioration_warning": deterioration_warning,
     }
+
+
+_HOLD_SUPPRESSION_KIND = {"tone": "entry_tone", "macro": "entry_macro"}
+
+
+def _entry_held_card(ticker, chk, score, rec_label, price, entry_lo, entry_hi,
+                     stop, rr, earn_days, in_zone):
+    """ENTRY_HELD card when the shared entry check holds a would-be ENTER_NOW,
+    else None (eligible). ``chk is None`` means the check raised: fail CLOSED
+    (hold_kind "check_failed", no suppression_kind, so no ledger row).
+
+    Carries NO sizing keys: the card has no share count, dollar size or budget
+    field, so nothing downstream can size, email or capture it as ENTER_NOW.
+    """
+    zone_txt = (f" (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo and entry_hi else "")
+    if chk is None:
+        binding = {
+            "check": "check_failed", "gate_id": None,
+            "reason": "entry check couldn't run",
+            "clears_when": "the entry check can run again — reload the page",
+            "gate_value": None, "gate_threshold": None,
+        }
+        holds, unchecked = [binding], []
+    else:
+        if chk["eligible"]:
+            return None
+        holds, binding, unchecked = chk["holds"], chk["binding"], chk["unchecked"]
+
+    kind = binding["check"]
+    reason = binding["reason"]
+    card = _card(
+        ticker, "ENTRY_HELD", score, rec_label, price, entry_lo, entry_hi,
+        stop, rr, earn_days,
+        title=f"{ticker} — Ready on Its Own Numbers, Held Today",
+        summary=(
+            f"Score {score:.0f}/100 · price is {'in' if in_zone else 'near'} the entry zone"
+            + (f" · R:R {rr:.1f}:1" if rr else "")
+            + f". Held today: {reason}."
+        ),
+        detail=(
+            f"The stock-level setup is a go (score {score:.0f}/100, {rec_label}, price "
+            f"{'inside' if in_zone else 'within 3% of'} the entry zone{zone_txt}). "
+            f"A shared new-entry check holds it today: {reason}. "
+            f"It clears when: {binding['clears_when']}."
+        ),
+        conditions_met=[
+            f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
+            f"Signal: {rec_label}",
+            f"Price {'in' if in_zone else 'near'} entry zone" + zone_txt,
+            f"R:R {rr:.1f}:1 — above {RR_ENTRY_MIN:.0f}:1 minimum" if rr else "",
+        ],
+        conditions_missing=[h["reason"] for h in holds],
+        institutional_lens=(
+            "A new entry is called only when every entry check agrees. A setup that is "
+            "right on its own numbers but held by the market, the calendar, the news or "
+            "the data is deferred, not rejected — it is re-checked every time."
+        ),
+        suppression_kind=_HOLD_SUPPRESSION_KIND.get(kind),
+        gate_value=binding.get("gate_value"),
+        gate_threshold=binding.get("gate_threshold"),
+    )
+    card["hold_kind"] = kind
+    card["holds"] = [dict(h) for h in holds]
+    card["hold_reason"] = reason
+    card["clears_when"] = binding["clears_when"]
+    card["unchecked"] = [dict(u) for u in unchecked]
+    return card
