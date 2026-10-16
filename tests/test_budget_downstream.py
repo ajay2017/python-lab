@@ -482,12 +482,12 @@ def test_watchlist_sizes_every_enter_now_ask_before_any_card_renders():
     pre = seg.index("_wl_bplan = _budget_downstream_plan(")
     loop = seg.index("for _wr in _wl_view:")
     assert pre < loop
-    assert seg.index("_wl_budget_asks.append") < loop
-    # asks are the ENTER_NOW, not-held, not-sold-today rows (the same set the
-    # loop replaces with a warning); composite = the card's score
-    asks = seg[seg.index("_wl_budget_asks = []"):pre]
-    for needle in ('_bw["action"] != "ENTER_NOW"', "_wl_held", "_wl_sold_today",
-                   '"composite": _bw["score"]'):
+    # asks are built by the pure budget_view.watchlist_asks (chunk 4 of the shared
+    # entry check): ENTER_NOW only, not-held, not-sold-today, composite = the
+    # card's score -- pinned at its boundaries in tests/test_watchlist_entry_page.py
+    assert seg.index("_budget_view.watchlist_asks(") < loop
+    asks = seg[seg.index("_wl_budget_asks = _budget_view.watchlist_asks("):pre]
+    for needle in ("_wl_recs", "_wl_held", "_wl_sold_today", "_f255_wl_pv"):
         assert needle in asks, needle
     # the row consumes the plan's result and keeps the F-255 size for the cap lines
     assert '_wl_ps = _wl_bud["ps"]' in seg

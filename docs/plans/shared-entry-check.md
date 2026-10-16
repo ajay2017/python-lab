@@ -3,7 +3,7 @@
 **Status: DESIGNED + OWNER-APPROVED 2026-10-16 (all 12 recommendations, D1-D12, plus additions A1-A4).
 Mockup v1 APPROVED 2026-10-16: `docs/mockups/2026-10-16-shared-entry-check-mockup.html`. Chunk 1 (golden
 master) DONE 2026-10-16 (`35ea1df`); chunk 2 DONE (`400b01c`, pushed); chunk 3 DONE (advisor ENTRY_HELD +
-G-28/G-29 capture, not wired to any surface yet); next chunk 4. Scope
+G-28/G-29 capture, `f71164b`); chunk 4 DONE (Watchlist page wiring, local); chunks 4-6 push together. Scope
 sweep DONE (results + owner decisions S-A..S-D below).**
 
 **Chunk 1 findings that bind later chunks:** (1) `_grow_today` takes the tone as an INPUT — the ±0.5 rule
@@ -202,6 +202,21 @@ ship any time after chunk 2.
    for every row (~28008-28024 → withhold on ENTRY_HELD, S-A), KPI "N held today" (~27746), label/icon/badge.
    `$`: existing card text renders through `_md_bold` inside raw HTML (safe); any hold text routed through
    st.info/caption/metric/plain markdown must escape `$`; "S&P" in hold text must go through safe_html.
+
+## Chunk 4 notes (Opus reviewer FIX-FIRST/1 → SHIP, 0 blocking, 2026-10-16) — carry into chunks 5-8
+- Round 1 blocking (fixed): the Protect banner said "matching 🏠 Home" when Home's own index read had failed
+  (Home ran the day as flat and sized picks) and the Watchlist's live read was bear. D2 stands (Home first,
+  then live; a live bear still defers); the banner now words each path truthfully via
+  `entry_eligibility.home_tone_state` (see `tone_source_line`).
+- **For chunk 5:** stamp `tone_read_at` on the headless market context too; decide whether G-28/G-29 rows
+  are written for ENTRY_HELD names already in the portfolio (no held filter in
+  `build_watchlist_suppression_rows`, same as G-05/06/13) — app and cron must match.
+- Known, accepted: held news cards omit the mockup's "Worst: '…'" headline line; the held card is several
+  stacked boxes (escaping rule); the A2 Trade Journal note reads only the Watchlist's `_wl_held_cache`.
+- Nits (optional): `home_tone_state(None, True)` → "tone failed" (unreachable today); the held card's
+  deterioration caption ends "Shown so you enter with eyes open".
+- Still showing an F-255 size on non-ENTER_NOW Watchlist rows (NEAR_ENTRY / WAIT / HOLD_OFF_EARNINGS /
+  REMOVE) — by current design; S-D.
 
 ## Scope sweep result (planner Opus 5.5, 2026-10-16, read-only, HEAD `c72e7b8`)
 Beyond the five surfaces above (+ the 11:30 intraday email, confirmed to re-run `compute_morning_picks` and

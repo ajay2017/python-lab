@@ -3753,6 +3753,39 @@ def load_budget_allocations_or_none(day) -> dict | None:
         return None
 
 
+def load_budget_allocation_times_or_none(day) -> dict | None:
+    """{TICKER: created_at} for the allocations pushed on ET date `day` -- the
+    time an email sized each name, for the Watchlist's "Emailed at 9:45 AM"
+    line (display only; the budget math reads load_budget_allocations_or_none).
+    None on ANY failure (no DB, untrustworthy `day`, missing table/column,
+    raised query, a result at the page cap); {} only when the read SUCCEEDED
+    and nothing was pushed. A row without a usable timestamp is simply absent
+    from the map (the line then says "today")."""
+    if not has_db() or day is None:
+        return None
+    d = _budget_day_iso(day)
+    if d is None:
+        return None
+    try:
+        data = (
+            _client().table("new_position_budget_allocations")
+            .select("ticker,created_at")
+            .eq("budget_date", d).order("ticker")
+            .limit(_BUDGET_ALLOC_PAGE_SIZE).execute().data
+        )
+        if data is None or len(data) >= _BUDGET_ALLOC_PAGE_SIZE:
+            return None
+        out: dict = {}
+        for r in data:
+            tk = str(r.get("ticker") or "").strip().upper()
+            ts = r.get("created_at")
+            if tk and ts:
+                out[tk] = str(ts)
+        return out
+    except Exception:
+        return None
+
+
 # PostgREST's own server-side default row cap on an unpaginated `.select()`.
 # Both load_recommendations() and load_recommendations_or_none() page in
 # chunks of this size via `.range()` rather than relying on a single call,

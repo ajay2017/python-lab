@@ -231,6 +231,7 @@ from stock_analyzer import act_today_precedence
 from stock_analyzer import home_notices as _home_notices_mod
 from stock_analyzer import act_today_pointer as _act_pointer_mod
 from stock_analyzer import budget_view as _budget_view
+from stock_analyzer import entry_eligibility as _entry_elig
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
     build_tax_analysis, _build_open_lots, holding_period_status, wash_sale_risk,
@@ -6361,6 +6362,9 @@ if page == "🏠 Home":
                 "leading_sectors": _lead_sectors,
                 # S&P row actually read (a missing row left _sp_pct at 0.0).
                 "tone_available":  _sp_row is not None,
+                # When this read happened (ET): the Watchlist's Protect banner
+                # prints it as the source time. Additive; absent on old bundles.
+                "tone_read_at":    _now_et(),
             }
         except Exception:
             _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": [], "tone_available": False}
@@ -6544,7 +6548,13 @@ if page == "🏠 Home":
                 st.session_state["_brief_built_at"] = datetime.now(_pytz.timezone("America/New_York"))
             except Exception:
                 _daily_brief    = None
-                _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": [], "tone_available": False}
+                # Keep the market context the build already READ (set just above
+                # on this MISS path): overwriting it with the flat fallback
+                # fabricated a +0.00% S&P and made the "tone couldn't be read"
+                # caption false after a brief crash (shared-entry-check chunk-2
+                # follow-up 5). Fall back only when it never became a dict.
+                if not isinstance(_market_context, dict):
+                    _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": [], "tone_available": False}
 
         # Daily new-position budget post-pass — BEFORE the rec-log capture below,
         # so the app-written new_pick / add_winner rows carry the budget-adjusted
@@ -27435,6 +27445,9 @@ elif page == "📋 Watchlist":
     # render's plan for 📈 Analysis to mirror; re-published once the plan is built.
     st.session_state["_wl_budget_plan_cache"] = None
     _stamp_coord(["_wl_budget_plan_cache"])
+    # Same for the held-today list the Trade Journal reads (None = not built).
+    st.session_state["_wl_held_cache"] = None
+    _stamp_coord(["_wl_held_cache"])
     st.title("📋 Watchlist Analysis")
     st.caption(
         "Your opportunity pipeline. Each stock on the watchlist is analysed for buy readiness — "
@@ -27636,6 +27649,76 @@ elif page == "📋 Watchlist":
     # Both must precede the recommendations they qualify.
     _render_portfolio_stale_banner(key_suffix="wl")
 
+    # ── Shared new-entry check: per-run context (docs/plans/shared-entry-check.md) ──
+    # Tone: today's Home Brief first (the same object Home renders), else a live
+    # read, else unavailable (fail OPEN with a visible note). Macro events the
+    # same way. Render-only wiring: the source order and every decision live in
+    # stock_analyzer/entry_eligibility.py.
+    _wl_tone_state = {"tone": None, "sp500_pct": None, "available": False,
+                      "source": None, "as_of": None}
+    _wl_home_state = _entry_elig.HOME_NOT_TODAY
+    _wl_home_b = None
+    _wl_home_is_today = False
+    # Tone and macro are read in SEPARATE try blocks: a macro failure must never
+    # discard a correctly-read tone (a bear day must not fail open because the
+    # macro build raised).
+    try:
+        _wl_home_syn = _get_or_offline(st.session_state, "_home_synth_cache")
+        _wl_home_is_today = (
+            _get_or_offline(_wl_home_syn, "date") == _today_et().isoformat())
+        _wl_home_b = (_get_or_offline(_wl_home_syn, "bundle")
+                      if _wl_home_is_today else None)
+        _wl_home_mc = _get_or_offline(_wl_home_b, "_market_context")
+        _wl_home_state = _entry_elig.home_tone_state(_wl_home_mc, _wl_home_is_today)
+        # The read time lives on the market context itself (None when absent).
+        _wl_read_at = _get_or_offline(_wl_home_mc, "tone_read_at")
+        _wl_tone_state = _entry_elig.resolve_tone_state(
+            _wl_home_mc, _wl_home_is_today, _wl_read_at, None, False)
+        if not _wl_tone_state["available"]:
+            _wl_live_pct = None
+            try:
+                _wl_idx = fetch_market_indices()
+                _wl_sp = next((i for i in _wl_idx if i["short"] == "S&P 500"), None)
+                _wl_live_pct = float(_wl_sp["change_pct"]) if _wl_sp else None
+            except Exception:
+                _wl_live_pct = None
+            _wl_tone_state = _entry_elig.resolve_tone_state(
+                None, False, None, _wl_live_pct, _wl_live_pct is not None)
+    except Exception:
+        _wl_tone_state = {"tone": None, "sp500_pct": None, "available": False,
+                          "source": None, "as_of": None}
+    _wl_macro_events_final = None
+    try:
+        _wl_home_events = _get_or_offline(_wl_home_b, "_macro_events")
+        _wl_live_events = None
+        if not (_wl_home_is_today and _wl_home_events is not None):
+            _wl_mc_key = f"_wl_macro_cal_{_today_et()}"
+            _wl_live_events = st.session_state.get(_wl_mc_key)
+            if _wl_live_events is None:
+                try:
+                    _wl_fred = (
+                        st.secrets.get("fred", {}).get("api_key")
+                        or os.environ.get("FRED_API_KEY", "")
+                    )
+                    _wl_live_events = build_macro_calendar(
+                        _wl_port_df, fred_key=_wl_fred or None,
+                        days_ahead=ECONOMIC_CALENDAR_WINDOW_DAYS, days_behind=7,
+                        today=_today_et(),
+                    )
+                    st.session_state[_wl_mc_key] = _wl_live_events
+                except Exception:
+                    _wl_live_events = None
+        _wl_macro_events_final = _entry_elig.pick_macro_events(
+            _wl_home_events, _wl_home_is_today, _wl_live_events)
+    except Exception:
+        _wl_macro_events_final = None
+    try:
+        _wl_run_ctx = _entry_elig.watchlist_run_ctx(
+            _wl_tone_state, _wl_macro_events_final, _today_et(), _now_et())
+    except Exception:
+        # Unreadable macro events -> "couldn't run" on every card, tone kept.
+        _wl_run_ctx = {"tone_state": _wl_tone_state, "macro_map": None}
+
     # ── Build recommendations ─────────────────────────────────────────────────
     _wl_recs: list[dict] = []
     # {TICKER (upper): sector} — captured alongside _wl_recs so the ENTER_NOW
@@ -27673,7 +27756,18 @@ elif page == "📋 Watchlist":
             "grow_today_sector_tickers": _wl_gt_sector_tickers,
         }
         try:
-            _wl_recs.append(build_watchlist_recommendation(_wt, _wd, portfolio_ctx=_wl_pctx))
+            # Per-ticker headlines: the same curate_news_items derivation Grow
+            # Today's candidates use (raw VADER over the bundle's news_raw, 8 per
+            # ticker); None on a failure reads as "no recent headlines to check".
+            try:
+                _wl_news_items = curate_news_items({_wt: _wd})
+            except Exception:
+                _wl_news_items = None
+            _wl_entry_ctx = _entry_elig.watchlist_ticker_ctx(
+                _wl_run_ctx, sector=_wl_ctx["sector"],
+                classified=_wl_ctx["classified"], news_items=_wl_news_items)
+            _wl_recs.append(build_watchlist_recommendation(
+                _wt, _wd, portfolio_ctx=_wl_pctx, entry_ctx=_wl_entry_ctx))
         except Exception:
             _wl_skipped.append(str(_wt))
 
@@ -27692,6 +27786,13 @@ elif page == "📋 Watchlist":
     # Sort: ENTER_NOW → NEAR_ENTRY → REMOVE → HOLD_OFF_EARNINGS → WAIT_ENTRY → WAIT_CATALYST
     # (actionable opportunities first — see sort_key_for_action for rationale)
     _wl_recs.sort(key=lambda x: sort_key_for_action(x["action"]))
+
+    # Today's held names for the Trade Journal BUY-confirm note (awareness only).
+    # Published only once the recs exist -- every early exit above leaves the
+    # page-start None (the offline sentinel), never an empty {} for a failure.
+    st.session_state["_wl_held_cache"] = _entry_elig.watchlist_held_cache(
+        _wl_recs, _today_et().isoformat())
+    _stamp_coord(["_wl_held_cache"])
 
     # ── Recommendations-log capture: ENTER_NOW (2026-09-09) ───────────────────
     # Grades the one Watchlist verdict that was never persisted/measured,
@@ -27744,6 +27845,7 @@ elif page == "📋 Watchlist":
 
     # ── KPI summary strip ─────────────────────────────────────────────────────
     _wl_enter    = sum(1 for r in _wl_recs if r["action"] == "ENTER_NOW")
+    _wl_heldtoday = sum(1 for r in _wl_recs if r["action"] == "ENTRY_HELD")
     _wl_near     = sum(1 for r in _wl_recs if r["action"] == "NEAR_ENTRY")
     _wl_remove   = sum(1 for r in _wl_recs if r["action"] == "REMOVE")
     _wl_unavail  = sum(1 for r in _wl_recs if r["action"] == "DATA_UNAVAILABLE")
@@ -27753,15 +27855,36 @@ elif page == "📋 Watchlist":
             "(fundamentals/valuation data unavailable) — no Remove/Enter call "
             "was made on them. See the **All** filter below."
         )
-    _wl_k1, _wl_k2, _wl_k3, _wl_k4 = st.columns(4)
+    _wl_k1, _wl_k2, _wl_kh, _wl_k3, _wl_k4 = st.columns(5)
     _wl_k1.metric("Watchlist size", len(_wl_recs))
     _wl_k2.metric("✅ Enter Now",    _wl_enter,
                   delta="Actionable" if _wl_enter else None,
                   delta_color="normal" if _wl_enter else "off")
+    _wl_kh.metric("⏸ Held today",   _wl_heldtoday)
     _wl_k3.metric("🟡 Near Entry",   _wl_near)
     _wl_k4.metric("🔴 Remove",       _wl_remove,
                   delta="Thesis broken" if _wl_remove else None,
                   delta_color="inverse" if _wl_remove else "off")
+
+    # Protect Mode / "couldn't run" disclosures (shared new-entry check). The
+    # wording and its conditions live in entry_eligibility.watchlist_banner.
+    _wl_banner = _entry_elig.watchlist_banner(
+        _wl_run_ctx.get("tone_state"), _wl_run_ctx.get("macro_map"), _wl_recs,
+        home_state=_wl_home_state, exclude=_wl_held | _wl_sold_today)
+    if _wl_banner["protect"] is not None:
+        _wl_pm = _wl_banner["protect"]
+        st.markdown(
+            f"<div style='padding:10px 14px;background:#2d1a05;border-radius:6px;"
+            f"border-left:4px solid #f59e0b;margin:6px 0 2px'>"
+            f"<span style='color:#fcd34d;font-weight:700'>{_safe_html(_wl_pm['title'])}</span><br>"
+            f"<span style='color:#eee;font-size:0.9em'>{_safe_html(_wl_pm['body'])}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if _wl_pm.get("source"):
+            st.caption(_wl_pm["source"])
+    for _wl_note in _wl_banner["notes"]:
+        st.caption(_wl_note)
 
     # ── Watchlist Resurrection (O4, Agentic Intelligence Roadmap v2) ─────────
     # One predicate drives BOTH this summary line and every per-card caption
@@ -27806,7 +27929,7 @@ elif page == "📋 Watchlist":
     # persisted selection survives a rerun where counts change — Streamlit
     # resets a widget's value when its options list itself changes shape.
     _WL_FILTER_LABELS = {
-        "actionable": f"🎯 Actionable ({_wl_enter + _wl_near})",
+        "actionable": f"🎯 Actionable ({_wl_enter + _wl_heldtoday + _wl_near})",
         "hold":       f"⚠️ Hold ({_wl_hold_count})",
         "wait":       f"⏳ Waiting ({_wl_wait_count})",
         "remove":     f"🔴 Remove ({_wl_remove})",
@@ -27836,7 +27959,7 @@ elif page == "📋 Watchlist":
         _wl_filter_sel = "actionable"
 
     if _wl_filter_sel == "actionable":
-        _wl_view = [r for r in _wl_recs if r["action"] in ("ENTER_NOW", "NEAR_ENTRY")]
+        _wl_view = [r for r in _wl_recs if r["action"] in ("ENTER_NOW", "ENTRY_HELD", "NEAR_ENTRY")]
     elif _wl_filter_sel == "hold":
         _wl_view = [r for r in _wl_recs if r["action"] == "HOLD_OFF_EARNINGS"]
     elif _wl_filter_sel == "wait":
@@ -27885,22 +28008,15 @@ elif page == "📋 Watchlist":
     # sized together, composite-first, from what is left after the emailed
     # allocations and Grow Today's picks/adds. A ticker that IS a Grow Today
     # pick today keeps its verdict but shows no second share count.
-    _wl_budget_asks = []
-    for _bw in _wl_recs:
-        if (_bw["action"] != "ENTER_NOW" or _bw["ticker"] in _wl_held
-                or _bw["ticker"] in _wl_sold_today):
-            continue   # same rows the per-ticker loop replaces with a warning
-        _bw_ps = None
-        if _bw["price"] and _bw["stop"] and _bw["price"] > _bw["stop"] and _f255_wl_pv > 0:
-            try:
-                _bw_ps = position_sizing(
-                    _f255_wl_pv, MODERATE_RISK_PCT, _bw["price"], _bw["stop"], SINGLE_NAME_CEILING,
-                    net_capital=_f255_wl_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
-                )
-            except Exception:
-                pass
-        _wl_budget_asks.append({"ticker": _bw["ticker"], "composite": _bw["score"],
-                                "price": _bw["price"], "ps": _bw_ps})
+    # Only ENTER_NOW cards ask (budget_view.watchlist_asks): an ENTRY_HELD name
+    # is never sized, so it takes no room from today's budget.
+    _wl_budget_asks = _budget_view.watchlist_asks(
+        _wl_recs, _wl_held, _wl_sold_today, _f255_wl_pv,
+        lambda _bw_px, _bw_stop: position_sizing(
+            _f255_wl_pv, MODERATE_RISK_PCT, _bw_px, _bw_stop, SINGLE_NAME_CEILING,
+            net_capital=_f255_wl_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+        ),
+    )
     _wl_bplan = _budget_downstream_plan(
         _f255_wl_pv, _f255_wl_net_cap, _f255_wl_basis, _f255_wl_acct, _wl_budget_asks)
     # Publish the Watchlist's ASKS (not its results) for 📈 Analysis: Analysis
@@ -27927,6 +28043,20 @@ elif page == "📋 Watchlist":
             st.caption(_wl_bo)
 
     # ── Per-ticker rows ────────────────────────────────────────────────────────
+    _wl_held_hdr_done = False
+    _wl_held_hdr_closed = False
+    # Today's emailed allocations (read-only) for the "Emailed at ... now deferred"
+    # line on a held card; None / {} = nothing to say. Fetched once, and only
+    # when a held card exists. The allocation stays counted in the budget.
+    _wl_alloc_map = None
+    _wl_alloc_times = None
+    if any(_r.get("action") == "ENTRY_HELD" for _r in _wl_view):
+        _wl_alloc_map = _budget_strict_allocations()
+        if _wl_alloc_map:
+            try:
+                _wl_alloc_times = db.load_budget_allocation_times_or_none(_today_et())
+            except Exception:
+                _wl_alloc_times = None
     for _wr in _wl_view:
         _action   = _wr["action"]
         _priority = _wr["priority"]
@@ -27935,10 +28065,13 @@ elif page == "📋 Watchlist":
         # Override ENTER_NOW if ticker is already in the portfolio — buying again would
         # blindly add to an existing position without checking current size or signal.
         _already_held = _ticker in _wl_held
-        if _action == "ENTER_NOW" and _already_held:
+        if _action in ("ENTER_NOW", "ENTRY_HELD") and _already_held:
             st.warning(
                 f"**{_ticker} — Already in Portfolio** · "
-                "This watchlist recommendation says ENTER NOW, but you already hold this position. "
+                + ("This name was ready on its own numbers but is held today, and you already "
+                 if _action == "ENTRY_HELD" else
+                 "This watchlist recommendation says ENTER NOW, but you already ")
+                + "hold this position. "
                 "Check Today's Brief for the current add/hold/sell signal instead.",
                 icon="⚠️",
             )
@@ -27951,11 +28084,13 @@ elif page == "📋 Watchlist":
         # check above lets it through, but the Daily Brief already blocks a
         # same-day re-buy and the cron never emails it. Captured for grading
         # like any ENTER_NOW; only the card is replaced.
-        if _action == "ENTER_NOW" and _ticker in _wl_sold_today:
+        if _action in ("ENTER_NOW", "ENTRY_HELD") and _ticker in _wl_sold_today:
             st.warning(
                 f"**{_ticker} — Sold Today** · "
-                "This watchlist recommendation says ENTER NOW, but you sold this "
-                "position today. A same-day re-entry isn't recommended; if the "
+                + ("This name was ready on its own numbers but is held today, and you sold this "
+                   if _action == "ENTRY_HELD" else
+                   "This watchlist recommendation says ENTER NOW, but you sold this ")
+                + "position today. A same-day re-entry isn't recommended; if the "
                 "setup still qualifies, the card returns tomorrow.",
                 icon="⚠️",
             )
@@ -27963,6 +28098,7 @@ elif page == "📋 Watchlist":
 
         _a_icon   = {
             "ENTER_NOW":         "✅",
+            "ENTRY_HELD":        "⏸",
             "NEAR_ENTRY":        "🎯",
             "WAIT_ENTRY":        "⏳",
             "WAIT_CATALYST":     "👁️",
@@ -27974,6 +28110,7 @@ elif page == "📋 Watchlist":
         # reads "Ready to Enter" (the fuller card-title phrase).
         _a_label  = {
             "ENTER_NOW":         "Ready to Enter",
+            "ENTRY_HELD":        _entry_elig.held_label(_wr),
             "NEAR_ENTRY":        "Near Entry",
             "WAIT_ENTRY":        "Wait for Entry",
             "WAIT_CATALYST":     "Wait for Catalyst",
@@ -27986,10 +28123,13 @@ elif page == "📋 Watchlist":
             "READY":   "#00C851",   # ENTER_NOW — green, matches the action-card badge
             "MONITOR": "#4a9eff",
         }.get(_priority, "#888")
+        if _action == "ENTRY_HELD":
+            _bclr = "#f59e0b"   # held today: amber, like its badge
         # Row badge colors (bg, fg, border) — distinct from _bclr, which colors
         # the inner detail banners by priority rather than by action.
         _a_bg, _a_fg, _a_bd = {
             "ENTER_NOW":         ("#052e16", "#4ade80", "#16a34a"),
+            "ENTRY_HELD":        ("#2d1a05", "#fcd34d", "#f59e0b"),
             "NEAR_ENTRY":        ("#3b2a0a", "#fcd34d", "#d97706"),
             "WAIT_ENTRY":        ("#1e293b", "#93c5fd", "#3b82f6"),
             "WAIT_CATALYST":     ("#1e293b", "#93c5fd", "#3b82f6"),
@@ -28007,7 +28147,9 @@ elif page == "📋 Watchlist":
         # Position sizing for this watchlist candidate
         _pv_now = st.session_state.get("_portfolio_value") or 0.0
         _wl_ps = None
-        if _price and _stop and _price > _stop and _pv_now > 0:
+        # ENTRY_HELD is held today: no size is computed or shown (OP-07, S-A).
+        if (_action != "ENTRY_HELD" and _price and _stop and _price > _stop
+                and _pv_now > 0):
             try:
                 _wl_ps = position_sizing(
                     _pv_now, MODERATE_RISK_PCT, _price, _stop, SINGLE_NAME_CEILING,
@@ -28025,6 +28167,18 @@ elif page == "📋 Watchlist":
 
         _row_open_key = f"_wl_row_open_{_ticker}"
         _row_is_open  = st.session_state.get(_row_open_key, False)
+
+        if (_wl_held_hdr_done and not _wl_held_hdr_closed and _action != "ENTRY_HELD"
+                and _wl_sort_sel == "Priority (default)"):
+            _wl_held_hdr_closed = True
+            st.divider()
+            st.markdown("**Other watchlist names**")
+        if (_action == "ENTRY_HELD" and not _wl_held_hdr_done
+                and _wl_sort_sel == "Priority (default)"):
+            _wl_held_hdr_done = True
+            st.markdown("**⏸ Held today**")
+            st.caption("Ready on their own numbers, held by a shared entry check "
+                       "(market, calendar, news or data). Re-checked every time you open this page.")
 
         with st.container(border=True):
             _rc1, _rc2 = st.columns([1, 24])
@@ -28110,6 +28264,38 @@ elif page == "📋 Watchlist":
                 unsafe_allow_html=True,
             )
 
+            # ENTRY_HELD (shared new-entry check): why it is held, when it clears,
+            # every hold if there are several, and the emailed-then-deferred line.
+            # Hold text carries "S&P" and "$" -> through _safe_html (raw HTML).
+            if _action == "ENTRY_HELD":
+                st.markdown(
+                    f"<div style='padding:8px 14px;background:#2d1a05;border-radius:6px;"
+                    f"border-left:4px solid #f59e0b;margin:6px 0 2px;font-size:0.72em;"
+                    f"color:#f59e0b;font-weight:700;letter-spacing:0.09em;"
+                    f"text-transform:uppercase'>{_safe_html(_entry_elig.held_label(_wr))}</div>",
+                    unsafe_allow_html=True,
+                )
+                for _h in _wr["holds"]:
+                    st.markdown(
+                        f"<div style='padding:2px 14px;color:#fcd34d;font-size:0.88em'>"
+                        f"⏸ {_safe_html(_h['reason'])}</div>",
+                        unsafe_allow_html=True,
+                    )
+                st.markdown(
+                    f"<div style='padding:2px 14px 8px;color:#9ca3af;font-size:0.82em'>"
+                    f"Clears when: {_safe_html(_wr['clears_when'])}</div>",
+                    unsafe_allow_html=True,
+                )
+                _wl_em_line = _entry_elig.emailed_then_held_line(
+                    _wr, _wl_alloc_map, _wl_alloc_times)
+                if _wl_em_line:
+                    st.caption(_wl_em_line.replace("$", "\\$"))
+                st.caption(_entry_elig.held_budget_footer(_wl_em_line, _wl_alloc_map))
+            # An eligible ENTER_NOW whose entry check could not run an input says so.
+            _wl_unchecked = _wr.get("entry_unchecked")
+            for _un in ([] if _wl_unchecked is None else _wl_unchecked):
+                st.caption(f"⚠️ {str(_un.get('why', '')).replace('$', chr(92) + '$')}")
+
             # For HOLD_OFF_EARNINGS: show when to return once earnings clear.
             if _action == "HOLD_OFF_EARNINGS" and _earn_d is not None and _earn_d >= 0:
                 from datetime import timedelta as _hoe_td
@@ -28169,7 +28355,8 @@ elif page == "📋 Watchlist":
                             f"✓ {_md_bold(_cm)}</div>",
                             unsafe_allow_html=True,
                         )
-                if _wr["conditions_missing"]:
+                # ENTRY_HELD lists its holds in the amber box above instead.
+                if _wr["conditions_missing"] and _action != "ENTRY_HELD":
                     st.markdown("**⏳ Conditions pending**")
                     for _cp in _wr["conditions_missing"]:
                         st.markdown(
@@ -28236,7 +28423,7 @@ elif page == "📋 Watchlist":
                     # Size withheld by the daily budget / already sized in Grow
                     # Today -- say which, not the generic "can't size" caption.
                     st.caption(_wl_bud["note"])
-                elif _price:
+                elif _price and _action != "ENTRY_HELD":
                     # Same two/three-cause split as Analysis — see the note there.
                     _wl_no_size_reason = sizing_unavailable_reason(
                         _pv_now, _price, _stop, SINGLE_NAME_CEILING,
@@ -29297,6 +29484,13 @@ elif page == "📒 Trade Journal":
                                 "(the budget check failed) — this entry is not blocked."}
         if _pb_prev["text"]:
             st.caption(_pb_prev["text"].replace("$", "\\$"))
+        # Held-today awareness (shared new-entry check): today's Watchlist plan
+        # says this name is held back from a new entry. Never blocks or alters
+        # the trade; None (cache not built / not today's / not held) says nothing.
+        _pb_hold_note = _entry_elig.journal_hold_note(
+            _pb_ticker, st.session_state.get("_wl_held_cache"), _today_et().isoformat())
+        if _pb_hold_note:
+            st.caption(_pb_hold_note.replace("$", "\\$"))
         _pb_c1, _pb_c2 = st.columns([1, 1])
         if _pb_c1.button("✅ Confirm BUY", type="primary", key="_tj_confirm_buy",
                           width="stretch",

@@ -638,6 +638,19 @@ def build_watchlist_recommendation(
         # Shared new-entry check (chunk 3): AFTER the hard fit gates above, so a
         # G-05/G-06/G-13 downgrade keeps precedence. Only this branch is
         # affected (D9) — REMOVE/NEAR_ENTRY/WAIT/HOLD_OFF_EARNINGS are untouched.
+        # Computed BEFORE the hold decision so a held card carries them too
+        # (chunk-3 review item 6). Pure; the legacy path's output is unchanged.
+        _cand_det = exit_advisor.candidate_deterioration_flag(
+            ticker, data.get("df"), spy_df, price=price, atr=data.get("atr"),
+        )
+        _det_warning = exit_advisor.candidate_deterioration_caption(
+            _cand_det, ticker, verdict_phrase="ENTER NOW",
+        )
+        # A held card is not an ENTER NOW call: same flag, its own phrase.
+        _det_warning_held = exit_advisor.candidate_deterioration_caption(
+            _cand_det, ticker, verdict_phrase="ready on its own numbers",
+        )
+
         _entry_unchecked = None
         if entry_ctx is not None:
             try:
@@ -652,20 +665,24 @@ def build_watchlist_recommendation(
                 )
             except Exception:
                 _chk = None   # fail CLOSED: _entry_held_card builds check_failed
-            _held_card = _entry_held_card(
-                ticker, _chk, score, rec_label, price, entry_lo, entry_hi,
-                stop, rr, earn_days, in_zone,
-            )
+            _held_args = (score, rec_label, price, entry_lo, entry_hi,
+                          stop, rr, earn_days, in_zone)
+            try:
+                _held_card = _entry_held_card(
+                    ticker, _chk, *_held_args,
+                    portfolio_caution=soft_caution, deterioration_warning=_det_warning_held,
+                )
+                _unchk = None if _chk is None else _chk.get("unchecked")
+                _entry_unchecked = [] if _unchk is None else list(_unchk)
+            except Exception:
+                # A malformed check result must still be a VISIBLE held card,
+                # never a dropped name (chunk-3 review item 2).
+                _held_card = _entry_held_card(
+                    ticker, None, *_held_args,
+                    portfolio_caution=soft_caution, deterioration_warning=_det_warning_held,
+                )
             if _held_card is not None:
                 return _held_card
-            _entry_unchecked = list(_chk["unchecked"])
-
-        _cand_det = exit_advisor.candidate_deterioration_flag(
-            ticker, data.get("df"), spy_df, price=price, atr=data.get("atr"),
-        )
-        _det_warning = exit_advisor.candidate_deterioration_caption(
-            _cand_det, ticker, verdict_phrase="ENTER NOW",
-        )
 
         _enter_card = _card(
             ticker, "ENTER_NOW", score, rec_label, price, entry_lo, entry_hi,
@@ -985,7 +1002,8 @@ _HOLD_SUPPRESSION_KIND = {"tone": "entry_tone", "macro": "entry_macro"}
 
 
 def _entry_held_card(ticker, chk, score, rec_label, price, entry_lo, entry_hi,
-                     stop, rr, earn_days, in_zone):
+                     stop, rr, earn_days, in_zone,
+                     portfolio_caution=None, deterioration_warning=None):
     """ENTRY_HELD card when the shared entry check holds a would-be ENTER_NOW,
     else None (eligible). ``chk is None`` means the check raised: fail CLOSED
     (hold_kind "check_failed", no suppression_kind, so no ledger row).
@@ -1005,7 +1023,24 @@ def _entry_held_card(ticker, chk, score, rec_label, price, entry_lo, entry_hi,
     else:
         if chk["eligible"]:
             return None
-        holds, binding, unchecked = chk["holds"], chk["binding"], chk["unchecked"]
+        _h = chk.get("holds")
+        holds = [] if _h is None else list(_h)
+        binding = chk.get("binding")
+        _u = chk.get("unchecked")
+        unchecked = [] if _u is None else list(_u)
+        if binding is None:
+            binding = holds[0] if holds else {}
+        # A hold missing a key keeps the card visible: read with defaults.
+        _norm = lambda h: {
+            "check": h.get("check") or "check_failed",
+            "gate_id": h.get("gate_id"),
+            "reason": h.get("reason") or "entry check held this name",
+            "clears_when": h.get("clears_when") or "the entry check passes — reload the page",
+            "gate_value": h.get("gate_value"),
+            "gate_threshold": h.get("gate_threshold"),
+        }
+        holds = [_norm(h) for h in holds]
+        binding = _norm(binding)
 
     kind = binding["check"]
     reason = binding["reason"]
@@ -1039,10 +1074,12 @@ def _entry_held_card(ticker, chk, score, rec_label, price, entry_lo, entry_hi,
         suppression_kind=_HOLD_SUPPRESSION_KIND.get(kind),
         gate_value=binding.get("gate_value"),
         gate_threshold=binding.get("gate_threshold"),
+        portfolio_caution=portfolio_caution,
+        deterioration_warning=deterioration_warning,
     )
     card["hold_kind"] = kind
     card["holds"] = [dict(h) for h in holds]
     card["hold_reason"] = reason
     card["clears_when"] = binding["clears_when"]
-    card["unchecked"] = [dict(u) for u in unchecked]
+    card["entry_unchecked"] = [dict(u) for u in unchecked]   # one key name (item 5)
     return card

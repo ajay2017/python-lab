@@ -11,6 +11,7 @@ Pure: no clock reads (``now_et`` / ``today`` are always passed in), no app or
 """
 from __future__ import annotations
 
+import math
 from datetime import date, time as _time
 
 from stock_analyzer.constants import (
@@ -33,13 +34,21 @@ def classify_tone(sp500_pct) -> str:
     )
 
 
+def _finite(x) -> bool:
+    """A real, finite number (NaN / inf / bool / None / str are not)."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
 def resolve_tone_state(home_ctx, home_is_today, home_built_at, live_pct, live_ok) -> dict:
-    """Today's Home market context first, else the live read, else unavailable."""
+    """Today's Home market context first, else the live read, else unavailable.
+
+    A NaN / inf S&P change reads as unavailable on both legs (never classified)."""
     if (
         home_is_today
         and isinstance(home_ctx, dict)
         and home_ctx.get("tone_available") is True
         and home_ctx.get("tone") is not None
+        and _finite(home_ctx.get("sp500_pct"))
     ):
         return {
             "tone": home_ctx.get("tone"),
@@ -48,7 +57,7 @@ def resolve_tone_state(home_ctx, home_is_today, home_built_at, live_pct, live_ok
             "source": "home",
             "as_of": home_built_at,
         }
-    if live_ok and live_pct is not None:
+    if live_ok and _finite(live_pct):
         return {
             "tone": classify_tone(live_pct),
             "sp500_pct": live_pct,
@@ -200,12 +209,24 @@ def check_macro(ctx):
     if bm is None:
         return {"kind": "unchecked", "check": "macro",
                 "why": "macro calendar unavailable — the macro-event check couldn't run"}
+    if not isinstance(bm, dict) or bm.get("sectors") is None:
+        # A map without its blocked-sector set is malformed, not "nothing
+        # blocked": say the check couldn't run rather than pass silently.
+        return {"kind": "unchecked", "check": "macro",
+                "why": "macro calendar unreadable — the macro-event check couldn't run"}
     # The hold is decided on SET MEMBERSHIP; the reason string only words it.
-    sectors = bm["sectors"]
-    reasons = bm["reasons"]
+    # Safe defaults (explicit None handling) so `{}` is a pass, not a crash.
+    sectors = bm.get("sectors")
+    reasons = bm.get("reasons")
+    reasons = {} if reasons is None else reasons
     sector = ctx.get("sector")
     if "__ALL__" in sectors:
         r = reasons.get("__ALL__")
+    elif not sector:
+        # A falsy sector can't be matched against a blocked-sector set: say so
+        # rather than pass silently (chunk-3 review item 3).
+        return {"kind": "unchecked", "check": "macro",
+                "why": "sector unknown — the macro-event check couldn't run"}
     elif sector in sectors:
         r = reasons.get(sector)
     else:
@@ -285,3 +306,236 @@ def entry_check(*, bundle=None, tone_state=None, sector=None, macro_map=None,
         "binding": holds[0] if holds else None,
         "unchecked": unchecked,
     }
+
+
+# ── Watchlist wiring helpers (chunk 4) ───────────────────────────────────────
+# Pure: app.py reads the caches / makes the live fetches and passes the RESULTS
+# in; every decision (which tone source, which hold reads how) is here.
+def news_ctx_from_items(items):
+    """``{"compound", "n", "headline"}`` from curated headline items (the
+    ``data.curate_news_items`` shape: ``title`` + raw-VADER ``compound``), or
+    None when there are none (-> check_news's "no recent headlines")."""
+    items = [n for n in (items or []) if isinstance(n, dict)]
+    if not items:
+        return None
+    worst = min(items, key=lambda n: n.get("compound", 0))
+    return {"compound": news_compound(items), "n": len(items),
+            "headline": worst.get("title")}
+
+
+def pick_macro_events(home_events, home_is_today, live_events):
+    """Today's Home brief's macro events first, else the live calendar read.
+    None (= unchecked) only when neither is available; ``[]`` is a real
+    "checked, none"."""
+    if home_is_today and home_events is not None:
+        return home_events
+    return live_events
+
+
+def watchlist_run_ctx(tone_state, macro_events, today: date, now_et) -> dict:
+    """The per-run part of an ``entry_ctx``: the tone state (from
+    ``resolve_tone_state``) and the macro block map (None when the events
+    couldn't be loaded -> check_macro's "unchecked")."""
+    return {"tone_state": tone_state,
+            "macro_map": macro_block_map(macro_events, today, now_et)}
+
+
+def watchlist_ticker_ctx(run_ctx, *, sector, classified, news_items) -> dict:
+    """The full per-ticker ``entry_ctx``. ``sector`` is the curated
+    ``sector_gate_context`` sector and is passed ONLY when ``classified`` (else
+    None -> check_macro says "sector unknown"). ``news_items`` None / empty =
+    headlines couldn't be read or none exist (-> "no recent headlines to
+    check")."""
+    return {
+        "tone_state": run_ctx.get("tone_state"),
+        "macro_map": run_ctx.get("macro_map"),
+        "news": news_ctx_from_items(news_items),
+        "sector": sector if classified else None,
+    }
+
+
+def _fmt_clock(dt) -> "str | None":
+    try:
+        hour = dt.hour % 12 or 12
+        return f"{hour}:{dt.minute:02d} {'AM' if dt.hour < 12 else 'PM'}"
+    except Exception:
+        return None
+
+
+HOME_TODAY_OK = "home_today_ok"
+HOME_TODAY_TONE_FAILED = "home_today_tone_failed"
+HOME_NOT_TODAY = "home_not_today"
+
+
+def home_tone_state(home_ctx, home_is_today) -> str:
+    """How Home's Brief stands for TODAY's tone: built today with a real read,
+    built today but its index read failed (Home then runs the day as flat), or
+    not built today. Drives the Protect banner's wording only."""
+    if not home_is_today:
+        return HOME_NOT_TODAY
+    if isinstance(home_ctx, dict) and home_ctx.get("tone_available") is True:
+        return HOME_TODAY_OK
+    return HOME_TODAY_TONE_FAILED
+
+
+def _fmt_read_time(as_of) -> "str | None":
+    clock = _fmt_clock(as_of)
+    return None if clock is None else clock
+
+
+def tone_source_line(tone_state, home_state=None) -> "str | None":
+    """Where the tone came from, worded so it is true on every path.
+
+    home  -> "Market read from Home's Brief, 9:42 AM ET." (time omitted when
+             the context carries none);
+    live  -> says why Home's read wasn't used when ``home_state`` tells us;
+    unavailable -> None (the caller says the check couldn't run instead)."""
+    if not isinstance(tone_state, dict) or not tone_state.get("available"):
+        return None
+    if tone_state.get("source") == "home":
+        clock = _fmt_read_time(tone_state.get("as_of"))
+        return ("Market read from Home's Brief" + (f", {clock} ET" if clock else "") + ".")
+    if home_state == HOME_TODAY_TONE_FAILED:
+        return ("Market read live — 🏠 Home's Brief couldn't read the market this run "
+                "and is treating today as flat (its picks were not deferred).")
+    if home_state == HOME_NOT_TODAY:
+        return "Market read live (🏠 Home's Brief isn't built today)."
+    return "Market read live."
+
+
+def watchlist_banner(tone_state, macro_map, recs, home_state=None, exclude=()) -> dict:
+    """What the top of the Actionable view says.
+
+    ``{"protect": None | {"title", "body", "source"}, "notes": [str, ...]}``.
+    ``protect`` is set on a bear tone; "matching 🏠 Home" is said ONLY when the
+    tone really came from Home's Brief. The "would otherwise be Ready" list is
+    names held ONLY by the tone check and not replaced by an Already-in-
+    Portfolio / Sold-Today override (``exclude``). ``notes`` carries the
+    fail-open "couldn't run" disclosures."""
+    notes: list = []
+    protect = None
+    ts = tone_state if isinstance(tone_state, dict) else {}
+    if not ts.get("available"):
+        notes.append("⚠️ The bear-day check couldn't run (market tone unavailable) — "
+                     "entries are shown, not deferred.")
+    elif ts.get("tone") == "bear":
+        pct = ts.get("sp500_pct")
+        pct_txt = f"{pct:+.1f}%" if _finite(pct) else "down"
+        skip = {str(x).upper() for x in (exclude or ())}
+        tickers = []
+        for r in (recs if recs is not None else []):
+            if not (isinstance(r, dict) and r.get("action") == "ENTRY_HELD"):
+                continue
+            if str(r.get("ticker", "")).upper() in skip:
+                continue
+            holds = r.get("holds")
+            holds = [] if holds is None else holds
+            if holds and all(isinstance(h, dict) and h.get("check") == "tone" for h in holds):
+                tickers.append(str(r.get("ticker")))
+        n = len(tickers)
+        matching = " matching 🏠 Home." if ts.get("source") == "home" else ""
+        protect = {
+            "title": (f"🛡️ Protect Mode — S&P {pct_txt} "
+                      f"(risk-off at {MARKET_TONE_BEAR_PCT:g}% or worse)."),
+            "body": ("New entries deferred," + matching if matching else "New entries deferred.")
+                    + (f" {n} name{'s' if n != 1 else ''} would otherwise be "
+                       f"Ready: {', '.join(tickers)}." if n else ""),
+            "source": tone_source_line(ts, home_state),
+        }
+    if macro_map is None:
+        notes.append("⚠️ The macro-event check couldn't run (macro calendar unavailable) — "
+                     "entries are shown, not held for it.")
+    return {"protect": protect, "notes": notes}
+
+
+def held_budget_footer(em_line, allocs) -> str:
+    """The sentence under a held card. The "not counted against today's budget"
+    claim is made ONLY when the emailed-allocation record was actually read
+    (``allocs`` not None) and holds nothing for the name (no emailed line)."""
+    base = "No size and no trade button while held."
+    if em_line:
+        return base
+    if allocs is None:
+        return base
+    return base + " Not counted against today's new-position budget."
+
+
+def watchlist_held_cache(recs, day_iso) -> "dict | None":
+    """``{"day", "held": {TICKER: hold_reason}}`` over the ENTRY_HELD cards, or
+    None when there are no recs to read (the page couldn't build them -- never
+    ``{}`` for failure; an empty ``held`` means checked, nothing held)."""
+    if recs is None:
+        return None
+    held = {}
+    for r in recs:
+        if isinstance(r, dict) and r.get("action") == "ENTRY_HELD":
+            held[str(r.get("ticker", "")).upper()] = (
+                r.get("hold_reason") or "held by the shared entry check")
+    return {"day": day_iso, "held": held}
+
+
+def journal_hold_note(ticker, held_cache, today_iso) -> "str | None":
+    """Trade Journal BUY-confirm awareness: 'Note: X is held today — <reason>.'
+    None when the cache is unreadable / not today's / the ticker isn't held --
+    it never claims "not held" and never blocks."""
+    if not isinstance(held_cache, dict) or held_cache.get("day") != today_iso:
+        return None
+    held = held_cache.get("held")
+    if not isinstance(held, dict):
+        return None
+    tk = str(ticker or "").upper()
+    if tk not in held:
+        return None
+    return f"Note: {tk} is held today — {held[tk]}."
+
+
+def emailed_then_held_line(card, allocs, alloc_times) -> "str | None":
+    """'Emailed at 9:45 AM with 6 sh — now deferred: <reason>' for an
+    ENTRY_HELD card whose name was already sized in an email today; else None.
+    The allocation is only READ -- it stays counted against today's budget."""
+    if not isinstance(card, dict) or card.get("action") != "ENTRY_HELD":
+        return None
+    tk = str(card.get("ticker", "")).upper()
+    alloc = allocs.get(tk) if isinstance(allocs, dict) else None
+    if not isinstance(alloc, dict):
+        return None
+    sh = alloc.get("shares")
+    try:
+        sh_txt = f" with {float(sh):g} sh" if sh is not None and float(sh) > 0 else ""
+    except (TypeError, ValueError):
+        sh_txt = ""
+    clock = None
+    raw = alloc_times.get(tk) if isinstance(alloc_times, dict) else None
+    if raw is not None:
+        try:
+            import pytz
+            from datetime import datetime as _dt
+            d = raw if isinstance(raw, _dt) else _dt.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if d.tzinfo is not None:
+                d = d.astimezone(pytz.timezone("America/New_York"))
+            clock = _fmt_clock(d)
+        except Exception:
+            clock = None
+    when = f"at {clock}" if clock else "today"
+    reason = card.get("hold_reason") or "held by the shared entry check"
+    return f"Emailed {when}{sh_txt} — now deferred: {reason}"
+
+
+HELD_KIND_LABELS = {
+    "macro": "macro event",
+    "news": "negative news",
+    "stale": "stale data",
+    "earnings": "earnings",
+    "check_failed": "entry check couldn't run",
+}
+
+
+def held_label(card) -> str:
+    """Badge text of an ENTRY_HELD card: "Deferred — market risk-off" on a bear
+    tone, "Held: <kind>" otherwise ("Held today" if the kind is unknown)."""
+    kind = card.get("hold_kind") if isinstance(card, dict) else None
+    if kind == "tone":
+        return "Deferred — market risk-off"
+    if kind in HELD_KIND_LABELS:
+        return f"Held: {HELD_KIND_LABELS[kind]}"
+    return "Held today"

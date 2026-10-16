@@ -230,16 +230,18 @@ def build_watchlist_suppression_rows(
     source: str,
     sector_by_ticker: "dict | None" = None,
 ) -> "list[dict]":
-    """Build G-05/G-06/G-13 rows from Watchlist recommendation cards.
+    """Build G-05/G-06/G-13 (NEAR_ENTRY downgrades) and G-28/G-29 (ENTRY_HELD
+    holds) rows from Watchlist recommendation cards.
 
     `recs`: the list build_watchlist_recommendation() produces, one dict per
-    ticker. Only a card that was actually downgraded carries a
-    `suppression_kind` key (set at watchlist_advisor.py's hard-breach and
-    in-zone-R:R sites) — an ordinary ENTER_NOW/NEAR_ENTRY (approaching-zone)/
-    WAIT_*/REMOVE/DATA_UNAVAILABLE card has no such key and is skipped. Both
-    conditions (`action == "NEAR_ENTRY"` AND `suppression_kind` present) are
-    checked — belt-and-braces against a future card gaining one without the
-    other.
+    ticker. Only a card that was actually downgraded or held carries a
+    `suppression_kind` key (set at watchlist_advisor.py's hard-breach,
+    in-zone-R:R and shared-entry-check hold sites) — an ordinary
+    ENTER_NOW/WAIT_*/REMOVE/DATA_UNAVAILABLE card has no such key and is
+    skipped. G-05/06/13 need `action == "NEAR_ENTRY"` AND a fit kind; G-28
+    (macro, `entry_macro`) and G-29 (bear-day, `entry_tone`) need
+    `action == "ENTRY_HELD"`. A hold bound by stale/news/earnings/check_failed
+    carries no `suppression_kind` and records no row (plan D3).
 
     Sentinel: `recs` is None or [] → return [] (a missing/empty session means
     the gates never ran this pass — recording "nothing suppressed" would be

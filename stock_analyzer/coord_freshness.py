@@ -210,6 +210,16 @@ PORTFOLIO_DEPENDENT_KEYS: dict[str, dict] = {
                "against the current budget and sizes from what they leave, so "
                "a stale copy re-sizes asks the Watchlist no longer shows",
     },
+    # Added with the shared new-entry check (chunk 4): {day, held: {TICKER:
+    # hold reason}} of today's ENTRY_HELD Watchlist cards, read ONLY by the
+    # Trade Journal's BUY-confirm note (awareness, never blocks or sizes) --
+    # so DECORATIVE. None = the page couldn't build its recommendations (never
+    # {}); the reader then says nothing.
+    "_wl_held_cache": {
+        "producer": "watchlist", "tier": TIER_DECORATIVE,
+        "why": "today's names the Watchlist is holding back from a new entry; "
+               "the Trade Journal BUY confirm only notes it (awareness, never a gate)",
+    },
 }
 
 FRESH, STALE, ABSENT = "fresh", "stale", "absent"
@@ -399,6 +409,7 @@ _DIMENSION_LABELS = {
     "_pi_factor_tilt_cache": "factor exposure",
     "_new_position_budget_cache": "today's new-position budget",
     "_wl_budget_plan_cache": "Watchlist share counts",
+    "_wl_held_cache": "Watchlist held-today list",
 }
 
 
@@ -471,7 +482,7 @@ SURFACE_KEYS: dict[str, tuple] = {
               "_reduce_calls", "_new_position_budget_cache", "_wl_budget_plan_cache"),
     "judge": ("_reduce_calls",),
     "tj":    ("_acct_gate_cache", "_actions_cache", "_grow_composites", "_highbeta_share",
-              "_port_risk_cache"),
+              "_port_risk_cache", "_wl_held_cache"),
     "tr":    (),
     # NOT ("_leverage_cache",): app.py ~30041 states outright that 💰 Account
     # computes its panel live, "NOT from _leverage_cache". Claiming it here

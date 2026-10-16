@@ -762,3 +762,30 @@ def buy_preview(inputs, trades_df, pending_dollars, today, now,
     return {"state": "unknown",
             "text": f"Daily new-buy budget couldn't be checked ({why}) — "
                     "this entry is not blocked."}
+
+
+def watchlist_asks(recs, held, sold_today, portfolio_value, sizing_fn) -> list:
+    """The Watchlist's budget asks: ONLY `action == "ENTER_NOW"` cards that
+    aren't held / sold today. ENTRY_HELD (a deferred or held name) and every
+    other action never ask -- a held name can't take budget room.
+
+    `sizing_fn(price, stop)` returns the F-255 `position_sizing` dict (the app
+    supplies it); any exception, a non-positive price/stop gap or a missing
+    portfolio value leaves `ps` None, exactly as the page did inline."""
+    asks = []
+    held = held or ()
+    sold_today = sold_today or ()
+    for r in (recs or []):
+        if (r.get("action") != "ENTER_NOW" or r.get("ticker") in held
+                or r.get("ticker") in sold_today):
+            continue   # same rows the per-ticker loop replaces with a warning
+        ps = None
+        if (r.get("price") and r.get("stop") and r["price"] > r["stop"]
+                and (portfolio_value or 0) > 0):
+            try:
+                ps = sizing_fn(r["price"], r["stop"])
+            except Exception:
+                pass
+        asks.append({"ticker": r["ticker"], "composite": r.get("score"),
+                     "price": r.get("price"), "ps": ps})
+    return asks

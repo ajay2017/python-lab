@@ -1,5 +1,7 @@
 """Chunk 3 of docs/plans/shared-entry-check.md: Watchlist ENTRY_HELD, the
 G-28/G-29 ledger rows and the registry ids."""
+import json
+import pathlib
 from datetime import timedelta
 
 import pytest
@@ -48,8 +50,19 @@ def _rec(data=None, ctx="default", **kw):
 
 
 # -- legacy path is byte-identical -------------------------------------------
+_GOLDEN = json.loads(
+    (pathlib.Path(__file__).parent / "fixtures" / "watchlist_advisor_legacy_golden.json")
+    .read_text(encoding="utf-8"))
+FROZEN_TODAY = __import__("datetime").date(2026, 10, 16)
+
+
+@pytest.fixture
+def frozen_clock(monkeypatch):
+    monkeypatch.setattr(watchlist_advisor, "_today_et", lambda: FROZEN_TODAY)
+
+
 def _legacy_fixtures():
-    soon = str(__import__("datetime").date.today() + timedelta(days=3))
+    soon = str(FROZEN_TODAY + timedelta(days=3))
     return [
         ("enter_now", _data(), None),
         ("soft", _data(), {"sector_weight_pct": 27.0, "sector_of_ticker": "Technology"}),
@@ -67,17 +80,20 @@ def _legacy_fixtures():
 
 
 @pytest.mark.parametrize("name,data,pctx", _legacy_fixtures(), ids=lambda v: v if isinstance(v, str) else "")
-def test_entry_ctx_none_is_byte_identical(name, data, pctx):
+def test_entry_ctx_none_is_byte_identical(name, data, pctx, frozen_clock):
     a = build_watchlist_recommendation("XYZ", data, portfolio_ctx=pctx)
     b = build_watchlist_recommendation("XYZ", data, portfolio_ctx=pctx, entry_ctx=None)
     assert a == b
-    assert repr(a) == repr(b)
+    # REAL golden (chunk-3 review item 1): repr frozen from the pre-entry_ctx
+    # advisor (git 400b01c), so this no longer compares new code with itself.
+    assert repr(a) == _GOLDEN[name]
+    assert repr(b) == _GOLDEN[name]
     # no entry-check key leaks onto a legacy card
     assert not ({"hold_kind", "holds", "hold_reason", "clears_when", "unchecked",
                  "entry_unchecked"} & set(a))
 
 
-def test_non_enter_now_branches_untouched_by_a_holding_ctx():
+def test_non_enter_now_branches_untouched_by_a_holding_ctx(frozen_clock):
     """D9: only the ENTER_NOW branch consults the check."""
     ctx = _ctx(tone_state=BEAR)
     for name, data, pctx in _legacy_fixtures():
@@ -209,7 +225,8 @@ def test_entry_held_card_carries_enter_now_fields_and_no_sizing():
             assert held[k] == ready[k]
     assert not (_SIZING_KEYS & set(held))
     assert held["readiness_pct"] < ready["readiness_pct"]
-    assert set(held) - set(ready) == {"hold_kind", "holds", "hold_reason", "clears_when", "unchecked"}
+    assert set(held) - set(ready) == {"hold_kind", "holds", "hold_reason", "clears_when"}
+    assert "entry_unchecked" in held and "entry_unchecked" in ready
 
 
 def test_sort_rank_entry_held_directly_after_enter_now_and_order_preserved():
