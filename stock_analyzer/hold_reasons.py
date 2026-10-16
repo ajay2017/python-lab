@@ -130,7 +130,7 @@ def budget_note(status, ctx=None) -> str:
                 f"({DAILY_NEW_POSITION_BUDGET_PCT:g}% of net capital) is already "
                 f"used. Resets tomorrow if it still qualifies.")
     if status == BUDGET_RESERVED:
-        return "Allocated in today's email"
+        return "Reserved by today's email run"
     if status == BUDGET_UNKNOWN:
         why = str(ctx.get("why") or "").strip() or "a required input was unavailable"
         return f"Size withheld — today's new-position budget couldn't be checked ({why})."
@@ -140,5 +140,5 @@ def budget_note(status, ctx=None) -> str:
 def budget_over_line(pct_used) -> str:
     """Logged buys alone are already above the budget."""
     return (f"Today's new buys are {_pct(pct_used, '?%')} of net capital — above the "
-            f"{DAILY_NEW_POSITION_BUDGET_PCT:g}% daily budget; nothing further "
+            f"{DAILY_NEW_POSITION_BUDGET_PCT:g}% daily budget; nothing new "
             f"sized today.")

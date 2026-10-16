@@ -231,8 +231,12 @@ class TestSurfaceNarrowing:
         # never session_state keys.
         for _k in cf.keys_for_surface("wl"):
             assert _k not in msg
+        # _new_position_budget_cache added with the daily new-position budget
+        # (chunk 4 registers it; chunk 5 makes Watchlist read it, since a size
+        # shown there is capped by the same budget).
         assert set(cf.keys_for_surface("wl")) == {
             "_grow_today_sectors_cache", "_port_risk_cache", "_risk_high_alerts_cache",
+            "_new_position_budget_cache",
         }
 
     def test_every_registered_surface_lists_only_real_registry_keys(self):
@@ -556,6 +560,9 @@ class TestApplyStampsRefusesTheOfflineSentinel:
             "_grow_today_sectors_cache": cf.ABSENT,
             "_risk_high_alerts_cache": cf.ABSENT,
             "_port_risk_cache": cf.STALE,
+            # never published in this scenario -> absent (silent), like the
+            # two failed producers above; mapped to `wl` by the daily budget.
+            "_new_position_budget_cache": cf.ABSENT,
         }
         # Only the genuinely-stale one speaks, and _port_risk_cache is
         # decision-tier, so it is a quiet caption -- NOT a warning claiming a

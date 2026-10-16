@@ -185,6 +185,17 @@ PORTFOLIO_DEPENDENT_KEYS: dict[str, dict] = {
         "producer": "home", "tier": TIER_DECORATIVE,
         "why": "names held tickers missing from _corr_df_cache",
     },
+    # Added with the daily new-position budget (chunk 4). GATE tier: it caps the
+    # SIZE of every new buy/add; stale (a buy logged since) means a size shown
+    # from a budget that no longer has that room. The post-trade republisher
+    # re-counts it from a fresh strict trades read and stamps it, like
+    # _acct_gate_cache; None = "couldn't check" (never stamped).
+    "_new_position_budget_cache": {
+        "producer": "home", "tier": TIER_GATE,
+        "why": "daily new-position budget (40% of net capital); caps the sum of "
+               "a day's new buys, so a stale count can show a size the budget "
+               "no longer has room for",
+    },
 }
 
 FRESH, STALE, ABSENT = "fresh", "stale", "absent"
@@ -371,6 +382,7 @@ _DIMENSION_LABELS = {
     "_mirror_overexp": "Investor Mirror",
     "_mirror_overhangs": "Investor Mirror",
     "_pi_factor_tilt_cache": "factor exposure",
+    "_new_position_budget_cache": "today's new-position budget",
 }
 
 
@@ -440,7 +452,7 @@ SURFACE_KEYS: dict[str, tuple] = {
               "_port_risk_cache", "_corr_coverage_cache", "_corr_unchecked_cache"),
     "macro": (),
     "an":    ("_mirror_orphans", "_mirror_overexp", "_mirror_overhangs", "_port_risk_cache",
-              "_reduce_calls"),
+              "_reduce_calls", "_new_position_budget_cache"),
     "judge": ("_reduce_calls",),
     "tj":    ("_acct_gate_cache", "_actions_cache", "_grow_composites", "_highbeta_share",
               "_port_risk_cache"),
@@ -454,7 +466,8 @@ SURFACE_KEYS: dict[str, tuple] = {
     "ec":    (),
     "me":    ("_mirror_orphans", "_mirror_overexp", "_mirror_overhangs", "_port_risk_cache",
               "_reduce_calls"),
-    "wl":    ("_grow_today_sectors_cache", "_port_risk_cache", "_risk_high_alerts_cache"),
+    "wl":    ("_grow_today_sectors_cache", "_port_risk_cache", "_risk_high_alerts_cache",
+              "_new_position_budget_cache"),
 }
 
 

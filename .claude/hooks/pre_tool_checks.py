@@ -919,6 +919,7 @@ _GATE_FILES = {
     # Daily new-position budget (added 2026-10-15): the pure decision that
     # caps the SUM of a day's new-position sizing across every surface.
     "stock_analyzer/daily_budget.py",
+    "stock_analyzer/budget_view.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,

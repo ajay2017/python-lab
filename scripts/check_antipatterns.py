@@ -151,7 +151,7 @@ _SENTINEL_KEYS = frozenset({
     "_reduce_calls", "_day_shock_cache", "_structural_alert_cache", "_dpnl_cache",
     "_leading_sectors_cache", "_market_tone_cache", "_mirror_orphans",
     "_mirror_overexp", "_mirror_overhangs", "_pi_factor_tilt_cache",
-    "_broker_drift_cache", "_home_synth_cache",
+    "_broker_drift_cache", "_home_synth_cache", "_new_position_budget_cache",
 })
 
 # The RENDER LAYER: the two entrypoints, which together are ~40k lines that no

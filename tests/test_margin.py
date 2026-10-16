@@ -319,6 +319,7 @@ _GATE_MODULES = [
     "stock_analyzer.bundle_loader",
     "stock_analyzer.watchlist_advisor",
     "stock_analyzer.daily_budget",
+    "stock_analyzer.budget_view",
 ]
 
 

@@ -72,3 +72,72 @@ def test_each_grow_today_block_branches_on_every_marker():
     markers = _producer_markers()
     for keys in _consumer_blocks():
         assert markers <= keys, f"missing branches: {sorted(markers - keys)}"
+
+
+# ── Daily new-position budget markers (chunk 4, docs/plans/daily-new-position-
+# budget.md). The F-255 markers above are branched on inline; the budget ones
+# are rendered through ONE pure function, `budget_view.card_note`, so the pin
+# has two ends here too: (producer) every budget flag `daily_budget.
+# apply_to_sizing` can emit must yield a note from card_note; (consumer) both
+# Grow Today blocks must call card_note on their `_sz`, with the right kind.
+_BUDGET_FLAG_RE = re.compile(r"budget_(capped|reserved|exhausted|unknown)$")
+
+
+def _budget_producer_flags() -> set:
+    src = (_ROOT / "stock_analyzer" / "daily_budget.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "apply_to_sizing")
+    flags = {n.value for n in ast.walk(fn)
+             if isinstance(n, ast.Constant) and isinstance(n.value, str)
+             and _BUDGET_FLAG_RE.match(n.value)}
+    for n in tree.body:   # exhausted/unknown go out via out[status] (module constants)
+        if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name) \
+                and n.targets[0].id in ("BUDGET_EXHAUSTED", "BUDGET_UNKNOWN"):
+            flags.add(n.value.value)
+    return flags
+
+
+def test_budget_producer_flag_set_is_what_we_expect():
+    assert _budget_producer_flags() == {
+        "budget_capped", "budget_reserved", "budget_exhausted", "budget_unknown"}
+
+
+def test_card_note_covers_every_budget_flag_the_producer_emits():
+    from stock_analyzer import budget_view
+    for flag in _budget_producer_flags():
+        sz = {"shares": 5, "budget_uncapped_shares": 9, flag: True}
+        for kind in ("pick", "add"):
+            assert budget_view.card_note(sz, kind), (flag, kind)
+
+
+def _card_note_calls() -> list:
+    """(kind, sibling-offset-from-ceiling-If) for each `_budget_view.card_note(_sz, kind, ...)`."""
+    tree = ast.parse((_ROOT / "app.py").read_text(encoding="utf-8"))
+    found = []
+    for parent in ast.walk(tree):
+        for field in ("body", "orelse", "finalbody"):
+            body = getattr(parent, field, None)
+            if not isinstance(body, list):
+                continue
+            ceil_idx = [i for i, st in enumerate(body) if isinstance(st, ast.If) and any(
+                _is_sz_get(n, "ceiling_capped") for n in ast.walk(st.test))]
+            for i, stmt in enumerate(body):
+                node = stmt.value if isinstance(stmt, ast.Assign) else None
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "card_note"
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "_budget_view"
+                        and node.args and isinstance(node.args[0], ast.Name)
+                        and node.args[0].id == "_sz"
+                        and isinstance(node.args[1], ast.Constant)):
+                    near = [i - c for c in ceil_idx if 0 < i - c <= 3]
+                    found.append((node.args[1].value, bool(near)))
+    return found
+
+
+def test_both_grow_today_blocks_render_the_budget_note_with_the_right_kind():
+    calls = _card_note_calls()
+    assert sorted(k for k, _ in calls) == ["add", "pick"]
+    assert all(near for _, near in calls), \
+        "card_note must sit in the same block as the F-255 sizing notes"

@@ -444,7 +444,7 @@ def test_hold_reasons_codes_match_daily_budget():
 
 
 def test_new_wording_strings():
-    assert hr.budget_note("budget_reserved") == "Allocated in today's email"
+    assert hr.budget_note("budget_reserved") == "Reserved by today's email run"
     pick = hr.budget_note("budget_exhausted")
     non = hr.budget_note("budget_exhausted", {"is_pick": False})
     assert pick.startswith("One of today's picks")

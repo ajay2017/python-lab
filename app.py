@@ -230,6 +230,7 @@ from stock_analyzer import outage_gate as _outage_gate
 from stock_analyzer import act_today_precedence
 from stock_analyzer import home_notices as _home_notices_mod
 from stock_analyzer import act_today_pointer as _act_pointer_mod
+from stock_analyzer import budget_view as _budget_view
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
     build_tax_analysis, _build_open_lots, holding_period_status, wash_sale_risk,
@@ -2605,6 +2606,87 @@ def _render_portfolio_stale_banner(key_suffix: str = "") -> None:
         st.rerun()
 
 
+def _budget_strict_trades():
+    """STRICT trades read for the daily new-position budget (None = unreadable).
+
+    NOT `st.session_state.trades_df`, which collapses a failed read to an empty
+    frame -- that would read "nothing bought today" and unlock the whole budget.
+    Cached per `_coord_epoch` + ET day + 5-minute bucket so it is not re-queried
+    on every rerun. Every trade-write site pops it, and the epoch bump covers a
+    successful refresh; the time bucket bounds the remaining blind spots (a
+    save_trade that succeeded while save_holdings failed -> no refresh, no bump;
+    a trade logged from another device/session) to five minutes. A failed read
+    is never cached, so the next render retries."""
+    _n = _now_et()
+    _key = (_coord_epoch(), _today_et().isoformat(), _n.hour * 12 + _n.minute // 5)
+    _c = st.session_state.get("_budget_trades_cache")
+    if isinstance(_c, dict) and _c.get("key") == _key and _c.get("df") is not None:
+        return _c["df"]
+    try:
+        _df = db.load_trades_or_none()
+    except Exception:
+        _df = None
+    if _df is not None:
+        st.session_state["_budget_trades_cache"] = {"key": _key, "df": _df}
+    return _df
+
+
+def _budget_strict_allocations():
+    """Today's emailed allocations (strict; None = unreadable). The app only
+    READS them -- the emails write. Cached per epoch + ET day + 5-minute
+    bucket (a scan-lane email can land while the page is open); a failed read
+    is never cached."""
+    _n = _now_et()
+    _key = (_coord_epoch(), _today_et().isoformat(), _n.hour * 12 + _n.minute // 5)
+    _c = st.session_state.get("_budget_allocs_cache")
+    if isinstance(_c, dict) and _c.get("key") == _key and _c.get("allocs") is not None:
+        return _c["allocs"]
+    try:
+        _a = db.load_budget_allocations_or_none(_today_et())
+    except Exception:
+        _a = None
+    if _a is not None:
+        st.session_state["_budget_allocs_cache"] = {"key": _key, "allocs": _a}
+    return _a
+
+
+def _publish_new_position_budget(raw_brief, gross_book, net_cap, basis_state,
+                                 acct_rec, price_map=None):
+    """Budget-adjust a RAW Daily Brief and publish `_new_position_budget_cache`
+    (None whenever the budget couldn't be checked -- never {}). Returns the
+    brief to render; the raw brief (the `_home_synth_cache` copy) is never
+    mutated. Render-only wiring: the decision is `budget_view.postpass`."""
+    _bi = _budget_view.budget_inputs(gross_book, net_cap, basis_state, acct_rec)
+    _out = _budget_view.postpass(
+        raw_brief, _bi, _budget_strict_trades(), _budget_strict_allocations(),
+        _today_et(), _now_et(), price_map,
+    )
+    st.session_state["_new_position_budget_cache"] = _out["cache"]
+    if _out.get("crashed"):
+        import logging
+        logging.warning("Daily budget post-pass crashed: %s", _out["crashed"])
+    return _out["brief"]
+
+
+def _budget_price_map(_pdf):
+    """{TICKER: live price} from the enriched book, for add-to-winner sizing
+    (an add carries no price of its own)."""
+    try:
+        if _pdf is None or _pdf.empty or "Price" not in _pdf.columns:
+            return {}
+        _out = {}
+        for _t, _p in zip(_pdf["Ticker"], _pdf["Price"]):
+            try:   # per-row: one None/garbage price must not empty the whole map
+                _pf = float(_p)
+            except (TypeError, ValueError):
+                continue
+            if _pf == _pf and _pf > 0:
+                _out[str(_t).upper()] = _pf
+        return _out
+    except Exception:
+        return {}
+
+
 def _refresh_portfolio_cache_after_trade(h_df: pd.DataFrame) -> None:
     """
     Rebuild _port_df_enriched/_last_port_df/_holdings_sig_at_home_build right
@@ -2617,6 +2699,10 @@ def _refresh_portfolio_cache_after_trade(h_df: pd.DataFrame) -> None:
     the prior cache untouched, and _portfolio_snapshot_stale()'s warning
     banner still catches staleness as a fallback.
     """
+    # Defence in depth: every trade-write site already pops this right after
+    # its save_trade/delete_trade, and the epoch bump below resets the key on
+    # success; this covers the outage/crash paths that return before the bump.
+    st.session_state.pop("_budget_trades_cache", None)
     try:
         held_data = dict(st.session_state.get("_last_held_data") or {})
         holdings = h_df.to_dict("records")
@@ -2650,6 +2736,10 @@ def _refresh_portfolio_cache_after_trade(h_df: pd.DataFrame) -> None:
                 f"{len(holdings)} holding(s) could not be priced — cache left "
                 "untouched rather than republished from an unmeasured book."
             )
+            # The budget cache describes the PRE-trade book: publish "couldn't
+            # check" and clear its stamp rather than leave it fresh-stamped.
+            st.session_state["_new_position_budget_cache"] = None
+            _stamp_coord(["_new_position_budget_cache"])
             return
 
         # Atomic commit: build every value first, then assign in one block. A
@@ -2680,12 +2770,44 @@ def _refresh_portfolio_cache_after_trade(h_df: pd.DataFrame) -> None:
         # thereby SILENCE that banner on 9 pages while risk, correlation and
         # Reduce/Exit still described the pre-trade book.
         _bump_coord_epoch()
-        _stamp_coord(["_acct_gate_cache"])
+        # Daily new-position budget: re-count from a fresh strict trades read so
+        # a just-logged buy can't leave `_new_position_budget_cache` under-
+        # counted on the next render (it is a GATE-tier cache). Its own try: a
+        # failure publishes None (couldn't check) and never undoes the atomic
+        # commit above. The brief it re-derives candidates from is the RAW
+        # (budget-free) memo; only the cache is kept -- the next Home render
+        # rebuilds the brief against the new book anyway.
+        try:
+            _rb_acct = db.load_account_cash()
+            _rb_net, _rb_state = _margin_mod.resolve_net_capital(
+                _value, _rb_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
+            )
+            _rb_memo = _get_or_offline(st.session_state, "_home_synth_cache")
+            _rb_raw = _get_or_offline(_rb_memo, "bundle")
+            # Only a TODAY memo brief supplies candidates; an older one is
+            # skipped (the budget numbers themselves don't need it).
+            _rb_brief = (
+                _get_or_offline(_rb_raw, "_daily_brief")
+                if _get_or_offline(_rb_memo, "date") == _today_et().isoformat() else None
+            )
+            _publish_new_position_budget(
+                _rb_brief, _value, _rb_net,
+                _rb_state, _rb_acct, _budget_price_map(port_df),
+            )
+        except Exception:
+            st.session_state["_new_position_budget_cache"] = None
+        _stamp_coord(["_acct_gate_cache", "_new_position_budget_cache"])
     except Exception as _exc:
         # Recorded rather than swallowed. A bare `pass` made a crashed
         # republisher indistinguishable from a successful no-op — the same
         # dead-diagnostic problem already logged against _gate_ledger_save_result.
         st.session_state["_refresh_error"] = f"{type(_exc).__name__}: {_exc}"
+        # Same reason as the outage path: never leave a fresh-stamped pre-trade budget.
+        st.session_state["_new_position_budget_cache"] = None
+        try:
+            _stamp_coord(["_new_position_budget_cache"])
+        except Exception:
+            pass
 
 
 def _fill_news_slot(slot, items: list) -> None:
@@ -5322,6 +5444,7 @@ if page == "🏠 Home":
                                 ),
                                 "trigger_type": "REBALANCE",
                             })
+                            st.session_state.pop("_budget_trades_cache", None)
                             st.session_state.trades_df = db.load_trades()
                         except Exception as _split_err:
                             st.warning(
@@ -6008,6 +6131,17 @@ if page == "🏠 Home":
                 except Exception as _e:
                     import logging
                     logging.warning("Composite freshness rebuild failed: %s", _e)
+        # Daily new-position budget post-pass (docs/plans/daily-new-position-
+        # budget.md). `_daily_brief` above is the RAW memoized brief; budget it
+        # into a NEW brief for this render only. `_home_synth_cache` keeps the
+        # raw one (the budget depends on today's trades/allocations, which are
+        # not in the memo signature), so the cache can never serve a stale
+        # budget. Same call as the MISS path below, so the two cannot drift.
+        _daily_brief_raw = _daily_brief
+        _daily_brief = _publish_new_position_budget(
+            _daily_brief_raw, total_val, _f255_net_cap, _f255_basis,
+            _f255_acct, _budget_price_map(port_df),
+        )
     else:
         # Computed once, pure/no-LLM — annotates alerts()/rebalance_actions()'s
         # independent bearish-signal heuristics with the ticker's canonical
@@ -6395,6 +6529,18 @@ if page == "🏠 Home":
                 _daily_brief    = None
                 _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
 
+        # Daily new-position budget post-pass — BEFORE the rec-log capture below,
+        # so the app-written new_pick / add_winner rows carry the budget-adjusted
+        # `rec_shares` (+ version 4 + `rec_budget_state`) exactly like the cron's.
+        # `_daily_brief_raw` stays budget-free: it is what `_home_synth_cache` and
+        # the Lock Setup snapshot store. A None brief (build crashed) still
+        # publishes the budget cache for the other surfaces.
+        _daily_brief_raw = _daily_brief
+        _daily_brief = _publish_new_position_budget(
+            _daily_brief_raw, total_val, _f255_net_cap, _f255_basis,
+            _f255_acct, _budget_price_map(port_df),
+        )
+
         # Cache sectors Grow Today is already filling so the Watchlist (a separate page)
         # can demote ENTER_NOW picks that would stack the same sector exposure.
         # When Daily Briefing failed, cache is None (not empty list) so downstream
@@ -6417,6 +6563,7 @@ if page == "🏠 Home":
             # offline marker -- the flag alone could be flipped back to False by
             # a path that serves this stub (2026-10-11 audit B-H2, Brief Lock).
             _daily_brief = offline_brief_stub()
+            _daily_brief_raw = _daily_brief   # the memo/lock store the stub itself
             # No reduce calls known while the Brief is offline — consumers fail
             # open (show sizing), consistent with the Brief itself being offline.
             st.session_state["_reduce_calls"] = {}
@@ -6603,12 +6750,19 @@ if page == "🏠 Home":
                         _s = pick.get("sizing")
                         if not isinstance(_s, dict) or not _s:
                             return {}
-                        return {
+                        _cols = {
                             "rec_shares":          _s.get("shares"),
                             "rec_stop":            _s.get("stop"),
                             "rec_portfolio_value": _s.get("portfolio_value"),
                             "rec_sizing_version":  _s.get("sizing_version"),
                         }
+                        # Daily budget: rec_shares is already the SHOWN size
+                        # (absent when the budget withheld it); the state says
+                        # why. Key only when set, like cron_runner's rows.
+                        _bst = _budget_view.rec_budget_state(_s)
+                        if _bst:
+                            _cols["rec_budget_state"] = _bst
+                        return _cols
 
                     _rec_rows: list[dict] = []
                     for _p in (_gt_today.get("new_picks") or []):
@@ -6746,6 +6900,18 @@ if page == "🏠 Home":
                         _p["_first_seen_at"] = _rec_first_seen.get(
                             (str(_p.get("ticker", "")).upper(), "add_winner")
                         )
+                    # The picks above are the budget-adjusted COPIES; decorate the
+                    # RAW (memoized / lockable) brief's too, so a memo-HIT render
+                    # (which re-derives its copies from the raw brief) still shows
+                    # "First surfaced". Previously one shared object carried it.
+                    _raw_gt = (_daily_brief_raw or {}).get("grow_today")
+                    if isinstance(_raw_gt, dict) and _raw_gt is not _gt_today:
+                        for _rk, _rt in (("new_picks", "new_pick"), ("add_positions", "add_winner")):
+                            _rl = _raw_gt.get(_rk)
+                            for _p in (_rl if isinstance(_rl, list) else []):
+                                _p["_first_seen_at"] = _rec_first_seen.get(
+                                    (str(_p.get("ticker", "")).upper(), _rt)
+                                )
                 except Exception as _rec_load_err:
                     _rec_load_error = str(_rec_load_err)[:200]
                 st.session_state["_rec_log_load_state"] = {
@@ -6897,7 +7063,9 @@ if page == "🏠 Home":
                 # Summary-only key here.
                 "_rag_record_label": _rag_record_label,
                 "_macro_events": _macro_events, "_market_context": _market_context,
-                "_daily_brief": _daily_brief,
+                # RAW (budget-free) brief — the budget post-pass re-derives a
+                # fresh adjusted copy on every render, hit or miss.
+                "_daily_brief": _daily_brief_raw,
                 "_grow_composites":   st.session_state.get("_grow_composites", {}),
                 "_movers_candidates": st.session_state.get("_movers_candidates", []),
                 "_grow_composites_coverage": st.session_state.get("_grow_composites_coverage", {}),
@@ -7800,7 +7968,10 @@ if page == "🏠 Home":
                 disabled=not _brief_lock_ok,
             ) and _brief_lock_ok:
                 st.session_state["_brief_locked"]          = True
-                st.session_state["_brief_locked_snapshot"] = _daily_brief
+                # RAW brief: the budget post-pass re-runs on a locked snapshot
+                # too (sizes always reflect today's logged buys, never a frozen
+                # budget).
+                st.session_state["_brief_locked_snapshot"] = _daily_brief_raw
                 st.session_state["_brief_locked_for_date"] = _today_et()
                 st.session_state["_brief_locked_at"]       = _b_now_et
                 st.session_state["_brief_refresh_nonce"] = \
@@ -8760,6 +8931,22 @@ if page == "🏠 Home":
     def _render_grow_today(grow: dict, tone: str):
         if not grow:
             return
+        # Daily new-position budget (docs/plans/daily-new-position-budget.md):
+        # the sizes in `grow` are ALREADY budget-adjusted (Home's post-pass).
+        # This cache only feeds the status line + the called-state wording;
+        # None = the budget couldn't be checked (each card says why).
+        _bud_cache = st.session_state.get("_new_position_budget_cache")
+        _bud_called = isinstance(_bud_cache, dict) and _bud_cache.get("state") == "called"
+
+        def _budget_status_captions():
+            _bl = _budget_view.status_line_text(
+                _bud_cache, mask=st.session_state.get("_privacy", True))
+            if _bl is not None:
+                # Escape $ so two dollar figures on one line aren't read as LaTeX.
+                st.caption(_bl.replace("$", "\\$"))
+            _bo = _budget_view.over_line_text(_bud_cache)
+            if _bo is not None:
+                st.caption(_bo)
         new_picks    = grow.get("new_picks", [])
         add_pos      = grow.get("add_positions", [])
         deploy_note  = grow.get("deploy_note")
@@ -9141,10 +9328,12 @@ if page == "🏠 Home":
             # not a portfolio plan. N is derived from SINGLE_NAME_CEILING, never
             # hardcoded, so this stays accurate if the policy constant changes.
             st.caption(
-                f"Suggested sizes are per-idea maximums, not a portfolio plan — "
+                f"Each size is at most that idea's own maximum, not a portfolio plan — "
                 f"at {int(SINGLE_NAME_CEILING)}% each, a book funds "
-                f"~{int(100 / SINGLE_NAME_CEILING)} concurrent full positions."
+                f"~{int(100 / SINGLE_NAME_CEILING)} concurrent full positions; "
+                f"today's new-position budget below limits the total."
             )
+            _budget_status_captions()
             # Pre-open note (panel-level, single line, NOT per-card).
             # Shows only in Pre-Market — prices are provisional until the
             # 9:30 ET open. On weekends/holidays/after-hours/closed we omit
@@ -9473,6 +9662,11 @@ if page == "🏠 Home":
                     f"📐 Size also capped at {int(NET_CAPITAL_POSITION_CAP_PCT)}% of net capital "
                     f"(margin-aware) — now ~{float(_sz['capital_pct']):.0f}% of your actual capital."
                 )
+            # Daily new-position budget note (partial / not sized / reserved /
+            # couldn't be checked). Wording + branching live in budget_view.
+            _bud_note = _budget_view.card_note(_sz, "pick", called=_bud_called)
+            if _bud_note is not None:
+                st.caption("📐 " + _bud_note)
             _ac_cov = _ac_cov_map.get(str(_gp["ticker"]).upper())
             if _ac_cov and (_ac_cov.get("consensus_rating") or _ac_cov.get("avg_pt") is not None):
                 _ac_parts = []
@@ -9714,6 +9908,8 @@ if page == "🏠 Home":
         # Add-to-winner
         if add_pos:
             st.markdown("**➕ Add to Winning Positions**")
+            if not new_picks:
+                _budget_status_captions()   # adds count toward the budget too
         for _ga in add_pos:
             _sz = _ga.get("sizing")
             _sz = _sz if isinstance(_sz, dict) else {}
@@ -9794,6 +9990,9 @@ if page == "🏠 Home":
                     f"📐 Add size also capped at {int(NET_CAPITAL_POSITION_CAP_PCT)}% of net capital "
                     f"(margin-aware) — now ~{float(_sz['capital_pct']):.0f}% of your actual capital."
                 )
+            _bud_note = _budget_view.card_note(_sz, "add", called=_bud_called)
+            if _bud_note is not None:
+                st.caption("📐 " + _bud_note)
             if _ga.get("sector_elevated_warning"):
                 st.caption(f"⚠️ {_ga['sector_elevated_warning']}")
 
@@ -28747,6 +28946,7 @@ elif page == "📒 Trade Journal":
         if _ps_c1.button("✅ Confirm SELL", type="primary", key="_tj_confirm_sell", width="stretch",
                           disabled=st.session_state.get("_readonly", False)):
             _ps_saved = db.save_trade(_pending_sell)
+            st.session_state.pop("_budget_trades_cache", None)
             if _ps_saved or not db.has_db():
                 _ps_broker_pid = st.session_state.pop("_tj_pending_broker_id", None)
                 if _ps_broker_pid is not None:
@@ -28867,6 +29067,7 @@ elif page == "📒 Trade Journal":
                           width="stretch",
                           disabled=st.session_state.get("_readonly", False)):
             _pb_saved = db.save_trade(_pending_buy)
+            st.session_state.pop("_budget_trades_cache", None)
             if _pb_saved or not db.has_db():
                 _pb_broker_pid = st.session_state.pop("_tj_pending_broker_id", None)
                 if _pb_broker_pid is not None:
@@ -31091,7 +31292,9 @@ elif page == "📒 Trade Journal":
                             st.session_state.pop("_tj_delete_confirm_pending", None)
                             failed = 0
                             for tid in _pending_ids:
-                                if not db.delete_trade(tid):
+                                _del_ok = db.delete_trade(tid)
+                                st.session_state.pop("_budget_trades_cache", None)
+                                if not _del_ok:
                                     failed += 1
                             if failed == 0:
                                 st.success(f"✅ Deleted {_pn} trade{'s' if _pn > 1 else ''}.")
@@ -31396,7 +31599,9 @@ elif page == "📒 Trade Journal":
                                         except (TypeError, ValueError):
                                             _bi_n_fail += 1
                                             continue
-                                        if db.save_trade(_bi_rec):
+                                        _bi_saved = db.save_trade(_bi_rec)
+                                        st.session_state.pop("_budget_trades_cache", None)
+                                        if _bi_saved:
                                             _bi_n_ok += 1
                                         else:
                                             _bi_n_fail += 1
@@ -31719,7 +31924,9 @@ elif page == "📒 Trade Journal":
                                         except (TypeError, ValueError):
                                             _ss_n_fail += 1
                                             continue
-                                        if db.save_trade(_ss_rec):
+                                        _ss_saved = db.save_trade(_ss_rec)
+                                        st.session_state.pop("_budget_trades_cache", None)
+                                        if _ss_saved:
                                             _ss_n_ok += 1
                                         else:
                                             _ss_n_fail += 1

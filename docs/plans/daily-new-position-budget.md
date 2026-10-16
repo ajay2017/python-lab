@@ -80,6 +80,13 @@ are budgeted. (c) Intraday writes allocations for fully-sized names whose share 
 chunk 4 must not call those "Allocated in today's email" unless the email showed the size (owner question). **Owner decided 2026-10-16: (a) the intraday email SHOWS the share count for every name it
 allocates**, so an allocation always means "a size was shown to you" and "Allocated in today's email" stays true.
 
+**Chunk-4 review notes for chunk 6 docs (2026-10-16):** disclose that (1) before the 09:45 scan email lands, Home ranks every
+pick and add composite-first, so the #1 pick it sizes (and the rec row it writes first) can differ from the size the email
+later locks; (2) for up to 5 minutes after the email (allocations cache bucket) and after a trade logged outside the normal
+refresh path (trades cache bucket), Home can show a pre-update size. Also fix the stale "Allocated in today's/this
+morning's email" wording below (now "Reserved by today's email run") and cron_runner._run_intraday's docstring (the intraday
+email now shows share counts).
+
 ## Basis states (`daily_budget` must NOT import `stock_analyzer.margin` — awareness-only invariant,
 `tests/test_margin.py` `_GATE_MODULES`; callers resolve `resolve_net_capital` and pass numbers in, as `risk.py` does)
 levered → net capital, lag-corrected; unlevered with a cash record (cash ≥ 0) → gross book + cash, lag-corrected; no cash
