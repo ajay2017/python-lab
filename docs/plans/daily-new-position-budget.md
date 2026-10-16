@@ -1,6 +1,6 @@
 # Daily new-position budget — cap the SUM of a day's new buys at 40% of net capital
 
-**Status: DESIGNED + OWNER-APPROVED 2026-10-15, build starting.** Planner (Opus 5.5) PROCEED WITH CHANGES; owner
+**Status: BUILT 2026-10-16 as F-306 / G-27 — all 6 chunks committed (`86514bc`, `2ba90a4`, `7e19531`, `f331739`, `8de9112`, then chunk 5 and the chunk-6 docs), each code chunk Opus-reviewed to SHIP; pushed together; live screenshots of Home, Watchlist, Analysis, the Trade Journal and the three emails PENDING.** Spec of record: `docs/requirements.md` F-306. The Wording section below is the original design; the shipped text is in `hold_reasons.py` (e.g. `budget_reserved` reads "Reserved by today's email run", and an exhausted non-pick reads "Not sized: … Resets tomorrow."). Earlier status: DESIGNED + OWNER-APPROVED 2026-10-15, build starting. Planner (Opus 5.5) PROCEED WITH CHANGES; owner
 accepted all 8 recommendations. Memory `project_daily_new_position_budget`. Ships after F-305 (Grow Today owns every
 buy) and reuses `stock_analyzer/hold_reasons.py`. Governing principles: OP-07 (gate the call, never the candidate),
 F-09d (leverage is awareness, never a gate — this caps SIZING against net capital, like F-255, and never blocks a call).
@@ -87,6 +87,11 @@ refresh path (trades cache bucket), Home can show a pre-update size. Also fix th
 morning's email" wording below (now "Reserved by today's email run") and cron_runner._run_intraday's docstring (the intraday
 email now shows share counts).
 
+**Chunk-5 notes (2026-10-16):** Analysis opened before 📋 Watchlist that day → owner default (a): show Analysis's size with a
+caption that it doesn't yet count Watchlist Ready-to-Enter names (switchable to withhold via one constant in budget_view).
+Disclose in docs: NEAR_ENTRY / WAIT Watchlist rows still show the plain F-255 sizing panel (they aren't today's entry
+call) — pre-existing, not budgeted.
+
 ## Basis states (`daily_budget` must NOT import `stock_analyzer.margin` — awareness-only invariant,
 `tests/test_margin.py` `_GATE_MODULES`; callers resolve `resolve_net_capital` and pass numbers in, as `risk.py` does)
 levered → net capital, lag-corrected; unlevered with a cash record (cash ≥ 0) → gross book + cash, lag-corrected; no cash
@@ -98,7 +103,7 @@ Status line on every sizing surface: "New positions today: X% of net capital (lo
 budget {DAILY_NEW_POSITION_BUDGET_PCT}%, $L left". Per-item: `budget_partial` "Sized from what's left of today's budget —
 {n} of {m} shares."; `budget_exhausted` "One of today's picks — not sized: today's new-position budget
 ({DAILY_NEW_POSITION_BUDGET_PCT}% of net capital) is already used. Resets tomorrow if it still qualifies.";
-`budget_reserved` "Allocated in this morning's email"; `budget_unknown` "Size withheld — today's new-position budget
+`budget_reserved` "Reserved by today's email run" (shipped text; designed as "Allocated in this morning's email"); `budget_unknown` "Size withheld — today's new-position budget
 couldn't be checked ({why})."; over budget from logged buys alone: "Today's new buys are {x}% of net capital — above the
 {DAILY_NEW_POSITION_BUDGET_PCT}% daily budget; nothing further sized today." Calm tone; nothing goes into Act Today.
 
