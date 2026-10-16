@@ -84,8 +84,9 @@ from stock_analyzer.data import is_trading_day
 from stock_analyzer.util import sentiment_value_or_none
 from stock_analyzer.headless_alert_engine import (
     compute_protective_alerts, compute_eod, compute_morning_picks,
-    compute_watchlist_entries, _build_context,
+    compute_watchlist_entries, _build_context, run_daily_budget,
 )
+from stock_analyzer import hold_reasons
 from stock_analyzer.notify import (
     render_alert_email, render_test_email, render_pullback_email,
     render_daily_action_email, render_intraday_entry_email, send_email_resend,
@@ -128,6 +129,23 @@ _LANE_OUTAGE_TEXT: dict[str, tuple[str, str]] = {
     "watchlist-entries": ("Watchlist Ready-to-Enter email",
                     "The proactive Watchlist ENTER_NOW email did NOT run."),
 }
+
+
+def _rec_budget_state(sz) -> "str | None":
+    """The daily-budget status a (budget-adjusted) sizing dict carries, as the
+    `recommendations.rec_budget_state` code; None when the budget did not touch
+    it (so a non-budget row keeps its pre-budget key set -- PostgREST rejects
+    unknown/mixed keys, and db.save_recommendations only adds the key when a
+    row of the batch carries a value)."""
+    if not isinstance(sz, dict):
+        return None
+    for _flag, _code in (("budget_unknown", hold_reasons.BUDGET_UNKNOWN),
+                         ("budget_exhausted", hold_reasons.BUDGET_EXHAUSTED),
+                         ("budget_capped", hold_reasons.BUDGET_PARTIAL),
+                         ("budget_reserved", hold_reasons.BUDGET_RESERVED)):
+        if sz.get(_flag):
+            return _code
+    return None
 
 
 def _build_new_pick_rows(picks: list[dict], rec_date) -> list[dict]:
@@ -195,6 +213,12 @@ def _build_new_pick_rows(picks: list[dict], rec_date) -> list[dict]:
                 "rec_portfolio_value": _s.get("portfolio_value"),
                 "rec_sizing_version":  _s.get("sizing_version"),
             })
+            # Daily new-position budget (docs/plans/daily-new-position-budget.md):
+            # rec_shares above is already the SHOWN size (NULL when the budget
+            # withheld it); the status says why. Key added only when set.
+            _bst = _rec_budget_state(_s)
+            if _bst:
+                _row["rec_budget_state"] = _bst
         rows.append(_row)
     return rows
 
@@ -1746,6 +1770,89 @@ def _run_scan(now_et, force: bool) -> int:
         _log(f"engine note: {e}")
     picks = payload.get("picks", [])
 
+    # High-conviction = the green "✅ Go — Composite Confirms" set. Key on the SAME
+    # field the Home badge reads — the reconciliation engine's verdict
+    # (xref.verdict_reconciled.verdict == "go", signal_reconciliation.py) — so the
+    # email can't silently drift from the badge if either detector changes.
+    # Composite must be present. Excludes unverified / movers-only / conflicted noise.
+    hi = [p for p in picks
+          if ((p.get("xref") or {}).get("verdict_reconciled") or {}).get("verdict") == "go"
+          and p.get("composite_score") is not None]
+    _log(f"morning picks: {len(picks)} new pick(s), {len(hi)} high-conviction (Go): "
+         + (", ".join(str(p.get("ticker")) for p in hi) or "(none)"))
+    # Sort so a STOCK pick always leads, never an ETF one -- see
+    # _morning_pick_sort_key's own docstring for the full rationale.
+    hi.sort(key=_morning_pick_sort_key)
+
+    # ── Watchlist entries — computed BEFORE the budget pass ─────────────────
+    # (daily new-position budget, docs/plans/daily-new-position-budget.md: the
+    # Go pick and the watchlist entries are sized in ONE joint composite-first
+    # allocation, so both must be known first.) Own try: a failure leaves the
+    # entries empty and skips only the Watchlist email -- the picks are still
+    # allocated and emailed. A db_unavailable verdict is remembered and handled
+    # AFTER the picks email, exactly where it was handled before this reorder.
+    _wle_payload = None
+    _wle_entries: list = []
+    _wle_outage_detail = None
+    try:
+        _wle_scanner_go = {
+            str(p.get("ticker")).strip().upper() for p in hi if p.get("ticker")
+        }
+        _wle_payload = compute_watchlist_entries(
+            today=now_et.date(), scanner_go_tickers=_wle_scanner_go, ctx=_scan_ctx,
+        )
+        if _wle_payload.get("reason") == "db_unavailable":
+            _wle_outage_detail = (
+                "; ".join(_wle_payload.get("errors", [])) or "watchlist/holdings unreadable")
+        else:
+            for e in _wle_payload.get("errors", []):
+                _log(f"watchlist-entries engine note: {e}")
+            # Explicit `is None` rather than `or []` so a genuine offline
+            # sentinel can never be silently collapsed into "checked, nothing new".
+            _wle_entries = _wle_payload.get("entries")
+            if _wle_entries is None:
+                _wle_entries = []
+    except Exception as _wle_err:
+        _log(f"watchlist-entries: FAILED — {str(_wle_err)[:120]} — continuing "
+             "(buy-list email unaffected).")
+        _wle_payload = None
+        _wle_entries = []
+
+    # ── Daily new-position budget (cap the SUM of a day's new buys) ─────────
+    # EMAILED = the sizes this run pushes: the #1 pick (the only Go pick whose
+    # email card shows a share count) + every watchlist entry; sized jointly,
+    # composite-first, from what is left after logged buys and earlier
+    # allocations, then WRITTEN (first writer wins). OTHER picks are sized
+    # afterwards from what is left, for the rec-log only (never written).
+    # Strict reads inside run_daily_budget; any unreadable input withholds the
+    # size (the BUY call stands). Runs BEFORE the rec-log below so rec_shares
+    # is the size actually shown.
+    _bud = None
+    _emailed_items = ([("pick", hi[0])] if hi else []) + [("entry", e) for e in _wle_entries]
+    # Dedupe WITHIN the others only: a non-Go pick whose ticker is also an
+    # emailed Watchlist entry must still be passed (as an "other") so its own
+    # sizing dict -- and the rec-log row built from it -- gets the budget-adjusted
+    # size. Pass 2 sees the pass-1 allocation, so it consumes nothing new.
+    _other_keys: set = set()
+    _other_items = []
+    for _p in picks:
+        _pk = str(_p.get("ticker") or "").strip().upper()
+        if _pk and _pk not in _other_keys and not any(_p is it for _k, it in _emailed_items):
+            _other_keys.add(_pk)
+            _other_items.append(("pick", _p))
+    if _emailed_items or _other_items:
+        _bud = run_daily_budget(now_et.date(), now_et, payload.get("budget_inputs"),
+                                _emailed_items, _other_items)
+        _b = _bud["budget"]
+        _log(f"budget: state={_b.get('state')} pct_used={_b.get('pct_used')} "
+             f"left={_b.get('left')} written={_bud.get('written')}"
+             + (f" · reason={_b.get('reason')}" if _b.get("reason") else ""))
+        if _bud.get("crashed"):
+            failures.append(f"budget: {_bud['crashed']}")
+        if _bud.get("save_failed"):
+            failures.append(f"budget_allocations: {_bud.get('save_error')}")
+    _budget_for_email = _bud["budget"] if _bud else None
+
     # ── Recommendation logging (Self Track Record — cron coverage fix) ─────────
     # The interactive app only logs a "new_pick" row when a real Streamlit
     # session visits Home and builds Grow Today (app.py ~line 4763). On a day
@@ -1832,16 +1939,6 @@ def _run_scan(now_et, force: bool) -> int:
         _log(f"gate ledger: FAILED — {str(_gl_err)[:120]} — continuing (email unaffected).")
         failures.append(f"gate_suppressions: {str(_gl_err)[:120]}")
 
-    # High-conviction = the green "✅ Go — Composite Confirms" set. Key on the SAME
-    # field the Home badge reads — the reconciliation engine's verdict
-    # (xref.verdict_reconciled.verdict == "go", signal_reconciliation.py) — so the
-    # email can't silently drift from the badge if either detector changes.
-    # Composite must be present. Excludes unverified / movers-only / conflicted noise.
-    hi = [p for p in picks
-          if ((p.get("xref") or {}).get("verdict_reconciled") or {}).get("verdict") == "go"
-          and p.get("composite_score") is not None]
-    _log(f"morning picks: {len(picks)} new pick(s), {len(hi)} high-conviction (Go): "
-         + (", ".join(str(p.get("ticker")) for p in hi) or "(none)"))
     if not hi:
         # Self-explaining 0: a 0-pick run almost always means the tone gate, not a
         # fault. Flat tape raises the new-pick bar to 78 (bull = 65); bear suppresses
@@ -1870,9 +1967,6 @@ def _run_scan(now_et, force: bool) -> int:
             _why = f"tone={_tone} (S&P {_spr})"
         _log(f"no high-conviction buy setups — no email · {_why}.")
     else:
-        # Sort so a STOCK pick always leads, never an ETF one -- see
-        # _morning_pick_sort_key's own docstring for the full rationale.
-        hi.sort(key=_morning_pick_sort_key)
         top_pick   = hi[0]
         other_picks = hi[1:]
 
@@ -1905,6 +1999,7 @@ def _run_scan(now_et, force: bool) -> int:
                 book_drift=payload.get("book_drift"),
                 macro_coverage_expired=payload.get("macro_coverage"),
                 exit_check_unavailable=exit_check_unavailable,
+                budget=_budget_for_email,
             )
             sent = _send_email("morning-action", subject, html)
             # Save dedup state ONLY on a real send — so a transient Resend failure
@@ -1917,35 +2012,21 @@ def _run_scan(now_et, force: bool) -> int:
 
     # ── Watchlist "Ready to Enter" proactive email ──────────────────────────
     # ENTER_NOW verdicts are otherwise only discoverable by opening 📋 Watchlist
-    # manually. Isolated in its own try/except, run AFTER the buy-list section
-    # has already sent/dedup-skipped, so a fault here can never affect it —
-    # same isolation posture as the rec-log/gate-ledger blocks above.
+    # manually. The entries were computed (and sized by the daily budget) above;
+    # this section only sends. Isolated in its own try/except, run AFTER the
+    # buy-list section has already sent/dedup-skipped, so a fault here can never
+    # affect it — same isolation posture as the rec-log/gate-ledger blocks above.
     _wle_sent = False
+    if _wle_outage_detail is not None:
+        _rc = _handle_db_unavailable("watchlist-entries", now_et, _wle_outage_detail)
+        if failures:   # keep an earlier write failure visible (D-M2 review NB-2)
+            _LAST_LANE_FAILURE_DETAIL = (f"{_LAST_LANE_FAILURE_DETAIL}; also: "
+                                         f"{'; '.join(failures)}")[:300]
+        return _rc
     try:
-        _wle_scanner_go = {
-            str(p.get("ticker")).strip().upper() for p in hi if p.get("ticker")
-        }
-        _wle_payload = compute_watchlist_entries(
-            today=now_et.date(), scanner_go_tickers=_wle_scanner_go, ctx=_scan_ctx,
-        )
-        if _wle_payload.get("reason") == "db_unavailable":
-            _rc = _handle_db_unavailable(
-                "watchlist-entries", now_et,
-                "; ".join(_wle_payload.get("errors", [])) or "watchlist/holdings unreadable")
-            if failures:   # keep an earlier write failure visible (D-M2 review NB-2)
-                _LAST_LANE_FAILURE_DETAIL = (f"{_LAST_LANE_FAILURE_DETAIL}; also: "
-                                             f"{'; '.join(failures)}")[:300]
-            return _rc
-        for e in _wle_payload.get("errors", []):
-            _log(f"watchlist-entries engine note: {e}")
-        # Already ruled out `entries is None` (the db_unavailable branch above
-        # returns before this point) — explicit `is None` check rather than
-        # `or []` so a genuine offline sentinel could never be silently
-        # collapsed into "checked, nothing new" if that branch ever changed.
-        _wle_entries = _wle_payload.get("entries")
-        if _wle_entries is None:
-            _wle_entries = []
-        if not _wle_entries:
+        if _wle_payload is None:
+            pass   # the compute itself failed (logged above) -- nothing to send
+        elif not _wle_entries:
             _log("watchlist-entries: nothing newly actionable — no email.")
         else:
             _wle_tickers = sorted(str(c.get("ticker", "")).upper() for c in _wle_entries)
@@ -1961,6 +2042,7 @@ def _run_scan(now_et, force: bool) -> int:
                     entries=_wle_entries,
                     built_at=_wle_payload.get("built_at", today_str),
                     gate_degraded=_wle_payload.get("gate_degraded", False),
+                    budget=_budget_for_email,
                 )
                 _wle_sent = _send_email("watchlist-entries", _wle_subject, _wle_html)
                 # Save dedup state ONLY on a real send — a transient Resend
@@ -1991,7 +2073,16 @@ def _run_intraday(now_et, force: bool) -> int:
 
     Requires scanner_cache to have been written by the earlier _run_scan() step.
     Deduplicates via _INTRADAY_ROW (row 4) so each qualifying name fires at most
-    once per day. Inert without RESEND_API_KEY."""
+    once per day. Inert without RESEND_API_KEY.
+
+    Daily new-position budget: a name already allocated this morning reuses its
+    allocation; a NEW name is sized from what is left and written (source
+    'intraday'). The email shows no share counts -- only the budget status line
+    and a per-entry note. A failed allocation write fails the lane (red
+    heartbeat) after the email has gone out."""
+    global _LAST_LANE_FAILURE_DETAIL
+    _LAST_LANE_FAILURE_DETAIL = None
+    _id_failures: list[str] = []
     today_str = now_et.date().isoformat()
     if not force:
         if not is_trading_day(now_et.date()):
@@ -2081,19 +2172,35 @@ def _run_intraday(now_et, force: bool) -> int:
                 _so = spy_data.get("open")
                 if _sc and _so and _so > 0:
                     spy_drop_pct = round((_sc - _so) / _so * 100, 2)
+            _id_bud = run_daily_budget(now_et.date(), now_et, payload.get("budget_inputs"),
+                                       [("intraday", _e) for _e in entries])
+            _id_b = _id_bud["budget"]
+            _log(f"intraday budget: state={_id_b.get('state')} left={_id_b.get('left')} "
+                 f"written={_id_bud.get('written')}"
+                 + (f" · reason={_id_b.get('reason')}" if _id_b.get("reason") else ""))
+            if _id_bud.get("crashed"):
+                _id_failures.append(f"budget: {_id_bud['crashed']}")
+            if _id_bud.get("save_failed"):
+                _id_failures.append(f"budget_allocations: {_id_bud.get('save_error')}")
             subject, html = render_intraday_entry_email(
                 entries=entries,
                 spy_drop=spy_drop_pct,
                 built_at=today_str,
                 book_drift=payload.get("book_drift"),
                 macro_coverage_expired=payload.get("macro_coverage"),
+                budget=_id_b,
             )
             sent = _send_email("intraday-entry", subject, html)
             if sent and db.save_alert_state(today_str, fp, _INTRADAY_ROW):
                 _log(f"intraday state saved (row={_INTRADAY_ROW}, date={today_str}, fp={fp}).")
             elif not sent:
                 _log("intraday email not sent (inert/failed) — state NOT saved (later slot may retry).")
-    _log(f"intraday done · entries={len(entries)} · sent={sent}")
+    _log(f"intraday done · entries={len(entries)} · sent={sent}"
+         + (f" · FAILURES={len(_id_failures)}" if _id_failures else ""))
+    if _id_failures:
+        _LAST_LANE_FAILURE_DETAIL = "; ".join(_id_failures)
+        _notify_failure("intraday", _LAST_LANE_FAILURE_DETAIL)
+        return 1
     return 0
 
 

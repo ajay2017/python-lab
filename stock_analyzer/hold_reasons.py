@@ -101,11 +101,14 @@ def _pct(x, fallback="0%") -> str:
         return fallback
 
 
-def budget_status_line(pct_used, logged, allocated, listed, left) -> str:
-    """Status line shown on every sizing surface."""
+def budget_status_line(pct_used, logged, allocated, listed, left,
+                       list_label="this list") -> str:
+    """Status line shown on every sizing surface. `list_label` names what
+    `listed` covers on that surface (the emails say "this morning's emails",
+    since their joint total includes entries the morning email does not show)."""
     return (f"New positions today: {_pct(pct_used)} of net capital "
             f"(logged {_usd(logged)} · allocated {_usd(allocated)} · "
-            f"this list {_usd(listed)}) — budget "
+            f"{list_label} {_usd(listed)}) — budget "
             f"{DAILY_NEW_POSITION_BUDGET_PCT:g}%, {_usd(left)} left")
 
 

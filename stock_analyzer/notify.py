@@ -16,13 +16,95 @@ import re
 import requests
 
 from stock_analyzer.constants import SINGLE_NAME_CEILING, NET_CAPITAL_POSITION_CAP_PCT
+from stock_analyzer import hold_reasons
 from stock_analyzer.risk import capital_equivalent_risk
 from stock_analyzer.trade_economics import entry_tier
 
 _RESEND_ENDPOINT = "https://api.resend.com/emails"
 
 
-def _sizing_cap_note(sz: dict) -> str:
+_NOTE_STYLE = 'style="color:#94a3b8;font-size:11px;margin-top:3px"'
+
+
+def _budget_notes(sz: dict, budget: "dict | None" = None, is_pick: bool = True) -> str:
+    """Daily new-position budget markers (docs/plans/daily-new-position-budget.md)
+    on a sizing dict, rendered with hold_reasons' wording -- never new text here.
+    "" when the sizing carries no budget marker. `budget` is run_daily_budget's
+    flat dict; only its state matters here (a called account reads differently
+    from a used-up budget)."""
+    if not isinstance(sz, dict):
+        return ""
+    called = isinstance(budget, dict) and budget.get("state") == "called"
+    texts = []
+    if sz.get("budget_capped"):
+        texts.append(hold_reasons.budget_note(hold_reasons.BUDGET_PARTIAL, {
+            "n": int(sz["shares"]) if sz.get("shares") else "?",
+            "m": (int(sz["budget_uncapped_shares"])
+                  if sz.get("budget_uncapped_shares") is not None else "?")}))
+    if sz.get("budget_reserved"):
+        texts.append(hold_reasons.budget_note(hold_reasons.BUDGET_RESERVED))
+    if sz.get("budget_exhausted"):
+        # A Watchlist "Ready to Enter" name is not "one of today's picks".
+        texts.append(hold_reasons.budget_note(
+            hold_reasons.BUDGET_EXHAUSTED,
+            {"called": True} if called else (None if is_pick else {"is_pick": False})))
+    if sz.get("budget_unknown"):
+        texts.append(hold_reasons.budget_note(
+            hold_reasons.BUDGET_UNKNOWN, {"why": sz.get("budget_reason")}))
+    return "".join(
+        f'<div {_NOTE_STYLE}>📐 {_html.escape(t)}</div>' for t in texts if t)
+
+
+def _budget_banner(budget: "dict | None") -> str:
+    """Status line at the top of an email's picks section, or "" when the
+    caller passed no budget (older callers). One line per state; a budget that
+    could not be checked says so rather than going silent. Escaped."""
+    if not isinstance(budget, dict):
+        return ""
+    state = budget.get("state")
+    lines = []
+    if state == "ok":
+        lines.append(hold_reasons.budget_status_line(
+            budget.get("pct_used"), budget.get("used_logged"),
+            budget.get("used_allocated"), budget.get("used_list"),
+            budget.get("left"), list_label="this morning's emails"))
+        if budget.get("over_line_pct") is not None:
+            lines.append(hold_reasons.budget_over_line(budget.get("over_line_pct")))
+    elif state == "called":
+        lines.append(hold_reasons.budget_note(
+            hold_reasons.BUDGET_EXHAUSTED, {"called": True}))
+    else:
+        lines.append(hold_reasons.budget_note(
+            hold_reasons.BUDGET_UNKNOWN, {"why": budget.get("reason")}))
+    inner = "".join(
+        f'<div style="color:#cbd5e1;font-size:12px;margin-top:2px">{_html.escape(t)}</div>'
+        for t in lines if t)
+    return (
+        f'<div style="border-left:4px solid #64748b;background:#14171c;border-radius:0 6px 6px 0;'
+        f'padding:8px 16px;margin:0 0 12px 0;font-family:Arial,Helvetica,sans-serif">'
+        f'{inner}</div>'
+    )
+
+
+def _budget_save_failed_footer(budget: "dict | None") -> str:
+    """Footer disclosure when this run could not record the sizes it just
+    emailed -- a later surface would otherwise hand out the same budget again."""
+    if not isinstance(budget, dict) or not budget.get("save_failed"):
+        return ""
+    return (
+        '<div style="font-family:Arial,Helvetica,sans-serif;color:#f59e0b;font-size:11px;'
+        'margin-top:12px">⚠️ Today&#39;s budget record couldn&#39;t be saved — later '
+        'suggestions may not account for these.</div>'
+    )
+
+
+def _sizing_cap_note(sz: dict, budget: "dict | None" = None, is_pick: bool = True) -> str:
+    """Budget markers (if any) followed by the concentration-cap disclosure
+    row. `budget=None` keeps every pre-budget caller byte-identical."""
+    return _budget_notes(sz, budget, is_pick) + _cap_note_core(sz)
+
+
+def _cap_note_core(sz: dict) -> str:
     """Concentration-cap disclosure row for an email card, or "" when silent.
 
     Five distinct cases, none of which may pass unexplained (an email that
@@ -608,6 +690,7 @@ def render_daily_action_email(
     book_drift: dict | None = None,
     macro_coverage_expired: "list[dict] | None" = None,
     exit_check_unavailable: bool = False,
+    budget: "dict | None" = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the single-action morning email.
 
@@ -647,7 +730,7 @@ def render_daily_action_email(
     _lo, _hi_p = sz.get("entry_lo"), sz.get("entry_hi")
     _sh, _tc   = sz.get("shares"), sz.get("total_cost")
     _stop, _pp = sz.get("stop"), sz.get("port_pct")
-    _cap_note  = _sizing_cap_note(sz)
+    _cap_note  = _sizing_cap_note(sz, budget)
     day     = top_pick.get("day_change")
 
     is_high_conviction = (comp or 0) >= SCAN_TOP_PICK_MIN_COMPOSITE
@@ -704,6 +787,9 @@ def render_daily_action_email(
 
     # ── Section 1c: macro calendar blind-spot (if any) ────────────────────────
     macro_cov_html = _macro_coverage_banner(macro_coverage_expired)
+
+    # ── Section 1d: daily new-position budget status (top of the picks) ───────
+    budget_html = _budget_banner(budget)
 
     # ── Section 2: #1 action card ─────────────────────────────────────────────
     score_bits = []
@@ -799,6 +885,7 @@ def render_daily_action_email(
         {exit_html}
         {drift_html}
         {macro_cov_html}
+        {budget_html}
         {top_card}
         {other_html}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;
@@ -807,6 +894,7 @@ def render_daily_action_email(
           intraday moves can leave it.</b> Advisory only — you place the trade. Exit signals
           shown above are from the 8am premarket run; open the app for full context.
         </div>
+        {_budget_save_failed_footer(budget)}
       </div>
     </body></html>"""
     return subject, body
@@ -818,6 +906,7 @@ def render_intraday_entry_email(
     built_at: str,
     book_drift: dict | None = None,
     macro_coverage_expired: "list[dict] | None" = None,
+    budget: "dict | None" = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the intraday pullback entry-window email.
 
@@ -847,7 +936,7 @@ def render_intraday_entry_email(
         sz     = e.get("sizing") or {}
         _lo, _hi_p = sz.get("entry_lo"), sz.get("entry_hi")
         _stop  = sz.get("stop")
-        _cap_note = _sizing_cap_note(sz)
+        _cap_note = _sizing_cap_note(sz, budget)
 
         price_line = ""
         if cur is not None and opn is not None and drop is not None:
@@ -883,6 +972,7 @@ def render_intraday_entry_email(
 
     drift_html    = _book_drift_banner(book_drift)
     macro_cov_html = _macro_coverage_banner(macro_coverage_expired)
+    budget_html    = _budget_banner(budget)
 
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
       <div style="max-width:640px;margin:0 auto">
@@ -895,7 +985,9 @@ def render_intraday_entry_email(
         </div>
         {drift_html}
         {macro_cov_html}
+        {budget_html}
         {''.join(cards)}
+        {_budget_save_failed_footer(budget)}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;
                     margin-top:18px;border-top:1px solid #292524;padding-top:10px">
           These names cleared all gates this morning (composite + tone + sector + macro). The
@@ -961,6 +1053,7 @@ def _email_section(title: str, content: str, section_colours: dict) -> str:
 
 def render_watchlist_entries_email(
     entries: list[dict], built_at: str, gate_degraded: bool = False,
+    budget: "dict | None" = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the Watchlist "Ready to Enter" proactive
     email — the headless counterpart to opening 📋 Watchlist and seeing an
@@ -1139,15 +1232,19 @@ def render_watchlist_entries_email(
                         f'missing or too old to trust, so the margin-adjusted share of '
                         f'this risk could not be checked.</div>'
                     )
-            sizing_html += _sizing_cap_note(sz)
+            sizing_html += _sizing_cap_note(sz, budget, is_pick=False)
         elif sz.get("portfolio_unknown"):
             sizing_html = (
                 f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
                 f'📐 Position sizing unavailable — your portfolio value could not be '
                 f'verified for this run, so any share count would be a guess.</div>'
             )
-        elif sz.get("ceiling_infeasible") or sz.get("capital_infeasible") or sz.get("stop_infeasible"):
-            sizing_html = _sizing_cap_note(sz)
+        elif (sz.get("ceiling_infeasible") or sz.get("capital_infeasible")
+              or sz.get("stop_infeasible") or sz.get("budget_exhausted")
+              or sz.get("budget_unknown")):
+            # budget_exhausted / budget_unknown carry NO `shares` (the daily
+            # budget withheld the size) -- the note says why, never a blank.
+            sizing_html = _sizing_cap_note(sz, budget, is_pick=False)
 
         cards.append(f"""
         <div style="border-left:4px solid {accent};background:#1c1917;border-radius:0 6px 6px 0;
@@ -1172,7 +1269,9 @@ def render_watchlist_entries_email(
           {n} watchlist name{'s' if n != 1 else ''} newly cleared ENTER NOW · {_html.escape(str(built_at))[:19]} ET
         </div>
         {degraded_html}
+        {_budget_banner(budget)}
         {''.join(cards)}
+        {_budget_save_failed_footer(budget)}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;margin-top:18px;
                     border-top:1px solid #292524;padding-top:10px">
           These watchlist names newly cleared the same ENTER NOW checks 📋 Watchlist applies

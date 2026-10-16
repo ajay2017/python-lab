@@ -51,7 +51,9 @@ from stock_analyzer.constants import (
     MARKET_TONE_BEAR_PCT,
     SNAPTRADE_BALANCE_STALE_HOURS,
     ACCOUNT_CASH_STALE_DAYS,
+    DAILY_NEW_POSITION_BUDGET_PCT,
 )
+from stock_analyzer import daily_budget as _daily_budget
 
 _ET = pytz.timezone("America/New_York")
 
@@ -581,6 +583,12 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
     # surfaces. `db.load_account_cash()` is a pure DB read that works headlessly
     # (no Streamlit dependency). None/inert when unlevered, no cash record, or
     # the record is stale — identical no-op posture to every other caller.
+    # The daily new-position budget (docs/plans/daily-new-position-budget.md)
+    # reads the SAME resolution, so `_f255_basis`/`_f255_acct` are kept and
+    # returned as `budget_inputs`; "unknown" (not "unlevered") on a failed
+    # resolution so the budget withholds instead of assuming a basis.
+    _f255_acct = None
+    _f255_basis = "unknown"
     try:
         _f255_acct = db.load_account_cash()
         _f255_net_cap, _f255_basis = _margin_mod.resolve_net_capital(
@@ -588,6 +596,7 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
         )
     except Exception:
         _f255_net_cap = None
+        _f255_basis = "unknown"
 
     # ETF new-pick candidate pool (ETF-support Phase 2b) — resolves the
     # owner-curated etf_registry table + the currently-held book into the
@@ -717,9 +726,19 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
     # a reference_shelf failure here can never abort pick computation.
     macro_coverage = grow.get("macro_coverage_expired")   # may be None or []
 
+    _acct_ok = isinstance(_f255_acct, dict)
+    budget_inputs = {
+        "gross_book":   portfolio_value,
+        "net_capital":  _f255_net_cap,
+        "basis_state":  _f255_basis,
+        "cash_balance": _f255_acct.get("cash_balance") if _acct_ok else None,
+        "cash_as_of":   _f255_acct.get("updated_at") if _acct_ok else None,
+    }
     return {"picks": grow.get("new_picks", []) or [], "built_at": built_at,
             "errors": errors, "diag": diag, "book_drift": book_drift,
             "macro_coverage": macro_coverage,
+            # Daily new-position budget basis inputs (see run_daily_budget).
+            "budget_inputs": budget_inputs,
             # grow_today dict — gate_ledger.build_suppression_rows reads the
             # suppression buckets from here (W5 capture half). Additive; existing
             # callers that ignore this key are unaffected.
@@ -1150,6 +1169,203 @@ def compute_watchlist_entries(
         "entries": new_entries, "built_at": built_at, "errors": errors,
         "reason": None, "gate_degraded": gate_degraded,
     }
+
+
+# ── Daily new-position budget (docs/plans/daily-new-position-budget.md) ──────
+# Push surfaces (emails) WRITE allocations; this module only orchestrates the
+# strict reads + the pure daily_budget decision. kind -> allocation `source`.
+_BUDGET_SOURCE = {"pick": "scan:morning", "entry": "scan:watchlist",
+                  "intraday": "intraday"}
+
+
+def _budget_candidate(item: dict, kind: str) -> dict:
+    """daily_budget candidate dict from a pick / watchlist entry / intraday
+    entry. A watchlist entry's `score` IS its composite (the email labels it
+    so); a pick carries `composite_score` and its momentum in `score`."""
+    if kind == "entry":
+        comp, mom = item.get("score"), None
+    else:
+        comp, mom = item.get("composite_score"), item.get("score")
+    return {
+        "ticker":    str(item.get("ticker") or "").strip().upper(),
+        "composite": comp,
+        "momentum":  mom,
+        "is_etf":    item.get("asset_type") == "etf",
+        "price":     item.get("price"),
+        "sizing":    item.get("sizing"),
+    }
+
+
+def run_daily_budget(today, now, budget_inputs, emailed, others=()) -> dict:
+    """Never-raises wrapper around `_run_daily_budget`. If the budget pass
+    itself crashes, every size it was meant to bound is WITHHELD (status
+    budget_unknown) rather than left at its un-budgeted F-255 size -- an
+    unchecked budget must never read as an unlimited one -- and the result
+    carries `crashed` so the lane can fail its heartbeat."""
+    try:
+        return _run_daily_budget(today, now, budget_inputs, emailed, others)
+    except Exception as exc:
+        why = "the budget check failed"
+        for _k, it in list(emailed) + list(others):
+            sz = it.get("sizing") if isinstance(it, dict) else None
+            if isinstance(sz, dict) and "shares" in sz:
+                it["sizing"] = _daily_budget.apply_to_sizing(
+                    sz, {"status": _daily_budget.BUDGET_UNKNOWN, "reason": why})
+        return {"budget": {"state": "unknown", "reason": why, "pct_used": None,
+                           "used_logged": None, "used_allocated": None,
+                           "used_list": None, "left": None, "over_line_pct": None,
+                           "save_failed": False},
+                "per_ticker": {}, "save_failed": False, "save_error": None,
+                "written": 0, "crashed": f"{type(exc).__name__}: {str(exc)[:120]}"}
+
+
+def _run_daily_budget(today, now, budget_inputs, emailed, others=()) -> dict:
+    """Size a lane's candidates against today's new-position budget and (for
+    the EMAILED set) write the allocations. Never raises.
+
+    today: plain ET `date` (never a datetime). now: tz-aware datetime.
+    budget_inputs: compute_morning_picks' `budget_inputs` (None/{} -> unknown).
+    emailed / others: lists of (kind, item) with kind in "pick" | "entry" |
+    "intraday" and item the pick / entry dict. EMAILED items are sized in ONE
+    joint composite-first pass against what is left after logged buys and
+    existing allocations, and their new sizes are written (source by kind,
+    first writer wins). OTHERS (e.g. non-emailed picks, rec-log only) are
+    sized afterwards from what is left; they are never written. Every item's
+    `sizing` is REPLACED with the budget-adjusted dict (so the email and the
+    rec-log row show the same size); a candidate whose budget status is
+    unknown/exhausted loses its size keys but the call itself is untouched.
+
+    Reads are STRICT: trades via `load_trades_or_none` (a failed read must
+    never collapse to "nothing bought today"), allocations via
+    `load_budget_allocations_or_none`. Any None -> every budget-consuming
+    size is withheld (status budget_unknown) with a visible reason.
+
+    Returns {"budget": <flat dict the email renderers read: state, reason,
+    pct_used, used_logged, used_allocated, used_list, left, over_line_pct,
+    save_failed>, "per_ticker": {...}, "save_failed": bool,
+    "save_error": str | None, "written": int}.
+    """
+    bi = budget_inputs if isinstance(budget_inputs, dict) else {}
+    try:
+        trades_df = db.load_trades_or_none()
+    except Exception:
+        trades_df = None
+    try:
+        allocs = db.load_budget_allocations_or_none(today)
+    except Exception:
+        allocs = None
+    try:
+        logged = _daily_budget.buys_on_et_day(trades_df, today)
+    except Exception:
+        logged = None
+    try:
+        basis = _daily_budget.budget_basis(
+            bi.get("gross_book"), bi.get("net_capital"),
+            bi.get("basis_state") or "unknown", bi.get("cash_balance"),
+            bi.get("cash_as_of"), trades_df, today, now,
+        )
+    except Exception:
+        basis = {"state": "unknown", "basis": None,
+                 "reason": "net capital couldn't be determined",
+                 "lag_adjustment": 0.0}
+
+    emailed = [(k, it) for k, it in emailed if isinstance(it, dict)]
+    others = [(k, it) for k, it in others if isinstance(it, dict)]
+    res1 = _daily_budget.allocate(
+        basis, logged, allocs,
+        [_budget_candidate(it, k) for k, it in emailed])
+
+    # Pass 2 sees pass 1's NEW consumption as if already allocated (or, for a
+    # ticker the owner already bought today, as logged $ -- allocate() never
+    # counts an allocation for a logged ticker, so carry it on the other side).
+    alloc2 = None if allocs is None else dict(allocs)
+    logged2 = None if logged is None else dict(logged)
+    if res1["state"] == "ok" and alloc2 is not None and logged2 is not None:
+        for tk, ent in res1["per_ticker"].items():
+            if ent["status"] in (_daily_budget.SIZED, _daily_budget.BUDGET_PARTIAL):
+                if tk in logged2:
+                    logged2[tk] = logged2[tk] + ent["dollars"]
+                else:
+                    alloc2[tk] = {"shares": ent["shares"], "dollars": ent["dollars"]}
+    res2 = _daily_budget.allocate(
+        basis, logged2, alloc2,
+        [_budget_candidate(it, k) for k, it in others])
+
+    per = dict(res2["per_ticker"])
+    per.update(res1["per_ticker"])  # emailed wins on any (never expected) overlap
+    for _kind, it in emailed + others:
+        tk = str(it.get("ticker") or "").strip().upper()
+        if isinstance(it.get("sizing"), dict):
+            it["sizing"] = _daily_budget.apply_to_sizing(it["sizing"], per.get(tk))
+
+    rows = []
+    if res1["state"] == "ok":
+        for kind, it in emailed:
+            tk = str(it.get("ticker") or "").strip().upper()
+            ent = res1["per_ticker"].get(tk)
+            if not ent or ent["status"] not in (_daily_budget.SIZED,
+                                                _daily_budget.BUDGET_PARTIAL):
+                continue
+            rows.append({
+                "budget_date":     today,
+                "ticker":          tk,
+                "dollars":         ent["dollars"],
+                "shares":          ent["shares"],
+                "price":           it.get("price"),
+                "composite_score": _budget_candidate(it, kind)["composite"],
+                "source":          _BUDGET_SOURCE.get(kind, "scan:morning"),
+                "basis_dollars":   basis.get("basis"),
+                "budget_pct":      DAILY_NEW_POSITION_BUDGET_PCT,
+            })
+    save_failed, save_error = False, None
+    if rows:
+        try:
+            out = db.save_budget_allocations(rows)
+        except Exception as exc:
+            out = {"error": f"raised: {str(exc)[:120]}"}
+        # Contract (plan, chunk-3): error alone misses the no-DB path (error
+        # None, saved 0) and dropped rows (an emailed size never recorded).
+        # A forced run (ALERT_FORCE) on a weekend/holiday has every row dropped
+        # by write_guards (error None, saved 0, skipped_non_trading == n): that
+        # is a deliberate no-op, not a lost size -- never a red lane.
+        _all_non_trading = (out.get("error") is None
+                            and out.get("skipped_non_trading") == len(rows))
+        if not _all_non_trading and not (
+                out.get("error") is None and out.get("saved") == len(rows)
+                and not out.get("dropped_invalid")):
+            save_failed = True
+            save_error = str(out.get("error") or
+                             f"saved {out.get('saved')}/{len(rows)}, "
+                             f"dropped {out.get('dropped_invalid')}")[:160]
+
+    reason = None
+    if res1["state"] == "unknown":
+        # allocate()'s own top-level reason survives even when every emailed
+        # item is a no-size marker (no per-ticker budget_unknown entry).
+        reason = (res1.get("reason")
+                  or next((e.get("reason") for e in res1["per_ticker"].values()
+                           if e["status"] == _daily_budget.BUDGET_UNKNOWN and e.get("reason")),
+                          None)
+                  or basis.get("reason"))
+    elif res1["state"] == "called":
+        reason = basis.get("reason")
+    over_pct = None
+    b_amt = _f(basis.get("basis"))
+    if (res1["state"] == "ok" and b_amt and b_amt > 0
+            and res1["used_logged"] > res1["budget"] + 1e-9):
+        over_pct = res1["used_logged"] / b_amt * 100.0
+    budget = {
+        "state": res1["state"], "reason": reason,
+        "pct_used": res1.get("pct_used"),
+        "used_logged": res1.get("used_logged"),
+        "used_allocated": res1.get("used_allocated"),
+        "used_list": res1.get("used_list"),
+        "left": res1.get("left"),
+        "over_line_pct": over_pct,
+        "save_failed": save_failed,
+    }
+    return {"budget": budget, "per_ticker": per, "save_failed": save_failed,
+            "save_error": save_error, "written": 0 if save_failed else len(rows)}
 
 
 def _assess_pullback(spy_6mo, fragility, threshold: float) -> dict | None:

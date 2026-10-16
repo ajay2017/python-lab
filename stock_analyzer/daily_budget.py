@@ -252,7 +252,7 @@ def allocate(basis_result, logged, allocations, candidates) -> dict:
         return {"state": state, "budget": 0.0 if state == "called" else None,
                 "used_logged": 0.0, "used_allocated": 0.0, "used_list": 0.0,
                 "left": 0.0 if state == "called" else None, "pct_used": None,
-                "per_ticker": per}
+                "reason": reason, "per_ticker": per}
 
     basis = float(br["basis"])
     budget = basis * DAILY_NEW_POSITION_BUDGET_PCT / 100.0

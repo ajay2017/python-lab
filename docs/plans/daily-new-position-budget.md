@@ -72,6 +72,13 @@ misses the no-DB path (error None, saved 0) and dropped rows (an emailed size ne
 actually inserted, best-effort) can flag an emailed size that lost to an earlier writer. Pass dates as plain ET `date`
 objects (a naive datetime is rejected; a UTC datetime after 20:00 ET would otherwise read tomorrow's row).
 
+**Chunk-3 review notes for chunks 4/5 (2026-10-16):** (a) SHIP CONDITION — chunk 3 must NOT be pushed (deployed) before
+chunks 4 and 5 (local commits on main are fine): `SIZING_FORMULA_VERSION` is 4 everywhere, so app-written rows would be stamped v4 while un-budgeted, and Home /
+Watchlist would show an un-budgeted size for a name the email sized smaller. (b) "a logged buy replaces its allocation"
+also unlocks an allocation made AFTER that day's buy (an add) — unreachable in cron, relevant once the app's add lanes
+are budgeted. (c) Intraday writes allocations for fully-sized names whose share count the intraday email doesn't show;
+chunk 4 must not call those "Allocated in today's email" unless the email showed the size (owner question).
+
 ## Basis states (`daily_budget` must NOT import `stock_analyzer.margin` — awareness-only invariant,
 `tests/test_margin.py` `_GATE_MODULES`; callers resolve `resolve_net_capital` and pass numbers in, as `risk.py` does)
 levered → net capital, lag-corrected; unlevered with a cash record (cash ≥ 0) → gross book + cash, lag-corrected; no cash

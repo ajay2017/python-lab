@@ -133,8 +133,11 @@ def _ledger_composite(composites, ticker):
 #   3 = F-255: adds the SEPARATE net-capital cap (NET_CAPITAL_POSITION_CAP_PCT)
 #       on top of the existing gross-book ceiling — inert (identical to v2's
 #       output) whenever the caller doesn't pass net_capital.
+#   4 = adds the daily new-position budget
+#       (daily_budget.BUDGET_SIZING_VERSION): a stored rec_shares now also
+#       depends on the day's other candidates and today's logged buys.
 # Bump this whenever the formula changes; do NOT reuse a number.
-SIZING_FORMULA_VERSION = 3
+SIZING_FORMULA_VERSION = 4
 
 
 def _position_size_for_render(
