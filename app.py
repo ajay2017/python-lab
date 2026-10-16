@@ -10280,8 +10280,8 @@ if page == "🏠 Home":
             _mb_shown = macro_blocked[:4]
             _mb_extra = len(macro_blocked) - len(_mb_shown)
             _mb_rows = "".join(
-                f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
-                f"({b.get('sector','—')}, Score {b.get('score',0):.0f}) — {b.get('reason','')}</div>"
+                f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{_safe_html(b['ticker'])}</b> "
+                f"({_safe_html(b.get('sector','—'))}, Score {b.get('score',0):.0f}) — {_safe_html(b.get('reason',''))}</div>"
                 for b in _mb_shown
             )
             if _mb_extra > 0:
@@ -15345,11 +15345,16 @@ elif page == "📡 Signals & Advice":
                                     st.info("🟡 **Technical weakness only** — this is a low-cost fund, so the ratchet stop may handle it without a full exit.")
 
                         # Specific bearish signals from t_signals
-                        bearish_sigs = {k: v for k, v in t_sigs.items() if "bearish" in v.lower()}
+                        # Only when the technical pillar was actually measured: below
+                        # TECHNICAL_MIN_BARS the signals are warm-up artifacts.
+                        bearish_sigs = (
+                            {k: v for k, v in t_sigs.items() if "bearish" in v.lower()}
+                            if r_data.get("t_available", True) else {}
+                        )
                         if bearish_sigs:
                             st.markdown("**Specific Bearish Technical Signals:**")
                             for k, v in bearish_sigs.items():
-                                st.markdown(f"<small style='color:#ff8800'>▼ **{k}**: {v}</small>", unsafe_allow_html=True)
+                                st.markdown(f"<small style='color:#ff8800'>▼ <b>{_safe_html(k)}</b>: {_safe_html(v)}</small>", unsafe_allow_html=True)
 
                     # ── Decision checklist ────────────────────────────────────
                     with check_col:
@@ -24447,30 +24452,42 @@ elif page == "📈 Analysis":
         _n = " ".join(x for x in (_res["note"], _res.get("caveat")) if x) or None
         return _res["ps"], _f, _n
 
-    if _budget_view.home_needed(_an_bplan) or _an_bplan["state"] == "unknown":
-        # Say WHY the share counts are missing (scorecard shows "—", the export
-        # drops its Trade line) rather than leaving the absence unexplained.
-        st.caption("Share counts are withheld: today's new-position budget "
-                   f"couldn't be checked ({_an_bplan['reason']}).")
-    if _budget_view.home_needed(_an_bplan):
-        if st.button("🏠 Open Home", key="_an_budget_goto_home"):
-            st.session_state["_pending_page"] = "🏠 Home"
-            st.rerun()
-    if _budget_view.needs_watchlist(_an_bplan):
-        if st.button("📋 Open Watchlist", key="_an_budget_goto_wl"):
-            st.session_state["_pending_page"] = "📋 Watchlist"
-            st.rerun()
+    # The budget status line / caveats / buttons only make sense when at least
+    # one analysed ticker would actually be offered a share count: a Buy /
+    # Strong Buy with a real verdict (the Trade Plan's BUY branch -- Sell, Hold
+    # and withheld names never get a Trade-Plan size) that has an F-255 size.
+    def _an_offers_size(_t, _r):
+        _b = _verdict_basis(_r)
+        if _b == "withheld":
+            return False
+        _lbl = (_r["etf_rec"] if _b == "etf" else _r["rec"])["label"]
+        return _lbl in ("Buy", "Strong Buy") and bool(_an_sizing(_t)[1])
 
-    if _an_bplan["summary"] is not None:
-        _an_bl = _budget_view.status_line_text(
-            _an_bplan["summary"], mask=st.session_state.get("_privacy", True),
-            list_label=("Grow Today + 📋 Watchlist" if _an_bplan.get("wl_counted")
-                        else "Grow Today"))
-        if _an_bl is not None:
-            st.caption(_an_bl.replace("$", "\\$"))
-        _an_bo = _budget_view.over_line_text(_an_bplan["summary"])
-        if _an_bo is not None:
-            st.caption(_an_bo)
+    if any(_an_offers_size(_t, _r) for _t, _r in results.items()):
+        if _budget_view.home_needed(_an_bplan) or _an_bplan["state"] == "unknown":
+            # Say WHY the share counts are missing (scorecard shows "—", the export
+            # drops its Trade line) rather than leaving the absence unexplained.
+            st.caption("Share counts are withheld: today's new-position budget "
+                       f"couldn't be checked ({_an_bplan['reason']}).")
+        if _budget_view.home_needed(_an_bplan):
+            if st.button("🏠 Open Home", key="_an_budget_goto_home"):
+                st.session_state["_pending_page"] = "🏠 Home"
+                st.rerun()
+        if _budget_view.needs_watchlist(_an_bplan):
+            if st.button("📋 Open Watchlist", key="_an_budget_goto_wl"):
+                st.session_state["_pending_page"] = "📋 Watchlist"
+                st.rerun()
+
+        if _an_bplan["summary"] is not None:
+            _an_bl = _budget_view.status_line_text(
+                _an_bplan["summary"], mask=st.session_state.get("_privacy", True),
+                list_label=("Grow Today + 📋 Watchlist" if _an_bplan.get("wl_counted")
+                            else "Grow Today"))
+            if _an_bl is not None:
+                st.caption(_an_bl.replace("$", "\\$"))
+            _an_bo = _budget_view.over_line_text(_an_bplan["summary"])
+            if _an_bo is not None:
+                st.caption(_an_bo)
 
     # ── Summary scorecard ──────────────────────────────────────────────────
     st.subheader("Summary Scorecard")
@@ -24515,7 +24532,7 @@ elif page == "📈 Analysis":
         if earn:
             try:
                 days = (datetime.strptime(earn, "%Y-%m-%d").date() - _today_et()).days
-                earn_label = f"{earn} ({days}d)" if days >= 0 else earn
+                earn_label = f"{earn} ({days}d)" if days >= 0 else f"{earn} (past)"
             except Exception:
                 earn_label = earn
 
@@ -25101,7 +25118,8 @@ elif page == "📈 Analysis":
 
             # A withheld verdict never labels the tab "Exit Plan" (that label
             # would come from the fabricated/tainted composite's Sell rating).
-            _plan_label = "🚪 Exit Plan" if (_sa_is_sell and not _da_withheld) else "📋 Trade Plan"
+            # A non-held Sell is not an exit (nothing to exit) -- "Trade Plan" too.
+            _plan_label = "🚪 Exit Plan" if (_sa_is_sell and not _da_withheld and _sa_holding) else "📋 Trade Plan"
 
             # ── Prior Trades (F-237): build the ticker's own round-trip history
             # BEFORE the tab strip, because the tab label carries the count.
@@ -25464,11 +25482,18 @@ elif page == "📈 Analysis":
                     _exit_urgent = rec["label"] == "Strong Sell"
                     _exit_color  = "#ef4444" if _exit_urgent else "#f59e0b"
                     _exit_bg     = "#450a0a" if _exit_urgent else "#422006"
-                    _exit_action = (
-                        "Exit full position. Multiple bearish signals indicate elevated risk of continued decline."
-                        if _exit_urgent else
-                        "Consider reducing or exiting. At minimum, raise your stop loss to protect gains."
-                    )
+                    if _sa_holding:
+                        _exit_action = (
+                            "Exit full position. Multiple bearish signals indicate elevated risk of continued decline."
+                            if _exit_urgent else
+                            "Consider reducing or exiting. At minimum, raise your stop loss to protect gains."
+                        )
+                    else:
+                        _exit_action = (
+                            "Avoid opening a position — multiple bearish signals indicate elevated risk of continued decline."
+                            if _exit_urgent else
+                            "Not an entry — wait for these signals to improve before considering a position."
+                        )
                     st.markdown(
                         f"<div style='background:{_exit_bg};border-left:4px solid {_exit_color};"
                         f"border-radius:8px;padding:12px 16px;margin:10px 0'>"
@@ -25611,7 +25636,7 @@ elif page == "📈 Analysis":
                                 )
                     else:
                         c3.metric("Entry Zone",
-                                  f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A",
+                                  f"\\${r['entry_lo']:.2f}–\\${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A",
                                   help=_tip("Entry Zone"))
                         c4.metric("R:R", f"{rr_val:.1f}:1" if rr_val and rr_val > 0 else "N/A",
                                   help=_tip("R:R Ratio"))
@@ -25664,7 +25689,7 @@ elif page == "📈 Analysis":
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Price", f"${price:.2f}" if price else "N/A")
                     c2.metric("Entry Zone",
-                              f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A",
+                              f"\\${r['entry_lo']:.2f}–\\${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A",
                               help=_tip("Entry Zone"))
                     _bs_delta, _bs_color = _stop_distance_delta(price, r["stop"])
                     c3.metric("Stop Loss", f"${r['stop']:.2f}" if r["stop"] else "N/A",
@@ -26021,6 +26046,8 @@ elif page == "📈 Analysis":
                                     f"⚠️ Earnings in {days} days ({earn}) — "
                                     "consider reduced position size or waiting until after the report."
                                 )
+                        elif days < 0:
+                            st.info(f"📅 Last reported: {earn} (past)")
                         else:
                             st.info(f"📅 Next earnings: {earn} ({days}d)")
                     except Exception:
@@ -26546,13 +26573,13 @@ elif page == "📈 Analysis":
                     _cov_parts = []
                     try:
                         _at_f = float(_cov_at)
-                        _cov_mean_str = f"Mean: **${_at_f:.2f}**"
+                        _cov_mean_str = f"Mean: **\\${_at_f:.2f}**"
                         if _cov_n:
                             _cov_mean_str += f"  ({int(_cov_n)} analysts)"
                         _cov_parts.append(_cov_mean_str)
                         if _cov_lo is not None and _cov_hi is not None:
                             _cov_parts.append(
-                                f"Range: ${float(_cov_lo):.2f}–${float(_cov_hi):.2f}"
+                                f"Range: \\${float(_cov_lo):.2f}–\\${float(_cov_hi):.2f}"
                             )
                         if price and price > 0:
                             _cov_upside = (_at_f / price - 1) * 100
@@ -28032,7 +28059,7 @@ elif page == "📋 Watchlist":
             _wm[0].metric("Price",      f"${_price:.2f}" if _price else "—")
             _wm[1].metric(
                 "Entry Zone",
-                f"${_entry_lo:.2f}–${_entry_hi:.2f}" if _entry_lo else "—",
+                f"\\${_entry_lo:.2f}–\\${_entry_hi:.2f}" if _entry_lo else "—",
                 help=_tip("Entry Zone"),
             )
             _wm[2].metric("ATR Stop",   f"${_stop:.2f}" if _stop else "—",
@@ -36995,8 +37022,8 @@ elif page == "💰 Account":
                     )
             if _levered:
                 st.caption(
-                    f"⚖️ **Margin debit ${abs(_cash):,.0f}** — you hold ${_equity:,.0f} of stock on "
-                    f"${_total_acct:,.0f} of your own money. Total value & growth correctly net out the "
+                    f"⚖️ **Margin debit \\${abs(_cash):,.0f}** — you hold \\${_equity:,.0f} of stock on "
+                    f"\\${_total_acct:,.0f} of your own money. Total value & growth correctly net out the "
                     "loan; account-level concentration below runs HIGHER than equity weight because "
                     "leverage amplifies exposure relative to your own capital."
                 )
@@ -37227,13 +37254,13 @@ elif page == "💰 Account":
                 _cash_implausible = False
                 if _have_pf and _new_cash > max(_equity * 10.0, 1_000_000.0):
                     st.warning(
-                        f"⚠️ ${_new_cash:,.0f} is far larger than your ${_equity:,.0f} invested "
+                        f"⚠️ \\${_new_cash:,.0f} is far larger than your \\${_equity:,.0f} invested "
                         "equity — double-check this before relying on account figures."
                     )
                     _cash_implausible = True
                 if _have_pf and _new_cash < 0 and abs(_new_cash) > _equity:
                     st.warning(
-                        f"⚠️ A margin debit of ${abs(_new_cash):,.0f} exceeds your ${_equity:,.0f} "
+                        f"⚠️ A margin debit of \\${abs(_new_cash):,.0f} exceeds your \\${_equity:,.0f} "
                         "equity — that implies negative net worth. Double-check the sign/amount."
                     )
                     _cash_implausible = True

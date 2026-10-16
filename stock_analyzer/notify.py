@@ -23,6 +23,29 @@ from stock_analyzer.trade_economics import entry_tier
 _RESEND_ENDPOINT = "https://api.resend.com/emails"
 
 
+def _fmt_built_at(built_at) -> str:
+    """Readable ET build stamp for email headers, e.g. 'Oct 16, 2026 · 9:48 AM'.
+
+    The value is already ET, so it is never timezone-converted. Display only:
+    on ANY parse failure (None, garbage) falls back to the old raw
+    ``str(built_at)[:19]`` so a header can never crash an email render.
+    """
+    try:
+        from datetime import date, datetime
+        if isinstance(built_at, date) and not isinstance(built_at, datetime):
+            return f"{built_at.strftime('%b')} {built_at.day}, {built_at.year}"
+        if not isinstance(built_at, datetime) and ":" not in str(built_at):
+            # Date-only (some lanes pass today_str): never invent a 12:00 AM time.
+            d = date.fromisoformat(str(built_at).strip())
+            return f"{d.strftime('%b')} {d.day}, {d.year}"
+        dt = built_at if isinstance(built_at, datetime) else datetime.fromisoformat(str(built_at))
+        hour = dt.hour % 12 or 12
+        return (f"{dt.strftime('%b')} {dt.day}, {dt.year} · "
+                f"{hour}:{dt.minute:02d} {'AM' if dt.hour < 12 else 'PM'}")
+    except Exception:
+        return str(built_at)[:19]
+
+
 _NOTE_STYLE = 'style="color:#94a3b8;font-size:11px;margin-top:3px"'
 
 
@@ -416,14 +439,14 @@ def render_alert_email(
         subtitle = (f"{n} protective action{'s' if n != 1 else ''}"
                     + (f" · {n_vel} WATCH accelerating" if n_vel else "")
                     + (f" · {n_split} signal{'s' if n_split != 1 else ''} withheld" if n_split else "")
-                    + f" · built {_html.escape(str(built_at))[:19]} ET")
+                    + f" · built {_html.escape(_fmt_built_at(built_at))} ET")
     elif velocity_alerts:
         subtitle = (f"{n_vel} early warning{'s' if n_vel != 1 else ''}"
                     + (f" · {n_split} signal{'s' if n_split != 1 else ''} withheld" if n_split else "")
-                    + f" · built {_html.escape(str(built_at))[:19]} ET")
+                    + f" · built {_html.escape(_fmt_built_at(built_at))} ET")
     else:
         subtitle = (f"{n_split} signal{'s' if n_split != 1 else ''} withheld"
-                    + f" · built {_html.escape(str(built_at))[:19]} ET")
+                    + f" · built {_html.escape(_fmt_built_at(built_at))} ET")
 
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
       <div style="max-width:640px;margin:0 auto">
@@ -467,7 +490,7 @@ def render_test_email(n_alerts: int, built_at: str) -> tuple[str, str]:
           trading day, only when the set changes.
         </div>
         <div style="color:#6b7280;font-size:11px;margin-top:16px;border-top:1px solid #292524;padding-top:10px">
-          Sent by a manual test run · built {_html.escape(str(built_at))[:19]} ET. No action needed.
+          Sent by a manual test run · built {_html.escape(_fmt_built_at(built_at))} ET. No action needed.
         </div>
       </div>
     </body></html>"""
@@ -545,7 +568,7 @@ def render_db_outage_email(lane: str, lane_label: str, what_did_not_run: str,
 
         <div style="color:#52525b;font-size:11px;margin-top:16px;border-top:1px solid #e4e4e7;padding-top:10px">
           Lane <span style="font-family:monospace">{_html.escape(lane)}</span> ·
-          attempted {_html.escape(str(built_at))[:19]} ET.
+          attempted {_html.escape(_fmt_built_at(built_at))} ET.
           You are receiving this because a scheduled run could not reach the database —
           silence would have been indistinguishable from "nothing to report".
         </div>
@@ -591,7 +614,7 @@ def render_pullback_email(pb: dict, built_at: str) -> tuple[str, str]:
           is usually how medium-term investors hurt themselves.
         </div>
         <div style="color:#6b7280;font-size:11px;margin-top:16px;border-top:1px solid #292524;padding-top:10px">
-          Sent once per qualifying down-day · built {_html.escape(str(built_at))[:19]} ET.
+          Sent once per qualifying down-day · built {_html.escape(_fmt_built_at(built_at))} ET.
         </div>
       </div>
     </body></html>"""
@@ -666,7 +689,7 @@ def render_buy_picks_email(picks: list[dict], built_at: str) -> tuple[str, str]:
           DRISHTA · New Positions to Initiate
         </div>
         <div style="font-family:Arial,Helvetica,sans-serif;color:#9ca3af;font-size:12px;margin-bottom:16px">
-          {n} high-conviction setup{'s' if n != 1 else ''} · scores as of the {_html.escape(str(built_at))[:19]} ET morning scan
+          {n} high-conviction setup{'s' if n != 1 else ''} · scores as of the {_html.escape(_fmt_built_at(built_at))} ET morning scan
         </div>
         {''.join(cards)}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;margin-top:18px;
@@ -880,7 +903,7 @@ def render_daily_action_email(
                     font-weight:700;margin-bottom:2px">DRISHTA · Morning Action Brief</div>
         <div style="font-family:Arial,Helvetica,sans-serif;color:#9ca3af;font-size:12px;
                     margin-bottom:16px">
-          {_html.escape(str(built_at))[:19]} ET · one decisive call
+          {_html.escape(_fmt_built_at(built_at))} ET · one decisive call
         </div>
         {exit_html}
         {drift_html}
@@ -992,7 +1015,7 @@ def render_intraday_entry_email(
                     font-weight:700;margin-bottom:2px">DRISHTA · Intraday Entry Window</div>
         <div style="font-family:Arial,Helvetica,sans-serif;color:#9ca3af;font-size:12px;
                     margin-bottom:16px">
-          {_html.escape(str(built_at))[:19]} ET
+          {_html.escape(_fmt_built_at(built_at))} ET
           {f'&nbsp;·&nbsp;{_html.escape(spy_line)}' if spy_line else ''}
         </div>
         {drift_html}
@@ -1278,7 +1301,7 @@ def render_watchlist_entries_email(
           DRISHTA · Watchlist Ready to Enter
         </div>
         <div style="font-family:Arial,Helvetica,sans-serif;color:#9ca3af;font-size:12px;margin-bottom:16px">
-          {n} watchlist name{'s' if n != 1 else ''} newly cleared ENTER NOW · {_html.escape(str(built_at))[:19]} ET
+          {n} watchlist name{'s' if n != 1 else ''} newly cleared ENTER NOW · {_html.escape(_fmt_built_at(built_at))} ET
         </div>
         {degraded_html}
         {_budget_banner(budget, "this morning's emails")}
@@ -1736,7 +1759,7 @@ def render_liveness_email(
           DRISHTA · Weekly Roster-Liveness Check
         </div>
         <div style="color:#52525b;font-size:12px;margin-top:4px;margin-bottom:16px">
-          Chore report · built {_sh(str(built_at))[:19]} ET ·
+          Chore report · built {_sh(_fmt_built_at(built_at))} ET ·
           awareness only, never gates a recommendation
         </div>
         {sweep_html}
@@ -1854,7 +1877,7 @@ def render_data_quality_email(findings: "list[dict]", built_at: str) -> "tuple[s
           DRISHTA · Weekly Data-Quality Check
         </div>
         <div style="color:#52525b;font-size:12px;margin-top:4px;margin-bottom:16px">
-          Chore report · built {_sh(str(built_at))[:19]} ET ·
+          Chore report · built {_sh(_fmt_built_at(built_at))} ET ·
           detection only, never gates a recommendation
         </div>
         {warn_html}

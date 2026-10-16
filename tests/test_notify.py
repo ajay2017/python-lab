@@ -640,3 +640,42 @@ def test_send_email_resend_mocked_failure(mock_post):
     assert ok is False
     assert "422" in detail
     assert "Invalid sender domain" in detail
+
+
+# ─── _fmt_built_at (readable ET header stamp, 2026-10-16) ───────────────────
+
+def test_fmt_built_at_datetime_input():
+    from datetime import datetime
+    assert notify._fmt_built_at(datetime(2026, 10, 16, 9, 48, 57)) == "Oct 16, 2026 · 9:48 AM"
+
+
+def test_fmt_built_at_iso_string():
+    assert notify._fmt_built_at("2026-10-16T09:48:57") == "Oct 16, 2026 · 9:48 AM"
+
+
+def test_fmt_built_at_iso_with_offset_is_not_converted():
+    # value is already ET -- the offset must not shift the wall-clock time
+    assert notify._fmt_built_at("2026-10-16T15:05:00-04:00") == "Oct 16, 2026 · 3:05 PM"
+
+
+def test_fmt_built_at_noon_and_midnight():
+    assert notify._fmt_built_at("2026-01-02T12:00:00") == "Jan 2, 2026 · 12:00 PM"
+    assert notify._fmt_built_at("2026-01-02T00:07:00") == "Jan 2, 2026 · 12:07 AM"
+
+
+def test_fmt_built_at_garbage_falls_back_to_raw_prefix():
+    assert notify._fmt_built_at("not-a-timestamp-at-all-xyz") == "not-a-timestamp-at-"
+
+
+def test_fmt_built_at_none_falls_back():
+    assert notify._fmt_built_at(None) == "None"
+
+
+def test_fmt_built_at_date_only_string_never_invents_a_time():
+    # cron_runner passes today_str (date only) on some lanes -- must not print "12:00 AM"
+    assert notify._fmt_built_at("2026-10-16") == "Oct 16, 2026"
+
+
+def test_fmt_built_at_date_object():
+    from datetime import date
+    assert notify._fmt_built_at(date(2026, 10, 16)) == "Oct 16, 2026"
