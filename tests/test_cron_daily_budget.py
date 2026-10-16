@@ -440,7 +440,10 @@ def test_intraday_reuses_existing_allocation_and_allocates_a_new_name_from_what_
         hold_reasons.BUDGET_PARTIAL, {"n": 16, "m": 24})) in html                   # BBB
     assert [(r["ticker"], r["source"], r["shares"]) for r in written] == [("BBB", "intraday", 16)]
     assert "New positions today" in html                                             # banner
-    assert " shares" not in html.replace("16 of 24 shares", "")                      # no counts
+    # Every allocation means "a size was shown": the written name AND the
+    # reserved one show their share counts.
+    assert "→ SIZE:</b> ~<b style='color:#e5e7eb'>24 shares</b>" in html            # AAA reserved
+    assert "→ SIZE:</b> ~<b style='color:#e5e7eb'>16 shares</b>" in html            # BBB new
 
 
 def test_intraday_control_no_prior_allocations_writes_both(monkeypatch):
@@ -511,8 +514,11 @@ def test_every_email_renders_the_status_line_and_the_save_footer():
             [dict(_pick("AAA", 80), intraday_drop_pct=-2.0)], -0.5, "t", budget=bad)[1],
         notify.render_watchlist_entries_email([_entry("WLB", 70)], "t", budget=bad)[1],
     ]
-    for html in renders:
-        assert line in html
+    intraday_line = _esc(hold_reasons.budget_status_line(
+        40.0, 0, 0, 4000, 0, list_label="this email"))
+    for i, html in enumerate(renders):
+        assert (intraday_line if i == 1 else line) in html
+        assert (line in html) is (i != 1)
         assert "later suggestions may not account for these" in html.replace("&#39;", "'")
     ok = notify.render_watchlist_entries_email([_entry("WLB", 70)], "t", budget=_BUDGET_OK)[1]
     assert line in ok and "later suggestions" not in ok          # control
@@ -688,3 +694,55 @@ def test_allocate_unknown_result_carries_its_top_level_reason():
     res = daily_budget.allocate(ok, None, {}, [])
     assert res["reason"] == "the trade log couldn't be read"
     assert daily_budget.allocate(ok, {}, {}, [])["state"] == "ok"      # control
+
+
+# ── 12. intraday shows the size of every name it allocates (owner decision 2026-10-16) ──
+
+def _shares_visible(html, n):
+    return f"<b style='color:#e5e7eb'>{n} shares</b>" in html
+
+
+def test_every_intraday_written_allocation_has_its_share_count_in_the_email(monkeypatch):
+    """Invariant: an intraday allocation always means a size was shown to you."""
+    rc, emails, written, _ = _run_intraday(
+        monkeypatch, [_pick("AAA", 80), _pick("BBB", 70), _pick("CCC", 60)],
+        allocations={"AAA": {"shares": 24.0, "dollars": 2400.0}})
+    html = emails["intraday-entry"]
+    assert written, "firing control: something must have been written"
+    for r in written:
+        assert r["source"] == "intraday"
+        assert _shares_visible(html, int(r["shares"])), r
+    assert _shares_visible(html, 24)            # reserved shows the morning size
+    assert "→ SIZE:" in html and html.count("→ SIZE:") == 2   # CCC: budget used, no size
+
+
+def test_intraday_no_size_entries_show_no_share_count(monkeypatch):
+    rc, emails, written, _ = _run_intraday(
+        monkeypatch, [_pick("AAA", 80)], allocations={}, trades=None)
+    html = emails["intraday-entry"]
+    assert written == []
+    assert "→ SIZE:" not in html and "shares</b>" not in html
+    assert "Size withheld" in html
+
+
+def test_intraday_f255_no_size_marker_keeps_its_note_and_shows_no_count(monkeypatch):
+    p = _pick("AAA", 80)
+    p["sizing"] = {"capital_infeasible": True, "one_share_capital_pct": 30.0,
+                   "net_capital": 10000.0, "portfolio_value": 14000.0, "sizing_version": 3}
+    rc, emails, written, _ = _run_intraday(monkeypatch, [p], allocations={})
+    html = emails["intraday-entry"]
+    assert written == [] and "→ SIZE:" not in html and "No size suggested" in html
+
+
+def test_morning_email_control_shows_the_top_pick_size_with_the_same_invariant(monkeypatch):
+    s = Scan(monkeypatch, [_pick("AAA", 80), _pick("BBB", 70)])
+    assert [r["ticker"] for r in s.written] == ["AAA"]
+    assert "24 shares" in s.emails["morning-action"]
+
+
+def test_intraday_banner_label_is_this_email_and_morning_keeps_its_own(monkeypatch):
+    rc, emails, _, _ = _run_intraday(monkeypatch, [_pick("AAA", 80, shares=10)], allocations={})
+    assert "this email $1,000" in emails["intraday-entry"]
+    assert "this morning's emails" not in _html.unescape(emails["intraday-entry"])
+    s = Scan(monkeypatch, [_pick("AAA", 80, shares=10)])
+    assert _esc("this morning's emails $1,000") in s.emails["morning-action"]

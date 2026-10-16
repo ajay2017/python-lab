@@ -55,7 +55,7 @@ def _budget_notes(sz: dict, budget: "dict | None" = None, is_pick: bool = True) 
         f'<div {_NOTE_STYLE}>📐 {_html.escape(t)}</div>' for t in texts if t)
 
 
-def _budget_banner(budget: "dict | None") -> str:
+def _budget_banner(budget: "dict | None", list_label: str = "this list") -> str:
     """Status line at the top of an email's picks section, or "" when the
     caller passed no budget (older callers). One line per state; a budget that
     could not be checked says so rather than going silent. Escaped."""
@@ -67,7 +67,7 @@ def _budget_banner(budget: "dict | None") -> str:
         lines.append(hold_reasons.budget_status_line(
             budget.get("pct_used"), budget.get("used_logged"),
             budget.get("used_allocated"), budget.get("used_list"),
-            budget.get("left"), list_label="this morning's emails"))
+            budget.get("left"), list_label=list_label))
         if budget.get("over_line_pct") is not None:
             lines.append(hold_reasons.budget_over_line(budget.get("over_line_pct")))
     elif state == "called":
@@ -789,7 +789,7 @@ def render_daily_action_email(
     macro_cov_html = _macro_coverage_banner(macro_coverage_expired)
 
     # ── Section 1d: daily new-position budget status (top of the picks) ───────
-    budget_html = _budget_banner(budget)
+    budget_html = _budget_banner(budget, "this morning's emails")
 
     # ── Section 2: #1 action card ─────────────────────────────────────────────
     score_bits = []
@@ -937,6 +937,17 @@ def render_intraday_entry_email(
         _lo, _hi_p = sz.get("entry_lo"), sz.get("entry_hi")
         _stop  = sz.get("stop")
         _cap_note = _sizing_cap_note(sz, budget)
+        # An intraday allocation always means "a size was shown to you": every
+        # entry whose budget-adjusted sizing still carries shares (sized /
+        # partial / reserved) shows them, formatted like the morning email's
+        # #1 pick. Exhausted / unknown / F-255 no-size markers have no `shares`
+        # key and keep their notes instead (never a blank, never "0 shares").
+        _sh, _tc, _pp = sz.get("shares"), sz.get("total_cost"), sz.get("port_pct")
+        size_str = ""
+        if _sh:
+            size_str = f"~<b style='color:#e5e7eb'>{int(_sh)} shares</b>"
+            if _tc:
+                size_str += f" (~${float(_tc):,.0f}" + (f", {float(_pp):.1f}% of book" if _pp is not None else "") + ")"
 
         price_line = ""
         if cur is not None and opn is not None and drop is not None:
@@ -960,6 +971,7 @@ def render_intraday_entry_email(
           </div>
           {f'<div style="color:#f1f5f9;font-size:14px;margin-top:6px">{price_line}</div>' if price_line else ''}
           {f'<div style="color:#cbd5e1;font-size:12px;margin-top:4px">{_html.escape(entry_str)}</div>' if entry_str else ''}
+          {f'<div style="color:#f1f5f9;font-size:14px;margin-top:6px"><b style="color:#22c55e">→ SIZE:</b> {size_str}</div>' if size_str else ''}
           <div style="color:#fbbf24;font-size:12px;margin-top:3px">
             ⚠️ Price moves fast — verify live before acting.
           </div>
@@ -972,7 +984,7 @@ def render_intraday_entry_email(
 
     drift_html    = _book_drift_banner(book_drift)
     macro_cov_html = _macro_coverage_banner(macro_coverage_expired)
-    budget_html    = _budget_banner(budget)
+    budget_html    = _budget_banner(budget, "this email")
 
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
       <div style="max-width:640px;margin:0 auto">
@@ -1269,7 +1281,7 @@ def render_watchlist_entries_email(
           {n} watchlist name{'s' if n != 1 else ''} newly cleared ENTER NOW · {_html.escape(str(built_at))[:19]} ET
         </div>
         {degraded_html}
-        {_budget_banner(budget)}
+        {_budget_banner(budget, "this morning's emails")}
         {''.join(cards)}
         {_budget_save_failed_footer(budget)}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;margin-top:18px;

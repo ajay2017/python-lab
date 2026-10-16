@@ -77,7 +77,8 @@ chunks 4 and 5 (local commits on main are fine): `SIZING_FORMULA_VERSION` is 4 e
 Watchlist would show an un-budgeted size for a name the email sized smaller. (b) "a logged buy replaces its allocation"
 also unlocks an allocation made AFTER that day's buy (an add) — unreachable in cron, relevant once the app's add lanes
 are budgeted. (c) Intraday writes allocations for fully-sized names whose share count the intraday email doesn't show;
-chunk 4 must not call those "Allocated in today's email" unless the email showed the size (owner question).
+chunk 4 must not call those "Allocated in today's email" unless the email showed the size (owner question). **Owner decided 2026-10-16: (a) the intraday email SHOWS the share count for every name it
+allocates**, so an allocation always means "a size was shown to you" and "Allocated in today's email" stays true.
 
 ## Basis states (`daily_budget` must NOT import `stock_analyzer.margin` — awareness-only invariant,
 `tests/test_margin.py` `_GATE_MODULES`; callers resolve `resolve_net_capital` and pass numbers in, as `risk.py` does)
