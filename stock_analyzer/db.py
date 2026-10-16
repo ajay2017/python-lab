@@ -3552,6 +3552,207 @@ def load_gate_suppressions() -> list[dict] | None:
         return None
 
 
+# ── Daily new-position budget allocations (chunk 2, docs/plans/daily-new-position-budget.md) ──
+# "A size was pushed to the owner today." Push surfaces (cron emails) WRITE; the
+# app only READS. FIRST WRITER WINS -- an allocation is never overwritten.
+# Full DDL + verify query: docs/sql/new-position-budget-allocations.sql (the
+# OWNER applies it). RLS: FOR ALL TO service_role.
+#
+# CREATE TABLE IF NOT EXISTS new_position_budget_allocations (
+#     budget_date      DATE        NOT NULL,
+#     ticker           TEXT        NOT NULL,
+#     dollars          NUMERIC     NOT NULL CHECK (dollars > 0 AND dollars < 'Infinity'),
+#     shares           NUMERIC,
+#     price            NUMERIC,
+#     composite_score  NUMERIC,
+#     source           TEXT        NOT NULL
+#                      CHECK (source IN ('scan:morning', 'scan:watchlist', 'intraday')),
+#     basis_dollars    NUMERIC,
+#     budget_pct       NUMERIC,
+#     created_at       TIMESTAMPTZ DEFAULT NOW(),
+#     PRIMARY KEY (budget_date, ticker)
+# );
+# ALTER TABLE new_position_budget_allocations ENABLE ROW LEVEL SECURITY;
+# CREATE POLICY "Allow all (service role)" ON public.new_position_budget_allocations
+#     FOR ALL TO service_role USING (true) WITH CHECK (true);
+_BUDGET_ALLOC_SOURCES = ("scan:morning", "scan:watchlist", "intraday")
+
+
+def _budget_day_iso(x) -> "str | None":
+    """ET calendar day as 'YYYY-MM-DD', or None when it can't be trusted.
+    Plain date -> itself. tz-aware datetime -> converted to America/New_York
+    first (a UTC 01:00 stamp is the PREVIOUS ET day; sending the raw timestamp
+    lets Postgres keep the UTC day and the read misses the row -> {} -> budget
+    unlocked, a fail-open). NAIVE datetime -> rejected (its zone is unknown;
+    a naive datetime.now() in the UTC container is exactly this). String
+    (whitespace stripped) -> a bare YYYY-MM-DD is itself; a longer timestamp
+    string is parsed and handled like a datetime (offset -> ET, naive ->
+    rejected); anything unparseable -> None."""
+    from datetime import date as _date, datetime as _dt
+    try:
+        if isinstance(x, str):
+            xs = x.strip()
+            if len(xs) > 10:
+                # A timestamp string: parse it and take the datetime branch
+                # (offset -> converted to ET; naive -> rejected). Truncating to
+                # 10 chars would keep the UTC day (01:00Z is the PREVIOUS ET day).
+                if xs[-1] in "Zz":
+                    xs = xs[:-1] + "+00:00"   # py < 3.11 compat
+                x = _dt.fromisoformat(xs)
+        if isinstance(x, _dt):
+            if x.tzinfo is None or x.utcoffset() is None:
+                return None
+            from stock_analyzer.market_time import ET
+            return x.astimezone(ET).date().isoformat()
+        if isinstance(x, _date):
+            return x.isoformat()
+        if isinstance(x, str):
+            return _date.fromisoformat(x.strip()).isoformat()
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return None
+
+
+def save_budget_allocations(rows: list[dict]) -> dict:
+    """Persist pushed-size allocations to new_position_budget_allocations.
+
+    EVERY return path carries the full key set:
+    {"attempted": N, "saved": M, "error": str | None, "dropped_invalid": D,
+     "skipped_non_trading": T, "inserted": int | None}.
+    "saved" counts rows SENT to an ignore-duplicates upsert (a row that already
+    existed is silently kept as-is by the DB, which is the point). "inserted"
+    is BEST-EFFORT: PostgREST with ignore-duplicates returns only the rows
+    actually inserted, so len(res.data) when that is a list, else None
+    (unknown) -- never treat None as 0.
+
+    - is_readonly() -> no-op with error "read-only"; no rows / no DB -> clean no-op.
+    - budget_date goes through _budget_day_iso (ET day; naive datetime or
+      unparseable string -> row dropped + counted in dropped_invalid).
+    - Weekend/holiday budget_date rows are dropped (write_guards), no DB call
+      if nothing remains.
+    - ticker upper-cased (None/"" -> dropped); dollars must be finite and > 0
+      (else dropped, counted in dropped_invalid); an unknown source drops too.
+      shares/price/composite/basis/pct are finite floats or NULL.
+    - UPSERT with on_conflict="budget_date,ticker", ignore_duplicates=True
+      (FIRST WRITER WINS). Deliberately NO TypeError fallback to a plain
+      upsert: that would flip to last-writer-wins and overwrite a size the
+      owner was already shown. An unsupported kwarg surfaces as an error.
+    - A missing table surfaces as error (never a silent "saved 0"). Never raises.
+    """
+    def _ret(attempted=0, saved=0, error=None, dropped=0, nontrading=0, inserted=None):
+        return {"attempted": attempted, "saved": saved, "error": error,
+                "dropped_invalid": dropped, "skipped_non_trading": nontrading,
+                "inserted": inserted}
+
+    if is_readonly():
+        return _ret(error="read-only")
+    if not rows or not has_db():
+        return _ret()
+
+    def _fin(x, positive=False):
+        try:
+            v = float(x) if x is not None else None
+        except (TypeError, ValueError):
+            return None
+        if v is None or not math.isfinite(v) or (positive and v <= 0):
+            return None
+        return v
+
+    dropped = 0
+    normalized: list[dict] = []
+    for r in rows:
+        day = _budget_day_iso(r.get("budget_date"))
+        if day is None:
+            dropped += 1
+            continue
+        normalized.append({**r, "budget_date": day})
+    from stock_analyzer.write_guards import split_non_trading_rows
+    normalized, _non_trading = split_non_trading_rows(normalized, "budget_date")
+    _warn_non_trading("save_budget_allocations", _non_trading)
+
+    payload: list[dict] = []
+    for r in normalized:
+        tk = str(r.get("ticker") or "").strip().upper()
+        src = str(r.get("source") or "").strip()
+        dollars = _fin(r.get("dollars"), positive=True)
+        if not tk or dollars is None or src not in _BUDGET_ALLOC_SOURCES:
+            dropped += 1
+            continue
+        payload.append({
+            "budget_date":     r["budget_date"],
+            "ticker":          tk,
+            "dollars":         dollars,
+            "shares":          _fin(r.get("shares")),
+            "price":           _fin(r.get("price")),
+            "composite_score": _fin(r.get("composite_score")),
+            "source":          src,
+            "basis_dollars":   _fin(r.get("basis_dollars")),
+            "budget_pct":      _fin(r.get("budget_pct")),
+        })
+    if not payload:
+        return _ret(dropped=dropped, nontrading=_non_trading)
+    payload = _sanitize_for_write(payload, "save_budget_allocations")
+    try:
+        res = _client().table("new_position_budget_allocations").upsert(
+            payload, on_conflict="budget_date,ticker", ignore_duplicates=True,
+        ).execute()
+        data = getattr(res, "data", None)
+        return _ret(len(payload), len(payload), None, dropped, _non_trading,
+                    len(data) if isinstance(data, list) else None)
+    except Exception as exc:
+        _record_db_error(f"budget_allocations_upsert: {str(exc)[:100]}")
+        return _ret(len(payload), 0, str(exc)[:200], dropped, _non_trading)
+
+
+_BUDGET_ALLOC_PAGE_SIZE = 1000
+
+
+def load_budget_allocations_or_none(day) -> dict | None:
+    """Allocations pushed on ET date `day` (date, tz-aware datetime, or ISO
+    string -- see _budget_day_iso), shaped
+    {TICKER: {"shares": float | None, "dollars": float}} -- exactly what
+    daily_budget.allocate() consumes. Offline-sentinel contract: None on ANY
+    failure (no DB, untrustworthy `day` incl. naive datetime, missing table,
+    raised query, a result at the page cap -- truncation would undercount the
+    used budget, a fail-open -- or a malformed row: missing ticker or
+    non-finite / <= 0 dollars, which also warns naming it); {} only when the
+    read SUCCEEDED and there are no rows. Never collapse the two: {} means
+    "nothing pushed today" and unlocks the whole budget."""
+    if not has_db() or day is None:
+        return None
+    d = _budget_day_iso(day)
+    if d is None:
+        return None
+    try:
+        data = (
+            _client().table("new_position_budget_allocations")
+            .select("ticker,shares,dollars")
+            .eq("budget_date", d).order("ticker")
+            .limit(_BUDGET_ALLOC_PAGE_SIZE).execute().data
+        )
+        if data is None or len(data) >= _BUDGET_ALLOC_PAGE_SIZE:
+            return None
+        out: dict = {}
+        for r in data:
+            tk = str(r.get("ticker") or "").strip().upper()
+            try:
+                dollars = float(r.get("dollars"))
+            except (TypeError, ValueError):
+                dollars = float("nan")
+            if not tk or not math.isfinite(dollars) or dollars <= 0:
+                import warnings
+                warnings.warn(f"load_budget_allocations_or_none: malformed row {r!r} -- treating the day as unreadable")
+                return None
+            sh = r.get("shares")
+            sh = float(sh) if sh is not None else None
+            if sh is not None and not math.isfinite(sh):
+                return None
+            out[tk] = {"shares": sh, "dollars": dollars}
+        return out
+    except Exception:
+        return None
+
+
 # PostgREST's own server-side default row cap on an unpaginated `.select()`.
 # Both load_recommendations() and load_recommendations_or_none() page in
 # chunks of this size via `.range()` rather than relying on a single call,

@@ -66,6 +66,12 @@ later candidates) — this is the honest version.
 - **Budget-used / can't-check are NOT ledgered gates** (the BUY call stands; no gate_id). The rec row is still written with
   `rec_shares` NULL, `rec_sizing_version` 4 and `rec_budget_state` set.
 
+**Chunk-3 contract for a failed allocation save (chunk-2 review, 2026-10-15):** treat the write as failed unless
+`out.get("error") is None and out.get("saved") == n_intended and not out.get("dropped_invalid")` — checking `error` alone
+misses the no-DB path (error None, saved 0) and dropped rows (an emailed size never recorded). `out["inserted"]` (rows
+actually inserted, best-effort) can flag an emailed size that lost to an earlier writer. Pass dates as plain ET `date`
+objects (a naive datetime is rejected; a UTC datetime after 20:00 ET would otherwise read tomorrow's row).
+
 ## Basis states (`daily_budget` must NOT import `stock_analyzer.margin` — awareness-only invariant,
 `tests/test_margin.py` `_GATE_MODULES`; callers resolve `resolve_net_capital` and pass numbers in, as `risk.py` does)
 levered → net capital, lag-corrected; unlevered with a cash record (cash ≥ 0) → gross book + cash, lag-corrected; no cash
