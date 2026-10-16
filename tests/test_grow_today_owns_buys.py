@@ -184,20 +184,20 @@ def test_withheld_stale_and_etf_never_overflow_but_land_in_unavailable():
 
 
 def test_tsla_shape_flat_vs_bull_with_composite_80_control():
-    """Momentum 90 / composite 48.8 Hold: bull -> composite_skipped; flat ->
-    flat_day_held (named, not silent). Never overflow. A composite-80 name is
-    the control in the same fixture."""
+    """Momentum 90 / composite 48.8 Hold: it fails the composite gate on ANY
+    day, so flat AND bull -> composite_skipped (2026-10-15: the flat market is
+    not why it is held). Never overflow, never flat_day_held. A composite-80
+    name is the control in the same fixture."""
     rows = [
         {"ticker": "TSLA", "score": 90, "sector": "Consumer"},
         {"ticker": "OKAY", "score": 91, "sector": "Energy"},
     ]
     comps = {"TSLA": _bundle(48.8, rec={"label": "Hold"}), "OKAY": _bundle(80.0)}
     flat = _run(rows, comps, tone="flat")
-    assert "TSLA" in _tk(flat["flat_day_held"])
     assert "OKAY" in _tk(flat["new_picks"])                 # control fires
+    assert "TSLA" in _tk(flat["composite_skipped"])
+    assert "TSLA" not in _tk(flat["flat_day_held"])
     assert "TSLA" not in _tk(flat["overflow_picks"])
-    item = find_item(flat["flat_day_held"], "TSLA")
-    assert item["reason"] and item["verdict"] in ("conflicted", "mixed", "caution")
 
     # bull: composite 80 beyond the cap is overflow; TSLA is composite_skipped
     rows2, comps2 = _cap_fixture(n_extra=1)
@@ -226,54 +226,85 @@ def test_flat_day_held_earnings_caution_carries_a_derived_clears_when():
     assert spot["composite_score"] == 80.0
     assert set(spot) == {"ticker", "sector", "momentum_score", "composite_score", "verdict",
                          "reason", "clears_when", "earnings_date", "earn_days"}
+    assert "SPOT" not in _tk(g["composite_skipped"] + g["composite_unavailable"])
 
 
-def test_flat_day_held_conflicted_with_earnings_imminent_has_no_clears_when():
-    # composite below the Buy bar -> another gate holds it anyway; never say
-    # "clears after earnings" for it.
-    rows = [{"ticker": "SPOT", "score": 90, "sector": "Telecom"},
+def test_flat_day_subbar_names_route_to_composite_skipped_not_flat_held():
+    """The 2026-10-15 bug: a conflicted 57 sat in 'held by the flat market'
+    above a 62 in 'composite says no'. Sub-bar names (conflicted OR caution)
+    go to composite_skipped; the composite-80 caution control stays held."""
+    rows = [{"ticker": "SPOT", "score": 90, "sector": "Telecom"},   # conflicted, 57
+            {"ticker": "CAUT", "score": 90, "sector": "Materials"},  # caution, 64.9
+            {"ticker": "HELD80", "score": 90, "sector": "Utilities"},  # caution, 80
             {"ticker": "OKAY", "score": 91, "sector": "Energy"}]
-    comps = {"SPOT": _bundle(48.8, rec={"label": "Hold"}), "OKAY": _bundle(80.0)}
+    comps = {"SPOT": _bundle(57.0, rec={"label": "Hold"}),
+             "CAUT": _bundle(COMPOSITE_BUY - 0.1),
+             "HELD80": _bundle(80.0), "OKAY": _bundle(80.0)}
+    earn = (_TODAY + timedelta(days=3)).isoformat()
     g = _run(rows, comps, tone="flat",
-             earnings_lookup={"SPOT": (_TODAY + timedelta(days=3)).isoformat()})
+             earnings_lookup={"SPOT": earn, "CAUT": earn, "HELD80": earn})
     assert "OKAY" in _tk(g["new_picks"])                    # control
-    spot = find_item(g["flat_day_held"], "SPOT")
-    assert spot is not None and spot["verdict"] == "conflicted"
-    assert spot["clears_when"] is None and spot["earnings_date"] is None
+    held = find_item(g["flat_day_held"], "HELD80")
+    assert held is not None and held["clears_when"]         # box's real purpose
+    for t in ("SPOT", "CAUT"):
+        assert t in _tk(g["composite_skipped"]), t
+        assert t not in _tk(g["flat_day_held"]), t
+    # no name lands in two buckets
+    seen = [t for b in _HELD_OUT + ("new_picks", "overflow_picks", "flat_day_held")
+            for t in _tk(g[b])]
+    assert len(seen) == len(set(seen))
 
 
-def test_flat_day_held_caution_below_the_buy_bar_has_no_clears_when():
-    # earnings-only caution, but the composite (64.9) is under COMPOSITE_BUY:
-    # another gate holds it anyway, so no "clears after earnings" hint.
-    rows = [{"ticker": "SPOT", "score": 90, "sector": "Telecom"},
-            {"ticker": "OKAY", "score": 91, "sector": "Energy"}]
-    comps = {"SPOT": _bundle(COMPOSITE_BUY - 0.1), "OKAY": _bundle(80.0)}
-    g = _run(rows, comps, tone="flat",
-             earnings_lookup={"SPOT": (_TODAY + timedelta(days=3)).isoformat()})
-    assert "OKAY" in _tk(g["new_picks"])                    # control
-    spot = find_item(g["flat_day_held"], "SPOT")
-    assert spot is not None and spot["verdict"] == "caution"
-    assert spot["clears_when"] is None and spot["earnings_date"] is None
+def test_flat_day_subbar_outranking_a_qualifier_does_not_leak_staged_hold():
+    """SUB (95, composite 57) is staged then rejected ahead of OKAY (85, 80):
+    the staged item must not leak onto OKAY, and OKAY must still be picked."""
+    rows = [{"ticker": "SUB", "score": 95, "sector": "Telecom"},
+            {"ticker": "OKAY", "score": 85, "sector": "Energy"}]
+    comps = {"SUB": _bundle(57.0, rec={"label": "Hold"}), "OKAY": _bundle(80.0)}
+    g = _run(rows, comps, tone="flat")
+    assert _tk(g["new_picks"]) == ["OKAY"]
+    assert "SUB" in _tk(g["composite_skipped"])
+    assert "SUB" not in _tk(g["flat_day_held"])
+    assert "OKAY" not in _tk(g["flat_day_held"])
 
 
-def test_flat_day_held_composite_is_the_trusted_value_or_none():
-    rows = [{"ticker": "SPOT", "score": 90, "sector": "Telecom"},
-            {"ticker": "OKAY", "score": 91, "sector": "Energy"}]
-    comps = {"SPOT": _bundle(80.0, stale_as_of="2026-10-10"), "OKAY": _bundle(80.0)}
-    g = _run(rows, comps, tone="flat",
-             earnings_lookup={"SPOT": (_TODAY + timedelta(days=3)).isoformat()})
-    assert "OKAY" in _tk(g["new_picks"])                    # control
-    spot = find_item(g["flat_day_held"], "SPOT")
-    assert spot is not None
-    assert spot["composite_score"] is None and spot["clears_when"] is None
-
-
-def test_flat_day_held_never_invents_a_clearing_event():
+def test_flat_day_composite_skip_item_matches_bull_day_item():
     rows = [{"ticker": "TSLA", "score": 90, "sector": "Consumer"}]
-    g = _run(rows, {"TSLA": _bundle(48.8, rec={"label": "Hold"})}, tone="flat")
-    item = find_item(g["flat_day_held"], "TSLA")
-    assert item is not None
-    assert item["clears_when"] is None and item["earnings_date"] is None
+    comps = {"TSLA": _bundle(57.0, rec={"label": "Hold"})}
+    flat = _run(rows, comps, tone="flat")
+    bull = _run(rows, comps, tone="bull")
+    f, b = find_item(flat["composite_skipped"], "TSLA"), find_item(bull["composite_skipped"], "TSLA")
+    assert f is not None and f == b
+    assert flat["flat_day_held"] == []
+
+
+def test_flat_day_unmeasured_names_land_in_composite_unavailable_like_bull_day():
+    rows = [{"ticker": "STAL", "score": 90, "sector": "Telecom"},
+            {"ticker": "WITH", "score": 90, "sector": "Materials"},
+            {"ticker": "OKAY", "score": 91, "sector": "Energy"}]
+    comps = {"STAL": _bundle(80.0, stale_as_of="2026-10-10"),
+             "WITH": _bundle(80.0, fundamentals_available=False),
+             "OKAY": _bundle(80.0)}
+    earn = (_TODAY + timedelta(days=3)).isoformat()
+    el = {"STAL": earn, "WITH": earn}
+    flat = _run(rows, comps, tone="flat", earnings_lookup=el)
+    bull = _run(rows, comps, tone="bull", earnings_lookup=el)
+    assert "OKAY" in _tk(flat["new_picks"])                 # control
+    for t in ("STAL", "WITH"):
+        assert t in _tk(flat["composite_unavailable"]), t
+        assert t not in _tk(flat["flat_day_held"]), t
+        assert find_item(flat["composite_unavailable"], t) == find_item(bull["composite_unavailable"], t)
+
+
+def test_flat_day_held_composite_is_the_trusted_value():
+    rows = [{"ticker": "SPOT", "score": 90, "sector": "Telecom"},
+            {"ticker": "OKAY", "score": 91, "sector": "Energy"}]
+    comps = {"SPOT": _bundle(80.0), "OKAY": _bundle(80.0)}
+    g = _run(rows, comps, tone="flat",
+             earnings_lookup={"SPOT": (_TODAY + timedelta(days=3)).isoformat()})
+    assert "OKAY" in _tk(g["new_picks"])                    # control
+    spot = find_item(g["flat_day_held"], "SPOT")
+    assert spot is not None and spot["composite_score"] == 80.0
 
 
 def test_flat_day_held_empty_on_bull_day():

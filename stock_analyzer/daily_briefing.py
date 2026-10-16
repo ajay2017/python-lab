@@ -1308,6 +1308,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # caution waits for, so movers are exempt from this gate (they still
             # face the composite gate, macro gate, act-today block below, and are
             # never reached on bear days due to the early return).
+            _flat_hold_item = None
             if tone == "flat" and not is_mover and xref["verdict"] not in ("confirmed", "unverified"):
                 # No longer silent (OP-07): name it, say why, and -- only where
                 # the data supports it -- when it could clear. The earnings date
@@ -1327,7 +1328,15 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 _fd_why = str(xref.get("verdict_label") or xref["verdict"])
                 if xref["conflicts"]:
                     _fd_why += " — " + "; ".join(str(c) for c in xref["conflicts"])
-                flat_day_held.append({
+                # The item is only STAGED here. It is committed to
+                # flat_day_held after the data-quality and composite gates
+                # below, so a name those gates would reject on ANY day (a sub-
+                # Buy composite, or an unmeasured/stale one) lands in the
+                # bucket that names its real reason instead of being blamed on
+                # the flat market (2026-10-15: a 57 sat above a 62 in
+                # "composite says no"). Only a name that would otherwise
+                # qualify stays held by the flat-day check.
+                _flat_hold_item = {
                     "ticker":          ticker,
                     "sector":          sector,
                     "momentum_score":  _f(row.get("Score", 0)),
@@ -1337,8 +1346,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "clears_when":     _fd_clears,
                     "earnings_date":   _fd_earn_date,
                     "earn_days":       _fd_earn,
-                })
-                continue
+                }
 
             _base_thesis = _thesis(ticker, row, is_leader)
             # Movers lead with today's move (their entry trigger), then the
@@ -1458,6 +1466,12 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "sector":         sector,
                     "momentum_score": _f(row.get("Score", 0)),
                 })
+                continue
+
+            # Flat-day hold commits here: the name cleared the data-quality
+            # and composite gates above; held by the flat-day verdict check.
+            if _flat_hold_item is not None:
+                flat_day_held.append(_flat_hold_item)
                 continue
 
             # Sector-unknown gate (D1, sector_gate_spec.md, 2026-09-30) — FAIL

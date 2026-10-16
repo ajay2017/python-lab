@@ -114,7 +114,7 @@ F-233 app_aligned wording, F-302/F-303/F-304 known-limits lines; architecture; U
 CLAUDE.md queue (N2, budget-build N3 rule, the measurement readout); this plan's Status line.
 
 ## Tests (each paired and non-vacuous; mutation-check that each mutation landed)
-TSLA shape (momentum 90, composite 48.8 Hold → flat: `flat_day_held`/not overflow; bull: `composite_skipped`)
+TSLA shape (momentum 90, composite 48.8 Hold → `composite_skipped` on BOTH flat and bull days — corrected 2026-10-15 after the live render showed sub-bar names in the flat-day box; only names with a trusted composite ≥ COMPOSITE_BUY can be `flat_day_held`)
 with a composite-80 control in `overflow_picks`; withheld (bq or `t_available=False`) and stale/ETF names never
 in overflow; bear day `overflow_picks == []` and `add_positions == []` with `adds_paused` populated (control: same
 fixture on a bull day sizes the add); gate parity on bull days for G-01/04/09/16/20/24/25/26 (nothing lost by
