@@ -196,6 +196,20 @@ PORTFOLIO_DEPENDENT_KEYS: dict[str, dict] = {
                "a day's new buys, so a stale count can show a size the budget "
                "no longer has room for",
     },
+    # Added with daily-budget chunk 5 (B1): the Watchlist's ENTER_NOW ASKS
+    # (ticker, composite, price, F-255 sizing -- not their budgeted sizes),
+    # published for 📈 Analysis, which re-runs the Watchlist's plan over them so
+    # the same ticker never gets two counts and the two pages never spend the
+    # same leftover twice. Carries its own day + epoch too (checked by
+    # budget_view.plan_downstream); this entry is the visible-banner half.
+    # None = the page never built its asks (published even when the budget is
+    # unknown).
+    "_wl_budget_plan_cache": {
+        "producer": "watchlist", "tier": TIER_GATE,
+        "why": "the Watchlist's Ready-to-Enter asks; Analysis re-sizes them "
+               "against the current budget and sizes from what they leave, so "
+               "a stale copy re-sizes asks the Watchlist no longer shows",
+    },
 }
 
 FRESH, STALE, ABSENT = "fresh", "stale", "absent"
@@ -212,6 +226,7 @@ PRODUCER_LABELS = {
     "home":         "🏠 Home",
     "my_edge":      "🎯 My Edge",
     "intelligence": "🧩 Intelligence (reload factor exposure)",
+    "watchlist":    "📋 Watchlist",
 }
 
 
@@ -383,6 +398,7 @@ _DIMENSION_LABELS = {
     "_mirror_overhangs": "Investor Mirror",
     "_pi_factor_tilt_cache": "factor exposure",
     "_new_position_budget_cache": "today's new-position budget",
+    "_wl_budget_plan_cache": "Watchlist share counts",
 }
 
 
@@ -452,7 +468,7 @@ SURFACE_KEYS: dict[str, tuple] = {
               "_port_risk_cache", "_corr_coverage_cache", "_corr_unchecked_cache"),
     "macro": (),
     "an":    ("_mirror_orphans", "_mirror_overexp", "_mirror_overhangs", "_port_risk_cache",
-              "_reduce_calls", "_new_position_budget_cache"),
+              "_reduce_calls", "_new_position_budget_cache", "_wl_budget_plan_cache"),
     "judge": ("_reduce_calls",),
     "tj":    ("_acct_gate_cache", "_actions_cache", "_grow_composites", "_highbeta_share",
               "_port_risk_cache"),

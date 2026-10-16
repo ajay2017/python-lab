@@ -2687,6 +2687,25 @@ def _budget_price_map(_pdf):
         return {}
 
 
+def _budget_downstream_plan(gross_book, net_cap, basis_state, acct_rec, asks,
+                            mirror_gt=False, independent=False, need_wl=False):
+    """Watchlist / Analysis sizing from what is LEFT of today's budget.
+    Render-only wiring over `budget_view.plan_downstream`: re-reads trades and
+    emailed allocations strictly (so a newer email/trade counts) and takes
+    Grow Today's picks from Home's published cache only when it describes
+    today. Never writes, never consumes room for another surface."""
+    _bi = _budget_view.budget_inputs(gross_book, net_cap, basis_state, acct_rec)
+    return _budget_view.plan_downstream(
+        _bi, _budget_strict_trades(), _budget_strict_allocations(),
+        st.session_state.get("_new_position_budget_cache"),
+        _today_et(), _now_et(), asks, mirror_gt=mirror_gt, independent=independent,
+        # Analysis only: the Watchlist's published plan (day + epoch checked in
+        # the pure planner); None / stale -> disclosed, never silently trusted.
+        need_wl=need_wl, wl_cache=st.session_state.get("_wl_budget_plan_cache"),
+        epoch=_coord_epoch(),
+    )
+
+
 def _refresh_portfolio_cache_after_trade(h_df: pd.DataFrame) -> None:
     """
     Rebuild _port_df_enriched/_last_port_df/_holdings_sig_at_home_build right
@@ -24392,6 +24411,67 @@ elif page == "📈 Analysis":
         portfolio_value, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
     )
 
+    # Daily new-position budget (docs/plans/daily-new-position-budget.md):
+    # Analysis sizes each ticker as min(F-255 size, what's left of today's
+    # budget), ONE place for all four sizing sites below (scorecard, Detailed
+    # Analysis, the no-size note, the exported brief) so the on-screen size and
+    # the exported size can never differ. Each ticker is evaluated ALONE against
+    # the same leftover -- looking at a name consumes nothing and never writes.
+    # A ticker that is a Grow Today pick (or emailed) shows that same size.
+    _an_ps_f255 = {}
+    _an_asks = []
+    for _at, _ar in results.items():
+        _ap = _ar["current_price"]
+        _aps = (
+            position_sizing(
+                portfolio_value, MODERATE_RISK_PCT, _ap, _ar["stop"], SINGLE_NAME_CEILING,
+                net_capital=_f255_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+            )
+            if _ap and _ar["stop"] and _ap > _ar["stop"] else None
+        )
+        _an_ps_f255[_at] = _aps
+        _an_asks.append({"ticker": _at, "composite": _ar.get("total"),
+                         "price": _ap, "ps": _aps})
+    _an_bplan = _budget_downstream_plan(
+        portfolio_value, _f255_net_cap, _f255_basis, _f255_acct, _an_asks,
+        mirror_gt=True, independent=True, need_wl=True,
+    )
+
+    def _an_sizing(_t):
+        """(budget-adjusted ps, F-255 ps, budget note) for one analysed ticker.
+        The note carries the "doesn't yet count 📋 Watchlist" caveat too."""
+        _res = _an_bplan["results"].get(str(_t).upper())
+        _f = _an_ps_f255.get(_t)
+        if _res is None:
+            return _f, _f, None
+        _n = " ".join(x for x in (_res["note"], _res.get("caveat")) if x) or None
+        return _res["ps"], _f, _n
+
+    if _budget_view.home_needed(_an_bplan) or _an_bplan["state"] == "unknown":
+        # Say WHY the share counts are missing (scorecard shows "—", the export
+        # drops its Trade line) rather than leaving the absence unexplained.
+        st.caption("Share counts are withheld: today's new-position budget "
+                   f"couldn't be checked ({_an_bplan['reason']}).")
+    if _budget_view.home_needed(_an_bplan):
+        if st.button("🏠 Open Home", key="_an_budget_goto_home"):
+            st.session_state["_pending_page"] = "🏠 Home"
+            st.rerun()
+    if _budget_view.needs_watchlist(_an_bplan):
+        if st.button("📋 Open Watchlist", key="_an_budget_goto_wl"):
+            st.session_state["_pending_page"] = "📋 Watchlist"
+            st.rerun()
+
+    if _an_bplan["summary"] is not None:
+        _an_bl = _budget_view.status_line_text(
+            _an_bplan["summary"], mask=st.session_state.get("_privacy", True),
+            list_label=("Grow Today + 📋 Watchlist" if _an_bplan.get("wl_counted")
+                        else "Grow Today"))
+        if _an_bl is not None:
+            st.caption(_an_bl.replace("$", "\\$"))
+        _an_bo = _budget_view.over_line_text(_an_bplan["summary"])
+        if _an_bo is not None:
+            st.caption(_an_bo)
+
     # ── Summary scorecard ──────────────────────────────────────────────────
     st.subheader("Summary Scorecard")
     # Without a portfolio total the Shares and P&L/Cost columns below render "—"
@@ -24428,13 +24508,7 @@ elif page == "📈 Analysis":
     for ticker, r in results.items():
         price = r["current_price"]
         targets = r["targets"]
-        ps = (
-            position_sizing(
-                portfolio_value, MODERATE_RISK_PCT, price, r["stop"], SINGLE_NAME_CEILING,
-                net_capital=_f255_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
-            )
-            if price and r["stop"] and price > r["stop"] else None
-        )
+        ps = _an_sizing(ticker)[0]   # budget-adjusted (see _an_sizing above)
         rr_val = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
         earn = r["earnings"]
         earn_label = "—"
@@ -24645,13 +24719,9 @@ elif page == "📈 Analysis":
             df = r["df"]
             price = r["current_price"]
             targets = r["targets"]
-            ps = (
-                position_sizing(
-                    portfolio_value, MODERATE_RISK_PCT, price, r["stop"], SINGLE_NAME_CEILING,
-                    net_capital=_f255_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
-                )
-                if price and r["stop"] and price > r["stop"] else None
-            )
+            # Budget-adjusted size + the pre-budget F-255 size (the cap warnings
+            # below describe the latter) + the budget's own note.
+            ps, _ps_f255, _ps_bud_note = _an_sizing(ticker)
             sr = r["sr"]
             rm = r["risk_metrics"]
 
@@ -25807,21 +25877,35 @@ elif page == "📈 Analysis":
                                 "update it on 💰 Account to see the capital-equivalent risk."
                             )
 
-                        if ps.get("ceiling_capped"):
+                        # The cap warnings describe the F-255 size (`_ps_f255`); when
+                        # the daily budget trimmed it further, the figures above are
+                        # the budget's, so the closing sentence says which is which.
+                        _ps_budget_cut = _ps_f255["shares"] != ps["shares"]
+                        if _ps_f255.get("ceiling_capped"):
                             st.warning(
-                                f"⚠️ **Capped to your {ps['ceiling_pct']:.0f}% single-name ceiling.** "
-                                f"A pure risk-based size would be **{ps['uncapped_shares']:,} shares "
-                                f"(~{ps['uncapped_pct']:.0f}% of portfolio)** — over the ceiling, because the "
-                                "stop is tight, so the risk-budget math inflates the dollar size. The figures "
-                                f"above are capped to **{ps['shares']:,} shares (~{ps['portfolio_pct']:.0f}%)**."
+                                f"⚠️ **Capped to your {_ps_f255['ceiling_pct']:.0f}% single-name ceiling.** "
+                                f"A pure risk-based size would be **{_ps_f255['uncapped_shares']:,} shares "
+                                f"(~{_ps_f255['uncapped_pct']:.0f}% of portfolio)** — over the ceiling, because the "
+                                "stop is tight, so the risk-budget math inflates the dollar size. "
+                                + (f"Before today's budget the cap gave **{_ps_f255['shares']:,} shares "
+                                   f"(~{_ps_f255['portfolio_pct']:.0f}%)**."
+                                   if _ps_budget_cut else
+                                   f"The figures above are capped to **{ps['shares']:,} shares "
+                                   f"(~{ps['portfolio_pct']:.0f}%)**.")
                             )
-                        if ps.get("capital_capped"):
+                        if _ps_f255.get("capital_capped"):
                             st.warning(
                                 f"⚠️ **Also capped to your {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap"
                                 ".** This is separate from the single-name book cap above — it gates on "
-                                "equity after margin debit, not gross book value. The figures above are sized to "
-                                f"**{ps['shares']:,} shares (~{ps['capital_pct']:.0f}% of your net capital)**."
+                                "equity after margin debit, not gross book value. "
+                                + (f"Before today's budget the cap gave **{_ps_f255['shares']:,} shares "
+                                   f"(~{_ps_f255['capital_pct']:.0f}% of your net capital)**."
+                                   if _ps_budget_cut else
+                                   f"The figures above are sized to **{ps['shares']:,} shares "
+                                   f"(~{ps['capital_pct']:.0f}% of your net capital)**.")
                             )
+                        if _ps_bud_note:
+                            st.caption(_ps_bud_note)
 
                         # Beta envelope check — warn when adding this position would push
                         # an already-elevated portfolio beta materially higher
@@ -25848,6 +25932,11 @@ elif page == "📈 Analysis":
                                     f"Use a firm stop at **${r['stop']:.2f}** and consider a starter position "
                                     f"(50–75% of suggested size) before committing fully."
                                 )
+                    elif (not ps and _ps_bud_note and not _stop_breached
+                          and not _under_reduce):
+                        # Size withheld by today's budget / already sized in Grow
+                        # Today -- say which, not the generic "can't size" caption.
+                        st.caption(_ps_bud_note)
                     elif not ps and not _stop_breached and not _under_reduce:
                         # Neither of the two banners above fired, yet Position Sizing
                         # still didn't render — say so rather than silently vanishing
@@ -27248,11 +27337,8 @@ elif page == "📈 Analysis":
             _ap_display_rec = r["etf_rec"] if _ap_etf_ok else r["rec"]
             _ap_display_total = r["etf_total"] if _ap_etf_ok else r["total"]
             targets = r["targets"]
-            ps = (position_sizing(
-                      portfolio_value, MODERATE_RISK_PCT, price, r["stop"], SINGLE_NAME_CEILING,
-                      net_capital=_f255_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
-                  )
-                  if price and r["stop"] and price > r["stop"] else None)
+            # Same budget-adjusted size as on screen (one source: _an_sizing).
+            ps = _an_sizing(ticker)[0]
             rr_v = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
             rm = r["risk_metrics"]
             if _ap_withheld:
@@ -27294,6 +27380,10 @@ elif page == "📈 Analysis":
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "📋 Watchlist":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
+    # Cleared up front so an early st.stop() below can never leave an EARLIER
+    # render's plan for 📈 Analysis to mirror; re-published once the plan is built.
+    st.session_state["_wl_budget_plan_cache"] = None
+    _stamp_coord(["_wl_budget_plan_cache"])
     st.title("📋 Watchlist Analysis")
     st.caption(
         "Your opportunity pipeline. Each stock on the watchlist is analysed for buy readiness — "
@@ -27415,6 +27505,16 @@ elif page == "📋 Watchlist":
         or st.session_state.get("_risk_high_alerts_cache") is None
     )
     _wl_grow_sectors = set(_wl_grow_sectors_raw or [])
+    # {sector: {tickers}} of today's Grow Today picks, so the sector soft-caution
+    # can skip the case where the pick in that sector is THIS ticker (nothing to
+    # choose between). Today's memo brief only; None = unknown -> caution stays.
+    _wl_syn = _get_or_offline(st.session_state, "_home_synth_cache")
+    _wl_syn_b = (
+        _get_or_offline(_get_or_offline(_wl_syn, "bundle"), "_daily_brief")
+        if _get_or_offline(_wl_syn, "date") == _today_et().isoformat() else None
+    )
+    _wl_gt_sector_tickers = _budget_view.grow_sector_tickers(
+        _get_or_offline(_wl_syn_b, "grow_today"))
     _wl_port_beta  = _wl_port_risk.get("beta")
 
     # The G-05 sector-CEILING fallback is driven by the enriched portfolio
@@ -27519,6 +27619,7 @@ elif page == "📋 Watchlist":
             "portfolio_beta":          _wl_port_beta,
             "active_high_risk_alerts": _wl_high_alerts,
             "grow_today_sectors":      _wl_grow_sectors,
+            "grow_today_sector_tickers": _wl_gt_sector_tickers,
         }
         try:
             _wl_recs.append(build_watchlist_recommendation(_wt, _wd, portfolio_ctx=_wl_pctx))
@@ -27728,6 +27829,52 @@ elif page == "📋 Watchlist":
         _f255_wl_pv, _f255_wl_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
     )
 
+    # Daily new-position budget (docs/plans/daily-new-position-budget.md, rank 3):
+    # every ENTER_NOW ask on this page is gathered BEFORE any card renders and
+    # sized together, composite-first, from what is left after the emailed
+    # allocations and Grow Today's picks/adds. A ticker that IS a Grow Today
+    # pick today keeps its verdict but shows no second share count.
+    _wl_budget_asks = []
+    for _bw in _wl_recs:
+        if (_bw["action"] != "ENTER_NOW" or _bw["ticker"] in _wl_held
+                or _bw["ticker"] in _wl_sold_today):
+            continue   # same rows the per-ticker loop replaces with a warning
+        _bw_ps = None
+        if _bw["price"] and _bw["stop"] and _bw["price"] > _bw["stop"] and _f255_wl_pv > 0:
+            try:
+                _bw_ps = position_sizing(
+                    _f255_wl_pv, MODERATE_RISK_PCT, _bw["price"], _bw["stop"], SINGLE_NAME_CEILING,
+                    net_capital=_f255_wl_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+                )
+            except Exception:
+                pass
+        _wl_budget_asks.append({"ticker": _bw["ticker"], "composite": _bw["score"],
+                                "price": _bw["price"], "ps": _bw_ps})
+    _wl_bplan = _budget_downstream_plan(
+        _f255_wl_pv, _f255_wl_net_cap, _f255_wl_basis, _f255_wl_acct, _wl_budget_asks)
+    # Publish the Watchlist's ASKS (not its results) for 📈 Analysis: Analysis
+    # re-runs this same plan against its own current inputs, so it always shows
+    # what this page would show now (one share count per ticker; Analysis is
+    # sized from what these leave). Never None here; the page-start clear covers
+    # the early-exit paths.
+    st.session_state["_wl_budget_plan_cache"] = _budget_view.wl_plan_cache(
+        _wl_budget_asks, _today_et(), _coord_epoch())
+    _stamp_coord(["_wl_budget_plan_cache"])
+    if _budget_view.home_needed(_wl_bplan) and _wl_budget_asks:
+        st.caption("Share counts below are withheld: " + _wl_bplan["reason"] + ".")
+        if st.button("🏠 Open Home", key="_wl_budget_goto_home"):
+            st.session_state["_pending_page"] = "🏠 Home"
+            st.rerun()
+    if _wl_budget_asks and _wl_bplan["summary"] is not None:
+        _wl_bl = _budget_view.status_line_text(
+            _wl_bplan["summary"], mask=st.session_state.get("_privacy", True),
+            list_label="Grow Today + this page")
+        if _wl_bl is not None:
+            st.caption(_wl_bl.replace("$", "\\$"))
+        _wl_bo = _budget_view.over_line_text(_wl_bplan["summary"])
+        if _wl_bo is not None:
+            st.caption(_wl_bo)
+
     # ── Per-ticker rows ────────────────────────────────────────────────────────
     for _wr in _wl_view:
         _action   = _wr["action"]
@@ -27817,6 +27964,13 @@ elif page == "📋 Watchlist":
                 )
             except Exception:
                 pass
+        # ENTER_NOW rows are sized from what's left of today's budget (pre-pass
+        # above); the F-255 size is kept for the cap-explanation lines.
+        _wl_ps_f255 = _wl_ps
+        _wl_bud = (_wl_bplan["results"].get(str(_ticker).upper())
+                   if (_wl_bplan is not None and _action == "ENTER_NOW") else None)
+        if _wl_bud is not None:
+            _wl_ps = _wl_bud["ps"]
 
         _row_open_key = f"_wl_row_open_{_ticker}"
         _row_is_open  = st.session_state.get(_row_open_key, False)
@@ -27997,9 +28151,13 @@ elif page == "📋 Watchlist":
                     # 15% single-name ceiling" above a 63-share / 7.6% result
                     # that the 15% ceiling (124 sh) did not produce — the
                     # net-capital cap did, and it was mentioned only as "also".
+                    # The cap lines describe the F-255 size (pre-budget); the
+                    # budget's own note follows, so the two never disagree.
                     for _cap_line in _sizing_cap_lines(
-                            _wl_ps, NET_CAPITAL_POSITION_CAP_PCT):
+                            _wl_ps_f255, NET_CAPITAL_POSITION_CAP_PCT):
                         st.caption(_cap_line)
+                    if _wl_bud is not None and _wl_bud["note"]:
+                        st.caption(_wl_bud["note"])
 
                     # C2: capital-equivalent risk disclosure — awareness only,
                     # no sizing/gate change. Reuses the net-capital/basis pair
@@ -28023,6 +28181,10 @@ elif page == "📋 Watchlist":
                             "is missing or too old to convert it to net-capital terms — "
                             "update it on 💰 Account to see the capital-equivalent risk."
                         )
+                elif _wl_bud is not None and _wl_bud["note"]:
+                    # Size withheld by the daily budget / already sized in Grow
+                    # Today -- say which, not the generic "can't size" caption.
+                    st.caption(_wl_bud["note"])
                 elif _price:
                     # Same two/three-cause split as Analysis — see the note there.
                     _wl_no_size_reason = sizing_unavailable_reason(
@@ -29062,6 +29224,28 @@ elif page == "📒 Trade Journal":
             f"at **${_pb_price:,.2f}**"
             f"{_pb_extra}"
         )
+        # Daily new-position budget awareness (pre-save preview: today's logged
+        # buys PLUS this one). Never blocks, never sizes -- the Confirm button
+        # below is unaffected whatever this says. A figure that can't be
+        # computed says so instead of going silent.
+        try:
+            _pb_pv = float(st.session_state.get("_portfolio_value") or 0.0)
+            _pb_acct = db.load_account_cash()
+            if _pb_pv > 0:
+                _pb_net, _pb_bstate = _margin_mod.resolve_net_capital(
+                    _pb_pv, _pb_acct, ACCOUNT_CASH_STALE_DAYS, _now_et())
+            else:   # portfolio not loaded this session -> no honest basis
+                _pb_net, _pb_bstate = None, "unknown"
+            _pb_prev = _budget_view.buy_preview(
+                _budget_view.budget_inputs(_pb_pv, _pb_net, _pb_bstate, _pb_acct),
+                _budget_strict_trades(), float(_pb_shares) * float(_pb_price),
+                _today_et(), _now_et(), pending_traded_at=_pending_buy.get("traded_at"))
+        except Exception:
+            _pb_prev = {"state": "unknown",
+                        "text": "Daily new-buy budget couldn't be checked "
+                                "(the budget check failed) — this entry is not blocked."}
+        if _pb_prev["text"]:
+            st.caption(_pb_prev["text"].replace("$", "\\$"))
         _pb_c1, _pb_c2 = st.columns([1, 1])
         if _pb_c1.button("✅ Confirm BUY", type="primary", key="_tj_confirm_buy",
                           width="stretch",
@@ -40911,6 +41095,8 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 - **"⏸ Flat market — only fully confirmed setups today"** — names held back on a flat day, with their composite and, where it can be known, what would clear them (e.g. after earnings).
 - **"Momentum leads — not checked today"** (collapsed) — hot names Grow Today didn't evaluate today, so they carry no verdict.
 - **"Adds paused on a flat/down day"** (collapsed) — holdings that would qualify for an add-to-winner; adds resume on the next up day.
+
+**Daily new-position budget (since 2026-10-16).** Each idea is capped on its own (15% of the book, 25% of net capital); this caps the **sum**. One trading day's new buys — what you've logged (adds included), sizes already emailed to you today, and newly sized suggestions — are capped at **40% of net capital**. Grow Today, 📋 Watchlist, 📈 Analysis and the three emails each show a *"New positions today: … of net capital … — budget 40%, … left"* line. Sizes already emailed are locked (*"Reserved by today's email run"*); everything later is sized from what's left, highest composite first — Grow Today, then the Watchlist, then Analysis. A name that gets less says *"Sized from what's left of today's budget — n of m shares"*; once it's used, a pick keeps its BUY call but reads *"not sized"* — never dropped, and it resets the next trading day. Sells don't give budget back, and nothing ever trims a holding. If the budget can't be checked (trade log or today's emailed sizes unreadable, cash figure stale or missing) the call still shows and the size is withheld with the reason. A ticker gets one share count a day: a Grow Today pick reads *"Sized in Grow Today today — see 🏠 Home"* on the Watchlist, and Analysis matches the Watchlist's size once you've opened the Watchlist today (and again after logging a trade) — until then it says it doesn't yet count the Watchlist's Ready-to-Enter names. Logging a BUY in the Trade Journal shows today's total including that buy — a heads-up, never a block. It can't see a buy you didn't log, and for up to 5 minutes after an email or a trade logged elsewhere a page can show a pre-update size.
 
 **What it deliberately does *not* do:** it does **not** scan the entire market. A thin micro-cap up 300% on the day — the kind a broker's *"all stocks > 20% today"* filter shows — won't appear here by design: the app screens *liquid, quality* names and stays a medium-term advisor, not a squeeze-chaser. To check any specific ticker yourself, use **🔍 Research a Stock** on Home or the **📈 Analysis** page — type a company name ("microsoft") instead of a ticker and it resolves the most likely match, disclosing which symbol it picked (and any other close-scoring match, e.g. GOOGL vs GOOG) rather than silently substituting one.
 """

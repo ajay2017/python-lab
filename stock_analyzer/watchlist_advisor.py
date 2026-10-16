@@ -94,7 +94,8 @@ def _pct_from_entry(price: float, entry_hi: float) -> float | None:
     return (price - entry_hi) / entry_hi * 100
 
 
-def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None) -> dict | None:
+def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None,
+                         ticker: str | None = None) -> dict | None:
     """
     Check whether portfolio risk state breaches limits for opening a new
     position. ENTER_NOW from this advisor only sees the single stock; it must
@@ -235,8 +236,19 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None) -> dict | None
     # be read as "same sector" as anything, including another unclassified
     # Grow Today pick that also fell back to "Other".
     _raw_sector = portfolio_ctx.get("sector_of_ticker") or ""
+    # "Pick the higher-conviction setup" is false when the Grow Today pick in
+    # that sector IS this same ticker -- one setup, nothing to choose between.
+    # `grow_today_sector_tickers` ({sector: {tickers}}) is optional: absent or
+    # missing this sector it stays "unknown" and the caution still fires.
+    _gt_by_sector = portfolio_ctx.get("grow_today_sector_tickers")
+    _gt_here = (_gt_by_sector.get(_raw_sector) if isinstance(_gt_by_sector, dict)
+                else None)
+    _same_ticker_only = (
+        bool(_gt_here) and bool(ticker)
+        and {str(t).upper() for t in _gt_here} == {str(ticker).upper()}
+    )
     if (_raw_sector and _raw_sector != UNCLASSIFIED_SECTOR
-            and _raw_sector in grow_sectors):
+            and _raw_sector in grow_sectors and not _same_ticker_only):
         soft.append(
             f"Daily Briefing → Grow Today is also recommending a **{sector_name}** pick today. "
             "Opening both stacks sector exposure — pick the higher-conviction setup, "
@@ -511,7 +523,7 @@ def build_watchlist_recommendation(
         # Portfolio risk gate: ENTER_NOW from this advisor only sees the single
         # stock — it must also respect portfolio-level concentration and beta.
         ticker_beta = (data.get("risk_metrics") or {}).get("beta")
-        gate        = _portfolio_risk_gate(ticker_beta, portfolio_ctx)
+        gate        = _portfolio_risk_gate(ticker_beta, portfolio_ctx, ticker)
 
         if gate and gate["severity"] == "hard" and gate["kind"] == "sector_unknown":
             # Data abstention, NOT a breach (owner decision D1, 2026-09-30):

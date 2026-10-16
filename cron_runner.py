@@ -2077,8 +2077,10 @@ def _run_intraday(now_et, force: bool) -> int:
 
     Daily new-position budget: a name already allocated this morning reuses its
     allocation; a NEW name is sized from what is left and written (source
-    'intraday'). The email shows no share counts -- only the budget status line
-    and a per-entry note. A failed allocation write fails the lane (red
+    'intraday'). The email shows the share count for every name it allocates
+    (owner decision 2026-10-16, `f331739`), so an allocation always means a size
+    was shown, plus the budget status line and a per-entry note. A failed
+    allocation write fails the lane (red
     heartbeat) after the email has gone out."""
     global _LAST_LANE_FAILURE_DETAIL
     _LAST_LANE_FAILURE_DETAIL = None
