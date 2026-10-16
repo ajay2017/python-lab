@@ -1,0 +1,178 @@
+# Shared new-entry check — Watchlist, its email and Analysis get Grow Today's entry checks; Grow Today adds get a news check
+
+**Status: DESIGNED + OWNER-APPROVED 2026-10-16 (all 12 recommendations, D1-D12, plus additions A1-A4).
+Mockup v1 APPROVED 2026-10-16: `docs/mockups/2026-10-16-shared-entry-check-mockup.html`. Chunk 1 (golden
+master) DONE 2026-10-16 (`tests/test_grow_today_golden.py`, 144 scenarios, 8 mutations all caught); scope
+sweep before chunk 3 in progress.**
+
+**Chunk 1 findings that bind later chunks:** (1) `_grow_today` takes the tone as an INPUT — the ±0.5 rule
+lives in app.py/headless — so the golden cannot prove `classify_tone`; chunk 2 needs its own −0.5/−0.49 and
++0.5/+0.49 unit tests. (2) Earnings never blocks an add INSIDE `_grow_today`: the only block is upstream (the
+Review earnings card routes the name to "ACT" in `_add_block_gate`). A held name with earnings tomorrow and no
+Review card IS added (golden `N2EARN1`). Chunk 7 must make the earnings check explicit in the add path rather
+than rely on the Review card existing. (3) The only wall-clock read reachable from `_grow_today` is
+`daily_briefing.py` ~931 (`_dt.now(ET)`). Planner (Opus 5.5), one pass,
+PROCEED WITH CHANGES. Governing principle: OP-07 (`docs/requirements.md` §2A.1, "Gate the call, never the
+candidate"). Covers two CLAUDE.md queue items: F-305 follow-up (b) "shared new-entry check" and N2.
+
+## Why
+Seen live 2026-10-16, a bear day in Protect Mode: 🏠 Home said "Defer new entries" while 📋 Watchlist showed
+BKNG (composite 80.8) READY TO ENTER sized 9 sh, and 📈 Analysis showed Strong Buy / 9 suggested. Grow
+Today checks stale data, the G-07 macro calendar, negative news and bear-day tone before it calls a new buy.
+`watchlist_advisor`'s ENTER_NOW, the Watchlist "Ready to Enter" email (F-265) and Analysis's sizing lane
+check none of these. Owner calls 2026-10-15: stale YES, macro YES, news YES, bear-day DEFER with a visible
+card, Grow Today's flat-day bar 78 NO (stays Grow-Today-only).
+
+## What each surface checks today (planner, from code at `c72e7b8`; app.py lines approximate)
+
+| Check | Grow Today new picks (`daily_briefing.py`) | Grow Today adds | Watchlist ENTER_NOW (`watchlist_advisor.py`) | Watchlist email (`headless_alert_engine.py`) | Analysis sizing (`app.py`) |
+|---|---|---|---|---|---|
+| Bear-day tone | early return 1049-1105; one `__MARKET__` G-23 ledger row | bull days only (2079) | none | none — tone is computed only inside `compute_morning_picks` (493-511), never passed to `compute_watchlist_entries` (761) | none |
+| Tone fetch failed | silently treated as "flat" (app ~6368/~6549; headless 493/510) | — | — | — | — |
+| Flat-day bar / hold | 1108; 1315-1352 | — | none (stays so) | none | none |
+| Macro G-07 | map 909-947, applied 1258-1276 | **none** | none | none | none |
+| Stale data | `stale_as_of` 1391; fund age 1404-1411 | — | none (only `verdict_basis`, 334) | none | none |
+| Negative news | `_cross_reference` avg ≤ `NEWS_SENTIMENT_NEGATIVE` (516-526) → `reconcile_signals` skip → `news_skipped` 1513-1535 | indirect only: Act Today critical news or Review warning news → `_add_block_gate` "ACT" (silent) | none | none | none |
+| Earnings ≤ `EARNINGS_IMMINENT_DAYS` | reconciled caution → `earnings_waiting` 1541 | **already blocked, silently** (Review earnings card → "ACT") | `HOLD_OFF_EARNINGS` 482 | inherited | "Earnings ✗" tile shown **but the size still renders** |
+| Budget (F-306) | `budget_view.postpass` | same | asks keyed on `action == "ENTER_NOW"` → `_wl_budget_plan_cache` | `_emailed_items` = entries | `_an_asks` = every result |
+
+**N2, corrected:** earnings already blocks adds (no visible reason). The news gap is *inverted* — a single
+tier-1 headline at −0.40 does not block an add (Act Today needs ≥ 2 such headlines; Review only covers
+(−0.25, −0.05]), while a mild −0.10 headline does. Held news is capped at 20 headlines book-wide
+(`data.py` 469/511). Macro never checks adds.
+
+## Design
+
+**New pure module `stock_analyzer/entry_eligibility.py`** — `_GATE_FILES` + CLAUDE.md's enumeration in the
+same commit. No clock reads (now/today passed in), no app/db imports.
+
+| Function | Content |
+|---|---|
+| `classify_tone(sp500_pct)` | the bull/bear/flat rule now copied in app ~6331 and headless 501; bear = `≤ MARKET_TONE_BEAR_PCT` |
+| `resolve_tone_state(home_ctx, home_is_today, home_built_at, live_pct, live_ok)` | `{tone, sp500_pct, available, source: "home"\|"live"\|None, as_of}` — today's Home brief, else live read, else unavailable |
+| `macro_block_map(macro_events, today, now_et)` / `macro_hold(sector, map)` | 909-947 + 1258-1262 lifted verbatim, `now_et` injected; `macro_events is None` = unchecked |
+| `data_trust_hold(bundle)` | 1391-1411 verbatim |
+| `news_compound(items)` / `is_negative_news(c)` | one derivation (raw VADER over `news_raw`, same as Grow Today candidates); predicate identical to `reconcile_signals` line 118 |
+| `entry_check(...)` | `{eligible, holds: [{check, gate_id, reason, clears_when, gate_value, gate_threshold}], binding, unchecked: [{check, why}]}`; never `None`; precedence stale → tone → macro → news → earnings; every applicable hold listed, the ledger records only `binding` |
+
+Grow Today keeps its own order and buckets and calls the lifted pieces in place — behaviour proved unchanged
+by a golden-master test (chunk 1).
+
+**Surfaces**
+- **Watchlist:** `build_watchlist_recommendation(..., entry_ctx=None)` — `None` is the legacy path,
+  byte-identical. With a context, the check runs in the ENTER_NOW branch after the existing hard fit gates; a
+  held name becomes new action **`ENTRY_HELD`** (with `hold_kind`), never ENTER_NOW. That one choice keeps it
+  out of the budget asks, the `enter_now` capture, the email list and Analysis's mirror.
+- **Analysis:** not-held Buy/Strong Buy sizing only — size withheld, excluded from `_an_asks`, reasons in the
+  existing Gate-checks strip; verdict label kept.
+- **Email:** `compute_morning_picks` returns its `entry_context` (market context + macro events); `_run_scan`
+  passes it into `compute_watchlist_entries`, so both emails in one run share one tone read.
+- **Adds (N2):** news check added LAST in `_add_block_gate`, new `news_blocked_adds` bucket, so every existing
+  gate's bucket and ledger rows are unchanged.
+
+**Input unavailable**
+
+| Check | Missing input | Behaviour | Why |
+|---|---|---|---|
+| Stale | keys absent (old bundles) → pass | hold (closed) when flagged | same as Grow Today |
+| Tone | fetch failed / `tone_available` False | **open, visible "bear-day check couldn't run"** | Grow Today runs that day as flat; closed would make them disagree |
+| Macro | `None` / raised | open + disclosure; `[]` = checked, none | static calendar; same as Grow Today cron |
+| News | no headlines (indistinguishable from an outage) | open; card says "no recent headlines to check" | same as Grow Today |
+| Earnings | date missing | open (current behaviour everywhere) | — |
+| `entry_check` crashes | — | **closed**: no ENTER_NOW, "entry check couldn't run" | it is a gate |
+
+New `tone_available` flag on the market context: today a failed index fetch is recorded as "flat" (a
+fabricated reading). Grow Today keeps treating it as flat (D1) but gets a render-only caption.
+
+**Coordination:** Watchlist and Analysis read tone and macro events from today's `_home_synth_cache` bundle
+(`_market_context`, `_macro_events`, app ~7084) — the same object Home renders; no new cache key. `ENTRY_HELD`
+never reaches the budget asks, emailed items or `new_position_budget_allocations`.
+
+## Owner decisions (2026-10-16 — all planner recommendations accepted)
+
+| # | Decision |
+|---|---|
+| D1 | Tone unreadable → **fail open with disclosure** on every surface; render-only caption on Grow Today too |
+| D2 | Tone source for Watchlist/Analysis → **today's Home brief first, then a live read**, source + time labelled |
+| D3 | **G-28** = Watchlist macro hold (sibling of G-07; reusing G-07 would collide on the ledger unique key (ticker, rec_date, gate_id, source)). **G-29** = Watchlist bear-day deferral, one row per ticker, lane "downgrade", counterfactual=True (reusing G-23 would break its `__MARKET__` readout). **No ledger rows** for stale (data abstention), news (F-302 precedent), Analysis holds, add-news holds |
+| D4 | Cron writes Watchlist ledger rows too (G-05/06/13/28/29, `source="cron"`) — so deferral costs are graded on days the Watchlist isn't opened |
+| D5 | Deferred names are not captured as `enter_now`; the email re-announces them on the next ready day with "(deferred yesterday)" |
+| D6 | Every Watchlist name deferred → **send no email** |
+| D7 | Analysis applies the full check incl. earnings, not-held names only; held-name add sizing stays the existing D5 gap |
+| D8 | G-07 macro on Grow Today adds → **out of scope**, queued as its own decision |
+| D9 | Watchlist stale check → **ENTER_NOW only**; REMOVE untouched |
+| D10 | `enter_now` population changes at cutover → **dated footnote** on the ~Nov base-rate readout, no version column |
+| D11 | **No new constants.** `GROW_TODAY_MAX_FUND_AGE_DAYS` (2), `MACRO_IMMINENT_DAYS` (3), `MARKET_TONE_BEAR_PCT` (−0.5), `NEWS_SENTIMENT_NEGATIVE` (−0.15) now govern every entry surface; names kept, docs say so |
+| D12 | Held cards sit in the Actionable view directly under ENTER NOW (confirm on mockup) |
+
+## Card / banner wording intent (mockup is authoritative once approved)
+- **Bear-day Watchlist banner:** "🛡️ Protect Mode — S&P −0.8% (risk-off ≤ −0.5%). New entries deferred,
+  matching 🏠 Home. N names would otherwise be Ready: BKNG…" + source line ("from Home's Brief, 09:42 ET" /
+  "live read").
+- **Bear-day card:** "Ready on its own numbers — deferred: market risk-off". Clears on a session where the S&P
+  isn't down 0.5% or more; re-checked every load. No size, no trade/log button, ▶ Analyze only.
+- **Macro card:** "Held: CPI in 2d (Consumer)" — clears after the release.
+- **News card:** "Held: negative news (avg −0.22, n headlines) '…'" — clears when the average rises above −0.15.
+- **Stale card:** "Held: score uses cached data from <date>" / "fundamentals N days old" — refresh to re-check.
+- Watchlist KPI "0 Enter Now · 3 held today"; held/sold-today overrides catch `ENTRY_HELD`; Watchlist
+  Resurrection excludes it.
+- **Analysis:** banner under the verdict strip; composite label kept; Shares "—".
+- **Email footer:** "Market tone at 09:45 ET: flat (S&P −0.2%); the app re-checks when opened and defers if the
+  market turns risk-off." + any couldn't-run lines.
+
+## Build plan
+
+| # | Chunk | Type | Files | Tests |
+|---|---|---|---|---|
+| 0 | This doc + mockup → owner approval | lead | docs | — |
+| 1 | Golden-master of `_grow_today` at HEAD: tone × macro (none / 3d / 4d / `__ALL__` / day-0 released / FOMC same day before+after time) × stale/fresh/fund-age 2 vs 3/keys absent × news −0.15/−0.149/none × earnings 0/7/8; clock frozen | implementer, tests only | tests | itself |
+| 2 | `entry_eligibility.py`; Grow Today onto the lifted fns; `classify_tone` wired into app + headless; `tone_available`; `_GATE_FILES` + CLAUDE.md | implementer → reviewer | new module, daily_briefing, headless, app (2 lines), pre_tool_checks, CLAUDE.md | golden unchanged; −0.5 bear / −0.49 not; macro day 3 holds, day 4 not; `None` vs `[]` both reachable; resolver order; news leg == `reconcile_signals` skip over a matrix |
+| 3 | Watchlist `ENTRY_HELD` + G-28/G-29 ledger builder + registry + §2A.3 rows | implementer → reviewer | watchlist_advisor, gate_ledger, gate_registry, requirements | `entry_ctx=None` byte-identical; held never ENTER_NOW; `build_enter_now_rows` → 0 rows; no sizing; registry anti-rot |
+| 4 | Watchlist page wiring (render) + pure `watchlist_asks()` | implementer → reviewer | app, budget_view | asks exclude `ENTRY_HELD`; screenshot (no literal `**`, no `$`-LaTeX) |
+| 5 | Email: pass `entry_context`; footer; cron ledger rows (D4) | implementer → reviewer | headless, cron_runner, notify | bear → entries [], no `enter_now` rows, no allocation; app and cron give the same card for identical inputs |
+| 6 | Analysis: pure `analysis_entry_hold`; withhold size; Gate-checks rows | implementer → reviewer | new pure fn, app | held → no size, excluded from asks; earnings day 7 → no size |
+| 7 | N2: news check last in `_add_block_gate`; `news_blocked_adds`; earnings pin test | implementer → reviewer | daily_briefing, app render | old buckets identical; `add_positions` loses exactly the news-held names; single tier-1 −0.40 now holds; earnings tomorrow never reaches `add_positions` (paired with a fixture that does — not vacuous); mutation-check each |
+| 8 | Docs | lead | requirements F-307 + §2A.3 G-28/G-29 + F-264/265/306/305 lines; architecture; user-manual; User Guide; shipped-log; CLAUDE.md queue; this Status line; memory | `check_constants_documented` |
+
+**Chunks 4, 5 and 6 push together** — any one alone creates a new cross-surface disagreement. Chunk 7 can
+ship any time after chunk 2.
+
+## Additions agreed after the mockup (owner, 2026-10-16)
+- **A1 — emailed, then deferred (chunk 4).** A name the 09:45 email sized on a flat market, which the app
+  later defers (market turned risk-off), shows on the Watchlist as "Emailed at 9:45 AM with 6 sh — now
+  deferred: market risk-off". Its allocation in `new_position_budget_allocations` **stays locked** (stays
+  counted against today's budget) — the conservative direction; nothing is released. Same treatment for an
+  emailed name later held for macro/news/stale. Test: an allocated + `ENTRY_HELD` name renders the emailed
+  line, is still counted in `used`, and gets no new size.
+- **A2 — Trade Journal awareness (chunk 4).** The BUY confirm line adds "Note: <TICKER> is held today —
+  <reason>" when the ticker is `ENTRY_HELD` in today's Watchlist plan or deferred/held by Grow Today. Awareness
+  only — never blocks or alters the trade (same posture as the F-306 budget line). If the hold state can't be
+  read, say nothing (no false "not held" claim either).
+- **A3 — pre-registered review rule for G-29 (Watchlist bear-day deferral), written before any data.** Graded
+  by the existing Gate Suppression Ledger readout at `GATE_LEDGER_HORIZON_TRADING_DAYS`, deferred names' forward
+  alpha vs SPY. **No review before** the readout's "firm" band (`GATE_LEDGER_FIRM_CALLS` matured calls and
+  `GATE_LEDGER_MIN_TICKERS` distinct tickers) **and** rows from at least 3 distinct bear days (one episode is
+  one sample, not many). **If** the deferred names' alpha is positive and distinguishable from zero by the
+  readout's own rule → deferring cost money → the lead brings a proposal to drop or narrow the Watchlist
+  bear-day deferral (an owner decision, never automatic), read side by side with G-23's verdict so Grow Today
+  and Watchlist are decided together and don't split again. Zero/negative/indistinguishable → keep. Not firm
+  within 12 months of the first row → keep, no change. Do not soften this later.
+- **A4 — room for more checks (chunk 2).** `entry_check` takes its checks as an ordered list of small pure
+  check functions (each returns a hold, an unchecked note or nothing), so a future check — e.g. a
+  margin-cushion floor, if the owner reopens that decision (open item 7 in
+  memory `project_next_session_plan_2026_10_16`) — is one function plus one list entry. This decides no
+  policy; no leverage check is built.
+- **A5 — optional, not scheduled:** show "held N days" on a card held several sessions running.
+- **Scope sweep before chunk 3:** a read-only Opus sweep of every surface that hands out a share count or a
+  buy call (incl. Diversification Advisor ADD cards, beta-repair adds, Rebalancer ADD) vs every cap/gate. Open
+  question it feeds: should a risk-REDUCING defensive add be deferred on a bear day like any other buy (lead's
+  view: no; owner's call).
+
+## Known limits (accepted)
+- Tone from Home's brief is as old as the brief (≤ 30 min auto-refresh, longer if locked); the source time is
+  printed so the Watchlist agrees with what Home shows.
+- Grow Today drops a candidate headline duplicating a held name's; Watchlist computes per ticker, so the two
+  can differ on a shared headline.
+- Analysis's news tab is LLM-rescored; the entry check uses raw VADER (as Grow Today candidates do). The hold
+  reason quotes the headline and its score.
+- Pre-market tone is yesterday's close — inherited from Home.

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mockup — Shared new-entry check (Watchlist / email / Analysis / Grow Today adds)</title>
+<style>
+  body { background:#0e1117; color:#e5e7eb; font-family:-apple-system,Segoe UI,Roboto,sans-serif; margin:24px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:#94a3b8; font-size:13px; margin-bottom:20px; }
+  .day { margin:28px 0 8px; font-size:15px; font-weight:700; color:#cbd5e1; border-bottom:1px solid #334155; padding-bottom:6px; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  .col h3 { font-size:12px; letter-spacing:.06em; text-transform:uppercase; margin:6px 0 10px; }
+  .before h3 { color:#f87171; } .after h3 { color:#4ade80; }
+  .panel { background:#111827; border:1px solid #1f2937; border-radius:8px; padding:12px 14px; }
+  .sec { font-weight:700; font-size:14px; margin:4px 0 8px; }
+  .sub2 { font-weight:700; font-size:13px; margin:14px 0 6px; color:#cbd5e1; }
+  .card { background:#0b1220; border-left:3px solid #22c55e; border-radius:6px; padding:9px 12px; margin:7px 0; }
+  .card.add { border-left-color:#3b82f6; }
+  .tk { font-weight:700; } .muted { color:#94a3b8; font-size:12px; margin-top:3px; }
+  .badge { display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px; margin-left:6px; }
+  .b-buy { background:#14532d; color:#86efac; } .b-held { background:#422006; color:#fcd34d; }
+  .b-def { background:#1e293b; color:#cbd5e1; border:1px solid #475569; }
+  .held { background:#1c1917; border-left:3px solid #f59e0b; border-radius:6px; padding:9px 12px; margin:8px 0; }
+  .held .t { color:#fbbf24; font-weight:700; font-size:13px; }
+  .defer { background:#1e293b; border-left:3px solid #64748b; border-radius:6px; padding:9px 12px; margin:8px 0; color:#cbd5e1; font-size:13px; }
+  .protect { background:#2a1215; border:1px solid #ef4444; border-radius:8px; padding:9px 14px; margin:6px 0 10px; font-size:13px; }
+  .protect .t { color:#fca5a5; font-weight:700; }
+  .btn { display:inline-block; background:#1f2937; border:1px solid #334155; border-radius:5px; padding:3px 10px; margin:6px 6px 0 0; font-size:12px; color:#e5e7eb; }
+  .btn.trade { background:#14532d; border-color:#16a34a; }
+  .kpi { display:inline-block; background:#0b1220; border:1px solid #1f2937; border-radius:6px; padding:6px 12px; margin:0 8px 8px 0; font-size:12px; color:#94a3b8; }
+  .kpi b { display:block; color:#e5e7eb; font-size:16px; }
+  .strip { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+  .gc { background:#0b1220; border:1px solid #1f2937; border-radius:6px; padding:5px 9px; font-size:12px; }
+  .gc.ok { color:#86efac; } .gc.no { color:#fca5a5; border-color:#7f1d1d; }
+  details { background:#0b1220; border:1px solid #1f2937; border-radius:6px; padding:7px 12px; margin:8px 0; font-size:13px; }
+  details summary { cursor:pointer; color:#cbd5e1; }
+  .cap { color:#94a3b8; font-size:12px; margin-top:6px; }
+  .email { background:#f8fafc; color:#0f172a; border-radius:6px; padding:12px 14px; font-size:13px; }
+  .email .ft { color:#475569; font-size:11.5px; border-top:1px solid #cbd5e1; margin-top:10px; padding-top:6px; }
+  .new { color:#4ade80; font-size:10px; font-weight:700; margin-left:6px; }
+  .note { background:#172033; border:1px solid #334155; border-radius:6px; padding:10px 14px; font-size:12.5px; color:#cbd5e1; margin-top:22px; line-height:1.55; }
+</style>
+</head>
+<body>
+<h1>Shared new-entry check — mockup v1 (static; tickers and numbers illustrative except BKNG, from 2026-10-16)</h1>
+<div class="sub">Owner decisions D1–D12 (2026-10-16), plan <code>docs/plans/shared-entry-check.md</code>. Left = today. Right = after the change. Nothing here is built yet. Wording is draft — say what to change.</div>
+
+<!-- ───────── 1. BEAR DAY, WATCHLIST ───────── -->
+<div class="day">1 · Bear day (S&amp;P −0.8%) — 📋 Watchlist, Actionable view</div>
+<div class="cols">
+  <div class="col before"><h3>Before (seen live 2026-10-16)</h3><div class="panel">
+    <span class="kpi"><b>1</b>Enter Now</span><span class="kpi"><b>4</b>Near entry</span>
+    <div class="card"><span class="tk">BKNG</span><span class="badge b-buy">READY TO ENTER</span>
+      <div class="muted">Composite 80.8 · in zone · R:R 2.4:1 · Suggested 9 sh</div>
+      <span class="btn trade">Log BUY</span><span class="btn">▶ Analyze</span></div>
+    <div class="cap">Meanwhile 🏠 Home: "Protect Mode — defer new entries".</div>
+  </div></div>
+  <div class="col after"><h3>After</h3><div class="panel">
+    <div class="protect"><span class="t">🛡️ Protect Mode — S&amp;P −0.8% (risk-off at −0.5% or worse).</span>
+      New entries deferred, matching 🏠 Home. 1 name would otherwise be Ready: BKNG.
+      <div class="cap">Market read from Home's Brief, 09:42 ET.</div></div>
+    <span class="kpi"><b>0</b>Enter Now</span><span class="kpi"><b>1</b>Held today</span><span class="kpi"><b>4</b>Near entry</span>
+    <div class="sub2">⏸ Held today <span class="new">NEW · directly under Enter Now (D12)</span></div>
+    <div class="defer"><span class="tk">BKNG</span><span class="badge b-def">DEFERRED — MARKET RISK-OFF</span>
+      <div class="muted">Ready on its own numbers (composite 80.8 · in zone · R:R 2.4:1). Deferred because the market is risk-off.</div>
+      <div class="muted">Clears when: a session where the S&amp;P isn't down 0.5% or more — re-checked every time you open this page.</div>
+      <span class="btn">▶ Analyze</span><span class="cap">&nbsp;no size · no Log BUY</span></div>
+    <div class="cap">Not counted against today's new-position budget, not emailed.</div>
+  </div></div>
+</div>
+
+<!-- ───────── 2. OTHER HOLDS ───────── -->
+<div class="day">2 · Up or flat day — the other three holds (same "Held today" section)</div>
+<div class="cols">
+  <div class="col before"><h3>Before</h3><div class="panel">
+    <div class="card"><span class="tk">JPM</span><span class="badge b-buy">READY TO ENTER</span><div class="muted">Composite 71 · Suggested 6 sh</div></div>
+    <div class="card"><span class="tk">NKE</span><span class="badge b-buy">READY TO ENTER</span><div class="muted">Composite 68 · Suggested 14 sh</div></div>
+    <div class="card"><span class="tk">CVX</span><span class="badge b-buy">READY TO ENTER</span><div class="muted">Composite 69 · Suggested 8 sh</div></div>
+    <div class="cap">All three would be Skip/held in Grow Today on the same data.</div>
+  </div></div>
+  <div class="col after"><h3>After</h3><div class="panel">
+    <span class="kpi"><b>0</b>Enter Now</span><span class="kpi"><b>3</b>Held today</span>
+    <div class="held"><div class="t">JPM — Held: macro event · CPI in 2d (Financials)</div>
+      <div class="muted">Opening a new position into a HIGH-impact release within 3 days is what this gate blocks.</div>
+      <div class="muted">Clears when: the release is out (Wed 10-21).</div><span class="btn">▶ Analyze</span></div>
+    <div class="held"><div class="t">NKE — Held: negative news (avg −0.22 across 4 headlines)</div>
+      <div class="muted">Worst: "Nike cuts full-year guidance on China weakness" (−0.61).</div>
+      <div class="muted">Clears when: the news average rises above −0.15.</div><span class="btn">▶ Analyze</span></div>
+    <div class="held"><div class="t">CVX — Held: stale data · fundamentals 4 days old</div>
+      <div class="muted">The score uses fundamentals older than 2 days.</div>
+      <div class="muted">Clears when: a refresh brings fresh data — reload the page.</div><span class="btn">▶ Analyze</span></div>
+    <div class="cap">If more than one check applies, each is listed; the first is the one recorded.</div>
+  </div></div>
+</div>
+
+<!-- ───────── 3. TONE UNREADABLE ───────── -->
+<div class="day">3 · Market tone couldn't be read (index fetch failed) — fail open, said out loud (D1)</div>
+<div class="cols">
+  <div class="col before"><h3>Before</h3><div class="panel">
+    <div class="sec">🌱 Grow Today</div>
+    <div class="cap">Silently treated as a flat day. Nothing says the market read failed.</div>
+  </div></div>
+  <div class="col after"><h3>After</h3><div class="panel">
+    <div class="sec">🌱 Grow Today</div>
+    <div class="cap">⚠️ Market tone couldn't be read this run — treated as a flat day; the bear-day check didn't run.</div>
+    <div class="sec" style="margin-top:12px">📋 Watchlist</div>
+    <div class="card"><span class="tk">JPM</span><span class="badge b-buy">READY TO ENTER</span><div class="muted">Composite 71 · Suggested 6 sh</div></div>
+    <div class="cap">⚠️ The bear-day check couldn't run (market tone unavailable) — entries are shown, not deferred.</div>
+  </div></div>
+</div>
+
+<!-- ───────── 4. ANALYSIS ───────── -->
+<div class="day">4 · 📈 Analysis on the same bear day — BKNG (not held)</div>
+<div class="cols">
+  <div class="col before"><h3>Before (seen live)</h3><div class="panel">
+    <div class="sec">BKNG — 🟢 Strong Buy · 80.8</div>
+    <div class="strip"><span class="gc ok">Score ✓</span><span class="gc ok">Zone ✓</span><span class="gc ok">R:R ✓</span><span class="gc ok">Earnings ✓</span></div>
+    <div class="muted">Scorecard Shares: → 9 suggested</div>
+  </div></div>
+  <div class="col after"><h3>After</h3><div class="panel">
+    <div class="sec">BKNG — 🟢 Strong Buy · 80.8</div>
+    <div class="held"><div class="t">Not an entry today — deferred: market risk-off (S&amp;P −0.8%)</div>
+      <div class="muted">The verdict stands on its own numbers; no size is offered today. Same call as 📋 Watchlist and 🏠 Home.</div></div>
+    <div class="strip"><span class="gc ok">Score ✓</span><span class="gc ok">Zone ✓</span><span class="gc ok">R:R ✓</span><span class="gc ok">Earnings ✓</span><span class="gc no">Market tone ✗</span><span class="gc ok">Macro ✓</span><span class="gc ok">News ✓</span><span class="gc ok">Data fresh ✓</span></div>
+    <div class="muted">Scorecard Shares: — (deferred)</div>
+    <div class="cap">Same rule for "Earnings ✗" (earnings within 7 days): today it shows ✗ and still sizes; after, it withholds the size (D7).</div>
+  </div></div>
+</div>
+
+<!-- ───────── 5. EMAIL ───────── -->
+<div class="day">5 · Watchlist "Ready to Enter" email</div>
+<div class="cols">
+  <div class="col before"><h3>Before</h3><div class="panel">
+    <div class="email"><b>1 watchlist name newly cleared ENTER NOW · 2026-10-16T09:48:57 ET</b><br>BKNG — 9 sh …
+      <div class="ft">Advisory only — verify price is still near this level before acting.</div></div>
+  </div></div>
+  <div class="col after"><h3>After</h3><div class="panel">
+    <div class="email"><b>1 watchlist name newly cleared ENTER NOW · Oct 16, 2026 · 9:48 AM ET</b><br>JPM — 6 sh … <i>(deferred yesterday)</i>
+      <div class="ft">Market tone at 9:45 AM ET: flat (S&amp;P −0.2%). The app re-checks when you open it and defers if the market turns risk-off.<br>Advisory only — verify price is still near this level before acting.</div></div>
+    <div class="cap">Bear day where every name is deferred → <b>no email is sent</b> (D6). Deferred names are not recorded as "already announced", so they come back on the next ready day with "(deferred yesterday)" (D5).</div>
+  </div></div>
+</div>
+
+<!-- ───────── 6. GROW TODAY ADDS (N2) ───────── -->
+<div class="day">6 · 🌱 Grow Today adds (N2) — bull day, held name with one strongly negative headline</div>
+<div class="cols">
+  <div class="col before"><h3>Before</h3><div class="panel">
+    <div class="sub2">➕ Add to winners</div>
+    <div class="card add"><span class="tk">MSFT</span><span class="badge b-buy">ADD</span>
+      <div class="muted">Composite 74 · +11% above cost · Suggested 3 sh</div></div>
+    <div class="cap">One tier-1 headline at −0.40 doesn't trip any card, so the add goes through. (A milder −0.10 headline would have blocked it silently.)</div>
+  </div></div>
+  <div class="col after"><h3>After</h3><div class="panel">
+    <div class="sub2">➕ Add to winners</div>
+    <div class="cap">No adds today.</div>
+    <details><summary>▸ Adds held — negative news (1) <span class="new">NEW</span></summary>
+      <div class="held"><div class="t">MSFT — would qualify as an add; held: negative news (avg −0.40, 1 headline)</div>
+        <div class="muted">"Microsoft faces antitrust probe over cloud bundling" (−0.40).</div>
+        <div class="muted">Clears when: the news average rises above −0.15.</div><span class="btn">▶ Analyze</span></div>
+    </details>
+    <div class="cap">Earnings within 7 days already blocks an add today; unchanged. Macro events on adds: not in this build (D8).</div>
+  </div></div>
+</div>
+
+<div class="note"><b>What to check:</b> (1) Is "⏸ Held today" directly under Enter Now the right place (D12)? (2) Is "Deferred — market risk-off" clear, and is it right that a deferred name has no size and no Log BUY, only ▶ Analyze (OP-07)? (3) The four "Clears when" lines. (4) Analysis: is the banner + extra Gate-check tiles enough, or should the verdict line itself change? (5) Email footer wording. (6) Adds held collapsed (▸) vs always open.<br>
+<b>Not shown:</b> the "entry check couldn't run" fail-closed line (no Enter Now, says why); Watchlist Resurrection simply excludes held names.</div>
+</body>
+</html>
