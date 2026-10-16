@@ -8883,7 +8883,7 @@ if page == "🏠 Home":
             _fn_scored   = _finalists_n
             _fn_picks    = len(new_picks)
             if _fn_scored > 0 and _fn_universe >= _fn_scored >= _fn_picks:
-                with st.expander("🔎 How today's screen funnelled down to picks", expanded=True):
+                with st.expander("🔎 How today's screen funnelled down to picks", expanded=False):
                     _fn_notscored = _fn_universe - _fn_scored
                     _fn_belowbar  = min(len(comp_skipped), _fn_scored - _fn_picks)
                     _fn_newsskip  = min(len(news_skipped), _fn_scored - _fn_picks - _fn_belowbar)
