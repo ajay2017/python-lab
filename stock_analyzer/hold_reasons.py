@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from stock_analyzer.constants import (
     COMPOSITE_BUY_FLAT_DAY,
+    DAILY_NEW_POSITION_BUDGET_PCT,
     GROW_MAX_PICKS_BULL,
     GROW_MAX_PICKS_DEFAULT,
     MOVER_MAX_PICKS,
@@ -73,3 +74,68 @@ def adds_paused_note(names) -> str:
 def adds_paused_label(tone, n) -> str:
     kind = "down" if tone == "bear" else "flat"
     return f"Adds paused on a {kind} day ({n})"
+
+
+# -- Daily new-position budget wording (docs/plans/daily-new-position-budget.md) --
+# "not sized" belongs to the budget only; none of these says "not one of today's
+# picks" (that phrase is the PACING header's, OVERFLOW_HEADER).
+BUDGET_PARTIAL = "budget_partial"
+BUDGET_EXHAUSTED = "budget_exhausted"
+BUDGET_RESERVED = "budget_reserved"
+BUDGET_UNKNOWN = "budget_unknown"
+
+BUDGET_CODES = (BUDGET_PARTIAL, BUDGET_EXHAUSTED, BUDGET_RESERVED, BUDGET_UNKNOWN)
+
+
+def _usd(x) -> str:
+    try:
+        return f"${float(x):,.0f}"
+    except (TypeError, ValueError):
+        return "$0"
+
+
+def _pct(x, fallback="0%") -> str:
+    try:
+        return f"{float(x):.1f}%"
+    except (TypeError, ValueError):
+        return fallback
+
+
+def budget_status_line(pct_used, logged, allocated, listed, left) -> str:
+    """Status line shown on every sizing surface."""
+    return (f"New positions today: {_pct(pct_used)} of net capital "
+            f"(logged {_usd(logged)} · allocated {_usd(allocated)} · "
+            f"this list {_usd(listed)}) — budget "
+            f"{DAILY_NEW_POSITION_BUDGET_PCT:g}%, {_usd(left)} left")
+
+
+def budget_note(status, ctx=None) -> str:
+    """Per-item note for a budget status; "" for any other status."""
+    ctx = ctx if isinstance(ctx, dict) else {}
+    if status == BUDGET_PARTIAL:
+        return (f"Sized from what's left of today's budget — "
+                f"{ctx.get('n', '?')} of {ctx.get('m', '?')} shares.")
+    if status == BUDGET_EXHAUSTED and ctx.get("called"):
+        return ("Not sized: net capital is at or below zero, so there is no "
+                "new-position budget today.")
+    if status == BUDGET_EXHAUSTED and ctx.get("is_pick") is False:
+        return (f"Not sized: today's new-position budget "
+                f"({DAILY_NEW_POSITION_BUDGET_PCT:g}% of net capital) is already "
+                f"used. Resets tomorrow.")
+    if status == BUDGET_EXHAUSTED:
+        return (f"One of today's picks — not sized: today's new-position budget "
+                f"({DAILY_NEW_POSITION_BUDGET_PCT:g}% of net capital) is already "
+                f"used. Resets tomorrow if it still qualifies.")
+    if status == BUDGET_RESERVED:
+        return "Allocated in today's email"
+    if status == BUDGET_UNKNOWN:
+        why = str(ctx.get("why") or "").strip() or "a required input was unavailable"
+        return f"Size withheld — today's new-position budget couldn't be checked ({why})."
+    return ""
+
+
+def budget_over_line(pct_used) -> str:
+    """Logged buys alone are already above the budget."""
+    return (f"Today's new buys are {_pct(pct_used, '?%')} of net capital — above the "
+            f"{DAILY_NEW_POSITION_BUDGET_PCT:g}% daily budget; nothing further "
+            f"sized today.")

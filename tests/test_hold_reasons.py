@@ -63,3 +63,11 @@ def test_adds_paused_note_names_tickers_and_never_sizes():
 def test_adds_paused_label_flat_vs_down():
     assert hr.adds_paused_label("bear", 2) == "Adds paused on a down day (2)"
     assert hr.adds_paused_label("flat", 1) == "Adds paused on a flat day (1)"
+
+
+def test_budget_texts_distinct_from_pacing_wording():
+    for s in hr.BUDGET_CODES:
+        assert "not one of today's picks" not in hr.budget_note(s, {"n": 1, "m": 2})
+    assert hr.budget_note("budget_exhausted")  # firing control
+    for code in hr.REASON_CODES:
+        assert "sized" not in hr.reason_text(code, {"sector": "Energy"}).lower()

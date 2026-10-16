@@ -56,3 +56,10 @@ def test_unparseable_timestamps_and_blank_tickers_are_skipped_not_fatal():
         ("OK",  "SELL", "2026-09-10T14:30:00+00:00"),
     ])
     assert tickers_sold_on(df, DAY) == {"OK"}
+
+
+def test_et_trade_dates_helper_shared_with_budget():
+    from stock_analyzer.sold_today import _et_trade_dates
+    df = _trades([("A", "SELL", "2026-09-10T03:59:00+00:00")])  # 23:59 ET the 9th
+    _, dates = _et_trade_dates(df)
+    assert list(dates) == [date(2026, 9, 9)]

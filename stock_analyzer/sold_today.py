@@ -27,6 +27,15 @@ import pandas as pd
 _REQUIRED_COLUMNS = ("traded_at", "action", "ticker")
 
 
+def _et_trade_dates(trades_df):
+    """(UTC timestamps, America/New_York dates) of `traded_at` -- the ONE
+    "what ET day is this trade" rule, shared with `daily_budget` so the two
+    can never disagree on "today". May raise; callers own their fail-safe."""
+    traded_at = pd.to_datetime(trades_df["traded_at"], utc=True, errors="coerce",
+                               format="ISO8601")
+    return traded_at, traded_at.dt.tz_convert("America/New_York").dt.date
+
+
 def tickers_sold_on(trades_df, day: date) -> "set[str] | None":
     if trades_df is None:
         return None
@@ -38,9 +47,7 @@ def tickers_sold_on(trades_df, day: date) -> "set[str] | None":
     if any(c not in trades_df.columns for c in _REQUIRED_COLUMNS):
         return None
     try:
-        traded_at = pd.to_datetime(trades_df["traded_at"], utc=True, errors="coerce",
-                                   format="ISO8601")
-        traded_date = traded_at.dt.tz_convert("America/New_York").dt.date
+        _, traded_date = _et_trade_dates(trades_df)
         mask = (trades_df["action"].astype(str).str.upper() == "SELL") & (traded_date == day)
         return {
             str(t).strip().upper() for t in trades_df.loc[mask, "ticker"]

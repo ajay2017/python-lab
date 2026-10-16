@@ -137,6 +137,12 @@ NET_CAPITAL_POSITION_CAP_PCT = 25.0  # SEPARATE capital-basis cap for NEW-positi
 # (15% of gross book). At real leverage, "15% of book" can be ~45% of capital
 # (ALB/OXY, 2026-08-24). Never changes SINGLE_NAME_CEILING or any existing
 # gross-book gate. Effective new-position size = min(risk-based, 15%-gross, 25%-net).
+DAILY_NEW_POSITION_BUDGET_PCT = 40.0  # Owner decision 2026-10-15. Caps the SUM of one
+# trading day's NEW-position sizing (logged BUYs incl. adds + emailed allocations +
+# newly sized suggestions) at this % of net capital. Later suggestions are sized from
+# what's left, highest composite first, and read "not sized" once spent -- never
+# dropped. ADDITIVE to NET_CAPITAL_POSITION_CAP_PCT / SINGLE_NAME_CEILING; never trims
+# a holding; not a leverage gate (sizing only). Investment-policy value.
 SINGLE_NAME_TRIM_TRIGGER = 18.0  # soft trim trigger — position that grew past ceiling (price appreciation after entry)
 SECTOR_REDUCE_TRIGGER = 20.0     # sector diversification reduce trigger — recommend reducing to SINGLE_NAME_CEILING
 # diversification_recommendations() literals, named per 2026-07-29 audit
