@@ -3,7 +3,7 @@
 **Status: DESIGNED + OWNER-APPROVED 2026-10-16 (all 12 recommendations, D1-D12, plus additions A1-A4).
 Mockup v1 APPROVED 2026-10-16: `docs/mockups/2026-10-16-shared-entry-check-mockup.html`. Chunk 1 (golden
 master) DONE 2026-10-16 (`35ea1df`); chunk 2 DONE (`400b01c`, pushed); chunk 3 DONE (advisor ENTRY_HELD +
-G-28/G-29 capture, `f71164b`); chunk 4 DONE (Watchlist page wiring, local); chunks 4-6 push together. Scope
+G-28/G-29 capture, `f71164b`); chunk 4 DONE (Watchlist page wiring, `469d7a6`); chunk 5 DONE (email + cron, local); chunks 4-6 push together. Scope
 sweep DONE (results + owner decisions S-A..S-D below).**
 
 **Chunk 1 findings that bind later chunks:** (1) `_grow_today` takes the tone as an INPUT — the ±0.5 rule
@@ -211,6 +211,19 @@ ship any time after chunk 2.
 - **For chunk 5:** stamp `tone_read_at` on the headless market context too; decide whether G-28/G-29 rows
   are written for ENTRY_HELD names already in the portfolio (no held filter in
   `build_watchlist_suppression_rows`, same as G-05/06/13) — app and cron must match.
+- **Decided by lead 2026-10-16 (measurement integrity, chunk 5):** G-28/G-29 rows are NOT written for
+  tickers already in the portfolio — a held name cannot be a deferred NEW entry, so counting it would grade
+  the gate on calls that were never going to be made. Applies in the app and the cron alike, via
+  `build_watchlist_suppression_rows(held_tickers=…)`, which filters only the G-28/G-29 kinds; G-05/06/13
+  behaviour is unchanged. Owner may reverse.
+- **Open — owner decision, must be settled before any G-28/G-29 readout can leave "building" (months
+  away):** with the cron writing Watchlist rows (D4), an app row and a cron row for the same ticker and day
+  count as TWO calls in `gate_ledger_readout.grade_by_gate`'s `n_matured_evaluable` (the alpha mean and the
+  distinct-ticker floor already use one row per ticker). New skew for G-05/06/13 (app-only until now) and
+  for G-28/G-29; for G-29 it would reach A3's "firm" bar up to ~2× sooner, softening a rule written as "do
+  not soften". Options: (a, lead's recommendation) count distinct (ticker, rec_date) for EVERY gate — also
+  the optional G-07 fix already noted in CLAUDE.md; (b) a dated readout footnote per gate; (c) count A3's
+  firm bar on distinct days for G-29 only. Raw rows keep `source`, so any option is a read-time change.
 - Known, accepted: held news cards omit the mockup's "Worst: '…'" headline line; the held card is several
   stacked boxes (escaping rule); the A2 Trade Journal note reads only the Watchlist's `_wl_held_cache`.
 - Nits (optional): `home_tone_state(None, True)` → "tone failed" (unreachable today); the held card's

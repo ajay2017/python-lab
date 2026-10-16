@@ -27833,6 +27833,9 @@ elif page == "📋 Watchlist":
             _wl_gl_rows = build_watchlist_suppression_rows(
                 _wl_recs, rec_date=_today_et(), source="app",
                 sector_by_ticker=_wl_sector_map,
+                # A held name can't be a deferred NEW entry: no G-28/G-29 row
+                # (the cron passes the same set — chunk 5).
+                held_tickers=_wl_held,
             )
             if _wl_gl_rows:
                 _wl_gate_ledger_save_result = db.save_gate_suppressions(_wl_gl_rows)

@@ -222,6 +222,18 @@ _WATCHLIST_ACTION: dict[str, str] = {
     "entry_tone":  "ENTRY_HELD",
 }
 
+# The two entry-check kinds describe a deferred NEW entry, so a ticker already in
+# the portfolio can never be one (chunk 5, lead decision: measurement integrity).
+# `held_tickers` filters ONLY these kinds; G-05/06/13 are untouched.
+_ENTRY_HOLD_KINDS = ("entry_macro", "entry_tone")
+
+# Short wording for the email's "(deferred yesterday — <reason>)" note, keyed by the
+# ledger gate id (derived from _WATCHLIST_KIND -- no new id literals here).
+WATCHLIST_HOLD_LABELS: dict[str, str] = {
+    _WATCHLIST_KIND["entry_macro"]: "macro event",
+    _WATCHLIST_KIND["entry_tone"]:  "market risk-off",
+}
+
 
 def build_watchlist_suppression_rows(
     recs: "list[dict] | None",
@@ -229,9 +241,15 @@ def build_watchlist_suppression_rows(
     rec_date,
     source: str,
     sector_by_ticker: "dict | None" = None,
+    held_tickers: "set | list | None" = None,
 ) -> "list[dict]":
     """Build G-05/G-06/G-13 (NEAR_ENTRY downgrades) and G-28/G-29 (ENTRY_HELD
     holds) rows from Watchlist recommendation cards.
+
+    `held_tickers` (optional): tickers already in the portfolio. G-28/G-29 rows
+    are NOT written for them -- a held name cannot be a deferred NEW entry, and
+    such a row would be graded as a suppressed buy. G-05/06/13 are unaffected.
+    None / empty = no filtering (legacy behaviour).
 
     `recs`: the list build_watchlist_recommendation() produces, one dict per
     ticker. Only a card that was actually downgraded or held carries a
@@ -254,6 +272,7 @@ def build_watchlist_suppression_rows(
         rec_date.isoformat() if hasattr(rec_date, "isoformat") else str(rec_date)[:10]
     )
     sector_by_ticker = sector_by_ticker or {}
+    _held = {str(t).strip().upper() for t in (held_tickers or []) if str(t).strip()}
 
     rows: list[dict] = []
     for card in recs:
@@ -271,6 +290,8 @@ def build_watchlist_suppression_rows(
 
         ticker = str(card.get("ticker", "")).strip().upper()
         if not ticker:
+            continue
+        if kind in _ENTRY_HOLD_KINDS and ticker in _held:
             continue
 
         # price_at_suppress: NULL when <= 0, per price_at_surface convention.

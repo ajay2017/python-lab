@@ -166,4 +166,13 @@ def test_app_publishes_the_final_held_list_for_the_brief():
 def test_cron_brief_uses_curate_brief_news():
     tree = parse_file_cached(ROOT / "stock_analyzer" / "headless_alert_engine.py")
     assert _calls(tree, "curate_brief_news"), "the cron must build news via the shared helper"
-    assert not _calls(tree, "curate_news_items"), "no second, divergent news builder in the cron"
+    # The Brief's news has ONE builder (curate_brief_news). The ONLY other
+    # curate_news_items call allowed is the Watchlist entry check's PER-TICKER
+    # read inside compute_watchlist_entries (shared-entry-check chunk 5) -- the
+    # same derivation the app's Watchlist page uses -- never feeding the Brief.
+    allowed = set()
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef) and fn.name == "compute_watchlist_entries":
+            allowed |= {id(c) for c in _calls(fn, "curate_news_items")}
+    stray = [c for c in _calls(tree, "curate_news_items") if id(c) not in allowed]
+    assert not stray, "no second, divergent news builder in the cron"

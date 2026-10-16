@@ -46,6 +46,20 @@ from stock_analyzer import headless_alert_engine as hae
 TODAY = date(2026, 7, 27)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_entry_context(monkeypatch):
+    """compute_watchlist_entries makes its own live tone/macro read when no
+    entry_context is passed (shared-entry-check chunk 5). Tests here must not
+    hit the network or today's real macro calendar: default to a flat,
+    available tone and a checked-empty calendar. Tests of the check itself pass
+    their own entry_context."""
+    monkeypatch.setattr(
+        hae, "_live_entry_context",
+        lambda today, port_df: {"market_context": {"tone": "flat", "sp500_pct": -0.2,
+                                                    "tone_available": True},
+                                "macro_events": []})
+
+
 # ── _f ────────────────────────────────────────────────────────────────────
 
 def test_f_parses_numeric_string():

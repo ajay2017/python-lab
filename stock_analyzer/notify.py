@@ -17,6 +17,7 @@ import requests
 
 from stock_analyzer.constants import SINGLE_NAME_CEILING, NET_CAPITAL_POSITION_CAP_PCT
 from stock_analyzer import hold_reasons
+from stock_analyzer.entry_eligibility import email_footer_lines
 from stock_analyzer.risk import capital_equivalent_risk
 from stock_analyzer.trade_economics import entry_tier
 
@@ -1088,7 +1089,7 @@ def _email_section(title: str, content: str, section_colours: dict) -> str:
 
 def render_watchlist_entries_email(
     entries: list[dict], built_at: str, gate_degraded: bool = False,
-    budget: "dict | None" = None,
+    budget: "dict | None" = None, entry_run: "dict | None" = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the Watchlist "Ready to Enter" proactive
     email — the headless counterpart to opening 📋 Watchlist and seeing an
@@ -1158,6 +1159,11 @@ def render_watchlist_entries_email(
         lo, hi  = e.get("entry_lo"), e.get("entry_hi")
         summary = _email_md_inline(str(e.get("summary") or ""))
         det_warning = e.get("deterioration_warning")
+        _unch = e.get("entry_unchecked")
+        unch_txt = "; ".join(
+            str(u.get("why")) for u in ([] if _unch is None else _unch)
+            if isinstance(u, dict) and u.get("why"))
+        held_y  = e.get("held_yesterday")   # D5: "macro event" / "market risk-off"
 
         # (a) Two-tier header — a deterioration-flagged name previously got
         # the IDENTICAL green header as a clean one, with the warning buried
@@ -1293,7 +1299,20 @@ def render_watchlist_entries_email(
           {sizing_html}
           {f'<div style="color:#a8a29e;font-size:12px;margin-top:4px">{summary}</div>' if summary else ''}
           {f'<div style="color:#a8a29e;font-size:12px;margin-top:4px">{_html.escape(str(det_warning))}</div>' if det_warning else ''}
+          {f'<div style="color:#78716c;font-size:11px;margin-top:4px">Not checked: {_html.escape(unch_txt)}</div>' if unch_txt else ''}
+          {f'<div style="color:#fcd34d;font-size:12px;margin-top:4px">(deferred yesterday — {_html.escape(str(held_y))})</div>' if held_y else ''}
         </div>""")
+
+    # Entry-check disclosure (shared-entry-check chunk 5): the tone this run
+    # used and every check that could not run, each line escaped. KNOWN LIMIT
+    # (chunk-2 follow-up 6, disclosed not fixed): a one-bar index series makes
+    # the provider set prev = price (0.0%), and a genuinely flat read looks the
+    # same -- the index row does not expose enough to tell them apart, so that
+    # case still reads as an available flat tone.
+    _entry_footer_html = "".join(
+        f'<div style="margin-top:6px">{_html.escape(ln)}</div>'
+        for ln in email_footer_lines(entry_run)
+    )
 
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
       <div style="max-width:640px;margin:0 auto">
@@ -1316,6 +1335,7 @@ def render_watchlist_entries_email(
           persists. Advisory only — verify price is still near this level before acting.
           Composite clears a bar; it does not rank which names outperform — measured on this
           engine's own past calls. The engine finds candidates; the selection is yours.
+          {_entry_footer_html}
         </div>
       </div>
     </body></html>"""

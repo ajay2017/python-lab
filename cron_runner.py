@@ -1800,6 +1800,11 @@ def _run_scan(now_et, force: bool) -> int:
         }
         _wle_payload = compute_watchlist_entries(
             today=now_et.date(), scanner_go_tickers=_wle_scanner_go, ctx=_scan_ctx,
+            # ONE tone/macro read per run (shared-entry-check chunk 5): the
+            # same reads Grow Today used above. None (compute_morning_picks
+            # failed before making them) -> the watchlist computation makes its
+            # own live read rather than skipping the check.
+            entry_context=payload.get("entry_context"),
         )
         if _wle_payload.get("reason") == "db_unavailable":
             _wle_outage_detail = (
@@ -1939,6 +1944,27 @@ def _run_scan(now_et, force: bool) -> int:
         _log(f"gate ledger: FAILED — {str(_gl_err)[:120]} — continuing (email unaffected).")
         failures.append(f"gate_suppressions: {str(_gl_err)[:120]}")
 
+    # ── Watchlist gate-ledger rows (shared-entry-check D4, cron source) ───────
+    # G-05/06/13 downgrades and G-28/G-29 holds from today's Watchlist cards, so
+    # deferral costs are graded on days nobody opens the page. The rows are
+    # built in compute_watchlist_entries (G-28/G-29 never for a held ticker).
+    # Same failure contract as the Grow Today ledger write above: a failed write
+    # reds the heartbeat, but never blocks either email.
+    try:
+        _wlgl_rows = (_wle_payload.get("gate_ledger_rows")
+                      if isinstance(_wle_payload, dict) else None)
+        if _wlgl_rows:
+            _wlgl_result = db.save_gate_suppressions(_wlgl_rows)
+            _log(f"watchlist gate ledger: saved={_wlgl_result.get('saved', 0)}/"
+                 f"{_wlgl_result.get('attempted', 0)} row(s)"
+                 + (f" — {_wlgl_result.get('error')}" if _wlgl_result.get("error") else ""))
+            _wlgl_err_msg = _wlgl_result.get("error")
+            if _wlgl_err_msg and not str(_wlgl_err_msg).startswith("compat"):
+                failures.append(f"watchlist_gate_suppressions: {str(_wlgl_err_msg)[:120]}")
+    except Exception as _wlgl_err:
+        _log(f"watchlist gate ledger: FAILED — {str(_wlgl_err)[:120]} — continuing (email unaffected).")
+        failures.append(f"watchlist_gate_suppressions: {str(_wlgl_err)[:120]}")
+
     if not hi:
         # Self-explaining 0: a 0-pick run almost always means the tone gate, not a
         # fault. Flat tape raises the new-pick bar to 78 (bull = 65); bear suppresses
@@ -2043,6 +2069,7 @@ def _run_scan(now_et, force: bool) -> int:
                     built_at=_wle_payload.get("built_at", today_str),
                     gate_degraded=_wle_payload.get("gate_degraded", False),
                     budget=_budget_for_email,
+                    entry_run=_wle_payload.get("entry_run"),
                 )
                 _wle_sent = _send_email("watchlist-entries", _wle_subject, _wle_html)
                 # Save dedup state ONLY on a real send — a transient Resend

@@ -3786,6 +3786,45 @@ def load_budget_allocation_times_or_none(day) -> dict | None:
         return None
 
 
+def load_gate_holds_on_day_or_none(day, gate_ids) -> dict | None:
+    """{TICKER: gate_id} for the `gate_suppressions` rows recorded on ET date
+    `day` for any of `gate_ids`, by an app or cron source -- the email's
+    "(deferred yesterday — ...)" note (shared-entry-check D5, display only). One
+    day's rows only (cheap), never the whole table.
+
+    None on ANY failure (no DB, untrustworthy `day` -- see _budget_day_iso,
+    missing table, raised query, a result at the page cap); {} only when the
+    read SUCCEEDED and nothing matched. Never collapse the two: a caller that
+    can't read this must say nothing, never claim "not held". A ticker with
+    several matching rows keeps the first in gate_id order (deterministic)."""
+    if not has_db() or day is None:
+        return None
+    d = _budget_day_iso(day)
+    if d is None:
+        return None
+    try:
+        ids = {str(g) for g in (gate_ids or [])}
+        data = (
+            _client().table("gate_suppressions")
+            .select("ticker,gate_id,source")
+            .eq("rec_date", d).in_("gate_id", sorted(ids))
+            .order("gate_id").order("ticker")
+            .limit(_GATE_SUPPRESSIONS_PAGE_SIZE).execute().data
+        )
+        if data is None or len(data) >= _GATE_SUPPRESSIONS_PAGE_SIZE:
+            return None
+        out: dict = {}
+        for r in data:
+            tk = str(r.get("ticker") or "").strip().upper()
+            gid = str(r.get("gate_id") or "")
+            if (tk and gid in ids and r.get("source") in ("cron", "app")
+                    and tk not in out):
+                out[tk] = gid
+        return out
+    except Exception:
+        return None
+
+
 # PostgREST's own server-side default row cap on an unpaginated `.select()`.
 # Both load_recommendations() and load_recommendations_or_none() page in
 # chunks of this size via `.range()` rather than relying on a single call,

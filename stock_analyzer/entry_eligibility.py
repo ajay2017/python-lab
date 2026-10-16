@@ -539,3 +539,33 @@ def held_label(card) -> str:
     if kind in HELD_KIND_LABELS:
         return f"Held: {HELD_KIND_LABELS[kind]}"
     return "Held today"
+
+
+# ── Watchlist email footer (chunk 5) ─────────────────────────────────────────
+def email_footer_lines(entry_run) -> "list[str]":
+    """Plain-text footer lines for the "Ready to Enter" email.
+
+    ``entry_run`` is ``{"tone_state": <resolve_tone_state result>,
+    "macro_available": bool}`` (what ``compute_watchlist_entries`` returns), or
+    None / malformed -> no lines (an old caller says nothing rather than
+    guessing). RUN-level lines only: one for the tone the run used -- or that it
+    couldn't be read -- and one if the macro calendar was unavailable. A check
+    that couldn't run for a single name (no headlines, unknown sector) is that
+    card's ``entry_unchecked`` note, which the email prints under the name.  The caller escapes before building HTML.
+    """
+    if not isinstance(entry_run, dict):
+        return []
+    lines: list = []
+    ts = entry_run.get("tone_state")
+    if isinstance(ts, dict) and ts.get("available") and _finite(ts.get("sp500_pct")):
+        clock = _fmt_clock(ts.get("as_of"))
+        at = f" at {clock} ET" if clock else ""
+        lines.append(
+            f"Market tone{at}: {ts.get('tone')} (S&P {float(ts['sp500_pct']):+.1f}%). "
+            "The app re-checks when you open it and defers if the market turns risk-off."
+        )
+    else:
+        lines.append("Market tone couldn't be read — the bear-day check didn't run.")
+    if entry_run.get("macro_available") is not True:
+        lines.append("Macro calendar unavailable — the macro-event check didn't run.")
+    return lines

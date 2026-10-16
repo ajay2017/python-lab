@@ -39,6 +39,24 @@ PRIOR_DAY = TODAY - timedelta(days=1)
 
 # ── test helpers ────────────────────────────────────────────────────────────
 
+_NETWORK_CALLS: list = []
+
+
+@pytest.fixture(autouse=True)
+def _count_network_reads(monkeypatch):
+    """Every run in this file must be network-free: a live index / macro read
+    here would be a real fetch. They are recorded (and fail) so the helper can
+    assert none happened -- `_read_market_context` swallows the raise, so a
+    bare raise alone would hide a leak."""
+    _NETWORK_CALLS.clear()
+
+    def _boom(*a, **k):
+        _NETWORK_CALLS.append("net")
+        raise RuntimeError("network read in a unit test")
+    monkeypatch.setattr("stock_analyzer.data.fetch_market_indices", _boom)
+    monkeypatch.setattr("stock_analyzer.macro_calendar.build_macro_calendar", _boom)
+
+
 def _wl_card(ticker, action="ENTER_NOW", score=70.0):
     return {
         "ticker": ticker, "action": action, "score": score, "price": 100.0,
@@ -60,6 +78,7 @@ def _run_watchlist_entries(
     prior_df=_UNSET, exit_signals_df=_UNSET, scanner_go_tickers=None,
     watchlist_side_effect=None, holdings_side_effect=None, bundle=None,
     exit_signals_side_effect=None, trades_df=_UNSET, trades_side_effect=None,
+    entry_context=None, ctx_log=None, load_gate_holds=_UNSET,
 ):
     cards = cards if cards is not None else {t: _wl_card(t) for t in watchlist}
     ctx = ctx if ctx is not None else {
@@ -78,8 +97,20 @@ def _run_watchlist_entries(
     # emailed entries (sold-today exclusion, 2026-10-11 audit follow-up).
     trades_df = pd.DataFrame() if trades_df is _UNSET else trades_df
 
-    def _fake_build_rec(ticker, data, portfolio_ctx=None):
+    def _fake_build_rec(ticker, data, portfolio_ctx=None, entry_ctx=None):
+        # entry_ctx is the chunk-5 kwarg; recorded so tests can assert on it.
+        if ctx_log is not None:
+            ctx_log.append((ticker, entry_ctx))
         return cards[ticker]
+
+    # No live reads in tests: a caller passing no entry_context gets this
+    # deterministic flat, available context from the fallback.
+    def _fake_live_ctx(today, port_df):
+        return {"market_context": {"tone": "flat", "sp500_pct": -0.2,
+                                   "tone_available": True},
+                "macro_events": []}
+
+    _gate_holds_default = {} if load_gate_holds is _UNSET else load_gate_holds
 
     with patch("stock_analyzer.headless_alert_engine.db.load_watchlist_or_none",
                return_value=None if watchlist_side_effect else list(watchlist),
@@ -101,14 +132,20 @@ def _run_watchlist_entries(
          patch("stock_analyzer.headless_alert_engine.db.save_recommendations",
                side_effect=lambda rows: {"attempted": len(rows), "saved": len(rows), "error": None}) as save_mock, \
          patch("stock_analyzer.headless_alert_engine.is_trading_day", return_value=True), \
+         patch("stock_analyzer.headless_alert_engine._live_entry_context",
+               side_effect=_fake_live_ctx), \
+         patch("stock_analyzer.headless_alert_engine.db.load_gate_holds_on_day_or_none",
+               return_value=_gate_holds_default), \
          patch("stock_analyzer.headless_alert_engine.db.load_trades_or_none",
                return_value=trades_df, side_effect=trades_side_effect), \
          patch("stock_analyzer.headless_alert_engine.db.load_recommendations_or_none",
                return_value=prior_df):
         result = hae.compute_watchlist_entries(
             TODAY, scanner_go_tickers=scanner_go_tickers,
+            **({"entry_context": entry_context} if entry_context is not None else {}),
         )
         result["_save_mock"] = save_mock
+        assert _NETWORK_CALLS == [], "compute_watchlist_entries made a live read"
         return result
 
 

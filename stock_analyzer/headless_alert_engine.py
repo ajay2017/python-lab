@@ -52,7 +52,9 @@ from stock_analyzer.constants import (
     DAILY_NEW_POSITION_BUDGET_PCT,
 )
 from stock_analyzer import daily_budget as _daily_budget
-from stock_analyzer.entry_eligibility import classify_tone
+from stock_analyzer.entry_eligibility import (
+    classify_tone, resolve_tone_state, watchlist_run_ctx, watchlist_ticker_ctx,
+)
 
 _ET = pytz.timezone("America/New_York")
 
@@ -442,6 +444,28 @@ def compute_protective_alerts(today: date | None = None) -> dict:
     }
 
 
+def _read_market_context() -> dict:
+    """The index read behind the headless market context. RAISES on a failed
+    fetch (the caller keeps its tone_available=False flat fallback).
+
+    ``tone_read_at`` is the ET datetime of THIS read -- the Watchlist email's
+    footer prints it, so the time shown is the time the tone was really read
+    (shared-entry-check chunk 5)."""
+    from stock_analyzer.data import fetch_market_indices
+    _idx = fetch_market_indices()
+    _sp = next((i for i in _idx if i.get("short") == "S&P 500"), None)
+    _nq = next((i for i in _idx if i.get("short") == "NASDAQ"), None)
+    _sp_pct = float(_sp["change_pct"]) if _sp else 0.0
+    return {
+        "tone": classify_tone(_sp_pct),
+        "sp500_pct": _sp_pct,
+        "nasdaq_pct": float(_nq["change_pct"]) if _nq else 0.0,
+        "leading_sectors": [],
+        "tone_available": _sp is not None,
+        "tone_read_at": datetime.now(_ET),
+    }
+
+
 def compute_morning_picks(today: date | None = None, scanner_results=None,
                            ctx: dict | None = None) -> dict:
     """Return {"picks": [...new_picks...], "built_at": <ET iso>, "errors": [...]}.
@@ -492,18 +516,7 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
     market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": [],
                       "tone_available": False}
     try:
-        from stock_analyzer.data import fetch_market_indices
-        _idx = fetch_market_indices()
-        _sp = next((i for i in _idx if i.get("short") == "S&P 500"), None)
-        _nq = next((i for i in _idx if i.get("short") == "NASDAQ"), None)
-        _sp_pct = float(_sp["change_pct"]) if _sp else 0.0
-        market_context = {
-            "tone": classify_tone(_sp_pct),
-            "sp500_pct": _sp_pct,
-            "nasdaq_pct": float(_nq["change_pct"]) if _nq else 0.0,
-            "leading_sectors": [],
-            "tone_available": _sp is not None,
-        }
+        market_context = _read_market_context()
     except Exception as e:
         errors.append(f"market tone fetch failed: {e}")
 
@@ -558,6 +571,11 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
     # the app would suppress on a binary-catalyst day (FOMC/CPI/jobs). The static
     # backbone gives the event dates even without a FRED key. (Streamlit-free.)
     macro_events: list = []
+    # The SAME events the Watchlist's entry check reads (entry_context below).
+    # None = the calendar could not be built (unchecked); [] = checked, none.
+    # Kept apart from `macro_events` because Grow Today's own input above
+    # defaults to [] on a failure.
+    entry_macro_events = None
     try:
         import os as _os
         from stock_analyzer.macro_calendar import build_macro_calendar
@@ -572,6 +590,7 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
         macro_events = build_macro_calendar(
             port_df, fred_key=(_os.environ.get("FRED_API_KEY") or None), today=today,
         ) or []
+        entry_macro_events = macro_events
     except Exception as e:
         errors.append(f"macro calendar failed: {e}")
 
@@ -656,7 +675,11 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
         )
     except Exception as e:
         return {"picks": [], "built_at": built_at,
-                "errors": errors + [f"build_daily_briefing failed: {e}"]}
+                "errors": errors + [f"build_daily_briefing failed: {e}"],
+                # The tone/macro reads were already made: the Watchlist email
+                # still shares them (one tone read per run).
+                "entry_context": {"market_context": market_context,
+                                  "macro_events": entry_macro_events}}
 
     # build_daily_briefing's tone/new_picks/etc. live nested under "grow_today"
     # (app.py always reads it that way) -- NOT at the top level of `brief`.
@@ -739,7 +762,14 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
             # grow_today dict — gate_ledger.build_suppression_rows reads the
             # suppression buckets from here (W5 capture half). Additive; existing
             # callers that ignore this key are unaffected.
-            "grow": grow}
+            "grow": grow,
+            # ONE tone read per run (shared-entry-check chunk 5): the market
+            # context (incl. `tone_read_at`) and the macro events loaded above,
+            # so `compute_watchlist_entries` -- and so both emails in a scan
+            # run -- use the SAME reads. `macro_events` None = couldn't be
+            # built (unchecked), [] = checked, none. Additive.
+            "entry_context": {"market_context": market_context,
+                              "macro_events": entry_macro_events}}
 
 
 def _prior_trading_day(d: date) -> date:
@@ -755,14 +785,53 @@ def _prior_trading_day(d: date) -> date:
     return cur
 
 
+def _live_entry_context(today: date, port_df) -> dict:
+    """A live `entry_context` for a caller that did not get one from
+    compute_morning_picks (shape: {"market_context", "macro_events"}).
+
+    Same sentinel semantics as compute_morning_picks: an unreadable index ->
+    tone_available False (the check reports "couldn't run", it is not skipped);
+    an unbuildable calendar -> macro_events None (unchecked), [] = checked,
+    none. Never raises."""
+    try:
+        mc = _read_market_context()
+    except Exception:
+        mc = {"tone_available": False}
+    macro_events = None
+    try:
+        import os as _os
+        import pandas as _pd
+        from stock_analyzer.macro_calendar import build_macro_calendar
+        macro_events = build_macro_calendar(
+            port_df if port_df is not None else _pd.DataFrame(),
+            fred_key=(_os.environ.get("FRED_API_KEY") or None), today=today,
+        )
+    except Exception:
+        macro_events = None
+    return {"market_context": mc, "macro_events": macro_events}
+
+
 def compute_watchlist_entries(
     today: date | None = None,
     watchlist: "list[str] | None" = None,
     scanner_go_tickers=None,
     ctx: dict | None = None,
+    entry_context: dict | None = None,
 ) -> dict:
     """Return {"entries": [...] | None, "built_at": <ET iso>, "errors": [...],
-    "reason": str | None, "gate_degraded": bool}.
+    "reason": str | None, "gate_degraded": bool, "entry_run": {...},
+    "gate_ledger_rows": [...]}.
+
+    `entry_context` (shared-entry-check chunk 5): compute_morning_picks'
+    `entry_context` -- {"market_context", "macro_events"} -- so both emails of
+    a scan run use ONE tone read. None (any other caller) does NOT skip the
+    check: `_live_entry_context` makes its own live read with the same sentinel
+    semantics (tone unreadable -> unchecked, macro unreadable -> None).
+    The shared entry check HOLDS a would-be ENTER_NOW (ENTRY_HELD): a held card
+    is never in `qualifying`, so it is never captured as enter_now, emailed
+    or allocated. `entry_run` carries what the email footer states;
+    `gate_ledger_rows` are the Watchlist ledger rows the cron saves (G-05/06/13
+    and G-28/G-29, source "cron", G-28/G-29 never for a held ticker).
 
     `ctx`: pass an already-built `_build_context(today)` result (from a
     same-`today` `compute_morning_picks` call, e.g. the `scan` cron lane) to
@@ -893,8 +962,45 @@ def compute_watchlist_entries(
     except Exception:
         rfr = 0.045
 
+    # ── Shared new-entry check: ONE per-run context (tone + macro map) ──────
+    # Same pure helpers the 📋 Watchlist page calls (resolve_tone_state /
+    # watchlist_run_ctx / watchlist_ticker_ctx), so the card is identical for
+    # identical inputs. Headless has no Home bundle -> tone source "live".
+    # Tone and macro are resolved in SEPARATE try blocks, like the app page: a
+    # macro failure must never discard a correctly-read tone (a bear day must
+    # not fail open because the macro build raised).
+    _ec_unavailable = {"tone": None, "sp500_pct": None, "available": False,
+                       "source": None, "as_of": None}
+    try:
+        if not isinstance(entry_context, dict):
+            entry_context = _live_entry_context(today, port_df)
+        _ec_mc = entry_context.get("market_context")
+        _ec_mc = _ec_mc if isinstance(_ec_mc, dict) else {}
+        _ec_tone = resolve_tone_state(
+            None, False, None, _ec_mc.get("sp500_pct"),
+            _ec_mc.get("tone_available") is True)
+        if _ec_tone["available"]:
+            # When the index was read -- the email footer prints it.
+            _ec_tone["as_of"] = _ec_mc.get("tone_read_at")
+    except Exception as e:
+        # Never silently skip the check: the tone reads as "couldn't run" (open
+        # + disclosed, the app's own fallback).
+        errors.append(f"entry check tone failed: {e}")
+        _ec_tone = dict(_ec_unavailable)
+        entry_context = entry_context if isinstance(entry_context, dict) else {}
+    try:
+        _entry_run_ctx = watchlist_run_ctx(
+            _ec_tone, entry_context.get("macro_events"), today, datetime.now(_ET))
+    except Exception as e:
+        # Unreadable macro events -> "couldn't run" on every card, tone kept.
+        errors.append(f"entry check macro failed: {e}")
+        _entry_run_ctx = {"tone_state": _ec_tone, "macro_map": None}
+    _entry_run = {"tone_state": _ec_tone,
+                  "macro_available": _entry_run_ctx.get("macro_map") is not None}
+
     # ── Per-ticker: bundle load → portfolio_ctx → build_watchlist_recommendation ──
     qualifying: list[dict] = []
+    all_cards: list[dict] = []   # every card, for the Watchlist ledger rows
     sector_map: dict = {}
     # Pillar scores per ticker for the enter_now rec-log capture below (D8).
     # Zero extra fetches — load_bundle already returns these. Deliberately the
@@ -965,10 +1071,25 @@ def compute_watchlist_entries(
             "grow_today_sectors":      set(),
         }
         try:
-            card = build_watchlist_recommendation(t, data, portfolio_ctx=pctx)
+            # Per-ticker headlines: the same curate_news_items derivation the
+            # page uses (raw VADER over the bundle's news_raw); a failure reads
+            # as "no recent headlines to check".
+            try:
+                from stock_analyzer.data import curate_news_items
+                _news_items = curate_news_items({t: data})
+            except Exception:
+                _news_items = None
+            _entry_ctx = watchlist_ticker_ctx(
+                _entry_run_ctx, sector=_sctx["sector"],
+                classified=_sctx["classified"], news_items=_news_items)
+            card = build_watchlist_recommendation(
+                t, data, portfolio_ctx=pctx, entry_ctx=_entry_ctx)
         except Exception as e:
             errors.append(f"{t}: recommendation build failed ({e})")
             continue
+        all_cards.append(card)
+        # ENTRY_HELD (held by the shared entry check) is deliberately NOT here:
+        # it is never captured as enter_now, emailed or allocated.
         if card.get("action") == "ENTER_NOW":
             qualifying.append(card)
 
@@ -1162,9 +1283,40 @@ def compute_watchlist_entries(
             except Exception as _ex:
                 errors.append(f"{_e.get('ticker', '?')}: sizing/economics failed ({_ex})")
 
+    # D5: a name the Watchlist held YESTERDAY (a G-28 macro / G-29 bear-day row)
+    # was never captured as enter_now, so the day-over-day diff re-announces it
+    # on the first ready day. Annotate it. Only tone/macro holds write ledger
+    # rows, so a name held yesterday for news / stale data gets no note -- an
+    # accepted gap. A failed read -> no annotation, never a claim it wasn't held.
+    if new_entries:
+        try:
+            from stock_analyzer.gate_ledger import WATCHLIST_HOLD_LABELS
+            _held_y = db.load_gate_holds_on_day_or_none(
+                _prior_trading_day(today), list(WATCHLIST_HOLD_LABELS))
+            if _held_y:
+                for _e in new_entries:
+                    _gid = _held_y.get(str(_e.get("ticker", "")).strip().upper())
+                    if _gid in WATCHLIST_HOLD_LABELS:
+                        _e["held_yesterday"] = WATCHLIST_HOLD_LABELS[_gid]
+        except Exception as e:
+            errors.append(f"held-yesterday lookup failed: {e}")
+
+    # Watchlist ledger rows (D4): the cron grades deferral costs on days nobody
+    # opens the page. Built here (pure), SAVED by cron_runner so a failed write
+    # reds the heartbeat like every other cron write. G-28/G-29 skip held names.
+    gate_ledger_rows: list = []
+    try:
+        from stock_analyzer.gate_ledger import build_watchlist_suppression_rows
+        gate_ledger_rows = build_watchlist_suppression_rows(
+            all_cards, rec_date=today, source="cron",
+            sector_by_ticker=sector_map, held_tickers=held_set)
+    except Exception as e:
+        errors.append(f"watchlist gate-ledger rows failed: {e}")
+
     return {
         "entries": new_entries, "built_at": built_at, "errors": errors,
         "reason": None, "gate_degraded": gate_degraded,
+        "entry_run": _entry_run, "gate_ledger_rows": gate_ledger_rows,
     }
 
 
