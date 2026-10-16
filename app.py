@@ -15386,6 +15386,10 @@ elif page == "📡 Signals & Advice":
                                 if 0 <= days_to_earn <= 14:
                                     _check("🔴", f"Earnings in {days_to_earn}d ({earn}) — bearish signal + near earnings = reduce now.", "#ff4444")
                                     earn_flag = True
+                                elif days_to_earn < 0:
+                                    # A past date is the LAST report, not an upcoming one —
+                                    # never "earnings in -20d … reduce before report".
+                                    _check("⚪", f"Last earnings {earn} (past) — next date not yet published.")
                                 elif days_to_earn <= 30:
                                     _check("🟡", f"Earnings in {days_to_earn}d ({earn}) — consider reducing before report.", "#ffbb33")
                                     earn_flag = True
@@ -15713,33 +15717,51 @@ elif page == "📡 Signals & Advice":
                     # ── Quick log button ──────────────────────────────────────
                     st.markdown("---")
                     log_col, note_col = st.columns([1, 2])
-                    with log_col:
-                        _default_shares = (
-                            act.get("half_shares", act.get("trim_shares", act.get("shares", 1)))
-                        )
-                        _default_action = "SELL" if act["type"] in ("review", "trim") else "BUY"
-                        # "trim" is the weight/concentration-driven reduction
-                        # (SINGLE_NAME_TRIM_TRIGGER) — the specific beta/concentration
-                        # call the outcome-measurement feature tracks. "review" is a
-                        # bearish-composite-signal call (a different, Exit-Advisor-
-                        # adjacent judgment), so it stays RECOMMENDATION.
-                        _default_trigger = "REBAL_TRIM" if act["type"] == "trim" else "RECOMMENDATION"
-                        if st.button(
-                            f"📝 Log trade for {ticker}",
-                            key=f"log_btn_{ticker}_{act['type']}",
-                            width="stretch",
-                            type="primary",
-                        ):
-                            st.session_state["_tj_prefill"] = {
-                                "ticker":  ticker,
-                                "action":  _default_action,
-                                "shares":  _default_shares,
-                                "price":   act["price"],
-                                "trigger": _default_trigger,
-                                "notes":   f"Based on advisor recommendation: {act['title']}",
-                            }
-                            st.session_state["_pending_page"] = "📒 Trade Journal"
-                            st.rerun()
+                    if act["type"] == "add":
+                        # An ADD is a new buy: its size must come from the sized
+                        # path (F-255 cap, daily budget, entry checks) on 📈
+                        # Analysis. The old Log button pre-filled the CURRENT
+                        # holding's share count — one click doubled the position
+                        # with no cap. Route to Analysis instead; no prefill.
+                        with log_col:
+                            if st.button(
+                                f"▶ Analyze {ticker} for a sized add",
+                                key=f"an_btn_{ticker}_{act['type']}",
+                                width="stretch",
+                                type="primary",
+                            ):
+                                st.session_state["_pending_page"]    = "📈 Analysis"
+                                st.session_state["_analysis_ticker"] = ticker
+                                st.session_state["_nav_origin"]      = "📡 Signals & Advice"
+                                st.rerun()
+                    else:
+                        with log_col:
+                            _default_shares = (
+                                act.get("half_shares", act.get("trim_shares", act.get("shares", 1)))
+                            )
+                            _default_action = "SELL" if act["type"] in ("review", "trim") else "BUY"
+                            # "trim" is the weight/concentration-driven reduction
+                            # (SINGLE_NAME_TRIM_TRIGGER) — the specific beta/concentration
+                            # call the outcome-measurement feature tracks. "review" is a
+                            # bearish-composite-signal call (a different, Exit-Advisor-
+                            # adjacent judgment), so it stays RECOMMENDATION.
+                            _default_trigger = "REBAL_TRIM" if act["type"] == "trim" else "RECOMMENDATION"
+                            if st.button(
+                                f"📝 Log trade for {ticker}",
+                                key=f"log_btn_{ticker}_{act['type']}",
+                                width="stretch",
+                                type="primary",
+                            ):
+                                st.session_state["_tj_prefill"] = {
+                                    "ticker":  ticker,
+                                    "action":  _default_action,
+                                    "shares":  _default_shares,
+                                    "price":   act["price"],
+                                    "trigger": _default_trigger,
+                                    "notes":   f"Based on advisor recommendation: {act['title']}",
+                                }
+                                st.session_state["_pending_page"] = "📒 Trade Journal"
+                                st.rerun()
                     with note_col:
                         st.caption(
                             "⚠️ Algorithmic analysis — not personal financial advice. "
