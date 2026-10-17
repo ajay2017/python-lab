@@ -1083,8 +1083,8 @@ def compute_watchlist_entries(
         }
         try:
             # Per-ticker headlines: the same curate_news_items derivation the
-            # page uses (raw VADER over the bundle's news_raw); a failure reads
-            # as "no recent headlines to check".
+            # page uses (raw VADER over the bundle's news_raw); a failure (None)
+            # reads as "headlines couldn't be read -- the news check didn't run".
             try:
                 from stock_analyzer.data import curate_news_items
                 _news_items = curate_news_items({t: data})

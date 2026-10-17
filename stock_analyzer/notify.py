@@ -1163,6 +1163,10 @@ def render_watchlist_entries_email(
         unch_txt = "; ".join(
             str(u.get("why")) for u in ([] if _unch is None else _unch)
             if isinstance(u, dict) and u.get("why"))
+        _pass = e.get("entry_passed")
+        pass_txt = "; ".join(
+            str(p.get("detail")) for p in ([] if _pass is None else _pass)
+            if isinstance(p, dict) and p.get("check") == "news" and p.get("detail"))
         held_y  = e.get("held_yesterday")   # D5: "macro event" / "market risk-off"
 
         # (a) Two-tier header — a deterioration-flagged name previously got
@@ -1299,6 +1303,7 @@ def render_watchlist_entries_email(
           {sizing_html}
           {f'<div style="color:#a8a29e;font-size:12px;margin-top:4px">{summary}</div>' if summary else ''}
           {f'<div style="color:#a8a29e;font-size:12px;margin-top:4px">{_html.escape(str(det_warning))}</div>' if det_warning else ''}
+          {f'<div style="color:#78716c;font-size:11px;margin-top:4px">News checked: {_html.escape(pass_txt)}</div>' if pass_txt else ''}
           {f'<div style="color:#78716c;font-size:11px;margin-top:4px">Not checked: {_html.escape(unch_txt)}</div>' if unch_txt else ''}
           {f'<div style="color:#fcd34d;font-size:12px;margin-top:4px">(deferred yesterday — {_html.escape(str(held_y))})</div>' if held_y else ''}
         </div>""")

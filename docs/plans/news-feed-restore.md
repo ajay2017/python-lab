@@ -3,7 +3,7 @@
 **Status: DESIGNED + OWNER-APPROVED 2026-10-16 (planner Opus 5.5, PROCEED WITH CHANGES; owner accepted every
 recommendation D-1..D-7, and yf.Search primary + Finnhub `/company-news` secondary after a source comparison). Chunk 1
 DONE 2026-10-16 (`593a26c`, Opus SHIP after 3 rounds, pushed). Chunk 2 (tripwire) DONE 2026-10-17 (Opus SHIP after
-one FIX-FIRST round). Next chunk 3.** Found from the live 📋 Watchlist (BKNG: "no recent headlines to check"). Blocks
+one FIX-FIRST round). Chunk 3 split into 3a/3b/3c 2026-10-17 (see Build plan); 3a in build.** Found from the live 📋 Watchlist (BKNG: "no recent headlines to check"). Blocks
 `docs/plans/shared-entry-check.md` chunk 7 (a news check on adds would be inert).
 
 ## Root cause (verified read-only)
@@ -66,7 +66,10 @@ one FIX-FIRST round). Next chunk 3.** Found from the live 📋 Watchlist (BKNG: 
 |---|---|---|
 | 1 | `fix(news)`: `yf.Search` + `relatedTickers` filter + age cap, `news_status`, LLM cache never saves an empty rescore (and treats a cached `[]` with live headlines as a miss), `cached` status, delete `fetch_curated_news`, selftest | reviewer (`bundle_loader` gate file; composites change) |
 | 2 | `feat(news)`: `news_feed.py` tripwire, cron failures, `api_health` / `system_health` row, Home cache | reviewer |
-| 3 | `feat(news)`: status-aware disclosure in `entry_eligibility`, `daily_briefing`, `curate_brief_news`, LLM evidence, app render, emails | reviewer |
+| 3 | `feat(news)`: status-aware disclosure in `entry_eligibility`, `daily_briefing`, `curate_brief_news`, LLM evidence, app render, emails — **split 2026-10-17 into 3a/3b/3c** (a 10-17 site map found `_act_today` has no route to any bundle/status — it sees only the status-less curated `news_items` — and `_news_feed_cache` is published after the Brief builds and read nowhere, so the Brief half needs its own plumbing) | reviewer |
+| 3a | Watchlist + Analysis: `check_news` splits feed-unavailable / "no headlines tagged to TICKER" / no recent headlines, and returns a visible PASS ("📰 News checked: N headlines, avg x — no negative news", owner-approved 2026-10-17) on Watchlist cards + the Ready email + Analysis's News tile; Analysis's "Opens Trade Journal pre-filled…" caption only beside a real trade button | reviewer |
+| 3b | Brief + emails: thread news status / feed state into `daily_briefing` (Act Today critical-news, Review warning-news, Grow Today negative-news Skip) and say when those checks didn't run; morning-email footer must stop implying a news gate it doesn't list | reviewer |
+| 3c | LLM evidence: "News: feed unavailable — do not infer quiet news" vs untagged vs real headlines (thesis, Pre-Mortem; debate/red-team carry no headlines today) | reviewer |
 | 4 | `feat(news)`: Finnhub `/company-news` fallback with a rate budget (after a Railway selftest) | reviewer |
 | 5 | Docs (new F-ID, F-307 news row, architecture, shipped-log, User Guide "Skip — Negative News", plans, memory) | lead |
 | 6 | Then shared-entry **chunk 7**, built against `news_status` | per its plan |
@@ -78,6 +81,14 @@ boundaries at `NEWS_FEED_OUTAGE_MIN_TICKERS` and `−1`, `None` on empty; cron o
 still sent (non-vacuous); `check_news` strings for each status; no invented `critical_news` during an outage, and a
 real critical WATCH fires with `ok` + 2 tier-1 headlines at −0.30 (the shared-entry golden master unchanged when
 status is `ok`); LLM evidence line differs for unavailable vs quiet.
+
+## Found during the 2026-10-17 site map — NOT built, each needs its own decision
+Unverified beyond a read-only code read; check against HEAD before acting.
+- `_sidebar_news` is overwritten by 📈 Analysis with the analysed tickers' news (`app.py` ~24394/~24407), and 🥧 Portfolio Overview's News Intelligence / Opportunity Signals (~20448) and the AI brief prompts (~8168, ~12384) read it as if it were holdings news. The comment at ~5016 blames Market Scanner, which only reads it.
+- `app.py` ~8166-8170 builds the premarket-stance headlines with `n.get("headline")`, but curated items carry `title` — so that list is probably always empty.
+- `debate_agent.build_entry_corpus` reads `grow_bundle["history"]` (~192/239/246/254) but `load_bundle` results carry `df`, so price/momentum/RS are probably always missing from the entry debate.
+- `premortem_advisor.driving_pillar_from_bundle` treats sentiment as always available (docstring ~96-97), so a fabricated neutral 50 can be named the driving pillar (feeds 3c).
+- The Act Today `critical_news` card and the Review news WATCH are never emailed — no Act Today/Review email renderer exists (feeds 3b scope).
 
 ## Owner SQL (Supabase, read-only) — dates the outage
 ```sql

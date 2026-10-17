@@ -291,7 +291,9 @@ def build_watchlist_recommendation(
     "sector"} runs entry_eligibility.entry_check inside the ENTER_NOW branch,
     AFTER the portfolio-fit hard gates. A held name becomes the new action
     ENTRY_HELD (never ENTER_NOW, no sizing keys); an eligible one stays
-    ENTER_NOW and gains `entry_unchecked` ("couldn't run" notes). If the check
+    ENTER_NOW and gains `entry_unchecked` ("couldn't run" notes) and
+    `entry_passed` ({check, detail} notes for checks that ran and cleared, e.g.
+    the news check). If the check
     itself raises, fail CLOSED: ENTRY_HELD with hold_kind "check_failed".
 
     portfolio_ctx (optional): {
@@ -652,6 +654,7 @@ def build_watchlist_recommendation(
         )
 
         _entry_unchecked = None
+        _entry_passed = None
         if entry_ctx is not None:
             try:
                 _chk = _entry_elig.entry_check(
@@ -662,6 +665,8 @@ def build_watchlist_recommendation(
                     news=entry_ctx.get("news"),
                     earnings_days=earn_days,
                     gate_ids={"tone": "G-29", "macro": "G-28"},
+                    ticker=ticker,
+                    news_read_failed=entry_ctx.get("news_read_failed", False),
                 )
             except Exception:
                 _chk = None   # fail CLOSED: _entry_held_card builds check_failed
@@ -674,6 +679,8 @@ def build_watchlist_recommendation(
                 )
                 _unchk = None if _chk is None else _chk.get("unchecked")
                 _entry_unchecked = [] if _unchk is None else list(_unchk)
+                _pass = None if _chk is None else _chk.get("passed")
+                _entry_passed = [] if _pass is None else [dict(p) for p in _pass]
             except Exception:
                 # A malformed check result must still be a VISIBLE held card,
                 # never a dropped name (chunk-3 review item 2).
@@ -755,6 +762,8 @@ def build_watchlist_recommendation(
         )
         if _entry_unchecked is not None:
             _enter_card["entry_unchecked"] = _entry_unchecked
+        if _entry_passed is not None:
+            _enter_card["entry_passed"] = _entry_passed
         return _enter_card
 
     # ── NEAR ENTRY — price already in zone, R:R not yet validated ───────────
@@ -1019,7 +1028,7 @@ def _entry_held_card(ticker, chk, score, rec_label, price, entry_lo, entry_hi,
             "clears_when": "the entry check can run again — reload the page",
             "gate_value": None, "gate_threshold": None,
         }
-        holds, unchecked = [binding], []
+        holds, unchecked, passed = [binding], [], []
     else:
         if chk["eligible"]:
             return None
@@ -1028,6 +1037,8 @@ def _entry_held_card(ticker, chk, score, rec_label, price, entry_lo, entry_hi,
         binding = chk.get("binding")
         _u = chk.get("unchecked")
         unchecked = [] if _u is None else list(_u)
+        _p = chk.get("passed")
+        passed = [] if _p is None else list(_p)
         if binding is None:
             binding = holds[0] if holds else {}
         # A hold missing a key keeps the card visible: read with defaults.
@@ -1082,4 +1093,5 @@ def _entry_held_card(ticker, chk, score, rec_label, price, entry_lo, entry_hi,
     card["hold_reason"] = reason
     card["clears_when"] = binding["clears_when"]
     card["entry_unchecked"] = [dict(u) for u in unchecked]   # one key name (item 5)
+    card["entry_passed"] = [dict(p) for p in passed]
     return card

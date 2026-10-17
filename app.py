@@ -24567,7 +24567,7 @@ elif page == "📈 Analysis":
             bundle=_r, basis=_b, label=_l, held=str(_t).strip().upper() in _an_held_set,
             run_ctx=_an_run_ctx, sector=_an_sctx["sector"],
             classified=_an_sctx["classified"], news_items=_an_news_items,
-            earnings=_r.get("earnings"), today=_today_et())
+            earnings=_r.get("earnings"), today=_today_et(), ticker=_t)
     # Single-ticker page: the hold also sits DIRECTLY under the verdict strip
     # above, so the first line is never an unqualified "Strong Buy" for a name
     # the entry check is holding back (mockup scene 4).
@@ -26312,6 +26312,7 @@ elif page == "📈 Analysis":
                 _ap_followed_sell = "yes" if "Sell" in rec["label"] else None
 
                 _ap_c1, _ap_c2, _ap_c3 = st.columns([1, 1, 2])
+                _ap_btn_shown = False
                 if _da_withheld:
                     # No verdict -> no pre-filled "RECOMMENDATION" trade button
                     # (it would log an attribution to a call never issued).
@@ -26330,6 +26331,7 @@ elif page == "📈 Analysis":
                 elif _sa_is_sell:
                     # Sell signal — primary action is SELL (exit/trim)
                     with _ap_c1:
+                        _ap_btn_shown = True
                         _render_trade_button(
                             ticker=ticker,
                             suggested_action="SELL",
@@ -26346,6 +26348,7 @@ elif page == "📈 Analysis":
                     # Hold — surface both sides so user picks
                     if _sa_holding:   # Trim is holder-only
                         with _ap_c1:
+                            _ap_btn_shown = True
                             _render_trade_button(
                                 ticker=ticker,
                                 suggested_action="SELL",
@@ -26358,6 +26361,7 @@ elif page == "📈 Analysis":
                                 width="stretch",
                             )
                     with _ap_c2:
+                        _ap_btn_shown = True
                         _render_trade_button(
                             ticker=ticker,
                             suggested_action="BUY",
@@ -26378,6 +26382,7 @@ elif page == "📈 Analysis":
                             st.caption("📒 Buy button hidden — the entry check is "
                                        "holding this name back today.")
                         else:
+                            _ap_btn_shown = True
                             _render_trade_button(
                                 ticker=ticker,
                                 suggested_action="BUY",
@@ -26392,6 +26397,7 @@ elif page == "📈 Analysis":
                             )
                     if _sa_holding:
                         with _ap_c2:
+                            _ap_btn_shown = True
                             _render_trade_button(
                                 ticker=ticker,
                                 suggested_action="SELL",
@@ -26404,7 +26410,7 @@ elif page == "📈 Analysis":
                                 width="stretch",
                             )
                 with _ap_c3:
-                    if not _da_withheld:
+                    if not _da_withheld and _ap_btn_shown:
                         st.caption(
                             f"Opens Trade Journal pre-filled with **{rec['label']} · "
                             f"{_da_display_total:.0f}/100** as the signal context."
@@ -27974,7 +27980,7 @@ elif page == "📋 Watchlist":
         try:
             # Per-ticker headlines: the same curate_news_items derivation Grow
             # Today's candidates use (raw VADER over the bundle's news_raw, 8 per
-            # ticker); None on a failure reads as "no recent headlines to check".
+            # ticker); None on a failure reads as "headlines couldn't be read".
             try:
                 _wl_news_items = curate_news_items({_wt: _wd})
             except Exception:
@@ -28514,6 +28520,11 @@ elif page == "📋 Watchlist":
             _wl_unchecked = _wr.get("entry_unchecked")
             for _un in ([] if _wl_unchecked is None else _wl_unchecked):
                 st.caption(f"⚠️ {str(_un.get('why', '')).replace('$', chr(92) + '$')}")
+            # A news check that RAN and cleared says so (a pass was invisible).
+            _wl_passed = _wr.get("entry_passed")
+            for _pn in ([] if _wl_passed is None else _wl_passed):
+                if _pn.get("check") == "news":
+                    st.caption(f"📰 News checked: {str(_pn.get('detail', '')).replace('$', chr(92) + '$')}")
 
             # For HOLD_OFF_EARNINGS: show when to return once earnings clear.
             if _action == "HOLD_OFF_EARNINGS" and _earn_d is not None and _earn_d >= 0:

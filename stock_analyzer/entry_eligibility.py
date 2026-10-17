@@ -14,6 +14,10 @@ from __future__ import annotations
 import math
 from datetime import date, time as _time
 
+from stock_analyzer.news_feed import (
+    NEWS_STATUS_CACHED, NEWS_STATUS_ERROR, NEWS_STATUS_NONE,
+)
+
 from stock_analyzer.constants import (
     EARNINGS_IMMINENT_DAYS,
     GROW_TODAY_MAX_FUND_AGE_DAYS,
@@ -171,7 +175,9 @@ def news_compound(items):
 
 # ── Ordered check functions (A4) ─────────────────────────────────────────────
 # Each takes the context dict and returns None (pass), or a dict with
-# kind "hold" (a hold row) or "unchecked" (a {check, why} note).
+# kind "hold" (a hold row), "unchecked" (a {check, why} note) or "passed"
+# (a {check, detail} note: the check ran and cleared, shown so a pass is not
+# invisible).
 def _gid(ctx, name):
     gids = ctx.get("gate_ids")
     return None if gids is None else gids.get(name)
@@ -242,17 +248,36 @@ def check_macro(ctx):
 
 def check_news(ctx):
     news = ctx.get("news")
-    if not news or news.get("compound") is None or not news.get("n"):
-        return {"kind": "unchecked", "check": "news", "why": "no recent headlines to check"}
-    c = news["compound"]
-    if is_negative_news(c):
-        return {
-            "kind": "hold", "check": "news", "gate_id": None,
-            "reason": f"negative news (avg {c:+.2f} across {news['n']} headlines)",
-            "clears_when": f"the news average rises above {NEWS_SENTIMENT_NEGATIVE:g}",
-            "gate_value": c, "gate_threshold": NEWS_SENTIMENT_NEGATIVE,
-        }
-    return None
+    if news and not isinstance(news, dict):
+        # Fail CLOSED on a malformed input, as before 3a (the caller's
+        # except turns this into "entry check couldn't run").
+        raise TypeError(f"check_news: news must be a dict or None, got {type(news).__name__}")
+    t = ctx.get("ticker")
+    who = str(t).upper() if t else "this ticker"
+    if isinstance(news, dict) and news.get("compound") is not None and news.get("n"):
+        # Real headlines are evaluated whatever the feed status says.
+        c = news["compound"]
+        n = news["n"]
+        if is_negative_news(c):
+            return {
+                "kind": "hold", "check": "news", "gate_id": None,
+                "reason": f"negative news (avg {c:+.2f} across {n} headlines)",
+                "clears_when": f"the news average rises above {NEWS_SENTIMENT_NEGATIVE:g}",
+                "gate_value": c, "gate_threshold": NEWS_SENTIMENT_NEGATIVE,
+            }
+        return {"kind": "passed", "check": "news", "n": n, "compound": c,
+                "detail": (f"{n} headline{'s' if n != 1 else ''}, avg {c:+.2f}"
+                           f" — above the negative-news bar ({NEWS_SENTIMENT_NEGATIVE:+.2f})")}
+    bundle = ctx.get("bundle")
+    status = bundle.get("news_status") if isinstance(bundle, dict) else None
+    if (ctx.get("news_read_failed") is True
+            or status in (NEWS_STATUS_ERROR, NEWS_STATUS_CACHED)):
+        return {"kind": "unchecked", "check": "news",
+                "why": f"headlines for {who} couldn't be read — the news check didn't run"}
+    if status == NEWS_STATUS_NONE:
+        return {"kind": "unchecked", "check": "news",
+                "why": f"no headlines tagged to {who}"}
+    return {"kind": "unchecked", "check": "news", "why": "no recent headlines to check"}
 
 
 def check_earnings(ctx):
@@ -275,8 +300,14 @@ DEFAULT_GATE_IDS = {"tone": None, "macro": None}
 
 
 def entry_check(*, bundle=None, tone_state=None, sector=None, macro_map=None,
-                news=None, earnings_days=None, gate_ids=None, checks=None) -> dict:
+                news=None, earnings_days=None, gate_ids=None, checks=None,
+                ticker=None, news_read_failed=False) -> dict:
     """Run every check; never returns None.
+
+    Returns ``eligible``/``holds``/``binding`` plus ``unchecked`` (checks that
+    couldn't run) and ``passed`` (checks that ran and cleared, a
+    ``{check, detail}`` note each; a pass never blocks).  ``ticker`` only words
+    the news note; ``news_read_failed`` True = the headline read itself raised.
 
     ``news`` is ``{"compound", "n", "headline"}`` or None. ``gate_ids`` maps
     "tone"/"macro" to the calling surface's ledger gate id (stale/news/earnings
@@ -286,10 +317,11 @@ def entry_check(*, bundle=None, tone_state=None, sector=None, macro_map=None,
     ctx = {
         "bundle": bundle, "tone_state": tone_state, "sector": sector,
         "macro_map": macro_map, "news": news, "earnings_days": earnings_days,
-        "gate_ids": gate_ids,
+        "gate_ids": gate_ids, "ticker": ticker, "news_read_failed": news_read_failed,
     }
     holds: list = []
     unchecked: list = []
+    passed: list = []
     for fn in (checks if checks is not None else DEFAULT_CHECKS):
         r = fn(ctx)
         if not r:
@@ -298,6 +330,12 @@ def entry_check(*, bundle=None, tone_state=None, sector=None, macro_map=None,
         kind = r.pop("kind", "hold")
         if kind == "unchecked":
             unchecked.append({"check": r.get("check"), "why": r.get("why")})
+        elif kind == "passed":
+            note = {"check": r.get("check"), "detail": r.get("detail")}
+            for k in ("n", "compound"):
+                if k in r:
+                    note[k] = r[k]
+            passed.append(note)
         else:
             holds.append(r)
     return {
@@ -305,6 +343,7 @@ def entry_check(*, bundle=None, tone_state=None, sector=None, macro_map=None,
         "holds": holds,
         "binding": holds[0] if holds else None,
         "unchecked": unchecked,
+        "passed": passed,
     }
 
 
@@ -314,7 +353,8 @@ def entry_check(*, bundle=None, tone_state=None, sector=None, macro_map=None,
 def news_ctx_from_items(items):
     """``{"compound", "n", "headline"}`` from curated headline items (the
     ``data.curate_news_items`` shape: ``title`` + raw-VADER ``compound``), or
-    None when there are none (-> check_news's "no recent headlines")."""
+    None when there are none (-> check_news reads the bundle's ``news_status`` to say WHY there are
+    none: headlines couldn't be read vs no headline tagged to the ticker)."""
     items = [n for n in (items or []) if isinstance(n, dict)]
     if not items:
         return None
@@ -343,13 +383,15 @@ def watchlist_run_ctx(tone_state, macro_events, today: date, now_et) -> dict:
 def watchlist_ticker_ctx(run_ctx, *, sector, classified, news_items) -> dict:
     """The full per-ticker ``entry_ctx``. ``sector`` is the curated
     ``sector_gate_context`` sector and is passed ONLY when ``classified`` (else
-    None -> check_macro says "sector unknown"). ``news_items`` None / empty =
-    headlines couldn't be read or none exist (-> "no recent headlines to
-    check")."""
+    None -> check_macro says "sector unknown"). ``news_items`` None means the
+    headline read raised (``news_read_failed`` True -> "headlines couldn't be read");
+    an empty list is a completed read with nothing usable, which check_news words
+    from the bundle's ``news_status`` (``curate_news_items`` never returns None)."""
     return {
         "tone_state": run_ctx.get("tone_state"),
         "macro_map": run_ctx.get("macro_map"),
         "news": news_ctx_from_items(news_items),
+        "news_read_failed": news_items is None,
         "sector": sector if classified else None,
     }
 
@@ -581,7 +623,8 @@ _ANALYSIS_BUY_LABELS = ("Buy", "Strong Buy")
 
 
 def analysis_entry_hold(*, basis, label, held, entry=None, check_crashed=False) -> dict:
-    """``{offer_size, hold, holds, unchecked, reason_if_no_size, entry_checked}``.
+    """``{offer_size, hold, holds, unchecked, passed, reason_if_no_size,
+    entry_checked, crashed}``.
 
     * withheld / unknown verdict basis -> no size.
     * any non-Buy verdict (held or not) -> no size (S-A); no entry check needed.
@@ -589,7 +632,7 @@ def analysis_entry_hold(*, basis, label, held, entry=None, check_crashed=False) 
     * not-held Buy -> ``entry`` (an ``entry_check`` result) decides; any hold,
       a crashed check or a missing result -> no size (fail CLOSED).
     """
-    out = {"offer_size": False, "hold": None, "holds": [], "unchecked": [],
+    out = {"offer_size": False, "hold": None, "holds": [], "unchecked": [], "passed": [],
            "reason_if_no_size": None, "entry_checked": False, "crashed": False}
     if basis not in ("equity", "etf"):
         out["reason_if_no_size"] = "verdict withheld"
@@ -610,6 +653,8 @@ def analysis_entry_hold(*, basis, label, held, entry=None, check_crashed=False) 
     holds = [] if holds is None else list(holds)
     unchecked = entry.get("unchecked")
     out["unchecked"] = [] if unchecked is None else list(unchecked)
+    passed = entry.get("passed")
+    out["passed"] = [] if passed is None else list(passed)
     out["holds"] = holds
     if holds:
         binding = entry.get("binding")
@@ -628,7 +673,8 @@ def analysis_needs_check(basis, label, held) -> bool:
 
 
 def analysis_entry_decision(*, bundle, basis, label, held, run_ctx, sector,
-                            classified, news_items, earnings, today: date) -> dict:
+                            classified, news_items, earnings, today: date,
+                            ticker=None) -> dict:
     """Build the per-ticker context with the Watchlist's own helpers, run
     ``entry_check`` and decide.  A crash anywhere in the check fails CLOSED
     (``reason_if_no_size`` = "entry check couldn't run"); a held name or a
@@ -644,6 +690,7 @@ def analysis_entry_decision(*, bundle, basis, label, held, run_ctx, sector,
                 bundle=bundle, tone_state=tctx["tone_state"], sector=tctx["sector"],
                 macro_map=tctx["macro_map"], news=tctx["news"],
                 earnings_days=_days_until(earnings, today) if earnings else None,
+                ticker=ticker, news_read_failed=tctx["news_read_failed"],
             )
         except Exception:
             entry, crashed = None, True
@@ -661,6 +708,8 @@ def analysis_gate_tiles(decision) -> "list[dict]":
     holds = [] if holds is None else holds
     unchecked = decision.get("unchecked")
     unchecked = [] if unchecked is None else unchecked
+    passed = decision.get("passed")
+    passed = [] if passed is None else passed
     crashed = decision.get("crashed") is True
     spec = (("tone", "Market tone", "Market not risk-off"),
             ("macro", "Macro", "No imminent macro event"),
@@ -675,9 +724,21 @@ def analysis_gate_tiles(decision) -> "list[dict]":
             tiles.append({"label": label, "state": False,
                           "detail": str(hold.get("reason") or "held")})
         elif any(isinstance(u, dict) and u.get("check") == chk for u in unchecked):
-            tiles.append({"label": label, "state": None, "detail": "not checked"})
+            u = next(u for u in unchecked
+                     if isinstance(u, dict) and u.get("check") == chk)
+            tiles.append({"label": label, "state": None,
+                          "detail": (str(u.get("why") or "not checked")
+                                     if chk == "news" else "not checked")})
         else:
-            tiles.append({"label": label, "state": True, "detail": ok})
+            detail = ok
+            p = next((p for p in passed
+                      if isinstance(p, dict) and p.get("check") == chk), None)
+            if chk == "news" and p is not None:
+                n, c = p.get("n"), p.get("compound")
+                if n is not None and c is not None:
+                    detail = (f"Above the negative-news bar ({n} headline"
+                              f"{'s' if n != 1 else ''}, avg {c:+.2f})")
+            tiles.append({"label": label, "state": True, "detail": detail})
     return tiles
 
 
