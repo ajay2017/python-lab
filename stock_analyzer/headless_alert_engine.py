@@ -25,6 +25,7 @@ from stock_analyzer import db
 from stock_analyzer import broker_sync
 from stock_analyzer import exit_advisor
 from stock_analyzer import split_detector
+from stock_analyzer import news_feed
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer.bundle_loader import load_bundle
 from stock_analyzer.data import fetch_spy, fetch_vix, fetch_risk_free_rate, is_trading_day
@@ -441,6 +442,9 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         # otherwise send NO email and disclose nothing (the exact silent-
         # filter this finding exists to close).
         "split_withheld": sorted(split_flagged),
+        # Additive -- news_feed.feed_state over the held bundles this run loaded
+        # (None = no bundles). The cron reddens the heartbeat on an outage.
+        "news_feed": news_feed.feed_state(held_data),
     }
 
 
@@ -769,7 +773,10 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
             # run -- use the SAME reads. `macro_events` None = couldn't be
             # built (unchecked), [] = checked, none. Additive.
             "entry_context": {"market_context": market_context,
-                              "macro_events": entry_macro_events}}
+                              "macro_events": entry_macro_events},
+            # Additive -- news_feed.feed_state over the held + Grow-candidate
+            # bundles this run loaded; the cron reddens the heartbeat on an outage.
+            "news_feed": news_feed.feed_state({**grow_composites, **held_data})}
 
 
 def _prior_trading_day(d: date) -> date:
@@ -1012,12 +1019,16 @@ def compute_watchlist_entries(
     _PILLAR_KEYS = ("t_score", "bq_score", "f_score",
                     "val_score", "s_score", "avg_sent")
     bundle_map: dict = {}
+    _news_status_map: dict = {}   # ticker -> {"news_status"} only (never the bundle)
     for t in watchlist:
         try:
             data = load_bundle(t, "6mo", spy_df=spy_for_bundles, rfr=rfr)
         except Exception as e:
             errors.append(f"{t}: bundle load failed ({e})")
+            _news_status_map[str(t)] = None
             continue
+        _news_status_map[str(t)] = {
+            "news_status": data.get("news_status") if isinstance(data, dict) else None}
         _provider_sector = data.get("sector") if isinstance(data, dict) else None
         # Both maps keyed UPPER, per build_enter_now_rows' documented contract.
         # Provably a no-op for sector_map today (db.save_watchlist upper-cases
@@ -1317,6 +1328,8 @@ def compute_watchlist_entries(
         "entries": new_entries, "built_at": built_at, "errors": errors,
         "reason": None, "gate_degraded": gate_degraded,
         "entry_run": _entry_run, "gate_ledger_rows": gate_ledger_rows,
+        # Additive -- news_feed.feed_state over the watchlist bundles loaded.
+        "news_feed": news_feed.feed_state(_news_status_map),
     }
 
 

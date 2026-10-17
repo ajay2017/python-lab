@@ -49,6 +49,7 @@ _stats: dict = {
     "fred":          _blank(),
     "supabase":      _blank(),
     "snaptrade":     _blank(),
+    "yahoo_news":    _blank(),   # yf.Search news feed (docs/plans/news-feed-restore.md)
 }
 
 
@@ -174,12 +175,13 @@ def get_health(source: str) -> dict:
     }
 
 
-def overall_level() -> tuple[str, str]:
+def overall_level(exclude: tuple = ()) -> tuple[str, str]:
     """
     Returns (level, icon) for the worst source.
-    Used to colour the sidebar expander title.
+    Used to colour the sidebar expander title. `exclude` names sources left out
+    of the roll-up (e.g. ("yahoo_news",) to judge the PRICE sources only).
     """
-    levels = [get_health(src)["level"] for src in _stats]
+    levels = [get_health(src)["level"] for src in _stats if src not in exclude]
     if "red"    in levels: return "red",    "🔴"
     if "yellow" in levels: return "yellow", "🟡"
     if "green"  in levels: return "green",  "🟢"

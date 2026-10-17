@@ -232,6 +232,7 @@ from stock_analyzer import home_notices as _home_notices_mod
 from stock_analyzer import act_today_pointer as _act_pointer_mod
 from stock_analyzer import budget_view as _budget_view
 from stock_analyzer import entry_eligibility as _entry_elig
+from stock_analyzer import news_feed as _news_feed
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
     build_tax_analysis, _build_open_lots, holding_period_status, wash_sale_risk,
@@ -3515,6 +3516,7 @@ with st.sidebar:
             ("fmp",           "FMP (failover)"),
             ("fred",          "FRED (St. Louis Fed)"),
             ("supabase",      "Supabase DB"),
+            ("yahoo_news",    "Yahoo News (yf.Search)"),
             ("bundle_cache",  "Bundle cache (last-known-good)"),
         ]:
             _ah_h = _ah.get_health(_ah_src)
@@ -7255,6 +7257,24 @@ if page == "🏠 Home":
     # only design + 3-round Opus review: docs/plans/structural-scanner-
     # phase2.md.
     st.session_state["_structural_alert_cache"] = _struct_new_clusters
+
+    # ── News-feed tripwire (docs/plans/news-feed-restore.md, chunk 2) ──────────
+    # feed_state over the bundles this Home render loaded (held + Grow
+    # candidates). Publish only -- the on-screen disclosure is chunk 3. None =
+    # not computed / the computation failed (never {}), so a consumer can tell
+    # "couldn't check" from "checked".
+    _news_feed_state = None
+    try:
+        _nf_in: dict = {}
+        if isinstance(_grow_composites, dict):
+            _nf_in.update(_grow_composites)
+        if isinstance(held_data, dict):
+            _nf_in.update(held_data)
+        if _nf_in:
+            _news_feed_state = _news_feed.feed_state(_nf_in)
+    except Exception:
+        _news_feed_state = None
+    st.session_state["_news_feed_cache"] = _news_feed_state
 
     # ── Coordination freshness stamp (F-260 Phase 1) ─────────────────────────
     # Placed here because this is where the _home_synth_cache hit/miss paths
@@ -37225,7 +37245,9 @@ elif page == "⚙️ App Settings":
                         _as_prices = fetch_live_prices(sorted(_as_changed))
                     except Exception:
                         _as_prices = None
-                    _as_health_red = _ah.overall_level()[0] == "red"
+                    # PRICE sources only: a dead news feed must not make a failed ticker
+                    # resolution read "provider layer is unreachable".
+                    _as_health_red = _ah.overall_level(exclude=("yahoo_news",))[0] == "red"
                     _as_resolution = reference_data.classify_ticker_resolution(
                         _as_changed, _as_prices, _as_health_red,
                     )

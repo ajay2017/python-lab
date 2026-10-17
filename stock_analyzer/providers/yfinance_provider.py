@@ -140,7 +140,17 @@ class YFinanceProvider(DataProvider):
     def search_news(self, ticker: str, now_ts: float | None = None) -> tuple[list, str]:
         """(items, news_status) for one ticker. Never raises. `status` is `ok` /
         `none` / `error` -- see stock_analyzer/news_feed.py. A response with NO
-        `news` key (the retired-endpoint 404 shape) is `error`, not `none`."""
+        `news` key (the retired-endpoint 404 shape) is `error`, not `none`.
+        Each fetch is recorded under api_health's "yahoo_news" source (🩺 check ③):
+        success when the response had a `news` key (ok/none), error otherwise."""
+        items, status = self._search_news_fetch(ticker, now_ts)
+        if status == _nf.NEWS_STATUS_ERROR:
+            _ah.record("yahoo_news", "error", "no `news` key / non-200 / exception")
+        else:
+            _ah.record("yahoo_news", "success")
+        return items, status
+
+    def _search_news_fetch(self, ticker: str, now_ts: float | None = None) -> tuple[list, str]:
         try:
             # NOT yf.Search: its fetch goes through YfData.cache_get, an lru_cache on a
             # process-wide singleton, so a long-lived process (the Railway app) would

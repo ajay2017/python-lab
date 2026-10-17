@@ -79,6 +79,7 @@ def _run_watchlist_entries(
     watchlist_side_effect=None, holdings_side_effect=None, bundle=None,
     exit_signals_side_effect=None, trades_df=_UNSET, trades_side_effect=None,
     entry_context=None, ctx_log=None, load_gate_holds=_UNSET,
+    load_bundle_fn=None,
 ):
     cards = cards if cards is not None else {t: _wl_card(t) for t in watchlist}
     ctx = ctx if ctx is not None else {
@@ -122,9 +123,9 @@ def _run_watchlist_entries(
          patch("stock_analyzer.headless_alert_engine.fetch_risk_free_rate", return_value=0.045), \
          patch("stock_analyzer.headless_alert_engine.fetch_spy", return_value=None), \
          patch("stock_analyzer.headless_alert_engine.load_bundle",
-               side_effect=lambda t, *a, **k: (
+               side_effect=load_bundle_fn or (lambda t, *a, **k: (
                    bundle if bundle is not None else {"sector": "Technology"}
-               )), \
+               ))), \
          patch("stock_analyzer.headless_alert_engine.build_watchlist_recommendation",
                side_effect=_fake_build_rec), \
          patch("stock_analyzer.headless_alert_engine.db.load_exit_signals_or_none",

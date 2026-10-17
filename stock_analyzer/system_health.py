@@ -281,6 +281,10 @@ _PROVIDERS: tuple[tuple[str, str], ...] = (
     # a user hit "Couldn't reach SnapTrade" with no error detail visible
     # anywhere because this row was missing).
     ("snaptrade",     "Broker sync — SnapTrade"),
+    # News feed (docs/plans/news-feed-restore.md): Yahoo retired the endpoint the
+    # old feed used and every consumer read "no news" for weeks. A missing `news`
+    # key records an error here, so 5 in a row grades red.
+    ("yahoo_news",    "News feed — Yahoo Search"),
 )
 
 

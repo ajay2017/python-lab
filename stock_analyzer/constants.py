@@ -802,6 +802,10 @@ NEWS_MAX_AGE_DAYS = 21
 # text query that returns unrelated items, so we over-fetch to survive the
 # relatedTickers filter (probe: 30 fetched -> NOW 6, APP 13, TEAM 6, CRM 29 kept).
 NEWS_SEARCH_FETCH_COUNT = 30
+# A run is a news-feed OUTAGE (not merely thin) when at least this many bundles were
+# fetched live and none returned a headline. Owner decision D-2, 2026-10-16. Changes
+# disclosure and the cron heartbeat only -- it gates no recommendation.
+NEWS_FEED_OUTAGE_MIN_TICKERS = 5
 NEWS_CRITICAL_MIN_HEADLINES     = 2     # min qualifying headlines per ticker before firing Critical News Act Today
 # Max news tier (1 = highest-quality source) that qualifies for "critical" —
 # shared by daily_briefing's Critical News Act Today card AND

@@ -87,6 +87,7 @@ from stock_analyzer.headless_alert_engine import (
     compute_watchlist_entries, _build_context, run_daily_budget,
 )
 from stock_analyzer import hold_reasons
+from stock_analyzer import news_feed
 from stock_analyzer.notify import (
     render_alert_email, render_test_email, render_pullback_email,
     render_daily_action_email, render_intraday_entry_email, send_email_resend,
@@ -360,6 +361,52 @@ def _notify_broker_failure(now_et, detail: str) -> None:
         pass   # dedup is best-effort; the email already went out
 
 
+_NEWS_FAILURE_ROW = 8   # alert_state lane: news-only failure-email dedup, once per ET day across lanes (self-creates on upsert)
+
+
+def _news_feed_check(*feeds) -> "str | None":
+    """Log a PARTIAL feed (no failure) and return the one outage failure line, or
+    None. The lane still does its work and sends its emails either way."""
+    for f in feeds:
+        if isinstance(f, dict) and f.get("partial"):
+            _n_un = len(f["unavailable"]) if isinstance(f.get("unavailable"), list) else 0
+            _log(f"news feed PARTIAL -- {_n_un} bundle(s) had no live news status "
+                 f"({f.get('with_news')} of {f.get('checked')} live returned headlines); "
+                 f"feed degraded, not down -- no failure raised.")
+    line = news_feed.outage_failure(*feeds)
+    if line:
+        _log(f"NEWS FEED OUTAGE — {line}")
+    return line
+
+
+def _notify_lane_failure(lane: str, now_et, failures) -> None:
+    """`_notify_failure` for a lane's accumulated failures. A run whose ONLY
+    failures are news-feed outages emails at most once per ET day across lanes
+    (EDT runs both DST slots of premarket/scan/intraday, so a sustained outage
+    would otherwise send ~6 a day); the heartbeat is red every run regardless.
+    Any other failure in the list emails exactly as before. Fails OPEN on a dedup
+    read/write error. Never raises."""
+    detail = "; ".join(failures)
+    news_only = bool(failures) and all(str(f).startswith("news feed:") for f in failures)
+    if not news_only:
+        _notify_failure(lane, detail)
+        return
+    today_str = now_et.date().isoformat()
+    try:
+        state = db.load_alert_state(_NEWS_FAILURE_ROW)
+        if state is not None and state.get("last_emailed_date") == today_str:
+            _log(f"{lane}: news-feed failure email already sent today -- skip (dedup)")
+            return
+    except Exception as exc:
+        _log(f"{lane}: news failure dedup read failed ({str(exc)[:80]}) -- sending anyway")
+    _notify_failure(lane, detail)
+    try:
+        db.save_alert_state(emailed_date=today_str, fingerprint="news_feed",
+                            row_id=_NEWS_FAILURE_ROW)
+    except Exception:
+        pass
+
+
 def _record_heartbeat(lane: str, now_et, status: str = "ok", detail: str | None = None) -> None:
     """Write one cron_heartbeat row (System Proprioception Phase 1) so the
     owner-only 🩺 System Trust page can prove each Railway lane is firing.
@@ -437,6 +484,11 @@ def _run_premarket(now_et, force: bool) -> int:
              f"stops and exits were NOT checked; this is not a clean day.")
     _log(f"computed {len(alerts)} protective alert(s): "
          + (", ".join(f"{a.get('kind')}/{a.get('ticker')}" for a in alerts) or "(none)"))
+    # A dead news feed (docs/plans/news-feed-restore.md, D-4): the lane still does
+    # all its work and sends its emails -- this only turns the heartbeat red.
+    _news_line = _news_feed_check(payload.get("news_feed"))
+    if _news_line:
+        failures.append(_news_line)
 
     # exit_signals capture — closes the gap where WATCH/TRIM/EXIT/RISK_OFF signal
     # history only existed for days the app was opened (app.py's own MISS-path
@@ -594,7 +646,7 @@ def _run_premarket(now_et, force: bool) -> int:
         _log("email not sent — state NOT saved so later slot can retry.")
     if failures:
         _LAST_LANE_FAILURE_DETAIL = "; ".join(failures)
-        _notify_failure("premarket", _LAST_LANE_FAILURE_DETAIL)
+        _notify_lane_failure("premarket", now_et, failures)
     _log(f"premarket done · sent={sent}"
          + (f" · FAILURES={len(failures)}" if failures else ""))
     return 1 if failures else 0
@@ -2085,9 +2137,15 @@ def _run_scan(now_et, force: bool) -> int:
         _log(f"watchlist-entries: FAILED — {str(_wle_err)[:120]} — continuing "
              "(buy-list email unaffected).")
 
+    # One news-outage line per lane run however many payloads saw it (D-4); the
+    # emails above have already gone out.
+    _news_line = _news_feed_check(
+        payload.get("news_feed"), (_wle_payload or {}).get("news_feed"))
+    if _news_line:
+        failures.append(_news_line)
     if failures:
         _LAST_LANE_FAILURE_DETAIL = "; ".join(failures)
-        _notify_failure("scan", _LAST_LANE_FAILURE_DETAIL)
+        _notify_lane_failure("scan", now_et, failures)
     _log(f"scan done · persisted={n} · buy_sent={sent} · watchlist_entries_sent={_wle_sent}"
          + (f" · FAILURES={len(failures)}" if failures else ""))
     return 1 if failures else 0
@@ -2152,6 +2210,9 @@ def _run_intraday(now_et, force: bool) -> int:
     payload = compute_morning_picks(today=now_et.date(), scanner_results=scanner_df)
     for e in payload.get("errors", []):
         _log(f"engine note: {e}")
+    _news_line = _news_feed_check(payload.get("news_feed"))
+    if _news_line:
+        _id_failures.append(_news_line)
     picks = payload.get("picks", [])
     go_picks = [
         p for p in picks
@@ -2161,6 +2222,10 @@ def _run_intraday(now_et, force: bool) -> int:
     ]
     if not go_picks:
         _log("intraday: no go-verdict picks in today's scan — skip.")
+        if _id_failures:   # a news outage must still redden the heartbeat
+            _LAST_LANE_FAILURE_DETAIL = "; ".join(_id_failures)
+            _notify_lane_failure("intraday", now_et, _id_failures)
+            return 1
         return 0
     _log(f"intraday: {len(go_picks)} go-verdict pick(s) to check: "
          + ", ".join(str(p.get("ticker")) for p in go_picks))
@@ -2228,7 +2293,7 @@ def _run_intraday(now_et, force: bool) -> int:
          + (f" · FAILURES={len(_id_failures)}" if _id_failures else ""))
     if _id_failures:
         _LAST_LANE_FAILURE_DETAIL = "; ".join(_id_failures)
-        _notify_failure("intraday", _LAST_LANE_FAILURE_DETAIL)
+        _notify_lane_failure("intraday", now_et, _id_failures)
         return 1
     return 0
 

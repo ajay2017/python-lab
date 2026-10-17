@@ -305,6 +305,7 @@ _SELF_CONSUMED_BY_PRODUCER = {
     "_day_shock_cache",          # Home only
     "_grow_composites_coverage", # Home only
     "_broker_drift_cache",       # Home only
+    "_news_feed_cache",          # Home publishes; feed health is not book-derived
 }
 
 # Was 14 on 2026-08-28 when the drift guard first exposed the gap. Now empty:

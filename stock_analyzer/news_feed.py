@@ -14,12 +14,12 @@ failed" can never again read as "nothing happened".
   error   -- an exception, OR the response had NO `news` key (the silent-404 shape)
   cached  -- the bundle came from `bundle_cache` (news is never cached there)
 
-Pure: no network, no Streamlit. Chunk 2 adds the cross-ticker `feed_state` here.
+Pure: no network, no Streamlit. `feed_state` is the cross-ticker tripwire.
 """
 
 from __future__ import annotations
 
-from stock_analyzer.constants import NEWS_MAX_AGE_DAYS
+from stock_analyzer.constants import NEWS_FEED_OUTAGE_MIN_TICKERS, NEWS_MAX_AGE_DAYS
 from stock_analyzer.market_time import now_et
 
 NEWS_STATUS_OK = "ok"
@@ -109,3 +109,87 @@ def llm_cache_usable(cached, live_headlines) -> bool:
     if not cached.get("headlines") and live_headlines:
         return False
     return True
+
+
+_LIVE_STATUSES = (NEWS_STATUS_OK, NEWS_STATUS_NONE, NEWS_STATUS_ERROR)
+
+
+def feed_state(bundles) -> dict | None:
+    """Cross-ticker news-feed verdict for one run.
+
+    `bundles` is an iterable of loaded results, or a `{ticker: result}` mapping (a
+    failed load may be `None`). Each result's status is read with
+    `.get("news_status")` -- entries cached before deploy lack it.
+
+    Returns None when given no bundles (nothing was checked), else
+    {"state": "ok" | "outage" | "thin",
+     "checked": live fetches (status ok/none/error),
+     "with_news": how many of those were `ok`,
+     "unavailable": tickers whose status is error / cached / missing,
+     "none": tickers whose status is `none`,
+     "partial": True when state is `ok` but at least NEWS_FEED_OUTAGE_MIN_TICKERS
+                bundles were unavailable (e.g. 17 error + 1 ok) -- NOT a red state,
+                a flag so a mostly-dead feed is not read as a healthy one}.
+      ok      -- at least one `ok`
+      outage  -- no `ok` and at least NEWS_FEED_OUTAGE_MIN_TICKERS live bundles
+      thin    -- no `ok` and fewer live bundles than that (too few to call it)
+    `cached` and missing statuses are not live fetches: listed as unavailable,
+    never counted in `checked`.
+
+    CAVEAT for consumers: `unavailable` is NOT the complete list of unchecked
+    tickers. A bundle that failed to load before reaching `held_data` /
+    `grow_composites` is simply absent from the protective and morning-picks
+    payloads' input; only the watchlist payload lists failed loads (as None).
+    Do not treat `unavailable` as "every ticker whose news was not checked".
+    """
+    if bundles is None:
+        return None
+    if hasattr(bundles, "items"):
+        pairs = [(str(k), v) for k, v in bundles.items()]
+    else:
+        pairs = []
+        for i, b in enumerate(bundles):
+            label = b.get("ticker") if isinstance(b, dict) else None
+            pairs.append((str(label) if label else f"#{i}", b))
+    if not pairs:
+        return None
+    live = ok_n = 0
+    unavailable: list[str] = []
+    none_list: list[str] = []
+    for label, b in pairs:
+        status = b.get("news_status") if isinstance(b, dict) else None
+        if status in _LIVE_STATUSES:
+            live += 1
+            if status == NEWS_STATUS_OK:
+                ok_n += 1
+            elif status == NEWS_STATUS_NONE:
+                none_list.append(label)
+            else:
+                unavailable.append(label)
+        else:
+            unavailable.append(label)
+    if ok_n > 0:
+        state = "ok"
+    elif live >= NEWS_FEED_OUTAGE_MIN_TICKERS:
+        state = "outage"
+    else:
+        state = "thin"
+    return {"state": state, "checked": live, "with_news": ok_n,
+            "unavailable": sorted(unavailable), "none": sorted(none_list),
+            "partial": state == "ok" and len(unavailable) >= NEWS_FEED_OUTAGE_MIN_TICKERS}
+
+
+def outage_failure(*feeds) -> str | None:
+    """One cron failure line if ANY of the given `feed_state` results is an outage
+    (the lane still does its work and sends its emails -- this only reddens the
+    heartbeat). None otherwise, including for None / thin / ok inputs. Never more
+    than one line however many payloads report an outage."""
+    worst = None
+    for f in feeds:
+        if isinstance(f, dict) and f.get("state") == "outage":
+            if worst is None or (f.get("checked") or 0) > (worst.get("checked") or 0):
+                worst = f
+    if worst is None:
+        return None
+    return (f"news feed: 0 headlines across {worst.get('checked')} tickers -- "
+            f"news sentiment / critical-news / negative-news checks did not run")
