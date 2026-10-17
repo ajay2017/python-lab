@@ -24450,6 +24450,128 @@ elif page == "📈 Analysis":
         portfolio_value, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
     )
 
+    # ── Shared new-entry check: may this page offer a share count at all? ──
+    # (docs/plans/shared-entry-check.md chunk 6 / D7 / S-A.) The decision lives
+    # in entry_eligibility.analysis_entry_decision; this block only reads caches
+    # and passes results in. The per-run tone / macro context is built with the
+    # SAME helpers as 📋 Watchlist (today's Home Brief first, else a live read;
+    # tone and macro in SEPARATE try blocks) so the two pages cannot disagree
+    # on the same ticker. Built only when a not-held Buy needs the check.
+    _an_pdf = st.session_state.get("_port_df_enriched", pd.DataFrame())
+    _an_held_set = set()
+    if _an_pdf is not None and not _an_pdf.empty and "Ticker" in _an_pdf.columns:
+        _an_held_set = {str(_x).strip().upper() for _x in _an_pdf["Ticker"].values}
+    _an_basis_lbl = {}
+    for _t, _r in results.items():
+        _b = _verdict_basis(_r)
+        _an_basis_lbl[_t] = (
+            _b, None if _b == "withheld"
+            else (_r["etf_rec"] if _b == "etf" else _r["rec"])["label"])
+    _an_need_ctx = any(
+        _entry_elig.analysis_needs_check(_b, _l, str(_t).strip().upper() in _an_held_set)
+        for _t, (_b, _l) in _an_basis_lbl.items())
+    _an_tone_state = {"tone": None, "sp500_pct": None, "available": False,
+                      "source": None, "as_of": None}
+    _an_home_state = _entry_elig.HOME_NOT_TODAY
+    _an_run_ctx = {"tone_state": _an_tone_state, "macro_map": None}
+    if _an_need_ctx:
+        _an_home_b = None
+        _an_home_is_today = False
+        try:
+            _an_home_syn = _get_or_offline(st.session_state, "_home_synth_cache")
+            _an_home_is_today = (
+                _get_or_offline(_an_home_syn, "date") == _today_et().isoformat())
+            _an_home_b = (_get_or_offline(_an_home_syn, "bundle")
+                          if _an_home_is_today else None)
+            _an_home_mc = _get_or_offline(_an_home_b, "_market_context")
+            _an_home_state = _entry_elig.home_tone_state(_an_home_mc, _an_home_is_today)
+            _an_read_at = _get_or_offline(_an_home_mc, "tone_read_at")
+            _an_tone_state = _entry_elig.resolve_tone_state(
+                _an_home_mc, _an_home_is_today, _an_read_at, None, False)
+            if not _an_tone_state["available"]:
+                _an_live_pct = None
+                try:
+                    _an_idx = fetch_market_indices()
+                    _an_sp = next((i for i in _an_idx if i["short"] == "S&P 500"), None)
+                    _an_live_pct = float(_an_sp["change_pct"]) if _an_sp else None
+                except Exception:
+                    _an_live_pct = None
+                _an_tone_state = _entry_elig.resolve_tone_state(
+                    None, False, None, _an_live_pct, _an_live_pct is not None)
+        except Exception:
+            _an_tone_state = {"tone": None, "sp500_pct": None, "available": False,
+                              "source": None, "as_of": None}
+        _an_macro_events = None
+        try:
+            _an_home_events = _get_or_offline(_an_home_b, "_macro_events")
+            _an_live_events = None
+            if not (_an_home_is_today and _an_home_events is not None):
+                # Same per-day key the Watchlist uses: one calendar build shared.
+                _an_mc_key = f"_wl_macro_cal_{_today_et()}"
+                _an_live_events = st.session_state.get(_an_mc_key)
+                if _an_live_events is None:
+                    try:
+                        _an_fred = (
+                            st.secrets.get("fred", {}).get("api_key")
+                            or os.environ.get("FRED_API_KEY", "")
+                        )
+                        _an_live_events = build_macro_calendar(
+                            _an_pdf, fred_key=_an_fred or None,
+                            days_ahead=ECONOMIC_CALENDAR_WINDOW_DAYS, days_behind=7,
+                            today=_today_et(),
+                        )
+                        st.session_state[_an_mc_key] = _an_live_events
+                    except Exception:
+                        _an_live_events = None
+            _an_macro_events = _entry_elig.pick_macro_events(
+                _an_home_events, _an_home_is_today, _an_live_events)
+        except Exception:
+            _an_macro_events = None
+        try:
+            _an_run_ctx = _entry_elig.watchlist_run_ctx(
+                _an_tone_state, _an_macro_events, _today_et(), _now_et())
+        except Exception:
+            _an_run_ctx = {"tone_state": _an_tone_state, "macro_map": None}
+    _an_entry = {}
+    for _t, _r in results.items():
+        _b, _l = _an_basis_lbl[_t]
+        try:
+            _an_sctx = sector_fit.sector_gate_context(_t, _r.get("sector"), _an_pdf)
+        except Exception:
+            _an_sctx = {"sector": None, "classified": False}
+        try:
+            _an_news_items = curate_news_items({_t: _r})
+        except Exception:
+            _an_news_items = None
+        _an_entry[_t] = _entry_elig.analysis_entry_decision(
+            bundle=_r, basis=_b, label=_l, held=str(_t).strip().upper() in _an_held_set,
+            run_ctx=_an_run_ctx, sector=_an_sctx["sector"],
+            classified=_an_sctx["classified"], news_items=_an_news_items,
+            earnings=_r.get("earnings"), today=_today_et())
+    # Single-ticker page: the hold also sits DIRECTLY under the verdict strip
+    # above, so the first line is never an unqualified "Strong Buy" for a name
+    # the entry check is holding back (mockup scene 4).
+    if len(results) == 1:
+        _an_strip_t = next(iter(results))
+        _an_strip_b = _entry_elig.analysis_hold_banner(
+            _an_entry[_an_strip_t], _an_tone_state, _an_home_state)
+        if _an_strip_b is not None:
+            st.markdown(
+                "<div style='padding:12px;border-radius:8px;background:#f59e0b18;"
+                "border-left:5px solid #f59e0b;margin-bottom:10px'>"
+                f"<b style='color:#f59e0b'>⏸ {_safe_html(_an_strip_b['title'])}</b>"
+                f"<br><span style='color:#ccc;font-size:0.9em'>"
+                f"{_safe_html(_an_strip_b['body'])}</span></div>",
+                unsafe_allow_html=True,
+            )
+            if _an_strip_b.get("source"):
+                st.caption(_an_strip_b["source"])
+    if _an_need_ctx:
+        # Fail-open disclosures, worded for Analysis sizes.
+        for _an_note in _entry_elig.analysis_notes(
+                _an_tone_state, _an_run_ctx.get("macro_map")):
+            st.caption(_an_note)
+
     # Daily new-position budget (docs/plans/daily-new-position-budget.md):
     # Analysis sizes each ticker as min(F-255 size, what's left of today's
     # budget), ONE place for all four sizing sites below (scorecard, Detailed
@@ -24460,6 +24582,11 @@ elif page == "📈 Analysis":
     _an_ps_f255 = {}
     _an_asks = []
     for _at, _ar in results.items():
+        if not _an_entry[_at]["offer_size"]:
+            # Held back / non-Buy / withheld: no size, so no ask -- it can
+            # neither consume nor be counted in today's budget plan.
+            _an_ps_f255[_at] = None
+            continue
         _ap = _ar["current_price"]
         _aps = (
             position_sizing(
@@ -24479,6 +24606,9 @@ elif page == "📈 Analysis":
     def _an_sizing(_t):
         """(budget-adjusted ps, F-255 ps, budget note) for one analysed ticker.
         The note carries the "doesn't yet count 📋 Watchlist" caveat too."""
+        _d = _an_entry.get(_t)
+        if _d is None or not _d["offer_size"]:
+            return None, None, None   # fail closed: no decision, no size
         _res = _an_bplan["results"].get(str(_t).upper())
         _f = _an_ps_f255.get(_t)
         if _res is None:
@@ -24491,11 +24621,8 @@ elif page == "📈 Analysis":
     # Strong Buy with a real verdict (the Trade Plan's BUY branch -- Sell, Hold
     # and withheld names never get a Trade-Plan size) that has an F-255 size.
     def _an_offers_size(_t, _r):
-        _b = _verdict_basis(_r)
-        if _b == "withheld":
-            return False
-        _lbl = (_r["etf_rec"] if _b == "etf" else _r["rec"])["label"]
-        return _lbl in ("Buy", "Strong Buy") and bool(_an_sizing(_t)[1])
+        # The same decision that gates the asks and every size below.
+        return _an_entry[_t]["offer_size"] and bool(_an_sizing(_t)[1])
 
     if any(_an_offers_size(_t, _r) for _t, _r in results.items()):
         if _budget_view.home_needed(_an_bplan) or _an_bplan["state"] == "unknown":
@@ -24572,8 +24699,9 @@ elif page == "📈 Analysis":
 
         # Check if this ticker is held in the portfolio
         _sc_held = None
-        if not _sc_port.empty and ticker in _sc_port["Ticker"].values:
-            _sc_held = _sc_port[_sc_port["Ticker"] == ticker].iloc[0].to_dict()
+        if not _sc_port.empty and str(ticker).strip().upper() in _an_held_set:
+            _sc_held = _sc_port[_sc_port["Ticker"].astype(str).str.strip().str.upper()
+                                == str(ticker).strip().upper()].iloc[0].to_dict()
 
         # ETF/fund Phase 2 follow-up (2026-09-28): these gate the R:R column
         # below (_sc_rr) — for an ETF with a real verdict, they must key off
@@ -24614,6 +24742,8 @@ elif page == "📈 Analysis":
             _sc_shares = f"{int(_sc_held.get('Shares', 0))} held"
         elif ps:
             _sc_shares = f"→ {ps['shares']} suggested"
+        elif _an_entry[ticker]["entry_checked"] and not _an_entry[ticker]["offer_size"]:
+            _sc_shares = _entry_elig.analysis_shares_label(_an_entry[ticker])
         else:
             _sc_shares = "—"
 
@@ -24773,6 +24903,8 @@ elif page == "📈 Analysis":
             # Budget-adjusted size + the pre-budget F-255 size (the cap warnings
             # below describe the latter) + the budget's own note.
             ps, _ps_f255, _ps_bud_note = _an_sizing(ticker)
+            _da_entry = _an_entry[ticker]
+            _da_held_back = _da_entry["entry_checked"] and not _da_entry["offer_size"]
             sr = r["sr"]
             rm = r["risk_metrics"]
 
@@ -25147,8 +25279,11 @@ elif page == "📈 Analysis":
             # where Home st.stop()s BEFORE publishing _port_df_enriched.
             _sa_port_state = _coord_cache_state("_port_df_enriched")
             _sa_port = st.session_state.get("_port_df_enriched", pd.DataFrame())
-            if not _sa_port.empty and ticker in _sa_port["Ticker"].values:
-                _sa_holding = _sa_port[_sa_port["Ticker"] == ticker].iloc[0].to_dict()
+            # One normalized test shared with _an_held_set / the scorecard, so a
+            # case mismatch can never skip the entry check yet show "📒 Buy".
+            if not _sa_port.empty and str(ticker).strip().upper() in _an_held_set:
+                _sa_holding = _sa_port[_sa_port["Ticker"].astype(str).str.strip().str.upper()
+                                       == str(ticker).strip().upper()].iloc[0].to_dict()
 
             # A withheld verdict never labels the tab "Exit Plan" (that label
             # would come from the fabricated/tainted composite's Sell rating).
@@ -25720,6 +25855,22 @@ elif page == "📈 Analysis":
 
                 else:
                     # ── BUY / STRONG BUY — TRADE PLAN ─────────────────────
+                    # Shared new-entry check (chunk 6): a not-held Buy held back
+                    # today keeps its verdict and gets no size. Visible, never
+                    # silent; the wording is built in entry_eligibility.
+                    _da_banner = _entry_elig.analysis_hold_banner(
+                        _da_entry, _an_tone_state, _an_home_state)
+                    if _da_banner is not None:
+                        st.markdown(
+                            "<div style='padding:12px;border-radius:8px;background:#f59e0b18;"
+                            "border-left:5px solid #f59e0b;margin-bottom:10px'>"
+                            f"<b style='color:#f59e0b'>⏸ {_safe_html(_da_banner['title'])}</b>"
+                            f"<br><span style='color:#ccc;font-size:0.9em'>"
+                            f"{_safe_html(_da_banner['body'])}</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                        if _da_banner.get("source"):
+                            st.caption(_da_banner["source"])
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Price", f"${price:.2f}" if price else "N/A")
                     c2.metric("Entry Zone",
@@ -25894,6 +26045,24 @@ elif page == "📈 Analysis":
                             f"</div>",
                             unsafe_allow_html=True,
                         )
+                    # Shared entry check tiles (chunk 6) -- only when the check ran.
+                    _gate_extra = _entry_elig.analysis_gate_tiles(_da_entry)
+                    if _gate_extra:
+                        for _gcol_w, _gx in zip(st.columns(len(_gate_extra)), _gate_extra):
+                            if _gx["state"] is True:
+                                _gcolor, _gicon = "#00C851", "✓"
+                            elif _gx["state"] is False:
+                                _gcolor, _gicon = "#ff4444", "✗"
+                            else:
+                                _gcolor, _gicon = "#888", "—"
+                            _gcol_w.markdown(
+                                f"<div style='text-align:center'>"
+                                f"<div style='color:{_safe_html(_gcolor)};font-size:1.2em'>{_safe_html(_gicon)}</div>"
+                                f"<div style='font-size:0.75em;color:#ccc'>{_safe_html(_gx['label'])}</div>"
+                                f"<div style='font-size:0.65em;color:#888'>{_safe_html(_gx['detail'])}</div>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
                     st.markdown("---")
 
                     # Add-on sizing is suppressed on a breached held position OR one
@@ -25991,6 +26160,9 @@ elif page == "📈 Analysis":
                                     f"Use a firm stop at **${r['stop']:.2f}** and consider a starter position "
                                     f"(50–75% of suggested size) before committing fully."
                                 )
+                    elif _da_held_back:
+                        st.caption("No position size is offered while the entry check "
+                                   "holds this name back (see the banner above).")
                     elif (not ps and _ps_bud_note and not _stop_breached
                           and not _under_reduce):
                         # Size withheld by today's budget / already sized in Grow
@@ -26165,18 +26337,24 @@ elif page == "📈 Analysis":
                 else:
                     # Buy signal — primary action is BUY (new or add)
                     with _ap_c1:
-                        _render_trade_button(
-                            ticker=ticker,
-                            suggested_action="BUY",
-                            signal_context=_ap_signal_ctx,
-                            price=price,
-                            shares=(ps["shares"] if ps else None),
-                            trigger="RECOMMENDATION",
-                            followed_intent=_ap_followed_buy,
-                            key_suffix=f"plan_buy_{ticker}",
-                            label=(f"📒 Add {ticker}" if _sa_holding else f"📒 Buy {ticker}"),
-                            width="stretch",
-                        )
+                        if _da_held_back:
+                            # OP-07: no size, no trade action on a held-back name
+                            # (the Watchlist hides Log BUY on ENTRY_HELD cards too).
+                            st.caption("📒 Buy button hidden — the entry check is "
+                                       "holding this name back today.")
+                        else:
+                            _render_trade_button(
+                                ticker=ticker,
+                                suggested_action="BUY",
+                                signal_context=_ap_signal_ctx,
+                                price=price,
+                                shares=(ps["shares"] if ps else None),
+                                trigger="RECOMMENDATION",
+                                followed_intent=_ap_followed_buy,
+                                key_suffix=f"plan_buy_{ticker}",
+                                label=(f"📒 Add {ticker}" if _sa_holding else f"📒 Buy {ticker}"),
+                                width="stretch",
+                            )
                     if _sa_holding:
                         with _ap_c2:
                             _render_trade_button(
@@ -27400,6 +27578,7 @@ elif page == "📈 Analysis":
             targets = r["targets"]
             # Same budget-adjusted size as on screen (one source: _an_sizing).
             ps = _an_sizing(ticker)[0]
+            _ap_entry = _an_entry[ticker]
             rr_v = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
             rm = r["risk_metrics"]
             if _ap_withheld:
@@ -27420,6 +27599,8 @@ elif page == "📈 Analysis":
                 (f"**Trade**: Buy {ps['shares']} @ \\${r['entry_lo']:.2f}–\\${r['entry_hi']:.2f} · "
                  f"Stop \\${r['stop']:.2f} · Target \\${targets['base']:.2f} · R:R {rr_v:.1f}:1"
                  if ps and rr_v and rr_v > 0 else ""),
+                (f"**Trade**: no size today — {_ap_entry['reason_if_no_size']}"
+                 if _ap_entry["entry_checked"] and not _ap_entry["offer_size"] else ""),
                 (f"**Scenarios**: Bull \\${targets['bull']:.2f} ({targets['bull_pct']:+.1f}%) · "
                  f"Base \\${targets['base']:.2f} ({targets['base_pct']:+.1f}%) · "
                  f"Bear \\${targets['bear']:.2f} ({targets['bear_pct']:+.1f}%)" if targets else ""),

@@ -569,3 +569,178 @@ def email_footer_lines(entry_run) -> "list[str]":
     if entry_run.get("macro_available") is not True:
         lines.append("Macro calendar unavailable — the macro-event check didn't run.")
     return lines
+
+
+# ── Analysis wiring (chunk 6) ────────────────────────────────────────────────
+# One decision for "may the Analysis page offer a share count for this name?"
+# (docs/plans/shared-entry-check.md D7 / S-A).  The Watchlist runs the same
+# ``entry_check`` over the same per-run context, so the two surfaces cannot
+# disagree on a not-held Buy.  Held-name ADD sizing is deliberately unchanged
+# here (the known D5 / S-D gap).
+_ANALYSIS_BUY_LABELS = ("Buy", "Strong Buy")
+
+
+def analysis_entry_hold(*, basis, label, held, entry=None, check_crashed=False) -> dict:
+    """``{offer_size, hold, holds, unchecked, reason_if_no_size, entry_checked}``.
+
+    * withheld / unknown verdict basis -> no size.
+    * any non-Buy verdict (held or not) -> no size (S-A); no entry check needed.
+    * held Buy (an add) -> size offered, unchanged (D5 gap); no check applied.
+    * not-held Buy -> ``entry`` (an ``entry_check`` result) decides; any hold,
+      a crashed check or a missing result -> no size (fail CLOSED).
+    """
+    out = {"offer_size": False, "hold": None, "holds": [], "unchecked": [],
+           "reason_if_no_size": None, "entry_checked": False, "crashed": False}
+    if basis not in ("equity", "etf"):
+        out["reason_if_no_size"] = "verdict withheld"
+        return out
+    if label not in _ANALYSIS_BUY_LABELS:
+        out["reason_if_no_size"] = (f"no size on a {label} verdict" if label
+                                    else "no size without a verdict")
+        return out
+    if held:
+        out["offer_size"] = True
+        return out
+    out["entry_checked"] = True
+    if check_crashed or not isinstance(entry, dict):
+        out["crashed"] = True
+        out["reason_if_no_size"] = "entry check couldn't run"
+        return out
+    holds = entry.get("holds")
+    holds = [] if holds is None else list(holds)
+    unchecked = entry.get("unchecked")
+    out["unchecked"] = [] if unchecked is None else list(unchecked)
+    out["holds"] = holds
+    if holds:
+        binding = entry.get("binding")
+        out["hold"] = binding if binding is not None else holds[0]
+        reason = out["hold"].get("reason") if isinstance(out["hold"], dict) else None
+        out["reason_if_no_size"] = reason or "held by the entry check"
+        return out
+    out["offer_size"] = True
+    return out
+
+
+def analysis_needs_check(basis, label, held) -> bool:
+    """True only for a not-held Buy / Strong Buy with a real verdict."""
+    return bool(basis in ("equity", "etf") and label in _ANALYSIS_BUY_LABELS
+                and not held)
+
+
+def analysis_entry_decision(*, bundle, basis, label, held, run_ctx, sector,
+                            classified, news_items, earnings, today: date) -> dict:
+    """Build the per-ticker context with the Watchlist's own helpers, run
+    ``entry_check`` and decide.  A crash anywhere in the check fails CLOSED
+    (``reason_if_no_size`` = "entry check couldn't run"); a held name or a
+    non-Buy verdict skips the check entirely."""
+    needs_check = analysis_needs_check(basis, label, held)
+    entry = None
+    crashed = False
+    if needs_check:
+        try:
+            tctx = watchlist_ticker_ctx(run_ctx, sector=sector, classified=classified,
+                                        news_items=news_items)
+            entry = entry_check(
+                bundle=bundle, tone_state=tctx["tone_state"], sector=tctx["sector"],
+                macro_map=tctx["macro_map"], news=tctx["news"],
+                earnings_days=_days_until(earnings, today) if earnings else None,
+            )
+        except Exception:
+            entry, crashed = None, True
+    return analysis_entry_hold(basis=basis, label=label, held=held,
+                               entry=entry, check_crashed=crashed)
+
+
+def analysis_gate_tiles(decision) -> "list[dict]":
+    """The four extra Gate-checks tiles (Market tone / Macro / News / Data
+    fresh): ``{label, state, detail}`` with state True (passed), False (held)
+    or None (not checked).  Empty when the entry check did not run."""
+    if not isinstance(decision, dict) or not decision.get("entry_checked"):
+        return []
+    holds = decision.get("holds")
+    holds = [] if holds is None else holds
+    unchecked = decision.get("unchecked")
+    unchecked = [] if unchecked is None else unchecked
+    crashed = decision.get("crashed") is True
+    spec = (("tone", "Market tone", "Market not risk-off"),
+            ("macro", "Macro", "No imminent macro event"),
+            ("news", "News", "No negative news"),
+            ("stale", "Data fresh", "Data is current"))
+    tiles = []
+    for chk, label, ok in spec:
+        hold = next((h for h in holds if isinstance(h, dict) and h.get("check") == chk), None)
+        if crashed:
+            tiles.append({"label": label, "state": None, "detail": "not checked"})
+        elif hold is not None:
+            tiles.append({"label": label, "state": False,
+                          "detail": str(hold.get("reason") or "held")})
+        elif any(isinstance(u, dict) and u.get("check") == chk for u in unchecked):
+            tiles.append({"label": label, "state": None, "detail": "not checked"})
+        else:
+            tiles.append({"label": label, "state": True, "detail": ok})
+    return tiles
+
+
+def analysis_hold_banner(decision, tone_state=None, home_state=None) -> "dict | None":
+    """The banner above the Trade Plan of a held-back not-held Buy:
+    ``{title, body, source}`` or None when nothing was held back.  "Same call
+    as 🏠 Home" is said only when the tone really came from Home's Brief."""
+    if (not isinstance(decision, dict) or not decision.get("entry_checked")
+            or decision.get("offer_size")):
+        return None
+    binding = decision.get("hold")
+    if not isinstance(binding, dict):
+        return {
+            "title": "Not an entry today — the entry check couldn't run",
+            "body": ("The verdict stands on its own numbers; no size is offered "
+                     "until the check can run. Reload the page to retry."),
+            "source": None,
+        }
+    reason = binding.get("reason") or "held by the entry check"
+    lead = "deferred: " if binding.get("check") == "tone" else "held: "
+    ts = tone_state if isinstance(tone_state, dict) else {}
+    # 🏠 Home is named only when the binding hold IS the tone and the tone
+    # really came from Home's Brief; no claim about what the Watchlist shows
+    # for this ticker (it may not be listed there at all).
+    same = ("📋 Watchlist and 🏠 Home apply the same check."
+            if (binding.get("check") == "tone" and ts.get("available")
+                and ts.get("source") == "home")
+            else "📋 Watchlist applies the same check.")
+    all_holds = decision.get("holds")
+    all_holds = [] if all_holds is None else all_holds
+    others = [str(h.get("reason")) for h in all_holds
+              if isinstance(h, dict) and h is not binding and h.get("reason")]
+    body = ("The verdict stands on its own numbers; no size is offered today. " + same)
+    if others:
+        body += " Also: " + "; ".join(others) + "."
+    clears = binding.get("clears_when")
+    if clears:
+        body += f" Clears when: {clears}."
+    return {
+        "title": f"Not an entry today — {lead}{reason}",
+        "body": body,
+        "source": (tone_source_line(ts, home_state) if binding.get("check") == "tone" else None),
+    }
+
+
+def analysis_notes(tone_state, macro_map) -> "list[str]":
+    """Fail-open disclosures for the Analysis page (worded for sizes, not for
+    the Watchlist's entries)."""
+    notes = []
+    ts = tone_state if isinstance(tone_state, dict) else {}
+    if not ts.get("available"):
+        notes.append("⚠️ The bear-day check couldn't run (market tone unavailable) — "
+                     "sizes are shown, not deferred.")
+    if macro_map is None:
+        notes.append("⚠️ The macro-event check couldn't run (macro calendar unavailable) — "
+                     "sizes are shown, not held for it.")
+    return notes
+
+
+def analysis_shares_label(decision) -> str:
+    """Scorecard Shares text for a held-back not-held Buy: "— (deferred)" when
+    the binding hold is the tone, "— (held)" otherwise (incl. a crashed check)."""
+    hold = decision.get("hold") if isinstance(decision, dict) else None
+    if isinstance(hold, dict) and hold.get("check") == "tone":
+        return "— (deferred)"
+    return "— (held)"

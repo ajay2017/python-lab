@@ -3,7 +3,7 @@
 **Status: DESIGNED + OWNER-APPROVED 2026-10-16 (all 12 recommendations, D1-D12, plus additions A1-A4).
 Mockup v1 APPROVED 2026-10-16: `docs/mockups/2026-10-16-shared-entry-check-mockup.html`. Chunk 1 (golden
 master) DONE 2026-10-16 (`35ea1df`); chunk 2 DONE (`400b01c`, pushed); chunk 3 DONE (advisor ENTRY_HELD +
-G-28/G-29 capture, `f71164b`); chunk 4 DONE (Watchlist page wiring, `469d7a6`); chunk 5 DONE (email + cron, local); chunks 4-6 push together. Scope
+G-28/G-29 capture, `f71164b`); chunk 4 DONE (Watchlist page wiring, `469d7a6`); chunk 5 DONE (email + cron, `82c27ad`); chunk 6 DONE (Analysis); chunks 3-6 pushed together; next chunk 8 docs, then chunk 7. Scope
 sweep DONE (results + owner decisions S-A..S-D below).**
 
 **Chunk 1 findings that bind later chunks:** (1) `_grow_today` takes the tone as an INPUT — the ±0.5 rule
