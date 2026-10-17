@@ -9,6 +9,9 @@ from datetime import date, datetime, time, timedelta
 
 from stock_analyzer.constants import (
     NEWS_BRIEF_LOOKBACK_TRADING_DAYS,
+    NEWS_CRITICAL_MAX_TIER,
+    NEWS_CRITICAL_MIN_HEADLINES,
+    NEWS_SENTIMENT_CRITICAL,
     NEWS_SENTIMENT_WARN,
 )
 from stock_analyzer.market_time import ET
@@ -89,3 +92,89 @@ def rescore_selection(
     extras.sort()
     ordered = head + [i for _, i in extras]
     return ordered[:max_items], ordered[max_items:]
+
+
+def _compound(item) -> float | None:
+    """The item's numeric compound, or None when missing/invalid/NaN."""
+    try:
+        c = item.get("compound")
+    except AttributeError:
+        return None
+    if c is None or isinstance(c, bool) or not isinstance(c, (int, float)):
+        return None
+    c = float(c)
+    return None if math.isnan(c) else c
+
+
+def _tier(item) -> float:
+    """The item's tier; a missing/invalid tier reads as 3 (lowest trust)."""
+    try:
+        t = item.get("tier", 3)
+    except AttributeError:
+        return 3
+    if t is None or isinstance(t, bool) or not isinstance(t, (int, float)):
+        return 3
+    return t
+
+
+def critical_news_by_ticker(news_items, held_tickers, window_start_ts) -> dict:
+    """{ticker: [items worst-first]} for held tickers with enough in-window
+    tier-1/2 headlines at or below NEWS_SENTIMENT_CRITICAL.
+
+    Undated or out-of-window items never count. Dict order = first appearance
+    of the ticker's qualifying item in `news_items`.
+    """
+    by_t: dict = {}
+    for item in news_items or []:
+        try:
+            t = str(item.get("ticker", "")).upper()
+        except AttributeError:
+            continue
+        if t not in held_tickers or not in_window(item, window_start_ts):
+            continue
+        c = _compound(item)
+        if c is None or c > NEWS_SENTIMENT_CRITICAL:
+            continue
+        if _tier(item) > NEWS_CRITICAL_MAX_TIER:
+            continue
+        by_t.setdefault(t, []).append(item)
+    out: dict = {}
+    for t, lst in by_t.items():
+        if len(lst) >= NEWS_CRITICAL_MIN_HEADLINES:
+            out[t] = sorted(lst, key=_compound)   # stable, worst first
+    return out
+
+
+def warning_news_by_ticker(news_items, held_tickers, window_start_ts, *, exclude) -> dict:
+    """{ticker: {"item", "n_negative", "n_act_qualifying"}} for held tickers
+    not in `exclude` with >= 1 in-window headline at or below
+    NEWS_SENTIMENT_WARN (any tier). `item` is the worst (lowest compound);
+    `n_act_qualifying` counts in-window tier-1/2 items at or below
+    NEWS_SENTIMENT_CRITICAL (what an Act Today card would need)."""
+    agg: dict = {}
+    for item in news_items or []:
+        try:
+            t = str(item.get("ticker", "")).upper()
+        except AttributeError:
+            continue
+        if t not in held_tickers or t in exclude or not in_window(item, window_start_ts):
+            continue
+        c = _compound(item)
+        if c is None or c > NEWS_SENTIMENT_WARN:
+            continue
+        e = agg.setdefault(t, {"item": item, "_c": c, "n_negative": 0, "n_act_qualifying": 0})
+        e["n_negative"] += 1
+        if c < e["_c"]:
+            e["item"], e["_c"] = item, c
+        if c <= NEWS_SENTIMENT_CRITICAL and _tier(item) <= NEWS_CRITICAL_MAX_TIER:
+            e["n_act_qualifying"] += 1
+    return {
+        t: {"item": e["item"], "n_negative": e["n_negative"],
+            "n_act_qualifying": e["n_act_qualifying"]}
+        for t, e in agg.items()
+    }
+
+
+def window_label(window_start: datetime) -> str:
+    """e.g. "Fri Oct 16" (no leading zero on the day, platform-independent)."""
+    return f"{window_start.strftime('%a %b')} {window_start.day}"

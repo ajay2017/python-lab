@@ -49,9 +49,7 @@ from stock_analyzer.constants import (
     WEAK_CONVICTION_SCORE,
     NEWS_SENTIMENT_CRITICAL,
     NEWS_SENTIMENT_NEGATIVE,
-    NEWS_SENTIMENT_WARN,
     NEWS_SENTIMENT_POSITIVE,
-    NEWS_CRITICAL_MAX_TIER,
     NEWS_CRITICAL_MIN_HEADLINES,
     STOP_PROFIT_LOCK_PNL_PCT,
     STOP_PROFIT_LOCK_TRIM_PCT,
@@ -93,6 +91,7 @@ from stock_analyzer import etf_candidates as etf_candidates_mod
 from stock_analyzer import pair_add_gate
 from stock_analyzer.entry_eligibility import data_trust_hold, macro_block_map, macro_hold
 from stock_analyzer.analyst_intel import trustworthy_composite
+from stock_analyzer import held_news_check
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -2459,7 +2458,9 @@ def deterioration_signals(
 
 def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                deterioration: list | None = None,
-               premortem_triggers: list | None = None) -> list[dict]:
+               premortem_triggers: list | None = None,
+               news_window_start_ts: float | None = None,
+               news_window_label: str | None = None) -> list[dict]:
     """
     Build the Act Today list. Each item carries a structured directive so the
     UI renders a concrete ACT/Why/Trigger block (matching Review Before Close)
@@ -2644,21 +2645,18 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
     # 3 — Critical news on held positions (compound ≤ NEWS_SENTIMENT_CRITICAL, tier ≤ 2,
     #     minimum NEWS_CRITICAL_MIN_HEADLINES qualifying headlines per ticker)
     held_tickers = _held_tickers(port_df)
-    _crit_by_ticker: dict = {}
-    for item in (news_items or []):
-        _t = str(item.get("ticker", "")).upper()
-        if (_t in held_tickers
-                and item.get("compound", 0) <= NEWS_SENTIMENT_CRITICAL
-                and item.get("tier", 3) <= NEWS_CRITICAL_MAX_TIER):
-            _crit_by_ticker.setdefault(_t, []).append(item)
+    if news_window_start_ts is None or news_window_label is None:
+        _nw = held_news_check.news_window_start(today)
+        news_window_start_ts = _nw.timestamp()
+        news_window_label = held_news_check.window_label(_nw)
+    _crit_by_ticker = held_news_check.critical_news_by_ticker(
+        news_items or [], held_tickers, news_window_start_ts)
 
     for ticker, _crit_items in _crit_by_ticker.items():
-        if len(_crit_items) < NEWS_CRITICAL_MIN_HEADLINES:
-            continue
         if ticker not in {i["ticker"] for i in items}:
             pm = _port_rows(port_df, ticker)
             row = pm.iloc[0] if not pm.empty else {}
-            _worst = min(_crit_items, key=lambda x: x.get("compound", 0))
+            _worst = _crit_items[0]
             _n = len(_crit_items)
             items.append({
                 "priority": "high",
@@ -2671,8 +2669,9 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                     "after the news is confirmed."
                 ),
                 "why": (
-                    f"{_n} tier-{_worst.get('tier', 2)} headline{'s' if _n > 1 else ''} "
-                    f"at sentiment {_worst.get('compound', 0):+.2f}: "
+                    f"{_n} headline{'s' if _n != 1 else ''} from tier-1/2 sources "
+                    f"since {news_window_label} "
+                    f"(worst {_worst.get('compound', 0):+.2f}): "
                     f"\"{(_worst.get('title') or _worst.get('headline', 'news alert'))[:80]}\" "
                     "— material, but not a mechanical sell."
                 ),
@@ -2897,7 +2896,9 @@ def _dynamic_overweight_floor(n_positions: int) -> float:
 def _review_list(port_df, news_items, macro_events, held_data, today,
                  portfolio_value: float = 0.0,
                  act_today: list | None = None,
-                 deterioration: list | None = None) -> list[dict]:
+                 deterioration: list | None = None,
+                 news_window_start_ts: float | None = None,
+                 news_window_label: str | None = None) -> list[dict]:
     """
     Build the Review Before Close list.
 
@@ -3160,7 +3161,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "weight":  weight,
         })
 
-    # 4 — Warning news on held positions (NEWS_SENTIMENT_CRITICAL < compound ≤ NEWS_SENTIMENT_WARN)
+    # 4 — Warning news on held positions: any in-window headline ≤ NEWS_SENTIMENT_WARN on a
+    #     held name without an Act Today card (held_news_check.warning_news_by_ticker, D-C)
     # Always WATCH — one negative headline below critical threshold doesn't warrant a
     # quantitative action. Trigger condition tells the user what would escalate.
     # Tickers already carrying an ACTIONABLE card — in Act Today, OR a stop /
@@ -3174,34 +3176,41 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         str(it.get("ticker", "")).upper() for it in items
         if (it.get("action") or {}).get("type") != "WATCH"
     }
-    warned: set = set()
-    for item in (news_items or []):
-        ticker = str(item.get("ticker", "")).upper()
-        sent   = item.get("compound", 0)
-        if (ticker in held_tickers
-                and ticker not in _actioned   # already actioned elsewhere — don't double-surface news
-                and NEWS_SENTIMENT_CRITICAL < sent <= NEWS_SENTIMENT_WARN
-                and ticker not in warned):
-            warned.add(ticker)
-            headline_text = (item.get("title") or item.get("headline") or "news")[:80]
-            items.append({
-                "priority": "low",
-                "icon":     "📰",
-                "ticker":   ticker,
-                "watch_kind": "news",   # discriminator: a negative-news WATCH (vs an earnings/scheduled WATCH)
-                "headline": f"negative headline (sentiment {sent:+.2f}): \"{headline_text}\"",
-                "action":   {"type": "WATCH"},
-                "why":      (
-                    f"One negative headline (sentiment {sent:+.2f}), below the "
-                    f"critical threshold ({NEWS_SENTIMENT_CRITICAL:+.2f}). Insufficient "
-                    "signal alone — wait for confirmation."
-                ),
-                "trigger":  (
-                    f"Second negative headline OR sentiment drops below {NEWS_SENTIMENT_CRITICAL:+.2f} "
-                    "→ tighten stop on this position."
-                ),
-                "weight":   0,
-            })
+    if news_window_start_ts is None or news_window_label is None:
+        _nw = held_news_check.news_window_start(today)
+        news_window_start_ts = _nw.timestamp()
+        news_window_label = held_news_check.window_label(_nw)
+    _warn = held_news_check.warning_news_by_ticker(
+        news_items or [], held_tickers, news_window_start_ts, exclude=_actioned)
+    for ticker, _w in _warn.items():
+        _item = _w["item"]
+        sent = _item.get("compound", 0)
+        n_neg = _w["n_negative"]
+        need = max(1, NEWS_CRITICAL_MIN_HEADLINES - _w["n_act_qualifying"])
+        headline_text = (_item.get("title") or _item.get("headline") or "news")[:80]
+        _lead = (
+            f"One negative headline since {news_window_label} (sentiment {sent:+.2f})."
+            if n_neg == 1 else
+            f"{n_neg} negative headlines since {news_window_label} (worst {sent:+.2f})."
+        )
+        items.append({
+            "priority": "low",
+            "icon":     "📰",
+            "ticker":   ticker,
+            "watch_kind": "news",   # discriminator: a negative-news WATCH (vs an earnings/scheduled WATCH)
+            "headline": (
+                f"negative headline{'s' if n_neg != 1 else ''} since "
+                f"{news_window_label} (worst {sent:+.2f}): \"{headline_text}\""
+            ),
+            "action":   {"type": "WATCH"},
+            "why":      f"{_lead} Not enough alone for an Act Today card — wait for confirmation.",
+            "trigger":  (
+                f"{need} more tier-1/2 headline{'s' if need != 1 else ''} at or below "
+                f"{NEWS_SENTIMENT_CRITICAL:+.2f} since {news_window_label} "
+                "→ Act Today critical news (tighten your stop)."
+            ),
+            "weight":   0,
+        })
 
     # 5 — Upcoming macro events (1–3 days)
     # Action policy:
@@ -3563,12 +3572,21 @@ def build_daily_briefing(
     _sold_today_or_none = tickers_sold_on(trades_df, today)
     _sold_today: set[str] = set() if _sold_today_or_none is None else _sold_today_or_none
 
+    # ONE recency window for both news checks (the same `news_window_start(today)`
+    # Home's LLM rescore uses -- docs/plans/held-news-coverage.md D-A).
+    _news_window = held_news_check.news_window_start(today)
+    _news_ts     = _news_window.timestamp()
+    _news_label  = held_news_check.window_label(_news_window)
     act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                         deterioration=deterioration,
-                        premortem_triggers=premortem_triggers)
+                        premortem_triggers=premortem_triggers,
+                        news_window_start_ts=_news_ts,
+                        news_window_label=_news_label)
     review = _review_list(port_df, news_items, macro_events, held_data, today,
                           portfolio_value=portfolio_value, act_today=act,
-                          deterioration=deterioration)
+                          deterioration=deterioration,
+                          news_window_start_ts=_news_ts,
+                          news_window_label=_news_label)
 
     # Risk-off protective de-risk (exit-discipline Phase 2) — computed AFTER act +
     # review so we can exclude any ticker already carrying a higher-priority reduce

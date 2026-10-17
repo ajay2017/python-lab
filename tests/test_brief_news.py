@@ -51,10 +51,14 @@ def test_every_candidate_keeps_its_own_headlines():
 
 
 def test_held_part_without_held_news_is_the_raw_curated_list():
-    # The cron path: it has never rescored, so its held news is raw VADER.
-    held = {"HLD": _bundle("HLD", 30, ts0=1_000)}
-    assert curate_brief_news(held, {}) == curate_news_items(held)
-    assert curate_brief_news(held, None) == curate_news_items(held)
+    # The cron path: it has never rescored, so its held news is raw VADER --
+    # and, since held-news chunk 2, UNCAPPED (every holding's headlines reach
+    # the Brief; recency is the Brief's window, not a top-20 cut).
+    held = {f"H{k}": _bundle(f"H{k}", 8, ts0=1_000 + k * 100) for k in range(4)}   # 32 > 20
+    full = curate_news_items(held, max_items=None)
+    assert len(full) == 32 and len(curate_news_items(held)) == 20
+    assert curate_brief_news(held, {}) == full
+    assert curate_brief_news(held, None) == full
 
 
 def test_a_passed_held_news_list_is_used_verbatim():
@@ -85,12 +89,15 @@ def test_a_held_ticker_in_candidates_is_not_double_counted():
     assert sum(i["ticker"] == "NEW" for i in out) == 2
 
 
-def test_duplicate_headline_across_held_and_candidate_appears_once():
+def test_duplicate_headline_across_held_and_candidate_appears_once_per_ticker():
+    # held-news-coverage D-E: the held-vs-candidate de-dup is gone, so a
+    # candidate keeps a headline it shares with a held name.
     same = "Shared sector headline"
     held = {"HLD": _bundle("HLD", 1, ts0=1_000, title_fmt=same)}
     cand = {"NEW": _bundle("NEW", 1, ts0=2_000, title_fmt=same)}
     out = curate_brief_news(held, cand)
-    assert [i["title"] for i in out].count(same) == 1
+    assert [i["title"] for i in out].count(same) == 2
+    assert sorted(i["ticker"] for i in out) == ["HLD", "NEW"]
 
 
 def test_none_and_non_dict_inputs_never_raise():

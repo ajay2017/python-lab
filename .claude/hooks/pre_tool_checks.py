@@ -924,6 +924,7 @@ _GATE_FILES = {
     # new-entry eligibility decision (stale / tone / macro / news / earnings)
     # that Grow Today and, from chunks 3-7, Watchlist/Analysis/email share.
     "stock_analyzer/entry_eligibility.py",
+    "stock_analyzer/held_news_check.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,

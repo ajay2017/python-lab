@@ -468,11 +468,13 @@ def curate_brief_news(held_data: dict | None, candidates: dict | None,
     """The `news_items` both Daily Brief builds pass (app and cron), so they
     cannot drift (audit 2026-10-11 B-M7, fixed 2026-10-13).
 
-    Two parts, each with its OWN cap, deduplicated by headline:
+    Two parts, the candidate part capped, the held part uncapped:
       * HELD news -- `held_news` when given (the app passes its FINAL held
         list, i.e. after the suppress-only LLM rescore when an Anthropic key
         is set, so Act Today keeps that false-positive filter), else
-        `curate_news_items(held_data)` (the cron, which has never rescored).
+        `curate_news_items(held_data, max_items=None)` -- EVERY held headline,
+        uncapped (the cron, which has never rescored). Recency is enforced by
+        the Brief's news window (held_news_check), not by a top-N cut.
         Act Today's critical-news check and the Review List read only held
         tickers from this.
       * CANDIDATE news -- every not-held new-pick candidate's headlines (up
@@ -486,22 +488,23 @@ def curate_brief_news(held_data: dict | None, candidates: dict | None,
     that. And the app passed held news only, so a candidate's own negative
     news never reached the cross-check.
 
-    Known limits: a headline shared by a held and a candidate ticker counts
-    for the held name only (dedup), so the candidate's check misses it. If
-    the candidate part can't be built (malformed news_raw), this returns the
-    held part alone -- the pre-fix behaviour -- rather than raising inside
+    Each ticker keeps its own headlines: a headline shared by a held and a
+    candidate ticker appears once per ticker. If the candidate part can't be
+    built (malformed news_raw), this returns the held part alone -- the pre-fix behaviour -- rather than raising inside
     the Brief build and taking Act Today offline with it.
     """
     held_data = held_data or {}
-    held = list(held_news) if held_news is not None else curate_news_items(held_data)
+    held = (list(held_news) if held_news is not None
+            else curate_news_items(held_data, max_items=None))
     try:
         cand_src = {t: b for t, b in (candidates or {}).items()
                     if t not in held_data and isinstance(b, dict)}
         if not cand_src:
             return held
         cand = curate_news_items(cand_src, max_items=_NEWS_PER_TICKER * len(cand_src))
-        seen = {str(i.get("title", "")).lower()[:70] for i in held}
-        return held + [i for i in cand if i["title"].lower()[:70] not in seen]
+        # No held-vs-candidate headline de-dup (held-news-coverage D-E): a
+        # headline shared with a held name stays on the candidate too.
+        return held + cand
     except Exception as exc:
         # Logged, not silent: falling back means layer 3 is OFF for every
         # candidate this build -- the very gap this helper exists to close.
