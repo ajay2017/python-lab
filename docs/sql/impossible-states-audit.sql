@@ -61,8 +61,10 @@
 --   C9   5  (added after the baseline run, from Q1's C1 detail) ON 09-11,
 --           APP 08-28, ARM 08-27, GOOG/MRVL 07-31: all before the F-39i fix.
 --           Confirm with the first run of the automated function.
---   C8   2  MU 2026-06-25 (pre-fix sweep hole, unrecoverable -- no close
---           stored); EOG 06-15 (a real sell + rebuy).
+--   C8   3  MU 2026-06-25 (pre-fix sweep hole, unrecoverable -- no close
+--           stored); EOG 06-15 (a real sell + rebuy); PLTR 2026-10-14 (a real
+--           sell + rebuy: SELL 10 @ 200.58 on 10-14, BUY 5 @ 195.00 on 10-15).
+--           Baseline raised 2 -> 3 on 2026-10-17 after the owner's SQL.
 --   D5   3  INTC/QCOM/MU 2026-05-26/28: composite column not yet populated.
 --   Every other check: 0.
 -- ---------------------------------------------------------------------

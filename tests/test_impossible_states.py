@@ -63,7 +63,7 @@ def test_any_row_on_a_zero_check_warns(cid):
     assert out[0]["key"] == f"impossible_states_{cid}" and out[0]["count"] == 1
 
 
-@pytest.mark.parametrize("cid,base", [("C3", 2), ("C7", 3), ("C8", 2), ("C9", 5), ("D5", 3)])
+@pytest.mark.parametrize("cid,base", [("C3", 2), ("C7", 3), ("C8", 3), ("C9", 5), ("D5", 3)])
 def test_frozen_check_warns_only_above_its_baseline(cid, base):
     assert ist.policy_for(cid) == (ist.FROZEN, base)
     assert _sev(ist.classify(_rows(**{cid: base}))) == ["ok"]
