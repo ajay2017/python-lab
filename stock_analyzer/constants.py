@@ -792,6 +792,16 @@ NEWS_SENTIMENT_CRITICAL =  -0.25   # critical-news Act Today threshold
 NEWS_SENTIMENT_NEGATIVE =  -0.15   # cross-reference "negative news" conflict
 NEWS_SENTIMENT_WARN     =  -0.05   # warning-news Review Before Close
 NEWS_SENTIMENT_POSITIVE =   0.10   # treat as supporting signal in xref
+# ── News feed (docs/plans/news-feed-restore.md) ──────────────────────────────
+# Headlines older than this are dropped at fetch time by BOTH news sources
+# (the yf.Search primary and the FMP adapter) -- an old headline is not "recent
+# news" and would otherwise feed the sentiment pillar and the news gates. Owner
+# decision D-3, 2026-10-16 (14 was the tighter alternative).
+NEWS_MAX_AGE_DAYS = 21
+# Headlines requested from yf.Search per ticker. Operational, not policy: Search is a
+# text query that returns unrelated items, so we over-fetch to survive the
+# relatedTickers filter (probe: 30 fetched -> NOW 6, APP 13, TEAM 6, CRM 29 kept).
+NEWS_SEARCH_FETCH_COUNT = 30
 NEWS_CRITICAL_MIN_HEADLINES     = 2     # min qualifying headlines per ticker before firing Critical News Act Today
 # Max news tier (1 = highest-quality source) that qualifies for "critical" —
 # shared by daily_briefing's Critical News Act Today card AND

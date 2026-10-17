@@ -50,6 +50,17 @@ def main(argv: list[str]) -> int:
                 print(f"   price_history ERROR: {exc}")
         print()
 
+    # ── News feed (yf.Search, relatedTickers-filtered) ────────────────────────
+    # Proves the news restore live (docs/plans/news-feed-restore.md): status is
+    # ok / none / error, and "error" means the Search response had no `news` key.
+    print("=== yfinance news (yf.Search)")
+    _yf = YFinanceProvider()
+    for t in tickers[:2]:
+        items, status = _yf.search_news(t)
+        newest = items[0].get("title") if items else None
+        print(f"   {t}: status={status} kept={len(items)} newest={newest!r}")
+    print()
+
     # ── Orchestrator end-to-end (live-price-primary + cross-check) ───────────
     # Exercises the REAL failover/cross-check paths regardless of the master
     # switch, so we can validate them before flipping DATA_MULTISOURCE_ENABLED.

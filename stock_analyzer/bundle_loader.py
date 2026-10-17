@@ -43,6 +43,7 @@ from stock_analyzer.scoring import combined_score, recommendation
 from stock_analyzer.risk import atr_stop_loss, compute_all_risk
 from stock_analyzer.targets import support_resistance, entry_zone, compute_price_targets
 from stock_analyzer import db
+from stock_analyzer import news_feed as _news_feed
 
 
 def _cache_age_in_days(fetched_at_iso: str | None) -> int | None:
@@ -70,6 +71,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     success path. Mirrors the original app.load_all exactly (less the Streamlit
     cache + the internal SPY/rfr fetch, now passed in)."""
     _stale_as_of = None
+    _from_cache = False
     try:
         bundle = fetch_ticker_bundle(ticker, period)
         try:
@@ -86,6 +88,16 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
             raise  # nothing cached (or too stale) → honest "Could not load"
         bundle = _cached_bundle["bundle"]
         _stale_as_of = _cached_bundle["fetched_at"]
+        _from_cache = True
+    # Per-ticker news feed status. A last-known-good cached bundle carries no news
+    # (never cached there) -> "cached". A bundle from a provider without its own
+    # status (FMP failover) reads "ok" only when it really has headlines; an empty
+    # one cannot be told from a failed fetch there, so it reads "error" (loud).
+    if _from_cache:
+        _news_status = _news_feed.NEWS_STATUS_CACHED
+    else:
+        _news_status = bundle.get("news_status") or (
+            _news_feed.NEWS_STATUS_OK if bundle.get("news") else _news_feed.NEWS_STATUS_ERROR)
     df = compute_indicators(bundle["history"])
     t_score, t_signals = technical_score(df)
     _t_cov = technical_coverage(df, t_signals)
@@ -167,7 +179,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         from stock_analyzer.news_intelligence import rescore_headlines_llm as _rescore_hl
         _today = _dt.date.today().isoformat()
         _cached = db.load_sentiment_llm_cache(ticker, _today)
-        if _cached is not None:
+        if _news_feed.llm_cache_usable(_cached, headlines):
             headlines = _cached["headlines"]
             avg_sent  = _cached["avg_sent"]
         else:
@@ -181,7 +193,9 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
                     pass
             if _ant_key:
                 _rescored = _rescore_hl(headlines, _ant_key, ticker)
-                if _rescored is not None:  # None = LLM failed; don't poison the day-cache
+                # None = LLM failed; an EMPTY rescore (no headlines) must never be
+                # saved either -- it would serve "no news" for the rest of the day.
+                if _news_feed.should_save_llm_rescore(_rescored):
                     _sc = [h["score"] for h in _rescored if isinstance(h.get("score"), (int, float))]
                     _new_avg = round(sum(_sc) / len(_sc), 3) if _sc else avg_sent
                     db.save_sentiment_llm_cache(ticker, _today, _rescored, _new_avg)
@@ -286,7 +300,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         "s_score": s_score, "avg_sent": avg_sent, "headlines": headlines,
         "total": total, "rec": rec, "financials": financials,
         "current_price": price, "upside": upside,
-        "atr": atr_val, "stop": stop, "news_raw": bundle["news"],
+        "atr": atr_val, "stop": stop, "news_raw": bundle["news"], "news_status": _news_status,
         "entry_lo": entry_lo, "entry_hi": entry_hi,
         "targets": targets, "sr": sr,
         "risk_metrics": risk_metrics, "earnings": bundle["earnings"],

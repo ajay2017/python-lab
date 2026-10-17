@@ -13,11 +13,16 @@ import time
 import concurrent.futures
 from datetime import datetime
 import yfinance as yf
+from yfinance.const import _BASE_URL_ as _YF_BASE_URL
+from yfinance.data import YfData as _YfData
 import pandas as pd
 import pytz
 
 from stock_analyzer import api_health as _ah
-from stock_analyzer.constants import DATA_YF_REQUEST_TIMEOUT_SEC, NYSE_HOLIDAYS
+from stock_analyzer.constants import (
+    DATA_YF_REQUEST_TIMEOUT_SEC, NYSE_HOLIDAYS, NEWS_SEARCH_FETCH_COUNT,
+)
+from stock_analyzer import news_feed as _nf
 from stock_analyzer.providers._util import classify_error
 from stock_analyzer.providers.base import (
     DataProvider, ProviderUnavailable,
@@ -131,6 +136,49 @@ class YFinanceProvider(DataProvider):
             return price
         return _retry(_fetch)
 
+    # ── News (yf.Search, filtered) ────────────────────────────────────────────
+    def search_news(self, ticker: str, now_ts: float | None = None) -> tuple[list, str]:
+        """(items, news_status) for one ticker. Never raises. `status` is `ok` /
+        `none` / `error` -- see stock_analyzer/news_feed.py. A response with NO
+        `news` key (the retired-endpoint 404 shape) is `error`, not `none`."""
+        try:
+            # NOT yf.Search: its fetch goes through YfData.cache_get, an lru_cache on a
+            # process-wide singleton, so a long-lived process (the Railway app) would
+            # serve each ticker's FIRST response -- error-shaped ones included -- for
+            # its whole life. Issue the same GET through the uncached YfData.get
+            # (same shared session + crumb). Params mirror yfinance 1.3.0 Search.search().
+            params = {
+                "q": ticker,
+                "quotesCount": 1,
+                "enableFuzzyQuery": False,
+                "newsCount": NEWS_SEARCH_FETCH_COUNT,
+                "quotesQueryId": "tss_match_phrase_query",
+                "newsQueryId": "news_cie_vespa",
+                "listsCount": 0,
+                "enableCb": False,
+                "enableNavLinks": False,
+                "enableResearchReports": False,
+                "enableCulturalAssets": False,
+                "recommendedCount": 0,
+            }
+            # Search defaults to a 30s timeout but runs inside the bundle's single
+            # DATA_YF_REQUEST_TIMEOUT_SEC budget: a slow news call must time out
+            # well before it, or it would fail the WHOLE bundle (-> FMP failover).
+            r = _YfData().get(
+                url=f"{_YF_BASE_URL}/v1/finance/search", params=params,
+                timeout=max(1, DATA_YF_REQUEST_TIMEOUT_SEC // 4),
+            )
+            if getattr(r, "status_code", 200) != 200:
+                return [], _nf.NEWS_STATUS_ERROR
+            # Raw parsed JSON with a missing `news` key intact (the retired-endpoint
+            # 404 shape is `{"message": "Not Found"}`) -> status "error", not "none".
+            resp = r.json()
+            kept = _nf.filter_search_news(resp.get("news") if isinstance(resp, dict) else None,
+                                          ticker, now_ts)
+            return kept, _nf.search_news_status(resp, kept)
+        except Exception:
+            return [], _nf.NEWS_STATUS_ERROR
+
     # ── Bundle (history + info + news + earnings + revisions) ─────────────────
     def bundle(self, ticker: str, period: str = "6mo") -> dict:
         """Single yf.Ticker session — fetches history, info, news and earnings in one go."""
@@ -156,11 +204,11 @@ class YFinanceProvider(DataProvider):
                         pass
             except Exception:
                 pass
-            news = []
-            try:
-                news = t.news or []
-            except Exception:
-                pass
+            # News: yfinance's Ticker.news hit a Yahoo endpoint that now answers a
+            # silent 404, so the feed comes from yf.Search filtered on relatedTickers
+            # (docs/plans/news-feed-restore.md). Its own try: a news error never fails
+            # or retries the bundle -- it just reads news_status == "error".
+            news, news_status = self.search_news(ticker)
             earnings = None
             try:
                 cal = t.calendar
@@ -206,6 +254,7 @@ class YFinanceProvider(DataProvider):
 
             return {
                 "history": hist, "info": info, "news": news,
+                "news_status": news_status,
                 "earnings": earnings, "revisions": revisions,
             }
 

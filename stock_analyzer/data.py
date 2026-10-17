@@ -14,8 +14,6 @@ _ET = pytz.timezone("America/New_York")
 # OFF so behaviour is byte-for-byte the pre-provider code. When
 # constants.DATA_MULTISOURCE_ENABLED is True, the public fetch_* functions route
 # through `_orch` (failover chain yfinance → Finnhub → FMP + price cross-check).
-# `_retry` is imported from the provider module for the one remaining
-# direct-yfinance call (fetch_curated_news).
 _PRIMARY = YFinanceProvider()
 
 
@@ -378,57 +376,6 @@ _TIER2 = frozenset([
     "the motley fool", "motley fool", "forbes", "business insider",
     "investing.com", "thestreet", "nasdaq",
 ])
-
-
-def fetch_curated_news(tickers: list[str], max_items: int = 20) -> list[dict]:
-    """
-    Aggregate and curate news across a set of tickers.
-    Deduplicates by headline, scores sentiment with VADER, and
-    ranks tier-1 sources (Reuters, Bloomberg, WSJ …) above the rest.
-    Returns items sorted by (source tier, recency).
-    """
-    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-    _va = SentimentIntensityAnalyzer()
-
-    seen: set[str] = set()
-    items: list[dict] = []
-
-    for ticker in tickers:
-        try:
-            news = _retry(lambda t=ticker: yf.Ticker(t).news or [])
-            for item in (news or [])[:8]:
-                title, publisher, url, ts = _parse_news_item(item)
-                if not title:
-                    continue
-                key = title.lower()[:70]
-                if key in seen:
-                    continue
-                seen.add(key)
-
-                pub_l = publisher.lower()
-                tier = (1 if any(p in pub_l for p in _TIER1) else
-                        2 if any(p in pub_l for p in _TIER2) else 3)
-
-                compound = _va.polarity_scores(title)["compound"]
-                label = ("Positive" if compound >= 0.05 else
-                         "Negative" if compound <= -0.05 else "Neutral")
-
-                items.append({
-                    "ticker":    ticker,
-                    "title":     title,
-                    "url":       url,
-                    "publisher": publisher,
-                    "ts":        ts,
-                    "compound":  round(compound, 2),
-                    "label":     label,
-                    "tier":      tier,
-                })
-        except Exception:
-            continue
-
-    # Tier-1 sources first; within same tier, newest first
-    items.sort(key=lambda x: (x["tier"], -x["ts"]))
-    return items[:max_items]
 
 
 def _parse_news_item(item: dict) -> tuple[str, str, str, int]:

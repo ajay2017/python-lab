@@ -457,7 +457,7 @@ class FMPProvider(DataProvider):
             # Some FMP news endpoints require an explicit date window; pass one.
             payload = self._get_json("news/stock", {
                 "symbols": ticker, "limit": limit,
-                "from": (date.today() - timedelta(days=21)).isoformat(),
+                "from": (date.today() - timedelta(days=C.NEWS_MAX_AGE_DAYS)).isoformat(),
                 "to":   date.today().isoformat(),
             })
         except Exception:
