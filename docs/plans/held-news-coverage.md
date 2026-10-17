@@ -1,7 +1,7 @@
 # Every holding's news is checked — held-news coverage fix
 
 **Status: DESIGNED 2026-10-17 (planner Opus 5.5, PROCEED WITH CHANGES, checked against HEAD `a8be518`). Owner
-decided to fix the cap (vs disclose only) 2026-10-17; **ALL decisions D-A..D-H DECIDED 2026-10-17 — every recommendation accepted** (D-A = 1 trading day). Chunk 1 COMMITTED locally 2026-10-17 (Opus SHIP after 2 FIX-FIRST rounds); NOT pushed — chunks 1-4 ship together.** Runs
+decided to fix the cap (vs disclose only) 2026-10-17; **ALL decisions D-A..D-H DECIDED 2026-10-17 — every recommendation accepted** (D-A = 1 trading day); D-I (Tune-up) added + decided 2026-10-17. Chunk 1 `3ea4306` and chunk 2 `543544e` COMMITTED locally (Opus SHIP); chunk 4 + docs (chunk 3) Opus SHIP after one FIX-FIRST round (flags must come from the detectors before card de-dup); all three commits pushed together. Requirements: F-308.** Runs
 before news chunk 3b (`docs/plans/news-feed-restore.md`), which then extends this module with `coverage(...)`.
 
 ## Problem (lead-verified)
@@ -34,6 +34,7 @@ holding's negative headlines never reach either check even with a healthy feed. 
 | D-F | Rebalancer `news_flags` (app ~20701) derive from the top-20 `_sidebar_news` → would disagree with the Brief | **Home publishes `_brief_news_flags_cache`** from the Brief's own cards (`None` when offline, registered in `coord_freshness`); Rebalancer reads it, falls back to today's derivation with a caption. Changes the Rebalancer's "critical" meaning from weight ≥ 8% to the Brief's ≥2 headlines |
 | D-G | Review clutter (estimate: ~2-4 news WATCH/day vs ~2 today, after the window + LLM) | **Accept one card per ticker; pre-registered trigger:** ≥5 news WATCH cards on 3 of the first 5 trading days → revisit, first option tier ≤ `NEWS_CRITICAL_MAX_TIER` on Review |
 | D-H | Cron Brief has no LLM rescore | **No LLM in cron** — its Act/Review are never emailed or persisted; only effect is a few more silent add-lane ACT blocks (fewer cron add-gate ledger rows on bull days) |
+| D-I | (Added 2026-10-17 by the chunk-2 review) Portfolio Tune-up's beta card is silently dropped when its root ticker carries ANY Act/Review card (`_acted_final`), incl. a news WATCH from one −0.05 headline | **News-only cards don't drop it** (same rule as D-D; a news WATCH isn't a trim) — DECIDED by the owner 2026-10-17 |
 
 ## Build plan (push 1-4 together; 2 and 4 must not ship apart)
 1. `fix(news)`: batched (25/batch, `max_tokens = 64 + 20n`, 3 concurrent workers), memoized (per-ET-day memo keyed
@@ -63,3 +64,7 @@ into the implementer spec at build time.
 - 3b's "checked" wording must count IN-WINDOW headlines and name the window; expected set from `port_df`, never
   `held_data` (F-292 lesson).
 - The Brief is memoized on holdings/date, not news; fresh headlines arrive only on a rebuild (unchanged).
+
+## Found by the chunk-2 review (not built)
+- `curate_news_items` still de-dups a headline naming two holdings across held tickers, so it counts for the first one iterated only (the D-E limit, within the held set).
+- No test pins `_GATE_FILES` against CLAUDE.md's enumeration (only that every entry is git-tracked).

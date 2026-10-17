@@ -379,6 +379,7 @@ from stock_analyzer.util import diversification_label_text, pair_trim_withheld_n
 from stock_analyzer.util import correlation_record_withheld_note
 from stock_analyzer.util import stop_distance_delta as _stop_distance_delta
 from stock_analyzer.news_intelligence import build_news_intelligence
+from stock_analyzer.held_news_check import published_news_flags, usable_news_flags
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
 from stock_analyzer.trade_review import (
@@ -2650,6 +2651,18 @@ def _budget_strict_allocations():
     if _a is not None:
         st.session_state["_budget_allocs_cache"] = {"key": _key, "allocs": _a}
     return _a
+
+
+def _publish_brief_coord_caches(brief):
+    """Publish the caches derived from a BUILT Brief: `_reduce_calls` and the
+    date-stamped `_brief_news_flags_cache`. One helper for the MISS path and the
+    composite-stale rebuild on the HIT path, so they cannot drift."""
+    st.session_state["_reduce_calls"] = reduce_call_items(
+        brief.get("act_today"), brief.get("review_list")
+    )
+    st.session_state["_brief_news_flags_cache"] = published_news_flags(
+        brief, _today_et().isoformat()
+    )
 
 
 def _publish_new_position_budget(raw_brief, gross_book, net_cap, basis_state,
@@ -6180,6 +6193,9 @@ if page == "🏠 Home":
                     })
                     st.session_state["_grow_today_sectors_cache"] = _grow_today_sectors_cache
                     st.session_state["_home_synth_cache"]["bundle"]["_grow_today_sectors_cache"] = _grow_today_sectors_cache
+                    # Mirror the MISS path: the rebuilt brief's reduce calls and
+                    # news flags replace the ones the earlier build published.
+                    _publish_brief_coord_caches(_daily_brief)
                 except Exception as _e:
                     import logging
                     logging.warning("Composite freshness rebuild failed: %s", _e)
@@ -6630,6 +6646,9 @@ if page == "🏠 Home":
             # No reduce calls known while the Brief is offline — consumers fail
             # open (show sizing), consistent with the Brief itself being offline.
             st.session_state["_reduce_calls"] = {}
+            # None (not {}) — the Rebalancer must see "news not checked by the
+            # Brief", never "no held name has news" (D-F, held-news-coverage).
+            st.session_state["_brief_news_flags_cache"] = None
         else:
             st.session_state["_daily_brief_offline"] = False
             _gt_today = _daily_brief.get("grow_today") or {}
@@ -6660,9 +6679,9 @@ if page == "🏠 Home":
             # sizing + show a "not a place to add" banner on a held name the Brief
             # is telling you to trim/exit — same _is_reduce/_ticker canon as the
             # Opportunity-Signals reconciliation, so the surfaces can't drift.
-            st.session_state["_reduce_calls"] = reduce_call_items(
-                _daily_brief.get("act_today"), _daily_brief.get("review_list")
-            )
+            # Also publishes the date-stamped news flags (the Brief's detector
+            # output, every held name in the recency window) for the Rebalancer.
+            _publish_brief_coord_caches(_daily_brief)
 
             # ── Recommendations log (persist + decorate with first-seen) ─────────
             # Capture every pick surfaced today so the user can audit the App's
@@ -7335,7 +7354,10 @@ if page == "🏠 Home":
     # would mark them current merely because Home ran — a freshness launder.
     # Each producer stamps its own; see coord_freshness.keys_for_producer.
     _home_keys = coord_freshness.keys_for_producer("home")
-    _stamp_coord([k for k in _home_keys if k != "_reduce_calls"] if _synth_hit else _home_keys)
+    # _brief_news_flags_cache is likewise written only on the MISS path.
+    _stamp_coord([k for k in _home_keys
+                  if k not in ("_reduce_calls", "_brief_news_flags_cache")]
+                 if _synth_hit else _home_keys)
 
     with _alert_ph_structural.container():
         if _struct_new_clusters:
@@ -10665,17 +10687,17 @@ if page == "🏠 Home":
                 _body += (
                     f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:6px'>"
                     f"<span style='color:{_act_color};font-weight:700'>→ ACT:</span> "
-                    f"<span style='color:#f1f5f9'>{_db_directive}</span></div>"
+                    f"<span style='color:#f1f5f9'>{_md_bold(_db_directive)}</span></div>"
                 )
             if _db_why:
                 _body += (
                     f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
-                    f"<b>Why:</b> {_db_why}</div>"
+                    f"<b>Why:</b> {_md_bold(_db_why)}</div>"
                 )
             if _db_trigger:
                 _body += (
                     f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
-                    f"<b>Trigger:</b> {_db_trigger}</div>"
+                    f"<b>Trigger:</b> {_md_bold(_db_trigger)}</div>"
                 )
             # Risk flags: one sub-block per flag (consolidated multi-risk).
             for _flag in _db_flags:
@@ -11352,15 +11374,15 @@ if page == "🏠 Home":
                 f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
                 f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
                 f"{_title_left}"
-                + (f" <span style='color:#a8a29e;font-weight:400'>· {_headline}</span>" if _headline else "")
+                + (f" <span style='color:#a8a29e;font-weight:400'>· {_md_bold(_headline)}</span>" if _headline else "")
                 + f"</div>"
                 f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:6px'>"
                 f"<span style='color:{_act_color};font-weight:700'>→ {_act_label}:</span> "
                 f"<span style='color:#f1f5f9'>{_act_text}</span></div>"
                 + (f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
-                   f"<b>Why:</b> {_why}</div>" if _why else "")
+                   f"<b>Why:</b> {_md_bold(_why)}</div>" if _why else "")
                 + (f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
-                   f"<b>Trigger:</b> {_trigger}</div>" if _trigger else "")
+                   f"<b>Trigger:</b> {_md_bold(_trigger)}</div>" if _trigger else "")
                 # Concept F: tax holding-period note (Review Before Close is an
                 # exit-direction card). Awareness-only, never gates. Resolve the
                 # subject via _tax_subject so PROTECTIVE_TRIM cards (ticker=None,
@@ -20516,6 +20538,10 @@ elif page == "🥧 Portfolio Overview":
             f"({_ni_sum.get('held_count', 0)} for your holdings)"
         )
         with st.expander(_ni_expander_title, expanded=bool(_ni_alts)):
+            st.caption(
+                "Shows the 20 most recent headlines across your holdings — "
+                "🏠 Home's Act Today and Review check every holding."
+            )
 
             # ── Summary KPI row ───────────────────────────────────────────
             _nic1, _nic2, _nic3, _nic4 = st.columns(4)
@@ -20746,16 +20772,31 @@ elif page == "🥧 Portfolio Overview":
         # rebalancer never silently recommends adding to a position News
         # Intelligence is currently flagging. Use the most negative recent flag
         # per ticker (alerts are pre-sorted by severity in build_news_intelligence).
+        # Prefer the Brief's own news flags (every holding, from the same
+        # critical/warning checks Act Today / Review run, BEFORE card de-dup, so
+        # a name whose news card was skipped is still flagged); fall back to the
+        # top-20 sidebar derivation with a caption when Home hasn't published
+        # them today (None = not checked).
+        _rb_brief_news = usable_news_flags(
+            st.session_state.get("_brief_news_flags_cache"), _today_et().isoformat()
+        )
         _rb_news_flags: dict = {}
-        for _alert in (_ni_alts or []):
-            _atk = str(_alert.get("ticker", "")).strip().upper()
-            if not _atk or _atk in _rb_news_flags:
-                continue
-            _rb_news_flags[_atk] = {
-                "level":    _alert.get("alert_level", "warning"),
-                "headline": _alert.get("headline", ""),
-                "compound": _alert.get("compound", 0.0),
-            }
+        if _rb_brief_news is not None:
+            _rb_news_flags = dict(_rb_brief_news)
+        else:
+            st.caption(
+                "News cross-check here uses the 20 most recent headlines across "
+                "your holdings — open 🏠 Home today to check every holding."
+            )
+            for _alert in (_ni_alts or []):
+                _atk = str(_alert.get("ticker", "")).strip().upper()
+                if not _atk or _atk in _rb_news_flags:
+                    continue
+                _rb_news_flags[_atk] = {
+                    "level":    _alert.get("alert_level", "warning"),
+                    "headline": _alert.get("headline", ""),
+                    "compound": _alert.get("compound", 0.0),
+                }
 
         # Build Risk Advisor trim set so Rebalancer ADD can never contradict
         # an investment-level reduce-exposure recommendation. When the cache
@@ -20994,7 +21035,7 @@ elif page == "🥧 Portfolio Overview":
             if _n_news_blocked:
                 _header += (
                     f"  ·  <span style='color:#fbbf24;font-size:0.65em;font-weight:600'>"
-                    f"⚠ {_n_news_blocked} flagged by News Intelligence — review before executing</span>"
+                    f"⚠ {_n_news_blocked} flagged by the news check — review before executing</span>"
                 )
                 st.markdown(_header, unsafe_allow_html=True)
             else:
@@ -21027,9 +21068,9 @@ elif page == "🥧 Portfolio Overview":
                         _nw_brd = "#ef4444" if _nw_critical else "#f59e0b"
                         _nw_txt = "#fca5a5" if _nw_critical else "#fcd34d"
                         _nw_lbl = (
-                            "🚨 News Intelligence Conflict — Defer Add"
+                            "🚨 News Conflict — Defer Add"
                             if _nw_critical else
-                            "📰 News Intelligence Caution"
+                            "📰 News Caution"
                         )
                         st.markdown(
                             f"<div style='padding:10px 14px;background:{_nw_bg};"
@@ -41564,9 +41605,9 @@ The Home brief is split into **offense** (left) and **defense** (right).
 The footer line beneath the cards states **risk, not capital** — "you'd be risking ~$X if every stop hits" is what you lose if every one of those trades goes against you, not the cash to deploy.
 
 **Right — three lanes, by urgency:**
-- **🔴 Act Today (decisions only)** — genuine trade decisions for *today*: a stop breached, a sell signal, a **deterioration trim or exit** on a position that's rolling over (see *loss protection* below), a sized trim, breaking critical news. If there's nothing here you'll see **"✅ Nothing to act on — you're set for today."** **Stop-breach cards are re-evaluated against the live intraday price on every render** — the Brief is memoized on portfolio composition (not price), so a breach can fire from yesterday's close even when the live price has already recovered. When the live price is more than 0.5% above the stop, the card is demoted to an amber **"⚠️ Stop Breach — Resolved"** section below Act Today rather than staying in the action lane; when live price data is not yet available the card stays in Act Today with a note to verify the current price before acting. **Tickers you sell during a session are immediately suppressed from Grow Today** — so an exit call you acted on won't re-appear as a BUY recommendation in the same session.
+- **🔴 Act Today (decisions only)** — genuine trade decisions for *today*: a stop breached, a sell signal, a **deterioration trim or exit** on a position that's rolling over (see *loss protection* below), a sized trim, breaking critical news (two or more tier-1/2 headlines at or below −0.25 on a holding since midnight ET of the previous trading day — every holding is checked, and the card names the window, e.g. "since Fri Oct 16"). If there's nothing here you'll see **"✅ Nothing to act on — you're set for today."** **Stop-breach cards are re-evaluated against the live intraday price on every render** — the Brief is memoized on portfolio composition (not price), so a breach can fire from yesterday's close even when the live price has already recovered. When the live price is more than 0.5% above the stop, the card is demoted to an amber **"⚠️ Stop Breach — Resolved"** section below Act Today rather than staying in the action lane; when live price data is not yet available the card stays in Act Today with a note to verify the current price before acting. **Tickers you sell during a session are immediately suppressed from Grow Today** — so an exit call you acted on won't re-appear as a BUY recommendation in the same session.
 - **⚠️ Stop Breach — Resolved** (appears between Act Today and Monitoring when present) — a stop-breach signal from overnight's close that the live intraday price has since cleared. Not a directive to act — the breach resolved — but kept visible for one session as context. An Analyze link bridges to the full signal picture for the name.
-- **👁️ Monitoring / Awareness (FYI)** — things to *know*, not act on: an early **deterioration watch** on a weakening hold, mild negative news, a broad macro event to hold through. While a hold is on a deterioration watch, the app also **won't nudge you to add to it** — even if its score still reads Strong Buy — and shows a "🟡 Add Suppressed — Early Deterioration Watch" note instead (don't add to a weakening name).
+- **👁️ Monitoring / Awareness (FYI)** — things to *know*, not act on: an early **deterioration watch** on a weakening hold, negative news on a holding (any headline at or below −0.05 since the previous trading day; the card says how many more tier-1/2 headlines would move it to Act Today), a broad macro event to hold through. If the AI news noise filter couldn't check some negative headlines, a one-line note above this section says so — those cards use raw sentiment. While a hold is on a deterioration watch, the app also **won't nudge you to add to it** — even if its score still reads Strong Buy — and shows a "🟡 Add Suppressed — Early Deterioration Watch" note instead (don't add to a weakening name).
 - **🔧 Portfolio Tune-up (standing quality)** — slow-moving risk-metric improvements (Sharpe, drawdown). *Not* time-sensitive — act on these when you rebalance or have fresh capital, not on the clock.
 
 **Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop). A **↔ Steady vs yesterday** chip means the signal is unchanged from yesterday — continuity, not a fresh call.

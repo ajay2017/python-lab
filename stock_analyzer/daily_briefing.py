@@ -2680,6 +2680,8 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                 ),
                 "weight":  _f(row.get("Weight (%)") if hasattr(row, "get") else 0),
                 "pnl_pct": _f(row.get("P&L (%)") if hasattr(row, "get") else 0),
+                "news_headline": str(_worst.get("title") or _worst.get("headline") or "news alert")[:140],
+                "news_compound": _f(_worst.get("compound", 0)),
             })
 
     # 4 — Today's HIGH-impact macro events
@@ -3210,6 +3212,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 "→ Act Today critical news (tighten your stop)."
             ),
             "weight":   0,
+            "news_headline": str(_item.get("title") or _item.get("headline") or "news")[:140],
+            "news_compound": _f(sent),
         })
 
     # 5 — Upcoming macro events (1–3 days)
@@ -3599,14 +3603,51 @@ def build_daily_briefing(
     # a WATCH-type review card ("not an action yet") must never coexist with a
     # same-render risk-off "Trim now" Act Today card for the same name (2026-07-29
     # audit H6; the prior narrower TRIM-only filter let that contradiction through).
+    # H6 still holds for non-news WATCH kinds. News-only cards (critical_news /
+    # news WATCH) are exempt (D-D, docs/plans/held-news-coverage.md): a mild
+    # headline must not move the protective TRIM off the biggest beta contributor.
     _reduced = decision_bucket.all_flagged_tickers(act, review)
     _rewrite_macro_affected(act, _reduced)
     _risk_off = exit_advisor.assess_risk_off_derisk(
         port_df, held_data,
         fragility=fragility, spy_trend_df=spy_trend_df, vix_level=vix_level,
-        exclude_tickers=_reduced,
+        exclude_tickers=decision_bucket.all_flagged_tickers(act, review, ignore_news=True),
     )
     if _risk_off:
+        # Where a risk-off TRIM lands, the same name's news WATCH is redundant:
+        # drop it and carry its headline on the risk-off card (same `why` note
+        # style as decision_bucket._reconcile_act's fold) so the news isn't lost.
+        _ro_by_t = {}
+        for _ro in _risk_off:
+            _rt = decision_bucket._ticker(_ro)
+            if _rt and _rt not in _ro_by_t:
+                _ro_by_t[_rt] = _ro
+        def _fold_news(_ro, _hl):
+            _hl = str(_hl or "").strip()
+            _note = ("⚠ Also flagged on recent negative headlines"
+                     + (f" (\"{_hl}\")" if _hl else "")
+                     + " — already factored into this reduce; it isn't a separate 'hold'.")
+            _ro["why"] = f"{str(_ro.get('why', '')).strip()}  {_note}".strip()
+
+        _kept_review = []
+        for _it in review:
+            _rt = decision_bucket._ticker(_it)
+            if _it.get("watch_kind") == "news" and _rt in _ro_by_t:
+                _fold_news(_ro_by_t[_rt], _it.get("news_headline"))
+                continue
+            _kept_review.append(_it)
+        review = _kept_review
+        # The Act critical-news card ("Hold for now") must not sit beside a
+        # "Trim - Risk-Off" on the same name, whatever BUCKET_CRITICAL_NEWS_IS_ACT
+        # says: fold it into the risk-off card the same way.
+        _kept_act = []
+        for _it in act:
+            _rt = decision_bucket._ticker(_it)
+            if str(_it.get("kind", "")) == "critical_news" and _rt in _ro_by_t:
+                _fold_news(_ro_by_t[_rt], _it.get("news_headline"))
+                continue
+            _kept_act.append(_it)
+        act = _kept_act
         act = act + _risk_off
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, review_list=review, composites=grow_composites or {},
@@ -3626,7 +3667,18 @@ def build_daily_briefing(
     # an Act Today card (incl. the risk-off TRIM appended above) or a Review
     # card, drop the redundant restatement (2026-08-04 audit — same broad
     # flagged basis as the risk-off exclude set, now that `act` includes risk-off).
-    _acted_final = decision_bucket.all_flagged_tickers(act, review)
+    # News-only cards don't count (D-I): a news WATCH isn't a trim, so it must not
+    # swallow the beta card.
+    _acted_final = decision_bucket.all_flagged_tickers(act, review, ignore_news=True)
     tuneup = _portfolio_tuneup(risk_recs, acted_tickers=_acted_final)
+    # News flags for OTHER surfaces (Rebalancer ADD cross-check), from the SAME
+    # detectors/inputs/window the cards use but NOT from the cards: a held name
+    # whose news card was de-duplicated away (another card/Act item) still has the
+    # headline, and must still be flagged.
+    _nf_held = _held_tickers(port_df)
+    _nf_crit = held_news_check.critical_news_by_ticker(news_items or [], _nf_held, _news_ts)
+    _nf_warn = held_news_check.warning_news_by_ticker(
+        news_items or [], _nf_held, _news_ts, exclude=set(_nf_crit))
     return {"act_today": act, "review_list": review,
-            "grow_today": grow, "portfolio_tuneup": tuneup}
+            "grow_today": grow, "portfolio_tuneup": tuneup,
+            "news_flags": held_news_check.news_flags_from_detectors(_nf_crit, _nf_warn)}

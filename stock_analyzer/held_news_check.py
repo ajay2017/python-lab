@@ -114,6 +114,8 @@ def _tier(item) -> float:
         return 3
     if t is None or isinstance(t, bool) or not isinstance(t, (int, float)):
         return 3
+    if math.isnan(float(t)):
+        return 3
     return t
 
 
@@ -178,3 +180,69 @@ def warning_news_by_ticker(news_items, held_tickers, window_start_ts, *, exclude
 def window_label(window_start: datetime) -> str:
     """e.g. "Fri Oct 16" (no leading zero on the day, platform-independent)."""
     return f"{window_start.strftime('%a %b')} {window_start.day}"
+
+
+def brief_news_flags(act_today, review_list) -> dict:
+    """{TICKER: {"level": "critical"|"warning", "headline", "compound"}} from the
+    Brief's OWN news cards (Act critical_news -> critical; Review news WATCH ->
+    warning). Critical wins if a ticker somehow has both. Pure; None -> {}.
+    Callers publish None (not this {}) when the Brief is offline."""
+    out: dict = {}
+    for it in review_list or []:
+        if not isinstance(it, dict) or it.get("watch_kind") != "news":
+            continue
+        t = str(it.get("ticker") or "").upper()
+        if t:
+            out[t] = {"level": "warning",
+                      "headline": str(it.get("news_headline") or ""),
+                      "compound": float(it.get("news_compound") or 0.0)}
+    for it in act_today or []:
+        if not isinstance(it, dict) or str(it.get("kind", "")) != "critical_news":
+            continue
+        t = str(it.get("ticker") or "").upper()
+        if t:
+            out[t] = {"level": "critical",
+                      "headline": str(it.get("news_headline") or ""),
+                      "compound": float(it.get("news_compound") or 0.0)}
+    return out
+
+
+def news_flags_from_detectors(critical, warning) -> dict:
+    """{TICKER: {"level", "headline", "compound"}} straight from the two news
+    detectors (`critical_news_by_ticker` / `warning_news_by_ticker`), so it covers
+    EVERY held name with an in-window negative headline -- including names whose
+    news CARD was de-duplicated away by another card. Critical wins. Pure."""
+    def _row(level, item):
+        c = _compound(item)
+        return {"level": level,
+                "headline": str(item.get("title") or item.get("headline") or "news")[:140],
+                "compound": 0.0 if c is None else c}
+    out: dict = {}
+    for t, e in (warning or {}).items():
+        if t:
+            out[str(t).upper()] = _row("warning", e["item"])
+    for t, lst in (critical or {}).items():
+        if t and lst:
+            out[str(t).upper()] = _row("critical", lst[0])
+    return out
+
+
+def published_news_flags(brief, today_iso: str) -> dict:
+    """The `_brief_news_flags_cache` payload for a built Brief: the Brief's own
+    detector-derived `news_flags` when present (covers names whose card was
+    de-duplicated), else derived from its cards (a brief dict without the key)."""
+    b = brief or {}
+    if "news_flags" in b and isinstance(b["news_flags"], dict):
+        flags = b["news_flags"]
+    else:
+        flags = brief_news_flags(b.get("act_today"), b.get("review_list"))
+    return {"date": today_iso, "flags": flags}
+
+
+def usable_news_flags(cache, today_iso: str):
+    """The flags dict from a published cache when it is today's, else None
+    (None / malformed / another day's = 'not checked', never 'no news')."""
+    if not isinstance(cache, dict) or cache.get("date") != today_iso:
+        return None
+    flags = cache.get("flags")
+    return flags if isinstance(flags, dict) else None

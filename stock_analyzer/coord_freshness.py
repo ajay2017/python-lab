@@ -67,6 +67,13 @@ PORTFOLIO_DEPENDENT_KEYS: dict[str, dict] = {
         "why": "suppresses ADD suggestions for names under a Reduce/Exit call; "
                "stale means an add can be proposed on a name flagged to trim",
     },
+    "_brief_news_flags_cache": {
+        "producer": "home",
+        "tier": TIER_GATE,
+        "why": "held names the Brief flagged on negative news; flags Rebalancer "
+               "ADDs (caps urgency + Defer/Caution banner), so stale means an "
+               "add can be proposed on a name with news",
+    },
     "_structural_alert_cache": {
         "producer": "home",
         "tier": TIER_GATE,
@@ -382,6 +389,7 @@ def decide_stale_banner(not_fresh: dict | None) -> tuple | None:
 
 _DIMENSION_LABELS = {
     "_reduce_calls": "Reduce/Exit calls",
+    "_brief_news_flags_cache": "news flags",
     "_structural_alert_cache": "correlation-cluster alerts",
     "_port_risk_cache": "portfolio risk and beta",
     "_fragility_cache": "book fragility",
@@ -474,7 +482,8 @@ SURFACE_KEYS: dict[str, tuple] = {
               "_port_risk_cache", "_risk_advisor_recs_cache", "_risk_pairs_cache",
               "_corr_unchecked_cache"),
     "pi":    ("_corr_df_cache", "_pi_factor_tilt_cache"),
-    "pa":    ("_acct_gate_cache", "_div_recs_cache", "_reduce_calls", "_risk_advisor_recs_cache"),
+    "pa":    ("_acct_gate_cache", "_brief_news_flags_cache", "_div_recs_cache",
+              "_reduce_calls", "_risk_advisor_recs_cache"),
     "ph":    ("_avg_corr_cache", "_div_score_cache", "_fragility_cache", "_highbeta_share",
               "_port_risk_cache", "_corr_coverage_cache", "_corr_unchecked_cache"),
     "macro": (),

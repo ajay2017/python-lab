@@ -524,7 +524,7 @@ def test_build_daily_briefing_top_level_keys_exclude_grow_today_fields():
         portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
     )
     assert set(brief.keys()) == {
-        "act_today", "review_list", "grow_today", "portfolio_tuneup",
+        "act_today", "review_list", "grow_today", "portfolio_tuneup", "news_flags",
     }
     grow_only_keys = (
         "tone", "sp500_pct", "new_picks", "sector_blocked_picks",

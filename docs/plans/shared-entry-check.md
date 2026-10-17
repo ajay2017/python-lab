@@ -1,5 +1,7 @@
 # Shared new-entry check — Watchlist, its email and Analysis get Grow Today's entry checks; Grow Today adds get a news check
 
+**STATUS 2026-10-17 — chunk 7 must be RE-PLANNED before it is built (held-news coverage, `docs/plans/held-news-coverage.md`, F-308).** Every holding's headlines now reach the Brief, and owner decision D-C gives any in-window headline ≤ −0.05 on a held name a Review news WATCH — so a single tier-1 −0.40 headline is already ACT-blocked in `_add_block_gate` (via `all_flagged_tickers`) before chunk 7's planned `news_blocked_adds` would run, and chunk 7's "one tier-1 −0.40 now holds" test would pass through the ACT path, not its own bucket. Planner recommendation: the add lane reads `held_news_check`'s per-ticker verdict (one owner of "this held name has negative news") instead of a second average-compound derivation; chunk 7's remaining job is to make the ACT block VISIBLE (today it is silent) and to add the explicit earnings + stale checks. Its golden master is unaffected (it feeds act/review as fixtures).
+
 **Status: DESIGNED + OWNER-APPROVED 2026-10-16 (all 12 recommendations, D1-D12, plus additions A1-A4).
 Mockup v1 APPROVED 2026-10-16: `docs/mockups/2026-10-16-shared-entry-check-mockup.html`. Chunk 1 (golden
 master) DONE 2026-10-16 (`35ea1df`); chunk 2 DONE (`400b01c`, pushed); chunk 3 DONE (advisor ENTRY_HELD +

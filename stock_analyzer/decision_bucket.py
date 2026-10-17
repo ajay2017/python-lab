@@ -105,7 +105,7 @@ def _reconcile_act(items: list[dict]) -> list[dict]:
         out.append(it)
     # Annotate the (first) reduce card per folded ticker so the news isn't lost.
     if folded:
-        _note = ("⚠ Also flagged on a negative headline today — already factored "
+        _note = ("⚠ Also flagged on recent negative headlines — already factored "
                  "into this reduce; it isn't a separate 'hold'.")
         for it in out:
             t = _ticker(it)
@@ -267,7 +267,18 @@ def bucket_act_by_type(act_items: list[dict] | None) -> dict:
     }
 
 
-def all_flagged_tickers(act_today: list | None, review_list: list | None) -> set[str]:
+def is_news_only_card(item: dict) -> bool:
+    """True for a card that exists only because of negative headlines: the Act
+    critical-news card or a Review news WATCH (docs/plans/held-news-coverage.md)."""
+    return str(item.get("kind", "")) == "critical_news" or item.get("watch_kind") == "news"
+
+
+def all_flagged_tickers(
+    act_today: list | None,
+    review_list: list | None,
+    *,
+    ignore_news: bool = False,
+) -> set[str]:
     """Every ticker carrying ANY card in either Brief lane — not just reduce cards.
 
     Broader than `reduce_call_tickers` by design (2026-07-29 audit finding H6,
@@ -276,8 +287,17 @@ def all_flagged_tickers(act_today: list | None, review_list: list | None) -> set
     this position" pick, not just a TRIM/EXIT. Uses `_ticker()` so ticker=None /
     action.trim_ticker items (macro cards) resolve correctly. Pure; safe on
     None/empty.
+
+    `ignore_news=True` skips news-only cards (critical_news / news WATCH): used
+    by the risk-off de-risk pool and the Tune-up filter, where a headline alone
+    must not move a protective trim off its beta-ranked name (D-D / D-I). The
+    default is unchanged for every other caller.
     """
-    return {_ticker(it) for it in (act_today or []) + (review_list or [])} - {""}
+    return {
+        _ticker(it)
+        for it in (act_today or []) + (review_list or [])
+        if not (ignore_news and is_news_only_card(it))
+    } - {""}
 
 
 def suppress_orphans_under_reduce_call(

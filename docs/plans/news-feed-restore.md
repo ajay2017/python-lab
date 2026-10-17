@@ -3,7 +3,7 @@
 **Status: DESIGNED + OWNER-APPROVED 2026-10-16 (planner Opus 5.5, PROCEED WITH CHANGES; owner accepted every
 recommendation D-1..D-7, and yf.Search primary + Finnhub `/company-news` secondary after a source comparison). Chunk 1
 DONE 2026-10-16 (`593a26c`, Opus SHIP after 3 rounds, pushed). Chunk 2 (tripwire) DONE 2026-10-17 (Opus SHIP after
-one FIX-FIRST round). Chunk 3 split into 3a/3b/3c 2026-10-17 (see Build plan); 3a in build.** Found from the live 📋 Watchlist (BKNG: "no recent headlines to check"). Blocks
+one FIX-FIRST round). Chunk 3 split into 3a/3b/3c 2026-10-17 (see Build plan); **3a DONE + pushed (`a8be518`, Opus SHIP ×2, live-verified on BKNG)**. Before 3b, the held-news coverage fix (`docs/plans/held-news-coverage.md`, F-308) — 3b must extend `held_news_check` with `coverage(...)`, count IN-WINDOW headlines, name the window, and take the expected set from `port_df`, never `held_data`.** Found from the live 📋 Watchlist (BKNG: "no recent headlines to check"). Blocks
 `docs/plans/shared-entry-check.md` chunk 7 (a news check on adds would be inert).
 
 ## Root cause (verified read-only)
