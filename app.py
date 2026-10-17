@@ -25693,7 +25693,7 @@ elif page == "📈 Analysis":
                         st.info(_pt_ptr_x)
 
                     # Downside scenarios (reframed for exit context)
-                    if targets:
+                    if targets and _sa_holding:   # "if you hold" is holder-only
                         st.markdown("#### Downside Risk — If You Hold")
                         _sc1, _sc2 = st.columns([2, 1])
                         with _sc1:
@@ -26233,10 +26233,17 @@ elif page == "📈 Analysis":
                 # ── Shared: consensus warning + earnings + S&R ─────────────
                 if targets and targets.get("above_consensus") and not _da_withheld:
                     at = targets["analyst_target"]
-                    st.warning(
-                        f"⚠️ Trading {(price-at)/at*100:.1f}% above analyst consensus (${at:.2f}). "
-                        "Targets are technically-derived. Consider smaller entry."
-                    )
+                    # "Consider smaller entry" only where a size is actually offered
+                    # on a Buy verdict; otherwise the fact stays, without the advice.
+                    if not (_sa_is_sell or _sa_is_hold or _da_held_back):
+                        st.warning(
+                            f"⚠️ Trading {(price-at)/at*100:.1f}% above analyst consensus (${at:.2f}). "
+                            "Targets are technically-derived. Consider smaller entry."
+                        )
+                    else:
+                        st.caption(
+                            f"Trading {(price-at)/at*100:.1f}% above analyst consensus (\\${at:.2f})."
+                        )
                 earn = r["earnings"]
                 if earn:
                     try:
@@ -26293,6 +26300,13 @@ elif page == "📈 Analysis":
                             "🚫 Trade buttons hidden — the verdict is withheld "
                             "(see the banner at the top of this ticker)."
                         )
+                elif _sa_is_sell and not _sa_holding:
+                    # Not held: nothing to sell -- no holder-only trade button.
+                    with _ap_c1:
+                        st.caption(
+                            "Not in your portfolio — nothing to sell. "
+                            "📒 Trade buttons appear here for names you hold."
+                        )
                 elif _sa_is_sell:
                     # Sell signal — primary action is SELL (exit/trim)
                     with _ap_c1:
@@ -26310,18 +26324,19 @@ elif page == "📈 Analysis":
                         )
                 elif _sa_is_hold:
                     # Hold — surface both sides so user picks
-                    with _ap_c1:
-                        _render_trade_button(
-                            ticker=ticker,
-                            suggested_action="SELL",
-                            signal_context=_ap_signal_ctx,
-                            price=price,
-                            shares=_ap_held_shares,
-                            trigger="MANUAL",
-                            key_suffix=f"plan_sell_{ticker}",
-                            label=f"📒 Trim {ticker}",
-                            width="stretch",
-                        )
+                    if _sa_holding:   # Trim is holder-only
+                        with _ap_c1:
+                            _render_trade_button(
+                                ticker=ticker,
+                                suggested_action="SELL",
+                                signal_context=_ap_signal_ctx,
+                                price=price,
+                                shares=_ap_held_shares,
+                                trigger="MANUAL",
+                                key_suffix=f"plan_sell_{ticker}",
+                                label=f"📒 Trim {ticker}",
+                                width="stretch",
+                            )
                     with _ap_c2:
                         _render_trade_button(
                             ticker=ticker,
