@@ -255,24 +255,233 @@ def rescore_news_items_llm(items: list[dict], api_key: str, timeout: float = 8.0
             llm_score = entry.get("score")
             if not isinstance(idx, int) or idx < 0 or idx >= len(items):
                 continue
-            if not isinstance(llm_score, (int, float)):
-                continue
-            llm_score = float(llm_score)
-            if not (-1.0 <= llm_score <= 1.0):
-                continue
-            vader_score = items[idx].get("compound", 0.0)
-            if llm_score <= vader_score:
-                continue  # suppress-only: LLM cannot lower a VADER score
-            new_score = round(llm_score, 3)
-            label = ("Positive" if new_score >= 0.05 else
-                     "Negative" if new_score <= -0.05 else "Neutral")
-            result[idx]["compound"] = new_score
-            result[idx]["label"] = label
+            updated = _apply_suppress_only(items[idx], llm_score)
+            if updated is not None:
+                result[idx] = updated
 
         return result
 
     except Exception:
         return items
+
+
+# ── Brief-scoped suppress-only rescore (docs/plans/held-news-coverage.md) ──
+# Module plumbing, not policy.
+_RESCORE_BATCH = 25
+_RESCORE_WORKERS = 3
+_RESCORE_MAX_ITEMS = 75
+_RESCORE_RETRY_S = 600
+
+
+def _apply_suppress_only(item: dict, llm_score) -> dict | None:
+    """Updated COPY of `item` when `llm_score` is valid and HIGHER than its VADER
+    compound (suppress-only: the LLM never lowers a score); else None."""
+    if isinstance(llm_score, bool) or not isinstance(llm_score, (int, float)):
+        return None
+    llm_score = float(llm_score)
+    if not (-1.0 <= llm_score <= 1.0):
+        return None
+    vader_score = item.get("compound", 0.0)
+    if llm_score <= vader_score:
+        return None
+    new_score = round(llm_score, 3)
+    label = ("Positive" if new_score >= 0.05 else
+             "Negative" if new_score <= -0.05 else "Neutral")
+    out = dict(item)
+    out["compound"] = new_score
+    out["label"] = label
+    return out
+
+
+def llm_score_batch(items: list[dict], api_key: str, timeout: float = 8.0) -> list | None:
+    """One Anthropic call scoring <= 25 items. Returns scores aligned to `items`
+    (None where missing/invalid), or None on any exception / parse failure."""
+    if not items or not api_key:
+        return None
+    try:
+        import anthropic
+        import json
+
+        headline_lines = []
+        for i, item in enumerate(items):
+            title = item.get("title") or item.get("headline", "")
+            ticker = item.get("ticker", "")
+            headline_lines.append(f'{i}. {ticker}: "{title}"')
+
+        prompt = (
+            "You are a financial sentiment analyst. Score each headline for financial sentiment "
+            "from -1.0 (very bearish) to +1.0 (very bullish) from an investor's perspective. "
+            "Apply financial domain knowledge: FDA approval = bullish, earnings beat = bullish, "
+            "analyst upgrade = bullish, 'don't sell' = bullish, regulatory delay = bearish, "
+            "earnings miss = bearish, analyst downgrade = bearish, layoffs = bearish. "
+            "Return ONLY a JSON array with no other text:\n"
+            '[{"idx": 0, "score": 0.3}, {"idx": 1, "score": -0.6}, ...]\n\n'
+            "Headlines:\n" + "\n".join(headline_lines)
+        )
+        client = anthropic.Anthropic(
+            api_key=api_key,
+            max_retries=0,
+            timeout=anthropic.Timeout(timeout),
+        )
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=64 + 32 * len(items),
+            temperature=0,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw.strip())
+
+        out: list = [None] * len(items)
+        for entry in parsed:
+            idx = entry.get("idx")
+            sc = entry.get("score")
+            if not isinstance(idx, int) or isinstance(idx, bool) or not (0 <= idx < len(items)):
+                continue
+            if isinstance(sc, bool) or not isinstance(sc, (int, float)):
+                continue
+            if not (-1.0 <= float(sc) <= 1.0):
+                continue
+            out[idx] = float(sc)
+        return out
+    except Exception:
+        return None
+
+
+def _is_neg(item: dict) -> bool:
+    from stock_analyzer.constants import NEWS_SENTIMENT_WARN
+    c = item.get("compound")
+    return (not isinstance(c, bool) and isinstance(c, (int, float))
+            and c == c and c <= NEWS_SENTIMENT_WARN)
+
+
+def rescore_failure_status(items: list[dict], window_start_ts) -> dict:
+    """Status for a Home rescore that raised: nothing was filtered."""
+    n = len(items)
+    selected = n
+    if window_start_ts is not None:
+        try:
+            from stock_analyzer.held_news_check import rescore_selection
+            send, over = rescore_selection(items, window_start_ts, max_items=_RESCORE_MAX_ITEMS)
+            selected = len(send) + len(over)
+            idx = send + over
+        except Exception:
+            idx = list(range(n))
+    else:
+        idx = list(range(n))
+    return {
+        "selected": selected, "sent": 0, "from_memo": 0, "filtered": 0,
+        "unfiltered": selected,
+        "unfiltered_negative": sum(1 for i in idx if _is_neg(items[i])),
+        "failed_batches": 0, "reason": "error",
+    }
+
+
+def _memo_key(item: dict) -> tuple:
+    title = item.get("title") or item.get("headline", "") or ""
+    return (str(item.get("ticker", "")).strip().upper(), str(title).lower()[:70])
+
+
+def rescore_brief_news(
+    items: list[dict],
+    api_key: str,
+    *,
+    window_start_ts: float,
+    memo: dict,
+    now_ts: float,
+    timeout: float = 8.0,
+) -> tuple[list[dict], dict | None]:
+    """Decision-scoped suppress-only rescore of the full held headline list.
+
+    Sends the first 20 items plus in-window items <= NEWS_SENTIMENT_WARN (at
+    most _RESCORE_MAX_ITEMS), batched and memoized. Returns copies of ALL items
+    (order unchanged) and a status dict (None when no api_key). `memo` is
+    mutated in place: {"scores": {(TICKER, title[:70]): score}, "failed_at": ts}.
+    """
+    result = [dict(i) for i in items]
+    if not api_key:
+        return result, None
+
+    from concurrent.futures import ThreadPoolExecutor
+    from stock_analyzer.held_news_check import rescore_selection
+
+    memo.setdefault("scores", {})
+    memo.setdefault("failed_at", None)
+    memo.setdefault("noscore", set())
+    scores = memo["scores"]
+    noscore = memo["noscore"]
+
+    send, over = rescore_selection(items, window_start_ts, max_items=_RESCORE_MAX_ITEMS)
+    from_memo = [i for i in send if _memo_key(items[i]) in scores or _memo_key(items[i]) in noscore]
+    todo = [i for i in send if _memo_key(items[i]) not in scores and _memo_key(items[i]) not in noscore]
+
+    failed_at = memo.get("failed_at")
+    backoff = failed_at is not None and (now_ts - failed_at) < _RESCORE_RETRY_S
+    batches: list[list[int]] = []
+    if todo and not backoff:
+        batches = [todo[k:k + _RESCORE_BATCH] for k in range(0, len(todo), _RESCORE_BATCH)]
+
+    failed_batches = 0
+    n_sent = 0
+    failed_idx: set[int] = set()
+    if batches:
+        def _run(b):
+            return llm_score_batch([items[i] for i in b], api_key, timeout)
+
+        with ThreadPoolExecutor(max_workers=_RESCORE_WORKERS) as ex:
+            outs = list(ex.map(_run, batches))
+        for b, got in zip(batches, outs):
+            if got is None:
+                failed_batches += 1
+                failed_idx.update(b)
+                continue
+            n_sent += len(b)
+            for i, sc in zip(b, got):
+                if sc is not None:
+                    scores[_memo_key(items[i])] = sc
+                else:
+                    noscore.add(_memo_key(items[i]))   # checked, no usable score
+        if failed_batches:
+            memo["failed_at"] = now_ts
+
+    changed = 0
+    for i in send:
+        sc = scores.get(_memo_key(items[i]))
+        if sc is None:
+            continue
+        updated = _apply_suppress_only(items[i], sc)
+        if updated is not None:
+            result[i] = updated
+            changed += 1
+
+    skipped_backoff = len(todo) if (todo and backoff) else 0
+    # Selected items left raw: over-bound, failed/backed-off, or scored None.
+    raw_idx = set(over) | failed_idx
+    if todo and backoff:
+        raw_idx |= set(todo)
+    for i in send:
+        if scores.get(_memo_key(items[i])) is None:
+            raw_idx.add(i)
+    unfiltered = len(raw_idx)
+    unfiltered_neg = sum(1 for i in raw_idx if _is_neg(items[i]))
+    reason = ("error" if failed_batches else
+              "over_bound" if over else
+              "backoff" if skipped_backoff else None)
+    status = {
+        "selected": len(send) + len(over),
+        "sent": n_sent,
+        "from_memo": len(from_memo),
+        "filtered": changed,
+        "unfiltered": unfiltered,
+        "unfiltered_negative": unfiltered_neg,
+        "failed_batches": failed_batches,
+        "reason": reason,
+    }
+    return result, status
 
 
 def rescore_headlines_llm(

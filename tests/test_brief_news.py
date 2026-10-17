@@ -152,7 +152,8 @@ def test_both_app_brief_builds_pass_curate_brief_news():
 
 
 def test_app_publishes_the_final_held_list_for_the_brief():
-    # Assigned from `_news` -- the variable the LLM rescore overwrites -- and
+    # Assigned from `_brief_news` -- the full held list the LLM rescore overwrites
+    # (`_news` is only the sidebar's top 20 since held-news chunk 1) -- and
     # never from _sidebar_news, which Market Scanner overwrites.
     tree = parse_file_cached(ROOT / "app.py")
     sets = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
@@ -160,7 +161,7 @@ def test_app_publishes_the_final_held_list_for_the_brief():
             and isinstance(n.targets[0].slice, ast.Constant)
             and n.targets[0].slice.value == "_brief_held_news"]
     assert len(sets) == 1
-    assert isinstance(sets[0].value, ast.Name) and sets[0].value.id == "_news"
+    assert isinstance(sets[0].value, ast.Name) and sets[0].value.id == "_brief_news"
 
 
 def test_cron_brief_uses_curate_brief_news():

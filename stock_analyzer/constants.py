@@ -806,6 +806,10 @@ NEWS_SEARCH_FETCH_COUNT = 30
 # fetched live and none returned a headline. Owner decision D-2, 2026-10-16. Changes
 # disclosure and the cron heartbeat only -- it gates no recommendation.
 NEWS_FEED_OUTAGE_MIN_TICKERS = 5
+# Act Today critical-news / Review warning-news count only headlines published since
+# 00:00 ET of the Nth previous NYSE trading day (owner decision 2026-10-17,
+# docs/plans/held-news-coverage.md D-A).
+NEWS_BRIEF_LOOKBACK_TRADING_DAYS = 1
 NEWS_CRITICAL_MIN_HEADLINES     = 2     # min qualifying headlines per ticker before firing Critical News Act Today
 # Max news tier (1 = highest-quality source) that qualifies for "critical" —
 # shared by daily_briefing's Critical News Act Today card AND

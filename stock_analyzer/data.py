@@ -378,6 +378,10 @@ _TIER2 = frozenset([
 ])
 
 
+# Sidebar / top-N held headlines; display count, not policy.
+HELD_NEWS_DISPLAY_COUNT = 20
+
+
 def _parse_news_item(item: dict) -> tuple[str, str, str, int]:
     """
     Extract (title, publisher, url, unix_ts) from a yfinance news item.
@@ -413,10 +417,11 @@ def _parse_news_item(item: dict) -> tuple[str, str, str, int]:
 _NEWS_PER_TICKER = 8
 
 
-def curate_news_items(data_by_ticker: dict, max_items: int = 20) -> list[dict]:
+def curate_news_items(data_by_ticker: dict, max_items: int | None = HELD_NEWS_DISPLAY_COUNT) -> list[dict]:
     """
     Build curated news from already-fetched load_all() results — zero extra API calls.
     data_by_ticker: {ticker: load_all_result_dict, ...}  (each must have "news_raw" key)
+    max_items=None returns the full sorted list (no cap).
     """
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
     _va = SentimentIntensityAnalyzer()
@@ -455,7 +460,7 @@ def curate_news_items(data_by_ticker: dict, max_items: int = 20) -> list[dict]:
 
     # Sort by recency first; within the same 30-minute window, prefer higher-tier sources
     items.sort(key=lambda x: (-(x["ts"] // 1800), x["tier"]))
-    return items[:max_items]
+    return items if max_items is None else items[:max_items]
 
 
 def curate_brief_news(held_data: dict | None, candidates: dict | None,

@@ -50,7 +50,7 @@ import extra_streamlit_components as stx
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
     fetch_spy, fetch_tlt, fetch_vix, fetch_live_prices, fetch_market_indices, market_status,
-    curate_news_items, curate_brief_news, fetch_price_history, fetch_risk_free_rate,
+    curate_news_items, curate_brief_news, HELD_NEWS_DISPLAY_COUNT, fetch_price_history, fetch_risk_free_rate,
     crosscheck_price, crosscheck_prices, crosscheck_validator_degraded,
     divergence_widened,
     fetch_earnings_calendar, fetch_next_earnings,
@@ -4994,30 +4994,53 @@ if page == "🏠 Home":
                 "current, but signals & analysis for these names may be slightly stale."
             )
 
+    _rs_status_live = None   # this render's rescore status (stale-rebuild reads it)
     if held_data:
-        _news = curate_news_items(held_data)
+        # Full held headline list (no cap): the sidebar still shows the top
+        # HELD_NEWS_DISPLAY_COUNT, but the Brief's news checks and the noise
+        # filter see every holding.
+        _held_all = curate_news_items(held_data, max_items=None)
+        _news = _held_all[:HELD_NEWS_DISPLAY_COUNT]
         st.session_state["_sidebar_news"] = _news
         _fill_news_slot(_news_slot, _news)
+        _brief_news = _held_all
+        _rs_status = None
+        _rs_window = None
         # LLM suppress-only rescore — raises VADER false-positives toward neutral; never lowers scores
         try:
-            from stock_analyzer.news_intelligence import rescore_news_items_llm as _rescore_llm
+            from stock_analyzer.news_intelligence import rescore_brief_news as _rescore_brief
+            from stock_analyzer import held_news_check as _held_news_check
             _ant_key = st.secrets.get("anthropic", {}).get("api_key", "")
-            if _ant_key and _news:
-                import datetime as _dt
-                _llm_ck = (f"_news_llm_{_dt.date.today().isoformat()}_"
-                           f"{','.join(sorted({n.get('ticker', '') for n in _news}))}")
-                if _llm_ck not in st.session_state:
-                    st.session_state[_llm_ck] = _rescore_llm(_news, _ant_key)
-                _news = st.session_state[_llm_ck]
-                st.session_state["_sidebar_news"] = _news
+            if _ant_key and _held_all:
+                _memo_key = f"_news_llm_memo_{_today_et().isoformat()}"
+                for _k in [k for k in st.session_state
+                           if isinstance(k, str) and k.startswith("_news_llm_memo_") and k != _memo_key]:
+                    st.session_state.pop(_k, None)
+                _memo = st.session_state.setdefault(_memo_key, {})
+                _rs_window = _held_news_check.news_window_start(_today_et()).timestamp()
+                _rescored, _rs_status = _rescore_brief(
+                    _held_all, _ant_key, window_start_ts=_rs_window,
+                    memo=_memo, now_ts=time.time(),
+                )
+                st.session_state["_sidebar_news"] = _rescored[:HELD_NEWS_DISPLAY_COUNT]
+                _brief_news = _rescored
         except Exception:
-            pass
+            _brief_news = _held_all
+            _rs_status = None
+            try:
+                from stock_analyzer.news_intelligence import rescore_failure_status as _rs_fail
+                _rs_status = _rs_fail(_held_all, _rs_window)
+            except Exception:
+                _rs_status = None
+        _rs_status_live = _rs_status
         # The FINAL held list (rescored when the LLM ran) for the Daily Brief
         # (B-M7). A dedicated key, not _sidebar_news: 🔍 Market Scanner
         # overwrites that one with scanner news.
-        st.session_state["_brief_held_news"] = _news
+        st.session_state["_brief_held_news"] = _brief_news
+        st.session_state["_brief_news_rescore_status"] = _rs_status
     else:
         st.session_state.pop("_brief_held_news", None)
+        st.session_state.pop("_brief_news_rescore_status", None)
 
     # ── Live price strip — fragment auto-refreshes every 60 s ────────────
     # Collapsed by default (2026-09-17 Home decluttering, mockup-approved) so
@@ -5996,7 +6019,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 16  # bumped: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 17  # bumped: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -6056,6 +6079,9 @@ if page == "🏠 Home":
         # `.get()` not [] — a bundle memoized before the schema bump lacks
         # the key, and None (not []) is the honest "not yet known" sentinel.
         _corr_unchecked      = _b.get("_corr_unchecked")
+        # Held-news rescore status the memoized Brief was built from (`.get()`:
+        # None = filter not run / unknown, never a fabricated all-clear).
+        st.session_state["_brief_news_rescore_status"] = _b.get("_brief_news_rescore_status")
         # Re-publish coordination caches (downstream pages read these and may
         # have mutated them since the last rebuild).
         st.session_state["_port_risk_cache"]          = _port_risk
@@ -6141,6 +6167,10 @@ if page == "🏠 Home":
                     # Update snapshot so next HIT reads fresh fetched_at values
                     st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
                     st.session_state["_home_synth_cache"]["bundle"]["_daily_brief"] = _daily_brief
+                    # The rebuild used THIS render's held-news list, so the
+                    # caption status must be this render's too, not the memoized one.
+                    st.session_state["_brief_news_rescore_status"] = _rs_status_live
+                    st.session_state["_home_synth_cache"]["bundle"]["_brief_news_rescore_status"] = _rs_status_live
                     # Mirror MISS-path _grow_today_sectors_cache update
                     _gt_today_fresh = (_daily_brief or {}).get("grow_today") or {}
                     _grow_today_sectors_cache = sorted({
@@ -6504,12 +6534,16 @@ if page == "🏠 Home":
         )
         if _brief_use_lock:
             _daily_brief = _brief_snapshot
+            # The status stored beside the snapshot at lock time (None if none) --
+            # never the current render's, which describes a different list.
+            st.session_state["_brief_news_rescore_status"] = st.session_state.get("_brief_locked_rescore_status")
             # _brief_built_at was set at the time of the original build (preserved)
         else:
             # Lock from a previous trading day — clear it so the new day's Brief builds fresh
             if st.session_state.get("_brief_locked") and _brief_locked_for != _today_et():
                 st.session_state["_brief_locked"] = False
                 st.session_state.pop("_brief_locked_snapshot", None)
+                st.session_state.pop("_brief_locked_rescore_status", None)
                 st.session_state.pop("_brief_locked_for_date", None)
                 st.session_state.pop("_brief_locked_at", None)
             try:
@@ -7110,6 +7144,8 @@ if page == "🏠 Home":
                 # Disclosure-only G-25/G-26 follow-on — see the restore
                 # comment in the HIT branch above.
                 "_corr_unchecked":      _corr_unchecked,
+                # Held-news rescore status for THIS build -- see the HIT restore.
+                "_brief_news_rescore_status": st.session_state.get("_brief_news_rescore_status"),
             },
         }
     # Overlay covers the full synthesis (data load + brief build). Clear here
@@ -7991,6 +8027,7 @@ if page == "🏠 Home":
             ):
                 st.session_state["_brief_locked"] = False
                 st.session_state.pop("_brief_locked_snapshot", None)
+                st.session_state.pop("_brief_locked_rescore_status", None)
                 st.session_state.pop("_brief_locked_for_date", None)
                 st.session_state.pop("_brief_locked_at", None)
                 st.session_state["_brief_refresh_nonce"] = \
@@ -8019,6 +8056,7 @@ if page == "🏠 Home":
                 # too (sizes always reflect today's logged buys, never a frozen
                 # budget).
                 st.session_state["_brief_locked_snapshot"] = _daily_brief_raw
+                st.session_state["_brief_locked_rescore_status"] = st.session_state.get("_brief_news_rescore_status")
                 st.session_state["_brief_locked_for_date"] = _today_et()
                 st.session_state["_brief_locked_at"]       = _b_now_et
                 st.session_state["_brief_refresh_nonce"] = \
@@ -11625,6 +11663,16 @@ if page == "🏠 Home":
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _rb_tk
                         st.rerun()
+
+        # Held-news noise filter coverage: say so when negative headlines went
+        # unfiltered (over the batch bound, a failed LLM batch, or backoff).
+        _rs_note = st.session_state.get("_brief_news_rescore_status")
+        if not _db_offline and isinstance(_rs_note, dict) and (_rs_note.get("unfiltered_negative") or 0) > 0:
+            _rs_n = int(_rs_note.get("unfiltered_negative") or 0)
+            st.caption(
+                f"The news noise filter couldn't check {_rs_n} negative headline"
+                f"{'s' if _rs_n != 1 else ''} today — news cards for them use raw sentiment."
+            )
 
         # Monitoring / Awareness — FYI, nothing to execute
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
