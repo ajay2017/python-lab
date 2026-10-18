@@ -57,14 +57,17 @@ def _ts(item: dict) -> float:
         return 0.0
 
 
-def filter_search_news(items, ticker: str, now_ts: float | None = None) -> list[dict]:
+def filter_search_news(items, ticker: str, now_ts: float | None = None,
+                       keep: int | None = NEWS_KEEP_PER_TICKER) -> list[dict]:
     """Keep only Search-news items that are really about `ticker`.
 
     * `relatedTickers` must contain `ticker` (case-insensitive, exact) or a share-class sibling (`_SIBLINGS`); an item with
       no `relatedTickers` is dropped (a text search returns unrelated headlines).
     * Items older than NEWS_MAX_AGE_DAYS are dropped (exactly at the boundary is
       kept); an item with no publish time cannot be aged and is dropped.
-    * Newest first, capped at NEWS_KEEP_PER_TICKER.
+    * Newest first, capped at `keep` (default NEWS_KEEP_PER_TICKER; None = no cap --
+      the bundle path keeps every tagged item so the relevance filter runs BEFORE
+      the cap).
     `now_ts` (unix seconds) is injectable for tests; default is now in ET.
     """
     want = str(ticker or "").strip().upper()
@@ -84,7 +87,31 @@ def filter_search_news(items, ticker: str, now_ts: float | None = None) -> list[
             continue
         kept.append(it)
     kept.sort(key=_ts, reverse=True)
-    return kept[:NEWS_KEEP_PER_TICKER]
+    return kept if keep is None else kept[:keep]
+
+
+def search_quote_names(resp, ticker: str) -> list[str]:
+    """Company names Yahoo's Search response gives for `ticker` (or its share-class
+    sibling): shortname / longname / name of every `quotes` entry whose `symbol`
+    matches. Never trusts `quotes[0]` blindly; malformed input -> []."""
+    want = str(ticker or "").strip().upper()
+    if not want or not isinstance(resp, dict):
+        return []
+    quotes = resp.get("quotes")
+    if not isinstance(quotes, (list, tuple)):
+        return []
+    wanted = {want, _SIBLINGS.get(want, want)}
+    out: list[str] = []
+    for q in quotes:
+        if not isinstance(q, dict):
+            continue
+        if str(q.get("symbol") or "").strip().upper() not in wanted:
+            continue
+        for k in ("shortname", "longname", "name"):
+            v = q.get(k)
+            if isinstance(v, str) and v.strip() and v.strip() not in out:
+                out.append(v.strip())
+    return out
 
 
 def search_news_status(response, kept: list) -> str:

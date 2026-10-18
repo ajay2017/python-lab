@@ -26810,6 +26810,28 @@ elif page == "📈 Analysis":
                             f"<small>{linked}</small>",
                             unsafe_allow_html=True,
                         )
+                    # Headlines the relevance filter dropped (title doesn't name the
+                    # company) -- disclosed, never silently filtered. st.text, not
+                    # markdown: titles contain `$`.
+                    _da_unrel_n = r.get("news_unrelated_n")
+                    _da_unrel_rows = r.get("news_unrelated")
+                    _da_unrel_rows = _da_unrel_rows if isinstance(_da_unrel_rows, list) else []
+                    if isinstance(_da_unrel_n, int) and _da_unrel_n > 0:
+                        st.caption(
+                            f"{_da_unrel_n} headline{'s' if _da_unrel_n != 1 else ''} tagged to "
+                            f"{ticker} didn't name it in the title and aren't counted in the "
+                            f"score or any news check.")
+                        _da_unrel_lbl = (
+                            f"Not counted — didn't name {ticker} "
+                            f"({len(_da_unrel_rows)} of {_da_unrel_n} shown)"
+                            if _da_unrel_n > len(_da_unrel_rows)
+                            else f"Not counted — didn't name {ticker} ({_da_unrel_n})")
+                        with st.expander(_da_unrel_lbl):
+                            for _u in _da_unrel_rows:
+                                st.text(f"{_u.get('title', '')} — {_u.get('publisher', '')}")
+                    elif r.get("news_relevance_checked") is False and r.get("news_status") != "cached":
+                        st.caption(
+                            f"Couldn't check which headlines name {ticker} (no usable company name) — all tagged headlines are counted.")
                 with dd4:
                     st.markdown("**Smart Money Signals**")
                     st.caption("Ownership · Shorts · Analyst revisions")

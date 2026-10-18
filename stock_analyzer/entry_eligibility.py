@@ -254,6 +254,11 @@ def check_news(ctx):
         raise TypeError(f"check_news: news must be a dict or None, got {type(news).__name__}")
     t = ctx.get("ticker")
     who = str(t).upper() if t else "this ticker"
+    # Headlines the relevance filter dropped (named another company). None/absent =
+    # not checked; only a real positive int is disclosed.
+    _bd = ctx.get("bundle")
+    unrel = _bd.get("news_unrelated_n") if isinstance(_bd, dict) else None
+    unrel = unrel if isinstance(unrel, int) and not isinstance(unrel, bool) and unrel > 0 else 0
     if isinstance(news, dict) and news.get("compound") is not None and news.get("n"):
         # Real headlines are evaluated whatever the feed status says.
         c = news["compound"]
@@ -267,7 +272,9 @@ def check_news(ctx):
             }
         return {"kind": "passed", "check": "news", "n": n, "compound": c,
                 "detail": (f"{n} headline{'s' if n != 1 else ''}, avg {c:+.2f}"
-                           f" — above the negative-news bar ({NEWS_SENTIMENT_NEGATIVE:+.2f})")}
+                           f" — above the negative-news bar ({NEWS_SENTIMENT_NEGATIVE:+.2f})"
+                           + (f" · {unrel} that didn't name {who} not counted"
+                              if unrel else ""))}
     bundle = ctx.get("bundle")
     status = bundle.get("news_status") if isinstance(bundle, dict) else None
     if (ctx.get("news_read_failed") is True
@@ -277,6 +284,11 @@ def check_news(ctx):
     if status == NEWS_STATUS_NONE:
         return {"kind": "unchecked", "check": "news",
                 "why": f"no headlines tagged to {who}"}
+    if unrel:
+        return {"kind": "unchecked", "check": "news",
+                "why": (f"no headlines naming {who} — {unrel} headline{'s' if unrel != 1 else ''}"
+                        f" tagged to {who} didn't name it in the title and "
+                        f"{'weren' if unrel != 1 else 'wasn'}'t counted")}
     return {"kind": "unchecked", "check": "news", "why": "no recent headlines to check"}
 
 

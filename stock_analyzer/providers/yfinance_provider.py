@@ -137,20 +137,32 @@ class YFinanceProvider(DataProvider):
         return _retry(_fetch)
 
     # ── News (yf.Search, filtered) ────────────────────────────────────────────
-    def search_news(self, ticker: str, now_ts: float | None = None) -> tuple[list, str]:
+    def search_news(self, ticker: str, now_ts: float | None = None,
+                    keep: int | None = _nf.NEWS_KEEP_PER_TICKER) -> tuple[list, str]:
         """(items, news_status) for one ticker. Never raises. `status` is `ok` /
         `none` / `error` -- see stock_analyzer/news_feed.py. A response with NO
         `news` key (the retired-endpoint 404 shape) is `error`, not `none`.
         Each fetch is recorded under api_health's "yahoo_news" source (🩺 check ③):
         success when the response had a `news` key (ok/none), error otherwise."""
-        items, status = self._search_news_fetch(ticker, now_ts)
+        items, status, _names = self.search_news_with_names(ticker, now_ts, keep)
+        return items, status
+
+    def search_news_with_names(self, ticker: str, now_ts: float | None = None,
+                               keep: int | None = _nf.NEWS_KEEP_PER_TICKER
+                               ) -> tuple[list, str, list]:
+        """`search_news` plus the company names the same Search response carries for
+        this ticker (feeds the headline-relevance filter). `status` is computed on
+        the tagged items exactly as `search_news` does."""
+        items, status, names = self._search_news_fetch(ticker, now_ts, keep)
         if status == _nf.NEWS_STATUS_ERROR:
             _ah.record("yahoo_news", "error", "no `news` key / non-200 / exception")
         else:
             _ah.record("yahoo_news", "success")
-        return items, status
+        return items, status, names
 
-    def _search_news_fetch(self, ticker: str, now_ts: float | None = None) -> tuple[list, str]:
+    def _search_news_fetch(self, ticker: str, now_ts: float | None = None,
+                           keep: int | None = _nf.NEWS_KEEP_PER_TICKER
+                           ) -> tuple[list, str, list]:
         try:
             # NOT yf.Search: its fetch goes through YfData.cache_get, an lru_cache on a
             # process-wide singleton, so a long-lived process (the Railway app) would
@@ -179,15 +191,15 @@ class YFinanceProvider(DataProvider):
                 timeout=max(1, DATA_YF_REQUEST_TIMEOUT_SEC // 4),
             )
             if getattr(r, "status_code", 200) != 200:
-                return [], _nf.NEWS_STATUS_ERROR
+                return [], _nf.NEWS_STATUS_ERROR, []
             # Raw parsed JSON with a missing `news` key intact (the retired-endpoint
             # 404 shape is `{"message": "Not Found"}`) -> status "error", not "none".
             resp = r.json()
             kept = _nf.filter_search_news(resp.get("news") if isinstance(resp, dict) else None,
-                                          ticker, now_ts)
-            return kept, _nf.search_news_status(resp, kept)
+                                          ticker, now_ts, keep=keep)
+            return kept, _nf.search_news_status(resp, kept), _nf.search_quote_names(resp, ticker)
         except Exception:
-            return [], _nf.NEWS_STATUS_ERROR
+            return [], _nf.NEWS_STATUS_ERROR, []
 
     # ── Bundle (history + info + news + earnings + revisions) ─────────────────
     def bundle(self, ticker: str, period: str = "6mo") -> dict:
@@ -218,7 +230,9 @@ class YFinanceProvider(DataProvider):
             # silent 404, so the feed comes from yf.Search filtered on relatedTickers
             # (docs/plans/news-feed-restore.md). Its own try: a news error never fails
             # or retries the bundle -- it just reads news_status == "error".
-            news, news_status = self.search_news(ticker)
+            # keep=None: every relevantly-TAGGED item (<= NEWS_SEARCH_FETCH_COUNT) so the
+            # bundle loader's relevance filter runs BEFORE the per-ticker cap.
+            news, news_status, news_names = self.search_news_with_names(ticker, keep=None)
             earnings = None
             try:
                 cal = t.calendar
@@ -264,7 +278,7 @@ class YFinanceProvider(DataProvider):
 
             return {
                 "history": hist, "info": info, "news": news,
-                "news_status": news_status,
+                "news_status": news_status, "news_names": news_names,
                 "earnings": earnings, "revisions": revisions,
             }
 

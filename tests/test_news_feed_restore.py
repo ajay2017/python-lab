@@ -278,7 +278,7 @@ def test_bundle_carries_ok_status(fake_search, monkeypatch):
     monkeypatch.setattr(yp.yf, "Ticker", _FakeTicker)
     real = nf.filter_search_news
     monkeypatch.setattr(nf, "filter_search_news",
-                        lambda items, t, now_ts=None: real(items, t, NOW))
+                        lambda items, t, now_ts=None, **kw: real(items, t, NOW, **kw))
     fake_search.response = {"news": [_item(ts=NOW)]}
     b = yp.YFinanceProvider().bundle("ACME")
     assert b["news_status"] == "ok" and len(b["news"]) == 1

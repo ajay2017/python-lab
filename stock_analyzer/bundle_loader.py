@@ -27,6 +27,7 @@ from stock_analyzer.constants import (
     VALUATION_COVERAGE_FRESH_DAYS,
 )
 from stock_analyzer.data import (
+    _parse_news_item,
     fetch_ticker_bundle, fetch_financials_from_info, fetch_etf_facts_from_info,
     fetch_etf_lookthrough,
 )
@@ -44,6 +45,10 @@ from stock_analyzer.risk import atr_stop_loss, compute_all_risk
 from stock_analyzer.targets import support_resistance, entry_zone, compute_price_targets
 from stock_analyzer import db
 from stock_analyzer import news_feed as _news_feed
+from stock_analyzer import news_relevance as _news_rel
+
+# Unrelated headlines carried for display (plumbing, not policy).
+_UNRELATED_SHOWN = 10
 
 
 def _cache_age_in_days(fetched_at_iso: str | None) -> int | None:
@@ -168,7 +173,27 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     except Exception:
         pass  # silent degrade — valuation scores on P/E + FCF alone
     val_score, val_signals, val_available = valuation_score(financials, _analyst_data, price, _sector_for_scoring)
-    avg_sent, headlines = analyze_news(bundle["news"])
+    # Headline relevance (docs/plans/headline-relevance.md): the feed tags every
+    # ticker a story merely mentions, so keep only headlines whose TITLE names this
+    # company/ticker -- once, here, so every news consumer reads the same set. Cap
+    # AFTER the split (a relevant older headline must not lose its slot to newer
+    # unrelated ones). No usable company name -> fail open (all tagged kept).
+    _rel_info = bundle.get("info")
+    _rel_extra = bundle.get("news_names")
+    _rel_names = [
+        _rel_info.get(k) if isinstance(_rel_info, dict) else None
+        for k in ("shortName", "longName", "displayName")
+    ] + (_rel_extra if isinstance(_rel_extra, list) else [])
+    _rel_names = [n for n in _rel_names if isinstance(n, str) and n.strip()]
+    _split = _news_rel.split_relevant(bundle["news"], ticker, _rel_names)
+    _news_kept = _split["kept"][:_news_feed.NEWS_KEEP_PER_TICKER]
+    _unrelated_rows = []
+    for _u in _split["unrelated"][:_UNRELATED_SHOWN]:
+        _ut, _up, _uu, _uts = _parse_news_item(_u)
+        _unrelated_rows.append({"title": _ut, "publisher": _up, "ts": _uts, "url": _uu})
+    _unrelated_n = (len(_split["unrelated"])
+                    if _split["checked"] and not _from_cache else None)
+    avg_sent, headlines = analyze_news(_news_kept)
     # Bidirectional LLM rescore — ticker-aware financial context, persisted to
     # sentiment_llm_cache so app + cron always use the same composite for a given
     # ticker on a given UTC day. Cache miss → call LLM → write cache. Any failure
@@ -179,6 +204,15 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         from stock_analyzer.news_intelligence import rescore_headlines_llm as _rescore_hl
         _today = _dt.date.today().isoformat()
         _cached = db.load_sentiment_llm_cache(ticker, _today)
+        if _cached is not None and _split["checked"]:
+            # The shared day-cache can hold rows written before this filter existed
+            # (or by a keyed deploy over unfiltered headlines): relevance-filter them
+            # with the same terms and recompute the average from what survives.
+            _crows = _news_rel.filter_scored(
+                _cached.get("headlines"), ticker, _rel_names)
+            _csc = [h["score"] for h in _crows if isinstance(h.get("score"), (int, float))]
+            _cached = dict(_cached, headlines=_crows,
+                           avg_sent=round(sum(_csc) / len(_csc), 3) if _csc else 0.0)
         if _news_feed.llm_cache_usable(_cached, headlines):
             headlines = _cached["headlines"]
             avg_sent  = _cached["avg_sent"]
@@ -300,7 +334,9 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         "s_score": s_score, "avg_sent": avg_sent, "headlines": headlines,
         "total": total, "rec": rec, "financials": financials,
         "current_price": price, "upside": upside,
-        "atr": atr_val, "stop": stop, "news_raw": bundle["news"], "news_status": _news_status,
+        "atr": atr_val, "stop": stop, "news_raw": _news_kept, "news_status": _news_status,
+        "news_unrelated": _unrelated_rows, "news_unrelated_n": _unrelated_n,
+        "news_relevance_checked": _split["checked"],
         "entry_lo": entry_lo, "entry_hi": entry_hi,
         "targets": targets, "sr": sr,
         "risk_metrics": risk_metrics, "earnings": bundle["earnings"],
