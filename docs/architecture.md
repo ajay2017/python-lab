@@ -370,9 +370,9 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `ENGINE_TRACK_FIRM_CALLS` | 15 | **Display-only** band threshold. At/above this count the card shows a "firm" verdict (WORKING or LAGGING); between `ENGINE_TRACK_MIN_CALLS` and this value it shows an "EARLY READ" softened verdict. Same caveats as `ENGINE_TRACK_MIN_CALLS`. |
 | `PROTECT_TRACK_MIN_CALLS` | 8 | **Display-only** band threshold for the 🛡️ Defense facet (protective EXIT/TRIM calls) of the same 🎯 Engine Track Record pointer card (F-229 Phase 2). Below this count of distinct mature+priced flagged tickers the card shows "Building protective track record" and withholds any verdict. NOT an investment gate; never feeds into any alert, the exit advisor, or the composite score. Safe to tune from observation. |
 | `PROTECT_TRACK_FIRM_CALLS` | 15 | **Display-only** band threshold. At/above this count the Defense facet shows a "firm" verdict (VALIDATED or RAN EARLY); between `PROTECT_TRACK_MIN_CALLS` and this value it shows an "EARLY READ" softened verdict. Same caveats as `PROTECT_TRACK_MIN_CALLS`. |
-| `GATE_LEDGER_MIN_CALLS` | 8 | **Display-only** band threshold for the Gate Suppression Ledger readout (F-259, "🛑 The Road Not Taken"). Below this count of matured+priced, `counterfactual=true` suppression rows for a gate, the readout shows "building" and withholds a verdict for that `gate_id`. Pre-registered with the user 2026-08-26 (`docs/plans/gate-suppression-ledger.md` §5, "N_min") before any capture data existed. NOT an investment gate; never feeds `risk_advisor`, `exit_advisor`, `daily_briefing`, scoring, or sizing — this readout is a retrospective measurement of the app's own past restraint. Safe to tune from observation. |
+| `GATE_LEDGER_MIN_CALLS` | 8 | **Display-only** band threshold for the Gate Suppression Ledger readout (F-259, "🛑 The Road Not Taken"). Below this count of matured+priced, `counterfactual=true` suppression **calls** for a gate (one call per distinct (ticker, rec_date) — an app row and a cron row for the same ticker and day are one call; owner decision 2026-10-18), the readout shows "building" and withholds a verdict for that `gate_id`. Pre-registered with the user 2026-08-26 (`docs/plans/gate-suppression-ledger.md` §5, "N_min") before any capture data existed. NOT an investment gate; never feeds `risk_advisor`, `exit_advisor`, `daily_briefing`, scoring, or sizing — this readout is a retrospective measurement of the app's own past restraint. Safe to tune from observation. |
 | `GATE_LEDGER_FIRM_CALLS` | 15 | **Display-only** band threshold. At/above this count a gate's readout shows a "firm" verdict; between `GATE_LEDGER_MIN_CALLS` and this value it shows "early". Same caveats as `GATE_LEDGER_MIN_CALLS`. |
-| `GATE_LEDGER_MIN_TICKERS` | 5 | **Display-only** distinct-ticker floor (§5 "K"). A gate is evaluable only at `GATE_LEDGER_MIN_CALLS` rows **and** this many distinct tickers — without it, one ticker re-recorded daily could reach the row-count floor on a single observation and falsely read as evaluable. Load-bearing to the pre-registered §5 retirement test; do not change without re-deriving that test's validity. |
+| `GATE_LEDGER_MIN_TICKERS` | 5 | **Display-only** distinct-ticker floor (§5 "K"). A gate is evaluable only at `GATE_LEDGER_MIN_CALLS` calls **and** this many distinct tickers — without it, one ticker re-recorded daily could reach the call-count floor on a single observation and falsely read as evaluable. Load-bearing to the pre-registered §5 retirement test; do not change without re-deriving that test's validity. |
 | `GATE_LEDGER_HORIZON_TRADING_DAYS` | 30 | Forward-alpha measurement window (§5 "H") for the Gate Suppression Ledger readout — how many NYSE trading sessions after `rec_date` a suppressed pick's alpha vs SPY is measured, via `predictive_analytics.forward_alpha_at_horizon` (reused, not re-implemented). Load-bearing to the pre-registered §5 retirement test; do not change without re-deriving that test's validity. |
 | `REC_OUTCOME_MIN_CALLS` | 8 | **Display-only** band threshold for the Recommendation Outcomes readout (F-273 Phase 1b/2, `rec_events` + `rec_events_readout.py`, `docs/plans/recommendation-outcomes-measurement.md` §10/§11). Below this count of matured, evaluable rows for a `rec_type` (rebal_trim/beta_trim/diversify_add), that type's arm shows "building" and withholds a verdict. NOT an investment gate; never feeds `risk_advisor`, `exit_advisor`, `daily_briefing`, scoring, or sizing — retrospective measurement only. Safe to tune from observation. |
 | `REC_OUTCOME_FIRM_CALLS` | 15 | **Display-only** band threshold. At/above this count a `rec_type`'s arm shows a "firm" verdict; between `REC_OUTCOME_MIN_CALLS` and this value it shows "early". Same caveats as `REC_OUTCOME_MIN_CALLS`. |
@@ -2370,13 +2370,19 @@ per `gate_id` (iterated from `gate_registry.GATE_IDS`, never re-sorted). Banding
 floors gate the building→early transition (`n_matured_evaluable < min_calls OR
 n_distinct_tickers_evaluable < min_tickers` → stay "building") — the distinct-ticker
 floor is load-bearing, since one ticker re-recorded daily could otherwise reach the
-row-count floor on a single observation. `min_tickers` never re-enters the early→firm
-check. G-23 is handled as a special minimal case: no banding, no mean alpha, excluded
+call-count floor on a single observation. `min_tickers` never re-enters the early→firm
+check. **Counts are calls, not rows (owner decision 2026-10-18):** every `n_*` status
+count groups a gate's rows by (normalized ticker, rec_date), so an app row and a cron
+row for the same ticker and day are one call; a call with rows in several statuses
+counts once, under the highest status in `_STATUS_PRECEDENCE` (evaluable first). The
+raw evaluable row count is kept as `n_matured_evaluable_rows` (not rendered).
+`mean_alpha_pct` still uses one row per ticker. G-23 is handled as a special minimal case: no banding, no mean alpha, excluded
 from the "no gate produced a verdict" retirement tally by design.
 
 `readout_footnotes(gate_id)` returns the §5a per-gate caveats a screen must disclose
 alongside a bare count (G-20's binding count is a bull-day-only undercount; G-23 has no
-per-ticker instrument) — every other gate_id returns `[]`.
+per-ticker instrument); G-07, G-16, G-25, G-26 and G-30 carry their own dated caveats
+— every other gate_id returns `[]`.
 
 **Redline, enforced by `tests/test_gate_ledger_readout.py`'s import-isolation test:**
 this module must never be imported by `risk_advisor.py`, `exit_advisor.py`,

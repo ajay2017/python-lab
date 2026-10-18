@@ -36662,17 +36662,17 @@ elif page == "🛑 The Road Not Taken":
                     )
                 if _g.get("n_matured_unpriceable"):
                     st.caption(
-                        f"⚪ {_g['n_matured_unpriceable']} matured row(s) could not be priced — "
+                        f"⚪ {_g['n_matured_unpriceable']} matured call(s) could not be priced — "
                         "excluded from the mean, not counted as a clean 'nothing happened'."
                     )
                 if _g.get("n_excluded_null_composite"):
                     st.caption(
-                        f"⚪ {_g['n_excluded_null_composite']} row(s) excluded: composite score "
+                        f"⚪ {_g['n_excluded_null_composite']} call(s) excluded: composite score "
                         "never loaded before this gate fired."
                     )
                 if _g.get("n_excluded_low_composite"):
                     st.caption(
-                        f"⚪ {_g['n_excluded_low_composite']} row(s) excluded: composite score was "
+                        f"⚪ {_g['n_excluded_low_composite']} call(s) excluded: composite score was "
                         "below the buy threshold, so this pick would not have qualified regardless "
                         "of this gate."
                     )
@@ -36689,7 +36689,7 @@ elif page == "🛑 The Road Not Taken":
                     )
                 if _g.get("n_excluded_source_mismatch"):
                     st.caption(
-                        f"⚪ {_g['n_excluded_source_mismatch']} row(s) excluded: recorded from a "
+                        f"⚪ {_g['n_excluded_source_mismatch']} call(s) excluded: recorded from a "
                         "source that couldn't have evaluated this gate."
                     )
                 for _fn in gate_ledger_readout.readout_footnotes(_g["gate_id"]):

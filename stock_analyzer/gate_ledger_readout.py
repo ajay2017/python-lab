@@ -82,6 +82,11 @@ def _to_date(v) -> "date | None":
         return None
 
 
+def _norm_ticker(v) -> str:
+    """Upper-stripped ticker — the one normalization every call/ticker count uses."""
+    return str(v or "").strip().upper()
+
+
 def _safe_float(x) -> "float | None":
     """NaN/None/non-numeric-safe float coerce. Used for composite_score (a
     filter input) and price_at_suppress (fed to forward_alpha_at_horizon,
@@ -224,13 +229,14 @@ def _collapse_evaluable_by_ticker(evaluable: "list[dict]") -> "list[dict]":
     so no priced/unpriced tier is needed — just the earliest-dated row per
     ticker, falling back to the group's first row when none parse as a date.
 
-    Scope is intentionally narrow: this does NOT change `n_matured_evaluable`,
-    `n_distinct_tickers_evaluable`, or the two-floor banding below — only
-    `mean_alpha_pct`'s own input population.
+    Scope is intentionally narrow: this only sets `mean_alpha_pct`'s input
+    population. The call COUNTS and the banding (one call per distinct
+    (ticker, rec_date), owner decision 2026-10-18) are computed separately by
+    `_count_calls_by_status`.
     """
     by_ticker: "dict[str, list[dict]]" = {}
     for r in evaluable:
-        tk = r.get("ticker")
+        tk = _norm_ticker(r.get("ticker"))
         if not tk:
             continue
         by_ticker.setdefault(tk, []).append(r)
@@ -241,6 +247,50 @@ def _collapse_evaluable_by_ticker(evaluable: "list[dict]") -> "list[dict]":
         rep = min(dated, key=lambda r: _to_date(r["rec_date"])) if dated else rows[0]
         out.append(rep)
     return out
+
+
+# Highest-precedence first. A call (one ticker on one day) can carry rows in
+# several statuses when the app and the cron both recorded it; a call that was
+# evaluated in any source is an evaluated call, so it counts once under the
+# first status in this order that any of its rows has. Counterfactual-false
+# outranks source-mismatch: for G-01 the only source that can evaluate it (app)
+# said non-binding, so "non-binding" is the truer label than "wrong source".
+_STATUS_PRECEDENCE = (
+    STATUS_MATURED_EVALUABLE,
+    STATUS_MATURED_UNPRICEABLE,
+    STATUS_NOT_MATURED,
+    STATUS_EXCLUDED_LOW_COMPOSITE,
+    STATUS_EXCLUDED_NULL_COMPOSITE,
+    STATUS_EXCLUDED_COUNTERFACTUAL_FALSE,
+    STATUS_EXCLUDED_SOURCE_MISMATCH,
+)
+
+
+def _count_calls_by_status(gate_rows: "list[dict]") -> "dict[str, int]":
+    """Group a gate's rows into CALLS keyed by (ticker, rec_date) and count each
+    call once, under its highest-precedence status (`_STATUS_PRECEDENCE`).
+
+    The `gate_suppressions` upsert key includes `source`, so an app row and a
+    cron row for the same ticker/day/gate are two rows but ONE decision. A row
+    with no ticker or an unparseable rec_date is its own call (unique key) —
+    never merged with anything. Statuses outside the precedence tuple
+    (market_wide) are ignored.
+    """
+    best: "dict[object, int]" = {}
+    for i, r in enumerate(gate_rows):
+        status = r.get("status")
+        if status not in _STATUS_PRECEDENCE:
+            continue
+        tk = _norm_ticker(r.get("ticker"))
+        d = _to_date(r.get("rec_date"))
+        key = (tk, d) if (tk and d is not None) else ("__row__", i)
+        rank = _STATUS_PRECEDENCE.index(status)
+        if key not in best or rank < best[key]:
+            best[key] = rank
+    counts = {st: 0 for st in _STATUS_PRECEDENCE}
+    for rank in best.values():
+        counts[_STATUS_PRECEDENCE[rank]] += 1
+    return counts
 
 
 def grade_by_gate(
@@ -259,7 +309,8 @@ def grade_by_gate(
     Banding mirrors `protective_track_record.protective_headline`'s exact
     if/elif/else structure, with one addition: TWO floors gate the
     building → early transition (§5's "N_min" and "K"), not just one — a
-    gate needs both `min_calls` matured-evaluable rows AND `min_tickers`
+    gate needs both `min_calls` matured-evaluable CALLS (one per distinct
+    (ticker, rec_date); owner decision 2026-10-18) AND `min_tickers`
     distinct tickers to leave "building". Only `min_calls`/`firm_calls`
     gate the early → firm transition; `min_tickers` never re-enters there
     (once a gate has cleared both floors once, later concentration in one
@@ -283,26 +334,20 @@ def grade_by_gate(
             continue
 
         evaluable = [r for r in gate_rows if r.get("status") == STATUS_MATURED_EVALUABLE]
-        n_matured_evaluable = len(evaluable)
+        # Every count is in CALLS (one per distinct ticker/rec_date), so the
+        # card's numbers share a unit (owner decision 2026-10-18).
+        _calls = _count_calls_by_status(gate_rows)
+        n_matured_evaluable = _calls[STATUS_MATURED_EVALUABLE]
+        n_matured_evaluable_rows = len(evaluable)
         n_distinct_tickers_evaluable = len({
-            r.get("ticker") for r in evaluable if r.get("ticker")
+            _norm_ticker(r.get("ticker")) for r in evaluable if _norm_ticker(r.get("ticker"))
         })
-        n_not_matured = sum(1 for r in gate_rows if r.get("status") == STATUS_NOT_MATURED)
-        n_matured_unpriceable = sum(
-            1 for r in gate_rows if r.get("status") == STATUS_MATURED_UNPRICEABLE
-        )
-        n_excluded_null_composite = sum(
-            1 for r in gate_rows if r.get("status") == STATUS_EXCLUDED_NULL_COMPOSITE
-        )
-        n_excluded_low_composite = sum(
-            1 for r in gate_rows if r.get("status") == STATUS_EXCLUDED_LOW_COMPOSITE
-        )
-        n_excluded_counterfactual_false = sum(
-            1 for r in gate_rows if r.get("status") == STATUS_EXCLUDED_COUNTERFACTUAL_FALSE
-        )
-        n_excluded_source_mismatch = sum(
-            1 for r in gate_rows if r.get("status") == STATUS_EXCLUDED_SOURCE_MISMATCH
-        )
+        n_not_matured = _calls[STATUS_NOT_MATURED]
+        n_matured_unpriceable = _calls[STATUS_MATURED_UNPRICEABLE]
+        n_excluded_null_composite = _calls[STATUS_EXCLUDED_NULL_COMPOSITE]
+        n_excluded_low_composite = _calls[STATUS_EXCLUDED_LOW_COMPOSITE]
+        n_excluded_counterfactual_false = _calls[STATUS_EXCLUDED_COUNTERFACTUAL_FALSE]
+        n_excluded_source_mismatch = _calls[STATUS_EXCLUDED_SOURCE_MISMATCH]
 
         # Two floors, both required to leave "building" (§5's N_min and K).
         if n_matured_evaluable < min_calls or n_distinct_tickers_evaluable < min_tickers:
@@ -315,9 +360,9 @@ def grade_by_gate(
         # mean_alpha_pct is measured over ONE representative row per distinct
         # ticker (collapsed episode), not over every matured_evaluable row —
         # a persisted multi-day suppression must not average into this mean
-        # once per day it persisted. n_matured_evaluable / the two-floor
-        # banding above are DELIBERATELY left on the raw row/ticker counts —
-        # see `_collapse_evaluable_by_ticker`'s docstring.
+        # once per day it persisted. The banding above counts one call per
+        # (ticker, rec_date) — owner decision 2026-10-18 — so an app row and a
+        # cron row for the same decision are one call.
         _collapsed_evaluable = _collapse_evaluable_by_ticker(evaluable)
         n_alpha_episodes = len(_collapsed_evaluable)
         mean_alpha_pct = (
@@ -333,6 +378,9 @@ def grade_by_gate(
             "gate_description": gate_description,
             "market_wide": False,
             "n_matured_evaluable": n_matured_evaluable,
+            # Raw evaluable row count (app + cron rows counted separately) —
+            # additive, for a future caption; not rendered.
+            "n_matured_evaluable_rows": n_matured_evaluable_rows,
             "n_distinct_tickers_evaluable": n_distinct_tickers_evaluable,
             "n_not_matured": n_not_matured,
             "n_matured_unpriceable": n_matured_unpriceable,
@@ -399,9 +447,7 @@ def readout_footnotes(gate_id: str) -> "list[str]":
         return [
             _PRE_TRUST_NOTE + " The graded ones (composite at or above the "
             "Buy bar) were all long-listed large caps with no ETFs, so no "
-            "contamination is evident, but they can't be re-verified. The "
-            "matured-call count includes separate app and cron rows for the "
-            "same ticker and day; the alpha average uses one row per ticker.",
+            "contamination is evident, but they can't be re-verified.",
         ]
     if gate_id == "G-16":
         return [_PRE_TRUST_NOTE]

@@ -220,7 +220,8 @@ ship any time after chunk 2.
   the gate on calls that were never going to be made. Applies in the app and the cron alike, via
   `build_watchlist_suppression_rows(held_tickers=…)`, which filters only the G-28/G-29 kinds; G-05/06/13
   behaviour is unchanged. Owner may reverse.
-- **Open — owner decision, must be settled before any G-28/G-29 readout can leave "building" (months
+- **DECIDED 2026-10-18 — option (a), built the same day: every gate counts one call per (ticker, rec_date).** Original note:
+  **Open — owner decision, must be settled before any G-28/G-29 readout can leave "building" (months
   away):** with the cron writing Watchlist rows (D4), an app row and a cron row for the same ticker and day
   count as TWO calls in `gate_ledger_readout.grade_by_gate`'s `n_matured_evaluable` (the alpha mean and the
   distinct-ticker floor already use one row per ticker). New skew for G-05/06/13 (app-only until now) and

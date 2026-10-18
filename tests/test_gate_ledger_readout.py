@@ -81,7 +81,12 @@ def _graded_row(ticker, gate_id="G-04", status=None, alpha=1.0, rec_date=REC_DAT
 
 def _n_rows(n, distinct, gate_id="G-04"):
     """n pre-graded matured_evaluable rows cycling among `distinct` tickers."""
-    return [_graded_row(f"T{i % distinct}", gate_id=gate_id, alpha=float(i)) for i in range(n)]
+    # one distinct rec_date per row, so each row is its own call
+    return [
+        _graded_row(f"T{i % distinct}", gate_id=gate_id, alpha=float(i),
+                    rec_date=date.fromordinal(REC_DATE.toordinal() + i))
+        for i in range(n)
+    ]
 
 
 def _spy_flat(d1, d2, price=100.0):
@@ -649,7 +654,7 @@ def test_readout_footnotes_g07_discloses_pre_trust_rows_and_row_vs_ticker_counts
     notes = glr.readout_footnotes("G-07")
     assert len(notes) == 1
     assert "2026-10-15" in notes[0]
-    assert "one row per ticker" in notes[0]
+    assert "one row per ticker" not in notes[0]
     assert "**" not in notes[0] and "$" not in notes[0]
 
 
@@ -725,3 +730,131 @@ def test_mixed_population_including_new_lanes_every_row_gets_one_status():
     assert [g["gate_id"] for g in graded] == ["G-02", "G-05", "G-06", "G-13", "G-18"]
     for g in graded:
         assert g["n_matured_evaluable"] == 1
+
+
+# ─── one call per distinct (ticker, rec_date), owner decision 2026-10-18 ────
+
+def _grade(rows, gid="G-04", min_calls=GATE_LEDGER_MIN_CALLS,
+           firm_calls=GATE_LEDGER_FIRM_CALLS, min_tickers=GATE_LEDGER_MIN_TICKERS):
+    return glr.grade_by_gate(
+        rows, gate_ids=(gid,), min_calls=min_calls, firm_calls=firm_calls,
+        min_tickers=min_tickers,
+    )[0]
+
+
+def _src(row, source):
+    r = dict(row)
+    r["source"] = source
+    return r
+
+
+def _dup(rows):
+    """Each row recorded twice: once by the app, once by the cron."""
+    return [_src(r, "app") for r in rows] + [_src(r, "cron") for r in rows]
+
+
+def test_app_and_cron_rows_same_ticker_day_count_as_one_call():
+    rows = _dup([_graded_row("AAA")])
+    out = _grade(rows)
+    assert out["n_matured_evaluable"] == 1
+    assert out["n_matured_evaluable_rows"] == 2
+
+
+def test_same_ticker_different_days_count_separately():
+    rows = [_graded_row("AAA", rec_date=date(2026, 1, 5)),
+            _graded_row("AAA", rec_date=date(2026, 1, 6))]
+    assert _grade(rows)["n_matured_evaluable"] == 2
+
+
+def test_ticker_case_and_whitespace_do_not_split_a_call():
+    rows = [_graded_row("aaa"), _graded_row(" AAA ")]
+    out = _grade(rows)
+    assert out["n_matured_evaluable"] == 1
+    assert out["n_distinct_tickers_evaluable"] == 1
+
+
+def test_duplicated_calls_at_min_calls_are_early_not_firm():
+    # Raw rows (2x) cross the firm bar; calls do not.
+    n = GATE_LEDGER_MIN_CALLS
+    assert 2 * n >= GATE_LEDGER_FIRM_CALLS > n
+    out = _grade(_dup(_n_rows(n, GATE_LEDGER_MIN_TICKERS)))
+    assert out["n_matured_evaluable"] == n
+    assert out["n_matured_evaluable_rows"] == 2 * n
+    assert out["band"] == "early"
+
+
+def test_duplicated_calls_one_below_min_calls_stay_building():
+    n = GATE_LEDGER_MIN_CALLS - 1
+    assert 2 * n >= GATE_LEDGER_MIN_CALLS
+    out = _grade(_dup(_n_rows(n, GATE_LEDGER_MIN_TICKERS)))
+    assert out["n_matured_evaluable"] == n
+    assert out["band"] == "building"
+
+
+def test_mixed_status_call_counts_once_as_evaluable():
+    rows = [_src(_graded_row("AAA"), "app"),
+            _src(_graded_row("AAA", status=glr.STATUS_MATURED_UNPRICEABLE), "cron")]
+    out = _grade(rows)
+    assert out["n_matured_evaluable"] == 1
+    assert out["n_matured_unpriceable"] == 0
+
+
+def test_counterfactual_true_app_and_false_cron_count_once_as_evaluable():
+    rows = [_src(_graded_row("AAA"), "app"),
+            _src(_graded_row("AAA", status=glr.STATUS_EXCLUDED_COUNTERFACTUAL_FALSE), "cron")]
+    out = _grade(rows)
+    assert out["n_matured_evaluable"] == 1
+    assert out["n_excluded_counterfactual_false"] == 0
+
+
+def test_rows_without_ticker_or_parseable_date_are_individual_calls():
+    no_ticker = [_graded_row("", rec_date=REC_DATE), _graded_row("", rec_date=REC_DATE)]
+    assert _grade(no_ticker)["n_matured_evaluable"] == 2
+    bad_date = [_graded_row("AAA", rec_date="not-a-date"),
+                _graded_row("AAA", rec_date="not-a-date")]
+    assert _grade(bad_date)["n_matured_evaluable"] == 2
+
+
+def test_not_matured_pair_counts_as_one_call():
+    rows = _dup([_graded_row("AAA", status=glr.STATUS_NOT_MATURED)])
+    out = _grade(rows)
+    assert out["n_not_matured"] == 1
+
+
+def test_mean_alpha_unchanged_by_duplication():
+    base = [_graded_row("AAA", alpha=2.0), _graded_row("BBB", alpha=4.0)]
+    single = _grade(base)["mean_alpha_pct"]
+    doubled = _grade(_dup(base))["mean_alpha_pct"]
+    assert single == doubled == pytest.approx(3.0)
+
+
+def test_precedence_order_below_the_evaluated_statuses():
+    order = [glr.STATUS_EXCLUDED_LOW_COMPOSITE, glr.STATUS_EXCLUDED_NULL_COMPOSITE,
+             glr.STATUS_EXCLUDED_COUNTERFACTUAL_FALSE, glr.STATUS_EXCLUDED_SOURCE_MISMATCH]
+    keys = {
+        glr.STATUS_EXCLUDED_LOW_COMPOSITE: "n_excluded_low_composite",
+        glr.STATUS_EXCLUDED_NULL_COMPOSITE: "n_excluded_null_composite",
+        glr.STATUS_EXCLUDED_COUNTERFACTUAL_FALSE: "n_excluded_counterfactual_false",
+        glr.STATUS_EXCLUDED_SOURCE_MISMATCH: "n_excluded_source_mismatch",
+    }
+    for i, hi in enumerate(order):
+        for lo in order[i + 1:]:
+            out = _grade([_graded_row("AAA", status=hi), _graded_row("AAA", status=lo)])
+            assert out[keys[hi]] == 1, (hi, lo)
+            assert out[keys[lo]] == 0, (hi, lo)
+
+
+def test_g01_app_nonbinding_plus_cron_binding_reads_counterfactual_false():
+    rows = [_graded_row("AAA", gate_id="G-01", status=glr.STATUS_EXCLUDED_COUNTERFACTUAL_FALSE),
+            _graded_row("AAA", gate_id="G-01", status=glr.STATUS_EXCLUDED_SOURCE_MISMATCH)]
+    out = _grade(rows, gid="G-01")
+    assert out["n_excluded_counterfactual_false"] == 1
+    assert out["n_excluded_source_mismatch"] == 0
+
+
+def test_g01_app_evaluable_plus_cron_source_mismatch_counts_one_evaluable():
+    rows = [_graded_row("AAA", gate_id="G-01"),
+            _graded_row("AAA", gate_id="G-01", status=glr.STATUS_EXCLUDED_SOURCE_MISMATCH)]
+    out = _grade(rows, gid="G-01")
+    assert out["n_matured_evaluable"] == 1
+    assert out["n_excluded_source_mismatch"] == 0
