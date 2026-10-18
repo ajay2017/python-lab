@@ -405,6 +405,27 @@ def readout_footnotes(gate_id: str) -> "list[str]":
         ]
     if gate_id == "G-16":
         return [_PRE_TRUST_NOTE]
+    if gate_id == "G-30":
+        return [
+            "Rows start with the first trading day after this gate shipped "
+            "(2026-10-19 at the earliest). The add lane alone is tiny — it "
+            "needs a bull day, a held Strong Buy with room above its stop and "
+            "bad news at once — so the new-pick Skips carry the measurement. "
+            "Both lanes are effectively bull-day only: on a flat day a pick "
+            "with negative news is held as a flat-day name before the Skip "
+            "check, so it writes no row. Only headlines whose title names the "
+            "company count (F-309 was already live, so every row uses it). "
+            "News is VADER-scored while the Anthropic key is off; if the key "
+            "is switched on, the app's held headlines are LLM-filtered and "
+            "this footnote must be dated (docs/plans/anthropic-key-enable.md).",
+            "Pre-registered rule (written before any data): no review before "
+            "this gate reaches the firm band. If the skipped and held names' "
+            "forward alpha vs SPY is then positive and distinguishable from "
+            "zero, the lead brings a proposal to narrow or drop the news check "
+            "— an owner decision, never automatic. If it is not firm within 12 "
+            "months of the first row, keep the check and record that its value "
+            "was unmeasurable.",
+        ]
     if gate_id == "G-23":
         return [
             "Market-wide restraint (ticker=‘__MARKET__’) — there is no single "

@@ -426,6 +426,19 @@ def _trim_targets(risk_recs: list | None) -> dict[str, dict]:
 
 # ── Cross-reference engine ────────────────────────────────────────────────────
 
+# The reconciled verdict's label for the negative-news skip, exactly as
+# signal_reconciliation.reconcile_signals emits it (no structured flag exists
+# there). G-30 (chunk 7b / N-B2) keys on it; pinned by a test against the real
+# reconcile_signals output so a label edit there cannot silently drop the rows.
+_NEGATIVE_NEWS_SKIP_LABEL = "❌ Skip — Negative News"
+
+
+def _ticker_news_avg(news_items, ticker: str):
+    """Mean compound of the Brief's headlines for `ticker`; None when none."""
+    _tn = [n for n in (news_items or []) if str(n.get("ticker", "")).upper() == ticker]
+    return sum(n.get("compound", 0) for n in _tn) / len(_tn) if _tn else None
+
+
 def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
                      held_data: dict, today: date,
                      earnings_lookup: dict | None = None,
@@ -629,11 +642,7 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
     # surfaces render alongside the tier badge. Calling reconcile_signals here
     # keeps the resolution copy consistent everywhere: same wording in Daily
     # Briefing, Grow Today, Market Scanner, and Watchlist.
-    _ticker_news = [n for n in (news_items or []) if str(n.get("ticker", "")).upper() == ticker]
-    _news_compound = (
-        sum(n.get("compound", 0) for n in _ticker_news) / len(_ticker_news)
-        if _ticker_news else None
-    )
+    _news_compound = _ticker_news_avg(news_items, ticker)
     _reconciled = reconcile_signals(
         ticker=ticker,
         momentum_score=scan_score,
@@ -1527,7 +1536,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # visible bucket, never silently dropped.
             _rv = xref.get("verdict_reconciled")
             if isinstance(_rv, dict) and _rv.get("verdict") == "skip":
-                news_skipped.append({
+                _rv_item = {
                     "ticker":          ticker,
                     "sector":          sector,
                     "momentum_score":  _f(row.get("Score", 0)),
@@ -1535,7 +1544,21 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "label":           str(_rv.get("label") or "❌ Skip"),
                     "one_liner":       str(_rv.get("one_liner") or ""),
                     "is_mover":        is_mover,
-                })
+                }
+                # G-30 (chunk 7b / N-B2): only the negative-news skip is ledgered.
+                # The "Signals Disagree" skip is a different gate and the
+                # legacy-conflicted branch below stays unlabelled.
+                if _rv_item["label"] == _NEGATIVE_NEWS_SKIP_LABEL:
+                    _nav = _ticker_news_avg(news_items, ticker)
+                    _rv_item.update({
+                        "gate_id":        "G-30",
+                        "counterfactual": True,
+                        "gate_value":     _nav,
+                        "gate_threshold": NEWS_SENTIMENT_NEGATIVE,
+                        "price":          price,
+                        "reason":         _rv_item["one_liner"],
+                    })
+                news_skipped.append(_rv_item)
                 continue
             if _legacy_conflicted:
                 news_skipped.append({
@@ -2367,8 +2390,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     })
                     continue
                 # ENTRY (chunk 7a) -- the shared entry check, LAST so every
-                # gate above keeps its bucket and ledger rows. gate_id stays
-                # None here (a ledger id for news is chunk 7b).
+                # gate above keeps its bucket and ledger rows. gate_id is G-30
+                # ONLY when the binding hold (first in holds) is news; a stale /
+                # earnings / check_failed binding hold stays unledgered.
                 _entry_v = _entry_verdict(row)
                 if _gate == "ENTRY":
                     _eb = _entry_v["binding"] or {}
@@ -2383,7 +2407,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                         "clears_when": _eb.get("clears_when"),
                         "holds":     list(_entry_v["holds"]),
                         "unchecked": list(_entry_v["unchecked"]),
-                        "gate_id":        None,
+                        "gate_id":        "G-30" if _eb.get("check") == "news" else None,
                         "counterfactual": True,
                         "gate_value":     _eb.get("gate_value"),
                         "gate_threshold": _eb.get("gate_threshold"),

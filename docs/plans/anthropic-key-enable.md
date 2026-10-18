@@ -41,6 +41,7 @@ is a deliberate change, not a config tweak: one path feeds the composite score.
 - Dated note in `docs/requirements.md` (F-309 / sentiment pillar) and `docs/architecture.md`: "from <date> the sentiment
   pillar uses LLM-scored headlines".
 - `docs/shipped-log.md` entry; memory `feedback_no_llm_dependency_in_prod` updated (key now present in prod).
+- **G-30 regime marker:** date the G-30 readout footnote (`gate_ledger_readout.readout_footnotes`) — from the switch-on day the app's held headlines are LLM-filtered (suppress-only) while cron rows and new-pick rows stay VADER, so G-30 add-lane rows from the app use a different scorer.
 
 ## Roll back
 Remove the variable and redeploy. Note: `sentiment_llm_cache` rows already written for today keep being served until

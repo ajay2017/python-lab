@@ -59,6 +59,14 @@ _BUCKET_LANES: dict[str, str] = {
     # added here — they are not gates, and must never produce a
     # gate_suppressions row (pinned in tests/test_gate_ledger.py).
     "pair_blocked_adds":         "add_winner",
+    # G-30 (chunk 7b / N-B2, 2026-10-18) -- negative news. entry_held_adds only
+    # carries a gate_id when the binding hold is news (stale/earnings/check_failed
+    # items stay unlabelled and are skipped above); news_skipped only when the
+    # reconciled "Skip -- Negative News" verdict fired (legacy-conflicted and
+    # "Signals Disagree" skips stay unlabelled). Held vs not-held partition, so
+    # one ticker is never in both lanes on a day.
+    "entry_held_adds":           "add_winner",
+    "news_skipped":              "new_pick",
 }
 
 _MAX_REASON_LEN = 300

@@ -79,7 +79,7 @@ def test_news_exactly_at_bar_is_held_just_above_is_added():
     at = _run(news=_news(NEWS_SENTIMENT_NEGATIVE))
     assert _only(at) == {"added": False, "card": False, "entry": True}
     h = at["entry_held_adds"][0]
-    assert h["check"] == "news" and h["gate_id"] is None and h["counterfactual"] is True
+    assert h["check"] == "news" and h["gate_id"] == "G-30" and h["counterfactual"] is True
     assert h["gate_threshold"] == NEWS_SENTIMENT_NEGATIVE and h["clears_when"]
     above = _run(news=_news(NEWS_SENTIMENT_NEGATIVE + 0.001))
     assert _only(above) == {"added": True, "card": False, "entry": False}

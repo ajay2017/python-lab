@@ -2248,7 +2248,7 @@
     "composite_score": 80.0,
     "counterfactual": true,
     "gap": 10.0,
-    "gate_id": null,
+    "gate_id": "G-30",
     "gate_threshold": -0.15,
     "gate_value": -0.4,
     "holds": [
@@ -2899,10 +2899,16 @@
   "news_skipped": [
    {
     "composite_score": 80.0,
+    "counterfactual": true,
+    "gate_id": "G-30",
+    "gate_threshold": -0.15,
+    "gate_value": -0.35,
     "is_mover": false,
     "label": "\u274c Skip \u2014 Negative News",
     "momentum_score": 92.0,
     "one_liner": "Momentum 92 but news sentiment is negative (-0.35). Wait for the news catalyst to clear before entering.",
+    "price": 50.0,
+    "reason": "Momentum 92 but news sentiment is negative (-0.35). Wait for the news catalyst to clear before entering.",
     "sector": "Utilities",
     "ticker": "ZUTIL"
    }
@@ -3471,7 +3477,7 @@
     "composite_score": 80.0,
     "counterfactual": true,
     "gap": 10.0,
-    "gate_id": null,
+    "gate_id": "G-30",
     "gate_threshold": -0.15,
     "gate_value": -0.4,
     "holds": [
@@ -6897,10 +6903,16 @@
   "news_skipped": [
    {
     "composite_score": 80.0,
+    "counterfactual": true,
+    "gate_id": "G-30",
+    "gate_threshold": -0.15,
+    "gate_value": -0.35,
     "is_mover": false,
     "label": "\u274c Skip \u2014 Negative News",
     "momentum_score": 92.0,
     "one_liner": "Momentum 92 but news sentiment is negative (-0.35). Wait for the news catalyst to clear before entering.",
+    "price": 50.0,
+    "reason": "Momentum 92 but news sentiment is negative (-0.35). Wait for the news catalyst to clear before entering.",
     "sector": "Utilities",
     "ticker": "ZUTIL"
    }
@@ -7311,10 +7323,16 @@
   "news_skipped": [
    {
     "composite_score": 80.0,
+    "counterfactual": true,
+    "gate_id": "G-30",
+    "gate_threshold": -0.15,
+    "gate_value": -0.15,
     "is_mover": false,
     "label": "\u274c Skip \u2014 Negative News",
     "momentum_score": 90.0,
     "one_liner": "Momentum 90 but news sentiment is negative (-0.15). Wait for the news catalyst to clear before entering.",
+    "price": 100.0,
+    "reason": "Momentum 90 but news sentiment is negative (-0.15). Wait for the news catalyst to clear before entering.",
     "sector": "Energy",
     "ticker": "ZNEWX"
    }
@@ -7733,10 +7751,16 @@
   "news_skipped": [
    {
     "composite_score": 80.0,
+    "counterfactual": true,
+    "gate_id": "G-30",
+    "gate_threshold": -0.15,
+    "gate_value": -0.4,
     "is_mover": false,
     "label": "\u274c Skip \u2014 Negative News",
     "momentum_score": 90.0,
     "one_liner": "Momentum 90 but news sentiment is negative (-0.40). Wait for the news catalyst to clear before entering.",
+    "price": 100.0,
+    "reason": "Momentum 90 but news sentiment is negative (-0.40). Wait for the news catalyst to clear before entering.",
     "sector": "Energy",
     "ticker": "ZNEWX"
    }
@@ -12636,7 +12660,7 @@
     "composite_score": 80.0,
     "counterfactual": true,
     "gap": 10.0,
-    "gate_id": null,
+    "gate_id": "G-30",
     "gate_threshold": -0.15,
     "gate_value": -0.4,
     "holds": [

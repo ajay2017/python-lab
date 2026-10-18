@@ -35,4 +35,6 @@ GATE_IDS: dict[str, str] = {
     # Shared new-entry check (chunk 3) — Watchlist ENTER_NOW held by the entry check.
     "G-28": "Imminent HIGH macro → Watchlist ENTER_NOW held",
     "G-29": "Bear-day tone → Watchlist ENTER_NOW deferred",
+    # Shared new-entry check chunk 7b / N-B2 (2026-10-18) — Grow Today news hold.
+    "G-30": "Negative news → Grow Today new pick skipped / add held",
 }
