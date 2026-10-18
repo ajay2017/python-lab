@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mockup — Chunk 7: adds to holdings get the entry check, and say why they're paused</title>
+<style>
+  body { background:#0e1117; color:#e5e7eb; font-family:-apple-system,Segoe UI,Roboto,sans-serif; margin:24px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:#94a3b8; font-size:13px; margin-bottom:20px; }
+  .day { margin:28px 0 8px; font-size:15px; font-weight:700; color:#cbd5e1; border-bottom:1px solid #334155; padding-bottom:6px; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  .col h3 { font-size:12px; letter-spacing:.06em; text-transform:uppercase; margin:6px 0 10px; }
+  .before h3 { color:#f87171; } .after h3 { color:#4ade80; }
+  .panel { background:#111827; border:1px solid #1f2937; border-radius:8px; padding:12px 14px; }
+  .sec { font-weight:700; font-size:14px; margin:4px 0 8px; }
+  .sub2 { font-weight:700; font-size:13px; margin:14px 0 6px; color:#cbd5e1; }
+  .card { background:#0b1220; border-left:3px solid #3b82f6; border-radius:6px; padding:9px 12px; margin:7px 0; }
+  .tk { font-weight:700; } .muted { color:#94a3b8; font-size:12px; margin-top:3px; }
+  .badge { display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px; margin-left:6px; }
+  .b-add { background:#1e3a8a; color:#bfdbfe; }
+  .held { background:#1c1917; border-left:3px solid #f59e0b; border-radius:6px; padding:9px 12px; margin:8px 0; }
+  .held .t { color:#fbbf24; font-weight:700; font-size:13px; }
+  .info { background:#172033; border-left:3px solid #64748b; border-radius:6px; padding:6px 10px; margin:6px 0 0; font-size:12px; color:#cbd5e1; }
+  .btn { display:inline-block; background:#1f2937; border:1px solid #334155; border-radius:5px; padding:3px 10px; margin:6px 6px 0 0; font-size:12px; color:#e5e7eb; }
+  .btn.trade { background:#14532d; border-color:#16a34a; }
+  .cap { color:#94a3b8; font-size:12px; margin-top:6px; }
+  .new { color:#4ade80; font-size:10px; font-weight:700; margin-left:6px; }
+  .ledger { background:#0b1220; border:1px solid #1f2937; border-radius:6px; padding:8px 12px; margin:6px 0; font-size:12.5px; }
+  .ledger .h { font-weight:700; color:#e5e7eb; }
+  .note { background:#172033; border:1px solid #334155; border-radius:6px; padding:10px 14px; font-size:12.5px; color:#cbd5e1; margin-top:22px; line-height:1.55; }
+</style>
+</head>
+<body>
+<h1>Chunk 7 — adds to holdings: same entry check as a new buy, and every pause says why (mockup v1, static)</h1>
+<div class="sub">Owner decisions 2026-10-18: N-A (same news bar as a new buy: average ≤ −0.15, or any Act Today card), N-B (+N-B2, ledger gate G-30), N-C (no macro check on adds yet). Plan <code>docs/plans/shared-entry-check.md</code>. Tickers and numbers illustrative. Nothing here is built yet. Wording is draft — say what to change.</div>
+
+<!-- ───────── 1. BULL DAY, ADDS ───────── -->
+<div class="day">1 · Up day — 🌱 Grow Today, "Add to winners"</div>
+<div class="cols">
+  <div class="col before"><h3>Before (today)</h3><div class="panel">
+    <div class="sub2">➕ Add to winners</div>
+    <div class="card"><span class="tk">ISRG</span><span class="badge b-add">ADD</span>
+      <div class="muted">Composite 79 · +14% above cost · Suggested 2 sh</div><span class="btn trade">Log BUY</span></div>
+    <div class="cap">Missing, with no explanation: MRVL (one −0.06 headline put a Review news card on it), NVDA (avg −0.22 news but no card), AVGO (earnings in 2 days), MU (stale data), CRM (trim card today).</div>
+  </div></div>
+  <div class="col after"><h3>After</h3><div class="panel">
+    <div class="sub2">➕ Add to winners</div>
+    <div class="card"><span class="tk">ISRG</span><span class="badge b-add">ADD</span>
+      <div class="muted">Composite 79 · +14% above cost · Suggested 2 sh</div>
+      <div class="muted">📰 News checked: 6 headlines, avg +0.11 — above the negative-news bar (−0.15)</div>
+      <span class="btn trade">Log BUY</span></div>
+    <div class="card"><span class="tk">MRVL</span><span class="badge b-add">ADD</span>
+      <div class="muted">Composite 77 · +9% above cost · Suggested 3 sh</div>
+      <div class="info">📰 Also in Review: 1 negative headline since Fri (−0.06) — the news average (−0.02) is above the −0.15 add bar, so the add stands. <span class="new">NEW</span></div>
+      <span class="btn trade">Log BUY</span></div>
+
+    <div class="held"><div class="t">📰 Adds held — entry check (3) <span class="new">NEW</span></div>
+      <div class="muted"><b>NVDA</b> — would qualify as an add; held: negative news (avg −0.22 across 5 headlines). Clears when: the news average rises above −0.15.</div>
+      <div class="muted"><b>AVGO</b> — held: earnings in 2d. Clears when: the report is out. <i>Also: news average −0.18.</i></div>
+      <div class="muted"><b>MU</b> — held: stale data — fundamentals 3 days old. Clears when: a refresh brings fresh data — reload the page.</div>
+      <span class="btn">▶ Analyze NVDA</span><span class="btn">▶ Analyze AVGO</span><span class="btn">▶ Analyze MU</span></div>
+    <div class="cap">Not suggested as adds — already have a call today: CRM (Act Today · TRIM), XOM (sold today). <span class="new">NEW</span></div>
+  </div></div>
+</div>
+
+<!-- ───────── 2. FLAT / BEAR DAY ───────── -->
+<div class="day">2 · Flat or down day — "Adds paused until the next up day"</div>
+<div class="cols">
+  <div class="col before"><h3>Before</h3><div class="panel">
+    <div class="cap">Adds paused (flat day): ISRG, MRVL, NVDA — "resume on the next up day".</div>
+  </div></div>
+  <div class="col after"><h3>After</h3><div class="panel">
+    <div class="cap">Adds paused (flat day): ISRG, MRVL — "resume on the next up day".</div>
+    <div class="cap">NVDA isn't listed: it's held by the entry check (news), so "resume on the next up day" wouldn't be true. It shows in "Adds held" on the next up day if still held.</div>
+  </div></div>
+</div>
+
+<!-- ───────── 3. LEDGER ───────── -->
+<div class="day">3 · 🛑 The Road Not Taken (Gate Suppression Ledger) — new gate G-30</div>
+<div class="cols">
+  <div class="col before"><h3>Before</h3><div class="panel">
+    <div class="cap">News skips and news-held adds are never recorded, so whether the news check helps can't be measured.</div>
+  </div></div>
+  <div class="col after"><h3>After</h3><div class="panel">
+    <div class="ledger"><span class="h">G-30 · Negative news → new pick skipped / add held</span> <span class="new">NEW</span>
+      <div class="muted">building — 0/8 matured calls, 0/5 distinct tickers</div>
+      <div class="muted">Each row is graded vs SPY after 30 trading days, like the other gates. If held/skipped names keep beating SPY, that's evidence the news check costs money.</div></div>
+  </div></div>
+</div>
+
+<div class="note"><b>What to check:</b> (1) "Adds held — entry check" as an always-open amber block vs collapsed (▸) like the first mockup. (2) The "Also in Review" line on an add card — clear that the add still stands? (3) The "already have a call today" caption — enough, or should those names be cards too? (4) Showing the "📰 News checked" line on every add card (it's on Watchlist cards already). (5) Flat/bear: leaving entry-held names out of "Adds paused" (with nothing shown that day).<br>
+<b>Not shown:</b> the "entry check couldn't run" fail-closed line (the add is held, reason "entry check couldn't run"); emails are unchanged — they never carried adds.</div>
+</body>
+</html>

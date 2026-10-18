@@ -113,6 +113,7 @@ from stock_analyzer.constants import (
     SECTOR_CEILING,
     SECTOR_ELEVATED,
     SINGLE_NAME_CEILING,
+    NEWS_SENTIMENT_NEGATIVE,
     CONCENTRATION_HIGHBETA_SHARE_WARN,
     JUDGMENT_EXIT_SIGNAL_MAP,
     JUDGMENT_FRAGILITY_SIGNAL_MAP,
@@ -6034,7 +6035,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 17  # bumped: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 18  # bumped: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -8927,7 +8928,8 @@ if page == "🏠 Home":
                     "sector_blocked_adds", "concentration_blocked_adds",
                     "risk_blocked_adds", "sector_blocked_picks",
                     "sector_unknown_picks", "cluster_blocked_adds", "pair_blocked_adds",
-                    "news_skipped", "earnings_waiting"):
+                    "news_skipped", "earnings_waiting",
+                    "entry_held_adds", "card_blocked_adds"):
             _gv = grow.get(_gk)
             if not isinstance(_gv, list):
                 continue
@@ -9098,6 +9100,11 @@ if page == "🏠 Home":
         # F-302: cleared every gate but the card's own verdict was "❌ Skip"
         # (usually Negative News) — held out of New Positions, shown below.
         news_skipped  = grow.get("news_skipped", [])
+        # Chunk 7: adds held by the shared entry check / paused by a card today.
+        # A key missing from a legacy cached brief is "not computed" -> render
+        # nothing (never read as an explanation).
+        entry_held_adds   = grow.get("entry_held_adds")
+        card_blocked_adds = grow.get("card_blocked_adds")
         # F-303: cleared every gate but the card says "⚠️ Caution — Earnings"
         # (wait for the post-print setup) — held out of New Positions too.
         earnings_waiting = grow.get("earnings_waiting", [])
@@ -10108,11 +10115,95 @@ if page == "🏠 Home":
                 st.caption("📐 " + _bud_note)
             if _ga.get("sector_elevated_warning"):
                 st.caption(f"⚠️ {_ga['sector_elevated_warning']}")
+            # Chunk 7: a news check that RAN and cleared says so (same wording as
+            # the Watchlist card line).
+            _ga_passed = _ga.get("entry_passed")
+            _ga_rn = _ga.get("review_news_note")
+            # The Also-in-Review line below states the news average itself, so a
+            # numeric average there makes this caption redundant.
+            _ga_rn_has_avg = isinstance(_ga_rn, dict) and isinstance(_ga_rn.get("news_avg"), (int, float))
+            for _ga_pn in ([] if _ga_passed is None else _ga_passed):
+                if isinstance(_ga_pn, dict) and _ga_pn.get("check") == "news" and not _ga_rn_has_avg:
+                    st.caption(f"📰 News checked: {str(_ga_pn.get('detail', '')).replace('$', chr(92) + '$')}")
+            # Chunk 7: a Review news WATCH no longer pauses the add -- say so.
+            if isinstance(_ga_rn, dict):
+                _rn_n = _ga_rn.get("n_negative")
+                _rn_parts = ["📰 Also in Review: "]
+                if isinstance(_rn_n, (int, float)):
+                    _rn_parts.append(f"{int(_rn_n)} negative headline{'s' if int(_rn_n) != 1 else ''}")
+                else:
+                    _rn_parts.append("negative headlines")
+                if _ga_rn.get("window_label"):
+                    _rn_parts.append(f" since {_ga_rn['window_label']}")
+                if isinstance(_ga_rn.get("worst_compound"), (int, float)):
+                    _rn_parts.append(f" ({_ga_rn['worst_compound']:+.2f})")
+                if isinstance(_ga_rn.get("news_avg"), (int, float)):
+                    _rn_parts.append(
+                        f" — the news average ({_ga_rn['news_avg']:+.2f}) is above the "
+                        f"{NEWS_SENTIMENT_NEGATIVE:+.2f} add bar, so the add stands.")
+                else:
+                    _rn_parts.append(" — no news average to check, so the add stands on the other checks.")
+                st.info("".join(_rn_parts).replace("$", chr(92) + "$"))
+            # Chunk 7: an input the entry check could not run says so (as Watchlist).
+            _ga_unchecked = _ga.get("entry_unchecked")
+            for _ga_un in ([] if _ga_unchecked is None else _ga_unchecked):
+                if isinstance(_ga_un, dict):
+                    st.caption(f"⚠️ {str(_ga_un.get('why', '')).replace('$', chr(92) + '$')}")
 
             if st.button(f"▶ Analyze {_ga['ticker']}", key=f"_db_grow_add_{_ga['ticker']}"):
                 st.session_state["_pending_page"]    = "📈 Analysis"
                 st.session_state["_analysis_ticker"] = _ga["ticker"]
                 st.rerun()
+
+        # Chunk 7: adds held by the shared entry check (stale data / negative
+        # news / earnings). Always open -- a held add must say why.
+        if isinstance(entry_held_adds, list) and entry_held_adds:
+            _eh_rows = []
+            for _eh in entry_held_adds:
+                _eh_tk = str(_eh.get("ticker", "")).strip()
+                if not _eh_tk:
+                    continue
+                _eh_line = (
+                    f"{_eh_tk} — would qualify as an add; held: {_eh.get('reason') or 'entry check'}."
+                )
+                if _eh.get("clears_when"):
+                    _eh_line += f" Clears when: {str(_eh['clears_when']).rstrip('.')}."
+                _eh_others = [
+                    str(_h.get("reason")) for _h in ([] if _eh.get("holds") is None else _eh["holds"])[1:]
+                    if isinstance(_h, dict) and _h.get("reason")
+                ]
+                if _eh_others:
+                    _eh_line += " Also: " + "; ".join(_eh_others) + "."
+                _eh_rows.append((_eh_tk, _eh_line))
+            if _eh_rows:
+                st.markdown(
+                    "<div style='background:#1c1917;border-left:3px solid #f59e0b;"
+                    "border-radius:6px;padding:8px 14px;margin:8px 0'>"
+                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em'>"
+                    f"📰 Adds held — entry check ({_safe_html(str(len(_eh_rows)))})</div></div>",
+                    unsafe_allow_html=True,
+                )
+                for _eh_tk, _eh_line in _eh_rows:
+                    st.caption(_eh_line.replace("$", chr(92) + "$"))
+                for _eh_i in range(0, len(_eh_rows), 4):
+                    _eh_chunk = _eh_rows[_eh_i:_eh_i + 4]
+                    _eh_cols = st.columns(len(_eh_chunk))
+                    for _eh_col, (_eh_tk, _eh_line) in zip(_eh_cols, _eh_chunk):
+                        if _eh_col.button(f"▶ Analyze {_eh_tk}", key=f"_db_grow_held_add_{_eh_tk}"):
+                            st.session_state["_pending_page"]    = "📈 Analysis"
+                            st.session_state["_analysis_ticker"] = _eh_tk
+                            st.rerun()
+        if isinstance(card_blocked_adds, list) and card_blocked_adds:
+            _cba = [
+                f"{str(_cb.get('ticker', '')).strip()} ({_cb.get('card_label') or 'Card'})"
+                for _cb in card_blocked_adds
+                if isinstance(_cb, dict) and str(_cb.get("ticker", "")).strip()
+            ]
+            if _cba:
+                st.caption(
+                    "Not suggested as adds — already have a call today: "
+                    + ", ".join(_cba)
+                )
 
         # Post-add cooldown — you already acted on this add recently; the app
         # is deliberately staying quiet so it doesn't read as day-trading.
@@ -41620,7 +41711,7 @@ Once your trades are logged and reconciled (see *First run* above), your daily r
 
 The Home brief is split into **offense** (left) and **defense** (right).
 
-**Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape.
+**Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape. An add to a holding gets the same entry check as a new buy: it's held — and listed under **"📰 Adds held — entry check"** with the reason and what clears it — when the holding's news averages −0.15 or worse, earnings are within 7 days, or its data is stale. A holding that already has a card today (a trim, an exit, a Monitoring watch) isn't suggested as an add, and a line names it. A single mild negative headline doesn't pause an add on its own: the add card says "📰 Also in Review: …" so you see it.
 
 **About the suggested share count.** It comes from the same sizing rule the whole app uses: risk 1.5% of the book on the trade, with the stop set 2× ATR below price, then **cap the position at the 15% single-name ceiling**. When your account is leveraged with a fresh cash balance, a second, separate ceiling also applies — 25% of your net capital (equity after margin debit), not just 15% of gross book — since leverage can make a "small" position a much bigger bet against the money you actually own. If the app does not know your portfolio value yet in this session — for example you opened 📈 Analysis or 📋 Watchlist directly without visiting 🏠 Home — it will **propose no share count at all** rather than guess against an assumed account size, and will say so. The card will disclose either ceiling if it binds, and both together if both do. Three things follow. First, when a cap binds, the card says so and tells you what the uncapped risk-budget size would have been — it never quietly shrinks a number on you. Second, **a suggested size is a per-idea maximum, not a portfolio plan**: at 15% apiece a book only funds about six full positions, so the sizes on screen are not meant to be taken all at once. Third, the app will suggest **no size at all** — and say which of the two reasons applies — when a single share would already exceed the ceiling (that's an account-size limit; changing the stop won't fix it) or when the price has fallen to or below the name's ATR stop (no room between entry and stop to size against). It never leaves the size line blank without a reason.
 

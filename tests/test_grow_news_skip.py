@@ -359,7 +359,7 @@ def test_app_wires_earnings_waiting():
                            if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)}
     src = ast.unparse(tree)
     assert "'earnings_waiting': earnings_waiting" in src           # _do_buckets
-    assert "'news_skipped', 'earnings_waiting')" in src            # dedup loop
+    assert "'news_skipped', 'earnings_waiting'," in src            # dedup loop
     # _ns_comp is shared by both boxes, so it must not live inside either if-block.
     for b in box + [n for n in ast.walk(tree) if isinstance(n, ast.If)
                     and isinstance(n.test, ast.Name) and n.test.id == "news_skipped"]:

@@ -346,6 +346,17 @@ def _card_label(item: dict, source: str) -> str:
     return f"{prefix} · {suffix}" if suffix else prefix
 
 
+def _probe_item(item: dict, source: str) -> dict:
+    """Copy of `item` tagged with `_source`, with a malformed (non-dict) review
+    `action` normalised exactly as `_card_label` does, so `_is_reduce` never
+    raises on it."""
+    probe = {**item, "_source": source}
+    act = item.get("action")
+    if source == "review" and not isinstance(act, dict):
+        probe["action"] = {"type": str(act or "")}
+    return probe
+
+
 def add_blocking_cards(
     act_today: list | None,
     review_list: list | None,
@@ -362,13 +373,25 @@ def add_blocking_cards(
     with no card gets "sold today". Pure; safe on None/empty.
     """
     out: dict[str, str] = {}
+    # A critical-news card never outranks a reduce card for the label: Home
+    # folds the news card into the reduce card (`_reconcile_act`), so naming the
+    # news card would point at a card that isn't on screen (chunk 7c).
+    _news_labelled: set[str] = set()
     for src, items in (("act", act_today), ("review", review_list)):
         for it in (items or []):
             if src == "review" and it.get("watch_kind") == "news":
                 continue
             t = _ticker(it)
-            if t and t not in out:
+            if not t:
+                continue
+            is_news = src == "act" and str(it.get("kind", "")) == "critical_news"
+            if t not in out:
                 out[t] = _card_label(it, src)
+                if is_news:
+                    _news_labelled.add(t)
+            elif t in _news_labelled and _is_reduce(_probe_item(it, src)):
+                out[t] = _card_label(it, src)
+                _news_labelled.discard(t)
     for s in (sold_today or ()):
         t = str(s).upper()
         if t and t not in out:
