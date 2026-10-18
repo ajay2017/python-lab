@@ -17,6 +17,8 @@ from stock_analyzer.gate_ledger_readout import readout_footnotes
 from stock_analyzer.gate_registry import GATE_IDS
 from stock_analyzer.signal_reconciliation import reconcile_signals
 from tests.test_add_entry_check import _T, _iso, _news, _run as _run_add
+from stock_analyzer.daily_briefing import _grow_today
+from tests.test_daily_briefing import make_port_df
 from tests.test_grow_news_skip import _bundle, _neg_news, _run as _run_pick
 
 pytestmark = pytest.mark.fast
@@ -184,3 +186,49 @@ def test_new_pick_gate_value_is_the_mean_of_the_headlines():
                   news, {"NEW": _bundle()})
     assert [i["ticker"] for i in g["news_skipped"]] == ["NEW"]
     assert g["news_skipped"][0]["gate_value"] == pytest.approx(-0.30)
+
+
+def _run_mover(news, tone="bull"):
+    ms = [{"ticker": "MV", "price": 100.0, "sector": "Energy", "score": COMPOSITE_BUY - 20,
+           "composite_score": 80, "day_change": 6.0}]
+    port_df = make_port_df([{"ticker": "HELD", "weight": 5.0, "sector": "Tech"}])
+    return _grow_today(port_df, None, news, {}, _D, 100_000.0, {"tone": tone},
+                       composites={"MV": _bundle(80)}, movers=ms)
+
+
+def test_low_momentum_mover_with_negative_news_is_skipped_and_ledgered():
+    # Movers aren't momentum-gated: a Buy-composite mover with modest scanner
+    # momentum + negative news used to reconcile "go" and get sized and logged as new_pick (app only).
+    g = _run_mover(_neg_news("MV"))
+    assert "MV" not in [i["ticker"] for i in g["new_picks"]]
+    item = next(i for i in g["news_skipped"] if i["ticker"] == "MV")
+    assert item["label"] == daily_briefing._NEGATIVE_NEWS_SKIP_LABEL
+    assert item["is_mover"] is True and item["gate_id"] == "G-30"
+    assert "Breakout today" in item["one_liner"]
+    rows = _g30(_rows(g))
+    assert len(rows) == 1 and rows[0]["ticker"] == "MV" and rows[0]["lane"] == "new_pick"
+    # _neg_news uses compound NEWS_SENTIMENT_NEGATIVE - 0.3 on every headline.
+    assert rows[0]["gate_value"] == pytest.approx(NEWS_SENTIMENT_NEGATIVE - 0.3)
+    assert rows[0]["gate_threshold"] == NEWS_SENTIMENT_NEGATIVE
+
+
+def test_low_momentum_mover_without_news_is_a_new_pick_control():
+    g = _run_mover([])
+    assert [i["ticker"] for i in g["new_picks"]] == ["MV"]
+    assert g["news_skipped"] == [] and _g30(_rows(g)) == []
+
+
+def test_flat_day_mover_with_negative_news_is_a_g30_skip_not_a_flat_hold():
+    g = _run_mover(_neg_news("MV"), tone="flat")
+    assert "MV" not in [i["ticker"] for i in g["new_picks"]]
+    assert "MV" not in [i["ticker"] for i in g.get("flat_day_held", [])]
+    item = next(i for i in g["news_skipped"] if i["ticker"] == "MV")
+    assert item["gate_id"] == "G-30" and item["is_mover"] is True
+    rows = _g30(build_suppression_rows(g, rec_date=_D, source="app", tone="flat"))
+    assert len(rows) == 1 and rows[0]["ticker"] == "MV"
+
+
+def test_flat_day_mover_without_news_is_a_new_pick_control():
+    g = _run_mover([], tone="flat")
+    assert [i["ticker"] for i in g["new_picks"]] == ["MV"]
+    assert g["news_skipped"] == [] and g.get("flat_day_held", []) == []

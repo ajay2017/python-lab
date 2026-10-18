@@ -23,9 +23,9 @@ Briefing, Grow Today, Market Scanner, and Watchlist.
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
-    NEWS_SENTIMENT_NEGATIVE,
     EARNINGS_IMMINENT_DAYS,
 )
+from stock_analyzer.entry_eligibility import is_negative_news
 
 
 # Composite signal categorisation — string-match because the producer
@@ -85,8 +85,9 @@ def reconcile_signals(
     "momentum_score" is really the composite compared against itself), the
     one-liner is rewritten to stop claiming two independent signals agree.
     momentum_score itself is NEVER gated on this flag — it still drives the
-    branch conditions (including the protective negative-news skip) exactly
-    as before. Only the returned copy string changes.
+    Signals Disagree skip exactly as before. Only the returned copy string
+    changes. The negative-news skip no longer depends on momentum_score (movers
+    are not momentum-gated); it uses entry_eligibility.is_negative_news.
     """
     comp_class = _composite_class(composite_signal, composite_score)
     composite_available = comp_class != "unknown"
@@ -115,7 +116,7 @@ def reconcile_signals(
         f"in {earnings_days}d" if earnings_imminent else None
     )
 
-    negative_news = news_sentiment is not None and news_sentiment <= NEWS_SENTIMENT_NEGATIVE
+    negative_news = is_negative_news(news_sentiment)
 
     # ── SKIP: composite contradicts momentum ────────────────────────────────
     if composite_available and comp_class in ("sell", "hold") and momentum_score >= COMPOSITE_BUY:
@@ -142,7 +143,7 @@ def reconcile_signals(
         }
 
     # ── SKIP: strong negative news regardless of other signals ──────────────
-    if negative_news and momentum_score >= COMPOSITE_BUY:
+    if negative_news:
         if momentum_available:
             one_liner = (
                 f"{mom_str} but news sentiment is negative ({news_sentiment:+.2f}). "

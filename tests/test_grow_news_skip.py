@@ -247,21 +247,36 @@ def test_conflicted_with_bad_data_keeps_the_data_reason():
     assert g["composite_skipped"] == [] and g["news_skipped"] == []
 
 
-def test_conflicted_residual_is_held_out_visibly():
-    # A low-score mover with negative news AND earnings in 2 days: legacy
-    # "conflicted" (earnings + signal), but reconciled is NOT "skip" -- the
-    # negative-news skip needs momentum >= COMPOSITE_BUY -- so only the
-    # residual branch can catch it. Pre-follow-up it vanished.
+def _mover_run(bundle, news, earnings=None):
     ms = [{"ticker": "MV", "price": 100.0, "sector": "Energy", "score": COMPOSITE_BUY - 20,
            "composite_score": 80, "day_change": 6.0}]
     port_df = make_port_df([{"ticker": "HELD", "weight": 5.0, "sector": "Tech"}])
-    g = _grow_today(port_df, None, _neg_news("MV"), {}, _TODAY, 100_000.0, {"tone": "bull"},
-                    composites={"MV": _bundle(80)}, movers=ms,
-                    earnings_lookup={"MV": (_TODAY + timedelta(days=2)).isoformat()})
+    return _grow_today(port_df, None, news, {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       composites={"MV": bundle}, movers=ms, earnings_lookup=earnings or {})
+
+
+def test_low_momentum_mover_with_news_and_earnings_is_a_negative_news_skip():
+    # Pre 2026-10-18 this fixture reached the legacy-conflicted residual branch
+    # because the news skip needed momentum >= COMPOSITE_BUY. It no longer does:
+    # the news skip is momentum-independent and wins first.
+    g = _mover_run(_bundle(80), _neg_news("MV"),
+                   {"MV": (_TODAY + timedelta(days=2)).isoformat()})
+    assert "MV" not in _tickers(g["new_picks"])
+    item = next(i for i in g["news_skipped"] if i["ticker"] == "MV")
+    assert "Negative News" in item["label"] and "Conflicted" not in item["label"]
+
+
+def test_conflicted_residual_is_held_out_visibly():
+    # The residual _legacy_conflicted branch still exists: a Hold-labelled
+    # bundle whose total clears the composite gate on score (so it isn't
+    # composite_skipped) is legacy "conflicted" (composite vs technical) while
+    # reconcile_signals (momentum below the buy bar) is NOT a skip.
+    g = _mover_run({**_bundle(COMPOSITE_BUY + 15), "rec": {"label": "Hold"}}, [])
     assert "MV" not in _tickers(g["new_picks"])
     item = next(i for i in g["news_skipped"] if i["ticker"] == "MV")
     assert "Conflicted" in item["label"]
-    assert "Earnings" in item["one_liner"] and "News sentiment" in item["one_liner"]
+    assert "Composite signal: Hold" in item["one_liner"]      # only this branch builds it from xref["conflicts"]
+    assert item.get("gate_id") is None and item["is_mover"] is True
 
 
 def test_no_new_pick_is_ever_legacy_conflicted():

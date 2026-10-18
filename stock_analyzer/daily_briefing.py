@@ -1340,9 +1340,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # gates below so it lands in the bucket that names its reason: a
             # Hold/Sell composite is a composite below the Buy bar
             # (composite_skipped), a stale/missing one is composite_unavailable,
-            # and anything left (e.g. negative news + imminent earnings on a
-            # mover) is held out into news_skipped after the reconciled-skip
-            # check. It can never reach sizing or new_picks.
+            # and anything left is held out into news_skipped after the
+            # reconciled-skip check. Since 2026-10-18 negative news (with or
+            # without imminent earnings) is a reconciled skip at any momentum,
+            # so that last branch is a defensive backstop. It can never reach
+            # sizing or new_picks.
             _legacy_conflicted = xref["verdict"] == "conflicted"
             # Flat-day high-conviction suppression — CURATED ONLY. A composite-Buy
             # mover up 5%+ today is itself the "clearer direction" the flat-day
@@ -1903,17 +1905,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # The synthetic scanner_row's "Score" feeds reconcile_signals()'s
             # own `momentum_score` parameter, which — unlike the visible
             # "Momentum" line (omitted via scanner_row_is_synthetic=True) —
-            # is NOT gated on momentum_available: it still drives branch
-            # conditions, including the protective negative-news skip
-            # (`negative_news and momentum_score >= COMPOSITE_BUY`). Passing a
-            # literal 0 here would make that check permanently unreachable for
-            # every ETF pick, silently disabling the one thing that could
-            # still veto an otherwise-eligible broad-market pick on a
-            # genuinely bad-news day. Using the real etf_total (already
-            # confirmed >= COMPOSITE_STRONG_BUY by etf_newpick_eligible above)
-            # keeps that check live without fabricating a visible momentum
-            # reading anywhere — Layer 1's own "Momentum: ..." string is still
-            # skipped entirely for a synthetic row, so nothing new renders.
+            # is NOT gated on momentum_available: it still drives the Signals
+            # Disagree branch. Using the real etf_total (already confirmed
+            # >= COMPOSITE_STRONG_BUY by etf_newpick_eligible above) rather
+            # than a literal 0 keeps that branch live without fabricating a
+            # visible momentum reading. The negative-news skip no longer
+            # depends on momentum_score at all, so it still vetoes this pick
+            # on a bad-news day either way.
             _shadow_composites = {_et: {"rec": _etf_rec, "total": _etf_total}}
             _etf_xref = _cross_reference(
                 _et, {"Ticker": _et, "Score": _f(_etf_total, 0), "Signal": ""}, port_df, news_items,
@@ -1928,10 +1926,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             if _etf_xref["verdict"] == "conflicted":
                 continue
 
-            # F-302 — same reconciled-skip hold-out as the stock lane. The
-            # comment above keeps momentum_score live precisely so negative news
-            # can veto an ETF pick; without this the card read "Skip" while the
-            # pick was still sized into new_picks. Routed into this lane's own
+            # F-302 — same reconciled-skip hold-out as the stock lane, so
+            # negative news vetoes an ETF pick; without this the card read
+            # "Skip" while the pick was still sized into new_picks. Routed into this lane's own
             # visible screen-out bucket, like its macro/AUM/held-group reasons.
             _etf_rv = _etf_xref.get("verdict_reconciled")
             if isinstance(_etf_rv, dict) and _etf_rv.get("verdict") == "skip":

@@ -7,7 +7,7 @@ import pytest
 
 from stock_analyzer import entry_eligibility as ee
 from stock_analyzer.constants import (
-    EARNINGS_IMMINENT_DAYS, GROW_TODAY_MAX_FUND_AGE_DAYS, MACRO_IMMINENT_DAYS,
+    COMPOSITE_BUY, EARNINGS_IMMINENT_DAYS, GROW_TODAY_MAX_FUND_AGE_DAYS, MACRO_IMMINENT_DAYS,
     MARKET_TONE_BEAR_PCT, MARKET_TONE_BULL_PCT, NEWS_SENTIMENT_NEGATIVE,
 )
 from stock_analyzer.macro_calendar import HIGH
@@ -101,11 +101,17 @@ def test_data_trust_boundaries():
     NEWS_SENTIMENT_NEGATIVE, NEWS_SENTIMENT_NEGATIVE - 0.001, NEWS_SENTIMENT_NEGATIVE + 0.001,
     -0.4, 0.0, 0.5, None,
 ])
-def test_is_negative_news_matches_reconcile_signals(c):
-    r = reconcile_signals("X", 90, "Strong Buy", composite_score=85,
+@pytest.mark.parametrize("mom", [0, COMPOSITE_BUY - 1, 90])
+def test_is_negative_news_matches_reconcile_signals(c, mom):
+    r = reconcile_signals("X", mom, "Strong Buy", composite_score=85,
                           composite_signal="Strong Buy", news_sentiment=c)
     skipped = r["verdict"] == "skip" and "Negative News" in r["label"]
     assert ee.is_negative_news(c) == skipped
+
+
+def test_reconcile_signals_uses_the_one_shared_predicate():
+    from stock_analyzer import signal_reconciliation
+    assert signal_reconciliation.is_negative_news is ee.is_negative_news
 
 
 def test_news_compound():

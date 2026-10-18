@@ -14,7 +14,9 @@ composite, then go, then a verify fallback) -- several tests here exist
 specifically to pin that ORDER, not just each condition in isolation, since a
 reordering would silently change which tier wins when two conditions overlap.
 """
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_HOLD
+import pytest
+
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_HOLD, NEWS_SENTIMENT_NEGATIVE
 from stock_analyzer.signal_reconciliation import (
     classify_composite_direction,
     classify_signal_change,
@@ -335,3 +337,41 @@ def test_momentum_available_true_go_one_liner_unchanged_default_behaviour():
         composite_score=90.0, composite_signal="Strong Buy",
     )
     assert "technical momentum and full-score analysis agree" in result["one_liner"]
+
+
+# ── negative-news skip is momentum-independent (movers aren't momentum-gated) ─
+
+@pytest.mark.parametrize("mom", [0, COMPOSITE_BUY - 1, COMPOSITE_BUY])
+def test_negative_news_skips_at_any_momentum(mom):
+    r = reconcile_signals("X", mom, composite_score=80, composite_signal="Buy",
+                          news_sentiment=NEWS_SENTIMENT_NEGATIVE)
+    assert r["verdict"] == "skip" and "Negative News" in r["label"]
+
+
+def test_news_just_above_threshold_is_not_a_skip():
+    r = reconcile_signals("X", 0, composite_score=80, composite_signal="Buy",
+                          news_sentiment=NEWS_SENTIMENT_NEGATIVE + 0.001)
+    assert r["verdict"] == "go"
+
+
+def test_negative_news_skip_on_mover_reads_breakout_not_momentum():
+    r = reconcile_signals("X", 10, composite_score=80, composite_signal="Buy",
+                          is_mover=True, news_sentiment=NEWS_SENTIMENT_NEGATIVE - 0.2)
+    assert r["verdict"] == "skip"
+    assert "Breakout today" in r["one_liner"] and "Momentum" not in r["one_liner"]
+
+
+def test_low_momentum_negative_news_beats_earnings_caution_and_verify():
+    neg = NEWS_SENTIMENT_NEGATIVE - 0.2
+    r = reconcile_signals("X", 10, composite_score=80, composite_signal="Buy",
+                          earnings_days=2, news_sentiment=neg)
+    assert r["verdict"] == "skip" and "Negative News" in r["label"]
+    r = reconcile_signals("X", 10, composite_score=None, composite_signal=None,
+                          news_sentiment=neg)
+    assert r["verdict"] == "skip" and "Negative News" in r["label"]
+
+
+def test_signals_disagree_still_precedes_negative_news():
+    r = reconcile_signals("X", 90, composite_score=55, composite_signal="Hold",
+                          news_sentiment=NEWS_SENTIMENT_NEGATIVE - 0.2)
+    assert r["verdict"] == "skip" and "Signals Disagree" in r["label"]
