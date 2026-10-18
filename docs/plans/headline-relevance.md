@@ -1,7 +1,7 @@
 # A headline counts only when it names the company
 
 **Status: DESIGNED 2026-10-17 (planner Opus 5.5, PROCEED WITH CHANGES, measured on live Yahoo headlines). **Owner
-decisions R1-R9 ALL DECIDED 2026-10-17 — every recommendation accepted** (order: relevance → R9 de-dup → D-7 "ap" → news 3b). Chunk 1 COMMITTED locally 2026-10-17 (Opus SHIP after 4 rounds); R9 next; push all together.** Triggered by the first live render of F-308
+decisions R1-R9 ALL DECIDED 2026-10-17 — every recommendation accepted** (order: relevance → R9 de-dup → D-7 "ap" → news 3b). Chunk 1 `3440d18` (Opus SHIP after 4 rounds) + R9 `e0d166e` (SHIP) committed; D-7 + docs last; all pushed together. Requirements: F-309. **D-G's count resets from this deploy** (earlier cards were the wrong-company defect).** Triggered by the first live render of F-308
 (`docs/plans/held-news-coverage.md`): most Review news WATCH cards quoted headlines about OTHER companies.
 
 ## Problem (live 2026-10-17)
@@ -71,3 +71,9 @@ rescore already targets when a key exists).
 - **R7 wording changed by the lead (owner-visible):** "were about other companies" can be FALSE (the SpaceX case — a headline about the company that just doesn't use the name the rule knows). Disclosures now say the headlines "didn't name TICKER in the title", which is true in every case.
 - Fail-open (no usable name) is now visible on Analysis: "Couldn't check which headlines name TICKER … all tagged headlines are counted."
 - **Known residual:** a holding whose headlines use a brand the alias map doesn't know loses that news from decisions until an alias is added; the disclosure says so honestly. The universe sweep (224 `TICKER_SECTORS` names) is the check.
+
+## Deferred (non-blocking, from the D-7 review 2026-10-17)
+- `data.curate_news_items`' title-only branch still builds its key with `title.lower()[:70]` rather than `title_key()` (same result today; drift risk).
+- A curly-apostrophe "Barron’s" publisher is tier 3 (was before D-7 too); Yahoo sends "Barrons.com" (tier 1). Normalise ’ → ' if it ever appears.
+- "APNews" (one word) would be tier 3; never seen live (Yahoo sends "Associated Press"/"AP"). Add `apnews` to `_TIER1` if it appears.
+- Block's product brands ("Cash App", "Square") are not aliases (R4); "Cash App" stories don't count for XYZ — an owner call if wanted.

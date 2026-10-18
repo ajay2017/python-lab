@@ -1,6 +1,7 @@
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, date, timezone
+import re
 import pytz
 
 from stock_analyzer import constants as _C
@@ -378,6 +379,24 @@ _TIER2 = frozenset([
 ])
 
 
+def publisher_tier(publisher) -> int:
+    """Source-credibility tier: 1 (wire/major), 2 (known finance outlet), 3 (other).
+
+    An entry matches only on non-alphanumeric boundaries, never as a bare
+    substring: "ap" matches "AP" / "AP News" but not "AppleInsider" or
+    "TheWrap". Tier feeds Act Today critical news, so a mislabelled source
+    could create a card.
+    """
+    pub_l = str(publisher or "").lower()
+    if not pub_l:
+        return 3
+    for tier, entries in ((1, _TIER1), (2, _TIER2)):
+        for e in entries:
+            if re.search(rf"(?<![a-z0-9]){re.escape(e)}(?![a-z0-9])", pub_l):
+                return tier
+    return 3
+
+
 # Sidebar / top-N held headlines; display count, not policy.
 HELD_NEWS_DISPLAY_COUNT = 20
 
@@ -417,7 +436,7 @@ def _parse_news_item(item: dict) -> tuple[str, str, str, int]:
 _NEWS_PER_TICKER = 8
 
 
-def _title_key(title) -> str:
+def title_key(title) -> str:
     """The headline de-dup key (shared by curate_news_items and dedupe_titles)."""
     return str(title or "").lower()[:70]
 
@@ -427,11 +446,15 @@ def dedupe_titles(items) -> list:
 
     Turns the per-ticker decision list back into the title-unique list the
     sidebar shows (a headline naming several holdings appears once).
+
+    Parity with the old title-only sidebar list holds when a shared
+    headline's copies share the ts//1800 bucket and tier; otherwise the list
+    is sorted fresher/higher-tier first, so that copy is the one kept.
     """
     seen: set[str] = set()
     out: list = []
     for it in items:
-        key = _title_key(it.get("title"))
+        key = title_key(it.get("title"))
         if key in seen:
             continue
         seen.add(key)
@@ -461,14 +484,12 @@ def curate_news_items(data_by_ticker: dict, max_items: int | None = HELD_NEWS_DI
             title, publisher, url, ts = _parse_news_item(item)
             if not title:
                 continue
-            key = (ticker, _title_key(title)) if per_ticker else title.lower()[:70]
+            key = (ticker, title_key(title)) if per_ticker else title.lower()[:70]
             if key in seen:
                 continue
             seen.add(key)
 
-            pub_l = publisher.lower()
-            tier = (1 if any(p in pub_l for p in _TIER1) else
-                    2 if any(p in pub_l for p in _TIER2) else 3)
+            tier = publisher_tier(publisher)
 
             compound = _va.polarity_scores(title)["compound"]
             label = ("Positive" if compound >= 0.05 else
@@ -494,6 +515,10 @@ def curate_brief_news(held_data: dict | None, candidates: dict | None,
                       held_news: list | None = None) -> list[dict]:
     """The `news_items` both Daily Brief builds pass (app and cron), so they
     cannot drift (audit 2026-10-11 B-M7, fixed 2026-10-13).
+
+    Both parts are built with per_ticker=True: a headline naming several
+    holdings is kept once PER ticker (the relevance filter keeps it only on
+    tickers its title names).
 
     Two parts, the candidate part capped, the held part uncapped:
       * HELD news -- `held_news` when given (the app passes its FINAL held

@@ -1,7 +1,7 @@
 # Every holding's news is checked — held-news coverage fix
 
 **Status: DESIGNED 2026-10-17 (planner Opus 5.5, PROCEED WITH CHANGES, checked against HEAD `a8be518`). Owner
-decided to fix the cap (vs disclose only) 2026-10-17; **ALL decisions D-A..D-H DECIDED 2026-10-17 — every recommendation accepted** (D-A = 1 trading day); D-I (Tune-up) added + decided 2026-10-17. Chunk 1 `3ea4306` and chunk 2 `543544e` COMMITTED locally (Opus SHIP); chunk 4 + docs (chunk 3) Opus SHIP after one FIX-FIRST round (flags must come from the detectors before card de-dup); all three commits pushed together. Requirements: F-308.** Runs
+decided to fix the cap (vs disclose only) 2026-10-17; **ALL decisions D-A..D-H DECIDED 2026-10-17 — every recommendation accepted** (D-A = 1 trading day); D-I (Tune-up) added + decided 2026-10-17. Chunk 1 `3ea4306` and chunk 2 `543544e` COMMITTED locally (Opus SHIP); chunk 4 + docs (chunk 3) Opus SHIP after one FIX-FIRST round (flags must come from the detectors before card de-dup); all three commits pushed together (`3ea4306`, `543544e`, `e9303ff`). Requirements: F-308. **2026-10-17 live render:** most Review news cards quoted other companies' stories → fixed by F-309 (`docs/plans/headline-relevance.md`); **D-G's count restarts from the F-309 deploy**, and its pre-registered first option (tier ≤ 2 on Review) was measured as a poor lever (keeps tier-2 misreads, drops real tier-3 negatives) — re-examine before using it.** Runs
 before news chunk 3b (`docs/plans/news-feed-restore.md`), which then extends this module with `coverage(...)`.
 
 ## Problem (lead-verified)

@@ -82,13 +82,13 @@ def rescore_selection(
     if keep_first is None:   # default = the shared display count (lazy import)
         from stock_analyzer.data import HELD_NEWS_DISPLAY_COUNT
         keep_first = HELD_NEWS_DISPLAY_COUNT
-    from stock_analyzer.data import _title_key
+    from stock_analyzer.data import title_key
     head: list[int] = []
     seen_titles: set[str] = set()
     for i, it in enumerate(items):
         if len(head) >= keep_first:
             break
-        k = _title_key(it.get("title") if hasattr(it, "get") else None)
+        k = title_key(it.get("title") if hasattr(it, "get") else None)
         if k in seen_titles:
             continue
         seen_titles.add(k)

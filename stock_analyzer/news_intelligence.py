@@ -397,7 +397,7 @@ def rescore_brief_news(
 ) -> tuple[list[dict], dict | None]:
     """Decision-scoped suppress-only rescore of the full held headline list.
 
-    Sends the first 20 items plus in-window items <= NEWS_SENTIMENT_WARN (at
+    Sends the first 20 distinct titles plus in-window items <= NEWS_SENTIMENT_WARN (at
     most _RESCORE_MAX_ITEMS), batched and memoized. Returns copies of ALL items
     (order unchanged) and a status dict (None when no api_key). `memo` is
     mutated in place: {"scores": {(TICKER, title[:70]): score}, "failed_at": ts}.

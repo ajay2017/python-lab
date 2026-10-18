@@ -59,7 +59,7 @@ one FIX-FIRST round). Chunk 3 split into 3a/3b/3c 2026-10-17 (see Build plan); *
 | D-4 | A news outage turns the cron lane red | **Yes** |
 | D-5 | Composites carried a fabricated 50 sentiment during the outage | **Dated footnotes, no `COMPOSITE_WEIGHTS_VERSION` bump**; expect ±1-2 pt moves on deploy (flips near 65 / 75) |
 | D-6 | Footnote the window on Engine Track Record + Recommendation Outcomes | **Yes**, once the SQL dates it |
-| D-7 | Pre-existing: `_TIER1` contains `"ap"` matched by substring (AppleInsider, TheWrap → tier 1) | **Separate reviewed fix**, not bundled |
+| D-7 | Pre-existing: `_TIER1` contains `"ap"` matched by substring (AppleInsider, TheWrap → tier 1) | **Separate reviewed fix**, not bundled — **DONE 2026-10-17** (`data.publisher_tier`, whole-word match; F-309) |
 
 ## Build plan
 | # | Chunk | Review |

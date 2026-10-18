@@ -46,6 +46,19 @@ def test_dedupe_titles_keeps_first_order_preserved():
     assert [i["title"] for i in dedupe_titles(items)] == ["A x", "B", "C"]
 
 
+def test_dedupe_titles_differing_copies_keep_fresher_or_higher_tier():
+    # Documented: parity with the old title-only list needs copies sharing the
+    # ts//1800 bucket and tier; otherwise the fresher / higher-tier copy wins.
+    d = {"AAA": {"news_raw": [_raw(_SHARED, ts=_S + 100, pub="Zacks")]},
+         "BBB": {"news_raw": [_raw(_SHARED, ts=_S + 100 + 7200, pub="Zacks")]}}
+    kept = dedupe_titles(curate_news_items(d, max_items=None, per_ticker=True))
+    assert [i["ticker"] for i in kept] == ["BBB"]   # fresher copy, not first-seen AAA
+    d = {"AAA": {"news_raw": [_raw(_SHARED, ts=_S + 100, pub="Zacks")]},
+         "BBB": {"news_raw": [_raw(_SHARED, ts=_S + 100, pub="Reuters")]}}
+    kept = dedupe_titles(curate_news_items(d, max_items=None, per_ticker=True))
+    assert [i["ticker"] for i in kept] == ["BBB"]   # same bucket, higher tier
+
+
 def test_sidebar_parity_with_ties():
     d = {}
     for k in range(18):
@@ -84,10 +97,12 @@ def test_curate_brief_news_candidate_part_per_ticker_and_d_e():
 
 
 def test_rescore_selection_head_is_title_unique():
-    items = [{"title": "dup", "ticker": "A"}, {"title": "dup", "ticker": "B"},
+    items = [{"title": "dup", "ticker": "A"},
+             {"title": "dup", "ticker": "B", "ts": _S + 100, "compound": -0.9},
              {"title": "x", "ticker": "A"}, {"title": "y", "ticker": "A"}]
     send, over = hnc.rescore_selection(items, _S, keep_first=3, max_items=10)
-    assert send[:3] == [0, 2, 3] and 1 not in send and over == []
+    # the repeat is an ordinary extra: in-window + negative -> sent AFTER the head
+    assert send == [0, 2, 3, 1] and over == []
 
 
 _APP = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
