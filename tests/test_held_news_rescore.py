@@ -260,9 +260,9 @@ def test_curate_uncapped_prefix_equals_default():
 
 # ── app.py wiring ──────────────────────────────────────────────────────────
 def test_home_wiring():
-    assert "_held_all = curate_news_items(held_data, max_items=None)" in _APP
-    assert re.search(r"_news\s*=\s*_held_all\[:HELD_NEWS_DISPLAY_COUNT\]", _APP)
-    assert re.search(r'st\.session_state\["_sidebar_news"\]\s*=\s*_rescored\[:HELD_NEWS_DISPLAY_COUNT\]', _APP)
+    assert "_held_all = curate_news_items(held_data, max_items=None, per_ticker=True)" in _APP
+    assert re.search(r"_news\s*=\s*dedupe_titles\(_held_all\)\[:HELD_NEWS_DISPLAY_COUNT\]", _APP)
+    assert re.search(r'st\.session_state\["_sidebar_news"\]\s*=\s*dedupe_titles\(_rescored\)\[:HELD_NEWS_DISPLAY_COUNT\]', _APP)
     home = _APP.split("# Full held headline list")[1].split('st.session_state.pop("_brief_held_news"')[0]
     assert "_news_llm_{" not in home.replace("_news_llm_memo_{", "")
     assert "date.today" not in home

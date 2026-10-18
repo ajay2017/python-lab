@@ -417,16 +417,43 @@ def _parse_news_item(item: dict) -> tuple[str, str, str, int]:
 _NEWS_PER_TICKER = 8
 
 
-def curate_news_items(data_by_ticker: dict, max_items: int | None = HELD_NEWS_DISPLAY_COUNT) -> list[dict]:
+def _title_key(title) -> str:
+    """The headline de-dup key (shared by curate_news_items and dedupe_titles)."""
+    return str(title or "").lower()[:70]
+
+
+def dedupe_titles(items) -> list:
+    """Keep the first occurrence of each headline title, order preserved.
+
+    Turns the per-ticker decision list back into the title-unique list the
+    sidebar shows (a headline naming several holdings appears once).
+    """
+    seen: set[str] = set()
+    out: list = []
+    for it in items:
+        key = _title_key(it.get("title"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out
+
+
+def curate_news_items(data_by_ticker: dict, max_items: int | None = HELD_NEWS_DISPLAY_COUNT,
+                      *, per_ticker: bool = False) -> list[dict]:
     """
     Build curated news from already-fetched load_all() results — zero extra API calls.
     data_by_ticker: {ticker: load_all_result_dict, ...}  (each must have "news_raw" key)
     max_items=None returns the full sorted list (no cap).
+    per_ticker=False (default, display lists): a headline appears once in total.
+    per_ticker=True (decision paths): once PER ticker, so a headline naming
+    several holdings reaches each of them (safe since the relevance filter
+    keeps a headline only on tickers its title names).
     """
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
     _va = SentimentIntensityAnalyzer()
 
-    seen: set[str] = set()
+    seen: set = set()
     items: list[dict] = []
 
     for ticker, r in data_by_ticker.items():
@@ -434,7 +461,7 @@ def curate_news_items(data_by_ticker: dict, max_items: int | None = HELD_NEWS_DI
             title, publisher, url, ts = _parse_news_item(item)
             if not title:
                 continue
-            key = title.lower()[:70]
+            key = (ticker, _title_key(title)) if per_ticker else title.lower()[:70]
             if key in seen:
                 continue
             seen.add(key)
@@ -495,13 +522,14 @@ def curate_brief_news(held_data: dict | None, candidates: dict | None,
     """
     held_data = held_data or {}
     held = (list(held_news) if held_news is not None
-            else curate_news_items(held_data, max_items=None))
+            else curate_news_items(held_data, max_items=None, per_ticker=True))
     try:
         cand_src = {t: b for t, b in (candidates or {}).items()
                     if t not in held_data and isinstance(b, dict)}
         if not cand_src:
             return held
-        cand = curate_news_items(cand_src, max_items=_NEWS_PER_TICKER * len(cand_src))
+        cand = curate_news_items(cand_src, max_items=_NEWS_PER_TICKER * len(cand_src),
+                                 per_ticker=True)
         # No held-vs-candidate headline de-dup (held-news-coverage D-E): a
         # headline shared with a held name stays on the candidate too.
         return held + cand

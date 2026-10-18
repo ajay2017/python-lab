@@ -69,17 +69,35 @@ def rescore_selection(
 ) -> tuple[list[int], list[int]]:
     """(send_indices, over_bound_indices) for the LLM suppress-only rescore.
 
-    Candidates: the first `keep_first` items regardless of score, then every
+    Candidates: the head, then every
     other in-window item with compound <= NEWS_SENTIMENT_WARN, most-negative
     first (ties by original index). Beyond `max_items` the least-negative
-    extras go to over_bound; the first `keep_first` are never over-bound.
+    extras go to over_bound; the head is never over-bound.
+
+    The head is the first `keep_first` TITLE-UNIQUE items (the headlines the
+    sidebar shows): the list is per-ticker, so a headline naming several
+    holdings repeats and an index-based head would stop short of the sidebar.
+    Later repeats are ordinary candidates (sent when in-window and negative).
     """
     if keep_first is None:   # default = the shared display count (lazy import)
         from stock_analyzer.data import HELD_NEWS_DISPLAY_COUNT
         keep_first = HELD_NEWS_DISPLAY_COUNT
-    head = list(range(min(keep_first, len(items))))
+    from stock_analyzer.data import _title_key
+    head: list[int] = []
+    seen_titles: set[str] = set()
+    for i, it in enumerate(items):
+        if len(head) >= keep_first:
+            break
+        k = _title_key(it.get("title") if hasattr(it, "get") else None)
+        if k in seen_titles:
+            continue
+        seen_titles.add(k)
+        head.append(i)
+    in_head = set(head)
     extras = []
-    for i in range(len(head), len(items)):
+    for i in range(len(items)):
+        if i in in_head:
+            continue
         it = items[i]
         if not in_window(it, window_start_ts):
             continue

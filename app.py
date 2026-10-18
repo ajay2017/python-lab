@@ -50,7 +50,7 @@ import extra_streamlit_components as stx
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
     fetch_spy, fetch_tlt, fetch_vix, fetch_live_prices, fetch_market_indices, market_status,
-    curate_news_items, curate_brief_news, HELD_NEWS_DISPLAY_COUNT, fetch_price_history, fetch_risk_free_rate,
+    curate_news_items, curate_brief_news, dedupe_titles, HELD_NEWS_DISPLAY_COUNT, fetch_price_history, fetch_risk_free_rate,
     crosscheck_price, crosscheck_prices, crosscheck_validator_degraded,
     divergence_widened,
     fetch_earnings_calendar, fetch_next_earnings,
@@ -5012,8 +5012,10 @@ if page == "🏠 Home":
         # Full held headline list (no cap): the sidebar still shows the top
         # HELD_NEWS_DISPLAY_COUNT, but the Brief's news checks and the noise
         # filter see every holding.
-        _held_all = curate_news_items(held_data, max_items=None)
-        _news = _held_all[:HELD_NEWS_DISPLAY_COUNT]
+        # per_ticker: a headline naming several holdings reaches each of them
+        # for the decision checks; the sidebar re-dedupes by title.
+        _held_all = curate_news_items(held_data, max_items=None, per_ticker=True)
+        _news = dedupe_titles(_held_all)[:HELD_NEWS_DISPLAY_COUNT]
         st.session_state["_sidebar_news"] = _news
         _fill_news_slot(_news_slot, _news)
         _brief_news = _held_all
@@ -5035,7 +5037,7 @@ if page == "🏠 Home":
                     _held_all, _ant_key, window_start_ts=_rs_window,
                     memo=_memo, now_ts=time.time(),
                 )
-                st.session_state["_sidebar_news"] = _rescored[:HELD_NEWS_DISPLAY_COUNT]
+                st.session_state["_sidebar_news"] = dedupe_titles(_rescored)[:HELD_NEWS_DISPLAY_COUNT]
                 _brief_news = _rescored
         except Exception:
             _brief_news = _held_all
