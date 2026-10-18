@@ -89,6 +89,7 @@ from stock_analyzer import asset_type
 from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
 from stock_analyzer import etf_candidates as etf_candidates_mod
 from stock_analyzer import pair_add_gate
+from stock_analyzer import entry_eligibility
 from stock_analyzer.entry_eligibility import data_trust_hold, macro_block_map, macro_hold
 from stock_analyzer.analyst_intel import trustworthy_composite
 from stock_analyzer import held_news_check
@@ -871,7 +872,10 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # Any ticker already flagged ANYWHERE in today's Brief (act_today OR
     # review_list — sell, stop, risk reduce, or a review-origin trim) must not
     # appear in Grow Today — contradicting signals in the same briefing is
-    # dangerous. decision_bucket.all_flagged_tickers() is the canonical broad
+    # dangerous. (Chunk 7a: held-name ADDS no longer read this set -- they use
+    # decision_bucket.add_blocking_cards, news WATCH excluded, owner N-A
+    # 2026-10-18; new picks / leads / ETF held-group keep this broad set.)
+    # decision_bucket.all_flagged_tickers() is the canonical broad
     # set (2026-07-29 audit H6) and resolves ticker=None/action.trim_ticker
     # macro-card shapes correctly, which a naive `.get("ticker")` loop misses.
     _act_blocked: set = decision_bucket.all_flagged_tickers(act_today, review_list)
@@ -950,17 +954,70 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         str(d["ticker"]).upper(): d for d in (deterioration or []) if d.get("tier") == "WATCH"
     }
 
-    def _add_block_gate(_r) -> "str | None":
-        """THE add-gate decision, in the order the bull loop applies it. Returns
-        None (nothing blocks), "ACT" (flagged elsewhere in today's Brief) or the
-        gate id that holds the add: G-20 WATCH, G-24 cooldown, G-16 sector cap,
-        G-01 risk trim, G-04 single-name ceiling, G-09 drift trim, G-26 danger
-        pair, G-25 new cluster. Shared by the bull add loop (which records the
-        bucket per gate) and adds_paused, so the two cannot diverge."""
+    # Add-lane CARD set (chunk 7a, owner decision N-A Option 2, 2026-10-18):
+    # any Act Today card (incl. critical news), any Review card EXCEPT a news
+    # WATCH, or a sale today. A Review news WATCH is an ENTRY decision (below),
+    # not a card block; the add card carries a note instead.
+    _add_cards: dict = decision_bucket.add_blocking_cards(act_today, review_list, sold_today)
+    _review_news_watch: dict = decision_bucket.review_news_watch_by_ticker(review_list)
+
+    _entry_memo: dict = {}
+
+    def _entry_verdict(_r) -> dict:
+        """The shared new-entry check for ONE held name's add -- exactly stale
+        data, negative news and imminent earnings (no tone: the bull loop only
+        runs on bull days; no macro: owner decision N-C). Memoised per ticker so
+        the bull loop and adds_paused read the same verdict. A crash fails
+        CLOSED (a hold), never open."""
         _t = str(_r["Ticker"])
         _tu = _t.upper()
-        if _t in _act_blocked:
-            return "ACT"
+        if _tu in _entry_memo:
+            return _entry_memo[_tu]
+        try:
+            _b = (held_data or {}).get(_t)
+            if not _b:
+                _b = None
+            _ed = None
+            if earnings_lookup and _t in earnings_lookup:
+                _ed = earnings_lookup[_t]
+            elif isinstance(_b, dict):
+                _ed = _b.get("earnings")
+            _edays = _days_until(_ed, today) if _ed else None
+            _nitems = [n for n in (news_items or [])
+                       if str(n.get("ticker", "")).upper() == _tu]
+            _v = entry_eligibility.entry_check(
+                bundle=_b,
+                news=entry_eligibility.news_ctx_from_items(_nitems),
+                earnings_days=_edays,
+                ticker=_t,
+                checks=(entry_eligibility.check_stale,
+                        entry_eligibility.check_news,
+                        entry_eligibility.check_earnings),
+            )
+        except Exception:
+            _h = {"check": "check_failed", "gate_id": None,
+                  "reason": "entry check couldn't run",
+                  "clears_when": "the entry check can run again — reload the page",
+                  "gate_value": None, "gate_threshold": None}
+            _v = {"eligible": False, "holds": [_h], "binding": _h,
+                  "unchecked": [], "passed": []}
+        _entry_memo[_tu] = _v
+        return _v
+
+    def _add_block_gate(_r) -> "str | None":
+        """THE add-gate decision, in the order the bull loop applies it. Returns
+        None (nothing blocks), "CARD" (a card in today's Brief or a sale today),
+        the gate id that holds the add (G-20 WATCH, G-24 cooldown, G-16 sector
+        cap, G-01 risk trim, G-04 single-name ceiling, G-09 drift trim, G-26
+        danger pair, G-25 new cluster), or "ENTRY" (the shared entry check:
+        stale data / negative news / imminent earnings) -- checked LAST so every
+        existing gate's bucket and ledger rows are unchanged. Shared by the bull
+        add loop (which records the bucket per gate) and adds_paused, so the two
+        cannot diverge."""
+        _t = str(_r["Ticker"])
+        _tu = _t.upper()
+        if _tu in _add_cards:
+            return "CARD"
         if _tu in _watch_by_ticker:
             return "G-20"
         if _recently_added(_t, held_data):
@@ -977,6 +1034,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             return "G-26"
         if cluster_add_blocks is not None and _tu in cluster_add_blocks:
             return "G-25"
+        if not _entry_verdict(_r)["eligible"]:
+            return "ENTRY"
         return None
 
     def _adds_paused_list() -> list[dict]:
@@ -1034,6 +1093,10 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "risk_blocked_adds":          [],
             "concentration_blocked_adds": [],
             "sector_blocked_adds":        [],
+            # Chunk 7a: a bear day suppresses every add outright, so neither
+            # the CARD nor the ENTRY bucket can have anything to record.
+            "card_blocked_adds":          [],
+            "entry_held_adds":            [],
             "sector_blocked_picks":       [],
             "sector_unknown_picks":       [],
             "macro_blocked_picks":        [],
@@ -1995,6 +2058,26 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     deterioration_blocked_adds: list[dict] = []  # adds suppressed — active early-deterioration WATCH
     cluster_blocked_adds: list[dict] = []  # adds suppressed — new correlation cluster (G-25)
     pair_blocked_adds: list[dict] = []  # adds suppressed — standing danger-tier correlated pair (G-26)
+    card_blocked_adds: list[dict] = []  # adds paused by a Brief card / sale today (chunk 7a, no ledger row)
+    entry_held_adds:   list[dict] = []  # adds held by the shared entry check (stale / news / earnings)
+
+    def _review_news_note(_t: str):
+        """Note for an add card whose ticker has a Review news WATCH (which no
+        longer pauses the add). None when there is no such card."""
+        _c = _review_news_watch.get(_t.upper())
+        if _c is None:
+            return None
+        _nc = entry_eligibility.news_ctx_from_items(
+            [n for n in (news_items or []) if str(n.get("ticker", "")).upper() == _t.upper()])
+        return {
+            "headline":       _c.get("headline"),
+            "n_negative":     _c.get("news_n_negative"),
+            "window_label":   _c.get("news_window_label"),
+            "news_headline":  _c.get("news_headline"),
+            "worst_compound": _c.get("news_compound"),
+            "news_avg":       None if _nc is None else _nc["compound"],
+            "news_n":         None if _nc is None else _nc["n"],
+        }
     # Deterioration WATCH — SUPPRESS add-to-winner (see docstring; changed
     # 2026-07-21 from annotate-only). `_watch_by_ticker` is built above, ahead
     # of the bear early return, because adds_paused reads it too.
@@ -2037,8 +2120,26 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 ticker  = str(row["Ticker"])
                 sector  = str(row.get("Sector", ""))
                 _gate = _add_block_gate(row)
-                # Skip if Act Today already flags this ticker for action
-                if _gate == "ACT":
+                # A card in today's Brief (Act Today / Review, not a news WATCH)
+                # or a sale today pauses the add. Recorded -- never silent --
+                # but with no gate id and no ledger row (the card itself is the
+                # disclosure; chunk 7a).
+                if _gate == "CARD":
+                    # A name already in the G-20 bucket keeps that render + ledger
+                    # row; never list it in two places.
+                    if any(x["ticker"].upper() == ticker.upper()
+                           for x in deterioration_blocked_adds):
+                        continue
+                    _cl = _add_cards.get(ticker.upper(), "")
+                    card_blocked_adds.append({
+                        "ticker":     ticker,
+                        "score":      scr,
+                        "where":      ("Act Today" if _cl.startswith("Act Today")
+                                       else "Monitoring" if _cl.startswith("Monitoring")
+                                       else "sold" if _cl == "sold today"
+                                       else "Card"),
+                        "card_label": _cl,
+                    })
                     continue
                 # Early-deterioration WATCH — an active WATCH on a held name
                 # (below its trend MA, drawing down from its peak) means the app
@@ -2265,6 +2366,32 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                         "baseline_scan_date": _cab.get("baseline_scan_date"),
                     })
                     continue
+                # ENTRY (chunk 7a) -- the shared entry check, LAST so every
+                # gate above keeps its bucket and ledger rows. gate_id stays
+                # None here (a ledger id for news is chunk 7b).
+                _entry_v = _entry_verdict(row)
+                if _gate == "ENTRY":
+                    _eb = _entry_v["binding"] or {}
+                    entry_held_adds.append({
+                        "ticker":    ticker,
+                        "score":     scr,
+                        "pnl_pct":   _f(row.get("P&L (%)")),
+                        "gap":       gap,
+                        "sector":    sector,
+                        "check":     _eb.get("check"),
+                        "reason":    _eb.get("reason"),
+                        "clears_when": _eb.get("clears_when"),
+                        "holds":     list(_entry_v["holds"]),
+                        "unchecked": list(_entry_v["unchecked"]),
+                        "gate_id":        None,
+                        "counterfactual": True,
+                        "gate_value":     _eb.get("gate_value"),
+                        "gate_threshold": _eb.get("gate_threshold"),
+                        "price":          _f(row.get("Price"), None),
+                        "composite_score": _f(row.get("Score"), None),
+                        "momentum_score":  None,
+                    })
+                    continue
                 price   = _f(row.get("Price", 0))
                 # Same alias-aware match as _sector_bonus/is_leader above --
                 # this is the add-to-winner lane's own copy of the identical
@@ -2325,6 +2452,14 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                         "Risk Advisor already has flagged for trim."
                         if sector in _elevated_sectors else None
                     ),
+                    # Chunk 7a: a Review news WATCH no longer pauses the add --
+                    # the add card says so. {headline, n_negative, window_label,
+                    # news_headline, worst_compound, news_avg, news_n} or None (no such card).
+                    "review_news_note": _review_news_note(ticker),
+                    # What the entry check cleared / couldn't run, so the
+                    # "News checked" line can render on every add card.
+                    "entry_passed":    list(_entry_v["passed"]),
+                    "entry_unchecked": list(_entry_v["unchecked"]),
                 })
         add_positions.sort(key=lambda x: (-x["score"], -x["gap"]))
 
@@ -2356,6 +2491,10 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "sector_blocked_adds":        sector_blocked_adds,
         "cooldown_adds":              cooldown_adds,
         "deterioration_blocked_adds": deterioration_blocked_adds,
+        # Chunk 7a: CARD (Brief card / sold today; no gate id, no ledger row)
+        # and ENTRY (shared entry check) add pauses -- always present.
+        "card_blocked_adds":          card_blocked_adds,
+        "entry_held_adds":            entry_held_adds,
         # G-25 — see cluster_add_blocks docstring above. cluster_gate_checked
         # is True only when cluster_add_blocks was actually resolved this run
         # (not None) — lets the render layer distinguish "checked, nothing
@@ -3214,6 +3353,10 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "weight":   0,
             "news_headline": str(_item.get("title") or _item.get("headline") or "news")[:140],
             "news_compound": _f(sent),
+            # Structured, so a consumer (the add card's "Also in Review" note)
+            # never parses the headline prose.
+            "news_n_negative": n_neg,
+            "news_window_label": news_window_label,
         })
 
     # 5 — Upcoming macro events (1–3 days)

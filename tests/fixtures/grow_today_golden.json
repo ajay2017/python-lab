@@ -4,23 +4,7 @@
   "adds_paused": [
    {
     "composite_score": 80.0,
-    "ticker": "N2EARN1"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "N2NEG40"
-   },
-   {
-    "composite_score": 80.0,
     "ticker": "ZADDOK"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN0"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN7"
    },
    {
     "composite_score": 80.0,
@@ -31,6 +15,7 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -39,6 +24,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -60,6 +46,7 @@
  "bear__earn_0d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -68,6 +55,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -98,6 +86,7 @@
  "bear__earn_at_imminent": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -106,6 +95,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -136,6 +126,7 @@
  "bear__earn_imminent_plus1": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -144,6 +135,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -174,6 +166,7 @@
  "bear__earn_in_held_data_7d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -182,6 +175,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -212,6 +206,7 @@
  "bear__earn_unknown": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -220,6 +215,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -250,6 +246,7 @@
  "bear__etf_clean": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -258,6 +255,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -279,6 +277,7 @@
  "bear__etf_macro_all": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -287,6 +286,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -308,6 +308,7 @@
  "bear__etf_negative_news": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -316,6 +317,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -337,6 +339,7 @@
  "bear__macro_3d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -345,6 +348,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -375,6 +379,7 @@
  "bear__macro_3d_medium": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -383,6 +388,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -413,6 +419,7 @@
  "bear__macro_4d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -421,6 +428,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -451,6 +459,7 @@
  "bear__macro_all_sectors_2d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -459,6 +468,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -489,6 +499,7 @@
  "bear__macro_all_sectors_4d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -497,6 +508,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -527,6 +539,7 @@
  "bear__macro_day0_after_time": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -535,6 +548,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -565,6 +579,7 @@
  "bear__macro_day0_at_time": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -573,6 +588,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -603,6 +619,7 @@
  "bear__macro_day0_bad_time": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -611,6 +628,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -641,6 +659,7 @@
  "bear__macro_day0_before_time": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -649,6 +668,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -679,6 +699,7 @@
  "bear__macro_day0_no_time_unreleased": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -687,6 +708,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -717,6 +739,7 @@
  "bear__macro_day0_released_flag": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -725,6 +748,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -755,6 +779,7 @@
  "bear__macro_empty": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -763,6 +788,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -793,6 +819,7 @@
  "bear__macro_fomc_day0_after": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -801,6 +828,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -831,6 +859,7 @@
  "bear__macro_fomc_day0_before": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -839,6 +868,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -869,6 +899,7 @@
  "bear__macro_fomc_day0_released_flag": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -877,6 +908,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -907,6 +939,7 @@
  "bear__macro_none": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -915,6 +948,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -945,6 +979,7 @@
  "bear__macro_past_1d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -953,6 +988,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -992,6 +1028,7 @@
     "ticker": "ZADDOK"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1000,6 +1037,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1059,6 +1097,7 @@
     "ticker": "ZADDOK"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1067,6 +1106,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1117,6 +1157,7 @@
  "bear__news_at_threshold": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1125,6 +1166,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1155,6 +1197,7 @@
  "bear__news_just_above": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1163,6 +1206,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1193,6 +1237,7 @@
  "bear__news_none": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1201,6 +1246,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1231,6 +1277,7 @@
  "bear__news_single_strong_neg": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1239,6 +1286,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1269,6 +1317,7 @@
  "bear__trust_fresh": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1277,6 +1326,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1307,6 +1357,7 @@
  "bear__trust_fund_age_at_max": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1315,6 +1366,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1345,6 +1397,7 @@
  "bear__trust_fund_age_max_plus1": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1353,6 +1406,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1383,6 +1437,7 @@
  "bear__trust_fundamentals_unavailable": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1391,6 +1446,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1421,6 +1477,7 @@
  "bear__trust_keys_absent": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1429,6 +1486,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1459,6 +1517,7 @@
  "bear__trust_stale_as_of": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1467,6 +1526,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1499,23 +1559,7 @@
   "adds_paused": [
    {
     "composite_score": 80.0,
-    "ticker": "N2EARN1"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "N2NEG40"
-   },
-   {
-    "composite_score": 80.0,
     "ticker": "ZADDOK"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN0"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN7"
    },
    {
     "composite_score": 80.0,
@@ -1526,6 +1570,7 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1534,6 +1579,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1555,6 +1601,7 @@
  "boundary__bear_edge__clean": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1563,6 +1610,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1602,6 +1650,7 @@
     "ticker": "ZADDOK"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1610,6 +1659,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -1662,23 +1712,7 @@
   "adds_paused": [
    {
     "composite_score": 80.0,
-    "ticker": "N2EARN1"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "N2NEG40"
-   },
-   {
-    "composite_score": 80.0,
     "ticker": "ZADDOK"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN0"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN7"
    },
    {
     "composite_score": 80.0,
@@ -1689,6 +1723,7 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1699,6 +1734,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -1723,6 +1759,7 @@
  "boundary__bear_edge_plus__clean": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1733,6 +1770,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -1838,6 +1876,7 @@
     "ticker": "ZADDOK"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -1854,6 +1893,7 @@
   "deploy_note": "At 1.5% risk per trade across 3 setups, you'd be risking ~$4,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [
    {
@@ -2095,9 +2135,21 @@
  "boundary__bull_edge__adds": {
   "add_positions": [
    {
+    "entry_passed": [],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Tech",
     "sector_elevated_warning": null,
@@ -2107,57 +2159,21 @@
     "ticker": "ZADDOK"
    },
    {
+    "entry_passed": [],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
-    "score": 80.0,
-    "sector": "Industrials",
-    "sector_elevated_warning": null,
-    "signal": "Strong Buy",
-    "sizing": {},
-    "thesis": "At breakeven vs entry, 10.0% above stop \u2014 Strong Buy, adds within existing position.",
-    "ticker": "N2NEG40"
-   },
-   {
-    "gap": 10.0,
-    "is_leader": false,
-    "pnl_pct": 0.0,
-    "score": 80.0,
-    "sector": "Materials",
-    "sector_elevated_warning": null,
-    "signal": "Strong Buy",
-    "sizing": {},
-    "thesis": "At breakeven vs entry, 10.0% above stop \u2014 Strong Buy, adds within existing position.",
-    "ticker": "N2EARN1"
-   },
-   {
-    "gap": 10.0,
-    "is_leader": false,
-    "pnl_pct": 0.0,
-    "score": 80.0,
-    "sector": "Telecom",
-    "sector_elevated_warning": null,
-    "signal": "Strong Buy",
-    "sizing": {},
-    "thesis": "At breakeven vs entry, 10.0% above stop \u2014 Strong Buy, adds within existing position.",
-    "ticker": "ZEARN0"
-   },
-   {
-    "gap": 10.0,
-    "is_leader": false,
-    "pnl_pct": 0.0,
-    "score": 80.0,
-    "sector": "Staples",
-    "sector_elevated_warning": null,
-    "signal": "Strong Buy",
-    "sizing": {},
-    "thesis": "At breakeven vs entry, 10.0% above stop \u2014 Strong Buy, adds within existing position.",
-    "ticker": "ZEARN7"
-   },
-   {
-    "gap": 10.0,
-    "is_leader": false,
-    "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Retail",
     "sector_elevated_warning": null,
@@ -2167,9 +2183,24 @@
     "ticker": "ZEARN8"
    },
    {
+    "entry_passed": [
+     {
+      "check": "news",
+      "compound": -0.1,
+      "detail": "1 headline, avg -0.10 \u2014 above the negative-news bar (-0.15)",
+      "n": 1
+     }
+    ],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Insurance",
     "sector_elevated_warning": null,
@@ -2180,6 +2211,26 @@
    }
   ],
   "adds_paused": [],
+  "card_blocked_adds": [
+   {
+    "card_label": "Monitoring",
+    "score": 80.0,
+    "ticker": "N2ACT",
+    "where": "Monitoring"
+   },
+   {
+    "card_label": "Monitoring",
+    "score": 80.0,
+    "ticker": "N2REV",
+    "where": "Monitoring"
+   },
+   {
+    "card_label": "Monitoring",
+    "score": 80.0,
+    "ticker": "N2EARN1REV",
+    "where": "Monitoring"
+   }
+  ],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -2187,9 +2238,151 @@
   "concentration_blocked_adds": [],
   "cooldown_adds": [],
   "corr_unchecked": null,
-  "deploy_note": "At 1.5% risk per trade across 7 setups, you'd be risking ~$10,500 if every stop hits.",
+  "deploy_note": "At 1.5% risk per trade across 3 setups, you'd be risking ~$4,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [
+   {
+    "check": "news",
+    "clears_when": "the news average rises above -0.15",
+    "composite_score": 80.0,
+    "counterfactual": true,
+    "gap": 10.0,
+    "gate_id": null,
+    "gate_threshold": -0.15,
+    "gate_value": -0.4,
+    "holds": [
+     {
+      "check": "news",
+      "clears_when": "the news average rises above -0.15",
+      "gate_id": null,
+      "gate_threshold": -0.15,
+      "gate_value": -0.4,
+      "reason": "negative news (avg -0.40 across 1 headlines)"
+     }
+    ],
+    "momentum_score": null,
+    "pnl_pct": 0.0,
+    "price": 100.0,
+    "reason": "negative news (avg -0.40 across 1 headlines)",
+    "score": 80.0,
+    "sector": "Industrials",
+    "ticker": "N2NEG40",
+    "unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     }
+    ]
+   },
+   {
+    "check": "earnings",
+    "clears_when": "the report is out",
+    "composite_score": 80.0,
+    "counterfactual": true,
+    "gap": 10.0,
+    "gate_id": null,
+    "gate_threshold": 7,
+    "gate_value": 1,
+    "holds": [
+     {
+      "check": "earnings",
+      "clears_when": "the report is out",
+      "gate_id": null,
+      "gate_threshold": 7,
+      "gate_value": 1,
+      "reason": "earnings in 1d"
+     }
+    ],
+    "momentum_score": null,
+    "pnl_pct": 0.0,
+    "price": 100.0,
+    "reason": "earnings in 1d",
+    "score": 80.0,
+    "sector": "Materials",
+    "ticker": "N2EARN1",
+    "unchecked": [
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ]
+   },
+   {
+    "check": "earnings",
+    "clears_when": "the report is out",
+    "composite_score": 80.0,
+    "counterfactual": true,
+    "gap": 10.0,
+    "gate_id": null,
+    "gate_threshold": 7,
+    "gate_value": 0,
+    "holds": [
+     {
+      "check": "earnings",
+      "clears_when": "the report is out",
+      "gate_id": null,
+      "gate_threshold": 7,
+      "gate_value": 0,
+      "reason": "earnings today"
+     }
+    ],
+    "momentum_score": null,
+    "pnl_pct": 0.0,
+    "price": 100.0,
+    "reason": "earnings today",
+    "score": 80.0,
+    "sector": "Telecom",
+    "ticker": "ZEARN0",
+    "unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ]
+   },
+   {
+    "check": "earnings",
+    "clears_when": "the report is out",
+    "composite_score": 80.0,
+    "counterfactual": true,
+    "gap": 10.0,
+    "gate_id": null,
+    "gate_threshold": 7,
+    "gate_value": 7,
+    "holds": [
+     {
+      "check": "earnings",
+      "clears_when": "the report is out",
+      "gate_id": null,
+      "gate_threshold": 7,
+      "gate_value": 7,
+      "reason": "earnings in 7d"
+     }
+    ],
+    "momentum_score": null,
+    "pnl_pct": 0.0,
+    "price": 100.0,
+    "reason": "earnings in 7d",
+    "score": 80.0,
+    "sector": "Staples",
+    "ticker": "ZEARN7",
+    "unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ]
+   }
+  ],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -2214,6 +2407,7 @@
  "boundary__bull_edge__clean": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -2224,6 +2418,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -2369,9 +2564,21 @@
  "boundary__bull_edge__multi_mixed": {
   "add_positions": [
    {
+    "entry_passed": [],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Tech",
     "sector_elevated_warning": null,
@@ -2381,9 +2588,21 @@
     "ticker": "ZADDOK"
    },
    {
+    "entry_passed": [],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Consumer",
     "sector_elevated_warning": null,
@@ -2394,6 +2613,7 @@
    }
   ],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -2426,6 +2646,7 @@
     "ticker": "ZMATL"
    }
   ],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -2714,23 +2935,7 @@
   "adds_paused": [
    {
     "composite_score": 80.0,
-    "ticker": "N2EARN1"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "N2NEG40"
-   },
-   {
-    "composite_score": 80.0,
     "ticker": "ZADDOK"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN0"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN7"
    },
    {
     "composite_score": 80.0,
@@ -2741,6 +2946,7 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -2751,6 +2957,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -2775,6 +2982,7 @@
  "boundary__bull_edge_minus__clean": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -2785,6 +2993,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -2890,6 +3099,7 @@
     "ticker": "ZADDOK"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -2906,6 +3116,7 @@
   "deploy_note": "At 1.5% risk per trade across 3 setups, you'd be risking ~$4,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [
    {
@@ -3147,9 +3358,21 @@
  "bull__adds_matrix_macro3d_energy": {
   "add_positions": [
    {
+    "entry_passed": [],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Tech",
     "sector_elevated_warning": null,
@@ -3159,57 +3382,21 @@
     "ticker": "ZADDOK"
    },
    {
+    "entry_passed": [],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
-    "score": 80.0,
-    "sector": "Industrials",
-    "sector_elevated_warning": null,
-    "signal": "Strong Buy",
-    "sizing": {},
-    "thesis": "At breakeven vs entry, 10.0% above stop \u2014 Strong Buy, adds within existing position.",
-    "ticker": "N2NEG40"
-   },
-   {
-    "gap": 10.0,
-    "is_leader": false,
-    "pnl_pct": 0.0,
-    "score": 80.0,
-    "sector": "Materials",
-    "sector_elevated_warning": null,
-    "signal": "Strong Buy",
-    "sizing": {},
-    "thesis": "At breakeven vs entry, 10.0% above stop \u2014 Strong Buy, adds within existing position.",
-    "ticker": "N2EARN1"
-   },
-   {
-    "gap": 10.0,
-    "is_leader": false,
-    "pnl_pct": 0.0,
-    "score": 80.0,
-    "sector": "Telecom",
-    "sector_elevated_warning": null,
-    "signal": "Strong Buy",
-    "sizing": {},
-    "thesis": "At breakeven vs entry, 10.0% above stop \u2014 Strong Buy, adds within existing position.",
-    "ticker": "ZEARN0"
-   },
-   {
-    "gap": 10.0,
-    "is_leader": false,
-    "pnl_pct": 0.0,
-    "score": 80.0,
-    "sector": "Staples",
-    "sector_elevated_warning": null,
-    "signal": "Strong Buy",
-    "sizing": {},
-    "thesis": "At breakeven vs entry, 10.0% above stop \u2014 Strong Buy, adds within existing position.",
-    "ticker": "ZEARN7"
-   },
-   {
-    "gap": 10.0,
-    "is_leader": false,
-    "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Retail",
     "sector_elevated_warning": null,
@@ -3219,9 +3406,24 @@
     "ticker": "ZEARN8"
    },
    {
+    "entry_passed": [
+     {
+      "check": "news",
+      "compound": -0.1,
+      "detail": "1 headline, avg -0.10 \u2014 above the negative-news bar (-0.15)",
+      "n": 1
+     }
+    ],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Insurance",
     "sector_elevated_warning": null,
@@ -3232,6 +3434,26 @@
    }
   ],
   "adds_paused": [],
+  "card_blocked_adds": [
+   {
+    "card_label": "Monitoring",
+    "score": 80.0,
+    "ticker": "N2ACT",
+    "where": "Monitoring"
+   },
+   {
+    "card_label": "Monitoring",
+    "score": 80.0,
+    "ticker": "N2REV",
+    "where": "Monitoring"
+   },
+   {
+    "card_label": "Monitoring",
+    "score": 80.0,
+    "ticker": "N2EARN1REV",
+    "where": "Monitoring"
+   }
+  ],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -3239,9 +3461,151 @@
   "concentration_blocked_adds": [],
   "cooldown_adds": [],
   "corr_unchecked": null,
-  "deploy_note": "At 1.5% risk per trade across 7 setups, you'd be risking ~$10,500 if every stop hits.",
+  "deploy_note": "At 1.5% risk per trade across 3 setups, you'd be risking ~$4,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [
+   {
+    "check": "news",
+    "clears_when": "the news average rises above -0.15",
+    "composite_score": 80.0,
+    "counterfactual": true,
+    "gap": 10.0,
+    "gate_id": null,
+    "gate_threshold": -0.15,
+    "gate_value": -0.4,
+    "holds": [
+     {
+      "check": "news",
+      "clears_when": "the news average rises above -0.15",
+      "gate_id": null,
+      "gate_threshold": -0.15,
+      "gate_value": -0.4,
+      "reason": "negative news (avg -0.40 across 1 headlines)"
+     }
+    ],
+    "momentum_score": null,
+    "pnl_pct": 0.0,
+    "price": 100.0,
+    "reason": "negative news (avg -0.40 across 1 headlines)",
+    "score": 80.0,
+    "sector": "Industrials",
+    "ticker": "N2NEG40",
+    "unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     }
+    ]
+   },
+   {
+    "check": "earnings",
+    "clears_when": "the report is out",
+    "composite_score": 80.0,
+    "counterfactual": true,
+    "gap": 10.0,
+    "gate_id": null,
+    "gate_threshold": 7,
+    "gate_value": 1,
+    "holds": [
+     {
+      "check": "earnings",
+      "clears_when": "the report is out",
+      "gate_id": null,
+      "gate_threshold": 7,
+      "gate_value": 1,
+      "reason": "earnings in 1d"
+     }
+    ],
+    "momentum_score": null,
+    "pnl_pct": 0.0,
+    "price": 100.0,
+    "reason": "earnings in 1d",
+    "score": 80.0,
+    "sector": "Materials",
+    "ticker": "N2EARN1",
+    "unchecked": [
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ]
+   },
+   {
+    "check": "earnings",
+    "clears_when": "the report is out",
+    "composite_score": 80.0,
+    "counterfactual": true,
+    "gap": 10.0,
+    "gate_id": null,
+    "gate_threshold": 7,
+    "gate_value": 0,
+    "holds": [
+     {
+      "check": "earnings",
+      "clears_when": "the report is out",
+      "gate_id": null,
+      "gate_threshold": 7,
+      "gate_value": 0,
+      "reason": "earnings today"
+     }
+    ],
+    "momentum_score": null,
+    "pnl_pct": 0.0,
+    "price": 100.0,
+    "reason": "earnings today",
+    "score": 80.0,
+    "sector": "Telecom",
+    "ticker": "ZEARN0",
+    "unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ]
+   },
+   {
+    "check": "earnings",
+    "clears_when": "the report is out",
+    "composite_score": 80.0,
+    "counterfactual": true,
+    "gap": 10.0,
+    "gate_id": null,
+    "gate_threshold": 7,
+    "gate_value": 7,
+    "holds": [
+     {
+      "check": "earnings",
+      "clears_when": "the report is out",
+      "gate_id": null,
+      "gate_threshold": 7,
+      "gate_value": 7,
+      "reason": "earnings in 7d"
+     }
+    ],
+    "momentum_score": null,
+    "pnl_pct": 0.0,
+    "price": 100.0,
+    "reason": "earnings in 7d",
+    "score": 80.0,
+    "sector": "Staples",
+    "ticker": "ZEARN7",
+    "unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ]
+   }
+  ],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -3266,6 +3630,7 @@
  "bull__earn_0d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -3287,6 +3652,7 @@
     "ticker": "ZNEWX"
    }
   ],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -3372,6 +3738,7 @@
  "bull__earn_at_imminent": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -3393,6 +3760,7 @@
     "ticker": "ZNEWX"
    }
   ],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -3478,6 +3846,7 @@
  "bull__earn_imminent_plus1": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -3488,6 +3857,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -3634,6 +4004,7 @@
  "bull__earn_in_held_data_7d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -3655,6 +4026,7 @@
     "ticker": "ZNEWX"
    }
   ],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -3740,6 +4112,7 @@
  "bull__earn_unknown": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -3750,6 +4123,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -3895,6 +4269,7 @@
  "bull__etf_clean": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -3905,6 +4280,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -3991,6 +4367,7 @@
  "bull__etf_macro_all": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -4001,6 +4378,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [
    {
     "group": "Broad Market",
@@ -4032,6 +4410,7 @@
  "bull__etf_negative_news": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -4042,6 +4421,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [
    {
     "group": "Broad Market",
@@ -4073,6 +4453,7 @@
  "bull__macro_3d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -4083,6 +4464,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -4182,6 +4564,7 @@
  "bull__macro_3d_medium": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -4192,6 +4575,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -4337,6 +4721,7 @@
  "bull__macro_4d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -4347,6 +4732,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -4492,6 +4878,7 @@
  "bull__macro_all_sectors_2d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -4502,6 +4889,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -4553,6 +4941,7 @@
  "bull__macro_all_sectors_4d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -4563,6 +4952,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -4708,6 +5098,7 @@
  "bull__macro_day0_after_time": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -4718,6 +5109,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -4863,6 +5255,7 @@
  "bull__macro_day0_at_time": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -4873,6 +5266,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -5018,6 +5412,7 @@
  "bull__macro_day0_bad_time": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -5028,6 +5423,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -5127,6 +5523,7 @@
  "bull__macro_day0_before_time": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -5137,6 +5534,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -5236,6 +5634,7 @@
  "bull__macro_day0_no_time_unreleased": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -5246,6 +5645,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -5345,6 +5745,7 @@
  "bull__macro_day0_released_flag": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -5355,6 +5756,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -5500,6 +5902,7 @@
  "bull__macro_empty": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -5510,6 +5913,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -5655,6 +6059,7 @@
  "bull__macro_fomc_day0_after": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -5665,6 +6070,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -5716,6 +6122,7 @@
  "bull__macro_fomc_day0_before": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -5726,6 +6133,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -5777,6 +6185,7 @@
  "bull__macro_fomc_day0_released_flag": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -5787,6 +6196,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -5838,6 +6248,7 @@
  "bull__macro_none": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -5848,6 +6259,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -5993,6 +6405,7 @@
  "bull__macro_past_1d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -6003,6 +6416,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -6148,9 +6562,21 @@
  "bull__multi_mixed": {
   "add_positions": [
    {
+    "entry_passed": [],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Tech",
     "sector_elevated_warning": null,
@@ -6160,9 +6586,21 @@
     "ticker": "ZADDOK"
    },
    {
+    "entry_passed": [],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Consumer",
     "sector_elevated_warning": null,
@@ -6173,6 +6611,7 @@
    }
   ],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -6205,6 +6644,7 @@
     "ticker": "ZMATL"
    }
   ],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -6491,9 +6931,21 @@
  "bull__multi_mixed_macro3d": {
   "add_positions": [
    {
+    "entry_passed": [],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Tech",
     "sector_elevated_warning": null,
@@ -6503,9 +6955,21 @@
     "ticker": "ZADDOK"
    },
    {
+    "entry_passed": [],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Consumer",
     "sector_elevated_warning": null,
@@ -6516,6 +6980,7 @@
    }
   ],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -6526,6 +6991,7 @@
   "deploy_note": "At 1.5% risk per trade across 4 setups, you'd be risking ~$6,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -6761,6 +7227,7 @@
  "bull__news_at_threshold": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -6771,6 +7238,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -6866,6 +7334,7 @@
  "bull__news_just_above": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -6876,6 +7345,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -7022,6 +7492,7 @@
  "bull__news_none": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -7032,6 +7503,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -7177,6 +7649,7 @@
  "bull__news_single_strong_neg": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -7187,6 +7660,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -7282,6 +7756,7 @@
  "bull__trust_fresh": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -7292,6 +7767,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -7437,6 +7913,7 @@
  "bull__trust_fund_age_at_max": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -7447,6 +7924,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -7592,6 +8070,7 @@
  "bull__trust_fund_age_max_plus1": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -7608,6 +8087,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -7693,6 +8173,7 @@
  "bull__trust_fundamentals_unavailable": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -7712,6 +8193,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -7797,6 +8279,7 @@
  "bull__trust_keys_absent": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -7807,6 +8290,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -7952,6 +8436,7 @@
  "bull__trust_stale_as_of": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -7968,6 +8453,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -8055,23 +8541,7 @@
   "adds_paused": [
    {
     "composite_score": 80.0,
-    "ticker": "N2EARN1"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "N2NEG40"
-   },
-   {
-    "composite_score": 80.0,
     "ticker": "ZADDOK"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN0"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN7"
    },
    {
     "composite_score": 80.0,
@@ -8082,6 +8552,7 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -8092,6 +8563,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -8116,6 +8588,7 @@
  "flat__earn_0d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -8126,6 +8599,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [
    {
@@ -8223,6 +8697,7 @@
  "flat__earn_at_imminent": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -8233,6 +8708,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [
    {
@@ -8330,6 +8806,7 @@
  "flat__earn_imminent_plus1": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -8340,6 +8817,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -8437,6 +8915,7 @@
  "flat__earn_in_held_data_7d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -8447,6 +8926,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [
    {
@@ -8544,6 +9024,7 @@
  "flat__earn_unknown": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -8554,6 +9035,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -8650,6 +9132,7 @@
  "flat__etf_clean": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -8660,6 +9143,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -8684,6 +9168,7 @@
  "flat__etf_macro_all": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -8694,6 +9179,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -8718,6 +9204,7 @@
  "flat__etf_negative_news": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -8728,6 +9215,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -8752,6 +9240,7 @@
  "flat__macro_3d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -8762,6 +9251,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -8861,6 +9351,7 @@
  "flat__macro_3d_medium": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -8871,6 +9362,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -8967,6 +9459,7 @@
  "flat__macro_4d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -8977,6 +9470,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -9073,6 +9567,7 @@
  "flat__macro_all_sectors_2d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -9083,6 +9578,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -9134,6 +9630,7 @@
  "flat__macro_all_sectors_4d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -9144,6 +9641,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -9240,6 +9738,7 @@
  "flat__macro_day0_after_time": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -9250,6 +9749,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -9346,6 +9846,7 @@
  "flat__macro_day0_at_time": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -9356,6 +9857,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -9452,6 +9954,7 @@
  "flat__macro_day0_bad_time": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -9462,6 +9965,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -9561,6 +10065,7 @@
  "flat__macro_day0_before_time": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -9571,6 +10076,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -9670,6 +10176,7 @@
  "flat__macro_day0_no_time_unreleased": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -9680,6 +10187,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -9779,6 +10287,7 @@
  "flat__macro_day0_released_flag": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -9789,6 +10298,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -9885,6 +10395,7 @@
  "flat__macro_empty": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -9895,6 +10406,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -9991,6 +10503,7 @@
  "flat__macro_fomc_day0_after": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -10001,6 +10514,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -10052,6 +10566,7 @@
  "flat__macro_fomc_day0_before": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -10062,6 +10577,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -10113,6 +10629,7 @@
  "flat__macro_fomc_day0_released_flag": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -10123,6 +10640,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -10174,6 +10692,7 @@
  "flat__macro_none": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -10184,6 +10703,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -10280,6 +10800,7 @@
  "flat__macro_past_1d": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -10290,6 +10811,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -10395,6 +10917,7 @@
     "ticker": "ZADDOK"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -10411,6 +10934,7 @@
   "deploy_note": "At 1.5% risk per trade across 3 setups, you'd be risking ~$4,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [
    {
@@ -10661,6 +11185,7 @@
     "ticker": "ZADDOK"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -10671,6 +11196,7 @@
   "deploy_note": "At 1.5% risk per trade across 2 setups, you'd be risking ~$3,000 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -10882,6 +11408,7 @@
  "flat__news_at_threshold": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -10892,6 +11419,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [
    {
@@ -10989,6 +11517,7 @@
  "flat__news_just_above": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -10999,6 +11528,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -11096,6 +11626,7 @@
  "flat__news_none": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -11106,6 +11637,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -11202,6 +11734,7 @@
  "flat__news_single_strong_neg": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -11212,6 +11745,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [
    {
@@ -11309,6 +11843,7 @@
  "flat__trust_fresh": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -11319,6 +11854,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -11415,6 +11951,7 @@
  "flat__trust_fund_age_at_max": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -11425,6 +11962,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -11521,6 +12059,7 @@
  "flat__trust_fund_age_max_plus1": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -11537,6 +12076,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -11622,6 +12162,7 @@
  "flat__trust_fundamentals_unavailable": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -11641,6 +12182,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -11726,6 +12268,7 @@
  "flat__trust_keys_absent": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -11736,6 +12279,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -11832,6 +12376,7 @@
  "flat__trust_stale_as_of": {
   "add_positions": [],
   "adds_paused": [],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -11848,6 +12393,7 @@
   "deploy_note": "At 1.5% risk per trade across 1 setup, you'd be risking ~$1,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -11935,23 +12481,7 @@
   "adds_paused": [
    {
     "composite_score": 80.0,
-    "ticker": "N2EARN1"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "N2NEG40"
-   },
-   {
-    "composite_score": 80.0,
     "ticker": "ZADDOK"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN0"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN7"
    },
    {
     "composite_score": 80.0,
@@ -11962,6 +12492,7 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -11970,6 +12501,7 @@
   "corr_unchecked": null,
   "deploy_note": null,
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "macro_blocked_picks": [],
@@ -11991,9 +12523,21 @@
  "n2_bull__adds_matrix": {
   "add_positions": [
    {
+    "entry_passed": [],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Tech",
     "sector_elevated_warning": null,
@@ -12003,57 +12547,21 @@
     "ticker": "ZADDOK"
    },
    {
+    "entry_passed": [],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
-    "score": 80.0,
-    "sector": "Industrials",
-    "sector_elevated_warning": null,
-    "signal": "Strong Buy",
-    "sizing": {},
-    "thesis": "At breakeven vs entry, 10.0% above stop \u2014 Strong Buy, adds within existing position.",
-    "ticker": "N2NEG40"
-   },
-   {
-    "gap": 10.0,
-    "is_leader": false,
-    "pnl_pct": 0.0,
-    "score": 80.0,
-    "sector": "Materials",
-    "sector_elevated_warning": null,
-    "signal": "Strong Buy",
-    "sizing": {},
-    "thesis": "At breakeven vs entry, 10.0% above stop \u2014 Strong Buy, adds within existing position.",
-    "ticker": "N2EARN1"
-   },
-   {
-    "gap": 10.0,
-    "is_leader": false,
-    "pnl_pct": 0.0,
-    "score": 80.0,
-    "sector": "Telecom",
-    "sector_elevated_warning": null,
-    "signal": "Strong Buy",
-    "sizing": {},
-    "thesis": "At breakeven vs entry, 10.0% above stop \u2014 Strong Buy, adds within existing position.",
-    "ticker": "ZEARN0"
-   },
-   {
-    "gap": 10.0,
-    "is_leader": false,
-    "pnl_pct": 0.0,
-    "score": 80.0,
-    "sector": "Staples",
-    "sector_elevated_warning": null,
-    "signal": "Strong Buy",
-    "sizing": {},
-    "thesis": "At breakeven vs entry, 10.0% above stop \u2014 Strong Buy, adds within existing position.",
-    "ticker": "ZEARN7"
-   },
-   {
-    "gap": 10.0,
-    "is_leader": false,
-    "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Retail",
     "sector_elevated_warning": null,
@@ -12063,9 +12571,24 @@
     "ticker": "ZEARN8"
    },
    {
+    "entry_passed": [
+     {
+      "check": "news",
+      "compound": -0.1,
+      "detail": "1 headline, avg -0.10 \u2014 above the negative-news bar (-0.15)",
+      "n": 1
+     }
+    ],
+    "entry_unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     }
+    ],
     "gap": 10.0,
     "is_leader": false,
     "pnl_pct": 0.0,
+    "review_news_note": null,
     "score": 80.0,
     "sector": "Insurance",
     "sector_elevated_warning": null,
@@ -12076,6 +12599,26 @@
    }
   ],
   "adds_paused": [],
+  "card_blocked_adds": [
+   {
+    "card_label": "Monitoring",
+    "score": 80.0,
+    "ticker": "N2ACT",
+    "where": "Monitoring"
+   },
+   {
+    "card_label": "Monitoring",
+    "score": 80.0,
+    "ticker": "N2REV",
+    "where": "Monitoring"
+   },
+   {
+    "card_label": "Monitoring",
+    "score": 80.0,
+    "ticker": "N2EARN1REV",
+    "where": "Monitoring"
+   }
+  ],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -12083,9 +12626,151 @@
   "concentration_blocked_adds": [],
   "cooldown_adds": [],
   "corr_unchecked": null,
-  "deploy_note": "At 1.5% risk per trade across 7 setups, you'd be risking ~$10,500 if every stop hits.",
+  "deploy_note": "At 1.5% risk per trade across 3 setups, you'd be risking ~$4,500 if every stop hits.",
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [
+   {
+    "check": "news",
+    "clears_when": "the news average rises above -0.15",
+    "composite_score": 80.0,
+    "counterfactual": true,
+    "gap": 10.0,
+    "gate_id": null,
+    "gate_threshold": -0.15,
+    "gate_value": -0.4,
+    "holds": [
+     {
+      "check": "news",
+      "clears_when": "the news average rises above -0.15",
+      "gate_id": null,
+      "gate_threshold": -0.15,
+      "gate_value": -0.4,
+      "reason": "negative news (avg -0.40 across 1 headlines)"
+     }
+    ],
+    "momentum_score": null,
+    "pnl_pct": 0.0,
+    "price": 100.0,
+    "reason": "negative news (avg -0.40 across 1 headlines)",
+    "score": 80.0,
+    "sector": "Industrials",
+    "ticker": "N2NEG40",
+    "unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     }
+    ]
+   },
+   {
+    "check": "earnings",
+    "clears_when": "the report is out",
+    "composite_score": 80.0,
+    "counterfactual": true,
+    "gap": 10.0,
+    "gate_id": null,
+    "gate_threshold": 7,
+    "gate_value": 1,
+    "holds": [
+     {
+      "check": "earnings",
+      "clears_when": "the report is out",
+      "gate_id": null,
+      "gate_threshold": 7,
+      "gate_value": 1,
+      "reason": "earnings in 1d"
+     }
+    ],
+    "momentum_score": null,
+    "pnl_pct": 0.0,
+    "price": 100.0,
+    "reason": "earnings in 1d",
+    "score": 80.0,
+    "sector": "Materials",
+    "ticker": "N2EARN1",
+    "unchecked": [
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ]
+   },
+   {
+    "check": "earnings",
+    "clears_when": "the report is out",
+    "composite_score": 80.0,
+    "counterfactual": true,
+    "gap": 10.0,
+    "gate_id": null,
+    "gate_threshold": 7,
+    "gate_value": 0,
+    "holds": [
+     {
+      "check": "earnings",
+      "clears_when": "the report is out",
+      "gate_id": null,
+      "gate_threshold": 7,
+      "gate_value": 0,
+      "reason": "earnings today"
+     }
+    ],
+    "momentum_score": null,
+    "pnl_pct": 0.0,
+    "price": 100.0,
+    "reason": "earnings today",
+    "score": 80.0,
+    "sector": "Telecom",
+    "ticker": "ZEARN0",
+    "unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ]
+   },
+   {
+    "check": "earnings",
+    "clears_when": "the report is out",
+    "composite_score": 80.0,
+    "counterfactual": true,
+    "gap": 10.0,
+    "gate_id": null,
+    "gate_threshold": 7,
+    "gate_value": 7,
+    "holds": [
+     {
+      "check": "earnings",
+      "clears_when": "the report is out",
+      "gate_id": null,
+      "gate_threshold": 7,
+      "gate_value": 7,
+      "reason": "earnings in 7d"
+     }
+    ],
+    "momentum_score": null,
+    "pnl_pct": 0.0,
+    "price": 100.0,
+    "reason": "earnings in 7d",
+    "score": 80.0,
+    "sector": "Staples",
+    "ticker": "ZEARN7",
+    "unchecked": [
+     {
+      "check": "stale",
+      "why": "no data bundle \u2014 the stale-data check couldn't run"
+     },
+     {
+      "check": "news",
+      "why": "no recent headlines to check"
+     }
+    ]
+   }
+  ],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],
@@ -12112,23 +12797,7 @@
   "adds_paused": [
    {
     "composite_score": 80.0,
-    "ticker": "N2EARN1"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "N2NEG40"
-   },
-   {
-    "composite_score": 80.0,
     "ticker": "ZADDOK"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN0"
-   },
-   {
-    "composite_score": 80.0,
-    "ticker": "ZEARN7"
    },
    {
     "composite_score": 80.0,
@@ -12139,6 +12808,7 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
   "composite_skipped": [],
@@ -12149,6 +12819,7 @@
   "deploy_note": null,
   "deterioration_blocked_adds": [],
   "earnings_waiting": [],
+  "entry_held_adds": [],
   "etf_screened_out": [],
   "flat_day_held": [],
   "leading_sectors": [],

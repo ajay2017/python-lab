@@ -288,6 +288,10 @@ def all_flagged_tickers(
     action.trim_ticker items (macro cards) resolve correctly. Pure; safe on
     None/empty.
 
+    NOTE (2026-10-18, chunk 7a): the held-name ADD lane no longer uses this set
+    -- it reads `add_blocking_cards` (a Review news WATCH excluded, owner N-A).
+    New picks, leads and the ETF held-group check keep this broad set.
+
     `ignore_news=True` skips news-only cards (critical_news / news WATCH): used
     by the risk-off de-risk pool and the Tune-up filter, where a headline alone
     must not move a protective trim off its beta-ranked name (D-D / D-I). The
@@ -298,6 +302,90 @@ def all_flagged_tickers(
         for it in (act_today or []) + (review_list or [])
         if not (ignore_news and is_news_only_card(it))
     } - {""}
+
+
+def _card_label(item: dict, source: str) -> str:
+    """Short, true label for the card that pauses an add. The PREFIX names the
+    Home section the card actually renders in -- derived from `classify_bucket`
+    (a Review-list trim sits in "Act Today", not "Review"); the suffix is derived
+    from the card's own fields. Falls back to the bare section name."""
+    act = item.get("action")
+    probe = {**item, "_source": source}
+    if source == "review" and not isinstance(act, dict):
+        # classify_bucket reads a review card's action as a dict; a malformed
+        # (string) action is read as its type rather than crashing the Brief.
+        probe["action"] = {"type": str(act or "")}
+    try:
+        bucket = classify_bucket(probe)
+    except Exception:
+        bucket = ""
+    prefix = {"act": "Act Today", "aware": "Monitoring"}.get(bucket, "Card")
+    suffix = ""
+    if source == "act":
+        kind = str(item.get("kind", ""))
+        suffix = (
+            "EXIT" if kind in EXIT_KINDS
+            else "TRIM" if kind in TRIM_KINDS
+            else "critical news" if kind == "critical_news"
+            else "pre-mortem trigger" if kind == "premortem_triggered"
+            else "macro event" if kind == "macro"
+            else ""
+        )
+    else:
+        atype = str(act.get("type", "")) if isinstance(act, dict) else ""
+        head = str(item.get("headline") or "")
+        if atype in _ACT_REVIEW_TYPES:
+            suffix = "TRIM"
+        elif atype == "TIGHTEN_ONLY":
+            suffix = "tighten stop"
+        elif head.startswith("earnings "):
+            # "earnings in 2d (2026-10-17), weight 5.0%" -> "earnings in 2d"
+            suffix = head.split(" (", 1)[0]
+        elif atype == "WATCH":
+            suffix = "WATCH"
+    return f"{prefix} · {suffix}" if suffix else prefix
+
+
+def add_blocking_cards(
+    act_today: list | None,
+    review_list: list | None,
+    sold_today: set | None = None,
+) -> dict[str, str]:
+    """`{TICKER: label}` for every held name whose add-to-winner is paused by a
+    card in today's Brief (or a sale today) -- the CARD half of the add gate.
+
+    Broader than reduce calls (any Act Today card, including critical news; any
+    Review card) but a Review NEWS WATCH (`watch_kind == "news"`) does NOT pause
+    an add: news is an ENTRY decision (`entry_eligibility.check_news`), and the
+    add card carries a note instead (owner decision N-A Option 2, 2026-10-18).
+    First card per ticker wins (Act Today before Review); a sold-today ticker
+    with no card gets "sold today". Pure; safe on None/empty.
+    """
+    out: dict[str, str] = {}
+    for src, items in (("act", act_today), ("review", review_list)):
+        for it in (items or []):
+            if src == "review" and it.get("watch_kind") == "news":
+                continue
+            t = _ticker(it)
+            if t and t not in out:
+                out[t] = _card_label(it, src)
+    for s in (sold_today or ()):
+        t = str(s).upper()
+        if t and t not in out:
+            out[t] = "sold today"
+    return out
+
+
+def review_news_watch_by_ticker(review_list: list | None) -> dict[str, dict]:
+    """`{TICKER: card}` for Review negative-news WATCH cards (the cards that
+    `add_blocking_cards` deliberately skips), first per ticker. Pure."""
+    out: dict[str, dict] = {}
+    for it in (review_list or []):
+        if it.get("watch_kind") == "news":
+            t = _ticker(it)
+            if t and t not in out:
+                out[t] = it
+    return out
 
 
 def suppress_orphans_under_reduce_call(

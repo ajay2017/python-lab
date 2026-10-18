@@ -287,3 +287,13 @@ def test_gate_list_contains_held_news_check():
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     assert "stock_analyzer/held_news_check.py" in m._GATE_FILES
+
+
+def test_review_news_watch_carries_structured_count_and_window():
+    # 7c reads these instead of parsing the headline prose (chunk 7a review).
+    two = _rev([_it(c=-0.10, tier=3, ts=_S + 1, title="t1"),
+                _it(c=-0.20, tier=3, ts=_S + 2, title="t2")])
+    w = find_item(two, "AAA")
+    assert w["news_n_negative"] == 2 and w["news_window_label"] == "Fri Oct 16"
+    one = find_item(_rev([_it(c=-0.10, tier=3, ts=_S + 1, title="t1")]), "AAA")
+    assert one["news_n_negative"] == 1
