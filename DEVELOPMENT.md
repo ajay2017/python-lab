@@ -160,7 +160,7 @@ Variables to set on the service:
 |---|---|---|
 | `SUPABASE_URL` | yes | `https://<project-id>.supabase.co` |
 | `SUPABASE_KEY` | yes | MUST be the service-role / secret key, not publishable |
-| `ANTHROPIC_API_KEY` | yes | AI Snapshot, AI Insights, broker-import ticker fallback |
+| `ANTHROPIC_API_KEY` | no (optional by principle) | Not set in production as of 2026-10-17. Every caller falls back without it. When set it also turns on LLM news sentiment in the composite score, so treat switching it on as a decision: see `docs/plans/anthropic-key-enable.md`. Also enables AI Snapshot, AI Insights, the thesis/debrief/monthly cron lanes and the broker-import ticker fallback. |
 | `APP_PASSWORD` | yes | owner login for the password gate |
 | `APP_READONLY_PASSWORD` | no | viewer account; leave blank to disable |
 | `FRED_API_KEY` | no | enriches the macro calendar with released values |
