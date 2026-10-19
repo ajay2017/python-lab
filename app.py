@@ -10514,6 +10514,17 @@ if page == "🏠 Home":
                 "</div>"
                 for c in comp_skipped[:5]
             )
+            # Never silently truncate: name the names beyond the 5 shown rows.
+            _cs_more = ""
+            if len(comp_skipped) > 5:
+                _cs_rest = [str(c.get("ticker", "")) for c in comp_skipped[5:]]
+                _cs_rest_txt = ", ".join(_cs_rest[:10]) + (", …" if len(_cs_rest) > 10 else "")
+                _cs_more = (
+                    f"<div style='color:#fca5a5;font-size:0.79em;margin-bottom:2px'>"
+                    f"• …and {_safe_html(len(_cs_rest))} more: {_safe_html(_cs_rest_txt)}"
+                    "</div>"
+                )
+            _cs_rows = _cs_rows + _cs_more
             st.markdown(
                 "<div style='background:#3f1d1d;border:1px solid #ef4444;"
                 "border-radius:8px;padding:8px 14px;margin-top:8px;margin-bottom:4px'>"
@@ -11764,6 +11775,21 @@ if page == "🏠 Home":
         # Held-news noise filter coverage: say so when negative headlines went
         # unfiltered (over the batch bound, a failed LLM batch, or backoff).
         _rs_note = st.session_state.get("_brief_news_rescore_status")
+        if not _db_offline and isinstance(_rs_note, dict):
+            # Positive disclosure when the AI filter actually ran (None = no key: silent).
+            try:
+                _rs_sel = int(_rs_note.get("selected") or 0)
+                _rs_unf = int(_rs_note.get("unfiltered") or 0)
+                _rs_raised = int(_rs_note.get("filtered") or 0)
+            except (TypeError, ValueError):
+                _rs_sel = _rs_unf = _rs_raised = 0
+            _rs_checked = max(0, _rs_sel - _rs_unf)
+            if _rs_sel > 0 and _rs_checked > 0:
+                st.caption(
+                    f"🤖 AI news filter re-read {_rs_checked} of your holdings' headline"
+                    f"{'s' if _rs_checked != 1 else ''} today and raised the score on "
+                    f"{_rs_raised} (it can only raise a score, never lower one)."
+                )
         if not _db_offline and isinstance(_rs_note, dict) and (_rs_note.get("unfiltered_negative") or 0) > 0:
             _rs_n = int(_rs_note.get("unfiltered_negative") or 0)
             st.caption(
@@ -41704,7 +41730,7 @@ The footer line beneath the cards states **risk, not capital** — "you'd be ris
 **Right — three lanes, by urgency:**
 - **🔴 Act Today (decisions only)** — genuine trade decisions for *today*: a stop breached, a sell signal, a **deterioration trim or exit** on a position that's rolling over (see *loss protection* below), a sized trim, breaking critical news (two or more tier-1/2 headlines at or below −0.25 on a holding since midnight ET of the previous trading day — every holding is checked, and the card names the window, e.g. "since Fri Oct 16"). If there's nothing here you'll see **"✅ Nothing to act on — you're set for today."** **Stop-breach cards are re-evaluated against the live intraday price on every render** — the Brief is memoized on portfolio composition (not price), so a breach can fire from yesterday's close even when the live price has already recovered. When the live price is more than 0.5% above the stop, the card is demoted to an amber **"⚠️ Stop Breach — Resolved"** section below Act Today rather than staying in the action lane; when live price data is not yet available the card stays in Act Today with a note to verify the current price before acting. **Tickers you sell during a session are immediately suppressed from Grow Today** — so an exit call you acted on won't re-appear as a BUY recommendation in the same session.
 - **⚠️ Stop Breach — Resolved** (appears between Act Today and Monitoring when present) — a stop-breach signal from overnight's close that the live intraday price has since cleared. Not a directive to act — the breach resolved — but kept visible for one session as context. An Analyze link bridges to the full signal picture for the name.
-- **👁️ Monitoring / Awareness (FYI)** — things to *know*, not act on: an early **deterioration watch** on a weakening hold, negative news on a holding (any headline at or below −0.05 since the previous trading day; the card says how many more tier-1/2 headlines would move it to Act Today), a broad macro event to hold through. Only headlines whose title names the company (or its ticker) count — a story that just mentions it in passing, like a market wrap or a rival's earnings, is ignored everywhere news is used; 📈 Analysis lists those under "Not counted" (if the app has no usable company name for a ticker, every tagged headline still counts, and Analysis says so). If the optional AI news noise filter is set up and couldn't check some negative headlines, a one-line note above this section says so — those cards use raw sentiment. While a hold is on a deterioration watch, the app also **won't nudge you to add to it** — even if its score still reads Strong Buy — and shows a "🟡 Add Suppressed — Early Deterioration Watch" note instead (don't add to a weakening name).
+- **👁️ Monitoring / Awareness (FYI)** — things to *know*, not act on: an early **deterioration watch** on a weakening hold, negative news on a holding (any headline at or below −0.05 since the previous trading day; the card says how many more tier-1/2 headlines would move it to Act Today), a broad macro event to hold through. Only headlines whose title names the company (or its ticker) count — a story that just mentions it in passing, like a market wrap or a rival's earnings, is ignored everywhere news is used; 📈 Analysis lists those under "Not counted" (if the app has no usable company name for a ticker, every tagged headline still counts, and Analysis says so). If the optional AI news noise filter is set up and couldn't check some negative headlines, a one-line note above this section says so — those cards use raw sentiment. When it does run, a line in the same place says how many headlines it re-read and how many it raised. While a hold is on a deterioration watch, the app also **won't nudge you to add to it** — even if its score still reads Strong Buy — and shows a "🟡 Add Suppressed — Early Deterioration Watch" note instead (don't add to a weakening name).
 - **🔧 Portfolio Tune-up (standing quality)** — slow-moving risk-metric improvements (Sharpe, drawdown). *Not* time-sensitive — act on these when you rebalance or have fresh capital, not on the clock.
 
 **Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop). A **↔ Steady vs yesterday** chip means the signal is unchanged from yesterday — continuity, not a fresh call.
