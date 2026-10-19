@@ -2,6 +2,21 @@
 
 **Status:** PROPOSED 2026-10-19 (lead, owner-requested). Nothing built. Planned start: item 2, next session.
 
+## Results so far
+**Item 2, first run (2026-10-19, owner-run SQL):**
+- `score_history` (held names, cron, 2026-09-14..10-19): **438 rows, 0 composite mismatches** against
+  `round(0.25t + 0.35bq + 0.30val + 0.10s, 1)` with unmeasured pillars as the neutral 50, **0 pillars outside 0-100**.
+  The stored arithmetic is sound.
+- 201 rows (46%) had an unmeasured pillar, 114 at Buy level (≥ 65). **All 201 were SENTIMENT only** — technical,
+  quality and valuation were measured on every row. By week: 09-14 0/86, 09-21 0/88, **09-28 37/87, 10-05 84/84,
+  10-12 80/80**, 10-19 0/13. Exactly the Yahoo news-feed outage (fixed `593a26c` 2026-10-16; tripwire `e3290ac`
+  turns the cron heartbeat red on a recurrence). So ~10-01..10-16 composites carried a placeholder 50 for sentiment
+  (≤ ±5 composite points; matters only near the 65/75 lines). Already detected going forward; nothing to fix.
+- `recommendations` (weights_version 2 rows with t/bq/val stored, 2026-08-10..10-19): **1,273 rows, 0 with an
+  impossible implied sentiment** ((composite − 0.25t − 0.35bq − 0.30val)/0.10 outside 0-100). Weaker than the
+  score_history check (it only catches a composite off by ≳ ±5 points), but clean.
+- Not yet run: the detectors per recent bug class (and folding both checks into the weekly Q0).
+
 ## The question
 After 4-5 months of live data and a run of sessions that each found bugs, the owner wants a way to **trust** the app.
 Two different questions, kept apart on purpose:
