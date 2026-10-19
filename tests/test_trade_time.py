@@ -386,17 +386,55 @@ def test_a_nat_row_is_not_treated_as_midnight():
     assert bool(out["traded_at_time_known"].iloc[0]) is True
 
 
+def _journal(n):
+    return pd.DataFrame([
+        _row(f"2026-07-{(i % 28) + 1:02d}T13:45:00.123456+00:00") for i in range(n)
+    ])
+
+
+def _best_time(fn, df, repeats=7):
+    """Min wall time of fn(df) over `repeats` runs."""
+    import time
+    best = float("inf")
+    for _ in range(repeats):
+        t0 = time.perf_counter()
+        fn(df)
+        best = min(best, time.perf_counter() - t0)
+    return best
+
+
+def _calib(df):
+    # the vectorised primitive normalize_traded_at is built on
+    return pd.to_datetime(df["traded_at"], utc=True, format="ISO8601")
+
+
+def _cost_ratio(fn=None, n=3000):
+    """normalize time / calibration time on the same values, same moment."""
+    fn = fn or tt.normalize_traded_at
+    df = _journal(n)
+    return _best_time(fn, df) / max(_best_time(_calib, df), 1e-5)
+
+
+def _scaling_ratio(fn=None):
+    fn = fn or tt.normalize_traded_at
+    return _best_time(fn, _journal(1200), 3) / max(_best_time(fn, _journal(300), 3), 1e-4)
+
+
+# Measured 2026-10-19 on AC: vectorised fast path 4.2-5.9x the calibration;
+# the old per-row scalar parse 10.3-15.4x. 8 sits between with margin both ways.
+_PER_ROW_RATIO_LIMIT = 8
+
+
 def test_normalize_is_not_quadratic_on_a_realistic_journal():
     """Runs inside load_trades_or_none (~44 call sites). A per-row scalar parse
-    cost ~0.55ms/row -- 168ms on a 300-row journal, every load."""
-    import time
-    rows = []
-    for i in range(300):
-        rows.append(_row(f"2026-07-{(i % 28) + 1:02d}T13:45:00.123456+00:00"))
-    df = pd.DataFrame(rows)
-    t0 = time.perf_counter()
-    tt.normalize_traded_at(df)
-    assert (time.perf_counter() - t0) < 0.10
+    cost ~0.55ms/row -- 168ms on a 300-row journal, every load. Two guards, both
+    machine-relative so a throttled laptop can't flake them: (1) cost relative to
+    a vectorised pd.to_datetime of the same values (throttling slows both
+    equally) catches a regression to per-row parsing, which is LINEAR and so
+    invisible to a scaling check; (2) 4x the rows must cost < 8x the time
+    (linear ~4x, quadratic ~16x)."""
+    assert _cost_ratio() < _PER_ROW_RATIO_LIMIT
+    assert _scaling_ratio() < 8
 
 
 def test_pd_na_broker_id_is_not_read_as_provenance():

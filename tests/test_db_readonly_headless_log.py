@@ -21,7 +21,9 @@ def test_real_streamlit_headless_logs_no_script_ctx_warning():
         "db.set_readonly(False)",
     ])
     root = pathlib.Path(db.__file__).resolve().parents[1]
+    # A cold `import streamlit` in a fresh interpreter under parallel-suite load
+    # exceeded 120 s on 2026-10-19 (the test passes alone in ~20 s).
     res = subprocess.run([sys.executable, "-c", code], cwd=root,
-                         capture_output=True, text=True, timeout=120)
+                         capture_output=True, text=True, timeout=300)
     assert res.returncode == 0, res.stderr
     assert "ScriptRunContext" not in res.stderr + res.stdout

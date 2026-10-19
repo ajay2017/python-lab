@@ -9,6 +9,7 @@ Two production defects, both found in real Supabase data:
 from datetime import date, datetime
 
 import pytest
+from tests._ast_cache import parse_file_cached
 
 from stock_analyzer import db
 from stock_analyzer.write_guards import snapshot_sweep_keep, split_non_trading_rows
@@ -202,8 +203,7 @@ def test_app_snapshot_held_set_comes_from_raw_holdings():
     which have already lost unpriced holdings."""
     import ast
     import pathlib
-    src = (pathlib.Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
-    tree = ast.parse(src)
+    tree = parse_file_cached(pathlib.Path(__file__).resolve().parents[1] / "app.py")
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
              and isinstance(n.func, ast.Attribute) and n.func.attr == "save_daily_snapshot"]
     assert len(calls) == 1

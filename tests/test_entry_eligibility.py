@@ -1,5 +1,6 @@
 """Chunk 2 of docs/plans/shared-entry-check.md: the shared entry-eligibility module."""
 import ast
+from tests._ast_cache import parse_file_cached
 import pathlib
 from datetime import date, datetime
 
@@ -196,7 +197,7 @@ def test_extra_check_is_applied_A4():
 @pytest.mark.parametrize("rel", ["app.py", "stock_analyzer/headless_alert_engine.py"])
 def test_no_local_tone_rule(rel):
     src = (ROOT / rel).read_text(encoding="utf-8")
-    tree = ast.parse(src)
+    tree = parse_file_cached(ROOT / rel)
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id in ("MARKET_TONE_BEAR_PCT", "MARKET_TONE_BULL_PCT"):
             pytest.fail(f"{rel} references {node.id} outside entry_eligibility")

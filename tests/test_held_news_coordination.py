@@ -2,6 +2,7 @@
 news-only cards stop swallowing risk-off TRIMs and Tune-up beta cards; Home
 publishes the Brief's own news flags for the Rebalancer."""
 import ast
+from tests._ast_cache import parse_file_cached
 import re
 from datetime import date
 from pathlib import Path
@@ -330,4 +331,4 @@ def test_act_critical_news_card_removed_for_risk_off_ticker(monkeypatch):
 def test_news_intelligence_caption_present():
     assert "Shows the 20 most recent headlines across your holdings" in _APP
     assert "Act Today and Review check every holding." in _APP
-    ast.parse(_APP)
+    parse_file_cached(Path(__file__).resolve().parent.parent / "app.py")

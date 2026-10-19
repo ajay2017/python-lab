@@ -4,6 +4,7 @@ can emit -- otherwise a capped size shows no reason / an infeasible BUY shows
 no size and no reason. Pins BOTH ends: the marker set is derived from the
 producer's source, the consumer blocks from app.py's AST."""
 import ast
+from tests._ast_cache import parse_file_cached
 import pathlib
 import re
 
@@ -38,7 +39,7 @@ def _is_sz_get(node, key=None):
 
 def _consumer_blocks() -> list:
     """Per `_sz.get("ceiling_capped")` If: the keys read by it and its next sibling."""
-    tree = ast.parse((_ROOT / "app.py").read_text(encoding="utf-8"))
+    tree = parse_file_cached(_ROOT / "app.py")
     blocks = []
     for parent in ast.walk(tree):
         for field in ("body", "orelse", "finalbody"):
@@ -113,7 +114,7 @@ def test_card_note_covers_every_budget_flag_the_producer_emits():
 
 def _card_note_calls() -> list:
     """(kind, sibling-offset-from-ceiling-If) for each `_budget_view.card_note(_sz, kind, ...)`."""
-    tree = ast.parse((_ROOT / "app.py").read_text(encoding="utf-8"))
+    tree = parse_file_cached(_ROOT / "app.py")
     found = []
     for parent in ast.walk(tree):
         for field in ("body", "orelse", "finalbody"):

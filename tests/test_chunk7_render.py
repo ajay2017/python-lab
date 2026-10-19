@@ -1,13 +1,14 @@
 """Shared-entry chunk 7c -- source-text pins for Home's add-to-winners render
 (app.py has no importing test suite) + the decision_bucket label preference."""
 import ast
+from tests._ast_cache import parse_file_cached
 import re
 from pathlib import Path
 
 from stock_analyzer import decision_bucket as db
 
 _SRC = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
-_TREE = ast.parse(_SRC)
+_TREE = parse_file_cached(Path(__file__).resolve().parent.parent / "app.py")
 
 
 def test_add_card_news_checked_caption_from_entry_passed():

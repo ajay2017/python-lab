@@ -11,6 +11,7 @@ Every "held-out" assertion here is paired with a control that FIRES in the same
 fixture and is asserted non-empty, so a no-op implementation cannot pass.
 """
 import ast
+from tests._ast_cache import parse_file_cached
 import inspect
 from datetime import date, timedelta
 from pathlib import Path
@@ -505,7 +506,7 @@ _PENDING_OTHER_COMMITS: set = set()   # emptied: P2/P3 landed (2026-10-15)
 
 
 def _retired_hits(path):
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    tree = parse_file_cached(path)
     hits = []
     for n in ast.walk(tree):
         if isinstance(n, ast.Name) and n.id in _RETIRED_NAMES:

@@ -6,6 +6,7 @@ the System Trust provider check; plus pins for Home's `_news_feed_cache` publish
 its registry rows. No network, no DB: everything is faked.
 """
 import ast
+from tests._ast_cache import parse_file_cached
 import datetime
 import re
 from pathlib import Path
@@ -304,7 +305,7 @@ def _app_src():
 
 
 def test_home_publishes_news_feed_cache_with_none_sentinel():
-    tree = ast.parse(_app_src())
+    tree = parse_file_cached(ROOT / "app.py")
     assigns = []
     for n in ast.walk(tree):
         if (isinstance(n, ast.Assign) and len(n.targets) == 1

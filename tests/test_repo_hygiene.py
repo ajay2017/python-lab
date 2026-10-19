@@ -17,11 +17,12 @@ Covered here:
   in CI, now also asserted locally via the suite).
 """
 import importlib.util
-import py_compile
 import re
 from pathlib import Path
 
 import pytest
+
+from tests._ast_cache import parse_file_cached
 
 pytestmark = pytest.mark.fast
 
@@ -43,9 +44,12 @@ def test_entrypoint_scripts_compile(script):
     path = ROOT / script
     if not path.exists():
         pytest.skip(f"{script} not present")
+    # Compiling from the cached AST still proves the file byte-compiles: the
+    # cache is keyed on the exact source bytes and only ever written after a
+    # successful parse; compile() then runs the same bytecode-generation step.
     try:
-        py_compile.compile(str(path), doraise=True)
-    except py_compile.PyCompileError as exc:
+        compile(parse_file_cached(path), str(path), "exec")
+    except (SyntaxError, ValueError) as exc:
         pytest.fail(f"{script} failed to compile:\n{exc}")
 
 

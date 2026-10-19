@@ -15,6 +15,7 @@ correctness check on any individual `_Store`'s fields (unconditional/lane/
 date_col) -- those stay eyeballed at review time, same as today.
 """
 import ast
+from tests._ast_cache import parse_file_cached
 from pathlib import Path
 
 import pytest
@@ -38,7 +39,7 @@ _ALLOWLIST = {
 
 
 def _called_save_functions(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    tree = parse_file_cached(path)
     names = set()
     for node in ast.walk(tree):
         if (
@@ -53,7 +54,7 @@ def _called_save_functions(path: Path) -> set[str]:
 
 
 def _function_table_targets(path: Path, func_names: set[str]) -> dict[str, set[str]]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    tree = parse_file_cached(path)
     result: dict[str, set[str]] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name in func_names:

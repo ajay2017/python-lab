@@ -8,6 +8,7 @@ render-only wiring that no test imports, so its wiring is pinned structurally
 firing control; the mutations run against each are listed in the build report.
 """
 import ast
+from tests._ast_cache import parse_file_cached
 import copy
 import datetime
 import pathlib
@@ -464,7 +465,7 @@ def _segment(src, start, end):
 
 
 def test_app_parses():
-    ast.parse(_app_src())
+    parse_file_cached(_ROOT / "app.py")
 
 
 def test_downstream_helper_re_reads_strictly_and_never_trusts_session_trades():
