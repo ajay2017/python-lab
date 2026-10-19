@@ -466,9 +466,14 @@ def readout_footnotes(gate_id: str) -> "list[str]":
             "an earnings wait, so the earnings hold would have kept some of "
             "these names out anyway. Only headlines whose title names the "
             "company count (F-309 was already live, so every row uses it). "
-            "News is VADER-scored while the Anthropic key is off; if the key "
-            "is switched on, the app's held headlines are LLM-filtered and "
-            "this footnote must be dated (docs/plans/anthropic-key-enable.md).",
+            "Scorer: new-pick rows and every cron row use raw VADER on the "
+            "candidate's own headlines. App add-lane rows use the held "
+            "headlines after the suppress-only LLM noise filter whenever the "
+            "web service has an Anthropic key — and the key has been live in "
+            "Railway since 2026-07-14 (first sentiment_llm_cache row; owner "
+            "confirmed 2026-10-19), so every G-30 row was written with it on: "
+            "no scorer change inside this gate's data. If the key is ever "
+            "removed, date that change here (docs/plans/anthropic-key-enable.md).",
             "Pre-registered rule (written before any data): no review before "
             "this gate reaches the firm band. If the skipped and held names' "
             "forward alpha vs SPY is then positive and distinguishable from "

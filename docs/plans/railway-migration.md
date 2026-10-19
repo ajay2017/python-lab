@@ -3,6 +3,10 @@
 **Date:** 2026-07-23
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 4.6
+**Phase 0a update 2026-10-19:** the owner confirmed the Anthropic key live in Railway is NOT the exposed
+`sk-ant-api03-x_sV2…` key, so production no longer depends on it. Closing 0a only needs the console to show the old
+key disabled (owner to confirm). See `docs/plans/anthropic-key-enable.md` (the key has been on since 2026-07-14).
+
 **Status: CUTOVER COMPLETE 2026-08-15 — Railway is the primary deploy.** All phases closed
 except 0a. Phases 0b, 1, 2, 3, 4 done (with real deviations from this plan — see "What
 actually happened" below); Phase 5 (parallel run) ran 2026-07-24 → 2026-08-15 with no

@@ -1,5 +1,15 @@
 # Switching the Anthropic key on in Railway — checklist
 
+**STATUS CORRECTED 2026-10-19: the key is ALREADY ON, and has been since 2026-07-14.** `sentiment_llm_cache` has rows
+every day from 2026-07-14 — the day the bidirectional LLM rescore shipped (`10edd8f`) — and a row is only written
+after a successful Anthropic call (`news_intelligence.rescore_headlines_llm` returns `None` on any error). The owner
+confirmed 2026-10-19 that the key is in Railway and is NOT the exposed `sk-ant-api03-x_sV2…` key. So the "NOT DONE"
+status below, and the 2026-10-17 belief it rests on ("the key is not set in Railway"), were wrong: there was never a
+VADER-only production period after 2026-07-14, and no regime change inside any October measurement. Still worth doing
+from the checklist: step 2 (a monthly spend cap), and confirming the old `x_sV2` key shows as disabled in the console.
+The "Roll back" section below is the live procedure if the owner ever wants production LLM-free. The original text is
+kept below as the design record.
+
 **Status: PREPARED 2026-10-18, NOT DONE — an owner decision.** The key is optional by principle
 (`docs/requirements.md` ~734: zero runtime dependency on LLM connectivity; owner 2026-10-17: "if the LLM is there it
 can be used, but if not the app should not fail"). Every key-reading path already checks for the key and falls back
