@@ -28166,6 +28166,9 @@ elif page == "📋 Watchlist":
     _wl_skipped: list[str] = []
     for _wt, _wd in _wl_data.items():
         if _wd is None:
+            # No data at all (e.g. a mistyped or delisted symbol): disclose it in
+            # the same warning below, never drop it silently (UBR, 2026-10-19).
+            _wl_skipped.append(str(_wt))
             continue
         # Per-ticker portfolio fit: sector_gate_context (sector_gate_spec.md,
         # 2026-09-30, Hole 1 fix) — the SAME helper the cron lane
