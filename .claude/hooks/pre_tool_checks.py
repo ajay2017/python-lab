@@ -121,6 +121,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 
@@ -586,12 +587,39 @@ def _start_process(args: list):
         # crash here wouldn't flip a verdict, but it would lose the actual
         # failure detail printed to the user. Applied to all subprocess
         # call sites in this file for the same reason, not just this one.
+        # POSIX: a new session/process group so a timeout can killpg the whole
+        # pytest tree (xdist workers included). Windows needs no flag --
+        # taskkill /T walks the parent-pid tree (see _kill_process_tree).
+        extra = {"start_new_session": True} if os.name != "nt" else {}
         return subprocess.Popen(
             args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            encoding="utf-8", errors="replace",
+            encoding="utf-8", errors="replace", **extra,
         )
     except Exception:
         return None
+
+
+def _kill_process_tree(proc) -> None:
+    """Kills `proc` AND its descendants; never raises. 2026-10-19 incident:
+    pytest runs with `-n auto`, and plain proc.kill() (TerminateProcess on
+    Windows) kills only the controller -- 4 xdist workers survived a timeout,
+    kept burning CPU and held files open in the snapshot worktree (the adapter
+    then failed to remove it, and the next attempt ran slower). Falls back to
+    proc.kill() if the tree kill raises or is unavailable."""
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True, timeout=30,
+            )
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
 
 
 def _finish_process(proc, timeout: int):
@@ -604,7 +632,7 @@ def _finish_process(proc, timeout: int):
         stdout, stderr = proc.communicate(timeout=timeout)
         return proc.returncode, stdout or "", stderr or ""
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_process_tree(proc)
         try:
             proc.communicate(timeout=5)
         except Exception:

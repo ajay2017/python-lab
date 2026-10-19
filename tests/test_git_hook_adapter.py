@@ -1041,3 +1041,26 @@ def test_a_commit_msg_crash_is_logged_under_the_hooks_real_name(monkeypatch):
     with pytest.raises(SystemExit):
         adapter.main()
     assert _BLOCKS_RECORDED[0][0] == "commit-msg"
+
+
+def test_snapshot_plumbing_uses_long_git_timeouts(monkeypatch):
+    # 2026-10-19: `git write-tree` hit the 30 s default under load and the gates
+    # silently fell back to the working tree. write-tree/commit-tree get >=120 s.
+    calls = []
+
+    def fake_git(*args, timeout=30):
+        calls.append((args, timeout))
+        return subprocess.CompletedProcess(args, 0, stdout="abc123\n", stderr="")
+
+    monkeypatch.setattr(adapter, "_git", fake_git)
+    _use_real_snapshot(monkeypatch)  # undo the autouse stub of _write_tree
+    tree, _ = adapter._write_tree()
+    assert tree == "abc123"
+    parent, _wt = adapter._add_snapshot_worktree(tree)
+    shutil.rmtree(parent, ignore_errors=True)
+
+    wt = [t for a, t in calls if a == ("write-tree",)]
+    ct = [t for a, t in calls if "commit-tree" in a]
+    assert wt and ct, calls
+    assert wt[0] >= 120
+    assert ct[0] >= 120

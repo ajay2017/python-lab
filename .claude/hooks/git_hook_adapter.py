@@ -449,7 +449,9 @@ def _write_tree() -> tuple[str | None, str]:
     to testing the working tree WITH A WARNING rather than blocking on plumbing.
     """
     try:
-        r = _git("write-tree")
+        # 120 s: under heavy load the default 30 s timed out (2026-10-19) and the
+        # gates silently fell back to the working tree.
+        r = _git("write-tree", timeout=120)
         if r.returncode != 0:
             return None, f"`git write-tree` failed: {r.stderr.strip()}"
         tree = r.stdout.strip()
@@ -475,6 +477,7 @@ def _add_snapshot_worktree(tree: str) -> tuple[str, str]:
         "-c", "user.name=drishta-gate", "-c", "user.email=gate@localhost",
         "-c", "commit.gpgsign=false",
         "commit-tree", tree, "-m", "drishta pre-commit gate snapshot",
+        timeout=120,  # see write-tree: 30 s was too tight under load
     )
     if r.returncode != 0:
         raise RuntimeError(f"`git commit-tree` failed: {r.stderr.strip()}")

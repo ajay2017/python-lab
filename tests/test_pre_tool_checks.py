@@ -1074,3 +1074,84 @@ class TestSubprocessEncodingExplicit:
             f"subprocess call(s) at line(s) {offenders} use text=True with no "
             "explicit encoding= -- add encoding=\"utf-8\", errors=\"replace\""
         )
+
+
+# --- pytest process-TREE kill on timeout (2026-10-19 orphaned xdist workers) ---
+
+def _pid_alive(pid: int) -> bool:
+    import os
+    if os.name == "nt":
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+            capture_output=True, text=True,
+        ).stdout
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)  # signal 0 is only a liveness probe on POSIX
+        return True
+    except OSError:
+        return False
+
+
+def test_finish_process_timeout_kills_grandchildren(tmp_path):
+    import time
+    pidfile = tmp_path / "grandchild.pid"
+    code = (
+        "import subprocess, sys, time\n"
+        "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        f"open({str(pidfile)!r}, 'w').write(str(g.pid))\n"
+        "time.sleep(120)\n"
+    )
+    proc = hook._start_process([sys.executable, "-c", code])
+    assert proc is not None
+    gpid = None
+    try:
+        deadline = time.time() + 15
+        while time.time() < deadline and gpid is None:
+            if pidfile.exists() and pidfile.read_text().strip():
+                gpid = int(pidfile.read_text().strip())
+            else:
+                time.sleep(0.1)
+        assert gpid is not None, "grandchild never started"
+        assert _pid_alive(gpid)
+        assert hook._finish_process(proc, timeout=3) == (None, "", "__timeout__")
+        deadline = time.time() + 15
+        while time.time() < deadline and _pid_alive(gpid):
+            time.sleep(0.25)
+        assert not _pid_alive(gpid), "grandchild survived the timeout kill"
+    finally:
+        if gpid is not None and _pid_alive(gpid):
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/PID", str(gpid)], capture_output=True)
+            else:
+                import os, signal
+                os.kill(gpid, signal.SIGKILL)
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def test_kill_process_tree_falls_back_to_kill_and_never_raises(monkeypatch):
+    killed = []
+
+    class _P:
+        pid = 999999
+
+        def kill(self):
+            killed.append(True)
+
+    def boom(*a, **k):
+        raise OSError("tree kill unavailable")
+
+    monkeypatch.setattr(hook.subprocess, "run", boom)
+    if hasattr(hook.os, "killpg"):
+        monkeypatch.setattr(hook.os, "killpg", boom)
+    hook._kill_process_tree(_P())
+    assert killed == [True]
+
+    class _Q(_P):
+        def kill(self):
+            raise OSError("already dead")
+
+    hook._kill_process_tree(_Q())  # must not raise
