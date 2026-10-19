@@ -1,8 +1,9 @@
 # Headline / feed-text HTML escaping (XSS hardening)
 
-**Status:** QUEUED 2026-10-19 — analysed and estimated, not started. Owner parked it to run the
-Monday live validations first. Scope decision (Phase 1 only vs 1+2) and the three decisions below are
-still open.
+**Status:** Phase 1 commit 1 SHIPPED 2026-10-19 (`util.safe_link` + checker credit; Opus FIX-FIRST/1 → SHIP/0).
+Owner decisions taken: Phases 1+2, credit `safe_link` in the checker, one Opus round. NEXT: commit 2 (migrate the 12
+sites; regenerate the baseline), then the separate `safe_html` markdown step and the plain-`st.markdown` sweep (see
+the review section below). Originally QUEUED 2026-10-19.
 
 ## Why
 
@@ -46,6 +47,27 @@ the headline "Arete Adjusts Price Target on Marvell Technology to $300 From $143
 `unsafe_allow_html=True`. `safe_html`/`html.escape` do NOT escape `$`, so the migration must also
 neutralise `$` (e.g. `&#36;` inside HTML, or the `\$` escape `_render_grow_flat_held` uses for
 plain markdown). Add a `$` case to the `safe_link` tests.
+
+**Found in review 2026-10-19 — markdown links are a live script vector, and the scope is wider.** Streamlit
+1.57's markdown renderer is called with `urlTransform` set to an identity function (`function dT(e){return e}` in
+`.venv/.../streamlit/static/static/js/src.D9MArGZj.js`, verified by the lead), its link component passes `href`
+through, and React 18.3 does not block `javascript:` URLs. So any `[x](javascript:…)` that reaches markdown parsing
+renders as a clickable script link (reasoned from the bundle + CommonMark, not browser-tested). Consequences:
+- **`safe_link` must neutralise markdown syntax too** (whitespace collapsed; `[ ] \ backtick` → character
+  references; URLs with whitespace/control chars refused) — **fixed in Phase 1 commit 1** (Opus review FIX-FIRST/1,
+  then SHIP/0). Two notes for commit 2 from the confirming review: (i) `style` is escaped but its whitespace is not
+  collapsed — collapse it (`" ".join(str(style).split())`) or document it as a trusted literal (every caller passes a
+  literal today); (ii) at an inline site a backtick left by `safe_html` in an earlier field can open a code span that
+  closes inside `safe_link`'s `href` — the gap is `safe_html`'s, but percent-encoding `` ` `` in the URL would make
+  `safe_link` immune regardless of its neighbours.
+- **`safe_html` has the same gap at inline (non-`<div>`-led) sites** — publisher, company name, firm and grade fields
+  routed through it can still carry a markdown link. Fixing it changes an already-credited escaper used across the
+  app, so it is a **separate reviewed step**, not part of the migration.
+- **Plain `st.markdown` / `st.caption` of untrusted text is NOT safe either** (this plan previously listed those as
+  "Streamlit-sanitized"). That includes AI narratives (regime scenario, catalyst stress, structural scan,
+  investigator report, CNBC what-to-watch, institutional lens) whose prompts include feed headlines, i.e. a prompt-
+  injected headline could make the model emit a link. Needs its own sweep + a decision on approach (e.g. neutralise
+  `](`/`[`` in untrusted markdown before render). Exploit still needs a click.
 
 ## Two constraints that shape the plan
 

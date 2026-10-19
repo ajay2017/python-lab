@@ -31,6 +31,7 @@ from stock_analyzer.util import (
     defense_facet_badge,
     correlation_unchecked_note,
     diversification_label_text,
+    safe_link,
 )
 import pytest
 
@@ -474,6 +475,121 @@ class TestSafeHtml:
 
     def test_plain_text_unchanged(self):
         assert safe_html("AAPL up 3%") == "AAPL up 3%"
+
+
+class TestSafeLink:
+    """safe_link renders untrusted feed titles/URLs into unsafe_allow_html, and
+    check_antipatterns credits it as a full escaper — so every argument that
+    reaches the output must be escaped here."""
+
+    def test_http_and_https_become_links(self):
+        for u in ("http://x.com/a", "https://x.com/a", "HTTPS://x.com/a",
+                  "  https://x.com/a  "):
+            out = safe_link(u, "t")
+            assert out.startswith("<a href="), u
+            assert 'target="_blank"' in out and 'rel="noopener noreferrer"' in out
+
+    def test_whitespace_stripped_from_href(self):
+        assert 'href="https://x.com/a"' in safe_link("  https://x.com/a  ", "t")
+
+    @pytest.mark.parametrize("bad", [
+        "javascript:alert(1)", "JavaScript:alert(1)", " javascript:alert(1)",
+        "data:text/html,<script>x</script>", "vbscript:msgbox(1)",
+        "//evil.com", "/x", "", None,
+    ])
+    def test_non_http_urls_fall_back_to_span(self, bad):
+        out = safe_link(bad, "title")
+        assert "<a" not in out
+        assert "href" not in out
+        assert out.startswith("<span")
+
+    def test_url_quotes_are_escaped(self):
+        out = safe_link("https://x.com/a\"b'c", "t")
+        href = out.split('href="', 1)[1].split('" target', 1)[0]
+        assert '"' not in href and "'" not in href
+        assert "&quot;" in href and "&#x27;" in href
+
+    def test_title_markup_is_escaped(self):
+        out = safe_link("https://x.com", "<script>x</script>")
+        assert "<script" not in out
+        assert "&lt;script&gt;" in out
+        out2 = safe_link("https://x.com", '</a><a href="https://evil">')
+        assert "</a><a" not in out2
+        assert out2.count("<a ") == 1
+
+    def test_dollar_is_neutralised_for_latex(self):
+        out = safe_link("https://x.com", "Target to $300 From $143")
+        assert "&#36;300" in out and "&#36;143" in out
+        assert "$" not in out
+
+    def test_truncation_happens_before_escaping(self):
+        # "&" sits at raw index 7 with max_len=10. Escape-first would give
+        # "aaaaaaa&amp;bbbb" and a cut at 10 would leave the half entity "&am".
+        # Truncate-first keeps "aaaaaaa&bb" and escapes it whole.
+        out = safe_link("https://x.com", "a" * 7 + "&bbbb", max_len=10)
+        assert "aaaaaaa&amp;bb…" in out
+        assert "&am…" not in out
+
+    def test_ellipsis_only_when_truncated(self):
+        assert "…" not in safe_link("https://x.com", "a" * 90, max_len=90)
+        assert "…" in safe_link("https://x.com", "a" * 91, max_len=90)
+
+    def test_style_cannot_break_out_of_attribute(self):
+        out = safe_link("https://x.com", "t", style='x"><script>y</script>\'')
+        assert "<script" not in out
+        assert '"><' not in out
+        assert "&quot;" in out and "&lt;script&gt;" in out and "&#x27;" in out
+        # Span fallback is escaped the same way.
+        out2 = safe_link(None, "t", style='x"><b>')
+        assert "<b>" not in out2
+
+    def test_blank_line_markdown_escape_is_neutralised(self):
+        out = safe_link("https://x.com", "x\n\n[click](javascript:alert(1))")
+        assert "[" not in out and "](" not in out and "\n" not in out
+        assert "&#91;click&#93;" in out
+
+    def test_url_with_blank_line_is_not_linked(self):
+        out = safe_link("https://x.com\n\n[a](javascript:alert(1))", "t")
+        assert out.startswith("<span") and "<a" not in out and "href" not in out
+        assert "[" not in out and "\n" not in out
+
+    @pytest.mark.parametrize("u", [
+        "https://x onmouseover=alert(1)", "https://x.com/\tz",
+        "https://x.com/\x00z", "https://x.com/\x7fz",
+        # Unicode whitespace: an ASCII-only check (c in " \t\n\r") passed every
+        # case above (confirming review 2026-10-19), so pin str.isspace() itself.
+        "https://x.com/ z", "https://x.com/ z",
+    ])
+    def test_url_with_whitespace_or_control_chars_is_not_linked(self, u):
+        out = safe_link(u, "t")
+        assert out.startswith("<span") and "href" not in out
+
+    def test_backtick_and_backslash_become_entities(self):
+        out = safe_link("https://x.com", "a`b\\c")
+        assert "`" not in out and "\\" not in out
+        assert "&#96;" in out and "&#92;" in out
+
+    @pytest.mark.parametrize("ml", [None, 2.5, "3", -2, "junk"])
+    def test_max_len_never_raises(self, ml):
+        out = safe_link("https://x.com", "abcdefgh", max_len=ml)
+        assert out.endswith("</a>")
+        if ml == -2:
+            # Clamped to 0: a clean empty title + ellipsis, never a tail slice.
+            assert ">…</a>" in out
+        if ml == "3":
+            assert ">abc…</a>" in out
+        if ml == 2.5:
+            assert ">ab…</a>" in out
+        if ml in (None, "junk"):
+            assert ">abcdefgh</a>" in out
+
+    def test_default_style_is_double_quoted(self):
+        assert 'style="color:#ddd;text-decoration:none"' in safe_link("https://x.com", "t")
+
+    def test_none_and_non_str_do_not_raise(self):
+        assert safe_link("https://x.com", None).endswith("></a>")
+        assert ">123</a>" in safe_link("https://x.com", 123)
+        assert "<span" in safe_link(12345, 123)
 
 
 class TestStopRecoveryState:

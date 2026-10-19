@@ -349,6 +349,7 @@ from stock_analyzer.pillar_availability import (
     technical_clause as _technical_clause,
 )
 from stock_analyzer.util import safe_html as _safe_html
+from stock_analyzer.util import safe_link as _safe_link
 from stock_analyzer.util import md_bold_to_html as _md_bold
 from stock_analyzer.util import factor_tilt_state as _factor_tilt_state
 from stock_analyzer.sold_today import tickers_sold_on
@@ -667,25 +668,6 @@ def _time_ago(ts: int) -> str:
     if delta < 86400:
         return f"{delta // 3600}h"
     return f"{delta // 86400}d"
-
-
-def _safe_link(url: str | None, title: str, max_len: int = 90, style: str = "color:#ddd;text-decoration:none") -> str:
-    """Render an untrusted news headline as a safe anchor.
-
-    Why: titles + URLs come from yfinance / RSS feeds. Without escaping a
-    title can break out of the anchor (`</a><script>...`) and without scheme
-    validation a `javascript:` URL would execute in the user's session —
-    which has access to Supabase-side-effecting buttons. Both surfaces are
-    rendered with unsafe_allow_html=True so the escaping has to happen here.
-    """
-    raw = "" if title is None else str(title)
-    truncated = raw[:max_len] + ("…" if len(raw) > max_len else "")
-    safe_title = _html.escape(truncated)
-    u = "" if url is None else str(url).strip()
-    if u.lower().startswith(("http://", "https://")):
-        safe_url = _html.escape(u, quote=True)
-        return f"<a href=\"{safe_url}\" target=\"_blank\" rel=\"noopener noreferrer\" style='{style}'>{safe_title}</a>"
-    return f"<span style='{style}'>{safe_title}</span>"
 
 
 # ── Analyst-coverage report-type labels (display only — the DB value and the

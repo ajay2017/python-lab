@@ -497,6 +497,55 @@ class TestUnsafeHtmlEscapingExemption:
             "no util import present, so nothing may be exempted"
         )
 
+    # ── safe_link (2026-10-19): credited exactly like safe_html ─────────────
+
+    _LINK_IMPORT = "from stock_analyzer.util import safe_link as _safe_link\n"
+
+    def test_fully_wrapped_safe_link_is_exempt(self):
+        """safe_link escapes title, url AND style internally, so a site whose
+        every interpolation is a direct safe_link call is fully escaped."""
+        code = self._LINK_IMPORT + 'st.markdown(f"<div>{_safe_link(u, t)}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" not in _rules_wired(code)
+
+    def test_partially_wrapped_safe_link_stays_flagged(self):
+        code = self._LINK_IMPORT + 'st.markdown(f"<div>{_safe_link(u, t)}{b}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
+    def test_safe_link_nested_in_another_call_earns_nothing(self):
+        code = self._LINK_IMPORT + 'st.markdown(f"<div>{outer(_safe_link(u, t))}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
+    def test_a_locally_defined_safe_link_lookalike_earns_nothing(self):
+        code = (
+            "def safe_link(u, t):\n    return t\n"
+            'st.markdown(f"<div>{safe_link(u, t)}</div>", unsafe_allow_html=True)'
+        )
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
+    def test_safe_link_without_an_import_earns_nothing(self):
+        """Credit is resolved from the IMPORT, never from the bare name."""
+        code = 'st.markdown(f"<div>{safe_link(u, t)}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
+    def test_safe_link_from_another_util_module_earns_nothing(self):
+        """`providers._util` also ends in "util"; only `stock_analyzer.util`
+        may grant credit."""
+        code = (
+            "from stock_analyzer.providers._util import safe_link\n"
+            'st.markdown(f"<div>{safe_link(u, t)}</div>", unsafe_allow_html=True)'
+        )
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
+    def test_a_shadowed_safe_link_alias_earns_nothing(self):
+        """The alias is imported, then rebound elsewhere — the binding no longer
+        provably is the escaper, so credit is revoked."""
+        code = (
+            "from stock_analyzer.util import safe_link as _sl\n"
+            "_sl = something\n"
+            'st.markdown(f"<div>{_sl(u, t)}</div>", unsafe_allow_html=True)'
+        )
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(code)
+
     # ── The collector itself ────────────────────────────────────────────────
 
     def test_collector_resolves_aliases(self):

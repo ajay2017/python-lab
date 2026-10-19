@@ -482,6 +482,63 @@ def safe_html(value: Any) -> str:
     return _html.escape(str(value), quote=True)
 
 
+def safe_link(url: Any, title: Any, max_len: int = 90,
+              style: str = "color:#ddd;text-decoration:none") -> str:
+    """Render an untrusted news headline as a safe anchor.
+
+    Why: titles + URLs come from yfinance / RSS feeds and are interpolated into
+    strings rendered with ``unsafe_allow_html=True``. Without escaping, a title
+    can break out of the anchor (``</a><script>...``) and a quote in a URL can
+    break out of the ``href`` attribute.
+
+    Scheme rule: only ``http://`` / ``https://`` (case-insensitive, after
+    ``.strip()``) becomes a link; anything else (``javascript:``, ``data:``,
+    relative, empty, None) falls back to a plain ``<span>``.
+
+    ``$`` rule: Streamlit's markdown treats ``$...$`` as LaTeX even with
+    ``unsafe_allow_html=True`` (seen live 2026-10-19), so ``$`` in the title is
+    emitted as ``&#36;``, which works inside an HTML block and inline.
+
+    Markdown rule: Streamlit 1.57 renders markdown with an identity
+    ``urlTransform``, so any text that reaches markdown parsing could become a
+    live ``[x](javascript:...)`` link. The title therefore has every whitespace
+    run collapsed to one space (no blank line can end the HTML block) and
+    square brackets, backslash and backtick are emitted as character references, which never act as
+    markdown syntax. A URL containing any whitespace (Unicode included) or an
+    ASCII control character (C0 or DEL) is not linked at all.
+
+    ELEMENT CONTENT ONLY: never interpolate safe_link output inside an HTML
+    attribute.
+
+    ``scripts/check_antipatterns.py`` credits any call to this function as fully
+    escaped, so EVERY argument that reaches the output (title, url, style) must
+    be escaped here — do not add an argument without escaping it.
+    """
+    try:
+        n = int(max_len)
+    except (TypeError, ValueError):
+        n = 90
+    n = max(0, n)
+    raw = "" if title is None else str(title)
+    raw = " ".join(raw.split())
+    # Truncate the RAW text first, THEN escape: escaping first could cut an
+    # entity such as ``&amp;`` in half.
+    truncated = raw[:n] + ("…" if len(raw) > n else "")
+    safe_title = _html.escape(truncated, quote=True)
+    # Character references AFTER html.escape so they are not double-escaped.
+    for ch, ref in (("$", "&#36;"), ("[", "&#91;"), ("]", "&#93;"),
+                    ("\\", "&#92;"), ("`", "&#96;")):
+        safe_title = safe_title.replace(ch, ref)
+    safe_style = _html.escape(str(style), quote=True)
+    u = "" if url is None else str(url).strip()
+    bad_char = any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in u)
+    if not bad_char and u.lower().startswith(("http://", "https://")):
+        safe_url = _html.escape(u, quote=True)
+        return (f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" '
+                f'style="{safe_style}">{safe_title}</a>')
+    return f'<span style="{safe_style}">{safe_title}</span>'
+
+
 def _factor_tilt_state_and_values(factor_tilt: Any) -> tuple:
     """(state, valid_correlations) for a `_pi_factor_tilt_cache` value.
 

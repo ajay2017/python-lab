@@ -592,7 +592,12 @@ def policy_constants(tree: ast.AST) -> frozenset:
 # The ONLY functions that count as escaping an interpolated value. Both escape
 # at the render boundary; md_bold_to_html escapes FIRST and only then converts
 # `**x**` to <b>, so its output carries no attacker-controlled markup either.
-_ESCAPING_HELPERS = frozenset({"safe_html", "md_bold_to_html"})
+# safe_link qualifies because it escapes title, url AND style internally and
+# only emits http/https hrefs (anything else becomes a plain <span>). It also
+# collapses whitespace and entity-encodes markdown syntax ([ ] \ `) so the
+# output cannot form a markdown link. ELEMENT CONTENT ONLY — never interpolate
+# safe_link output inside an HTML attribute.
+_ESCAPING_HELPERS = frozenset({"safe_html", "md_bold_to_html", "safe_link"})
 
 
 def escaping_names(tree: ast.AST) -> frozenset:
