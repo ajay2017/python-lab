@@ -246,6 +246,15 @@ def _valid_snapshot_row(row) -> bool:
     return cash_ts.date() == snap_d and cash_ts.hour >= ALERT_EOD_HOUR_ET
 
 
+# Public names for the period report (period_attribution) -- the same
+# functions, one validity rule and one NYSE-session rule app-wide. The private
+# names stay as the canonical bindings this module's own code uses.
+valid_account_snapshot_row = _valid_snapshot_row
+prior_trading_day = _prior_trading_day
+last_trading_day_on_or_before = _last_trading_day_on_or_before
+is_trading_day = _is_trading_day
+
+
 def _spy_period_return(spy_prices_by_date: "dict | None", start: date, end: date) -> "float | None":
     """SPY % return from `start` to `end`, using the nearest trading-day
     close on/before each date (`benchmark_mirror.price_on_or_before`).

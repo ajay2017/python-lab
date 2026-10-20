@@ -1,7 +1,7 @@
 # Weekly / monthly report — where the money went, and who made the call
 
 **Status:** DESIGNED 2026-10-20 (planner, Opus 5.5) — verdict **PROCEED WITH CHANGES** (design below). Mockup
-`docs/mockups/2026-10-20-period-report-mockup.html` **APPROVED 2026-10-20** ("build as shown"). **Owner decisions 2026-10-20: all 13 §D recommendations accepted** — incl. #4 days-above level = the existing `LEVERAGE_REFERENCE_TARGET` 2.0× (no new constant) and #9 the Weekly Debrief switches to this engine + its email gets the block (C7/C8). Build order: C0 owner SQL · C2 · C3 · C4 · C5 · C6 · C7 · C8.
+`docs/mockups/2026-10-20-period-report-mockup.html` **APPROVED 2026-10-20** ("build as shown"). **Owner decisions 2026-10-20: all 13 §D recommendations accepted** — incl. #4 days-above level = the existing `LEVERAGE_REFERENCE_TARGET` 2.0× (no new constant) and #9 the Weekly Debrief switches to this engine + its email gets the block (C7/C8). Build order: C0 owner SQL · C2 · C3 · C4 · C5 · C6 · C7 · C8. **Progress 2026-10-20:** C0 run (results below); C3 SHIPPED (`73c7581`, Opus SHIP/0); C2 SHIPPED (`stock_analyzer/period_attribution.py`, S1 reconciliation + S3 leverage + trust strip + exports; Opus SHIP/0 after 2 FIX-FIRST rounds). NEXT: C4 (app.py render of S1/S3 + trust strip + export, to the approved mockup; chip labels carry markdown-escaped `\$`, so render via markdown, never raw HTML or st.metric; say in one sentence that a journal-inconsistent ticker is excluded for the rest of the window).
 Earlier: QUEUED 2026-10-19 (owner agreed the approach).
 
 ## Why
