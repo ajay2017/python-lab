@@ -342,6 +342,22 @@ def scale_ps(ps, new_shares) -> dict:
         v = _num(out.get(key))
         if v is not None:
             out[key] = round(v * ratio, nd)
+    if "room_capped" in out:
+        # S-D: a held add trimmed by the budget -- the post-trade % follows the
+        # FINAL cost, and the holding is no longer what binds.
+        ex = _num(out.get("existing_value")) or 0.0
+        tc = _num(out.get("total_cost")) or 0.0
+        pv, nc = _num(out.get("portfolio_value")), _num(out.get("net_capital"))
+        if pv:
+            out["post_portfolio_pct"] = round((ex + tc) / pv * 100, 1)
+        else:
+            out.pop("post_portfolio_pct", None)
+        if nc and nc > 0:
+            out["post_capital_pct"] = round((ex + tc) / nc * 100, 1)
+        else:
+            out.pop("post_capital_pct", None)
+        out["room_capped"] = False
+        out["room_binding"] = None
     return out
 
 

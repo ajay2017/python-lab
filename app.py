@@ -257,6 +257,7 @@ from stock_analyzer.decision_bucket import (
 )
 from stock_analyzer.act_today_view import (
     act_today_view,
+    is_offline_brief,
     offline_brief_stub,
     brief_lock_allowed,
     locked_snapshot_servable,
@@ -6039,6 +6040,11 @@ if page == "🏠 Home":
     _synth_cache = st.session_state.get("_home_synth_cache")
     _synth_hit = _synth_cache is not None and _synth_cache.get("sig") == _synth_sig
     if _synth_hit:
+        # A hit means holdings / shares / date / stops are unchanged, so this
+        # brief describes the CURRENT book: re-stamp its epoch (S-D C2). After a
+        # logged trade the epoch bumps and this stamp lags until Home rebuilds,
+        # so Analysis reads the add verdict as "unknown", not a stale "add".
+        _synth_cache["epoch"] = _coord_epoch()
         _b = _synth_cache["bundle"]
         alert_list         = _b["alert_list"]
         n_danger           = _b["n_danger"]
@@ -7113,6 +7119,10 @@ if page == "🏠 Home":
             # ET date this synthesis was built -- lets cross-page readers (the
             # Watchlist overflow caption) refuse a brief that is not today's.
             "date": _today_et().isoformat(),
+            # Book generation + build time (S-D C2): Analysis reads Grow Today's
+            # add verdict from this brief only when the epoch still matches.
+            "epoch": _coord_epoch(),
+            "built_at": _now_et().strftime("%H:%M"),
             "bundle": {
                 "alert_list": alert_list, "n_danger": n_danger, "n_warning": n_warning,
                 "actions": actions, "corr_df": corr_df, "div": div,
@@ -10475,10 +10485,7 @@ if page == "🏠 Home":
         # Risk Advisor suppressed an add-to-winner — surface the conflict so the
         # user understands why a winning held position isn't on the add list.
         if blocked_adds:
-            _reason_label = {
-                "beta":   "high portfolio beta",
-                "sharpe": "poor risk-adjusted return",
-            }
+            _reason_label = _sizing_path.RISK_ADD_REASON_LABEL
             _rows = "".join(
                 f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
                 f"(Strong Buy, Score {b.get('score',0):.0f}, P&L {b.get('pnl_pct',0):+.1f}%) — "
@@ -24827,6 +24834,43 @@ elif page == "📈 Analysis":
             run_ctx=_an_run_ctx, sector=_an_sctx["sector"],
             classified=_an_sctx["classified"], news_items=_an_news_items,
             earnings=_r.get("earnings"), today=_today_et(), ticker=_t)
+    # ── S-D C2: a HELD name's add is Grow Today's call, never decided here ──
+    # Holdings state first (D4): when the book can't be read, no ticker gets a
+    # size -- a held name would otherwise be sized as a fresh entry. Then, for
+    # every held name, Grow Today's verdict for today (read from Home's memoised
+    # brief only while it still describes today and the current book) decides
+    # whether any add size is offered at all.
+    _an_port_state = _coord_cache_state("_port_df_enriched")
+    _an_holdings_state = _sizing_path.holdings_state(
+        _an_port_state, st.session_state.get("_last_held_tickers"), _an_pdf)
+    # A holding Home couldn't price is dropped from the enriched book but is
+    # still in _last_held_tickers: it must NOT be read as "not held" and sized
+    # as a fresh buy -- no share count at all for it.
+    _an_last_held = st.session_state.get("_last_held_tickers")
+    _an_unpriced = (
+        _sizing_path.unpriced_holdings(_an_last_held, _an_pdf)
+        if _an_holdings_state == "ready" else set())
+    _an_memo = _get_or_offline(st.session_state, "_home_synth_cache")
+    _an_brief = _get_or_offline(_get_or_offline(_an_memo, "bundle"), "_daily_brief")
+    _an_grow = (_an_brief.get("grow_today")
+                if isinstance(_an_brief, dict) and not is_offline_brief(_an_brief) else None)
+    _an_built_at = _get_or_offline(_an_memo, "built_at")
+    _an_add_v = {}
+    if _an_holdings_state == "unknown":
+        for _t in list(_an_entry):
+            _an_entry[_t] = _sizing_path.analysis_holdings_unknown(_an_entry[_t])
+    else:
+        for _t in list(_an_entry):
+            if str(_t).strip().upper() in _an_unpriced:
+                _an_entry[_t] = _sizing_path.analysis_holdings_unknown(
+                    _an_entry[_t], ticker=str(_t).strip().upper(), unpriced=True)
+            elif str(_t).strip().upper() in _an_held_set:
+                _an_add_v[_t] = _sizing_path.held_add_verdict(
+                    _t, _an_grow, brief_date=_get_or_offline(_an_memo, "date"),
+                    today=_today_et(), brief_epoch=_get_or_offline(_an_memo, "epoch"),
+                    epoch=_coord_epoch())
+                _an_entry[_t] = _sizing_path.analysis_offer_held_add(
+                    _an_entry[_t], _an_add_v[_t])
     # Single-ticker page: the hold also sits DIRECTLY under the verdict strip
     # above, so the first line is never an unqualified "Strong Buy" for a name
     # the entry check is holding back (mockup scene 4).
@@ -24859,6 +24903,7 @@ elif page == "📈 Analysis":
     # the same leftover -- looking at a name consumes nothing and never writes.
     # A ticker that is a Grow Today pick (or emailed) shows that same size.
     _an_ps_f255 = {}
+    _an_size_res = {}
     _an_asks = []
     for _at, _ar in results.items():
         if not _an_entry[_at]["offer_size"]:
@@ -24867,13 +24912,31 @@ elif page == "📈 Analysis":
             _an_ps_f255[_at] = None
             continue
         _ap = _ar["current_price"]
-        _aps = (
-            position_sizing(
-                portfolio_value, MODERATE_RISK_PCT, _ap, _ar["stop"], SINGLE_NAME_CEILING,
-                net_capital=_f255_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+        if str(_at).strip().upper() in _an_held_set:
+            # S-D: a held add is sized on the WHOLE position (what is already
+            # held counts toward both caps) through the one shared sizing path.
+            _ares = (
+                _sizing_path.size_position(
+                    entry=_ap, stop=_ar["stop"], gross_book=portfolio_value,
+                    net_capital=_f255_net_cap,
+                    existing_value=_sizing_path.held_value(
+                        _at, _an_pdf, _an_holdings_state, held_tickers=_an_last_held))
+                if _ap and _ar["stop"] and _ap > _ar["stop"] else None
             )
-            if _ap and _ar["stop"] and _ap > _ar["stop"] else None
-        )
+            _an_size_res[_at] = _ares
+            _aps = (
+                dict(_ares["ps"], portfolio_value=round(portfolio_value, 2),
+                     net_capital=(round(_f255_net_cap, 2) if _f255_net_cap is not None else None))
+                if _ares is not None and _ares["state"] == "sized" else None
+            )
+        else:
+            _aps = (
+                position_sizing(
+                    portfolio_value, MODERATE_RISK_PCT, _ap, _ar["stop"], SINGLE_NAME_CEILING,
+                    net_capital=_f255_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+                )
+                if _ap and _ar["stop"] and _ap > _ar["stop"] else None
+            )
         _an_ps_f255[_at] = _aps
         _an_asks.append({"ticker": _at, "composite": _ar.get("total"),
                          "price": _ap, "ps": _aps})
@@ -24953,12 +25016,21 @@ elif page == "📈 Analysis":
     _sc_definitely_flat = (
         isinstance(_sc_held_known, (list, tuple, set)) and len(_sc_held_known) == 0
     )
-    if _sc_port_state != "ready" and not _sc_definitely_flat:
+    _sc_unpriced = sorted(str(_t).strip().upper() for _t in results
+                          if str(_t).strip().upper() in _an_unpriced)
+    if _sc_unpriced:
+        st.warning(
+            "⚠ **A holding couldn't be priced** — "
+            + ", ".join(_sc_unpriced)
+            + " is in your holdings but wasn't priced on 🏠 Home, so no share count is "
+            "shown for it. Open 🏠 Home to refresh, then re-check before acting."
+        )
+    if _an_holdings_state == "unknown":
         st.warning(
             "⚠ **Holdings context unavailable** — this session could not check which "
-            "of these tickers you already hold, so every row below shows a fresh "
-            "entry suggestion even for names you may already own. Open the 🏠 Home "
-            "page once to load your holdings, then re-check before acting."
+            "of these tickers you already hold, so no share count is shown for any row "
+            "below (a name you already own would be sized as a new position). Open the "
+            "🏠 Home page once to load your holdings, then re-check before acting."
         )
     _sc_port = st.session_state.get("_port_df_enriched", pd.DataFrame())
     rows = []
@@ -25689,10 +25761,17 @@ elif page == "📈 Analysis":
                     isinstance(_sa_held_known, (list, tuple, set))
                     and len(_sa_held_known) == 0
                 )
-                if _sa_port_state != "ready" and not _sa_definitely_flat:
+                if str(ticker).strip().upper() in _an_unpriced:
                     st.warning(
-                        ("⚠ **Holdings context unavailable** — the plan below assumes a "
-                         "**new position**. This session could not check whether you already "
+                        f"⚠ **Your {ticker} holding couldn't be priced on 🏠 Home** — no share "
+                        "count is shown, and the stop-breach and Reduce/Exit protection that "
+                        "would show here could not run. Open 🏠 Home to refresh, "
+                        "then re-check before acting."
+                    )
+                elif _an_holdings_state == "unknown":
+                    st.warning(
+                        ("⚠ **Holdings context unavailable** — no share count is shown. "
+                         "This session could not check whether you already "
                          f"hold {ticker}, or whether it is under an active Reduce/Exit call, so "
                          "neither the add-to-position sizing nor the Reduce suppression could "
                          "run. Open the 🏠 Home page once to load your holdings, "
@@ -25862,8 +25941,7 @@ elif page == "📈 Analysis":
                         pass
                     st.info(
                         f"**Already held:** {int(_sa_holding.get('Shares', 0))} shares · "
-                        f"P&L {_sa_holding.get('P&L (%)', 0):+.1f}%. "
-                        f"Sizing below is for adding to your existing position.{_earn_note}"
+                        f"P&L {_sa_holding.get('P&L (%)', 0):+.1f}%.{_earn_note}"
                     )
                 return _stop_breached, _under_reduce, _rc
 
@@ -26292,7 +26370,15 @@ elif page == "📈 Analysis":
                         and r.get("val_available", True)
                     )
                     _gate_rr_ok     = (rr_val >= RR_ENTRY_MIN)       if rr_val else None
-                    _gate_conc_ok   = ((_gc_tw or 0) < SINGLE_NAME_CEILING) if _gc_tw is not None else None
+                    # S-D: the concentration tile reads the one shared function
+                    # (whole position after the add, book AND net-capital basis),
+                    # for held and not-held names alike.
+                    _gc_ct = _sizing_path.concentration_tile(
+                        existing_value=_sizing_path.held_value(
+                            ticker, _gc_port, _an_holdings_state, held_tickers=_an_last_held),
+                        add_cost=(ps["total_cost"] if ps else 0),
+                        gross_book=portfolio_value, net_capital=_f255_net_cap)
+                    _gate_conc_ok   = _gc_ct["state"]
                     _gate_sector_ok = ((_gc_sw or 0) < SECTOR_CEILING)      if _gc_sw is not None else None
                     _gate_earn_ok   = (_gc_earn_days > EARNINGS_IMMINENT_DAYS) if _gc_earn_days is not None else None
                     st.markdown("**Gate checks**")
@@ -26302,8 +26388,7 @@ elif page == "📈 Analysis":
                          "Expense ratio available" if _da_etf_ok else "BQ + Valuation metrics available"),
                         (f"R/R ≥ {RR_ENTRY_MIN:.0f}×", _gate_rr_ok,
                          f"R/R = {rr_val:.1f}×" if rr_val else "R/R unavailable"),
-                        ("Concentration", _gate_conc_ok,
-                         f"{_gc_tw:.1f}% of portfolio" if _gc_tw is not None else "See Account page"),
+                        ("Concentration", _gate_conc_ok, _gc_ct["detail"]),
                         ("Sector cap",    _gate_sector_ok,
                          f"{_gc_sw:.1f}% in sector" if _gc_sw is not None else "See Account page"),
                         ("Earnings",      _gate_earn_ok,
@@ -26343,6 +26428,40 @@ elif page == "📈 Analysis":
                                 unsafe_allow_html=True,
                             )
                     st.markdown("---")
+
+                    # S-D C2: for a held name the add is Grow Today's call -- show
+                    # it (add / paused / no call / unavailable) before any size.
+                    # Skipped when a stop-breach / Reduce banner already says
+                    # "not an add" above.
+                    _da_add_v = _da_entry.get("held_add")
+                    if _sa_holding and isinstance(_da_add_v, dict) and not _stop_breached and not _under_reduce:
+                        _am_size_res = _an_size_res.get(ticker)
+                        _am_box = _sizing_path.add_call_box(
+                            _da_add_v, ps=ps,
+                            size_text=((_am_size_res or {}).get("text") or _ps_bud_note),
+                            same_size=_budget_view.GROW_TODAY_MIRROR_NOTE in (_ps_bud_note or ""),
+                            built_at=_an_built_at)
+                        _am_color = {"green": "#10b981", "amber": "#f59e0b"}.get(_am_box["tone"], "#94a3b8")
+                        if _am_box["body"]:
+                            st.markdown(
+                                f"<div style='padding:12px;border-radius:8px;background:{_safe_html(_am_color)}18;"
+                                f"border-left:5px solid {_safe_html(_am_color)};margin-bottom:10px'>"
+                                f"<b style='color:{_safe_html(_am_color)}'>{_safe_html(_am_box['title'])}</b>"
+                                f"<br><span style='color:#ccc;font-size:0.9em'>{_safe_html(_am_box['body'])}</span></div>",
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown(
+                                f"<div style='padding:12px;border-radius:8px;background:{_safe_html(_am_color)}18;"
+                                f"border-left:5px solid {_safe_html(_am_color)};margin-bottom:10px'>"
+                                f"<b style='color:{_safe_html(_am_color)}'>{_safe_html(_am_box['title'])}</b></div>",
+                                unsafe_allow_html=True,
+                            )
+                        if _am_box["source"]:
+                            st.caption(_am_box["source"].replace("$", chr(92) + "$"))
+                        if _am_box["show_home"] and st.button("🏠 Open Home", key=f"_an_addcall_home_{ticker}"):
+                            st.session_state["_pending_page"] = "🏠 Home"
+                            st.rerun()
 
                     # Add-on sizing is suppressed on a breached held position OR one
                     # under a Brief Reduce/Exit call — you don't size up a position
@@ -26388,7 +26507,9 @@ elif page == "📈 Analysis":
                         # the daily budget trimmed it further, the figures above are
                         # the budget's, so the closing sentence says which is which.
                         _ps_budget_cut = _ps_f255["shares"] != ps["shares"]
-                        if _ps_f255.get("ceiling_capped"):
+                        # A held add trimmed by what is already held is explained by
+                        # the add box above (the whole position vs the cap), not here.
+                        if _ps_f255.get("ceiling_capped") and not _ps_f255.get("room_capped"):
                             st.warning(
                                 f"⚠️ **Capped to your {_ps_f255['ceiling_pct']:.0f}% single-name ceiling.** "
                                 f"A pure risk-based size would be **{_ps_f255['uncapped_shares']:,} shares "
@@ -26400,7 +26521,7 @@ elif page == "📈 Analysis":
                                    f"The figures above are capped to **{ps['shares']:,} shares "
                                    f"(~{ps['portfolio_pct']:.0f}%)**.")
                             )
-                        if _ps_f255.get("capital_capped"):
+                        if _ps_f255.get("capital_capped") and not _ps_f255.get("room_capped"):
                             st.warning(
                                 f"⚠️ **Also capped to your {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap"
                                 ".** This is separate from the single-name book cap above — it gates on "
@@ -26439,6 +26560,10 @@ elif page == "📈 Analysis":
                                     f"Use a firm stop at **${r['stop']:.2f}** and consider a starter position "
                                     f"(50–75% of suggested size) before committing fully."
                                 )
+                    elif _da_entry.get("holdings_unknown"):
+                        st.caption(_da_entry.get("holdings_note")
+                                   or "No position size is shown — your holdings couldn't be "
+                                      "checked this session. Open 🏠 Home to load them.")
                     elif _da_held_back:
                         st.caption("No position size is offered while the entry check "
                                    "holds this name back (see the banner above).")
@@ -26447,8 +26572,9 @@ elif page == "📈 Analysis":
                         # Size withheld by today's budget / already sized in Grow
                         # Today -- say which, not the generic "can't size" caption.
                         st.caption(_ps_bud_note)
-                    elif not ps and not _stop_breached and not _under_reduce:
-                        # Neither of the two banners above fired, yet Position Sizing
+                    elif not ps and not _stop_breached and not _under_reduce and not _sa_holding:
+                        # (A held name never gets this fresh-entry caption: the add
+                        # box above carries the reason.) Neither of the two banners above fired, yet Position Sizing
                         # still didn't render — say so rather than silently vanishing
                         # (matches Watchlist's equivalent caption for the same gap).
                         # Ask the shared detector WHICH condition suppressed it: a
@@ -26620,18 +26746,27 @@ elif page == "📈 Analysis":
                                 width="stretch",
                             )
                     with _ap_c2:
-                        _ap_btn_shown = True
-                        _render_trade_button(
-                            ticker=ticker,
-                            suggested_action="BUY",
-                            signal_context=_ap_signal_ctx,
-                            price=price,
-                            shares=(ps["shares"] if ps else None),
-                            trigger="MANUAL",
-                            key_suffix=f"plan_buy_{ticker}",
-                            label=f"📒 Add {ticker}",
-                            width="stretch",
-                        )
+                        if _sa_holding or _da_entry.get("holdings_unknown"):
+                            # Grow Today never calls an add on a Hold verdict (and a
+                            # holding that couldn't be read/priced gets no size).
+                            st.caption(
+                                "📒 Add button hidden — no share count while your holdings "
+                                "can't be read." if _da_entry.get("holdings_unknown") else
+                                f"📒 Add button hidden — Grow Today isn't calling an "
+                                f"add on {ticker} today.")
+                        else:
+                            _ap_btn_shown = True
+                            _render_trade_button(
+                                ticker=ticker,
+                                suggested_action="BUY",
+                                signal_context=_ap_signal_ctx,
+                                price=price,
+                                shares=(ps["shares"] if ps else None),
+                                trigger="MANUAL",
+                                key_suffix=f"plan_buy_{ticker}",
+                                label=f"📒 Add {ticker}",
+                                width="stretch",
+                            )
                 else:
                     # Buy signal — primary action is BUY (new or add)
                     with _ap_c1:
@@ -26640,6 +26775,23 @@ elif page == "📈 Analysis":
                             # (the Watchlist hides Log BUY on ENTRY_HELD cards too).
                             st.caption("📒 Buy button hidden — the entry check is "
                                        "holding this name back today.")
+                        elif _da_entry.get("holdings_unknown"):
+                            st.caption("📒 Buy button hidden — your holdings couldn't be "
+                                       "checked, so no size is shown.")
+                        elif _sa_holding and not (isinstance(_da_entry.get("held_add"), dict)
+                                                  and _da_entry["held_add"].get("state") == "add"
+                                                  and ps):
+                            # S-D C2: an add is Grow Today's call. No call (or no size)
+                            # -> no Add button; Sell stays.
+                            _ap_hv = _da_entry.get("held_add")
+                            if isinstance(_ap_hv, dict) and _ap_hv.get("state") == "add":
+                                st.caption("📒 Add button hidden — no add size today (see above).")
+                            elif isinstance(_ap_hv, dict) and _ap_hv.get("state") == "unknown":
+                                st.caption(f"📒 Add button hidden — Grow Today's add call for "
+                                           f"{ticker} isn't available.")
+                            else:
+                                st.caption(f"📒 Add button hidden — Grow Today isn't calling an "
+                                           f"add on {ticker} today.")
                         else:
                             _ap_btn_shown = True
                             _render_trade_button(
@@ -27923,6 +28075,11 @@ elif page == "📈 Analysis":
                  if ps and rr_v and rr_v > 0 else ""),
                 (f"**Trade**: no size today — {_ap_entry['reason_if_no_size']}"
                  if _ap_entry["entry_checked"] and not _ap_entry["offer_size"] else ""),
+                (f"**Trade**: no add size today — {str(_ap_entry['reason_if_no_size']).replace('$', chr(92) + '$')}"
+                 if (not _ap_entry["entry_checked"] and not _ap_entry["offer_size"]
+                     and _ap_entry.get("reason_if_no_size")
+                     and (_ap_entry.get("holdings_unknown") or isinstance(_ap_entry.get("held_add"), dict))
+                     and _ap_display_rec["label"] in ("Buy", "Strong Buy")) else ""),
                 (f"**Scenarios**: Bull \\${targets['bull']:.2f} ({targets['bull_pct']:+.1f}%) · "
                  f"Base \\${targets['base']:.2f} ({targets['base_pct']:+.1f}%) · "
                  f"Bear \\${targets['bear']:.2f} ({targets['bear_pct']:+.1f}%)" if targets else ""),
@@ -42233,7 +42390,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🧑‍⚖️ The Judge** — **BETA, audit authority only: it never gates a recommendation.** Collects each advisor's opinion on a ticker, weights them by their own past accuracy once they clear a minimum sample, and flags **coherence gaps** — a name under an active protective veto that no other risk surface is currently flagging. It reports; it never suppresses or changes a call.
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above). A third tab, **📄 Reports** (owner-only), hosts a Tax Report (realized short-term/long-term gains by tax year, wash-sale flags) and a Performance Review (a point-in-time return-vs-SPY / recs-and-gates / trade-behavior / leverage-and-risk-drift snapshot for a picked period), both with CSV/Markdown export (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
-- **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
+- **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R). On a name you already hold, Analysis never decides an add: it shows Grow Today's add call for today (add / paused with the reason / no add call / not available — open 🏠 Home) and offers a size and 📒 Add only when Grow Today is calling the add. If your holdings couldn't be checked (or a holding couldn't be priced), no share count is shown.
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
 - **📋 Watchlist** — names you're tracking, with enter-now flags. Defaults to a **🎯 Actionable** filter (just the Enter Now / Near Entry names) rather than showing everything at once — other chips (Hold / Waiting / Remove / All), a ticker search box, and a sort dropdown are there to look further. Old, forgotten names that just became actionable get a "👁️ actionable again" callout. A name that says Enter Now but that you **sold today** shows a "Sold Today" warning instead of the entry card; it comes back the next day if the setup still qualifies. A **Ready to Enter** card can carry a soft caption noting the sector was classified only from the data provider's own label (the ticker isn't on the curated sector map) — the sector-cap check still ran, just against a less exact bucket.
 - **🧵 Thesis** — read-only consolidation of five features per ticker: your saved **Thesis** (what you believed at entry), **F-1 Review** (AI verdict: Intact / Weakening / Broken), **Thesis Red Team** (erosion score + counter-evidence), **Multi-Agent Debate** (Bull/Bear/Judge verdict), **Analyst Coverage** (saved research + consensus), and **Pre-Mortem** (your stated risk case + breached triggers). Every evidence line carries a **provenance tag** (📊 fact / 🧮 derived / 🏦 analyst opinion / 🤖 AI inference / 🖊 your words) so you always know what kind of claim you're looking at. Missing data is disclosed honestly (e.g. "No debate on record," "Erosion not computed today") rather than silently omitted. A **tension banner** surfaces when the engine composite, F-1 verdict, analyst consensus, and debate verdict genuinely disagree with each other — awareness only, never a gate. **"What changed since last review"** now shows a real diff comparing your two most recent evidence snapshots, reporting material composite moves, erosion shifts, analyst price-target cuts, newly-saved research, market-regime changes, and F-1 verdict changes; when insufficient history exists or no change crossed a threshold, it discloses that honestly instead. Awareness only; never gates or recommends.

@@ -6,7 +6,7 @@ def test_g31_footnote_present_and_mentions_leverage():
     notes = readout_footnotes("G-31")
     assert len(notes) == 1
     txt = notes[0]
-    assert "2026-10-19" in txt and "leverage" in txt and "9.6%" in txt
+    assert "2026-10-20" in txt and "leverage" in txt and "9.6%" in txt
 
 
 def test_unrelated_gate_has_no_g31_text():

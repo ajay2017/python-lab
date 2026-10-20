@@ -44,8 +44,32 @@ def _finite(x) -> bool:
 
 # ── held_value ────────────────────────────────────────────────────────────────
 
-def held_value(ticker, port_df, holdings_state) -> "float | None":
+def _norm_set(tickers) -> set:
+    if not isinstance(tickers, (list, tuple, set, frozenset)):
+        return set()
+    return {str(t).strip().upper() for t in tickers if str(t).strip()}
+
+
+def unpriced_holdings(held_tickers, port_df) -> set:
+    """Tickers the app KNOWS you hold (`held_tickers`, e.g. Home's
+    `_last_held_tickers`) that are missing from the enriched book -- Home drops
+    a holding it couldn't price. Never read as "not held"."""
+    try:
+        in_book = set()
+        if port_df is not None and getattr(port_df, "columns", None) is not None \
+                and "Ticker" in port_df.columns:
+            in_book = {str(t).strip().upper() for t in port_df["Ticker"].values}
+        return _norm_set(held_tickers) - in_book
+    except Exception:
+        return set()
+
+
+def held_value(ticker, port_df, holdings_state, held_tickers=None) -> "float | None":
     """Dollar value already held in `ticker`: 0.0 = not held, None = couldn't check.
+
+    `held_tickers` (optional): the tickers the app knows are held. A ticker in
+    it but absent from the book (a holding Home couldn't price) is None, never
+    0.0 -- fail closed.
 
     holdings_state: "ready" (holdings loaded), "flat" (definitely holds
     nothing); anything else is unknown. Never raises.
@@ -56,8 +80,12 @@ def held_value(ticker, port_df, holdings_state) -> "float | None":
         usable = (port_df is not None and cols is not None and len(port_df) > 0
                   and "Ticker" in cols and "Market Value" in cols)
         if not usable:
+            if str(ticker).strip().upper() in _norm_set(held_tickers):
+                return None
             return 0.0 if holdings_state == "flat" else None
         want = str(ticker).strip().upper()
+        if want in unpriced_holdings(held_tickers, port_df):
+            return None
         total = 0.0
         matched = False
         for _, r in port_df.iterrows():
@@ -227,6 +255,26 @@ _PAUSE_BUCKETS = (
 _UNKNOWN_REASON = "Grow Today's add call for today isn't available — open 🏠 Home to build it."
 
 
+# G-01: `risk_blocked_adds[].reason` is the risk-rec TYPE, not a sentence.
+RISK_ADD_REASON_LABEL = {
+    "beta":   "high portfolio beta",
+    "sharpe": "poor risk-adjusted return",
+}
+
+
+def _risk_add_reason(it) -> str:
+    code = it.get("reason")
+    label = RISK_ADD_REASON_LABEL.get(code) if isinstance(code, str) else None
+    if label:
+        return f"Risk Advisor flagged this holding for trim due to {label}."
+    title = it.get("title")
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    if isinstance(code, str) and code.strip():
+        return code.strip()
+    return "Risk Advisor flagged this holding for trim, so Grow Today paused adds."
+
+
 def _iso(d):
     if d is None:
         return None
@@ -269,6 +317,8 @@ def held_add_verdict(ticker, grow, *, brief_date, today, brief_epoch, epoch) -> 
             if it is not None:
                 if b == "card_blocked_adds":
                     reason = f"Paused by a card in today's Brief ({it.get('where') or 'Card'})"
+                elif b == "risk_blocked_adds":
+                    reason = _risk_add_reason(it)
                 else:
                     reason = it.get("reason") or "Grow Today paused adds to this name today."
                 return _verdict("paused", reason, it.get("gate_id"), it)
@@ -309,24 +359,157 @@ def concentration_tile(*, existing_value, add_cost, gross_book, net_capital) -> 
         add = float(add_cost) if has_add else 0.0
         gb = float(gross_book)
         now_g = ex / gb * 100.0
-        # Post-trade denominator, as concentration.assess_add_concentration does:
-        # the add also grows the book, so an add landing exactly on the cap of
-        # the pre-trade book must not read as a breach.
-        after_g = (ex + add) / (gb + add) * 100.0
+        # DISPLAY the pre-trade denominator (it equals room_note / post_portfolio_pct
+        # on the Grow Today card); the ✗ test below uses the post-trade one, as
+        # concentration.assess_add_concentration does, so an add that lands
+        # exactly on the cap of the pre-trade book never reads as a breach.
+        after_g = (ex + add) / gb * 100.0
+        after_g_post = (ex + add) / (gb + add) * 100.0
         net_ok = net_capital is not None and _finite(net_capital) and float(net_capital) > 0
+        fresh = has_add and ex == 0
         parts = []
-        if has_add:
+        if fresh:
+            parts.append(f"{after_g:.1f}% of book")
+        elif has_add:
             parts.append(f"{now_g:.1f}% → {after_g:.1f}% of book")
         else:
             parts.append(f"{now_g:.1f}% of book")
-        breach = (after_g if has_add else now_g) >= SINGLE_NAME_CEILING
+        breach = (after_g_post if has_add else now_g) >= SINGLE_NAME_CEILING
         if net_ok:
             nc = float(net_capital)
             now_c = ex / nc * 100.0
             after_c = (ex + add) / nc * 100.0
-            parts.append(f"{now_c:.1f}% → {after_c:.1f}% of net capital" if has_add
-                         else f"{now_c:.1f}% of net capital")
+            if fresh:
+                parts.append(f"{after_c:.1f}% of net capital")
+            elif has_add:
+                parts.append(f"{now_c:.1f}% → {after_c:.1f}% of net capital")
+            else:
+                parts.append(f"{now_c:.1f}% of net capital")
             breach = breach or (after_c if has_add else now_c) >= NET_CAPITAL_POSITION_CAP_PCT
-        return {"state": not breach, "detail": " · ".join(parts)}
+        detail = " · ".join(parts)
+        if fresh:
+            detail += " after the buy"
+        return {"state": not breach, "detail": detail}
     except Exception:
         return {"state": None, "detail": "See Account page"}
+
+
+# ── Analysis wiring (S-D C2) ──────────────────────────────────────────────────
+
+def holdings_state(port_state, last_held_tickers, port_df=None) -> str:
+    """"ready" | "flat" | "unknown" for the Analysis page.
+
+    "ready": the enriched book is published and non-empty. "flat": definitely
+    holds nothing (Home published an EMPTY held-tickers list). Anything else is
+    "unknown" -- never read as flat.
+    """
+    try:
+        has_rows = port_df is not None and len(port_df) > 0
+        if port_state == "ready" and has_rows:
+            return "ready"
+        if (isinstance(last_held_tickers, (list, tuple, set))
+                and len(last_held_tickers) == 0):
+            return "flat"
+        return "unknown"
+    except Exception:
+        return "unknown"
+
+
+_HOLDINGS_UNKNOWN_REASON = "your holdings couldn't be checked this session"
+
+
+def analysis_holdings_unknown(decision, ticker=None, unpriced=False) -> dict:
+    """D4: a COPY of an Analysis entry decision with no size offered because
+    the holdings could not be read (a held name would be sized as a new one).
+    `unpriced=True`: this ONE holding is known but Home couldn't price it."""
+    out = dict(decision) if isinstance(decision, dict) else {}
+    out["offer_size"] = False
+    out["entry_checked"] = False
+    out["holdings_unknown"] = True
+    if unpriced and ticker:
+        note = (f"Your {ticker} holding couldn't be priced on 🏠 Home, "
+                "so no share count is shown.")
+        out["reason_if_no_size"] = note.rstrip(".")
+        out["holdings_note"] = note
+    else:
+        out["reason_if_no_size"] = _HOLDINGS_UNKNOWN_REASON
+    return out
+
+
+def analysis_offer_held_add(decision, verdict) -> dict:
+    """A COPY of an Analysis entry decision for a HELD name, aligned with Grow
+    Today's add call: the size is offered only when the verdict is "add".
+    Analysis never decides an add itself. Never raises (a crash -> no size)."""
+    try:
+        out = dict(decision) if isinstance(decision, dict) else {}
+        out["held_add"] = verdict
+        if out.get("offer_size") is not True:
+            out["offer_size"] = False
+            return out                      # already no size: just attach the verdict
+        if not isinstance(verdict, dict) or verdict.get("state") != "add":
+            out["offer_size"] = False
+            reason = verdict.get("reason") if isinstance(verdict, dict) else None
+            out["reason_if_no_size"] = reason or "Grow Today's add call isn't available"
+        else:
+            item = verdict.get("item")
+            sz = item.get("sizing") if isinstance(item, dict) else None
+            if not (isinstance(sz, dict) and "shares" in sz):
+                # Grow Today called the add but carries no share count (holding
+                # unreadable / budget-withheld): never size it here instead.
+                out["offer_size"] = False
+                out["reason_if_no_size"] = (
+                    "Grow Today couldn't read your holding, so it has no add size today"
+                    if isinstance(sz, dict) and sz.get("holding_unknown")
+                    else "Grow Today has no add size for this name today")
+        return out
+    except Exception:
+        return {"offer_size": False, "held_add": verdict, "holds": [], "unchecked": [],
+                "passed": [], "hold": None, "entry_checked": False, "crashed": False,
+                "reason_if_no_size": "Grow Today's add call isn't available"}
+
+
+def _num_or_none(x):
+    return float(x) if _finite(x) else None
+
+
+def add_call_box(verdict, *, ps=None, size_text=None, same_size=False, built_at=None) -> dict:
+    """The "➕ Add ..." box Analysis shows on a HELD Buy: Grow Today's call,
+    never Analysis's own. `{tone, title, body, source, show_home}` with tone in
+    "green" | "amber" | "grey". A missing built_at / score drops that fragment
+    (never prints "None"). `ps` is the FINAL (post-budget) sizing or None."""
+    v = verdict if isinstance(verdict, dict) else {}
+    state = v.get("state")
+    _it = v.get("item")
+    item = _it if isinstance(_it, dict) else {}
+    score = _num_or_none(item.get("score"))
+    if score is None:
+        score = _num_or_none(item.get("composite_score"))
+    frag = [f"Grow Today's call, built {built_at} ET" if built_at else "Grow Today's call"]
+    if score is not None:
+        frag.append(f"composite there {score:.0f}")
+    reason = str(v.get("reason") or "").strip()
+    if state == "add":
+        sh = ps.get("shares") if isinstance(ps, dict) else None
+        if _finite(sh) and float(sh) >= 1:
+            src = " · ".join(frag) + "."
+            if same_size:
+                src += " Same size as Grow Today's card."
+            return {"tone": "green", "show_home": False, "source": src,
+                    "title": f"➕ Add — Grow Today's call today: {int(float(sh))} shares",
+                    "body": room_note(ps) or ""}
+        return {"tone": "green", "show_home": False,
+                "source": " · ".join(frag) + ".",
+                "title": "➕ Add — Grow Today's call today",
+                "body": str(size_text or "No share count is shown for this name today.")}
+    if state == "paused":
+        if v.get("gate_id"):
+            frag.append(f"gate {v['gate_id']}")
+        return {"tone": "amber", "show_home": False, "source": " · ".join(frag) + ".",
+                "title": "➕ Add — paused in Grow Today today",
+                "body": reason or "Grow Today paused adds to this name today."}
+    if state == "not_called":
+        return {"tone": "grey", "show_home": False, "source": None,
+                "title": "➕ No add call today", "body": reason}
+    return {"tone": "grey", "show_home": True, "source": None,
+            "title": "➕ Add call not available",
+            "body": reason or _UNKNOWN_REASON}

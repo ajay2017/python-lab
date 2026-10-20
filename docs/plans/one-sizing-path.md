@@ -1,6 +1,6 @@
 # S-D — One sizing path for every share count
 
-**Status:** DESIGNED 2026-10-19 (planner, Opus 5.5) — verdict **PROCEED WITH CHANGES**. **Owner decided 2026-10-19:
+**Status:** C1 + C2 BUILT 2026-10-20 (F-310; `7d59019` + the C2 commit, each Opus-reviewed to SHIP/0) — add sizes count the holding, G-31, Analysis shows Grow Today's add call, D4. NEXT: C3 (risk footer from final sizes), then C4-C9. Verify on the first live renders: the Grow Today "Position Already at the Cap" block and "Capped by what you already hold" note; the Analysis add box in each state (MRVL → paused, no size, no 📒 Add); no literal `**` / `$`-LaTeX. Earlier: DESIGNED 2026-10-19 (planner, Opus 5.5) — verdict **PROCEED WITH CHANGES**. **Owner decided 2026-10-19:
 all recommendations** — D1 yes (caps bind on the whole post-trade position), D2-A (Analysis shows Grow Today's add
 verdict), D3a (`room_blocked_adds` + new gate G-31), D4 yes (holdings unknown → no size), D5 deferred to the C7 dry
 run, D6-X (no buy-sized numbers on secondary surfaces; bare literals named as constants, values unchanged, each

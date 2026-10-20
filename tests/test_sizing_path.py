@@ -454,7 +454,7 @@ def test_tile_mrvl_shape_is_false_on_capital():
     t = sp.concentration_tile(existing_value=EXISTING, add_cost=ENTRY, gross_book=GROSS,
                               net_capital=NET)
     assert t["state"] is False
-    assert t["detail"] == "8.8% → 9.9% of book · 22.9% → 26.2% of net capital"
+    assert t["detail"] == "8.8% → 10.1% of book · 22.9% → 26.2% of net capital"
     assert "$" not in t["detail"]
 
 
@@ -729,10 +729,10 @@ def test_room_note_book_variant():
     assert n.endswith("of the book (cap 15%)") and n.startswith("Capped by what you already hold")
 
 
-def test_concentration_tile_after_state_uses_the_post_trade_denominator():
+def test_concentration_tile_exactly_on_the_cap_of_the_pre_trade_book_is_not_a_breach():
     t = sp.concentration_tile(existing_value=500.0, add_cost=1000.0,
                               gross_book=10_000.0, net_capital=None)
-    assert t["state"] is True and "13.6% of book" in t["detail"]
+    assert t["state"] is True and "15.0% of book" in t["detail"]   # displayed pre-trade; ✗ test is post-trade
 
 
 def test_margin_called_account_holding_the_name_reads_capital_not_room():

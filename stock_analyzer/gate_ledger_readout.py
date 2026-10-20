@@ -484,7 +484,7 @@ def readout_footnotes(gate_id: str) -> "list[str]":
         ]
     if gate_id == "G-31":
         return [
-            "Live since 2026-10-19 (S-D). Expected to bind often: at ~2.6× "
+            "Live since 2026-10-20 (S-D). Expected to bind often: at ~2.6× "
             "leverage any holding above ~9.6% of the book is already ≥ 25% of "
             "net capital, so a high call count here mostly reflects leverage, "
             "not a strict gate.",
