@@ -69,8 +69,12 @@
 --           sell + rebuy: SELL 10 @ 200.58 on 10-14, BUY 5 @ 195.00 on 10-15).
 --           Baseline raised 2 -> 3 on 2026-10-17 after the owner's SQL.
 --   D5   3  INTC/QCOM/MU 2026-05-26/28: composite column not yet populated.
---   E1  0, E2 0  (2026-10-19, owner SQL: 438 / 1,273 rows). E3 not yet
---           baselined: ACCRUING in impossible_states.py until the first count.
+--   E1  0, E2 0  (2026-10-19, owner SQL: 438 / 1,273 rows).
+--   E3  11  (2026-10-20, owner SQL, 11 of 184): every one a SELL marked
+--           followed_signal='yes' against a Buy/Strong Buy signal_seen,
+--           06-03..10-16. FROZEN at 11. (The comment inside Q0's E arm still
+--           says 'never run' -- refresh it at the next Q0 edit; changing it
+--           now would change Q0_VERSION and force a re-apply.)
 --   Every other check: 0.
 -- ---------------------------------------------------------------------
 

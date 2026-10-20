@@ -10,8 +10,8 @@ what a run's counts MEAN. It is pure, so the decision is unit-tested.
 Section E (2026-10-19) is recompute / provenance: E1 (score_history composite
 vs its weighted pillars) and E2 (recommendations' implied sentiment in range)
 are ZERO, both measured 0 on 2026-10-19. E3 (a trade marked "followed signal"
-against the opposite signal) has never been run, so it sits in _RESIDUAL as
-ACCRUING until the owner's first count sets its FROZEN baseline.
+against the opposite signal) is FROZEN at 11, its first count (owner SQL
+2026-10-20): all SELLs marked "yes" against a Buy signal.
 
 Three kinds of check, set from the post-cleanup baseline of 2026-10-14:
 
@@ -69,10 +69,11 @@ _RESIDUAL: "dict[str, tuple[str, int]]" = {
     "C8": (FROZEN, 3),   # MU 06-25 hole, EOG 06-15 + PLTR 10-14 real sell-and-rebuy (owner SQL 2026-10-17)
     "C9": (FROZEN, 5),   # derived from Q1's C1 detail; confirm on first automated run
     "D5": (FROZEN, 3),
-    # E3 has never been run: not yet baselined. Flip to (FROZEN, <count>) at
-    # the owner's first run's count; until then it is reported beside its
-    # count but never raises a finding.
-    "E3": (ACCRUING, 0),
+    # E3 first run 2026-10-20 (owner SQL): 11 of 184 -- all SELLs marked
+    # followed_signal='yes' against a Buy/Strong Buy signal_seen, 06-03..10-16
+    # (ADBE, AVGO, ISRG, NOW, FSLR, EOG, GD, SPOT, AAPL, MRVL, MSFT). One
+    # pattern: "followed" read as "followed my own rule/stop". A 12th = new row.
+    "E3": (FROZEN, 11),
 }
 
 # Must equal scripts/gen_impossible_states_function.py::q0_version() (a test

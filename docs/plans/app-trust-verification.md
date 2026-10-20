@@ -1,6 +1,6 @@
 # App trust verification — is the app computing what it claims?
 
-**Status:** ITEM 2 BUILT 2026-10-20 — Q0 section E (E1 score_history recompute, E2 recommendations implied sentiment, E3 followed_signal against the opposite signal) + data_maintenance check 7 (held tickers missing from TICKER_SECTORS); Q0_VERSION `q0:fdbd2b2a9c28`. **Owner:** re-apply `docs/sql/impossible-states-function.sql` in Supabase, then run E3's first count to baseline it. Items 1, 3, 4, 5 not started. (Was: PROPOSED 2026-10-19, lead, owner-requested.)
+**Status:** ITEM 2 BUILT 2026-10-20 — Q0 section E (E1 score_history recompute, E2 recommendations implied sentiment, E3 followed_signal against the opposite signal) + data_maintenance check 7 (held tickers missing from TICKER_SECTORS); Q0_VERSION `q0:fdbd2b2a9c28`. **Owner 2026-10-20: function re-applied; E3 first count = 11 of 184** (all SELLs marked followed_signal='yes' against a Buy/Strong Buy signal_seen, 06-03..10-16 — "followed" read as "followed my own rule/stop"), now FROZEN at 11. Items 1, 3, 4, 5 not started. (Was: PROPOSED 2026-10-19, lead, owner-requested.)
 
 ## Results so far
 **Item 2, first run (2026-10-19, owner-run SQL):**
