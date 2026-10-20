@@ -1924,6 +1924,21 @@ def _reset_tj_decision_context() -> None:
     st.session_state["_tj_deviation_reason_pending"] = ""
 
 
+def _rec_events_frame_or_none():
+    """rec_events as a DataFrame for self_track_record's matcher, or None when
+    the table couldn't be read (never an empty frame standing in for a failed
+    read). Shares the day-scoped `_rec_events_full_cache_{date}` key with
+    🎖️ Recommendation Outcomes / 📊 Performance Review; `is None` is the
+    miss-check so a failed read keeps retrying instead of freezing."""
+    _re_key = f"_rec_events_full_cache_{_today_et().isoformat()}"
+    if st.session_state.get(_re_key) is None:
+        st.session_state[_re_key] = db.load_rec_events()
+    _re_rows = st.session_state[_re_key]
+    if _re_rows is None:
+        return None
+    return pd.DataFrame(_re_rows)
+
+
 def _render_trade_button(
     ticker: str,
     suggested_action: str = "BUY",
@@ -46302,7 +46317,10 @@ elif page == "🧠 AI Insights":
             _b_trades_df = db.load_trades_or_none()
             _b_recs_df = db.load_recommendations_or_none(start_date=None, end_date=None)
             _b_exit_signals_df = db.load_exit_signals_or_none()
-            _b_pdf = st.session_state.get("_port_df_enriched")
+            # rec_events (rebalance/beta trims, diversify adds) feed the
+            # who-made-the-call matcher; None = couldn't read, not "none".
+            _b_rec_events_df = _rec_events_frame_or_none()
+            _b_pdf =st.session_state.get("_port_df_enriched")
 
             # universe_set/watchlist_set: same real sources 🎯 My Edge's own
             # Self-vs-Engine buy-side tab uses, but via the _or_none-disciplined
@@ -46361,6 +46379,7 @@ elif page == "🧠 AI Insights":
                 "trades_df": _b_trades_df,
                 "exit_signals_df": _b_exit_signals_df,
                 "recs_df": _b_recs_df,
+                "rec_events_df": _b_rec_events_df,
                 "current_prices": _b_current_prices,
                 "spy_close_by_date": _b_spy_close_by_date,
                 "port_df": _b_pdf,
@@ -48807,6 +48826,27 @@ elif page == "🎯 My Edge":
     # TAB F — Self vs Engine
     # ═════════════════════════════════════════════════════════════════════════
     with _me_tab_f:
+        # C5b (docs/plans/period-report.md): the matcher now counts more of the
+        # app's stored calls, so older figures on this page read differently.
+        st.caption(
+            "📅 Since 2026-10-20 a buy also counts as app-aligned when it followed a "
+            "Grow Today add-to-winner, a Watchlist ready-to-enter or a diversify-add "
+            "call, and a sell when it followed a risk-off, rebalance-trim or beta-trim "
+            "call — earlier figures on this page counted those as your own. "
+            "A sell tagged as a stop-hit with no matching app call is no longer "
+            "counted as your own — it's shown separately, ungraded."
+        )
+        from stock_analyzer import self_track_record as _stv
+        _stv_recs_df = db.load_recommendations_or_none()
+        _sts_exit_signals = db.load_exit_signals_or_none()
+        _stv_rec_events_df = _rec_events_frame_or_none()
+        if _stv_rec_events_df is None:
+            st.caption(
+                "⚪ Rebalance / beta-trim / diversify calls couldn't be read, so "
+                "they aren't matched."
+            )
+        st.caption(_stv.matched_call_coverage_caption(
+            _stv_recs_df, _sts_exit_signals, _stv_rec_events_df))
         _me_sub_buy, _me_sub_sell = st.tabs(["📈 Buy-Side", "📉 Sell-Side"])
 
         with _me_sub_buy:
@@ -48830,7 +48870,6 @@ elif page == "🎯 My Edge":
                 "net at the time. Treat the split across that boundary as approximate."
             )
 
-            from stock_analyzer import self_track_record as _stv
             from stock_analyzer.constants import (
                 SELF_TRACK_MATCH_LOOKBACK_DAYS as _stv_lookback,
                 SELF_TRACK_RELIABLE_LOG_START  as _stv_reliable_start,
@@ -48846,7 +48885,9 @@ elif page == "🎯 My Edge":
             # load_recommendations_or_none() makes that distinction explicit:
             # None on any failure, empty DataFrame only on a genuine zero-row
             # result (2026-08-06 Opus review finding, fixed pre-ship).
-            _stv_recs_df = db.load_recommendations_or_none()
+            # (_stv_recs_df / _stv_rec_events_df / _sts_exit_signals are loaded
+            # once above the sub-tabs, so the coverage caption and both sides
+            # share the same reads.)
 
             # SPY close series — same build as the Engine Track Record card
             # (_cached_spy("6mo")), not a second parallel price-fetch path.
@@ -48891,6 +48932,7 @@ elif page == "🎯 My Edge":
                 _stv_classified = _stv.classify_buys(
                     _stv_trades_df, _stv_recs_df, _stv_universe, _stv_watchlist,
                     _stv_reliable_start, _stv_lookback,
+                    rec_events_df=_stv_rec_events_df,
                 )
 
                 _stv_tickers = sorted({r["ticker"] for r in (_stv_classified or [])})
@@ -49090,10 +49132,10 @@ elif page == "🎯 My Edge":
             # but reordering the tabs or conditionally skipping buy-side would
             # raise NameError here. Don't move this block above _me_sub_buy.
             st.caption(
-                "Splits your own SELL trades into ones that followed an active "
-                "EXIT/TRIM signal within a few days (engine-called) vs ones you "
-                "initiated on your own with no active EXIT/TRIM signal on file "
-                "(self-initiated), then compares each group's post-sell alpha vs "
+                "Splits your own SELL trades into ones that followed an app exit "
+                "call within a few days — EXIT, TRIM, risk-off, rebalance trim or "
+                "beta trim (engine-called) — vs ones you initiated on your own "
+                "with no such call on file (self-initiated), then compares each group's post-sell alpha vs "
                 "SPY. Unlike Buy-Side, there is no third scope bucket here — "
                 "every held ticker is inherently something the engine could have "
                 "signalled on. **Grading window is open-ended** (sell date → "
@@ -49131,8 +49173,6 @@ elif page == "🎯 My Edge":
             # distinction explicit: None on any failure, empty DataFrame only
             # on a genuine zero-row result -- same convention as
             # load_recommendations_or_none() above.
-            _sts_exit_signals = db.load_exit_signals_or_none()
-
             if _sts_exit_signals is None or _stv_spy is None:
                 st.info("Can't check right now — exit-signal data unavailable.")
             else:
@@ -49143,6 +49183,7 @@ elif page == "🎯 My Edge":
                 _sts_classified = _stv.classify_sells(
                     _sts_trades_df, _sts_exit_signals,
                     _sts_reliable_start, _sts_window,
+                    rec_events_df=_stv_rec_events_df,
                 )
 
                 # SOLD-ticker set -- deliberately DIFFERENT from the buy-side's
@@ -49243,15 +49284,15 @@ elif page == "🎯 My Edge":
                             "Engine-called — avg post-exit alpha",
                             f"{_sts_engine_stats['avg_alpha_pct']:+.1f}pp"
                             if _sts_engine_stats["avg_alpha_pct"] is not None else "n/a",
-                            help="An active EXIT/TRIM signal was on file within "
-                                 f"{_sts_window} days before the sell.",
+                            help="An app exit call (EXIT, TRIM, risk-off, rebalance or beta "
+                                 f"trim) was on file within {_sts_window} days before the sell.",
                         )
                         _sts_c2.metric(
                             "Self-initiated — avg post-exit alpha",
                             f"{_sts_self_stats['avg_alpha_pct']:+.1f}pp"
                             if _sts_self_stats["avg_alpha_pct"] is not None else "n/a",
-                            help="No active EXIT/TRIM signal on file — you sold on "
-                                 "your own read.",
+                            help="No app exit call (EXIT, TRIM, risk-off, rebalance or beta "
+                                 "trim) on file — you sold on your own read.",
                         )
                         st.caption(
                             "Negative = good exit (stock underperformed SPY after you "
@@ -49264,6 +49305,13 @@ elif page == "🎯 My Edge":
                             f"{_sts_summary['n_coverage_limited']} additional sell(s) from "
                             f"before {_sts_reliable_start} are excluded — exit-signal "
                             "coverage from that period is unreliable, not graded either way."
+                        )
+
+                    if _sts_summary.get("n_stop_unlogged"):
+                        st.caption(
+                            f"{_sts_summary['n_stop_unlogged']} sell(s) tagged STOP_HIT with "
+                            "no matching app call — stop sales aren't logged by the app, so "
+                            "we can't tell whose stop it was. Not graded."
                         )
 
                     # -- Missed exits -- visible by default, never a gate --

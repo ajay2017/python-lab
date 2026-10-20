@@ -287,6 +287,12 @@ def _print_self_track_cut(trades_df: pd.DataFrame, exit_signals_df) -> list[dict
             "distribution above is unaffected."
         )
         return None
+    # EXIT/TRIM only, as before: classify_sells now also counts RISK_OFF, which
+    # would move sells from self_initiated to engine_aligned in this cut.
+    if len(exit_signals_df) > 0 and "signal_type" in exit_signals_df.columns:
+        exit_signals_df = exit_signals_df[
+            exit_signals_df["signal_type"].astype(str).str.strip().str.upper()
+            .isin(["EXIT", "TRIM"])]
     classified = _stv.classify_sells(
         trades_df, exit_signals_df,
         SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
@@ -308,6 +314,13 @@ def _print_self_track_cut(trades_df: pd.DataFrame, exit_signals_df) -> list[dict
         f"(coverage_limited rows are pre-{SELF_TRACK_SELL_RELIABLE_LOG_START} "
         f"and excluded from this split by definition)."
     )
+    if buckets.get("stop_unlogged"):
+        print(
+            f"  {buckets['stop_unlogged']} sell(s) tagged STOP_HIT with no matching "
+            "EXIT/TRIM signal are counted as stop_unlogged (the app doesn't log "
+            "stop breaches, so whose stop it was is unknown) -- NOT in the N above "
+            "and not self-initiated."
+        )
     return classified
 
 

@@ -179,6 +179,7 @@ def _adapt_classify_sells(data_bundle: dict) -> dict:
     classified = classify_sells(
         trades_df, exit_signals_df,
         SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+        rec_events_df=data_bundle.get("rec_events_df"),
     )
     if classified is None:
         return {"error": "exit-signal history unavailable — can't classify sells"}
@@ -197,6 +198,7 @@ def _adapt_classify_buys(data_bundle: dict) -> dict:
     classified = classify_buys(
         trades_df, recs_df, universe_set or set(), watchlist_set or set(),
         SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS,
+        rec_events_df=data_bundle.get("rec_events_df"),
     )
     if classified is None:
         return {"error": "recommendation history unavailable — can't classify buys"}
@@ -317,8 +319,11 @@ TOOLBOX: dict = {
         "adapter": _adapt_classify_sells,
         "needs": frozenset({"trades_df", "exit_signals_df"}),
         "summary": "Classifies every SELL trade as app-aligned (followed an "
-                   "active EXIT/TRIM signal within the matching window) vs. "
-                   "self-initiated (no matching signal on file).",
+                   "app exit call within the matching window: an EXIT, TRIM "
+                   "or risk-off signal, or a rebalance or beta trim) vs. "
+                   "self-initiated (no matching call on file); a sell tagged "
+                   "as a stop-hit with no matching call is counted "
+                   "separately as stop_unlogged and not graded.",
         "cannot": [
             "cannot judge a BUY-side decision (see rec_outcomes for that)",
             "cannot classify a sell from before exit-signal capture went live",

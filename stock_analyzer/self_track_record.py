@@ -6,9 +6,10 @@ Every BUY trade in the journal is classified into one of four buckets by
 whether a matching app recommendation exists on file within a short lookback
 window before the trade date:
 
-  app_aligned        — a matching new_pick / overflow_pick rec (or a historical
-                        buy_candidate whose stored composite_score >=
-                        COMPOSITE_BUY) exists within
+  app_aligned        — a matching new_pick / overflow_pick / add_winner /
+                        enter_now (not already held) rec, a diversify_add
+                        rec_event, or a historical buy_candidate whose stored
+                        composite_score >= COMPOSITE_BUY, exists within
                         SELF_TRACK_MATCH_LOOKBACK_DAYS before (inclusive) the
                         trade date. This is the App's own call, not the
                         user's self-initiated instinct — graded here only as
@@ -33,7 +34,7 @@ window before the trade date:
                         graded either way.
 
 `trigger_type` (MANUAL / RECOMMENDATION on the trades table) has ZERO
-influence on the bucket — that field records what the USER said at trade
+influence on the BUY bucket (the one SELL-side exception is STOP_HIT, below) — that field records what the USER said at trade
 time; this module independently re-derives the same-instinct-vs-app-aligned
 split from the actual recommendation history, which is the more reliable
 signal (a user can mis-tag trigger_type, or the field can be absent on
@@ -46,8 +47,10 @@ alpha-vs-SPY math (never reimplemented here).
 
 SELL-side sibling (classify_sells / self_vs_engine_sell_summary /
 detect_missed_exits, below): the mirrored question — "is MY OWN exit
-instinct good?" vs the engine's EXIT/TRIM signals — graded against
-exit_signals instead of recommendations. Three buckets, not four (no
+instinct good?" vs the engine's exit calls (exit_signals EXIT / TRIM / RISK_OFF, plus
+rec_events rebal_trim / beta_trim) — graded against those instead of
+recommendations. Three graded buckets plus a counted-but-ungraded
+stop_unlogged bucket (no
 self_out_of_scope equivalent — every held ticker is inherently something the
 engine could have signalled on). See the section header above those
 functions for the full bucket definitions and the deliberate
@@ -70,6 +73,123 @@ def _f(v, default=0.0):
         return default
 
 
+def _truthy_flag(v) -> bool:
+    """True only for a real affirmative (True / 1 / "true"); None/NaN/absent
+    is NOT affirmative."""
+    if v is None:
+        return False
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "t", "1", "yes")
+    try:
+        return bool(v) and v == v
+    except (TypeError, ValueError):
+        return False
+
+
+def _rec_event_index(rec_events_df, types) -> dict:
+    """{rec_type: {TICKER: [fired_date, ...]}} for the wanted rec_events types.
+    None / empty / column-less frame -> {} (nothing to match)."""
+    out: dict = {}
+    try:
+        if rec_events_df is None or len(rec_events_df) == 0:
+            return out
+        for _, r in rec_events_df.iterrows():
+            rt = str(r.get("rec_type", "") or "").strip()
+            if rt not in types:
+                continue
+            tk = str(r.get("ticker", "") or "").strip().upper()
+            fd = _to_date(r.get("fired_date"))
+            if not tk or fd is None:
+                continue
+            out.setdefault(rt, {}).setdefault(tk, []).append(fd)
+    except Exception:
+        return out
+    return out
+
+
+# Call types the matcher recognises (single source for both sides + coverage).
+_BUY_REC_TYPES = ("new_pick", "overflow_pick", "buy_candidate",
+                  "add_winner", "enter_now")
+_BUY_EVENT_TYPES = ("diversify_add",)
+_SELL_SIGNAL_TYPES = ("EXIT", "TRIM", "RISK_OFF")
+_SELL_EVENT_TYPES = ("rebal_trim", "beta_trim")
+
+
+def _first_match(index: dict, lo: date, hi: date):
+    """Name of the first call type (insertion order) with a date in [lo, hi]."""
+    for name, dates in index.items():
+        if any(lo <= d <= hi for d in dates):
+            return name
+    return None
+
+
+def matched_call_coverage(recs_df, exit_signals_df, rec_events_df=None) -> dict:
+    """Earliest stored date per call type, so a page can say "matched since".
+    Keys: every buy rec type that counts as a call (buy_candidate included),
+    diversify_add, exit_EXIT / exit_TRIM / exit_RISK_OFF, rebal_trim, beta_trim.
+    A type with no stored row (or an unreadable frame) -> None."""
+    cov: dict = {k: None for k in (
+        list(_BUY_REC_TYPES) + list(_BUY_EVENT_TYPES)
+        + [f"exit_{t}" for t in _SELL_SIGNAL_TYPES] + list(_SELL_EVENT_TYPES))}
+
+    def _upd(key, d):
+        if d is not None and (cov[key] is None or d < cov[key]):
+            cov[key] = d
+
+    try:
+        if recs_df is not None and len(recs_df) > 0:
+            for _, r in recs_df.iterrows():
+                rt = str(r.get("rec_type", "") or "").strip()
+                if rt in _BUY_REC_TYPES:
+                    _upd(rt, _to_date(r.get("rec_date")))
+        if exit_signals_df is not None and len(exit_signals_df) > 0:
+            for _, sg in exit_signals_df.iterrows():
+                st_ = str(sg.get("signal_type", "") or "").strip().upper()
+                if st_ in _SELL_SIGNAL_TYPES:
+                    _upd(f"exit_{st_}", _to_date(sg.get("signal_date")))
+        ev = _rec_event_index(rec_events_df,
+                              _BUY_EVENT_TYPES + _SELL_EVENT_TYPES)
+        for rt, by_tk in ev.items():
+            for ds in by_tk.values():
+                for d in ds:
+                    _upd(rt, d)
+    except Exception:
+        pass
+    return cov
+
+
+# Plain names + which source frame holds each call type, for the page caption.
+_COVERAGE_LABELS = (
+    ("new_pick", "Grow Today picks", "recs"),
+    ("overflow_pick", "overflow picks", "recs"),
+    ("add_winner", "add-to-winner", "recs"),
+    ("enter_now", "Watchlist ready-to-enter", "recs"),
+    ("buy_candidate", "earlier buy candidates", "recs"),
+    ("diversify_add", "diversify adds", "events"),
+    ("exit_EXIT", "EXIT signals", "exits"),
+    ("exit_TRIM", "TRIM signals", "exits"),
+    ("exit_RISK_OFF", "risk-off signals", "exits"),
+    ("rebal_trim", "rebalance trims", "events"),
+    ("beta_trim", "beta trims", "events"),
+)
+
+
+def matched_call_coverage_caption(recs_df, exit_signals_df, rec_events_df=None) -> str:
+    """One caption: which app calls the matcher knows and since when. A call
+    type whose SOURCE frame is None (couldn't be read) says "couldn't be read",
+    never "no rows yet" (that wording is only for a readable, empty source)."""
+    cov = matched_call_coverage(recs_df, exit_signals_df, rec_events_df)
+    src_none = {"recs": recs_df is None, "exits": exit_signals_df is None,
+                "events": rec_events_df is None}
+    parts = []
+    for key, name, src in _COVERAGE_LABELS:
+        if src_none[src]:
+            parts.append(f"{name} couldn't be read")
+        else:
+            parts.append(f"{name} {cov.get(key) or 'no rows yet'}")
+    return "Matched app calls (and since when): " + " · ".join(parts) + "."
+
+
 # ── Classification ──────────────────────────────────────────────────────────
 
 def classify_buys(
@@ -79,6 +199,7 @@ def classify_buys(
     watchlist_set: set,
     reliable_log_start: date,
     match_lookback_days: int,
+    rec_events_df=None,
 ) -> list[dict] | None:
     """
     Classify every BUY row in `trades_df` into one of the four buckets above.
@@ -108,12 +229,18 @@ def classify_buys(
     # (below-bar, NULL, NaN, non-numeric): the app was steering away from those
     # names, so a trade matching only them is self-initiated, tagged
     # rule_reclassified so the page can disclose the rule change.
-    rec_index: dict[str, list[date]] = {}
+    # rec_index is keyed ticker -> {call_type: [dates]} so each match can name
+    # WHICH stored call it matched (`matched_call`).
+    rec_index: dict[str, dict[str, list[date]]] = {}
     weak_bc_index: dict[str, list[date]] = {}
     if len(recs_df) > 0:
         for _, r in recs_df.iterrows():
             rt = str(r.get("rec_type", "") or "").strip()
-            if rt not in ("new_pick", "overflow_pick", "buy_candidate"):
+            if rt not in _BUY_REC_TYPES:
+                continue
+            # A Watchlist row for a name already held was shown as "Already in
+            # portfolio", not an entry call -- never a match.
+            if rt == "enter_now" and _truthy_flag(r.get("already_held")):
                 continue
             tk = str(r.get("ticker", "") or "").strip().upper()
             rd = _to_date(r.get("rec_date"))
@@ -135,7 +262,12 @@ def classify_buys(
                 if not ok:
                     weak_bc_index.setdefault(tk, []).append(rd)
                     continue
-            rec_index.setdefault(tk, []).append(rd)
+            rec_index.setdefault(tk, {}).setdefault(rt, []).append(rd)
+
+    # rec_events diversify_add: ticker = the named ADD candidate.
+    for _rt, _by_tk in _rec_event_index(rec_events_df, _BUY_EVENT_TYPES).items():
+        for _tk, _ds in _by_tk.items():
+            rec_index.setdefault(_tk, {}).setdefault(_rt, []).extend(_ds)
 
     out: list[dict] = []
     if trades_df is None or len(trades_df) == 0:
@@ -152,7 +284,8 @@ def classify_buys(
             continue
 
         lo = D - timedelta(days=match_lookback_days)
-        has_rec = any(lo <= rd <= D for rd in rec_index.get(tk, []))
+        matched_call = _first_match(rec_index.get(tk, {}), lo, D)
+        has_rec = matched_call is not None
         rule_reclassified = (not has_rec) and any(
             lo <= rd <= D for rd in weak_bc_index.get(tk, []))
         in_scope = tk in universe_set or tk in watchlist_set
@@ -176,6 +309,7 @@ def classify_buys(
             "price":       price,
             "bucket":      bucket,
             "rule_reclassified": rule_reclassified,
+            "matched_call": matched_call,
             "user_thesis": t.get("user_thesis"),
             "situational_category": t.get("situational_category"),
             # ── fields compute_outcomes() reads (same shape as
@@ -234,7 +368,9 @@ def rule_reclassified_caption(n, last_bc_date=None) -> str:
     when = f" ({last_bc_date})" if last_bc_date else ""
     return (
         "ℹ️ How app-aligned is counted: a buy counts as the app's call only if "
-        "it matched a New Position or an \"Also cleared\" name — or, before the "
+        "it matched a Grow Today pick, an overflow (\"Also cleared\") name, an "
+        "add-to-winner, a Watchlist ready-to-enter (not already held) or a "
+        "diversify-add call — or, before the "
         f"More Buy Candidates feed was retired{when}, a More Buy Candidates name "
         f"whose composite was ≥ {COMPOSITE_BUY}. {n} earlier graded buy(s) matched only "
         "a lower-scored or unscored More Buy Candidates name — names the app was "
@@ -458,7 +594,8 @@ def situational_category_breakdown(
 # "out of scope" concept the way buys do against a scanned universe (every
 # held ticker is inherently something the engine could have signalled on):
 #
-#   engine_aligned    — an EXIT or TRIM exit_signals row for the ticker falls
+#   engine_aligned    — an EXIT / TRIM / RISK_OFF exit_signals row, or a
+#                        rebal_trim / beta_trim rec_event, for the ticker falls
 #                        within SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS before
 #                        (inclusive) the sell date. Matched, date-independent
 #                        — a real signal match is unambiguous regardless of
@@ -477,12 +614,19 @@ def situational_category_breakdown(
 #                        self-initiated exit. Disclosed, never graded either
 #                        way. WATCH-tier signals never count as a match —
 #                        WATCH is a soft heads-up, not an exit decision.
+#   stop_unlogged      — no matching call AND the user tagged the sell
+#                        trigger_type STOP_HIT. The app does not log stop
+#                        breaches, so whose stop it was is unknown: counted
+#                        and disclosed, never graded, never "self-initiated".
+#                        (The only place this module reads a user field; a
+#                        matching call always wins over the tag.)
 
 def classify_sells(
     trades_df,
     exit_signals_df,
     reliable_log_start: date,
     signal_window_days: int,
+    rec_events_df=None,
 ) -> list[dict] | None:
     """
     Classify every SELL row in `trades_df` into one of the three buckets above.
@@ -515,17 +659,21 @@ def classify_sells(
     if exit_signals_df is None:
         return None
 
-    sig_index: dict[str, list[date]] = {}
+    # ticker -> {matched_call name: [dates]}; WATCH never counts.
+    sig_index: dict[str, dict[str, list[date]]] = {}
     if len(exit_signals_df) > 0:
-        for _, s in exit_signals_df.iterrows():
-            st_ = str(s.get("signal_type", "") or "").strip().upper()
-            if st_ not in ("EXIT", "TRIM"):
+        for _, sg in exit_signals_df.iterrows():
+            st_ = str(sg.get("signal_type", "") or "").strip().upper()
+            if st_ not in _SELL_SIGNAL_TYPES:
                 continue
-            tk = str(s.get("ticker", "") or "").strip().upper()
-            sd = _to_date(s.get("signal_date"))
+            tk = str(sg.get("ticker", "") or "").strip().upper()
+            sd = _to_date(sg.get("signal_date"))
             if not tk or sd is None:
                 continue
-            sig_index.setdefault(tk, []).append(sd)
+            sig_index.setdefault(tk, {}).setdefault(f"exit_{st_}", []).append(sd)
+    for _rt, _by_tk in _rec_event_index(rec_events_df, _SELL_EVENT_TYPES).items():
+        for _tk, _ds in _by_tk.items():
+            sig_index.setdefault(_tk, {}).setdefault(_rt, []).extend(_ds)
 
     out: list[dict] = []
     if trades_df is None or len(trades_df) == 0:
@@ -542,10 +690,19 @@ def classify_sells(
             continue
 
         lo = D - timedelta(days=signal_window_days)
-        has_signal = any(lo <= sd <= D for sd in sig_index.get(tk, []))
+        matched_call = _first_match(sig_index.get(tk, {}), lo, D)
 
-        if has_signal:
+        # The ONLY use of a user field in this module: a sell with no matching
+        # call that the user tagged STOP_HIT is not called "self-initiated" --
+        # the app does not log stop breaches, so whose stop it was is unknown.
+        # A matching call always wins over the tag. Absent/None -> not a stop.
+        _tt = t.get("trigger_type")
+        is_stop = str(_tt or "").strip().upper() == "STOP_HIT"
+
+        if matched_call is not None:
             bucket = "engine_aligned"
+        elif is_stop:
+            bucket = "stop_unlogged"
         elif D >= reliable_log_start:
             bucket = "self_initiated"
         else:
@@ -560,6 +717,7 @@ def classify_sells(
             "shares":      shares,
             "price":       price,
             "bucket":      bucket,
+            "matched_call": matched_call,
             "user_thesis": t.get("user_thesis"),
             # ── fields compute_outcomes() reads — deliberately a MISSED/
             # UNACTED shape, see the docstring above. ──
@@ -603,7 +761,7 @@ def self_vs_engine_sell_summary(
         {
           "available": True,
           "n_engine_aligned": int, "n_self_initiated": int,
-          "n_coverage_limited": int,
+          "n_coverage_limited": int, "n_stop_unlogged": int,
           "engine_aligned": {"n": int, "avg_alpha_pct": float|None, "sufficient": bool},
           "self_graded":    {"n": int, "avg_alpha_pct": float|None, "sufficient": bool},
           "min_sample_n": int,
@@ -622,6 +780,7 @@ def self_vs_engine_sell_summary(
 
     buckets: dict[str, list[dict]] = {
         "engine_aligned": [], "self_initiated": [], "coverage_limited": [],
+        "stop_unlogged": [],   # counted, never graded (stop sales aren't logged)
     }
     for r in enriched:
         b = r.get("bucket")
@@ -642,6 +801,7 @@ def self_vs_engine_sell_summary(
         "n_engine_aligned":    len(buckets["engine_aligned"]),
         "n_self_initiated":    len(buckets["self_initiated"]),
         "n_coverage_limited":  len(buckets["coverage_limited"]),
+        "n_stop_unlogged":     len(buckets["stop_unlogged"]),
         "engine_aligned":      _graded(buckets["engine_aligned"]),
         "self_graded":         _graded(buckets["self_initiated"]),
         "min_sample_n":        min_sample_n,

@@ -589,8 +589,11 @@ def main() -> int:
         _print_report([], headline)
         return 0
 
+    # `scoped` (EXIT/TRIM only), NOT the full frame: classify_sells now also
+    # counts RISK_OFF as a call, which would price a risk-off sale as "sold
+    # near an EXIT/TRIM call" and move this script's numbers.
     sell_classified = classify_sells(
-        trades_df, signals_df,
+        trades_df, scoped,
         reliable_log_start=SELF_TRACK_SELL_RELIABLE_LOG_START,
         signal_window_days=SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
     )
