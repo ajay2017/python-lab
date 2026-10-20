@@ -40400,7 +40400,10 @@ elif page == "💰 Account":
                                             }
                                             for _w in _pr_wf
                                         ]),
+                                        # Sized to the row count so no row (the first ones
+                                        # included) scrolls out of view.
                                         hide_index=True, width="stretch",
+                                        height=(len(_pr_wf) + 1) * 35 + 3,
                                     )
                                 _pr_res = _pr_recon["residual"]
                                 if _pr_res is not None:
@@ -40417,6 +40420,7 @@ elif page == "💰 Account":
                                                  "$": _m_usd(_pr_recon["book_gap_end"])},
                                             ]),
                                             hide_index=True, width="stretch",
+                                            height=(4 + 1) * 35 + 3,   # 4 rows, none scrolled out
                                         )
                                 # "Unexplained" exists only when the account was reconciled
                                 # (ok / partial); in pre_coverage there is no such row.

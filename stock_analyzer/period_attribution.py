@@ -639,7 +639,9 @@ def _usd(x) -> str:
     reads a pair as LaTeX."""
     if x is None:
         return "unknown"
-    sign = "-" if x < -_CENT_TOL else ""
+    if round(abs(x)) == 0:
+        return "\\$0"   # never "-\$0" for a sub-dollar rounding residue
+    sign = "-" if x < 0 else ""
     return f"{sign}\\${abs(x):,.0f}"
 
 
@@ -879,8 +881,8 @@ def usd_plain(x, *, plus: bool = False) -> str:
     prefixes gains with "+"."""
     if x is None:
         return "unknown"
-    if abs(x) < _CENT_TOL:
-        return "$0"
+    if abs(x) < _CENT_TOL or round(abs(x)) == 0:
+        return "$0"   # incl. a sub-dollar residue that would print "-$0"
     sign = "-" if x < 0 else ("+" if plus else "")
     return f"{sign}${abs(x):,.0f}"
 
