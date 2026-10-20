@@ -20,6 +20,7 @@ import ast
 import hashlib
 import os
 import pickle
+import re
 import sys
 import tempfile
 import time
@@ -125,3 +126,39 @@ def parse_file_cached(path) -> ast.Module:
                 pass
     except Exception:
         return _plain_parse(raw, path)
+
+
+# --- source_segment: ast.get_source_segment without re-splitting per call -----
+# The stdlib splits the WHOLE source into lines on every call; in a loop over
+# app.py (~49K lines) that is minutes. Same splitter and byte-offset slicing as
+# scripts/check_antipatterns.py::_Visitor._source_segment (padded=False).
+_LINE_RE = re.compile(r"(.*?(?:\r\n|\n|\r|$))")
+_LINES_MEMO: dict[int, tuple[str, list[str]]] = {}
+
+
+def _split_lines(src: str) -> list[str]:
+    hit = _LINES_MEMO.get(id(src))
+    if hit is not None and hit[0] is src:  # id reuse after GC can never match
+        return hit[1]
+    lines = [m[0] for m in _LINE_RE.finditer(src)]
+    if len(_LINES_MEMO) > 8:
+        _LINES_MEMO.clear()
+    _LINES_MEMO[id(src)] = (src, lines)
+    return lines
+
+
+def source_segment(src: str, node) -> str | None:
+    """Same result as ``ast.get_source_segment(src, node)`` (padded=False)."""
+    start = getattr(node, "lineno", None)
+    end = getattr(node, "end_lineno", None)
+    col = getattr(node, "col_offset", None)
+    end_col = getattr(node, "end_col_offset", None)
+    if start is None or end is None or col is None or end_col is None:
+        return None
+    lineno, end_lineno = start - 1, end - 1
+    lines = _split_lines(src)
+    if end_lineno == lineno:
+        return lines[lineno].encode()[col:end_col].decode()
+    first = lines[lineno].encode()[col:].decode()
+    last = lines[end_lineno].encode()[:end_col].decode()
+    return first + "".join(lines[lineno + 1:end_lineno]) + last

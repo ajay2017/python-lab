@@ -5,8 +5,10 @@ app.py isn't importable in tests, so these read its source (AST)."""
 import ast
 from pathlib import Path
 
+from tests._ast_cache import parse_file_cached, source_segment
+
 _SRC = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
-_TREE = ast.parse(_SRC)
+_TREE = parse_file_cached(Path(__file__).resolve().parent.parent / "app.py")
 
 
 def _calls(attr):
@@ -30,7 +32,7 @@ def test_both_classifiers_receive_rec_events_df():
 def test_rec_events_loader_returns_none_on_failure():
     fn = next(n for n in ast.walk(_TREE)
               if isinstance(n, ast.FunctionDef) and n.name == "_rec_events_frame_or_none")
-    src = ast.get_source_segment(_SRC, fn)
+    src = source_segment(_SRC, fn)
     assert "db.load_rec_events()" in src
     assert "return None" in src
     assert "or []" not in src and "or {}" not in src

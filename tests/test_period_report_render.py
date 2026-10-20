@@ -12,12 +12,13 @@ from pathlib import Path
 import pytest
 
 from stock_analyzer import period_attribution as pa
+from tests._ast_cache import parse_file_cached, source_segment
 
 pytestmark = pytest.mark.fast
 
 _APP = Path(__file__).parent.parent / "app.py"
 _SRC = _APP.read_text(encoding="utf-8")
-_TREE = ast.parse(_SRC)
+_TREE = parse_file_cached(_APP)
 for _n in ast.walk(_TREE):
     for _c in ast.iter_child_nodes(_n):
         _c._parent = _n  # type: ignore[attr-defined]

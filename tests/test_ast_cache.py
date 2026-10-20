@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from tests import _ast_cache
-from tests._ast_cache import parse_file_cached
+from tests._ast_cache import parse_file_cached, source_segment
 
 APP_PY = Path(__file__).resolve().parent.parent / "app.py"
 
@@ -104,3 +104,30 @@ def test_stale_lock_is_broken(cache, tmp_path, monkeypatch):
 # above already prove generically (pickle round-trip fidelity + content-keyed
 # invalidation). The mutation runs that edit app.py and see wiring tests fail
 # are the end-to-end evidence that no stale tree is ever served.
+
+
+def test_source_segment_matches_stdlib_on_tricky_source():
+    src = ("x = (1 +\n     2)\r\n"
+           "s = '—'; t = 'café \U0001F600'; u = t + s\r\n"
+           "def f(a,\n      b):\n    return a  # — note\n")
+    tree = ast.parse(src)
+    nodes = list(ast.walk(tree))
+    assert any(not hasattr(n, "lineno") for n in nodes)  # Module/Load: no positions
+    assert any(getattr(n, "end_lineno", 0) != getattr(n, "lineno", 0)
+               for n in nodes if hasattr(n, "lineno"))  # multi-line present
+    for n in nodes:
+        assert source_segment(src, n) == ast.get_source_segment(src, n)
+    assert source_segment(src, tree) is None
+
+
+def test_source_segment_matches_stdlib_on_app_sample():
+    src = APP_PY.read_text(encoding="utf-8")
+    tree = parse_file_cached(APP_PY)
+    n_checked = 0
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign):
+            assert source_segment(src, n) == ast.get_source_segment(src, n)
+            n_checked += 1
+            if n_checked >= 200:
+                break
+    assert n_checked == 200

@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 
 from stock_analyzer import period_attribution as pa
+from tests._ast_cache import parse_file_cached, source_segment
 
 bs = chr(92)
 _SRC = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
@@ -23,12 +24,12 @@ def test_markdown_usd_never_prints_signed_zero():
 
 
 def test_period_report_tables_are_sized_to_their_rows():
-    tree = ast.parse(_SRC)
+    tree = parse_file_cached(Path(__file__).resolve().parent.parent / "app.py")
     hits = 0
     for n in ast.walk(tree):
         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                 and n.func.attr == "dataframe" and n.args):
-            seg = ast.get_source_segment(_SRC, n) or ""
+            seg = source_segment(_SRC, n) or ""
             if "Where the change came from" in seg or "Book gap at end" in seg:
                 assert any(k.arg == "height" for k in n.keywords), seg[:80]
                 hits += 1

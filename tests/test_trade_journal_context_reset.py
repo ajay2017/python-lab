@@ -5,8 +5,10 @@ tests, so these read its source (AST)."""
 import ast
 from pathlib import Path
 
+from tests._ast_cache import parse_file_cached, source_segment
+
 _SRC = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
-_TREE = ast.parse(_SRC)
+_TREE = parse_file_cached(Path(__file__).resolve().parent.parent / "app.py")
 
 
 def _func(name):
@@ -53,13 +55,13 @@ def test_both_confirm_save_handlers_call_the_reset():
         if not isinstance(n, ast.If):
             continue
         # innermost block: the submit-signature assignment is a DIRECT statement
-        direct = [ast.get_source_segment(_SRC, s) or "" for s in n.body
+        direct = [source_segment(_SRC, s) or "" for s in n.body
                   if isinstance(s, ast.Assign)]
         # Confirm handlers stamp the sig with their own (_ps_/_pb_) ticker; the
         # form's submit stage stamps a dedup sig BEFORE confirm (not a save).
         if any('"_tj_last_submit_sig"' in d and ("(_ps_ticker" in d or "(_pb_ticker" in d)
                for d in direct):
-            body_src = "\n".join(ast.get_source_segment(_SRC, s) or "" for s in n.body)
+            body_src = "\n".join(source_segment(_SRC, s) or "" for s in n.body)
             assert "_reset_tj_decision_context()" in body_src
             hits += 1
     assert hits == 2
@@ -67,14 +69,14 @@ def test_both_confirm_save_handlers_call_the_reset():
 
 def test_button_without_intent_sets_skip():
     fn = _func("_render_trade_button")
-    src = ast.get_source_segment(_SRC, fn)
+    src = source_segment(_SRC, fn)
     followed_if = next(
         n for n in ast.walk(fn)
         if isinstance(n, ast.If) and isinstance(n.test, ast.Name)
         and n.test.id == "followed_intent"
     )
     assert followed_if.orelse, "no else branch for followed_intent=None"
-    else_src = "\n".join(ast.get_source_segment(_SRC, s) for s in followed_if.orelse)
+    else_src = "\n".join(source_segment(_SRC, s) for s in followed_if.orelse)
     assert '"_tj_followed_pending"' in else_src and "— (skip)" in else_src
     assert 'session_state["_tj_followed"]' not in src
 
