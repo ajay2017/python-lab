@@ -1905,6 +1905,25 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
         )
 
 
+def _reset_tj_decision_context() -> None:
+    """Clear the Trade Journal's Decision Context answers after a saved trade.
+
+    Without this, "Did you follow the signal?" / "Signal at time of trade" /
+    the lesson fields kept the PREVIOUS trade's answers, so a later SELL could
+    be saved as followed_signal='yes' beside a stale Buy signal. These are
+    widget-bound keys, so stage them through the same _pending keys the Trade
+    Journal consumes before its widgets render (a direct write raises
+    StreamlitAPIException once the widget has rendered).
+    """
+    st.session_state["_tj_followed_pending"] = "— (skip)"
+    # A DELETE flag, not "": while the key exists, the text_input's
+    # value=<auto-filled live signal> is ignored for every later trade.
+    st.session_state["_tj_signal_seen_clear"] = True
+    st.session_state["_tj_lesson_category_pending"] = "— (skip)"
+    st.session_state["_tj_lesson_pending"] = ""
+    st.session_state["_tj_deviation_reason_pending"] = ""
+
+
 def _render_trade_button(
     ticker: str,
     suggested_action: str = "BUY",
@@ -1964,6 +1983,10 @@ def _render_trade_button(
             st.session_state["_tj_followed_pending"] = _followed_map.get(
                 followed_intent, "— (skip)"
             )
+        else:
+            # No stated intent: don't let an earlier trade's "Yes" ride along
+            # onto this (e.g. a Sell opened from a Buy page).
+            st.session_state["_tj_followed_pending"] = "— (skip)"
         st.session_state["_pending_page"] = "📒 Trade Journal"
         st.rerun()
 
@@ -29959,10 +29982,17 @@ elif page == "📒 Trade Journal":
     # These flow Analysis → Trade Journal across navigation. Writing to the
     # widget-bound keys here is safe because the widgets haven't rendered yet
     # in this run.
+    # Clear first (drops the stale key so the widget's auto-fill default
+    # applies again), THEN a button-staged value, which must still win.
+    if st.session_state.pop("_tj_signal_seen_clear", False):
+        st.session_state.pop("_tj_signal_seen", None)
     if "_tj_signal_seen_pending" in st.session_state:
         st.session_state["_tj_signal_seen"] = st.session_state.pop("_tj_signal_seen_pending")
     if "_tj_followed_pending" in st.session_state:
         st.session_state["_tj_followed"] = st.session_state.pop("_tj_followed_pending")
+    for _tj_dc_key in ("_tj_lesson_category", "_tj_lesson", "_tj_deviation_reason"):
+        if f"{_tj_dc_key}_pending" in st.session_state:
+            st.session_state[_tj_dc_key] = st.session_state.pop(f"{_tj_dc_key}_pending")
 
     # ── Log a Trade form ──────────────────────────────────────────────────────
     _prefill_ticker = prefill.get("ticker", "").strip().upper()
@@ -30097,6 +30127,7 @@ elif page == "📒 Trade Journal":
                 # one backdated trade would leave the field sticky on that
                 # past date for the NEXT trade too.
                 st.session_state.pop("_tj_trade_date", None)
+                _reset_tj_decision_context()
                 import time as _ps_time
                 st.session_state["_tj_last_submit_sig"] = (_ps_ticker, "SELL", _ps_shares)
                 st.session_state["_tj_last_submit_ts"]  = _ps_time.time()
@@ -30355,6 +30386,7 @@ elif page == "📒 Trade Journal":
                 # See the matching SELL-confirm comment above — reset the
                 # date picker so it doesn't stay sticky on a past date.
                 st.session_state.pop("_tj_trade_date", None)
+                _reset_tj_decision_context()
                 import time as _pb_time
                 st.session_state["_tj_last_submit_sig"] = (_pb_ticker, "BUY", _pb_shares)
                 st.session_state["_tj_last_submit_ts"]  = _pb_time.time()
