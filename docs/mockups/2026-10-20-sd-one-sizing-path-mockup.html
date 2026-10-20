@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mockup — S-D chunks C1b + C2: add sizes count what you already hold, and Analysis shows Grow Today's add call</title>
+<style>
+  body { background:#0e1117; color:#e5e7eb; font-family:-apple-system,Segoe UI,Roboto,sans-serif; margin:24px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:#94a3b8; font-size:13px; margin-bottom:20px; line-height:1.5; }
+  .day { margin:28px 0 8px; font-size:15px; font-weight:700; color:#cbd5e1; border-bottom:1px solid #334155; padding-bottom:6px; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  .col h3 { font-size:12px; letter-spacing:.06em; text-transform:uppercase; margin:6px 0 10px; }
+  .before h3 { color:#f87171; } .after h3 { color:#4ade80; }
+  .panel { background:#111827; border:1px solid #1f2937; border-radius:8px; padding:12px 14px; }
+  .sec { font-weight:700; font-size:14px; margin:4px 0 8px; }
+  .addcard { background:#052e16; border-left:3px solid #4ade80; border-radius:6px; padding:10px 14px; margin:6px 0; }
+  .tk { font-weight:700; color:#f9fafb; } .meta { color:#9ca3af; font-size:12px; margin-left:8px; }
+  .thesis { color:#d1d5db; font-size:12.5px; margin-top:5px; font-style:italic; }
+  .size { color:#6b7280; font-size:12px; margin-top:4px; }
+  .cap { color:#94a3b8; font-size:12px; margin-top:5px; }
+  .amber { background:#422006; border:1px solid #f59e0b; border-radius:8px; padding:8px 14px; margin:8px 0; }
+  .amber .h { color:#fbbf24; font-weight:700; font-size:13px; margin-bottom:4px; }
+  .amber .r { color:#fcd34d; font-size:12.5px; }
+  .amber .f { color:#fde68a; font-size:12px; margin-top:6px; font-style:italic; }
+  .strip { background:#0b3d1e; border-left:5px solid #22c55e; border-radius:8px; padding:10px 12px; margin-bottom:10px; font-weight:700; }
+  .call { border-radius:8px; padding:10px 12px; margin:8px 0; }
+  .call.add { background:#22c55e18; border-left:5px solid #22c55e; }
+  .call.paused { background:#f59e0b18; border-left:5px solid #f59e0b; }
+  .call.notc { background:#64748b22; border-left:5px solid #64748b; }
+  .call .t { font-weight:700; } .call.add .t { color:#4ade80; } .call.paused .t { color:#f59e0b; } .call.notc .t { color:#cbd5e1; }
+  .call .b { color:#ccc; font-size:12.5px; margin-top:3px; }
+  .src { color:#94a3b8; font-size:11.5px; margin-top:4px; }
+  .h4 { font-weight:700; font-size:14px; margin:12px 0 6px; }
+  .metrics { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  .m { background:#0b1220; border-radius:6px; padding:6px 8px; }
+  .m .l { color:#94a3b8; font-size:11px; } .m .v { font-size:18px; font-weight:700; } .m .d { color:#94a3b8; font-size:11px; }
+  .gates { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; text-align:center; margin:8px 0; }
+  .g .i { font-size:16px; } .g .l { font-size:11px; color:#ccc; } .g .d { font-size:10px; color:#888; }
+  .ok { color:#00C851; } .bad { color:#ff4444; } .na { color:#888; }
+  .btn { display:inline-block; background:#1f2937; border:1px solid #334155; border-radius:5px; padding:3px 10px; margin:6px 6px 0 0; font-size:12px; color:#e5e7eb; }
+  .btn.trade { background:#14532d; border-color:#16a34a; }
+  .warn { background:#3b2f0a; border-left:3px solid #eab308; border-radius:6px; padding:6px 10px; font-size:12px; color:#fde68a; margin:6px 0; }
+  .new { color:#4ade80; font-size:10px; font-weight:700; margin-left:6px; }
+  .strike { text-decoration:line-through; color:#f87171; }
+  .note { background:#172033; border:1px solid #334155; border-radius:6px; padding:10px 14px; font-size:12.5px; color:#cbd5e1; margin-top:22px; line-height:1.55; }
+  .ask { background:#1e1b4b; border:1px solid #6366f1; border-radius:6px; padding:10px 14px; font-size:12.5px; color:#e0e7ff; margin-top:14px; line-height:1.55; }
+</style>
+</head>
+<body>
+<h1>S-D, chunks C1b + C2: add sizes count what you already hold, and 📈 Analysis shows Grow Today's add call (mockup v1, static)</h1>
+<div class="sub">Owner decisions 2026-10-19: D1 (15% of book and 25% of net capital bind on the <b>whole</b> position after an add), D2-A (Analysis shows Grow Today's add verdict and never decides an add itself), D3a (no room left → listed, ledger gate G-31), D4 (holding unknown → no size). Plan <code>docs/plans/one-sizing-path.md</code>.
+MRVL numbers are the live 10-19 case (7 sh at $238.86 = $1,672, book ~$19,000, net capital ~$7,300 — the plan's test fixture); MRVL's composite, P&amp;L and sector %, and all of NVDA, are illustrative. Nothing here is built yet. Wording is draft — say what to change.</div>
+
+<!-- ───────── 1. GROW TODAY ───────── -->
+<div class="day">1 · Up day — 🌱 Grow Today, "Add to Winning Positions"</div>
+<div class="cols">
+  <div class="col before"><h3>Today</h3><div class="panel">
+    <div class="sec">➕ Add to Winning Positions</div>
+    <div class="addcard"><span class="tk">MRVL</span><span class="meta">Strong Buy · Composite 81/100 · P&amp;L +6.2%</span>
+      <div class="thesis">💡 Up 6.2% vs entry, 12.4% above stop — Strong Buy, adds within existing position.</div>
+      <div class="size">📐 Add: 7 shares ≈ $1,672 · Sizing stop ~$215.00</div>
+      <div class="cap">📐 Add size also capped at 25% of net capital (margin-aware) — now ~23% of your actual capital.</div>
+    </div>
+    <div class="cap">↑ "now ~23%" describes the <b>new shares only</b>. After the add, MRVL would be ~46% of net capital.</div>
+    <div class="addcard"><span class="tk">NVDA</span><span class="meta">Strong Buy · Composite 78/100 · P&amp;L +4.0%</span>
+      <div class="thesis">💡 Up 4.0% vs entry, 9.1% above stop — Strong Buy, adds within existing position.</div>
+      <div class="size">📐 Add: 10 shares ≈ $1,800 · Sizing stop ~$165.00</div>
+      <div class="cap">📐 Add size also capped at 25% of net capital (margin-aware) — now ~25% of your actual capital.</div>
+    </div>
+  </div></div>
+
+  <div class="col after"><h3>After C1</h3><div class="panel">
+    <div class="sec">➕ Add to Winning Positions</div>
+    <div class="addcard"><span class="tk">NVDA</span><span class="meta">Strong Buy · Composite 78/100 · P&amp;L +4.0%</span>
+      <div class="thesis">💡 Up 4.0% vs entry, 9.1% above stop — Strong Buy, adds within existing position.</div>
+      <div class="size">📐 Add: 2 shares ≈ $360 · Sizing stop ~$165.00</div>
+      <div class="cap">📐 Capped by what you already hold — 19.7% → 24.7% of net capital (cap 25%).<span class="new">NEW</span></div>
+    </div>
+    <div class="amber">
+      <div class="h">🔒 Add Suppressed — Position Already at the Cap<span class="new">NEW</span></div>
+      <div class="r">• <b>MRVL</b> (8.8% of book · Score 81) — You already hold 22.9% of your net capital (cap 25%) — one more share would make it 26.2%. No add while the whole position is at the cap.</div>
+      <div class="f">These winners qualify on signal, but what you already hold leaves less than one share of room under the 15%-of-book or 25%-of-net-capital cap. The cap applies to the whole position, not just the new shares. Trim, or let the book grow, before adding.</div>
+    </div>
+    <div class="cap">Same amber style as the existing "🔒 Add Suppressed — Single-Name Ceiling (15%)" block, shown right under it. Each row gets a ▶ Analyze button like the other paused blocks. Logged as gate <b>G-31</b> (🛑 The Road Not Taken).</div>
+  </div></div>
+</div>
+
+<!-- ───────── 2. ANALYSIS, MRVL, PAUSED G-24 ───────── -->
+<div class="day">2 · 📈 Analysis → MRVL (held) on the morning Grow Today paused it — the live 10-19 case</div>
+<div class="cols">
+  <div class="col before"><h3>Today</h3><div class="panel">
+    <div class="strip">🟢 Strong Buy · 81/100</div>
+    <div class="gates">
+      <div class="g"><div class="i ok">✓</div><div class="l">Data Quality</div><div class="d">BQ + Valuation</div></div>
+      <div class="g"><div class="i ok">✓</div><div class="l">R/R ≥ 2×</div><div class="d">R/R = 2.4×</div></div>
+      <div class="g"><div class="i ok">✓</div><div class="l">Concentration</div><div class="d">8.8% of portfolio</div></div>
+      <div class="g"><div class="i ok">✓</div><div class="l">Sector cap</div><div class="d">31.0% in sector</div></div>
+      <div class="g"><div class="i na">—</div><div class="l">Earnings</div><div class="d">See Catalyst Watch</div></div>
+    </div>
+    <div class="h4">Position Sizing</div>
+    <div class="metrics">
+      <div class="m"><div class="l">Shares</div><div class="v">7</div></div>
+      <div class="m"><div class="l">Investment</div><div class="v">$1,672</div><div class="d">8.8% of portfolio</div></div>
+      <div class="m"><div class="l">Max Risk</div><div class="v">$167</div><div class="d">0.88%</div></div>
+      <div class="m"><div class="l">Risk/Share</div><div class="v">$23.86</div></div>
+    </div>
+    <div class="warn">⚠️ Also capped to your 25% net-capital cap. … sized to 7 shares (~23% of your net capital).</div>
+    <span class="btn trade">📒 Add MRVL (7 sh pre-filled)</span><span class="btn">📒 Sell MRVL</span>
+    <div class="cap">Grow Today, same morning: "🌱 Add Paused — Recently Added: MRVL — added 5d ago". The two pages disagree.</div>
+  </div></div>
+
+  <div class="col after"><h3>After C1 + C2</h3><div class="panel">
+    <div class="strip">🟢 Strong Buy · 81/100</div>
+    <div class="gates">
+      <div class="g"><div class="i ok">✓</div><div class="l">Data Quality</div><div class="d">BQ + Valuation</div></div>
+      <div class="g"><div class="i ok">✓</div><div class="l">R/R ≥ 2×</div><div class="d">R/R = 2.4×</div></div>
+      <div class="g"><div class="i ok">✓</div><div class="l">Concentration</div><div class="d">8.8% of book · 22.9% of net capital</div></div>
+      <div class="g"><div class="i ok">✓</div><div class="l">Sector cap</div><div class="d">31.0% in sector</div></div>
+      <div class="g"><div class="i na">—</div><div class="l">Earnings</div><div class="d">See Catalyst Watch</div></div>
+    </div>
+    <div class="call paused"><div class="t">➕ Add — paused in Grow Today today<span class="new">NEW</span></div>
+      <div class="b">Added within the last 10 days (5d ago) — letting the new shares settle before suggesting more.</div>
+      <div class="src">Grow Today's call, built 09:52 · composite there 81. This page never decides an add on its own — it shows Grow Today's.</div></div>
+    <div class="cap">No Position Sizing block. Scorecard Shares column: "—".</div>
+    <span class="btn">📒 Sell MRVL</span>
+    <div class="cap">📒 Add button hidden — Grow Today isn't calling an add on MRVL today.</div>
+  </div></div>
+</div>
+
+<!-- ───────── 3. ANALYSIS, MRVL, NO ROOM ───────── -->
+<div class="day">3 · 📈 Analysis → MRVL once the cooldown has passed (up day, everything else clears)</div>
+<div class="cols">
+  <div class="col before"><h3>Today</h3><div class="panel">
+    <div class="cap">Same as scene 2's "Today": 7 shares offered, Concentration ✓ 8.8%.</div>
+  </div></div>
+  <div class="col after"><h3>After C1 + C2</h3><div class="panel">
+    <div class="gates">
+      <div class="g"><div class="i ok">✓</div><div class="l">Data Quality</div><div class="d"></div></div>
+      <div class="g"><div class="i ok">✓</div><div class="l">R/R ≥ 2×</div><div class="d"></div></div>
+      <div class="g"><div class="i bad">✗</div><div class="l">Concentration</div><div class="d">8.8% of book · 22.9% of net capital</div></div>
+      <div class="g"><div class="i ok">✓</div><div class="l">Sector cap</div><div class="d"></div></div>
+      <div class="g"><div class="i na">—</div><div class="l">Earnings</div><div class="d"></div></div>
+    </div>
+    <div class="call paused"><div class="t">➕ Add — paused in Grow Today today</div>
+      <div class="b">You already hold 22.9% of your net capital (cap 25%) — one more share would make it 26.2%. No add while the whole position is at the cap.</div>
+      <div class="src">Grow Today's call, built 09:52 · composite there 81 · gate G-31.</div></div>
+    <div class="cap">Concentration tile turns ✗ when either the book % ≥ 15 or the net-capital % ≥ 25 (now, or after the add).</div>
+  </div></div>
+</div>
+
+<!-- ───────── 4. ANALYSIS, ADD CALLED ───────── -->
+<div class="day">4 · 📈 Analysis → NVDA (held) when Grow Today IS calling the add</div>
+<div class="cols">
+  <div class="col before"><h3>Today</h3><div class="panel">
+    <div class="metrics">
+      <div class="m"><div class="l">Shares</div><div class="v">10</div></div>
+      <div class="m"><div class="l">Investment</div><div class="v">$1,800</div><div class="d">9.5% of portfolio</div></div>
+      <div class="m"><div class="l">Max Risk</div><div class="v">$150</div><div class="d">0.79%</div></div>
+      <div class="m"><div class="l">Risk/Share</div><div class="v">$15.00</div></div>
+    </div>
+    <div class="cap">10 new shares on top of 8 held → ~44% of net capital.</div>
+  </div></div>
+  <div class="col after"><h3>After C1 + C2</h3><div class="panel">
+    <div class="call add"><div class="t">➕ Add — Grow Today's call today: 2 shares<span class="new">NEW</span></div>
+      <div class="b">Capped by what you already hold — 19.7% → 24.7% of net capital (cap 25%).</div>
+      <div class="src">Grow Today's call, built 09:52 · composite there 78. Same size as Grow Today's card.</div></div>
+    <div class="gates">
+      <div class="g"><div class="i ok">✓</div><div class="l">Data Quality</div><div class="d"></div></div>
+      <div class="g"><div class="i ok">✓</div><div class="l">R/R ≥ 2×</div><div class="d"></div></div>
+      <div class="g"><div class="i ok">✓</div><div class="l">Concentration</div><div class="d">7.6% → 9.5% of book · 19.7% → 24.7% of net capital</div></div>
+      <div class="g"><div class="i ok">✓</div><div class="l">Sector cap</div><div class="d"></div></div>
+      <div class="g"><div class="i na">—</div><div class="l">Earnings</div><div class="d"></div></div>
+    </div>
+    <div class="h4">Position Sizing</div>
+    <div class="metrics">
+      <div class="m"><div class="l">Shares</div><div class="v">2</div></div>
+      <div class="m"><div class="l">Investment</div><div class="v">$360</div><div class="d">1.9% of portfolio</div></div>
+      <div class="m"><div class="l">Max Risk</div><div class="v">$30</div><div class="d">0.16%</div></div>
+      <div class="m"><div class="l">Risk/Share</div><div class="v">$15.00</div></div>
+    </div>
+    <span class="btn trade">📒 Add NVDA (2 sh pre-filled)</span><span class="btn">📒 Sell NVDA</span>
+  </div></div>
+</div>
+
+<!-- ───────── 5. NOT CALLED / UNKNOWN ───────── -->
+<div class="day">5 · 📈 Analysis → a held Buy when Grow Today isn't calling an add, or its call can't be read</div>
+<div class="cols">
+  <div class="col after"><h3>Flat or down day / not an add candidate</h3><div class="panel">
+    <div class="call notc"><div class="t">➕ No add call today</div>
+      <div class="b">Grow Today only suggests adds on an up day.</div>
+      <div class="src">Other wordings: "Market risk-off today — Grow Today makes no add calls." / "Not an add candidate today — Grow Today adds need a Strong Buy, composite ≥ 65 and ≥ 8% above the stop."</div></div>
+    <div class="cap">No size, Add button hidden, Concentration tile shows "now" only.</div>
+  </div></div>
+  <div class="col after"><h3>Grow Today's call unavailable</h3><div class="panel">
+    <div class="call notc"><div class="t">➕ Add call not available</div>
+      <div class="b">Grow Today's add call for today isn't available — open 🏠 Home to build it.</div></div>
+    <span class="btn">🏠 Open Home</span>
+    <div class="cap">Shown when Home hasn't built today's Brief, the Brief is offline, or a trade was logged since it was built (the book changed, so its add call is stale). Never falls back to sizing the add here.</div>
+  </div></div>
+</div>
+
+<div class="note"><b>What changes, in one line each.</b><br>
+• Every add size now counts what you already hold: the whole position must stay under 15% of the book and under 25% of net capital (strictly under, so the 📒 Trade Journal's post-trade check never flags a size the app suggested).<br>
+• Grow Today: partial room → smaller add plus a "Capped by what you already hold" line; no room → the name moves to a new "Position Already at the Cap" block (gate G-31), never silently dropped.<br>
+• 📈 Analysis on a held name shows Grow Today's add call (add / paused / no call / unavailable) and its size — it never sizes an add itself, so every add pause in Grow Today (recently added, deterioration watch, sector cap, trim call, correlation, entry check, room) now holds on Analysis too.<br>
+• Not-held names on Analysis are unchanged (the shared entry check still decides).<br>
+• Unchanged here: the Grow Today risk footer (chunk C3), Watchlist / Rebalancer / Diversification / Econ / Catalyst counts (chunks C4–C6).</div>
+
+<div class="ask"><b>Two wording/behaviour calls for you:</b><br>
+1. <b>Add button on a paused/no-call held name</b> — the mockup hides "📒 Add" (Sell stays), matching how a held-back new buy hides "📒 Buy". Alternative: keep the button with no shares pre-filled. Recommendation: hide.<br>
+2. <b>Block title</b> — "🔒 Add Suppressed — Position Already at the Cap". Alternative: fold these rows into the existing "Single-Name Ceiling (15%)" block and retitle it "Concentration". Recommendation: separate block, because this one is usually the net-capital cap, not the 15% ceiling.</div>
+</body>
+</html>

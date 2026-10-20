@@ -37,4 +37,6 @@ GATE_IDS: dict[str, str] = {
     "G-29": "Bear-day tone → Watchlist ENTER_NOW deferred",
     # Shared new-entry check chunk 7b / N-B2 (2026-10-18) — Grow Today news hold.
     "G-30": "Negative news → Grow Today new pick skipped / add held",
+    # S-D (2026-10-19) — the caps bind on the whole position after an add.
+    "G-31": "Add would leave no room under the single-name / net-capital cap for the whole position → Grow Today add held",
 }

@@ -40,7 +40,10 @@ from stock_analyzer.sold_today import _et_trade_dates
 
 # Stamped on every budget-processed sizing (version 4 = adds the daily budget;
 # daily_briefing.SIZING_FORMULA_VERSION is bumped to match by the wiring chunk).
-BUDGET_SIZING_VERSION = 4
+# Version 5 (S-D, 2026-10-19): the F-255 caps bind on the whole position after an
+# add, so a stored add's rec_shares changed meaning. Kept equal to
+# daily_briefing.SIZING_FORMULA_VERSION (pinned by a test).
+BUDGET_SIZING_VERSION = 5
 
 SIZED = "sized"
 BUDGET_PARTIAL = "budget_partial"
@@ -314,7 +317,10 @@ def allocate(basis_result, logged, allocations, candidates) -> dict:
 
 
 _SIZE_KEYS = ("shares", "total_cost", "port_pct", "risk_budget", "ceiling_capped",
-              "uncapped_shares", "capital_capped", "capital_pct")
+              "uncapped_shares", "capital_capped", "capital_pct",
+              # S-D room fields describe the sized add; no size -> no claim.
+              "post_portfolio_pct", "post_capital_pct", "room_capped",
+              "room_binding", "existing_value", "net_capital")
 
 
 def apply_to_sizing(sizing, entry) -> dict:
@@ -348,6 +354,23 @@ def apply_to_sizing(sizing, entry) -> dict:
         for k in ("port_pct", "capital_pct"):
             if _num(base.get(k)) is not None:
                 out[k] = round(base[k] * ratio, 1)
+        if "room_capped" in base:
+            # S-D: the budget, not the holding, now binds -> recompute the
+            # post-trade % from the final cost and drop the room claim.
+            _ex = _num(base.get("existing_value")) or 0.0
+            _pv = _num(base.get("portfolio_value"))
+            _nc = _num(base.get("net_capital"))
+            _tc = _num(out["total_cost"]) or 0.0
+            if _pv:
+                out["post_portfolio_pct"] = round((_ex + _tc) / _pv * 100, 1)
+            else:
+                out.pop("post_portfolio_pct", None)
+            if _nc and _nc > 0:
+                out["post_capital_pct"] = round((_ex + _tc) / _nc * 100, 1)
+            else:
+                out.pop("post_capital_pct", None)
+            out["room_capped"] = False
+            out["room_binding"] = None
     if status == BUDGET_PARTIAL:
         out["budget_capped"] = True
         out["budget_uncapped_shares"] = entry.get("uncapped_shares", old)

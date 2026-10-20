@@ -30,12 +30,61 @@ def atr_stop_loss(df: pd.DataFrame, multiplier: float = ATR_STOP_MULT) -> tuple[
     return stop, round(atr_val, 2)
 
 
+def _valid_existing(existing_value) -> bool:
+    """True only for a real, finite, non-negative number (bool/str rejected)."""
+    if isinstance(existing_value, bool) or not isinstance(existing_value, (int, float, np.integer, np.floating)):
+        return False
+    v = float(existing_value)
+    return bool(np.isfinite(v)) and v >= 0.0
+
+
+def _ceiling_room_shares(portfolio_value: float, max_position_pct: float,
+                         existing: float, entry: float) -> int:
+    """Whole shares that fit under the gross ceiling on top of `existing`."""
+    return int((portfolio_value * max_position_pct / 100.0 - existing) / entry)
+
+
+def _capital_room_shares(net_capital: float, max_capital_pct: float,
+                         existing: float, entry: float) -> int:
+    """Whole shares that fit STRICTLY below the net-capital cap on top of `existing`.
+
+    Strictly below because concentration.assess_add_concentration flags
+    post_name_mv / net_capital * 100 >= capital_ceiling: landing exactly on the
+    cap would contradict a size this app suggested. (The exact-equality case
+    for NEW picks, existing == 0, is pre-existing and flagged, not changed
+    here — the strict rule applies only when existing > 0.)
+    """
+    cap_dollars = net_capital * max_capital_pct / 100.0
+    n = int((cap_dollars - existing) / entry)
+    if existing + n * entry >= cap_dollars:
+        n -= 1
+    return n
+
+
 def sizing_unavailable_reason(
     portfolio_value: float, entry: float, stop: float,
     max_position_pct: float | None = None,
     net_capital: float | None = None, max_capital_pct: float | None = None,
+    existing_value: float = 0.0,
 ) -> str | None:
     """Why `position_sizing` would decline to size, or None if it would size.
+
+    S-D (2026-10-19, owner decision D1): `existing_value` is the dollar value
+    already held in this name. When > 0 the single-name ceiling and the
+    net-capital cap bind on the WHOLE position after the add (existing + new
+    shares), not on the new shares alone. Three more reasons follow from that:
+
+      "holding"      — existing_value is not a finite number >= 0 (None, NaN,
+                       inf, negative, non-numeric). NEVER coerced to 0: that
+                       would size a held name as a fresh one (fail-open).
+      "room_ceiling" — existing_value > 0 and the gross-book ceiling leaves
+                       less than one whole share of room (already at/above it).
+      "room_capital" — existing_value > 0 and the net-capital cap leaves less
+                       than one whole share of room, STRICTLY below the cap.
+
+    Order: stop -> portfolio -> holding -> ceiling/room_ceiling ->
+    capital/room_capital. With existing_value == 0 every branch is identical
+    to before S-D.
 
     `position_sizing` returns None for FOUR structurally different reasons
     (2026-08-25: F-255 added the third; 2026-08-27: this commit adds the fourth),
@@ -95,14 +144,28 @@ def sizing_unavailable_reason(
     # ceiling path dropped its floor.) An honest refusal is the only safe answer.
     if portfolio_value <= 0:
         return "portfolio"
+    # Validated separately from _num(): _num turns NaN/None into 0.0, which
+    # would read a held name of unknown size as a fresh one.
+    if not _valid_existing(existing_value):
+        return "holding"
+    existing = float(existing_value)
     if (max_position_pct is not None and portfolio_value > 0
             and int((portfolio_value * (_num(max_position_pct) / 100.0)) / entry) < 1):
         return "ceiling"
+    if existing > 0 and net_capital is not None and net_capital <= 0:
+        # Margin-called account holding the name: the capital wording, not a room one.
+        return "capital"
+    if existing > 0 and max_position_pct is not None:
+        if _ceiling_room_shares(portfolio_value, _num(max_position_pct), existing, entry) < 1:
+            return "room_ceiling"
     if net_capital is not None and net_capital <= 0:
         return "capital"
     if (net_capital is not None and net_capital > 0 and max_capital_pct is not None
             and int((net_capital * _num(max_capital_pct) / 100.0) / entry) < 1):
         return "capital"
+    if existing > 0 and net_capital is not None and max_capital_pct is not None:
+        if _capital_room_shares(net_capital, _num(max_capital_pct), existing, entry) < 1:
+            return "room_capital"
     return None
 
 
@@ -110,11 +173,15 @@ def position_sizing(
     portfolio_value: float, risk_pct: float, entry: float, stop: float,
     max_position_pct: float | None = None,
     net_capital: float | None = None, max_capital_pct: float | None = None,
+    existing_value: float = 0.0,
 ) -> dict | None:
     # All no-size conditions live in one place — see sizing_unavailable_reason.
+    # existing_value > 0 (S-D, owner decision D1): the caps bind on the WHOLE
+    # position after the add; see sizing_unavailable_reason's docstring.
     if sizing_unavailable_reason(portfolio_value, entry, stop, max_position_pct,
-                                  net_capital, max_capital_pct):
+                                  net_capital, max_capital_pct, existing_value):
         return None
+    existing = float(existing_value)
     risk_dollars   = portfolio_value * risk_pct
     risk_per_share = entry - stop
     risk_based_shares = max(1, int(risk_dollars / risk_per_share))
@@ -132,7 +199,10 @@ def position_sizing(
         # breached the cap AND left ceiling_capped False (risk_based_shares was
         # also 1, so `shares > ceiling_shares` never fired) — a $4,500 name on a
         # $10,000 book printed 1 share = 45% of portfolio, silently.
-        ceiling_shares = int((portfolio_value * (max_position_pct / 100.0)) / entry)
+        if existing > 0:
+            ceiling_shares = _ceiling_room_shares(portfolio_value, max_position_pct, existing, entry)
+        else:
+            ceiling_shares = int((portfolio_value * (max_position_pct / 100.0)) / entry)
         if shares > ceiling_shares:
             shares = ceiling_shares
             ceiling_capped = True
@@ -149,7 +219,10 @@ def position_sizing(
             and max_capital_pct is not None and entry > 0):
         # Guaranteed >= 1 by the "capital" guard in sizing_unavailable_reason
         # above (same formula), so no max(1, ...) floor needed here either.
-        capital_cap_shares = int((net_capital * max_capital_pct / 100.0) / entry)
+        if existing > 0:
+            capital_cap_shares = _capital_room_shares(net_capital, max_capital_pct, existing, entry)
+        else:
+            capital_cap_shares = int((net_capital * max_capital_pct / 100.0) / entry)
         if shares > capital_cap_shares:
             shares = capital_cap_shares
             capital_capped = True
@@ -180,6 +253,14 @@ def position_sizing(
         # must never import it).
         out["capital_capped"] = capital_capped
         out["capital_pct"]    = round(total_cost / net_capital * 100.0, 1)
+    if existing > 0:
+        out["existing_value"] = round(existing, 2)
+        out["post_portfolio_pct"] = round((existing + total_cost) / portfolio_value * 100, 1)
+        if net_capital is not None:
+            out["post_capital_pct"] = round((existing + total_cost) / net_capital * 100, 1)
+        out["room_capped"] = bool(ceiling_capped or capital_capped)
+        out["room_binding"] = ("capital" if capital_capped
+                               else "ceiling" if ceiling_capped else None)
     return out
 
 

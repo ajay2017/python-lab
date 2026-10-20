@@ -193,7 +193,7 @@ def test_binding_day_non_emailed_pick_rec_row_carries_the_budget_size(monkeypatc
     assert "rec_budget_state" not in a                  # untouched by the budget
     assert b["rec_shares"] == 16
     assert b["rec_budget_state"] == hold_reasons.BUDGET_PARTIAL
-    assert b["rec_sizing_version"] == 4
+    assert b["rec_sizing_version"] == daily_budget.BUDGET_SIZING_VERSION
     assert [r["ticker"] for r in s.written] == ["AAA"]   # BBB's size was never pushed
 
 
@@ -208,7 +208,7 @@ def test_exhausted_pick_keeps_its_buy_call_and_gets_null_rec_shares(monkeypatch)
     assert _esc(hold_reasons.budget_note(hold_reasons.BUDGET_EXHAUSTED)) in html
     r = s.rec_row("AAA")
     assert r.get("rec_shares") is None and r["rec_budget_state"] == hold_reasons.BUDGET_EXHAUSTED
-    assert r["rec_sizing_version"] == 4
+    assert r["rec_sizing_version"] == daily_budget.BUDGET_SIZING_VERSION
     assert s.written == []                                   # nothing pushed, nothing recorded
 
 
@@ -302,7 +302,7 @@ def test_unreadable_trades_withhold_every_consuming_size_but_the_buy_still_goes(
         r = s.rec_row(tk)
         assert r.get("rec_shares") is None
         assert r["rec_budget_state"] == hold_reasons.BUDGET_UNKNOWN
-        assert r["rec_sizing_version"] == 4
+        assert r["rec_sizing_version"] == daily_budget.BUDGET_SIZING_VERSION
     assert s.written == []
 
 
@@ -546,7 +546,7 @@ def test_morning_card_exhausted_keeps_the_pick_wording():
 # ── 10. versioning + row hygiene + crash fallback ───────────────────────────
 
 def test_sizing_formula_version_matches_the_budget_version():
-    assert SIZING_FORMULA_VERSION == daily_budget.BUDGET_SIZING_VERSION == 4
+    assert SIZING_FORMULA_VERSION == daily_budget.BUDGET_SIZING_VERSION == 5
 
 
 def test_non_budget_row_keeps_its_pre_budget_key_set():
@@ -603,7 +603,7 @@ def test_non_go_pick_that_is_also_a_watchlist_entry_gets_the_budget_size(monkeyp
     r = s.rec_row("WLB")
     assert r["rec_shares"] == 16
     assert r["rec_budget_state"] == hold_reasons.BUDGET_PARTIAL
-    assert r["rec_sizing_version"] == 4
+    assert r["rec_sizing_version"] == daily_budget.BUDGET_SIZING_VERSION
 
 
 def test_all_non_trading_allocation_save_is_a_quiet_noop_not_a_failure(monkeypatch):

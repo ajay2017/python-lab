@@ -88,7 +88,7 @@ def test_binding_day_second_24pct_pick_shrinks_to_16pct_and_rec_row_state():
     b = _sz(out, "pick", "BBB")
     assert b["total_cost"] == 1600.0 and b["capital_pct"] == 16.0
     assert b["budget_capped"] is True and b["budget_uncapped_shares"] == 24
-    assert b["sizing_version"] == 4
+    assert b["sizing_version"] == dbud.BUDGET_SIZING_VERSION
     # the rec row app.py writes reads exactly these keys off the shown sizing
     assert bv.rec_budget_state(b) == hr.BUDGET_PARTIAL
     assert bv.rec_budget_state(_sz(out, "pick", "AAA")) is None
@@ -111,7 +111,7 @@ def test_exhausted_pick_keeps_its_call_but_loses_its_size():
     assert "shares" not in b and b["budget_exhausted"] is True
     assert [p["ticker"] for p in out["brief"]["grow_today"]["new_picks"]] == ["AAA", "BBB"]
     assert bv.rec_budget_state(b) == hr.BUDGET_EXHAUSTED
-    assert b["sizing_version"] == 4
+    assert b["sizing_version"] == dbud.BUDGET_SIZING_VERSION
 
 
 # ------------------------------------------------ emailed (reserved) sizes

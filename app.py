@@ -232,6 +232,7 @@ from stock_analyzer import act_today_precedence
 from stock_analyzer import home_notices as _home_notices_mod
 from stock_analyzer import act_today_pointer as _act_pointer_mod
 from stock_analyzer import budget_view as _budget_view
+from stock_analyzer import sizing_path as _sizing_path
 from stock_analyzer import entry_eligibility as _entry_elig
 from stock_analyzer import news_feed as _news_feed
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
@@ -6017,7 +6018,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 18  # bumped: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 19  # bumped: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -8911,7 +8912,7 @@ if page == "🏠 Home":
                     "risk_blocked_adds", "sector_blocked_picks",
                     "sector_unknown_picks", "cluster_blocked_adds", "pair_blocked_adds",
                     "news_skipped", "earnings_waiting",
-                    "entry_held_adds", "card_blocked_adds"):
+                    "entry_held_adds", "card_blocked_adds", "room_blocked_adds"):
             _gv = grow.get(_gk)
             if not isinstance(_gv, list):
                 continue
@@ -9052,6 +9053,9 @@ if page == "🏠 Home":
         risk_banner  = grow.get("risk_banner")
         blocked_adds  = grow.get("risk_blocked_adds", [])
         conc_blocked  = grow.get("concentration_blocked_adds", [])
+        # G-31 (S-D) -- adds with no room left under the whole-position caps.
+        # Same "list in every return path" contract as conc_blocked above.
+        room_blocked  = grow.get("room_blocked_adds", [])
         sector_blocked = (grow.get("sector_blocked_adds", []) or []) + (grow.get("sector_blocked_picks", []) or [])
         # D1 (sector_gate_spec.md, 2026-09-30) — distinct from sector_blocked
         # above (a KNOWN sector already over cap): this is "couldn't check,"
@@ -9733,6 +9737,12 @@ if page == "🏠 Home":
                     f"book, above the {int(SINGLE_NAME_CEILING)}% single-name ceiling. This name "
                     f"is too large for this account at the current cap."
                 )
+            elif _sz.get("holding_unknown") or _sz.get("room_infeasible"):
+                # S-D markers belong to add cards (a new pick has no holding); defensive only.
+                st.caption(
+                    "📐 No size suggested — the room under the position caps can't be checked "
+                    "for this name."
+                )
             elif _sz.get("capital_infeasible"):
                 # F-255 net-capital cap. one_share_capital_pct is None when net
                 # capital <= 0 (margin-called) — same two arms as notify._sizing_cap_note.
@@ -9758,7 +9768,8 @@ if page == "🏠 Home":
                     f"${_sz['stop_at']:,.2f} ATR stop, so there is no room between entry and stop "
                     f"to size against."
                 )
-            if _sz.get("capital_capped") and _sz.get("capital_pct") is not None:
+            if (_sz.get("capital_capped") and _sz.get("capital_pct") is not None
+                    and not _sz.get("room_capped")):
                 # F-255: applied AFTER the ceiling cap, so it can stack with it (as in the emails).
                 st.caption(
                     f"📐 Size also capped at {int(NET_CAPITAL_POSITION_CAP_PCT)}% of net capital "
@@ -10052,10 +10063,30 @@ if page == "🏠 Home":
                 unsafe_allow_html=True,
             )
             # Single-name ceiling disclosure for add-to-winner cards.
-            if _sz.get("ceiling_capped"):
+            # S-D: when the add was trimmed by what is already held, the caps
+            # apply to the WHOLE position -- say so instead of the new-shares-only
+            # wording below (which would mislead).
+            _room_txt = _sizing_path.room_note(_sz)   # FINAL (post-budget) sizing
+            if _sz.get("ceiling_capped") and _room_txt is None:
                 st.caption(
                     f"📐 Add size reduced to the {int(SINGLE_NAME_CEILING)}% single-name ceiling. "
                     f"Risk-budget size would be {_sz['uncapped_shares']} shares."
+                )
+            elif _sz.get("room_capped") and _room_txt is not None:
+                st.caption(f"📐 {_room_txt.replace('$', chr(92) + '$')}.")
+            elif _sz.get("holding_unknown"):
+                st.caption(
+                    "📐 No add size suggested — your current holding couldn't be read, so the "
+                    "room under the caps can't be checked."
+                )
+            elif _sz.get("room_infeasible"):
+                _ri_cap = _sz.get("room_binding") == "capital"
+                _ri_now = _sz.get("existing_capital_pct") if _ri_cap else _sz.get("existing_gross_pct")
+                st.caption(
+                    f"📐 No add size suggested — you already hold "
+                    f"{float(_ri_now or 0.0):.1f}% of your {'net capital' if _ri_cap else 'book'} "
+                    f"(cap {int(NET_CAPITAL_POSITION_CAP_PCT if _ri_cap else SINGLE_NAME_CEILING)}%); "
+                    f"one more share would make it {float(_sz.get('one_more_pct') or 0.0):.1f}%."
                 )
             elif _sz.get("ceiling_infeasible"):
                 st.caption(
@@ -10086,7 +10117,8 @@ if page == "🏠 Home":
                     f"📐 No add size suggested — price is at or below this name's "
                     f"${_sz['stop_at']:,.2f} ATR sizing stop."
                 )
-            if _sz.get("capital_capped") and _sz.get("capital_pct") is not None:
+            if (_sz.get("capital_capped") and _sz.get("capital_pct") is not None
+                    and _room_txt is None):
                 # F-255: applied AFTER the ceiling cap, so it can stack with it (as in the emails).
                 st.caption(
                     f"📐 Add size also capped at {int(NET_CAPITAL_POSITION_CAP_PCT)}% of net capital "
@@ -10258,6 +10290,43 @@ if page == "🏠 Home":
                 "</div></div>",
                 unsafe_allow_html=True,
             )
+
+        # G-31 (S-D): the cap applies to the WHOLE position, so a holding that
+        # already leaves < 1 share of room is listed here, never sized.
+        if room_blocked:
+            _rm_rows = []
+            for _rb in room_blocked:
+                _rb_tk = str(_rb.get("ticker", "")).strip()
+                if not _rb_tk:
+                    continue
+                _rm_rows.append((_rb_tk,
+                    f"{_rb_tk} ({float(_rb.get('existing_gross_pct') or 0.0):.1f}% of book · "
+                    f"Score {float(_rb.get('score') or 0.0):.0f}) — {_rb.get('reason', '')}"))
+            st.markdown(
+                "<div style='background:#1c1917;border-left:3px solid #f59e0b;"
+                "border-radius:6px;padding:8px 14px;margin:8px 0'>"
+                "<div style='color:#fbbf24;font-weight:700;font-size:0.84em'>"
+                f"🔒 Add Suppressed — Position Already at the Cap ({_safe_html(str(len(_rm_rows)))})</div></div>",
+                unsafe_allow_html=True,
+            )
+            for _rm_tk, _rm_line in _rm_rows:
+                st.caption(_rm_line.replace("$", chr(92) + "$"))
+            st.caption(
+                "These winners qualify on signal, but what you already hold leaves less than one "
+                f"share of room under the {int(SINGLE_NAME_CEILING)}%-of-book or "
+                f"{int(NET_CAPITAL_POSITION_CAP_PCT)}%-of-net-capital cap. "
+                "The cap applies to the whole position, not just the new shares. "
+                "Trim, or let the book grow, before adding."
+            )
+            _rm_tks = [_t for _t, _l in _rm_rows]
+            for _rm_i in range(0, len(_rm_tks), 4):
+                _rm_chunk = _rm_tks[_rm_i:_rm_i + 4]
+                _rm_cols = st.columns(len(_rm_chunk))
+                for _rm_col, _rm_tk in zip(_rm_cols, _rm_chunk):
+                    if _rm_col.button(f"▶ Analyze {_rm_tk}", key=f"_db_grow_room_add_{_rm_tk}"):
+                        st.session_state["_pending_page"]    = "📈 Analysis"
+                        st.session_state["_analysis_ticker"] = _rm_tk
+                        st.rerun()
 
         # New correlation cluster (G-25) — a new pair ≥ CORR_HIGH_PAIRS_THRESHOLD
         # formed since the last acknowledged Structural Scan. Purely a
@@ -41722,7 +41791,7 @@ Once your trades are logged and reconciled (see *First run* above), your daily r
 
 The Home brief is split into **offense** (left) and **defense** (right).
 
-**Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape. An add to a holding gets the same entry check as a new buy: it's held — and listed under **"📰 Adds held — entry check"** with the reason and what clears it — when the holding's news averages −0.15 or worse, earnings are within 7 days, or its data is stale. A holding that already has a card today (a trim, an exit, a Monitoring watch) isn't suggested as an add, and a line names it. A single mild negative headline doesn't pause an add on its own: the add card says "📰 Also in Review: …" so you see it.
+**Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape. An add to a holding gets the same entry check as a new buy: it's held — and listed under **"📰 Adds held — entry check"** with the reason and what clears it — when the holding's news averages −0.15 or worse, earnings are within 7 days, or its data is stale. A holding that already has a card today (a trim, an exit, a Monitoring watch) isn't suggested as an add, and a line names it. An add is sized so the whole position stays at or under 15% of the book and under 25% of your net capital — what you already hold counts toward both; if there's no room left, the name is listed under **"🔒 Add Suppressed — Position Already at the Cap"**. A single mild negative headline doesn't pause an add on its own: the add card says "📰 Also in Review: …" so you see it.
 
 **About the suggested share count.** It comes from the same sizing rule the whole app uses: risk 1.5% of the book on the trade, with the stop set 2× ATR below price, then **cap the position at the 15% single-name ceiling**. When your account is leveraged with a fresh cash balance, a second, separate ceiling also applies — 25% of your net capital (equity after margin debit), not just 15% of gross book — since leverage can make a "small" position a much bigger bet against the money you actually own. If the app does not know your portfolio value yet in this session — for example you opened 📈 Analysis or 📋 Watchlist directly without visiting 🏠 Home — it will **propose no share count at all** rather than guess against an assumed account size, and will say so. The card will disclose either ceiling if it binds, and both together if both do. Three things follow. First, when a cap binds, the card says so and tells you what the uncapped risk-budget size would have been — it never quietly shrinks a number on you. Second, **a suggested size is a per-idea maximum, not a portfolio plan**: at 15% apiece a book only funds about six full positions, so the sizes on screen are not meant to be taken all at once. Third, the app will suggest **no size at all** — and say which of the two reasons applies — when a single share would already exceed the ceiling (that's an account-size limit; changing the stop won't fix it) or when the price has fallen to or below the name's ATR stop (no room between entry and stop to size against). It never leaves the size line blank without a reason.
 

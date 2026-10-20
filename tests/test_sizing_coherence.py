@@ -365,7 +365,11 @@ class TestStopMethodologyAgreement:
         )
         assert sz["port_pct"] <= SINGLE_NAME_CEILING
         _risk_leg    = int((pv * RISK_PCT_PER_TRADE) / (ATR_STOP_MULT * atr))
-        _ceiling_leg = int(pv * (SINGLE_NAME_CEILING / 100.0) / price)
+        # S-D (owner decision D1): the ceiling binds on the WHOLE position, so the
+        # holding's own market value comes off the room.
+        _existing = float(port_df.iloc[0]["Market Value"])
+        assert _existing > 0, "fixture must hold something, or this proves nothing"
+        _ceiling_leg = int((pv * (SINGLE_NAME_CEILING / 100.0) - _existing) / price)
         assert sz["shares"] == min(_risk_leg, _ceiling_leg)
 
     def test_new_pick_stop_uses_live_price_not_the_bundle_close(self):
@@ -649,9 +653,10 @@ class TestSizingProvenance:
 
 class TestNetCapitalCap:
 
-    def test_sizing_formula_version_is_4(self):
-        # 3 -> 4 with the daily new-position budget (daily_budget.BUDGET_SIZING_VERSION).
-        assert SIZING_FORMULA_VERSION == 4
+    def test_sizing_formula_version_is_5(self):
+        # 3 -> 4 with the daily new-position budget (daily_budget.BUDGET_SIZING_VERSION);
+        # 4 -> 5 with S-D (caps bind on the whole position after an add).
+        assert SIZING_FORMULA_VERSION == 5
 
     def test_net_capital_none_is_byte_identical_to_pre_f255_output(self):
         """_position_size_for_render(..., net_capital=None) (the default, and

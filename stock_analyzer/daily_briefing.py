@@ -136,8 +136,9 @@ def _ledger_composite(composites, ticker):
 #   4 = adds the daily new-position budget
 #       (daily_budget.BUDGET_SIZING_VERSION): a stored rec_shares now also
 #       depends on the day's other candidates and today's logged buys.
+#   5 = S-D: SINGLE_NAME_CEILING / NET_CAPITAL_POSITION_CAP_PCT bind on the whole position after an add (existing holding value counted); add_winner rec_shares change meaning.
 # Bump this whenever the formula changes; do NOT reuse a number.
-SIZING_FORMULA_VERSION = 4
+SIZING_FORMULA_VERSION = 5
 
 
 def _position_size_for_render(
@@ -147,6 +148,7 @@ def _position_size_for_render(
     entry_lo,
     entry_hi,
     net_capital: float | None = None,
+    existing_value: float = 0.0,
 ) -> dict:
     """Wrap position_sizing() into renderer-compatible keys.
 
@@ -171,6 +173,19 @@ def _position_size_for_render(
                                   hit this branch. An account-size constraint,
                                   just on net capital rather than gross book.
       - ``stop_infeasible``     — inputs are fine but price is at/below the stop.
+    S-D (2026-10-19) adds two more, only reachable when `existing_value` is
+    not 0 (an add to a held name; the caps bind on the WHOLE position):
+      - ``room_infeasible``     — the existing holding already leaves less than
+                                  one whole share of room under the ceiling
+                                  (``room_binding`` "ceiling") or STRICTLY below
+                                  the net-capital cap ("capital"). Carries the
+                                  existing / one-more-share percentages.
+      - ``holding_unknown``     — `existing_value` is not a finite number >= 0
+                                  (never coerced to 0 — that would size a held
+                                  name as a fresh one).
+    On a sized add, room_capped / room_binding / post_portfolio_pct /
+    post_capital_pct / existing_value are copied through. With
+    existing_value == 0 the output is byte-identical to before S-D.
     These markers carry NO ``shares`` key, so a renderer gating its size text
     on ``shares`` can never print "0 shares"; they exist so a card that already
     says BUY never shows a blank size with no reason.
@@ -189,7 +204,30 @@ def _position_size_for_render(
     _reason = sizing_unavailable_reason(
         portfolio_value, price, stop, max_position_pct=SINGLE_NAME_CEILING,
         net_capital=net_capital, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+        existing_value=existing_value,
     )
+    if _reason == "holding":
+        return {
+            "holding_unknown": True,
+            "sizing_version": SIZING_FORMULA_VERSION,
+        }
+    if _reason in ("room_ceiling", "room_capital"):
+        _ex = float(existing_value)
+        _cap_basis = _reason == "room_capital"
+        _den = net_capital if _cap_basis else portfolio_value
+        return {
+            "room_infeasible": True,
+            "room_binding": "capital" if _cap_basis else "ceiling",
+            "existing_value": round(_ex, 2),
+            "existing_gross_pct": round(_ex / portfolio_value * 100, 1),
+            "existing_capital_pct": (
+                round(_ex / net_capital * 100, 1) if net_capital and net_capital > 0 else None
+            ),
+            "one_more_pct": round((_ex + price) / _den * 100, 1),
+            "cap_pct": NET_CAPITAL_POSITION_CAP_PCT if _cap_basis else SINGLE_NAME_CEILING,
+            "portfolio_value": round(portfolio_value, 2),
+            "sizing_version": SIZING_FORMULA_VERSION,
+        }
     if _reason == "ceiling":
         # One share alone breaches the single-name cap, so no honest size
         # exists. Surface an explicit marker rather than an empty dict so the
@@ -241,6 +279,7 @@ def _position_size_for_render(
         portfolio_value, RISK_PCT_PER_TRADE, price, stop,
         max_position_pct=SINGLE_NAME_CEILING,
         net_capital=net_capital, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+        existing_value=existing_value,
     )
     if raw is None:
         # Unreachable today: position_sizing delegates the identical predicate
@@ -267,6 +306,15 @@ def _position_size_for_render(
     if net_capital is not None:
         out["capital_capped"] = raw.get("capital_capped", False)
         out["capital_pct"]    = raw.get("capital_pct")
+    if "room_capped" in raw:
+        # Only present when existing_value > 0 (S-D): leaves the fresh-pick
+        # output byte-identical.
+        for _k in ("existing_value", "post_portfolio_pct", "post_capital_pct",
+                   "room_capped", "room_binding"):
+            if _k in raw:
+                out[_k] = raw[_k]
+        # Carried so a later budget trim can recompute post_capital_pct.
+        out["net_capital"] = round(net_capital, 2) if net_capital is not None else None
     return out
 
 
@@ -1106,6 +1154,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # the CARD nor the ENTRY bucket can have anything to record.
             "card_blocked_adds":          [],
             "entry_held_adds":            [],
+            # G-31 (S-D): always a list, never omitted; a bear day has no adds.
+            "room_blocked_adds":          [],
             "sector_blocked_picks":       [],
             "sector_unknown_picks":       [],
             "macro_blocked_picks":        [],
@@ -2080,6 +2130,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     pair_blocked_adds: list[dict] = []  # adds suppressed — standing danger-tier correlated pair (G-26)
     card_blocked_adds: list[dict] = []  # adds paused by a Brief card / sale today (chunk 7a, no ledger row)
     entry_held_adds:   list[dict] = []  # adds held by the shared entry check (stale / news / earnings)
+    room_blocked_adds: list[dict] = []  # adds with no room left under the whole-position caps (G-31, S-D)
 
     def _review_news_note(_t: str):
         """Note for an add card whose ticker has a Review news WATCH (which no
@@ -2433,14 +2484,55 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 # higher, suggest MORE shares, and over-buy into strength).
                 _held_bundle = (held_data or {}).get(ticker, {})
                 _held_stop = _f(_held_bundle.get("stop"))
+                # S-D (owner decision D1): the caps bind on the WHOLE position,
+                # so the holding's own market value goes in. A missing/NaN value
+                # is passed as NaN (-> holding_unknown, no size), NEVER as 0.0,
+                # which would size a held name as a fresh one.
+                _existing_mv = _f(row.get("Market Value"), None)
                 sizing = (
                     _position_size_for_render(
                         portfolio_value, price, _held_stop,
                         _held_bundle.get("entry_lo"), _held_bundle.get("entry_hi"),
                         net_capital=net_capital,
+                        existing_value=(float("nan") if _existing_mv is None else _existing_mv),
                     )
                     if price > 0 and portfolio_value > 0 else {}
                 )
+                # Room check LAST (after ENTRY and sizing) so every earlier gate
+                # keeps its own bucket and ledger row.
+                if sizing.get("room_infeasible"):
+                    _rb = sizing.get("room_binding")
+                    if _rb == "capital":
+                        _now_p = sizing.get("existing_capital_pct")
+                        _basis_txt, _cap_c = "of your net capital", NET_CAPITAL_POSITION_CAP_PCT
+                    else:
+                        _now_p = sizing.get("existing_gross_pct")
+                        _basis_txt, _cap_c = "of your book", SINGLE_NAME_CEILING
+                    room_blocked_adds.append({
+                        "ticker":    ticker,
+                        "score":     scr,
+                        "pnl_pct":   _f(row.get("P&L (%)")),
+                        "gap":       gap,
+                        "sector":    sector,
+                        "weight":    _cur_wt,
+                        "reason":    (
+                            f"You already hold {_now_p:.1f}% {_basis_txt} "
+                            f"(cap {_cap_c:.0f}%) — one more share would make it "
+                            f"{sizing['one_more_pct']:.1f}%. "
+                            "No add while the whole position is at the cap."
+                        ),
+                        "room_binding":         _rb,
+                        "existing_gross_pct":   sizing.get("existing_gross_pct"),
+                        "existing_capital_pct": sizing.get("existing_capital_pct"),
+                        "gate_id":        "G-31",
+                        "counterfactual": True,
+                        "gate_value":     _now_p,
+                        "gate_threshold": _cap_c,
+                        "price":          _f(row.get("Price"), None),
+                        "composite_score": _f(row.get("Score"), None),
+                        "momentum_score":  None,
+                    })
+                    continue
                 # Honest P&L framing — the composite is entry-price-agnostic, so a
                 # Strong Buy add candidate can be up OR down vs the user's entry.
                 # State the real P&L with a single correct sign (the old copy hard-
@@ -2516,6 +2608,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         # and ENTRY (shared entry check) add pauses -- always present.
         "card_blocked_adds":          card_blocked_adds,
         "entry_held_adds":            entry_held_adds,
+        # G-31 (S-D) -- no room left under the whole-position caps.
+        "room_blocked_adds":          room_blocked_adds,
         # G-25 — see cluster_add_blocks docstring above. cluster_gate_checked
         # is True only when cluster_add_blocks was actually resolved this run
         # (not None) — lets the render layer distinguish "checked, nothing

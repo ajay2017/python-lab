@@ -482,6 +482,13 @@ def readout_footnotes(gate_id: str) -> "list[str]":
             "months of the first row, keep the check and record that its value "
             "was unmeasurable.",
         ]
+    if gate_id == "G-31":
+        return [
+            "Live since 2026-10-19 (S-D). Expected to bind often: at ~2.6× "
+            "leverage any holding above ~9.6% of the book is already ≥ 25% of "
+            "net capital, so a high call count here mostly reflects leverage, "
+            "not a strict gate.",
+        ]
     if gate_id == "G-23":
         return [
             "Market-wide restraint (ticker=‘__MARKET__’) — there is no single "

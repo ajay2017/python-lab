@@ -130,9 +130,11 @@ LEVERAGE_GIVEBACK_CONFIRM_DAYS = 2        # owner-accepted operational default. 
 # ── Concentration limits ─────────────────────────────────────────────────────
 SECTOR_CEILING    = 35.0         # hard sector cap (% of portfolio)
 SECTOR_ELEVATED   = 25.0         # soft warn above this
-SINGLE_NAME_CEILING = 15.0       # hard single-name cap — no add-to-winner above this
-NET_CAPITAL_POSITION_CAP_PCT = 25.0  # SEPARATE capital-basis cap for NEW-position
-# sizing only. Caps a single new/added position at 25% of net capital (equity
+SINGLE_NAME_CEILING = 15.0       # hard single-name cap — no add-to-winner above this. Binds on the WHOLE position after an add (existing holding value + new shares), owner decision D1 2026-10-19; the denominator stays the pre-trade gross book.
+NET_CAPITAL_POSITION_CAP_PCT = 25.0  # SEPARATE capital-basis cap for every suggested
+# size (a new position or an add). Caps the WHOLE position after the trade (existing
+# holding value + new shares, owner decision D1 2026-10-19; denominator stays the
+# pre-trade net capital) at 25% of net capital (equity
 # after margin debit) — additive to, and independent of, SINGLE_NAME_CEILING
 # (15% of gross book). At real leverage, "15% of book" can be ~45% of capital
 # (ALB/OXY, 2026-08-24). Never changes SINGLE_NAME_CEILING or any existing

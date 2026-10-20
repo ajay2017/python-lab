@@ -19,6 +19,7 @@ from stock_analyzer.constants import SINGLE_NAME_CEILING, NET_CAPITAL_POSITION_C
 from stock_analyzer import hold_reasons
 from stock_analyzer.entry_eligibility import email_footer_lines
 from stock_analyzer.risk import capital_equivalent_risk
+from stock_analyzer.sizing_path import room_note as _room_note
 from stock_analyzer.trade_economics import entry_tier
 
 _RESEND_ENDPOINT = "https://api.resend.com/emails"
@@ -170,8 +171,46 @@ def _cap_note_core(sz: dict) -> str:
             f'📐 Size also capped at {int(NET_CAPITAL_POSITION_CAP_PCT)}% of net capital (margin-aware) — '
             f'now ~{float(sz["capital_pct"]):.0f}% of your actual capital.</div>'
         )
+    _room = _room_note(sz)
+    if _room is not None:
+        # S-D (2026-10-19): sized, but trimmed by what is already held. One
+        # shared helper so the email and the app word it identically.
+        parts.append(
+            f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+            f'📐 {_html.escape(_room)}.</div>'
+        )
+    elif sz.get("room_capped") and "shares" in sz:
+        # Fallback when the sizing lacks the fields the helper needs.
+        if sz.get("post_capital_pct") is not None and sz.get("room_binding") == "capital":
+            parts.append(
+                f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+                f'📐 Size capped by what you already hold — now ~{float(sz["post_capital_pct"]):.0f}% '
+                f'of your net capital.</div>'
+            )
+        elif sz.get("post_portfolio_pct") is not None:
+            parts.append(
+                f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+                f'📐 Size capped by what you already hold — now ~{float(sz["post_portfolio_pct"]):.0f}% '
+                f'of the book.</div>'
+            )
     if parts:
         return "".join(parts)
+    if sz.get("room_infeasible"):
+        _on_cap = sz.get("room_binding") == "capital"
+        _now = sz.get("existing_capital_pct") if _on_cap else sz.get("existing_gross_pct")
+        _cap = NET_CAPITAL_POSITION_CAP_PCT if _on_cap else SINGLE_NAME_CEILING
+        _basis = "of your net capital" if _on_cap else "of the book"
+        _now_txt = f" ({float(_now):.0f}% {_basis} now)" if _now is not None else ""
+        return (
+            f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+            f'📐 No add size suggested — what you already hold{_now_txt} leaves no room '
+            f'under the {int(_cap)}% cap.</div>'
+        )
+    if sz.get("holding_unknown"):
+        return (
+            f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+            f'📐 No add size suggested — your current holding couldn&#39;t be read.</div>'
+        )
     if sz.get("ceiling_infeasible") and sz.get("one_share_pct") is not None:
         return (
             f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
@@ -1286,7 +1325,8 @@ def render_watchlist_entries_email(
             )
         elif (sz.get("ceiling_infeasible") or sz.get("capital_infeasible")
               or sz.get("stop_infeasible") or sz.get("budget_exhausted")
-              or sz.get("budget_unknown")):
+              or sz.get("budget_unknown") or sz.get("room_infeasible")
+              or sz.get("holding_unknown")):
             # budget_exhausted / budget_unknown carry NO `shares` (the daily
             # budget withheld the size) -- the note says why, never a blank.
             sizing_html = _sizing_cap_note(sz, budget, is_pick=False)

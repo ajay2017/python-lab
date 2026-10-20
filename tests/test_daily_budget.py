@@ -275,7 +275,7 @@ def test_apply_partial_exhausted_and_no_mutation():
     r = db.allocate(OK, logged, alloc, cands)
     part = db.apply_to_sizing(cands[1]["sizing"], r["per_ticker"]["BBB"])
     assert part["shares"] < 24 and part["budget_capped"] is True
-    assert part["budget_uncapped_shares"] == 24 and part["sizing_version"] == 4
+    assert part["budget_uncapped_shares"] == 24 and part["sizing_version"] == db.BUDGET_SIZING_VERSION
     assert part["total_cost"] == pytest.approx(part["shares"] * 100)
     assert part["port_pct"] < 10.0
     ex = db.apply_to_sizing(sz, {"status": "budget_exhausted"})
@@ -287,9 +287,9 @@ def test_apply_partial_exhausted_and_no_mutation():
 def test_apply_sized_and_passthrough_only_bump_version():
     sz = _sz(10, 100)
     out = db.apply_to_sizing(sz, {"status": "sized", "shares": 10, "dollars": 1000.0})
-    assert out["shares"] == 10 and out["sizing_version"] == 4 and "budget_capped" not in out
+    assert out["shares"] == 10 and out["sizing_version"] == db.BUDGET_SIZING_VERSION and "budget_capped" not in out
     mk = db.apply_to_sizing({"ceiling_infeasible": True, "sizing_version": 3}, {"status": "passthrough"})
-    assert mk == {"ceiling_infeasible": True, "sizing_version": 4}
+    assert mk == {"ceiling_infeasible": True, "sizing_version": db.BUDGET_SIZING_VERSION}
     assert db.apply_to_sizing({}, {"status": "passthrough"}) == {}
 
 

@@ -956,6 +956,8 @@ _GATE_FILES = {
     # Added 2026-10-17 (docs/plans/headline-relevance.md): whether a headline counts
     # toward a ticker at all; applied once in bundle_loader before every news consumer.
     "stock_analyzer/news_relevance.py",
+    # S-D 2026-10-19: the one sizing path
+    "stock_analyzer/sizing_path.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,

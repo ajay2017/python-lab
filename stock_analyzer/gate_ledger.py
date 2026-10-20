@@ -67,6 +67,9 @@ _BUCKET_LANES: dict[str, str] = {
     # one ticker is never in both lanes on a day.
     "entry_held_adds":           "add_winner",
     "news_skipped":              "new_pick",
+    # G-31 (S-D, 2026-10-19) -- the add leaves no room under the whole-position
+    # single-name / net-capital cap. Flows through grow_today like G-25/G-26.
+    "room_blocked_adds":         "add_winner",
 }
 
 _MAX_REASON_LEN = 300

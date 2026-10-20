@@ -49,8 +49,8 @@ def test_grow_shown_lists_both_new_keys():
     assert '"entry_held_adds"' in seg and '"card_blocked_adds"' in seg
 
 
-def test_schema_version_bumped_to_18():
-    assert re.search(r"_SYNTH_SCHEMA_VER = 18\b", _SRC)
+def test_schema_version_bumped_to_19():
+    assert re.search(r"_SYNTH_SCHEMA_VER = 19\b", _SRC)
 
 
 def test_no_direct_nav_page_assignment_added():

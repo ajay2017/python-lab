@@ -89,11 +89,13 @@ def make_port_df(rows):
     "Weight (%)" when "Gate Weight (%)" is absent, so it's omitted here.
 
     Per-row fields: ticker, weight (%), score, signal, price, sector, pnl_pct,
-    gap_to_stop (%), shares, mom_1m, stop.
+    gap_to_stop (%), shares, mom_1m, stop, market_value (S-D: defaults to
+    shares * price, the holding's value the add loop sizes against).
     """
     defaults = dict(
         weight=10.0, score=50.0, signal="Hold", price=100.0, sector="Tech",
         pnl_pct=0.0, gap_to_stop=None, shares=10, mom_1m=0.0, stop=90.0,
+        market_value=None,
     )
     filled = [{**defaults, **r} for r in rows]
     data = [
@@ -109,6 +111,8 @@ def make_port_df(rows):
             "Shares": r["shares"],
             "1M Momentum": r["mom_1m"],
             "Stop": r["stop"],
+            "Market Value": (r["market_value"] if r["market_value"] is not None
+                             else r["shares"] * r["price"]),
         }
         for r in filled
     ]
