@@ -92,9 +92,16 @@ class _FakeTradesBuilder:
     def select(self, *_a, **_k): return self
     def order(self, *_a, **_k): return self
 
+    def range(self, start, end):
+        self._rng = (start, end)
+        return self
+
     def execute(self):
         if self._raise_exc is not None:
             raise self._raise_exc
+        rng = getattr(self, "_rng", None)
+        if rng is not None:
+            return _FakeTradesExec(self._rows[rng[0]:rng[1] + 1])
         return _FakeTradesExec(self._rows)
 
 

@@ -106,3 +106,26 @@ optional stored weekly snapshots (columns on `weekly_debriefs`).
 11. Missing close [historical fetch, except split tickers → unknown].
 12. Turnover [(Σ bought + Σ sold) ÷ mean recorded net equity].
 13. Trades pagination [fix `load_trades_or_none` in this work (db.py, reviewed)].
+
+## C0 audit — owner-run 2026-10-20 (`docs/sql/period-report-c0-audit.sql`)
+- trades 322 (under the PostgREST page cap; pagination fix is preventive); 0 fractional fills.
+- account_daily_snapshots 28 rows since 09-10, 0 null cash / net_equity; daily_snapshots 28 sessions since 09-10 = every NYSE
+  session 09-10..10-19 (full coverage).
+- account_flows: only the 06-25 `baseline` row — no deposit/withdrawal ever recorded. **Owner 2026-10-20: no withdrawals since
+  06-25** (deposits not stated). An unrecorded deposit would land in "unexplained" (cash side).
+- snaptrade_income_events: fees stored negative (cash out); interest negative = charged, positive = earned. **Margin interest has no
+  rows after 2026-08** although the September statement shows MINT charged → capture gap (statement CSV not imported). **Owner imported the September statement 2026-10-20**; October stays a gap until its statement (~11-01, trust item 1). The report
+  flags months in the period with no interest row while levered (`interest_coverage_gap_months`), never "$0".
+- trigger_type: most trades are imports and imports default to MANUAL (Oct: 14 of 19 MANUAL rows imported) → the stated lens has a
+  large "not stated" bucket, confirming decision #1 (evidence lens leads). signal_seen missing mainly May-Jul buys; decision_context
+  on every trade since 2026-08 (first 2026-07-17); 20 rows late-logged (context captured on a different ET day than the trade).
+
+## C3 review follow-ups (Opus SHIP/0, 2026-10-20) — not built, unreachable below 1,000 rows
+- N1: de-duplicate by `id` after joining pages in `load_trades_or_none` / `load_snaptrade_income_events_or_none` (a trade logged
+  between page reads shifts newest-first offsets → the last row of page 1 repeats on page 2 → a replay double-count). The
+  recommendations loader has the same shape.
+- N2: every paginated loader stops on a short page; if the server's max-rows were ever set below 1000 a full page would read as
+  short and truncate silently. Sturdier: stop only on an empty page (one extra call).
+- N3: `load_snaptrade_income_events_or_none` docstring says None on "read-only/no creds" — `has_db()` doesn't check read-only;
+  say "no creds".
+- N5: the old `load_snaptrade_income_events` stays unpaginated (unchanged on purpose).

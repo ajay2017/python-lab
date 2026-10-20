@@ -501,6 +501,7 @@ def test_a_shim_failure_falls_back_to_the_raw_frame_not_the_offline_sentinel(mon
     class _Q:
         def select(self, *a, **k): return self
         def order(self, *a, **k):  return self
+        def range(self, *a, **k):  return self
         def execute(self):         return _Resp()
 
     class _Client:

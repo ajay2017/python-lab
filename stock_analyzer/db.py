@@ -1363,6 +1363,10 @@ def load_watchlist_or_none() -> "list[str] | None":
         return None
 
 
+# PostgREST's server-side row cap -- see _RECOMMENDATIONS_PAGE_SIZE's docstring.
+_TRADES_PAGE_SIZE = 1000
+
+
 def load_trades_or_none() -> "pd.DataFrame | None":
     """Trades, or `None` (the offline sentinel) when the table could not be read.
 
@@ -1386,12 +1390,27 @@ def load_trades_or_none() -> "pd.DataFrame | None":
     if not has_db():
         return None
     try:
-        rows = (
-            _client().table("trades")
-            .select("*")
-            .order("traded_at", desc=True)
-            .execute().data
-        )
+        # Paginated via .range() (PostgREST caps an unpaginated select, which
+        # would silently drop the OLDEST trades -- every replay depends on
+        # them). A failure on ANY page raises into the except below -> None,
+        # never a partial frame. `id` is the unique tie-breaker so page
+        # boundaries are stable across the per-page re-executions.
+        rows: list = []
+        _start = 0
+        while True:
+            _page = (
+                _client().table("trades")
+                .select("*")
+                .order("traded_at", desc=True).order("id", desc=True)
+                .range(_start, _start + _TRADES_PAGE_SIZE - 1)
+                .execute().data
+            )
+            if not _page:
+                break
+            rows.extend(_page)
+            if len(_page) < _TRADES_PAGE_SIZE:
+                break
+            _start += _TRADES_PAGE_SIZE
         _ah.record("supabase", "success")
         if not rows:
             # Read succeeded, journal is genuinely empty — NOT unreadable.
@@ -6085,6 +6104,41 @@ def load_snaptrade_income_events(since_date: str | None = None) -> list[dict]:
         return rows or []
     except Exception:
         return []
+
+
+_INCOME_EVENTS_PAGE_SIZE = 1000
+
+
+def load_snaptrade_income_events_or_none(since_date: str | None = None) -> "list[dict] | None":
+    """Same rows/filters as load_snaptrade_income_events(), but `None` (the
+    offline sentinel) on ANY failure -- no DB, read-only/no creds, or a raised
+    exception on any page -- and `[]` only when the read succeeded and found
+    nothing. For consumers where "couldn't read" must never read as "no
+    income events". Paginated via `.range()`; ordered by (event_date, id) so
+    page boundaries are stable. Never raises."""
+    if not has_db():
+        return None
+    try:
+        rows: list = []
+        start = 0
+        while True:
+            q = _client().table("snaptrade_income_events").select("*")
+            if since_date:
+                q = q.gte("event_date", since_date)
+            page = (
+                q.order("event_date", desc=False).order("id", desc=False)
+                .range(start, start + _INCOME_EVENTS_PAGE_SIZE - 1)
+                .execute().data
+            )
+            if not page:
+                break
+            rows.extend(page)
+            if len(page) < _INCOME_EVENTS_PAGE_SIZE:
+                break
+            start += _INCOME_EVENTS_PAGE_SIZE
+        return rows
+    except Exception:
+        return None
 
 
 def save_snaptrade_income_events(rows: list[dict]) -> int:

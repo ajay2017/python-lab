@@ -68,6 +68,7 @@ def test_trades_or_none_distinguishes_empty_from_unreadable(monkeypatch):
         def table(self, *_a): return self
         def select(self, *_a): return self
         def order(self, *_a, **_k): return self
+        def range(self, *_a, **_k): return self
         def execute(self): return type("R", (), {"data": []})()
 
     monkeypatch.setattr(db, "_client", lambda: _Empty())
