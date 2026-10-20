@@ -910,6 +910,22 @@ def pre_coverage_reason_text(recon) -> str:
     }.get(rec.get("pre_coverage_reason"), "Account records are not available for this period.")
 
 
+def book_side_extra(recon) -> str:
+    """Suffix for the "Book side" row of What's in Unexplained.  R_book equals
+    the book-gap change only in the clean case; the P&L of an unpriced or
+    journal-inconsistent position is left out of the waterfall and lands in
+    R_book (module docstring), so without this note a non-zero book side next
+    to two $0 gaps reads as a contradiction.  "" when no position was left out."""
+    rec = _dict(recon)
+    names = {r[0] for r in _list(rec.get("unpriced")) + _list(rec.get("journal_inconsistent"))
+             if isinstance(r, (tuple, list)) and r}
+    if not names:
+        return ""
+    n = len(names)
+    return (f"; includes the move on {n} position{'' if n == 1 else 's'} left out above "
+            "because it couldn't be priced or replayed")
+
+
 def split_moves(recon) -> "dict | None":
     """Borrowed / own split of the moves on positions held at the PRIOR close
     (held-through + last-day-sold legs: the engine splits exactly these two).

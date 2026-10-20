@@ -21704,8 +21704,8 @@ elif page == "🥧 Portfolio Overview":
                 st.markdown("#### 🔵 Tax Loss Harvesting Opportunities")
                 for _hr in _harvest_rows:
                     with st.expander(
-                        f"🔵 **{_hr['ticker']}** — harvest ${_hr['harvestable']:,.0f} loss  "
-                        f"| saves ~${_hr['harvestable'] * _stcg_r:,.0f} in taxes on other gains",
+                        f"🔵 **{_hr['ticker']}** — harvest \\${_hr['harvestable']:,.0f} loss  "
+                        f"| saves ~\\${_hr['harvestable'] * _stcg_r:,.0f} in taxes on other gains",
                         expanded=True,
                     ):
                         _hc = st.columns(3)
@@ -30795,7 +30795,9 @@ elif page == "📒 Trade Journal":
                 _avg = float(_cb_match.iloc[0]["Avg Cost ($)"])
                 _cost_basis_hint = _avg
                 if _live_action == "SELL":
-                    _cost_hint_label = f"Cost Basis / share ($)  ← auto-filled ${_avg:.2f}"
+                    # \$-escaped: a widget label is markdown, and two bare "$"
+                    # pair up as LaTeX (both signs vanish, text in math font).
+                    _cost_hint_label = f"Cost Basis / share (\\$)  ← auto-filled \\${_avg:.2f}"
                     _cb_info = f"ℹ️ Avg cost from holdings: **${_avg:.2f}** — pre-filled below"
             elif _live_action == "BUY":
                 _cb_info = "🆕 New position — cost basis will be set to your buy price"
@@ -40407,12 +40409,14 @@ elif page == "💰 Account":
                                     )
                                 _pr_res = _pr_recon["residual"]
                                 if _pr_res is not None:
+                                    _pr_book_side_extra = _pa_mod.book_side_extra(_pr_recon)
                                     with st.expander("What's in Unexplained"):
                                         st.dataframe(
                                             pd.DataFrame([
                                                 {"Part": "Cash side (cash change not explained by trades, deposits and income)",
                                                  "$": _m_usd(_pr_res["cash"])},
-                                                {"Part": "Book side (recorded book vs trade-journal replay)",
+                                                {"Part": "Book side (recorded book vs trade-journal replay"
+                                                         + _pr_book_side_extra + ")",
                                                  "$": _m_usd(_pr_res["book"])},
                                                 {"Part": "Book gap at start (recorded minus replayed)",
                                                  "$": _m_usd(_pr_recon["book_gap_start"])},

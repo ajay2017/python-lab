@@ -34,3 +34,21 @@ def test_period_report_tables_are_sized_to_their_rows():
                 assert any(k.arg == "height" for k in n.keywords), seg[:80]
                 hits += 1
     assert hits == 2
+
+
+def test_book_side_extra_names_left_out_positions():
+    # by design R_book also carries the move on an unpriced / journal-flagged
+    # position, so the row must say so (2026-10-20: -$113 beside two $0 gaps)
+    assert pa.book_side_extra({"unpriced": [], "journal_inconsistent": []}) == ""
+    assert pa.book_side_extra({}) == ""
+    assert pa.book_side_extra(None) == ""
+    one = pa.book_side_extra({"unpriced": [("XYZ", "2026-10-14"), ("XYZ", "2026-10-15")]})
+    assert "1 position left out above" in one       # one name over two days = 1
+    two = pa.book_side_extra({"unpriced": [("XYZ", "d")], "journal_inconsistent": [("ABC", "d")]})
+    assert "2 positions left out above" in two
+
+
+def test_book_side_row_uses_the_extra():
+    assert '_pa_mod.book_side_extra(_pr_recon)' in _SRC
+    assert '"Book side (recorded book vs trade-journal replay"' in _SRC
+    assert '+ _pr_book_side_extra + ")"' in _SRC
