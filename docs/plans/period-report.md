@@ -129,3 +129,25 @@ optional stored weekly snapshots (columns on `weekly_debriefs`).
 - N3: `load_snaptrade_income_events_or_none` docstring says None on "read-only/no creds" — `has_db()` doesn't check read-only;
   say "no creds".
 - N5: the old `load_snaptrade_income_events` stays unpaginated (unchanged on purpose).
+
+## C5b — complete the "who made the call" matcher (owner go-ahead 2026-10-20)
+Owner asked for the option that needs no user input (a missed dropdown can't change the answer). Decision: "who made the call" is
+DERIVED from the app's stored calls matched by ticker + date window; `trigger_type` stays a label (2nd view), `followed_signal` is
+never read (E3: 11 of 184 contradict). Today `self_track_record.classify_buys` matches only new_pick / overflow_pick / buy_candidate
+(≥ COMPOSITE_BUY) — so a Grow Today add-to-winner buy or a Watchlist "ready to enter" buy counts as "your own", under-crediting the
+app (also in 🎯 My Edge). Design check (lead, verified in code): stored calls = recommendations `add_winner`, `enter_now` (exclude
+`already_held` rows — the Watchlist showed "Already in portfolio", not "Enter now"); rec_events `diversify_add`, `rebal_trim`,
+`beta_trim`; exit_signals EXIT / TRIM / RISK_OFF (WATCH never counts). **Stop breaches are NOT stored** (exit_signals types are
+TRIM/EXIT/RISK_OFF/WATCH; manual_stops holds current levels only) → a sell with no matching call whose `trigger_type` is STOP_HIT reads
+"unknown — stop sales aren't logged", never "your own". Windows unchanged: buys `SELF_TRACK_MATCH_LOOKBACK_DAYS` (3), sells
+`SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS` (5). Each match records which call type matched; the page lists each call type with the date it is
+matched from (derived from the data's earliest row per type) so older trades of a newer call type aren't silently mis-read.
+My Edge numbers change when this ships (some "own" buys become app-aligned) → a dated note on My Edge and the report.
+
+## C4 review notes (2026-10-20)
+- **Mockup correction:** the mockup indented "of which on borrowed / own money" under "held through" alone; the engine splits
+  held_through + sold_leg. The render uses a subtotal row "Moves on positions held at the prior close" with borrowed / own / not-split
+  children instead (Opus C4 review blocking #1).
+- **Deferred:** decision #11's historical-close fallback (`historical_closes=None`; gaps are listed as unpriced and land in Unexplained —
+  honest; today's daily_snapshots coverage is complete since 09-10).
+- Behaviour changes to state when shipping: default period moves from This quarter to Last week; a Custom end in the future is rejected.

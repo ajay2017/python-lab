@@ -713,7 +713,7 @@ def trust_strip(recon, lev, *, trades_truncated=None, flows_last_date=None,
     elif trades_truncated:
         chips.append(_chip("trades", "Trade journal may be truncated", "warn"))
     else:
-        chips.append(_chip("trades", "Trade journal complete", "ok"))
+        chips.append(_chip("trades", "Trade journal read in full", "ok"))
     if lev is None or lev.get("status") == "offline":
         chips.append(_chip("leverage_records", "Leverage records: unknown", "unknown"))
     elif lev.get("n_trading_days") is None:
@@ -869,3 +869,136 @@ def format_period_markdown(report: dict) -> str:
     if chips:
         lines += ["", "## Data trust"] + [f"- {c['label']} ({c['state']})" for c in chips]
     return "\n".join(lines) + "\n"
+
+
+# --- render helpers (C4): pure formatting, no I/O ---------------------------
+
+def usd_plain(x, *, plus: bool = False) -> str:
+    """Dollars for st.metric / dataframe cells (NOT markdown): sign BEFORE the
+    `$` ("-$1,314"), "unknown" for None, "$0" inside half a cent.  `plus`
+    prefixes gains with "+"."""
+    if x is None:
+        return "unknown"
+    if abs(x) < _CENT_TOL:
+        return "$0"
+    sign = "-" if x < 0 else ("+" if plus else "")
+    return f"{sign}${abs(x):,.0f}"
+
+
+def interest_posted(recon) -> "float | None":
+    """Margin interest posted in the window as a signed P&L figure (charged is
+    negative, earned positive); None when income could not be read."""
+    inc = _dict(recon).get("income")
+    if inc is None:
+        return None
+    return -inc["interest_charged"] + inc["interest_earned"]
+
+
+def pre_coverage_reason_text(recon) -> str:
+    """Why the account-level reconciliation is unavailable (status pre_coverage)."""
+    rec = _dict(recon)
+    return {
+        "no_start_record": "There is no valid account record for the session before this period, so the "
+                           "change in your account can't be measured.",
+        "no_end_record_yet": f"There is no valid account record after {rec.get('d0')} in this period (the "
+                             "end-of-day record may not have landed yet).",
+        "no_valid_end_record": f"Account records exist after {rec.get('d0')} but none passed the after-close "
+                               "cash check.",
+        "no_sessions": "There are no trading sessions in this range.",
+    }.get(rec.get("pre_coverage_reason"), "Account records are not available for this period.")
+
+
+def split_moves(recon) -> "dict | None":
+    """Borrowed / own split of the moves on positions held at the PRIOR close
+    (held-through + last-day-sold legs: the engine splits exactly these two).
+    {held_sold, borrowed, own, unsplit}; borrowed/own are None ("unknown", never
+    $0) when no day in the window had a valid account row to split on
+    (days_split == 0); then the whole amount is `unsplit`.  None without pos_pnl."""
+    rec = _dict(recon)
+    pp = rec.get("pos_pnl")
+    if not pp:
+        return None
+    hs = pp["held_through"] + pp["sold_leg"]
+    ls = _dict(rec.get("leverage_split"))
+    if not ls.get("days_split"):
+        return {"held_sold": hs, "borrowed": None, "own": None, "unsplit": hs}
+    b, o = ls["borrowed"], ls["own"]
+    return {"held_sold": hs, "borrowed": b, "own": o, "unsplit": hs - b - o}
+
+
+def waterfall_rows(recon) -> "list[dict]":
+    """Rows {label, value (float|None), indent, total, breakdown, note} for the
+    S1 table.  A value that is None means "unknown" (never $0).  `breakdown`
+    rows (the held-at-prior-close subtotal) restate lines already above and are
+    NOT added again into the net; their indented children sum to them.
+    pre_coverage / offline show only the holdings price-move lines (no flows,
+    no residual, no total)."""
+    rec = _dict(recon)
+    pp = rec.get("pos_pnl")
+    ls = _dict(rec.get("leverage_split"))
+    rows: "list[dict]" = []
+
+    def add(label, value, indent=False, total=False, note="", breakdown=False):
+        rows.append({"label": label, "value": value, "indent": indent, "total": total,
+                     "breakdown": breakdown, "note": note})
+
+    if pp:
+        add("Price moves on positions held through", pp["held_through"])
+        add("Last-day moves on positions you sold", pp["sold_leg"])
+        sm = split_moves(rec)
+        add("Moves on positions held at the prior close (the two lines above)", sm["held_sold"],
+            breakdown=True)
+        avg = ls.get("avg_leverage")
+        add("on borrowed money" + (f" (avg {avg:.1f}x leverage)" if avg is not None and sm["borrowed"] is not None else ""),
+            sm["borrowed"], indent=True)
+        add("on your own money", sm["own"], indent=True)
+        if sm["unsplit"] is not None and abs(sm["unsplit"]) >= _CENT_TOL:
+            add("not split (no valid account record that day)", sm["unsplit"], indent=True)
+        add("First-day moves on positions you bought", pp["bought_leg"])
+        add("Same-day round trips", pp["round_trip"])
+    if rec.get("status") in ("ok", "partial"):
+        fl, inc, res = rec.get("flows"), rec.get("income"), rec.get("residual")
+        add("Deposits / withdrawals", fl["net"] if fl is not None else None,
+            note="none recorded" if (fl is not None and fl["n"] == 0) else "")
+        add("Dividends", inc["dividends"] if inc is not None else None)
+        gap = inc["interest_coverage_gap_months"] if inc is not None else []
+        add("Margin interest posted", interest_posted(rec),
+            note=("not recorded for " + ", ".join(gap)) if gap else "posts monthly")
+        add("Fees", inc["fees"] if inc is not None else None)
+        add("Unexplained", res["total"] if res is not None else None)
+        add("Net equity change", rec.get("equity_change"), total=True)
+    return rows
+
+
+def leverage_tiles(lev) -> dict:
+    """Strings for the three S3 tiles.  `cushion` is returned as a float so the
+    caller can mask it.  A call distance >= 0 means ALREADY in a margin call."""
+    lev = _dict(lev)
+    out = {"range_value": "unknown", "range_delta": None, "call_value": "unknown", "call_when": None,
+           "cushion": None, "days_value": "unknown", "days_delta": None}
+    if lev.get("status") != "ok":
+        return out
+    out["range_value"] = f"{lev['min']['leverage']:.2f}x - {lev['max']['leverage']:.2f}x"
+    out["range_delta"] = (f"start {lev['start']['leverage']:.2f}x ({lev['start']['date']}) -> "
+                          f"end {lev['end']['leverage']:.2f}x ({lev['end']['date']})")
+    cc = lev.get("closest_call")
+    if cc is not None:
+        d = cc["call_distance_pct"]
+        if d >= 0:
+            out["call_value"] = "In a margin call"
+            out["call_when"] = f"on {cc['date']}"
+        else:
+            out["call_value"] = f"{d:.1f}%"
+            out["call_when"] = f"a {abs(d):.1f}% drop away on {cc['date']}"
+        out["cushion"] = cc.get("cushion")
+    out["days_value"] = f"{lev['days_above_reference']} of {lev['n_days_recorded']}"
+    out["days_delta"] = "recorded days"
+    return out
+
+
+def mask_usd(text: str, mask: str = "••••••") -> str:
+    """Replace every backslash-escaped dollar amount in a chip/caption label
+    (a minus, a backslash, a dollar sign, digits) with `mask` -- privacy mode
+    must show no dollar figure."""
+    import re
+    return re.sub(r"-?\\\$[\d,]+(?:\.\d+)?", mask, str(text))

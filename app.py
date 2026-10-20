@@ -242,6 +242,7 @@ from stock_analyzer.tax_advisor import (
 )
 from stock_analyzer import tax_report as _tax_report
 from stock_analyzer import performance_review as _perf_review_mod
+from stock_analyzer import period_attribution as _pa_mod
 from stock_analyzer import exit_advisor
 from stock_analyzer.exit_advisor import compute_relative_strength
 from stock_analyzer.thesis_red_team import (
@@ -1082,6 +1083,16 @@ def _tip(key: str) -> str:
 def _m(val_str: str) -> str:
     """Return masked placeholder when privacy mode is on, otherwise the value as-is."""
     return "••••••" if st.session_state.get("_privacy", True) else val_str
+
+
+def _m_usd(v, *, plus: bool = False, md: bool = False) -> str:
+    """A period-report dollar figure for display. None stays the readable word
+    "unknown" even in privacy mode (it is not a figure); every real value goes
+    through `_m`. `md=True` backslash-escapes `$` for a markdown string."""
+    txt = _pa_mod.usd_plain(v, plus=plus)
+    if v is None:
+        return txt
+    return _m(txt.replace("$", chr(92) + "$") if md else txt)
 
 
 # _tickers_traded_since relocated to stock_analyzer/broker_sync.py 2026-08-24
@@ -40002,47 +40013,44 @@ elif page == "💰 Account":
                 # read "pre_coverage" (found in Opus review, 2026-10-01).
                 _perf_first_measurable = _perf_review_mod.first_measurable_period_start(_perf_acct_snap_full_df)
 
-                _perf_preset_options = ["This Quarter", "Last Quarter", "This Tax Year", "Custom"]
-                if _perf_first_measurable is not None and _perf_first_measurable <= _perf_today:
-                    # Appended, not prepended -- "This Quarter" stays the
-                    # default radio selection, so this addition changes
-                    # nothing about the page's existing default behavior.
-                    _perf_preset_options = _perf_preset_options + ["Since Tracking Began"]
+                # One period drives BOTH the period-report sections (S1/S3) and the
+                # existing build_review sections below (docs/plans/period-report.md,
+                # owner decision #8: "Last week" = last completed Mon-Sun week).
+                _perf_preset_ids = {
+                    "Last week": "last_week", "Last month": "last_month",
+                    "This quarter": "this_quarter", "Last quarter": "last_quarter",
+                    "This tax year": "this_tax_year", "Since tracking": "since_tracking",
+                    "Custom": "custom",
+                }
+                _perf_preset_options = [
+                    _lbl for _lbl in _perf_preset_ids
+                    if _lbl != "Since tracking"
+                    or (_perf_first_measurable is not None and _perf_first_measurable <= _perf_today)
+                ]
                 _perf_preset = st.radio(
                     "Period", _perf_preset_options,
-                    horizontal=True, key="_perf_period_preset",
+                    horizontal=True, key="_perf_period_preset_v2",
                 )
-                _perf_q = (_perf_today.month - 1) // 3          # 0-3
-                _perf_q_start_month = _perf_q * 3 + 1
-                if _perf_preset == "Since Tracking Began":
-                    _perf_start = _perf_first_measurable
-                    _perf_end = _perf_today
-                elif _perf_preset == "This Quarter":
-                    _perf_start = date(_perf_today.year, _perf_q_start_month, 1)
-                    _perf_end = _perf_today
-                elif _perf_preset == "Last Quarter":
-                    if _perf_q == 0:
-                        _perf_start = date(_perf_today.year - 1, 10, 1)
-                        _perf_end = date(_perf_today.year - 1, 12, 31)
-                    else:
-                        _perf_start = date(_perf_today.year, (_perf_q - 1) * 3 + 1, 1)
-                        _perf_end = date(_perf_today.year, _perf_q_start_month, 1) - timedelta(days=1)
-                elif _perf_preset == "This Tax Year":
-                    _perf_start = date(_perf_today.year, 1, 1)
-                    _perf_end = _perf_today
-                else:
+                _perf_custom_start = _perf_custom_end = None
+                if _perf_preset == "Custom":
                     _perf_c1, _perf_c2 = st.columns(2)
-                    _perf_start = _perf_c1.date_input(
+                    _perf_custom_start = _perf_c1.date_input(
                         "Start date", value=_perf_today - timedelta(days=90),
                         key="_perf_start_date",
                     )
-                    _perf_end = _perf_c2.date_input(
+                    _perf_custom_end = _perf_c2.date_input(
                         "End date", value=_perf_today, key="_perf_end_date",
                     )
+                _perf_resolved = _pa_mod.resolve_period(
+                    _perf_preset_ids[_perf_preset], _perf_today,
+                    custom_start=_perf_custom_start, custom_end=_perf_custom_end,
+                    tracking_start=_perf_first_measurable,
+                )
 
-                if _perf_start > _perf_end:
-                    st.error("⛔ Start date must be on or before the end date.")
+                if _perf_resolved is None:
+                    st.error("⛔ Start date must be on or before the end date, and the end date can't be in the future.")
                 else:
+                    _perf_start, _perf_end = _perf_resolved
                     # ── Load dependencies — exact patterns already used by
                     # 🛑 The Road Not Taken (SPY/gate rows) and
                     # 🎖️ Recommendation Outcomes (risk snapshots/trades/
@@ -40191,65 +40199,129 @@ elif page == "💰 Account":
                     if _perf_review is None:
                         st.error("⛔ Invalid date range.")
                     else:
-                        st.caption(f"Period: **{_perf_start}** to **{_perf_end}**")
+                        # ── Period report (C4): S1 period result + S3 leverage & margin
+                        # + data-trust strip. The reconciliation is the pure engine
+                        # stock_analyzer.period_attribution; every loader is the
+                        # None-on-failure variant so "couldn't read" never reads as
+                        # "nothing happened". A crash here never takes the page down.
+                        _pr_report = None
+                        _pr_err = None
+                        try:
+                            _pr_daily_df = db.load_daily_snapshots_or_none(
+                                _perf_start - timedelta(days=14), _perf_end)
+                            _pr_income = db.load_snaptrade_income_events_or_none()
+                            _pr_recon = _pa_mod.reconcile_period(
+                                period_start=_perf_start, period_end=_perf_end,
+                                trades_df=_perf_trades_df,
+                                account_snapshots_df=_perf_acct_snap_full_df,
+                                daily_snapshots_df=_pr_daily_df,
+                                flows=_perf_flows_rows, income_events=_pr_income,
+                                historical_closes=None,
+                            )
+                            _pr_lev = _pa_mod.leverage_section(
+                                _perf_acct_snap_full_df, _perf_start, _perf_end,
+                                LEVERAGE_REFERENCE_TARGET,
+                            )
+                            _pr_flow_dates = (
+                                [str(_pf.get("flow_date"))[:10] for _pf in _perf_flows_rows
+                                 if _pf.get("flow_date")]
+                                if _perf_flows_rows is not None else []
+                            )
+                            _pr_inc = _pr_recon["income"]
+                            # Today's System Trust chip (same memoised read Home uses);
+                            # None when unreadable / read-only -> the chip is left out,
+                            # never shown as a grey "unknown".
+                            _pr_health = None
+                            if not db.is_readonly():
+                                try:
+                                    from stock_analyzer import system_health as _sysh_pr
+                                    _pr_health = {"ok": "ok", "warn": "degraded", "down": "failing"}.get(
+                                        _sysh_pr.get_health().get("chip_severity"))
+                                except Exception:
+                                    _pr_health = None
+                            _pr_chips = _pa_mod.trust_strip(
+                                _pr_recon, _pr_lev,
+                                # The trades read is paginated, so a successful read is complete.
+                                trades_truncated=(False if _perf_trades_df is not None else None),
+                                flows_last_date=(max(_pr_flow_dates) if _pr_flow_dates else None),
+                                interest_last_posted=(
+                                    _pr_inc["last_interest_charged_month"] if _pr_inc is not None else None),
+                                health_now=_pr_health,
+                            )
+                            if _pr_health is None:
+                                _pr_chips = [_pc for _pc in _pr_chips if _pc["key"] != "health_now"]
+                            _pr_report = {
+                                "period_start": _perf_start, "period_end": _perf_end,
+                                "recon": _pr_recon, "leverage": _pr_lev, "trust": _pr_chips,
+                            }
+                        except Exception as _pr_exc:
+                            _pr_err = type(_pr_exc).__name__
 
-                        # ── Account Return vs SPY (2026-10-01) ───────────
-                        # The real headline: a first-vs-last account_daily_
-                        # snapshots lookup + account.money_weighted_return
-                        # (same formula 💰 Account / 🎯 My Edge already use)
-                        # — NEVER the capital_vs_margin backward-reconstruction
-                        # engine (ruled out for this feature). Built after a
-                        # live-data endpoint-integrity audit PASSED: chaining a
-                        # real Robinhood statement forward through 10 real
-                        # trading days landed on the recorded cash balance to
-                        # the exact penny, and a full month's activity matched
-                        # the recorded day-over-day cash changes to the cent on
-                        # 11 of 14 days (memory
-                        # project_performance_review_return_tile_redesign).
-                        st.markdown("#### 💰 Account Return vs SPY")
-                        _ar = _perf_review["account_return"]
-                        if _ar["status"] == "offline":
-                            st.warning(
-                                "⚪ Could not compute — account history or cash-flow "
-                                "history isn't available right now."
-                            )
-                        elif _ar["status"] == "ok":
-                            _ar_c1, _ar_c2, _ar_c3 = st.columns(3)
-                            _ar_c1.metric(
-                                f"Your account, {_ar['d0']} → {_ar['d1']}",
-                                f"{_ar['return_pct']:+.2f}%",
-                            )
-                            _ar_c2.metric(
-                                "SPY, same dates",
-                                f"{_ar['spy_return_pct']:+.2f}%"
-                                if _ar.get("spy_return_pct") is not None else "—",
-                            )
-                            _ar_c3.metric(
-                                "Net gain",
-                                _m(f"${_ar['gain']:,.2f}"),
-                                help=f"After {_ar['n_flows']} deposit/withdrawal(s) found in "
-                                     "your cash-flow ledger this period.",
-                            )
-                            if _ar.get("max_leverage") is not None and _ar["max_leverage"] > 1:
-                                st.caption(
-                                    f"⚠️ At up to {_ar['max_leverage']:.1f}x leverage this period, "
-                                    "your return moves roughly that many times the book's own "
-                                    "move — SPY above is unlevered."
-                                )
-                            if _ar.get("spy_d1_price_pending"):
-                                st.caption(
-                                    f"⏳ SPY's close for {_ar['d1']} isn't posted yet — SPY "
-                                    "comparison withheld until after close."
-                                )
-                            st.caption(f"ℹ️ {_ar['caption']}")
+                        if _pr_report is None:
+                            st.warning(f"⚪ The period report couldn't be built ({_pr_err}).")
+                            st.caption(f"Period: {_perf_start} to {_perf_end}")
                         else:
-                            st.info(
-                                "⚪ Your daily account history doesn't cover the start of this "
-                                "period, so an account-level return can't be shown for the "
-                                "full period."
+                            _pr_dot = {"ok": "🟢", "warn": "🟡", "unknown": "⚪"}
+                            _pr_d0, _pr_d1 = _pr_recon["d0"], _pr_recon["d1"]
+                            st.caption(
+                                f"Period {_perf_start} → {_perf_end}"
+                                + (f" · account change measured {_pr_d0} close → {_pr_d1} close"
+                                   if _pr_d0 is not None and _pr_d1 is not None else "")
                             )
-                            _ar_sec = _ar.get("secondary")
-                            if _ar_sec is not None:
+                            # Chip labels carry markdown-escaped dollars, so this is
+                            # markdown (not raw HTML); privacy mode masks them.
+                            _pr_strip = " · ".join(
+                                f"{_pr_dot[_pc['state']]} "
+                                + (_pa_mod.mask_usd(_pc["label"]) if st.session_state.get("_privacy", True)
+                                   else _pc["label"])
+                                for _pc in _pr_chips
+                            )
+                            st.markdown(_pr_strip)
+                            st.caption(
+                                "Amber = check this, grey = can't tell from stored data. Nothing here "
+                                "says \"no outage during the period\" — feed and cron health aren't "
+                                "stored per day; the System Trust chip, when shown, is today's state."
+                            )
+
+                            # ── 1 · Period result ───────────────────────────
+                            st.markdown("#### 1 · Period result")
+                            _ar = _perf_review["account_return"]  # same dict the expander's block reads
+                            _pr_ok = _pr_recon["status"] in ("ok", "partial")
+                            _pr_t1, _pr_t2, _pr_t3 = st.columns(3)
+                            _pr_pct = _pr_recon["equity_pct"]
+                            _pr_t1.metric(
+                                "Net equity change",
+                                _m_usd(_pr_recon["equity_change"]) if _pr_ok else "unknown",
+                                delta=(f"{_pr_pct:+.1f}% of {_m_usd(_pr_recon['equity_start'])} "
+                                       "at the start" if _pr_ok and _pr_pct is not None else None),
+                            )
+                            _pr_t2.metric(
+                                "Your account %",
+                                f"{_ar['return_pct']:+.2f}%" if _ar["status"] == "ok" else "—",
+                                help="Your account's return from recorded account values, adjusted for "
+                                     "any deposits/withdrawals in the period. The method note and the "
+                                     "month-by-month breakdown are under \"More from this period\".",
+                            )
+                            _pr_t3.metric(
+                                "SPY %, same dates",
+                                f"{_ar['spy_return_pct']:+.2f}%"
+                                if _ar["status"] == "ok" and _ar.get("spy_return_pct") is not None else "—",
+                            )
+                            # Caveats that used to sit under the old account-return tiles.
+                            if _ar["status"] == "ok":
+                                if _ar.get("max_leverage") is not None and _ar["max_leverage"] > 1:
+                                    st.caption(
+                                        f"⚠️ At up to {_ar['max_leverage']:.1f}x leverage this period, "
+                                        "your return moves roughly that many times the book's own "
+                                        "move — SPY above is unlevered."
+                                    )
+                                if _ar.get("spy_d1_price_pending"):
+                                    st.caption(
+                                        f"⏳ SPY's close for {_ar['d1']} isn't posted yet — SPY "
+                                        "comparison withheld until after close."
+                                    )
+                            elif _ar["status"] != "offline" and _ar.get("secondary") is not None:
+                                _ar_sec = _ar["secondary"]
                                 _ar_sec_spy = _ar_sec.get("spy_return_pct")
                                 st.caption(
                                     f"Tracked history covers {_ar_sec['d0']} to {_ar_sec['d1']}: "
@@ -40262,317 +40334,453 @@ elif page == "💰 Account":
                                         f"⏳ SPY's close for {_ar_sec['d1']} isn't posted yet — "
                                         "SPY comparison withheld until after close."
                                     )
-
-                        # build_review always sets this key to a list (never
-                        # None/missing) -- a plain index, not `.get(...) or []`,
-                        # which would silently mask a future contract break.
-                        _ar_monthly = _perf_review["account_return_monthly"]
-                        if _ar_monthly:
-                            _ar_monthly_ok_n = sum(1 for _armc in _ar_monthly if _armc.get("status") == "ok")
-                            with st.expander(
-                                f"📅 Month by month ({_ar_monthly_ok_n} of {len(_ar_monthly)} computed)"
-                            ):
-                                st.caption(
-                                    "Each month is computed independently — with any deposits or "
-                                    "withdrawals in the period, these won't exactly compound to "
-                                    "the period total above."
-                                )
-                                for _arm in _ar_monthly:
-                                    if _arm.get("status") == "ok":
-                                        _arm_spy = _arm.get("spy_return_pct")
-                                        st.caption(
-                                            f"**{_arm['month']}** — account {_arm['return_pct']:+.2f}%"
-                                            + (f", SPY {_arm_spy:+.2f}%" if _arm_spy is not None else "")
-                                        )
-                                    else:
-                                        st.caption(f"**{_arm['month']}** — not enough account history that month")
-
-                        # ── Return on capital cycled through closed trades ──
-                        # 2026-10-01 reframe: this used to show a "vs SPY"
-                        # delta badge, which read as a verdict — the owner's
-                        # real Q3 account return (+19.44%, confirmed against
-                        # a Robinhood statement) was the OPPOSITE sign from
-                        # what that badge implied. No delta is computed here
-                        # anymore. When the real Account Return above is
-                        # available, its own SPY figure is the one SPY number
-                        # shown on the page — this section drops its SPY tile
-                        # rather than show a second, differently-dated one.
-                        st.markdown("#### 🔁 Return on Capital Cycled Through Closed Trades")
-                        _prv = _perf_review["return_vs_spy"]
-                        if _prv["status"] == "offline":
-                            st.warning(
-                                "⚪ Could not compute — trade history or SPY "
-                                "history isn't available right now."
-                            )
-                        elif _prv["status"] == "empty":
-                            st.info("No trades closed in this period.")
-                            if _ar["status"] != "ok" and _prv.get("spy_period_return_pct") is not None:
-                                st.caption(f"SPY period return: {_prv['spy_period_return_pct']:+.2f}%")
-                        elif _ar["status"] == "ok":
-                            # SPY already shown above, over the account block's
-                            # own (slightly differently anchored) dates.
-                            _prv_c1, _prv_c2 = st.columns(2)
-                            _prv_c1.metric(
-                                "Return on capital cycled",
-                                f"{_prv['realized_return_pct']:+.2f}%"
-                                if _prv["realized_return_pct"] is not None else "—",
-                                help="Realized P&L ÷ summed cost basis of every closed lot this "
-                                     "period. Capital reused across several round trips is counted "
-                                     "once per trade, so this is closer to an average per-trade "
-                                     "return than a period return — it is NOT your account's return.",
-                            )
-                            _prv_c2.metric(
-                                "Realized P&L (closed trades)",
-                                _m(f"${_prv['realized_pnl_total']:,.2f}"),
-                            )
-                            if _prv["realized_return_pct"] is None:
-                                st.caption(
-                                    "⚪ Return on capital cycled unavailable — no cost-basis data "
-                                    "on the closed trades this period."
-                                )
-                            st.caption(
-                                f"ℹ️ {_prv['caption']} ({_prv['n_realized_trades']} trade(s) "
-                                "closed this period.) See Account Return vs SPY above for the "
-                                "real comparison to the market."
-                            )
-                        else:
-                            st.caption(
-                                "⚠️ The two figures below are NOT directly comparable to each "
-                                "other — see the explanation underneath the tiles."
-                            )
-                            _prv_c1, _prv_c2, _prv_c3 = st.columns(3)
-                            _prv_c1.metric(
-                                "SPY period return",
-                                f"{_prv['spy_period_return_pct']:+.2f}%"
-                                if _prv["spy_period_return_pct"] is not None else "—",
-                                help="Not directly comparable to the figure beside it — see caption below.",
-                            )
-                            _prv_c2.metric(
-                                "Return on capital cycled",
-                                f"{_prv['realized_return_pct']:+.2f}%"
-                                if _prv["realized_return_pct"] is not None else "—",
-                                help="Realized P&L ÷ summed cost basis of every closed lot this "
-                                     "period. Capital reused across several round trips is counted "
-                                     "once per trade, so this is closer to an average per-trade "
-                                     "return than a period return — it is NOT your account's return "
-                                     "and not directly comparable to SPY's period return.",
-                            )
-                            _prv_c3.metric(
-                                "Realized P&L (closed trades)",
-                                _m(f"${_prv['realized_pnl_total']:,.2f}"),
-                            )
-                            if _prv["realized_return_pct"] is None:
-                                st.caption(
-                                    "⚪ Return on capital cycled unavailable — no cost-basis data "
-                                    "on the closed trades this period."
-                                )
-                            st.caption(
-                                f"ℹ️ {_prv['caption']} ({_prv['n_realized_trades']} "
-                                "trade(s) closed this period.)"
-                            )
-
-                        # ── Trade Behavior ───────────────────────────────
-                        st.markdown("#### 📊 Trade Behavior")
-                        _ptb = _perf_review["trade_behavior"]
-                        if _ptb["status"] == "offline":
-                            st.warning("⚪ Could not read trade history right now.")
-                        elif _ptb["status"] == "empty":
-                            st.info("No closed trades in this period.")
-                        else:
-                            _ptb_c1, _ptb_c2, _ptb_c3 = st.columns(3)
-                            _ptb_c1.metric("Trades closed", _ptb["n_trades"])
-                            _ptb_c2.metric("Total realized P&L", _m(f"${_ptb['total_realized_pnl']:,.2f}"))
-                            _ptb_c3.metric(
-                                "Win rate",
-                                f"{_ptb['win_rate_pct']:.1f}%" if _ptb["win_rate_pct"] is not None else "—",
-                            )
-                            if _ptb["trigger_breakdown"]:
-                                st.dataframe(
-                                    pd.DataFrame(_ptb["trigger_breakdown"]),
-                                    hide_index=True, width="stretch",
-                                )
-                            if _ptb["monthly_trend"]:
-                                st.dataframe(
-                                    pd.DataFrame(_ptb["monthly_trend"]),
-                                    hide_index=True, width="stretch",
-                                )
-
-                        # ── Recommendations acted vs skipped ─────────────
-                        st.markdown("#### 🎯 Recommendations Acted vs Skipped")
-                        _prc = _perf_review["recs"]
-                        if _prc["status"] == "offline":
-                            st.warning("⚪ Could not read the recommendation-outcomes ledger right now.")
-                        elif _prc["status"] == "empty":
-                            st.info("No qualifying recommendation calls fired in this period.")
-                        else:
-                            for _prg in _prc["by_type"]:
-                                with st.container(border=True):
-                                    st.markdown(
-                                        f"**{_prg['rec_type']} / {_prg['arm']}** — "
-                                        f"{_prg['n_calls']} call(s), {_prg['n_distinct_tickers']} "
-                                        "distinct ticker(s)"
+                            if _pr_recon["status"] == "offline":
+                                st.warning("⚪ Trades, account history or price history couldn't be "
+                                           "loaded right now, so the period result can't be built.")
+                            else:
+                                if _pr_recon["status"] == "pre_coverage":
+                                    st.info(_pa_mod.pre_coverage_reason_text(_pr_recon)
+                                            + " Holdings only — can't reconcile to your account this period.")
+                                _pr_wf = _pa_mod.waterfall_rows(_pr_recon)
+                                if _pr_wf:
+                                    st.dataframe(
+                                        pd.DataFrame([
+                                            {
+                                                "Where the change came from":
+                                                    ("   ↳ " if _w["indent"] else "") + _w["label"]
+                                                    + (f" ({_w['note']})" if _w["note"] else ""),
+                                                "$": _m_usd(_w["value"], plus=not _w["total"]),
+                                            }
+                                            for _w in _pr_wf
+                                        ]),
+                                        hide_index=True, width="stretch",
                                     )
-                                    if _prg["below_floor"]:
-                                        st.caption(
-                                            "⚪ Below the standalone page's evaluable floor — "
-                                            "descriptive counts only, no verdict implied."
+                                _pr_res = _pr_recon["residual"]
+                                if _pr_res is not None:
+                                    with st.expander("What's in Unexplained"):
+                                        st.dataframe(
+                                            pd.DataFrame([
+                                                {"Part": "Cash side (cash change not explained by trades, deposits and income)",
+                                                 "$": _m_usd(_pr_res["cash"])},
+                                                {"Part": "Book side (recorded book vs trade-journal replay)",
+                                                 "$": _m_usd(_pr_res["book"])},
+                                                {"Part": "Book gap at start (recorded minus replayed)",
+                                                 "$": _m_usd(_pr_recon["book_gap_start"])},
+                                                {"Part": "Book gap at end (recorded minus replayed)",
+                                                 "$": _m_usd(_pr_recon["book_gap_end"])},
+                                            ]),
+                                            hide_index=True, width="stretch",
                                         )
-                                    if _prg.get("mean_leg_a_alpha_pct") is not None:
-                                        st.caption(
-                                            f"Mean candidate alpha vs SPY: {_prg['mean_leg_a_alpha_pct']:+.2f}%"
-                                        )
-                                    for _prfn in _prg["footnotes"]:
-                                        st.caption(f"ℹ️ {_prfn}")
+                                # "Unexplained" exists only when the account was reconciled
+                                # (ok / partial); in pre_coverage there is no such row.
+                                _pr_where = (
+                                    "sit in Unexplained" if _pr_recon["status"] in ("ok", "partial")
+                                    else "aren't accounted for anywhere this period (there is no account "
+                                         "record to reconcile against)"
+                                )
+                                if _pr_recon["unpriced"]:
+                                    st.caption(
+                                        "⚠️ No close price for: "
+                                        + ", ".join(sorted({_up[0] for _up in _pr_recon["unpriced"]}))
+                                        + " — their price moves are left out of the lines above (not "
+                                          "counted as zero) and their P&L " + _pr_where + "."
+                                    )
+                                if _pr_recon["journal_inconsistent"]:
+                                    st.caption(
+                                        "⚠️ " + ", ".join(_pr_recon["journal_inconsistent"])
+                                        + ": the trade journal's order for these doesn't add up, so they "
+                                          "are excluded from the lines above for the rest of the period "
+                                          "and their P&L " + _pr_where + "."
+                                    )
+                                _pr_legacy = _pr_recon["legacy_close_to_close"]
+                                if _pr_legacy is not None:
+                                    st.caption(
+                                        "Looking only at names held at both ends of the period, "
+                                        "close to close, shows "
+                                        + _m_usd(_pr_legacy, md=True)
+                                        + "; the difference is the sold / bought / round-trip lines "
+                                          "above — the days a close-to-close view can't see. The "
+                                          "\"borrowed money\" split is the same idea as 💰 Capital vs "
+                                          "Margin's margin contribution, built here from your recorded "
+                                          "daily account rows rather than a reconstruction, so the two "
+                                          "can differ slightly."
+                                    )
 
-                        # ── Gates fired ───────────────────────────────────
-                        st.markdown("#### 🛑 Gates Fired")
-                        _pgt = _perf_review["gates"]
-                        if _pgt["status"] == "offline":
-                            st.warning("⚪ Could not read the suppression ledger right now.")
-                        elif _pgt["status"] == "empty":
-                            st.info("No gate suppressions logged in this period.")
-                        else:
-                            for _pgg in _pgt["by_gate"]:
-                                with st.container(border=True):
-                                    if _pgg.get("market_wide"):
-                                        st.markdown(f"**{_pgg['gate_id']}** — market-wide, no single ticker to evaluate.")
-                                    else:
+                            # ── 3 · Leverage & margin ───────────────────────
+                            st.markdown("#### 3 · Leverage & margin")
+                            if _pr_lev["status"] == "offline":
+                                st.warning("⚪ Could not read account snapshot history right now.")
+                            elif _pr_lev["status"] == "empty":
+                                st.info("No account snapshots recorded in this period.")
+                            else:
+                                _pl_t = _pa_mod.leverage_tiles(_pr_lev)
+                                _pl_c1, _pl_c2, _pl_c3 = st.columns(3)
+                                _pl_c1.metric("Leverage range", _pl_t["range_value"],
+                                              delta=_pl_t["range_delta"], delta_color="off",
+                                              delta_arrow="off")
+                                _pl_cush = _pl_t["cushion"]
+                                _pl_c2.metric(
+                                    "Closest to a margin call", _pl_t["call_value"],
+                                    delta=((_pl_t["call_when"]
+                                            + (f" · cushion {_m_usd(_pl_cush)}"
+                                               if _pl_cush is not None else ""))
+                                           if _pl_t["call_when"] else None),
+                                    delta_color="off", delta_arrow="off",
+                                )
+                                _pl_c3.metric(f"Days above {LEVERAGE_REFERENCE_TARGET:.1f}x",
+                                              _pl_t["days_value"], delta=_pl_t["days_delta"],
+                                              delta_color="off", delta_arrow="off")
+                                _pl_r1, _pl_r2 = st.columns(2)
+                                _pl_sm = _pa_mod.split_moves(_pr_recon)
+                                _pl_r1.metric(
+                                    "Borrowed money's share of moves on positions held at the prior close",
+                                    _m_usd(_pl_sm["borrowed"] if _pl_sm is not None else None),
+                                )
+                                _pl_gap = (_pr_recon["income"]["interest_coverage_gap_months"]
+                                           if _pr_recon["income"] is not None else [])
+                                _pl_r2.metric(
+                                    "Margin interest posted",
+                                    _m_usd(_pa_mod.interest_posted(_pr_recon)),
+                                    delta=(("not recorded for " + ", ".join(_pl_gap)) if _pl_gap
+                                           else "posts monthly"),
+                                    delta_color="off", delta_arrow="off",
+                                )
+                                # Merged from the old "Leverage & Margin Cushion Drift" section
+                                # (owner decision #10): the end-of-period readings it carried.
+                                _pld = _perf_review["leverage_drift"]
+                                if _pld["status"] == "ok":
+                                    _pld_cd = _pld["call_distance_pct_end"]
+                                    _pld_cu = _pld["cushion_end"]
+                                    st.caption(
+                                        f"At the period end ({_pld['end_date']}): cushion "
+                                        + (_m_usd(_pld_cu) if _pld_cu is not None else "—")
+                                        + (f" ({'down' if _pld['cushion_delta'] < 0 else 'up'} "
+                                           f"{_m_usd(abs(_pld['cushion_delta']))} since "
+                                           f"{_pld['start_date']})" if _pld["cushion_delta"] is not None else "")
+                                        + " · call distance "
+                                        + (f"{_pld_cd:.1f}%" if _pld_cd is not None else "—")
+                                        + (f" ({_pld['call_distance_pct_delta']:+.1f}pp)"
+                                           if _pld["call_distance_pct_delta"] is not None else "")
+                                    )
+                                if _pr_lev["days_in_call"]:
+                                    st.warning(f"🔴 {_pr_lev['days_in_call']} recorded day(s) in a margin call this period.")
+                                if _pr_lev["n_null_rows"] or _pr_lev["n_null_call_rows"]:
+                                    st.caption(
+                                        f"{_pr_lev['n_null_rows']} day(s) had no leverage recorded and "
+                                        f"{_pr_lev['n_null_call_rows']} had no margin-call distance — left "
+                                        "out of the figures above."
+                                    )
+                                st.caption(
+                                    f"The {MARGIN_MAINTENANCE_RATE * 100:.0f}% maintenance rate is an "
+                                    "estimate — your broker's real rate per stock can be higher, so a "
+                                    "real call is likely closer than shown. Longer periods also show "
+                                    "the closest call in the period."
+                                )
+
+                        with st.expander("More from this period"):
+
+                            # ── Account Return vs SPY (2026-10-01) ───────────
+                            # The real headline: a first-vs-last account_daily_
+                            # snapshots lookup + account.money_weighted_return
+                            # (same formula 💰 Account / 🎯 My Edge already use)
+                            # — NEVER the capital_vs_margin backward-reconstruction
+                            # engine (ruled out for this feature). Built after a
+                            # live-data endpoint-integrity audit PASSED: chaining a
+                            # real Robinhood statement forward through 10 real
+                            # trading days landed on the recorded cash balance to
+                            # the exact penny, and a full month's activity matched
+                            # the recorded day-over-day cash changes to the cent on
+                            # 11 of 14 days (memory
+                            # project_performance_review_return_tile_redesign).
+                            st.markdown("#### 💰 Account Return vs SPY")
+                            _ar = _perf_review["account_return"]
+                            if _ar["status"] == "offline":
+                                st.warning(
+                                    "⚪ Could not compute — account history or cash-flow "
+                                    "history isn't available right now."
+                                )
+                            elif _ar["status"] == "ok":
+                                st.caption(f"ℹ️ {_ar['caption']}")
+                            else:
+                                st.info(
+                                    "⚪ Your daily account history doesn't cover the start of this "
+                                    "period, so an account-level return can't be shown for the "
+                                    "full period."
+                                )
+
+                            # build_review always sets this key to a list (never
+                            # None/missing) -- a plain index, not `.get(...) or []`,
+                            # which would silently mask a future contract break.
+                            _ar_monthly = _perf_review["account_return_monthly"]
+                            if _ar_monthly:
+                                _ar_monthly_ok_n = sum(1 for _armc in _ar_monthly if _armc.get("status") == "ok")
+                                with st.expander(
+                                    f"📅 Month by month ({_ar_monthly_ok_n} of {len(_ar_monthly)} computed)"
+                                ):
+                                    st.caption(
+                                        "Each month is computed independently — with any deposits or "
+                                        "withdrawals in the period, these won't exactly compound to "
+                                        "the period total above."
+                                    )
+                                    for _arm in _ar_monthly:
+                                        if _arm.get("status") == "ok":
+                                            _arm_spy = _arm.get("spy_return_pct")
+                                            st.caption(
+                                                f"**{_arm['month']}** — account {_arm['return_pct']:+.2f}%"
+                                                + (f", SPY {_arm_spy:+.2f}%" if _arm_spy is not None else "")
+                                            )
+                                        else:
+                                            st.caption(f"**{_arm['month']}** — not enough account history that month")
+
+                            # ── Return on capital cycled through closed trades ──
+                            # 2026-10-01 reframe: this used to show a "vs SPY"
+                            # delta badge, which read as a verdict — the owner's
+                            # real Q3 account return (+19.44%, confirmed against
+                            # a Robinhood statement) was the OPPOSITE sign from
+                            # what that badge implied. No delta is computed here
+                            # anymore. When the real Account Return above is
+                            # available, its own SPY figure is the one SPY number
+                            # shown on the page — this section drops its SPY tile
+                            # rather than show a second, differently-dated one.
+                            st.markdown("#### 🔁 Return on Capital Cycled Through Closed Trades")
+                            _prv = _perf_review["return_vs_spy"]
+                            if _prv["status"] == "offline":
+                                st.warning(
+                                    "⚪ Could not compute — trade history or SPY "
+                                    "history isn't available right now."
+                                )
+                            elif _prv["status"] == "empty":
+                                st.info("No trades closed in this period.")
+                                if _ar["status"] != "ok" and _prv.get("spy_period_return_pct") is not None:
+                                    st.caption(f"SPY period return: {_prv['spy_period_return_pct']:+.2f}%")
+                            elif _ar["status"] == "ok":
+                                # SPY already shown above, over the account block's
+                                # own (slightly differently anchored) dates.
+                                _prv_c1, _prv_c2 = st.columns(2)
+                                _prv_c1.metric(
+                                    "Return on capital cycled",
+                                    f"{_prv['realized_return_pct']:+.2f}%"
+                                    if _prv["realized_return_pct"] is not None else "—",
+                                    help="Realized P&L ÷ summed cost basis of every closed lot this "
+                                         "period. Capital reused across several round trips is counted "
+                                         "once per trade, so this is closer to an average per-trade "
+                                         "return than a period return — it is NOT your account's return.",
+                                )
+                                _prv_c2.metric(
+                                    "Realized P&L (closed trades)",
+                                    _m(f"${_prv['realized_pnl_total']:,.2f}"),
+                                )
+                                if _prv["realized_return_pct"] is None:
+                                    st.caption(
+                                        "⚪ Return on capital cycled unavailable — no cost-basis data "
+                                        "on the closed trades this period."
+                                    )
+                                st.caption(
+                                    f"ℹ️ {_prv['caption']} ({_prv['n_realized_trades']} trade(s) "
+                                    "closed this period.) See \"Your account %\" vs \"SPY %\" in 1 · Period result "
+                                    "at the top for the real comparison to the market."
+                                )
+                            else:
+                                st.caption(
+                                    "⚠️ The two figures below are NOT directly comparable to each "
+                                    "other — see the explanation underneath the tiles."
+                                )
+                                _prv_c1, _prv_c2, _prv_c3 = st.columns(3)
+                                _prv_c1.metric(
+                                    "SPY period return",
+                                    f"{_prv['spy_period_return_pct']:+.2f}%"
+                                    if _prv["spy_period_return_pct"] is not None else "—",
+                                    help="Not directly comparable to the figure beside it — see caption below.",
+                                )
+                                _prv_c2.metric(
+                                    "Return on capital cycled",
+                                    f"{_prv['realized_return_pct']:+.2f}%"
+                                    if _prv["realized_return_pct"] is not None else "—",
+                                    help="Realized P&L ÷ summed cost basis of every closed lot this "
+                                         "period. Capital reused across several round trips is counted "
+                                         "once per trade, so this is closer to an average per-trade "
+                                         "return than a period return — it is NOT your account's return "
+                                         "and not directly comparable to SPY's period return.",
+                                )
+                                _prv_c3.metric(
+                                    "Realized P&L (closed trades)",
+                                    _m(f"${_prv['realized_pnl_total']:,.2f}"),
+                                )
+                                if _prv["realized_return_pct"] is None:
+                                    st.caption(
+                                        "⚪ Return on capital cycled unavailable — no cost-basis data "
+                                        "on the closed trades this period."
+                                    )
+                                st.caption(
+                                    f"ℹ️ {_prv['caption']} ({_prv['n_realized_trades']} "
+                                    "trade(s) closed this period.)"
+                                )
+
+                            # ── Trade Behavior ───────────────────────────────
+                            st.markdown("#### 📊 Trade Behavior")
+                            _ptb = _perf_review["trade_behavior"]
+                            if _ptb["status"] == "offline":
+                                st.warning("⚪ Could not read trade history right now.")
+                            elif _ptb["status"] == "empty":
+                                st.info("No closed trades in this period.")
+                            else:
+                                _ptb_c1, _ptb_c2, _ptb_c3 = st.columns(3)
+                                _ptb_c1.metric("Trades closed", _ptb["n_trades"])
+                                _ptb_c2.metric("Total realized P&L", _m(f"${_ptb['total_realized_pnl']:,.2f}"))
+                                _ptb_c3.metric(
+                                    "Win rate",
+                                    f"{_ptb['win_rate_pct']:.1f}%" if _ptb["win_rate_pct"] is not None else "—",
+                                )
+                                if _ptb["trigger_breakdown"]:
+                                    st.dataframe(
+                                        pd.DataFrame(_ptb["trigger_breakdown"]),
+                                        hide_index=True, width="stretch",
+                                    )
+                                if _ptb["monthly_trend"]:
+                                    st.dataframe(
+                                        pd.DataFrame(_ptb["monthly_trend"]),
+                                        hide_index=True, width="stretch",
+                                    )
+
+                            # ── Recommendations acted vs skipped ─────────────
+                            st.markdown("#### 🎯 Recommendations Acted vs Skipped")
+                            _prc = _perf_review["recs"]
+                            if _prc["status"] == "offline":
+                                st.warning("⚪ Could not read the recommendation-outcomes ledger right now.")
+                            elif _prc["status"] == "empty":
+                                st.info("No qualifying recommendation calls fired in this period.")
+                            else:
+                                for _prg in _prc["by_type"]:
+                                    with st.container(border=True):
                                         st.markdown(
-                                            f"**{_pgg['gate_id']}** — {_pgg.get('n_matured_evaluable', 0)} "
-                                            f"matured evaluable, {_pgg.get('n_distinct_tickers_evaluable', 0)} "
+                                            f"**{_prg['rec_type']} / {_prg['arm']}** — "
+                                            f"{_prg['n_calls']} call(s), {_prg['n_distinct_tickers']} "
                                             "distinct ticker(s)"
                                         )
-                                        if _pgg.get("below_floor"):
+                                        if _prg["below_floor"]:
                                             st.caption(
                                                 "⚪ Below the standalone page's evaluable floor — "
                                                 "descriptive counts only, no verdict implied."
                                             )
-                                        if _pgg.get("mean_alpha_pct") is not None:
-                                            st.caption(f"Mean forward alpha: {_pgg['mean_alpha_pct']:+.2f}%")
-                                    for _pgfn in _pgg.get("footnotes", []):
-                                        st.caption(f"ℹ️ {_pgfn}")
+                                        if _prg.get("mean_leg_a_alpha_pct") is not None:
+                                            st.caption(
+                                                f"Mean candidate alpha vs SPY: {_prg['mean_leg_a_alpha_pct']:+.2f}%"
+                                            )
+                                        for _prfn in _prg["footnotes"]:
+                                            st.caption(f"ℹ️ {_prfn}")
 
-                        # ── Leverage & margin cushion drift ──────────────
-                        st.markdown("#### 🛡️ Leverage & Margin Cushion Drift")
-                        _pld = _perf_review["leverage_drift"]
-                        if _pld["status"] == "offline":
-                            st.warning("⚪ Could not read account snapshot history right now.")
-                        elif _pld["status"] == "empty":
-                            st.info("No account snapshots recorded in this period.")
-                        else:
-                            _pld_c1, _pld_c2, _pld_c3 = st.columns(3)
-                            _pld_c1.metric(
-                                "Leverage",
-                                f"{_pld['leverage_end']:.2f}x" if _pld["leverage_end"] is not None else "—",
-                                delta=(f"{_pld['leverage_delta']:+.2f}x"
-                                       if _pld["leverage_delta"] is not None else None),
-                            )
-                            _pld_c2.metric(
-                                "Cushion",
-                                _m(f"${_pld['cushion_end']:,.0f}") if _pld["cushion_end"] is not None else "—",
-                                # Sign BEFORE the "$": st.metric reads direction
-                                # from the first character, so "$-120" showed a
-                                # shrinking cushion as a green ↑. No delta under
-                                # privacy mode — "••••••" would also read as ↑.
-                                delta=(f"{'-' if _pld['cushion_delta'] < 0 else '+'}"
-                                       f"${abs(_pld['cushion_delta']):,.0f}"
-                                       if _pld["cushion_delta"] is not None
-                                       and not st.session_state.get("_privacy", True)
-                                       else None),
-                            )
-                            _pld_c3.metric(
-                                "Call distance",
-                                f"{_pld['call_distance_pct_end']:.1f}%"
-                                if _pld["call_distance_pct_end"] is not None else "—",
-                                delta=(f"{_pld['call_distance_pct_delta']:+.1f}pp"
-                                       if _pld["call_distance_pct_delta"] is not None else None),
-                            )
-                            st.caption(f"Start of period: {_pld['start_date']} · End of period: {_pld['end_date']}")
-
-                        # ── Portfolio risk drift ──────────────────────────
-                        st.markdown("#### 🧬 Portfolio Risk Drift")
-                        _prd = _perf_review["risk_drift"]
-                        if _prd["status"] == "offline":
-                            st.warning("⚪ Could not read portfolio risk snapshot history right now.")
-                        elif _prd["status"] == "empty":
-                            st.info("No risk snapshots recorded in this period.")
-                        else:
-                            _prd_c1, _prd_c2, _prd_c3, _prd_c4 = st.columns(4)
-                            _prd_c1.metric(
-                                "Portfolio beta",
-                                f"{_prd['portfolio_beta_end']:.2f}" if _prd["portfolio_beta_end"] is not None else "—",
-                                delta=(f"{_prd['portfolio_beta_delta']:+.2f}"
-                                       if _prd["portfolio_beta_delta"] is not None else None),
-                            )
-                            _prd_c2.metric(
-                                "Top sector %",
-                                f"{_prd['top_sector_pct_end']:.1f}%" if _prd["top_sector_pct_end"] is not None else "—",
-                                delta=(f"{_prd['top_sector_pct_delta']:+.1f}pp"
-                                       if _prd["top_sector_pct_delta"] is not None else None),
-                            )
-                            _prd_c3.metric(
-                                "Max single-name %",
-                                f"{_prd['max_single_name_pct_end']:.1f}%"
-                                if _prd["max_single_name_pct_end"] is not None else "—",
-                                delta=(f"{_prd['max_single_name_pct_delta']:+.1f}pp"
-                                       if _prd["max_single_name_pct_delta"] is not None else None),
-                            )
-                            _prd_c4.metric(
-                                "Avg pairwise corr",
-                                f"{_prd['avg_pairwise_corr_end']:.2f}" if _prd["avg_pairwise_corr_end"] is not None else "—",
-                                delta=(f"{_prd['avg_pairwise_corr_delta']:+.2f}"
-                                       if _prd["avg_pairwise_corr_delta"] is not None else None),
-                            )
-                            st.caption(
-                                f"Correlation sample size: {_prd.get('corr_coverage_n_start')} → "
-                                f"{_prd.get('corr_coverage_n_end')} observations — a shift here can "
-                                "reflect sample size, not just a real diversification change."
-                            )
-
-                        # ── Risk Discipline (R-Multiple, chunks 4/5) ─────
-                        st.markdown("#### 📐 Risk Discipline (R-Multiple)")
-                        _prk = _perf_review["risk_discipline"]
-                        if _prk["status"] == "offline":
-                            st.warning("⚪ Could not read trade history right now.")
-                        elif _prk["status"] == "empty":
-                            st.info("No closed round trips exited in this period.")
-                        else:
-                            st.caption(
-                                f"R available for {_prk['n_resolvable']} of {_prk['n_total']} "
-                                "closed episode(s) this period — measured against the app's own "
-                                "ATR-based entry stop (\"engine\" lens; your own declared stop "
-                                "isn't tracked long enough yet to aggregate)."
-                            )
-                            if _prk["below_floor"]:
-                                st.caption(
-                                    f"⚪ Below the {PROTECT_TRACK_MIN_CALLS}-call floor used "
-                                    "elsewhere in the app — descriptive per-episode detail only "
-                                    "below, no mean/median shown."
-                                )
+                            # ── Gates fired ───────────────────────────────────
+                            st.markdown("#### 🛑 Gates Fired")
+                            _pgt = _perf_review["gates"]
+                            if _pgt["status"] == "offline":
+                                st.warning("⚪ Could not read the suppression ledger right now.")
+                            elif _pgt["status"] == "empty":
+                                st.info("No gate suppressions logged in this period.")
                             else:
-                                _prk_c1, _prk_c2, _prk_c3 = st.columns(3)
-                                _prk_c1.metric("Mean R", f"{_prk['mean_r']:+.2f}R")
-                                _prk_c2.metric("Median R", f"{_prk['median_r']:+.2f}R")
-                                _prk_c3.metric(
-                                    "Losers worse than -1.0R",
-                                    f"{_prk['n_losers_worse_than_1r']} of {_prk['n_resolvable']}",
-                                    help=(
-                                        f"{_prk['pct_losers_worse_than_1r']:.0f}% of resolvable "
-                                        "losing episodes — descriptive only, not a classification "
-                                        "of whether the risk plan was \"honored\"."
-                                    ),
+                                for _pgg in _pgt["by_gate"]:
+                                    with st.container(border=True):
+                                        if _pgg.get("market_wide"):
+                                            st.markdown(f"**{_pgg['gate_id']}** — market-wide, no single ticker to evaluate.")
+                                        else:
+                                            st.markdown(
+                                                f"**{_pgg['gate_id']}** — {_pgg.get('n_matured_evaluable', 0)} "
+                                                f"matured evaluable, {_pgg.get('n_distinct_tickers_evaluable', 0)} "
+                                                "distinct ticker(s)"
+                                            )
+                                            if _pgg.get("below_floor"):
+                                                st.caption(
+                                                    "⚪ Below the standalone page's evaluable floor — "
+                                                    "descriptive counts only, no verdict implied."
+                                                )
+                                            if _pgg.get("mean_alpha_pct") is not None:
+                                                st.caption(f"Mean forward alpha: {_pgg['mean_alpha_pct']:+.2f}%")
+                                        for _pgfn in _pgg.get("footnotes", []):
+                                            st.caption(f"ℹ️ {_pgfn}")
+
+                            # ── Portfolio risk drift ──────────────────────────
+                            st.markdown("#### 🧬 Portfolio Risk Drift")
+                            _prd = _perf_review["risk_drift"]
+                            if _prd["status"] == "offline":
+                                st.warning("⚪ Could not read portfolio risk snapshot history right now.")
+                            elif _prd["status"] == "empty":
+                                st.info("No risk snapshots recorded in this period.")
+                            else:
+                                _prd_c1, _prd_c2, _prd_c3, _prd_c4 = st.columns(4)
+                                _prd_c1.metric(
+                                    "Portfolio beta",
+                                    f"{_prd['portfolio_beta_end']:.2f}" if _prd["portfolio_beta_end"] is not None else "—",
+                                    delta=(f"{_prd['portfolio_beta_delta']:+.2f}"
+                                           if _prd["portfolio_beta_delta"] is not None else None),
                                 )
-                            with st.expander(f"Per-episode detail ({_prk['n_total']})"):
-                                for _prk_ep in _prk["episodes"]:
-                                    _prk_r = _prk_ep.get("r_multiple")
-                                    _prk_r_txt = (f"{_prk_r:+.2f}R" if _prk_r is not None
-                                                  else f"no R ({_prk_ep.get('reason', 'unknown')})")
-                                    _prk_awl = (" · ⚠️ added while losing"
-                                                if _prk_ep.get("added_while_losing") else "")
+                                _prd_c2.metric(
+                                    "Top sector %",
+                                    f"{_prd['top_sector_pct_end']:.1f}%" if _prd["top_sector_pct_end"] is not None else "—",
+                                    delta=(f"{_prd['top_sector_pct_delta']:+.1f}pp"
+                                           if _prd["top_sector_pct_delta"] is not None else None),
+                                )
+                                _prd_c3.metric(
+                                    "Max single-name %",
+                                    f"{_prd['max_single_name_pct_end']:.1f}%"
+                                    if _prd["max_single_name_pct_end"] is not None else "—",
+                                    delta=(f"{_prd['max_single_name_pct_delta']:+.1f}pp"
+                                           if _prd["max_single_name_pct_delta"] is not None else None),
+                                )
+                                _prd_c4.metric(
+                                    "Avg pairwise corr",
+                                    f"{_prd['avg_pairwise_corr_end']:.2f}" if _prd["avg_pairwise_corr_end"] is not None else "—",
+                                    delta=(f"{_prd['avg_pairwise_corr_delta']:+.2f}"
+                                           if _prd["avg_pairwise_corr_delta"] is not None else None),
+                                )
+                                st.caption(
+                                    f"Correlation sample size: {_prd.get('corr_coverage_n_start')} → "
+                                    f"{_prd.get('corr_coverage_n_end')} observations — a shift here can "
+                                    "reflect sample size, not just a real diversification change."
+                                )
+
+                            # ── Risk Discipline (R-Multiple, chunks 4/5) ─────
+                            st.markdown("#### 📐 Risk Discipline (R-Multiple)")
+                            _prk = _perf_review["risk_discipline"]
+                            if _prk["status"] == "offline":
+                                st.warning("⚪ Could not read trade history right now.")
+                            elif _prk["status"] == "empty":
+                                st.info("No closed round trips exited in this period.")
+                            else:
+                                st.caption(
+                                    f"R available for {_prk['n_resolvable']} of {_prk['n_total']} "
+                                    "closed episode(s) this period — measured against the app's own "
+                                    "ATR-based entry stop (\"engine\" lens; your own declared stop "
+                                    "isn't tracked long enough yet to aggregate)."
+                                )
+                                if _prk["below_floor"]:
                                     st.caption(
-                                        f"**{_prk_ep.get('ticker')}** · {_prk_ep.get('exit_date')} "
-                                        f"· {_prk_r_txt}{_prk_awl}"
+                                        f"⚪ Below the {PROTECT_TRACK_MIN_CALLS}-call floor used "
+                                        "elsewhere in the app — descriptive per-episode detail only "
+                                        "below, no mean/median shown."
                                     )
+                                else:
+                                    _prk_c1, _prk_c2, _prk_c3 = st.columns(3)
+                                    _prk_c1.metric("Mean R", f"{_prk['mean_r']:+.2f}R")
+                                    _prk_c2.metric("Median R", f"{_prk['median_r']:+.2f}R")
+                                    _prk_c3.metric(
+                                        "Losers worse than -1.0R",
+                                        f"{_prk['n_losers_worse_than_1r']} of {_prk['n_resolvable']}",
+                                        help=(
+                                            f"{_prk['pct_losers_worse_than_1r']:.0f}% of resolvable "
+                                            "losing episodes — descriptive only, not a classification "
+                                            "of whether the risk plan was \"honored\"."
+                                        ),
+                                    )
+                                with st.expander(f"Per-episode detail ({_prk['n_total']})"):
+                                    for _prk_ep in _prk["episodes"]:
+                                        _prk_r = _prk_ep.get("r_multiple")
+                                        _prk_r_txt = (f"{_prk_r:+.2f}R" if _prk_r is not None
+                                                      else f"no R ({_prk_ep.get('reason', 'unknown')})")
+                                        _prk_awl = (" · ⚠️ added while losing"
+                                                    if _prk_ep.get("added_while_losing") else "")
+                                        st.caption(
+                                            f"**{_prk_ep.get('ticker')}** · {_prk_ep.get('exit_date')} "
+                                            f"· {_prk_r_txt}{_prk_awl}"
+                                        )
 
                         # ── Export ─────────────────────────────────────────
                         _perf_csv = _perf_review_mod.format_review_csv(_perf_review).to_csv(index=False)
@@ -40590,6 +40798,25 @@ elif page == "💰 Account":
                                 file_name=f"performance_review_{_perf_start}_{_perf_end}.md",
                                 mime="text/markdown", key="_perf_dl_md",
                             )
+
+                        # Period report (S1 + S3 + trust chips) — its own pair of
+                        # downloads next to the review export above.
+                        if _pr_report is not None:
+                            _pr_csv = _pa_mod.format_period_csv(_pr_report).to_csv(index=False)
+                            _pr_md = _pa_mod.format_period_markdown(_pr_report)
+                            _pr_dl_c1, _pr_dl_c2 = st.columns(2)
+                            with _pr_dl_c1:
+                                st.download_button(
+                                    "⬇️ Download period report CSV", data=_pr_csv,
+                                    file_name=f"period_report_{_perf_start}_{_perf_end}.csv",
+                                    mime="text/csv", key="_pr_dl_csv",
+                                )
+                            with _pr_dl_c2:
+                                st.download_button(
+                                    "⬇️ Download period report Markdown", data=_pr_md,
+                                    file_name=f"period_report_{_perf_start}_{_perf_end}.md",
+                                    mime="text/markdown", key="_pr_dl_md",
+                                )
             else:
                 _rpt_trades_df = db.load_trades_or_none()
                 _rpt_years = _tax_report.available_tax_years(_rpt_trades_df)
@@ -42375,7 +42602,9 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 
 **Tax Report:** pick a tax year and see your realized gains/losses split into short-term vs. long-term, reconstructed lot-by-lot in the order you actually bought (FIFO) rather than the single blended average-cost number shown elsewhere in the app. Each closed lot also gets a wash-sale flag (⛔ violation / ⏳ pending / ✅ clean) reusing the same check the Tax lens on 🥧 Portfolio Overview already applies to harvested losses. A reconciliation line compares this report's total to the app's own stored average-cost total — they can legitimately differ on a position you sold in parts at different prices, and the report says so rather than picking one silently. Download the full lot table as CSV or a formatted Markdown report. **This is not tax advice** — it's an informational reconciliation tool; verify every figure against your broker's official 1099-B before filing.
 
-**Performance Review:** pick a period (Since Tracking Began — once your account history covers enough — This Quarter, Last Quarter, This Tax Year, or a custom date range) for a point-in-time, downloadable snapshot: **Account Return vs SPY** (your real account return, read from your recorded account value just before the period started and at its end, adjusted for any deposits/withdrawals in between, next to SPY's return over those SAME dates — a "Month by month" expander breaks it down by calendar month; shown only when your daily account history covers the start of the period, otherwise withheld with a note on what sub-range IS covered); **Return on Capital Cycled Through Closed Trades** (realized P&L divided by the summed cost basis of every closed lot that period — capital reused across several round trips is counted once per trade, so this reads closer to an average per-trade return than a period return, and it's **not your account's own return**; realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎖️ Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); **Risk Discipline** (R-Multiple — closed trades' realized P&L measured against the planned risk at entry, reconstructed from the app's ATR-baseline or your own saved risk plan; per-trade detail always shown, plus mean/median/worst-loss stats once enough matured episodes exist); and **Leverage & Margin Cushion Drift** / **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing account and risk-snapshot history). Downloads as CSV or Markdown, same as the Tax Report.
+**Performance Review:** pick a period (Last week — the last completed Mon–Sun — Last month, This quarter, Last quarter, This tax year, Since tracking once your account history covers enough, or a custom date range) for a point-in-time, downloadable snapshot. **At the top: a data-trust strip, then "1 · Period result" and "3 · Leverage & margin"** (see the paragraph below). Everything described next sits under a **"More from this period"** expander: **Account Return vs SPY** (your real account return, read from your recorded account value just before the period started and at its end, adjusted for any deposits/withdrawals in between, next to SPY's return over those SAME dates — a "Month by month" expander breaks it down by calendar month; shown only when your daily account history covers the start of the period, otherwise withheld with a note on what sub-range IS covered); **Return on Capital Cycled Through Closed Trades** (realized P&L divided by the summed cost basis of every closed lot that period — capital reused across several round trips is counted once per trade, so this reads closer to an average per-trade return than a period return, and it's **not your account's own return**; realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎖️ Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); **Risk Discipline** (R-Multiple — closed trades' realized P&L measured against the planned risk at entry, reconstructed from the app's ATR-baseline or your own saved risk plan; per-trade detail always shown, plus mean/median/worst-loss stats once enough matured episodes exist); and **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing risk-snapshot history; the old leverage-cushion drift now lives in section 3). Downloads as CSV or Markdown, same as the Tax Report.
+
+**Period result and the data-trust chips:** "1 · Period result" shows how much your net account value changed over the period and where the change came from — price moves on positions you held through and the last-day moves on names you sold (together, the moves on positions held at the prior close, split into borrowed vs your own money), the first-day moves on names you bought, same-day round trips, deposits/withdrawals, dividends, margin interest and fees. **"Unexplained" is whatever those lines don't account for** — expand it to see its cash side and book side; a missing trade, an unrecorded deposit or a price the app couldn't find lands there rather than being hidden. A missing figure reads "unknown", never zero. The chips above it are the checks behind the numbers: green = checked and fine, amber = look at this, grey = can't be told from stored data (they describe the stored records, not whether a data feed was down during the period — except the System Trust chip, when shown, which is today's live state). "3 · Leverage & margin" shows the leverage range, the closest the account came to a margin call (at an ESTIMATED maintenance rate, so a real call is likely closer) and the days above the reference leverage. A separate pair of downloads exports this section and the chips.
 """
             )
 
