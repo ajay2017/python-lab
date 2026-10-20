@@ -121,7 +121,7 @@ sizing_path crash → callers render no size + "sizing couldn't run".
    📒 prefill only with a size), Grow Today room note + room-blocked block. Mockup first. Reviewer.
 3. **C2** Analysis held add = Grow Today verdict (D2-A) — closes the G-24 finding. Push right after C1. Reviewer.
 4. **C3** risk footer from final sizes — budget_view, daily_briefing, app 9049/10434. Reviewer.
-5. **C4** quick wins — (a) no Watchlist size panel on non-ENTER_NOW rows via `may_show_size`; (b) no Catalyst
+5. **C4** quick wins — (0) from the C2 review: a held name 🏠 Home couldn't price, on a Sell verdict, still says "Not in your portfolio — nothing to sell" beside the new "holding couldn't be priced" warning (app.py Analysis Sell branch; reword to "holding couldn't be priced — open 🏠 Home to sell" when the ticker is in `_an_unpriced`); (a) no Watchlist size panel on non-ENTER_NOW rows via `may_show_size`; (b) no Catalyst
    HOLD_OR_ADD / Econ OPPORTUNITY add advice inside earnings/G-07 windows, no count outside. Reviewer recommended.
 6. **C5** Rebalancer ADD per D6 — drop/clamp the count; read `held_add_verdict` for G-24/G-25/G-26 (closes D5 of
    CLAUDE.md's G-25 entry). Reviewer.

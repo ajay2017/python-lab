@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mockup — 💰 Account → Reports: where the money went, and who made the call</title>
+<style>
+  body { background:#0e1117; color:#e5e7eb; font-family:-apple-system,Segoe UI,Roboto,sans-serif; margin:24px; max-width:1100px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:#94a3b8; font-size:13px; margin-bottom:18px; line-height:1.5; }
+  h2 { font-size:16px; margin:26px 0 8px; border-bottom:1px solid #334155; padding-bottom:5px; }
+  .radio span { display:inline-block; border:1px solid #334155; border-radius:14px; padding:3px 11px; margin-right:6px; font-size:12.5px; color:#cbd5e1; }
+  .radio span.on { background:#1e3a8a; border-color:#3b82f6; color:#fff; }
+  .cap { color:#94a3b8; font-size:12px; margin:6px 0; line-height:1.45; }
+  .chips span { display:inline-block; font-size:11.5px; border-radius:12px; padding:2px 9px; margin:3px 4px 3px 0; }
+  .ok { background:#052e16; color:#86efac; border:1px solid #166534; }
+  .warn { background:#422006; color:#fcd34d; border:1px solid #b45309; }
+  .unk { background:#1f2937; color:#cbd5e1; border:1px solid #475569; }
+  .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:8px 0; }
+  .m { background:#111827; border:1px solid #1f2937; border-radius:8px; padding:9px 12px; }
+  .m .l { color:#94a3b8; font-size:11.5px; } .m .v { font-size:22px; font-weight:700; margin-top:2px; } .m .d { font-size:12px; color:#94a3b8; margin-top:2px; }
+  .neg { color:#f87171; } .pos { color:#4ade80; }
+  table { border-collapse:collapse; width:100%; font-size:13px; margin:6px 0; }
+  td, th { border-bottom:1px solid #1f2937; padding:5px 8px; text-align:left; }
+  th { color:#94a3b8; font-weight:600; font-size:12px; }
+  td.n { text-align:right; font-variant-numeric:tabular-nums; }
+  tr.ind td:first-child { padding-left:26px; color:#cbd5e1; }
+  tr.tot td { font-weight:700; border-top:1px solid #475569; }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .card { background:#111827; border:1px solid #1f2937; border-radius:8px; padding:10px 14px; margin:8px 0; font-size:13px; }
+  .toggle span { display:inline-block; font-size:12px; padding:2px 10px; border:1px solid #334155; border-radius:5px; margin-right:4px; }
+  .toggle span.on { background:#334155; }
+  .badge { display:inline-block; font-size:11px; background:#1e293b; border:1px solid #475569; border-radius:10px; padding:1px 8px; color:#cbd5e1; margin-left:6px; }
+  .exp { border:1px solid #334155; border-radius:6px; padding:7px 12px; margin:14px 0; color:#cbd5e1; font-size:13px; }
+  .note { background:#172033; border:1px solid #334155; border-radius:6px; padding:10px 14px; font-size:12.5px; color:#cbd5e1; margin-top:22px; line-height:1.55; }
+  .ask { background:#1e1b4b; border:1px solid #6366f1; border-radius:6px; padding:10px 14px; font-size:12.5px; color:#e0e7ff; margin-top:14px; line-height:1.6; }
+</style>
+</head>
+<body>
+<h1>💰 Account → Reports → Performance Review: "where the money went, and who made the call" (mockup v1, static)</h1>
+<div class="sub">Plan <code>docs/plans/period-report.md</code> (planner design 2026-10-20). Shown for the AI sell-off week 10-12 → 10-16. Equity −$1,314 (10-09 $8,518 → 10-16 $7,204), the −$683 held-all-week figure, the top losers, 3.73× / 2.4% on 09-30, ~3.5× turnover and the +4.5 / −0.3pp and +13.8 / +1.5pp edge figures come from the 2026-10-19 analysis. <b>Every other number is illustrative.</b> Nothing is built. Wording is draft. Below this, the existing Performance Review sections move into a "More from this period" expander, unchanged.</div>
+
+<div class="radio"><span class="on">Last week</span><span>Last month</span><span>This quarter</span><span>Last quarter</span><span>This tax year</span><span>Since tracking</span><span>Custom</span></div>
+<div class="cap">Period 10-12 → 10-16 · account change measured 10-09 close → 10-16 close (the session before the period to the last account record in it).</div>
+
+<!-- trust strip -->
+<div class="chips">
+  <span class="ok">Account records 5/5</span><span class="ok">Price marks 5/5</span><span class="ok">Unpriced 0</span>
+  <span class="warn">Unexplained −$57 (0.7%)</span><span class="warn">Deposits/withdrawals ledger: last entry 10-01</span>
+  <span class="unk">Margin interest posts monthly (last 09-30)</span><span class="unk">System Trust now: OK</span>
+</div>
+<div class="cap">Amber = check this, grey = can't tell from stored data. Nothing here says "no outage during the period" — feed and cron health aren't stored per day, so the last chip is today's state.</div>
+
+<!-- S1 -->
+<h2>1 · Period result</h2>
+<div class="metrics">
+  <div class="m"><div class="l">Net equity change</div><div class="v neg">−$1,314</div><div class="d">−15.4% of $8,518 at the start</div></div>
+  <div class="m"><div class="l">Your account % (Modified Dietz)</div><div class="v neg">−15.4%</div><div class="d">existing tile</div></div>
+  <div class="m"><div class="l">SPY %, same dates</div><div class="v neg">−1.9%</div><div class="d">existing tile · % next to %</div></div>
+</div>
+<table>
+  <tr><th>Where the change came from</th><th style="text-align:right">$</th></tr>
+  <tr><td>Price moves on positions held through</td><td class="n neg">−$683</td></tr>
+  <tr class="ind"><td>↳ of which on borrowed money (avg 3.0× leverage)</td><td class="n neg">−$455</td></tr>
+  <tr class="ind"><td>↳ of which on your own money</td><td class="n neg">−$228</td></tr>
+  <tr><td>Last-day moves on positions you sold</td><td class="n neg">−$318</td></tr>
+  <tr><td>First-day moves on positions you bought</td><td class="n neg">−$196</td></tr>
+  <tr><td>Same-day round trips</td><td class="n neg">−$64</td></tr>
+  <tr><td>Deposits / withdrawals</td><td class="n">$0</td></tr>
+  <tr><td>Dividends</td><td class="n pos">+$4</td></tr>
+  <tr><td>Margin interest posted</td><td class="n">$0 <span class="badge">posts monthly</span></td></tr>
+  <tr><td>Fees</td><td class="n">$0</td></tr>
+  <tr><td>Unexplained ▸ <span class="cap">(cash side −$74 · book side +$17 · book gap at start $3, at end $20)</span></td><td class="n neg">−$57</td></tr>
+  <tr class="tot"><td>Net equity change</td><td class="n neg">−$1,314</td></tr>
+</table>
+<div class="cap">Looking only at names held all week shows −$683; the difference is the sold / bought / round-trip lines above — the days a close-to-close view can't see. The "borrowed money" share is the same idea as 💰 Capital vs Margin's margin contribution, built here from your recorded daily account rows rather than a reconstruction, so the two can differ slightly.</div>
+
+<!-- S2 -->
+<h2>2 · Where it came from</h2>
+<div class="two">
+  <div><b style="font-size:13px">Top detractors</b>
+    <table><tr><th>Ticker</th><th>Sector</th><th style="text-align:right">$</th><th style="text-align:right">of which trading days</th></tr>
+      <tr><td>SPCX</td><td>Aerospace &amp; Defense</td><td class="n neg">−$212</td><td class="n">−$31</td></tr>
+      <tr><td>CRWD</td><td>Cybersecurity</td><td class="n neg">−$224</td><td class="n">−$224</td></tr>
+      <tr><td>PLTR</td><td>AI &amp; Data</td><td class="n neg">−$158</td><td class="n">−$12</td></tr>
+      <tr><td>TSLA</td><td>EV &amp; Auto</td><td class="n neg">−$135</td><td class="n">−$40</td></tr>
+      <tr><td>MRVL</td><td>Semiconductors</td><td class="n neg">−$114</td><td class="n">−$9</td></tr></table></div>
+  <div><b style="font-size:13px">Top contributors</b>
+    <table><tr><th>Ticker</th><th>Sector</th><th style="text-align:right">$</th><th style="text-align:right">of which trading days</th></tr>
+      <tr><td>MSFT</td><td>AI &amp; Cloud</td><td class="n pos">+$146</td><td class="n">+$146</td></tr>
+      <tr><td>XOM</td><td>Energy</td><td class="n pos">+$61</td><td class="n">$0</td></tr>
+      <tr><td>WK ◦</td><td>Technology (provider)</td><td class="n pos">+$38</td><td class="n">$0</td></tr>
+      <tr><td>ABBV</td><td>Healthcare</td><td class="n pos">+$29</td><td class="n">$0</td></tr>
+      <tr><td>SAP</td><td>Enterprise Software</td><td class="n pos">+$22</td><td class="n">$0</td></tr></table></div>
+</div>
+<div class="cap">◦ = sector from the data provider, not the app's curated map (it also skips the sector gates). A sector table sits below these.</div>
+<div class="card">5 largest losers = <b>75% of losses</b>. · Names with beta ≥ 1.3: <b>92% of losses, 38% of gains</b> (2 names with unknown beta, −$6, excluded from both).</div>
+
+<!-- S3 -->
+<h2>3 · Leverage &amp; margin</h2>
+<div class="metrics">
+  <div class="m"><div class="l">Leverage range</div><div class="v">2.61× – 3.21×</div><div class="d">start 3.0× (10-09) → end 2.61× (10-16)</div></div>
+  <div class="m"><div class="l">Closest to a margin call</div><div class="v">−12.9%</div><div class="d">a 12.9% drop away on 10-13 · cushion $2,410</div></div>
+  <div class="m"><div class="l">Days above 2.0×</div><div class="v">5 of 5</div><div class="d">recorded days</div></div>
+</div>
+<div class="two">
+  <div class="card">Borrowed money's share of price moves: <b class="neg">−$455</b></div>
+  <div class="card">Margin interest posted: <b>$0</b> this week (posts monthly; last 09-30)</div>
+</div>
+<div class="cap">The 25% maintenance rate is an estimate — your broker's real rate per stock can be higher, so a real call is likely closer than shown. Longer periods also show the closest call in the period (e.g. "2.4% drop away on 09-30 at 3.73×").</div>
+
+<!-- S4 -->
+<h2>4 · Who made the call</h2>
+<div class="toggle"><span class="on">Matched to app signals</span><span>Reason you logged</span></div>
+<table>
+  <tr><th></th><th style="text-align:right">Sells</th><th style="text-align:right">Realized $</th><th style="text-align:right">Won / lost</th><th style="text-align:right">Buys</th><th style="text-align:right">$ bought</th></tr>
+  <tr><td>App-called</td><td class="n">6</td><td class="n pos">+$107</td><td class="n">4 / 2</td><td class="n">5</td><td class="n">$5,310</td></tr>
+  <tr><td>Your own</td><td class="n">5</td><td class="n neg">−$313</td><td class="n">1 / 4</td><td class="n">9</td><td class="n">$6,080</td></tr>
+  <tr><td>Not stated (imported, no reason set)</td><td class="n">1</td><td class="n neg">−$1</td><td class="n">0 / 1</td><td class="n">0</td><td class="n">$0</td></tr>
+</table>
+<div class="card">Buys into names the app rated <b>Hold</b>: 7 ($4,250) — HOOD, TSLA, SPCX, CRWD · composite known for 12 of 14 buys. · Turnover <b>3.5× net equity</b> ($11.4K bought + $16.0K sold).</div>
+<div class="cap">Realized P&amp;L credits the whole round trip to whoever closed it; open positions are excluded. Win rates per group show only at 8+ trades. 2 rows: the two views disagree (e.g. a stop-loss sale with no app exit signal). "Reason you logged" uses the trigger you picked in 📒 Trade Journal; a stop-hit may be your own manual stop.</div>
+
+<!-- S5 -->
+<h2>5 · Your edge vs the engine</h2>
+<div class="two">
+  <div class="card"><b>Buys — average alpha vs SPY</b><span class="badge">All time (same as 🎯 My Edge)</span><br>
+    App-aligned <b class="pos">+4.5pp</b> · Your own <b>−0.3pp</b><br><span class="cap">This period: 3 app-aligned / 6 own buys (4 graded) — below the 8-trade floor, so no period figure.</span></div>
+  <div class="card"><b>Sells — after-sale move vs SPY</b> <span class="cap">(positive = the stock kept beating SPY after you sold = sold early)</span><span class="badge">All time</span><br>
+    App-called <b>+13.8pp</b> · Your own <b>+1.5pp</b><br><span class="cap">This period: 6 app / 5 own sells — below the floor.</span></div>
+</div>
+
+<div class="exp">▸ More from this period — Trade Behavior · Recommendations · Gates · Risk Discipline · Risk Drift · Return on cycled capital (unchanged)</div>
+<div class="cap">Export: CSV / Markdown of all five sections.</div>
+
+<div class="note"><b>What this is and isn't.</b> A look-back on the Reports tab: facts about concentration, leverage and trading, no verdicts, nothing on Act Today. Every dollar line adds up to the net-equity change (the "Unexplained" row is whatever doesn't, shown with its cash and book halves so a missing journal trade or a missing deposit shows up). A missing day or record reads "unknown", never $0. Later: the Sunday 🗓️ Weekly Debrief email gets a "Where the money went" block from this same engine, and the Debrief's own week numbers switch to it (they currently count a mid-week buy's whole value as a "contributor").</div>
+
+<div class="ask"><b>Your calls (planner's recommendation first):</b> see the questions in the session. The main ones: which "who made the call" view leads; the high-beta cut (beta ≥ 1.3); the "days above" leverage level (2.0× will read "every day" at ~3×); "Last week" = last Mon–Sun; fold the email into the Sunday Debrief.</div>
+</body>
+</html>
