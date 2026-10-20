@@ -18,6 +18,7 @@
 --   B  records persisting an unverified claim  ("records withhold")
 --   C  two producers of the same fact that disagree
 --   D  plain impossible states (identities broken, wrong-day stamps)
+--   E  recompute / provenance (a stored value must equal its own derivation)
 --
 -- READ-ONLY. Every statement is a SELECT. Safe against production.
 --
@@ -32,7 +33,9 @@
 -- Thresholds below are transcribed from stock_analyzer/constants.py at
 -- HEAD 2026-10-14: COMPOSITE_BUY=65, COMPOSITE_STRONG_BUY=75 (=HIGH_
 -- CONVICTION), SINGLE_NAME_CEILING=15.0, CORR_MIN_OBS_TRUSTED=20,
--- ACCOUNT_CASH_STALE_DAYS=7. diversification_score = (1-avg_corr)/2*100
+-- ACCOUNT_CASH_STALE_DAYS=7, and (section E, 2026-10-19) COMPOSITE_WEIGHTS
+-- technical .25 / business_quality .35 / valuation .30 / sentiment .10.
+-- diversification_score = (1-avg_corr)/2*100
 -- (portfolio.py:1915), so its ceiling for a long-only book is 50.
 -- Dates of record-side fixes: F-291/F-292 withhold-on-unverified 2026-10-09.
 -- =====================================================================
@@ -66,6 +69,8 @@
 --           sell + rebuy: SELL 10 @ 200.58 on 10-14, BUY 5 @ 195.00 on 10-15).
 --           Baseline raised 2 -> 3 on 2026-10-17 after the owner's SQL.
 --   D5   3  INTC/QCOM/MU 2026-05-26/28: composite column not yet populated.
+--   E1  0, E2 0  (2026-10-19, owner SQL: 438 / 1,273 rows). E3 not yet
+--           baselined: ACCRUING in impossible_states.py until the first count.
 --   Every other check: 0.
 -- ---------------------------------------------------------------------
 
@@ -264,6 +269,46 @@ SELECT * FROM (
                              OR traded_at > now()),
          COUNT(*)
   FROM trades
+  -- E: recompute / provenance (2026-10-19, app-trust item 2). A stored value
+  -- that can be re-derived from its own inputs must still equal that
+  -- derivation. Weights are COMPOSITE_WEIGHTS (constants.py): technical .25,
+  -- business_quality .35, valuation .30, sentiment .10 (version 2, since
+  -- 2026-07-09; test_impossible_states pins these numbers to constants.py).
+  UNION ALL
+  -- E1: first run 2026-10-19 (owner SQL) = 438 rows / 0 mismatches. An
+  -- unmeasured pillar is stored null and enters the composite as 50. Equity
+  -- rows only: an ETF composite is the technical/cost blend
+  -- (ETF_COMPOSITE_WEIGHTS) and stores no bq/val.
+  SELECT 'E1', 'score_history: composite != its weighted pillars (0.25t+0.35bq+0.30val+0.10s, unmeasured = 50)',
+         COUNT(*) FILTER (WHERE ABS(composite - (0.25*COALESCE(t_score, 50) + 0.35*COALESCE(bq_score, 50)
+                                                 + 0.30*COALESCE(val_score, 50) + 0.10*COALESCE(s_score, 50))) > 0.2),
+         COUNT(*)
+  FROM score_history
+  WHERE NOT (bq_score IS NULL AND val_score IS NULL)
+  UNION ALL
+  -- E2: first run 2026-10-19 (owner SQL) = 1,273 rows / 0. Sentiment is the
+  -- one pillar recommendations does not store, so back it out of the composite.
+  SELECT 'E2', 'recommendations (weights v2): implied sentiment outside 0-100 (composite off by >~5 pts)',
+         COUNT(*) FILTER (WHERE (composite_score - 0.25*t_score - 0.35*bq_score - 0.30*val_score) / 0.10 < -0.5
+                             OR (composite_score - 0.25*t_score - 0.35*bq_score - 0.30*val_score) / 0.10 > 100.5),
+         COUNT(*)
+  FROM recommendations
+  WHERE weights_version = 2 AND composite_score IS NOT NULL AND t_score IS NOT NULL
+    AND bq_score IS NOT NULL AND val_score IS NOT NULL
+  UNION ALL
+  -- E3: NEVER RUN yet -- not baselined (ACCRUING in impossible_states.py until
+  -- the owner's first count). Stored values: followed_signal is the text
+  -- 'yes' / 'no' / 'discretionary' / NULL (app.py Trade Journal save);
+  -- signal_seen is the free-text reconciled verdict at click, e.g.
+  -- 'Strong Buy · Composite 81/100'. Detector candidate (a) from 2026-10-19:
+  -- MSFT SELL 10-16 marked 'yes' against a 'Buy'.
+  SELECT 'E3', 'trades: followed_signal = yes against the OPPOSITE signal (a SELL "following" a Buy, or a BUY "following" a Sell)',
+         COUNT(*) FILTER (WHERE (UPPER(action) = 'SELL' AND LOWER(followed_signal) = 'yes'
+                                 AND signal_seen ILIKE '%buy%' AND signal_seen NOT ILIKE '%sell%')
+                             OR (UPPER(action) = 'BUY' AND LOWER(followed_signal) = 'yes'
+                                 AND signal_seen ILIKE '%sell%' AND signal_seen NOT ILIKE '%buy%')),
+         COUNT(*) FILTER (WHERE followed_signal IS NOT NULL)
+  FROM trades
 ) q
 ORDER BY (n_bad > 0) DESC, id;
 
@@ -351,6 +396,36 @@ SELECT chk, d, ticker, detail FROM (
   FROM recommendations
   WHERE rec_type IN ('new_pick', 'add_winner', 'enter_now')
     AND (composite_score IS NULL OR composite_score < 65 OR price_at_surface IS NULL OR price_at_surface <= 0)
+  UNION ALL
+  SELECT 'E1', score_date, ticker,
+         format('composite=%s implied=%s | t=%s bq=%s val=%s s=%s',
+                composite,
+                ROUND((0.25*COALESCE(t_score, 50) + 0.35*COALESCE(bq_score, 50)
+                       + 0.30*COALESCE(val_score, 50) + 0.10*COALESCE(s_score, 50))::numeric, 2),
+                t_score, bq_score, val_score, s_score)
+  FROM score_history
+  WHERE NOT (bq_score IS NULL AND val_score IS NULL)
+    AND ABS(composite - (0.25*COALESCE(t_score, 50) + 0.35*COALESCE(bq_score, 50)
+                         + 0.30*COALESCE(val_score, 50) + 0.10*COALESCE(s_score, 50))) > 0.2
+  UNION ALL
+  SELECT 'E2', rec_date, ticker,
+         format('%s composite=%s implied_sentiment=%s | t=%s bq=%s val=%s',
+                rec_type, composite_score,
+                ROUND(((composite_score - 0.25*t_score - 0.35*bq_score - 0.30*val_score) / 0.10)::numeric, 1),
+                t_score, bq_score, val_score)
+  FROM recommendations
+  WHERE weights_version = 2 AND composite_score IS NOT NULL AND t_score IS NOT NULL
+    AND bq_score IS NOT NULL AND val_score IS NOT NULL
+    AND ((composite_score - 0.25*t_score - 0.35*bq_score - 0.30*val_score) / 0.10 < -0.5
+         OR (composite_score - 0.25*t_score - 0.35*bq_score - 0.30*val_score) / 0.10 > 100.5)
+  UNION ALL
+  SELECT 'E3', (traded_at AT TIME ZONE 'America/New_York')::date, ticker,
+         format('%s followed_signal=%s | signal_seen=%s', UPPER(action), followed_signal, LEFT(signal_seen, 80))
+  FROM trades
+  WHERE (UPPER(action) = 'SELL' AND LOWER(followed_signal) = 'yes'
+         AND signal_seen ILIKE '%buy%' AND signal_seen NOT ILIKE '%sell%')
+     OR (UPPER(action) = 'BUY' AND LOWER(followed_signal) = 'yes'
+         AND signal_seen ILIKE '%sell%' AND signal_seen NOT ILIKE '%buy%')
 ) q
 ORDER BY chk, d DESC NULLS FIRST, ticker;
 

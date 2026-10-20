@@ -7,6 +7,12 @@ five real defects (ff5ef85, 3ab4d59). Q0 also lives as a Postgres function
 run it through PostgREST rpc as data_maintenance check 6. This module decides
 what a run's counts MEAN. It is pure, so the decision is unit-tested.
 
+Section E (2026-10-19) is recompute / provenance: E1 (score_history composite
+vs its weighted pillars) and E2 (recommendations' implied sentiment in range)
+are ZERO, both measured 0 on 2026-10-19. E3 (a trade marked "followed signal"
+against the opposite signal) has never been run, so it sits in _RESIDUAL as
+ACCRUING until the owner's first count sets its FROZEN baseline.
+
 Three kinds of check, set from the post-cleanup baseline of 2026-10-14:
 
   ZERO      must stay 0. Any row is a new defect. This is every check not
@@ -50,6 +56,7 @@ EXPECTED_IDS: "frozenset[str]" = frozenset(
     + [f"B{i}" for i in range(1, 4)]
     + [f"C{i}" for i in range(1, 10)]
     + [f"D{i}" for i in range(1, 11)]
+    + [f"E{i}" for i in range(1, 4)]
 )
 
 # id -> (policy, baseline n_bad). Every other id in EXPECTED_IDS is ZERO.
@@ -62,12 +69,16 @@ _RESIDUAL: "dict[str, tuple[str, int]]" = {
     "C8": (FROZEN, 3),   # MU 06-25 hole, EOG 06-15 + PLTR 10-14 real sell-and-rebuy (owner SQL 2026-10-17)
     "C9": (FROZEN, 5),   # derived from Q1's C1 detail; confirm on first automated run
     "D5": (FROZEN, 3),
+    # E3 has never been run: not yet baselined. Flip to (FROZEN, <count>) at
+    # the owner's first run's count; until then it is reported beside its
+    # count but never raises a finding.
+    "E3": (ACCRUING, 0),
 }
 
 # Must equal scripts/gen_impossible_states_function.py::q0_version() (a test
 # pins it). The function returns this as its `_V` row, so a function applied
 # in Supabase before a Q0 edit is reported instead of silently running old SQL.
-Q0_VERSION = "q0:16c85d32d98d"
+Q0_VERSION = "q0:fdbd2b2a9c28"
 _VERSION_ID = "_V"
 
 _KEY, _LABEL = "impossible_states", "Impossible-states audit"

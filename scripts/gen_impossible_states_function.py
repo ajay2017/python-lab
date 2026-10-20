@@ -55,7 +55,7 @@ $fn$;
 REVOKE EXECUTE ON FUNCTION public.impossible_states_q0(date[]) FROM PUBLIC, anon, authenticated;
 GRANT  EXECUTE ON FUNCTION public.impossible_states_q0(date[]) TO service_role;
 
--- VERIFY: 28 check rows plus one `_V` version row; counts match a manual Q0 run.
+-- VERIFY: 31 check rows plus one `_V` version row; counts match a manual Q0 run.
 -- SELECT * FROM public.impossible_states_q0(ARRAY['2026-07-03']::date[]);
 """
 

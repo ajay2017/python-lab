@@ -210,8 +210,48 @@ AS $fn$
                                OR traded_at > now()),
            COUNT(*)
     FROM trades
+    -- E: recompute / provenance (2026-10-19, app-trust item 2). A stored value
+    -- that can be re-derived from its own inputs must still equal that
+    -- derivation. Weights are COMPOSITE_WEIGHTS (constants.py): technical .25,
+    -- business_quality .35, valuation .30, sentiment .10 (version 2, since
+    -- 2026-07-09; test_impossible_states pins these numbers to constants.py).
     UNION ALL
-    SELECT '_V', 'q0:16c85d32d98d', NULL, NULL  -- version stamp, see q0_version()
+    -- E1: first run 2026-10-19 (owner SQL) = 438 rows / 0 mismatches. An
+    -- unmeasured pillar is stored null and enters the composite as 50. Equity
+    -- rows only: an ETF composite is the technical/cost blend
+    -- (ETF_COMPOSITE_WEIGHTS) and stores no bq/val.
+    SELECT 'E1', 'score_history: composite != its weighted pillars (0.25t+0.35bq+0.30val+0.10s, unmeasured = 50)',
+           COUNT(*) FILTER (WHERE ABS(composite - (0.25*COALESCE(t_score, 50) + 0.35*COALESCE(bq_score, 50)
+                                                   + 0.30*COALESCE(val_score, 50) + 0.10*COALESCE(s_score, 50))) > 0.2),
+           COUNT(*)
+    FROM score_history
+    WHERE NOT (bq_score IS NULL AND val_score IS NULL)
+    UNION ALL
+    -- E2: first run 2026-10-19 (owner SQL) = 1,273 rows / 0. Sentiment is the
+    -- one pillar recommendations does not store, so back it out of the composite.
+    SELECT 'E2', 'recommendations (weights v2): implied sentiment outside 0-100 (composite off by >~5 pts)',
+           COUNT(*) FILTER (WHERE (composite_score - 0.25*t_score - 0.35*bq_score - 0.30*val_score) / 0.10 < -0.5
+                               OR (composite_score - 0.25*t_score - 0.35*bq_score - 0.30*val_score) / 0.10 > 100.5),
+           COUNT(*)
+    FROM recommendations
+    WHERE weights_version = 2 AND composite_score IS NOT NULL AND t_score IS NOT NULL
+      AND bq_score IS NOT NULL AND val_score IS NOT NULL
+    UNION ALL
+    -- E3: NEVER RUN yet -- not baselined (ACCRUING in impossible_states.py until
+    -- the owner's first count). Stored values: followed_signal is the text
+    -- 'yes' / 'no' / 'discretionary' / NULL (app.py Trade Journal save);
+    -- signal_seen is the free-text reconciled verdict at click, e.g.
+    -- 'Strong Buy · Composite 81/100'. Detector candidate (a) from 2026-10-19:
+    -- MSFT SELL 10-16 marked 'yes' against a 'Buy'.
+    SELECT 'E3', 'trades: followed_signal = yes against the OPPOSITE signal (a SELL "following" a Buy, or a BUY "following" a Sell)',
+           COUNT(*) FILTER (WHERE (UPPER(action) = 'SELL' AND LOWER(followed_signal) = 'yes'
+                                   AND signal_seen ILIKE '%buy%' AND signal_seen NOT ILIKE '%sell%')
+                               OR (UPPER(action) = 'BUY' AND LOWER(followed_signal) = 'yes'
+                                   AND signal_seen ILIKE '%sell%' AND signal_seen NOT ILIKE '%buy%')),
+           COUNT(*) FILTER (WHERE followed_signal IS NOT NULL)
+    FROM trades
+    UNION ALL
+    SELECT '_V', 'q0:fdbd2b2a9c28', NULL, NULL  -- version stamp, see q0_version()
   ) q
   ORDER BY id
 $fn$;
@@ -221,5 +261,5 @@ $fn$;
 REVOKE EXECUTE ON FUNCTION public.impossible_states_q0(date[]) FROM PUBLIC, anon, authenticated;
 GRANT  EXECUTE ON FUNCTION public.impossible_states_q0(date[]) TO service_role;
 
--- VERIFY: 28 check rows plus one `_V` version row; counts match a manual Q0 run.
+-- VERIFY: 31 check rows plus one `_V` version row; counts match a manual Q0 run.
 -- SELECT * FROM public.impossible_states_q0(ARRAY['2026-07-03']::date[]);

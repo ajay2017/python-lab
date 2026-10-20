@@ -80,6 +80,25 @@ def test_accruing_check_never_warns_but_reports_growth(cid, base):
     assert f"{cid} {base + 500} (baseline {base})" in out[0]["detail"]
 
 
+def test_section_e_ids_are_expected():
+    assert {"E1", "E2", "E3"} <= ist.EXPECTED_IDS
+    assert len(ist.EXPECTED_IDS) == 31
+
+
+@pytest.mark.parametrize("cid", ["E1", "E2"])
+def test_recompute_checks_are_zero_policy(cid):
+    assert ist.policy_for(cid) == (ist.ZERO, 0)
+    out = ist.classify(_rows(**{cid: 1}))
+    assert _sev(out) == ["warn"] and out[0]["key"] == f"impossible_states_{cid}"
+
+
+def test_e3_is_accruing_until_baselined_and_never_raises():
+    assert ist.policy_for("E3") == (ist.ACCRUING, 0)
+    out = ist.classify(_rows(E3=7))
+    assert _sev(out) == ["ok"]
+    assert "E3 7 (baseline 0)" in out[0]["detail"]
+
+
 def test_shape_mismatch_does_not_stop_the_other_checks():
     rows = [r for r in _rows(D4=1) if r["id"] != "A1"]
     keys = {f["key"] for f in ist.classify(rows)}
@@ -99,11 +118,11 @@ def test_version_row_is_not_an_unexpected_check():
 
 
 def test_missing_or_unexpected_check_ids_are_reported():
-    rows = [r for r in _rows() if r["id"] != "D4"] + [{"id": "E1", "chk": "x", "n_bad": 0}]
+    rows = [r for r in _rows() if r["id"] != "D4"] + [{"id": "Z9", "chk": "x", "n_bad": 0}]
     out = ist.classify(rows)
     shape = [f for f in out if f["key"] == "impossible_states_shape"]
     assert len(shape) == 1 and shape[0]["severity"] == "warn"
-    assert "D4" in shape[0]["detail"] and "E1" in shape[0]["detail"]
+    assert "D4" in shape[0]["detail"] and "Z9" in shape[0]["detail"]
 
 
 def test_unreadable_count_is_unknown_not_zero():
@@ -193,7 +212,7 @@ def test_run_all_checks_includes_the_audit(monkeypatch):
                  "check_pending_import_anomalies"):
         monkeypatch.setattr(dm, name, lambda *_a, **_k: [])
     out = dm.run_all_checks(set(), set(), set())
-    assert [f["key"] for f in out] == ["impossible_states_D4"]
+    assert [f["key"] for f in out if f["key"] != "unmapped_sectors"] == ["impossible_states_D4"]
 
 
 # ── the SQL function file is generated, not hand-copied ────────────────────
@@ -248,7 +267,30 @@ def test_q0_thresholds_are_the_constants_py_values():
 def test_function_checks_match_expected_ids_and_take_the_calendar_as_a_parameter():
     text = (ROOT / "docs" / "sql" / "impossible-states-function.sql").read_text(encoding="utf-8")
     body = text.split("$fn$")[1]
-    assert set(re.findall(r"SELECT '([A-D]\d+)'", body)) == set(ist.EXPECTED_IDS)
+    assert set(re.findall(r"SELECT '([A-E]\d+)'", body)) == set(ist.EXPECTED_IDS)
     assert "= ANY(p_closed)" in body
     assert "DATE '2026-07-03'" not in body, "the calendar must come from constants, not SQL"
     assert re.search(r"\b(INSERT|UPDATE|DELETE|TRUNCATE|DROP|ALTER)\b", body) is None
+
+
+def test_e1_e2_weights_in_q0_equal_composite_weights():
+    """The recompute detectors hard-code the four pillar weights in SQL; a
+    future COMPOSITE_WEIGHTS change must fail here, not leave E1/E2 wrong."""
+    from stock_analyzer.constants import COMPOSITE_WEIGHTS as W
+    audit = (ROOT / "docs" / "sql" / "impossible-states-audit.sql").read_text(
+        encoding="utf-8").replace("\r\n", "\n")
+    q0 = audit.split("-- Q0 — SUMMARY", 1)[1].split(") q\nORDER BY", 1)[0]
+    e1 = q0.split("SELECT 'E1'", 1)[1].split("SELECT 'E2'", 1)[0]
+    e2 = q0.split("SELECT 'E2'", 1)[1].split("SELECT 'E3'", 1)[0]
+
+    def num(text, col):
+        m = re.search(r"([0-9.]+)\*(?:COALESCE\()?" + col + r"\b", text)
+        assert m, f"{col} weight not found"
+        return float(m.group(1))
+
+    for col, key in (("t_score", "technical"), ("bq_score", "business_quality"),
+                     ("val_score", "valuation")):
+        assert num(e1, col) == W[key], f"E1 {col}"
+        assert num(e2, col) == W[key], f"E2 {col}"
+    assert float(re.search(r"([0-9.]+)\*COALESCE\(s_score", e1).group(1)) == W["sentiment"]
+    assert "/ 0.10" in e2 and W["sentiment"] == 0.10

@@ -1,6 +1,6 @@
 # App trust verification — is the app computing what it claims?
 
-**Status:** PROPOSED 2026-10-19 (lead, owner-requested). Nothing built. Planned start: item 2, next session.
+**Status:** ITEM 2 BUILT 2026-10-20 — Q0 section E (E1 score_history recompute, E2 recommendations implied sentiment, E3 followed_signal against the opposite signal) + data_maintenance check 7 (held tickers missing from TICKER_SECTORS); Q0_VERSION `q0:fdbd2b2a9c28`. **Owner:** re-apply `docs/sql/impossible-states-function.sql` in Supabase, then run E3's first count to baseline it. Items 1, 3, 4, 5 not started. (Was: PROPOSED 2026-10-19, lead, owner-requested.)
 
 ## Results so far
 **Item 2, first run (2026-10-19, owner-run SQL):**

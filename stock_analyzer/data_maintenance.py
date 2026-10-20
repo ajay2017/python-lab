@@ -463,7 +463,7 @@ def check_pending_import_anomalies() -> "list[dict]":
 
 # ── Check 6 — impossible-states audit (2026-10-14) ───────────────────────────
 def check_impossible_states() -> "list[dict]":
-    """Runs the impossible-states audit's Q0 (28 counts of rows that should
+    """Runs the impossible-states audit's Q0 (31 counts of rows that should
     not exist if the code were correct: fabricated best-value readings,
     unverified stored claims, two producers disagreeing, broken identities)
     and compares each to its 2026-10-14 baseline. This is a different
@@ -483,13 +483,56 @@ def check_impossible_states() -> "list[dict]":
     return classify(res.get("rows"), res.get("error"))
 
 
+# ── Check 7 — held tickers with no curated sector (2026-10-19) ───────────────
+_UNMAPPED_LIST_CAP = 15
+
+
+def check_unmapped_sectors(held_tickers: "set[str] | None") -> "list[dict]":
+    """Held tickers missing from `portfolio.TICKER_SECTORS`. Such a name falls
+    back to the row/provider sector label, and to UNCLASSIFIED_SECTOR
+    ("Other") when that is a placeholder or absent (`sector_fit.gate_sector`
+    / `portfolio.resolve_sector`); an unclassified name can't be checked by
+    the sector ceiling or the macro sector gate at all. Found 2026-10-19 via
+    WK. Detection only.
+
+    `held_tickers is None` (the holdings read failed) is "unknown", never
+    "ok": nothing was checked."""
+    key, label = "unmapped_sectors", "Held tickers with no curated sector"
+    if held_tickers is None:
+        return [{
+            "key": key, "label": label, "severity": "unknown",
+            "detail": "holdings couldn't be read, so sector coverage wasn't checked",
+        }]
+    from stock_analyzer.portfolio import TICKER_SECTORS
+
+    held = {str(t).strip().upper() for t in held_tickers if str(t or "").strip()}
+    missing = sorted(t for t in held if t not in TICKER_SECTORS)
+    if not missing:
+        return [{
+            "key": key, "label": label, "severity": "ok",
+            "detail": f"all {len(held)} held ticker(s) have a curated sector",
+            "count": 0,
+        }]
+    shown = ", ".join(missing[:_UNMAPPED_LIST_CAP])
+    if len(missing) > _UNMAPPED_LIST_CAP:
+        shown += f" +{len(missing) - _UNMAPPED_LIST_CAP} more"
+    return [{
+        "key": key, "label": label, "severity": "warn",
+        "detail": (f"{len(missing)} held ticker(s) not in TICKER_SECTORS: {shown} — "
+                   "each falls back to the provider sector, or to \"Other\" "
+                   "(unclassified, so the sector ceiling and macro sector gate "
+                   "can't run for it); add it to portfolio.TICKER_SECTORS"),
+        "count": len(missing),
+    }]
+
+
 # ── Orchestrator ──────────────────────────────────────────────────────────────
 def run_all_checks(
     held_tickers: "set[str] | None",
     watchlist_tickers: "set[str] | None",
     discovery_tickers: "set[str] | None",
 ) -> "list[dict]":
-    """Run all 6 checks, each isolated in its own try/except (mirrors
+    """Run all 7 checks, each isolated in its own try/except (mirrors
     cron_runner.py::_run_maintenance's per-sub-job isolation) so one raising
     can't prevent the others from reporting. A check that raises degrades to
     a single "unknown" finding row naming which check failed, rather than
@@ -498,7 +541,8 @@ def run_all_checks(
     The three roster args may be `None` (2026-10-02 review M1) when the
     caller's own holdings/watchlist/discovery-universe read failed this
     run — passed straight through to check_orphan_cache_rows, which is the
-    only one of the 5 checks that consumes them."""
+    only one of the 7 checks that consumes them (check 7 takes `held_tickers`
+    too)."""
     out: "list[dict]" = []
 
     def _safe(name: str, fn) -> None:
@@ -518,4 +562,5 @@ def run_all_checks(
     _safe("thesis_reviews_duplicates", check_thesis_reviews_duplicates)
     _safe("pending_import_duplicates", check_pending_import_anomalies)
     _safe("impossible_states", check_impossible_states)
+    _safe("unmapped_sectors", lambda: check_unmapped_sectors(held_tickers))
     return out

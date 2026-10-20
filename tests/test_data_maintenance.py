@@ -641,3 +641,45 @@ def test_add_account_flow_end_to_end_accepts_new_flow(monkeypatch):
     assert ok is True
     assert fake_table.inserted is not None
     assert fake_table.inserted["amount"] == 750.0
+
+
+# ── check 7 — held tickers with no curated sector ────────────────────────────
+
+def test_unmapped_sectors_none_held_is_unknown():
+    out = dm.check_unmapped_sectors(None)
+    assert [r["severity"] for r in out] == ["unknown"]
+    assert "wasn't checked" in out[0]["detail"]
+
+
+def test_unmapped_sectors_all_mapped_is_ok():
+    out = dm.check_unmapped_sectors({"MSFT", "NVDA"})
+    assert out[0]["severity"] == "ok" and out[0]["count"] == 0
+
+
+def test_unmapped_sectors_warns_naming_the_ticker_case_insensitively(monkeypatch):
+    from stock_analyzer import portfolio
+    monkeypatch.delitem(portfolio.TICKER_SECTORS, "WK", raising=False)
+    out = dm.check_unmapped_sectors({" wk ", "msft"})
+    assert out[0]["severity"] == "warn" and out[0]["count"] == 1
+    assert "WK" in out[0]["detail"] and "MSFT" not in out[0]["detail"]
+
+
+def test_unmapped_sectors_caps_the_listed_names():
+    held = {f"ZZZ{i:02d}" for i in range(20)}
+    out = dm.check_unmapped_sectors(held)
+    assert out[0]["count"] == 20 and "+5 more" in out[0]["detail"]
+
+
+def test_run_all_checks_includes_unmapped_sectors_and_isolates_a_raise(monkeypatch):
+    for name in ("check_orphan_cache_rows", "check_account_flows_duplicates",
+                 "check_analyst_coverage_duplicates", "check_thesis_reviews_duplicates",
+                 "check_pending_import_anomalies", "check_impossible_states"):
+        monkeypatch.setattr(dm, name, lambda *_a, **_k: [])
+    assert [r["key"] for r in dm.run_all_checks({"MSFT"}, set(), set())] == ["unmapped_sectors"]
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("x")
+    monkeypatch.setattr(dm, "check_unmapped_sectors", _boom)
+    rows = dm.run_all_checks({"MSFT"}, set(), set())
+    assert [r["key"] for r in rows] == ["unmapped_sectors_error"]
+    assert rows[0]["severity"] == "unknown"
