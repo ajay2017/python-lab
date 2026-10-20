@@ -111,8 +111,8 @@ optional stored weekly snapshots (columns on `weekly_debriefs`).
 - trades 322 (under the PostgREST page cap; pagination fix is preventive); 0 fractional fills.
 - account_daily_snapshots 28 rows since 09-10, 0 null cash / net_equity; daily_snapshots 28 sessions since 09-10 = every NYSE
   session 09-10..10-19 (full coverage).
-- account_flows: only the 06-25 `baseline` row — no deposit/withdrawal ever recorded. **Owner 2026-10-20: no withdrawals since
-  06-25** (deposits not stated). An unrecorded deposit would land in "unexplained" (cash side).
+- account_flows: only the 06-25 `baseline` row — no deposit/withdrawal ever recorded. **Owner 2026-10-20: no deposits and no
+  withdrawals since 06-25** — the $0 flows line is genuine, not a gap.
 - snaptrade_income_events: fees stored negative (cash out); interest negative = charged, positive = earned. **Margin interest has no
   rows after 2026-08** although the September statement shows MINT charged → capture gap (statement CSV not imported). **Owner imported the September statement 2026-10-20**; October stays a gap until its statement (~11-01, trust item 1). The report
   flags months in the period with no interest row while levered (`interest_coverage_gap_months`), never "$0".
