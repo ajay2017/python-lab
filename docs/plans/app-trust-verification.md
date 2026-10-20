@@ -16,6 +16,9 @@
   impossible implied sentiment** ((composite − 0.25t − 0.35bq − 0.30val)/0.10 outside 0-100). Weaker than the
   score_history check (it only catches a composite off by ≳ ±5 points), but clean.
 - Not yet run: the detectors per recent bug class (and folding both checks into the weekly Q0).
+- **Detector candidates found 2026-10-19:** (a) `trades.followed_signal` contradicting `signal_seen` (e.g. a SELL
+  marked 'yes' against a "Buy" signal — MSFT 10-16) and mostly NULL on manual trades, so any "followed the app"
+  statistic is unreliable; (b) held/traded tickers missing from `portfolio.TICKER_SECTORS` (WK, CF, ENVA).
 
 ## The question
 After 4-5 months of live data and a run of sessions that each found bugs, the owner wants a way to **trust** the app.
