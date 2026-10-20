@@ -597,7 +597,9 @@ def policy_constants(tree: ast.AST) -> frozenset:
 # collapses whitespace and entity-encodes markdown syntax ([ ] \ `) so the
 # output cannot form a markdown link. ELEMENT CONTENT ONLY — never interpolate
 # safe_link output inside an HTML attribute.
-_ESCAPING_HELPERS = frozenset({"safe_html", "md_bold_to_html", "safe_link"})
+# safe_text is safe_html plus the same whitespace collapse and character
+# references for $ [ ] \ ` that safe_link applies to a title.
+_ESCAPING_HELPERS = frozenset({"safe_html", "md_bold_to_html", "safe_link", "safe_text"})
 
 
 def escaping_names(tree: ast.AST) -> frozenset:

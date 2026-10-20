@@ -352,6 +352,7 @@ from stock_analyzer.pillar_availability import (
 )
 from stock_analyzer.util import safe_html as _safe_html
 from stock_analyzer.util import safe_link as _safe_link
+from stock_analyzer.util import safe_text as _safe_text
 from stock_analyzer.util import md_bold_to_html as _md_bold
 from stock_analyzer.util import factor_tilt_state as _factor_tilt_state
 from stock_analyzer.sold_today import tickers_sold_on
@@ -2841,7 +2842,7 @@ def _fill_news_slot(slot, items: list) -> None:
             _icon = "▲" if _ni["label"] == "Positive" else (
                     "▼" if _ni["label"] == "Negative" else "–")
             _badge = "✅ " if _ni["tier"] == 1 else ""
-            _pub   = _ni["publisher"][:18]
+            _pub   = _ni["publisher"][:18]  # raw; escaped at the interpolation
             _ago   = _time_ago(_ni["ts"])
             _link  = _safe_link(
                 _ni.get("url"),
@@ -2856,7 +2857,7 @@ def _fill_news_slot(slot, items: list) -> None:
                 f"<div style='font-size:0.72em;color:#666;margin-bottom:2px'>"
                 f"<span style='color:{_clr};font-weight:bold'>{_icon}</span> "
                 f"<b style='color:#999'>{_ni['ticker']}</b> · "
-                f"{_badge}{_pub} · {_ago}</div>"
+                f"{_badge}{_safe_text(_pub)} · {_ago}</div>"
                 f"<div style='font-size:0.78em'>{_link}</div>"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -4582,7 +4583,7 @@ def _render_holdings_earnings(port_df, held_data):
                             _rv_icon = "⬆️" if _rv_dir == "up" else ("⬇️" if _rv_dir == "down" else "➡️")
                             st.markdown(
                                 f"<div style='font-size:0.8em;color:#999;margin-left:8px'>"
-                                f"{_rv_icon} {_rv_firm}</div>",
+                                f"{_safe_text(_rv_icon)} {_safe_text(_rv_firm)}</div>",
                                 unsafe_allow_html=True,
                             )
 
@@ -4598,7 +4599,7 @@ def _render_holdings_earnings(port_df, held_data):
                         st.markdown(
                             f"<div style='font-size:0.88em;color:#bbb;margin-top:6px'>"
                             f"Post-earnings reaction: "
-                            f"<span style='color:{_rxn_color};font-weight:600'>{_rxn_text}</span>"
+                            f"<span style='color:{_rxn_color};font-weight:600'>{_safe_text(_rxn_text)}</span>"
                             f"</div>",
                             unsafe_allow_html=True,
                         )
@@ -8825,9 +8826,9 @@ if page == "🏠 Home":
                 f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap;"
                 f"border-top:1px solid #374151;padding-top:10px;margin-top:4px'>"
                 f"<span style='color:#fbbf24;font-size:1em;font-weight:700'>{_qr_res['ticker']}</span>"
-                + (f"<span style='color:#d1d5db;font-size:0.85em'>{_qr_res['name']}</span>"
+                + (f"<span style='color:#d1d5db;font-size:0.85em'>{_safe_text(_qr_res['name'])}</span>"
                    if _qr_res.get("name") and _qr_res["name"] != _qr_res["ticker"] else "")
-                + (f"<span style='color:#9ca3af;font-size:0.8em'>{_qr_res['sector']}</span>"
+                + (f"<span style='color:#9ca3af;font-size:0.8em'>{_safe_text(_qr_res['sector'])}</span>"
                    if _qr_res.get("sector") else "")
                 + (f"<span style='color:#f9fafb;font-size:0.9em'>${_qr_res['price']:.2f}</span>"
                    if _qr_res.get("price") else "")
@@ -15746,17 +15747,20 @@ elif page == "📡 Signals & Advice":
                                        "#00C851" if h["label"] == "Positive" else "#888")
                                 arrow = "▼" if h["label"] == "Negative" else (
                                         "▲" if h["label"] == "Positive" else "–")
-                                headline_short = h["headline"][:78] + ("…" if len(h["headline"]) > 78 else "")
                                 url = h.get("url", "")
-                                link_part = (
-                                    f"<a href='{url}' target='_blank' "
-                                    f"style='color:#ccc;text-decoration:none'>{headline_short}</a>"
-                                    if url else f"<span style='color:#ccc'>{headline_short}</span>"
+                                # Untrusted title + URL: escaped, http(s)-only, $ and
+                                # markdown neutralised (util.safe_link).
+                                link_part = _safe_link(
+                                    url, h["headline"], max_len=78,
+                                    style="color:#ccc;text-decoration:none",
                                 )
+                                # "[source ↗]" is a literal label; a second safe_link
+                                # from the same URL only when it yields a real anchor
+                                # (a non-http(s) URL falls through to the no-link note).
+                                _src_a = _safe_link(url, "[source ↗]", max_len=20,
+                                                    style="color:#4a9eff;font-size:0.7em")
                                 source_tag = (
-                                    f" <a href='{url}' target='_blank' "
-                                    f"style='color:#4a9eff;font-size:0.7em'>[source ↗]</a>"
-                                    if url else
+                                    f" {_src_a}" if _src_a.startswith("<a ") else
                                     " <span style='color:#555;font-size:0.7em'>[no link — verify on Yahoo Finance]</span>"
                                 )
                                 st.markdown(
@@ -15864,8 +15868,8 @@ elif page == "📡 Signals & Advice":
                                 firm = analyst_act.get("firm", "Unknown")
                                 st.markdown(
                                     f"<div style='font-size:0.82em;margin-bottom:3px'>"
-                                    f"<span style='color:{aclr};font-weight:bold'>{arr} {firm}</span>"
-                                    f"<span style='color:#aaa'> · {grade_str}</span></div>",
+                                    f"<span style='color:{aclr};font-weight:bold'>{arr} {_safe_text(firm)}</span>"
+                                    f"<span style='color:#aaa'> · {_safe_text(grade_str)}</span></div>",
                                     unsafe_allow_html=True,
                                 )
                             st.markdown(
@@ -20753,7 +20757,7 @@ elif page == "🥧 Portfolio Overview":
                         f"{_al['weight']:.1f}% weight  ·  "
                         f"P&L {_al['pnl_pct']:+.1f}%  ·  "
                         f"Score {_al['score']:.0f}/100  ·  "
-                        f"{_al.get('publisher', '')[:20]}  ·  "
+                        f"{_safe_text((_al.get('publisher') or '')[:20])}  ·  "
                         f"{_time_ago(_al.get('ts', 0))}</div>"
                         f"<div style='font-size:0.84em'>{_al_link}</div>"
                         f"<div style='font-size:0.72em;color:#666;margin-top:5px'>"
@@ -20792,7 +20796,7 @@ elif page == "🥧 Portfolio Overview":
                         f"{_op['weight']:.1f}% weight  ·  "
                         f"P&L {_op['pnl_pct']:+.1f}%  ·  "
                         f"Score {_op['score']:.0f}/100  ·  "
-                        f"{_op.get('publisher', '')[:20]}  ·  "
+                        f"{_safe_text((_op.get('publisher') or '')[:20])}  ·  "
                         f"{_time_ago(_op.get('ts', 0))}</div>"
                         f"<div style='font-size:0.84em'>{_op_link}</div>"
                         f"<div style='font-size:0.72em;color:#666;margin-top:5px'>"
@@ -20857,13 +20861,9 @@ elif page == "🥧 Portfolio Overview":
                                  "#ef4444" if _hn["compound"] <= -0.05 else "#555")
                     _hn_icon = ("▲" if _hn["compound"] >= 0.05 else
                                 "▼" if _hn["compound"] <= -0.05 else "–")
-                    _hn_url  = _hn.get("url", "")
-                    _hn_link = (
-                        f"<a href='{_hn_url}' target='_blank' "
-                        f"style='color:#bbb;text-decoration:none'>{_html.escape(_hn['title'][:85])}"
-                        f"{'…' if len(_hn['title']) > 85 else ''}</a>"
-                        if _hn_url else
-                        f"<span style='color:#bbb'>{_html.escape(_hn['title'][:85])}</span>"
+                    _hn_link = _safe_link(
+                        _hn.get("url", ""), _hn["title"], max_len=85,
+                        style="color:#bbb;text-decoration:none",
                     )
                     st.markdown(
                         f"<div style='padding:5px 0;border-bottom:1px solid #1a1a1a'>"
@@ -20871,7 +20871,7 @@ elif page == "🥧 Portfolio Overview":
                         f"<b style='color:#999;font-size:0.85em'>{_hn['ticker']}</b>  "
                         f"<span style='color:#555;font-size:0.78em'>"
                         f"{_hn['weight']:.1f}% · P&L {_hn['pnl_pct']:+.1f}% · "
-                        f"{_hn.get('publisher','')[:18]} · {_time_ago(_hn.get('ts',0))}"
+                        f"{_safe_text((_hn.get('publisher') or '')[:18])} · {_time_ago(_hn.get('ts',0))}"
                         f"</span><br>"
                         f"<span style='font-size:0.82em'>{_hn_link}</span>"
                         f"</div>",
@@ -21488,7 +21488,7 @@ elif page == "🥧 Portfolio Overview":
                                 st.markdown(
                                     f"<div style='font-size:0.82em;color:#bbb;margin:3px 0'>"
                                     f"<span style='color:{_hl_clr};font-weight:bold'>"
-                                    f"[{_hl['score']:+.2f}]</span> {_hl['title']}"
+                                    f"[{_hl['score']:+.2f}]</span> {_safe_text(_hl['title'])}"
                                     f"</div>",
                                     unsafe_allow_html=True,
                                 )
@@ -25565,7 +25565,7 @@ elif page == "📈 Analysis":
                     f"<div style='background:#111827;border:1px solid #374151;"
                     f"border-radius:8px;padding:8px 14px;margin:8px 0 12px;"
                     f"font-size:0.82em;color:#9ca3af'>"
-                    f"🏢 <b style='color:#e5e7eb'>{_co_name}</b> — company info "
+                    f"🏢 <b style='color:#e5e7eb'>{_safe_text(_co_name)}</b> — company info "
                     f"unavailable from Yahoo Finance right now. Try the "
                     f"<a href='https://finance.yahoo.com/quote/{ticker}/profile' "
                     f"style='color:#60a5fa' target='_blank'>Yahoo profile page</a> "
@@ -25578,11 +25578,11 @@ elif page == "📈 Analysis":
                 # missing values are skipped rather than rendered as dashes.
                 _meta_parts = []
                 if _co_sector_raw and _co_industry_raw:
-                    _meta_parts.append(f"{_co_sector_raw} · {_co_industry_raw}")
+                    _meta_parts.append(f"{_safe_text(_co_sector_raw)} · {_safe_text(_co_industry_raw)}")
                 elif _co_sector_raw:
-                    _meta_parts.append(_co_sector_raw)
+                    _meta_parts.append(_safe_text(_co_sector_raw))
                 elif _co_industry_raw:
-                    _meta_parts.append(_co_industry_raw)
+                    _meta_parts.append(_safe_text(_co_industry_raw))
                 if _co_mcap_str:
                     _meta_parts.append(f"Market cap <b style='color:#e5e7eb'>{_co_mcap_str}</b>")
                 _meta_line = " · ".join(_meta_parts) if _meta_parts else ""
@@ -25608,12 +25608,12 @@ elif page == "📈 Analysis":
                     f"<span style='color:#9ca3af;font-size:0.72em;font-weight:700;"
                     f"letter-spacing:0.08em;text-transform:uppercase'>"
                     f"🏢 Company Overview</span>"
-                    f"<span style='color:#f9fafb;font-weight:700'>{_co_name}</span>"
+                    f"<span style='color:#f9fafb;font-weight:700'>{_safe_text(_co_name)}</span>"
                     + (f"<span style='color:#9ca3af;font-size:0.82em'>{_meta_line}</span>"
                        if _meta_line else "")
                     + f"</div>"
                     + (f"<div style='color:#d1d5db;font-size:0.85em;line-height:1.5'>"
-                       f"{_co_one_liner}</div>" if _co_one_liner else "")
+                       f"{_safe_text(_co_one_liner)}</div>" if _co_one_liner else "")
                     + f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -27120,12 +27120,9 @@ elif page == "📈 Analysis":
                               "#ff4444" if h["label"] == "Negative" else "#888")
                         lbl = "▲" if h["label"] == "Positive" else (
                               "▼" if h["label"] == "Negative" else "–")
-                        headline_text = h["headline"][:75] + ("…" if len(h["headline"]) > 75 else "")
-                        url = h.get("url", "")
-                        linked = (
-                            f"<a href='{url}' target='_blank' "
-                            f"style='color:#ccc;text-decoration:none'>{headline_text}</a>"
-                            if url else headline_text
+                        linked = _safe_link(
+                            h.get("url", ""), h["headline"], max_len=75,
+                            style="color:#ccc;text-decoration:none",
                         )
                         st.markdown(
                             f"<small style='color:{clr}'>{lbl} {h['score']:+.2f}</small> "
@@ -27234,8 +27231,8 @@ elif page == "📈 Analysis":
                                 to_g = action.get("to_grade", "")
                                 arrow = f" {from_g} → {to_g}" if from_g and to_g else (f" → {to_g}" if to_g else "")
                                 st.markdown(
-                                    f"<small style='color:{act_clr}'>● {action.get('firm','')}"
-                                    f"{arrow} ({act_lbl})</small>",
+                                    f"<small style='color:{act_clr}'>● {_safe_text(action.get('firm') or '')}"
+                                    f" {_safe_text(arrow)} ({_safe_text(act_lbl)})</small>",
                                     unsafe_allow_html=True,
                                 )
                     else:

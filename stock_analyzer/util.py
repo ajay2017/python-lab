@@ -482,6 +482,24 @@ def safe_html(value: Any) -> str:
     return _html.escape(str(value), quote=True)
 
 
+def safe_text(value: Any) -> str:
+    """Escape an untrusted feed/LLM TEXT field for ELEMENT CONTENT inside an
+    ``unsafe_allow_html`` string — ``safe_html`` plus the markdown/LaTeX
+    hazards ``safe_html`` leaves alone (the same rules ``safe_link`` applies to
+    a title): whitespace runs collapse to one space, and ``$ [ ] \\ ```` are
+    emitted as character references, so the text can neither render as LaTeX
+    (``$300 ... $143``) nor form a markdown link at an inline site.
+
+    Never interpolate inside an HTML attribute. ``scripts/check_antipatterns.py``
+    credits a direct call to this function as fully escaped.
+    """
+    out = _html.escape(" ".join(str(value).split()), quote=True)
+    for ch, ref in (("$", "&#36;"), ("[", "&#91;"), ("]", "&#93;"),
+                    ("\\", "&#92;"), ("`", "&#96;")):
+        out = out.replace(ch, ref)
+    return out
+
+
 def safe_link(url: Any, title: Any, max_len: int = 90,
               style: str = "color:#ddd;text-decoration:none") -> str:
     """Render an untrusted news headline as a safe anchor.
@@ -529,11 +547,17 @@ def safe_link(url: Any, title: Any, max_len: int = 90,
     for ch, ref in (("$", "&#36;"), ("[", "&#91;"), ("]", "&#93;"),
                     ("\\", "&#92;"), ("`", "&#96;")):
         safe_title = safe_title.replace(ch, ref)
-    safe_style = _html.escape(str(style), quote=True)
+    # Collapse whitespace so a newline/blank line in a style can never end the
+    # HTML block (same reason as the title).
+    safe_style = _html.escape(" ".join(str(style).split()), quote=True)
     u = "" if url is None else str(url).strip()
     bad_char = any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in u)
     if not bad_char and u.lower().startswith(("http://", "https://")):
-        safe_url = _html.escape(u, quote=True)
+        # A backtick in the href could pair with a stray backtick in an earlier
+        # inline field and open a code span closing inside this href, so it is
+        # percent-encoded. [ ] stay as-is: inside an HTML tag they are not
+        # markdown syntax, and IPv6 hosts need them.
+        safe_url = _html.escape(u.replace("`", "%60"), quote=True)
         return (f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" '
                 f'style="{safe_style}">{safe_title}</a>')
     return f'<span style="{safe_style}">{safe_title}</span>'

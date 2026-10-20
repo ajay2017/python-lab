@@ -1,6 +1,15 @@
 # Headline / feed-text HTML escaping (XSS hardening)
 
-**Status:** Phase 1 commit 1 SHIPPED 2026-10-19 (`util.safe_link` + checker credit; Opus FIX-FIRST/1 → SHIP/0).
+**Status:** Phase 1 commit 2 BUILT 2026-10-20 (not yet committed) — the 12 inventory sites migrated to `util.safe_link`
+(headline + URL) and a new `util.safe_text` (other untrusted text: `safe_html` plus whitespace collapse and character
+references for `$`, `[`, `]`, `\` and the backtick, so it neither renders as LaTeX nor forms a markdown link; credited in the checker), `safe_link`
+gained style whitespace collapse + backtick percent-encoding in the URL, baseline regenerated (sites that still carry
+trusted local interpolations re-key rather than drop out — only an all-escaped f-string is credited). NEXT: the
+`safe_html` markdown step and the plain-`st.markdown` sweep (Phase 2). **Owner live-check (Phase 3):** Signals & Advice →
+Evidence & Sources, Analysis → Deep Dive sentiment (MRVL "$300 From $143" must show the dollar signs), Portfolio
+Overview → Recent headlines and All News for Your Holdings, sidebar news, Requires Attention / Opportunity cards,
+Analysis → Company Overview, quick research bar, earnings playbook reaction line, analyst actions (both places) —
+unchanged look, links open, no literal `&amp;`, no `\$`. Earlier: Phase 1 commit 1 SHIPPED 2026-10-19 (`util.safe_link` + checker credit; Opus FIX-FIRST/1 → SHIP/0).
 Owner decisions taken: Phases 1+2, credit `safe_link` in the checker, one Opus round. NEXT: commit 2 (migrate the 12
 sites; regenerate the baseline), then the separate `safe_html` markdown step and the plain-`st.markdown` sweep (see
 the review section below). Originally QUEUED 2026-10-19.
@@ -68,6 +77,18 @@ renders as a clickable script link (reasoned from the bundle + CommonMark, not b
   investigator report, CNBC what-to-watch, institutional lens) whose prompts include feed headlines, i.e. a prompt-
   injected headline could make the model emit a link. Needs its own sweep + a decision on approach (e.g. neutralise
   `](`/`[`` in untrusted markdown before render). Exploit still needs a click.
+
+## Phase 2 additions from the commit-2 review (2026-10-20, Opus SHIP/0)
+- N2: `Sector: {_al['sector']}` / `{_op['sector']}` (alert / opportunity cards) and `_sd['sector']` stay raw beside the now-escaped
+  publisher; `resolve_sector` falls back to the raw yfinance `.info` sector for unmapped tickers. Low risk, but escape them.
+- N3: `st.caption(f"  ↳ [{_si['ticker']}] {_si['title'][:80]}…")` (sector-pattern line, All News) puts a raw title into plain
+  markdown — part of the plain-`st.markdown` sweep; also a `$`-LaTeX risk.
+- N5: parametrize the checker's lookalike / no-import / other-module / shadowed-alias / nested-call tests over
+  `{safe_link, safe_text}` (the real-repo count can't detect a broken `safe_text` credit — it exempts 0 app.py sites today).
+- N6 (pre-existing, all four helpers): re-importing over the alias (`from evil import x as _safe_text`, `import evil as
+  _safe_text`) keeps the credit because `_module_bound_names` skips imports — close it in a later checker round.
+- The 11 migrated sites stay baselined (re-keyed) because their f-strings also carry trusted locals; getting them out of the
+  baseline means wrapping those locals too — revisit here, not as churn now.
 
 ## Two constraints that shape the plan
 

@@ -32,6 +32,7 @@ from stock_analyzer.util import (
     correlation_unchecked_note,
     diversification_label_text,
     safe_link,
+    safe_text,
 )
 import pytest
 
@@ -590,6 +591,33 @@ class TestSafeLink:
         assert safe_link("https://x.com", None).endswith("></a>")
         assert ">123</a>" in safe_link("https://x.com", 123)
         assert "<span" in safe_link(12345, 123)
+
+    def test_style_whitespace_is_collapsed(self):
+        out = safe_link("https://x.com", "t", style="color:#ddd;\n\n\tfont-size:1em")
+        assert "\n" not in out and "\t" not in out
+        assert 'style="color:#ddd; font-size:1em"' in out
+
+    def test_backtick_in_url_is_percent_encoded(self):
+        out = safe_link("https://x.com/a`b", "t")
+        assert "`" not in out.split('href="')[1].split('"')[0]
+        assert 'href="https://x.com/a%60b"' in out
+
+
+class TestSafeText:
+    def test_dollar_and_markdown_neutralised(self):
+        out = safe_text("to $300 From $143 [x](javascript:alert(1)) `c` \\")
+        for ch in ("$", "[", "]", "`", "\\"):
+            assert ch not in out
+        assert "&#36;300" in out
+
+    def test_html_escaped_and_whitespace_collapsed(self):
+        out = safe_text('<script>a</script>\n\n"x"  y')
+        assert "<" not in out and "\n" not in out and "  " not in out
+        assert "&lt;script&gt;" in out and "&quot;x&quot;" in out
+
+    def test_none_and_non_str(self):
+        assert safe_text(None) == "None"
+        assert safe_text(12) == "12"
 
 
 class TestStopRecoveryState:

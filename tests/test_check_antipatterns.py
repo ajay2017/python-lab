@@ -501,6 +501,13 @@ class TestUnsafeHtmlEscapingExemption:
 
     _LINK_IMPORT = "from stock_analyzer.util import safe_link as _safe_link\n"
 
+    def test_fully_wrapped_safe_text_is_exempt_and_partial_is_not(self):
+        imp = "from stock_analyzer.util import safe_text as _safe_text\n"
+        ok = imp + 'st.markdown(f"<div>{_safe_text(x)}</div>", unsafe_allow_html=True)'
+        part = imp + 'st.markdown(f"<div>{_safe_text(x)}{b}</div>", unsafe_allow_html=True)'
+        assert "UNSAFE_HTML_DYNAMIC" not in _rules_wired(ok)
+        assert "UNSAFE_HTML_DYNAMIC" in _rules_wired(part)
+
     def test_fully_wrapped_safe_link_is_exempt(self):
         """safe_link escapes title, url AND style internally, so a site whose
         every interpolation is a direct safe_link call is fully escaped."""
