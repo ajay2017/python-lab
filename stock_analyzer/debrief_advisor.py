@@ -28,7 +28,8 @@ State the account result: your account (net equity) moved X% ($Y) from the <d0> 
 Section 2 — DECISIONS YOU MADE (bullet list):
 For each actionable signal surfaced this week — both new-position entry signals AND protective WATCH/TRIM/EXIT signals — did the investor act or not, and what happened to the name by week-end? Be specific. When a conviction tier (Strong Buy / Buy) is given for an entry signal, name it.
 Example (entry): "• NVDA: Strong Buy new position signal (confirmed, surfaced 3×). You did not act. Name fell 6.8% by Friday."
-Example (protective): "• TSLA: TRIM signal (surfaced 2×). You held — not acted on. Position is down 9.2% from peak."
+Example (protective): "• TSLA: TRIM signal (surfaced 2×). You held — not acted on. When it fired on 2026-07-22 the position was 9.2% below its peak, P&L −4.1%."
+A protective signal's drawdown and P&L are a snapshot from the day it fired — always say that day, and never present them as the week-end figure or as a distance "from peak" with a plus sign.
 If a ticker appears under "Positions fully closed this week", write ONLY: "• TICKER: Position closed this week." — do NOT describe it as a price loss or wipeout; closing a position on a signal is correct behaviour.
 If no signals of either kind were surfaced, write "• No actionable signals were surfaced this week."
 
@@ -178,6 +179,30 @@ def unknown_result_reason(recon, account_return) -> str:
 
 def _names(rows) -> "list[str]":
     return sorted({str(r[0]) for r in (rows or []) if isinstance(r, (tuple, list)) and r})
+
+
+def _times_str(p: dict) -> str:
+    times = p.get("times_surfaced", 1)
+    return f" (surfaced {times}× this week)" if times and times > 1 else ""
+
+
+def _signal_snapshot_str(p: dict) -> str:
+    """A protective signal's drawdown and P&L, stated as what they are: a
+    snapshot taken WHEN the signal fired, not the week-end.  dd_from_peak_pct
+    is stored as a positive size ("Down 14.1% from its peak"); printing it with
+    the signed _pct gave "+14.1% from peak", and the model then mislabelled it
+    two different ways on two runs (2026-10-20, HOOD)."""
+    dd, pnl = _fnum(p.get("dd_from_peak_pct")), _fnum(p.get("pnl_pct"))
+    parts = []
+    if dd is not None:
+        parts.append(f"{abs(dd):.1f}% below its peak")
+    if pnl is not None:
+        parts.append(f"P&L {_pct(pnl)} vs its cost")
+    if not parts:
+        return ""
+    when = p.get("signal_date")
+    lead = f"when it fired on {when}" if when else "when it fired"
+    return f"; {lead}: " + ", ".join(parts) + " (a snapshot then, not the week-end)"
 
 
 def generated_et_date(ts) -> str:
@@ -512,6 +537,9 @@ def build_debrief_package(
                         "sold":             tk in week_sells,
                         "pnl_pct":          sig.get("pnl_pct"),
                         "dd_from_peak_pct": sig.get("dd_from_peak_pct"),
+                        # the day those two figures were measured -- a snapshot
+                        # at the signal, not the week-end (HOOD 2026-10-15)
+                        "signal_date":      str(sig.get("signal_date") or "")[:10] or None,
                     }
                 else:
                     _prot_by_tk[tk]["times_surfaced"] += 1
@@ -520,6 +548,7 @@ def build_debrief_package(
                         _prot_by_tk[tk]["tier"]             = tier
                         _prot_by_tk[tk]["pnl_pct"]           = sig.get("pnl_pct")
                         _prot_by_tk[tk]["dd_from_peak_pct"]  = sig.get("dd_from_peak_pct")
+                        _prot_by_tk[tk]["signal_date"]       = str(sig.get("signal_date") or "")[:10] or None
             package["protective_signals"] = sorted(
                 _prot_by_tk.values(),
                 key=lambda x: _tier_rank.get(x["tier"], 0),
@@ -706,11 +735,8 @@ def _format_prompt(package: dict) -> str:
         )
         for p in package["protective_signals"]:
             action_str = "sold" if p["sold"] else "held — NOT acted on"
-            dd_str  = f"; {_pct(p.get('dd_from_peak_pct'))} from peak" if p.get("dd_from_peak_pct") is not None else ""
-            pnl_str = f"; P&L {_pct(p.get('pnl_pct'))}" if p.get("pnl_pct") is not None else ""
-            times     = p.get("times_surfaced", 1)
-            times_str = f" (surfaced {times}× this week)" if times > 1 else ""
-            lines.append(f"  {p['ticker']}: {p['tier']} signal{times_str} — {action_str}{dd_str}{pnl_str}")
+            lines.append(f"  {p['ticker']}: {p['tier']} signal{_times_str(p)} — {action_str}"
+                         f"{_signal_snapshot_str(p)}")
     else:
         lines.append("")
         lines.append("No protective (WATCH/TRIM/EXIT) signals fired this week.")

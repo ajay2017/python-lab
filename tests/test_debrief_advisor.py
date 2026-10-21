@@ -624,6 +624,36 @@ def test_protective_signals_escalates_to_most_severe_tier_seen():
     assert entry["times_surfaced"] == 2
 
 
+def test_protective_signal_figures_carry_the_date_of_the_row_they_came_from():
+    # WATCH 07-20 then EXIT 07-22: the kept figures are the EXIT's, so the
+    # date must be the EXIT's too
+    sig_df = pd.DataFrame([
+        _exit_sig("AAA", "2026-07-20", "WATCH", pnl_pct=-2.0, dd_from_peak_pct=5.0),
+        _exit_sig("AAA", "2026-07-22", "EXIT", pnl_pct=-12.9, dd_from_peak_pct=14.1),
+    ])
+    entry = next(s for s in _generic_pkg(exit_signals_df=sig_df)["protective_signals"]
+                 if s["ticker"] == "AAA")
+    assert (entry["signal_date"], entry["pnl_pct"], entry["dd_from_peak_pct"]) == ("2026-07-22", -12.9, 14.1)
+
+
+def test_protective_signal_line_is_unsigned_dated_and_called_a_snapshot():
+    # 2026-10-20 live: dd_from_peak_pct is a positive size ("Down 14.1% from its
+    # peak"); the prompt printed "+14.1% from peak" and the model mislabelled it.
+    s = da._signal_snapshot_str({"dd_from_peak_pct": 14.1, "pnl_pct": -12.9, "signal_date": "2026-10-15"})
+    assert s == ("; when it fired on 2026-10-15: 14.1% below its peak, P&L -12.9% vs its cost"
+                 " (a snapshot then, not the week-end)")
+    assert "+14.1" not in s
+    assert "14.1% below its peak" in da._signal_snapshot_str({"dd_from_peak_pct": -14.1})   # either sign stored
+    assert da._signal_snapshot_str({}) == ""
+    assert "when it fired:" in da._signal_snapshot_str({"pnl_pct": -1.0})                    # no date → no invented one
+    prompt = da._format_prompt(_base_package(protective_signals=[{
+        "ticker": "HOOD", "tier": "EXIT", "times_surfaced": 1, "sold": False,
+        "pnl_pct": -12.9, "dd_from_peak_pct": 14.1, "signal_date": "2026-10-15"}]))
+    assert "HOOD: EXIT signal — held — NOT acted on; when it fired on 2026-10-15: 14.1% below its peak" in prompt
+    assert "from peak" not in prompt.split("HOOD:")[1].splitlines()[0]
+    assert "never present them as the week-end figure" in da._SYSTEM_PROMPT
+
+
 def test_protective_signals_does_not_downgrade_from_a_later_lower_tier():
     sig_df = pd.DataFrame([
         _exit_sig("AAA", "2026-07-20", "EXIT"),
