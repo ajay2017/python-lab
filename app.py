@@ -43739,7 +43739,8 @@ elif page == "🧠 AI Insights":
 
             st.caption(
                 f"Week ending {_wd.get('week_ending', '—')} · "
-                f"generated {str(_wd.get('generated_at', ''))[:10]}"
+                # generated_at is stored in UTC; an evening run read as tomorrow
+                f"generated {_dba.generated_et_date(_wd.get('generated_at'))}"
                 + (" · ✉ emailed" if _wd.get("email_sent") else "")
                 + ("" if _wd_cur else " · older method")
             )

@@ -814,6 +814,38 @@ def test_generate_debrief_round_trip_is_stamped_v2_and_save_ready():
     assert set(result) <= set(db._WEEKLY_DEBRIEF_COLS)
 
 
+def test_generated_et_date_uses_the_new_york_day():
+    # 2026-10-20 21:30 ET is already 10-21 in UTC
+    assert da.generated_et_date("2026-10-21T01:30:00+00:00") == "2026-10-20"
+    assert da.generated_et_date("2026-10-21T15:00:00+00:00") == "2026-10-21"
+    for bad in (None, "", "not a date", float("nan")):
+        assert da.generated_et_date(bad) == "—"
+
+
+def test_app_debrief_caption_uses_the_et_date_helper():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
+    assert "_dba.generated_et_date(_wd.get('generated_at'))" in src
+    assert "str(_wd.get('generated_at', ''))[:10]" not in src
+
+
+def test_generate_debrief_discloses_a_reply_cut_off_at_the_token_limit(monkeypatch):
+    # 2026-10-18 live: the reply hit max_tokens=700 and "One thing to watch"
+    # ended mid-sentence with nothing saying so.
+    core, (t, _a, _dl) = _week_core()
+    pkg = da.build_debrief_package(SUN, core, None, t)
+    calls = []
+    _install_fake_anthropic(_RAW, calls=calls)
+    monkeypatch.setattr(_FakeResponse, "stop_reason", "max_tokens", raising=False)
+    cut = da.generate_debrief(pkg, api_key="fake-key")
+    last = [k for k in ("section_facts", "section_decisions", "section_patterns", "section_watchnext") if cut[k]][-1]
+    assert cut[last].endswith("(cut off — the debrief hit its length limit)")
+    assert calls[0]["max_tokens"] >= 1500
+    monkeypatch.setattr(_FakeResponse, "stop_reason", "end_turn", raising=False)
+    whole = da.generate_debrief(pkg, api_key="fake-key")
+    assert not any("cut off" in (whole[k] or "") for k in ("section_facts", "section_watchnext"))
+
+
 # ─── _format_prompt blocks carried over (handwritten packages) ────────────────
 
 def _base_package(**overrides):

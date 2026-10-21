@@ -180,6 +180,19 @@ def _names(rows) -> "list[str]":
     return sorted({str(r[0]) for r in (rows or []) if isinstance(r, (tuple, list)) and r})
 
 
+def generated_et_date(ts) -> str:
+    """The ET calendar date of a stored `generated_at` (written in UTC), or "—".
+    Slicing the ISO string gave the UTC day, so an evening ET run read as tomorrow."""
+    import pandas as pd
+    try:
+        t = pd.to_datetime(ts, utc=True)
+    except (TypeError, ValueError):
+        return "—"
+    if t is None or pd.isna(t):
+        return "—"
+    return str(t.tz_convert("America/New_York").date())
+
+
 def method_is_current(metrics_version) -> bool:
     """True when a saved debrief row was measured with the current method
     (METRICS_VERSION).  NULL / NaN / 1 (legacy equity-positions rows) -> False."""
@@ -795,7 +808,10 @@ def generate_debrief(
     package: dict,
     api_key: str,
     model: str = "claude-sonnet-4-6",
-    max_tokens: int = 700,
+    # 700 cut the 2026-10-18 debrief off mid-sentence: the engine package (exact
+    # legs, closed / not-measured names, 13 decision bullets) runs longer than
+    # the old one. 1500 leaves room; a reply that still hits it is disclosed below.
+    max_tokens: int = 1500,
 ) -> dict | None:
     """
     Call the LLM to generate a weekly portfolio debrief.
@@ -817,6 +833,11 @@ def generate_debrief(
         )
         text     = response.content[0].text if response.content else ""
         sections = _parse_response(text)
+        if getattr(response, "stop_reason", None) == "max_tokens":
+            # never let a cut-off sentence read as the model's whole thought
+            _last = next((k for k in reversed(list(sections)) if sections.get(k)), None)
+            if _last is not None:
+                sections[_last] = sections[_last].rstrip() + " … (cut off — the debrief hit its length limit)"
         return {
             "week_ending":      package["week_ending"],
             "metrics_version":  package["metrics_version"],
