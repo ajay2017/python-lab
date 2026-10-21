@@ -958,6 +958,9 @@ _GATE_FILES = {
     "stock_analyzer/news_relevance.py",
     # S-D 2026-10-19: the one sizing path
     "stock_analyzer/sizing_path.py",
+    # Item C 2026-10-21: the provider-first price-target chooser that feeds the
+    # Valuation pillar's PT Upside leg (decides which target scores, or none).
+    "stock_analyzer/valuation_target.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,

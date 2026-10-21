@@ -317,6 +317,9 @@ class _Db:
     def load_analyst_coverage(*a, **k): return None
 
     @staticmethod
+    def load_analyst_coverage_or_none(*a, **k): return None
+
+    @staticmethod
     def save_sector_cache(*a, **k): pass
 
     @staticmethod

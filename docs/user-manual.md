@@ -172,7 +172,7 @@ Every ticker gets a **0–100 composite** (`scoring.combined_score`) from four w
 | Pillar | Weight | What it measures |
 |---|---|---|
 | Business quality | **0.35** | Revenue/earnings growth, margins, debt (`fundamentals.business_quality_score`) |
-| Valuation | **0.30** | Forward P/E, FCF yield, analyst PT upside + consensus (`valuation.valuation_score`) |
+| Valuation | **0.30** | Forward P/E, FCF yield, analyst PT upside + consensus (`valuation.valuation_score`). PT upside uses the data provider's consensus target (≥ 3 analysts, ≤ 3× price); your saved research only when that's unusable; otherwise it isn't scored (F-311). The consensus rating still comes from your saved research. |
 | Technical | **0.25** | Momentum/trend (labelled **"Technical"**, never "Momentum" — that collides with the scanner) |
 | Sentiment | **0.10** | VADER news sentiment, LLM-rescored (bounded ±0.5, `SENTIMENT_LLM_MAX_SWING`) |
 

@@ -658,6 +658,14 @@ ANALYST_EXTRACT_TIMEOUT_SEC = 90
 # covers Forward P/E, FCF Yield, analyst PT upside, and analyst consensus rating.
 VALUATION_COVERAGE_FRESH_DAYS = 90   # analyst_coverage lookback for scoring
 
+# 2026-10-21 (item C, owner decision): PT Upside scores the data provider's
+# consensus target first; the owner's saved analyst research is only a fallback
+# when the provider's target is unusable. Composite rows written before this
+# date used saved research first. COMPOSITE_WEIGHTS_VERSION deliberately NOT
+# bumped (weights unchanged; owner decision D-5).
+VALUATION_PT_MIN_ANALYSTS = 3        # provider target needs >= this many analysts (N unknown -> not scored); saved fallback needs >= this many distinct firms
+VALUATION_PT_MAX_TARGET_RATIO = 3.0  # a target above this multiple of price is not scored (upper side only)
+
 VALUATION_PT_UPSIDE_STRONG  = 30    # ≥ this % → 25/25 pts
 VALUATION_PT_UPSIDE_GOOD    = 15
 VALUATION_PT_UPSIDE_MODEST  = 5

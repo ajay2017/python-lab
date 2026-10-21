@@ -9,6 +9,8 @@ Pure computation — no I/O.  Graceful degradation: absent metrics contribute 0 
 numerator AND denominator, so the score reflects only the data that is present.
 """
 from __future__ import annotations
+import math
+import numbers
 from stock_analyzer.constants import (
     VALUATION_PT_UPSIDE_STRONG, VALUATION_PT_UPSIDE_GOOD,
     VALUATION_PT_UPSIDE_MODEST, VALUATION_PT_UPSIDE_NEUTRAL,
@@ -26,7 +28,8 @@ def valuation_score(
     """
     Returns (score 0-100, signals dict, val_available). Pure computation — no I/O.
 
-    analyst_data keys: avg_pt (float|None), consensus_label (str|None), has_coverage (bool).
+    analyst_data keys: avg_pt (float|None), consensus_label (str|None), has_coverage (bool),
+    optional pt_tag / consensus_tag (short source labels appended to the signal text).
     Graceful degradation: absent metrics contribute 0 to numerator AND denominator.
 
     val_available requires at least one OBJECTIVE metric (Forward P/E or FCF Yield) to
@@ -92,11 +95,14 @@ def valuation_score(
 
     # ── PT Upside to consensus avg target (25 pts) ───────────────────────────
     # Analyst-derived, NOT objective — does not contribute to objective_max_points.
+    # The target is chosen once, upstream (valuation_target.choose_pt_target:
+    # provider first, saved research as fallback). There is deliberately NO
+    # fallback to financials["analyst_target"] here -- it would let a provider
+    # target the chooser rejected (too few analysts, implausible) back in.
     avg_pt = analyst_data.get("avg_pt")
-    # Fall back to yfinance single analyst target if no DB coverage
-    if avg_pt is None:
-        avg_pt = financials.get("analyst_target")
-    if avg_pt is not None and current_price and current_price > 0:
+    _pt_ok = (not isinstance(avg_pt, bool) and isinstance(avg_pt, numbers.Real)
+              and math.isfinite(float(avg_pt)) and float(avg_pt) > 0)
+    if _pt_ok and current_price and current_price > 0:
         max_points += 25
         upside_pct = (avg_pt - current_price) / current_price * 100
         if upside_pct >= VALUATION_PT_UPSIDE_STRONG:
@@ -112,7 +118,14 @@ def valuation_score(
         else:
             pts, label = 0,  f"Above analyst target — overvalued on consensus ({upside_pct:.0f}%)"
         points += pts
-        signals["PT Upside"] = label
+        _pt_tag = analyst_data.get("pt_tag")
+        signals["PT Upside"] = f"{label} ({_pt_tag})" if _pt_tag else label
+    else:
+        # Not scored: say why instead of the leg silently vanishing. Display only --
+        # 0 points and NOTHING added to the denominator, so the score is identical.
+        _why = analyst_data.get("pt_not_scored")
+        if isinstance(_why, str) and _why.strip():
+            signals["PT Upside"] = _why
 
     # ── Analyst consensus rating ──────────────────────────────────────────────
     # Analyst-derived, NOT objective — does not contribute to objective_max_points.
@@ -129,7 +142,9 @@ def valuation_score(
         max_points += max(VALUATION_CONSENSUS_PTS.values())
         pts = VALUATION_CONSENSUS_PTS.get(label_raw, 0)
         points += pts
-        signals["Analyst Consensus"] = f"{label_raw} (analyst consensus)"
+        _cons_tag = analyst_data.get("consensus_tag")
+        _cons_sig = f"{label_raw} (analyst consensus)"
+        signals["Analyst Consensus"] = f"{_cons_sig} ({_cons_tag})" if _cons_tag else _cons_sig
 
     val_available = objective_max_points > 0
     score = round((points / max_points) * 100, 1) if val_available else 50.0

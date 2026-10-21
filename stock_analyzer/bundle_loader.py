@@ -16,6 +16,7 @@ a Streamlit-cached helper).
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 from stock_analyzer.constants import (
@@ -25,6 +26,8 @@ from stock_analyzer.constants import (
     ETF_LOOKTHROUGH_CACHE_MAX_AGE_DAYS,
     ATR_STOP_MULT,
     VALUATION_COVERAGE_FRESH_DAYS,
+    VALUATION_PT_MIN_ANALYSTS,
+    VALUATION_PT_MAX_TARGET_RATIO,
 )
 from stock_analyzer.data import (
     _parse_news_item,
@@ -39,6 +42,9 @@ from stock_analyzer.fundamentals import (
     upside_potential, count_core_metrics, resolve_fundamentals, CORE_BQ_KEYS,
 )
 from stock_analyzer.valuation import valuation_score
+from stock_analyzer.valuation_target import choose_pt_target, pt_short_tag, pt_label
+from stock_analyzer.market_time import ET, now_et
+import logging
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
 from stock_analyzer.risk import atr_stop_loss, compute_all_risk
@@ -63,6 +69,46 @@ def _cache_age_in_days(fetched_at_iso: str | None) -> int | None:
         return max(0, (datetime.now(timezone.utc) - dt).days)
     except Exception:
         return None
+
+
+_log = logging.getLogger(__name__)
+
+
+def _et_date_str(ts) -> str | None:
+    """A stored UTC (or tz-aware) ISO timestamp -> its America/New_York calendar
+    date 'YYYY-MM-DD'. Naive stamps are UTC (that is how the caches write them).
+    A bare 'YYYY-MM-DD' is already a calendar date and is returned unchanged —
+    `db.load_bundle_cache` stores `fetched` as a UTC DATE, which can't be converted
+    (reading it as UTC midnight would move every one a day early); for an
+    evening-ET fetch it can read one day ahead. None if absent/unparseable."""
+    if not ts:
+        return None
+    s = str(ts).strip()
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        try:
+            return datetime.strptime(s, "%Y-%m-%d").date().isoformat()
+        except ValueError:
+            return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(ET).date().isoformat()
+    except Exception:
+        return None
+
+
+def _coerce_pt_str(v):
+    """A saved target stored as a string ("685", "$700", "1,200.50") -> float.
+    Anything else (incl. unparseable / non-finite strings) is returned unchanged;
+    the chooser rejects junk itself."""
+    if isinstance(v, str):
+        try:
+            f = float(v.strip().replace("$", "").replace(",", ""))
+        except ValueError:
+            return v
+        return f if math.isfinite(f) else v
+    return v
 
 
 def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.045) -> dict:
@@ -116,10 +162,12 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     # no-ops if the table doesn't exist → live-only.
     _fund_source = "live"
     _fund_cache_age_days = None
+    _fund_cache_fetched_at = None   # the cache row's own fetch time (NB-1a)
     if count_core_metrics(financials) >= FUNDAMENTALS_GATE_MIN_METRICS:
         db.save_fundamentals_cache(ticker, financials)            # write-through
     else:
         _cached = db.load_fundamentals_cache(ticker)
+        _fund_cache_fetched_at = (_cached or {}).get("fetched_at")
         _cached_age = _cache_age_in_days((_cached or {}).get("fetched_at"))
         financials, _, _fund_source, _fund_cache_age_days = resolve_fundamentals(
             financials,
@@ -145,33 +193,97 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     _closes = df["Close"].dropna() if not df.empty else None
     price = float(_closes.iloc[-1]) if _closes is not None and not _closes.empty else None
     # ── Analyst coverage for Valuation pillar ──────────────────────────────────
-    _analyst_data: dict = {"avg_pt": None, "consensus_label": None, "has_coverage": False}
+    # Item C (2026-10-21): the PT Upside target is chosen ONCE here, provider
+    # first (valuation_target.choose_pt_target), the owner's saved research only
+    # as a fallback. The saved-research RATING leg is unchanged (owner D-1).
+    _consensus_label = None
+    _consensus_tag = None
+    _saved_targets = None   # None = coverage read FAILED (never "no coverage")
     try:
         import json as _json
-        _cov_df = db.load_analyst_coverage(ticker=ticker, days=VALUATION_COVERAGE_FRESH_DAYS)
-        if _cov_df is not None and not _cov_df.empty:
+        _cov_df = db.load_analyst_coverage_or_none(
+            ticker=ticker, days=VALUATION_COVERAGE_FRESH_DAYS)
+        if _cov_df is not None:
+            _saved_targets = []
             _all_analysts: list = []
-            for _, _row in _cov_df.iterrows():
-                _raw = _row.get("analysts") or []
-                if isinstance(_raw, str):
-                    try:
-                        _raw = _json.loads(_raw)
-                    except Exception:
-                        _raw = []
-                if isinstance(_raw, list):
-                    _all_analysts.extend(_raw)
+            _row_dates: list = []
+            if not _cov_df.empty:
+                for _, _row in _cov_df.iterrows():
+                    _raw = _row.get("analysts") or []
+                    if isinstance(_raw, str):
+                        try:
+                            _raw = _json.loads(_raw)
+                        except Exception:
+                            _raw = []
+                    if isinstance(_raw, list):
+                        _all_analysts.extend(_raw)
+                        for _a in _raw:
+                            if isinstance(_a, dict):
+                                _saved_targets.append({
+                                    "firm": _a.get("firm"),
+                                    "price_target": _coerce_pt_str(_a.get("price_target")),
+                                    "article_date": _a.get("article_date") or _row.get("article_date"),
+                                })
+                                _d = _a.get("article_date") or _row.get("article_date")
+                                if _d:
+                                    _row_dates.append(str(_d)[:10])
             if _all_analysts:
                 from stock_analyzer.analyst_intel import derive_consensus
                 _cons = derive_consensus(_all_analysts)
                 _raw_label = _cons.get("consensus_rating") or ""
-                _label = _raw_label.split(" (")[0] if " (" in _raw_label else (_raw_label or None)
-                _analyst_data = {
-                    "avg_pt":          _cons.get("avg_pt"),
-                    "consensus_label": _label,
-                    "has_coverage":    bool(_label),
-                }
-    except Exception:
-        pass  # silent degrade — valuation scores on P/E + FCF alone
+                _consensus_label = (_raw_label.split(" (")[0] if " (" in _raw_label
+                                    else (_raw_label or None))
+                if _consensus_label:
+                    _firms = {str(a.get("firm") or "").strip().lower()
+                              for a in _all_analysts if isinstance(a, dict)} - {""}
+                    _nf = len(_firms) or len(_all_analysts)
+                    _consensus_tag = (f"your saved research, {_nf} firm{'' if _nf == 1 else 's'}"
+                                      + (f", newest {max(_row_dates)}" if _row_dates else ""))
+    except Exception as _cov_exc:
+        _saved_targets = None  # degrade — valuation scores on P/E + FCF alone
+        _consensus_label = None
+        _consensus_tag = None
+        # The user still sees "couldn't be read". A DB outage returns None without
+        # raising, so an exception here is usually a CODE bug: log it (server log
+        # only). Deliberately NOT api_health — this source has no Data Health /
+        # System Trust row, so recording it would turn the health icon red with
+        # nothing explaining why (system_health.py ~277-283).
+        _log.warning("saved-research read for %s raised %s: %s",
+                     ticker, type(_cov_exc).__name__, _cov_exc)
+    _fin_for_pt = financials if isinstance(financials, dict) else {}
+    # Source key: `_source` is the provider that served the bundle; `_info_source`
+    # is set only when ANOTHER provider back-filled sparse info (so it wins).
+    # A bundle served from the last-known-good bundle cache carries neither
+    # (the cache stores only history + info) -> generic "data provider" label.
+    # as_of = when the provider's target was actually fetched, as an America/New_York
+    # date: the fundamentals-cache row's own stamp when financials (and so the
+    # target) came from that cache — checked FIRST, since a stale bundle can still
+    # take its financials from the fundamentals cache — else the bundle cache's
+    # date on a stale bundle, else now.
+    if _fund_source != "live":
+        _pt_as_of = _et_date_str(_fund_cache_fetched_at)   # None if unknown -> no date shown
+    elif _stale_as_of is not None:
+        _pt_as_of = _et_date_str(_stale_as_of)
+    else:
+        _pt_as_of = now_et().date().isoformat()
+    _pt_choice = choose_pt_target(
+        _fin_for_pt.get("analyst_target"), _fin_for_pt.get("num_analyst_opinions"),
+        bundle.get("_info_source") or bundle.get("_source"),
+        _pt_as_of,
+        _stale_as_of is not None or _fund_source != "live",
+        _saved_targets, price,
+        min_analysts=VALUATION_PT_MIN_ANALYSTS, max_ratio=VALUATION_PT_MAX_TARGET_RATIO)
+    _analyst_data: dict = {
+        "avg_pt":          _pt_choice["target"],
+        "pt_tag":          pt_short_tag(_pt_choice),
+        "consensus_label": _consensus_label,
+        "has_coverage":    bool(_consensus_label),
+        "consensus_tag":   _consensus_tag,
+    }
+    if _pt_choice["source"] is None:
+        # Why PT Upside is not scored (no `$` in this branch's text) -- shown in the
+        # valuation signals instead of the leg silently vanishing.
+        _analyst_data["pt_not_scored"] = pt_label(_pt_choice)
     val_score, val_signals, val_available = valuation_score(financials, _analyst_data, price, _sector_for_scoring)
     # Headline relevance (docs/plans/headline-relevance.md): the feed tags every
     # ticker a story merely mentions, so keep only headlines whose TITLE names this
@@ -248,7 +360,10 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         risk_metrics = compute_all_risk(df, spy_df, rfr)
     except Exception:
         risk_metrics = compute_all_risk(df, None, rfr)
-    upside = upside_potential(price, financials) if price else None
+    # Built from the CHOSEN target (item C), never the raw provider target: a
+    # rejected target must not show as "upside to analyst target" elsewhere.
+    upside = (upside_potential(price, {"analyst_target": _pt_choice["target"]})
+              if price and _pt_choice["target"] is not None else None)
     _info  = bundle.get("info", {})
     name   = _info.get("shortName") or _info.get("longName") or ticker
     sector = _info.get("sector", "")
@@ -326,6 +441,8 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         "bq_score":         bq_score,  "bq_signals":   bq_signals,
         "val_score":        val_score, "val_signals":  val_signals,
         "val_analyst_data": _analyst_data,
+        "val_pt_choice":    _pt_choice,
+        "upside_tag":       pt_short_tag(_pt_choice) if _pt_choice["target"] is not None else None,
         "bq_available":     bq_available,
         "val_available":    val_available,
         # Backward compat aliases (keep for one release):
@@ -345,6 +462,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         "industry": industry, "market_cap": market_cap,
         "business_summary": business_summary,
         "info_source": bundle.get("_info_source"),
+        "data_source": bundle.get("_source"),   # provider that served the bundle (None from the bundle cache)
         "quote_type": _quote_type,
         "asset_type": _asset_type,
         "etf_facts": _etf_facts,

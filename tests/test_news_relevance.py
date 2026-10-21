@@ -251,6 +251,7 @@ class _Db:
     save_fundamentals_cache = staticmethod(lambda *a, **k: None)
     load_fundamentals_cache = staticmethod(lambda *a, **k: None)
     load_analyst_coverage = staticmethod(lambda *a, **k: None)
+    load_analyst_coverage_or_none = staticmethod(lambda *a, **k: None)
     save_sector_cache = staticmethod(lambda *a, **k: None)
     load_sector_cache = staticmethod(lambda *a, **k: "")
     save_etf_lookthrough_cache = staticmethod(lambda *a, **k: None)

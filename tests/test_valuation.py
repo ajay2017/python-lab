@@ -156,14 +156,43 @@ def test_pt_upside_overvalued_scores_zero():
     assert "overvalued" in signals["PT Upside"]
 
 
-def test_pt_upside_falls_back_to_financials_analyst_target_when_no_db_coverage():
-    # analyst_data.avg_pt absent -> falls back to financials["analyst_target"]
-    score, signals, val_available = valuation_score(
-        {**_PE_ANCHOR, "analyst_target": 130.0}, {}, 100.0,
-    )
-    assert val_available is True
-    assert score == 100.0
-    assert "PT Upside" in signals
+def test_financials_analyst_target_is_no_longer_a_pt_fallback():
+    # Item C (2026-10-21): the chooser is the only PT source. A raw provider
+    # target in financials must NOT score when analyst_data has no avg_pt,
+    # otherwise a target the chooser rejected would sneak back in.
+    with_fin = valuation_score({**_PE_ANCHOR, "analyst_target": 130.0}, {}, 100.0)
+    without = valuation_score(dict(_PE_ANCHOR), {}, 100.0)
+    assert "PT Upside" not in with_fin[1]
+    assert with_fin == without
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), 0, 0.0, -5.0, True, "130"])
+def test_pt_upside_not_scored_for_unusable_avg_pt(bad):
+    score, signals, _ = valuation_score(_PE_ANCHOR, {"avg_pt": bad}, 100.0)
+    base = valuation_score(_PE_ANCHOR, {}, 100.0)
+    assert "PT Upside" not in signals
+    assert (score, signals) == (base[0], base[1])
+
+
+def test_val_available_identical_with_and_without_pt_target():
+    # PT is analyst-derived (not objective): it must never flip val_available.
+    for fin in (_PE_ANCHOR, {}):
+        a = valuation_score(fin, {"avg_pt": 130.0}, 100.0)[2]
+        b = valuation_score(fin, {}, 100.0)[2]
+        assert a == b
+
+
+def test_pt_and_consensus_tags_appended_to_signal_text():
+    _, sig, _ = valuation_score(
+        _PE_ANCHOR,
+        {"avg_pt": 130.0, "pt_tag": "Yahoo Finance mean, 31 analysts",
+         "consensus_label": "Buy", "has_coverage": True,
+         "consensus_tag": "your saved research, 2 firms, newest 2026-10-01"},
+        100.0)
+    assert sig["PT Upside"].endswith("(Yahoo Finance mean, 31 analysts)")
+    assert sig["Analyst Consensus"].endswith("(your saved research, 2 firms, newest 2026-10-01)")
+    _, sig2, _ = valuation_score(_PE_ANCHOR, {"avg_pt": 130.0}, 100.0)
+    assert sig2["PT Upside"].endswith(")") and "analysts" not in sig2["PT Upside"]
 
 
 def test_pt_upside_excluded_when_no_current_price():
@@ -421,3 +450,21 @@ def test_mixed_strong_and_weak_signals_averages_correctly():
     score, _, _ = valuation_score({"forward_pe": 60.0, "fcf_yield": 6.0}, {}, None)
     expected = round((2 + 20) / (25 + 20) * 100, 1)
     assert score == expected
+
+
+def test_pt_not_scored_reason_is_shown_but_score_unchanged():
+    fin = {"forward_pe": 20.0, "fcf_yield": 5.0}
+    base_s, base_sig, base_av = valuation_score(
+        fin, {"avg_pt": None, "has_coverage": False}, 100.0, "")
+    why = "Not scored — the data provider has no analyst target; no saved research"
+    s, sig, av = valuation_score(
+        fin, {"avg_pt": None, "has_coverage": False, "pt_not_scored": why}, 100.0, "")
+    assert "PT Upside" not in base_sig
+    assert sig["PT Upside"] == why
+    assert (s, av) == (base_s, base_av)           # display only: no points, no denominator
+
+
+def test_pt_not_scored_reason_ignored_when_pt_scores():
+    s, sig, _ = valuation_score(
+        {"forward_pe": 20.0}, {"avg_pt": 150.0, "pt_not_scored": "stale text"}, 100.0, "")
+    assert "stale text" not in sig["PT Upside"]

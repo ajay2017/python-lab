@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Dry-run: what does provider-first PT sourcing do to Valuation and the composite?
 
+HISTORICAL — only meaningful against code BEFORE F-311 C2 (2026-10-21). After C2
+the bundle's `val_analyst_data.avg_pt` already holds the chosen target, so the
+"old" and "new" columns are the same. Its one real run (370 names, 68 changed,
+14 threshold crossings) is recorded in docs/plans/valuation-target-source.md.
+
 Item C, chunk C1 (read-only diagnostic; C2 later wires the chooser into
 bundle_loader). For every held / watchlist / in-window-coverage ticker it loads
 the bundle exactly the way the app does, then recomputes:
@@ -114,14 +119,33 @@ def main() -> int:
         print("No Supabase credentials (SUPABASE_URL/SUPABASE_KEY) -- cannot run.")
         return 1
 
-    cov_df = db.load_analyst_coverage(days=VALUATION_COVERAGE_FRESH_DAYS, limit=None)
-    saved_map = _saved_by_ticker(cov_df)
-
-    held: set[str] = set()
+    # The db loaders report a failed read via st.error, which prints nothing
+    # outside Streamlit — so a failed read must stop the run here, never be
+    # read as "no rows".
+    cov_df = db.load_analyst_coverage_or_none(days=VALUATION_COVERAGE_FRESH_DAYS, limit=None)
     hdf = db.load_holdings_or_none()
-    if hdf is not None and not hdf.empty:
-        held = {str(t).strip().upper() for t in hdf["Ticker"].tolist() if str(t).strip()}
-    wl = db.load_watchlist_or_none() or []
+    wl = db.load_watchlist_or_none()
+    failed = [name for name, v in (("analyst_coverage", cov_df), ("holdings", hdf), ("watchlist", wl))
+              if v is None]
+    if failed:
+        print(f"Could not read {', '.join(failed)} from Supabase: "
+              f"{db.unavailable_detail() or 'the query raised'}. Nothing was computed.")
+        try:  # surface the real exception the loaders swallowed
+            db._client().table("holdings").select("ticker").limit(1).execute()
+            print("A direct probe of `holdings` succeeded, so the failure is in the loaders.")
+        except Exception as exc:
+            print(f"Underlying error: {type(exc).__name__}: {str(exc)[:400]}")
+        return 1
+    saved_map = _saved_by_ticker(cov_df)
+    held = {str(t).strip().upper() for t in hdf["Ticker"].tolist() if str(t).strip()}
+    if not held and not wl and not saved_map and not args.tickers.strip():
+        # RLS returns zero rows (not an error) to any key that isn't the
+        # service-role key, so three empty tables almost always mean the key.
+        print("Holdings, watchlist and analyst coverage all read back EMPTY. With RLS on, "
+              "that is what a non-service-role key sees: check SUPABASE_KEY is the "
+              "service-role / secret key (starts with 'sb_secret_' or is the service_role "
+              "JWT), and SUPABASE_URL is the right project. Nothing was computed.")
+        return 1
     if args.tickers.strip():
         tickers = sorted({t.strip().upper() for t in args.tickers.split(",") if t.strip()})
     else:
@@ -154,7 +178,8 @@ def main() -> int:
             cached = b.get("stale_as_of") is not None or b.get("fund_source") not in (None, "live")
             as_of = b.get("stale_as_of") or b.get("fetched_at")
             ch = choose_pt_target(
-                fin.get("analyst_target"), fin.get("num_analyst_opinions"), b.get("info_source"),
+                fin.get("analyst_target"), fin.get("num_analyst_opinions"),
+                b.get("info_source") or b.get("data_source"),
                 as_of, cached, saved_map.get(t, []), price,
                 min_analysts=args.min_analysts, max_ratio=args.max_ratio)
             new_ad = dict(ad, avg_pt=ch["target"])
