@@ -1,7 +1,60 @@
 # Regression tests for stock_analyzer/ pure-logic modules — no Streamlit, no
 # Supabase, no live network. See docs/plans/test-automation.md for scope and
 # batch order.
+import ast
+import sys
+from pathlib import Path
+
 import pandas as pd
+import pytest
+
+# ── Guard: no test parses app.py the slow way ───────────────────────────────
+# app.py is ~3 MB; a plain ast.parse costs 15-90 s per xdist worker, and the
+# commit hook gives the whole suite 450 s (it timed out 3x on 2026-10-20).
+# Tests must use tests._ast_cache.parse_file_cached / source_segment instead.
+# Fires only when a TEST FILE calls ast.parse / ast.get_source_segment
+# DIRECTLY on a huge source: production code (e.g. check_antipatterns parsing
+# app.py), pytest internals and _ast_cache itself are untouched.  pytest.fail
+# raises a BaseException, so a test's own `except Exception` can't swallow it.
+_HUGE_SOURCE_CHARS = 1_000_000   # app.py ~3.0M; next-largest (db.py) ~0.33M
+_TESTS_DIR = Path(__file__).resolve().parent
+_AST_CACHE_PY = _TESTS_DIR / "_ast_cache.py"
+_real_parse = ast.parse
+_real_get_source_segment = ast.get_source_segment
+
+
+def _forbid_slow_app_parse(source, fn_name):
+    if not isinstance(source, (str, bytes)) or len(source) <= _HUGE_SOURCE_CHARS:
+        return
+    try:
+        caller = Path(sys._getframe(2).f_code.co_filename).resolve()
+    except Exception:
+        return
+    if caller.parent == _TESTS_DIR and caller != _AST_CACHE_PY:
+        pytest.fail(
+            f"{caller.name} calls ast.{fn_name} on a {len(source):,}-char source "
+            "(app.py) directly -- use tests._ast_cache.parse_file_cached(path) "
+            "/ source_segment(src, node) so the commit hook stays under 450 s.",
+            pytrace=False,
+        )
+
+
+def _guarded_parse(source, *args, **kwargs):
+    _forbid_slow_app_parse(source, "parse")
+    return _real_parse(source, *args, **kwargs)
+
+
+def _guarded_get_source_segment(source, node, *args, **kwargs):
+    _forbid_slow_app_parse(source, "get_source_segment")
+    return _real_get_source_segment(source, node, *args, **kwargs)
+
+
+# A test that MUST compare against the stdlib on app.py (the cache's own parity
+# test) opts out visibly via `ast.get_source_segment.__wrapped__`.
+_guarded_parse.__wrapped__ = _real_parse
+_guarded_get_source_segment.__wrapped__ = _real_get_source_segment
+ast.parse = _guarded_parse
+ast.get_source_segment = _guarded_get_source_segment
 
 
 def make_risk_advisor_inputs(

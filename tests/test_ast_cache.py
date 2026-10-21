@@ -123,11 +123,50 @@ def test_source_segment_matches_stdlib_on_tricky_source():
 def test_source_segment_matches_stdlib_on_app_sample():
     src = APP_PY.read_text(encoding="utf-8")
     tree = parse_file_cached(APP_PY)
+    # parity vs the REAL stdlib on app.py: the one deliberate opt-out of the
+    # conftest slow-parse guard
+    stdlib_segment = getattr(ast.get_source_segment, "__wrapped__", ast.get_source_segment)
     n_checked = 0
     for n in ast.walk(tree):
         if isinstance(n, ast.Assign):
-            assert source_segment(src, n) == ast.get_source_segment(src, n)
+            assert source_segment(src, n) == stdlib_segment(src, n)
             n_checked += 1
             if n_checked >= 200:
                 break
     assert n_checked == 200
+
+
+# ── conftest guard: a test must not parse app.py-sized source directly ─────
+
+_HUGE = "#" * 1_000_001   # just over the guard's threshold; a comment, cheap to parse
+
+
+def test_guard_blocks_a_direct_huge_parse_from_a_test():
+    with pytest.raises(pytest.fail.Exception, match="parse_file_cached"):
+        ast.parse(_HUGE)
+    with pytest.raises(pytest.fail.Exception, match="source_segment"):
+        ast.get_source_segment(_HUGE, ast.parse("x = 1").body[0])
+
+
+def test_guard_is_not_swallowed_by_except_exception():
+    swallowed = False
+    with pytest.raises(pytest.fail.Exception):
+        try:
+            ast.parse(_HUGE)
+        except Exception:
+            swallowed = True
+    assert not swallowed
+
+
+def test_guard_allows_small_sources_and_the_cache_itself(cache, tmp_path):
+    assert ast.parse("x = 1").body                       # small source from a test: fine
+    p = tmp_path / "big.py"
+    p.write_text(_HUGE, encoding="utf-8")
+    assert isinstance(parse_file_cached(p), ast.Module)  # _ast_cache parses it: fine
+
+
+def test_guard_allows_non_test_callers():
+    # production code (e.g. scripts/check_antipatterns.py) parses app.py itself
+    ns = {}
+    exec(compile("import ast\ndef f(s):\n    return ast.parse(s)\n", "/not_tests/mod.py", "exec"), ns)
+    assert isinstance(ns["f"](_HUGE), ast.Module)
