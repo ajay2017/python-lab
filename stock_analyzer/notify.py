@@ -1387,6 +1387,80 @@ def render_watchlist_entries_email(
     return subject, body
 
 
+def _money_block(pkg: dict) -> str:
+    """The Weekly Debrief email's "Where the money went" table: EXACTLY the rows
+    💰 Account → Reports → Last week shows (`period_attribution.waterfall_rows`,
+    built once in the debrief package), formatted with the same
+    `period_attribution.usd_plain(value, plus=not total)` the page's `_m_usd` wraps --
+    minus the privacy mask.  "" when there are no rows (engine offline / no period)."""
+    from stock_analyzer import period_attribution as _pa
+    rows = pkg.get("waterfall_rows") if isinstance(pkg, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return ""
+    measured = pkg.get("result_status") in ("ok", "partial")
+    if measured:
+        heading = "Where the money went"
+        # The shaded rows (the held-at-prior-close subtotal and its borrowed/own
+        # split) restate lines above them, so only the UNSHADED lines sum to the
+        # net change -- "every line adds up" was false (review, 2026-10-20).
+        caption = (f"{_html.escape(str(pkg.get('d0') or '?'))} close → "
+                   f"{_html.escape(str(pkg.get('d1') or '?'))} close · "
+                   "the unshaded lines add up to the net-equity change")
+        if pkg.get("dates_agree") is False:
+            # the tiles' return uses account_return's own dates (return_d0/d1);
+            # say the block's window differs instead of showing two silently
+            caption += (" · measured over the account records' own dates, which "
+                        "differ from the return above")
+    else:
+        heading = "Where the money went — positions only"
+        caption = ("The account's own change can't be measured this week, so deposits, "
+                   "income and the total aren't shown.")
+    out = [
+        "<div style='margin:8px 0 26px'>"
+        f"<div style='font-size:0.95em;font-weight:700;color:#111827;margin:0 0 2px'>{heading}</div>"
+        f"<div style='font-size:0.75em;color:#6b7280;margin:0 0 8px'>{caption}</div>"
+        "<table width='100%' style='border-collapse:collapse;font-size:0.85em;"
+        "border:1px solid #e5e7eb;border-radius:8px;overflow:hidden'>"
+    ]
+    last = len(rows) - 1
+    for i, r in enumerate(rows):
+        total, indent, breakdown = bool(r.get("total")), bool(r.get("indent")), bool(r.get("breakdown"))
+        muted = indent or breakdown
+        text = _pa.usd_plain(r.get("value"), plus=not total)
+        colour = ""
+        if text.startswith("-"):
+            colour = "color:#dc2626;"
+        elif text.startswith("+"):
+            colour = "color:#059669;"
+        if muted:
+            colour = ""   # the muted row carries its own grey
+        border = "border-bottom:1px solid #f1f5f9;" if i < last else ""
+        pad_l = "30px" if indent else "12px"
+        pad_v = "8px" if total else "6px"
+        ital = "font-style:italic;" if breakdown else ""
+        label = ("↳ " if indent else "") + _html.escape(str(r.get("label") or ""))
+        note = r.get("note")
+        note_html = (f" <span style='color:#9ca3af'>({_html.escape(str(note))})</span>" if note else "")
+        tr_style = ("background:#f8fafc;color:#6b7280;" if muted else "") + ("font-weight:700;" if total else "")
+        out.append(
+            f"<tr style='{tr_style}'>"
+            f"<td style='padding:{pad_v} 12px {pad_v} {pad_l};{border}{ital}'>{label}{note_html}</td>"
+            f"<td style='padding:{pad_v} 12px;{border}text-align:right;{colour}{ital}'>{_html.escape(text)}</td>"
+            "</tr>"
+        )
+    out.append("</table>")
+    names = pkg.get("unmeasured")
+    if names:
+        out.append(
+            "<div style='font-size:0.72em;color:#6b7280;margin:6px 2px 0'>"
+            "Not measured (P&amp;L not included above): "
+            + ", ".join(_html.escape(str(t)) for t in names)
+            + " — couldn't be priced or replayed on every day.</div>"
+        )
+    out.append("</div>")
+    return "".join(out)
+
+
 def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: dict | None = None,
                          period: dict | None = None) -> str:
     """Render the weekly portfolio debrief as a professional HTML email (light-mode-first).
@@ -1405,7 +1479,8 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: di
     """
 
     week_ending  = debrief.get("week_ending", "—")
-    generated_at = str(debrief.get("generated_at", ""))[:10]
+    from stock_analyzer.debrief_advisor import generated_et_date
+    generated_at = generated_et_date(debrief.get("generated_at"))   # ET day, not the UTC slice
     perf  = debrief.get("performance_pct")
     spy   = debrief.get("spy_pct")
     alpha = debrief.get("alpha_pct")
@@ -1449,6 +1524,7 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: di
     perf_block = ""
     if v2:
         pkg = period or {}
+        money_block = _money_block(pkg)
         if perf is None or (isinstance(perf, float) and perf != perf):
             reason = pkg.get("result_reason") or "the account result couldn't be measured for this period."
             perf_block = (
@@ -1482,6 +1558,7 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: di
                 + lev_sentence +
                 "</p>"
             )
+        perf_block += money_block
     elif perf is not None:
         # The trades caveat renders BEFORE the KPI tiles (not after) — a reader
         # sees the eye-catching % numbers first regardless of layout order, so

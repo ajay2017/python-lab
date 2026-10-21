@@ -316,6 +316,7 @@ def build_debrief_package(
         "max_leverage":     None,
         "leverage":         None,
         "waterfall":        None,
+        "waterfall_rows":   [],
         "interest_gap_months": [],
         "unmeasured":       [],
         "contributors":     [],
@@ -381,6 +382,8 @@ def build_debrief_package(
         res = recon.get("residual")
         fl = recon.get("flows")
         full = status in ("ok", "partial")
+        # The Reports page's own rows (one function builds both), over the recon's window.
+        package["waterfall_rows"] = pa.waterfall_rows(recon)
         package["waterfall"] = {
             "held_through": pp["held_through"] if pp else None,
             "sold_leg":     pp["sold_leg"] if pp else None,
