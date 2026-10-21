@@ -23,6 +23,17 @@ def test_markdown_usd_never_prints_signed_zero():
     assert pa._usd(-1500) == "-" + bs + "$1,500"
 
 
+def test_dollar_helpers_read_non_finite_as_unknown():
+    # the Sunday email's money block formats with usd_plain: one NaN/inf must
+    # read "unknown", not raise (round(nan) is ValueError, round(inf) OverflowError)
+    for x in (float("nan"), float("inf"), float("-inf")):
+        assert pa.usd_plain(x) == "unknown", x
+        assert pa.usd_plain(x, plus=True) == "unknown", x
+        assert pa._usd(x) == "unknown", x
+    assert pa.usd_plain(-1313.4) == "-$1,313"   # firing control: finite values still format
+    assert pa._usd(1313.4) == bs + "$1,313"
+
+
 def test_period_report_tables_are_sized_to_their_rows():
     tree = parse_file_cached(Path(__file__).resolve().parent.parent / "app.py")
     hits = 0

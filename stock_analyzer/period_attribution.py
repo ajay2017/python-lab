@@ -42,6 +42,7 @@ with no close -> listed in `unpriced`, its P&L excluded.
 """
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timedelta
 
 import pandas as pd
@@ -647,8 +648,8 @@ def _chip(key, label, state):
 def _usd(x) -> str:
     """Display dollars; `$` is backslash-escaped so Streamlit/Markdown never
     reads a pair as LaTeX."""
-    if x is None:
-        return "unknown"
+    if x is None or not math.isfinite(x):
+        return "unknown"   # NaN/inf would raise in round(); unknown, never a crash
     if round(abs(x)) == 0:
         return "\\$0"   # never "-\$0" for a sub-dollar rounding residue
     sign = "-" if x < 0 else ""
@@ -889,8 +890,8 @@ def usd_plain(x, *, plus: bool = False) -> str:
     """Dollars for st.metric / dataframe cells (NOT markdown): sign BEFORE the
     `$` ("-$1,314"), "unknown" for None, "$0" inside half a cent.  `plus`
     prefixes gains with "+"."""
-    if x is None:
-        return "unknown"
+    if x is None or not math.isfinite(x):
+        return "unknown"   # NaN/inf would raise in round(); unknown, never a crash
     if abs(x) < _CENT_TOL or round(abs(x)) == 0:
         return "$0"   # incl. a sub-dollar residue that would print "-$0"
     sign = "-" if x < 0 else ("+" if plus else "")
