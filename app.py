@@ -25979,13 +25979,18 @@ elif page == "📈 Analysis":
                     # rather than showing a contradictory standalone warning below.
                     _earn_str = r.get("earnings", "")
                     _earn_note = ""
+                    # Add-on advice only when Grow Today is actually calling an add
+                    # (S-D C4 (00)): beside "No add call today" it contradicted the page.
+                    _earn_add_v = _da_entry.get("held_add")
+                    _earn_is_add = isinstance(_earn_add_v, dict) and _earn_add_v.get("state") == "add"
                     try:
                         if _earn_str:
                             _earn_d = (datetime.strptime(_earn_str, "%Y-%m-%d").date() - _today_et()).days
                             if 0 <= _earn_d <= 21:
                                 _earn_note = (
-                                    f" Earnings in **{_earn_d} days** ({_earn_str}) — "
-                                    "consider reduced add-on size or wait until after the report."
+                                    f" Earnings in **{_earn_d} days** ({_earn_str})"
+                                    + (" — consider reduced add-on size or wait until after the report."
+                                       if _earn_is_add else ".")
                                 )
                     except Exception:
                         pass
@@ -26757,12 +26762,19 @@ elif page == "📈 Analysis":
                             "(see the banner at the top of this ticker)."
                         )
                 elif _sa_is_sell and not _sa_holding:
-                    # Not held: nothing to sell -- no holder-only trade button.
+                    # No priced holding -> no holder-only trade button.  A holding
+                    # Home couldn't price IS held (S-D C4 (0)): never "nothing to sell".
                     with _ap_c1:
-                        st.caption(
-                            "Not in your portfolio — nothing to sell. "
-                            "📒 Trade buttons appear here for names you hold."
-                        )
+                        if str(ticker).strip().upper() in _an_unpriced:
+                            st.caption(
+                                f"You hold {ticker}, but 🏠 Home couldn't price it, so "
+                                "there's no Sell button here. Log the sale from 📒 Trade Journal."
+                            )
+                        else:
+                            st.caption(
+                                "Not in your portfolio — nothing to sell. "
+                                "📒 Trade buttons appear here for names you hold."
+                            )
                 elif _sa_is_sell:
                     # Sell signal — primary action is SELL (exit/trim)
                     with _ap_c1:
