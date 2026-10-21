@@ -411,6 +411,16 @@ def reconcile_period(*, period_start, period_end, trades_df, account_snapshots_d
             unsplit += X
             days_unsplit += 1
 
+    # Additive per-ticker endpoints (Weekly Debrief shape + price %): shares at
+    # d0/d1 and the d0/d1 closes.  A split-window name gets no closes -- a
+    # close-to-close % across a split is a fabricated move.
+    for t, rec in per_ticker.items():
+        rec["shares_start"] = hmap.get(d0, {}).get(t, 0.0)
+        rec["shares_end"] = hmap.get(d1, {}).get(t, 0.0)
+        is_split_name = t in split_tickers or t in split_dates
+        rec["close_start"] = None if is_split_name else close(t, d0)
+        rec["close_end"] = None if is_split_name else close(t, d1)
+
     pos_total = sum(tot.values())
     pos_pnl = dict(tot, total=pos_total)
     leverage_split = {

@@ -196,6 +196,7 @@ def build_report_package(
         "band_rows":    [],
         "verdict_rows": [],
         "weekly_trajectory": [],
+        "weekly_excluded_old_method": 0,
     }
 
     if recs_df is None or (hasattr(recs_df, "empty") and recs_df.empty):
@@ -255,7 +256,14 @@ def build_report_package(
     package["verdict_rows"] = by_verdict(scoped)
 
     if weekly_rows:
+        # Only weeks measured the way the Weekly Debrief measures them today are
+        # comparable; an older-method row (metrics_version missing/NULL/1) would
+        # mix two different quantities in one trajectory.
+        from stock_analyzer.debrief_advisor import METRICS_VERSION as _WD_VERSION
         for w in weekly_rows:
+            if w.get("metrics_version") != _WD_VERSION:
+                package["weekly_excluded_old_method"] += 1
+                continue
             package["weekly_trajectory"].append({
                 "week_ending":     str(w.get("week_ending", "")),
                 "performance_pct": w.get("performance_pct"),
@@ -334,7 +342,10 @@ def _format_prompt(package: dict) -> str:
 
     if package.get("weekly_trajectory"):
         lines.append("")
-        lines.append("Weekly performance trajectory (most recent first):")
+        _n_old = package.get("weekly_excluded_old_method") or 0
+        lines.append("Weekly performance trajectory (most recent first):"
+                     + (f" ({_n_old} earlier week{'' if _n_old == 1 else 's'} used an older method — not shown)"
+                        if _n_old > 0 else ""))
         for w in package["weekly_trajectory"]:
             lines.append(
                 f"  week ending {w['week_ending']}: portfolio {_pct(w.get('performance_pct'))}, "

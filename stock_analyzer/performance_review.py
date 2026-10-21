@@ -933,6 +933,10 @@ def _account_return_section(
     return {"status": "pre_coverage", "earliest_valid_date": earliest_valid, "secondary": secondary}
 
 
+# Public name for the Weekly Debrief / period_inputs (same function, one return rule).
+account_return = _account_return_section
+
+
 def monthly_account_returns(
     account_snapshots_df: "pd.DataFrame | None",
     account_flows_rows: "list[dict] | None",

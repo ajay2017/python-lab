@@ -23,8 +23,7 @@ from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
 _SYSTEM_PROMPT = """You are a disciplined portfolio advisor helping an individual investor reflect on the past week. Write a structured weekly debrief in four sections. Be factual, concise, and neutral — observation not judgement. Write in second person ("Your portfolio..."). Plain language, no jargon. Target 400–500 words total.
 
 Section 1 — WHAT HAPPENED (2–3 sentences):
-Performance vs benchmark. Name the top contributors and detractors from the data package (these already exclude closed positions). Facts only.
-IMPORTANT — metric framing: the "Portfolio return" figure is the week's equity-position value change (Mon–Fri), not a money-weighted investment return. Say "equity positions gained/fell X%" or "portfolio value moved X% this week" — never "the portfolio returned X%" or imply it is a true investment-return metric. Do NOT reference or compare against the Account page's all-time figure; they measure different things.
+State the account result: your account (net equity) moved X% ($Y) from the <d0> close to the <d1> close; SPY moved Z% over the same dates. If leverage is given, say once that at about L× leverage the account moves roughly L times the holdings' own move while SPY is unlevered — never call the gap skill. If the account result is unknown, say so in one sentence with the reason given; never estimate. Name contributors/detractors with their $: a position sold this week shows the move up to the sale, one bought this week the move from its buy price. If names are listed as not measured, say their P&L isn't included. If margin interest is listed as not recorded for a month, say the interest line may be understated. Do not speculate about the unexplained remainder. This is the same figure as 💰 Account → Reports → Last week. Facts only.
 
 Section 2 — DECISIONS YOU MADE (bullet list):
 For each actionable signal surfaced this week — both new-position entry signals AND protective WATCH/TRIM/EXIT signals — did the investor act or not, and what happened to the name by week-end? Be specific. When a conviction tier (Strong Buy / Buy) is given for an entry signal, name it.
@@ -62,7 +61,7 @@ Format your response with exactly these bold headers:
 
 Rules:
 - Only use facts from the data package. Never invent trades, prices, or events.
-- Positions listed under "Positions fully closed this week" were intentionally sold — always narrate as "position closed", NEVER as a price loss or total wipeout.
+- Positions listed under "Positions fully closed this week" were intentionally sold — in the Decisions bullets always narrate as "position closed", NEVER as a price loss, a wipeout or −100%. A closed position may still appear among the contributors/detractors with its real move (the move up to the sale).
 - Do not recommend buying, selling, or any specific action.
 - No disclaimers. End after the four sections."""
 
@@ -97,50 +96,133 @@ def _traded_at_et_dates(trades_df):
     ).dt.tz_convert("America/New_York").dt.date
 
 
-def classify_snapshot_read(snapshots_or_none, min_days: int) -> tuple[str, int]:
-    """Classify a daily_snapshots read for the weekly-debrief generation gate.
+METRICS_VERSION = 2   # 1 = legacy equity-positions Mon→Fri close union marks (rows before 2026-10-20); 2 = period_attribution engine
 
-    Returns (status, days_available):
-      "outage"       — the read itself failed (snapshots_or_none is None,
-                        e.g. db.load_daily_snapshots_or_none() saw a DB
-                        outage or missing credentials). Must render as
-                        "could not check", never the same "not enough data
-                        yet" message a genuine early-run gets — the two look
-                        identical from days_available alone (both 0), and
-                        collapsing them tells the owner to wait for data
-                        accrual when the real problem is a live DB outage
-                        worth investigating now.
-      "insufficient" — the read succeeded but fewer than `min_days` trading
-                        days of snapshots exist yet (a genuine early-run or
-                        a partial-week shortfall, not a failure).
-      "ready"        — enough days exist; safe to build the debrief package.
+_SHAPE_EPS = 1e-6
 
-    Pure function — extracted so the interactive "Generate Now" button in
-    app.py (no test coverage of its own) is render-only wiring around a
-    decision that IS tested. Mirrors the cron lane's own outage-vs-empty
-    distinction in cron_runner.py::_run_debrief, which reaches the same
-    conclusion via a different mechanism (an unconditional db-health probe
-    when days_available == 0, rather than an _or_none read) because the
-    cron lane predates load_daily_snapshots_or_none()."""
-    if snapshots_or_none is None:
-        return "outage", 0
-    days = (
-        len(snapshots_or_none["snapshot_date"].unique())
-        if not snapshots_or_none.empty else 0
-    )
-    if days < min_days:
-        return "insufficient", days
-    return "ready", days
+
+def _fnum(v) -> "float | None":
+    """float or None; NaN/inf/non-numeric -> None (None means unknown, never 0)."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return x if x == x and x not in (float("inf"), float("-inf")) else None
+
+
+def shape(shares_start, shares_end, bought_usd, sold_usd) -> "str | None":
+    """How a position's week looked, from its share counts at the two period
+    endpoints and the dollars bought/sold inside the window.
+
+    closed (held at the start, none at the end) / opened (none at the start,
+    held at the end) / round_trip (none at either end but traded in between) /
+    traded, trimmed, added or held (held at both ends, by what traded).  None
+    when neither held nor traded (no story to tell)."""
+    s0 = (_fnum(shares_start) or 0.0) > _SHAPE_EPS
+    s1 = (_fnum(shares_end) or 0.0) > _SHAPE_EPS
+    bought = (_fnum(bought_usd) or 0.0) > 0
+    sold = (_fnum(sold_usd) or 0.0) > 0
+    if s0 and not s1:
+        return "closed"
+    if s1 and not s0:
+        return "opened"
+    if not s0 and not s1:
+        return "round_trip" if (bought or sold) else None
+    if bought and sold:
+        return "traded"
+    if sold:
+        return "trimmed"
+    if bought:
+        return "added"
+    return "held"
+
+
+def _price_pct(rec: dict) -> "float | None":
+    c0, c1 = _fnum(rec.get("close_start")), _fnum(rec.get("close_end"))
+    if c0 is None or c1 is None or c0 <= 0:
+        return None
+    return (c1 / c0 - 1.0) * 100.0
+
+
+def escape_md_dollars(text) -> str:
+    """Escape `$` as a backslash-dollar for st.markdown (two bare `$` render as
+    LaTeX).  Idempotent: an already-escaped backslash-dollar is left alone."""
+    import re
+    return re.sub(r"(?<!\\)\$", lambda _m: "\\$", str(text if text is not None else ""))
+
+
+def signal_days_back(today, week_start) -> int:
+    """`days_back` for a protective-signal read that must still reach the week's
+    first day: measured from today, so a Friday click or a Saturday retry needs
+    more than a fixed 10 days.  (today - week_start) + 1, never below 1."""
+    return max(1, (today - week_start).days + 1)
+
+
+def unknown_result_reason(recon, account_return) -> str:
+    """Why the account result is unknown, branching on the stage that failed:
+    the deposit/withdrawal read (account_return offline), an unmeasurable
+    reconciliation (pre_coverage reason), an account return the engine could not
+    compute while the reconciliation could, else a generic line."""
+    from stock_analyzer import period_attribution as pa
+    ar_status = account_return.get("status") if isinstance(account_return, dict) else None
+    recon_status = recon.get("status") if isinstance(recon, dict) else None
+    if ar_status == "offline":
+        return "the deposit/withdrawal history couldn't be read, so the account's return can't be measured."
+    if recon_status == "pre_coverage":
+        return pa.pre_coverage_reason_text(recon)
+    if ar_status == "pre_coverage":
+        return ("the account's return couldn't be computed over this week's dates "
+                "(no usable account records at both ends).")
+    return "the account result couldn't be measured for this period."
+
+
+def _names(rows) -> "list[str]":
+    return sorted({str(r[0]) for r in (rows or []) if isinstance(r, (tuple, list)) and r})
+
+
+def method_is_current(metrics_version) -> bool:
+    """True when a saved debrief row was measured with the current method
+    (METRICS_VERSION).  NULL / NaN / 1 (legacy equity-positions rows) -> False."""
+    v = _fnum(metrics_version)
+    return v is not None and int(v) == METRICS_VERSION
+
+
+def numbers_behind(package: dict, core: dict | None) -> dict:
+    """The legs behind a generated debrief, for the on-screen "Numbers behind
+    this debrief" expander: every per-ticker leg, their sum, the engine's
+    positions total and whether the two agree (to the cent).  Pure."""
+    recon = core.get("recon") if isinstance(core, dict) else None
+    recon = recon if isinstance(recon, dict) else {}
+    per = recon.get("per_ticker")
+    per = per if isinstance(per, dict) else {}
+    pp = recon.get("pos_pnl")
+    unmeasured_names = set(package.get("unmeasured", ()))
+    legs = []
+    for tk in sorted(per):
+        rec = per[tk]
+        legs.append({
+            "ticker": tk, "total": _fnum(rec.get("total")),
+            "shape": shape(rec.get("shares_start"), rec.get("shares_end"),
+                           rec.get("bought_usd"), rec.get("sold_usd")),
+            "held_through": _fnum(rec.get("held_through")), "sold_leg": _fnum(rec.get("sold_leg")),
+            "bought_leg": _fnum(rec.get("bought_leg")), "round_trip": _fnum(rec.get("round_trip")),
+            "measured": tk not in unmeasured_names,
+        })
+    legs_sum = sum(l["total"] for l in legs if l["total"] is not None)
+    pos_total = _fnum(pp["total"]) if pp else None
+    return {
+        "legs": legs, "legs_sum": legs_sum if legs else None, "pos_total": pos_total,
+        "legs_match": (pos_total is not None and round(legs_sum - pos_total, 2) == 0),
+    }
 
 
 # ── Data package builder ──────────────────────────────────────────────────────
 
 def build_debrief_package(
     week_ending: date,
-    snapshots_df,
+    core: dict | None,
     recs_df,
     trades_df,
-    spy_week_pct: float | None = None,
     broken_theses: list[str] | None = None,
     all_recs_df=None,
     exit_signals_df=None,
@@ -148,42 +230,56 @@ def build_debrief_package(
     """
     Assemble the structured data package for the LLM.
 
-    snapshots_df: DataFrame with columns snapshot_date, ticker, shares, close_price
-                  covering the week (ideally 5 trading days).
+    core:         `period_inputs.compute_period_core(...)` -- {recon, leverage,
+                  account_return} for the Mon-Sun week ending `week_ending`;
+                  the SAME engine and figures as 💰 Account -> Reports -> Last
+                  week.  None = the engine inputs could not be read (offline).
     recs_df:      DataFrame of recommendations surfaced during the week.
     trades_df:    DataFrame of all trades (to detect acted-on signals).
-    spy_week_pct: SPY % return for the same period (optional).
     broken_theses: list of tickers with BROKEN thesis status (from F-1).
     exit_signals_df: DataFrame from db.load_exit_signals() — WATCH/TRIM/EXIT
                   protective signals, the symmetric counterpart to recs_df's
                   entry signals. Optional; omitted gracefully when absent.
 
-    Returns a dict consumed by generate_debrief().
+    Returns a dict consumed by generate_debrief().  `narratable` is False when
+    the engine is offline -- generate_debrief() then writes nothing.
     """
     import pandas as pd
-
-    # yfinance can return a >=2-row frame with a NaN Close (holiday gap, partial
-    # fetch, upstream glitch) rather than raising — that NaN then survives as a
-    # float (not None) and renders as the literal string "nan" downstream instead
-    # of the intended "N/A". Treat it the same as "unavailable" at the one place
-    # both the cron and on-demand callers funnel through.
-    if isinstance(spy_week_pct, float) and spy_week_pct != spy_week_pct:
-        spy_week_pct = None
+    from stock_analyzer import period_attribution as pa
 
     week_start = week_ending - timedelta(days=6)
+    core = core if isinstance(core, dict) else None
+    recon = (core or {}).get("recon")
+    recon = recon if isinstance(recon, dict) else None
+    ar = (core or {}).get("account_return")
+    ar = ar if isinstance(ar, dict) else None
+    lev = (core or {}).get("leverage")
+    lev = lev if isinstance(lev, dict) else None
 
     package: dict = {
+        "metrics_version":  METRICS_VERSION,
         "week_ending":      str(week_ending),
         "week_start":       str(week_start),
-        "has_snapshots":    False,
-        "days_available":   0,
+        "d0":               None,
+        "d1":               None,
+        "d1_short_of_period_end": False,
+        "result_status":    "offline",
+        "result_reason":    None,
         "performance_pct":  None,
-        "spy_pct":          spy_week_pct,
+        "spy_pct":          None,
+        "spy_pending":      False,
         "alpha_pct":        None,
-        "week_start_value": None,
-        "week_end_value":   None,
-        "net_flow":         None,
-        "week_had_trades":  False,
+        "equity_start":     None,
+        "equity_end":       None,
+        "equity_change":    None,
+        "dates_agree":      None,
+        "return_d0":        None,
+        "return_d1":        None,
+        "max_leverage":     None,
+        "leverage":         None,
+        "waterfall":        None,
+        "interest_gap_months": [],
+        "unmeasured":       [],
         "contributors":     [],
         "detractors":       [],
         "closed_positions":       [],
@@ -193,102 +289,111 @@ def build_debrief_package(
         "broken_theses":          broken_theses or [],
         "behavioral":             {},
         "decision_quality_month": None,
+        "narratable":       False,
     }
 
-    if snapshots_df is None or (hasattr(snapshots_df, "empty") and snapshots_df.empty):
-        return package
+    per_ticker: dict = {}
+    if recon is not None:
+        status = recon.get("status") or "offline"
+        package["result_status"] = status
+        package["d0"] = str(recon["d0"]) if recon.get("d0") else None
+        package["d1"] = str(recon["d1"]) if recon.get("d1") else None
+        package["d1_short_of_period_end"] = bool(recon.get("d1_short_of_period_end"))
+        if status in ("ok", "partial"):
+            package["equity_start"] = recon.get("equity_start")
+            package["equity_end"] = recon.get("equity_end")
+            package["equity_change"] = recon.get("equity_change")
+        package["narratable"] = (status != "offline" and recon.get("pos_pnl") is not None)
+        _pt = recon.get("per_ticker")
+        per_ticker = _pt if isinstance(_pt, dict) else {}
 
-    snap = snapshots_df.copy()
-    snap["snapshot_date"] = snap["snapshot_date"].astype(str).str[:10]
-    week_dates = sorted(snap["snapshot_date"].unique())
-    package["days_available"] = len(week_dates)
+        # Account result: the SAME flow-adjusted figure Reports shows (account_return).
+        if ar is not None and ar.get("status") == "ok":
+            package["performance_pct"] = ar.get("return_pct")
+            package["spy_pct"] = ar.get("spy_return_pct")
+            package["spy_pending"] = bool(ar.get("spy_d1_price_pending"))
+            # the % is measured over account_return's own endpoints; keep them so the
+            # label never borrows the reconciliation's dates when the two differ
+            package["return_d0"] = str(ar["d0"]) if ar.get("d0") else None
+            package["return_d1"] = str(ar["d1"]) if ar.get("d1") else None
+            # the SAME leverage figure Reports' caveat uses (max of the two endpoint rows)
+            package["max_leverage"] = ar.get("max_leverage")
+            if package["performance_pct"] is not None and package["spy_pct"] is not None:
+                package["alpha_pct"] = round(package["performance_pct"] - package["spy_pct"], 2)
+            agree = (ar.get("d0") == recon.get("d0") and ar.get("d1") == recon.get("d1"))
+            package["dates_agree"] = bool(agree)
+            if not agree:
+                # the % and the $ would describe different windows -- keep the %,
+                # withhold the dollar change
+                package["equity_change"] = None
+                package["equity_start"] = None
+                package["equity_end"] = None
 
-    if len(week_dates) < 5:
-        return package
+        if package["performance_pct"] is None:
+            package["result_reason"] = unknown_result_reason(recon, ar)
 
-    package["has_snapshots"] = True
-    start_date = week_dates[0]
-    end_date   = week_dates[-1]
-    start_snap = snap[snap["snapshot_date"] == start_date]
-    end_snap   = snap[snap["snapshot_date"] == end_date]
+        if lev is not None and lev.get("status") == "ok":
+            package["leverage"] = {
+                "min": lev["min"]["leverage"], "max": lev["max"]["leverage"],
+                "start": lev["start"]["leverage"], "end": lev["end"]["leverage"],
+            }
 
-    # start_date/end_date are ISO date STRINGS sliced from snapshot_date
-    # above (a plain date column, no offset), not date objects -- convert
-    # once so the trades_df["traded_at"] date-range filters below can
-    # compare like-for-like `date` objects against the ET-anchored parse.
-    _start_d = date.fromisoformat(start_date)
-    _end_d   = date.fromisoformat(end_date)
+        pp = recon.get("pos_pnl")
+        inc = recon.get("income")
+        res = recon.get("residual")
+        fl = recon.get("flows")
+        full = status in ("ok", "partial")
+        package["waterfall"] = {
+            "held_through": pp["held_through"] if pp else None,
+            "sold_leg":     pp["sold_leg"] if pp else None,
+            "bought_leg":   pp["bought_leg"] if pp else None,
+            "round_trip":   pp["round_trip"] if pp else None,
+            "flows_net":    fl["net"] if (full and fl is not None) else None,
+            "dividends":    inc["dividends"] if (full and inc is not None) else None,
+            "interest":     pa.interest_posted(recon) if full else None,
+            "fees":         inc["fees"] if (full and inc is not None) else None,
+            "unexplained":  res["total"] if (full and res is not None) else None,
+        }
+        gap = inc.get("interest_coverage_gap_months") if inc else None
+        package["interest_gap_months"] = list(gap) if gap is not None else []
 
-    # Portfolio value
-    start_val = float((start_snap["shares"] * start_snap["close_price"]).sum()) if not start_snap.empty else 0.0
-    end_val   = float((end_snap["shares"] * end_snap["close_price"]).sum())   if not end_snap.empty else 0.0
-    package["week_start_value"] = start_val if start_val > 0 else None
-    package["week_end_value"]   = end_val   if end_val   > 0 else None
+        unmeasured = set(_names(recon.get("unpriced"))) | set(_names(recon.get("journal_inconsistent")))
+        package["unmeasured"] = sorted(unmeasured)
 
-    if start_val > 0 and end_val > 0:
-        perf = ((end_val - start_val) / start_val) * 100
-        package["performance_pct"] = round(perf, 2)
-        if spy_week_pct is not None:
-            package["alpha_pct"] = round(perf - spy_week_pct, 2)
+        rows = []
+        for tk, rec in per_ticker.items():
+            if tk in unmeasured:
+                continue
+            total = _fnum(rec.get("total"))
+            if total is None:
+                continue
+            shp = shape(rec.get("shares_start"), rec.get("shares_end"),
+                        rec.get("bought_usd"), rec.get("sold_usd"))
+            rows.append({
+                "ticker": tk, "pnl": total, "shape": shp,
+                "price_pct": _price_pct(rec) if shp == "held" else None,
+            })
+        package["contributors"] = sorted(
+            [r for r in rows if r["pnl"] > 0], key=lambda r: (-r["pnl"], r["ticker"]))[:3]
+        package["detractors"] = sorted(
+            [r for r in rows if r["pnl"] < 0], key=lambda r: (r["pnl"], r["ticker"]))[:3]
 
-    # Flag weeks with trades so the LLM can caveat the return figure.
-    # A clean cash-flow-adjusted return requires daily cash/margin history
-    # (not available — snapshots are equity-only). Margin buys in particular
-    # can't be treated as external capital flows.
-    week_had_trades = False
-    if trades_df is not None and not (hasattr(trades_df, "empty") and trades_df.empty):
-        _ta_dates = _traded_at_et_dates(trades_df)
-        _wt = trades_df[
-            (_ta_dates >= _start_d) &
-            (_ta_dates <= _end_d) &
-            trades_df["action"].str.upper().isin(["BUY", "SELL"])
-        ]
-        week_had_trades = not _wt.empty
-    package["net_flow"] = None
-    package["week_had_trades"] = week_had_trades
-
-    # Per-position P&L
-    start_val_by_tk: dict[str, float] = {
-        str(r["ticker"]).upper(): float(r["shares"]) * float(r["close_price"])
-        for _, r in start_snap.iterrows()
-    }
-    end_val_by_tk: dict[str, float] = {
-        str(r["ticker"]).upper(): float(r["shares"]) * float(r["close_price"])
-        for _, r in end_snap.iterrows()
-    }
-
-    pos_pnl = []
-    for tk in set(list(start_val_by_tk) + list(end_val_by_tk)):
-        sv = start_val_by_tk.get(tk, 0.0)
-        ev = end_val_by_tk.get(tk, 0.0)
-        pnl = ev - sv
-        pct = ((ev - sv) / sv * 100) if sv > 0 else None
-        pos_pnl.append({"ticker": tk, "pnl": pnl, "pct": pct})
-
-    pos_pnl.sort(key=lambda x: x["pnl"], reverse=True)
-
-    # Detect positions fully closed (sold) this week — their end-of-week snapshot
-    # value is $0 not because the price collapsed but because the SELL removed them.
-    # Exclude from contributors/detractors so the LLM doesn't narrate them as losses.
+    # "Closed" = held going into the week and none left at the end.  A name
+    # bought AND sold inside the week (round_trip) is not a closed position:
+    # the prompt would otherwise say "Position closed this week" about a
+    # name that was never held at the start.
     closed_tickers: set[str] = set()
-    if trades_df is not None and not (hasattr(trades_df, "empty") and trades_df.empty):
-        _ta_dates2 = _traded_at_et_dates(trades_df)
-        _week_sells = trades_df[
-            (_ta_dates2 >= _start_d) &
-            (_ta_dates2 <= _end_d) &
-            (trades_df["action"].str.upper() == "SELL")
-        ]
-        for _stk in _week_sells["ticker"].astype(str).str.upper().unique():
-            if end_val_by_tk.get(_stk, 0.0) == 0.0:
-                closed_tickers.add(_stk)
+    for tk, rec in per_ticker.items():
+        if shape(rec.get("shares_start"), rec.get("shares_end"),
+                 rec.get("bought_usd"), rec.get("sold_usd")) == "closed":
+            closed_tickers.add(tk)
     package["closed_positions"] = sorted(closed_tickers)
 
-    package["contributors"] = [p for p in pos_pnl if p["pnl"] > 0 and p["ticker"] not in closed_tickers][:3]
-    package["detractors"]   = sorted(
-        [p for p in pos_pnl if p["pnl"] < 0 and p["ticker"] not in closed_tickers],
-        key=lambda x: x["pnl"]
-    )[:3]
-    _pnl_by_tk = {p["ticker"]: p for p in pos_pnl}
+    def _end_week_pct(tk: str):
+        rec = per_ticker.get(tk)
+        if rec is None or tk in closed_tickers:
+            return None
+        return _price_pct(rec)
 
     # Recommendations surfaced this week — actionable types only.
     # buy_candidate is an awareness-only feed; including it inflates the signal
@@ -338,10 +443,9 @@ def build_debrief_package(
                         "_verdicts":      [verdict] if verdict else [],
                         "times_surfaced": 1,
                         "acted":          tk in acted_tickers,
-                        # Suppress end_week_pct for closed positions — their -100%
-                        # is a closure accounting artifact, not a price event.
-                        "end_week_pct":   None if tk in closed_tickers
-                                          else _pnl_by_tk.get(tk, {}).get("pct"),
+                        # Price % over the window (close_end / close_start − 1);
+                        # None for a closed position or when either close is missing.
+                        "end_week_pct":   _end_week_pct(tk),
                     }
                 else:
                     by_ticker[tk]["times_surfaced"] += 1
@@ -472,36 +576,93 @@ def build_debrief_package(
     return package
 
 
+def _usd_plain(v) -> str:
+    """Plain-dollar text for the LLM prompt (sign before the $); 'unknown' for None."""
+    x = _fnum(v)
+    if x is None:
+        return "unknown"
+    if round(abs(x)) == 0:
+        return "$0"
+    return f"{'-' if x < 0 else '+'}${abs(x):,.0f}"
+
+
+_SHAPE_TEXT = {
+    "closed":     "position sold this week — the move up to the sale",
+    "opened":     "position bought this week — the move from its buy price",
+    "round_trip": "bought and sold within the week",
+    "traded":     "held at both ends, bought and sold in between",
+    "trimmed":    "held at both ends, partly sold",
+    "added":      "held at both ends, added to",
+    "held":       "held all week",
+}
+
+
+def _leg_line(c: dict) -> str:
+    pct = c.get("price_pct")
+    pct_str = f"; price {_pct(pct)}" if pct is not None else ""
+    return f"  {c['ticker']}: {_usd_plain(c['pnl'])} ({_SHAPE_TEXT.get(c.get('shape'), 'traded')}{pct_str})"
+
+
 def _format_prompt(package: dict) -> str:
     lines = [f"Week: {package['week_start']} to {package['week_ending']}", ""]
 
+    d0, d1 = package.get("d0"), package.get("d1")
     if package.get("performance_pct") is not None:
-        lines.append("Portfolio performance (equity positions only — cash and margin excluded):")
-        if package.get("week_start_value"):
-            lines.append(f"  Start value: ${package['week_start_value']:,.0f}")
-        if package.get("week_end_value"):
-            lines.append(f"  End value:   ${package['week_end_value']:,.0f}")
-        lines.append(f"  Portfolio return: {_pct(package.get('performance_pct'))}")
-        lines.append(f"  SPY return:       {_pct(package.get('spy_pct'))}")
-        lines.append(f"  Alpha:            {_pct(package.get('alpha_pct'))}")
-        if package.get("week_had_trades"):
-            lines.append("  Note: Trades (buys/sells) occurred this week. The return above reflects"
-                         " equity market-value change and may include position-size effects"
-                         " (e.g. margin-funded buys), not pure price appreciation.")
+        r0, r1 = package.get("return_d0") or d0, package.get("return_d1") or d1
+        lines.append(f"Account change measured {r0} close to {r1} close (net equity, flow-adjusted;"
+                     " the same figure as the Account page's Reports tab, Last week):")
+        lines.append(f"  Account change: {_pct(package.get('performance_pct'))}"
+                     + (f" ({_usd_plain(package['equity_change'])})"
+                        if package.get("dates_agree") and package.get("equity_change") is not None else ""))
+        if package.get("spy_pct") is not None:
+            lines.append(f"  SPY over the same dates: {_pct(package.get('spy_pct'))}")
+            lines.append(f"  Account vs SPY: {package['alpha_pct']:+.1f} percentage points")
+        elif package.get("spy_pending"):
+            lines.append("  SPY over the same dates: not posted yet")
+        else:
+            lines.append("  SPY over the same dates: unknown")
     else:
-        lines.append("Portfolio performance: insufficient snapshot data for this period.")
+        reason = package.get("result_reason") or "the account result couldn't be measured for this period."
+        lines.append(f"Account result: unknown — {reason}")
+        lines.append("  Do not estimate it; say only that it is unknown and why.")
+    ml = _fnum(package.get("max_leverage"))
+    if package.get("performance_pct") is not None and ml is not None and ml > 1:
+        lines.append(f"  Leverage: up to {ml:.1f}x at the week's endpoints")
+
+    wf = package.get("waterfall")
+    if wf:
+        lines.append("")
+        lines.append("Where the account change came from:" if package.get("performance_pct") is not None
+                     else "Position P&L (account result unknown):")
+        for label, key in (
+            ("Price moves on positions held through", "held_through"),
+            ("Last-day moves on positions sold", "sold_leg"),
+            ("First-day moves on positions bought", "bought_leg"),
+            ("Same-day round trips", "round_trip"),
+            ("Deposits / withdrawals", "flows_net"),
+            ("Dividends", "dividends"),
+            ("Margin interest posted", "interest"),
+            ("Fees", "fees"),
+            ("Unexplained remainder", "unexplained"),
+        ):
+            lines.append(f"  {label}: {_usd_plain(wf.get(key))}")
+    if package.get("interest_gap_months"):
+        lines.append("  Margin interest not recorded for: "
+                     + ", ".join(package["interest_gap_months"]) + " (the interest line may be understated)")
+    if package.get("d1_short_of_period_end") and d1:
+        lines.append(f"  Note: the latest account record in the week is {d1}, before the week's end.")
+    if package.get("unmeasured"):
+        lines.append("  Not measured (P&L not included above): " + ", ".join(package["unmeasured"]))
 
     lines.append("")
     if package.get("contributors"):
         lines.append("Top contributors (by $ gain):")
         for c in package["contributors"]:
-            pct_str = f" ({_pct(c['pct'])})" if c.get("pct") is not None else ""
-            lines.append(f"  {c['ticker']}: +${c['pnl']:,.0f}{pct_str}")
+            lines.append(_leg_line(c))
     if package.get("detractors"):
         lines.append("Top detractors (by $ loss):")
         for d in package["detractors"]:
-            pct_str = f" ({_pct(d['pct'])})" if d.get("pct") is not None else ""
-            lines.append(f"  {d['ticker']}: -${abs(d['pnl']):,.0f}{pct_str}")
+            lines.append(_leg_line(d))
 
     lines.append("")
     _rec_type_label = {"new_pick": "New position", "add_winner": "Add to winner"}
@@ -545,9 +706,9 @@ def _format_prompt(package: dict) -> str:
         lines.append("")
         lines.append(f"Positions fully closed (sold) this week: {', '.join(package['closed_positions'])}")
         lines.append(
-            "  These tickers were sold during the week. Their end-of-week snapshot value"
-            " is $0 — an accounting artifact of the sell, not a market-price collapse."
-            " They are excluded from the contributor/detractor table above."
+            "  These tickers were sold during the week. In the Decisions section say only"
+            " that the position was closed; they may still appear among the contributors/"
+            "detractors above with their real move up to the sale."
         )
 
     if package.get("broken_theses"):
@@ -641,7 +802,7 @@ def generate_debrief(
 
     Returns a save-ready dict (for db.save_weekly_debrief) or None on any failure.
     """
-    if not api_key or not package.get("has_snapshots"):
+    if not api_key or not package.get("narratable"):
         return None
     try:
         import anthropic
@@ -658,6 +819,7 @@ def generate_debrief(
         sections = _parse_response(text)
         return {
             "week_ending":      package["week_ending"],
+            "metrics_version":  package["metrics_version"],
             "generated_at":     datetime.now(timezone.utc).isoformat(),
             "performance_pct":  package.get("performance_pct"),
             "spy_pct":          package.get("spy_pct"),

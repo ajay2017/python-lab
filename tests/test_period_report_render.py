@@ -43,20 +43,59 @@ def _enclosing_try(node):
     return None
 
 
+_PI = Path(__file__).parent.parent / "stock_analyzer" / "period_inputs.py"
+
+
+def _core_call():
+    """The Reports block's one `_pi_mod.compute_period_core(...)` call (the engine now runs
+    through the shared period_inputs helper, not directly from app.py)."""
+    return _attr_calls("_pi_mod", "compute_period_core")[0]
+
+
+def _pi_func(name):
+    tree = parse_file_cached(_PI)
+    return next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name)
+
+
+def _calls_in(root, name):
+    return [n for n in ast.walk(root) if isinstance(n, ast.Call)
+            and ((isinstance(n.func, ast.Attribute) and n.func.attr == name)
+                 or (isinstance(n.func, ast.Name) and n.func.id == name))]
+
+
 # --- wiring ------------------------------------------------------------------
 
 def test_page_calls_the_engine_once_each():
-    for fn in ("reconcile_period", "leverage_section", "trust_strip", "waterfall_rows",
-               "leverage_tiles", "format_period_csv", "format_period_markdown", "resolve_period"):
+    # the page reaches the engine ONLY through period_inputs: one load, one core run ...
+    assert len(_attr_calls("_pi_mod", "load_engine_inputs")) == 1
+    assert len(_attr_calls("_pi_mod", "compute_period_core")) == 1
+    # ... never directly
+    for fn in ("reconcile_period", "leverage_section"):
+        assert _attr_calls("_pa_mod", fn) == [], fn
+    # the remaining presentation calls are still made exactly once
+    for fn in ("trust_strip", "waterfall_rows", "leverage_tiles", "format_period_csv",
+               "format_period_markdown"):
         assert len(_attr_calls("_pa_mod", fn)) == 1, fn
+    # resolve_period: once in the Reports block, once more in the Weekly Debrief's Generate Now
+    # (C7), which sits after it in the file
+    debrief_line = next(i for i, ln in enumerate(_SRC.splitlines(), 1) if 'key="_wd_generate_btn"' in ln)
+    rp = _attr_calls("_pa_mod", "resolve_period")
+    assert len(rp) == 2 and len([c for c in rp if c.lineno < debrief_line]) == 1
+    # and the helper itself runs each engine function exactly once
+    core = _pi_func("compute_period_core")
+    assert len(_calls_in(core, "reconcile_period")) == 1
+    assert len(_calls_in(core, "leverage_section")) == 1
+    assert len(_calls_in(core, "account_return")) == 1
 
 
 def test_engine_calls_are_inside_a_try_that_catches_exception():
-    for fn in ("reconcile_period", "leverage_section", "trust_strip"):
-        call = _attr_calls("_pa_mod", fn)[0]
+    # the app-side try still exists: the helper's inputs/core AND the trust strip sit in it
+    for call in (_attr_calls("_pi_mod", "load_engine_inputs")[0], _core_call(),
+                 _attr_calls("_pa_mod", "trust_strip")[0]):
         t = _enclosing_try(call)
-        assert t is not None, fn
-        assert any(isinstance(h.type, ast.Name) and h.type.id == "Exception" for h in t.handlers), fn
+        assert t is not None, ast.unparse(call)[:60]
+        assert any(isinstance(h.type, ast.Name) and h.type.id == "Exception" for h in t.handlers), \
+            ast.unparse(call)[:60]
 
 
 def _assigned_from(name: str):
@@ -69,37 +108,43 @@ def _assigned_from(name: str):
 
 
 def test_each_loader_is_the_none_on_failure_variant():
-    rc = _attr_calls("_pa_mod", "reconcile_period")[0]
-    inc = _kw(rc, "income_events")
-    daily = _kw(rc, "daily_snapshots_df")
-    assert isinstance(inc, ast.Name) and isinstance(daily, ast.Name)
-    srcs = {inc.id: _assigned_from(inc.id), daily.id: _assigned_from(daily.id)}
-    assert [v.func.attr for v in srcs[inc.id]] == ["load_snaptrade_income_events_or_none"]
-    assert [v.func.attr for v in srcs[daily.id]] == ["load_daily_snapshots_or_none"]
-    trades = _kw(rc, "trades_df")
+    # (1) the shared helper reads only the None-on-failure variants ...
+    attrs = {n.attr for n in ast.walk(_pi_func("load_engine_inputs")) if isinstance(n, ast.Attribute)}
+    assert {"load_trades_or_none", "load_daily_snapshots_or_none",
+            "load_snaptrade_income_events_or_none", "load_account_flows_for_dedup_check",
+            "load_account_daily_snapshots"} <= attrs
+    # ... and never their lenient siblings (which collapse a failed read to an empty frame / [])
+    assert not attrs & {"load_trades", "load_daily_snapshots", "load_snaptrade_income_events",
+                        "load_account_flows"}
+    # (2) the page hands the helper its own day-cached frames, not fresh lenient loaders
+    li = _attr_calls("_pi_mod", "load_engine_inputs")[0]
+    trades = _kw(li, "trades_df")
+    assert isinstance(trades, ast.Name)
     assert [v.func.attr for v in _assigned_from(trades.id)] == ["load_trades_or_none"]
-    # flows come from the dedup-check loader through the day cache, never db.load_account_flows()
-    flows = _kw(rc, "flows")
+    flows = _kw(li, "flows")
     assert isinstance(flows, ast.Name) and flows.id == "_perf_flows_rows"
     assert "db.load_account_flows_for_dedup_check()" in _SRC
-    # and the period report never reads the lenient flows loader
-    t = _enclosing_try(rc)
-    assert not [c for c in ast.walk(t) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
-                and c.func.attr in ("load_account_flows", "load_snaptrade_income_events", "load_trades")]
-    # the account snapshots are the day-cached full (unscoped) frame
-    snaps = _kw(rc, "account_snapshots_df")
+    snaps = _kw(li, "account_snapshots_df")
     assert isinstance(snaps, ast.Name) and snaps.id == "_perf_acct_snap_full_df"
+    # the period report never reads the lenient loaders inside its try
+    t = _enclosing_try(li)
+    assert not [c for c in ast.walk(t) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                and c.func.attr in ("load_account_flows", "load_snaptrade_income_events", "load_trades",
+                                    "load_daily_snapshots")]
 
 
 def test_reference_leverage_is_the_constant():
-    ls = _attr_calls("_pa_mod", "leverage_section")[0]
-    assert isinstance(ls.args[3], ast.Name) and ls.args[3].id == "LEVERAGE_REFERENCE_TARGET"
+    kw = _kw(_core_call(), "reference_leverage")
+    assert isinstance(kw, ast.Name) and kw.id == "LEVERAGE_REFERENCE_TARGET"
+    # the helper forwards its parameter (not a literal) as leverage_section's 4th argument
+    ls = _calls_in(_pi_func("compute_period_core"), "leverage_section")[0]
+    assert isinstance(ls.args[3], ast.Name) and ls.args[3].id == "reference_leverage"
     # the "Days above N.Nx" tile label reads the same constant
     assert "Days above {LEVERAGE_REFERENCE_TARGET:.1f}x" in _SRC
 
 
 def test_no_or_collapse_around_period_inputs():
-    t = _enclosing_try(_attr_calls("_pa_mod", "reconcile_period")[0])
+    t = _enclosing_try(_core_call())
     for n in ast.walk(t):
         if isinstance(n, ast.BoolOp) and isinstance(n.op, ast.Or):
             for v in n.values:
@@ -142,6 +187,8 @@ def test_existing_sections_live_inside_more_from_this_period():
     # the new S1/S3 engine calls are NOT inside it
     for fn in ("reconcile_period", "leverage_section", "waterfall_rows", "leverage_tiles", "split_moves"):
         assert _attr_calls("_pa_mod", fn, root=w) == [], fn
+    for fn in ("compute_period_core", "load_engine_inputs"):
+        assert _attr_calls("_pi_mod", fn, root=w) == [], fn
 
 
 def _fn_def(name):
@@ -152,7 +199,7 @@ def test_every_period_dollar_goes_through_the_masking_helper():
     # the helper masks real values via _m and leaves None readable ("unknown")
     helper = ast.unparse(_fn_def("_m_usd"))
     assert "_m(" in helper and "is None" in helper
-    t = _enclosing_try(_attr_calls("_pa_mod", "reconcile_period")[0])
+    t = _enclosing_try(_core_call())
     region = t._parent  # the else-branch body holding the S1/S3 render
     # no raw usd_plain / _m(usd_plain) left in the render: dollars use _m_usd only
     assert [c for c in ast.walk(region) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)

@@ -558,6 +558,92 @@ def test_render_debrief_email_week_had_trades_shows_warning():
     assert "Trades occurred this week" in html
 
 
+# ─── render_debrief_email — C7 (metrics_version 2, period_attribution engine) ──
+
+def _v2(perf=-11.5, spy=1.0, alpha=-12.5, **kw):
+    d = _debrief(perf=perf, spy=spy, alpha=alpha)
+    d["metrics_version"] = 2
+    d.update(kw)
+    return d
+
+
+_PERIOD = {"d0": "2026-10-09", "d1": "2026-10-12", "max_leverage": 2.4, "result_reason": None}
+
+
+def test_v2_email_tiles_label_account_spy_and_vs_spy_pp():
+    html = notify.render_debrief_email(_v2(), period=_PERIOD)
+    assert ">Account<" in html and ">S&P 500<" in html
+    assert "vs SPY" in html
+    assert "net equity · 2026-10-09→2026-10-12 close" in html
+    assert "same dates · SPY" in html
+    assert "-11.5%" in html and "-12.5pp" in html
+    assert "equity positions" not in html and "Mon&#8202;" not in html
+    assert "Trades occurred this week" not in html
+
+
+def test_v2_footnote_names_reports_and_leverage_sentence():
+    html = notify.render_debrief_email(_v2(), period=_PERIOD)
+    assert "net-equity change, flow-adjusted" in html
+    assert "Reports → Last week" in html
+    assert "At up to 2.4&times; leverage" in html and "SPY is unlevered" in html
+
+
+def test_v2_footnote_omits_leverage_sentence_when_unknown():
+    html = notify.render_debrief_email(_v2(), period={"d0": "2026-10-09", "d1": "2026-10-12", "max_leverage": None})
+    assert "leverage" not in html.split("</table>")[1].split("</p>")[0]
+
+
+def test_v2_leverage_sentence_only_above_one_x_like_reports():
+    for lev in (1.0, 0.8):
+        html = notify.render_debrief_email(_v2(), period=dict(_PERIOD, max_leverage=lev))
+        assert "leverage" not in html.split("</table>")[1].split("</p>")[0]
+    html = notify.render_debrief_email(_v2(), period=dict(_PERIOD, max_leverage=1.01))
+    assert "At up to 1.0&times; leverage" in html
+
+
+def test_v2_tile_subtitle_uses_the_returns_own_dates_when_they_differ():
+    html = notify.render_debrief_email(
+        _v2(), period=dict(_PERIOD, return_d0="2026-10-02", return_d1="2026-10-09"))
+    assert "net equity · 2026-10-02→2026-10-09 close" in html
+    assert "2026-10-09→2026-10-12" not in html
+
+
+def test_v2_unknown_result_renders_one_reason_line_and_no_tiles():
+    period = dict(_PERIOD, result_reason="There is no valid account record for the session before this period.")
+    html = notify.render_debrief_email(_v2(perf=None, spy=None, alpha=None), period=period)
+    assert "Account result unknown — There is no valid account record" in html
+    assert "<table width='100%'" not in html
+    assert "vs SPY" not in html
+
+
+def test_v2_unknown_result_reason_is_escaped():
+    html = notify.render_debrief_email(_v2(perf=None), period={"result_reason": "<b>x</b> & y"})
+    assert "&lt;b&gt;x&lt;/b&gt; &amp; y" in html and "<b>x</b>" not in html
+
+
+def test_v2_week_over_week_delta_only_when_prior_has_same_version():
+    same = notify.render_debrief_email(_v2(), prior={"alpha_pct": -2.5, "metrics_version": 2}, period=_PERIOD)
+    assert "vs last wk" in same
+    older = notify.render_debrief_email(_v2(), prior={"alpha_pct": -2.5, "metrics_version": 1}, period=_PERIOD)
+    assert "vs last wk" not in older
+    legacy = notify.render_debrief_email(_v2(), prior={"alpha_pct": -2.5}, period=_PERIOD)
+    assert "vs last wk" not in legacy
+    nan_ver = notify.render_debrief_email(_v2(), prior={"alpha_pct": -2.5, "metrics_version": float("nan")},
+                                          period=_PERIOD)
+    assert "vs last wk" not in nan_ver
+
+
+def test_v1_email_output_is_unchanged_by_the_new_period_argument():
+    base = notify.render_debrief_email(_debrief())
+    assert notify.render_debrief_email(_debrief(), period=_PERIOD) == base
+    assert "equity positions" in base and "Alpha (unadjusted)" in base
+
+
+def test_v1_week_over_week_delta_still_shown_between_legacy_rows():
+    html = notify.render_debrief_email(_debrief(), prior={"alpha_pct": 1.0})
+    assert "vs last wk" in html
+
+
 # ─── render_intelligence_email — inner _alpha_html (NaN guard) ──────────────
 
 def _report(engine_alpha=5.0, acted=3, missed=1):

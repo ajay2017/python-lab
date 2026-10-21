@@ -2477,7 +2477,7 @@ def update_user_thesis(ticker: str, thesis: str) -> bool:
 _WEEKLY_DEBRIEF_COLS = [
     "id", "week_ending", "generated_at", "performance_pct", "spy_pct",
     "alpha_pct", "section_facts", "section_decisions", "section_patterns",
-    "section_watchnext", "email_sent", "email_sent_at",
+    "section_watchnext", "email_sent", "email_sent_at", "metrics_version",
 ]
 
 

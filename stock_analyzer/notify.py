@@ -1387,7 +1387,8 @@ def render_watchlist_entries_email(
     return subject, body
 
 
-def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: dict | None = None) -> str:
+def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: dict | None = None,
+                         period: dict | None = None) -> str:
     """Render the weekly portfolio debrief as a professional HTML email (light-mode-first).
 
     week_had_trades: True when a BUY/SELL landed inside the joined week — the
@@ -1398,6 +1399,9 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: di
     alpha trend annotation on the Alpha tile. The delta is computed here in code,
     not narrated by the LLM — arithmetic on two numbers has zero business being
     left to a text-generation model when Python can just do it exactly.
+    period: the debrief package (metrics_version 2 only) -- supplies the d0/d1
+    close dates, the leverage range and the unknown-result reason the tiles and
+    footnote name.  Ignored for a legacy (v1) debrief.
     """
 
     week_ending  = debrief.get("week_ending", "—")
@@ -1406,17 +1410,22 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: di
     spy   = debrief.get("spy_pct")
     alpha = debrief.get("alpha_pct")
 
-    alpha_subtitle = "vs benchmark"
-    if prior is not None:
+    v2 = debrief.get("metrics_version") == 2
+    alpha_subtitle = "percentage points" if v2 else "vs benchmark"
+    # Week-over-week only between rows measured the same way -- a v2 week against
+    # a legacy equity-positions week would compare two different quantities.
+    if prior is not None and prior.get("metrics_version") == debrief.get("metrics_version"):
         prior_alpha = prior.get("alpha_pct")
         if (alpha is not None and prior_alpha is not None
                 and not (isinstance(alpha, float) and alpha != alpha)
                 and not (isinstance(prior_alpha, float) and prior_alpha != prior_alpha)):
             _delta = float(alpha) - float(prior_alpha)
             _arrow = "▲" if _delta >= 0 else "▼"
-            alpha_subtitle = f"vs benchmark &nbsp;·&nbsp; {_arrow} {_delta:+.1f}pp vs last wk"
+            alpha_subtitle = (("percentage points" if v2 else "vs benchmark")
+                              + f" &nbsp;·&nbsp; {_arrow} {_delta:+.1f}pp vs last wk")
 
-    def _pct_cell(label: str, v: float | None, bold: bool = False, subtitle: str = "") -> str:
+    def _pct_cell(label: str, v: float | None, bold: bool = False, subtitle: str = "",
+                  unit: str = "%") -> str:
         if v is None or (isinstance(v, float) and v != v):   # NaN != NaN
             v = None
         if v is None:
@@ -1424,7 +1433,7 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: di
         else:
             colour   = "#16a34a" if v >= 0 else "#dc2626"
             weight   = "700" if bold else "600"
-            val_html = f"<span style='color:{colour};font-weight:{weight}'>{v:+.1f}%</span>"
+            val_html = f"<span style='color:{colour};font-weight:{weight}'>{v:+.1f}{unit}</span>"
         lw = "700" if bold else "400"
         sub_html = (f"<div style='font-size:0.68em;color:#9ca3af;margin-top:3px'>{subtitle}</div>"
                     if subtitle else "")
@@ -1438,7 +1447,42 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: di
         )
 
     perf_block = ""
-    if perf is not None:
+    if v2:
+        pkg = period or {}
+        if perf is None or (isinstance(perf, float) and perf != perf):
+            reason = pkg.get("result_reason") or "the account result couldn't be measured for this period."
+            perf_block = (
+                "<p style='font-size:0.8em;color:#b45309;background:#fffbeb;"
+                "border:1px solid #fde68a;border-radius:6px;padding:8px 12px;"
+                "margin:20px 0;text-align:center'>"
+                f"Account result unknown — {_html.escape(str(reason))}</p>"
+            )
+        else:
+            d0 = _html.escape(str(pkg.get("return_d0") or pkg.get("d0") or "?"))
+            d1 = _html.escape(str(pkg.get("return_d1") or pkg.get("d1") or "?"))
+            # Same figure and rule as Reports' leverage caveat: the larger of the two
+            # endpoint leverages (account_return.max_leverage), shown only above 1x.
+            lev_max = pkg.get("max_leverage")
+            lev_sentence = ""
+            if isinstance(lev_max, (int, float)) and lev_max == lev_max and lev_max > 1:
+                lev_sentence = (f" At up to {lev_max:.1f}&times; leverage your account moves roughly "
+                                f"{lev_max:.1f}&times; the holdings' own move; SPY is unlevered.")
+            perf_block = (
+                "<table width='100%' style='border-collapse:collapse;background:#f8fafc;"
+                "border:1px solid #e5e7eb;border-radius:8px;margin:20px 0 4px;overflow:hidden'>"
+                "<tr>"
+                + _pct_cell("Account", perf, bold=True, subtitle=f"net equity · {d0}→{d1} close")
+                + _pct_cell("S&P 500", spy, subtitle="same dates · SPY")
+                + _pct_cell("vs SPY", alpha, bold=True, subtitle=alpha_subtitle,
+                            unit="pp").replace("border-right:1px solid #e5e7eb", "border-right:none")
+                + "</tr></table>"
+                "<p style='font-size:0.72em;color:#9ca3af;margin:0 0 20px;text-align:center'>"
+                "Your account's net-equity change, flow-adjusted — the same figure as "
+                "💰 Account → Reports → Last week."
+                + lev_sentence +
+                "</p>"
+            )
+    elif perf is not None:
         # The trades caveat renders BEFORE the KPI tiles (not after) — a reader
         # sees the eye-catching % numbers first regardless of layout order, so
         # the caveat needs to land ahead of them to actually frame the read,

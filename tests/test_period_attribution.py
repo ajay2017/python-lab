@@ -689,3 +689,42 @@ def test_phantom_shares_later_intervals_are_journal_flagged_not_unpriced():
     assert "journal-inconsistent" in pa.format_period_markdown({"recon": r})
     assert r["residual"] is not None
     assert "journal-excluded" in {x["key"]: x for x in pa.trust_strip(r, None)}["unexplained"]["label"]
+
+
+# --- C7: additive per-ticker endpoint fields (Weekly Debrief shape / price %) --
+
+def test_per_ticker_endpoint_fields_on_big_world():
+    t, a, dl, flows, income = big_world()
+    r = recon(t, a, dl, flows=flows, income=income)
+    pt = r["per_ticker"]
+    # A: 10 sh at d0 (FRI) .. 11 sh at d1 (WED, bought 1 on WED)
+    assert (pt["A"]["shares_start"], pt["A"]["shares_end"]) == (10, 11)
+    assert (pt["A"]["close_start"], pt["A"]["close_end"]) == (100, 99)
+    # B: sold out during the window; no close at WED because it is no longer held
+    assert (pt["B"]["shares_start"], pt["B"]["shares_end"]) == (10, 0)
+    assert pt["B"]["close_start"] == 50 and pt["B"]["close_end"] is None
+    # E: bought MON/TUE (5 sh) and sold WED -> flat at both endpoints, but it traded
+    assert (pt["E"]["shares_start"], pt["E"]["shares_end"]) == (0, 0) and pt["E"]["bought_usd"] > 0
+    # D: same-day round trip never held at either endpoint
+    assert (pt["D"]["shares_start"], pt["D"]["shares_end"]) == (0, 0)
+    # existing keys still there and the identity is untouched
+    assert sum(v["total"] for v in pt.values()) == pytest.approx(r["pos_pnl"]["total"], abs=1e-9)
+    for rec in pt.values():
+        assert {"held_through", "sold_leg", "bought_leg", "round_trip", "total",
+                "bought_usd", "sold_usd"} <= set(rec)
+
+
+def test_per_ticker_closes_withheld_for_a_split_name():
+    trades, acct = _split_world()
+    daily = pd.DataFrame([{"snapshot_date": FRI.isoformat(), "ticker": "S", "shares": 10, "close_price": 100},
+                          {"snapshot_date": MON.isoformat(), "ticker": "S", "shares": 20, "close_price": 52}])
+    r = recon(trades, acct, daily, ps=MON, pe=MON)
+    s = r["per_ticker"]["S"]
+    assert (s["shares_start"], s["shares_end"]) == (10, 20)
+    assert s["close_start"] is None and s["close_end"] is None   # a close-to-close % across a split is fabricated
+
+
+def test_offline_recon_per_ticker_stays_empty():
+    r = pa.reconcile_period(period_start=MON, period_end=MON, trades_df=None, account_snapshots_df=None,
+                            daily_snapshots_df=None, flows=None, income_events=None)
+    assert r["status"] == "offline" and r["per_ticker"] == {}

@@ -169,7 +169,8 @@ def _fake_pipeline(monkeypatch, n_priced, min_graded_check_value=None):
 def test_build_report_package_fully_populated_pipeline(monkeypatch):
     _fake_pipeline(monkeypatch, n_priced=5)
     recs_df = pd.DataFrame([{"ticker": "AAA"}])
-    weekly_rows = [{"week_ending": "2026-01-25", "performance_pct": 2.0, "spy_pct": 1.0, "alpha_pct": 1.0}]
+    weekly_rows = [{"week_ending": "2026-01-25", "performance_pct": 2.0, "spy_pct": 1.0, "alpha_pct": 1.0,
+                    "metrics_version": 2}]
     result = ir.build_report_package("2026-01-01", "2026-01-31", recs_df, pd.DataFrame(),
                                       weekly_rows=weekly_rows, min_graded=5)
     assert result["n_total"] == 2
@@ -352,3 +353,33 @@ def test_classify_recommendations_read_outage_never_confused_with_empty():
     """The failure mode this function exists to close: None and a genuinely
     empty DataFrame must classify DIFFERENTLY."""
     assert ir.classify_recommendations_read(None) != ir.classify_recommendations_read(pd.DataFrame())
+
+
+# ─── C7: only current-method weekly rows feed the trajectory ─────────────────
+
+def test_build_report_package_weekly_trajectory_keeps_only_current_method_rows(monkeypatch):
+    _fake_pipeline(monkeypatch, n_priced=5)
+    recs_df = pd.DataFrame([{"ticker": "AAA"}])
+    weekly_rows = [
+        {"week_ending": "2026-01-25", "performance_pct": 2.0, "spy_pct": 1.0, "alpha_pct": 1.0, "metrics_version": 2},
+        {"week_ending": "2026-01-18", "performance_pct": 9.0, "spy_pct": 1.0, "alpha_pct": 8.0, "metrics_version": 1},
+        {"week_ending": "2026-01-11", "performance_pct": 7.0, "spy_pct": 1.0, "alpha_pct": 6.0},
+        {"week_ending": "2026-01-04", "performance_pct": 5.0, "spy_pct": 1.0, "alpha_pct": 4.0,
+         "metrics_version": float("nan")},
+    ]
+    result = ir.build_report_package("2026-01-01", "2026-01-31", recs_df, pd.DataFrame(),
+                                      weekly_rows=weekly_rows, min_graded=5)
+    assert [w["week_ending"] for w in result["weekly_trajectory"]] == ["2026-01-25"]
+    assert result["weekly_excluded_old_method"] == 3
+
+
+def test_format_prompt_notes_earlier_weeks_on_an_older_method():
+    package = _base_package(
+        weekly_trajectory=[{"week_ending": "2026-01-25", "performance_pct": 1.0, "spy_pct": 0.5, "alpha_pct": 0.5}],
+        weekly_excluded_old_method=3,
+    )
+    text = ir._format_prompt(package)
+    assert "(3 earlier weeks used an older method — not shown)" in text
+    clean = ir._format_prompt(_base_package(
+        weekly_trajectory=[{"week_ending": "2026-01-25", "performance_pct": 1.0, "spy_pct": 0.5, "alpha_pct": 0.5}]))
+    assert "older method" not in clean

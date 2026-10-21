@@ -2540,8 +2540,11 @@ def _run_thesis(now_et, force: bool) -> int:
 
 def _run_debrief(now_et, force: bool) -> int:
     """Sunday evening: generate weekly portfolio debrief via LLM and email it.
-    Runs after thesis reviews in the same Sunday cron slot. Requires
-    daily_snapshots to have >= 5 trading days of data."""
+    Runs after thesis reviews in the same Sunday cron slot. Numbers come from the
+    period_attribution engine (the same figures as 💰 Account → Reports → Last
+    week); the lane runs whenever the engine's inputs are readable -- there is no
+    minimum-snapshot-days floor."""
+    global _LAST_LANE_FAILURE_DETAIL
     if not force and now_et.weekday() != 6:   # 6 = Sunday
         _log("debrief: not Sunday — skip.")
         return 0
@@ -2553,43 +2556,33 @@ def _run_debrief(now_et, force: bool) -> int:
 
     from stock_analyzer import debrief_advisor as _da
     from stock_analyzer import notify as _notify
-    from stock_analyzer.constants import WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS
-    from stock_analyzer.market_time import most_recent_sunday
+    from stock_analyzer import period_attribution as _pa
+    from stock_analyzer import period_inputs as _pi
+    from stock_analyzer.constants import LEVERAGE_REFERENCE_TARGET
 
-    # Anchored to the most recent Sunday, not raw now_et.date() — a `force`
-    # retry on a different calendar day must land on the SAME week_ending as
-    # the original run (see market_time.most_recent_sunday docstring).
-    week_ending = most_recent_sunday(now_et.date())
-    week_start  = week_ending - __import__("datetime").timedelta(days=6)
+    # The last completed Mon-Sun week; a `force` retry on a different calendar day
+    # must land on the SAME week_ending as the original run (resolve_period's
+    # last_week ends on the most recent Sunday on or before today -- the same
+    # formula as market_time.most_recent_sunday).
+    week_start, week_ending = _pa.resolve_period("last_week", now_et.date())
 
-    # Load snapshot data for the week. The lenient loader (not _or_none) is
-    # intentional here — this lane's outage detection is the separate
-    # _db_unavailable_detail() probe below, not an _or_none None-check; the
-    # threshold comparison itself is delegated to classify_snapshot_read() so
-    # the comparison against WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS lives in
-    # stock_analyzer/, not here (this lane's own snapshots_df is never None,
-    # so "outage" never fires from this call — only "insufficient"/"ready").
-    snapshots_df = db.load_daily_snapshots(start_date=week_start, end_date=week_ending)
-    _snap_status, days_available = _da.classify_snapshot_read(
-        snapshots_df, WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS
-    )
+    inputs = _pi.load_engine_inputs(db, week_start, week_ending)
+    _offline = [k for k in ("trades_df", "account_snapshots_df", "daily_snapshots_df")
+                if inputs.get(k) is None]
+    if _offline:
+        # A None read is a failed read, never "nothing happened": probe whether
+        # the whole DB is down (outage email) or just these reads failed.
+        _detail = _db_unavailable_detail()
+        if _detail:
+            return _handle_db_unavailable("debrief", now_et, _detail)
+        _LAST_LANE_FAILURE_DETAIL = f"debrief_inputs_offline: {', '.join(_offline)}"
+        _log(f"debrief: engine inputs unreadable ({', '.join(_offline)}) — no debrief written.")
+        _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
+        return 1
 
-    if _snap_status == "insufficient":
-        # days_available == 0 is indistinguishable from a DB outage without probing —
-        # a genuine early-run has at least some snapshots; zero means nothing came back.
-        # A partial shortfall (1–4 days) is a data-accumulation issue, not an outage.
-        if days_available == 0:
-            _detail = _db_unavailable_detail()
-            if _detail:
-                return _handle_db_unavailable("debrief", now_et, _detail)
-        _log(f"debrief: only {days_available} snapshot day(s) available — need "
-             f"{WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS}. Earliest full debrief after "
-             f"{week_start + __import__('datetime').timedelta(days=WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS - days_available)}.")
-        return 0
-
-    # Load recommendations and trades for the week
+    # Load recommendations for the week
     recs_df   = db.load_recommendations(start_date=week_start, end_date=week_ending)
-    trades_df = db.load_trades()
+    trades_df = inputs["trades_df"]
     # Full recommendation history for behavioral fingerprint patterns (all-time).
     all_recs_df = db.load_recommendations()
     # Protective (WATCH/TRIM/EXIT) signals for the week — the symmetric
@@ -2608,27 +2601,28 @@ def _run_debrief(now_et, force: bool) -> int:
     # stakes than A1/J1 (a retrospective review, not a deploy-capital rec),
     # so the fix is scoped to correctness + observability, not a deeper
     # narrative-disclosure change to build_debrief_package itself.
-    exit_signals_df = db.load_exit_signals_or_none(days_back=10)
+    exit_signals_df = db.load_exit_signals_or_none(
+        days_back=_da.signal_days_back(now_et.date(), week_start))
     if exit_signals_df is None:
         _log("debrief: exit_signals lookup failed — this week's debrief will "
              "omit the protective-signal section (same as a genuinely quiet "
              "week would render, but this is NOT a genuinely quiet week; "
              "check DB connectivity).")
 
-    # Fetch SPY return for the week
-    spy_week_pct = None
+    # SPY closes by date -- same provider path as Reports' _cached_spy("2y")
+    # (data.fetch_spy); None on any failure so the account result stays
+    # independent of an SPY outage (SPY just reads as unknown).
+    spy_by_date = None
     try:
-        import yfinance as yf
-        spy = yf.download("SPY", start=str(week_start), end=str(week_ending), progress=False, auto_adjust=True)
-        if not spy.empty and len(spy) >= 2:
-            _close = spy["Close"]
-            if hasattr(_close, "columns"):   # multi-ticker download yields a DataFrame
-                _close = _close.iloc[:, 0]
-            _c0 = float(_close.iloc[0])
-            _c1 = float(_close.iloc[-1])
-            spy_week_pct = round((_c1 - _c0) / _c0 * 100, 2)
+        from stock_analyzer.data import fetch_spy
+        spy_by_date = _pi.spy_closes_by_date(fetch_spy("2y"))
     except Exception:
-        pass
+        spy_by_date = None
+
+    core = _pi.compute_period_core(
+        inputs, week_start, week_ending,
+        spy_prices_by_date=spy_by_date, reference_leverage=LEVERAGE_REFERENCE_TARGET,
+    )
 
     # Collect BROKEN theses from thesis_reviews
     broken_theses: list[str] = []
@@ -2645,24 +2639,28 @@ def _run_debrief(now_et, force: bool) -> int:
     # Build data package and call LLM
     package = _da.build_debrief_package(
         week_ending   = week_ending,
-        snapshots_df  = snapshots_df,
+        core          = core,
         recs_df       = recs_df,
         trades_df     = trades_df,
-        spy_week_pct  = spy_week_pct,
         broken_theses = broken_theses,
         all_recs_df   = all_recs_df,
         exit_signals_df = exit_signals_df,
     )
-    _log(f"debrief: {days_available} snapshot day(s) · "
+    _log(f"debrief: result_status={package.get('result_status')} · "
          f"{len(recs_df) if not recs_df.empty else 0} rec(s) · "
-         f"SPY {spy_week_pct:+.1f}%" if spy_week_pct is not None else
-         f"debrief: {days_available} snapshot day(s) · "
-         f"{len(recs_df) if not recs_df.empty else 0} rec(s) · SPY N/A")
+         f"account={package.get('performance_pct')} · SPY={package.get('spy_pct')}")
 
     result = _da.generate_debrief(package, api_key)
     if result is None:
-        _log("debrief: LLM call failed or insufficient snapshot data — skip.")
-        return 0
+        # A paid generation that produced nothing is a failed lane, not a quiet
+        # one (mirrors the thesis lane's D-M2 contract): flip the return code and
+        # the heartbeat instead of a green 0.
+        _LAST_LANE_FAILURE_DETAIL = ("debrief_blind: no debrief generated "
+                                     + ("(LLM call failed)" if package.get("narratable")
+                                        else "(engine result not narratable)"))
+        _log(f"debrief: {_LAST_LANE_FAILURE_DETAIL}")
+        _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
+        return 1
 
     # Prior week's debrief, for the email's week-over-week alpha trend — loaded
     # BEFORE this week's save below, so it can't accidentally read back the row
@@ -2688,7 +2686,7 @@ def _run_debrief(now_et, force: bool) -> int:
     email_from = os.environ.get("ALERT_EMAIL_FROM", "").strip()
     if resend_key and email_to and email_from:
         html    = _notify.render_debrief_email(
-            result, week_had_trades=package.get("week_had_trades", False), prior=prior_debrief,
+            result, prior=prior_debrief, period=package,
         )
         subject = f"DRISHTA Weekly Debrief — week of {result['week_ending']}"
         ok, detail = _notify.send_email_resend(
@@ -2706,6 +2704,13 @@ def _run_debrief(now_et, force: bool) -> int:
     else:
         _log("debrief: no Resend credentials — debrief saved but not emailed.")
 
+    if not saved:
+        # weekly_debriefs has no freshness check, so an unsaved debrief (e.g. the
+        # metrics_version column missing) would otherwise leave a green heartbeat.
+        _LAST_LANE_FAILURE_DETAIL = ("weekly_debriefs: save failed "
+                                     "(metrics_version column missing? apply the DDL)")
+        _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
+        return 1
     return 0
 
 

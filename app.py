@@ -243,6 +243,7 @@ from stock_analyzer.tax_advisor import (
 from stock_analyzer import tax_report as _tax_report
 from stock_analyzer import performance_review as _perf_review_mod
 from stock_analyzer import period_attribution as _pa_mod
+from stock_analyzer import period_inputs as _pi_mod
 from stock_analyzer import exit_advisor
 from stock_analyzer.exit_advisor import compute_relative_strength
 from stock_analyzer.thesis_red_team import (
@@ -40256,21 +40257,21 @@ elif page == "💰 Account":
                         _pr_report = None
                         _pr_err = None
                         try:
-                            _pr_daily_df = db.load_daily_snapshots_or_none(
-                                _perf_start - timedelta(days=14), _perf_end)
-                            _pr_income = db.load_snaptrade_income_events_or_none()
-                            _pr_recon = _pa_mod.reconcile_period(
-                                period_start=_perf_start, period_end=_perf_end,
+                            # One shared helper (period_inputs) loads the engine inputs and runs
+                            # the engine, so this page, the Weekly Debrief's Generate Now and the
+                            # Sunday cron cannot differ on the same week.
+                            _pr_inputs = _pi_mod.load_engine_inputs(
+                                db, _perf_start, _perf_end,
                                 trades_df=_perf_trades_df,
                                 account_snapshots_df=_perf_acct_snap_full_df,
-                                daily_snapshots_df=_pr_daily_df,
-                                flows=_perf_flows_rows, income_events=_pr_income,
-                                historical_closes=None,
+                                flows=_perf_flows_rows,
                             )
-                            _pr_lev = _pa_mod.leverage_section(
-                                _perf_acct_snap_full_df, _perf_start, _perf_end,
-                                LEVERAGE_REFERENCE_TARGET,
+                            _pr_core = _pi_mod.compute_period_core(
+                                _pr_inputs, _perf_start, _perf_end,
+                                spy_prices_by_date=_perf_spy_by_date,
+                                reference_leverage=LEVERAGE_REFERENCE_TARGET,
                             )
+                            _pr_recon, _pr_lev = _pr_core["recon"], _pr_core["leverage"]
                             _pr_flow_dates = (
                                 [str(_pf.get("flow_date"))[:10] for _pf in _perf_flows_rows
                                  if _pf.get("flow_date")]
@@ -42564,7 +42565,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🎯 Post-earnings Thesis Checkpoint** — Within 14 days of a held position reporting earnings, a prompt surfaces on AI Insights → Positions. Claude compares the result (actual vs estimated EPS, beat/miss, surprise %) against your thesis and suggests INTACT / WEAKENING / BROKEN. Confirming the suggestion writes a timestamped review row tagged as an earnings checkpoint. Suggestion-only — never auto-saves or auto-changes a recommendation.
 
-- **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch next week. Delivered by email every Sunday and available on demand. (Needs about a week of trade history before the first one generates meaningfully.)
+- **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch next week. Delivered by email every Sunday and available on demand. Uses the same numbers as 💰 Account → Reports → Last week; your account's net-equity change vs SPY over the same dates.
 
 - **🧭 Monthly Intelligence Report — "is the engine picking well, and am I acting well?"** A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. The report is visual (funnel chart, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
 
@@ -43621,80 +43622,96 @@ elif page == "🧠 AI Insights":
 
         # On-demand generation
         if st.button("Generate Now", key="_wd_generate_btn", disabled=not _ai_api_key,
-                     help="Generate a debrief for the trailing 7 days using current snapshot data."):
+                     help="Generate a debrief for the last completed Mon–Sun week, using the "
+                          "same numbers as 💰 Account → Reports → Last week."):
             with st.spinner("Assembling data and calling AI..."):
-                from stock_analyzer.constants import WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS
-                from stock_analyzer.market_time import today_et as _wd_today_et
-                from stock_analyzer.market_time import most_recent_sunday as _wd_most_recent_sunday
+                from stock_analyzer import period_inputs as _wd_pi
 
-                # Anchored to the most recent Sunday, not the raw click date — a
-                # weekday click must land on the SAME week_ending the Sunday cron
-                # would compute, or the upsert (UNIQUE on week_ending) creates a
-                # one-day-off duplicate row instead of overwriting in place. See
-                # market_time.most_recent_sunday docstring.
-                _wd_today      = _wd_most_recent_sunday(_wd_today_et())
-                _wd_week_start = _wd_today - timedelta(days=6)
-                # _or_none (not the lenient loader) so classify_snapshot_read
-                # can tell a DB outage apart from a genuine early-run — the
-                # same silent-outage-collapse class the cron lane's own
-                # _db_unavailable_detail() probe already guards against.
-                _wd_snaps = _ai_db.load_daily_snapshots_or_none(start_date=_wd_week_start, end_date=_wd_today)
-                _wd_status, _wd_days = _dba.classify_snapshot_read(
-                    _wd_snaps, min_days=WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS
+                # The last completed Mon-Sun week: ends on the same Sunday the Sunday
+                # cron computes (resolve_period's last_week), so a weekday click lands
+                # on the SAME week_ending and the upsert (UNIQUE on week_ending)
+                # overwrites in place instead of creating a one-day-off duplicate.
+                _wd_start, _wd_today = _pa_mod.resolve_period("last_week", _today_et())
+
+                # Reuse the day-scoped cross-page caches when they are populated
+                # (same keys Reports uses); otherwise let the helper load.
+                _wd_snap_key = f"_account_daily_snapshots_full_cache_{_today_et().isoformat()}"
+                _wd_flows_key = f"_account_flows_full_cache_{_today_et().isoformat()}"
+                _wd_snap_c = st.session_state.get(_wd_snap_key)
+                _wd_flows_c = st.session_state.get(_wd_flows_key)
+                _wd_inputs = _wd_pi.load_engine_inputs(
+                    _ai_db, _wd_start, _wd_today,
+                    account_snapshots_df=_wd_snap_c if _wd_snap_c is not None else _wd_pi.LOAD,
+                    flows=_wd_flows_c if _wd_flows_c is not None else _wd_pi.LOAD,
                 )
-                if _wd_status == "outage":
+                if _wd_inputs["account_snapshots_df"] is not None:
+                    st.session_state[_wd_snap_key] = _wd_inputs["account_snapshots_df"]
+                if _wd_inputs["flows"] is not None:
+                    st.session_state[_wd_flows_key] = _wd_inputs["flows"]
+
+                _wd_failed = [
+                    _n for _k, _n in (("trades_df", "trade journal"),
+                                      ("account_snapshots_df", "account history"),
+                                      ("daily_snapshots_df", "daily price snapshots"))
+                    if _wd_inputs[_k] is None
+                ]
+                if _wd_failed:
                     st.error(
-                        "Could not read snapshot data — the database may be "
+                        "Could not read " + ", ".join(_wd_failed) + " — the database may be "
                         "unreachable. Try again in a moment."
                     )
-                elif _wd_status == "insufficient":
-                    st.warning(
-                        f"Only {_wd_days} trading day(s) of snapshot data available — "
-                        f"need {WEEKLY_DEBRIEF_MIN_SNAPSHOT_DAYS}. "
-                        f"Check back after more days accumulate."
-                    )
                 else:
-                    _wd_recs   = _ai_db.load_recommendations(
-                        start_date=_wd_week_start, end_date=_wd_today
+                    _wd_recs = _ai_db.load_recommendations(
+                        start_date=_wd_start, end_date=_wd_today
                     )
-                    _wd_trades = st.session_state.get("trades_df", pd.DataFrame())
+                    _wd_all_recs = _ai_db.load_recommendations()
+                    _wd_exit_sigs = _ai_db.load_exit_signals_or_none(
+                        days_back=_dba.signal_days_back(_today_et(), _wd_start))
                     _wd_broken = list(
                         _thesis_reviews_df[_thesis_reviews_df["status"] == "BROKEN"]["ticker"]
                         .astype(str).str.upper().unique()
                     ) if not _thesis_reviews_df.empty and "status" in _thesis_reviews_df.columns else []
 
-                    # Fetch SPY return
-                    _wd_spy_pct = None
+                    # SPY closes by date (None on any failure -> SPY reads as unknown;
+                    # the account result stays independent of an SPY outage).
+                    _wd_spy_by_date = None
                     try:
-                        import yfinance as _yf
-                        _spy = _yf.download("SPY", start=str(_wd_week_start), end=str(_wd_today),
-                                            progress=False, auto_adjust=True)
-                        if _spy is not None and not _spy.empty and len(_spy) >= 2:
-                            _wd_spy_pct = round(float(
-                                (_spy["Close"].iloc[-1] - _spy["Close"].iloc[0])
-                                / _spy["Close"].iloc[0] * 100
-                            ), 2)
+                        _wd_spy_by_date = _wd_pi.spy_closes_by_date(_cached_spy("2y"))
                     except Exception:
-                        pass
+                        _wd_spy_by_date = None
 
+                    _wd_core = _wd_pi.compute_period_core(
+                        _wd_inputs, _wd_start, _wd_today,
+                        spy_prices_by_date=_wd_spy_by_date,
+                        reference_leverage=LEVERAGE_REFERENCE_TARGET,
+                    )
                     _wd_pkg = _dba.build_debrief_package(
                         week_ending   = _wd_today,
-                        snapshots_df  = _wd_snaps,
+                        core          = _wd_core,
                         recs_df       = _wd_recs,
-                        trades_df     = _wd_trades,
-                        spy_week_pct  = _wd_spy_pct,
+                        trades_df     = _wd_inputs["trades_df"],
                         broken_theses = _wd_broken,
+                        all_recs_df   = _wd_all_recs,
+                        exit_signals_df = _wd_exit_sigs,
                     )
                     _wd_result = _dba.generate_debrief(_wd_pkg, _ai_api_key)
                     if _wd_result is None:
-                        st.error("AI debrief failed — LLM offline or insufficient snapshot data.")
+                        st.error("AI debrief failed — LLM offline or the week's numbers could not be read.")
                     else:
                         _saved = _ai_db.save_weekly_debrief(_wd_result)
                         if _saved:
+                            # Flash slot: survives the st.rerun() below (an un-rerun delta
+                            # is discarded), rendered-and-popped under the newest debrief.
+                            st.session_state["_wd_numbers_flash"] = {
+                                "package": _wd_pkg,
+                                "behind": _dba.numbers_behind(_wd_pkg, _wd_core),
+                            }
                             st.success("Debrief generated and saved.")
                             st.rerun()
                         else:
                             st.warning("Generated but save failed (DB offline) — showing inline:")
+                            if _wd_pkg.get("result_reason"):
+                                st.info("Account result unknown — " + str(_wd_pkg["result_reason"]))
                             for _lbl, _col in [
                                 ("What happened", "section_facts"),
                                 ("Decisions you made", "section_decisions"),
@@ -43703,57 +43720,64 @@ elif page == "🧠 AI Insights":
                             ]:
                                 if _wd_result.get(_col):
                                     st.markdown(f"**{_lbl}**")
-                                    st.markdown(_wd_result[_col])
+                                    st.markdown(_dba.escape_md_dollars(_wd_result[_col]))
 
         # Display most recent debrief
         if _wd_df.empty:
             st.info(
                 "No weekly debriefs yet. Click **Generate Now** to create one on-demand, "
-                "or wait for the Sunday evening cron (runs automatically once "
-                "daily snapshots has ≥5 trading days of data)."
+                "or wait for the Sunday evening cron."
             )
         else:
             _wd = _wd_df.iloc[0]
             _wd_perf  = _wd.get("performance_pct")
             _wd_spy   = _wd.get("spy_pct")
             _wd_alpha = _wd.get("alpha_pct")
+            # Older rows (metrics_version NULL/1) were measured as equity positions,
+            # Mon->Fri; they stay viewable but are labelled and never trended.
+            _wd_cur = _dba.method_is_current(_wd.get("metrics_version"))
 
             st.caption(
                 f"Week ending {_wd.get('week_ending', '—')} · "
                 f"generated {str(_wd.get('generated_at', ''))[:10]}"
                 + (" · ✉ emailed" if _wd.get("email_sent") else "")
+                + ("" if _wd_cur else " · older method")
             )
 
             # Performance summary row
-            if _wd_perf is not None:
+            def _wd_fmt(v, suffix):
+                return "unknown" if (v is None or v != v) else f"{v:+.1f}{suffix}"
+            if _wd_cur:
                 _wd_col1, _wd_col2, _wd_col3 = st.columns(3)
-                def _wd_colour(v):
-                    return "#22c55e" if v and v >= 0 else "#ef4444"
-                with _wd_col1:
-                    st.markdown(
-                        f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Portfolio</div>"
-                        f"<div style='font-size:1.4em;font-weight:700;color:{_wd_colour(_wd_perf)}'>{_wd_perf:+.1f}%</div></div>",
-                        unsafe_allow_html=True,
-                    )
-                with _wd_col2:
-                    st.markdown(
-                        f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>SPY</div>"
-                        f"<div style='font-size:1.4em;font-weight:700;color:{_wd_colour(_wd_spy)}'>"
-                        f"{'N/A' if _wd_spy is None else f'{_wd_spy:+.1f}%'}</div></div>",
-                        unsafe_allow_html=True,
-                    )
-                with _wd_col3:
-                    st.markdown(
-                        f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Alpha</div>"
-                        f"<div style='font-size:1.4em;font-weight:700;color:{_wd_colour(_wd_alpha)}'>"
-                        f"{'N/A' if _wd_alpha is None else f'{_wd_alpha:+.1f}%'}</div></div>",
-                        unsafe_allow_html=True,
-                    )
-                st.markdown("")
+                _wd_col1.metric("Account %", _wd_fmt(_wd_perf, "%"))
+                _wd_col2.metric("SPY %, same dates", _wd_fmt(_wd_spy, "%"))
+                _wd_col3.metric("vs SPY (pp)", _wd_fmt(_wd_alpha, ""))
+                st.caption(
+                    "Account change measured from the session before the week to its last "
+                    "account record — same figure as 💰 Account → Reports → Last week. A "
+                    "leveraged account moves roughly its leverage times the holdings' own move; "
+                    "SPY is unlevered."
+                )
+            elif _wd_perf is not None and _wd_perf == _wd_perf:
+                _wd_col1, _wd_col2, _wd_col3 = st.columns(3)
+                _wd_col1.metric("Portfolio", _wd_fmt(_wd_perf, "%"))
+                _wd_col2.metric("SPY", _wd_fmt(_wd_spy, "%"))
+                _wd_col3.metric("Alpha", _wd_fmt(_wd_alpha, "%"))
+                st.caption(
+                    "Older method: equity positions only, Monday–Friday — not comparable "
+                    "with later weeks."
+                )
+            st.markdown("")
 
             # Weekly alpha trajectory — are you beating SPY, week over week?
             # Per-week alpha (portfolio − SPY) from the saved debriefs, oldest → newest.
-            _wt = _wd_df[_wd_df["alpha_pct"].notna()].copy() if "alpha_pct" in _wd_df.columns else _wd_df.iloc[0:0]
+            # Current-method rows only: an older-method week is a different quantity.
+            _wt_all = _wd_df[_wd_df["alpha_pct"].notna()].copy() if "alpha_pct" in _wd_df.columns else _wd_df.iloc[0:0]
+            if "metrics_version" in _wt_all.columns:
+                _wt = _wt_all[_wt_all["metrics_version"].apply(_dba.method_is_current)]
+            else:
+                _wt = _wt_all.iloc[0:0]
+            _wt_old_n = len(_wt_all) - len(_wt)
             if len(_wt) >= 2:
                 _wt = _wt.iloc[::-1]   # load is newest-first; chart reads left→right in time
                 _wt_x = [str(w)[:10] for w in _wt["week_ending"]]
@@ -43773,11 +43797,18 @@ elif page == "🧠 AI Insights":
                 st.plotly_chart(_wt_fig, width="stretch")
                 _wt_beat = sum(1 for v in _wt_a if v > 0)
                 st.caption(
-                    f"Portfolio return minus SPY, per week — green = beat the market. "
+                    f"Account return minus SPY, per week — green = beat the market. "
                     f"You beat SPY in **{_wt_beat} of {len(_wt_a)}** tracked week(s). "
                     f"This is the trend the metrics above show for just the latest week."
+                    + (f" {_wt_old_n} earlier week(s) used the older method and aren't shown."
+                       if _wt_old_n > 0 else "")
                 )
                 st.markdown("")
+            elif _wt_old_n > 0:
+                st.caption(
+                    f"{_wt_old_n} earlier week(s) used the older method and aren't shown — "
+                    "the weekly trend appears once two weeks use the current method."
+                )
 
             for _wd_label, _wd_col in [
                 ("What happened", "section_facts"),
@@ -43787,8 +43818,63 @@ elif page == "🧠 AI Insights":
             ]:
                 if _wd.get(_wd_col):
                     st.markdown(f"**{_wd_label}**")
-                    st.markdown(_wd.get(_wd_col))
+                    st.markdown(_dba.escape_md_dollars(_wd.get(_wd_col)))
                     st.markdown("")
+
+        # Numbers behind the debrief just generated (flash slot, popped so it shows once).
+        _wd_flash = st.session_state.pop("_wd_numbers_flash", None)
+        if _wd_flash:
+            _wdf_pkg, _wdf_beh = _wd_flash["package"], _wd_flash["behind"]
+            # The unknown-result reason must survive the rerun, so it lives in the flash.
+            if _wdf_pkg.get("result_reason"):
+                st.info("Account result unknown — " + str(_wdf_pkg["result_reason"]))
+            with st.expander("Numbers behind this debrief (as generated)", expanded=True):
+                st.caption(
+                    f"Account change measured {_wdf_pkg.get('return_d0') or _wdf_pkg.get('d0')} close → "
+                    f"{_wdf_pkg.get('return_d1') or _wdf_pkg.get('d1')} close."
+                )
+                _wdf_wf = _wdf_pkg.get("waterfall")
+                _wdf_wf = _wdf_wf if isinstance(_wdf_wf, dict) else {}
+                for _wdf_lbl, _wdf_key in (
+                    ("Price moves on positions held through", "held_through"),
+                    ("Last-day moves on positions sold", "sold_leg"),
+                    ("First-day moves on positions bought", "bought_leg"),
+                    ("Same-day round trips", "round_trip"),
+                    ("Deposits / withdrawals", "flows_net"),
+                    ("Dividends", "dividends"),
+                    ("Margin interest posted", "interest"),
+                    ("Fees", "fees"),
+                    ("Unexplained", "unexplained"),
+                ):
+                    st.markdown(f"{_wdf_lbl}: {_m_usd(_wdf_wf.get(_wdf_key), md=True)}")
+                st.markdown(
+                    f"Net equity change: {_m_usd(_wdf_pkg.get('equity_change'), md=True)}"
+                )
+                _wdf_lev = _wdf_pkg.get("max_leverage")   # same figure Reports' caveat uses
+                if _wdf_lev is not None and _wdf_lev > 1:
+                    st.caption(
+                        f"⚠️ At up to {_wdf_lev:.1f}x leverage this week, your return moves "
+                        "roughly that many times the holdings' own move — SPY is unlevered."
+                    )
+                if _wdf_beh["legs"]:
+                    st.dataframe(
+                        pd.DataFrame([
+                            {"Ticker": _l["ticker"], "Shape": _l["shape"] or "—",
+                             "P&L": _m_usd(_l["total"]),
+                             "Measured": "yes" if _l["measured"] else "not measured"}
+                            for _l in _wdf_beh["legs"]
+                        ]),
+                        hide_index=True, width="stretch",
+                    )
+                    st.caption(
+                        f"Sum of the legs {_m_usd(_wdf_beh['legs_sum'], md=True)} vs the engine's positions "
+                        f"total {_m_usd(_wdf_beh['pos_total'], md=True)} — "
+                        + ("they match." if _wdf_beh["legs_match"] else "they do NOT match.")
+                    )
+                if _wdf_pkg.get("closed_positions"):
+                    st.caption("Closed this week: " + ", ".join(_wdf_pkg["closed_positions"]))
+                if _wdf_pkg.get("unmeasured"):
+                    st.caption("Not measured (P&L not included): " + ", ".join(_wdf_pkg["unmeasured"]))
 
         st.divider()
 
