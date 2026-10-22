@@ -209,12 +209,10 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 
 ### Open now (owner-agreed order, 2026-10-22)
 
-1. **🟠 Railway security incident.**
-   - Every credential was rotated on 2026-10-22, and the Streamlit fallback has its secrets re-added.
-   - **Pending:** Railway re-enable, section 5 of `docs/plans/credential-rotation-2026-10.md`, the one-time misuse checks, then remove this item.
-   - Until then `drishta.up.railway.app` can't verify a push.
-   - **All 7 Railway cron lanes are FAILING** (owner, 2026-10-22): they still run with the deleted keys, because variable changes need a redeploy and redeploys are paused. Forward-only captures (EOD leverage/risk rows, rec_events, score history, ledger cron rows) are lost for each missed day; 10-21 is likely gone.
-   - **Stopgap:** the owner runs `.github/workflows/alerts.yml` by hand: `auto` after ~17:00 ET each trading day (the EOD lane), optionally `auto` ~08:00–09:00 (premarket) and `scan` ~09:45, `thesis` on Sundays. Broker sync (SnapTrade) can't run there.
+1. **🟢 Railway security incident: misuse checks only.**
+   - Credentials rotated, Railway redeployed with the new variables (web + 7 crons), and section 5's verification table passed (owner, 2026-10-22). `drishta.up.railway.app` is the verify surface again.
+   - **Pending (owner):** section 5's one-time misuse checks (Anthropic usage, Resend log, Supabase logs plus trades vs broker, SnapTrade) in `docs/plans/credential-rotation-2026-10.md`; then mark that plan DONE and remove this item.
+   - Days the crons ran on the deleted keys lost their forward-only captures (EOD leverage/risk rows, rec_events, score history, ledger cron rows); 10-21 is likely gone.
 2. **S-D, one sizing path** (`docs/plans/one-sizing-path.md`, F-310).
    - C1 + C2 shipped 2026-10-20; C3 (risk footer) and C4 (quick wins: Watchlist non-ready rows, Catalyst / Econ windows, FSLR caption, (0b)) shipped 2026-10-22, screenshots pending.
    - **NEXT: C5**, then C6–C9:
@@ -236,6 +234,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 8. **Small leftovers:**
    - F-304 follow-ups (3)–(7) (docs/queue.md)
    - From S-D C4 (2026-10-22): N-C, a macro (G-07) check on Grow Today adds, is still deferred, so the 📅 Economic Calendar defers any in-window add to Grow Today rather than saying "don't add"; reopening it needs planner + reviewer. Bare literals left in `earnings_advisor._recommend` (Hard Rule #1): `net_rev <= -2`, `weight >= 5`, `0.35`, `est_move * 0.85`. Watchlist Remove/Wait rows read "No size yet … once Ready to Enter" (true, odd on Remove; owner may want a neutral line).
+   - **Bear scenario can sit ABOVE the price** (seen live 2026-10-22, FSLR: Bear $173.66, +1.4% at $171.25). `targets.py` takes the max of support × `TARGETS_BEAR_SUPPORT_CUSHION_MULT`, 52w low × `TARGETS_BEAR_52W_LOW_CUSHION_MULT` (1.03, an upward cushion) and price − `TARGETS_BEAR_ATR_MULT` × ATR, with no cap at the price; within 3% of the 52w low the bear floor lands above the price. Display-only (Analysis scenario blocks + two text summaries; R:R uses the stop). The fix is a formula choice (filter to candidates below the price, or cushion downward): owner picks the order vs S-D C5; reviewer before ship.
    - `self_track_record` UTC dating
    - the report's "Book side" label
    - 2 stale `.claude/worktrees`
@@ -252,11 +251,12 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
      - capital-basis % on every emailed pick
      - whether the owner's real stops live in broker stop orders (R-Multiple)
 
-### Live checks waiting for Railway (app.py has no tests; a screenshot is the only check)
+### Live checks pending (Railway is back as of 2026-10-22; app.py has no tests, so a screenshot is the only check)
 
-- **S-D C4:** 📋 Watchlist NEAR_ENTRY "No size yet" / held caption; 📅 Economic Calendar 🎯 Add detail and the in-window HOLD sentence (its rationale sits in raw HTML and starts with `**TICKER**`, pre-existing: check for literal `**`); 🔔 Catalyst HOLD / HOLD_OR_ADD text; 📈 Analysis "Selling goes against today's Buy call" (FSLR) and the not-held Sell caption.
+- **S-D C4:** 📋 Watchlist NEAR_ENTRY "No size yet" / held caption; 📅 Economic Calendar 🎯 Add detail and the in-window HOLD sentence (its rationale sits in raw HTML and starts with `**TICKER**`, pre-existing: check for literal `**`); 🔔 Catalyst HOLD / HOLD_OR_ADD text; 📈 Analysis not-held Sell caption. (FSLR "Selling goes against today's Buy call" + "Add button hidden" verified live 2026-10-22.)
 - **S-D C3 risk footer** (🏠 Home → Grow Today, under the cards): "If every stop hits, the N sized setups above lose ~$X", unsized names with reasons, `$` not LaTeX.
-- **F-311 C3 labels:** Trade Plan "🎯 Base target", the Watchlist R:R note, Scanner Range caption.
+- **F-311 C3 labels:** the Watchlist R:R note, Scanner Range caption. (Trade Plan "🎯 Base target: Yahoo Finance mean, 30 analysts" verified live 2026-10-22.)
+- **S-D C3 footer needs a day with sized Grow Today picks:** 10-22 was risk-off, so no setups and correctly no footer. The Analysis "No add call today" box in its risk-off state was verified live 2026-10-22.
 - **Recent Grow Today / Watchlist / Analysis surfaces:**
   - the F-305 overflow and flat-day boxes
   - F-306 budget lines

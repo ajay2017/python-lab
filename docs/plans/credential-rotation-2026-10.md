@@ -1,6 +1,17 @@
 # Credential rotation after the Railway security incident — checklist
 
-**Status: ROTATION DONE 2026-10-22 (owner confirmed); verification PENDING until Railway is re-enabled.** Railway
+**Status: ROTATION + VERIFICATION DONE 2026-10-22 (owner confirmed: Railway redeployed with the new variables,
+section 5's verification table passed). Only section 5's one-time misuse checks are still open.**
+
+*Update 2026-10-22 (re-enable): Railway first came back on the **old** deployment, which still held the pre-rotation
+variables. The browser's 30-day "remember me" cookie, signed from the old `APP_PASSWORD`, was still valid there, so
+the app opened without asking for a password, straight onto the database-outage page because the old
+`SUPABASE_KEY` was deleted. Nothing renders before `_check_password()` in `app.py` except page config and CSS, so
+this was a stale deploy, not a hole in the login gate. After the redeploy, the same browser got the Sign In page. Lesson:
+after rotating, redeploy every service; re-enabling alone keeps the old values live, and the old password with
+them.*
+
+Original status: ROTATION DONE 2026-10-22 (owner confirmed); verification PENDING until Railway is re-enabled. Railway
 notified its customers of a security incident and asked them to rotate every API key and credential stored with it.
 Every credential below has been rotated and its copies handled. What's left is section 5: re-enable the Railway project
 (`endearing-magic`: the web service plus the seven cron services), confirm each credential works, and do the one-time
@@ -35,8 +46,8 @@ simply wrong; no app code checks the key's prefix (grep 2026-10-22), so this has
 Claude. Section 5's checks after re-enable are what actually confirm each credential works.
 
 **Still to do:**
-- [ ] Re-enable Railway and run the section 5 verification table. The new values only take effect on each service's
-  next deploy: the web service and all seven cron services.
+- [x] Re-enable Railway and run the section 5 verification table. The new values only take effect on each service's
+  next deploy: the web service and all seven cron services. Done 2026-10-22: redeployed, table passed (owner).
 - [ ] Section 5's one-time misuse checks (Anthropic usage, Resend log, Supabase logs and trades vs broker, SnapTrade).
 - [x] Laptop cleanup: `.streamlit/secrets.toml` checked 2026-10-22. `[anthropic] api_key` is empty and no full key
   remains (it had already been cleared). The Supabase and app values there are placeholders. Optional, still open:
