@@ -1,5 +1,9 @@
 # Switching the Anthropic key on in Railway — checklist
 
+**UPDATE 2026-10-22: both leftover steps are done.** During the Railway security-incident rotation
+(`docs/plans/credential-rotation-2026-10.md`) the key was replaced with a new one, the previous key was deleted, and a
+monthly spend cap was set in the Anthropic console (step 2 below). The old `x_sV2…` key is gone too.
+
 **STATUS CORRECTED 2026-10-19: the key is ALREADY ON, and has been since 2026-07-14.** `sentiment_llm_cache` has rows
 every day from 2026-07-14 — the day the bidirectional LLM rescore shipped (`10edd8f`) — and a row is only written
 after a successful Anthropic call (`news_intelligence.rescore_headlines_llm` returns `None` on any error). The owner

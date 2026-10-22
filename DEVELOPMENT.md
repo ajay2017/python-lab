@@ -160,12 +160,17 @@ Variables to set on the service:
 |---|---|---|
 | `SUPABASE_URL` | yes | `https://<project-id>.supabase.co` |
 | `SUPABASE_KEY` | yes | MUST be the service-role / secret key, not publishable |
-| `ANTHROPIC_API_KEY` | no (optional by principle) | Not set in production as of 2026-10-17. Every caller falls back without it. When set it also turns on LLM news sentiment in the composite score, so treat switching it on as a decision: see `docs/plans/anthropic-key-enable.md`. Also enables AI Snapshot, AI Insights, the thesis/debrief/monthly cron lanes and the broker-import ticker fallback. |
+| `ANTHROPIC_API_KEY` | no (optional by principle) | Set in production since 2026-07-14 (corrected 2026-10-19; see `docs/plans/anthropic-key-enable.md`). Every caller falls back without it. When set it also turns on LLM news sentiment in the composite score, so treat switching it on as a decision: see `docs/plans/anthropic-key-enable.md`. Also enables AI Snapshot, AI Insights, the thesis/debrief/monthly cron lanes and the broker-import ticker fallback. |
 | `APP_PASSWORD` | yes | owner login for the password gate |
 | `APP_READONLY_PASSWORD` | no | viewer account; leave blank to disable |
 | `FRED_API_KEY` | no | enriches the macro calendar with released values |
 | `FINNHUB_API_KEY` | no | primary live-price provider |
 | `FMP_API_KEY` | no | tertiary live-price provider |
+| `SNAPTRADE_CLIENT_ID`, `SNAPTRADE_CONSUMER_KEY` | no | SnapTrade Personal API key pair for the broker sync (`cron-broker`); read env-first, so not in `railway_start.sh` |
+
+> **Rotating credentials:** every value above (plus `RESEND_API_KEY`) is also copied into GitHub Actions secrets and
+> the dormant Streamlit Cloud app. The full rotation procedure, written after the 2026-10 Railway security incident,
+> is [`docs/plans/credential-rotation-2026-10.md`](docs/plans/credential-rotation-2026-10.md).
 
 The six Cron Job services share these via Railway **Shared Variables**, plus their own
 `ALERT_RUN_MODE` and the email trio (`RESEND_API_KEY`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`).
