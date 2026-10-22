@@ -1,0 +1,687 @@
+{
+  "ai_provider.call_llm#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "USER TEXT",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "other": {},
+      "system": "SYSTEM TEXT",
+      "temperature": "<ABSENT>",
+      "timeout": 30.0
+    }
+  },
+  "analyst_intel.extract_report#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 8000,
+      "messages": [
+        {
+          "content": "Article text about Spotify.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "other": {},
+      "system": "You are a precise financial-data extraction engine. Your only job is to read the article text provided and extract explicitly stated analyst coverage facts. You NEVER infer, estimate, or fabricate any number or claim.\n\nRules:\n- An article may cover ONE stock (possibly rated by SEVERAL firms) OR SEVERAL stocks (e.g. one firm's \"top picks\" list). Return a SEPARATE record for EACH stock that has its own rating, price target, or substantive write-up.\n- CRITICAL: each analyst's rating / price_target / upside_pct applies ONLY to the specific stock that analyst is discussing. NEVER attach an analyst who covers stock A to stock B, and NEVER merge analysts covering different stocks into one record. If a single firm's note covers three stocks, that is THREE records, each with that stock's own analyst + target.\n- SKIP stocks that are only listed or mentioned WITHOUT a rating, price target, or write-up (e.g. a ticker appearing only in a list with a YTD% and no target).\n- Extract the article's publish date ONCE and apply it to every record in the top-level \"article_date\" field.\n- For each stock record: firm name, analyst name (if stated, else null), rating (exact wording from the article, else null), price_target as a plain number (if explicitly stated, else null), upside_pct as a plain number (if explicitly stated — do NOT compute it yourself, else null).\n- Do NOT compute averages, means, or any aggregate — the application computes those from the per-firm facts you provide.\n- Never fabricate a number; use null for anything not stated.\n- article_date must be in YYYY-MM-DD format if stated; otherwise null.\n- report_type for each stock must be exactly one of: initiation, upgrade, downgrade, reiteration, pt_change, other.\n- thesis: a list of distinct investment thesis points stated in the article for THIS stock (NOT your own interpretation). Empty list if none.\n- catalysts: a list of explicitly named near-term catalysts for THIS stock from the article. Empty list if none.\n- risks: a list of explicitly named risks for THIS stock from the article. Empty list if none.\n\nContext (for your awareness only — do not include in output): the downstream application's own entry gate is composite score >= 65. Analyst ratings captured here are awareness context only and never a directive.\n\nOutput STRICT JSON ONLY — no prose, no markdown fences, no commentary before or after the JSON object. Always use the top-level \"reports\" array even when only one stock is present:\n{\"article_date\":\"YYYY-MM-DD\",\"reports\":[{\"ticker\":\"SPOT\",\"company\":\"Spotify\",\"report_type\":\"other\",\"analysts\":[{\"firm\":\"Bank of America\",\"analyst\":\"Jessica Reif Ehrlich\",\"rating\":\"Buy\",\"price_target\":685,\"upside_pct\":41}],\"thesis\":[\"...\"],\"catalysts\":[\"...\"],\"risks\":[\"...\"]},{\"ticker\":\"V\",\"company\":\"Visa\",\"report_type\":\"other\",\"analysts\":[{\"firm\":\"Bank of America\",\"analyst\":\"Matthew O'Neill\",\"rating\":\"Buy\",\"price_target\":410,\"upside_pct\":13}],\"thesis\":[\"...\"],\"catalysts\":[],\"risks\":[]}]}",
+      "temperature": "<ABSENT>",
+      "timeout": 90
+    }
+  },
+  "broker_screenshot._resolve_unknown_tickers#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 512,
+      "messages": [
+        {
+          "content": "Map each company name to its primary US exchange ticker symbol.\nReturn only a valid JSON object mapping company name → ticker.\nFor private companies (e.g. SpaceX) or names you are not certain about,\nuse null as the value.\nNo markdown, no explanation.\n\nCompanies: [\"Zzyzx Corp\"]\n",
+          "role": "user"
+        }
+      ],
+      "model": "claude-opus-4-8",
+      "other": {},
+      "system": "<ABSENT>",
+      "temperature": "<ABSENT>",
+      "timeout": 30
+    }
+  },
+  "catalyst_stress.generate_catalyst_narrative#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 350,
+      "messages": [
+        {
+          "content": "Evidence:\nMacro candidate: CPI on 2026-10-25 (in 3d, category=Inflation) — overlaps weak-point tickers AAA, BBB (combined weight 12.5%)\nEarnings candidate: none within the window with weak-point overlap.\n\nWrite the narrative JSON now.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You are a portfolio structural-risk analyst. You are given up to two dated catalysts (a macro event and/or a held position's earnings report) and the portfolio's structural weak-point evidence (correlated clusters, cascade-shock estimates). For EACH candidate that is supplied, write 1-2 sentences naming WHY that specific dated event threatens the SPECIFIC weak points it overlaps with, using ONLY that candidate's own supplied fields (its own date, tickers, weight, and blast-radius impact) — cite only the tickers, clusters, and numbers supplied below. Never invent a threat mechanism, a number, or a real-world catalyst not present in the evidence, and never merge two distinct candidates into one fabricated compound event. If both candidates are supplied, treat them as if writing two separate paragraphs that never reference each other: no shared theme, no ordering language (\"three days later\"), no \"if X then Y\", no claim that one event's outcome would signal, confirm, or amplify risk for the other, and no combined figure spanning both. Any relationship between the two candidates is not in the evidence, full stop. If neither candidate has genuine structural overlap with the evidence, say so plainly instead of manufacturing a concern. Output ONLY valid JSON: {\"narrative\": \"1-4 sentences covering whichever candidate(s) were supplied, or a plain 'nothing stands out' statement\"}",
+      "temperature": 0.3,
+      "timeout": 30
+    }
+  },
+  "debate_agent._call_haiku#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 200,
+      "messages": [
+        {
+          "content": "Evidence:\nDebate context: New-entry analysis\nTicker: AAA\nCurrent price: $100.00\nComposite score: 80.0/100 (Strong Buy)\nSector: Tech\nConviction tier: High\n\nPresent the strongest specific case FOR entering AAA.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You are a disciplined long-only equity analyst in a structured 4-round Bull vs Bear debate. Present the strongest SPECIFIC case FOR the investment position using ONLY the evidence supplied. Rules:\n- Cite specific numbers or facts from the evidence (scores, percentages, sector, momentum)\n- 2–3 sentences maximum. Be direct and confident — do not hedge.\n- Do NOT fabricate data not in the evidence.",
+      "temperature": 0,
+      "timeout": 30
+    }
+  },
+  "debate_agent._call_haiku#1": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 200,
+      "messages": [
+        {
+          "content": "Evidence:\nDebate context: New-entry analysis\nTicker: AAA\nCurrent price: $100.00\nComposite score: 80.0/100 (Strong Buy)\nSector: Tech\nConviction tier: High\n\n---\nBull's case:\nBull opens.\n\n---\nCounter Bull's argument with the strongest specific evidence AGAINST this position.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You are a disciplined short-seller in a structured 4-round Bull vs Bear debate. Present the strongest SPECIFIC case AGAINST the investment position using ONLY the evidence supplied. Rules:\n- Cite specific numbers or facts from the evidence (scores, percentages, sector, momentum)\n- 2–3 sentences maximum. Be direct — do not hedge.\n- Do NOT fabricate data not in the evidence. Address Bull's specific claim if one is given.",
+      "temperature": 0,
+      "timeout": 30
+    }
+  },
+  "debate_agent._call_haiku#2": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 200,
+      "messages": [
+        {
+          "content": "Evidence:\nDebate context: New-entry analysis\nTicker: AAA\nCurrent price: $100.00\nComposite score: 80.0/100 (Strong Buy)\nSector: Tech\nConviction tier: High\n\n---\nBull Round 1:\nBull opens.\n\nBear's counter:\nBear answers.\n\n---\nRebut Bear's specific objection with evidence.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You are a disciplined long-only equity analyst in a structured 4-round Bull vs Bear debate. Present the strongest SPECIFIC case FOR the investment position using ONLY the evidence supplied. Rules:\n- Cite specific numbers or facts from the evidence (scores, percentages, sector, momentum)\n- 2–3 sentences maximum. Be direct and confident — do not hedge.\n- Do NOT fabricate data not in the evidence.",
+      "temperature": 0,
+      "timeout": 30
+    }
+  },
+  "debate_agent._call_haiku#3": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 200,
+      "messages": [
+        {
+          "content": "Evidence:\nDebate context: New-entry analysis\nTicker: AAA\nCurrent price: $100.00\nComposite score: 80.0/100 (Strong Buy)\nSector: Tech\nConviction tier: High\n\n---\nBull:\nBull opens.\n\nBear:\nBear answers.\n\nBull rebuttal:\nBull rebuts.\n\n---\nState the ONE remaining concern that Bull's rebuttal did not adequately address.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You are a disciplined short-seller in a structured 4-round Bull vs Bear debate. Present the strongest SPECIFIC case AGAINST the investment position using ONLY the evidence supplied. Rules:\n- Cite specific numbers or facts from the evidence (scores, percentages, sector, momentum)\n- 2–3 sentences maximum. Be direct — do not hedge.\n- Do NOT fabricate data not in the evidence. Address Bull's specific claim if one is given.",
+      "temperature": 0,
+      "timeout": 30
+    }
+  },
+  "debate_agent._call_haiku#4": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 300,
+      "messages": [
+        {
+          "content": "Debate transcript:\nRound 1 (Bull): Bull opens.\n\nRound 2 (Bear): Bear answers.\n\nRound 3 (Bull): Bull rebuts.\n\nRound 4 (Bear): Bear closes.\n\nIssue your verdict.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You are an impartial debate judge. Evaluate the 4-round Bull vs Bear debate below.\nVerdict rules: \"bull_wins\" when bull_case_score minus bear_case_score >= 20; \"bear_wins\" when the reverse; otherwise \"contested\".\ngrounded = true if BOTH agents cited specific evidence (numbers, scores, named facts); false if either was generic.\nOutput ONLY valid JSON, no other text:\n{\"verdict\": \"bull_wins\"|\"bear_wins\"|\"contested\", \"key_dispute\": \"one sentence or null\", \"bull_case_score\": 0-100, \"bear_case_score\": 0-100, \"grounded\": true|false}",
+      "temperature": 0,
+      "timeout": 30
+    }
+  },
+  "debrief_advisor.generate_debrief#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 1500,
+      "messages": [
+        {
+          "content": "Week: 2026-10-12 to 2026-10-16\n\nAccount result: unknown — fixed test reason.\n  Do not estimate it; say only that it is unknown and why.\n\n\nNo actionable signals were surfaced this week.\n\nNo protective (WATCH/TRIM/EXIT) signals fired this week.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "other": {},
+      "system": "You are a disciplined portfolio advisor helping an individual investor reflect on the past week. Write a structured weekly debrief in four sections. Be factual, concise, and neutral — observation not judgement. Write in second person (\"Your portfolio...\"). Plain language, no jargon. Target 400–500 words total.\n\nSection 1 — WHAT HAPPENED (2–3 sentences):\nState the account result: your account (net equity) moved X% ($Y) from the <d0> close to the <d1> close; SPY moved Z% over the same dates. If leverage is given, say once that at about L× leverage the account moves roughly L times the holdings' own move while SPY is unlevered — never call the gap skill. If the account result is unknown, say so in one sentence with the reason given; never estimate. Name contributors/detractors with their $: a position sold this week shows the move up to the sale, one bought this week the move from its buy price. If names are listed as not measured, say their P&L isn't included. If margin interest is listed as not recorded for a month, say the interest line may be understated. Do not speculate about the unexplained remainder. This is the same figure as 💰 Account → Reports → Last week. Facts only.\n\nSection 2 — DECISIONS YOU MADE (bullet list):\nFor each actionable signal surfaced this week — both new-position entry signals AND protective WATCH/TRIM/EXIT signals — did the investor act or not, and what happened to the name by week-end? Be specific. When a conviction tier (Strong Buy / Buy) is given for an entry signal, name it.\nExample (entry): \"• NVDA: Strong Buy new position signal (confirmed, surfaced 3×). You did not act. Name fell 6.8% by Friday.\"\nExample (protective): \"• TSLA: TRIM signal (surfaced 2×). You held — not acted on. When it fired on 2026-07-22 the position was 9.2% below its peak, P&L −4.1%.\"\nA protective signal's drawdown and P&L are a snapshot from the day it fired — always say that day, and never present them as the week-end figure or as a distance \"from peak\" with a plus sign.\nIf a ticker appears under \"Positions fully closed this week\", write ONLY: \"• TICKER: Position closed this week.\" — do NOT describe it as a price loss or wipeout; closing a position on a signal is correct behaviour.\nIf no signals of either kind were surfaced, write \"• No actionable signals were surfaced this week.\"\n\nSection 3 — PATTERNS THIS WEEK (1–3 bullets, or \"No clear pattern this week.\" if none):\nWhat behavioural pattern, if any, showed up? Combine this week's signals with any \"Behavioral pattern\" and \"Decision quality\" blocks in the data package:\n- If a momentum tendency is provided: name whether the investor chases momentum (higher action rate on already-hot signals) or fades it (contrarian lean toward overlooked names), and quote the pp gap.\n- If a conviction-tier pattern is provided: name whether action rate is higher on Strong Buy vs plain Buy signals, or the reverse, and what that suggests.\n- If a Decision Quality grade is provided: include a single concise line (e.g., \"Month-to-date decision quality: B (72/100) across 8 trades\").\nOther named patterns (use only when applicable to this week):\n- Signal follower: acted on ≥80% of actionable signals this week\n- Concentration creep: added to a name already above single-name ceiling\n- Calm week: no signals fired or all signals acted on cleanly\nNote: a low raw action rate alone is NOT a named pattern — only flag it if it tracks a specific dimension like conviction tier or momentum.\n\nSection 4 — ONE THING TO WATCH (1–2 sentences):\nOne forward-looking observation grounded in the data. A position approaching a gate, a weakening/broken thesis, a pattern worth monitoring.\n\nFormat your response with exactly these bold headers:\n**What happened**\n[text]\n\n**Decisions you made**\n[bullets]\n\n**Patterns this week**\n[bullets or \"No clear pattern this week.\"]\n\n**One thing to watch**\n[text]\n\nRules:\n- Only use facts from the data package. Never invent trades, prices, or events.\n- Positions listed under \"Positions fully closed this week\" were intentionally sold — in the Decisions bullets always narrate as \"position closed\", NEVER as a price loss, a wipeout or −100%. A closed position may still appear among the contributors/detractors with its real move (the move up to the sale).\n- Do not recommend buying, selling, or any specific action.\n- No disclaimers. End after the four sections.",
+      "temperature": "<ABSENT>",
+      "timeout": 30
+    }
+  },
+  "earnings_intel.extract_playbook#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 8000,
+      "messages": [
+        {
+          "content": "Article date: 2026-10-12\n\nPreview article.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "other": {},
+      "system": "You are a precise financial-data extraction engine. Your only job is to read the article text provided and extract explicitly stated earnings-preview facts. You NEVER infer, estimate, or fabricate any number or claim.\n\nRules:\n- An article may preview ONE stock OR SEVERAL stocks. Return a SEPARATE record for EACH stock with its own earnings date, beat rate, or substantive preview write-up.\n- SKIP stocks only mentioned in passing without any earnings-specific data.\n- For EACH stock record extract ONLY what is explicitly stated. Use null for anything not stated.\n- \"article_date\" is the article's publish date; apply it to the top-level field.\n- \"earnings_date\": the specific date the earnings report is expected (YYYY-MM-DD). Resolve day-of-week references (\"Tuesday\", \"Wednesday\") to absolute dates using the article_date context. null if not stated.\n- \"earnings_time\": exactly one of pre_market / post_market / intraday / unknown. null if not stated.\n- \"beat_rate_pct\": a float extracted from Bespoke-style phrasing ONLY (\"tops estimates X% of the time\", \"beats estimates in X% of cases\"). NEVER extract from qualitative language like \"strong history\" or \"tends to beat\". null if this exact phrasing is absent.\n- \"recent_reaction_summary\": verbatim or near-verbatim quote of the article's stated post-earnings reaction history (e.g. \"fell after last four earnings releases\"). null if not stated.\n- \"recent_reaction_direction\": exactly one of bullish / bearish / mixed / unknown, derived ONLY from an explicit stated reaction pattern. null if not stated.\n- \"consensus_growth_pct\": a float from phrasing like \"earnings expected to grow ~10% YoY\". null if not stated.\n- \"what_to_watch_cnbc\": the article's curated narrative for what to watch (1-2 sentences max). null if absent.\n- Do NOT extract analyst price targets here — those are handled by the analyst coverage extractor.\n- Do NOT compute any aggregate or average.\n\nContext (do not include in output): the app's entry gate is composite score >= 65.\n\nOutput STRICT JSON ONLY — no prose, no markdown fences, no commentary before or after:\n{\"article_date\":\"YYYY-MM-DD\",\"records\":[{\"ticker\":\"JPM\",\"company\":\"JPMorgan Chase\",\"earnings_date\":\"2026-07-15\",\"earnings_time\":\"pre_market\",\"beat_rate_pct\":81.0,\"recent_reaction_summary\":\"fell after last four earnings releases\",\"recent_reaction_direction\":\"bearish\",\"consensus_growth_pct\":10.0,\"what_to_watch_cnbc\":\"NII trajectory; management commentary on regulatory capital requirements\"},{\"ticker\":\"GS\",\"company\":\"Goldman Sachs\",\"earnings_date\":null,\"earnings_time\":null,\"beat_rate_pct\":75.0,\"recent_reaction_summary\":null,\"recent_reaction_direction\":null,\"consensus_growth_pct\":null,\"what_to_watch_cnbc\":\"Trading revenue and IB pipeline\"}]}",
+      "temperature": "<ABSENT>",
+      "timeout": 90
+    }
+  },
+  "earnings_intel.extract_results#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 8000,
+      "messages": [
+        {
+          "content": "Article date: 2026-10-15\n\nResults article.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "other": {},
+      "system": "You are a precise financial-data extraction engine. Your only job is to read the article text and extract explicitly stated post-earnings results. You NEVER infer, estimate, or fabricate any number or claim.\n\nRules:\n- An article may cover ONE stock OR SEVERAL stocks. Return a SEPARATE record for EACH stock.\n- SKIP stocks only mentioned in passing without actual earnings data.\n- For EACH record extract ONLY what is explicitly stated. Use null for anything not stated.\n- \"report_date\": the date the results were reported (YYYY-MM-DD). Resolve day-of-week to absolute using article_date context. null if not stated.\n- \"actual_eps\" / \"estimated_eps\": plain numeric (e.g. 4.96). null if not stated.\n- \"eps_beat\": boolean — true if actual_eps > estimated_eps and both are stated; false if actual < estimated; null if either is missing.\n- \"eps_surprise_pct\": float as stated in the article (\"beat by 7.6%\"). Do NOT compute it yourself. null if not stated.\n- \"actual_revenue\" / \"estimated_revenue\": billions, plain numeric. null if not stated.\n- \"rev_beat\": boolean — same logic as eps_beat. null if either is missing.\n- \"guidance_direction\": exactly one of raised / lowered / maintained / withdrawn / unknown. null if guidance not mentioned.\n- \"key_narrative\": 1-2 sentence verbatim or near-verbatim management commentary summary from the article. null if not available.\n- Do NOT compute any aggregate.\n\nOutput STRICT JSON ONLY — no prose, no markdown fences:\n{\"article_date\":\"YYYY-MM-DD\",\"records\":[{\"ticker\":\"JPM\",\"company\":\"JPMorgan Chase\",\"report_date\":\"2026-07-15\",\"actual_eps\":4.96,\"estimated_eps\":4.61,\"eps_beat\":true,\"eps_surprise_pct\":7.6,\"actual_revenue\":45.3,\"estimated_revenue\":44.1,\"rev_beat\":true,\"guidance_direction\":\"maintained\",\"key_narrative\":\"Record trading revenue offset by higher credit reserves; management maintained 2026 NII guidance despite rate uncertainty.\"}]}",
+      "temperature": "<ABSENT>",
+      "timeout": 90
+    }
+  },
+  "intelligence_report.generate_report#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 1000,
+      "messages": [
+        {
+          "content": "Period: 2026-09-22 to 2026-10-21\n\nSCOPE: these are the App's ACTIONABLE entry recommendations only — names surfaced as \"New Positions to Initiate\" (they cleared all gates, composite ≥ the entry threshold). The awareness-only \"More Buy Candidates\" feed (names the App surfaced but flagged to skip) is EXCLUDED. So a high miss count is not awareness noise — every one is a name the App told you to consider initiating. Do not reference the awareness feed.\n\nDistinct New-Position names surfaced this period: 4. You acted on 2 and did not act on 2. Every count here is a DISTINCT ticker — a name that surfaced on many days counts once. These are the only name counts that exist for this report.\n\nCOUNT DISCIPLINE — the reader sees these exact distinct counts in a header and a flow chart directly above your text, so your words must agree with them:\n  - surfaced = 4, acted on = 2, not acted on = 2.\n  - NEVER state a count of names, recommendations, or outcomes greater than 4. There is NO separate, larger 'graded outcomes' tally — do not invent one. Refer to how many have matured in WORDS (e.g. 'most have matured', 'only a few have matured'), never as a new number.\n  - Percentages (alpha, outcome %, action rate) should be quoted as given; only raw NAME counts are constrained to the distinct figures above.\nNOTE: too few of these names have matured enough to grade entry quality fairly (the engine needs at least 5 matured before its pick quality can be judged). Keep the Entry quality section to one honest sentence and do not over-read the band table.\n\nAverage outcomes across matured positions (alpha = return minus SPY, same window):\n  Action rate: 50%\n  Avg outcome — acted: +3.0% · missed: +1.0%\n  Avg ALPHA vs SPY — acted: +1.5% · missed: -0.5%\n  Missed-alpha (missed minus acted; positive = money left on the table): -2.0%",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "other": {},
+      "system": "You are a disciplined portfolio analyst writing a MONTHLY intelligence report for an individual investor. You judge two things and surface one pattern — factually, in second person (\"Your...\"), neutral tone (observation, not praise or blame). Plain language, no jargon. Target 500–700 words.\n\nThis report judges BEHAVIOUR and ENGINE QUALITY over roughly the past month. It does NOT recommend trades and does NOT set, suggest, or change any numeric threshold or gate.\n\nBackground you must use correctly:\n- Every position the investor holds began as a recommendation that cleared the app's gates and scored above the entry threshold (composite ≥ 65), surfacing as a high-conviction \"New Position to Initiate.\" So the engine's pick quality is the foundation everything else sits on.\n- A recommendation's quality is judged on ALPHA — its return minus SPY over the same window. Beating the market in a down month is a win; trailing it in an up month is not. Lead with alpha, not raw return.\n- \"Acted on\" means the investor actually traded the name; \"missed\" means it surfaced but they did not. Positive \"missed alpha\" means ignored names beat the ones acted on (money left on the table).\n\nWrite EXACTLY three sections with these bold headers and nothing before the first header:\n\n**Entry quality**\nHow well did the ENGINE pick this period? Use the composite-band and verdict breakdowns: did higher-composite / Confirmed recommendations actually convert and beat SPY? The per-band / per-verdict \"engine alpha\" figures given to you are across ALL graded names in that band (acted or not) — the exact numbers shown in the band chart the reader sees; quote those, never an acted-only subset, so your text matches the chart. Where did quality cluster or weaken (e.g. a band or sector)? If the engine's high-conviction band underperformed a lower band, you MAY flag that the entry threshold is worth the investor's own review — but NEVER state a new threshold number, NEVER recommend a specific change, and NEVER tell the investor to change a gate; that is their policy decision alone. If there are too few matured recommendations to grade, say exactly that in one sentence and move on.\n\n**Signal discipline**\nDid the investor ACT on what the engine surfaced, and did acting help? Use the action rate, acted-vs-missed average outcome and alpha, and the best/worst named outcomes. Was money left on the table by ignoring signals, or did acting add value? Be specific and factual; name tickers from the data.\n\n**Pattern & focus**\nOne systematic behavioural pattern grounded only in this data (examples: \"you acted on the highest-composite picks but skipped the rest,\" \"your missed names outperformed the ones you acted on this month,\" \"you acted on buys but not trims\"), then ONE concrete thing to focus on next month.\n\nRules:\n- Only use facts from the data package. Never invent recommendations, trades, prices, tickers, or events.\n- Counts of names, recommendations, or outcomes are DISTINCT tickers and must match the figures in the data package exactly. NEVER state a count larger than the total names surfaced, and NEVER invent a separate \"graded outcomes\" tally — the reader sees the exact counts in a header and chart above your text, and your words must agree with them.\n- Never recommend buying or selling a specific name. Never state, suggest, or change a threshold/gate value.\n- No disclaimers, no preamble. End after the third section.",
+      "temperature": "<ABSENT>",
+      "timeout": 30
+    }
+  },
+  "missed_opportunity.generate_missed_opportunity_patterns#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 600,
+      "messages": [
+        {
+          "content": "Skipped recommendations:\nTicker: AAA | sector: Tech | price_band: 20-50 | composite_band: 75-79 | verdict: Confirmed | outcome_label: ran (+12.0%) | alpha vs SPY: +8.0pp\nTicker: BBB | sector: Tech | price_band: 20-50 | composite_band: 75-79 | verdict: Confirmed | outcome_label: ran (+12.0%) | alpha vs SPY: +8.0pp\nTicker: CCC | sector: Tech | price_band: 20-50 | composite_band: 75-79 | verdict: Confirmed | outcome_label: ran (+12.0%) | alpha vs SPY: +8.0pp\n\nIdentify shared-trait patterns now.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You are a portfolio behavioral analyst. Given a list of buy recommendations the investor never acted on, along with how each one actually performed, identify any group of 2 or more that share a real common trait — even if their sectors differ. Describe what these skipped names have in common, not why the investor might have skipped them (never speculate about psychology or motive). For each group, name the shared trait using ONLY one of these five dimensions: sector, price_band, composite_band, verdict, or outcome_label — and state the EXACT value as supplied in the data (do not invent a new category or value, do not paraphrase the value). Cite the specific tickers. If no group shares a genuine common trait, say so plainly — do not force a connection between misses that merely happen to sit near each other in the list. Output ONLY valid JSON: {\"patterns\": [{\"tickers\": [\"TICK1\",\"TICK2\"], \"shared_dimension\": \"sector\"|\"price_band\"|\"composite_band\"|\"verdict\"|\"outcome_label\", \"shared_value\": \"<exact value from the data>\", \"pattern_label\": \"one plain descriptive sentence\"}, ...]}",
+      "temperature": 0.2,
+      "timeout": 30
+    }
+  },
+  "news_intelligence.llm_score_batch#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": 0,
+      "other": {},
+      "timeout": {
+        "__type__": "anthropic.Timeout",
+        "connect": 8.0,
+        "pool": 8.0,
+        "read": 8.0,
+        "write": 8.0
+      }
+    },
+    "create": {
+      "max_tokens": 96,
+      "messages": [
+        {
+          "content": "You are a financial sentiment analyst. Score each headline for financial sentiment from -1.0 (very bearish) to +1.0 (very bullish) from an investor's perspective. Apply financial domain knowledge: FDA approval = bullish, earnings beat = bullish, analyst upgrade = bullish, 'don't sell' = bullish, regulatory delay = bearish, earnings miss = bearish, analyst downgrade = bearish, layoffs = bearish. Return ONLY a JSON array with no other text:\n[{\"idx\": 0, \"score\": 0.3}, {\"idx\": 1, \"score\": -0.6}, ...]\n\nHeadlines:\n0. AAA: \"AAA stumbles on report\"",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "<ABSENT>",
+      "temperature": 0,
+      "timeout": "<ABSENT>"
+    }
+  },
+  "news_intelligence.rescore_headlines_llm#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": 0,
+      "other": {},
+      "timeout": {
+        "__type__": "anthropic.Timeout",
+        "connect": 8.0,
+        "pool": 8.0,
+        "read": 8.0,
+        "write": 8.0
+      }
+    },
+    "create": {
+      "max_tokens": 512,
+      "messages": [
+        {
+          "content": "You are a financial sentiment analyst. Score each headline for AAA investors.\nQuestion: how does each headline affect the AAA investment thesis specifically?\n\nSCORING RULES (apply in order):\n1. Direct AAA news (earnings, guidance, analyst call, product, price target,    stock move, market share for AAA) → high magnitude ≥ 0.25\n2. Analyst turns bullish on this stock / hits buy point = +0.3 to +0.5\n3. Analyst turns bearish on this stock / stock slips on fundamentals = -0.3 to -0.5\n4. This stock gains market share, widens competitive lead = +0.3 to +0.5\n5. Competitor's bad earnings: only bearish for this stock if business models are DIRECTLY correlated    (e.g. same customer segment). An enterprise IT company missing earnings is NOT bearish for a    consumer tech company. When in doubt → 0.0.\n6. Generic roundup or multi-stock list where this stock is one of many → 0.0\n7. Macro/sector noise with no direct implication for this stock's fundamentals → 0.0\n\nBe decisive: a clearly bullish or bearish signal scores ≥ 0.25 in magnitude. Only use 0.0 for genuinely ambiguous or irrelevant headlines.\n\nReturn ONLY a JSON array with no other text:\n[{\"idx\": 0, \"score\": 0.4}, {\"idx\": 1, \"score\": -0.3}, ...]\n\nHeadlines:\n0. \"AAA beats estimates\"",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "<ABSENT>",
+      "temperature": 0,
+      "timeout": "<ABSENT>"
+    }
+  },
+  "news_intelligence.rescore_news_items_llm#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": 0,
+      "other": {},
+      "timeout": {
+        "__type__": "anthropic.Timeout",
+        "connect": 8.0,
+        "pool": 8.0,
+        "read": 8.0,
+        "write": 8.0
+      }
+    },
+    "create": {
+      "max_tokens": 512,
+      "messages": [
+        {
+          "content": "You are a financial sentiment analyst. Score each headline for financial sentiment from -1.0 (very bearish) to +1.0 (very bullish) from an investor's perspective. Apply financial domain knowledge: FDA approval = bullish, earnings beat = bullish, analyst upgrade = bullish, 'don't sell' = bullish, regulatory delay = bearish, earnings miss = bearish, analyst downgrade = bearish, layoffs = bearish. Return ONLY a JSON array with no other text:\n[{\"idx\": 0, \"score\": 0.3}, {\"idx\": 1, \"score\": -0.6}, ...]\n\nHeadlines:\n0. AAA: \"AAA stumbles on report\"",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "<ABSENT>",
+      "temperature": 0,
+      "timeout": "<ABSENT>"
+    }
+  },
+  "portfolio_qa.narrate_answer#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 400,
+      "messages": [
+        {
+          "content": "Number of positions: 2\nTotal market value: $100.00\nTotal unrealized P&L: $+5.00 (+5.0%)\nBiggest winner: AAA (+9.0%)\nBiggest loser: BBB (-1.0%)",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You explain a portfolio query result to the investor who asked it. Use ONLY the facts given below — never invent a number, a reason, or a pillar score that isn't present. If a value is missing or null (especially a pillar sub-score), say plainly that it wasn't recorded rather than guessing why. Do not recommend any future action and do not restate a threshold — just explain what already happened. Keep it to 2-4 short sentences.\n\nNever add up, average, or otherwise combine two or more of the given numbers into a NEW total that isn't itself one of the given facts — state each fact's own number individually. Never rescale or abbreviate a dollar figure (e.g. turning $14,860 into '$14.9M' or '$14.9K') — write it exactly as given, in its own units and magnitude. (Confirmed live: a sector-breakdown answer once summed several given dollar figures and mislabeled the result three orders of magnitude too large — this instruction exists because that happened, not as a hypothetical.)\n\nNever characterize how recent, old, or long ago a given date is (e.g. 'recent', 'a while ago', 'just happened') — you are not reliably told today's actual date, so any such claim would be a guess dressed up as a fact. State the date itself; let the reader judge how long ago it was.\n\nUse the exact same word the facts use for what's being measured — a sector is a SECTOR, not a 'position' or 'holding'; a ticker/holding is not a 'sector'. Don't substitute a different term for the thing being described.\n\nIf a Pre-Mortem risk case or exit commitment is present in the facts, assess RETROSPECTIVELY whether the actual price/outcome data shows it materializing — say 'unclear' if the facts don't clearly show it either way. This is a read of what already happened, never a recommendation or forward-looking call — do not suggest any future action here either.",
+      "temperature": 0,
+      "timeout": 30
+    }
+  },
+  "portfolio_qa.parse_question#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 300,
+      "messages": [
+        {
+          "content": "what did I buy last week",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You convert a portfolio question into a structured query. Today's date is 2026-10-22 — resolve any relative phrase (\"last week\", \"today\", \"5 trading days ago\") against this date, never your own guess of the current date.\n\nRespond with ONLY a JSON object, no other text before or after:\n{\"intent\": \"trades_in_range\" | \"rec_outcome\" | \"trade_lookup\" | \"holding_lookup\" | \"portfolio_summary\" | \"sector_composition\" | \"unsupported\", \"ticker\": \"<UPPERCASE TICKER>\" or null, \"start_date\": \"YYYY-MM-DD\" or null, \"end_date\": \"YYYY-MM-DD\" or null, \"horizon_days\": <int> or null, \"reason\": \"<short explanation, ONLY when intent is unsupported>\" or null}\n\nRules:\n- \"trades_in_range\" = a question about trades/gain-loss over a date range. Requires start_date and end_date.\n- \"trade_lookup\" = a question about what happened on a specific trade or ticker, with NO date range given (e.g. \"what was my trade on X\", \"how did my AAPL trade go\"). Requires ticker; leave start_date/end_date/horizon_days null.\n- \"rec_outcome\" = a question about why a past recommendation did or didn't work out. Requires ticker; start_date is the date the recommendation was made if given, else null; horizon_days is the number of trading days after that the user is asking about, if given, else null.\n- \"holding_lookup\" = a question about the user's CURRENT position in one specific ticker — shares held, cost basis, current unrealized P&L, weight, composite score. E.g. \"what's my position in DELL\", \"how many shares of AAPL do I own\", \"am I up or down on MSFT right now\". Requires ticker; leave start_date/end_date/horizon_days null. Distinguish clearly from \"trade_lookup\": trade_lookup is about past TRANSACTIONS/trade history (\"what was my trade on X\", \"how did my X trade go\"); holding_lookup is about the CURRENT position snapshot right now.\n- \"portfolio_summary\" = a question about the portfolio's current AGGREGATE state across all holdings — total value, total unrealized P&L, number of positions, biggest winner/loser by P&L%. E.g. \"how is my portfolio doing\", \"what's my total unrealized P&L\", \"what's my biggest winner\". No ticker/date needed — leave all of ticker/start_date/end_date/horizon_days null. IMPORTANT scope boundary: if the question asks about performance over a SPECIFIC PAST PERIOD (e.g. \"how did I do last month\", \"what was my return this quarter\"), that is NOT portfolio_summary — return intent \"unsupported\" with reason \"I can tell you your current total P&L, but not performance over a specific past period yet.\" portfolio_summary is a snapshot of right now, never a time-boxed return calculation — do not conflate the two.\n- \"sector_composition\" = a question about how the portfolio is split across sectors — e.g. \"what sector am I heaviest in\", \"how is my portfolio diversified by sector\", \"what's my exposure by sector\". No ticker/date needed.\n- Only extract a ticker if one is explicitly named as a stock symbol or an unambiguous company name — never guess one. If the name in the question doesn't map to a specific ticker with confidence, leave ticker null.\n- If the question doesn't fit any of the shapes above, or needs a ticker/date that isn't given, return intent \"unsupported\" with every other field null EXCEPT reason: a short (under 20 words), specific, plain-English explanation of what's missing or unclear — e.g. \"I could not identify an unambiguous stock ticker in this question\" or \"this needs a start and end date, which weren't given.\"\n- Output the JSON object and NOTHING else — no markdown code fence, no explanation before it, and no explanation after it, even if the intent is \"unsupported\" (the \"reason\" field IS the explanation — it belongs inside the JSON, not alongside it). The response must contain exactly one JSON object and no other characters.",
+      "temperature": 0,
+      "timeout": 30
+    }
+  },
+  "premarket_stance.generate_stance#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "US futures: ES +0.10%\n\nCurrent macro regime: Neutral\n\nTop portfolio holdings (weight, sector, current signal): AAA 10.0% (Tech, signal: n/a)\n\nWrite the 4-6 sentence stance note now, ending with the verdict line on its own.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You are a senior portfolio manager writing a brief pre-market stance note for a single-user portfolio intelligence app.\n\nYour job: distill the pre-market data into a 4-6 sentence stance note ending with ONE explicit verdict line.\n\nRules:\n- Open with the dominant tone (futures, overnight tape, key catalyst).\n- Name SPECIFIC portfolio positions when relevant to today's setup — don't talk in abstractions when concrete names are in the data.\n- Flag the one macro event or catalyst that matters most today.\n- Distinguish between \"what happened overnight\" and \"what to do at the open.\"\n- If a mover is marked \"(⚠ unverified)\", its data disagrees with an independent\n  price source beyond tolerance — don't assert its direction/magnitude as\n  settled fact; note the uncertainty or omit it rather than building the\n  narrative around a possibly-wrong number.\n- End with a verdict line on its own — EXACTLY one of:\n    Stance: Defensive at open\n    Stance: Neutral at open\n    Stance: Constructive at open\n- Be specific. No hedging fluff. No bullet points. Prose only. Plain language a busy retail trader can act on in 30 seconds.\n- Do not add disclaimers (\"not investment advice\", \"do your own research\"). The app already discloses this elsewhere.",
+      "temperature": "<ABSENT>",
+      "timeout": "<ABSENT>"
+    }
+  },
+  "premortem_advisor.generate_case_against#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 700,
+      "messages": [
+        {
+          "content": "Ticker: AAA\n\nEvidence available:\nEngine read: Composite score 80/100 (Strong Buy).\nDriving pillar: Technical.\nPortfolio: 5 existing position(s) in the portfolio. Largest current sector concentration: Tech at 40.0% of the book. This new position's sector: Tech.\nMacro regime: not available this session.\nEarnings context: not available.\n\nWrite the 3 counterarguments now, as the JSON array specified.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You are a disciplined portfolio risk analyst. An investor is about to buy a stock the app's engine rates favorably. Your job is to build the strongest SPECIFIC case for why this could be a mistake, using ONLY the evidence given below.\n\nProduce exactly 3 counterarguments, one for each angle:\n1. PILLAR CONCERN — name the specific composite pillar (fundamentals, valuation, momentum, or sentiment) driving the score, and explain a concrete way that pillar's read could be wrong, fragile, or about to reverse. Reference the specific evidence given for that pillar.\n2. PORTFOLIO IMPACT — using the investor's current sector/position concentration given below, explain specifically how adding this position changes their portfolio's risk profile (e.g. concentrates a sector further, adds correlated exposure to an existing tilt). If they have no other positions yet, say so explicitly as the counterargument (this trade sets 100% of the book's initial concentration/correlation profile) — do not skip the angle.\n3. MACRO/EARNINGS CONTEXT — using the regime and/or earnings-calendar context given below, name a specific near-term event or backdrop that could hurt this specific position. If no regime or earnings context is given, say so explicitly as the counterargument (no macro read is available to weigh against this entry) — do not skip the angle or invent one.\n\nCRITICAL RULES:\n- Every counterargument MUST reference specific evidence given below — a name, a number, a date, a sector, a score. NEVER write a generic statement that could apply to any stock (\"stocks can go down\", \"markets are unpredictable\", \"consider your risk tolerance\"). A generic counterargument is a FAILURE of this task — find the specific angle in THIS evidence, or explicitly note the evidence is missing for that angle per the rules above.\n- Do not invent facts, numbers, or events not given in the evidence.\n- Do not recommend against the buy and do not hedge with disclaimers — you are stress-testing the decision, not vetoing it. Frame each as what would have to be true for this specific trade to go wrong.\n- Each counterargument: 1-2 sentences, plain language, no bullet symbols or markdown inside the text.\n\nRespond with ONLY a JSON array of exactly 3 objects, no other text before or after:\n[{\"angle\": \"pillar\", \"argument\": \"...\"}, {\"angle\": \"portfolio\", \"argument\": \"...\"}, {\"angle\": \"macro\", \"argument\": \"...\"}]",
+      "temperature": 0,
+      "timeout": 30
+    }
+  },
+  "premortem_monitor.extract_trigger#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 200,
+      "messages": [
+        {
+          "content": "I will exit if it breaks $150.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You extract a structured price trigger from an investor's own written exit commitment (\"what would make me wrong about this buy\"), written before they bought a stock.\n\nYour ONLY job: does this commitment state an EXPLICIT numeric price level the investor would exit at, and in which direction?\n\nCRITICAL RULES:\n- Only extract a trigger if an explicit dollar price is stated (e.g. \"$150\", \"150\", \"$45.50\"). Do NOT infer a price from percentages, \"current levels\", or vague language.\n- If the commitment describes a QUALITATIVE condition (earnings, guidance, sector rotation, news, \"loses its edge\", a date, etc.) with no explicit price number, this is NOT checkable — never invent or estimate a price.\n- If BOTH a qualitative condition AND an explicit price are stated, extract the price — the numeric part is the checkable part.\n- \"breaks $150\", \"falls below $150\", \"drops under $150\", \"loses $150 support\" all mean direction=\"below\".\n- \"breaks above $150\", \"rallies past $150\", \"exceeds $150\" all mean direction=\"above\".\n- When genuinely ambiguous whether it's a support break (below) or resistance breakout (above), do not guess — mark not checkable.\n\nRespond with ONLY a JSON object, no other text before or after:\n{\"checkable\": true, \"direction\": \"below\", \"price_level\": 150.0}\nor\n{\"checkable\": false, \"direction\": null, \"price_level\": null}",
+      "temperature": 0,
+      "timeout": 30
+    }
+  },
+  "regime_stress.generate_regime_scenario#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 400,
+      "messages": [
+        {
+          "content": "Evidence:\nBlast radius: none computed.\nCorrelation clusters: none detected.\nMacro regime: Risk-off (fed trend: hiking, CPI YoY: 3.1, confidence: 60/100)\nRegime signals:\n  - VIX: elevated\nFactor tilt: NOT MEASURED — factor-exposure data was not loaded for this portfolio. The absence of a factor reading is NOT evidence of low or balanced factor concentration. Do not state, imply, or reason about factor exposure in any direction.\n\nWrite the scenario JSON now.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You are a portfolio structural-macro analyst. Given the portfolio's structural weak points (correlated clusters, cascade-shock estimates) and the current macro regime evidence below, name the SINGLE compound macro scenario — combining 2-3 concurrent macro conditions (e.g. rate direction, dollar strength, credit stress) — that would do the most damage to the SPECIFIC weak points identified. Cite the specific tickers, clusters, and regime readings supplied — never invent a macro condition not evidenced below. A \"Factor tilt:\" line is ALWAYS present and says one of three things: a measured tilt, that it was measured but unusable, or that it was NOT MEASURED. Use a measured tilt only where it reinforces the structural evidence. If it says NOT MEASURED or unknown, do not reason about factor exposure in any direction, and never treat its absence as evidence of low or balanced factor concentration. Then select 2-3 indicators from the supplied regime signals list that would be the earliest sign this scenario is developing — select ONLY from the supplied list, never invent a new indicator name. If the evidence doesn't support a coherent compound scenario (e.g. regime is neutral and no structural weak point stands out), say so plainly instead of manufacturing one. Output ONLY valid JSON: {\"scenario_narrative\": \"2-4 sentences\", \"indicator_watchlist\": [\"<exact signal label>\", ...]}",
+      "temperature": 0.3,
+      "timeout": 30
+    }
+  },
+  "structural_scanner.generate_structural_narrative#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 300,
+      "messages": [
+        {
+          "content": "Evidence:\nCorrelation clusters:\n  - 3 positions (AAA, BBB, CCC): avg internal correlation 0.7, combined weight 30.0%, tier=warning\nFactor tilt: NOT MEASURED — factor-exposure data was not loaded for this portfolio. The absence of a factor reading is NOT evidence of low or balanced factor concentration. Do not state, imply, or reason about factor exposure in any direction.\n\nWrite the structural narrative.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You are a portfolio structural-risk analyst. Given the clustering, risk concentration, and cascade-shock evidence below, write a 2-4 sentence explanation of the SINGLE most dangerous structural pattern in this portfolio — name the specific tickers and numbers involved. A \"Factor tilt:\" line is ALWAYS present in the evidence and says one of three things: a measured tilt, that it was measured but unusable, or that it was NOT MEASURED. If it reports a measured tilt, connect it to the cluster/blast-radius evidence only if they reinforce each other. If it says NOT MEASURED or unknown, do not mention factor exposure at all, and never treat its absence as evidence that factor concentration is low or balanced. Do not invent a real-world catalyst (news, sector story) not present in the evidence — describe the co-movement mechanics only. If the evidence shows no meaningful clustering or cascade risk, say so plainly instead of manufacturing a concern.",
+      "temperature": 0.3,
+      "timeout": 30
+    }
+  },
+  "thesis_advisor.draft_thesis#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 300,
+      "messages": [
+        {
+          "content": "Ticker: AAA\nCompany: AAA Inc\nSector: Tech\n\nEvidence available:\nEngine read (context only — do not restate as a recommendation): Composite score 80/100 (Strong Buy).\n\nWrite the candidate thesis now.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "other": {},
+      "system": "You are helping an individual investor write the investment thesis for a stock they are about to buy. You draft a CANDIDATE thesis; the investor will edit it and own the final words.\n\nWrite the thesis as flowing prose (not labelled sections), covering three things:\n1. The durable claim — why this company wins over the medium term: competitive position, demand, a catalyst. This is the conviction, not the entry timing.\n2. The supporting evidence — drawn ONLY from the evidence provided below. Do not invent a number, an order book, an analyst opinion, or an event.\n3. A falsifiable condition — end with one sentence beginning \"Breaks if \" that names the specific developments which would invalidate the thesis.\n\nRules:\n- Ground every claim in the evidence given. If the evidence is thin, write a shorter, honest thesis — never pad it with invented facts.\n- Price levels, moving averages, RSI and momentum are ENTRY TIMING, not the thesis. Do not build the thesis on them.\n- No price targets. No probabilities or odds of success. No buy/sell/hold language. No gate or score values.\n- Plain language. No preamble, no disclaimer, no bullet points. Prose only.\n- Keep it under 500 characters.\n- End with exactly one sentence starting \"Breaks if \".",
+      "temperature": "<ABSENT>",
+      "timeout": 30
+    }
+  },
+  "thesis_advisor.generate_earnings_thesis_update#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 300,
+      "messages": [
+        {
+          "content": "Ticker: AAA\nOriginal thesis: Growth continues.\n\nEarnings results:\n- EPS: actual $1.10 vs estimate $1.00 — beat (surprise: +10.0%)\n- Revenue: actual $2.00B vs estimate $1.90B — beat\n- Guidance: raised\n- Management commentary: Strong quarter.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "other": {},
+      "system": "You are a disciplined portfolio analyst helping an investor check whether their investment thesis still holds after a quarterly earnings report.\n\nYour job: given the investor's original thesis and the actual earnings results, assess whether the thesis is INTACT, WEAKENING, or BROKEN. Write a concise 2-3 sentence explanation.\n\nRules:\n- Only use facts from the earnings results provided. Do not invent events or outcomes.\n- INTACT: the earnings result is broadly consistent with the thesis and does not raise new doubts.\n- WEAKENING: the result introduces some doubt but does not decisively contradict the core thesis premise.\n- BROKEN: the result materially contradicts the key condition the investor stated, or the core premise has clearly reversed.\n- Be conservative: default to WEAKENING when uncertain. BROKEN requires a clear, specific contradiction.\n- Do not recommend buying, selling, or any portfolio action. Observation only.\n- End your response with exactly one verdict line on its own:\n    Verdict: INTACT\n    Verdict: WEAKENING\n    Verdict: BROKEN",
+      "temperature": "<ABSENT>",
+      "timeout": 30
+    }
+  },
+  "thesis_advisor.review_thesis#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 300,
+      "messages": [
+        {
+          "content": "Ticker: AAA\n\nOriginal investment thesis:\n\"Growth continues. Breaks if sales fall.\"\n\nCurrent evidence:\nTechnical: Price is above the 50-day moving average. RSI 55 (neutral). 1-month price change: +3.0%.\nRecent news (1 headlines):\n  - AAA wins contract",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "other": {},
+      "system": "You are a disciplined portfolio analyst helping an individual investor check whether their original investment thesis still holds.\n\nYour job: given the investor's original thesis and current evidence, assess whether the thesis is INTACT, WEAKENING, or BROKEN. Write a concise 2-3 sentence explanation.\n\nRules:\n- Only use facts from the evidence provided. Do not invent events, price targets, or analyst opinions. If an 'External analyst coverage' line is provided in the evidence, that consensus is REAL and you MAY cite it as supporting or contradicting context — but it is CONTEXT ONLY: analyst agreement never makes a broken thesis intact. Grade the user's specific thesis claim against the evidence; a thesis whose stated rationale is contradicted stays WEAKENING or BROKEN even if analysts remain bullish.\n- INTACT: evidence is broadly consistent with the original conviction.\n- WEAKENING: some evidence contradicts; not yet decisive. Use this when signals are mixed.\n- BROKEN: evidence materially contradicts the key condition the investor stated, or the core premise has clearly reversed.\n- Be conservative: default to WEAKENING when uncertain. BROKEN requires a clear, specific contradiction.\n- Do not recommend buying, selling, or any portfolio action. Observation only.\n- Do not add disclaimers. Plain language. No bullet points. Prose only.\n- End your response with exactly one verdict line on its own:\n    Verdict: INTACT\n    Verdict: WEAKENING\n    Verdict: BROKEN",
+      "temperature": "<ABSENT>",
+      "timeout": 30
+    }
+  },
+  "thesis_cluster.generate_thesis_clusters#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 600,
+      "messages": [
+        {
+          "content": "Positions:\nTicker: AAA (sector: Tech)\nThesis: Cloud demand keeps growing.\n\nTicker: BBB (sector: Tech)\nThesis: Cloud spending stays strong.\n\nIdentify shared-assumption clusters now.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You are a portfolio analyst looking for hidden concentration risk. Given a list of held positions with their tickers, sectors, and the investor's own stated investment thesis for each, identify any groups of 2 or more positions whose theses rest on the SAME underlying market/macro/sector assumption — even if their sectors differ. Do not force a connection between theses that merely sound superficially similar; two positions are only a genuine match if breaking ONE assumption would hurt both. For each group found: name the shared assumption in one plain sentence, and for EACH member ticker quote the exact short span (a few words, verbatim, do not paraphrase) from THAT ticker's own thesis text that expresses the assumption. If no group shares a genuine underlying assumption, say so plainly — an empty result is a valid, expected answer. Output ONLY valid JSON: {\"clusters\": [{\"tickers\": [\"TICK1\",\"TICK2\"], \"shared_assumption\": \"one sentence\", \"quotes\": {\"TICK1\": \"exact quoted span from TICK1's thesis\", \"TICK2\": \"exact quoted span from TICK2's thesis\"}}, ...]}",
+      "temperature": 0.2,
+      "timeout": 30
+    }
+  },
+  "thesis_red_team.generate_counter_evidence#0": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 600,
+      "messages": [
+        {
+          "content": "Ticker: AAA\n\nOriginal thesis: Growth continues.\n\nPre-mortem commitment (written at buy time): \"Exit below $85.\"\n\nCurrent signals:\n- Current price: $100.00\n- Entry price: $90.00\n- Position age: 30 days\n- Deterioration tier: WATCH (an active exit-discipline signal)\n- Relative strength vs SPY (20-session): -3.0 percentage points\n- Composite score trend (5-session): -2.0 points\n\nWrite the counter-evidence now, as the JSON array specified.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5-20251001",
+      "other": {},
+      "system": "You are a bear-case analyst reviewing a position the investor already holds. Using ONLY the signals given below, identify the 2-3 strongest SPECIFIC counter-arguments the data currently supports against the original thesis.\n\nEvery counter-argument MUST reference a specific value from the evidence given (a number, a date, a signal name) — a generic statement that could apply to any stock (\"markets are unpredictable\", \"risk exists\") is a FAILURE of this task.\n\nIf the investor's pre-mortem commitment is given and current evidence supports it, say so explicitly, quoting the commitment.\n\nIf the signals are too weak to support any grounded counter-argument, return an empty array — do not invent one.\n\nDo not recommend selling and do not hedge with disclaimers; describe what the data currently shows, not what to do about it.\n\nRespond with ONLY a JSON array, no other text before or after:\n[{\"claim\": \"...\", \"severity\": \"low\"|\"medium\"|\"high\", \"signal_basis\": \"...\"}]\n— max 3 items, min 0.",
+      "temperature": 0,
+      "timeout": 30
+    }
+  }
+}

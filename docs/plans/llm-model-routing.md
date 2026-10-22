@@ -287,3 +287,54 @@ requirements.md F-ID, architecture.md constants, User Guide). Pre-existing, note
 **Revised phases:** Phase 1 and 2 unchanged in scope, with the changes above. Phase 3 switches `fast`, `deep` and
 `extract` (not `extract_trigger`) from App Settings. Phase 4 switches `score`, `filter` and `extract_trigger`, each
 with a dry run and a reviewed commit.
+
+## 11. Phase 1 build spec (lead, 2026-10-22)
+
+Phase 1 changes **no** model and no request. It moves the calls onto one helper, proven by recorded requests. Five
+commits:
+
+| Chunk | What | Review |
+|---|---|---|
+| **P1-a** | `tests/test_llm_request_golden.py` + `tests/fixtures/llm_requests_golden.json`: records every `messages.create` in `stock_analyzer/` today (client arguments; model, `max_tokens`, `temperature` present or absent, timeout, system, messages), plus an AST guard so a new call without a snapshot fails. AI Snapshot (`app.py`) can't be imported and is not covered. | Not needed (tests only) |
+| **P1-b** | `stock_analyzer/llm.py`, described below. Not called by anything yet. Added to `_GATE_FILES` (and to CLAUDE.md's list in the same commit). | **Required** |
+| **P1-c** | Narrative and extraction modules call `llm.complete`; golden tests unchanged | Recommended |
+| **P1-d** | `news_intelligence` (score, filter); key lookup in `bundle_loader` and `cron_runner` | **Required** |
+| **P1-e** | `ai_provider`'s Claude branch and AI Snapshot use the helper (AI Snapshot keeps its own menu); ratchet test (string literals only, allowlisting `investigator.EVAL_PASSED_MODELS`) | Required if a gate file is touched |
+
+### `stock_analyzer/llm.py` (P1-b)
+
+Pure apart from the SDK call; no Streamlit import; no module-level mutable state.
+
+- **Roles:** `fast`, `deep`, `extract`, `extract_strong`, `extract_trigger`, `filter`, `score`. `PINNED_ROLES =
+  {score, filter, extract_trigger}`. `JSON_ROLES` = every role except `fast` and `deep`.
+- **Code defaults** (equal to today's models, so Phase 1 changes nothing): fast, filter, score and extract_trigger →
+  `claude-haiku-4-5-20251001`; deep and extract → `claude-sonnet-4-6`; extract_strong → `claude-opus-4-8`. Phase 1
+  resolves role → code default only. An explicit `model=` argument wins (Investigator, AI Snapshot, tests). The env
+  override and App Settings arrive in Phase 2, and pinned roles ignore both.
+- **Profiles:** `legacy-sampling` (Haiku 4.5, Sonnet 4.6), `opus-4x` (Opus 4.8), `modern` (everything else).
+  `build_request(profile, role, ...)` is a pure function:
+  - Legacy profiles forward exactly what the caller passed. `temperature` only if given, and never thinking, effort,
+    `output_config` or `max_tokens` headroom. This is the Phase 1 path.
+  - `modern` drops `temperature` and sets effort `low`. Thinking is off for JSON roles: Haiku 5.5 `{"type":
+    "disabled"}`; Sonnet 5.5 `{"type": "between_tools"}`; Opus 5.5 omits `thinking`. Narrative roles use adaptive
+    thinking (omit `thinking`) with a named thinking-headroom constant added to `max_tokens`. Built and unit-tested
+    now, used from Phase 3.
+- **`complete(role, *, api_key, system, messages, max_tokens, model=None, temperature=None, timeout=None,
+  client_kwargs=None) -> LLMResult`.** It constructs `anthropic.Anthropic(api_key=api_key, **client_kwargs)` and
+  forwards `timeout` per request exactly as the caller passes it, so each site keeps its own timeout and retry
+  settings. It never raises.
+- **`LLMResult`** (frozen dataclass): `text`, `stop_reason`, `error`, `model`, `usage`, `truncated`. Rules:
+  - `text` is the first `type == "text"` block's text. Any thinking block that comes first is skipped.
+  - `refusal` → `text = None`, with an error naming the category.
+  - `max_tokens` → narrative roles keep the text, with `truncated = True` (today's behaviour). JSON roles get
+    `text = None`. This one change is deliberate: today a cut-off JSON reply reaches the parser, which almost always
+    fails on it.
+  - Any other unknown stop reason is an error for JSON roles.
+  - Exceptions become `error`, with the key stripped from the text.
+- **`resolve_anthropic_key(secrets_getter=None, environ=os.environ) -> str`:** env `ANTHROPIC_API_KEY`, then
+  `[anthropic] api_key`, then a flat `ANTHROPIC_API_KEY` secret. The getter is passed in and any exception from it
+  (no `secrets.toml` in the cron) counts as "not set". Used by callers from P1-d onward.
+- **Tests:** builder per profile and role (no temperature on `modern`; the right "off" form per family; Haiku 5.5
+  `disabled` only with effort low / medium / high); text found after a leading thinking block; refusal with text →
+  `None`; `max_tokens` behaviour per role kind; key resolver with a raising getter; an explicit `model=` beats the
+  role default; no module-level state (two concurrent results don't interfere).
