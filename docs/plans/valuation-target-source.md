@@ -1,5 +1,31 @@
 # Valuation target source — provider first, saved research as fallback (item C, F-311)
 
+**Live check 2026-10-22 (Streamlit Cloud fallback, Railway paused), C3 Deep Dive PASSED on META:**
+- The Valuation tile reads "🎯 Target used: Yahoo Finance analyst mean target $833.13 · 58 analysts · fetched
+  2026-10-22", with `$` shown literally (no maths font).
+- PT Upside names its source: "(Yahoo Finance mean, 58 analysts)".
+- The Analyst Consensus line is labelled "your saved research, 4 firms, newest 2026-09-18", which is correct per D-1.
+- The Business Quality tile has no second "Analyst Target".
+
+**Coverage tab, Street consensus section PASSED (META, same day):**
+- "Mean: $833.13 (58 analysts) · Range: $600.00–$1050.00 · Implied upside: +27.4%".
+- "Used in scoring: Yahoo Finance analyst mean target $833.13 · 58 analysts · fetched 2026-10-22".
+- `$` shown literally.
+- The reconciliation caption didn't appear, because only one target source was in play, so its `$` is still
+  unchecked.
+
+**Found on the same tab: a pre-existing bug, not from C3. FIXED 2026-10-22 (new `util.finite_or_none`; live check pending):** the saved-research card
+reads "Avg PT: $nan ($nan–$nan)" for a saved row with no price target (META, Morgan Stanley, 2026-09-18).
+- Cause: the cards come from `_cov_df.iterrows()` (`app.py` ~27388), and pandas turns `None` into `NaN`. So
+  `if _cov_a_pt is not None` (~27421) passes, and `float(low) != float(high)` is true for NaN.
+- The same bug was in the 🧠 AI Insights library card (`_ac_df.iterrows()`, ~45051), and it is fixed there too.
+  ~44870 (`_ac_apt_i`) is safe: it comes from `derive_consensus` over a NaN-cleaned list.
+- The firm table's PT and Upside cells showed the word "None"; they now show "—".
+
+**Still to check:** the reconciliation caption's `$` (needs a ticker where the sources disagree), the Trade Plan
+"🎯 Base target:" caption, the 📋 Watchlist card note under R:R, Market Scanner's Range caption and "Mean target"
+(bold, no literal `**`), and the next ENTER_NOW email's Base-target line.
+
 **Status:** C1 SHIPPED 2026-10-21 (`637c0e9`, chooser + dry-run, not wired). C2 SHIPPED 2026-10-21 (`71e3a6a`, wired into scoring, Opus SHIP/0). D-6 built 2026-10-21 (ET): `compute_price_targets` now takes the chosen target as a required argument (bundle_loader passes `_pt_choice["target"]`), so a rejected target no longer sets the Trade Plan's Base/Bull or the Watchlist ENTER_NOW R:R; Quick Research reads `val_pt_choice` and names the source. C3 built 2026-10-21 (ET): source labels on every analyst-target surface (see the C3 bullet); `base_source` records which Base candidate won (analyst / resistance / momentum / flat) and `valuation_target.base_target_note` names it on the Trade Plan, 📋 Watchlist card and ENTER_NOW email; a fundamentals-cache-served target is labelled "data provider". Opus review FIX-FIRST/1 (the note called a flat +10% placeholder "technical levels") → fixed. Item C is complete once C3 is pushed and screenshot-verified.
 
 ## Problem
