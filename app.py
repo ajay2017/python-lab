@@ -364,6 +364,7 @@ from stock_analyzer.util import sizing_cap_lines as _sizing_cap_lines
 from stock_analyzer.util import sizing_unavailable_caption as _sizing_unavailable_caption
 from stock_analyzer.util import get_or_offline as _get_or_offline
 from stock_analyzer.util import numeric_or as _numeric_or
+from stock_analyzer.util import finite_or_none as _finite_or_none
 from stock_analyzer.util import pillar_tile as _pillar_tile
 from stock_analyzer.util import ETF_PILLAR_NA_SHORT, ETF_PILLAR_NA_REASON
 from stock_analyzer.util import bq_score_or_none as _bq_or_none
@@ -27391,9 +27392,9 @@ elif page == "📈 Analysis":
                         _cov_rt_raw = str(_covrow.get("report_type") or "")
                         _cov_rt     = _ANALYST_RTYPE_LABELS.get(_cov_rt_raw, _cov_rt_raw)
                         _cov_crat   = _covrow.get("consensus_rating")
-                        _cov_a_pt  = _covrow.get("avg_pt")
-                        _cov_h_pt  = _covrow.get("high_pt")
-                        _cov_l_pt  = _covrow.get("low_pt")
+                        _cov_a_pt  = _finite_or_none(_covrow.get("avg_pt"))
+                        _cov_h_pt  = _finite_or_none(_covrow.get("high_pt"))
+                        _cov_l_pt  = _finite_or_none(_covrow.get("low_pt"))
 
                         # Card header (same style as Ideas Inbox)
                         st.markdown(
@@ -27442,11 +27443,13 @@ elif page == "📈 Analysis":
                             for _af in _cov_analysts_raw:
                                 if not isinstance(_af, dict):
                                     continue
+                                _af_pt = _finite_or_none(_af.get("price_target"))
+                                _af_up = _finite_or_none(_af.get("upside_pct"))
                                 _firm_rows.append({
                                     "Firm":     _af.get("firm") or "—",
                                     "Rating":   _af.get("rating") or "—",
-                                    "PT ($)":   _af.get("price_target"),
-                                    "Upside %": _af.get("upside_pct"),
+                                    "PT ($)":   f"{_af_pt:,.2f}" if _af_pt is not None else "—",
+                                    "Upside %": f"{_af_up:.0f}%" if _af_up is not None else "—",
                                 })
                             if _firm_rows:
                                 st.dataframe(
@@ -45056,9 +45059,9 @@ elif page == "🧠 AI Insights":
                 _ac_rt     = _ANALYST_RTYPE_LABELS.get(_ac_rt_raw, _ac_rt_raw)
                 _ac_rowid  = _ac_row.get("id")
                 _ac_crat  = _ac_row.get("consensus_rating")
-                _ac_a_pt  = _ac_row.get("avg_pt")
-                _ac_h_pt  = _ac_row.get("high_pt")
-                _ac_l_pt  = _ac_row.get("low_pt")
+                _ac_a_pt  = _finite_or_none(_ac_row.get("avg_pt"))
+                _ac_h_pt  = _finite_or_none(_ac_row.get("high_pt"))
+                _ac_l_pt  = _finite_or_none(_ac_row.get("low_pt"))
 
                 # Held / watchlist badge
                 if _ac_t in _ac_held_tickers:

@@ -17,6 +17,7 @@ from stock_analyzer.util import (
     md_bold_to_html,
     bq_score_or_none,
     numeric_or,
+    finite_or_none,
     pillar_tile,
     sentiment_value_or_none,
     val_score_or_none,
@@ -1575,3 +1576,27 @@ def test_stop_distance_delta_price_exactly_at_stop_counts_as_breached():
 ])
 def test_stop_distance_delta_unusable_input_renders_no_delta(price, stop):
     assert _sdd(price, stop) == (None, "off")
+
+
+# ── finite_or_none ────────────────────────────────────────────────────────────
+class TestFiniteOrNone:
+    @pytest.mark.parametrize("val,exp", [
+        (5, 5.0), (2.5, 2.5), (0, 0.0), (0.0, 0.0), ("685", 685.0),
+        (" 410.5 ", 410.5),
+    ])
+    def test_valid(self, val, exp):
+        r = finite_or_none(val)
+        assert r == exp and isinstance(r, float)
+
+    def test_numpy(self):
+        import numpy as np
+        assert finite_or_none(np.int64(7)) == 7.0
+        assert finite_or_none(np.float64(1.5)) == 1.5
+        assert finite_or_none(np.float64(np.nan)) is None
+
+    @pytest.mark.parametrize("val", [
+        "nan", "inf", "-inf", "", "  ", "abc", None, True, False,
+        float("inf"), float("-inf"), float("nan"), [1], {"a": 1}, (1,),
+    ])
+    def test_none(self, val):
+        assert finite_or_none(val) is None

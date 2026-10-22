@@ -76,6 +76,33 @@ def numeric_or(value: Any, default: float) -> float:
     return v
 
 
+def finite_or_none(value: Any) -> float | None:
+    """``float(value)`` when it is a finite real number, else ``None``.
+
+    Pandas turns a stored ``None`` into ``NaN`` when rows pass through a
+    DataFrame, so ``is not None`` checks pass and ``float(nan)`` prints "nan".
+    This rejects NaN/±inf (also parsed from strings), ``bool``, empty or
+    unparseable strings and any non-numeric type. Zero is preserved. Never raises.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            v = float(value.strip())
+        except ValueError:
+            return None
+    elif isinstance(value, numbers.Real):
+        try:
+            v = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    else:
+        return None
+    if v != v or v in (float("inf"), float("-inf")):
+        return None
+    return v
+
+
 def bq_score_or_none(value: Any, bundle: dict | None) -> Any:
     """``value`` unless the bundle says Business Quality was unmeasurable —
     in which case ``value`` is `fundamentals.py`'s fabricated neutral 50, and
