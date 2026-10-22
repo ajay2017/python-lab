@@ -961,6 +961,10 @@ _GATE_FILES = {
     # Item C 2026-10-21: the provider-first price-target chooser that feeds the
     # Valuation pillar's PT Upside leg (decides which target scores, or none).
     "stock_analyzer/valuation_target.py",
+    # LLM routing 2026-10-22 (docs/plans/llm-model-routing.md): the role -> model
+    # registry and request builder; the score / filter / extract_trigger roles feed
+    # the composite, Act Today/Review cards and the R-Multiple declared stop.
+    "stock_analyzer/llm.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,

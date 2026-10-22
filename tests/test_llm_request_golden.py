@@ -99,7 +99,13 @@ class _FakeMessages:
 
     def create(self, **kwargs):
         rec = self._rec
+        # The call site is the first frame outside the shared helper: once a
+        # module routes through stock_analyzer.llm.complete, the frame that
+        # calls messages.create is llm.complete itself, and keying on it would
+        # file every migrated site under one name.
         caller = sys._getframe(1)
+        while caller.f_back is not None and caller.f_globals.get("__name__") == "stock_analyzer.llm":
+            caller = caller.f_back
         mod = caller.f_globals.get("__name__", "?")
         mod = mod.removeprefix("stock_analyzer.")
         func = caller.f_code.co_name
@@ -485,20 +491,35 @@ def test_golden_secret_is_placeholder(golden):
     assert FAKE_KEY not in FIXTURE.read_text(encoding="utf-8")
 
 
+def _is_llm_complete_call(node) -> bool:
+    """`llm.complete(...)` / `_llm.complete(...)`: the shared helper's entry
+    point (stock_analyzer/llm.py). Migrated call sites must call it through a
+    module alias ending in "llm" so this guard can see them."""
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "complete"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id.endswith("llm"))
+
+
 def _ast_call_sites() -> set[tuple[str, str]]:
-    """(module, enclosing function) for every `<x>.messages.create(...)` in
-    stock_analyzer/*.py."""
+    """(module, enclosing function) for every Anthropic call site in
+    stock_analyzer/*.py: a `<x>.messages.create(...)`, or a call to the shared
+    helper `llm.complete(...)`. llm.py itself is the helper, not a site: its
+    own messages.create is what every migrated site goes through."""
     found: set[tuple[str, str]] = set()
     for path in sorted(PKG_DIR.glob("*.py")):
+        if path.stem == "llm":
+            continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
         def visit(node, func):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 func = node.name
-            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            if ((isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "create"
                     and isinstance(node.func.value, ast.Attribute)
-                    and node.func.value.attr == "messages"):
+                    and node.func.value.attr == "messages")
+                    or _is_llm_complete_call(node)):
                 found.add((path.stem, func or "<module>"))
             for child in ast.iter_child_nodes(node):
                 visit(child, func)
