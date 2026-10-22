@@ -235,6 +235,7 @@ from stock_analyzer import home_notices as _home_notices_mod
 from stock_analyzer import act_today_pointer as _act_pointer_mod
 from stock_analyzer import budget_view as _budget_view
 from stock_analyzer import sizing_path as _sizing_path
+from stock_analyzer import trade_caption as _trade_caption
 from stock_analyzer import entry_eligibility as _entry_elig
 from stock_analyzer import news_feed as _news_feed
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
@@ -26801,7 +26802,7 @@ elif page == "📈 Analysis":
                 _ap_followed_sell = "yes" if "Sell" in rec["label"] else None
 
                 _ap_c1, _ap_c2, _ap_c3 = st.columns([1, 1, 2])
-                _ap_btn_shown = False
+                _ap_shown = set()   # suggested actions whose button rendered ("BUY"/"SELL")
                 if _da_withheld:
                     # No verdict -> no pre-filled "RECOMMENDATION" trade button
                     # (it would log an attribution to a call never issued).
@@ -26821,13 +26822,14 @@ elif page == "📈 Analysis":
                             )
                         else:
                             st.caption(
-                                "Not in your portfolio — nothing to sell. "
-                                "📒 Trade buttons appear here for names you hold."
+                                "Not in your portfolio — nothing to sell. Bought it at "
+                                "Robinhood? Log it from 💰 Account → 📥 Pending Imports "
+                                "(exact broker date and price) or from 📒 Trade Journal."
                             )
                 elif _sa_is_sell:
                     # Sell signal — primary action is SELL (exit/trim)
                     with _ap_c1:
-                        _ap_btn_shown = True
+                        _ap_shown.add("SELL")
                         _render_trade_button(
                             ticker=ticker,
                             suggested_action="SELL",
@@ -26844,7 +26846,7 @@ elif page == "📈 Analysis":
                     # Hold — surface both sides so user picks
                     if _sa_holding:   # Trim is holder-only
                         with _ap_c1:
-                            _ap_btn_shown = True
+                            _ap_shown.add("SELL")
                             _render_trade_button(
                                 ticker=ticker,
                                 suggested_action="SELL",
@@ -26866,7 +26868,7 @@ elif page == "📈 Analysis":
                                 f"📒 Add button hidden — Grow Today isn't calling an "
                                 f"add on {ticker} today.")
                         else:
-                            _ap_btn_shown = True
+                            _ap_shown.add("BUY")
                             _render_trade_button(
                                 ticker=ticker,
                                 suggested_action="BUY",
@@ -26904,7 +26906,7 @@ elif page == "📈 Analysis":
                                 st.caption(f"📒 Add button hidden — Grow Today isn't calling an "
                                            f"add on {ticker} today.")
                         else:
-                            _ap_btn_shown = True
+                            _ap_shown.add("BUY")
                             _render_trade_button(
                                 ticker=ticker,
                                 suggested_action="BUY",
@@ -26919,7 +26921,7 @@ elif page == "📈 Analysis":
                             )
                     if _sa_holding:
                         with _ap_c2:
-                            _ap_btn_shown = True
+                            _ap_shown.add("SELL")
                             _render_trade_button(
                                 ticker=ticker,
                                 suggested_action="SELL",
@@ -26932,11 +26934,11 @@ elif page == "📈 Analysis":
                                 width="stretch",
                             )
                 with _ap_c3:
-                    if not _da_withheld and _ap_btn_shown:
-                        st.caption(
-                            f"Opens Trade Journal pre-filled with **{rec['label']} · "
-                            f"{_da_display_total:.0f}/100** as the signal context."
-                        )
+                    if not _da_withheld:
+                        _ap_ctx_cap = _trade_caption.context_caption(
+                            rec["label"], _da_display_total, _ap_shown)
+                        if _ap_ctx_cap is not None:
+                            st.caption(_ap_ctx_cap)
 
             # ── Chart ─────────────────────────────────────────────────────
             with chart_tab:
@@ -28940,8 +28942,11 @@ elif page == "📋 Watchlist":
         # Position sizing for this watchlist candidate
         _pv_now = st.session_state.get("_portfolio_value") or 0.0
         _wl_ps = None
-        # ENTRY_HELD is held today: no size is computed or shown (OP-07, S-A).
-        if (_action != "ENTRY_HELD" and _price and _stop and _price > _stop
+        # S-D D6: a share count only on the actions sizing_path allows (ENTER_NOW);
+        # ENTRY_HELD is held today (OP-07, S-A) and every other row gets a caption.
+        _wl_may_size = _sizing_path.may_show_size("watchlist", _action)
+        _wl_ns_cap = _sizing_path.watchlist_no_size_caption(_action, _already_held, _ticker)
+        if (_wl_may_size and _price and _stop and _price > _stop
                 and _pv_now > 0):
             try:
                 _wl_ps = position_sizing(
@@ -29224,6 +29229,9 @@ elif page == "📋 Watchlist":
                     # Size withheld by the daily budget / already sized in Grow
                     # Today -- say which, not the generic "can't size" caption.
                     st.caption(_wl_bud["note"])
+                elif _wl_ns_cap is not None:
+                    # S-D D6 / C4 (a): no share count off a row that isn't ready.
+                    st.caption(_wl_ns_cap)
                 elif _price and _action != "ENTRY_HELD":
                     # Same two/three-cause split as Analysis — see the note there.
                     _wl_no_size_reason = sizing_unavailable_reason(
@@ -42302,7 +42310,7 @@ The Home brief is split into **offense** (left) and **defense** (right).
 
 **Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape. An add to a holding gets the same entry check as a new buy: it's held — and listed under **"📰 Adds held — entry check"** with the reason and what clears it — when the holding's news averages −0.15 or worse, earnings are within 7 days, or its data is stale. A holding that already has a card today (a trim, an exit, a Monitoring watch) isn't suggested as an add, and a line names it. An add is sized so the whole position stays at or under 15% of the book and under 25% of your net capital — what you already hold counts toward both; if there's no room left, the name is listed under **"🔒 Add Suppressed — Position Already at the Cap"**. A single mild negative headline doesn't pause an add on its own: the add card says "📰 Also in Review: …" so you see it.
 
-**About the suggested share count.** It comes from the same sizing rule the whole app uses: risk 1.5% of the book on the trade, with the stop set 2× ATR below price, then **cap the position at the 15% single-name ceiling**. When your account is leveraged with a fresh cash balance, a second, separate ceiling also applies — 25% of your net capital (equity after margin debit), not just 15% of gross book — since leverage can make a "small" position a much bigger bet against the money you actually own. If the app does not know your portfolio value yet in this session — for example you opened 📈 Analysis or 📋 Watchlist directly without visiting 🏠 Home — it will **propose no share count at all** rather than guess against an assumed account size, and will say so. The card will disclose either ceiling if it binds, and both together if both do. Three things follow. First, when a cap binds, the card says so and tells you what the uncapped risk-budget size would have been — it never quietly shrinks a number on you. Second, **a suggested size is a per-idea maximum, not a portfolio plan**: at 15% apiece a book only funds about six full positions, so the sizes on screen are not meant to be taken all at once. Third, the app will suggest **no size at all** — and say which of the two reasons applies — when a single share would already exceed the ceiling (that's an account-size limit; changing the stop won't fix it) or when the price has fallen to or below the name's ATR stop (no room between entry and stop to size against). It never leaves the size line blank without a reason.
+**About the suggested share count.** It comes from the same sizing rule the whole app uses: risk 1.5% of the book on the trade, with the stop set 2× ATR below price, then **cap the position at the 15% single-name ceiling**. When your account is leveraged with a fresh cash balance, a second, separate ceiling also applies — 25% of your net capital (equity after margin debit), not just 15% of gross book — since leverage can make a "small" position a much bigger bet against the money you actually own. If the app does not know your portfolio value yet in this session — for example you opened 📈 Analysis or 📋 Watchlist directly without visiting 🏠 Home — it will **propose no share count at all** rather than guess against an assumed account size, and will say so. The card will disclose either ceiling if it binds, and both together if both do. Three things follow. First, when a cap binds, the card says so and tells you what the uncapped risk-budget size would have been — it never quietly shrinks a number on you. Second, **a suggested size is a per-idea maximum, not a portfolio plan**: at 15% apiece a book only funds about six full positions, so the sizes on screen are not meant to be taken all at once. Third, the app will suggest **no size at all** — and say which of the two reasons applies — when a single share would already exceed the ceiling (that's an account-size limit; changing the stop won't fix it) or when the price has fallen to or below the name's ATR stop (no room between entry and stop to size against). It never leaves the size line blank without a reason. On 📋 Watchlist only a **Ready to Enter** row gets a share count; a row that isn't ready says "No size yet", and one for a name you already hold points you to Grow Today's add call on 📈 Analysis.
 
 **One caveat on adds.** For an add-to-winner the cap bounds *the shares being added*, not the position you end up with — so a full-size add onto a name already near 15% can leave it above 15%. That's a known limitation, not a bug you're seeing; the concentration checks on 🔗 Risk Analysis and the Rebalancer still measure the *resulting* position and will flag it.
 
@@ -42761,7 +42769,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🪞 Trade Review** — behavioural retrospective on every recorded trade, over a selectable look-back window (2wk/30d/60d/90d/all-time). Categorizes each trade *App-Followed* (aligned with the app's recommendation), *Deviated* (external info/discretionary), or *Discretionary* (neither recorded) — inferred from the Journal columns, no manual tagging — and flags panic-window trades (made on a day the S&P 500 closed ≤ -1.5%) plus a vs-SPY benchmark per trade. **💡 What the Data Says** turns the raw numbers into a verdict, concrete findings, and one next move. **📈 Performance Trends** charts cumulative P&L and rolling win rate over the window. **⚖ Risk Discipline** checks position-size discipline against your single-name ceiling and sector mix. **🎯 Course-Correction Recommendations** and a **📜 Per-Trade Scorecard** round it out for drilling into individual trades.
 - **📜 Recommendations History** — every recommendation the app surfaced over time (the audit trail).
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🧭 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
-- **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY** (high-conviction name with tailwind), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
+- **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY**, shown as 🎯 Add (a high-conviction name with a tailwind; it carries no share count — for an add and its size, check 📈 Analysis, which shows Grow Today's call; within 3 days of the release it isn't shown as an add: it reads WATCH if a WATCH rule applies, otherwise HOLD), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer with two independent sections. **Forward Volatility Forecaster** (Phase 1) tests whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. **Earnings-Move Magnitude** (Phase 2) tests whether the app's own already-live pre-earnings sizing heuristic beats a naive "assume it moves like its own past prints" baseline, per held ticker around its scheduled print — unsigned magnitude only, never a directional call, and no "upcoming, not yet matured" preview (an outcome is only ever shown after it's known). Both sections feed **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. Each section's skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated.
 - **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Six checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh), and **⑥ Write outcomes** (did today's interactive ledger writes — 6 write paths: the buy recommendations log, the Grow Today gate suppression ledger, the Watchlist Ready-to-Enter log, and the 3 Watchlist/Rebalancer/Analysis gate-ledger capture sites added 2026-09-13 — actually save, or did a swallowed failure look identical to a healthy "nothing to record"?). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Check ⑥, unlike ④/⑤, DOES feed the Home banner — it is a same-session pass/fail signal, not a standing condition or a cold-load cache. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.** Below the six checks, a **🤖 Portfolio Investigator — AI provider** section lets you choose which AI model the 🔎 Investigator tab (🧠 AI Insights) uses — separate from 🤖 AI Snapshot's own provider choice, not shared or inherited. Only a model that's already passed a required accuracy check is offered.

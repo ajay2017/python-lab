@@ -935,6 +935,7 @@ EARNINGS_BEAT_RATE_REDUCE_THRESHOLD      = 60.0  # below this + weak composite �
 EARNINGS_BEAT_RATE_STRONG_THRESHOLD      = 75.0  # above this + bullish reaction → strengthens HOLD_OR_ADD
 EARNINGS_BEARISH_REACTION_COMPOSITE_GATE = 75    # bearish reaction history + composite < this → REDUCE
 EARNINGS_MIN_BEAT_RATE_ENTRY             = 70.0  # catalyst scanner — min beat rate to surface a watchlist candidate
+EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS   = 2     # min net analyst upgrades (90d) for Catalyst HOLD_OR_ADD
 
 # Forward window (days) for macro-event awareness — high-impact events
 # (FOMC, CPI, NFP, GDP) shown ahead on the Economic Calendar page and in
@@ -955,6 +956,7 @@ CATALYST_STRESS_WINDOW_DAYS = 14
 # Pre-event PROTECT / WATCH classification thresholds. Values surfaced here
 # so future changes are policy decisions, not hidden literals.
 MACRO_PROTECT_PNL_PCT    = -15.0  # already-underwater + bear-move = MEDIUM PROTECT
+MACRO_PROTECT_PNL_WINDOW_DAYS = 7  # the losing-position PROTECT (MEDIUM) fires only within this many days of the event
 MACRO_PROTECT_BEAR_MOVE  =  1.5   # min % sector bear-move to flag any PROTECT action
 MACRO_WATCH_MED_WEIGHT   =  8.0   # min weight for WATCH-MEDIUM (oversized + meaningful bear)
 MACRO_WATCH_BEAR_MOVE    =  1.0   # min sector bear-move for any WATCH tier
@@ -962,6 +964,7 @@ MACRO_WATCH_LOW_SCORE    = 55.0   # weak score gating WATCH-LOW
 MACRO_WATCH_LOW_WEIGHT   = 12.0   # min weight gating WATCH-LOW
 MACRO_OPP_SCORE          = 68.0   # min composite score for OPPORTUNITY classification
 MACRO_OPP_BULL_MOVE      =  1.5   # min sector bull-move for OPPORTUNITY
+MACRO_OPP_WINDOW_DAYS    = 14     # Econ Calendar OPPORTUNITY only when the HIGH event is within this many days
 
 # Portfolio bear-exposure tier cutoffs for the macro-event playbook header
 # (% of portfolio sitting in sectors with high bear-move sensitivity).

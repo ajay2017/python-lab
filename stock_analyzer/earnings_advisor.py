@@ -19,6 +19,7 @@ from stock_analyzer.constants import (
     EARNINGS_BEAT_RATE_STRONG_THRESHOLD,
     EARNINGS_BEARISH_REACTION_COMPOSITE_GATE,
     EARNINGS_MIN_BEAT_RATE_ENTRY,
+    EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS,
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
     COMPOSITE_STRONG_BUY,
@@ -347,7 +348,7 @@ def _recommend(
         )
 
     # ── HOLD_OR_ADD — high conviction + positive revisions ───────────────────
-    if score >= COMPOSITE_STRONG_BUY and net_rev >= 2:
+    if score >= COMPOSITE_STRONG_BUY and net_rev >= EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS:
         _hoa_extras = []
         if beat_rate is not None and beat_rate >= EARNINGS_BEAT_RATE_STRONG_THRESHOLD:
             _hoa_extras.append(f"historical beat rate **{beat_rate:.0f}%**")
@@ -357,24 +358,39 @@ def _recommend(
             " Combined with " + " and ".join(_hoa_extras) + ", this is a high-quality earnings setup."
             if _hoa_extras else ""
         )
+        _hoa_head = (
+            f"Strong setup heading into earnings: score **{score:.0f}/100** with "
+            f"**+{net_rev} net analyst upgrades** in 90 days — analysts are raising estimates, "
+            "not cutting. Positive revision momentum into earnings is historically the strongest "
+            f"predictor of a beat-and-raise.{_hoa_context} "
+        )
+        _hoa_lens_head = (
+            "'Earnings revision momentum' is one of the most robust alpha factors in quantitative "
+            "investing — stocks with rising analyst estimates consistently outperform those with "
+            "falling estimates. When you have both a strong composite score AND rising estimates "
+            "heading into a report, "
+        )
+        # S-D D6: only one sizing path hands out share counts, so this advisor
+        # never sizes an add. With the report inside the imminent window it
+        # isn't an add window at all: HOLD.
+        if days <= EARNINGS_IMMINENT_DAYS:
+            return (
+                "HOLD",
+                "OK",
+                _hoa_head + "**Hold full position** — with the report this close, this isn't the window to add.",
+                _hoa_lens_head
+                + "institutional guidance is to hold through it rather than add into it. "
+                "The risk is real but the setup is genuinely positive.",
+            )
         return (
             "HOLD_OR_ADD",
             "OK",
-            (
-                f"Strong setup heading into earnings: score **{score:.0f}/100** with "
-                f"**+{net_rev} net analyst upgrades** in 90 days — analysts are raising estimates, "
-                "not cutting. Positive revision momentum into earnings is historically the strongest "
-                f"predictor of a beat-and-raise.{_hoa_context} "
-                "**Hold full position.** If conviction is high, a small add (5–10% of current size) "
-                "on any pre-earnings weakness could be warranted."
-            ),
-            (
-                "'Earnings revision momentum' is one of the most robust alpha factors in quantitative "
-                "investing — stocks with rising analyst estimates consistently outperform those with "
-                "falling estimates. When you have both a strong composite score AND rising estimates "
-                "heading into a report, Institutional guidance is to hold and potentially lean in. "
-                "The risk is real but the setup is genuinely positive."
-            ),
+            _hoa_head
+            + "**Hold full position.** For an add, check 📈 Analysis — it shows whether "
+            "Grow Today is calling one today, and its size.",
+            _hoa_lens_head
+            + "institutional guidance is to hold and potentially lean in. "
+            "The risk is real but the setup is genuinely positive.",
         )
 
     # ── HOLD — general case, score is decent ─────────────────────────────────

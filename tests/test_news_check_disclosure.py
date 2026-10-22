@@ -218,15 +218,18 @@ def test_app_wiring():
     assert "ticker=_t" in APP[i:i + 600]
     assert 'st.caption(f"📰 News checked:' in APP
     assert '_wr.get("entry_passed")' in APP
-    j = APP.index("_ap_btn_shown = False")
-    k = APP.index("Opens Trade Journal pre-filled", j)
+    # S-D C4: the shown-button set (`_ap_shown`) drives the context caption.
+    j = APP.index("_ap_shown = set()")
+    k = APP.index("_trade_caption.context_caption(", j)
     chain = APP[j:k]
-    assert chain.count("_ap_btn_shown = True") == chain.count("_render_trade_button(") == 5
-    assert "if not _da_withheld and _ap_btn_shown:" in APP[k - 200:k]
-    # each flag-set sits directly before its button call
+    assert chain.count("_ap_shown.add(") == chain.count("_render_trade_button(") == 5
+    assert "if not _da_withheld:" in APP[k - 200:k]
+    # each set-add sits directly before its button call, with that button's direction
     for m in range(len(chain)):
         if chain.startswith("_render_trade_button(", m):
-            assert chain[:m].rstrip().endswith("_ap_btn_shown = True")
+            before = chain[:m].rstrip()
+            act = chain[m:m + 300].split('suggested_action="', 1)[1].split('"', 1)[0]
+            assert before.endswith(f'_ap_shown.add("{act}")'), act
 
 
 def test_email_shows_base_target_note_escaped_only_when_present():

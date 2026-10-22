@@ -4,6 +4,8 @@ recommendation ladder ahead of a binary earnings event, plus the watchlist
 earnings-catalyst candidate scanner. Pure computation (date math only, no
 I/O). See docs/plans/test-automation.md for scope.
 """
+import ast
+import inspect
 from datetime import date, timedelta
 
 import pandas as pd
@@ -14,6 +16,7 @@ from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_STRONG_BUY,
     EARNINGS_BEARISH_REACTION_COMPOSITE_GATE,
+    EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS,
     EARNINGS_BEAT_RATE_REDUCE_THRESHOLD,
     EARNINGS_BEAT_RATE_STRONG_THRESHOLD,
     EARNINGS_IMMINENT_DAYS,
@@ -203,21 +206,53 @@ def test_recommend_monitor_stop_boundary_exactly_at_threshold_not_monitor():
 
 def test_recommend_hold_or_add_high_conviction_positive_revisions():
     action, priority, detail, lens = _rec(
-        score=COMPOSITE_STRONG_BUY, net_rev=2, weight=2.0, gap_to_stop=20.0,
+        days=EARNINGS_IMMINENT_DAYS + 1, score=COMPOSITE_STRONG_BUY, net_rev=2,
+        weight=2.0, gap_to_stop=20.0,
     )
     assert action == "HOLD_OR_ADD"
     assert priority == "OK"
     assert "net analyst upgrades" in detail
 
 
-def test_recommend_hold_or_add_requires_net_rev_at_least_2():
-    action, _, _, _ = _rec(score=COMPOSITE_STRONG_BUY, net_rev=1, weight=2.0, gap_to_stop=20.0)
-    assert action != "HOLD_OR_ADD"
+def test_recommend_hold_or_add_requires_min_net_revisions():
+    kw = dict(days=EARNINGS_IMMINENT_DAYS + 1, score=COMPOSITE_STRONG_BUY, weight=2.0,
+              gap_to_stop=20.0)
+    at, _, _, _ = _rec(net_rev=EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS, **kw)
+    below, _, _, _ = _rec(net_rev=EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS - 1, **kw)
+    assert at == "HOLD_OR_ADD"
+    assert below != "HOLD_OR_ADD"
+
+
+def test_recommend_hold_or_add_inside_imminent_window_is_hold_no_add_advice():
+    action, priority, detail, lens = _rec(
+        days=EARNINGS_IMMINENT_DAYS, score=COMPOSITE_STRONG_BUY,
+        net_rev=EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS, weight=2.0, gap_to_stop=20.0,
+    )
+    assert action == "HOLD" and priority == "OK"
+    assert "net analyst upgrades" in detail
+    assert "Hold full position" in detail
+    assert "this isn't the window to add" in detail
+    assert "5–10%" not in detail and "small add" not in detail
+    assert lens.endswith(
+        "institutional guidance is to hold through it rather than add into it. "
+        "The risk is real but the setup is genuinely positive.")
+
+
+def test_recommend_hold_or_add_outside_imminent_window_points_to_analysis():
+    action, _, detail, lens = _rec(
+        days=EARNINGS_IMMINENT_DAYS + 1, score=COMPOSITE_STRONG_BUY,
+        net_rev=EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS, weight=2.0, gap_to_stop=20.0,
+    )
+    assert action == "HOLD_OR_ADD"
+    assert "📈 Analysis" in detail
+    assert "5–10%" not in detail and "small add" not in detail
+    assert "hold and potentially lean in" in lens
 
 
 def test_recommend_hold_or_add_extras_beat_rate_and_bullish_reaction():
     action, _, detail, _ = _rec(
-        score=COMPOSITE_STRONG_BUY, net_rev=2, weight=2.0, gap_to_stop=20.0,
+        days=EARNINGS_IMMINENT_DAYS + 1, score=COMPOSITE_STRONG_BUY, net_rev=2,
+        weight=2.0, gap_to_stop=20.0,
         beat_rate=EARNINGS_BEAT_RATE_STRONG_THRESHOLD, reaction="bullish",
     )
     assert "historical beat rate" in detail
@@ -546,3 +581,14 @@ def test_catalyst_candidates_real_verdict_etf_not_listed_as_withheld_nor_ranked(
         ["SPY"], set(), {"SPY": etf}, {"SPY": _ctx()}, today=TODAY, withheld_out=out,
     )
     assert result == [] and out == []
+
+
+def test_hold_or_add_branch_compares_net_rev_to_the_constant_not_a_bare_2():
+    tree = ast.parse(inspect.getsource(ea._recommend))
+    hits = [n for n in ast.walk(tree) if isinstance(n, ast.Compare)
+            and isinstance(n.left, ast.Name) and n.left.id == "net_rev"
+            and any(isinstance(o, ast.GtE) for o in n.ops)]
+    assert hits, "expected a `net_rev >= ...` comparison"
+    for n in hits:
+        comp = n.comparators[0]
+        assert isinstance(comp, ast.Name) and comp.id == "EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS"

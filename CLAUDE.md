@@ -216,10 +216,8 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
    - **All 7 Railway cron lanes are FAILING** (owner, 2026-10-22): they still run with the deleted keys, because variable changes need a redeploy and redeploys are paused. Forward-only captures (EOD leverage/risk rows, rec_events, score history, ledger cron rows) are lost for each missed day; 10-21 is likely gone.
    - **Stopgap:** the owner runs `.github/workflows/alerts.yml` by hand: `auto` after ~17:00 ET each trading day (the EOD lane), optionally `auto` ~08:00–09:00 (premarket) and `scan` ~09:45, `thesis` on Sundays. Broker sync (SnapTrade) can't run there.
 2. **S-D, one sizing path** (`docs/plans/one-sizing-path.md`, F-310).
-   - C1 + C2 shipped 2026-10-20; C3 (risk footer from final sizes) shipped 2026-10-22, screenshot pending.
-   - **NEXT: C4** (quick wins, including (0b) and the "📒 Sell FSLR pre-filled with Buy" caption call), then C5–C9:
-     - Watchlist non-ENTER_NOW rows
-     - Catalyst / Econ windows
+   - C1 + C2 shipped 2026-10-20; C3 (risk footer) and C4 (quick wins: Watchlist non-ready rows, Catalyst / Econ windows, FSLR caption, (0b)) shipped 2026-10-22, screenshots pending.
+   - **NEXT: C5**, then C6–C9:
      - Rebalancer ADD, including G-25/G-26 coverage (D5)
      - Diversification $
      - the D5 dry run, the AST ratchet and the docs
@@ -237,6 +235,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 7. **Data providers and news.** Live Data Health on 10-17 showed Finnhub (live-price primary) returning 429 on 9 of 16 calls and FMP returning 402 on 11 of 11, so the fundamentals failover is effectively dead. That needs a read-only provider investigation in its own right. On news, the owner said (10-17) to re-check the queue before more news work. The lead recommends dropping chunk 4 (backup source) and the VADER-polarity fix, with a minimal or no 3b/3c (`docs/plans/news-feed-restore.md`).
 8. **Small leftovers:**
    - F-304 follow-ups (3)–(7) (docs/queue.md)
+   - From S-D C4 (2026-10-22): N-C, a macro (G-07) check on Grow Today adds, is still deferred, so the 📅 Economic Calendar defers any in-window add to Grow Today rather than saying "don't add"; reopening it needs planner + reviewer. Bare literals left in `earnings_advisor._recommend` (Hard Rule #1): `net_rev <= -2`, `weight >= 5`, `0.35`, `est_move * 0.85`. Watchlist Remove/Wait rows read "No size yet … once Ready to Enter" (true, odd on Remove; owner may want a neutral line).
    - `self_track_record` UTC dating
    - the report's "Book side" label
    - 2 stale `.claude/worktrees`
@@ -255,6 +254,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 
 ### Live checks waiting for Railway (app.py has no tests; a screenshot is the only check)
 
+- **S-D C4:** 📋 Watchlist NEAR_ENTRY "No size yet" / held caption; 📅 Economic Calendar 🎯 Add detail and the in-window HOLD sentence (its rationale sits in raw HTML and starts with `**TICKER**`, pre-existing: check for literal `**`); 🔔 Catalyst HOLD / HOLD_OR_ADD text; 📈 Analysis "Selling goes against today's Buy call" (FSLR) and the not-held Sell caption.
 - **S-D C3 risk footer** (🏠 Home → Grow Today, under the cards): "If every stop hits, the N sized setups above lose ~$X", unsized names with reasons, `$` not LaTeX.
 - **F-311 C3 labels:** Trade Plan "🎯 Base target", the Watchlist R:R note, Scanner Range caption.
 - **Recent Grow Today / Watchlist / Analysis surfaces:**

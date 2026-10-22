@@ -47,19 +47,19 @@ def _row(**overrides):
 # bull=+2.5 (>= OPP_BULL 1.5); Healthcare bear=-0.5, bull=+0.5 (both weak).
 
 def test_sell_signal_always_protects_high():
-    action, priority = _pre_event_action(
+    action, priority, _ = _pre_event_action(
         _row(Signal="Sell", Score=90.0, **{"Weight (%)": 1.0}), "Non-Farm Payrolls", days_until=20
     )
     assert action == "PROTECT" and priority == "HIGH"
 
 
 def test_strong_sell_signal_protects_high():
-    action, priority = _pre_event_action(_row(Signal="Strong Sell"), "Non-Farm Payrolls", days_until=20)
+    action, priority, _ = _pre_event_action(_row(Signal="Strong Sell"), "Non-Farm Payrolls", days_until=20)
     assert action == "PROTECT" and priority == "HIGH"
 
 
 def test_low_score_with_bear_exposure_protects_high():
-    action, priority = _pre_event_action(
+    action, priority, _ = _pre_event_action(
         _row(Score=40.0, Sector="Financials"), "Non-Farm Payrolls", days_until=20
     )
     assert action == "PROTECT" and priority == "HIGH"
@@ -67,19 +67,19 @@ def test_low_score_with_bear_exposure_protects_high():
 
 def test_low_score_without_bear_exposure_does_not_protect():
     # Healthcare's bear move (-0.5) is below _PROTECT_BEAR (1.5)
-    action, _ = _pre_event_action(_row(Score=40.0, Sector="Healthcare"), "Non-Farm Payrolls", days_until=20)
+    action, _, _ = _pre_event_action(_row(Score=40.0, Sector="Healthcare"), "Non-Farm Payrolls", days_until=20)
     assert action != "PROTECT"
 
 
 def test_oversized_position_with_bear_exposure_protects_high():
-    action, priority = _pre_event_action(
+    action, priority, _ = _pre_event_action(
         _row(**{"Weight (%)": 20.0}, Sector="Financials"), "Non-Farm Payrolls", days_until=20
     )
     assert action == "PROTECT" and priority == "HIGH"
 
 
 def test_deep_loss_near_event_protects_medium():
-    action, priority = _pre_event_action(
+    action, priority, _ = _pre_event_action(
         _row(**{"P&L (%)": -20.0}, Sector="Financials"), "Non-Farm Payrolls", days_until=5
     )
     assert action == "PROTECT" and priority == "MEDIUM"
@@ -87,35 +87,35 @@ def test_deep_loss_near_event_protects_medium():
 
 def test_deep_loss_far_from_event_does_not_protect_via_pnl_path():
     # Same deep loss, but days_until=10 (> 7) -- pnl_pct PROTECT path requires <= 7 days
-    action, _ = _pre_event_action(
+    action, _, _ = _pre_event_action(
         _row(**{"P&L (%)": -20.0}, Sector="Financials"), "Non-Farm Payrolls", days_until=10
     )
     assert action != "PROTECT"
 
 
 def test_opportunity_high_score_buy_signal_and_bull_exposure():
-    action, priority = _pre_event_action(
+    action, priority, _ = _pre_event_action(
         _row(Score=75.0, Signal="Buy", Sector="Financials"), "Non-Farm Payrolls", days_until=10
     )
     assert action == "OPPORTUNITY" and priority == "OK"
 
 
 def test_opportunity_requires_event_within_14_days():
-    action, _ = _pre_event_action(
+    action, _, _ = _pre_event_action(
         _row(Score=75.0, Signal="Buy", Sector="Financials"), "Non-Farm Payrolls", days_until=20
     )
     assert action != "OPPORTUNITY"
 
 
 def test_opportunity_requires_buy_signal_not_just_high_score():
-    action, _ = _pre_event_action(
+    action, _, _ = _pre_event_action(
         _row(Score=75.0, Signal="Hold", Sector="Financials"), "Non-Farm Payrolls", days_until=10
     )
     assert action != "OPPORTUNITY"
 
 
 def test_watch_medium_on_bear_exposure_and_sufficient_weight():
-    action, priority = _pre_event_action(
+    action, priority, _ = _pre_event_action(
         _row(Score=60.0, **{"Weight (%)": 10.0}, Sector="Financials"), "Non-Farm Payrolls", days_until=20
     )
     assert action == "WATCH" and priority == "MEDIUM"
@@ -124,38 +124,38 @@ def test_watch_medium_on_bear_exposure_and_sufficient_weight():
 def test_watch_low_on_weak_score():
     # NFP "AI & Data" bear = -1.2 -- in [WATCH_BEAR 1.0, PROTECT_BEAR 1.5),
     # the band where only the WATCH-LOW check (not WATCH-MEDIUM) can fire.
-    action, priority = _pre_event_action(
+    action, priority, _ = _pre_event_action(
         _row(Score=50.0, Sector="AI & Data"), "Non-Farm Payrolls", days_until=20
     )
     assert action == "WATCH" and priority == "LOW"
 
 
 def test_watch_low_on_high_weight_even_with_ok_score():
-    action, priority = _pre_event_action(
+    action, priority, _ = _pre_event_action(
         _row(Score=60.0, **{"Weight (%)": 13.0}, Sector="AI & Data"), "Non-Farm Payrolls", days_until=20
     )
     assert action == "WATCH" and priority == "LOW"
 
 
 def test_hold_when_no_conditions_trigger():
-    action, priority = _pre_event_action(_row(Sector="Healthcare"), "Non-Farm Payrolls", days_until=20)
+    action, priority, _ = _pre_event_action(_row(Sector="Healthcare"), "Non-Farm Payrolls", days_until=20)
     assert action == "HOLD" and priority == "OK"
 
 
 def test_unknown_event_name_defaults_to_hold():
-    action, priority = _pre_event_action(_row(Score=90.0, Signal="Buy"), "Not A Real Event", days_until=1)
+    action, priority, _ = _pre_event_action(_row(Score=90.0, Signal="Buy"), "Not A Real Event", days_until=1)
     assert action == "HOLD" and priority == "OK"
 
 
 def test_unknown_sector_in_known_event_defaults_zero_moves():
-    action, _ = _pre_event_action(_row(Sector="Not A Real Sector"), "Non-Farm Payrolls", days_until=5)
+    action, _, _ = _pre_event_action(_row(Sector="Not A Real Sector"), "Non-Farm Payrolls", days_until=5)
     assert action == "HOLD"
 
 
 def test_sell_signal_takes_priority_over_opportunity_conditions():
     # High score + Buy-adjacent text wouldn't matter; a real Sell signal
     # must win regardless of how good the other numbers look.
-    action, priority = _pre_event_action(
+    action, priority, _ = _pre_event_action(
         _row(Signal="Sell", Score=95.0, **{"Weight (%)": 1.0}), "Non-Farm Payrolls", days_until=3
     )
     assert action == "PROTECT" and priority == "HIGH"
@@ -205,9 +205,14 @@ def test_action_detail_protect_50pct_reduction_when_other_trigger():
     assert "sell 50 shares" in detail.lower()
 
 
-def test_action_detail_opportunity_adds_10pct():
+def test_action_detail_opportunity_points_to_analysis_with_no_size():
+    # S-D D6 / C4: only one sizing path hands out share counts -- no shares, no $.
     detail = _action_detail(_row(Shares=100, Price=50.0), "Non-Farm Payrolls", "OPPORTUNITY")
-    assert "10 shares" in detail  # 10% of 100
+    assert detail == (
+        "Positive setup into the event. For an add, check 📈 Analysis — "
+        "it shows whether Grow Today is calling one today, and its size."
+    )
+    assert "shares" not in detail and "$" not in detail
 
 
 def test_action_detail_hold_is_generic():

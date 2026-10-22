@@ -17,6 +17,8 @@ from stock_analyzer.constants import (
     COMPOSITE_HOLD,
     SINGLE_NAME_CEILING,
     MACRO_PROTECT_PNL_PCT,
+    MACRO_PROTECT_PNL_WINDOW_DAYS,
+    MACRO_IMMINENT_DAYS,
     MACRO_PROTECT_BEAR_MOVE,
     MACRO_WATCH_MED_WEIGHT,
     MACRO_WATCH_BEAR_MOVE,
@@ -24,6 +26,7 @@ from stock_analyzer.constants import (
     MACRO_WATCH_LOW_WEIGHT,
     MACRO_OPP_SCORE,
     MACRO_OPP_BULL_MOVE,
+    MACRO_OPP_WINDOW_DAYS,
     MACRO_EXPOSURE_CRITICAL_PCT,
     MACRO_EXPOSURE_HIGH_PCT,
     MACRO_EXPOSURE_MEDIUM_PCT,
@@ -315,6 +318,10 @@ _OPP_BULL        = MACRO_OPP_BULL_MOVE      # min sector bull-move for OPPORTUNI
 
 
 def _pre_event_action(row, event_name: str, days_until: int) -> tuple:
+    """Returns (action, priority, opp_downgraded). `opp_downgraded` is True only
+    when every OPPORTUNITY condition held but the release is within
+    MACRO_IMMINENT_DAYS and no WATCH branch fired, so the action is HOLD (a
+    WATCH that fires first is returned as a normal WATCH, flag False)."""
     score   = _f(row.get("Score"),    50.0)
     signal  = str(row.get("Signal",   ""))
     weight  = _f(row.get("Weight (%)"), 0.0)
@@ -326,28 +333,34 @@ def _pre_event_action(row, event_name: str, days_until: int) -> tuple:
     bull_move =    _f(sc.get("bull", {}).get("sector_moves", {}).get(sector, 0))
 
     if "Sell" in signal or "Strong Sell" in signal:
-        return "PROTECT", "HIGH"
+        return "PROTECT", "HIGH", False
     if score < _PROTECT_SCORE and bear_move >= _PROTECT_BEAR:
-        return "PROTECT", "HIGH"
+        return "PROTECT", "HIGH", False
     if weight > _PROTECT_WEIGHT and bear_move >= _PROTECT_BEAR:
-        return "PROTECT", "HIGH"
-    if pnl_pct < MACRO_PROTECT_PNL_PCT and bear_move >= _PROTECT_BEAR and days_until <= 7:
-        return "PROTECT", "MEDIUM"
+        return "PROTECT", "HIGH", False
+    if (pnl_pct < MACRO_PROTECT_PNL_PCT and bear_move >= _PROTECT_BEAR
+            and days_until <= MACRO_PROTECT_PNL_WINDOW_DAYS):
+        return "PROTECT", "MEDIUM", False
 
+    opp_in_window = False
     if (score >= _OPP_SCORE and
             ("Buy" in signal or "Strong Buy" in signal) and
-            bull_move >= _OPP_BULL and days_until <= 14):
-        return "OPPORTUNITY", "OK"
+            bull_move >= _OPP_BULL and days_until <= MACRO_OPP_WINDOW_DAYS):
+        if days_until > MACRO_IMMINENT_DAYS:
+            return "OPPORTUNITY", "OK", False
+        # Inside the macro window: not shown as an add. Fall through to the
+        # WATCH checks; only a plain HOLD carries the downgrade flag.
+        opp_in_window = True
 
     if bear_move >= _PROTECT_BEAR and weight >= _WATCH_WEIGHT:
-        return "WATCH", "MEDIUM"
+        return "WATCH", "MEDIUM", False
     if bear_move >= _WATCH_BEAR and (score < MACRO_WATCH_LOW_SCORE or weight >= MACRO_WATCH_LOW_WEIGHT):
-        return "WATCH", "LOW"
+        return "WATCH", "LOW", False
 
-    return "HOLD", "OK"
+    return "HOLD", "OK", opp_in_window
 
 
-def _build_rationale(row, event_name: str, action: str) -> str:
+def _build_rationale(row, event_name: str, action: str, opp_downgraded: bool = False) -> str:
     ticker  = str(row.get("Ticker", ""))
     sector  = str(row.get("Sector", ""))
     weight  = _f(row.get("Weight (%)"), 0.0)
@@ -386,12 +399,16 @@ def _build_rationale(row, event_name: str, action: str) -> str:
             f"limited upside to holding through the release."
         )
 
-    if action == "OPPORTUNITY":
-        return (
+    if action == "OPPORTUNITY" or (action == "HOLD" and opp_downgraded):
+        text = (
             f"**{ticker}** is high-conviction (score {score:.0f}/100, {signal}) in {sector} — "
             f"a sector that could move ~{bull_move:.0f}% on a {bull_label}. "
             f"Positive revision momentum into an event is the strongest alpha setup in institutional investing."
         )
+        if action == "HOLD":
+            text += (f" With the release within {MACRO_IMMINENT_DAYS} days this isn't shown as an add "
+                     "here; any add is Grow Today's call (📈 Analysis).")
+        return text
 
     if action == "WATCH":
         return (
@@ -438,11 +455,10 @@ def _action_detail(row, event_name: str, action: str) -> str:
         )
 
     if action == "OPPORTUNITY":
-        add_sh  = max(1, int(shares * 0.10))
-        add_val = round(add_sh * price)
+        # S-D D6: only one sizing path hands out share counts, so no size here.
         return (
-            f"Consider a small pre-event add: **{add_sh:,} shares (~${add_val:,.0f})** — "
-            f"10% of current size. Deploy in 1-2 tranches, not all at once."
+            "Positive setup into the event. For an add, check 📈 Analysis — "
+            "it shows whether Grow Today is calling one today, and its size."
         )
 
     return (
@@ -537,8 +553,8 @@ def build_event_playbooks(
             total_bull_impact += bull_impact
             total_bear_impact += bear_impact
 
-            action, priority = _pre_event_action(row, ev_name, days_until)
-            rationale        = _build_rationale(row, ev_name, action)
+            action, priority, opp_down = _pre_event_action(row, ev_name, days_until)
+            rationale        = _build_rationale(row, ev_name, action, opp_down)
             detail           = _action_detail(row, ev_name, action)
             post_evt         = _post_event_rules(row, ev_name)
 

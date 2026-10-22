@@ -462,8 +462,12 @@ def test_budget_asks_come_from_the_pure_helper_not_an_inline_loop():
 def test_sizing_is_skipped_for_entry_held_in_both_places():
     body = WL[WL.index("for _wr in _wl_view:"):]
     first_sizing = body.index("_wl_ps = position_sizing(")
-    guard = body.rindex('_action != "ENTRY_HELD"', 0, first_sizing)
+    # S-D C4: the guard is sizing_path.may_show_size, which excludes ENTRY_HELD.
+    from stock_analyzer.sizing_path import may_show_size
+    assert may_show_size("watchlist", "ENTRY_HELD") is False
+    guard = body.rindex("_wl_may_size and", 0, first_sizing)
     assert first_sizing - guard < 300          # the guard is the condition of THAT call
+    assert '_wl_may_size = _sizing_path.may_show_size("watchlist", _action)' in body[:guard]
     assert 'elif _price and _action != "ENTRY_HELD":' in body   # no "can't size" caption either
     # and no trade button for it: the log-buy is keyed on ENTER_NOW only
     qa = body[body.index("_qa_col1:"):body.index("_qa_col2:")]

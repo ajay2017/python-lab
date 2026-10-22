@@ -42,6 +42,33 @@ def _finite(x) -> bool:
         return False
 
 
+# ── may_show_size ─────────────────────────────────────────────────────────────
+
+# Per surface: the suggested actions on which a share count may be shown.
+_SIZE_ACTIONS = {"watchlist": frozenset({"ENTER_NOW"})}
+
+
+def may_show_size(surface, action) -> bool:
+    """S-D D6: only one sizing path hands out share counts. A surface shows a
+    size only on the actions listed in `_SIZE_ACTIONS`; an unknown surface or
+    action is False (fail closed)."""
+    try:
+        return action in _SIZE_ACTIONS.get(surface, frozenset())
+    except TypeError:
+        return False
+
+
+def watchlist_no_size_caption(action, held, ticker) -> "str | None":
+    """Caption for a Watchlist row that gets no share count, or None when a
+    size may be shown (ENTER_NOW) or the row is ENTRY_HELD (own wording)."""
+    if may_show_size("watchlist", action) or action == "ENTRY_HELD":
+        return None
+    if held:
+        return (f"📐 No size — you already hold {ticker}; "
+                "an add is Grow Today's call (📈 Analysis).")
+    return "📐 No size yet — a share count appears once this name is Ready to Enter."
+
+
 # ── held_value ────────────────────────────────────────────────────────────────
 
 def _norm_set(tickers) -> set:
