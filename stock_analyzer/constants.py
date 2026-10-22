@@ -365,6 +365,14 @@ TARGETS_BEAR_ATR_MULT = 6.0   # bear floor = price − this × ATR (~1.5 monthly
 TARGETS_BEAR_SUPPORT_CUSHION_MULT  = 0.98  # bear floor candidate: nearest support with a 2% cushion
 TARGETS_BEAR_52W_LOW_CUSHION_MULT  = 1.03  # bear floor candidate: 52w-low with a 3% cushion
 
+# Rebalancer drift bands, in percentage points of portfolio weight
+# (rebalancer.compute_drift / build_rebalance_plan). |drift| <= TOLERANCE_OK is
+# in tolerance; TOLERANCE_OK..TOLERANCE_WATCH is "watch" (status DRIFTING);
+# above TOLERANCE_WATCH is "action" (status TRIM / ADD). Moved here from
+# rebalancer.py 2026-10-22, same values.
+TOLERANCE_OK    = 2.0
+TOLERANCE_WATCH = 5.0
+
 # Watchlist Resurrection (O4, Agentic Intelligence Roadmap v2, 2026-07-26). A
 # watchlist ticker added at least this many days ago that is now ENTER_NOW/
 # NEAR_ENTRY is flagged as plausibly forgotten — a memory jog, never a gate.

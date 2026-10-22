@@ -9,7 +9,9 @@ when and how to rebalance.
 
 import pandas as pd
 
-from stock_analyzer.constants import COMPOSITE_HOLD, COMPOSITE_BUY
+from stock_analyzer.constants import (
+    COMPOSITE_HOLD, COMPOSITE_BUY, TOLERANCE_OK, TOLERANCE_WATCH,
+)
 
 
 def _f(val, default=0.0):
@@ -22,10 +24,7 @@ def _f(val, default=0.0):
         return default
 
 
-# Tolerance bands
-TOLERANCE_OK      = 2.0   # ±2% — no action needed
-TOLERANCE_WATCH   = 5.0   # 2–5% — monitor
-# > 5% = action needed
+# Tolerance bands (TOLERANCE_OK / TOLERANCE_WATCH) live in constants.py.
 
 
 def equal_weights(port_df: pd.DataFrame) -> dict:
@@ -95,6 +94,19 @@ def compute_drift(
     return pd.DataFrame(rows).sort_values("Drift (pp)", ascending=False).reset_index(drop=True)
 
 
+def drift_bar_color(drift_pp: float) -> str:
+    """Bar colour for the drift chart: red = overweight past the action band,
+    amber = overweight in the watch band, blue = underweight past tolerance,
+    gray = in tolerance. Decision lives here, not in app.py."""
+    if drift_pp > TOLERANCE_WATCH:
+        return "#ff4444"
+    if drift_pp > TOLERANCE_OK:
+        return "#ffbb33"
+    if drift_pp < -TOLERANCE_OK:
+        return "#4a9eff"
+    return "#888888"
+
+
 def build_rebalance_plan(
     drift_df: pd.DataFrame,
     total_val: float,
@@ -148,7 +160,7 @@ def build_rebalance_plan(
                 "risk_blocked_adds": [],
                 "reduce_blocked_adds": [], "reduce_blocked_adds_count": 0,
                 "grow_paused_adds": [], "grow_paused_adds_count": 0,
-                "trim_pct": 0.0}
+                "trim_pct": 0.0, "trim_action_needed": False}
 
     news_flags      = news_flags or {}
     risk_trim_set   = {str(t).upper() for t in (risk_trim_set or set())}
@@ -183,8 +195,9 @@ def build_rebalance_plan(
             ok_list.append(ticker)
             continue
 
-        shares_delta = abs(drift_val) / price if price > 0 else 0
-        shares_delta = max(1, int(shares_delta))
+        # Floor, never round up: a sub-one-share drift must not become a
+        # 1-share sell that overshoots below target. 0 = no share count.
+        shares_delta = int(abs(drift_val) / price) if price > 0 else 0
 
         # Trim urgency scoring — score thresholds aligned with scoring.py
         # signal boundaries so the rebalancer speaks the same vocabulary as
@@ -203,14 +216,18 @@ def build_rebalance_plan(
                 urgency = max(urgency, 5)
 
             # Rationale
+            _sell_txt = (
+                f"{shares_delta:,} share{'' if shares_delta == 1 else 's'} "
+                f"(≈${abs(drift_val):,.0f})"
+            )
             if "Sell" in signal:
                 rationale = (
-                    f"**{ticker}** is {drift_pp:+.1f}pp overweight AND has a Sell signal "
+                    f"{ticker} is {drift_pp:+.1f}pp overweight AND has a Sell signal "
                     f"(score {score:.0f}/100). Carrying oversized exposure in a position "
                     f"your own signals are flagging bearish is a double risk."
                 )
                 action_detail = (
-                    f"Sell **{shares_delta:,} shares** (≈${abs(drift_val):,.0f}) to bring "
+                    f"Sell {_sell_txt} to bring "
                     f"weight from {current:.1f}% → {target:.1f}%. "
                     "Priority: do this before considering any other trim."
                 )
@@ -220,36 +237,51 @@ def build_rebalance_plan(
                 # was never actually measured. Drift/concentration alone
                 # drives this trim; the trim ACTION itself is unchanged.
                 rationale = (
-                    f"**{ticker}** is {drift_pp:+.1f}pp overweight (conviction unmeasured — "
+                    f"{ticker} is {drift_pp:+.1f}pp overweight (conviction unmeasured — "
                     "fundamentals unavailable). Drift/concentration alone drives this trim, "
                     "not a broken thesis."
                 )
                 action_detail = (
-                    f"Sell **{shares_delta:,} shares** (≈${abs(drift_val):,.0f}) to bring "
+                    f"Sell {_sell_txt} to bring "
                     f"weight from {current:.1f}% → {target:.1f}%."
                 )
             elif score < COMPOSITE_HOLD:
                 rationale = (
-                    f"**{ticker}** is {drift_pp:+.1f}pp overweight with a score in the Sell zone "
+                    f"{ticker} is {drift_pp:+.1f}pp overweight with a score in the Sell zone "
                     f"({score:.0f}/100, below {COMPOSITE_HOLD}). You've drifted into a large "
                     f"position in a name where conviction is broken."
                 )
                 action_detail = (
-                    f"Sell **{shares_delta:,} shares** (≈${abs(drift_val):,.0f}) to reduce "
+                    f"Sell {_sell_txt} to reduce "
                     f"from {current:.1f}% → {target:.1f}%. "
                     "Recycle proceeds into higher-conviction names."
                 )
             else:
                 rationale = (
-                    f"**{ticker}** has drifted {drift_pp:+.1f}pp above target weight — "
+                    f"{ticker} has drifted {drift_pp:+.1f}pp above target weight — "
                     f"a winner running. Score {score:.0f}/100 supports the thesis, "
                     f"but concentration risk increases as the position grows."
                 )
                 action_detail = (
-                    f"Sell **{shares_delta:,} shares** (≈${abs(drift_val):,.0f}) to trim "
+                    f"Sell {_sell_txt} to trim "
                     f"from {current:.1f}% → {target:.1f}%. "
                     "Keep the core position — just cap the binary event risk from concentration."
                 )
+
+            if shares_delta < 1:
+                # No share count: sub-one-share drift, or no usable price.
+                # One `$` per string (two on a line render as LaTeX).
+                if price > 0:
+                    action_detail = (
+                        f"The drift (≈${abs(drift_val):,.0f}) is less than one share "
+                        f"at {price:,.2f}, so no trim is sized; selling one share "
+                        f"would take {ticker} below target."
+                    )
+                else:
+                    action_detail = (
+                        "Price unavailable, so no share count; the drift is "
+                        f"≈${abs(drift_val):,.0f}."
+                    )
 
             inst_lens = (
                 "Institutional position sizing rule: no single name above 15% of portfolio,"
@@ -295,7 +327,7 @@ def build_rebalance_plan(
                     "score":       score,
                     "signal":      signal,
                     "reason": (
-                        f"Today's Brief has an active Reduce/Exit call on **{ticker}**. "
+                        f"Today's Brief has an active Reduce/Exit call on {ticker}. "
                         "Rebalance ADD suppressed — resolve that call first."
                     ),
                 })
@@ -313,7 +345,7 @@ def build_rebalance_plan(
                     "score":       score,
                     "signal":      signal,
                     "reason": (
-                        f"Risk Advisor recommends trimming **{ticker}** (beta or Sharpe drag). "
+                        f"Risk Advisor recommends trimming {ticker} (beta or Sharpe drag). "
                         "Rebalance ADD suppressed — resolve the investment-level trim first."
                     ),
                     # Gate Suppression Ledger (roadmap B2, 2026-09-13) — G-02
@@ -380,7 +412,7 @@ def build_rebalance_plan(
 
             if score >= COMPOSITE_BUY and ("Buy" in signal):
                 rationale = (
-                    f"**{ticker}** is {abs(drift_pp):.1f}pp below target weight. "
+                    f"{ticker} is {abs(drift_pp):.1f}pp below target weight. "
                     f"Score {score:.0f}/100 · {signal}."
                 )
             elif not _score_ok:
@@ -391,13 +423,13 @@ def build_rebalance_plan(
                 # fabricated "Score 0/100" -- fixed here, not just the leg
                 # that gates whether the add fires at all.
                 rationale = (
-                    f"**{ticker}** is {abs(drift_pp):.1f}pp underweight vs target. "
+                    f"{ticker} is {abs(drift_pp):.1f}pp underweight vs target. "
                     "Conviction unmeasured — fundamentals unavailable for this "
                     "holding, so this reflects drift only, not a scored recommendation."
                 )
             else:
                 rationale = (
-                    f"**{ticker}** is {abs(drift_pp):.1f}pp below target weight. "
+                    f"{ticker} is {abs(drift_pp):.1f}pp below target weight. "
                     f"Score {score:.0f}/100 · {signal}."
                 )
 
@@ -488,4 +520,7 @@ def build_rebalance_plan(
         "grow_paused_adds":          grow_paused_adds_list,
         "grow_paused_adds_count":    len(grow_paused_adds_list),
         "trim_pct": round(total_trim / total_val * 100, 1) if total_val > 0 else 0.0,
+        # True only when a trim is past the action band (status TRIM), not
+        # merely DRIFTING (watch).
+        "trim_action_needed": any(t["status"] == "TRIM" and t["shares_delta"] >= 1 for t in trims),
     }

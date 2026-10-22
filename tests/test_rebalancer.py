@@ -145,7 +145,7 @@ def test_build_rebalance_plan_empty_drift_df():
         "risk_blocked_adds": [],
         "reduce_blocked_adds": [], "reduce_blocked_adds_count": 0,
         "grow_paused_adds": [], "grow_paused_adds_count": 0,
-        "trim_pct": 0.0,
+        "trim_pct": 0.0, "trim_action_needed": False,
     }
 
 
@@ -202,10 +202,71 @@ def test_build_rebalance_plan_trim_drifting_status_urgency_floor_applies_when_be
     assert trim["urgency"] == 10
 
 
-def test_build_rebalance_plan_trim_shares_delta_at_least_1_even_if_price_invalid():
+def test_build_rebalance_plan_trim_price_invalid_gives_zero_shares_and_text():
     df = pd.DataFrame([_drift_row("AAPL", "TRIM", 8.0, 8000.0, price=0.0)])
-    result = reb.build_rebalance_plan(df, total_val=100_000.0)
-    assert result["trims"][0]["shares_delta"] == 1
+    trim = reb.build_rebalance_plan(df, total_val=100_000.0)["trims"][0]
+    assert trim["shares_delta"] == 0
+    assert trim["action_detail"].startswith("Price unavailable, so no share count")
+    assert trim["action_detail"].count("$") == 1
+
+
+def test_trim_shares_delta_floors_not_rounds():
+    df = pd.DataFrame([_drift_row("AAPL", "TRIM", 8.0, 270.0, price=100.0)])
+    trim = reb.build_rebalance_plan(df, total_val=100_000.0)["trims"][0]
+    assert trim["shares_delta"] == 2  # 2.7 floors to 2
+    assert "Sell 2 shares" in trim["action_detail"]
+
+
+def test_trim_sub_one_share_has_no_share_count():
+    df = pd.DataFrame([_drift_row("META", "TRIM", 3.0, 508.0, price=700.0)])
+    trim = reb.build_rebalance_plan(df, total_val=100_000.0)["trims"][0]
+    assert trim["shares_delta"] == 0
+    assert "less than one share" in trim["action_detail"]
+    assert "below target" in trim["action_detail"]
+    assert "Sell" not in trim["action_detail"]
+    assert trim["action_detail"].count("$") == 1
+
+
+def test_trim_one_share_is_singular():
+    df = pd.DataFrame([_drift_row("AAPL", "TRIM", 8.0, 150.0, price=100.0)])
+    trim = reb.build_rebalance_plan(df, total_val=100_000.0)["trims"][0]
+    assert trim["shares_delta"] == 1
+    assert "Sell 1 share " in trim["action_detail"]
+    assert "1 shares" not in trim["action_detail"]
+
+
+def test_trim_action_needed_only_for_trim_status_not_drifting():
+    watch = pd.DataFrame([_drift_row("AAPL", "DRIFTING", 3.0, 3000.0)])
+    act = pd.DataFrame([_drift_row("AAPL", "TRIM", 8.0, 8000.0)])
+    assert reb.build_rebalance_plan(watch, total_val=100_000.0)["trim_action_needed"] is False
+    assert reb.build_rebalance_plan(act, total_val=100_000.0)["trim_action_needed"] is True
+    assert reb.build_rebalance_plan(pd.DataFrame(), total_val=1.0)["trim_action_needed"] is False
+
+
+def test_no_markdown_bold_in_any_plan_text():
+    df = pd.DataFrame([
+        _drift_row("A", "TRIM", 8.0, 8000.0, signal="Sell", score=20.0),
+        _drift_row("B", "TRIM", 8.0, 8000.0, signal="Hold", score=40.0),
+        {**_drift_row("C", "TRIM", 8.0, 8000.0), "Score Available": False},
+        _drift_row("D", "TRIM", 8.0, 8000.0, signal="Buy", score=70.0),
+        _drift_row("E", "ADD", -8.0, -8000.0, signal="Buy", score=70.0),
+        _drift_row("F", "ADD", -8.0, -8000.0, signal="Hold", score=50.0),
+        {**_drift_row("G", "ADD", -8.0, -8000.0), "Score Available": False},
+        _drift_row("H", "ADD", -8.0, -8000.0),
+        _drift_row("I", "ADD", -8.0, -8000.0),
+        _drift_row("J", "ADD", -8.0, -8000.0),
+    ])
+    result = reb.build_rebalance_plan(
+        df, total_val=100_000.0, reduce_call_set={"H"}, risk_trim_set={"I"},
+        add_verdicts={"J": {"state": "paused", "reason": "r", "gate_id": "G-24"}})
+    texts = []
+    for row in result["trims"] + result["adds"]:
+        texts += [row["rationale"], row["action_detail"]]
+    for row in result["reduce_blocked_adds"] + result["risk_blocked_adds"]:
+        texts.append(row["reason"])
+    assert len(texts) == 16
+    assert all("**" not in t for t in texts)
+    assert any(t.startswith("A ") for t in texts)
 
 
 def test_build_rebalance_plan_trim_withheld_score_skips_urgency_bump_and_numeric_rationale():
@@ -594,3 +655,12 @@ def test_build_rebalance_plan_zero_total_val_rebalance_pct_is_zero():
     df = pd.DataFrame([_drift_row("AAPL", "TRIM", 8.0, 8000.0)])
     result = reb.build_rebalance_plan(df, total_val=0.0)
     assert result["rebalance_pct"] == 0.0
+
+
+def test_trim_action_needed_false_when_action_trim_is_under_one_share():
+    # A TRIM-status drift worth less than one share sizes no trim, so the
+    # KPI must not say "Action required" for it.
+    tiny = pd.DataFrame([_drift_row("META", "TRIM", 6.0, 508.0, price=650.0)])
+    plan = reb.build_rebalance_plan(tiny, total_val=10_000.0)
+    assert plan["trims"][0]["shares_delta"] == 0
+    assert plan["trim_action_needed"] is False

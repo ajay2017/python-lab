@@ -289,6 +289,57 @@ def test_compute_price_targets_bear_floor_atr_based_wins():
     assert result["bear"] == expected
 
 
+def _bear_candidates(df, financials, price):
+    sup = targets.support_resistance(df, current_price=price)["nearest_support"]
+    return (
+        sup * TARGETS_BEAR_SUPPORT_CUSHION_MULT,
+        financials["52_week_low"] * TARGETS_BEAR_52W_LOW_CUSHION_MULT,
+        price - TARGETS_BEAR_ATR_MULT * targets._atr_val(df),
+    )
+
+
+def test_bear_excludes_52w_low_cushion_candidate_at_or_above_price():
+    # FSLR-shaped: 52w low within 3% below price, so low x 1.03 > price.
+    low_pattern = [95, 94, 95, 94, 95, 94, 93, 94, 95, 94, 95, 94, 95, 94, 95]
+    df = _bear_case_df(low_pattern, high_offset=2.0)
+    price = 100.0
+    fin = {"52_week_low": 99.0}
+    sup, low_c, atr_c = _bear_candidates(df, fin, price)
+    assert low_c >= price  # the buggy candidate
+    result = targets.compute_price_targets(df, fin, price, None)
+    assert result["bear"] < price
+    assert result["bear"] == round(max(c for c in (sup, atr_c) if c < price), 2)
+    assert result["bear_pct"] < 0
+
+
+def test_bear_falls_back_when_every_candidate_at_or_above_price():
+    # Flat history at 100 (ATR 0) with price BELOW it: every level sits above.
+    df = _mk_ohlc([100.0] * 30, highs=[100.0] * 30, lows=[100.0] * 30)
+    price = 90.0
+    fin = {"52_week_low": 200.0}
+    assert all(c >= price for c in _bear_candidates(df, fin, price))
+    result = targets.compute_price_targets(df, fin, price, None)
+    from stock_analyzer.constants import TARGETS_SUPPORT_FALLBACK_MULT
+    expected = round(price * TARGETS_SUPPORT_FALLBACK_MULT
+                     * TARGETS_BEAR_SUPPORT_CUSHION_MULT, 2)
+    assert result["bear"] == expected
+    assert result["bear"] < price and result["bear_pct"] < 0
+
+
+@pytest.mark.parametrize("low,pattern,off", [
+    (99.0, [95, 94, 95, 94, 95, 94, 93, 94, 95, 94, 95, 94, 95, 94, 95], 2.0),
+    (95.0, [22, 21, 22, 21, 22, 20, 22, 21, 22, 21, 22, 21, 22, 21, 22], 1.0),
+    (10.0, [50, 49, 50, 49, 50, 48, 50, 49, 50, 49, 50, 49, 50, 49, 50], 0.2),
+    (100.0, [95, 94, 95, 94, 95, 94, 93, 94, 95, 94, 95, 94, 95, 94, 95], 2.0),
+    (250.0, [95, 94, 95, 94, 95, 94, 93, 94, 95, 94, 95, 94, 95, 94, 95], 2.0),
+])
+def test_bear_always_below_price(low, pattern, off):
+    df = _bear_case_df(pattern, high_offset=off)
+    result = targets.compute_price_targets(df, {"52_week_low": low}, 100.0, None)
+    assert result["bear"] < 100.0
+    assert result["bear_pct"] < 0
+
+
 # ─── risk_reward ─────────────────────────────────────────────────────────────
 
 def test_risk_reward_entry_equals_stop_returns_zero():
@@ -343,3 +394,21 @@ def test_base_source_no_candidate_is_flat_fallback(monkeypatch):
     r = targets.compute_price_targets(df, {}, 100.0, None)
     assert r["base_source"] == "flat"
     assert r["base"] == round(100.0 * targets.TARGETS_BASE_FALLBACK_MULT, 2)
+
+
+def test_compute_price_targets_bear_never_zero_or_negative():
+    # Breakdown below every recent low (nearest_support falls back to a level
+    # ABOVE price), 52w low at the price (x1.03 cushion is above it) and a
+    # range so wide that price - 6xATR is negative: no candidate is in
+    # (0, price), so the bear must take the positive fallback, never <= 0.
+    low_pattern = [50, 51, 50, 51, 50, 49, 50, 51, 50, 51, 50, 51, 50, 51, 50]
+    df = _bear_case_df(low_pattern, high_offset=60.0)
+    current_price = 40.0
+    result = targets.compute_price_targets(
+        df, {"52_week_low": current_price}, current_price, None)
+    from stock_analyzer.constants import (
+        TARGETS_SUPPORT_FALLBACK_MULT, TARGETS_BEAR_SUPPORT_CUSHION_MULT)
+    assert result["bear"] == round(
+        current_price * TARGETS_SUPPORT_FALLBACK_MULT
+        * TARGETS_BEAR_SUPPORT_CUSHION_MULT, 2)
+    assert 0 < result["bear"] < current_price

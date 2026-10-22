@@ -135,13 +135,24 @@ def compute_price_targets(
                      default=current_price * TARGETS_MODEST_UPSIDE_MULT), 2)
 
     # Bear: strongest support floor below current price.
+    # The bear is ALWAYS below the price: only candidates strictly under
+    # current_price qualify. Within 3% of the 52w low, low x 1.03 sits above
+    # today's price, and a bear "floor" above price showed a GAIN as the bear
+    # case (FSLR: Bear +1.4%). Mirrors the bull's max(..., default=...).
     # ATR-based floor replaces the old flat 0.78× multiplier so that volatile
     # stocks get a deeper bear scenario and stable stocks a shallower one.
     # 6× ATR ≈ 1.5 monthly adverse moves — a meaningful but not extreme bear case.
     atr = _atr_val(df)
     atr_bear = current_price - TARGETS_BEAR_ATR_MULT * atr
-    bear = round(max(nearest_support * TARGETS_BEAR_SUPPORT_CUSHION_MULT,
-                      week52_low * TARGETS_BEAR_52W_LOW_CUSHION_MULT, atr_bear), 2)
+    bear_candidates = [
+        nearest_support * TARGETS_BEAR_SUPPORT_CUSHION_MULT,
+        week52_low * TARGETS_BEAR_52W_LOW_CUSHION_MULT,
+        atr_bear,
+    ]
+    bear = round(max(
+        (c for c in bear_candidates if 0 < c < current_price),
+        default=(current_price * TARGETS_SUPPORT_FALLBACK_MULT
+                 * TARGETS_BEAR_SUPPORT_CUSHION_MULT)), 2)
 
     def pct(t: float) -> float:
         return round((t - current_price) / current_price * 100, 1)

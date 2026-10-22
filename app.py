@@ -96,10 +96,10 @@ from stock_analyzer.trade_time import (
     NOTE_TEXT_IMPORT as _NOTE_TEXT_IMPORT,
 )
 from stock_analyzer.rebalancer import (
-    equal_weights, compute_drift, build_rebalance_plan,
-    TOLERANCE_OK, TOLERANCE_WATCH,
+    equal_weights, compute_drift, build_rebalance_plan, drift_bar_color,
 )
 from stock_analyzer.constants import (
+    TOLERANCE_OK, TOLERANCE_WATCH,
     VALUATION_COVERAGE_FRESH_DAYS, VALUATION_PT_MIN_ANALYSTS, VALUATION_PT_MAX_TARGET_RATIO,
     DB_OUTAGE_SAFE_PAGES,
     DB_RELOAD_RETRY_SEC,
@@ -21152,10 +21152,11 @@ elif page == "🥧 Portfolio Overview":
         _n_add   = (len(_rb_plan["adds"]) + _rb_plan["grow_paused_adds_count"]
                     + _rb_plan["reduce_blocked_adds_count"]
                     + _rb_plan["risk_blocked_adds_count"])
-        _n_ok    = len(_rb_plan["ok"]) + sum(1 for _, r in _drift_df.iterrows() if r["Status"] == "DRIFTING")
+        _n_ok    = len(_rb_plan["ok"])
         _rb_k1.metric("Trim needed",    _n_trim,
-                      delta="Action required" if _n_trim else None,
-                      delta_color="inverse" if _n_trim else "off")
+                      delta=("Action required" if _rb_plan["trim_action_needed"]
+                             else ("Watch" if _n_trim else None)),
+                      delta_color="inverse" if _rb_plan["trim_action_needed"] else "off")
         _rb_k2.metric("Underweight",    _n_add,
                       help="Holdings below target weight by more than the tolerance. "
                            "Drift only: Grow Today decides adds.")
@@ -21167,10 +21168,7 @@ elif page == "🥧 Portfolio Overview":
         # Drift bar chart
         if not _drift_df.empty:
             import plotly.graph_objects as _go_rb
-            _dc = ["#ff4444" if d > TOLERANCE_WATCH else
-                   ("#ffbb33" if d > TOLERANCE_OK else
-                   ("#4a9eff" if d < -TOLERANCE_OK else "#888888"))
-                   for d in _drift_df["Drift (pp)"]]
+            _dc = [drift_bar_color(d) for d in _drift_df["Drift (pp)"]]
             _rb_fig = _go_rb.Figure(_go_rb.Bar(
                 x=_drift_df["Ticker"],
                 y=_drift_df["Drift (pp)"],
@@ -21197,11 +21195,13 @@ elif page == "🥧 Portfolio Overview":
                               annotation_text=f"+{TOLERANCE_OK:.0f}pp tolerance",
                               annotation_position="right")
             _rb_fig.add_hline(y=-TOLERANCE_OK,   line_dash="dash", line_color="#888",
+                              annotation_text=f"−{TOLERANCE_OK:.0f}pp tolerance",
                               annotation_position="right")
             _rb_fig.add_hline(y=TOLERANCE_WATCH,  line_dash="dot", line_color="#ffbb33",
                               annotation_text=f"+{TOLERANCE_WATCH:.0f}pp action",
                               annotation_position="right")
             _rb_fig.add_hline(y=-TOLERANCE_WATCH, line_dash="dot", line_color="#4a9eff",
+                              annotation_text=f"−{TOLERANCE_WATCH:.0f}pp action",
                               annotation_position="right")
             _rb_fig.update_layout(
                 title="Weight Drift vs Target (pp = percentage points)",
@@ -21228,7 +21228,11 @@ elif page == "🥧 Portfolio Overview":
 
                 with st.expander(
                     f"{_tr_icon} **{_tr['ticker']}** — trim {_tr['drift_pp']:+.1f}pp  "
-                    f"| sell ~{_tr['shares_delta']:,} shares ≈ ${_tr['drift_val']:,.0f}",
+                    + (f"| sell ~{_tr['shares_delta']:,} share{'' if _tr['shares_delta'] == 1 else 's'} "
+                       f"≈ ${_tr['drift_val']:,.0f}"
+                       if _tr["shares_delta"] >= 1 else
+                       f"| ≈${_tr['drift_val']:,.0f} drift "
+                       + ("(under one share)" if _tr["price"] > 0 else "(price unavailable)")),
                     expanded=_tr_exp,
                 ):
                     _tr_m = st.columns(4)
