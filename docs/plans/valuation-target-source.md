@@ -14,7 +14,7 @@
 - The reconciliation caption didn't appear, because only one target source was in play, so its `$` is still
   unchecked.
 
-**Found on the same tab: a pre-existing bug, not from C3. FIXED 2026-10-22 (new `util.finite_or_none`; live check pending):** the saved-research card
+**Found on the same tab: a pre-existing bug, not from C3. FIXED 2026-10-22 (`f360094`, new `util.finite_or_none`); LIVE-VERIFIED the same day on META: no Avg PT line, and "—" in the firm table.** the saved-research card
 reads "Avg PT: $nan ($nan–$nan)" for a saved row with no price target (META, Morgan Stanley, 2026-09-18).
 - Cause: the cards come from `_cov_df.iterrows()` (`app.py` ~27388), and pandas turns `None` into `NaN`. So
   `if _cov_a_pt is not None` (~27421) passes, and `float(low) != float(high)` is true for NaN.
