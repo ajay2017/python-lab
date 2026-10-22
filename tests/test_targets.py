@@ -150,6 +150,7 @@ def test_compute_price_targets_analyst_target_above_current_sets_base():
     financials = {"analyst_target": 150.0}
     result = targets.compute_price_targets(df, financials, current_price=100.0, analyst_target=150.0)
     assert result["base"] == 150.0
+    assert result["base_source"] == "analyst"
     assert result["above_consensus"] is False  # 150 is NOT < 100
 
 
@@ -167,6 +168,7 @@ def test_compute_price_targets_analyst_target_below_current_falls_back_to_smalle
     financials = {"analyst_target": 90.0}  # <= current -> triggers fallback branch
     result = targets.compute_price_targets(df, financials, current_price=100.0, analyst_target=90.0)
     assert result["base"] == 105.0
+    assert result["base_source"] == "resistance"
 
 
 def test_compute_price_targets_bull_empty_generator_guard_falls_back_to_modest_upside():
@@ -305,3 +307,39 @@ def test_risk_reward_normal_case_rounds_to_one_decimal():
 def test_risk_reward_rounds_non_exact_ratio():
     # risk = 12, reward = 25 -> ratio 2.0833... -> rounds to 2.1
     assert targets.risk_reward(entry=100.0, stop=88.0, target=125.0) == 2.1
+
+
+# ─── base_source names the winning candidate ────────────────────────────────
+
+def _old_base(df, price):
+    sr = targets.support_resistance(df, current_price=price)
+    drift = float(df["Close"].pct_change().dropna().mean()) * 21
+    cands = [t for t in [sr["nearest_resistance"], round(price * (1 + drift * 3), 2),
+                         price * targets.TARGETS_MODEST_UPSIDE_MULT] if t and t > price]
+    return round(min(cands) if cands else price * targets.TARGETS_BASE_FALLBACK_MULT, 2)
+
+
+def test_base_source_flat_modest_wins_and_base_unchanged():
+    df = _mk_ohlc([100.0] * 30, highs=[100.0] * 30)   # no resistance above, zero drift
+    r = targets.compute_price_targets(df, {}, 100.0, None)
+    assert r["base_source"] == "flat"
+    assert r["base"] == _old_base(df, 100.0)
+
+
+def test_base_source_momentum_wins():
+    closes = [100.0 * (1.0006 ** i) for i in range(30)]
+    df = _mk_ohlc(closes)
+    price = closes[-1]
+    r = targets.compute_price_targets(df, {}, price, None)
+    drift = float(df["Close"].pct_change().dropna().mean()) * 21
+    mom = round(price * (1 + drift * 3), 2)
+    assert price < mom < price * targets.TARGETS_MODEST_UPSIDE_MULT
+    assert r["base_source"] == "momentum" and r["base"] == mom == _old_base(df, price)
+
+
+def test_base_source_no_candidate_is_flat_fallback(monkeypatch):
+    df = _mk_ohlc([100.0] * 30, highs=[100.0] * 30)
+    monkeypatch.setattr(targets, "TARGETS_MODEST_UPSIDE_MULT", 0.5)
+    r = targets.compute_price_targets(df, {}, 100.0, None)
+    assert r["base_source"] == "flat"
+    assert r["base"] == round(100.0 * targets.TARGETS_BASE_FALLBACK_MULT, 2)

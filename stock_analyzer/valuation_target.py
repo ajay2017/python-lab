@@ -192,7 +192,7 @@ def _provider_reason(c) -> str:
     return "the data provider's target couldn't be used"
 
 
-def pt_label(choice: dict) -> str:
+def pt_label(choice: dict, fresh_days=None) -> str:
     """Long, human label naming the source (may contain `$`)."""
     src = choice.get("source")
     if src == SOURCE_PROVIDER:
@@ -215,7 +215,9 @@ def pt_label(choice: dict) -> str:
         return "Not scored — no current price to compare against"
     sr = choice.get("saved_reject")
     if sr == "none":
-        saved = "no saved research target in the last 90 days"
+        saved = (f"no saved research target in the last {fresh_days} days"
+                 if isinstance(fresh_days, int) and not isinstance(fresh_days, bool)
+                 else "no recent saved research target")
     elif sr == "read_failed":
         saved = "your saved research couldn't be read"
     elif sr == "too_few_firms":
@@ -237,3 +239,33 @@ def pt_short_tag(choice: dict) -> str:
         tag = f"your saved research, {_plural(choice['n'], 'firm')}"
         return f"{tag}, {d}" if d else tag
     return "not scored"
+
+
+def base_target_note(targets, choice) -> str | None:
+    """One line saying where the Trade Plan's Base target came from.
+
+    Never contains `$` or `**` (safe for st.caption and raw HTML alike).
+    """
+    if not isinstance(targets, dict):
+        return None
+    bs = targets.get("base_source")
+    if bs == "analyst":
+        if not isinstance(choice, dict) or choice.get("source") is None:
+            return None
+        note = "Base target: " + pt_short_tag(choice)
+        if choice.get("source") == SOURCE_SAVED:
+            note += " (no data-provider target qualified)"
+        return note
+    if bs in ("resistance", "momentum", "flat") and isinstance(choice, dict):
+        if bs == "resistance":
+            head = "Base target: nearest resistance"
+        elif bs == "momentum":
+            head = "Base target: 3-month momentum projection"
+        else:
+            bp = targets.get("base_pct")
+            head = (f"Base target: a flat +{float(bp):.0f}% placeholder" if _real(bp)
+                    else "Base target: a flat placeholder")
+        if choice.get("target") is None:
+            return head + " — no analyst target qualified"
+        return head + " — the price is above the analyst target (" + pt_short_tag(choice) + ")"
+    return None

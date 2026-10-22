@@ -86,8 +86,13 @@ def test_entry_ctx_none_is_byte_identical(name, data, pctx, frozen_clock):
     assert a == b
     # REAL golden (chunk-3 review item 1): repr frozen from the pre-entry_ctx
     # advisor (git 400b01c), so this no longer compares new code with itself.
-    assert repr(a) == _GOLDEN[name]
-    assert repr(b) == _GOLDEN[name]
+    # C3: the public wrapper adds one key (rr_target_note), appended last; the
+    # frozen golden predates it, so compare the card without that key.
+    assert a["rr_target_note"] is None and b["rr_target_note"] is None
+    a_core = {k: v for k, v in a.items() if k != "rr_target_note"}
+    b_core = {k: v for k, v in b.items() if k != "rr_target_note"}
+    assert repr(a_core) == _GOLDEN[name]
+    assert repr(b_core) == _GOLDEN[name]
     # no entry-check key leaks onto a legacy card
     assert not ({"hold_kind", "holds", "hold_reason", "clears_when", "unchecked",
                  "entry_unchecked"} & set(a))

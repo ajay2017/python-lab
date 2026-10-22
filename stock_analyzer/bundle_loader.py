@@ -42,7 +42,7 @@ from stock_analyzer.fundamentals import (
     upside_potential, count_core_metrics, resolve_fundamentals, CORE_BQ_KEYS,
 )
 from stock_analyzer.valuation import valuation_score
-from stock_analyzer.valuation_target import choose_pt_target, pt_short_tag, pt_label
+from stock_analyzer.valuation_target import choose_pt_target, pt_short_tag, pt_label, base_target_note
 from stock_analyzer.market_time import ET, now_et
 import logging
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
@@ -268,7 +268,9 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         _pt_as_of = now_et().date().isoformat()
     _pt_choice = choose_pt_target(
         _fin_for_pt.get("analyst_target"), _fin_for_pt.get("num_analyst_opinions"),
-        bundle.get("_info_source") or bundle.get("_source"),
+        # Financials from the fundamentals cache may have been written by a
+        # different provider than this bundle's, so name none (generic label).
+        (bundle.get("_info_source") or bundle.get("_source")) if _fund_source == "live" else None,
         _pt_as_of,
         _stale_as_of is not None or _fund_source != "live",
         _saved_targets, price,
@@ -283,7 +285,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     if _pt_choice["source"] is None:
         # Why PT Upside is not scored (no `$` in this branch's text) -- shown in the
         # valuation signals instead of the leg silently vanishing.
-        _analyst_data["pt_not_scored"] = pt_label(_pt_choice)
+        _analyst_data["pt_not_scored"] = pt_label(_pt_choice, fresh_days=VALUATION_COVERAGE_FRESH_DAYS)
     val_score, val_signals, val_available = valuation_score(financials, _analyst_data, price, _sector_for_scoring)
     # Headline relevance (docs/plans/headline-relevance.md): the feed tags every
     # ticker a story merely mentions, so keep only headlines whose TITLE names this
@@ -357,6 +359,8 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     # Built from the CHOSEN target (item C, D-6), never the raw provider target,
     # because targets["base"] feeds the Watchlist ENTER_NOW R:R gate.
     targets = compute_price_targets(df, financials, price, _pt_choice["target"]) if price else None
+    if isinstance(targets, dict):
+        targets["base_note"] = base_target_note(targets, _pt_choice)
     sr = support_resistance(df, current_price=price)
     try:
         risk_metrics = compute_all_risk(df, spy_df, rfr)
@@ -364,7 +368,8 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         risk_metrics = compute_all_risk(df, None, rfr)
     # Built from the CHOSEN target (item C), never the raw provider target: a
     # rejected target must not show as "upside to analyst target" elsewhere.
-    upside = (upside_potential(price, {"analyst_target": _pt_choice["target"]})
+    upside = (upside_potential(price, {"analyst_target": _pt_choice["target"]},
+                               source_tag=pt_short_tag(_pt_choice))
               if price and _pt_choice["target"] is not None else None)
     _info  = bundle.get("info", {})
     name   = _info.get("shortName") or _info.get("longName") or ticker

@@ -1227,6 +1227,9 @@ def render_watchlist_entries_email(
         if stop is not None:
             zone_bits.append(f"stop ${float(stop):.2f}")
         zone_str = "  ·  ".join(zone_bits)
+        # Where the Base target (so the R:R above) came from; own line under the zone.
+        _rr_note = e.get("rr_target_note")
+        rr_note = _rr_note if isinstance(_rr_note, str) and _rr_note else ""
 
         # (b) Economics line — honest, derived arithmetic, never a forecast.
         # Only the halves trade_economics.trade_economics could actually
@@ -1339,6 +1342,7 @@ def render_watchlist_entries_email(
             {f'<span style="color:#9ca3af;font-weight:400">&nbsp;·&nbsp;composite {float(score):.0f}/100</span>' if score is not None else ''}
           </div>
           {f'<div style="color:#cbd5e1;font-size:12px;margin-top:5px">{zone_str}</div>' if zone_str else ''}
+          {f'<div style="color:#9ca3af;font-size:11px;margin-top:2px">{_html.escape(rr_note)}</div>' if rr_note else ''}
           {f'<div style="color:#cbd5e1;font-size:12px;margin-top:4px">{econ_str}</div>' if econ_str else ''}
           {sizing_html}
           {f'<div style="color:#a8a29e;font-size:12px;margin-top:4px">{summary}</div>' if summary else ''}

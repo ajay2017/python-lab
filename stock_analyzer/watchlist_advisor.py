@@ -276,7 +276,20 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None,
     return None
 
 
-def build_watchlist_recommendation(
+def build_watchlist_recommendation(*args, **kwargs) -> dict:
+    """Public entry point: `_build_watchlist_recommendation` plus the one-line
+    note saying where the Base target (and so the R:R) came from. Sets only
+    `rr_target_note`; every other field is the inner function's."""
+    card = _build_watchlist_recommendation(*args, **kwargs)
+    data = kwargs.get("data") if "data" in kwargs else (args[1] if len(args) > 1 else None)
+    targets = data.get("targets") if isinstance(data, dict) else None
+    note = targets.get("base_note") if isinstance(targets, dict) else None
+    if isinstance(card, dict):
+        card["rr_target_note"] = note if isinstance(note, str) and note else None
+    return card
+
+
+def _build_watchlist_recommendation(
     ticker: str,
     data: dict,
     portfolio_ctx: dict | None = None,

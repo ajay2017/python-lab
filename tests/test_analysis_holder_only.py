@@ -56,4 +56,4 @@ def test_consider_smaller_entry_only_on_a_sized_buy():
     assert "Consider smaller entry" in warn
     neutral = blk[blk.index("else:"):]
     assert "Consider smaller entry" not in neutral
-    assert "above analyst consensus (\\\\${at:.2f})" in neutral
+    assert "above the analyst target (\\\\${at:.2f}" in neutral

@@ -88,6 +88,7 @@ from stock_analyzer.market_time import et_anchor_iso as _et_anchor_iso
 from stock_analyzer.market_time import now_et as _now_et
 from stock_analyzer import broker_sync
 from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
+from stock_analyzer.valuation_target import pt_label as _pt_label
 # Note markers imported from the module that DETECTS them, so a reworded
 # writer cannot silently disarm the imported-trade repair.
 from stock_analyzer.trade_time import (
@@ -99,6 +100,7 @@ from stock_analyzer.rebalancer import (
     TOLERANCE_OK, TOLERANCE_WATCH,
 )
 from stock_analyzer.constants import (
+    VALUATION_COVERAGE_FRESH_DAYS, VALUATION_PT_MIN_ANALYSTS, VALUATION_PT_MAX_TARGET_RATIO,
     DB_OUTAGE_SAFE_PAGES,
     DB_RELOAD_RETRY_SEC,
     POSITION_SETTLING_DAYS,
@@ -9852,7 +9854,7 @@ if page == "🏠 Home":
                     except (TypeError, ValueError):
                         pass
                 if _ac_parts:
-                    st.caption(f"🏦 Your saved research: {' · '.join(_ac_parts)} ({_ac_cov.get('n_firms', '?')} firms) — awareness only")
+                    st.caption(f"🏦 Your saved research: {' · '.join(_ac_parts)} ({_ac_cov.get('n_firms', '?')} firms) — the score uses the data provider's target first; 📈 Analysis shows which target was used")
 
             # Entry Timing (F-220 Phase 2) — the fresh pick's own momentum-vs-
             # composite divergence, computed at brief-build time in daily_briefing
@@ -11489,7 +11491,7 @@ if page == "🏠 Home":
                                 if _ap:
                                     st.caption(
                                         f"🏦 Your saved research: {' · '.join(_ap)} "
-                                        f"({_ac.get('n_firms', '?')} firms) — awareness only"
+                                        f"({_ac.get('n_firms', '?')} firms) — the score uses the data provider's target first; 📈 Analysis shows which target was used"
                                     )
                             if st.button(f"▶ Analyze {_t}", key=f"_rebal_an_{_t}_{_rebal_sfx}"):
                                 st.session_state["_pending_page"]    = "📈 Analysis"
@@ -24172,6 +24174,12 @@ elif page == "🔍 Market Scanner":
                 "⚠️ Mixed = analyst cautious despite strong price action  ·  "
                 "❌ Diverging = analysts bearish — proceed carefully"
             )
+            st.caption(
+                "Upside = % to the data provider's analyst mean target as reported, before the "
+                f"Valuation pillar's checks (at least {VALUATION_PT_MIN_ANALYSTS} analysts, "
+                f"no more than {VALUATION_PT_MAX_TARGET_RATIO:g}× the price). "
+                "📈 Analysis shows the target actually used in the score."
+            )
 
             # ── Detailed drill-down cards ─────────────────────────────────
             st.markdown("**Drill-down** — expand any ticker for the full evidence breakdown:")
@@ -24294,14 +24302,14 @@ elif page == "🔍 Market Scanner":
                         if _evr["target"] and _evr["upside"] is not None:
                             _uc = "#00C851" if _evr["upside"] >= 0 else "#ff4444"
                             st.markdown(
-                                f"Mean target: **${_evr['target']:.2f}**  "
+                                f"Mean target: <b>${_evr['target']:.2f}</b>  "
                                 f"<span style='color:{_uc}'>({_evr['upside']:+.1f}%)</span>",
                                 unsafe_allow_html=True,
                             )
                         if _evr["t_low"] and _evr["t_high"]:
                             st.caption(
-                                f"Range ${_evr['t_low']:.2f} → ${_evr['t_high']:.2f}"
-                                + (f"  ·  Median ${_evr['t_med']:.2f}" if _evr["t_med"] else "")
+                                f"Range \\${_evr['t_low']:.2f} → \\${_evr['t_high']:.2f}"
+                                + (f"  ·  Median \\${_evr['t_med']:.2f}" if _evr["t_med"] else "")
                             )
 
                         st.markdown("**🔼 Analyst Revisions (last 90 days)**")
@@ -24771,7 +24779,7 @@ elif page == "📈 Analysis":
                 f"<b style='font-size:1.2em;color:{_sv_rec['color']}'>"
                 f"{_sv_rec['icon']} {_sv_rec['label']} · {_sv_r['total']}/100</b>"
                 f"<br><span style='color:#ccc;font-size:0.9em'>{_sv_rec['rationale']}</span>"
-                + (f"<br><small style='color:#888'>📍 {_sv_r['upside']}</small>"
+                + (f"<br><small style='color:#888'>📍 {_safe_html(_sv_r['upside'])}</small>"
                    if _sv_r.get('upside') and _sv_rec['label'] not in ("Sell", "Strong Sell")
                    and "upside" in (_sv_r.get('upside') or "").lower() else "")
                 + "</div>",
@@ -25438,7 +25446,7 @@ elif page == "📈 Analysis":
                     f"{r.get('val_score', 50):.0f} × 30% + "
                     f"Sentiment {r['s_score']:.0f} × 10%)"
                     f"</span><br>{rec['rationale']}"
-                    + (f"<br><small>📍 {r['upside']}</small>"
+                    + (f"<br><small>📍 {_safe_html(r['upside'])}</small>"
                        if r["upside"]
                        and rec["label"] not in ("Sell", "Strong Sell")
                        and "upside" in r["upside"].lower()
@@ -26145,6 +26153,9 @@ elif page == "📈 Analysis":
                                     f"<span style='color:{_clr}'>{_pct:+.1f}%{_impact}</span>",
                                     unsafe_allow_html=True,
                                 )
+                        _bn = targets.get("base_note")
+                        if isinstance(_bn, str) and _bn:
+                            st.caption("🎯 " + _bn)
 
                 elif _sa_is_hold:
                     # ── HOLD — POSITION MONITOR ────────────────────────────
@@ -26264,6 +26275,9 @@ elif page == "📈 Analysis":
                                     f"{_lbl} `${_tgt:.2f}` <span style='color:{_clr}'>{_pct:+.1f}%</span>",
                                     unsafe_allow_html=True,
                                 )
+                        _bn = targets.get("base_note")
+                        if isinstance(_bn, str) and _bn:
+                            st.caption("🎯 " + _bn)
 
                 else:
                     # ── BUY / STRONG BUY — TRADE PLAN ─────────────────────
@@ -26689,20 +26703,25 @@ elif page == "📈 Analysis":
                             if rr_val and rr_val > 0:
                                 quality = "✅ Favourable" if rr_val >= 2.5 else ("⚠️ Marginal" if rr_val >= 1.5 else "❌ Poor")
                                 st.markdown(f"**R:R** `{rr_val:.1f}:1` — {quality}")
+                        _bn = targets.get("base_note")
+                        if isinstance(_bn, str) and _bn:
+                            st.caption("🎯 " + _bn)
 
                 # ── Shared: consensus warning + earnings + S&R ─────────────
                 if targets and targets.get("above_consensus") and not _da_withheld:
                     at = targets["analyst_target"]
+                    _at_tag = r.get("upside_tag")
+                    _at_tag_txt = f", {_at_tag}" if isinstance(_at_tag, str) and _at_tag else ""
                     # "Consider smaller entry" only where a size is actually offered
                     # on a Buy verdict; otherwise the fact stays, without the advice.
                     if not (_sa_is_sell or _sa_is_hold or _da_held_back):
                         st.warning(
-                            f"⚠️ Trading {(price-at)/at*100:.1f}% above analyst consensus (${at:.2f}). "
+                            f"⚠️ Trading {(price-at)/at*100:.1f}% above the analyst target (${at:.2f}{_at_tag_txt}). "
                             "Targets are technically-derived. Consider smaller entry."
                         )
                     else:
                         st.caption(
-                            f"Trading {(price-at)/at*100:.1f}% above analyst consensus (\\${at:.2f})."
+                            f"Trading {(price-at)/at*100:.1f}% above the analyst target (\\${at:.2f}{_at_tag_txt})."
                         )
                 earn = r["earnings"]
                 if earn:
@@ -27149,6 +27168,12 @@ elif page == "📈 Analysis":
                                 f"<span style='color:#ccc'>{v}</span>",
                                 unsafe_allow_html=True,
                             )
+                        _dd2v_ptc = r.get("val_pt_choice")
+                        if isinstance(_dd2v_ptc, dict) and _dd2v_ptc.get("source") is not None:
+                            st.caption(
+                                "🎯 Target used: "
+                                + _pt_label(_dd2v_ptc, fresh_days=VALUATION_COVERAGE_FRESH_DAYS).replace("$", "\\$")
+                            )
                         _dd2v_fin = r["financials"]
                         st.markdown("---")
                         raw_metrics = [
@@ -27305,9 +27330,11 @@ elif page == "📈 Analysis":
                 # ── Street consensus (data provider) ──────────────────────
                 st.markdown("**🏦 Street consensus (data provider)**")
                 st.caption(
-                    "The analyst mean price target from the data provider (Yahoo Finance) — "
-                    "the same number shown on the Trade Plan / Base scenario. "
-                    "This is the broad provider mean, not firm-by-firm research."
+                    "The analyst mean price target as the data provider (Yahoo Finance) reports it. "
+                    "The Valuation score and the Trade Plan's Base target use it only when at least "
+                    f"{VALUATION_PT_MIN_ANALYSTS} analysts cover the stock and it is no more than "
+                    f"{VALUATION_PT_MAX_TARGET_RATIO:g}× the price — the line below says which "
+                    "target was actually used."
                 )
                 _cov_fin = r["financials"]
                 _cov_at  = _cov_fin.get("analyst_target")       # provider mean PT
@@ -27339,6 +27366,12 @@ elif page == "📈 Analysis":
                         st.markdown("  ·  ".join(_cov_parts), unsafe_allow_html=True)
                 else:
                     st.info(f"No provider consensus available for {ticker}.")
+                _cov_ptc = r.get("val_pt_choice")
+                if isinstance(_cov_ptc, dict):
+                    st.caption(
+                        "Used in scoring: "
+                        + _pt_label(_cov_ptc, fresh_days=VALUATION_COVERAGE_FRESH_DAYS).replace("$", "\\$")
+                    )
 
                 st.markdown("---")
 
@@ -27477,18 +27510,19 @@ elif page == "📈 Analysis":
                             )
                             _cov_n_str = str(int(_cov_n)) if _cov_n else "?"
                             st.caption(
-                                f"Provider mean ${float(_cov_at):.2f} across "
+                                f"Provider mean \\${float(_cov_at):.2f} across "
                                 f"{_cov_n_str} analysts · "
                                 f"your {_cov_n_firms_saved} saved firm(s) "
-                                f"avg ${float(_cov_saved_apt):.2f}."
+                                f"avg \\${float(_cov_saved_apt):.2f}."
                             )
                         except (TypeError, ValueError):
                             pass
 
-                # Awareness-only footer
                 st.caption(
-                    "Awareness only — analyst targets never move a gate or "
-                    "the engine's verdict."
+                    "Your saved research's ratings feed the Valuation pillar's Analyst "
+                    f"Consensus leg (last {VALUATION_COVERAGE_FRESH_DAYS} days); its targets are "
+                    "used for PT Upside only when the data provider's target doesn't qualify. "
+                    "Valuation is part of the composite, so both can move a verdict."
                 )
 
             # ── 🧾 Prior Trades (F-237) ─────────────────────────────────────
@@ -28141,7 +28175,9 @@ elif page == "📈 Analysis":
                      and _ap_display_rec["label"] in ("Buy", "Strong Buy")) else ""),
                 (f"**Scenarios**: Bull \\${targets['bull']:.2f} ({targets['bull_pct']:+.1f}%) · "
                  f"Base \\${targets['base']:.2f} ({targets['base_pct']:+.1f}%) · "
-                 f"Bear \\${targets['bear']:.2f} ({targets['bear_pct']:+.1f}%)" if targets else ""),
+                 f"Bear \\${targets['bear']:.2f} ({targets['bear_pct']:+.1f}%)"
+                 + (f" · {targets['base_note']}" if isinstance(targets.get("base_note"), str)
+                    and targets["base_note"] else "") if targets else ""),
                 (f"**Risk**: Sharpe {rm['sharpe']:.2f} · Sortino {rm['sortino']:.2f} · "
                  f"Max DD {rm['max_drawdown']:.1f}% · Beta {rm['beta']:.2f}"
                  if rm.get("beta") else
@@ -28977,6 +29013,9 @@ elif page == "📋 Watchlist":
                           f"{_earn_d}d" if _earn_d is not None and _earn_d >= 0 else "—",
                           delta="⚠️ Imminent" if _earn_d is not None and 0 <= _earn_d <= 7 else None,
                           delta_color="inverse" if (_earn_d is not None and 0 <= _earn_d <= 7) else "off")
+            _wl_rr_note = _wr.get("rr_target_note")
+            if isinstance(_wl_rr_note, str) and _wl_rr_note:
+                st.caption("🎯 " + _wl_rr_note + (" — the R:R above is built from it." if _rr else ""))
 
             # Summary banner
             st.markdown(
@@ -42314,6 +42353,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 """
             )
 
+        # keep the 3 / 3× below in sync with VALUATION_PT_MIN_ANALYSTS / VALUATION_PT_MAX_TARGET_RATIO
         with st.expander("🧮 How stocks are scored", expanded=False):
             st.markdown(
                 """
@@ -42321,7 +42361,7 @@ Every stock gets a **Composite score (0–100)** blending four factors:
 
 - **Technical — 25%** (trend, momentum, RSI, relative strength)
 - **Business Quality — 35%** (revenue/earnings growth, profitability, balance sheet)
-- **Valuation — 30%** (Forward P/E, FCF yield, analyst PT upside, consensus rating)
+- **Valuation — 30%** (Forward P/E, FCF yield, analyst PT upside, consensus rating) — PT upside uses the data provider's analyst mean target when at least 3 analysts cover the stock and it's no more than 3× the price, else your saved research (3+ firms), else it isn't scored; every page labels which
 - **Sentiment — 10%** (news tone)
 
 A composite of **65 or higher** clears the Buy threshold. Momentum alone is *not* enough — a hot breakout (high momentum) is **skipped** if the full composite says Hold/Sell ("composite contradicts momentum").
@@ -42567,7 +42607,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **📅 Earnings Playbook extraction** — Paste a CNBC Pro pre-earnings preview into Ideas Inbox and Haiku extracts: historical beat rate, typical post-earnings reaction direction, analyst consensus growth estimate, and what to watch on the call. Enriches Catalyst Watch playbook cards with structured intel rather than raw article text.
 
-- **🏦 Analyst Coverage extraction** — Paste a CNBC Pro or broker note (single-stock or a multi-stock "top picks" roundup) and Haiku extracts per-firm facts: firm name, rating, price target, and thesis summary. Multi-stock articles produce **one record per stock** — facts are never merged across names. Always shows an editable preview before saving. Awareness only: analyst targets never change a score, a gate, or a verdict.
+- **🏦 Analyst Coverage extraction** — Paste a CNBC Pro or broker note (single-stock or a multi-stock "top picks" roundup) and Haiku extracts per-firm facts: firm name, rating, price target, and thesis summary. Multi-stock articles produce **one record per stock** — facts are never merged across names. Always shows an editable preview before saving. Saved ratings feed the Valuation pillar's Analyst Consensus leg; saved targets are used for PT Upside only when the data provider's target doesn't qualify.
 
 ---
 

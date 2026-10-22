@@ -1,6 +1,6 @@
 # Valuation target source — provider first, saved research as fallback (item C, F-311)
 
-**Status:** C1 SHIPPED 2026-10-21 (`637c0e9`, chooser + dry-run, not wired). C2 SHIPPED 2026-10-21 (`71e3a6a`, wired into scoring, Opus SHIP/0). D-6 built 2026-10-21 (ET): `compute_price_targets` now takes the chosen target as a required argument (bundle_loader passes `_pt_choice["target"]`), so a rejected target no longer sets the Trade Plan's Base/Bull or the Watchlist ENTER_NOW R:R; Quick Research reads `val_pt_choice` and names the source. C3 (Analysis page labels) NOT started.
+**Status:** C1 SHIPPED 2026-10-21 (`637c0e9`, chooser + dry-run, not wired). C2 SHIPPED 2026-10-21 (`71e3a6a`, wired into scoring, Opus SHIP/0). D-6 built 2026-10-21 (ET): `compute_price_targets` now takes the chosen target as a required argument (bundle_loader passes `_pt_choice["target"]`), so a rejected target no longer sets the Trade Plan's Base/Bull or the Watchlist ENTER_NOW R:R; Quick Research reads `val_pt_choice` and names the source. C3 built 2026-10-21 (ET): source labels on every analyst-target surface (see the C3 bullet); `base_source` records which Base candidate won (analyst / resistance / momentum / flat) and `valuation_target.base_target_note` names it on the Trade Plan, 📋 Watchlist card and ENTER_NOW email; a fundamentals-cache-served target is labelled "data provider". Opus review FIX-FIRST/1 (the note called a flat +10% placeholder "technical levels") → fixed. Item C is complete once C3 is pushed and screenshot-verified.
 
 ## Problem
 

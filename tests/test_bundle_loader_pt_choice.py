@@ -275,3 +275,66 @@ def test_coerce_pt_str():
     assert f("685") == 685.0 and f("$700") == 700.0 and f(" 1,200.50 ") == 1200.5
     assert f(12.5) == 12.5 and f(None) is None
     assert f("abc") == "abc" and f("nan") == "nan" and f("inf") == "inf"
+
+
+# ── C3: Base-target note + source-tagged upside ──────────────────────────────
+def test_base_note_provider_accepted(monkeypatch):
+    out = _load(monkeypatch, pd.DataFrame(),
+                {"sector": "", "targetMeanPrice": 224.81, "numberOfAnalystOpinions": 31})
+    note = out["targets"]["base_note"]
+    assert "Yahoo Finance mean, 31 analysts" in note and note.startswith("Base target:")
+    assert "Yahoo Finance mean, 31 analysts" in out["upside"]
+    assert "$" not in note and "**" not in note
+
+
+def test_base_note_saved_fallback(monkeypatch):
+    out = _load(monkeypatch, _cov(("A", 140.0), ("B", 150.0), ("C", 160.0)),
+                {"sector": "", "targetMeanPrice": 224.81, "numberOfAnalystOpinions": 1})
+    note = out["targets"]["base_note"]
+    assert "your saved research" in note and "no data-provider target qualified" in note
+
+
+def test_base_note_rejected_target_says_technical(monkeypatch):
+    out = _load(monkeypatch, pd.DataFrame(),
+                {"sector": "", "targetMeanPrice": 600.0, "numberOfAnalystOpinions": 20})
+    note = out["targets"]["base_note"]
+    assert note.startswith("Base target: ") and "technical levels" not in note
+    assert "no analyst target qualified" in note
+
+
+def test_as_of_fund_cache_date_beats_stale_bundle_date(monkeypatch):
+    # A bundle served stale whose financials came from the fundamentals cache
+    # must date the target by the fundamentals-cache row, not the bundle's date.
+    # Swapping the two branches in bundle_loader makes this read 2026-10-15.
+    from datetime import datetime, timedelta, timezone
+    from stock_analyzer.market_time import ET
+    fetched = datetime.now(timezone.utc) - timedelta(days=3)
+    fc = {"fetched_at": fetched.isoformat(),
+          "financials": {"revenue_growth": 0.1, "analyst_target": 224.81,
+                         "num_analyst_opinions": 31}}
+    info = {"sector": ""}
+    monkeypatch.setattr(bundle_loader, "db", _db(
+        pd.DataFrame(), fund_cache=fc, bundle_cache={
+            "bundle": {"history": _price_df(), "info": info, "news": [],
+                       "earnings": {}, "revisions": {}},
+            "fetched_at": "2026-10-15"}))
+
+    def _boom(t, p):
+        raise RuntimeError("provider down")
+    monkeypatch.setattr(bundle_loader, "fetch_ticker_bundle", _boom)
+    out = bundle_loader.load_bundle("TESTX")
+    assert out["stale_as_of"] == "2026-10-15"
+    assert out["fund_source"] != "live"
+    assert out["val_pt_choice"]["source"] == "provider"
+    assert out["val_pt_choice"]["as_of"] == fetched.astimezone(ET).date().isoformat()
+    assert out["val_pt_choice"]["as_of"] != "2026-10-15"
+
+
+def test_fund_cache_served_target_has_generic_provider_name(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    fc = {"fetched_at": (datetime.now(timezone.utc) - timedelta(days=3)).isoformat(),
+          "financials": {"revenue_growth": 0.1, "analyst_target": 224.81,
+                         "num_analyst_opinions": 31}}
+    out = _load(monkeypatch, pd.DataFrame(), {"sector": ""}, fund_cache=fc)
+    assert out["fund_source"] != "live"
+    assert out["val_pt_choice"]["provider_name"] == "data provider"

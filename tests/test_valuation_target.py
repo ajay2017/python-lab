@@ -159,8 +159,8 @@ def test_saved_dates_accept_date_objects_and_undated_loses():
 
 # ── labels ─────────────────────────────────────────────────────────────────
 def test_none_vs_read_failed_labels_differ():
-    a = pt_label(_c(pt=None, saved=[]))
-    b = pt_label(_c(pt=None, saved=None))
+    a = pt_label(_c(pt=None, saved=[]), fresh_days=90)
+    b = pt_label(_c(pt=None, saved=None), fresh_days=90)
     assert "no saved research target in the last 90 days" in a
     assert "your saved research couldn't be read" in b and a != b
 
@@ -215,7 +215,7 @@ def test_provider_reason_text_in_saved_fallback(kw, expected):
 ])
 def test_label_not_scored(saved, part):
     c = _c(pt=None, saved=saved)
-    assert pt_label(c) == (f"Not scored — the data provider has no analyst target; {part}")
+    assert pt_label(c, fresh_days=90) == (f"Not scored — the data provider has no analyst target; {part}")
 
 
 def test_label_no_price_and_fractional_ratio():
@@ -266,3 +266,54 @@ def test_result_is_json_safe(choice):
     json.loads(json.dumps(choice, allow_nan=False))
     assert all(v is None or isinstance(v, (str, float, int, bool)) for v in choice.values())
     assert not any(isinstance(v, float) and not math.isfinite(v) for v in choice.values())
+
+
+# ── C3: base_target_note / pt_label fresh_days ───────────────────────────────
+def _ch(**kw):
+    base = dict(provider_target=224.81, provider_n=31, provider_source_key="yahoo_finance",
+                provider_as_of="2026-10-20", provider_cached=False, saved_targets=[],
+                price=117.0, min_analysts=3, max_ratio=3.0)
+    base.update(kw)
+    return choose_pt_target(**base)
+
+
+def test_base_target_note_branches():
+    from stock_analyzer.valuation_target import base_target_note
+    prov = _ch()
+    n = base_target_note({"base_source": "analyst"}, prov)
+    assert n == "Base target: Yahoo Finance mean, 31 analysts"
+    saved = _ch(provider_n=1, saved_targets=[
+        {"firm": f, "price_target": 150.0, "article_date": "2026-10-01"} for f in "ABC"])
+    n2 = base_target_note({"base_source": "analyst"}, saved)
+    assert n2.startswith("Base target: your saved research, 3 firms, 2026-10-01")
+    assert n2.endswith("(no data-provider target qualified)")
+    none = _ch(provider_target=None)
+    n3 = base_target_note({"base_source": "resistance"}, none)
+    assert n3 == "Base target: nearest resistance — no analyst target qualified"
+    n4 = base_target_note({"base_source": "momentum"}, prov)
+    assert n4 == ("Base target: 3-month momentum projection — the price is above "
+                  "the analyst target (Yahoo Finance mean, 31 analysts)")
+    n5 = base_target_note({"base_source": "flat", "base_pct": 10.0}, none)
+    assert n5 == "Base target: a flat +10% placeholder — no analyst target qualified"
+    n6 = base_target_note({"base_source": "flat", "base_pct": None}, none)
+    assert n6 == "Base target: a flat placeholder — no analyst target qualified"
+    assert base_target_note({"base_source": "technical"}, none) is None
+    for out in (n, n2, n3, n4, n5, n6):
+        assert "$" not in out and "**" not in out
+
+
+@pytest.mark.parametrize("targets,choice", [
+    (None, None), ("x", {}), ({}, {}), ({"base_source": "weird"}, {}),
+    ({"base_source": "analyst"}, None),
+    ({"base_source": "analyst"}, {"source": None, "target": None}),
+    ({"base_source": "resistance"}, None),
+])
+def test_base_target_note_none_cases(targets, choice):
+    from stock_analyzer.valuation_target import base_target_note
+    assert base_target_note(targets, choice) is None
+
+
+def test_pt_label_none_saved_uses_fresh_days():
+    c = _ch(provider_target=None, saved_targets=[])
+    assert "in the last 90 days" in pt_label(c, fresh_days=90)
+    assert "no recent saved research target" in pt_label(c)

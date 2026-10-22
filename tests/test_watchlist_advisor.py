@@ -878,3 +878,21 @@ def test_deterioration_warning_uses_enter_now_verdict_phrase():
     rec = build_watchlist_recommendation("XYZ", _base_data(df=_det_df()))
     assert rec["deterioration_warning"] is not None
     assert "rates it ENTER NOW" in rec["deterioration_warning"]
+
+
+# ─── C3: rr_target_note carries the bundle's targets["base_note"] ───────────
+
+def test_rr_target_note_mirrors_bundle_base_note():
+    note = "Base target: Yahoo Finance mean, 31 analysts"
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(targets={"base": 130.0, "base_note": note}))
+    assert rec["rr_target_note"] == note
+    kw = build_watchlist_recommendation(
+        "XYZ", data=_base_data(targets={"base": 130.0, "base_note": note}))
+    assert kw["rr_target_note"] == note
+
+
+def test_rr_target_note_none_when_absent():
+    assert build_watchlist_recommendation("XYZ", _base_data())["rr_target_note"] is None
+    assert build_watchlist_recommendation(
+        "XYZ", _base_data(targets=None))["rr_target_note"] is None

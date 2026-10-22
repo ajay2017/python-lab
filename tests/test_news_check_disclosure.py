@@ -227,3 +227,14 @@ def test_app_wiring():
     for m in range(len(chain)):
         if chain.startswith("_render_trade_button(", m):
             assert chain[:m].rstrip().endswith("_ap_btn_shown = True")
+
+
+def test_email_shows_base_target_note_escaped_only_when_present():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    _s, h = render_watchlist_entries_email(
+        [_card(rr_target_note="Base target: <b>x</b> & y")], built_at="x")
+    assert "Base target: &lt;b&gt;x&lt;/b&gt; &amp; y" in h
+    assert "<b>x</b>" not in h
+    for none in (None, "", 5):
+        _s, h = render_watchlist_entries_email([_card(rr_target_note=none)], built_at="x")
+        assert "Base target" not in h

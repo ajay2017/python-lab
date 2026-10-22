@@ -216,11 +216,6 @@ def business_quality_score(financials: dict, sector: str = "") -> tuple[float, d
             points += 2
             signals["Profit Margin"] = f"{pct:.1f}% — Marginal/Loss"
 
-    # ── Analyst price target ──────────────────────────────────────────────────
-    target = financials.get("analyst_target")
-    if target:
-        signals["Analyst Target"] = f"${target:.2f}"
-
     # ── Debt-to-equity (lower = safer balance sheet) ──────────────────────────
     de = financials.get("debt_to_equity")
     if de is not None:
@@ -255,10 +250,13 @@ def business_quality_score(financials: dict, sector: str = "") -> tuple[float, d
 fundamental_score = business_quality_score  # backward compat alias
 
 
-def upside_potential(current_price: float, financials: dict) -> str | None:
+def upside_potential(current_price: float, financials: dict,
+                     source_tag: str | None = None) -> str | None:
     target = financials.get("analyst_target")
     if target and current_price:
         pct = (target - current_price) / current_price * 100
         direction = "upside" if pct > 0 else "downside"
+        if isinstance(source_tag, str) and source_tag:
+            return f"{abs(pct):.1f}% {direction} to analyst target (${target:.2f}, {source_tag})"
         return f"{abs(pct):.1f}% {direction} to analyst target (${target:.2f})"
     return None

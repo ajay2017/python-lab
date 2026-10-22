@@ -104,12 +104,22 @@ def compute_price_targets(
     momentum_target = round(current_price * (1 + monthly_drift * 3), 2)  # 3-month projection
 
     # Base: analyst consensus if above current price; else use momentum/resistance
+    base_source = "flat"
     if analyst_target and analyst_target > current_price:
         base = round(analyst_target, 2)
+        base_source = "analyst"
     else:
         # Stock has surpassed consensus — use nearest resistance or momentum
-        candidates = [t for t in [nearest_resistance, momentum_target, current_price * TARGETS_MODEST_UPSIDE_MULT] if t and t > current_price]
-        base = round(min(candidates) if candidates else current_price * TARGETS_BASE_FALLBACK_MULT, 2)
+        # Labelled so the note can name the candidate that actually won; ties
+        # go to the first in list order, exactly as the old min() did.
+        labelled = [("resistance", nearest_resistance), ("momentum", momentum_target),
+                    ("flat", current_price * TARGETS_MODEST_UPSIDE_MULT)]
+        candidates = [(lbl, t) for lbl, t in labelled if t and t > current_price]
+        if candidates:
+            base_source, _won = min(candidates, key=lambda c: c[1])
+            base = round(_won, 2)
+        else:
+            base = round(current_price * TARGETS_BASE_FALLBACK_MULT, 2)
 
     # Bull: highest credible upside — extended analyst or 52w high breakout
     bull_candidates = [
@@ -141,6 +151,7 @@ def compute_price_targets(
     return {
         "bull": bull,
         "base": base,
+        "base_source": base_source,
         "bear": bear,
         "bull_pct": pct(bull),
         "base_pct": pct(base),
