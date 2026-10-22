@@ -9132,7 +9132,6 @@ if page == "🏠 Home":
                 st.caption(_bo)
         new_picks    = grow.get("new_picks", [])
         add_pos      = grow.get("add_positions", [])
-        deploy_note  = grow.get("deploy_note")
         bear_msg     = grow.get("message")
         lead_secs_ui = grow.get("leading_sectors", [])
         risk_banner  = grow.get("risk_banner")
@@ -10582,8 +10581,12 @@ if page == "🏠 Home":
                 unsafe_allow_html=True,
             )
 
-        if deploy_note:
-            st.info(f"💰 {deploy_note}")
+        # S-D C3: the footer totals the FINAL sizes, so it must read the
+        # post-budget `grow` (the brief `_publish_new_position_budget` returned).
+        _rf = _budget_view.risk_footer(grow, mask=st.session_state.get("_privacy", True), called=_bud_called)
+        if _rf is not None:
+            # Escape $ so two dollar figures on one line aren't read as LaTeX.
+            st.info("💰 " + _rf["text"].replace("$", "\\$"))
 
         # ─────────────────────────────────────────────────────────────────
         # BELOW THE FOLD — "Here's what we considered but didn't recommend"
@@ -42303,7 +42306,7 @@ The Home brief is split into **offense** (left) and **defense** (right).
 
 **One caveat on adds.** For an add-to-winner the cap bounds *the shares being added*, not the position you end up with — so a full-size add onto a name already near 15% can leave it above 15%. That's a known limitation, not a bug you're seeing; the concentration checks on 🔗 Risk Analysis and the Rebalancer still measure the *resulting* position and will flag it.
 
-The footer line beneath the cards states **risk, not capital** — "you'd be risking ~$X if every stop hits" is what you lose if every one of those trades goes against you, not the cash to deploy.
+The footer line beneath the cards states **risk, not capital** — "if every stop hits, the N sized setups above lose ~$X in total" adds up what each *sized* card loses at its stop, after the caps and today's budget, and names any setup that carries no size and why. It is not the cash to deploy.
 
 **Right — three lanes, by urgency:**
 - **🔴 Act Today (decisions only)** — genuine trade decisions for *today*: a stop breached, a sell signal, a **deterioration trim or exit** on a position that's rolling over (see *loss protection* below), a sized trim, breaking critical news (two or more tier-1/2 headlines at or below −0.25 on a holding since midnight ET of the previous trading day — every holding is checked, and the card names the window, e.g. "since Fri Oct 16"). If there's nothing here you'll see **"✅ Nothing to act on — you're set for today."** **Stop-breach cards are re-evaluated against the live intraday price on every render** — the Brief is memoized on portfolio composition (not price), so a breach can fire from yesterday's close even when the live price has already recovered. When the live price is more than 0.5% above the stop, the card is demoted to an amber **"⚠️ Stop Breach — Resolved"** section below Act Today rather than staying in the action lane; when live price data is not yet available the card stays in Act Today with a note to verify the current price before acting. **Tickers you sell during a session are immediately suppressed from Grow Today** — so an exit call you acted on won't re-appear as a BUY recommendation in the same session.

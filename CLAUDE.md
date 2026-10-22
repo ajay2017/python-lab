@@ -216,8 +216,8 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
    - **All 7 Railway cron lanes are FAILING** (owner, 2026-10-22): they still run with the deleted keys, because variable changes need a redeploy and redeploys are paused. Forward-only captures (EOD leverage/risk rows, rec_events, score history, ledger cron rows) are lost for each missed day; 10-21 is likely gone.
    - **Stopgap:** the owner runs `.github/workflows/alerts.yml` by hand: `auto` after ~17:00 ET each trading day (the EOD lane), optionally `auto` ~08:00–09:00 (premarket) and `scan` ~09:45, `thesis` on Sundays. Broker sync (SnapTrade) can't run there.
 2. **S-D, one sizing path** (`docs/plans/one-sizing-path.md`, F-310).
-   - C1 + C2 shipped 2026-10-20. **NEXT: C3,** the risk footer from final sizes.
-   - Then C4 (quick wins, including (0b) and the "📒 Sell FSLR pre-filled with Buy" caption call), then C5–C9:
+   - C1 + C2 shipped 2026-10-20; C3 (risk footer from final sizes) shipped 2026-10-22, screenshot pending.
+   - **NEXT: C4** (quick wins, including (0b) and the "📒 Sell FSLR pre-filled with Buy" caption call), then C5–C9:
      - Watchlist non-ENTER_NOW rows
      - Catalyst / Econ windows
      - Rebalancer ADD, including G-25/G-26 coverage (D5)
@@ -255,6 +255,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 
 ### Live checks waiting for Railway (app.py has no tests; a screenshot is the only check)
 
+- **S-D C3 risk footer** (🏠 Home → Grow Today, under the cards): "If every stop hits, the N sized setups above lose ~$X", unsized names with reasons, `$` not LaTeX.
 - **F-311 C3 labels:** Trade Plan "🎯 Base target", the Watchlist R:R note, Scanner Range caption.
 - **Recent Grow Today / Watchlist / Analysis surfaces:**
   - the F-305 overflow and flat-day boxes

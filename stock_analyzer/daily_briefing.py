@@ -1189,7 +1189,6 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # anyway, so there is nothing for this to have gated even if it
             # were read).
             "corr_unchecked":             corr_unchecked,
-            "deploy_note":                None,
             "risk_banner":                risk_banner,
             # LATE construction: built after every suppression decision so the
             # gate above can never read this value.
@@ -2576,24 +2575,6 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 })
         add_positions.sort(key=lambda x: (-x["score"], -x["gap"]))
 
-    # Capital deployment note
-    deploy_note = None
-    if portfolio_value > 0 and (new_picks or add_positions):
-        n_trades = len(new_picks) + len(add_positions)
-        deploy   = portfolio_value * RISK_PCT_PER_TRADE * n_trades
-        _risk_pct_str = f"{RISK_PCT_PER_TRADE * 100:.1f}%"
-        if _act_risk_flags:
-            deploy_note = (
-                f"⚠️ Resolve Act Today risk alerts before acting. "
-                f"If proceeding: {_risk_pct_str} risk per trade across {n_trades} setup{'s' if n_trades > 1 else ''} "
-                f"= ~${deploy:,.0f} at risk if every stop hits."
-            )
-        else:
-            deploy_note = (
-                f"At {_risk_pct_str} risk per trade across {n_trades} setup{'s' if n_trades > 1 else ''}, "
-                f"you'd be risking ~${deploy:,.0f} if every stop hits."
-            )
-
     return {
         "tone":                       tone,
         "message":                    None,
@@ -2640,7 +2621,6 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "flat_day_held":              flat_day_held,
         "unevaluated_leads":          unevaluated_leads,
         "adds_paused":                [] if tone == "bull" else _adds_paused_list(),
-        "deploy_note":                deploy_note,
         "risk_banner":                risk_banner,
         "sp500_pct":                  sp500_pct,
         "nasdaq_pct":                 nasdaq_pct,

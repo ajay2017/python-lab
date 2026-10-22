@@ -18,8 +18,9 @@ ceiling-capped position_sizing() for both the new-pick and add-winner paths:
    end-to-end through _grow_today (new-pick lane re-derives against the LIVE
    price; the add lane reads held_data's stop verbatim, which is deliberate).
 6. No bare 0.05/0.07/0.08 literal remains in the sizing path.
-7. deploy_note frames RISK, not capital, and its figure is the one the code
-   computes — asserted against the rendered string, not recomputed in the test.
+7. `_grow_today` no longer emits a `deploy_note` (it ran before the caps and the
+   budget and counted unsized setups); the risk footer now comes from the final
+   sizes via `budget_view.risk_footer` (tests/test_budget_view_risk_footer.py).
 8. sizing_unavailable_reason distinguishes "stop" from "ceiling" and never
    disagrees with position_sizing.
 """
@@ -450,19 +451,12 @@ class TestNoHardcodedStopLiterals:
         )
 
 
-# ── 7. deploy_note wording ────────────────────────────────────────────────────
+# ── 7. deploy_note retired ────────────────────────────────────────────────────
 
-class TestDeployNote:
-    """deploy_note must express risk, not capital to deploy."""
+class TestDeployNoteRetired:
+    """S-D C3: the pre-cap deploy_note is gone; the footer reads final sizes."""
 
-    def test_deploy_note_states_the_real_risk_dollars(self):
-        """The note's dollar figure equals the risk budget, computed by the CODE.
-
-        The previous version of this test recomputed the formula inside the test
-        and asserted the result against itself, so the formula could have changed
-        freely and the suite stayed green. This drives `_grow_today` and parses
-        the rendered string instead.
-        """
+    def test_grow_today_has_no_deploy_note(self):
         from tests.test_daily_briefing import _scanner_df, make_port_df
 
         pv, atr, price = 100_000.0, 3.0, 100.0
@@ -476,49 +470,8 @@ class TestDeployNote:
         scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
         grow = _grow_today(port_df, scanner, [], {}, _TODAY, pv, {"tone": "bull"},
                            composites={"NEW": bundle})
-
-        note = grow.get("deploy_note")
-        assert note, "fixture must produce a note, or this test proves nothing"
-        n_trades = len(grow["new_picks"]) + len(grow["add_positions"])
-        expected = pv * RISK_PCT_PER_TRADE * n_trades
-        assert f"${expected:,.0f}" in note, f"expected ${expected:,.0f} in {note!r}"
-        # And the framing must be risk, never capital to commit.
-        assert "deploying" not in note.lower()
-        assert "risk" in note.lower()
-
-    def test_deploy_note_never_frames_risk_as_capital(self):
-        """The rendered note must not use a capital-deployment verb.
-
-        Previously this scanned the whole daily_briefing module for the string
-        "deploying", which would fail on any future comment containing the word.
-        Asserts on the rendered output instead.
-        """
-        from tests.test_daily_briefing import _scanner_df, make_port_df
-
-        pv, atr, price = 100_000.0, 3.0, 100.0
-        bundle = {
-            "total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"},
-            "fundamentals_available": True,
-            "stop": round(price - ATR_STOP_MULT * atr, 2), "atr": atr,
-            "entry_lo": 99.0, "entry_hi": 101.5,
-        }
-        grow = _grow_today(
-            make_port_df([{"ticker": "HELD", "weight": 5.0, "sector": "Tech"}]),
-            _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Tech"}]),
-            [], {}, _TODAY, pv, {"tone": "bull"}, composites={"NEW": bundle},
-        )
-        note = grow.get("deploy_note") or ""
-        assert note, "fixture must produce a note"
-        assert "deploy" not in note.lower(), f"capital framing leaked into {note!r}"
-
-    def test_deploy_note_contains_risk_phrasing(self):
-        """The note must mention risk (the correct framing, not capital deployment)."""
-        src_path = Path(__file__).resolve().parent.parent / "stock_analyzer" / "daily_briefing.py"
-        src = src_path.read_text(encoding="utf-8")
-        assert "if every stop hits" in src, (
-            "deploy_note risk framing 'if every stop hits' not found — "
-            "re-check the deploy_note edit."
-        )
+        assert grow["new_picks"], "fixture must produce a pick, or this proves nothing"
+        assert "deploy_note" not in grow
 
 
 # ── 8. sizing_unavailable_reason — the two causes must stay distinguishable ────

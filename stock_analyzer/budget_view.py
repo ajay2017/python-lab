@@ -8,6 +8,8 @@ is the pure glue the app calls so none of it sits untested in app.py:
   * `card_note`           -- which per-card note a (budget-adjusted) sizing
                              dict gets, via `hold_reasons.budget_note`.
   * `status_line_text` / `over_line_text` -- the panel-level wording.
+  * `risk_footer`         -- the Grow Today "if every stop hits" footer, totalled
+                             from the FINAL (post-cap, post-budget) sizes.
   * `rec_budget_state`    -- the `recommendations.rec_budget_state` code a
                              budget-adjusted sizing carries (mirror of
                              cron_runner._rec_budget_state, so an app-written
@@ -290,6 +292,115 @@ def over_line_text(cache) -> "str | None":
         return None
     pct = cache.get("over_line_pct")
     return hold_reasons.budget_over_line(pct) if pct is not None else None
+
+
+# S-D C3: why a Grow Today setup carries no size. First matching flag wins.
+_UNSIZED_WHY = (
+    ("holding_unknown", "holding couldn't be checked"),
+    ("room_infeasible", "no room left under the position cap"),
+    ("ceiling_infeasible", "one share exceeds the single-name cap"),
+    ("capital_infeasible", "one share exceeds the net-capital cap"),
+    ("stop_infeasible", "price is at or below the stop"),
+    ("portfolio_unknown", "portfolio value unknown"),
+    ("budget_unknown", "the budget couldn't be checked"),
+    ("budget_exhausted", "today's new-position budget is used up"),
+)
+_CALLED_WHY = "net capital is at or below zero"
+_NO_SIZE_WHY = "no size"
+_ACT_RISK_PREFIX = "⚠️ Resolve Act Today risk alerts before acting. "
+
+
+def _unsized_why(sz, called=False) -> str:
+    if isinstance(sz, dict):
+        # Same wording logic as the cards: a margin-called budget exhaustion and
+        # a capital_infeasible with no one-share % both mean net capital <= 0.
+        if sz.get("capital_infeasible") and sz.get("one_share_capital_pct") is None:
+            return _CALLED_WHY
+        if called and sz.get("budget_exhausted"):
+            return _CALLED_WHY
+        for flag, phrase in _UNSIZED_WHY:
+            if sz.get(flag):
+                return phrase
+    return _NO_SIZE_WHY
+
+
+def risk_footer(grow, mask=False, called=False) -> "dict | None":
+    """Grow Today's risk footer, totalled from the FINAL sizes: pass the
+    POST-BUDGET `grow_today` dict (`postpass` output). Setups are the new picks
+    then the adds; a setup is sized when its sizing dict has finite shares > 0,
+    and its risk is `total_cost - shares * stop` (never `actual_risk`: Grow
+    Today sizing dicts carry none (`_position_size_for_render` doesn't copy it),
+    and `apply_to_sizing` wouldn't rescale it on a partial trim anyway). Unsized setups
+    are named with the reason. None when there is no list or no setup.
+    {"state": "sized"|"partial"|"none_sized"|"unknown", "n_setups", "n_sized",
+    "risk_dollars" (None unless sized/partial), "unsized": [{"ticker", "why"}],
+    "act_risk", "text"}. `mask` hides dollar amounts; `called` is the budget cache's margin-called
+    state (it changes the budget-exhausted reason). Never raises."""
+    try:
+        if not isinstance(grow, dict):
+            return None
+        setups = []
+        for key in ("new_picks", "add_positions"):
+            lst = grow.get(key)
+            setups.extend(it for it in (lst if isinstance(lst, list) else [])
+                          if isinstance(it, dict))
+        if not setups:
+            return None
+        act_risk = bool(grow.get("risk_banner"))
+        total, n_sized, bad = 0.0, 0, None  # bad: (ticker, "stop"|"below")
+        unsized = []
+        for it in setups:
+            tk = str(it.get("ticker") or "").strip().upper() or "?"
+            sz = it.get("sizing")
+            sh = _num(sz.get("shares")) if isinstance(sz, dict) else None
+            if sh is None or sh <= 0:
+                unsized.append({"ticker": tk, "why": _unsized_why(sz, called)})
+                continue
+            n_sized += 1
+            tc, stop = _num(sz.get("total_cost")), _num(sz.get("stop"))
+            risk = (tc - sh * stop) if (tc and tc > 0 and stop and stop > 0) else None
+            if risk is None or risk < 0:
+                bad = bad or (tk, "stop" if risk is None else "below")
+            else:
+                total += risk
+        n = len(setups)
+        s = "" if n_sized == 1 else "s"
+        no_size = ", ".join(f"{u['ticker']} ({u['why']})" for u in unsized)
+        risk_dollars = None
+        if bad is not None:
+            state = "unknown"
+            if bad[1] == "below":
+                text = f"Couldn't total the risk: {bad[0]}'s price is already below its stop."
+            else:
+                text = f"Couldn't total the risk: {bad[0]} has a size but no usable stop."
+        elif n_sized == 0:
+            state = "none_sized"
+            lead = ("The 1 setup above has no size today" if n == 1 else
+                    f"None of the {n} setups above has a size today")
+            text = (f"{lead}, so there's no risk total. No size: {no_size}.")
+        else:
+            risk_dollars = total
+            x = f"{total:,.0f}"
+            head = (f"If every stop hits, the {n_sized} sized setup{s} above "
+                    f"{'loses' if n_sized == 1 else 'lose'} ~${x} in total")
+            if unsized:
+                state = "partial"
+                text = (f"{head} ({n_sized} of {n} sized). That's the risk, not "
+                        f"the cash to deploy. No size: {no_size}.")
+            else:
+                state = "sized"
+                text = f"{head}. That's the risk, not the cash to deploy."
+        if act_risk:
+            text = _ACT_RISK_PREFIX + text
+        if mask:
+            text = _USD_RE.sub(_MASK, text)
+        return {"state": state, "n_setups": n, "n_sized": n_sized,
+                "risk_dollars": risk_dollars, "unsized": unsized,
+                "act_risk": act_risk, "text": text}
+    except Exception:
+        return {"state": "unknown", "n_setups": 0, "n_sized": 0,
+                "risk_dollars": None, "unsized": [], "act_risk": False,
+                "text": "Couldn't total the risk for this list."}
 
 
 # ---------------------------------------------------------------------------

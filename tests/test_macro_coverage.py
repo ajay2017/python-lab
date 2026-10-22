@@ -265,7 +265,7 @@ def test_expired_static_does_not_change_new_picks_or_macro_blocked(monkeypatch):
     # Compare the ENTIRE return dict, not two hand-picked keys. reference_shelf
     # claims this value "cannot cause that function to suppress or un-suppress
     # any pick" — asserting on two keys is narrower than that claim and would
-    # miss a mutation that read coverage and moved add_positions, deploy_note,
+    # miss a mutation that read coverage and moved add_positions,
     # risk_banner, or a sizing field inside a pick dict. Verified: across these
     # two runs the ONLY key that differs is macro_coverage_expired itself.
     _ignore = {"macro_coverage_expired"}
