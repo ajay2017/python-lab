@@ -411,6 +411,32 @@ from stock_analyzer import broker_import as _bimp
 from stock_analyzer import broker_screenshot as _bscr
 from stock_analyzer import debate_agent
 from stock_analyzer import llm as _llm
+
+
+def _anthropic_secret(section, key):
+    """st.secrets getter for _llm.resolve_anthropic_key (section None = a flat key)."""
+    if section is None:
+        return st.secrets.get(key, "")
+    _sec = st.secrets.get(section)
+    return _sec.get(key, "") if _sec else ""
+
+
+def _anthropic_key() -> str:
+    """Anthropic key for narrative and extraction features: env ANTHROPIC_API_KEY,
+    then [anthropic] api_key, then a flat ANTHROPIC_API_KEY secret."""
+    return _llm.resolve_anthropic_key(_anthropic_secret)
+
+
+def _anthropic_key_section_only() -> str:
+    """[anthropic] api_key only: no env var, no flat secret. This is exactly what these
+    reads used before P1-f. For calls whose output feeds a pinned LLM role (the news
+    filter, the Pre-Mortem trigger): widening the sources could switch them on where
+    they're off today, and the filter removes protective cards."""
+    return _llm.resolve_anthropic_key(
+        lambda section, key: _anthropic_secret(section, key) if section == "anthropic" else "",
+        environ={},
+    )
+
 from stock_analyzer.prediction_scoring import (
     score_predictions as _model_lab_score,
     below_min_matured_floor as _model_lab_below_floor,
@@ -2105,9 +2131,7 @@ def _build_premortem_case(ticker: str) -> dict | None:
     except Exception:
         pass
 
-    _pm_api_key = (
-        st.secrets.get("anthropic", {}).get("api_key", "") if hasattr(st, "secrets") else ""
-    )
+    _pm_api_key = _anthropic_key()
     if not _pm_api_key:
         return None
 
@@ -5065,7 +5089,7 @@ if page == "🏠 Home":
         try:
             from stock_analyzer.news_intelligence import rescore_brief_news as _rescore_brief
             from stock_analyzer import held_news_check as _held_news_check
-            _ant_key = st.secrets.get("anthropic", {}).get("api_key", "")
+            _ant_key = _anthropic_key_section_only()
             if _ant_key and _held_all:
                 _memo_key = f"_news_llm_memo_{_today_et().isoformat()}"
                 for _k in [k for k in st.session_state
@@ -8225,11 +8249,7 @@ if page == "🏠 Home":
             # interpretive stance is the first thing the user sees pre-open.
             # Card hides silently when no Anthropic key is configured —
             # graceful degradation so the rest of Today's Brief is unaffected.
-            _pms_key = (
-                st.secrets.get("anthropic", {}).get("api_key")
-                or st.secrets.get("ANTHROPIC_API_KEY")
-                or os.environ.get("ANTHROPIC_API_KEY", "")
-            )
+            _pms_key = _anthropic_key()
             if _pms_key:
                 _pms_model     = _llm.resolve_model(_llm.ROLE_FAST)
                 _pms_today_key = str(_today_et())
@@ -9935,7 +9955,7 @@ if page == "🏠 Home":
                                  disabled=_deb_btn_disabled or st.session_state.get("_readonly", False),
                                  help=_deb_btn_help):
                         with st.spinner(f"Running debate for {_deb_ticker} — 5 Haiku calls, ~15 seconds…"):
-                            _api_key_deb = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                            _api_key_deb = _anthropic_key()
                             _deb_bundle  = _gc_map.get(_deb_ticker, {})
                             _deb_spy_df  = _cached_spy("6mo")
                             _deb_spy_cl  = (
@@ -11053,7 +11073,7 @@ if page == "🏠 Home":
                                      disabled=_dbx_disabled or st.session_state.get("_readonly", False),
                                      help=_dbx_help):
                             with st.spinner(f"Challenging the exit for {_db_ticker} — 5 Haiku calls, ~15 seconds…"):
-                                _api_key_x = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                                _api_key_x = _anthropic_key()
                                 _x_pdf = st.session_state.get("_port_df_enriched")
                                 _x_hd  = st.session_state.get("_last_held_data") or {}
                                 _x_spy = _cached_spy("6mo")
@@ -18419,7 +18439,7 @@ elif page == "🔗 Risk Analysis":
                             if st.button("🎯 Generate regime-aware scenario", key="_rs_gen_btn",
                                          disabled=st.session_state.get("_readonly", False) or not _rs_record_ok) and _rs_record_ok:
                                 with st.spinner("Synthesizing regime-aware scenario…"):
-                                    _rs_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                                    _rs_api_key = _anthropic_key()
                                     _rs_factor_cache = st.session_state.get("_pi_factor_tilt_cache")
                                     _rs_evidence = regime_stress.build_regime_scenario_inputs(
                                         _rs_blast, _rs_clusters, _rs_regime, _rs_cross_asset, _rs_factor_cache
@@ -18536,7 +18556,7 @@ elif page == "🔗 Risk Analysis":
                             if st.button("📅 Generate catalyst-specific stress", key="_cs_gen_btn",
                                          disabled=st.session_state.get("_readonly", False) or not _cs_record_ok) and _cs_record_ok:
                                 with st.spinner("Synthesizing catalyst-specific stress…"):
-                                    _cs_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                                    _cs_api_key = _anthropic_key()
                                     _cs_evidence = catalyst_stress.build_catalyst_stress_inputs(
                                         _cs_ranked, _cs_blast, _cs_clusters
                                     )
@@ -19868,7 +19888,7 @@ elif page == "🧩 Intelligence":
                     if st.button("🧬 Generate structural narrative", key="_ss_gen_narrative_btn",
                                  disabled=st.session_state.get("_readonly", False) or not _ss_record_ok) and _ss_record_ok:
                         with st.spinner("Synthesizing structural narrative…"):
-                            _ss_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                            _ss_api_key = _anthropic_key()
                             _ss_factor_cache = st.session_state.get("_pi_factor_tilt_cache")
                             _ss_evidence = structural_scanner.build_narrative_inputs(
                                 _ss_clusters, _ss_rb["positions"], _ss_blast, _ss_factor_cache
@@ -19933,7 +19953,7 @@ elif page == "🧩 Intelligence":
                              disabled=st.session_state.get("_readonly", False),
                              help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
                     with st.spinner("Analyzing saved theses for shared assumptions…"):
-                        _hsb_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                        _hsb_api_key = _anthropic_key()
                         _hsb_result  = thesis_cluster.generate_thesis_clusters(_hsb_corpus, _hsb_api_key)
                     if _hsb_result is not None:
                         db.save_thesis_cluster_cache(
@@ -24727,7 +24747,7 @@ elif page == "📈 Analysis":
     # LLM suppress-only rescore — raises VADER false-positives toward neutral; never lowers scores
     try:
         from stock_analyzer.news_intelligence import rescore_news_items_llm as _rescore_llm
-        _ant_key = st.secrets.get("anthropic", {}).get("api_key", "")
+        _ant_key = _anthropic_key_section_only()
         if _ant_key and _news:
             import datetime as _dt
             _llm_ck = (f"_news_llm_{_dt.date.today().isoformat()}_"
@@ -30876,10 +30896,7 @@ elif page == "📒 Trade Journal":
         if _live_action == "BUY":
             from stock_analyzer import thesis_advisor as _ta_auth
             _tj_tk_draft  = (st.session_state.get("_tj_ticker") or "").strip().upper()
-            _ai_key_draft = (
-                st.secrets.get("anthropic", {}).get("api_key", "")
-                if hasattr(st, "secrets") else ""
-            )
+            _ai_key_draft = _anthropic_key()
             _dc1, _dc2 = st.columns([1, 3])
             with _dc1:
                 _draft_clicked = st.button(
@@ -31522,10 +31539,7 @@ elif page == "📒 Trade Journal":
                         else ""
                     )
                     if _pmt_commitment:
-                        _pmt_api_key = (
-                            st.secrets.get("anthropic", {}).get("api_key", "")
-                            if hasattr(st, "secrets") else ""
-                        )
+                        _pmt_api_key = _anthropic_key_section_only()
                         from stock_analyzer import premortem_monitor as _pmt_monitor
                         _pmt_result = _pmt_monitor.extract_trigger(_pmt_commitment, _pmt_api_key)
                         if _pmt_result is None:
@@ -32926,11 +32940,7 @@ elif page == "📒 Trade Journal":
                 )
 
                 # Optional: Anthropic API key for resolving unknown company names
-                _ss_api_key = (
-                    st.secrets.get("anthropic", {}).get("api_key")
-                    or st.secrets.get("ANTHROPIC_API_KEY")
-                    or os.environ.get("ANTHROPIC_API_KEY", "")
-                )
+                _ss_api_key = _anthropic_key()
 
                 if _ss_text_input and _ss_text_input.strip():
                     if st.button(
@@ -34573,7 +34583,7 @@ elif page == "📜 Recommendations History":
                              disabled=st.session_state.get("_readonly", False),
                              help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
                     with st.spinner("Analyzing skipped recommendations for a shared pattern…"):
-                        _mo_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                        _mo_api_key = _anthropic_key()
                         _mo_result  = missed_opportunity.generate_missed_opportunity_patterns(
                             _mo_corpus, _mo_api_key
                         )
@@ -43113,7 +43123,7 @@ elif page == "🧠 AI Insights":
         "🤖 AI Snapshot on 🏠 Home instead."
     )
 
-    _ai_api_key = st.secrets.get("anthropic", {}).get("api_key", "") if hasattr(st, "secrets") else ""
+    _ai_api_key = _anthropic_key()
 
     # ── Load shared data ONCE for the status header + sections ───────────────
     _thesis_reviews_df = _ai_db.load_thesis_reviews()
@@ -45784,7 +45794,7 @@ elif page == "🧠 AI Insights":
                 _rt_trade_date     = _trade_date_by_ticker.get(_rt_ticker)
                 _rt_counter_evidence = None   # None until a call is actually attempted
                 if _rt_erosion["score"] >= THESIS_EROSION_HAIKU_MIN and _rt_thesis_text:
-                    _rt_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                    _rt_api_key = _anthropic_key()
                     try:
                         _rt_age_days = (_today_et() - date.fromisoformat(_rt_trade_date)).days
                     except (ValueError, TypeError):
