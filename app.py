@@ -21064,8 +21064,8 @@ elif page == "🥧 Portfolio Overview":
         # silently applying zero exclusions (2026-08-04 audit finding).
         if _risk_advisor_recs_raw is None:
             st.caption(
-                "⚠️ Risk Advisor cross-check unavailable this session — ADD "
-                "suggestions below aren't verified against active trim calls."
+                "⚠️ Risk Advisor cross-check unavailable this session — "
+                "Underweight rows below aren't verified against active trim calls."
             )
         _rb_risk_trim_set: set = set()
         for _rrec in (_risk_advisor_recs or []):
@@ -21095,19 +21095,34 @@ elif page == "🥧 Portfolio Overview":
         )
         if not _rb_reduce_verified:
             st.caption(
-                "⚠️ Reduce/Exit cross-check unavailable this session — ADD "
-                "suggestions below aren't verified against active Reduce/Exit calls."
+                "⚠️ Reduce/Exit cross-check unavailable this session — "
+                "Underweight rows below aren't verified against active Reduce/Exit calls."
             )
         _rb_reduce_set = (
             set((st.session_state.get("_reduce_calls") or {}).keys())
             if _rb_reduce_verified else set()
         )
 
+        # S-D C5 — a held name's add is Grow Today's call (same verdict
+        # 📈 Analysis reads).
+        _rb_memo  = _get_or_offline(st.session_state, "_home_synth_cache")
+        _rb_brief = _get_or_offline(_get_or_offline(_rb_memo, "bundle"), "_daily_brief")
+        _rb_grow  = (_rb_brief.get("grow_today")
+                     if isinstance(_rb_brief, dict) and not is_offline_brief(_rb_brief) else None)
+        _rb_add_verdicts = {}
+        for _rb_tk in _drift_df["Ticker"] if not _drift_df.empty else []:
+            _rb_tku = str(_rb_tk).strip().upper()
+            _rb_add_verdicts[_rb_tku] = _sizing_path.held_add_verdict(
+                _rb_tku, _rb_grow, brief_date=_get_or_offline(_rb_memo, "date"),
+                today=_today_et(), brief_epoch=_get_or_offline(_rb_memo, "epoch"),
+                epoch=_coord_epoch())
+
         _rb_plan  = build_rebalance_plan(
             _drift_df, total_val,
             news_flags=_rb_news_flags,
             risk_trim_set=_rb_risk_trim_set,
             reduce_call_set=_rb_reduce_set,
+            add_verdicts=_rb_add_verdicts,
         )
 
         # ── Gate Suppression Ledger capture: G-02 (roadmap B2, 2026-09-13) ──
@@ -21134,15 +21149,20 @@ elif page == "🥧 Portfolio Overview":
         # KPI summary
         _rb_k1, _rb_k2, _rb_k3, _rb_k4 = st.columns(4)
         _n_trim  = len(_rb_plan["trims"])
-        _n_add   = len(_rb_plan["adds"])
+        _n_add   = (len(_rb_plan["adds"]) + _rb_plan["grow_paused_adds_count"]
+                    + _rb_plan["reduce_blocked_adds_count"]
+                    + _rb_plan["risk_blocked_adds_count"])
         _n_ok    = len(_rb_plan["ok"]) + sum(1 for _, r in _drift_df.iterrows() if r["Status"] == "DRIFTING")
         _rb_k1.metric("Trim needed",    _n_trim,
                       delta="Action required" if _n_trim else None,
                       delta_color="inverse" if _n_trim else "off")
-        _rb_k2.metric("Add needed",     _n_add)
+        _rb_k2.metric("Underweight",    _n_add,
+                      help="Holdings below target weight by more than the tolerance. "
+                           "Drift only: Grow Today decides adds.")
         _rb_k3.metric("In tolerance",   _n_ok)
-        _rb_k4.metric("Portfolio moved", f"{_rb_plan['rebalance_pct']:.1f}%",
-                      help="% of portfolio value touched if all actions executed")
+        _rb_k4.metric("Trims would move", f"{_rb_plan['trim_pct']:.1f}%",
+                      help="% of portfolio value sold if every trim above is executed. "
+                           "Underweight drift isn't included: adds are Grow Today's call.")
 
         # Drift bar chart
         if not _drift_df.empty:
@@ -21193,7 +21213,7 @@ elif page == "🥧 Portfolio Overview":
             st.caption(
                 "🔴 Red = overweight >5pp (trim)  ·  "
                 "🟡 Amber = overweight 2–5pp (watch)  ·  "
-                "🔵 Blue = underweight >2pp (consider adding)  ·  "
+                "🔵 Blue = underweight >2pp (drift; adds are Grow Today's call)  ·  "
                 "⬛ Gray = within ±2pp tolerance"
             )
 
@@ -21287,15 +21307,39 @@ elif page == "🥧 Portfolio Overview":
                 unsafe_allow_html=True,
             )
 
+        # S-D C5: Grow Today paused adds to these names today, so the
+        # Rebalancer doesn't suggest adding either (its own gate rows are
+        # already logged by Grow Today).
+        # One st.warning (plain markdown, no raw HTML): separate st.markdown
+        # calls would render as disconnected boxes. `$` escaped so a reason
+        # carrying dollar figures isn't read as LaTeX.
+        _rb_grow_paused = _rb_plan["grow_paused_adds"]
+        if _rb_grow_paused:
+            _rbg_lines = [
+                f"- **{_rbg['ticker']}** (currently {_rbg.get('current_pct', 0):.1f}% → "
+                f"target {_rbg.get('target_pct', 0):.1f}%, drift {_rbg.get('drift_pp', 0):+.1f}pp) — "
+                + str(_rbg.get("reason") or "").replace("$", "\\$")
+                for _rbg in _rb_grow_paused[:5]
+            ]
+            if len(_rb_grow_paused) > 5:
+                _rbg_lines.append(f"- …and {len(_rb_grow_paused) - 5} more")
+            st.warning(
+                "**⏸ Not adding — Grow Today paused these today**\n\n"
+                + "\n".join(_rbg_lines)
+                + "\n\n*Grow Today's add checks (concentration, correlation cluster, pair, "
+                "sector, cooldown, cards) paused adding to these names today, so the "
+                "Rebalancer doesn't suggest adding either. See 🏠 Home → Grow Today.*"
+            )
+
         # Add recommendations
         if _rb_plan["adds"]:
             # Header summary — how many ADDs are competing with active news flags?
             _n_news_blocked = _rb_plan.get("news_blocked_adds", 0)
-            _header = "#### ➕ Add Actions (Underweight)"
+            _header = "#### 🔵 Underweight (drift; Grow Today decides adds)"
             if _n_news_blocked:
                 _header += (
                     f"  ·  <span style='color:#fbbf24;font-size:0.65em;font-weight:600'>"
-                    f"⚠ {_n_news_blocked} flagged by the news check — review before executing</span>"
+                    f"⚠ {_n_news_blocked} with an active news flag</span>"
                 )
                 st.markdown(_header, unsafe_allow_html=True)
             else:
@@ -21307,10 +21351,12 @@ elif page == "🥧 Portfolio Overview":
                 # Title icon override — surface news flag in the collapsed header
                 if _nw:
                     _ad_icon = "⛔" if _nw.get("level") == "critical" else "⚠️"
+                elif _ad.get("grow_call") == "add":
+                    _ad_icon = "➕"
 
                 with st.expander(
-                    f"{_ad_icon} **{_ad['ticker']}** — add {_ad['drift_pp']:+.1f}pp  "
-                    f"| buy ~{_ad['shares_delta']:,} shares ≈ ${_ad['drift_val']:,.0f}"
+                    f"{_ad_icon} **{_ad['ticker']}** — {_ad['drift_pp']:+.1f}pp vs target  "
+                    f"| ≈${_ad['drift_val']:,.0f} drift"
                     + ("  ·  ACTIVE NEWS FLAG" if _nw else ""),
                     expanded=_ad_exp,
                 ):
@@ -21318,7 +21364,7 @@ elif page == "🥧 Portfolio Overview":
                     _ad_m[0].metric("Current Weight",  f"{_ad['current_pct']:.1f}%")
                     _ad_m[1].metric("Target Weight",   f"{_ad['target_pct']:.1f}%")
                     _ad_m[2].metric("Drift",           f"{_ad['drift_pp']:+.1f}pp")
-                    _ad_m[3].metric("$ to Add",        f"${_ad['drift_val']:,.0f}")
+                    _ad_m[3].metric("$ Below Target",  f"${_ad['drift_val']:,.0f}")
 
                     # News Intelligence cross-flag — render above rationale so the
                     # user sees the conflict before reading the buy thesis.
@@ -21328,16 +21374,16 @@ elif page == "🥧 Portfolio Overview":
                         _nw_brd = "#ef4444" if _nw_critical else "#f59e0b"
                         _nw_txt = "#fca5a5" if _nw_critical else "#fcd34d"
                         _nw_lbl = (
-                            "🚨 News Conflict — Defer Add"
+                            "🚨 Critical News Flag"
                             if _nw_critical else
-                            "📰 News Caution"
+                            "📰 News Flag"
                         )
                         st.markdown(
-                            f"<div style='padding:10px 14px;background:{_nw_bg};"
-                            f"border-radius:6px;border-left:4px solid {_nw_brd};margin:8px 0'>"
-                            f"<span style='font-size:0.72em;color:{_nw_brd};font-weight:700;"
-                            f"letter-spacing:0.09em;text-transform:uppercase'>{_nw_lbl}</span><br>"
-                            f"<span style='color:{_nw_txt};font-size:0.88em'>{_nw['message']}</span>"
+                            f"<div style='padding:10px 14px;background:{_safe_html(_nw_bg)};"
+                            f"border-radius:6px;border-left:4px solid {_safe_html(_nw_brd)};margin:8px 0'>"
+                            f"<span style='font-size:0.72em;color:{_safe_html(_nw_brd)};font-weight:700;"
+                            f"letter-spacing:0.09em;text-transform:uppercase'>{_safe_html(_nw_lbl)}</span><br>"
+                            f"<span style='color:{_safe_html(_nw_txt)};font-size:0.88em'>{_safe_html(_nw['message'])}</span>"
                             f"</div>",
                             unsafe_allow_html=True,
                         )
@@ -21353,8 +21399,8 @@ elif page == "🥧 Portfolio Overview":
                         f"<div style='padding:10px 14px;background:#0d2137;"
                         f"border-radius:6px;border-left:4px solid #4a9eff;margin:6px 0'>"
                         f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
-                        f"letter-spacing:0.09em;text-transform:uppercase'>Recommended Action</span><br>"
-                        f"<span style='color:#eee;font-size:0.9em'>{_ad['action_detail']}</span>"
+                        f"letter-spacing:0.09em;text-transform:uppercase'>Drift · today's add call</span><br>"
+                        f"<span style='color:#eee;font-size:0.9em'>{_safe_html(_ad['action_detail'])}</span>"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
@@ -21366,7 +21412,8 @@ elif page == "🥧 Portfolio Overview":
             with st.expander(f"✅ {len(_rb_plan['ok'])} position(s) within tolerance", expanded=False):
                 st.caption(", ".join(_rb_plan["ok"]) + " — no action needed.")
 
-        if not _rb_plan["trims"] and not _rb_plan["adds"]:
+        if not (_rb_plan["trims"] or _rb_plan["adds"] or _rb_plan["grow_paused_adds"]
+                or _rb_plan["reduce_blocked_adds"] or _rb_plan["risk_blocked_adds"]):
             st.success(
                 "✅ All positions are within tolerance of their target weights. "
                 "No rebalancing needed."

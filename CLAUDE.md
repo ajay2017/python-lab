@@ -215,8 +215,8 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
    - Days the crons ran on the deleted keys lost their forward-only captures (EOD leverage/risk rows, rec_events, score history, ledger cron rows); 10-21 is likely gone.
 2. **S-D, one sizing path** (`docs/plans/one-sizing-path.md`, F-310).
    - C1 + C2 shipped 2026-10-20; C3 (risk footer) and C4 (quick wins: Watchlist non-ready rows, Catalyst / Econ windows, FSLR caption, (0b)) shipped 2026-10-22, screenshots pending.
-   - **NEXT: C5**, then C6–C9:
-     - Rebalancer ADD, including G-25/G-26 coverage (D5)
+   - C5 (Rebalancer underweight rows: no share counts, Grow Today's verdict per name, paused names in their own block; closes D5's Rebalancer half) shipped 2026-10-22, screenshots pending.
+   - **NEXT: C6**, then C7–C9:
      - Diversification $
      - the D5 dry run, the AST ratchet and the docs
 3. **App trust item 4:** antipattern rules for a literal `**` in raw HTML and a bare `$` next to numbers (~1 h). Slot it between S-D chunks.
@@ -256,6 +256,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 - **S-D C4:** 📋 Watchlist NEAR_ENTRY "No size yet" / held caption; 📅 Economic Calendar 🎯 Add detail and the in-window HOLD sentence (its rationale sits in raw HTML and starts with `**TICKER**`, pre-existing: check for literal `**`); 🔔 Catalyst HOLD / HOLD_OR_ADD text; 📈 Analysis not-held Sell caption. (FSLR "Selling goes against today's Buy call" + "Add button hidden" verified live 2026-10-22.)
 - **S-D C3 risk footer** (🏠 Home → Grow Today, under the cards): "If every stop hits, the N sized setups above lose ~$X", unsized names with reasons, `$` not LaTeX.
 - **F-311 C3 labels:** the Watchlist R:R note, Scanner Range caption. (Trade Plan "🎯 Base target: Yahoo Finance mean, 30 analysts" verified live 2026-10-22.)
+- **S-D C5 Rebalancer** (🥧 Portfolio Overview → ⚖️ Rebalancing Advisor): KPIs "Underweight" / "Trims would move"; the "⏸ Not adding — Grow Today paused these today" warning; an underweight card's "Drift · today's add call" box (one `$`, no share count); a news-flagged card ("📰 News Flag", no add advice). Known, pre-existing: `**TICKER**` in the rationale prints literally in raw HTML; a headline with two `$` could render as LaTeX.
 - **S-D C3 footer needs a day with sized Grow Today picks:** 10-22 was risk-off, so no setups and correctly no footer. The Analysis "No add call today" box in its risk-off state was verified live 2026-10-22.
 - **Recent Grow Today / Watchlist / Analysis surfaces:**
   - the F-305 overflow and flat-day boxes

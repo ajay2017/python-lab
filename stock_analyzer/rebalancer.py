@@ -101,10 +101,12 @@ def build_rebalance_plan(
     news_flags: dict | None = None,
     risk_trim_set: set | None = None,
     reduce_call_set: set | None = None,
+    add_verdicts: dict | None = None,
 ) -> dict:
     """
-    Generates trim and add action lists with specific share counts,
-    urgency ordering, and Institutional-style rationale.
+    Generates trim actions with specific share counts and underweight (add)
+    rows as drift only (S-D C5: no share counts; Grow Today sizes every buy),
+    with urgency ordering and Institutional-style rationale.
 
     news_flags (optional): {ticker: {"level": "critical"|"warning",
                                      "headline": str, "compound": float}}
@@ -124,17 +126,29 @@ def build_rebalance_plan(
        call is a more specific, time-sensitive signal than the portfolio-level
        beta/Sharpe metric.
 
+    add_verdicts (optional): {UPPERCASE ticker: verdict dict} from
+       sizing_path.held_add_verdict ({"state": "add"|"paused"|"not_called"|
+       "unknown", "reason", "gate_id", "item"}). S-D C5: a held name's add is
+       Grow Today's call, not the Rebalancer's. A "paused" verdict moves the
+       row to grow_paused_adds (checked AFTER reduce_call_set and
+       risk_trim_set). Surviving add rows carry no share count: they show
+       drift plus Grow Today's verdict (grow_call / grow_call_text). None means
+       the cross-check couldn't run: every surviving add row reads "unknown".
+
     Returns dict with:
       trims, adds, ok, total_trim_value, total_add_value, rebalance_pct,
       news_blocked_adds, risk_blocked_adds_count, reduce_blocked_adds,
-      reduce_blocked_adds_count
+      reduce_blocked_adds_count, grow_paused_adds, grow_paused_adds_count,
+      trim_pct (trims only; rebalance_pct still sums trim + add drift)
     """
     if drift_df.empty:
         return {"trims": [], "adds": [], "ok": [], "total_trim_value": 0,
                 "total_add_value": 0, "rebalance_pct": 0,
                 "news_blocked_adds": 0, "risk_blocked_adds_count": 0,
                 "risk_blocked_adds": [],
-                "reduce_blocked_adds": [], "reduce_blocked_adds_count": 0}
+                "reduce_blocked_adds": [], "reduce_blocked_adds_count": 0,
+                "grow_paused_adds": [], "grow_paused_adds_count": 0,
+                "trim_pct": 0.0}
 
     news_flags      = news_flags or {}
     risk_trim_set   = {str(t).upper() for t in (risk_trim_set or set())}
@@ -143,6 +157,7 @@ def build_rebalance_plan(
     trims, adds, ok_list = [], [], []
     risk_blocked_adds_list: list[dict] = []
     reduce_blocked_adds_list: list[dict] = []
+    grow_paused_adds_list: list[dict] = []
 
     for _, row in drift_df.iterrows():
         ticker    = row["Ticker"]
@@ -309,6 +324,49 @@ def build_rebalance_plan(
                 })
                 continue
 
+            # S-D C5: Grow Today owns every buy. If it paused adds to this
+            # name today (G-24/G-25/G-26, cooldown, cards ...), don't suggest
+            # one here. Grow Today logs its own gate rows: no ledger capture.
+            v = None
+            if add_verdicts is not None:
+                v = add_verdicts.get(str(ticker).strip().upper())
+            if isinstance(v, dict) and v.get("state") == "paused":
+                grow_paused_adds_list.append({
+                    "ticker":      ticker,
+                    "current_pct": current,
+                    "target_pct":  target,
+                    "drift_pp":    drift_pp,
+                    "score":       score,
+                    "signal":      signal,
+                    "gate_id":     v.get("gate_id"),
+                    "reason": (v.get("reason")
+                               or "Grow Today paused adds to this name today."),
+                })
+                continue
+
+            _v_state = v.get("state") if isinstance(v, dict) else None
+            grow_call = _v_state if _v_state in ("add", "not_called") else "unknown"
+            if grow_call == "add":
+                grow_call_text = (
+                    f"Grow Today is calling an add on {ticker} today; "
+                    "its size is on 🏠 Home → Grow Today."
+                )
+            elif grow_call == "not_called":
+                grow_call_text = "No add call today: " + (
+                    v.get("reason")
+                    or "Grow Today isn't calling an add on this name today.")
+            else:
+                grow_call_text = (
+                    v.get("reason") if isinstance(v, dict) and v.get("reason")
+                    else "Grow Today's add call for today isn't available — "
+                         "open 🏠 Home to build it.")
+            action_detail = (
+                f"Underweight by ≈${abs(drift_val):,.0f} "
+                f"({current:.1f}% vs a {target:.1f}% target). "
+                "The Rebalancer measures drift; it doesn't size buys. "
+                + grow_call_text
+            )
+
             # Add urgency: high-conviction underweight names first
             urgency = 0
             if score >= COMPOSITE_BUY:
@@ -322,14 +380,8 @@ def build_rebalance_plan(
 
             if score >= COMPOSITE_BUY and ("Buy" in signal):
                 rationale = (
-                    f"**{ticker}** is {abs(drift_pp):.1f}pp underweight vs target — "
-                    f"score {score:.0f}/100 with a {signal} signal. "
-                    "You're underexposed to a high-conviction name."
-                )
-                action_detail = (
-                    f"Buy **{shares_delta:,} shares** (≈${abs(drift_val):,.0f}) to build "
-                    f"from {current:.1f}% → {target:.1f}%. "
-                    "Deploy in 1–2 tranches to average in, not all at once."
+                    f"**{ticker}** is {abs(drift_pp):.1f}pp below target weight. "
+                    f"Score {score:.0f}/100 · {signal}."
                 )
             elif not _score_ok:
                 # Same fundamentals-withhold guard as the TRIM branch above.
@@ -343,28 +395,18 @@ def build_rebalance_plan(
                     "Conviction unmeasured — fundamentals unavailable for this "
                     "holding, so this reflects drift only, not a scored recommendation."
                 )
-                action_detail = (
-                    f"Consider buying **{shares_delta:,} shares** (≈${abs(drift_val):,.0f}) "
-                    f"to move from {current:.1f}% → {target:.1f}%, if you still want the exposure."
-                )
             else:
                 rationale = (
-                    f"**{ticker}** is {abs(drift_pp):.1f}pp underweight. "
-                    f"Score {score:.0f}/100 · {signal}. "
-                    "Position has lagged target — reassess conviction before adding."
-                )
-                action_detail = (
-                    f"Consider buying **{shares_delta:,} shares** (≈${abs(drift_val):,.0f}) "
-                    f"to move from {current:.1f}% → {target:.1f}%. "
-                    "Only add if the fundamental thesis remains intact."
+                    f"**{ticker}** is {abs(drift_pp):.1f}pp below target weight. "
+                    f"Score {score:.0f}/100 · {signal}."
                 )
 
             inst_lens = (
-                "Underweight rebalancing in high-conviction names is one of the highest-return "
-                "uses of portfolio cash. Systematic rebalancing — buying underweight winners and "
-                "trimming overweight laggards — tends to improve long-term returns versus a drift "
-                "portfolio, purely from the discipline of maintaining target allocations. "
-                "Use proceeds from trims to fund adds — keeping total exposure stable."
+                "Drift shows where the book has moved away from its target weights. "
+                "Trims are sized here; adds are not — every buy, including an add to "
+                "something you hold, goes through Grow Today's checks (budget, "
+                "concentration, correlation cluster, pair, sector) so there is one "
+                "sizing path."
             )
 
             # Cross-check against active News Intelligence flags. Adding to a
@@ -377,18 +419,18 @@ def build_rebalance_plan(
                 _headline = str(nf.get("headline", ""))[:140]
                 _compound = _f(nf.get("compound"))
                 if _level == "critical":
-                    # Drop urgency to bottom — rebalancing should not chase
-                    # a position currently absorbing a critical negative catalyst.
+                    # Drop urgency to bottom — the drift list should not rank
+                    # a position absorbing a critical negative catalyst first.
+                    # The message gives no add advice: Grow Today owns adds.
                     urgency = min(urgency, 5)
                     news_warning = {
                         "level":    "critical",
                         "headline": _headline,
                         "compound": _compound,
                         "message": (
-                            "⛔ **Active critical news flag** "
+                            "⛔ Active critical news flag "
                             f"(sentiment {_compound:+.2f}): \"{_headline}\". "
-                            "Defer this add until the impact is assessed — "
-                            "drift-driven sizing must not override an active negative catalyst."
+                            "Any add goes through Grow Today's entry check."
                         ),
                     }
                 else:
@@ -397,10 +439,9 @@ def build_rebalance_plan(
                         "headline": _headline,
                         "compound": _compound,
                         "message": (
-                            "⚠ **Negative news flag** "
+                            "⚠ Negative news flag "
                             f"(sentiment {_compound:+.2f}): \"{_headline}\". "
-                            "Verify the original thesis is still intact before adding. "
-                            "If the negative driver is short-term, a smaller add or a delay is appropriate."
+                            "Grow Today weighs this before calling any add."
                         ),
                     }
 
@@ -413,12 +454,13 @@ def build_rebalance_plan(
                 "target_pct":    target,
                 "drift_pp":      drift_pp,
                 "drift_val":     abs(drift_val),
-                "shares_delta":  shares_delta,
                 "price":         price,
                 "urgency":       urgency,
                 "status":        status,
                 "rationale":     rationale,
                 "action_detail": action_detail,
+                "grow_call":     grow_call,
+                "grow_call_text": grow_call_text,
                 "institutional_lens":       inst_lens,
                 "news_warning":  news_warning,
             })
@@ -443,4 +485,7 @@ def build_rebalance_plan(
         "risk_blocked_adds_count": len(risk_blocked_adds_list),
         "reduce_blocked_adds":       reduce_blocked_adds_list,
         "reduce_blocked_adds_count": len(reduce_blocked_adds_list),
+        "grow_paused_adds":          grow_paused_adds_list,
+        "grow_paused_adds_count":    len(grow_paused_adds_list),
+        "trim_pct": round(total_trim / total_val * 100, 1) if total_val > 0 else 0.0,
     }

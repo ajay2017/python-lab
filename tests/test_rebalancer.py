@@ -144,6 +144,8 @@ def test_build_rebalance_plan_empty_drift_df():
         "news_blocked_adds": 0, "risk_blocked_adds_count": 0,
         "risk_blocked_adds": [],
         "reduce_blocked_adds": [], "reduce_blocked_adds_count": 0,
+        "grow_paused_adds": [], "grow_paused_adds_count": 0,
+        "trim_pct": 0.0,
     }
 
 
@@ -249,14 +251,16 @@ def test_build_rebalance_plan_add_high_conviction_underweight():
     add = result["adds"][0]
     # score>=BUY(+30) + Buy in signal(+20) + drift>WATCH(+30) = 80
     assert add["urgency"] == 80
-    assert "high-conviction name" in add["rationale"]
+    assert "below target weight" in add["rationale"]
+    assert "Buy" in add["rationale"]
 
 
 def test_build_rebalance_plan_add_low_conviction_rationale():
     df = pd.DataFrame([_drift_row("AAPL", "ADD", -8.0, -8000.0, signal="Hold", score=50.0)])
     result = reb.build_rebalance_plan(df, total_val=100_000.0)
     add = result["adds"][0]
-    assert "reassess conviction before adding" in add["rationale"]
+    assert "below target weight" in add["rationale"]
+    assert "before adding" not in add["rationale"]
     assert add["urgency"] == 30  # only drift>WATCH tier
 
 
@@ -374,6 +378,216 @@ def test_build_rebalance_plan_totals_and_rebalance_pct():
     assert result["total_trim_value"] == 8000.0
     assert result["total_add_value"] == 6000.0
     assert result["rebalance_pct"] == 14.0
+
+
+# ── S-D C5: Grow Today owns adds ─────────────────────────────────────────────
+
+def _add_df(*tickers):
+    return pd.DataFrame([
+        _drift_row(t, "ADD", -8.0, -8000.0, signal="Buy", score=70.0,
+                   current=2.0, target=10.0)
+        for t in tickers
+    ])
+
+
+def test_grow_paused_verdict_moves_add_to_grow_paused_bucket():
+    df = pd.DataFrame(
+        [_drift_row("AAPL", "ADD", -8.0, -8000.0, signal="Buy", score=70.0),
+         _drift_row("MSFT", "ADD", -6.0, -6000.0)])
+    verdicts = {"AAPL": {"state": "paused", "reason": "cluster pause",
+                         "gate_id": "G-25", "item": None}}
+    result = reb.build_rebalance_plan(df, total_val=100_000.0, add_verdicts=verdicts)
+    assert [a["ticker"] for a in result["adds"]] == ["MSFT"]
+    assert result["grow_paused_adds_count"] == 1
+    p = result["grow_paused_adds"][0]
+    assert p["ticker"] == "AAPL"
+    assert p["gate_id"] == "G-25"
+    assert p["reason"] == "cluster pause"
+    assert p["drift_pp"] == -8.0
+    # paused row excluded from total_add_value (only MSFT's 6000)
+    assert result["total_add_value"] == 6000.0
+
+
+def test_grow_paused_default_reason_when_missing():
+    verdicts = {"AAPL": {"state": "paused", "gate_id": None}}
+    result = reb.build_rebalance_plan(_add_df("AAPL"), total_val=100_000.0,
+                                      add_verdicts=verdicts)
+    assert result["grow_paused_adds"][0]["reason"] == \
+        "Grow Today paused adds to this name today."
+    assert result["grow_paused_adds"][0]["gate_id"] is None
+
+
+def test_grow_paused_lookup_uppercases_ticker():
+    verdicts = {"AAPL": {"state": "paused", "reason": "r", "gate_id": "G-24"}}
+    result = reb.build_rebalance_plan(_add_df("aapl"), total_val=100_000.0,
+                                      add_verdicts=verdicts)
+    assert result["adds"] == []
+    assert result["grow_paused_adds_count"] == 1
+
+
+def test_reduce_call_wins_over_grow_paused():
+    verdicts = {"AAPL": {"state": "paused", "reason": "r", "gate_id": "G-24"}}
+    result = reb.build_rebalance_plan(_add_df("AAPL"), total_val=100_000.0,
+                                      reduce_call_set={"AAPL"}, add_verdicts=verdicts)
+    assert result["reduce_blocked_adds_count"] == 1
+    assert result["grow_paused_adds"] == []
+    assert result["grow_paused_adds_count"] == 0
+    assert result["adds"] == []
+
+
+def test_risk_trim_wins_over_grow_paused():
+    verdicts = {"AAPL": {"state": "paused", "reason": "r", "gate_id": "G-24"}}
+    result = reb.build_rebalance_plan(_add_df("AAPL"), total_val=100_000.0,
+                                      risk_trim_set={"AAPL"}, add_verdicts=verdicts)
+    assert result["risk_blocked_adds_count"] == 1
+    assert result["grow_paused_adds"] == []
+    assert result["adds"] == []
+
+
+def test_grow_call_add_state():
+    verdicts = {"AAPL": {"state": "add", "reason": "", "gate_id": None}}
+    add = reb.build_rebalance_plan(_add_df("AAPL"), total_val=100_000.0,
+                                   add_verdicts=verdicts)["adds"][0]
+    assert add["grow_call"] == "add"
+    assert "Grow Today is calling an add on AAPL today" in add["grow_call_text"]
+    assert add["grow_call_text"] in add["action_detail"]
+
+
+def test_grow_call_not_called_state():
+    verdicts = {"AAPL": {"state": "not_called", "reason": "score below the buy bar",
+                         "gate_id": None}}
+    add = reb.build_rebalance_plan(_add_df("AAPL"), total_val=100_000.0,
+                                   add_verdicts=verdicts)["adds"][0]
+    assert add["grow_call"] == "not_called"
+    assert add["grow_call_text"].startswith("No add call today:")
+    assert "score below the buy bar" in add["grow_call_text"]
+
+
+@pytest.mark.parametrize("verdicts", [
+    None, {}, {"MSFT": {"state": "add"}}, {"AAPL": "garbage"}, {"AAPL": None},
+    {"AAPL": {"state": "unknown", "reason": ""}},
+])
+def test_grow_call_unknown_when_verdict_missing_or_garbage(verdicts):
+    add = reb.build_rebalance_plan(_add_df("AAPL"), total_val=100_000.0,
+                                   add_verdicts=verdicts)["adds"][0]
+    assert add["grow_call"] == "unknown"
+    assert "open 🏠 Home to build it" in add["grow_call_text"]
+
+
+def test_grow_call_unknown_uses_verdict_reason_when_present():
+    verdicts = {"AAPL": {"state": "unknown", "reason": "brief is stale"}}
+    add = reb.build_rebalance_plan(_add_df("AAPL"), total_val=100_000.0,
+                                   add_verdicts=verdicts)["adds"][0]
+    assert add["grow_call"] == "unknown"
+    assert add["grow_call_text"] == "brief is stale"
+
+
+@pytest.mark.parametrize("kwargs", [
+    {}, {"add_verdicts": {"AAPL": {"state": "add"}}},
+])
+def test_add_rows_carry_no_share_count_or_buy_text(kwargs):
+    df = pd.DataFrame([
+        _drift_row("AAPL", "ADD", -8.0, -8000.0, signal="Buy", score=70.0),
+        _drift_row("MSFT", "ADD", -8.0, -8000.0, signal="Hold", score=50.0),
+        {**_drift_row("XOM", "ADD", -8.0, -8000.0, score=40.0), "Score Available": False},
+    ])
+    result = reb.build_rebalance_plan(df, total_val=100_000.0, **kwargs)
+    assert len(result["adds"]) == 3
+    for add in result["adds"]:
+        assert "shares_delta" not in add
+        d = add["action_detail"]
+        assert "shares" not in d
+        assert "Buy " not in d
+        assert "**" not in d
+        assert d.count("$") == 1
+        assert "tranche" not in d
+
+
+@pytest.mark.parametrize("level", ["critical", "warning"])
+def test_add_news_message_gives_no_add_advice_or_bold(level):
+    news = {"AAPL": {"level": level, "headline": "Probe", "compound": -0.5}}
+    add = reb.build_rebalance_plan(_add_df("AAPL"), total_val=100_000.0,
+                                   news_flags=news)["adds"][0]
+    msg = add["news_warning"]["message"]
+    assert "smaller add" not in msg
+    assert "Defer this add" not in msg
+    assert "**" not in msg
+    assert "Grow Today" in msg
+
+
+def test_add_rationales_have_no_buy_instruction():
+    df = pd.DataFrame([
+        _drift_row("AAPL", "ADD", -8.0, -8000.0, signal="Buy", score=70.0),
+        _drift_row("MSFT", "ADD", -8.0, -8000.0, signal="Hold", score=50.0),
+    ])
+    for add in reb.build_rebalance_plan(df, total_val=100_000.0)["adds"]:
+        assert "underexposed" not in add["rationale"]
+        assert "before adding" not in add["rationale"]
+        assert "below target weight" in add["rationale"]
+
+
+def test_trim_pct_counts_trims_only():
+    df = pd.DataFrame([
+        _drift_row("AAPL", "TRIM", 8.0, 8000.0),
+        _drift_row("MSFT", "ADD", -6.0, -6000.0),
+    ])
+    result = reb.build_rebalance_plan(df, total_val=100_000.0)
+    assert result["trim_pct"] == 8.0
+    assert result["rebalance_pct"] == 14.0
+    assert reb.build_rebalance_plan(df, total_val=0.0)["trim_pct"] == 0.0
+    assert reb.build_rebalance_plan(pd.DataFrame(), total_val=1.0)["trim_pct"] == 0.0
+
+
+def test_verdict_lookup_strips_whitespace_and_case():
+    verdicts = {"AAPL": {"state": "paused", "reason": "r", "gate_id": "G-24"}}
+    result = reb.build_rebalance_plan(_add_df(" aapl "), total_val=100_000.0,
+                                      add_verdicts=verdicts)
+    assert result["adds"] == []
+    assert result["grow_paused_adds_count"] == 1
+
+
+def test_real_held_add_verdict_flows_through_plan():
+    from stock_analyzer import sizing_path
+    d = "2026-10-22"
+    grow = {
+        "tone": "bull",
+        "cluster_blocked_adds": [{"ticker": "X", "reason": "new cluster", "gate_id": "G-25"}],
+        "add_positions": [{"ticker": "Y"}],
+    }
+    verdicts = {
+        t: sizing_path.held_add_verdict(t, grow, brief_date=d, today=d,
+                                        brief_epoch=1, epoch=1)
+        for t in ("X", "Y")
+    }
+    result = reb.build_rebalance_plan(_add_df("X", "Y"), total_val=100_000.0,
+                                      add_verdicts=verdicts)
+    assert [p["ticker"] for p in result["grow_paused_adds"]] == ["X"]
+    assert result["grow_paused_adds"][0]["gate_id"] == "G-25"
+    assert [a["ticker"] for a in result["adds"]] == ["Y"]
+    assert result["adds"][0]["grow_call"] == "add"
+
+
+def test_app_passes_add_verdicts_to_build_rebalance_plan():
+    """No test imports app.py: pin the wiring on the shared cached parse."""
+    import ast
+    from pathlib import Path
+    from tests._ast_cache import parse_file_cached
+    tree = parse_file_cached(Path(__file__).resolve().parent.parent / "app.py")
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "build_rebalance_plan"]
+    assert calls
+    assert all(any(k.arg == "add_verdicts" for k in c.keywords) for c in calls)
+
+
+def test_trims_unchanged_by_add_verdicts():
+    df = pd.DataFrame([_drift_row("AAPL", "TRIM", 8.0, 8000.0)])
+    result = reb.build_rebalance_plan(
+        df, total_val=100_000.0,
+        add_verdicts={"AAPL": {"state": "paused", "reason": "r"}})
+    assert result["trims"][0]["shares_delta"] >= 1
+    assert result["trims"][0]["shares_delta"] == 80
+    assert result["grow_paused_adds"] == []
 
 
 def test_build_rebalance_plan_zero_total_val_rebalance_pct_is_zero():
