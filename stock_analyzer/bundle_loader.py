@@ -354,7 +354,9 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     rec = recommendation(total)
     stop, atr_val = atr_stop_loss(df, multiplier=ATR_STOP_MULT)
     entry_lo, entry_hi = entry_zone(price, atr_val) if price else (None, None)
-    targets = compute_price_targets(df, financials, price) if price else None
+    # Built from the CHOSEN target (item C, D-6), never the raw provider target,
+    # because targets["base"] feeds the Watchlist ENTER_NOW R:R gate.
+    targets = compute_price_targets(df, financials, price, _pt_choice["target"]) if price else None
     sr = support_resistance(df, current_price=price)
     try:
         risk_metrics = compute_all_risk(df, spy_df, rfr)

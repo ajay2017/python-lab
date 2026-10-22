@@ -77,9 +77,17 @@ def entry_zone(current_price: float, atr_val: float) -> tuple[float, float]:
 
 
 def compute_price_targets(
-    df: pd.DataFrame, financials: dict, current_price: float
+    df: pd.DataFrame, financials: dict, current_price: float,
+    analyst_target: float | None,
 ) -> dict:
-    analyst_target = financials.get("analyst_target")
+    """Base/bull/bear price targets.
+
+    ``analyst_target`` is the CHOSEN target from
+    ``valuation_target.choose_pt_target`` (always finite > 0 or None); never pass
+    ``financials["analyst_target"]`` directly -- a target the chooser rejected must
+    not set the Base/Bull targets, which feed the Watchlist ENTER_NOW R:R gate
+    (RR_ENTRY_MIN). ``financials`` is read for 52-week high/low only.
+    """
     _w52h = financials.get("52_week_high")
     week52_high = _w52h if _w52h is not None else current_price * TARGETS_52W_HIGH_FALLBACK_MULT
     _w52l = financials.get("52_week_low")

@@ -515,10 +515,26 @@ def test_research_ticker_key_context_downgrades_net_neg2_clause():
 
 def test_research_ticker_key_context_upside_pct_clause():
     data = _base_data([100.0, 100.0, 100.0])
-    data["financials"] = {"analyst_target": 120.0, "short_pct_float": None}
+    data["financials"] = {"analyst_target": None, "short_pct_float": None}
+    data["val_pt_choice"] = {"target": 120.0, "source": "provider"}
+    data["upside_tag"] = "Yahoo Finance mean, 31 analysts"
     result = qr.research_ticker("XYZ", data)
     assert "target" in result["bullets"][3]
+    assert "Yahoo Finance mean, 31 analysts" in result["bullets"][3]
     assert result["upside_pct"] == pytest.approx(20.0)
+
+
+def test_research_ticker_ignores_raw_financials_analyst_target():
+    # Item C / D-6: a target the chooser did not pick must not reappear here.
+    data = _base_data([100.0, 100.0, 100.0])
+    data["financials"] = {"analyst_target": 120.0, "short_pct_float": None}
+    result = qr.research_ticker("XYZ", data)
+    assert result["upside_pct"] is None
+    assert result["analyst_target"] is None
+    assert "Analyst target" not in result["bullets"][3]
+    data["val_pt_choice"] = {"target": None}
+    result = qr.research_ticker("XYZ", data)
+    assert result["upside_pct"] is None and result["analyst_target"] is None
 
 
 def test_research_ticker_key_context_short_interest_clause_above_15():

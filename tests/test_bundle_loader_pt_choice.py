@@ -112,6 +112,34 @@ def test_implausible_provider_target_does_not_sneak_back_in(monkeypatch):
     assert "224" not in out["val_signals"]["PT Upside"] and "600" not in out["val_signals"]["PT Upside"]
 
 
+def test_rejected_provider_target_does_not_set_trade_plan_targets(monkeypatch):
+    # Item C / D-6: the Trade Plan targets (which feed the ENTER_NOW R:R gate)
+    # are built from the CHOSEN target, never the raw provider target.
+    out = _load(monkeypatch, pd.DataFrame(),
+                {"sector": "", "targetMeanPrice": 600.0, "numberOfAnalystOpinions": 20})
+    t = out["targets"]
+    assert t["analyst_target"] is None
+    assert t["base"] != 600.0
+    assert t["above_consensus"] is False
+
+
+def test_saved_fallback_target_sets_trade_plan_base(monkeypatch):
+    out = _load(monkeypatch, _cov(("A", 140.0), ("B", 150.0), ("C", 160.0)),
+                {"sector": "", "targetMeanPrice": 224.81, "numberOfAnalystOpinions": 1})
+    t = out["targets"]
+    assert out["current_price"] < 150.0          # fixture's last close ~117.7
+    assert t["analyst_target"] == 150.0
+    assert t["base"] == 150.0                    # the value the R:R gate reads
+    assert t["above_consensus"] is False
+
+
+def test_accepted_provider_target_flows_to_trade_plan_targets(monkeypatch):
+    out = _load(monkeypatch, pd.DataFrame(),
+                {"sector": "", "targetMeanPrice": 224.81, "numberOfAnalystOpinions": 31})
+    assert out["targets"]["analyst_target"] == 224.81
+    assert out["targets"]["base"] == 224.81      # the value the R:R gate reads
+
+
 def test_bundle_loader_passes_constants_and_calls_chooser_once():
     src = (_ROOT / "stock_analyzer" / "bundle_loader.py").read_text(encoding="utf-8")
     tree = ast.parse(src)

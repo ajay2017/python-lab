@@ -245,7 +245,12 @@ def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) 
     fundamentals_available = data.get("fundamentals_available", True) and data.get("val_available", True)
     _basis = verdict_basis(data)
 
-    target     = fins.get("analyst_target")
+    # Item C / D-6: the target the Valuation pillar chose (provider first, saved
+    # research only as fallback), never the raw provider target -- a rejected
+    # target must not reappear here. No chooser result -> no target shown.
+    _pt_choice = data.get("val_pt_choice")
+    target     = _pt_choice.get("target") if isinstance(_pt_choice, dict) else None
+    _pt_tag    = data.get("upside_tag")
     upside_pct = float((target - price) / price * 100) if target and price else None
 
     # Bullet 1: overall signal + composite score — withheld when fundamentals
@@ -334,7 +339,7 @@ def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) 
         )
     if upside_pct is not None:
         b4_parts.append(
-            f"🎯 Analyst target ${target:.2f} = {upside_pct:+.0f}% from current price"
+            f"🎯 Analyst target ${target:.2f}" + (f" ({_pt_tag})" if _pt_tag else "") + f" = {upside_pct:+.0f}% from current price"
         )
     short_pct = fins.get("short_pct_float") or 0
     if short_pct > 15:

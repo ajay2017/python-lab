@@ -14,6 +14,7 @@ from stock_analyzer.constants import (
     TARGETS_ENTRY_ZONE_LOW_ATR_FRAC,
     TARGETS_ENTRY_ZONE_HIGH_ATR_FRAC,
     TARGETS_MODEST_UPSIDE_MULT,
+    TARGETS_BULL_ANALYST_MULT,
     TARGETS_BEAR_ATR_MULT,
     TARGETS_BEAR_SUPPORT_CUSHION_MULT,
     TARGETS_BEAR_52W_LOW_CUSHION_MULT,
@@ -147,7 +148,7 @@ def test_support_resistance_monotonic_series_has_no_locals():
 def test_compute_price_targets_analyst_target_above_current_sets_base():
     df = _flat_df(30, 100.0)
     financials = {"analyst_target": 150.0}
-    result = targets.compute_price_targets(df, financials, current_price=100.0)
+    result = targets.compute_price_targets(df, financials, current_price=100.0, analyst_target=150.0)
     assert result["base"] == 150.0
     assert result["above_consensus"] is False  # 150 is NOT < 100
 
@@ -164,7 +165,7 @@ def test_compute_price_targets_analyst_target_below_current_falls_back_to_smalle
     df = _mk_ohlc(closes, highs=high, lows=low)
 
     financials = {"analyst_target": 90.0}  # <= current -> triggers fallback branch
-    result = targets.compute_price_targets(df, financials, current_price=100.0)
+    result = targets.compute_price_targets(df, financials, current_price=100.0, analyst_target=90.0)
     assert result["base"] == 105.0
 
 
@@ -178,7 +179,7 @@ def test_compute_price_targets_bull_empty_generator_guard_falls_back_to_modest_u
     financials = {"analyst_target": 150.0, "52_week_high": 200.0, "52_week_low": 50.0}
     current_price = float("nan")
 
-    result = targets.compute_price_targets(df, financials, current_price)  # must not raise
+    result = targets.compute_price_targets(df, financials, current_price, 150.0)  # must not raise
 
     expected_default = current_price * TARGETS_MODEST_UPSIDE_MULT
     assert math.isnan(result["bull"])
@@ -188,16 +189,28 @@ def test_compute_price_targets_bull_empty_generator_guard_falls_back_to_modest_u
 def test_compute_price_targets_above_consensus_true_when_target_below_current():
     df = _flat_df(30, 100.0)
     financials = {"analyst_target": 80.0}
-    result = targets.compute_price_targets(df, financials, current_price=100.0)
+    result = targets.compute_price_targets(df, financials, current_price=100.0, analyst_target=80.0)
     assert result["above_consensus"] is True
 
 
 def test_compute_price_targets_pct_rounding():
     df = _flat_df(30, 100.0)
     financials = {"analyst_target": 133.33}
-    result = targets.compute_price_targets(df, financials, current_price=100.0)
+    result = targets.compute_price_targets(df, financials, current_price=100.0, analyst_target=133.33)
     # base = 133.33 -> pct = (133.33-100)/100*100 = 33.33 -> rounds to 33.3
     assert result["base_pct"] == 33.3
+
+
+def test_compute_price_targets_ignores_raw_financials_analyst_target():
+    """Item C / D-6: only the CHOSEN target (the parameter) may set base/bull;
+    a raw financials["analyst_target"] the chooser rejected must be ignored."""
+    df = _flat_df(30, 100.0)
+    financials = {"analyst_target": 150.0, "52_week_high": 120.0, "52_week_low": 80.0}
+    result = targets.compute_price_targets(df, financials, current_price=100.0, analyst_target=None)
+    assert result["base"] != 150.0
+    assert result["analyst_target"] is None
+    assert result["above_consensus"] is False
+    assert result["bull"] != round(150.0 * TARGETS_BULL_ANALYST_MULT, 2)
 
 
 # ─── compute_price_targets — bear floor: each of the 3 candidates wins ──────
@@ -218,7 +231,7 @@ def test_compute_price_targets_bear_floor_support_cushion_wins():
     current_price = 100.0
     financials = {"52_week_low": 50.0}  # deep -> small candidate
 
-    result = targets.compute_price_targets(df, financials, current_price)
+    result = targets.compute_price_targets(df, financials, current_price, None)
 
     nearest_support = targets.support_resistance(df, current_price=current_price)["nearest_support"]
     atr_val = targets._atr_val(df)
@@ -239,7 +252,7 @@ def test_compute_price_targets_bear_floor_52w_low_cushion_wins():
     current_price = 100.0
     financials = {"52_week_low": 95.0}
 
-    result = targets.compute_price_targets(df, financials, current_price)
+    result = targets.compute_price_targets(df, financials, current_price, None)
 
     nearest_support = targets.support_resistance(df, current_price=current_price)["nearest_support"]
     atr_val = targets._atr_val(df)
@@ -261,7 +274,7 @@ def test_compute_price_targets_bear_floor_atr_based_wins():
     current_price = 100.0
     financials = {"52_week_low": 10.0}
 
-    result = targets.compute_price_targets(df, financials, current_price)
+    result = targets.compute_price_targets(df, financials, current_price, None)
 
     nearest_support = targets.support_resistance(df, current_price=current_price)["nearest_support"]
     atr_val = targets._atr_val(df)
