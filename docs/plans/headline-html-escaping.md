@@ -1,6 +1,8 @@
 # Headline / feed-text HTML escaping (XSS hardening)
 
-**Status:** Phase 1 commit 2 BUILT 2026-10-20 (not yet committed) — the 12 inventory sites migrated to `util.safe_link`
+**Status (2026-10-22):** Phase 1 SHIPPED (`2cb4ace` util.safe_link, `60e7625` the 12 sites); Phase 2 (the remaining baselined dynamic-HTML sites) not started.
+
+*Earlier status:* Phase 1 commit 2 BUILT 2026-10-20 (not yet committed) — the 12 inventory sites migrated to `util.safe_link`
 (headline + URL) and a new `util.safe_text` (other untrusted text: `safe_html` plus whitespace collapse and character
 references for `$`, `[`, `]`, `\` and the backtick, so it neither renders as LaTeX nor forms a markdown link; credited in the checker), `safe_link`
 gained style whitespace collapse + backtick percent-encoding in the URL, baseline regenerated (sites that still carry

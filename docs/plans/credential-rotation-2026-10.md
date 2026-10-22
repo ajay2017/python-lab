@@ -8,6 +8,8 @@ check for signs of misuse.
 
 **Progress:**
 
+*Update 2026-10-22 (owner, per session handoff): the Streamlit Cloud fallback had its secrets re-added and is serving the app while Railway is paused, so the "no DB access" note in the SUPABASE_KEY row below is out of date.*
+
 | Credential | Rotated at provider | Railway updated | GitHub / Streamlit Cloud copies |
 |---|---|---|---|
 | `SUPABASE_KEY` | ✅ 2026-10-21: new secret key; old `default` secret key deleted; legacy keys handled (owner, 2026-10-22) | ✅ 2026-10-21 | ✅ GitHub updated · Streamlit Cloud removed (fallback has no DB access until a key is re-added) |
