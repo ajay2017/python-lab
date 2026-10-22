@@ -23,6 +23,8 @@ from typing import Optional
 
 import pandas as pd
 
+from stock_analyzer import llm
+
 _COLS_TRADE   = ["ticker", "action", "shares", "price", "activity_date", "company"]
 _COLS_INVALID = _COLS_TRADE + ["reason"]
 _TRADE_ACTIONS = {"BUY", "SELL"}
@@ -258,18 +260,20 @@ def _resolve_unknown_tickers(
     if not unknowns or not api_key:
         return {}
     try:
-        import anthropic  # noqa: PLC0415
-        client = anthropic.Anthropic(api_key=api_key)
         prompt = _TICKER_LOOKUP_PROMPT.format(
             names_json=json.dumps(unknowns)
         )
-        resp = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_EXTRACT_STRONG,
+            api_key=api_key,
             model=model,
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
             timeout=30,
         )
-        raw = resp.content[0].text.strip() if resp.content else "{}"
+        if not r.ok:
+            return {}
+        raw = r.text.strip()
         raw = re.sub(r"^```(?:json)?[\r\n]*", "", raw)
         raw = re.sub(r"[\r\n]*```$", "", raw.strip()).strip()
         data = json.loads(raw)

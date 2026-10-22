@@ -22,6 +22,7 @@ import hashlib
 import json
 from datetime import date, datetime, timezone
 
+from stock_analyzer import llm
 from stock_analyzer.constants import (
     LLM_REQUEST_TIMEOUT_SEC,
     COMPOSITE_STRONG_BUY,
@@ -215,17 +216,19 @@ def review_thesis(
     if not api_key or not user_thesis or not user_thesis.strip():
         return None
     try:
-        import anthropic
-        client      = anthropic.Anthropic(api_key=api_key)
         user_prompt = _format_prompt(ticker, user_thesis, inputs)
-        response    = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_DEEP,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        text   = response.content[0].text if response.content else ""
+        if not r.ok:
+            return None
+        text   = r.text
         parsed = _parse_response(text)
         return {
             **parsed,
@@ -479,17 +482,19 @@ def draft_thesis(
     if not api_key:
         return None
     try:
-        import anthropic
-        client      = anthropic.Anthropic(api_key=api_key)
         user_prompt = _format_authoring_prompt(ticker, inputs)
-        response    = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_DEEP,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             system=_DRAFT_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        text = response.content[0].text.strip() if response.content else ""
+        if not r.ok:
+            return None
+        text = r.text.strip()
         if not text:
             return None
         return {
@@ -850,7 +855,6 @@ def generate_earnings_thesis_update(
     if not api_key or not user_thesis or not earnings_result:
         return None
     try:
-        import anthropic
         r = earnings_result
         # Derive a simple earnings_signal label from the extracted facts
         eps_beat = r.get("eps_beat")
@@ -892,15 +896,18 @@ def generate_earnings_thesis_update(
 
         user_msg = "\n".join(result_parts)
 
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        resp = llm.complete(
+            llm.ROLE_DEEP,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             system=_EARNINGS_CHECKPOINT_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        text = response.content[0].text if response.content else ""
+        if not resp.ok:
+            return None
+        text = resp.text
         parsed = _parse_response(text)
         return {
             "suggested_status": parsed["status"],

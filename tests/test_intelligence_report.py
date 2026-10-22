@@ -26,6 +26,7 @@ pytestmark = pytest.mark.fast
 # ─── fake anthropic module helper ────────────────────────────────────────────
 
 class _FakeBlock:
+    type = "text"
     def __init__(self, text):
         self.text = text
 
@@ -383,3 +384,27 @@ def test_format_prompt_notes_earlier_weeks_on_an_older_method():
     clean = ir._format_prompt(_base_package(
         weekly_trajectory=[{"week_ending": "2026-01-25", "performance_pct": 1.0, "spy_pct": 0.5, "alpha_pct": 0.5}]))
     assert "older method" not in clean
+
+
+def _install_fake_anthropic_no_text_block():
+    """A reply with no text block at all (e.g. stop_reason end_turn, empty content)."""
+    class _M:
+        def create(self, **kwargs):
+            return types.SimpleNamespace(content=[], stop_reason="end_turn", usage=None)
+
+    class _C:
+        def __init__(self, **kwargs):
+            self.messages = _M()
+
+    fake_mod = types.ModuleType("anthropic")
+    fake_mod.Anthropic = _C
+    sys.modules["anthropic"] = fake_mod
+
+
+def test_generate_report_no_text_block_returns_none_not_an_empty_report():
+    # P1-c: an empty reply used to return a report dict with empty sections,
+    # which the monthly cron then saved.
+    package = _base_package()
+    package["has_data"] = True
+    _install_fake_anthropic_no_text_block()
+    assert ir.generate_report(package, api_key="fake-key") is None

@@ -29,6 +29,7 @@ Entry points:
 import json
 from datetime import datetime, timezone
 
+from stock_analyzer import llm
 from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
 
 _ANGLES = ("pillar", "portfolio", "macro")
@@ -296,10 +297,10 @@ def generate_case_against(
     if not api_key:
         return None
     try:
-        import anthropic
-        client      = anthropic.Anthropic(api_key=api_key)
         user_prompt = _format_case_against_prompt(ticker, inputs)
-        response    = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_FAST,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             temperature=0,  # structured JSON output — deterministic, not prose
@@ -307,7 +308,9 @@ def generate_case_against(
             messages=[{"role": "user", "content": user_prompt}],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        text = response.content[0].text.strip() if response.content else ""
+        if not r.ok:
+            return None
+        text = r.text.strip()
         case_against = _parse_case_against(text)
         if not case_against:
             return None

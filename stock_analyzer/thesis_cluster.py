@@ -31,6 +31,7 @@ Design principles (mirrors regime_stress.py / debate_agent.py):
 
 import json
 
+from stock_analyzer import llm
 from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
 
 _THESIS_TRUNCATE_CHARS = 1500   # prompt-sizing tuning, not a policy threshold
@@ -156,10 +157,10 @@ def generate_thesis_clusters(corpus: list[dict], api_key: str,
     if not api_key or len(corpus) < _MIN_THESIS_POSITIONS:
         return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
         prompt_text, truncated = _format_corpus_for_prompt(corpus)
-        response = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_FAST,
+            api_key=api_key,
             model=model,
             max_tokens=600,
             temperature=0.2,
@@ -170,9 +171,9 @@ def generate_thesis_clusters(corpus: list[dict], api_key: str,
             }],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        if not response.content:
+        if not r.ok:
             return None
-        raw_text = response.content[0].text.strip()
+        raw_text = r.text.strip()
         clusters = _parse_cluster_response(raw_text, corpus)
         if clusters is None:
             return None

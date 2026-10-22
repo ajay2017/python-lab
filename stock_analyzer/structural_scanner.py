@@ -18,6 +18,7 @@ Design principles (mirrors debate_agent.py):
 
 from itertools import combinations
 
+from stock_analyzer import llm
 from stock_analyzer.constants import CORR_HIGH_PAIRS_THRESHOLD, LLM_REQUEST_TIMEOUT_SEC
 from stock_analyzer.util import factor_tilt_evidence_line
 
@@ -249,11 +250,10 @@ def generate_structural_narrative(evidence: dict, api_key: str,
     if not api_key:
         return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-
         evidence_text = _format_evidence(evidence)
-        response = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_FAST,
+            api_key=api_key,
             model=model,
             max_tokens=300,
             temperature=0.3,
@@ -264,9 +264,9 @@ def generate_structural_narrative(evidence: dict, api_key: str,
             }],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        if not response.content:
+        if not r.ok:
             return None
-        text = response.content[0].text.strip()
+        text = r.text.strip()
         return text or None
     except Exception:
         return None

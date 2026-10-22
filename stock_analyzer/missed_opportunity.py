@@ -37,6 +37,7 @@ Design principles (mirrors thesis_cluster.py):
 
 import json
 
+from stock_analyzer import llm
 from stock_analyzer.constants import (
     LLM_REQUEST_TIMEOUT_SEC,
     COMPOSITE_STRONG_BUY, COMPOSITE_BUY, COMPOSITE_HOLD,
@@ -189,10 +190,10 @@ def generate_missed_opportunity_patterns(corpus: list[dict], api_key: str,
     if not api_key or len(corpus) < _MIN_MISSED_TICKERS:
         return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
         prompt_text = _format_corpus_for_prompt(corpus)
-        response = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_FAST,
+            api_key=api_key,
             model=model,
             max_tokens=600,
             temperature=0.2,
@@ -203,9 +204,9 @@ def generate_missed_opportunity_patterns(corpus: list[dict], api_key: str,
             }],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        if not response.content:
+        if not r.ok:
             return None
-        raw_text = response.content[0].text.strip()
+        raw_text = r.text.strip()
         patterns = _parse_pattern_response(raw_text, corpus)
         if patterns is None:
             return None

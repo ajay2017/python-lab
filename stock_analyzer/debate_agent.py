@@ -16,6 +16,7 @@ Design principles (mirrors premortem_advisor.py):
 import json
 import math
 
+from stock_analyzer import llm
 from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
 
 # ── Module-level ceilings (UI / quality knobs, not investment-policy thresholds) ─
@@ -45,10 +46,16 @@ _VALID_VERDICTS = {"bull_wins", "bear_wins", "contested"}
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
-def _call_haiku(client, model, system, user_text, max_tokens=200):
-    """Single Haiku call. Returns text or None on any failure. Never raises."""
+def _call_haiku(api_key, model, system, user_text, max_tokens=200, role=llm.ROLE_FAST):
+    """Single Haiku call. Returns text or None on any failure. Never raises.
+
+    The judge passes ROLE_EXTRACT so a reply cut off at max_tokens is never
+    parsed as a verdict; the rounds keep ROLE_FAST (cut-off narrative is kept).
+    """
     try:
-        response = client.messages.create(
+        r = llm.complete(
+            role,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             temperature=0,
@@ -56,7 +63,7 @@ def _call_haiku(client, model, system, user_text, max_tokens=200):
             messages=[{"role": "user", "content": user_text}],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        return response.content[0].text.strip() if response.content else None
+        return r.text.strip() if r.ok else None
     except Exception:
         return None
 
@@ -443,8 +450,7 @@ def run_debate(corpus: dict, debate_type: str, api_key: str,
         }
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        import anthropic  # noqa: F401  (pre-flight only)
     except Exception:
         return {
             "transcript": [], "verdict": None, "partial": True,
@@ -465,7 +471,7 @@ def run_debate(corpus: dict, debate_type: str, api_key: str,
                f"is underwater — argue only from the thesis and current data.")
     else:
         _r1 = f"Evidence:\n{corpus_text}\n\nPresent the strongest specific case FOR entering {ticker}."
-    r1 = _call_haiku(client, model, _BULL_SYSTEM, _r1)
+    r1 = _call_haiku(api_key, model, _BULL_SYSTEM, _r1)
     if not r1:
         return {"transcript": transcript, "verdict": None, "partial": True, "error": "round1_failed"}
     transcript.append({"round": 1, "agent": "bull", "text": r1})
@@ -479,7 +485,7 @@ def run_debate(corpus: dict, debate_type: str, api_key: str,
     else:
         _r2 = (f"Evidence:\n{corpus_text}\n\n---\nBull's case:\n{r1}\n\n---\n"
                f"Counter Bull's argument with the strongest specific evidence AGAINST this position.")
-    r2 = _call_haiku(client, model, _BEAR_SYSTEM, _r2)
+    r2 = _call_haiku(api_key, model, _BEAR_SYSTEM, _r2)
     if not r2:
         return {"transcript": transcript, "verdict": None, "partial": True, "error": "round2_failed"}
     transcript.append({"round": 2, "agent": "bear", "text": r2})
@@ -491,7 +497,7 @@ def run_debate(corpus: dict, debate_type: str, api_key: str,
     else:
         _r3 = (f"Evidence:\n{corpus_text}\n\n---\nBull Round 1:\n{r1}\n\nBear's counter:\n{r2}\n\n---\n"
                f"Rebut Bear's specific objection with evidence.")
-    r3 = _call_haiku(client, model, _BULL_SYSTEM, _r3)
+    r3 = _call_haiku(api_key, model, _BULL_SYSTEM, _r3)
     if not r3:
         return {"transcript": transcript, "verdict": None, "partial": True, "error": "round3_failed"}
     transcript.append({"round": 3, "agent": "bull", "text": r3})
@@ -503,7 +509,7 @@ def run_debate(corpus: dict, debate_type: str, api_key: str,
     else:
         _r4 = (f"Evidence:\n{corpus_text}\n\n---\nBull:\n{r1}\n\nBear:\n{r2}\n\nBull rebuttal:\n{r3}\n\n---\n"
                f"State the ONE remaining concern that Bull's rebuttal did not adequately address.")
-    r4 = _call_haiku(client, model, _BEAR_SYSTEM, _r4)
+    r4 = _call_haiku(api_key, model, _BEAR_SYSTEM, _r4)
     if not r4:
         return {"transcript": transcript, "verdict": None, "partial": True, "error": "round4_failed"}
     transcript.append({"round": 4, "agent": "bear", "text": r4})
@@ -514,9 +520,9 @@ def run_debate(corpus: dict, debate_type: str, api_key: str,
         for t in transcript
     )
     judge_raw = _call_haiku(
-        client, model, _JUDGE_SYSTEM,
+        api_key, model, _JUDGE_SYSTEM,
         f"Debate transcript:\n{full_transcript_text}\n\nIssue your verdict.",
-        max_tokens=300,
+        max_tokens=300, role=llm.ROLE_EXTRACT,
     )
     judge = _parse_judge(judge_raw) if judge_raw else None
 

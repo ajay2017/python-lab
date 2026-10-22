@@ -19,6 +19,7 @@ import pandas as pd
 import pytest
 
 from stock_analyzer import debate_agent as da
+from stock_analyzer import llm
 
 pytestmark = pytest.mark.fast
 
@@ -26,6 +27,7 @@ pytestmark = pytest.mark.fast
 # ─── fake anthropic module helper ────────────────────────────────────────────
 
 class _FakeBlock:
+    type = "text"
     def __init__(self, text):
         self.text = text
 
@@ -70,15 +72,50 @@ def _history(n=25, start=100.0, step=1.0):
 
 # ─── _call_haiku ──────────────────────────────────────────────────────────────
 
-def test_call_haiku_success_returns_stripped_text():
-    client = _FakeClient(response_text="  hello there  ")
-    result = da._call_haiku(client, "model", "system", "user text")
+def test_call_haiku_success_returns_stripped_text(monkeypatch):
+    monkeypatch.setitem(sys.modules, "anthropic", _fake_anthropic_module("  hello there  "))
+    result = da._call_haiku("fake-key", "model", "system", "user text")
     assert result == "hello there"
 
 
-def test_call_haiku_raises_returns_none():
-    client = _FakeClient(raise_exc=RuntimeError("boom"))
-    result = da._call_haiku(client, "model", "system", "user text")
+def test_call_haiku_raises_returns_none(monkeypatch):
+    monkeypatch.setitem(sys.modules, "anthropic",
+                        _fake_anthropic_module(raise_exc=RuntimeError("boom")))
+    result = da._call_haiku("fake-key", "model", "system", "user text")
+    assert result is None
+
+
+def _fake_anthropic_module(response_text=None, raise_exc=None, stop_reason=None):
+    class _Resp(_FakeResponse):
+        pass
+    _Resp.stop_reason = stop_reason
+
+    class _Msgs:
+        def create(self, **kwargs):
+            if raise_exc is not None:
+                raise raise_exc
+            return _Resp(response_text)
+
+    class _Client:
+        def __init__(self, **kwargs):
+            self.messages = _Msgs()
+
+    mod = types.ModuleType("anthropic")
+    mod.Anthropic = _Client
+    return mod
+
+
+def test_call_haiku_round_role_keeps_text_cut_off_at_max_tokens(monkeypatch):
+    monkeypatch.setitem(sys.modules, "anthropic",
+                        _fake_anthropic_module("half a sent", stop_reason="max_tokens"))
+    result = da._call_haiku("fake-key", "model", "system", "user text", role=llm.ROLE_FAST)
+    assert result == "half a sent"
+
+
+def test_call_haiku_judge_role_returns_none_when_cut_off_at_max_tokens(monkeypatch):
+    monkeypatch.setitem(sys.modules, "anthropic",
+                        _fake_anthropic_module("half a sent", stop_reason="max_tokens"))
+    result = da._call_haiku("fake-key", "model", "system", "user text", role=llm.ROLE_EXTRACT)
     assert result is None
 
 
@@ -317,9 +354,10 @@ def _stateful_haiku(responses):
     Records every call's kwargs on `.calls` for prompt-content assertions."""
     calls = []
 
-    def _fake(client, model, system, user_text, max_tokens=200):
+    def _fake(api_key, model, system, user_text, max_tokens=200, role=llm.ROLE_FAST):
         idx = len(calls)
-        calls.append({"system": system, "user_text": user_text, "max_tokens": max_tokens})
+        calls.append({"system": system, "user_text": user_text, "max_tokens": max_tokens,
+                      "role": role})
         return responses[idx] if idx < len(responses) else None
 
     _fake.calls = calls
@@ -409,6 +447,16 @@ def test_run_debate_full_success_populates_judge_fields(monkeypatch):
     ]
 
 
+def test_run_debate_rounds_use_fast_role_and_judge_uses_extract_role(monkeypatch):
+    _install_fake_anthropic()
+    fake = _stateful_haiku(["bull1", "bear1", "bull2", "bear2", _JUDGE_JSON])
+    monkeypatch.setattr(da, "_call_haiku", fake)
+    da.run_debate({"ticker": "AAPL"}, "entry", api_key="fake-key")
+    assert [c["role"] for c in fake.calls] == [
+        llm.ROLE_FAST, llm.ROLE_FAST, llm.ROLE_FAST, llm.ROLE_FAST, llm.ROLE_EXTRACT,
+    ]
+
+
 def test_run_debate_judge_unparseable_returns_error_sentinel_not_contested(monkeypatch):
     """Judge call succeeds but returns unparseable output → error sentinel, not "contested".
     A genuine 50/50 contested verdict comes from _parse_judge returning verdict="contested",
@@ -463,3 +511,10 @@ def test_run_debate_exit_vs_entry_round1_prompt_wording_differs(monkeypatch):
     entry_round1_prompt = fake_entry.calls[0]["user_text"]
     assert "entering" in entry_round1_prompt
     assert "CONTINUING TO HOLD" not in entry_round1_prompt
+
+
+def test_call_haiku_default_role_is_fast():
+    # run_debate relies on this default for the four rounds; the stateful fake
+    # in the test above has its own default, so it can't catch a change here.
+    import inspect
+    assert inspect.signature(da._call_haiku).parameters["role"].default == llm.ROLE_FAST

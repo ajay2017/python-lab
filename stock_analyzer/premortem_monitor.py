@@ -54,6 +54,7 @@ from datetime import date as _date
 
 import pandas as pd
 
+from stock_analyzer import llm
 from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
 
 _EXTRACT_SYSTEM_PROMPT = """You extract a structured price trigger from an investor's own written exit commitment ("what would make me wrong about this buy"), written before they bought a stock.
@@ -132,9 +133,9 @@ def extract_trigger(
     if not api_key or not (commitment_text or "").strip():
         return None
     try:
-        import anthropic
-        client   = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_EXTRACT_TRIGGER,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             temperature=0,  # structured JSON output — deterministic, not prose
@@ -142,7 +143,9 @@ def extract_trigger(
             messages=[{"role": "user", "content": commitment_text.strip()}],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        text = response.content[0].text.strip() if response.content else ""
+        if not r.ok:
+            return None
+        text = r.text.strip()
         return _parse_trigger(text)
     except Exception:
         return None

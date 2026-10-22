@@ -30,6 +30,7 @@ Design principles (mirrors regime_stress.py):
 import json
 from datetime import date
 
+from stock_analyzer import llm
 from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
 from stock_analyzer.macro_calendar import is_all_sector_category
 
@@ -284,10 +285,10 @@ def generate_catalyst_narrative(evidence: dict, api_key: str, model: str = "clau
     if not evidence.get("top_macro") and not evidence.get("top_earnings"):
         return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
         evidence_text = _format_evidence(evidence)
-        response = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_FAST,
+            api_key=api_key,
             model=model,
             max_tokens=350,
             temperature=0.3,
@@ -298,9 +299,9 @@ def generate_catalyst_narrative(evidence: dict, api_key: str, model: str = "clau
             }],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        if not response.content:
+        if not r.ok:
             return None
-        raw_text = response.content[0].text.strip()
+        raw_text = r.text.strip()
         return _parse_catalyst_narrative_response(raw_text)
     except Exception:
         return None

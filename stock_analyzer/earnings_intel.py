@@ -20,6 +20,7 @@ Public API:
 
 import json
 
+from stock_analyzer import llm
 from stock_analyzer.constants import ANALYST_EXTRACT_MAX_TOKENS, ANALYST_EXTRACT_TIMEOUT_SEC
 
 # Diagnostic: last-failure reason for each extractor (None on success).
@@ -75,17 +76,20 @@ def extract_playbook(
         LAST_PLAYBOOK_ERROR = "no API key configured or empty text"
         return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
         user_msg = f"Article date: {article_date}\n\n{raw_text.strip()}"
-        response = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_EXTRACT,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             system=_playbook_system_prompt(),
             messages=[{"role": "user", "content": user_msg}],
             timeout=ANALYST_EXTRACT_TIMEOUT_SEC,
         )
-        text = response.content[0].text if response.content else ""
+        if not r.ok:
+            LAST_PLAYBOOK_ERROR = r.error
+            return None
+        text = r.text
         records = _parse_json_response(text, "records")
         if records is None:
             LAST_PLAYBOOK_ERROR = "JSON parse failed"
@@ -142,17 +146,20 @@ def extract_results(
         LAST_RESULTS_ERROR = "no API key configured or empty text"
         return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
         user_msg = f"Article date: {article_date}\n\n{raw_text.strip()}"
-        response = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_EXTRACT,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             system=_results_system_prompt(),
             messages=[{"role": "user", "content": user_msg}],
             timeout=ANALYST_EXTRACT_TIMEOUT_SEC,
         )
-        text = response.content[0].text if response.content else ""
+        if not r.ok:
+            LAST_RESULTS_ERROR = r.error
+            return None
+        text = r.text
         records = _parse_json_response(text, "records")
         if records is None:
             LAST_RESULTS_ERROR = "JSON parse failed"

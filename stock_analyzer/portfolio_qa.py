@@ -24,6 +24,7 @@ import re
 
 import pandas as pd
 
+from stock_analyzer import llm
 from stock_analyzer.constants import (
     LLM_REQUEST_TIMEOUT_SEC,
     QA_REC_OUTCOME_DEFAULT_HORIZON_DAYS,
@@ -337,9 +338,9 @@ def parse_question(question: str, api_key: str, today_et, history=None,
         LAST_PARSE_ERROR = "no API key configured or empty question"
         return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_FAST,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             temperature=0,
@@ -347,7 +348,10 @@ def parse_question(question: str, api_key: str, today_et, history=None,
             messages=[{"role": "user", "content": str(question).strip()}],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        text = response.content[0].text.strip() if response.content else ""
+        if not r.ok:
+            LAST_PARSE_ERROR = r.error
+            return None
+        text = r.text.strip()
         result = parse_parsed_query(text, question=question)
         if result is None:
             LAST_PARSE_ERROR = f"model returned an unparseable response: {text[:200]!r}"
@@ -1100,9 +1104,9 @@ def narrate_answer(intent: str, facts, api_key: str,
         LAST_NARRATE_ERROR = "no API key configured"
         return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_FAST,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             temperature=0,
@@ -1110,7 +1114,10 @@ def narrate_answer(intent: str, facts, api_key: str,
             messages=[{"role": "user", "content": facts_to_text(intent, facts)}],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        text = response.content[0].text.strip() if response.content else ""
+        if not r.ok:
+            LAST_NARRATE_ERROR = r.error
+            return None
+        text = r.text.strip()
         if not text:
             LAST_NARRATE_ERROR = "model returned an empty response"
             return None

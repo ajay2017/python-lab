@@ -28,6 +28,7 @@ pytestmark = pytest.mark.fast
 # ─── fake anthropic module helper ────────────────────────────────────────────
 
 class _FakeBlock:
+    type = "text"
     def __init__(self, text):
         self.text = text
 
@@ -1003,3 +1004,31 @@ def test_already_reviewed_today_malformed_timestamp_never_matches():
 def test_already_reviewed_today_missing_reviewed_at_column_returns_false():
     df = pd.DataFrame([{"ticker": "AAPL"}])
     assert ta.already_reviewed_today("AAPL", df, date(2026, 9, 27)) is False
+
+
+def _install_fake_anthropic_no_text_block():
+    """A reply with no text block at all (e.g. stop_reason end_turn, empty content)."""
+    class _M:
+        def create(self, **kwargs):
+            return types.SimpleNamespace(content=[], stop_reason="end_turn", usage=None)
+
+    class _C:
+        def __init__(self, **kwargs):
+            self.messages = _M()
+
+    fake_mod = types.ModuleType("anthropic")
+    fake_mod.Anthropic = _C
+    sys.modules["anthropic"] = fake_mod
+
+
+def test_review_thesis_no_text_block_returns_none_not_a_weakening_verdict():
+    # P1-c: an empty reply used to be parsed by _parse_response, whose safe
+    # default is WEAKENING, so the weekly cron saved a fabricated verdict.
+    _install_fake_anthropic_no_text_block()
+    assert ta.review_thesis("AAPL", "Services growth carries the multiple.", {}, api_key="fake") is None
+
+
+def test_generate_earnings_thesis_update_no_text_block_returns_none():
+    _install_fake_anthropic_no_text_block()
+    assert ta.generate_earnings_thesis_update(
+        "AAPL", "Services growth carries the multiple.", {"eps_beat": True}, api_key="fake") is None

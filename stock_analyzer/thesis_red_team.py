@@ -9,6 +9,7 @@
 
 import json
 
+from stock_analyzer import llm
 from stock_analyzer.constants import (
     LLM_REQUEST_TIMEOUT_SEC,
     PT_TARGET_CUT_WARN_PCT,
@@ -252,10 +253,10 @@ def generate_counter_evidence(
     if not api_key:
         return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
         system_prompt, user_prompt = inputs
-        response = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_FAST,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             temperature=0,
@@ -263,7 +264,9 @@ def generate_counter_evidence(
             messages=[{"role": "user", "content": user_prompt}],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        text = response.content[0].text.strip() if response.content else ""
+        if not r.ok:
+            return None
+        text = r.text.strip()
         return parse_counter_evidence_response(text)
     except Exception:
         return None

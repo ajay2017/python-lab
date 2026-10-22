@@ -22,6 +22,7 @@ pytestmark = pytest.mark.fast
 # ─── fake anthropic module helper ────────────────────────────────────────────
 
 class _FakeBlock:
+    type = "text"
     def __init__(self, text):
         self.text = text
 

@@ -14,6 +14,8 @@ generate_stance() binds to Anthropic. Other providers can be wired by
 adding a sibling function with the same return contract.
 """
 
+from stock_analyzer import llm
+
 
 _SYSTEM_PROMPT = """You are a senior portfolio manager writing a brief pre-market stance note for a single-user portfolio intelligence app.
 
@@ -197,16 +199,18 @@ def generate_stance(
     if not api_key or not inputs:
         return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
         user_prompt = format_user_prompt(inputs)
-        response = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_FAST,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
         )
-        text = response.content[0].text if response.content else ""
+        if not r.ok:
+            return None
+        text = r.text
         parsed = parse_stance(text)
         parsed["raw"]   = text
         parsed["model"] = model

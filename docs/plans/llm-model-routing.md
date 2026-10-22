@@ -1,6 +1,6 @@
 # LLM model routing: move to current models, and change models without code changes
 
-**Status: READY TO BUILD (Phase 1), 2026-10-22. No code written.** Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
+**Status (2026-10-22): Phase 1 IN PROGRESS. P1-a, P1-b and P1-c built and reviewed; P1-d next (see section 12).** *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
 lead from an AST inventory of every Anthropic call (2026-10-22) and the Claude API migration guide bundled with Claude
 Code (cached 2026-10-06). **Owner agreed with every lead recommendation in section 7 (2026-10-22):** D-1 App Settings
 with the score role pinned in code; D-2 switch the score model, but last, after the Phase 4 dry run; D-3 Sonnet 5.5
@@ -338,3 +338,33 @@ Pure apart from the SDK call; no Streamlit import; no module-level mutable state
   `disabled` only with effort low / medium / high); text found after a leading thinking block; refusal with text →
   `None`; `max_tokens` behaviour per role kind; key resolver with a raising getter; an explicit `model=` beats the
   role default; no module-level state (two concurrent results don't interfere).
+
+## 12. Phase 1 progress
+
+- **P1-a** (`8e12011`): golden snapshot of every `messages.create` request in `stock_analyzer/`.
+- **P1-b** (`74234dc`): `stock_analyzer/llm.py`, in `_GATE_FILES`. Opus review FIX-FIRST/2, then SHIP.
+- **P1-c** (2026-10-22): 21 call sites in 17 modules call `llm.complete`; golden fixture unchanged. Built by
+  `implementer` (Sonnet 5.5); Opus review SHIP, 0 blocking. Roles: `extract` (analyst and earnings extraction, the
+  debate judge), `extract_strong` (broker ticker lookup), `extract_trigger` (Pre-Mortem trigger), `deep` (thesis x3,
+  weekly debrief, monthly report), `fast` (the rest, including the four debate rounds). Every site still passes its own
+  `model=`, so the role decides only how the reply is read. Deliberate changes, all on unusual replies: a JSON-role
+  reply cut off at `max_tokens` fails before parsing; a refusal fails everywhere; a reply with **no text block** now
+  returns the failure value. Before, the thesis review and earnings update parsed `""` into the parser's default
+  WEAKENING verdict, which the weekly cron saved, and the monthly report saved empty sections.
+
+**Carried forward from the P1-c review:**
+- **P1-e:** pin each site's role in a test. The golden recorder should also record the role, or an AST test should map
+  site → role. Changing the Pre-Mortem trigger, analyst extraction or broker lookup to `fast` currently fails no test,
+  and from Phase 3 the role picks the model.
+- **P1-e (or earlier, in `llm.py`):** an **empty-string or whitespace-only** text block still counts as a reply
+  (`LLMResult.ok`), so the thesis review would still save a WEAKENING verdict with an empty summary for it (unchanged
+  from before P1-c). Decide whether `parse_response` adopts ai_provider's stricter "empty or whitespace = no reply"
+  rule for every role. `llm.py` is a gate file, so this needs review.
+- **Phase 3:** these sites ask for JSON but are mapped to `fast` and would get narrative treatment (adaptive thinking,
+  extra headroom, cut-off text kept): `portfolio_qa.parse_question`, `premortem_advisor.generate_case_against`,
+  `thesis_red_team`, `missed_opportunity`, `thesis_cluster`, `catalyst_stress`, `regime_stress`. Decide before
+  switching `fast` to a 5.5 model.
+- **Pre-existing, noted:** the monthly report cron lane logs "skip" and stays green when `generate_report` returns
+  `None` (`cron_runner.py` ~2819). More failure kinds now reach that path. The weekly debrief lane already goes red in
+  the same case.
+

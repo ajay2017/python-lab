@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
+from stock_analyzer import llm
 from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
 
 
@@ -405,17 +406,19 @@ def generate_report(
     if not api_key or not package.get("has_data"):
         return None
     try:
-        import anthropic
-        client   = anthropic.Anthropic(api_key=api_key)
         prompt   = _format_prompt(package)
-        response = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_DEEP,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             system=_system_prompt(),
             messages=[{"role": "user", "content": prompt}],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
-        text     = response.content[0].text if response.content else ""
+        if not r.ok:
+            return None
+        text     = r.text
         sections = _parse_response(text)
         return {
             "period_start":  package["period_start"],

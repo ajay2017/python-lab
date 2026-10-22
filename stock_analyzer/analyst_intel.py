@@ -17,6 +17,7 @@ Design contract (same as the rest of the AI layer):
 
 import json
 
+from stock_analyzer import llm
 from stock_analyzer.constants import ANALYST_EXTRACT_MAX_TOKENS
 
 # Diagnostic: reason for the most recent extract_report() failure (or None on
@@ -99,17 +100,20 @@ def extract_report(
         LAST_EXTRACT_ERROR = "no API key configured or empty text"
         return None
     try:
-        import anthropic
         from stock_analyzer.constants import ANALYST_EXTRACT_TIMEOUT_SEC
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        r = llm.complete(
+            llm.ROLE_EXTRACT,
+            api_key=api_key,
             model=model,
             max_tokens=max_tokens,
             system=_system_prompt(),
             messages=[{"role": "user", "content": raw_text}],
             timeout=ANALYST_EXTRACT_TIMEOUT_SEC,
         )
-        text = response.content[0].text if response.content else ""
+        if not r.ok:
+            LAST_EXTRACT_ERROR = r.error
+            return None
+        text = r.text
         # Robust JSON parse: strip markdown fences first, then slice to first { ... last }
         cleaned = text.strip()
         if cleaned.startswith("```"):
