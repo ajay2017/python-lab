@@ -1,6 +1,6 @@
 # LLM model routing: move to current models, and change models without code changes
 
-**Status (2026-10-22): Phase 1 IN PROGRESS. P1-a, P1-b and P1-c built and reviewed; P1-d next (see section 12).** *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
+**Status (2026-10-22): Phase 1 IN PROGRESS. P1-a to P1-d built and reviewed; P1-e next (see section 12).** *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
 lead from an AST inventory of every Anthropic call (2026-10-22) and the Claude API migration guide bundled with Claude
 Code (cached 2026-10-06). **Owner agreed with every lead recommendation in section 7 (2026-10-22):** D-1 App Settings
 with the score role pinned in code; D-2 switch the score model, but last, after the Phase 4 dry run; D-3 Sonnet 5.5
@@ -352,6 +352,22 @@ Pure apart from the SDK call; no Streamlit import; no module-level mutable state
   returns the failure value. Before, the thesis review and earnings update parsed `""` into the parser's default
   WEAKENING verdict, which the weekly cron saved, and the monthly report saved empty sections.
 
+- **P1-d** (2026-10-22): `news_intelligence`'s three calls use `llm.complete` (`score` for `rescore_headlines_llm`,
+  `filter` for the other two; pinned, so no `model=`; the client keeps `max_retries=0` and the 8-second
+  `anthropic.Timeout` via `client_kwargs`). Golden fixture unchanged. Built by `implementer` (Sonnet 5.5); Opus review
+  SHIP, 0 blocking. Key lookups:
+  - **The three cron lanes** call `llm.resolve_anthropic_key()`: env only, the same as before.
+  - **`bundle_loader`** calls it with `_anthropic_section_secret`. **Deliberately narrower than section 11's resolver
+    order:** env, then `[anthropic] api_key`, and **never the flat `ANTHROPIC_API_KEY` secret.** `bundle_loader` never
+    read the flat secret, and reading it would switch on LLM news scoring (which moves the composite) on a deploy
+    whose secrets carry only the flat key, e.g. the Streamlit Cloud fallback, whose secret shape is unknown. A test pins
+    the call site to this getter. Widening it is a separate, reviewed decision.
+  - **Railway check (owner, 2026-10-22):** one `ANTHROPIC_API_KEY` variable on the web service; `railway_start.sh`
+    writes `[anthropic] api_key` from it at every boot, so env and secrets always match there.
+  - **Cut-off-reply counting on the score role is deferred to Phase 2** (section 10 item 4). The reviewer confirmed
+    that every path into `rescore_headlines_llm` is capped at 10 headlines (`sentiment.py` `news_items[:10]` and
+    `NEWS_KEEP_PER_TICKER`), about 150 tokens against a 512 cap, and a cut-off reply already fell back to VADER.
+
 **Carried forward from the P1-c review:**
 - **P1-e:** pin each site's role in a test. The golden recorder should also record the role, or an AST test should map
   site → role. Changing the Pre-Mortem trigger, analyst extraction or broker lookup to `fast` currently fails no test,
@@ -368,3 +384,8 @@ Pure apart from the SDK call; no Streamlit import; no module-level mutable state
   `None` (`cron_runner.py` ~2819). More failure kinds now reach that path. The weekly debrief lane already goes red in
   the same case.
 
+**Carried forward from the P1-d review:**
+- **P1-e:** `app.py` ~24724, the sidebar's filter-role call, still reads `st.secrets` directly, and its 512-token cap is
+  reachable with about 30+ items (display-only, suppress-only, pre-existing).
+- **Cosmetic:** `bundle_loader.py` ~345 comment says "env first (Railway cron lanes)"; the Railway web service sets
+  the variable too. Fix in the next reviewed `bundle_loader` commit.

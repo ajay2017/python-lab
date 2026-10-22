@@ -87,6 +87,7 @@ from stock_analyzer.headless_alert_engine import (
     compute_watchlist_entries, _build_context, run_daily_budget,
 )
 from stock_analyzer import hold_reasons
+from stock_analyzer import llm
 from stock_analyzer import news_feed
 from stock_analyzer.notify import (
     render_alert_email, render_test_email, render_pullback_email,
@@ -2312,7 +2313,7 @@ def _run_thesis(now_et, force: bool) -> int:
         _log("thesis: not Sunday — skip.")
         return 0
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    api_key = llm.resolve_anthropic_key()
     if not api_key:
         _log("thesis: INERT — no ANTHROPIC_API_KEY set. Add it to Railway → Variables to activate.")
         return 0
@@ -2549,7 +2550,7 @@ def _run_debrief(now_et, force: bool) -> int:
         _log("debrief: not Sunday — skip.")
         return 0
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    api_key = llm.resolve_anthropic_key()
     if not api_key:
         _log("debrief: INERT — no ANTHROPIC_API_KEY set.")
         return 0
@@ -2726,7 +2727,7 @@ def _run_monthly_report(now_et, force: bool) -> int:
         _log("monthly: not the first Sunday of the month — skip.")
         return 0
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    api_key = llm.resolve_anthropic_key()
     if not api_key:
         _log("monthly: INERT — no ANTHROPIC_API_KEY set.")
         return 0

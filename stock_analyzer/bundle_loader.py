@@ -35,6 +35,7 @@ from stock_analyzer.data import (
     fetch_etf_lookthrough,
 )
 from stock_analyzer import asset_type
+from stock_analyzer import llm
 from stock_analyzer import etf_scoring
 from stock_analyzer.technicals import compute_indicators, technical_score, technical_coverage
 from stock_analyzer.fundamentals import (
@@ -72,6 +73,17 @@ def _cache_age_in_days(fetched_at_iso: str | None) -> int | None:
 
 
 _log = logging.getLogger(__name__)
+
+
+def _anthropic_section_secret(section, key):
+    """Secrets getter for llm.resolve_anthropic_key: only the [anthropic] section.
+    bundle_loader has never read a flat ANTHROPIC_API_KEY secret; reading one
+    could switch on LLM news scoring (which moves the composite) on a deploy
+    whose secrets carry only the flat key."""
+    if section != "anthropic":
+        return ""
+    import streamlit as _st
+    return (_st.secrets.get("anthropic") or {}).get(key, "")
 
 
 def _et_date_str(ts) -> str | None:
@@ -314,7 +326,6 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     # at any step leaves avg_sent / headlines as the original VADER values (fail-open).
     try:
         import datetime as _dt
-        import os as _os
         from stock_analyzer.news_intelligence import rescore_headlines_llm as _rescore_hl
         _today = _dt.date.today().isoformat()
         _cached = db.load_sentiment_llm_cache(ticker, _today)
@@ -331,14 +342,8 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
             headlines = _cached["headlines"]
             avg_sent  = _cached["avg_sent"]
         else:
-            # Read key: env first (GitHub Actions cron), then st.secrets (Streamlit Cloud)
-            _ant_key = _os.getenv("ANTHROPIC_API_KEY", "").strip()
-            if not _ant_key:
-                try:
-                    import streamlit as _st
-                    _ant_key = (_st.secrets.get("anthropic") or {}).get("api_key", "")
-                except Exception:
-                    pass
+            # Read key: env first (Railway cron lanes), then the [anthropic] secret
+            _ant_key = llm.resolve_anthropic_key(_anthropic_section_secret)
             if _ant_key:
                 _rescored = _rescore_hl(headlines, _ant_key, ticker)
                 # None = LLM failed; an EMPTY rescore (no headlines) must never be

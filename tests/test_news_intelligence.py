@@ -30,13 +30,16 @@ pytestmark = pytest.mark.fast
 # ── fake anthropic module helper ───────────────────────────────────────────
 
 class _FakeBlock:
+    type = "text"
+
     def __init__(self, text):
         self.text = text
 
 
 class _FakeResponse:
-    def __init__(self, text):
+    def __init__(self, text, stop_reason=None):
         self.content = [_FakeBlock(text)]
+        self.stop_reason = stop_reason
 
 
 class _FakeMessages:
@@ -731,3 +734,26 @@ def test_rescore_headlines_llm_does_not_mutate_original():
     _install_fake_anthropic('[{"idx": 0, "score": 0.3}]')
     ni.rescore_headlines_llm(headlines, "fake-key", ticker="AAA")
     assert headlines[0]["score"] == 0.0
+
+
+# -- a score/filter-role reply cut off at max_tokens is a failure, never parsed --
+
+def test_cut_off_reply_is_failure_for_all_three_sites(monkeypatch):
+    import types as _t
+    txt = '[{"idx": 0, "score": -0.9}]'
+
+    class _Msgs:
+        def create(self, **kw):
+            return _FakeResponse(txt, stop_reason="max_tokens")
+
+    class _Client:
+        def __init__(self, **kw):
+            self.messages = _Msgs()
+
+    monkeypatch.setitem(sys.modules, "anthropic",
+                        _t.SimpleNamespace(Anthropic=_Client, Timeout=lambda t: t))
+    heads = [{"headline": "x", "score": 0.0}]
+    items = [{"title": "x", "ticker": "AAA", "compound": 0.0, "label": "Neutral"}]
+    assert ni.rescore_headlines_llm(heads, "k", "AAA") is None
+    assert ni.llm_score_batch(items, "k") is None
+    assert ni.rescore_news_items_llm(items, "k") == items

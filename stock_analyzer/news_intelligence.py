@@ -11,6 +11,7 @@ Transforms raw curated news items into actionable portfolio intelligence:
 
 import time as _time
 
+from stock_analyzer import llm
 from stock_analyzer.constants import (
     NEWS_OPPORTUNITY_COMPOUND_MIN,
     NEWS_OPPORTUNITY_SCORE_MIN,
@@ -229,19 +230,18 @@ def rescore_news_items_llm(items: list[dict], api_key: str, timeout: float = 8.0
             "Headlines:\n" + "\n".join(headline_lines)
         )
 
-        client = anthropic.Anthropic(
+        r = llm.complete(
+            llm.ROLE_FILTER,
             api_key=api_key,
-            max_retries=0,
-            timeout=anthropic.Timeout(timeout),
-        )
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
             max_tokens=512,
             temperature=0,
             messages=[{"role": "user", "content": prompt}],
+            client_kwargs={"max_retries": 0, "timeout": anthropic.Timeout(timeout)},
         )
+        if not r.ok:
+            return items
 
-        raw = response.content[0].text.strip()
+        raw = r.text.strip()
         # Strip markdown code fences if the model wraps the JSON
         if raw.startswith("```"):
             raw = raw.split("```")[1]
@@ -318,18 +318,18 @@ def llm_score_batch(items: list[dict], api_key: str, timeout: float = 8.0) -> li
             '[{"idx": 0, "score": 0.3}, {"idx": 1, "score": -0.6}, ...]\n\n'
             "Headlines:\n" + "\n".join(headline_lines)
         )
-        client = anthropic.Anthropic(
+        r = llm.complete(
+            llm.ROLE_FILTER,
             api_key=api_key,
-            max_retries=0,
-            timeout=anthropic.Timeout(timeout),
-        )
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
             max_tokens=64 + 32 * len(items),
             temperature=0,
             messages=[{"role": "user", "content": prompt}],
+            client_kwargs={"max_retries": 0, "timeout": anthropic.Timeout(timeout)},
         )
-        raw = response.content[0].text.strip()
+        if not r.ok:
+            return None
+
+        raw = r.text.strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -536,19 +536,18 @@ def rescore_headlines_llm(
             "Headlines:\n" + "\n".join(headline_lines)
         )
 
-        client = anthropic.Anthropic(
+        r = llm.complete(
+            llm.ROLE_SCORE,
             api_key=api_key,
-            max_retries=0,
-            timeout=anthropic.Timeout(timeout),
-        )
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
             max_tokens=512,
             temperature=0,
             messages=[{"role": "user", "content": prompt}],
+            client_kwargs={"max_retries": 0, "timeout": anthropic.Timeout(timeout)},
         )
+        if not r.ok:
+            return None
 
-        raw = response.content[0].text.strip()
+        raw = r.text.strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):

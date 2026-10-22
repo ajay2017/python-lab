@@ -206,7 +206,7 @@ def test_llm_score_batch_max_tokens(monkeypatch):
         def create(self, **kw):
             seen.update(kw)
             txt = '[{"idx": 0, "score": 0.2}, {"idx": 1, "score": 9}]'
-            return types.SimpleNamespace(content=[types.SimpleNamespace(text=txt)])
+            return types.SimpleNamespace(content=[types.SimpleNamespace(type="text", text=txt)])
 
     class _Client:
         def __init__(self, **kw):
