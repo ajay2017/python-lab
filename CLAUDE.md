@@ -220,7 +220,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
      - Diversification $
      - the D5 dry run, the AST ratchet and the docs
 3. **App trust item 4:** antipattern rules for a literal `**` in raw HTML and a bare `$` next to numbers (~1 h). Slot it between S-D chunks.
-   - Item 2 shipped (`db8d891`). **Owner:** re-apply `docs/sql/impossible-states-function.sql`, then run E3's first count.
+   - Item 2 shipped (`db8d891`); the Q0 function was re-applied and verified 2026-10-22 (owner SQL: 32 rows, `_V` = `q0:fdbd2b2a9c28`, every check at its baseline; C1 21 vs 19 is its by-design accruing class, the regression split C9 is unchanged at 5). E3 was baselined 10-20 (11).
    - Items 1, 3 (System Trust ⑧, planner first) and 5 are open (`docs/plans/app-trust-verification.md`).
 4. **Weekly/monthly report, F-276c** (`docs/plans/period-report.md`).
    - Sections 1 + 3, C5b, C7 and C8 have shipped. **NEXT: C5** (section 2), then **C6** (sections 4 + 5).
