@@ -198,7 +198,7 @@ def review_thesis(
     user_thesis: str,
     inputs: dict,
     api_key: str,
-    model: str = "claude-sonnet-4-6",
+    model: str | None = None,
     max_tokens: int = 300,
 ) -> dict | None:
     """
@@ -233,7 +233,7 @@ def review_thesis(
         return {
             **parsed,
             "raw":         text,
-            "model":       model,
+            "model":       r.model,
             "reviewed_at": datetime.now(timezone.utc).isoformat(),
         }
     except Exception:
@@ -243,7 +243,7 @@ def review_thesis(
 def run_batch_review(
     positions: list[dict],
     api_key: str,
-    model: str = "claude-sonnet-4-6",
+    model: str | None = None,
 ) -> list[dict]:
     """
     Run thesis reviews for a list of open positions.
@@ -464,7 +464,7 @@ def draft_thesis(
     ticker: str,
     inputs: dict,
     api_key: str,
-    model: str = "claude-sonnet-4-6",
+    model: str | None = None,
     max_tokens: int = 300,
 ) -> dict | None:
     """
@@ -499,7 +499,7 @@ def draft_thesis(
             return None
         return {
             "draft":        text,
-            "model":        model,
+            "model":        r.model,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
     except Exception:
@@ -836,7 +836,7 @@ def generate_earnings_thesis_update(
     user_thesis: str,
     earnings_result: dict,
     api_key: str,
-    model: str = "claude-sonnet-4-6",
+    model: str | None = None,
     max_tokens: int = 300,
 ) -> dict | None:
     """

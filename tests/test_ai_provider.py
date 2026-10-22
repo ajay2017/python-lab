@@ -26,6 +26,8 @@ pytestmark = pytest.mark.fast
 # ── fake anthropic module (mirrors test_portfolio_qa.py) ────────────────────
 
 class _FakeAnthBlock:
+    type = "text"  # the real SDK TextBlock has it; llm.parse_response reads it
+
     def __init__(self, text):
         self.text = text
 

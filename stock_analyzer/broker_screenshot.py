@@ -295,7 +295,7 @@ def _resolve_unknown_tickers(
 def parse_robinhood_text(
     text: str,
     api_key: Optional[str] = None,
-    model: str = "claude-opus-4-8",
+    model: str | None = None,
     reference_date: Optional[datetime.date] = None,
 ) -> dict:
     """

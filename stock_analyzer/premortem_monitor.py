@@ -118,7 +118,7 @@ def _parse_trigger(text: str) -> dict | None:
 def extract_trigger(
     commitment_text: str,
     api_key: str,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str | None = None,
     max_tokens: int = 200,
 ) -> dict | None:
     """

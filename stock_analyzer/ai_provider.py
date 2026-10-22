@@ -21,6 +21,8 @@ set the module-level `LAST_CALL_ERROR` with a short description — never
 raise out of the function.
 """
 
+from stock_analyzer import llm
+
 # ─── Provider registry ───────────────────────────────────────────────────────
 # Same shape as AI Snapshot's `_AI_PROVIDERS`, plus a per-model "tier" field
 # ("fast" | "capable") used for display/filtering only — it does NOT gate
@@ -140,23 +142,24 @@ def call_llm(provider: str, model: str, api_key: str, system: str, user: str,
     LAST_CALL_ERROR = None
     try:
         if provider == "Claude (Anthropic)":
-            import anthropic as _anth
-            c = _anth.Anthropic(api_key=api_key)
-            r = c.messages.create(
-                model=model, max_tokens=max_tokens, system=system,
+            r = llm.complete(
+                llm.ROLE_DEEP, api_key=api_key, model=model,
+                max_tokens=max_tokens, system=system,
                 messages=[{"role": "user", "content": user}],
                 timeout=timeout,
             )
-            # content[0] is NOT always the text block -- a reasoning-capable
-            # model (confirmed live on claude-opus-5) can lead with a
-            # ThinkingBlock/RedactedThinkingBlock that has no .text attribute
-            # at all, so a blind [0].text crashes on exactly the calls where
-            # the model chose to think first. Scan for the first block that
-            # actually has text instead of trusting position.
-            for block in r.content:
-                text = getattr(block, "text", None)
-                if text and text.strip():
-                    return text
+            # llm.parse_response scans for the first TEXT block (a reasoning
+            # model can lead with a thinking block that has no .text), but it
+            # accepts empty text. Keep this module's stricter rule: empty or
+            # whitespace-only text is "no reply".
+            if r.ok and r.text.strip():
+                return r.text
+            if (r.stop_reason is None and r.error
+                    and not r.error.startswith("no text in reply")):
+                # an exception inside llm.complete (network, bad key, ...):
+                # r.error is already "Type: message", key-redacted, <=300 chars
+                LAST_CALL_ERROR = r.error
+                return None
             # No block with genuinely non-empty text -- confirmed live: a
             # thinking-heavy model can exhaust the entire max_tokens budget on
             # thinking content before ever emitting text, which is NOT an
@@ -166,7 +169,7 @@ def call_llm(provider: str, model: str, api_key: str, system: str, user: str,
             # string that would render as a blank report) with no diagnostic.
             LAST_CALL_ERROR = (
                 f"response contained no text content "
-                f"(stop_reason={getattr(r, 'stop_reason', None)!r}) -- "
+                f"(stop_reason={r.stop_reason!r}) -- "
                 f"likely truncated by max_tokens={max_tokens} before any "
                 f"text was emitted"
             )

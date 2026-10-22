@@ -36,7 +36,6 @@ from stock_analyzer.constants import (
 from stock_analyzer.broker_screenshot import _LOW_CONF_NAMES, _TICKER_MAP
 from stock_analyzer.investor_mirror import build_closed_lots
 
-_MODEL = "claude-haiku-4-5-20251001"
 
 _VALID_INTENTS = (
     "trades_in_range", "rec_outcome", "trade_lookup",
@@ -321,7 +320,7 @@ LAST_PARSE_ERROR: str | None = None
 
 
 def parse_question(question: str, api_key: str, today_et, history=None,
-                    model: str = _MODEL, max_tokens: int = 300) -> dict | None:
+                    model: str | None = None, max_tokens: int = 300) -> dict | None:
     """Returns the validated structured query dict, or None on ANY failure
     (no key, API error, malformed response). Fail-open — never raises.
     On None, LAST_PARSE_ERROR carries the real reason (mirrors
@@ -1093,7 +1092,7 @@ LAST_NARRATE_ERROR: str | None = None
 
 
 def narrate_answer(intent: str, facts, api_key: str,
-                    model: str = _MODEL, max_tokens: int = 400) -> str | None:
+                    model: str | None = None, max_tokens: int = 400) -> str | None:
     """Returns the plain-English answer, or None on ANY failure (no key, API
     error). Fail-open — never raises. Caller must show an explicit
     'AI layer offline' state on None, never a fabricated answer. On None,

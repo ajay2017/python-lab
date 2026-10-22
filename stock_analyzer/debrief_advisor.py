@@ -837,7 +837,7 @@ def _parse_response(text: str) -> dict:
 def generate_debrief(
     package: dict,
     api_key: str,
-    model: str = "claude-sonnet-4-6",
+    model: str | None = None,
     # 700 cut the 2026-10-18 debrief off mid-sentence: the engine package (exact
     # legs, closed / not-measured names, 13 decision bullets) runs longer than
     # the old one. 1500 leaves room; a reply that still hits it is disclosed below.

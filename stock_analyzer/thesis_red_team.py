@@ -237,7 +237,7 @@ def generate_counter_evidence(
     ticker,
     inputs,
     api_key,
-    model="claude-haiku-4-5-20251001",
+    model=None,
     max_tokens=600,
 ):
     """

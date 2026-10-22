@@ -79,7 +79,7 @@ Output STRICT JSON ONLY — no prose, no markdown fences, no commentary before o
 def extract_report(
     raw_text: str,
     api_key: str,
-    model: str = "claude-sonnet-4-6",
+    model: str | None = None,
     max_tokens: int = ANALYST_EXTRACT_MAX_TOKENS,
 ) -> list[dict] | None:
     """

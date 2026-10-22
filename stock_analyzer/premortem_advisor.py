@@ -279,7 +279,7 @@ def generate_case_against(
     ticker: str,
     inputs: dict,
     api_key: str,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str | None = None,
     max_tokens: int = 700,
 ) -> dict | None:
     """
@@ -316,7 +316,7 @@ def generate_case_against(
             return None
         return {
             "case_against": case_against,
-            "model":        model,
+            "model":        r.model,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
     except Exception:

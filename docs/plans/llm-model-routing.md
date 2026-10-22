@@ -1,6 +1,6 @@
 # LLM model routing: move to current models, and change models without code changes
 
-**Status (2026-10-22): Phase 1 IN PROGRESS. P1-a to P1-d built and reviewed; P1-e next (see section 12).** *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
+**Status (2026-10-22): Phase 1 CODE-COMPLETE apart from P1-f (app.py key reads, owner decision). P1-a to P1-e built and reviewed (section 12). Phase 2 not started.** *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
 lead from an AST inventory of every Anthropic call (2026-10-22) and the Claude API migration guide bundled with Claude
 Code (cached 2026-10-06). **Owner agreed with every lead recommendation in section 7 (2026-10-22):** D-1 App Settings
 with the score role pinned in code; D-2 switch the score model, but last, after the Phase 4 dry run; D-3 Sonnet 5.5
@@ -389,3 +389,28 @@ Pure apart from the SDK call; no Streamlit import; no module-level mutable state
   reachable with about 30+ items (display-only, suppress-only, pre-existing).
 - **Cosmetic:** `bundle_loader.py` ~345 comment says "env first (Railway cron lanes)"; the Railway web service sets
   the variable too. Fix in the next reviewed `bundle_loader` commit.
+
+- **P1-e** (2026-10-22): ai_provider's Claude branch (`deep`, user-picked model, stricter empty-text rule kept) and
+  AI Snapshot's (`fast`, its own menu kept) call `llm.complete`. Every `model=` default and `portfolio_qa._MODEL` is
+  gone: `None` resolves to the role default (equal to the old literal); saved/returned model fields use `r.model`;
+  `run_debate` resolves once so the judge stays on Haiku. `_pms_model` and the broker import resolve through roles.
+  The golden fixture gained one entry (Investigator on `claude-opus-5`); every other entry is unchanged. Lead fix:
+  `LLMResult.status_code`, so AI Snapshot's 529/429/401/403 hints survive. New guards: `tests/test_llm_roles.py` (role
+  per site, plus the debate call sites) and `tests/test_llm_ratchet.py` (no `claude-…` ids outside `llm.py` and the
+  three menus; no Anthropic client or `messages.create` outside `llm.py`; `llm` import form). Built by `implementer`
+  (Sonnet 5.5); Opus review SHIP, 0 blocking.
+
+**Carried forward from the P1-e review (and still open from earlier):**
+- **P1-f (owner decision):** app.py reads the Anthropic key in about 20 places, in mixed orders. Move them onto
+  `resolve_anthropic_key`, but keep the two news-filter reads (Home brief ~5067, sidebar ~24724) section-only like
+  `bundle_loader`: widening them could switch the filter on, and the filter removes protective cards. The sidebar call's
+  512-token cap is reachable with about 30+ items.
+- **Next reviewed `llm.py` change:** should `parse_response` treat empty or whitespace-only text as no reply for every
+  role? Today a blank text block counts as a reply, so the thesis review could still save a WEAKENING verdict with an
+  empty summary.
+- **Next reviewed `ai_provider` change:** a refusal gets the "likely truncated by max_tokens" message; give it its own
+  wording plus a test. Also: an empty first text block followed by a real one now returns None (the old loop took the
+  first non-empty block). Rare.
+- **Cosmetic:** `portfolio_qa.py` ~38 has a run of blank lines where `_MODEL` was.
+- **Phase 3:** add the Investigator's plan stage (JSON, on `deep`) to the list of JSON sites on narrative roles.
+

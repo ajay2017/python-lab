@@ -271,7 +271,7 @@ def _format_evidence(evidence: dict) -> str:
 
 # ── Narrative generation ──────────────────────────────────────────────────
 
-def generate_catalyst_narrative(evidence: dict, api_key: str, model: str = "claude-haiku-4-5-20251001") -> dict | None:
+def generate_catalyst_narrative(evidence: dict, api_key: str, model: str | None = None) -> dict | None:
     """
     Single Haiku call. Returns {"narrative": str} or None on any failure (no
     key, timeout, malformed response, empty narrative). Never raises.

@@ -173,7 +173,7 @@ def _format_evidence(evidence: dict) -> str:
 
 # ── Scenario generation ───────────────────────────────────────────────────
 
-def generate_regime_scenario(evidence, api_key, model="claude-haiku-4-5-20251001"):
+def generate_regime_scenario(evidence, api_key, model=None):
     """
     Single Haiku call. Returns {"scenario_narrative": str,
     "indicator_watchlist": list[str]} or None on any failure (no key,

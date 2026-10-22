@@ -429,7 +429,7 @@ def build_exit_corpus(ticker, port_df_row, held_data_bundle, erosion_cache_row,
 # ── Main debate runner ────────────────────────────────────────────────────────
 
 def run_debate(corpus: dict, debate_type: str, api_key: str,
-               model: str = "claude-haiku-4-5-20251001") -> dict:
+               model: str | None = None) -> dict:
     """
     Run a 4-round Bull vs Bear debate + Judge verdict (5 Haiku calls total).
 
@@ -456,6 +456,10 @@ def run_debate(corpus: dict, debate_type: str, api_key: str,
             "transcript": [], "verdict": None, "partial": True,
             "error": "anthropic_import_failed",
         }
+
+    # Resolve once so every round AND the judge (ROLE_EXTRACT, whose own
+    # default is Sonnet) run on the same model: the fast-role Haiku.
+    model = llm.resolve_model(llm.ROLE_FAST, model)
 
     ticker      = corpus.get("ticker", "?")
     corpus_text = _format_corpus(corpus, debate_type)

@@ -176,7 +176,7 @@ def _format_corpus_for_prompt(corpus: list[dict]) -> str:
 # ── Pattern generation ─────────────────────────────────────────────────────
 
 def generate_missed_opportunity_patterns(corpus: list[dict], api_key: str,
-                                         model: str = "claude-haiku-4-5-20251001") -> dict | None:
+                                         model: str | None = None) -> dict | None:
     """
     Single Haiku call. Returns {"patterns": list[dict]} or None on any
     failure (no key, too few positions, timeout, malformed response).

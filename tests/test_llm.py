@@ -344,3 +344,52 @@ def test_complete_error_path_never_raises_on_odd_keys(key):
     assert res.text is None and res.error.startswith("RuntimeError")
     if key == "abc":   # a key shorter than 6 characters is not used for redaction
         assert "abc" in res.error
+
+
+def test_complete_keeps_the_http_status_of_an_sdk_error():
+    class _StatusErr(Exception):
+        status_code = 529
+
+    class _Msgs:
+        def create(self, **kw):
+            raise _StatusErr("overloaded_error")
+
+    class _Client:
+        def __init__(self, **kw):
+            self.messages = _Msgs()
+
+    r = llm.complete(llm.ROLE_FAST, api_key="sk-test-123456", max_tokens=10,
+                     messages=[{"role": "user", "content": "x"}], client_factory=_Client)
+    assert not r.ok and r.status_code == 529
+    assert "overloaded_error" in r.error
+
+
+def test_complete_status_code_is_none_without_an_int_status():
+    class _Msgs:
+        def create(self, **kw):
+            raise RuntimeError("boom")
+
+    class _Client:
+        def __init__(self, **kw):
+            self.messages = _Msgs()
+
+    r = llm.complete(llm.ROLE_FAST, api_key="sk-test-123456", max_tokens=10,
+                     messages=[{"role": "user", "content": "x"}], client_factory=_Client)
+    assert r.status_code is None
+
+
+def test_complete_status_code_rejects_a_bool():
+    class _BoolErr(Exception):
+        status_code = True
+
+    class _Msgs:
+        def create(self, **kw):
+            raise _BoolErr("x")
+
+    class _Client:
+        def __init__(self, **kw):
+            self.messages = _Msgs()
+
+    r = llm.complete(llm.ROLE_FAST, api_key="sk-test-123456", max_tokens=10,
+                     messages=[{"role": "user", "content": "x"}], client_factory=_Client)
+    assert r.status_code is None

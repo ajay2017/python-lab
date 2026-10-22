@@ -211,7 +211,8 @@ python-lab/
     ├── trade_economics.py          Trade-level dollar economics — turns an already-decided entry/stop/reward:risk into plain dollars-and-percent arithmetic; display only, deliberately NOT in `risk.py`
     ├── data_maintenance.py         Database maintenance / data-quality checks (F-235 ⑦, detection only) — orphaned / duplicate rows, stuck states, the impossible-states audit (check 6) and held tickers with no curated sector (check 7); see its own section below
     ├── impossible_states.py        Impossible-states audit baseline + regression decision (`classify`) for data_maintenance check 6 — zero / frozen / accruing per Q0 check id, 2026-10-14 baseline; pure
-    ├── ai_provider.py              Shared multi-provider LLM registry + dispatch, used by 🔎 Portfolio Investigator only
+    ├── llm.py                      The one Anthropic call path: role → model registry, request builder per model profile, reply parser (`LLMResult`), key lookup; every Claude call goes through `complete()`. `_GATE_FILES` member
+    ├── ai_provider.py              Shared multi-provider LLM registry + dispatch, used by 🔎 Portfolio Investigator only (its Claude branch calls `llm.complete`)
     ├── investigator.py             🔎 Portfolio Investigator (F-275) — multi-step LLM orchestration over a FIXED, already-reviewed toolbox of pure functions; redlines enforced in code
     ├── ticker_resolver.py          Company-name → ticker resolution for free-text lookups (Home's Research a Stock box) via yfinance Search; never consulted for input that already looks like a ticker, never raises
     ├── act_today_precedence.py     Held-position banner precedence for add-to-existing flow (stop-breach > reduce call > plain held)
@@ -3407,7 +3408,45 @@ Tax-harvest is explicitly out of scope for this readout; it stays on Phase 1a's 
 `tax_advisor.harvest_outcomes_summary()` running total. Opus `reviewer`: SHIP, 0 blocking.
 Full design: `docs/plans/recommendation-outcomes-measurement.md` §10/§11.
 
+### `stock_analyzer/llm.py`
+
+The single path for every Anthropic call in the app and the crons (LLM model routing Phase 1,
+`docs/plans/llm-model-routing.md`, commits `74234dc`..P1-e). Callers name a **role**, not a model:
+`fast`, `deep`, `extract`, `extract_strong`, `extract_trigger`, `filter`, `score`.
+`CODE_DEFAULTS` maps each role to a model, today the same models the call sites used to hardcode
+(Haiku 4.5 for fast/filter/score/extract_trigger, Sonnet 4.6 for deep/extract, Opus 4.8 for
+extract_strong). `PINNED_ROLES` (`score`, `filter`, `extract_trigger`) feed the sentiment
+pillar, Act Today's news checks and the Pre-Mortem declared stop, so their model can only be
+changed in this file, by a reviewed commit: `resolve_model` raises if a caller passes a
+different model for one.
+
+`complete(role, *, api_key, messages, max_tokens, system=None, model=None, temperature=None,
+timeout=None, client_kwargs=None)` resolves the model, builds the request with
+`build_request` (pure; the `legacy-sampling` and `opus-4x` profiles forward exactly what the
+caller passed, while the `modern` profile for 5.x models drops `temperature`, sets effort and
+thinking, and adds token headroom, unused until Phase 3), calls the SDK, and returns a frozen
+`LLMResult(text, stop_reason, error, model, usage, truncated, status_code)`. It never raises.
+`parse_response` reads the first `type == "text"` block. A refusal always gives no text. A
+reply cut off at `max_tokens` keeps its text, flagged `truncated`, for the narrative roles
+(`fast`, `deep`) and gives no text for the JSON roles. `status_code` carries an SDK HTTP
+error's status, which AI Snapshot's error banner reads. The key is stripped from error text.
+
+`resolve_anthropic_key(secrets_getter=None, environ=None)`: env `ANTHROPIC_API_KEY`, then
+`[anthropic] api_key`, then a flat secret, with any getter exception treated as "not set". The
+cron lanes call it with no getter (env only). `bundle_loader` passes a getter that answers only
+the `[anthropic]` section, so it never reads a flat secret.
+
+Guards: `tests/test_llm_request_golden.py` records every request (proves Phase 1 changed
+none); `tests/test_llm_roles.py` pins each call site's role; `tests/test_llm_ratchet.py`
+fails on a `claude-…` model id outside this file and the user-facing menus
+(`ai_provider.AI_PROVIDERS`, `investigator.EVAL_PASSED_MODELS`, AI Snapshot's `_AI_PROVIDERS`),
+or an Anthropic client / `messages.create` outside this file.
+
 ### `stock_analyzer/ai_provider.py`
+
+*(2026-10-22: the Claude branch now calls `llm.complete(llm.ROLE_DEEP, ...)`, which reads
+the first text block; this module keeps its stricter rule that empty or whitespace-only text is
+no reply. The paragraph below describes the pre-P1-e code.)*
 
 Multi-provider LLM registry, extracted from 🤖 AI Snapshot's own inline `_AI_PROVIDERS`
 dict/dispatch (`app.py` ~10685-10830) so the 🔎 Portfolio Investigator (F-275) could reuse the

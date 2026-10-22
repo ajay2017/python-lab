@@ -135,6 +135,8 @@ class LLMResult:
     model: str | None
     usage: dict | None
     truncated: bool = False
+    # HTTP status of an SDK APIStatusError (429, 529, 401...), else None.
+    status_code: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -206,9 +208,11 @@ def complete(role, *, api_key, messages, max_tokens, system=None, model=None,
         msg = f"{type(e).__name__}: {e}"
         if isinstance(api_key, str) and len(api_key) >= 6:
             msg = msg.replace(api_key, _REDACTED)
+        status = getattr(e, "status_code", None)
         return LLMResult(text=None, stop_reason=None,
                          error=msg[:_ERROR_MAX_CHARS], model=resolved,
-                         usage=None)
+                         usage=None,
+                         status_code=status if isinstance(status, int) and not isinstance(status, bool) else None)
 
 
 def resolve_anthropic_key(secrets_getter=None, environ=None) -> str:

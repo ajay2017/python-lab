@@ -394,7 +394,7 @@ def _parse_response(text: str) -> dict:
 def generate_report(
     package: dict,
     api_key: str,
-    model: str = "claude-sonnet-4-6",
+    model: str | None = None,
     max_tokens: int = 1000,
 ) -> dict | None:
     """

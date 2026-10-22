@@ -410,6 +410,7 @@ from stock_analyzer.decision_journal import compute_patterns
 from stock_analyzer import broker_import as _bimp
 from stock_analyzer import broker_screenshot as _bscr
 from stock_analyzer import debate_agent
+from stock_analyzer import llm as _llm
 from stock_analyzer.prediction_scoring import (
     score_predictions as _model_lab_score,
     below_min_matured_floor as _model_lab_below_floor,
@@ -8230,7 +8231,7 @@ if page == "🏠 Home":
                 or os.environ.get("ANTHROPIC_API_KEY", "")
             )
             if _pms_key:
-                _pms_model     = "claude-haiku-4-5-20251001"
+                _pms_model     = _llm.resolve_model(_llm.ROLE_FAST)
                 _pms_today_key = str(_today_et())
                 _pms_cache_key = f"_pm_stance__{_pms_today_key}__{_pms_model}"
                 _pms_cached    = st.session_state.get(_pms_cache_key)
@@ -12597,13 +12598,18 @@ if page == "🏠 Home":
     # ── Unified AI call ───────────────────────────────────────────────────
     def _call_ai_brief(provider, model, api_key, sys_prompt, usr_prompt):
         if provider == "Claude (Anthropic)":
-            import anthropic as _anth
-            c = _anth.Anthropic(api_key=api_key)
-            r = c.messages.create(
-                model=model, max_tokens=700, system=sys_prompt,
+            r = _llm.complete(
+                _llm.ROLE_FAST, api_key=api_key, model=model, max_tokens=700,
+                system=sys_prompt,
                 messages=[{"role": "user", "content": usr_prompt}],
             )
-            return r.content[0].text
+            if not r.ok:
+                # Keep the HTTP status: the error banner below picks its
+                # overloaded / rate-limit / bad-key hint from it.
+                _err = RuntimeError(r.error)
+                _err.status_code = r.status_code
+                raise _err
+            return r.text
         elif provider == "OpenAI":
             from openai import OpenAI as _OAI
             c = _OAI(api_key=api_key)
@@ -32936,7 +32942,6 @@ elif page == "📒 Trade Journal":
                             _ss_parsed = _bscr.parse_robinhood_text(
                                 text=_ss_text_input,
                                 api_key=_ss_api_key or None,
-                                model="claude-opus-4-8",
                                 reference_date=_today_et(),
                             )
                         st.session_state["_ss_parsed"] = _ss_parsed

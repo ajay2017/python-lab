@@ -156,6 +156,10 @@ def case_ai_provider(rec, mp):
     out = ai_provider.call_llm("Claude (Anthropic)", "claude-sonnet-4-6", FAKE_KEY,
                                "SYSTEM TEXT", "USER TEXT", 500)
     assert out == "A plan."
+    # a second model: the opus-4x request shape (no sampling), same fields
+    out = ai_provider.call_llm("Claude (Anthropic)", "claude-opus-5", FAKE_KEY,
+                               "SYSTEM TEXT", "USER TEXT", 500)
+    assert out == "A plan."
 
 
 def case_analyst_intel(rec, mp):

@@ -61,7 +61,7 @@ def extract_playbook(
     raw_text: str,
     article_date,
     api_key: str,
-    model: str = "claude-sonnet-4-6",
+    model: str | None = None,
     max_tokens: int = ANALYST_EXTRACT_MAX_TOKENS,
 ) -> list[dict] | None:
     """
@@ -132,7 +132,7 @@ def extract_results(
     raw_text: str,
     article_date,
     api_key: str,
-    model: str = "claude-sonnet-4-6",
+    model: str | None = None,
     max_tokens: int = ANALYST_EXTRACT_MAX_TOKENS,
 ) -> list[dict] | None:
     """

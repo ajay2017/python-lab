@@ -240,7 +240,7 @@ def _format_evidence(evidence: dict) -> str:
 # ── Narrative generation ─────────────────────────────────────────────────
 
 def generate_structural_narrative(evidence: dict, api_key: str,
-                                   model: str = "claude-haiku-4-5-20251001") -> str | None:
+                                   model: str | None = None) -> str | None:
     """
     Single Haiku call synthesizing the evidence dict into a 2-4 sentence
     structural narrative. Returns None on any failure (no key, timeout, empty

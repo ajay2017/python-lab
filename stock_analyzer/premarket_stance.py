@@ -181,7 +181,7 @@ def parse_stance(text: str) -> dict:
 def generate_stance(
     inputs: dict,
     api_key: str,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str | None = None,
     max_tokens: int = 500,
 ) -> dict | None:
     """
@@ -213,7 +213,7 @@ def generate_stance(
         text = r.text
         parsed = parse_stance(text)
         parsed["raw"]   = text
-        parsed["model"] = model
+        parsed["model"] = r.model
         return parsed
     except Exception:
         return None

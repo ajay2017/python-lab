@@ -22,6 +22,29 @@
       "timeout": 30.0
     }
   },
+  "ai_provider.call_llm#1": {
+    "client": {
+      "api_key": "<KEY>",
+      "base_url": "<ABSENT>",
+      "max_retries": "<ABSENT>",
+      "other": {},
+      "timeout": "<ABSENT>"
+    },
+    "create": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "USER TEXT",
+          "role": "user"
+        }
+      ],
+      "model": "claude-opus-5",
+      "other": {},
+      "system": "SYSTEM TEXT",
+      "temperature": "<ABSENT>",
+      "timeout": 30.0
+    }
+  },
   "analyst_intel.extract_report#0": {
     "client": {
       "api_key": "<KEY>",
