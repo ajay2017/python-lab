@@ -217,7 +217,8 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
    - C1 + C2 shipped 2026-10-20; C3 (risk footer) and C4 (quick wins: Watchlist non-ready rows, Catalyst / Econ windows, FSLR caption, (0b)) shipped 2026-10-22, screenshots pending.
    - C5 (Rebalancer underweight rows: no share counts, Grow Today's verdict per name, paused names in their own block; closes D5's Rebalancer half) shipped 2026-10-22, screenshots pending.
    - C6 (Diversification "Gap to 10% target" relabel, Undersized card points to Analysis) shipped 2026-10-23, screenshot pending.
-   - **NEXT:** C7–C9:
+   - C8 (AST ratchet on direct `position_sizing(` calls, `tests/test_sizing_ratchet.py`) shipped 2026-10-23.
+   - **NEXT:** C9 docs (C7 dry run optional):
      - the D5 dry run, the AST ratchet and the docs
 3. **App trust item 4:** antipattern rules for a literal `**` in raw HTML and a bare `$` next to numbers (~1 h). Slot it between S-D chunks.
    - Item 2 shipped (`db8d891`); the Q0 function was re-applied and verified 2026-10-22 (owner SQL: 32 rows, `_V` = `q0:fdbd2b2a9c28`, every check at its baseline; C1 21 vs 19 is its by-design accruing class, the regression split C9 is unchanged at 5). E3 was baselined 10-20 (11).
