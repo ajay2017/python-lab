@@ -99,6 +99,55 @@ Rules (each an AST signature, low false-positive by design):
       subscripting and BoolOp uses are all invisible to it, so a green gate means
       "no new bare-truthiness instance", never "the class is closed."
 
+  MARKDOWN_DOLLAR_PAIR       — (render layer only) a Streamlit markdown-rendered
+      call carrying TWO or more unescaped `$` in one string. Shape: a call
+      `<x>.markdown|caption|info|warning|error|success|toast(text)` or
+      `st.write(text)` (bare `st` only, so `f.write` / `sys.stdout.write` can't
+      hit) (first positional arg, else `body=`) OR any
+      `<x>.<widget>(..., help=text)`, where
+      `_static_dollar_count(text) >= 2`. Streamlit's markdown parser reads two `$`
+      on one line as inline LaTeX: both dollar signs vanish and the text between
+      them turns into italic math (live incidents 2026-08-27, 2026-09-10,
+      2026-09-18; memory `feedback_streamlit_renderer_mismatch`). The project fix
+      is a doubled backslash in source (`f"\\${x:,.0f}"`, runtime string has one backslash before the `$`);
+      a `$` immediately preceded by a backslash is not counted. `st.metric` is
+      NOT a listed attr (it does not render markdown) and is not flagged; a
+      receiver whose source text contains "log" (`logger.error`, `_log.info`) is
+      exempt on the body check. One hit per call, whether body, `help=` or both
+      qualify. A `<s>.replace("$", ...)` call counts zero (it is the runtime
+      escape idiom).
+      LIMIT, stated honestly: calls with `unsafe_allow_html=True` are skipped
+      (raw HTML, a different renderer; see HTML_LITERAL_BOLD). A string built
+      across several `+=` pieces that each hold ONE `$` is missed (the Name trace
+      takes the MAX of the assignments, not the sum); names are traced one level
+      only and only within the enclosing function (module body if top-level); a
+      generator-joined row counts as ONE row; widget labels (expander / button
+      titles) are not scanned. A green gate means "no new instance of the
+      shapes above", not "no LaTeX bug".
+  HTML_LITERAL_BOLD          — (render layer only) a call with
+      `unsafe_allow_html=True` whose HTML text (first positional arg, else
+      `body=`) (a) STARTS with a CommonMark type-6 HTML block tag (`<div`, `<p`,
+      `<table`, ... followed by whitespace, `>` or `/>`, case-insensitive; see
+      `_HTML_BLOCK_TAGS`) after lstrip(), and (b) contains a literal `**` in a
+      string constant reachable through f-string parts, `+`, ternary branches,
+      call args, `.format` receivers, join elements or one level of Name tracing
+      — EXCEPT constants inside the arguments of `_md_bold` / `md_bold_to_html`,
+      which convert the asterisks. WHY the block-tag condition: only an HTML
+      block suppresses markdown, so `**bold**` prints its asterisks there (live
+      recurrences 2026-08-27 and 2026-10-02). A string that starts with markdown
+      text or an INLINE tag (`<span`, `<small`, `<b`, `<abbr`) is still parsed
+      as markdown and the bold renders, so those are deliberately NOT flagged.
+      The leading fragment is the first string constant in source order (f-string
+      first part, `+` left side, each ternary branch, the traced value of a Name).
+      Convert with `stock_analyzer.util.md_bold_to_html` (`_md_bold` in app.py).
+      LIMIT, stated honestly: `**` arriving through a RUNTIME value (e.g. a
+      stock_analyzer function returning "**Do not open ...**" interpolated into
+      a div) is invisible to a static scan; only a screenshot, or wrapping the
+      value in `_md_bold`, catches that. A blank line (two newlines) inside the
+      string resumes markdown, so a `**` after one can be a false positive; a
+      string whose leading fragment is an interpolation or an inline tag but
+      later opens a block tag is missed.
+
 Baseline: like check_constants_documented.py, a snapshot of the existing tail is
 recorded (scripts/antipattern_baseline.json) so CI is green on day one and only
 NEW instances fail. The baseline is keyed on the *normalized source segment*
@@ -345,6 +394,137 @@ def _is_dynamic_html(node: ast.AST, escapers: frozenset = frozenset()) -> bool:
     return False
 
 
+_MD_CALL_ATTRS = frozenset({
+    "markdown", "caption", "info", "warning", "error", "success", "write", "toast",
+})
+_BOLD_CONVERTERS = frozenset({"_md_bold", "md_bold_to_html"})
+# CommonMark type-6 HTML block start-condition tag names.
+_HTML_BLOCK_TAGS = frozenset(
+    "address article aside base basefont blockquote body caption center col "
+    "colgroup dd details dialog dir div dl dt fieldset figcaption figure footer "
+    "form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li "
+    "link main menu menuitem nav noframes ol optgroup option p param search "
+    "section summary table tbody td tfoot th thead title tr track ul".split())
+_BLOCK_TAG_RE = re.compile(r"<([A-Za-z][A-Za-z0-9]*)(?=[\s>]|/>|$)")
+
+
+def _starts_with_block_tag(text: str) -> bool:
+    m = _BLOCK_TAG_RE.match(text.lstrip())
+    return bool(m) and m.group(1).lower() in _HTML_BLOCK_TAGS
+
+
+def _leading_fragments(node: ast.AST, lookup=None) -> list:
+    """Candidate leading static strings of an expression (first str constant in
+    source order). A ternary yields both branches; a Name its traced values."""
+    if isinstance(node, ast.Constant):
+        return [node.value] if isinstance(node.value, str) else []
+    if isinstance(node, ast.JoinedStr):
+        return _leading_fragments(node.values[0]) if node.values else []
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+        return _leading_fragments(node.left, lookup)
+    if isinstance(node, ast.IfExp):
+        return _leading_fragments(node.body, lookup) + _leading_fragments(node.orelse, lookup)
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "format"):
+        return _leading_fragments(node.func.value, lookup)
+    if isinstance(node, ast.Name) and lookup is not None:
+        return [f for v in lookup(node.id) for f in _leading_fragments(v)]
+    return []
+_UNESCAPED_DOLLAR = re.compile(r"(?<!\\)\$")
+
+
+def _scope_assignments(scope: ast.AST) -> dict:
+    """{name: [value nodes]} for single-Name `Assign` and `AugAssign` targets in
+    ONE scope, not descending into nested functions / lambdas / classes. Built
+    lazily per scope by the visitor (app.py's module body is ~one big script)."""
+    out: dict = {}
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        n = stack.pop()
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+        if isinstance(n, ast.Assign):
+            if len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+                out.setdefault(n.targets[0].id, []).append(n.value)
+        elif isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name):
+            out.setdefault(n.target.id, []).append(n.value)
+        stack.extend(ast.iter_child_nodes(n))
+    return out
+
+
+def _static_dollar_count(node: ast.AST, lookup=None) -> int:
+    """Statically visible `$` not immediately preceded by a backslash.
+
+    `lookup(name) -> [value nodes]` enables the depth-1 Name trace (the max over
+    the name's assignments, each counted WITHOUT a lookup so it never recurses).
+    Only the branch that renders is counted for a ternary (max), and only the
+    format string for `%` (left). See the MARKDOWN_DOLLAR_PAIR docstring."""
+    if isinstance(node, ast.Constant):
+        return len(_UNESCAPED_DOLLAR.findall(node.value)) if isinstance(node.value, str) else 0
+    if isinstance(node, ast.JoinedStr):
+        return sum(_static_dollar_count(v, lookup) for v in node.values)
+    if isinstance(node, ast.FormattedValue):
+        return _static_dollar_count(node.value, lookup)
+    if isinstance(node, ast.BinOp):
+        if isinstance(node.op, ast.Add):
+            return _static_dollar_count(node.left, lookup) + _static_dollar_count(node.right, lookup)
+        if isinstance(node.op, ast.Mod):
+            return _static_dollar_count(node.left, lookup)
+        return 0
+    if isinstance(node, ast.IfExp):
+        return max(_static_dollar_count(node.body, lookup), _static_dollar_count(node.orelse, lookup))
+    if isinstance(node, ast.Call):
+        f = node.func
+        # `<s>.replace("$", chr(92) + "$")` IS the runtime escape idiom, so it
+        # counts zero rather than the two literals in its own arguments.
+        if (isinstance(f, ast.Attribute) and f.attr == "replace" and node.args
+                and isinstance(node.args[0], ast.Constant) and node.args[0].value == "$"):
+            return 0
+        if (isinstance(f, ast.Attribute) and f.attr == "join" and len(node.args) == 1
+                and isinstance(node.args[0], (ast.ListComp, ast.GeneratorExp))):
+            return _static_dollar_count(node.args[0].elt, lookup)
+        n = sum(_static_dollar_count(a, lookup) for a in node.args)
+        if isinstance(f, ast.Attribute) and f.attr == "format":
+            n += _static_dollar_count(f.value, lookup)
+        return n
+    if isinstance(node, ast.Name) and lookup is not None:
+        return max((_static_dollar_count(v) for v in lookup(node.id)), default=0)
+    return 0
+
+
+def _has_literal_bold(node: ast.AST, lookup=None) -> bool:
+    """True if a string constant reachable from `node` contains `**`, skipping
+    anything inside the arguments of an `_md_bold` / `md_bold_to_html` call."""
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, str) and "**" in node.value
+    if isinstance(node, ast.JoinedStr):
+        return any(_has_literal_bold(v, lookup) for v in node.values)
+    if isinstance(node, ast.FormattedValue):
+        return _has_literal_bold(node.value, lookup)
+    if isinstance(node, ast.BinOp):
+        if isinstance(node.op, ast.Add):
+            return _has_literal_bold(node.left, lookup) or _has_literal_bold(node.right, lookup)
+        if isinstance(node.op, ast.Mod):
+            return _has_literal_bold(node.left, lookup)
+        return False
+    if isinstance(node, ast.IfExp):
+        return _has_literal_bold(node.body, lookup) or _has_literal_bold(node.orelse, lookup)
+    if isinstance(node, ast.Call):
+        f = node.func
+        if (getattr(f, "id", None) in _BOLD_CONVERTERS
+                or (isinstance(f, ast.Attribute) and f.attr in _BOLD_CONVERTERS)):
+            return False
+        if (isinstance(f, ast.Attribute) and f.attr == "join" and len(node.args) == 1
+                and isinstance(node.args[0], (ast.ListComp, ast.GeneratorExp))):
+            return _has_literal_bold(node.args[0].elt, lookup)
+        if any(_has_literal_bold(a, lookup) for a in node.args):
+            return True
+        return isinstance(f, ast.Attribute) and f.attr == "format" and _has_literal_bold(f.value, lookup)
+    if isinstance(node, ast.Name) and lookup is not None:
+        return any(_has_literal_bold(v) for v in lookup(node.id))
+    return False
+
+
 class _Visitor(ast.NodeVisitor):
     def __init__(self, src: str, rel: str = "", policy_consts: frozenset = frozenset(),
                  escapers: frozenset = frozenset()) -> None:
@@ -372,6 +552,31 @@ class _Visitor(ast.NodeVisitor):
         # `.astimezone()` call. Those ARE tz-aware, so flagging them is a false
         # positive — see the NAIVE_DATE_TODAY branch in visit_Call.
         self._tz_safe_calls: set[int] = set()
+        # Enclosing-scope stack (Module / FunctionDef) and its lazily built
+        # assignment index, for the depth-1 Name trace in the two render rules.
+        self._scopes: list[ast.AST] = []
+        self._scope_idx: dict[int, dict] = {}
+
+    def _lookup(self, name: str) -> list:
+        if not self._scopes:
+            return []
+        scope = self._scopes[-1]
+        idx = self._scope_idx.get(id(scope))
+        if idx is None:
+            idx = self._scope_idx[id(scope)] = _scope_assignments(scope)
+        return idx.get(name, [])
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._scopes.append(node)
+        self.generic_visit(node)
+        self._scopes.pop()
+
+    def visit_FunctionDef(self, node: "ast.FunctionDef | ast.AsyncFunctionDef") -> None:
+        self._scopes.append(node)
+        self.generic_visit(node)
+        self._scopes.pop()
+
+    visit_AsyncFunctionDef = visit_FunctionDef
 
     def _seg(self, node: ast.AST) -> str:
         seg = self._source_segment(node) or ""
@@ -501,6 +706,32 @@ class _Visitor(ast.NodeVisitor):
                 html_arg = node.args[0] if node.args else None
                 if html_arg is not None and _is_dynamic_html(html_arg, self.escapers):
                     self.hits.append(("UNSAFE_HTML_DYNAMIC", self._seg(node)))
+        # MARKDOWN_DOLLAR_PAIR / HTML_LITERAL_BOLD (render layer only).
+        if self.rel in _RENDER_LAYER:
+            _raw_html = any(
+                kw.arg == "unsafe_allow_html"
+                and isinstance(kw.value, ast.Constant) and kw.value.value is True
+                for kw in node.keywords
+            )
+            _text = node.args[0] if node.args else next(
+                (kw.value for kw in node.keywords if kw.arg == "body"), None)
+            if _raw_html:
+                if (_text is not None
+                        and any(_starts_with_block_tag(f) for f in _leading_fragments(_text, self._lookup))
+                        and _has_literal_bold(_text, self._lookup)):
+                    self.hits.append(("HTML_LITERAL_BOLD", self._seg(node)))
+            elif isinstance(node.func, ast.Attribute):
+                _flag = False
+                if (node.func.attr in _MD_CALL_ATTRS and _text is not None
+                        and (node.func.attr != "write"
+                             or getattr(node.func.value, "id", None) == "st")
+                        and "log" not in self._seg(node.func.value).lower()):
+                    _flag = _static_dollar_count(_text, self._lookup) >= 2
+                if not _flag:
+                    _help = next((kw.value for kw in node.keywords if kw.arg == "help"), None)
+                    _flag = _help is not None and _static_dollar_count(_help, self._lookup) >= 2
+                if _flag:
+                    self.hits.append(("MARKDOWN_DOLLAR_PAIR", self._seg(node)))
         # MIXED_TZ_PARSE — pd.to_datetime on a mixed-precision timestamptz
         # column without format="ISO8601". THIRD recurrence of one bug class
         # (2026-05-28, 2026-08-02, 2026-08-23 at eight sites at once), which is
@@ -807,6 +1038,11 @@ def main() -> int:
             "  MIXED_TZ_PARSE            → add format=\"ISO8601\"; utc=True "
             "ALONE does not fix mixed microsecond precision — it silently NaTs "
             "rows. This rule baselines at ZERO; do NOT --init past it.\n"
+            "  MARKDOWN_DOLLAR_PAIR      → 2+ unescaped `$` in one markdown/caption/help string "
+            "renders as LaTeX (the signs vanish). Escape each as a doubled backslash in source "
+            "(f\"\\\\${x:,.0f}\"). st.metric needs no escape.\n"
+            "  HTML_LITERAL_BOLD         → a literal `**bold**` in an unsafe_allow_html string that starts with a block tag (<div, <p, ...) prints "
+            "the asterisks. Wrap the text in _md_bold(...) (stock_analyzer.util.md_bold_to_html).\n"
             "If an instance is genuinely acceptable, regenerate the baseline "
             "deliberately: python scripts/check_antipatterns.py --init\n"
         )

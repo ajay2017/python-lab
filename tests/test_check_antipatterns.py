@@ -711,3 +711,149 @@ class TestSourceSegmentMatchesStdlib:
         assert len(nodes) > 100
         for n in nodes:
             assert v._source_segment(n) == ast.get_source_segment(src, n)
+
+
+class TestMarkdownDollarPair:
+    """MARKDOWN_DOLLAR_PAIR (2026-10-23): 2+ unescaped `$` in one string handed to
+    a markdown-rendering Streamlit call is parsed as inline LaTeX."""
+
+    @staticmethod
+    def _hits(code, rel="app.py", rule="MARKDOWN_DOLLAR_PAIR"):
+        v = ca._Visitor(code, rel)
+        v.visit(ast.parse(code))
+        return [seg for r, seg in v.hits if r == rule]
+
+    @pytest.mark.parametrize("code", [
+        'st.caption(f"a ${x:.2f} b ${y:.2f}")',
+        'st.info("a $1 b $2")',
+        'st.markdown(body=f"${a} ${b}")',
+        'st.checkbox("x", help="costs $5 or $10")',
+        'st.caption(f"{_m(f\'${a}\')} then {_m(f\'${b}\')}")',   # nested in one f-string
+        'st.caption("a $1 " + "b $2")',
+        'st.caption("a $%s b $%s" % (1, 2))',
+        'st.caption("a ${} b ${}".format(1, 2))',
+        'st.caption(("$1 " if c else "x") + ("$2" if d else "y"))',
+    ])
+    def test_flags_two_unescaped_dollars(self, code):
+        assert len(self._hits(code)) == 1
+
+    @pytest.mark.parametrize("code", [
+        'st.caption(f"a \\\\${x} b \\\\${y}")',                 # doubled-backslash escapes
+        'st.caption(f"a ${x} b")',                              # one dollar
+        'st.metric("x", f"${a} ${b}")',                         # metric does not render markdown
+        'st.markdown(f"${a} ${b}", unsafe_allow_html=True)',    # raw HTML: out of scope
+        'st.caption("a $1" if c else "b $2")',                  # one branch renders
+        'logger.error("$1 $2")',
+        'logging.warning("$1 $2")',
+        '_log.info("$1 $2")',
+        'st.caption(s.replace("$", chr(92) + "$"))',            # the runtime escape idiom
+        'st.caption(f"{a}")',                                   # nothing static
+    ])
+    def test_ignores_safe_shapes(self, code):
+        assert self._hits(code) == []
+
+    def test_outside_render_layer_is_ignored(self):
+        assert self._hits('st.caption("$1 $2")', rel="stock_analyzer/x.py") == []
+
+    def test_name_traced_one_level_in_function(self):
+        code = 'def f():\n    t = f"${a} and ${b}"\n    st.caption(t)\n'
+        assert len(self._hits(code)) == 1
+
+    def test_name_traced_via_augassign(self):
+        code = 'def f():\n    t = "x"\n    t += " $1 and $2"\n    st.caption(t)\n'
+        assert len(self._hits(code)) == 1
+
+    def test_name_not_traced_past_one_level(self):
+        code = 'def f():\n    a = "$1 $2"\n    b = a\n    st.caption(b)\n'
+        assert self._hits(code) == []
+
+    def test_name_is_scoped_to_enclosing_function(self):
+        code = 'def f():\n    t = "$1 $2"\ndef g():\n    st.caption(t)\n'
+        assert self._hits(code) == []
+
+    def test_module_level_name_traced(self):
+        code = 't = "$1 $2"\nst.caption(t)\n'
+        assert len(self._hits(code)) == 1
+
+    def test_pieces_with_one_dollar_each_are_a_documented_miss(self):
+        code = 'def f():\n    t = "a $1"\n    t += " b $2"\n    st.caption(t)\n'
+        assert self._hits(code) == []
+
+    def test_join_counts_one_row(self):
+        assert self._hits('st.caption(", ".join(f"${a} ${b}" for a in r))') != []
+        assert self._hits('st.caption(", ".join(f"${a}" for a in r))') == []
+
+    def test_body_and_help_on_one_call_is_one_hit(self):
+        code = 'st.markdown("$1 $2", help="$3 $4")'
+        assert len(self._hits(code)) == 1
+
+    def test_dollar_helper_directly(self):
+        n = lambda s: ca._static_dollar_count(ast.parse(s, mode="eval").body)
+        assert n('"$a $b"') == 2
+        assert n('"\\\\$a $b"') == 1
+        assert n('1') == 0
+
+
+class TestHtmlLiteralBold:
+    """HTML_LITERAL_BOLD (2026-10-23): markdown is not processed inside raw HTML."""
+
+    @staticmethod
+    def _hits(code, rel="app.py"):
+        v = ca._Visitor(code, rel)
+        v.visit(ast.parse(code))
+        return [seg for r, seg in v.hits if r == "HTML_LITERAL_BOLD"]
+
+    @pytest.mark.parametrize("code", [
+        'st.markdown("<div>**x**</div>", unsafe_allow_html=True)',
+        'st.markdown("<DIV class=a>**x**</DIV>", unsafe_allow_html=True)',
+        'st.markdown("  <p>**x**</p>", unsafe_allow_html=True)',
+        'st.markdown("y" if c else "<div>**x**</div>", unsafe_allow_html=True)',
+        'st.markdown(f"<div>**{t}**</div>", unsafe_allow_html=True)',
+        'st.markdown(body="<p>**x**</p>", unsafe_allow_html=True)',
+        'st.markdown("<p>" + "**x**", unsafe_allow_html=True)',
+        'st.markdown("<p>**x**</p>" if c else "y", unsafe_allow_html=True)',
+        'st.markdown("<p>**{}**</p>".format(t), unsafe_allow_html=True)',
+        'st.markdown(f"<p>{_md_bold(a)}</p>**x**", unsafe_allow_html=True)',
+    ])
+    def test_flags_literal_bold_in_raw_html(self, code):
+        assert len(self._hits(code)) == 1
+
+    @pytest.mark.parametrize("code", [
+        'st.markdown(_md_bold("<div>**x**</div>"), unsafe_allow_html=True)',
+        'st.markdown(f"<div>{_md_bold(\'**x**\')}</div>", unsafe_allow_html=True)',
+        'st.markdown(md_bold_to_html("**x**"), unsafe_allow_html=True)',
+        'st.markdown("**x**")',                                  # real markdown, no raw HTML
+        'st.markdown("**x**", unsafe_allow_html=False)',
+        'st.markdown("<div>x</div>", unsafe_allow_html=True)',
+        'st.markdown("<span>**x**</span>", unsafe_allow_html=True)',
+        'st.markdown("**x** <span>y</span>", unsafe_allow_html=True)',
+        'st.markdown("<small>• **x**</small>", unsafe_allow_html=True)',
+        'st.markdown("<divider>**x**</divider>", unsafe_allow_html=True)',
+        'st.markdown(f"{a}<div>**x**</div>", unsafe_allow_html=True)',
+    ])
+    def test_ignores_safe_shapes(self, code):
+        assert self._hits(code) == []
+
+    def test_outside_render_layer_is_ignored(self):
+        code = 'st.markdown("<b>**x**</b>", unsafe_allow_html=True)'
+        assert self._hits(code, rel="stock_analyzer/x.py") == []
+
+    def test_name_traced_one_level(self):
+        code = 'def f():\n    h = "<p>**x**</p>"\n    st.markdown(h, unsafe_allow_html=True)\n'
+        assert len(self._hits(code)) == 1
+
+    def test_runtime_value_is_a_documented_miss(self):
+        code = 'st.markdown(f"<div>{advisor_text()}</div>", unsafe_allow_html=True)'
+        assert self._hits(code) == []
+
+
+class TestDollarPairWriteReceiver:
+    def test_write_requires_bare_st_receiver(self):
+        def hits(code):
+            v = ca._Visitor(code, "app.py")
+            v.visit(ast.parse(code))
+            return [1 for r, _ in v.hits if r == "MARKDOWN_DOLLAR_PAIR"]
+        assert len(hits('st.write("$1 $2")')) == 1
+        assert hits('f.write("$1 $2")') == []
+        assert hits('sys.stdout.write("$1 $2")') == []
+        assert len(hits('f.caption("$1 $2")')) == 1   # other attrs keep any receiver
