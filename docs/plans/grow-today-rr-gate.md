@@ -1,9 +1,9 @@
 # Grow Today R:R gate (G-32): entry reward:risk ≥ 2:1 on new picks AND adds
 
 **Status:** C1 BUILT 2026-10-23 (`stock_analyzer/entry_rr.py`, `scripts/grow_rr_dryrun.py`; Opus FIX-FIRST/2 → SHIP/0).
-Nothing wired. **Next: the OWNER runs the dry run** (`python scripts/grow_rr_dryrun.py --days 30 --csv grow_rr.csv`, then
+Nothing wired. **Dry run DONE 2026-10-23, readout below. Next: the owner rules on U1–U13.** (Was: the owner runs the dry run (`python scripts/grow_rr_dryrun.py --days 30 --csv grow_rr.csv`, then
 `python scripts/grow_rr_dryrun.py --today`, from a shell with `SUPABASE_URL` / `SUPABASE_KEY`); the lead records the readout
-here; the owner rules on U1–U13. Enforcement (C3–C5) waits for that; C4 ships before or with C3.
+here; the owner rules on U1–U13.) Enforcement (C3–C5) waits for that; C4 ships before or with C3.
 C1 review fixes worth knowing when reading the readout: the retro target uses the same 6-month window as the live bundle
 (52-week high/low from the longer frame), and `--today` measures picks, adds and overflow (near-exact: bundles re-fetched).
 
@@ -60,6 +60,22 @@ since `fc9e6af` (`rr_readout.redeploy_headline`).
 5. **C5 (same push as C3)** — Home banners, empty state, Analysis / Rebalancer / Signals text, User Guide.
 6. **C6** — docs (new F-312, F-43b / F-305 notes, architecture "used by" row, coordination-caches "no new key",
    shipped-log, queue, this Status). Push C3–C5 after 16:00 ET or at a weekend so no day's rows straddle regimes.
+
+## Dry-run readout (owner ran C1, 2026-10-23)
+
+`python scripts/grow_rr_dryrun.py --days 30` (rec_date 2026-09-11 … 2026-10-22; 103 rows, 0 skipped) and `--today`.
+
+- **New picks: 96 rows over 22 days, 44 would be held (46%).** Pass 52, below 44, no_upside 0, unknown 0.
+  - **By name:** 40 distinct names. 13 always held, 22 always pass, 5 mixed (CVX, TER, ESTC, MRVL, ABBV). The held rows are concentrated: HPE 11 (R:R 1.0–1.6, ATR 5–7%), TWLO 7, AMD 4, ABNB / FTNT / AAPL 2 each, then SMCI, PLTR, OKTA, FIVN, SPOT, DELL and WFC once each.
+  - **Median ATR%** held 4.6 vs pass 3.2. So the gate acts as a volatility filter, as the planner expected, but on the analyst base, not mainly the technical one.
+  - **`base_source`:** analyst 91 (39 held), resistance 4 (all held), flat 1 (held). The U3 technical-fallback question touches 5 of 96 rows, all held under either answer.
+  - **Near misses in [1.5, 2.0): 10.** One rounding disagreement: CVX 2026-09-17, 1.98, shown as "2.0" by the 1-dp `risk_reward`. Stop-basis flips between the bundle ATR stop and `rec_stop`: 4 of 96 (ESTC 10-15 pass → below; ABBV, CVX, SPOT 09-17 below → pass).
+  - **Days left with no passing pick: 2 of 22** (10-14, 10-21). Counting passing overflow names too, still 2 of 22.
+- **Adds: 3 rows (ON 09-21, ON 09-22, MU 09-14), all pass.** Too few to judge the lane the planner expected G-32 to bind on.
+- **Overflow: 4 rows, 2 pass** (OXY 10-20, CRM 10-19), so a freed slot could have been refilled (U5).
+- **Asset type:** no ETF rows.
+- **`--today`: no rows.** The 10-23 cron scan was present (scan_date 2026-10-23, source cron), but Grow Today produced no picks, adds or overflow, and the retro has no 10-23 rows either. The script doesn't print `compute_morning_picks` errors, so a quiet day can't be told apart from a failed build.
+- **Approximation that matters most:** 95 of 96 pick rows use today's provider target (`approx_today`); only held names have a dated snapshot. Targets that moved since 09-11 shift those R:Rs in an unknown direction.
 
 ## Owner decisions needed (after the dry run)
 
