@@ -10327,10 +10327,12 @@ if page == "🏠 Home":
                 unsafe_allow_html=True,
             )
 
-        # Early-deterioration WATCH suppressed an add — the composite still reads
-        # Strong Buy, but the name is below its trend MA / drawing down from its
-        # peak. The app won't nudge to grow a weakening position; it says why
-        # (previously this only annotated the add card, which read as contradictory).
+        # Early-deterioration WATCH suppressed an add — the name is below its trend
+        # MA / drawing down from its peak. The app won't nudge to grow a weakening
+        # position; it says why (previously this only annotated the add card, which
+        # read as contradictory). The list is EVERY held WATCH name (daily_briefing's
+        # pre-pass), not only Strong Buys, so the text must not claim a score
+        # (seen live 2026-10-23: "These still score Strong Buy" above a 64).
         if deterioration_blocked:
             _dt_rows = "".join(
                 f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
@@ -10345,10 +10347,11 @@ if page == "🏠 Home":
                 "🟡 Add Suppressed — Early Deterioration Watch</div>"
                 + _dt_rows
                 + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
-                "These still score Strong Buy, but they're below their trend line and "
-                "pulling back from recent highs — an early deterioration Watch (also shown "
-                "in Review Before Close). The app won't nudge you to add to a weakening "
-                "position; if the trend re-strengthens, they'll return to the add list."
+                "These holdings are below their trend line and pulling back from recent "
+                "highs — an early deterioration Watch (also shown in Review Before Close). "
+                "The app won't nudge you to add to a weakening position, whatever its "
+                "score; once the trend re-strengthens, the Watch lifts and they can "
+                "qualify for an add again."
                 "</div></div>",
                 unsafe_allow_html=True,
             )
@@ -29248,7 +29251,7 @@ elif page == "📋 Watchlist":
                         f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
                         f"letter-spacing:0.09em;text-transform:uppercase'>Position Sizing</span><br>"
                         f"<span style='color:#eee;font-size:0.88em'>"
-                        f"<b>{_wl_ps['shares']:,} shares</b> @ ${_price:.2f} = "
+                        f"<b>{_wl_ps['shares']:,} {'share' if _wl_ps['shares'] == 1 else 'shares'}</b> @ ${_price:.2f} = "
                         f"<b>${_wl_ps['total_cost']:,.0f}</b> "
                         f"({_wl_ps['portfolio_pct']:.1f}% of portfolio)<br>"
                         f"Risk: ${_wl_ps['actual_risk']:,.0f} "
