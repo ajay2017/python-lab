@@ -77,6 +77,32 @@ since `fc9e6af` (`rr_readout.redeploy_headline`).
 - **`--today`: no rows.** The 10-23 cron scan was present (scan_date 2026-10-23, source cron), but Grow Today produced no picks, adds or overflow, and the retro has no 10-23 rows either. The script doesn't print `compute_morning_picks` errors, so a quiet day can't be told apart from a failed build.
 - **Approximation that matters most:** 95 of 96 pick rows use today's provider target (`approx_today`); only held names have a dated snapshot. Targets that moved since 09-11 shift those R:Rs in an unknown direction.
 
+## Outcome analysis (lead, 2026-10-23, owner-requested before ruling on U1–U13)
+
+Scratch analysis, not repo code: forward prices from yfinance over the dry-run pick rows, plus the owner's `trades` rows
+since 2026-09-11 (owner SQL).
+
+- **All 96 picks (price path), alpha vs SPY, close to close from rec_date.** At the 2.0 bar the gate doesn't separate:
+  - kept: −0.7pp at 5 days (46 matured) and −0.3pp at 10 days (40);
+  - held: −0.4pp at 5 days (37) and −1.0pp at 10 days (34);
+  - per name: kept 0.0pp over 25 names, held −1.2pp over 16.
+  - Alpha does not rise with R:R. The 1–1.5 band was +2.5pp at 5 days (7 of 7 beat SPY); the 2–2.5 band +2.2pp (6 of 8);
+    3–5 was the worst at −1.8pp (8 of 24).
+  - A 2.5 bar would also remove the 2–2.5 band: TER, PM, CRM, ABBV and ESTC won; COP and one CVX lost. Its kept set
+    averaged −1.3pp at 5 days.
+  - "First touch" (stop vs target) is geometry, not skill: low-R:R targets sit a few % above entry.
+- **The owner's actual Grow-Today-triggered buys (13 lots).** Sold lots are valued at their sale price, open lots at the
+  2026-10-23 close.
+  - The 5 lots the gate would have held made +$63 on $5,037 (+1.3%): AAPL +4.7%, ABBV +9.0%, PLTR +0.9% (all open);
+    DELL −5.9% and HPE −3.0% (both sold).
+  - The 8 passing lots made +$581 on $7,160 (+8.1%): ON +14.0% / +15.6% (add), SAP +11.8%, ISRG +10.9%, MU +6.7%
+    (add) and CRM +3.6% (overflow) gained; NVDA −6.5% / −4.8% lost.
+  - Excluded: manual buys, the MRVL Diversify-add (R:R 1.8 on the 10-06/07 rows, −$236), and the MU 09-30 and
+    CRM 09-15 buys (no matching dry-run row).
+- **Read:** the two lenses disagree. Both are small, sit in one choppy regime and use approximate targets, and the
+  trade lens is dominated by exit timing. Neither measures an edge for R:R ≥ 2 as an entry filter. The lead's
+  recommendation is the C2 shadow (exact R:R recorded per pick, no routing change) before enforcement.
+
 ## Owner decisions needed (after the dry run)
 
 - **U1** price basis: bundle triple (recommended) vs the lane's sizing price.
