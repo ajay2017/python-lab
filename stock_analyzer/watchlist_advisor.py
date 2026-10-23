@@ -32,6 +32,7 @@ from stock_analyzer.constants import (
     UNCLASSIFIED_SECTOR,
 )
 from stock_analyzer import exit_advisor
+from stock_analyzer.rr_readout import fmt_ratio_vs
 from stock_analyzer import asset_type as _asset_type_mod
 from stock_analyzer import entry_eligibility as _entry_elig
 from stock_analyzer.pillar_availability import (
@@ -577,7 +578,7 @@ def _build_watchlist_recommendation(
                     f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
                     f"Signal: {rec_label}",
                     f"Price {'in' if in_zone else 'near'} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
-                    f"R:R {rr:.1f}:1 — above 2:1 minimum" if rr else "Risk/reward acceptable",
+                    f"R:R {rr:.1f}:1 — above {RR_ENTRY_MIN:.0f}:1 minimum" if rr else "Risk/reward acceptable",
                 ],
                 conditions_missing=[
                     "Sector unknown — the sector-concentration check couldn't run",
@@ -618,7 +619,7 @@ def _build_watchlist_recommendation(
                     f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
                     f"Signal: {rec_label}",
                     f"Price {'in' if in_zone else 'near'} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
-                    f"R:R {rr:.1f}:1 — above 2:1 minimum" if rr else "Risk/reward acceptable",
+                    f"R:R {rr:.1f}:1 — above {RR_ENTRY_MIN:.0f}:1 minimum" if rr else "Risk/reward acceptable",
                 ],
                 conditions_missing=[
                     f"Portfolio fit: {gate['reason']}",
@@ -718,7 +719,7 @@ def _build_watchlist_recommendation(
                 f"the thesis is intact. "
                 f"Price {'is inside' if in_zone else f'is within 3% of'} the entry zone "
                 f"(${entry_lo:.2f}–${entry_hi:.2f}). "
-                + (f"Risk/reward is {rr:.1f}:1 — well above the 2:1 minimum. " if rr else "")
+                + (f"Risk/reward is {rr:.1f}:1 — well above the {RR_ENTRY_MIN:.0f}:1 minimum. " if rr else "")
                 # Deliberately does NOT say "use the position sizing below": that
                 # panel is WITHHELD whenever the portfolio value is unknown
                 # (F-261 refuses to size against a book it cannot measure), and
@@ -735,7 +736,7 @@ def _build_watchlist_recommendation(
                 f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
                 f"Signal: {rec_label}",
                 f"Price {'in' if in_zone else 'near'} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
-                f"R:R {rr:.1f}:1 — above 2:1 minimum" if rr else "Risk/reward acceptable",
+                f"R:R {rr:.1f}:1 — above {RR_ENTRY_MIN:.0f}:1 minimum" if rr else "Risk/reward acceptable",
                 f"No imminent earnings risk" if not earn_soon else "",
             ],
             # Deliberately EMPTY on this branch (2026-08-28). It used to carry
@@ -791,7 +792,7 @@ def _build_watchlist_recommendation(
     # memory / docs/plans/test-automation.md).
     if score >= COMPOSITE_BUY and in_zone and (rr is None or rr < RR_ENTRY_MIN):
         rr_reason = (
-            f"R:R is only {rr:.1f}:1 — below the {RR_ENTRY_MIN:.0f}:1 minimum"
+            f"R:R is only {fmt_ratio_vs(rr, RR_ENTRY_MIN)}:1 — below the {RR_ENTRY_MIN:.0f}:1 minimum"
             if rr is not None else
             "no validated price target, so risk/reward can't be computed"
         )
@@ -862,7 +863,7 @@ def _build_watchlist_recommendation(
             ],
             conditions_missing=[
                 f"Price {abs(pct_above):.1f}% above entry zone — wait for pullback or set limit",
-                (f"R:R {rr:.1f}:1 — currently below {RR_ENTRY_MIN:.0f}:1 target at this price" if rr and rr < RR_ENTRY_MIN else ""),
+                (f"R:R {fmt_ratio_vs(rr, RR_ENTRY_MIN)}:1 — currently below {RR_ENTRY_MIN:.0f}:1 target at this price" if rr and rr < RR_ENTRY_MIN else ""),
             ],
             institutional_lens=(
                 "Entry discipline is where most retail investors give back the edge their analysis creates. "

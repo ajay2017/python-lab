@@ -859,12 +859,14 @@ def rebalance_actions(
             # Trim to the ceiling: sell (w - ceiling)% of the BOOK, i.e. the
             # fraction (w - ceiling)/w of this position. (Pre-2026-10-23 this
             # divided by 100, understating the trim by w/100.) Floor the share
-            # count; a sub-one-share excess sizes 0 shares (action still emitted).
+            # count; a sub-one-share excess sizes 0 shares (action still emitted,
+            # but urgency "low" and sized=False: no sell call is actually made).
             trim_val    = mval * (w - SINGLE_NAME_CEILING) / w if w > 0 else 0.0
             trim_shares = int(trim_val / price) if price and price > 0 else 0
             actions.append({
                 "type":    "trim",
-                "urgency": "medium",
+                "urgency": "medium" if trim_shares >= 1 else "low",
+                "sized":   trim_shares >= 1,
                 "ticker":  ticker,
                 "title":   "Oversized Position with Strong Gain",
                 "trigger": f"Weight {w:.0f}% exceeds {SINGLE_NAME_TRIM_TRIGGER:.0f}% threshold with +{pnl:.0f}% profit",

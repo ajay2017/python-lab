@@ -107,6 +107,17 @@ def test_build_snapshot_actions_list_sets_act_today_n_to_length():
     assert snap["active_recs"]["act_today_n"] == 3
 
 
+def test_build_snapshot_act_today_n_excludes_unsized_trim():
+    acts = [
+        {"type": "trim", "trim_shares": 0},
+        {"type": "trim", "trim_shares": 3},
+        {"type": "trim"},
+        {"type": "add"},
+    ]
+    snap = build_snapshot(ticker="AAA", action="BUY", actions=acts)
+    assert snap["active_recs"]["act_today_n"] == 3
+
+
 def test_build_snapshot_actions_none_leaves_act_today_n_none():
     snap = build_snapshot(ticker="AAA", action="BUY", actions=None)
     assert snap["active_recs"]["act_today_n"] is None

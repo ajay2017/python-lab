@@ -118,11 +118,20 @@ def build_snapshot(
     except Exception:
         regime_out = None
 
-    # ── Active-recommendation load at decision time
+    # ── Active-recommendation load at decision time. A trim action whose
+    # trim_shares is a number < 1 made no sell call, so it isn't counted.
+    # 2026-10-23: act_today_n excludes oversized-trim actions that size 0
+    # shares; earlier rows counted them.
+    def _unsized_trim(a) -> bool:
+        if not isinstance(a, dict) or a.get("type") != "trim":
+            return False
+        ts = a.get("trim_shares")
+        return isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts == ts and ts < 1
+
     act_today_n = None
     try:
         if actions is not None:
-            act_today_n = int(len(actions))
+            act_today_n = int(sum(1 for a in actions if not _unsized_trim(a)))
     except Exception:
         act_today_n = None
 

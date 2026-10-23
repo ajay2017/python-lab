@@ -391,6 +391,19 @@ def test_near_entry_in_zone_low_rr_gets_distinct_copy_not_approaching():
     assert "below the 2:1 minimum" in rec["summary"]
 
 
+def test_near_entry_in_zone_rr_just_below_min_does_not_round_up_to_min():
+    # base=119.7 -> rr = 1.97: must print 1.97, never "2.0:1 ... below the 2:1".
+    rec = build_watchlist_recommendation("XYZ", _base_data(targets={"base": 119.7}))
+    assert rec["action"] == "NEAR_ENTRY"
+    assert "1.97:1" in rec["summary"]
+    assert "2.0:1" not in rec["summary"]
+
+
+def test_near_entry_in_zone_low_rr_prints_one_decimal_when_unambiguous():
+    rec = build_watchlist_recommendation("XYZ", _base_data(targets={"base": 115.0}))
+    assert "1.5:1" in rec["summary"]
+
+
 def test_near_entry_generic_approaching_copy_unaffected_when_out_of_zone():
     # The distinct in-zone branch must NOT swallow the ordinary "price above
     # zone, R:R would be fine if you were at the right price" case.

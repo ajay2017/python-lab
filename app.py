@@ -143,6 +143,8 @@ from stock_analyzer.constants import (
     FUNDAMENTALS_GATE_MIN_METRICS,
     FUNDAMENTALS_CACHE_MAX_AGE_DAYS,
     RR_ENTRY_MIN,
+    RR_FAVOURABLE_MIN,
+    RR_MARGINAL_MIN,
     TRADE_PRICE_SANITY_FLOOR,
     TRADE_PRICE_SANITY_RATIO_LOW,
     TRADE_PRICE_SANITY_RATIO_HIGH,
@@ -299,6 +301,7 @@ from stock_analyzer.portfolio import (
     correlation_claim_verified, correlation_flat,
     beta_diversifying_sectors,
 )
+from stock_analyzer.rr_readout import fmt_ratio_vs, rr_quality, redeploy_headline
 from stock_analyzer.beta_repair import (
     aligned_beta, leverage_side_effect, rank_defensive_candidates,
 )
@@ -10649,7 +10652,7 @@ if page == "🏠 Home":
                     st.caption(f"…and {len(etf_screened) - 6} more.")
 
         # Composite-conflict suppression — momentum was hot but the full
-        # composite (Technical + Fundamental + Sentiment) was below the
+        # composite (Technical + Business Quality + Valuation + Sentiment) was below the
         # Buy threshold. Surfaces what was considered AND rejected so the
         # user makes the decision on the Brief itself.
         if comp_skipped:
@@ -10691,7 +10694,7 @@ if page == "🏠 Home":
                 + _cs_rows
                 + "<div style='color:#fecaca;font-size:0.76em;margin-top:6px;font-style:italic'>"
                 "Momentum (a single-factor breakout signal) caught these names, "
-                "but the full composite — Technical + Fundamental + Sentiment — "
+                "but the full composite — Technical + Business Quality + Valuation + Sentiment — "
                 f"is below the Buy threshold ({COMPOSITE_BUY:.0f}). Decision: skip until composite "
                 "recovers. Track on the Watchlist for a re-look."
                 "</div></div>",
@@ -11468,13 +11471,41 @@ if page == "🏠 Home":
                             return _CORR_STATE_COPY[classify_book_corr(cv)](cv)
 
                         st.markdown("**Redeploy into — engine-vetted candidates:**")
-                        if any(c["passes"] is True for c in _cand_rows):
-                            _best = next(c for c in _cand_rows if c["passes"] is True)
+                        _hl = redeploy_headline(_display)
+                        if _hl["state"] == "entry":
                             st.success(
-                                f"**{_best['ticker']}** ({_best['sector']}) clears the Buy gate "
-                                f"({_best['score']:.0f} ≥ {COMPOSITE_BUY:.0f}) — a genuine redeploy entry, "
-                                "not just a sector filler.",
+                                f"**{_hl['ticker']}** ({_hl['sector']}) clears the Buy gate "
+                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f} · "
+                                f"R:R {fmt_ratio_vs(_hl['rr'], RR_ENTRY_MIN)}:1 ≥ {RR_ENTRY_MIN:.0f}:1) "
+                                "— a genuine redeploy entry, not just a sector filler.",
                                 icon="🎯",
+                            )
+                        elif _hl["state"] == "rr_fails":
+                            st.warning(
+                                f"**{_hl['ticker']}** clears the composite Buy gate "
+                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R is "
+                                f"{fmt_ratio_vs(_hl['rr'], RR_ENTRY_MIN)}:1 — below the "
+                                f"{RR_ENTRY_MIN:.0f}:1 minimum the Watchlist uses for an entry, so it "
+                                "isn't confirmed as an entry at today's price. Check 📈 Analysis. "
+                                "Trimming is still sound — wait for a better entry or pick your own name.",
+                                icon="🚦",
+                            )
+                        elif _hl["state"] == "no_upside":
+                            st.warning(
+                                f"**{_hl['ticker']}** clears the composite Buy gate "
+                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R isn't positive "
+                                "at today's price (price at or above its base target, or at or below "
+                                "its stop), so it isn't an entry now. Trimming is still sound; "
+                                "check 📈 Analysis.",
+                                icon="🚦",
+                            )
+                        elif _hl["state"] == "rr_unknown":
+                            st.warning(
+                                f"**{_hl['ticker']}** clears the composite Buy gate "
+                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R couldn't be "
+                                "computed (no stop or target), so it isn't confirmed as an entry. "
+                                "Check 📈 Analysis before acting.",
+                                icon="🚦",
                             )
                         else:
                             st.warning(
@@ -16395,20 +16426,42 @@ elif page == "📡 Signals & Advice":
                         )
 
                         # Headline: does the sector need have an actionable entry today?
-                        _passers = [c for c in _annotated if c["passes"] is True]
-                        if _passers:
-                            _best = _passers[0]
-                            _best_rr = (
-                                f" · R:R {_best['rr']:.1f}:1"
-                                if isinstance(_best["rr"], (int, float)) and _best["rr"] > 0 else ""
-                            )
+                        _hl = redeploy_headline(_top)
+                        if _hl["state"] == "entry":
                             st.success(
-                                f"✅ **{_best['ticker']}** clears the Buy gate "
-                                f"({_best['score']:.0f} ≥ {COMPOSITE_BUY:.0f}{_best_rr}) — "
+                                f"✅ **{_hl['ticker']}** clears the Buy gate "
+                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f} · "
+                                f"R:R {fmt_ratio_vs(_hl['rr'], RR_ENTRY_MIN)}:1 ≥ {RR_ENTRY_MIN:.0f}:1) — "
                                 f"a genuine entry, not just a sector filler.",
                                 icon="🎯",
                             )
-                        elif any(c["passes"] is False for c in _annotated):
+                        elif _hl["state"] == "rr_fails":
+                            st.warning(
+                                f"**{_hl['ticker']}** clears the composite Buy gate "
+                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R is "
+                                f"{fmt_ratio_vs(_hl['rr'], RR_ENTRY_MIN)}:1 — below the "
+                                f"{RR_ENTRY_MIN:.0f}:1 minimum the Watchlist uses for an entry, so it "
+                                f"isn't confirmed as an entry at today's price. Check 📈 Analysis. "
+                                f"Or pick your own {rec['sector']} name.",
+                                icon="🚦",
+                            )
+                        elif _hl["state"] == "no_upside":
+                            st.warning(
+                                f"**{_hl['ticker']}** clears the composite Buy gate "
+                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R isn't positive "
+                                "at today's price (price at or above its base target, or at or below "
+                                "its stop), so it isn't an entry now. Check 📈 Analysis.",
+                                icon="🚦",
+                            )
+                        elif _hl["state"] == "rr_unknown":
+                            st.warning(
+                                f"**{_hl['ticker']}** clears the composite Buy gate "
+                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R couldn't be "
+                                f"computed (no stop or target), so it isn't confirmed as an entry. "
+                                f"Check 📈 Analysis before acting.",
+                                icon="🚦",
+                            )
+                        elif _hl["state"] == "none_pass":
                             st.warning(
                                 f"⚠️ The sector tilt is sound, but none of these names currently "
                                 f"clear the Buy gate (≥ {COMPOSITE_BUY:.0f}). Diversifying here is "
@@ -16505,11 +16558,12 @@ elif page == "📡 Signals & Advice":
                                     delta_color="normal" if _c["passes"] else "off",
                                 )
                                 if isinstance(_c["rr"], (int, float)) and _c["rr"] > 0:
-                                    _rr_q = (
-                                        "✅" if _c["rr"] >= 2.5 else
-                                        ("⚠️" if _c["rr"] >= 1.5 else "❌")
+                                    _rr_q = {"favourable": "✅", "marginal": "⚠️"}.get(
+                                        rr_quality(_c["rr"]), "❌"
                                     )
-                                    st.caption(f"R:R {_c['rr']:.1f}:1 {_rr_q}")
+                                    st.caption(
+                                        f"R:R {fmt_ratio_vs(_c['rr'], RR_MARGINAL_MIN, RR_FAVOURABLE_MIN)}:1 {_rr_q}"
+                                    )
                                 else:
                                     st.caption("R:R N/A")
                                 if not _c["passes"]:
@@ -17550,7 +17604,7 @@ elif page == "🔗 Risk Analysis":
                                         if st.button(
                                             "📊 Load Composite Scores",
                                             key=f"_def_load_comp_{_rtype}",
-                                            help="Fetches full Technical + Fundamental + Sentiment scores for each candidate",
+                                            help="Fetches full Technical + Business Quality + Valuation + Sentiment scores for each candidate",
                                         ):
                                             with st.spinner("Fetching composite scores…"):
                                                 for _tc in _def_tickers:
@@ -26803,8 +26857,12 @@ elif page == "📈 Analysis":
                                     unsafe_allow_html=True,
                                 )
                             if rr_val and rr_val > 0:
-                                quality = "✅ Favourable" if rr_val >= 2.5 else ("⚠️ Marginal" if rr_val >= 1.5 else "❌ Poor")
-                                st.markdown(f"**R:R** `{rr_val:.1f}:1` — {quality}")
+                                quality = {
+                                    "favourable": "✅ Favourable", "marginal": "⚠️ Marginal",
+                                }.get(rr_quality(rr_val), "❌ Poor")
+                                st.markdown(
+                                    f"**R:R** `{fmt_ratio_vs(rr_val, RR_MARGINAL_MIN, RR_FAVOURABLE_MIN)}:1` — {quality}"
+                                )
                         _bn = targets.get("base_note")
                         if isinstance(_bn, str) and _bn:
                             st.caption("🎯 " + _bn)
@@ -42552,9 +42610,9 @@ It reads two things together: how far a name has fallen **from its highest point
                 """
 When a single sector grows past the **35% hard cap** (or approaches the **25% warn** line), the app raises a **Hard Cap Breach** card in **🔴 Act Today** — and, rather than a bare "trim your sector" nudge, it hands you a concrete plan you open with **🔎 Rebalance plan — what to trim, where to redeploy**:
 
-**Trim first — how much, and why.** It lists your holdings in that sector **weakest-conviction first** (by the engine's composite score), and for each shows the *basis* so a single number never proposes a trim blind: the composite's three pillars (**technical · fundamental · sentiment**), its **recent momentum** (1-week / 1-month), and which pillar is holding the score down. It then turns the headline target into a plan that **adds up** — fully exit the weakest names, partial-trim the last — showing the **$ · % · ≈shares** to sell each and a 🧾 flag for whether the sale **realizes a gain or a loss**; the trims sum to exactly the reduction needed to bring the sector back under the warn line.
+**Trim first — how much, and why.** It lists your holdings in that sector **weakest-conviction first** (by the engine's composite score), and for each shows the *basis* so a single number never proposes a trim blind: the composite's four pillars (**technical · business quality · valuation · sentiment**), its **recent momentum** (1-week / 1-month), and which pillar is holding the score down. It then turns the headline target into a plan that **adds up** — fully exit the weakest names, partial-trim the last — showing the **$ · % · ≈shares** to sell each and a 🧾 flag for whether the sale **realizes a gain or a loss**; the trims sum to exactly the reduction needed to bring the sector back under the warn line.
 
-**Where to redeploy — engine-vetted, correlation-checked.** For your **under-represented** sectors it names real tickers to consider, scored on the **same Composite ≥ 65 Buy gate** used everywhere else (a ✅ passer is "a genuine entry," not filler), each annotated with its **correlation to your actual book** (🟢 genuine diversifier → 🔴 moves with what you already own) so you can pick a name that truly spreads risk — plus your saved analyst research as an awareness note. **▶ Analyze** jumps to the full scorecard to trade from there. Each sector's **Gap to 10% target** figure is how far that sector sits below its target in dollars of your book, not a buy size: size any buy on 📈 Analysis.
+**Where to redeploy — engine-vetted, correlation-checked.** For your **under-represented** sectors it names real tickers to consider, scored on the **same Composite ≥ 65 Buy gate** used everywhere else; the headline calls a name "a genuine entry" only when one of the names shown also has an **R:R of at least 2:1**, the minimum the Watchlist uses for an entry (otherwise it names the top scorer and why it isn't confirmed: R:R below 2:1, R:R not positive at today's price, or R:R not computable), each annotated with its **correlation to your actual book** (🟢 genuine diversifier → 🔴 moves with what you already own) so you can pick a name that truly spreads risk — plus your saved analyst research as an awareness note. **▶ Analyze** jumps to the full scorecard to trade from there. Each sector's **Gap to 10% target** figure is how far that sector sits below its target in dollars of your book, not a buy size: size any buy on 📈 Analysis.
 
 **It advises; you decide.** The engine's conviction score sets the order; correlation and analyst data only *annotate* (they never re-rank or gate). When a sector *must* be cut there are two honest schools — **trim the laggard** (momentum) or **take profit on the runner** (rebalance) — and the card names both and leaves the final call to you. Nothing is auto-sold.
 

@@ -346,6 +346,12 @@ PERF_ALPHA_BAND_PCT = 5.0
 # the Analysis page is a research/judgement surface, so the user decides).
 RR_ENTRY_MIN = 2.0
 
+# R:R DISPLAY bands only (not a gate): the Analysis Trade Plan's
+# "✅ Favourable / ⚠️ Marginal / ❌ Poor" label and the Diversification
+# Advisor card's R:R icon. Values unchanged from the literals they replace.
+RR_FAVOURABLE_MIN = 2.5
+RR_MARGINAL_MIN = 1.5
+
 # ── Price-target construction heuristics (targets.compute_price_targets) ────
 # One level upstream of RR_ENTRY_MIN above (which IS the actual entry gate) —
 # these size the bull/base/bear price levels R:R is computed from. Named per

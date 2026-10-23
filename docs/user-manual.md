@@ -334,7 +334,8 @@ The decision-critical constants, transcribed from [`constants.py`](../stock_anal
 | `SECTOR_CEILING` / `SECTOR_ELEVATED` | 35% / 25% | Sector cap / soft warn |
 | `PORTFOLIO_BETA_TARGET/_ELEVATED/_CEILING` | 1.0 / 1.3 / 1.4 | Portfolio beta bands |
 | `RISK_PCT_PER_TRADE` | 1.5% | Risk per trade (sizing) |
-| `RR_ENTRY_MIN` | 2.0 | Min entry reward:risk (ENTER_NOW gate) |
+| `RR_ENTRY_MIN` | 2.0 | Min entry reward:risk (ENTER_NOW gate; also the redeploy/diversification headline's "genuine entry" bar) |
+| `RR_FAVOURABLE_MIN` / `RR_MARGINAL_MIN` | 2.5 / 1.5 | R:R display bands (✅ / ⚠️ / ❌), not a gate |
 | `ATR_STOP_MULT` / `STOP_TIGHTEN_ATR_MULT` | 2.0 / 1.5 | Stop width / tighten |
 | `DETERIORATION_WATCH/TRIM/EXIT_DD_PCT` | 6 / 8 / 12% | Exit ladder drawdown floors |
 | `DETERIORATION_EXIT_DOLLAR_LOSS` | $250 | TRIM→EXIT escalation |

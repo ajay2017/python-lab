@@ -965,6 +965,9 @@ _GATE_FILES = {
     # registry and request builder; the score / filter / extract_trigger roles feed
     # the composite, Act Today/Review cards and the R-Multiple declared stop.
     "stock_analyzer/llm.py",
+    # 2026-10-23: decides when the Diversification / Rebalancer redeploy headline may
+    # call a candidate "a genuine entry" (composite AND R:R >= RR_ENTRY_MIN).
+    "stock_analyzer/rr_readout.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,

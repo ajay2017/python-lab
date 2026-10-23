@@ -117,8 +117,16 @@ def _fired_date_str(fired_date) -> str:
 
 # ── rebal_trim ───────────────────────────────────────────────────────────────
 
-def _build_rebal_trim_rows(port_df, fired_date_str: str) -> "list[dict]":
+def _build_rebal_trim_rows(
+    port_df, fired_date_str: str, skipped_out: "set[str] | None" = None,
+) -> "list[dict]":
     """One row per `rebalance_actions()` "trim" action that day.
+
+    A trim whose `trim_shares` is a number < 1 is SKIPPED (no row): the app
+    made no sell call, so a row would record a call it didn't make. Its ticker
+    is added to `skipped_out` (when given) so the caller can still keep it in
+    the `single_name_concentration` dedup set. A missing / non-numeric
+    `trim_shares` keeps the row.
 
     `metric_before` = the ticker's current portfolio weight; `metric_predicted_
     after` = `SINGLE_NAME_CEILING` (the target the trim rec is sized against);
@@ -137,6 +145,11 @@ def _build_rebal_trim_rows(port_df, fired_date_str: str) -> "list[dict]":
             continue
         ticker = str(act.get("ticker", "") or "").strip().upper()
         if not ticker:
+            continue
+        _ts = act.get("trim_shares")
+        if isinstance(_ts, (int, float)) and not isinstance(_ts, bool) and _ts == _ts and _ts < 1:
+            if skipped_out is not None:
+                skipped_out.add(ticker)
             continue
         rows.append({
             "rec_type":               "rebal_trim",
@@ -535,8 +548,11 @@ def build_rec_event_rows(
     rebal_trim_tickers: "set[str]" = set()
 
     try:
-        rebal_rows = _build_rebal_trim_rows(port_df, fired_date_str)
-        rebal_trim_tickers = {r["ticker"] for r in rebal_rows}
+        _rebal_skipped: "set[str]" = set()
+        rebal_rows = _build_rebal_trim_rows(port_df, fired_date_str, _rebal_skipped)
+        # Skipped (unsized) trims stay in the dedup set so no new
+        # single_name_concentration row appears where none was written before.
+        rebal_trim_tickers = {r["ticker"] for r in rebal_rows} | _rebal_skipped
         rows.extend(rebal_rows)
     except Exception:
         pass

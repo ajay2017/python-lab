@@ -1940,6 +1940,18 @@ def test_trim_sub_one_share_keeps_action_with_zero_shares():
     assert act["trim_val"] == pytest.approx(5_000.0)
 
 
+def test_trim_unsized_is_low_urgency_sized_false():
+    df, _ = _trim_book(20.0, price=10_000.0)
+    act = _trim_act(df)
+    assert act["urgency"] == "low" and act["sized"] is False
+
+
+def test_trim_sized_is_medium_urgency_sized_true():
+    df, _ = _trim_book(20.0)
+    act = _trim_act(df)
+    assert act["urgency"] == "medium" and act["sized"] is True
+
+
 def test_trim_boundaries_unchanged():
     from stock_analyzer.constants import REBALANCE_TRIM_PNL_PCT, SINGLE_NAME_TRIM_TRIGGER
     df, _ = _trim_book(SINGLE_NAME_TRIM_TRIGGER)

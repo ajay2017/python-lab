@@ -55,6 +55,32 @@ def test_rebal_trim_row_built_from_rebalance_actions_trim_action(monkeypatch):
     assert r["corr_coverage_n"] is None
 
 
+def test_rebal_trim_skips_unsized_trim_and_reports_it(monkeypatch):
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [
+        {"type": "trim", "ticker": "AAA", "weight": 22.0, "trim_val": 500.0, "trim_shares": 0},
+        {"type": "trim", "ticker": "BBB", "weight": 22.0, "trim_val": 5000.0, "trim_shares": 2},
+        {"type": "trim", "ticker": "CCC", "weight": 22.0, "trim_val": 5000.0},
+    ])
+    skipped: set = set()
+    rows = rec._build_rebal_trim_rows(pd.DataFrame({"Ticker": ["AAA"]}), "2026-09-15", skipped)
+    assert [r["ticker"] for r in rows] == ["BBB", "CCC"]
+    assert skipped == {"AAA"}
+
+
+def test_unsized_trim_ticker_gets_no_single_name_conc_row_either(monkeypatch):
+    port = _sn_port_df(weight=20.0, score=WEAK_CONVICTION_SCORE)
+    # Precondition: absent the dedup this ticker WOULD get a concentration row.
+    assert len(rec._build_single_name_conc_rows(port, None, FIRED_DATE, "2026-09-15")) == 1
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [
+        {"type": "trim", "ticker": "AAA", "weight": 20.0, "trim_val": 500.0, "trim_shares": 0},
+    ])
+    rows = rec.build_rec_event_rows(
+        FIRED_DATE, port, None, None, None, None, None, None, None,
+    )
+    assert not [r for r in rows if r["ticker"] == "AAA"
+                and r["rec_type"] in ("rebal_trim", "single_name_concentration")]
+
+
 def test_rebal_trim_ignores_non_trim_actions(monkeypatch):
     monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [
         {"type": "add", "ticker": "BBB", "weight": 2.0},
