@@ -301,7 +301,7 @@ from stock_analyzer.portfolio import (
     correlation_claim_verified, correlation_flat,
     beta_diversifying_sectors,
 )
-from stock_analyzer.rr_readout import fmt_ratio_vs, rr_quality, redeploy_headline
+from stock_analyzer.rr_readout import fmt_ratio_vs, rank_add_candidates, rr_quality, redeploy_headline
 from stock_analyzer.beta_repair import (
     aligned_beta, leverage_side_effect, rank_defensive_candidates,
 )
@@ -11414,12 +11414,11 @@ if page == "🏠 Home":
                                     _a["withheld"] = _quality.get(_a["ticker"], {}).get("withheld")
                                 _cand_rows.extend(_annot)
 
-                        # Global re-rank across sectors: gate-passers (composite
-                        # desc) → scored-failers → unscored. Composite is primary.
-                        def _rebal_rank(c: dict) -> tuple:
-                            tier = 0 if c["passes"] is True else (1 if c["passes"] is False else 2)
-                            return (tier, -(c["score"] if isinstance(c["score"], (int, float)) else 0))
-                        _cand_rows.sort(key=_rebal_rank)
+                        # Global re-rank across sectors: entry-ready first (Buy gate
+                        # AND R:R ≥ RR_ENTRY_MIN), then gate-passers → scored-failers
+                        # → unscored, composite desc within a tier
+                        # (rr_readout.rank_add_candidates).
+                        _cand_rows = rank_add_candidates(_cand_rows)
                         # Dedup by ticker (keep the best-ranked instance). A ticker
                         # could in principle appear in two redeploy sectors' pools;
                         # two identical Analyze-button keys would raise
@@ -11559,7 +11558,7 @@ if page == "🏠 Home":
                                 st.rerun()
 
                         st.caption(
-                            f"_Ranked by your engine's composite (Buy gate {COMPOSITE_BUY:.0f}); "
+                            f"_Names clearing both the Buy gate ({COMPOSITE_BUY:.0f}) and R:R ≥ {RR_ENTRY_MIN:.0f}:1 first, then by your engine's composite; "
                             "correlation measured against your actual book. Full options on "
                             "📡 Signals & Advice → Diversification tab._"
                         )
@@ -16366,7 +16365,7 @@ elif page == "📡 Signals & Advice":
                                     "rr":     _crr,
                                     "withheld": None if _cb_ok else (_unmeasured_pillars(_cb) or ["a pillar"]),
                                 }
-                        _annotated = annotate_add_candidates(_div_cands, _div_quality)
+                        _annotated = rank_add_candidates(annotate_add_candidates(_div_cands, _div_quality))
                         for _a in _annotated:
                             _a["withheld"] = _div_quality.get(_a["ticker"], {}).get("withheld")
                         _scored_n  = sum(1 for c in _annotated if c["passes"] is not None)
@@ -16473,8 +16472,8 @@ elif page == "📡 Signals & Advice":
                         # Show how wide the net was cast vs the curated 4-roster.
                         st.caption(
                             f"Scored **{_scored_n}** of {len(_annotated)} {rec['sector']} names from the discovery "
-                            f"universe · showing the top **{len(_top)}** by composite "
-                            f"(best-first). The roster is always included; gate = "
+                            f"universe · showing the top **{len(_top)}**: names clearing both the Buy gate and R:R ≥ {RR_ENTRY_MIN:.0f}:1 first, then by composite. "
+                            f"The roster is always included; gate = "
                             f"composite ≥ {COMPOSITE_BUY:.0f}."
                         )
 
@@ -16523,7 +16522,7 @@ elif page == "📡 Signals & Advice":
                                 f"here, portfolio beta {_add_current_beta:.2f} {_arrow} {_new_b:.2f}"
                             )
 
-                        # Per-candidate quality cards (top N, best-first, gated)
+                        # Per-candidate quality cards (top N, entry-ready first, gated)
                         _score_cols = st.columns(len(_top))
                         for _scol, _c in zip(_score_cols, _top):
                             _cand = _c["ticker"]
@@ -42612,9 +42611,9 @@ When a single sector grows past the **35% hard cap** (or approaches the **25% wa
 
 **Trim first — how much, and why.** It lists your holdings in that sector **weakest-conviction first** (by the engine's composite score), and for each shows the *basis* so a single number never proposes a trim blind: the composite's four pillars (**technical · business quality · valuation · sentiment**), its **recent momentum** (1-week / 1-month), and which pillar is holding the score down. It then turns the headline target into a plan that **adds up** — fully exit the weakest names, partial-trim the last — showing the **$ · % · ≈shares** to sell each and a 🧾 flag for whether the sale **realizes a gain or a loss**; the trims sum to exactly the reduction needed to bring the sector back under the warn line.
 
-**Where to redeploy — engine-vetted, correlation-checked.** For your **under-represented** sectors it names real tickers to consider, scored on the **same Composite ≥ 65 Buy gate** used everywhere else; the headline calls a name "a genuine entry" only when one of the names shown also has an **R:R of at least 2:1**, the minimum the Watchlist uses for an entry (otherwise it names the top scorer and why it isn't confirmed: R:R below 2:1, R:R not positive at today's price, or R:R not computable), each annotated with its **correlation to your actual book** (🟢 genuine diversifier → 🔴 moves with what you already own) so you can pick a name that truly spreads risk — plus your saved analyst research as an awareness note. **▶ Analyze** jumps to the full scorecard to trade from there. Each sector's **Gap to 10% target** figure is how far that sector sits below its target in dollars of your book, not a buy size: size any buy on 📈 Analysis.
+**Where to redeploy — engine-vetted, correlation-checked.** For your **under-represented** sectors it names real tickers to consider, scored on the **same Composite ≥ 65 Buy gate** used everywhere else; names that clear both that gate and an R:R of at least 2:1 are listed first, so if any scanned name is an entry, at least one is always shown; the headline calls a name "a genuine entry" only when one of the names shown also has an **R:R of at least 2:1**, the minimum the Watchlist uses for an entry (otherwise it names the top scorer and why it isn't confirmed: R:R below 2:1, R:R not positive at today's price, or R:R not computable), each annotated with its **correlation to your actual book** (🟢 genuine diversifier → 🔴 moves with what you already own) so you can pick a name that truly spreads risk — plus your saved analyst research as an awareness note. **▶ Analyze** jumps to the full scorecard to trade from there. Each sector's **Gap to 10% target** figure is how far that sector sits below its target in dollars of your book, not a buy size: size any buy on 📈 Analysis.
 
-**It advises; you decide.** The engine's conviction score sets the order; correlation and analyst data only *annotate* (they never re-rank or gate). When a sector *must* be cut there are two honest schools — **trim the laggard** (momentum) or **take profit on the runner** (rebalance) — and the card names both and leaves the final call to you. Nothing is auto-sold.
+**It advises; you decide.** The engine's conviction score sets the order (on the redeploy list, names that also clear the 2:1 R:R come first); correlation and analyst data only *annotate* (they never re-rank or gate). When a sector *must* be cut there are two honest schools — **trim the laggard** (momentum) or **take profit on the runner** (rebalance) — and the card names both and leaves the final call to you. Nothing is auto-sold.
 
 **A same-day buy gets a one-day grace period.** If you bought a name *today*, the trim plan holds it back from the list even if it's your weakest-conviction name in an over-cap sector — you won't see a buy recommended and, hours later on the same brief, that exact position flagged for a full exit. A "🕐 Held back from today's plan" note names it; it returns to normal trim ranking the next day. If a sector is **approaching** the 25% warn line (not yet over the 35% cap), new picks and add-to-winners there aren't suppressed — they carry an amber "sector already elevated" note instead, so the buy side stays honest about a sector the trim side is already watching without blocking a genuinely good entry.
 """

@@ -1,5 +1,7 @@
 """Pure R:R readout helpers: number formatting, display quality band, and the
-redeploy/diversification headline decision (so app.py stays render-only).
+redeploy/diversification headline decision, and the display ranking of add
+candidates (entry-ready names first, applied before the top-N cut), so app.py
+stays render-only.
 """
 from __future__ import annotations
 
@@ -48,6 +50,35 @@ def rr_quality(rr) -> str | None:
     return "poor"
 
 
+def is_entry_ready(c: dict, rr_min: float = RR_ENTRY_MIN) -> bool:
+    """A candidate is entry-ready when it clears the composite Buy gate
+    (passes is True) AND its R:R is a finite number >= rr_min."""
+    rr = c.get("rr")
+    return c.get("passes") is True and _finite(rr) and rr >= rr_min
+
+
+def rank_add_candidates(candidates: list[dict], rr_min: float = RR_ENTRY_MIN) -> list[dict]:
+    """Display order for add/redeploy candidates, applied BEFORE the top-N cut:
+    entry-ready (Buy gate AND R:R >= rr_min) -> other gate-passers -> scored
+    but below the gate -> unscored; higher composite first within a tier.
+    Stable, so ties keep the incoming order. Returns a new list; the input is
+    not mutated."""
+    def _key(c: dict) -> tuple:
+        if is_entry_ready(c, rr_min):
+            tier = 0
+        elif c.get("passes") is True:
+            tier = 1
+        elif c.get("passes") is False:
+            tier = 2
+        else:
+            tier = 3
+        score = c.get("score")
+        num = score if isinstance(score, (int, float)) and not isinstance(score, bool) else 0
+        return (tier, -num)
+
+    return sorted(candidates or [], key=_key)
+
+
 def redeploy_headline(candidates: list[dict], rr_min: float = RR_ENTRY_MIN) -> dict:
     """Decide the headline for an add-candidate list. Callers pass the
     DISPLAYED rows (in display order), so a named ticker always has a card.
@@ -69,8 +100,7 @@ def redeploy_headline(candidates: list[dict], rr_min: float = RR_ENTRY_MIN) -> d
         }
 
     for c in cands:
-        rr = c.get("rr")
-        if c.get("passes") is True and _finite(rr) and rr >= rr_min:
+        if is_entry_ready(c, rr_min):
             return _pack("entry", c)
     for c in cands:
         if c.get("passes") is True:
