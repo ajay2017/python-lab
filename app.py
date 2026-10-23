@@ -12072,7 +12072,7 @@ if page == "🏠 Home":
                     f"<div style='color:#cbd5e1;font-weight:700;font-size:0.86em'>"
                     f"{_tu.get('title','Portfolio metric')}</div>"
                     + (f"<div style='color:#94a3b8;font-size:0.8em;margin-top:4px'>"
-                       f"{_tu.get('recommendation','')}</div>" if _tu.get("recommendation") else "")
+                       f"{_md_bold(_tu.get('recommendation',''))}</div>" if _tu.get("recommendation") else "")
                     + (f"<div style='color:#64748b;font-size:0.76em;margin-top:4px'>"
                        f"Positions: {_tu_tk}</div>" if _tu_tk else "")
                     + "</div>",

@@ -33,6 +33,9 @@ def test_rr_quality_bands_and_boundaries():
     assert rr_quality(RR_MARGINAL_MIN) == "marginal"
     assert rr_quality(RR_MARGINAL_MIN - 0.01) == "poor"
     assert rr_quality(0.1) == "poor"
+    # ❌ is exactly "fails the entry minimum" (owner decision 2026-10-23)
+    assert RR_MARGINAL_MIN == RR_ENTRY_MIN
+    assert rr_quality(RR_ENTRY_MIN - 0.01) == "poor"
 
 
 @pytest.mark.parametrize("bad", [None, float("nan"), float("inf"), 0, 0.0, -1.0, "2.0", True])

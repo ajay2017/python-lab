@@ -283,6 +283,29 @@ def test_single_name_conc_fires_above_ceiling_and_conviction():
     assert r["corr_coverage_n"] is None
 
 
+def _sn_priced_df(price, weight=SINGLE_NAME_CEILING + 1.0, market_value=20000.0):
+    df = _sn_port_df(weight=weight, market_value=market_value)
+    df["Price"] = [price]
+    return df
+
+
+def test_single_name_conc_skips_under_one_share_excess():
+    # excess = 1pp of $20,000 = $200 < one $500 share: the card shows no trim.
+    assert rec._build_single_name_conc_rows(
+        _sn_priced_df(500.0), None, FIRED_DATE, "2026-09-15") == []
+
+
+def test_single_name_conc_keeps_one_share_or_more_excess():
+    assert len(rec._build_single_name_conc_rows(
+        _sn_priced_df(100.0), None, FIRED_DATE, "2026-09-15")) == 1
+
+
+@pytest.mark.parametrize("price", [None, 0.0, -1.0, float("nan")])
+def test_single_name_conc_unknown_price_keeps_row(price):
+    assert len(rec._build_single_name_conc_rows(
+        _sn_priced_df(price), None, FIRED_DATE, "2026-09-15")) == 1
+
+
 def test_single_name_conc_does_not_fire_below_ceiling():
     rows = rec._build_single_name_conc_rows(
         _sn_port_df(weight=SINGLE_NAME_CEILING - 0.1, score=90.0), None, FIRED_DATE, "2026-09-15",

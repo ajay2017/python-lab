@@ -348,9 +348,14 @@ RR_ENTRY_MIN = 2.0
 
 # R:R DISPLAY bands only (not a gate): the Analysis Trade Plan's
 # "✅ Favourable / ⚠️ Marginal / ❌ Poor" label and the Diversification
-# Advisor card's R:R icon. Values unchanged from the literals they replace.
+# Advisor card's R:R icon. Bands: ❌ below RR_MARGINAL_MIN, ⚠️ up to
+# RR_FAVOURABLE_MIN, ✅ at/above it.
+# Owner decision 2026-10-23: RR_MARGINAL_MIN was 1.5, so the ⚠️ band straddled
+# the entry minimum — live, OXY R:R 1.8 (fails entry) and CVX 2.3 (headlined as
+# a genuine entry) both showed ⚠️. It now EQUALS RR_ENTRY_MIN by design: ❌ is
+# exactly "fails the entry minimum", so the icon can't contradict the headline.
 RR_FAVOURABLE_MIN = 2.5
-RR_MARGINAL_MIN = 1.5
+RR_MARGINAL_MIN = RR_ENTRY_MIN
 
 # ── Price-target construction heuristics (targets.compute_price_targets) ────
 # One level upstream of RR_ENTRY_MIN above (which IS the actual entry gate) —

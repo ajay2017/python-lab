@@ -478,6 +478,43 @@ def test_single_name_overweight_strong_conviction_flagged():
     assert rec["priority"] == "MEDIUM"
 
 
+def _sn_rec(excess_pp, price):
+    rows = [{
+        "ticker": "AAA", "weight": SINGLE_NAME_CEILING + excess_pp, "market_value": 20_000.0,
+        "score": WEAK_CONVICTION_SCORE + 10, "price": price,
+    }]
+    return find_rec(_recs(rows), "single_name_concentration")
+
+
+def test_single_name_under_one_share_excess_sizes_no_trim():
+    # 0.05pp of the $100k book = $50 < one $100 share: no trim is proposed, the
+    # card stays (awareness) at MEDIUM so the Tune-up lane (HIGH/MEDIUM only)
+    # still shows it.
+    rec = _sn_rec(0.05, 100.0)
+    assert rec is not None
+    assert rec["trim_sized"] is False
+    assert "Trim" not in rec["recommendation"]
+    assert "sizes no trim" in rec["recommendation"]
+    assert "Hold" not in rec["recommendation"]  # must not contradict a same-day Act Today trim
+    assert "frees" not in rec["expected_outcome"]
+    assert rec["priority"] == "MEDIUM"
+    assert rec["recommendation"].count("$") == 1
+
+
+def test_single_name_one_share_or_more_keeps_trim_wording():
+    rec = _sn_rec(5.0, 100.0)
+    assert rec["trim_sized"] is True
+    assert rec["recommendation"].startswith("Trim ")
+    assert "frees" in rec["expected_outcome"]
+
+
+@pytest.mark.parametrize("price", [None, 0.0, -5.0])
+def test_single_name_unknown_price_keeps_trim_wording(price):
+    rec = _sn_rec(0.05, price)
+    assert rec["trim_sized"] is True
+    assert rec["recommendation"].startswith("Trim ")
+
+
 def test_single_name_overweight_weak_conviction_not_flagged_here():
     # Overweight + WEAK is the daily_briefing "weak-large" flag's job, not this
     # one's -- this rec is deliberately conviction-INDEPENDENT-above-the-gate,

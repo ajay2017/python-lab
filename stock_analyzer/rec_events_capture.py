@@ -388,6 +388,11 @@ def _build_single_name_conc_rows(
     rows (this type and rebal_trim can both fire on an oversized+profitable+
     strong-conviction name). Same-day-BUY exclusion mirrors
     `_bought_today_tickers`.
+
+    A row is skipped when the excess is under one share (a positive Price and
+    `int(excess_dollar / price) == 0`): the live card then shows no trim, so
+    there is no call to record (2026-10-23). A missing / non-positive price
+    keeps the row.
     """
     if port_df is None or getattr(port_df, "empty", True):
         return []
@@ -420,6 +425,9 @@ def _build_single_name_conc_rows(
         if not (score_raw is None or score_raw >= WEAK_CONVICTION_SCORE):
             continue
         excess_pp = w - SINGLE_NAME_CEILING
+        _px = _safe_float(row.get("Price"))
+        if _px and _px > 0 and int(round(excess_pp / 100.0 * pv) / _px) == 0:
+            continue
         rows.append({
             "rec_type":               "single_name_concentration",
             "ticker":                 ticker,

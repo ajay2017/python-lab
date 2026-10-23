@@ -906,6 +906,11 @@ def build_risk_advisor_recommendations(
         if w >= SINGLE_NAME_CEILING and (score_raw is None or score_raw >= WEAK_CONVICTION_SCORE):
             excess_pp     = w - SINGLE_NAME_CEILING
             excess_dollar = round(excess_pp / 100.0 * _gd)
+            # Under one share: no trade is sized (owner decision 2026-10-23).
+            # Unknown / non-positive price keeps the trim wording (fail toward
+            # the current behaviour).
+            _px = tr["price"]
+            _trim_sized = not (_px and _px > 0 and int(excess_dollar / _px) == 0)
             _conviction_clause = (
                 "Conviction is unmeasured (fundamentals unavailable — a data "
                 "outage or an ETF with no cost data); this is still a SIZE limit."
@@ -941,14 +946,26 @@ def build_risk_advisor_recommendations(
                     "market_value": tr["market_value"],
                     "label":        f"{w:.1f}% weight  ·  {_conviction_label}",
                 }],
+                "trim_sized": _trim_sized,
                 "recommendation": (
-                    f"Trim **{t}** by ~**{excess_pp:.0f}pp (~${excess_dollar:,.0f})** back toward the "
-                    f"{SINGLE_NAME_CEILING:.0f}% ceiling. Keep the thesis — just cap the size so a "
-                    "single name can't dominate the outcome."
+                    (
+                        f"Trim **{t}** by ~**{excess_pp:.0f}pp (~${excess_dollar:,.0f})** back toward the "
+                        f"{SINGLE_NAME_CEILING:.0f}% ceiling. Keep the thesis — just cap the size so a "
+                        "single name can't dominate the outcome."
+                    ) if _trim_sized else (
+                        f"**{t}** is over the {SINGLE_NAME_CEILING:.0f}% ceiling by less than one "
+                        f"share (~${excess_dollar:,.0f}), so the ceiling alone sizes no trim. "
+                        "Don't add to it."
+                    )
                 ),
                 "expected_outcome": (
-                    f"Bringing {t} from {w:.1f}% to {SINGLE_NAME_CEILING:.0f}% frees "
-                    f"~${excess_dollar:,.0f} to diversify and bounds single-name shock."
+                    (
+                        f"Bringing {t} from {w:.1f}% to {SINGLE_NAME_CEILING:.0f}% frees "
+                        f"~${excess_dollar:,.0f} to diversify and bounds single-name shock."
+                    ) if _trim_sized else (
+                        f"The ceiling alone sizes no trade; {t}'s weight drifts back under it as "
+                        "the rest of the book grows or the price falls."
+                    )
                 ),
                 "institutional_lens": (
                     "The single-name ceiling is a risk limit INDEPENDENT of conviction. Funds "
