@@ -213,12 +213,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
    - Credentials rotated, Railway redeployed with the new variables (web + 7 crons), and section 5's verification table passed (owner, 2026-10-22). `drishta.up.railway.app` is the verify surface again.
    - **Pending (owner):** section 5's one-time misuse checks (Anthropic usage, Resend log, Supabase logs plus trades vs broker, SnapTrade) in `docs/plans/credential-rotation-2026-10.md`; then mark that plan DONE and remove this item.
    - Days the crons ran on the deleted keys lost their forward-only captures (EOD leverage/risk rows, rec_events, score history, ledger cron rows); 10-21 is likely gone.
-2. **S-D, one sizing path** (`docs/plans/one-sizing-path.md`, F-310).
-   - C1 + C2 shipped 2026-10-20; C3 (risk footer) and C4 (quick wins: Watchlist non-ready rows, Catalyst / Econ windows, FSLR caption, (0b)) shipped 2026-10-22, screenshots pending.
-   - C5 (Rebalancer underweight rows: no share counts, Grow Today's verdict per name, paused names in their own block; closes D5's Rebalancer half) shipped 2026-10-22, screenshots pending.
-   - C6 (Diversification "Gap to 10% target" relabel, Undersized card points to Analysis) shipped 2026-10-23, screenshot pending.
-   - C8 (AST ratchet on direct `position_sizing(` calls, `tests/test_sizing_ratchet.py`) shipped 2026-10-23.
-   - **NEXT:** C9 docs (requirements F-310 line, architecture module section, user-manual, User Guide); C7, the D5 post-trade `SECTOR_CEILING` dry run, is optional.
+2. **S-D, one sizing path** (`docs/plans/one-sizing-path.md`, F-310): **C1–C6, C8 and C9 shipped (2026-10-20…23).** Only optional C7 remains: a read-only dry run on whether `SECTOR_CEILING` should also bind post-trade (D5); owner decides after seeing it. Screenshots still pending for C3 (footer, needs sized picks), C4 rows and the C6 Signals "Undersized" card.
 3. **App trust item 4:** antipattern rules for a literal `**` in raw HTML and a bare `$` next to numbers (~1 h). Slot it between S-D chunks.
    - Item 2 shipped (`db8d891`); the Q0 function was re-applied and verified 2026-10-22 (owner SQL: 32 rows, `_V` = `q0:fdbd2b2a9c28`, every check at its baseline; C1 21 vs 19 is its by-design accruing class, the regression split C9 is unchanged at 5). E3 was baselined 10-20 (11).
    - Items 1, 3 (System Trust ⑧, planner first) and 5 are open (`docs/plans/app-trust-verification.md`).
