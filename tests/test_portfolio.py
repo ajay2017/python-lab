@@ -1890,3 +1890,11 @@ def test_flat_holding_end_to_end_through_the_real_chain():
     assert portfolio.correlation_claim_verified(
         portfolio.correlation_unchecked(corr2, ["AAA", "FLAT"]), cov2) is True
     assert portfolio.diversification_score(corr2)["score"] is None
+
+
+def test_diversify_add_skip_below_target():
+    # The Diversification ADD card renders the gap as "-{gap_pct}pp vs target";
+    # gap_pct is positive only while a sector skipped at DIVERSIFY_ADD_SKIP_PCT
+    # sits below DIVERSIFY_ADD_TARGET_PCT. Reversing them would print "--x.xpp".
+    from stock_analyzer.constants import DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT
+    assert DIVERSIFY_ADD_SKIP_PCT < DIVERSIFY_ADD_TARGET_PCT

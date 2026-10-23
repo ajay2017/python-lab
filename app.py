@@ -16065,7 +16065,7 @@ elif page == "📡 Signals & Advice":
                             f"Sell **{ts} shares** (~${tv:,.0f}) to reduce from "
                             f"{act['weight']:.0f}% → ~15% portfolio weight.  \n"
                             f"This locks in a portion of the {act['pnl']:.0f}% gain while keeping "
-                            f"the core position. Reinvest the proceeds in underweighted high-conviction names."
+                            f"the core position."
                         )
                         st.markdown(action_text)
 
@@ -16073,10 +16073,10 @@ elif page == "📡 Signals & Advice":
                         action_text = (
                             f"Score is **{act['score']:.0f}/100** ({act['signal']}) but weight is only "
                             f"{act['weight']:.1f}%.  \n"
-                            f"Consider building toward **8–10% weight** — buy in 2–3 tranches to average in "
-                            f"rather than deploying all at once.  \n"
-                            f"First tranche: target 4–5% weight. Only add second tranche if price holds above "
-                            f"stop at **${act['stop']:.2f}**."
+                            "Whether to add, and how much, is Grow Today's call. "
+                            "📈 Analysis shows Grow Today's add call for this holding when its plan is a Buy and, "
+                            "only when Grow Today is calling an add, a size that has passed the "
+                            "budget, concentration and entry checks. No size is suggested here."
                         )
                         st.markdown(action_text)
 
@@ -16091,7 +16091,7 @@ elif page == "📡 Signals & Advice":
                         # with no cap. Route to Analysis instead; no prefill.
                         with log_col:
                             if st.button(
-                                f"▶ Analyze {ticker} for a sized add",
+                                f"▶ Analyze {ticker}: today's add call",
                                 key=f"an_btn_{ticker}_{act['type']}",
                                 width="stretch",
                                 type="primary",
@@ -16270,8 +16270,14 @@ elif page == "📡 Signals & Advice":
                                     f"*(Sector-typical prior: ~{rec['corr_to_tech']:.2f}.)*"
                                 )
                         with ac2:
-                            st.metric("Suggested add", f"${rec['add_dollars']:,.0f}",
-                                      f"+{rec['gap_pct']:.1f}%", delta_color="normal")
+                            # S-D C6 (D6-X): the sector gap is drift, not a buy size.
+                            st.metric(f"Gap to {rec['target_pct']:.0f}% target",
+                                      f"≈${rec['add_dollars']:,.0f}",
+                                      f"-{rec['gap_pct']:.1f}pp vs target", delta_color="off",
+                                      help="How far this sector sits below its diversification "
+                                           "target, in dollars of your book. Not a buy size: "
+                                           "size any buy on 📈 Analysis, where Grow Today's "
+                                           "budget and entry checks apply.")
                         # ── Cross-validate candidates against the quality engine ──
                         # The candidate POOL now comes from the broad discovery
                         # universe (portfolio.diversifying_candidate_pool), not a
@@ -16446,8 +16452,8 @@ elif page == "📡 Signals & Advice":
                             _delta = _new_b - _add_current_beta
                             _arrow = "↓" if _delta < 0 else ("↑" if _delta > 0 else "→")
                             return (
-                                f"β {_cb_beta:.2f} · adds ${rec['add_dollars']:,.0f} → "
-                                f"portfolio beta {_add_current_beta:.2f} {_arrow} {_new_b:.2f}"
+                                f"β {_cb_beta:.2f} · if the whole ≈${rec['add_dollars']:,.0f} gap went "
+                                f"here, portfolio beta {_add_current_beta:.2f} {_arrow} {_new_b:.2f}"
                             )
 
                         # Per-candidate quality cards (top N, best-first, gated)
@@ -42534,7 +42540,7 @@ When a single sector grows past the **35% hard cap** (or approaches the **25% wa
 
 **Trim first — how much, and why.** It lists your holdings in that sector **weakest-conviction first** (by the engine's composite score), and for each shows the *basis* so a single number never proposes a trim blind: the composite's three pillars (**technical · fundamental · sentiment**), its **recent momentum** (1-week / 1-month), and which pillar is holding the score down. It then turns the headline target into a plan that **adds up** — fully exit the weakest names, partial-trim the last — showing the **$ · % · ≈shares** to sell each and a 🧾 flag for whether the sale **realizes a gain or a loss**; the trims sum to exactly the reduction needed to bring the sector back under the warn line.
 
-**Where to redeploy — engine-vetted, correlation-checked.** For your **under-represented** sectors it names real tickers to consider, scored on the **same Composite ≥ 65 Buy gate** used everywhere else (a ✅ passer is "a genuine entry," not filler), each annotated with its **correlation to your actual book** (🟢 genuine diversifier → 🔴 moves with what you already own) so you can pick a name that truly spreads risk — plus your saved analyst research as an awareness note. **▶ Analyze** jumps to the full scorecard to trade from there.
+**Where to redeploy — engine-vetted, correlation-checked.** For your **under-represented** sectors it names real tickers to consider, scored on the **same Composite ≥ 65 Buy gate** used everywhere else (a ✅ passer is "a genuine entry," not filler), each annotated with its **correlation to your actual book** (🟢 genuine diversifier → 🔴 moves with what you already own) so you can pick a name that truly spreads risk — plus your saved analyst research as an awareness note. **▶ Analyze** jumps to the full scorecard to trade from there. Each sector's **Gap to 10% target** figure is how far that sector sits below its target in dollars of your book, not a buy size: size any buy on 📈 Analysis.
 
 **It advises; you decide.** The engine's conviction score sets the order; correlation and analyst data only *annotate* (they never re-rank or gate). When a sector *must* be cut there are two honest schools — **trim the laggard** (momentum) or **take profit on the runner** (rebalance) — and the card names both and leaves the final call to you. Nothing is auto-sold.
 

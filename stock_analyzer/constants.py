@@ -503,7 +503,6 @@ REBALANCE_ADD_MIN_SCORE        = 70    # Strong Buy + undersized (<5% weight) + 
 REBALANCE_ADD_UNDERSIZED_PCT   = 5.0   # "undersized" weight ceiling for the add-candidate check above — was a
                                         # bare `w < 5` literal despite this comment already describing it as if
                                         # extracted (2026-08-04 audit finding)
-REBALANCE_ADD_TARGET_WEIGHT_PCT = 8.0  # target weight used to size the "add" action's suggested dollar amount
 REBALANCE_REVIEW_GAP_PCT       = 5.0   # bearish signal + profitable + gap below this (or unknown) = high urgency
 
 # ── Brief Act-vs-Awareness split (decision_bucket.classify_bucket) ───────────
