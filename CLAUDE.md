@@ -209,24 +209,22 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 
 ### Open now (owner-agreed order, 2026-10-22)
 
-1. **🟢 Railway security incident: misuse checks only.**
-   - Credentials rotated, Railway redeployed with the new variables (web + 7 crons), and section 5's verification table passed (owner, 2026-10-22). `drishta.up.railway.app` is the verify surface again.
-   - **Pending (owner):** section 5's one-time misuse checks (Anthropic usage, Resend log, Supabase logs plus trades vs broker, SnapTrade) in `docs/plans/credential-rotation-2026-10.md`; then mark that plan DONE and remove this item.
-   - Days the crons ran on the deleted keys lost their forward-only captures (EOD leverage/risk rows, rec_events, score history, ledger cron rows); 10-21 is likely gone.
-2. **S-D, one sizing path** (`docs/plans/one-sizing-path.md`, F-310): **C1–C6, C8 and C9 shipped (2026-10-20…23).** Only optional C7 remains: a read-only dry run on whether `SECTOR_CEILING` should also bind post-trade (D5); owner decides after seeing it. Screenshots still pending for C3 (footer, needs sized picks), C4 rows and the C6 Signals "Undersized" card.
-3. **App trust item 4:** antipattern rules for a literal `**` in raw HTML and a bare `$` next to numbers (~1 h). Slot it between S-D chunks.
+*The Railway security incident was closed 2026-10-23 (owner); see `docs/plans/credential-rotation-2026-10.md`, including the forward-only captures lost on 10-21.*
+
+1. **S-D, one sizing path** (`docs/plans/one-sizing-path.md`, F-310): **C1–C6, C8 and C9 shipped (2026-10-20…23).** Only optional C7 remains: a read-only dry run on whether `SECTOR_CEILING` should also bind post-trade (D5); owner decides after seeing it. Screenshots still pending for C3 (footer, needs sized picks), C4 rows and the C6 Signals "Undersized" card.
+2. **App trust item 4:** antipattern rules for a literal `**` in raw HTML and a bare `$` next to numbers (~1 h). Slot it between S-D chunks.
    - Item 2 shipped (`db8d891`); the Q0 function was re-applied and verified 2026-10-22 (owner SQL: 32 rows, `_V` = `q0:fdbd2b2a9c28`, every check at its baseline; C1 21 vs 19 is its by-design accruing class, the regression split C9 is unchanged at 5). E3 was baselined 10-20 (11).
    - Items 1, 3 (System Trust ⑧, planner first) and 5 are open (`docs/plans/app-trust-verification.md`).
-4. **Weekly/monthly report, F-276c** (`docs/plans/period-report.md`).
+3. **Weekly/monthly report, F-276c** (`docs/plans/period-report.md`).
    - Sections 1 + 3, C5b, C7 and C8 have shipped. **NEXT: C5** (section 2), then **C6** (sections 4 + 5).
    - Verify the Sunday email when the crons run: dates, money block equal to Reports, `metrics_version = 2`.
-5. **Headline / feed-text HTML escaping.** Phase 1 shipped (`2cb4ace` `util.safe_link`, `60e7625` the 12 sites). Phase 2 is the remaining baselined dynamic-HTML sites (`docs/plans/headline-html-escaping.md`).
-6. **LLM model routing** (`docs/plans/llm-model-routing.md` §12).
+4. **Headline / feed-text HTML escaping.** Phase 1 shipped (`2cb4ace` `util.safe_link`, `60e7625` the 12 sites). Phase 2 is the remaining baselined dynamic-HTML sites (`docs/plans/headline-html-escaping.md`).
+5. **LLM model routing** (`docs/plans/llm-model-routing.md` §12).
    - **Phase 1 complete 2026-10-22** (`74234dc`..`32e1d8a`): every Claude call goes through `stock_analyzer/llm.py`.
    - **Phase 2** (App Settings model choice) waits on a 30-day Anthropic console usage export. If spend is small, defer it; if large, consider a reviewed `CODE_DEFAULTS` switch instead.
    - Small items: the empty-text rule in `parse_response`, and ai_provider's refusal wording.
-7. **Data providers and news.** Live Data Health on 10-17 showed Finnhub (live-price primary) returning 429 on 9 of 16 calls and FMP returning 402 on 11 of 11, so the fundamentals failover is effectively dead. That needs a read-only provider investigation in its own right. On news, the owner said (10-17) to re-check the queue before more news work. The lead recommends dropping chunk 4 (backup source) and the VADER-polarity fix, with a minimal or no 3b/3c (`docs/plans/news-feed-restore.md`).
-8. **Small leftovers:**
+6. **Data providers and news.** Live Data Health on 10-17 showed Finnhub (live-price primary) returning 429 on 9 of 16 calls and FMP returning 402 on 11 of 11, so the fundamentals failover is effectively dead. That needs a read-only provider investigation in its own right. On news, the owner said (10-17) to re-check the queue before more news work. The lead recommends dropping chunk 4 (backup source) and the VADER-polarity fix, with a minimal or no 3b/3c (`docs/plans/news-feed-restore.md`).
+7. **Small leftovers:**
    - F-304 follow-ups (3)–(7) (docs/queue.md)
    - From S-D C4 (2026-10-22): N-C, a macro (G-07) check on Grow Today adds, is still deferred, so the 📅 Economic Calendar defers any in-window add to Grow Today rather than saying "don't add"; reopening it needs planner + reviewer. Bare literals left in `earnings_advisor._recommend` (Hard Rule #1): `net_rev <= -2`, `weight >= 5`, `0.35`, `est_move * 0.85`. Watchlist Remove/Wait rows read "No size yet … once Ready to Enter" (true, odd on Remove; owner may want a neutral line).
    - **Diversification Advisor "clears the Buy gate" banner ignores R:R** (seen live 2026-10-23): "✅ EOG clears the Buy gate (75 ≥ 65 · R:R 0.7:1) — a genuine entry" while EOG's own card shows R:R 0.7:1 ❌, and it headlines EOG over CVX (R:R 2.5:1 ✅, "cleanest diversifier"). The banner checks composite only. Fix: name a candidate only if it also passes the R:R check (or say "R:R fails"); decision surface → reviewer. Same card: R:R bands 2.5 / 1.5 are bare literals in app.py (~16495), and the owner may want "➕ Add for Diversification" / "🟢 Add {sector}" reworded to "Underweight: {sector}" (S-D C6 review).

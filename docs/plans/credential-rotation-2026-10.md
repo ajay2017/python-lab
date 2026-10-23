@@ -1,7 +1,15 @@
 # Credential rotation after the Railway security incident — checklist
 
-**Status: ROTATION + VERIFICATION DONE 2026-10-22 (owner confirmed: Railway redeployed with the new variables,
-section 5's verification table passed). Only section 5's one-time misuse checks are still open.**
+**Status: DONE 2026-10-23. The owner declared the incident resolved: every credential and API key rotated, Railway
+redeployed with the new variables, section 5's verification table passed. The owner closed the misuse checks without
+reporting each one's result separately, so the boxes below are ticked on the owner's closure, not on per-check findings.**
+
+Earlier status: ROTATION + VERIFICATION DONE 2026-10-22 (owner confirmed: Railway redeployed with the new variables,
+section 5's verification table passed). Only section 5's one-time misuse checks are still open.
+
+Data loss to remember: on the days the crons ran on the deleted keys, their forward-only captures (EOD leverage/risk
+rows, rec_events, score history, ledger cron rows) were not written; 2026-10-21 is likely gone. They can't be
+backfilled.
 
 *Update 2026-10-22 (re-enable): Railway first came back on the **old** deployment, which still held the pre-rotation
 variables. The browser's 30-day "remember me" cookie, signed from the old `APP_PASSWORD`, was still valid there, so
@@ -48,11 +56,12 @@ Claude. Section 5's checks after re-enable are what actually confirm each creden
 **Still to do:**
 - [x] Re-enable Railway and run the section 5 verification table. The new values only take effect on each service's
   next deploy: the web service and all seven cron services. Done 2026-10-22: redeployed, table passed (owner).
-- [ ] Section 5's one-time misuse checks (Anthropic usage, Resend log, Supabase logs and trades vs broker, SnapTrade).
+- [x] Section 5's one-time misuse checks (Anthropic usage, Resend log, Supabase logs and trades vs broker, SnapTrade).
+  Closed 2026-10-23: the owner declared the incident resolved.
 - [x] Laptop cleanup: `.streamlit/secrets.toml` checked 2026-10-22. `[anthropic] api_key` is empty and no full key
   remains (it had already been cleared). The Supabase and app values there are placeholders. Optional, still open:
   the 6 local Claude Code transcripts that contain the old revoked key.
-- [ ] When all of the above is done, set this Status line to DONE and remove the CLAUDE.md queue entry.
+- [x] When all of the above is done, set this Status line to DONE and remove the CLAUDE.md queue entry. Done 2026-10-23.
 
 **Rule: treat every value that was in Railway → Variables as exposed**, including the Supabase key. Rotating means
 create a new value **and** revoke the old one. Creating a new key while the old one still works closes nothing.
