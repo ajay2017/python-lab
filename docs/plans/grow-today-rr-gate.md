@@ -1,0 +1,83 @@
+# Grow Today R:R gate (G-32): entry reward:risk ≥ 2:1 on new picks AND adds
+
+**Status:** DESIGNED 2026-10-23 (planner, Opus 5.5: PROCEED for chunk 1 only). Nothing built. Next: C1 (the
+read-only dry run). Enforcement (C3–C5) waits for the owner to see the dry-run readout and rule on U1–U13.
+
+**Owner decision (2026-10-23):** Grow Today must require entry R:R ≥ `RR_ENTRY_MIN` (2.0) for new picks AND adds to
+held winners, only after a read-only dry run shows how many it would have removed. Principle: one entry bar
+everywhere new money goes in at today's price (memory `project_rr_entry_policy_2026_10_23`). Today Grow Today
+(`daily_briefing.py`) has no R:R check; Watchlist ENTER_NOW does (G-13); the Diversification / Rebalancer headline does
+since `fc9e6af` (`rr_readout.redeploy_headline`).
+
+## What the planner found that shapes the numbers
+
+- `targets.compute_price_targets` (~106-119): when price ≥ the chosen analyst target, base = min(resistance,
+  momentum, price × `TARGETS_MODEST_UPSIDE_MULT`), so a technical base is at most +10%. The bundle stop is
+  close − `ATR_STOP_MULT` (2.0) × ATR (`risk.py` ~25-30). So for a name at/above consensus, R:R ≤ 5 / ATR%: the gate
+  passes only if ATR ≤ 2.5% of price. With an analyst base it needs upside ≥ 4 × ATR%.
+- So G-32 will mostly act as a **volatility filter on momentum winners above consensus** (the add lane). The common
+  failure is 0 < R:R < 2 on a technical, often "flat placeholder", base, not a non-positive R:R. The readout must
+  split by `base_source`.
+- `targets.risk_reward` (~175-180) rounds to 1 decimal before downstream comparisons, so a true 1.95 passes as 2.0
+  on the redeploy headline and the Analysis gate tile; the Watchlist rounds to 2 decimals, so [1.995, 2.0) passes
+  there. A naive "compare unrounded" also fails a true 2:1 on float noise ((100.1, 95.1, 110.1) → 1.9999999999999973).
+
+## Design (summary; full spec in the 2026-10-23 planner hand-back, reproduced in the chunk briefs)
+
+- **New pure module `stock_analyzer/entry_rr.py`** (a `_GATE_FILES` member from C1): `measure(entry, stop, target)` →
+  `{"rr", "state": ok | no_upside | unknown, "why"}`, rr = round((target − entry)/(entry − stop), 6) (float-noise
+  cleanup only); `from_bundle(bundle)` reads `current_price`, `stop`, `targets.base`; `clears(m, rr_min=RR_ENTRY_MIN)`.
+  `targets.risk_reward` stays as is, documented as display only.
+- **Predicate:** hold iff `not entry_rr.clears(entry_rr.from_bundle(bundle))`. Same bundle triple the Watchlist and
+  the Diversification headline use, so a ticker's R:R is identical on every surface. Zero new fetches.
+- **Placement:** new picks after the earnings-wait check, before sizing; adds last, after sizing and G-31 (G-31's
+  pre-registered population must not shift); ETF lane after eligibility/macro (unledgered, `etf_screened_out`
+  kind `rr`). Bear day: the G-23 early return still wins.
+- **Suppression is visible:** G-32 in `gate_registry.py` + requirements §2A.3; ledger buckets `rr_blocked_picks`
+  (`new_pick`) and `rr_blocked_adds` (`add_winner`), `counterfactual=True`, `gate_value` = rr (NULL if unknown),
+  `gate_threshold` = `RR_ENTRY_MIN`; Home banners "📐 Not an Entry at Today's Price — Reward:Risk Below 2:1 (N)" and
+  "📐 Add Held — Reward:Risk Below 2:1"; the email and Home agree because both call `build_daily_briefing`.
+  `sizing_path._PAUSE_BUCKETS` gains `rr_blocked_adds`, so the Rebalancer "⏸ Not adding" and Analysis "No add call
+  today" show the reason. No new session cache.
+- **Unknown R:R → hold** (G-13 parity), ledgered with NULL; non-positive → hold with its own wording.
+
+## Chunks
+
+1. **C1** — `entry_rr.py` + tests + `scripts/grow_rr_dryrun.py` (retro over the last N trading days of
+   `recommendations` new_pick / add_winner / overflow_pick rows, plus an exact `--today` mode on `scanner_cache`) +
+   `summarize` tests; `_GATE_FILES` + review-policy line. Not wired. Reviewer. Precedent:
+   `scripts/valuation_source_dryrun.py` (read-only, `db.set_readonly(True)`, Anthropic key dropped; the owner runs it
+   from a normal shell with `SUPABASE_URL` / `SUPABASE_KEY`).
+   **OWNER CHECKPOINT:** run the script; the lead records the readout here; the owner rules on U1–U13.
+2. **C2 (optional, U9)** — measure-only shadow field + a "G-32 shadow:" cron diag line, no routing change.
+3. **C4 (before or with C3)** — move Watchlist G-13, both headline callers and the Analysis gate tile / F-43b caveat
+   onto `entry_rr` (unrounded). Also a standalone fix for today's 1.95–1.99 cross-surface inconsistency.
+4. **C3** — enforcement in both lanes + ETF, ledger, registry, sizing_path, grow_dropoff, evening_debrief, cron diag.
+5. **C5 (same push as C3)** — Home banners, empty state, Analysis / Rebalancer / Signals text, User Guide.
+6. **C6** — docs (new F-312, F-43b / F-305 notes, architecture "used by" row, coordination-caches "no new key",
+   shipped-log, queue, this Status). Push C3–C5 after 16:00 ET or at a weekend so no day's rows straddle regimes.
+
+## Owner decisions needed (after the dry run)
+
+- **U1** price basis: bundle triple (recommended) vs the lane's sizing price.
+- **U2** add stop: bundle ATR stop (recommended) vs trailing / ratchet / manual (looser).
+- **U3** technical-fallback base: counts as measured (recommended, G-13 parity) vs "no validated target" → hold.
+  Decide after seeing the `base_source` split.
+- **U4** unknown R:R: hold + ledger with NULL (recommended) vs unledgered abstention.
+- **U5** a slot freed by G-32 goes to the next fully qualifying candidate (recommended) vs left empty.
+- **U6** apply to the ETF lane, unledgered (recommended).
+- **U7** ratify moving G-13 / the headline / the Analysis tile to unrounded R:R ([1.995, 2.0) and [1.95, 2.0) then fail).
+- **U8** Analysis not-held Buy: keep the F-43b caveat (recommended) vs withhold the size below 2:1.
+- **U9** dry-run window (recommend 30 trading days); whether to wait for ≥ 5 bull days of shadow (C2) first.
+- **U10** G-32 pre-registered review rule (recommend G-31's wording).
+- **U11** optional `rec_rr` / `rec_target` columns (recommend defer).
+- **U12** optional "would clear at or below $X" line (X = base − 4·ATR on the bundle basis).
+- **U13** a G-32-held morning pick does not re-fire in the intraday pullback lane (recommended for now).
+
+## Risks
+
+- Silent filtering if C3 ships without C5; a 1.95–1.99 contradiction across surfaces if C3 ships without C4.
+- After go-live, new_pick / add_winner rows are all ≥ 2:1: a population shift for Recommendation Outcomes (~12-16)
+  and E2. Record the go-live date; the G-32 ledger rows keep the removed names.
+- More no-email mornings: expected.
+- app.py has no tests: banners and empty states are screenshot-only (check literal `**` and `$`-LaTeX).
