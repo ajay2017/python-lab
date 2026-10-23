@@ -968,6 +968,9 @@ _GATE_FILES = {
     # 2026-10-23: decides when the Diversification / Rebalancer redeploy headline may
     # call a candidate "a genuine entry" (composite AND R:R >= RR_ENTRY_MIN).
     "stock_analyzer/rr_readout.py",
+    # 2026-10-23: the unrounded entry R:R measure + `clears` predicate G-32 uses to
+    # hold Grow Today picks / adds below RR_ENTRY_MIN (nothing wired yet in C1).
+    "stock_analyzer/entry_rr.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,

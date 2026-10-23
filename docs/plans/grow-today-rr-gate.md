@@ -1,7 +1,11 @@
 # Grow Today R:R gate (G-32): entry reward:risk ≥ 2:1 on new picks AND adds
 
-**Status:** DESIGNED 2026-10-23 (planner, Opus 5.5: PROCEED for chunk 1 only). Nothing built. Next: C1 (the
-read-only dry run). Enforcement (C3–C5) waits for the owner to see the dry-run readout and rule on U1–U13.
+**Status:** C1 BUILT 2026-10-23 (`stock_analyzer/entry_rr.py`, `scripts/grow_rr_dryrun.py`; Opus FIX-FIRST/2 → SHIP/0).
+Nothing wired. **Next: the OWNER runs the dry run** (`python scripts/grow_rr_dryrun.py --days 30 --csv grow_rr.csv`, then
+`python scripts/grow_rr_dryrun.py --today`, from a shell with `SUPABASE_URL` / `SUPABASE_KEY`); the lead records the readout
+here; the owner rules on U1–U13. Enforcement (C3–C5) waits for that; C4 ships before or with C3.
+C1 review fixes worth knowing when reading the readout: the retro target uses the same 6-month window as the live bundle
+(52-week high/low from the longer frame), and `--today` measures picks, adds and overflow (near-exact: bundles re-fetched).
 
 **Owner decision (2026-10-23):** Grow Today must require entry R:R ≥ `RR_ENTRY_MIN` (2.0) for new picks AND adds to
 held winners, only after a read-only dry run shows how many it would have removed. Principle: one entry bar

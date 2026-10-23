@@ -65,3 +65,4 @@ The deterministic gates are the safety net; the **paid agents are for judgment o
 *(Append one line per added or removed member: date, file, reason, commit.)*
 
 - 2026-10-23 · added `stock_analyzer/rr_readout.py`: `redeploy_headline` decides when the 📡 Diversification Advisor and 🏠 Rebalancer redeploy headlines may call a candidate "a genuine entry" (composite ≥ `COMPOSITE_BUY` AND R:R ≥ `RR_ENTRY_MIN`), and `rr_quality` the ✅/⚠️/❌ R:R band; a decision surface from day one (flagged by the commit's own Opus review). Commit: the R:R / trim truth fix.
+- 2026-10-23 · added `stock_analyzer/entry_rr.py`: the unrounded entry R:R measure and `clears` predicate that G-32 will use to hold Grow Today picks and adds below `RR_ENTRY_MIN`, and that C4 moves Watchlist G-13 and the R:R headlines onto; a gate predicate from day one, though nothing is wired yet. Commit: G-32 C1.

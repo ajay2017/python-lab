@@ -173,6 +173,7 @@ def compute_price_targets(
 
 
 def risk_reward(entry: float, stop: float, target: float) -> float:
+    """Display only, rounded to 1 decimal; gate comparisons use `entry_rr` (G-32)."""
     risk = entry - stop
     reward = target - entry
     if risk <= 0:
