@@ -856,8 +856,12 @@ def rebalance_actions(
         avg_cost = row["Avg Cost"]
 
         if w > SINGLE_NAME_TRIM_TRIGGER and pnl > REBALANCE_TRIM_PNL_PCT:
-            trim_val    = mval * (w - SINGLE_NAME_CEILING) / 100
-            trim_shares = max(1, int(trim_val / price))
+            # Trim to the ceiling: sell (w - ceiling)% of the BOOK, i.e. the
+            # fraction (w - ceiling)/w of this position. (Pre-2026-10-23 this
+            # divided by 100, understating the trim by w/100.) Floor the share
+            # count; a sub-one-share excess sizes 0 shares (action still emitted).
+            trim_val    = mval * (w - SINGLE_NAME_CEILING) / w if w > 0 else 0.0
+            trim_shares = int(trim_val / price) if price and price > 0 else 0
             actions.append({
                 "type":    "trim",
                 "urgency": "medium",

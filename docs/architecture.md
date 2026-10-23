@@ -3232,7 +3232,7 @@ create table if not exists public.rec_events (
     metric_name             text,                -- 'single_name_pct' | 'portfolio_beta' | 'avg_pairwise_corr'
     metric_before           numeric,             -- NULL-preserving, never fabricated 0
     metric_predicted_after  numeric,             -- nullable — no formula exists yet for diversify_add
-    rec_dollars             numeric,
+    rec_dollars             numeric,          -- rebal_trim rows fired before 2026-10-23 are UNDERSTATED by a factor of weight/100 (portfolio.rebalance_actions sized the trim as mval × (w − SINGLE_NAME_CEILING) / 100; fixed to … / w). Don't compare dollar sizes across that date.
     price_at_rec            numeric,             -- ADD only; NULL when unavailable
     candidates              jsonb,               -- ADD only — the full surfaced candidate pool
     corr_coverage_n         integer,             -- ADD only

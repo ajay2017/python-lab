@@ -16061,12 +16061,18 @@ elif page == "📡 Signals & Advice":
                     elif act["type"] == "trim":
                         ts = act["trim_shares"]
                         tv = act["trim_val"]
-                        action_text = (
-                            f"Sell **{ts} shares** (~${tv:,.0f}) to reduce from "
-                            f"{act['weight']:.0f}% → ~15% portfolio weight.  \n"
-                            f"This locks in a portion of the {act['pnl']:.0f}% gain while keeping "
-                            f"the core position."
-                        )
+                        if ts >= 1:
+                            action_text = (
+                                f"Sell **{ts} share{'s' if ts != 1 else ''}** (~${ts * act['price']:,.0f}) to reduce from "
+                                f"{act['weight']:.0f}% → ~{SINGLE_NAME_CEILING:.0f}% portfolio weight.  \n"
+                                f"This locks in a portion of the {act['pnl']:.0f}% gain while keeping "
+                                f"the core position."
+                            )
+                        else:
+                            action_text = (
+                                f"The excess over {SINGLE_NAME_CEILING:.0f}% (~${tv:,.0f}) is less than "
+                                f"one share at the current price, so no trim is sized."
+                            )
                         st.markdown(action_text)
 
                     elif act["type"] == "add":
@@ -16100,6 +16106,11 @@ elif page == "📡 Signals & Advice":
                                 st.session_state["_analysis_ticker"] = ticker
                                 st.session_state["_nav_origin"]      = "📡 Signals & Advice"
                                 st.rerun()
+                    elif act["type"] == "trim" and not act.get("trim_shares"):
+                        # Sub-one-share trim sizes 0 shares: a 0-share SELL
+                        # prefill is meaningless, so no Log button.
+                        with log_col:
+                            st.caption("Under one share — nothing to log.")
                     else:
                         with log_col:
                             _default_shares = (

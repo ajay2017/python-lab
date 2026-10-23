@@ -1898,3 +1898,51 @@ def test_diversify_add_skip_below_target():
     # sits below DIVERSIFY_ADD_TARGET_PCT. Reversing them would print "--x.xpp".
     from stock_analyzer.constants import DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT
     assert DIVERSIFY_ADD_SKIP_PCT < DIVERSIFY_ADD_TARGET_PCT
+
+
+# ── rebalance_actions trim sizing (fixed 2026-10-23) ─────────────────────────
+
+def _trim_book(w_top, pnl=40.0, price=100.0):
+    """5-position book where AAA has weight `w_top`% and the rest split evenly."""
+    book = 100_000.0
+    rows = []
+    rest = (100.0 - w_top) / 4
+    for t, w in [("AAA", w_top)] + [(f"B{i}", rest) for i in range(4)]:
+        rows.append({
+            "Ticker": t, "Weight (%)": w, "P&L (%)": pnl if t == "AAA" else 0.0,
+            "Price": price, "Shares": book * w / 100 / price, "Signal": "Hold",
+            "Score": 50.0, "Stop": 90.0, "Stop Type": "ATR",
+            "Gap to Stop (%)": 10.0, "Market Value": book * w / 100,
+            "Avg Cost": 80.0,
+        })
+    return pd.DataFrame(rows), book
+
+
+def _trim_act(df):
+    return next((a for a in portfolio.rebalance_actions(df)
+                 if a["type"] == "trim" and a["ticker"] == "AAA"), None)
+
+
+@pytest.mark.parametrize("w", [20.0, 25.0])
+def test_trim_sizes_book_fraction_to_ceiling(w):
+    df, book = _trim_book(w)
+    act = _trim_act(df)
+    expected = book * (w - SINGLE_NAME_CEILING) / 100
+    assert act["trim_val"] == pytest.approx(expected)
+    assert act["trim_shares"] == int(expected / 100.0)
+
+
+def test_trim_sub_one_share_keeps_action_with_zero_shares():
+    df, _ = _trim_book(20.0, price=10_000.0)   # excess $5,000 < one share
+    act = _trim_act(df)
+    assert act is not None
+    assert act["trim_shares"] == 0
+    assert act["trim_val"] == pytest.approx(5_000.0)
+
+
+def test_trim_boundaries_unchanged():
+    from stock_analyzer.constants import REBALANCE_TRIM_PNL_PCT, SINGLE_NAME_TRIM_TRIGGER
+    df, _ = _trim_book(SINGLE_NAME_TRIM_TRIGGER)
+    assert _trim_act(df) is None
+    df, _ = _trim_book(20.0, pnl=REBALANCE_TRIM_PNL_PCT)
+    assert _trim_act(df) is None
