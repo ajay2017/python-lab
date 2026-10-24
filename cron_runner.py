@@ -1918,9 +1918,10 @@ def _run_scan(now_et, force: bool) -> int:
     # Positions to Initiate pick gets surfaced at all — so without this,
     # `recommendations` silently under-covers those days and every BUY that
     # matches one of today's picks would wrongly read as "no rec on file"
-    # (see SELF_TRACK_RELIABLE_LOG_START). Only "new_pick" is logged — the
-    # cron has no held-portfolio context to compute add_winner rows, and no
-    # buy_candidate list at all. save_recommendations is an idempotent upsert
+    # (see SELF_TRACK_RELIABLE_LOG_START). Only "new_pick" is logged by choice —
+    # compute_morning_picks passes port_df and held_data into build_daily_briefing,
+    # so add_winner rows ARE computed headless, but this lane persists only the
+    # new_pick rows (and there is no buy_candidate list at all). save_recommendations is an idempotent upsert
     # (on_conflict="ticker,rec_date,rec_type", ignore_duplicates=True), so a
     # same-day interactive re-write later can't double-count. Wrapped so a DB
     # hiccup here can NEVER abort the scan or block the higher-priority
@@ -1963,6 +1964,28 @@ def _run_scan(now_et, force: bool) -> int:
     except Exception as _of_err:
         _log(f"rec log: overflow_pick FAILED — {str(_of_err)[:120]} — continuing.")
         failures.append(f"overflow rec log: {str(_of_err)[:120]}")
+
+    # ── G-32 shadow capture (C2, measure-only) ────────────────────────────────
+    # Entry R:R of every Grow Today pick / add / overflow name, for a later
+    # outcome analysis. Own try/except: never aborts the scan or blocks the
+    # emails. A missing table (DDL applied by hand) is a skip, not a failure,
+    # so the heartbeat doesn't go red before the owner creates it.
+    try:
+        from stock_analyzer import g32_shadow
+        _g32_rows = g32_shadow.build_shadow_rows(payload.get("grow"), now_et.date(), "cron")
+        _g32_res = db.save_g32_shadow(_g32_rows)
+        if _g32_res.get("missing_table"):
+            _log("g32 shadow: table not created yet — skipped")
+        else:
+            _log(f"g32 shadow: saved={_g32_res.get('saved', 0)}/"
+                 f"{_g32_res.get('attempted', 0)} row(s)"
+                 + (f" — {_g32_res.get('error')}" if _g32_res.get("error") else ""))
+            _g32_err_msg = _g32_res.get("error")
+            if _g32_err_msg and not str(_g32_err_msg).startswith("compat"):
+                failures.append(f"g32 shadow: {str(_g32_err_msg)[:120]}")
+    except Exception as _g32_err:
+        _log(f"g32 shadow: FAILED — {str(_g32_err)[:120]} — continuing.")
+        failures.append(f"g32 shadow: {str(_g32_err)[:120]}")
 
     # ── Gate Suppression Ledger (W5 capture — cron source) ────────────────────
     # Persist which gates fired today so restraint can be graded later.

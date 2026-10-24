@@ -75,7 +75,7 @@ Of the 7 categories requested, only ~2.5 have a real, evidenced finding. Stating
 
 ### The hard constraint (governs the entire design)
 
-`recommendations`, `exit_signals`, `gate_suppressions`, `rec_events`, `score_history`, `model_predictions`, `analyst_target_snapshots`, `judgment_opinions`/`judgment_grades`, `analyst_coverage` are **intentionally permanent** — each one's own module docstring confirms it exists specifically to grade a past call (Engine Track Record, Research Scorecard, Gate Suppression Ledger, Recommendation Outcomes Measurement). **A maintenance job that archives or prunes any of these would destroy the evidence base those features are built on.** This is the single biggest constraint on the design: the framework must be architecturally *incapable* of targeting these tables for deletion, not merely instructed not to.
+`recommendations`, `exit_signals`, `gate_suppressions`, `g32_shadow` (added 2026-10-23), `rec_events`, `score_history`, `model_predictions`, `analyst_target_snapshots`, `judgment_opinions`/`judgment_grades`, `analyst_coverage` are **intentionally permanent** — each one's own module docstring confirms it exists specifically to grade a past call (Engine Track Record, Research Scorecard, Gate Suppression Ledger, Recommendation Outcomes Measurement). **A maintenance job that archives or prunes any of these would destroy the evidence base those features are built on.** This is the single biggest constraint on the design: the framework must be architecturally *incapable* of targeting these tables for deletion, not merely instructed not to.
 
 ### Real findings
 

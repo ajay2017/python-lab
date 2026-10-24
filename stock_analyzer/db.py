@@ -1010,6 +1010,32 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.rec_events;
     create policy "Allow all (service role)" on public.rec_events
         for all to service_role using (true) with check (true);
+
+    -- G-32 C2 shadow capture (2026-10-23, docs/plans/grow-today-rr-gate.md) --
+    -- one row per Grow Today pick / add / overflow name per scan day, written
+    -- by the scan cron (g32_shadow.build_shadow_rows). MEASURE-ONLY: nothing
+    -- reads this table to route, size or gate anything; it exists so the
+    -- outcomes of names above/below RR_ENTRY_MIN can be analysed in 4-6 weeks.
+    -- First-writer-wins upsert. Applied BY HAND in Supabase -- until then
+    -- save_g32_shadow reports missing_table and the cron logs a skip.
+    create table if not exists public.g32_shadow (
+        id           bigserial primary key,
+        rec_date     date not null,
+        lane         text not null,          -- pick | add | overflow
+        ticker       text not null,
+        source       text not null,          -- 'cron'
+        entry        numeric, stop numeric, base numeric, base_source text,
+        rr           numeric, rr_state text,
+        lane_entry   numeric, lane_stop numeric, rr_lane numeric,
+        composite    numeric, is_mover boolean, asset_type text,
+        rr_min       numeric,
+        captured_at  timestamptz not null default now(),
+        unique (rec_date, lane, ticker, source)
+    );
+    alter table public.g32_shadow enable row level security;
+    drop policy if exists "Allow all (service role)" on public.g32_shadow;
+    create policy "Allow all (service role)" on public.g32_shadow
+        for all to service_role using (true) with check (true);
 """
 
 import math
@@ -3524,6 +3550,91 @@ def save_gate_suppressions(rows: list[dict]) -> dict:
             return {"attempted": len(payload), "saved": 0, "error": str(exc2)[:200]}
     except Exception as exc:
         _record_db_error(f"gate_suppressions_upsert: {str(exc)[:100]}")
+        return {"attempted": len(payload), "saved": 0, "error": str(exc)[:200]}
+
+
+def save_g32_shadow(rows: list[dict]) -> dict:
+    """Persist G-32 shadow rows to g32_shadow (UPSERT ONLY, measure-only data).
+
+    Returns {"attempted": N, "saved": M, "error": str | None}, plus
+    "missing_table": True when the table's DDL hasn't been applied yet (a
+    skip, not a failure: saved=0, error=None). Mirrors save_gate_suppressions:
+    read-only no-op, weekend/holiday rows dropped, non-finite -> None, upsert
+    on (rec_date, lane, ticker, source) first-writer-wins, never raises.
+    """
+    if is_readonly():
+        return {"attempted": 0, "saved": 0, "error": "read-only"}
+    if not rows or not has_db():
+        return {"attempted": 0, "saved": 0, "error": None}
+    from stock_analyzer.write_guards import split_non_trading_rows
+    rows, _non_trading = split_non_trading_rows(rows, "rec_date")
+    _warn_non_trading("save_g32_shadow", _non_trading)
+    if not rows:
+        return {"attempted": 0, "saved": 0, "error": None,
+                "skipped_non_trading": _non_trading}
+
+    _num_cols = ("entry", "stop", "base", "rr", "lane_entry", "lane_stop",
+                 "rr_lane", "composite", "rr_min")
+    payload: list[dict] = []
+    for r in rows:
+        tk = str(r.get("ticker", "") or "").strip().upper()
+        lane = str(r.get("lane", "") or "").strip()
+        src = str(r.get("source", "") or "").strip()
+        rd = r.get("rec_date")
+        if not tk or not lane or not src or rd is None:
+            continue
+        item = {
+            "rec_date":    rd.isoformat() if hasattr(rd, "isoformat") else str(rd)[:10],
+            "lane":        lane,
+            "ticker":      tk,
+            "source":      src,
+            "base_source": r.get("base_source"),
+            "rr_state":    r.get("rr_state"),
+            "is_mover":    None if r.get("is_mover") is None else bool(r.get("is_mover")),
+            "asset_type":  r.get("asset_type"),
+        }
+        for c in _num_cols:
+            try:
+                v = float(r.get(c)) if r.get(c) is not None else None
+            except (TypeError, ValueError):
+                v = None
+            item[c] = v if v is not None and math.isfinite(v) else None
+        payload.append(item)
+    if not payload:
+        return {"attempted": 0, "saved": 0, "error": None}
+    payload = _sanitize_for_write(payload, "save_g32_shadow")
+
+    def _missing(exc) -> bool:
+        try:
+            from stock_analyzer.system_health import _is_missing_table
+            return bool(_is_missing_table(exc))
+        except Exception:
+            return False   # can't tell -> treat as a real error, never a skip
+
+    on_conflict = "rec_date,lane,ticker,source"
+    try:
+        _client().table("g32_shadow").upsert(
+            payload, on_conflict=on_conflict, ignore_duplicates=True,
+        ).execute()
+        return {"attempted": len(payload), "saved": len(payload), "error": None}
+    except TypeError:
+        try:
+            _client().table("g32_shadow").upsert(
+                payload, on_conflict=on_conflict,
+            ).execute()
+            return {"attempted": len(payload), "saved": len(payload),
+                    "error": "compat: ignore_duplicates unsupported (last-writer-wins)"}
+        except Exception as exc2:
+            if _missing(exc2):
+                return {"attempted": len(payload), "saved": 0, "error": None,
+                        "missing_table": True}
+            _record_db_error(f"g32_shadow_upsert_compat: {str(exc2)[:100]}")
+            return {"attempted": len(payload), "saved": 0, "error": str(exc2)[:200]}
+    except Exception as exc:
+        if _missing(exc):
+            return {"attempted": len(payload), "saved": 0, "error": None,
+                    "missing_table": True}
+        _record_db_error(f"g32_shadow_upsert: {str(exc)[:100]}")
         return {"attempted": len(payload), "saved": 0, "error": str(exc)[:200]}
 
 

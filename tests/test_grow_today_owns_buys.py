@@ -161,7 +161,8 @@ def test_overflow_is_unsized_disjoint_and_every_item_is_a_go_equity_pick():
     for o in g["overflow_picks"]:
         assert "sizing" not in o and "shares" not in o
         assert set(o) == {"ticker", "sector", "composite_score", "momentum_score",
-                          "price", "reason", "verdict", "is_mover"}
+                          "price", "reason", "verdict", "is_mover",
+                          "entry_rr"}   # G-32 C2 measure-only shadow field
         assert o["reason"] in ("pick_cap", "sector_slot", "mover_cap")
         assert o["ticker"] not in picked and o["ticker"] not in held_out
         assert verdict_basis(comps[o["ticker"]]) == "equity"

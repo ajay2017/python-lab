@@ -307,7 +307,11 @@ def _ser(x):
     if hasattr(x, "isoformat"):
         return x.isoformat()
     if isinstance(x, dict):
-        return {str(k): _ser(v) for k, v in sorted(x.items(), key=lambda kv: str(kv[0]))}
+        # G-32 C2: `entry_rr` is a measure-only shadow field read only by the cron's
+        # g32_shadow capture. Excluded so this golden keeps proving routing is
+        # byte-identical; test_g32_shadow.py covers the field itself.
+        return {str(k): _ser(v) for k, v in sorted(x.items(), key=lambda kv: str(kv[0]))
+                if str(k) != "entry_rr"}
     if isinstance(x, (set, frozenset)):
         return sorted((_ser(v) for v in x), key=lambda v: json.dumps(v, sort_keys=True))
     if isinstance(x, (list, tuple)):

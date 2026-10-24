@@ -161,6 +161,9 @@ _INVENTORY: tuple[_Store, ...] = (
     # being written with no signal anywhere in the app, not even "unknown".
     # All existence-only, same rationale as the block above.
     _Store("gate_suppressions",          "Gate suppression ledger",                   "scan",   "daily", False),
+    # G-32 C2 shadow capture (measure-only): conditional like gate_suppressions; the
+    # cron skips cleanly until the owner applies the DDL, and this row is what shows it.
+    _Store("g32_shadow",                 "G-32 entry R:R shadow (measure-only)",      "scan",   "daily", False),
     # rec_events (Recommendation-Outcomes-Measurement Phase 1b, 2026-09-17):
     # written by the EOD cron alongside portfolio_risk_snapshots, but
     # CONDITIONAL like gate_suppressions above — a day with no qualifying

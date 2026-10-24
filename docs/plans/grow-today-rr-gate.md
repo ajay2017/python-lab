@@ -1,7 +1,7 @@
 # Grow Today R:R gate (G-32): entry reward:risk ≥ 2:1 on new picks AND adds
 
 **Status:** C1 BUILT 2026-10-23 (`stock_analyzer/entry_rr.py`, `scripts/grow_rr_dryrun.py`; Opus FIX-FIRST/2 → SHIP/0).
-Nothing wired. **Dry run DONE 2026-10-23, readout below. Next: the owner rules on U1–U13.** (Was: the owner runs the dry run (`python scripts/grow_rr_dryrun.py --days 30 --csv grow_rr.csv`, then
+Nothing enforced. **Dry run DONE 2026-10-23 (readout + outcome analysis below). Owner chose the C2 shadow first (2026-10-23): C2 BUILT 2026-10-23, persisting to a new `g32_shadow` table; the owner applies its DDL by hand. Next: about 4–6 weeks of shadow rows, then an outcome readout, then the owner rules on U1–U13.** (Was: the owner runs the dry run (`python scripts/grow_rr_dryrun.py --days 30 --csv grow_rr.csv`, then
 `python scripts/grow_rr_dryrun.py --today`, from a shell with `SUPABASE_URL` / `SUPABASE_KEY`); the lead records the readout
 here; the owner rules on U1–U13.) Enforcement (C3–C5) waits for that; C4 ships before or with C3.
 C1 review fixes worth knowing when reading the readout: the retro target uses the same 6-month window as the live bundle
@@ -54,6 +54,10 @@ since `fc9e6af` (`rr_readout.redeploy_headline`).
    from a normal shell with `SUPABASE_URL` / `SUPABASE_KEY`).
    **OWNER CHECKPOINT:** run the script; the lead records the readout here; the owner rules on U1–U13.
 2. **C2 (optional, U9)** — measure-only shadow field + a "G-32 shadow:" cron diag line, no routing change.
+   **As built (2026-10-23, owner choice):** a log line can't be queried, so C2 persists instead. `_grow_today` attaches
+   `entry_rr` to every pick / add / overflow item after routing; the scan cron writes them to `g32_shadow`
+   (architecture §6.51) via the new `stock_analyzer/g32_shadow.py` and `db.save_g32_shadow`; System Trust ② lists the
+   store. Coverage limits: cron rows have no movers (`movers=[]`) and the add lane runs without G-01 (`risk_recs=[]`).
 3. **C4 (before or with C3)** — move Watchlist G-13, both headline callers and the Analysis gate tile / F-43b caveat
    onto `entry_rr` (unrounded). Also a standalone fix for today's 1.95–1.99 cross-surface inconsistency.
 4. **C3** — enforcement in both lanes + ETF, ledger, registry, sizing_path, grow_dropoff, evening_debrief, cron diag.

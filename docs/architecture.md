@@ -3297,6 +3297,46 @@ from "couldn't read the ledger." Registered in `system_health.py`'s `_INVENTORY`
 Trust check ②). Awareness only — no rec/scoring/sizing engine may read this table (same
 redline as `portfolio_risk_snapshots`).
 
+### 6.51 `g32_shadow` table
+
+```sql
+create table if not exists public.g32_shadow (
+    id           bigserial primary key,
+    rec_date     date not null,
+    lane         text not null,          -- pick | add | overflow
+    ticker       text not null,
+    source       text not null,          -- 'cron'
+    entry        numeric, stop numeric, base numeric, base_source text,
+    rr           numeric, rr_state text,
+    lane_entry   numeric, lane_stop numeric, rr_lane numeric,
+    composite    numeric, is_mover boolean, asset_type text,
+    rr_min       numeric,
+    captured_at  timestamptz not null default now(),
+    unique (rec_date, lane, ticker, source)
+);
+alter table public.g32_shadow enable row level security;
+drop policy if exists "Allow all (service role)" on public.g32_shadow;
+create policy "Allow all (service role)" on public.g32_shadow
+    for all to service_role using (true) with check (true);
+```
+
+G-32 chunk C2 (2026-10-23, `docs/plans/grow-today-rr-gate.md`): a **measure-only** shadow of
+entry R:R, so the owner can measure outcomes before deciding whether to enforce G-32.
+- **What a row is:** one row per Grow Today new pick, add-to-winner and overflow name per scan day.
+- **What it records:**
+  - the bundle-basis R:R (`entry_rr.from_bundle`: `entry` / `stop` / `base`, `rr`, `rr_state`);
+  - the lane basis the lane sized with (`lane_entry` / `lane_stop` / `rr_lane`);
+  - `RR_ENTRY_MIN` at capture (`rr_min`).
+- **How it gets there:** `daily_briefing._grow_today` attaches an `entry_rr` field to each item after every routing
+  decision; nothing reads it except `g32_shadow.build_shadow_rows`. The scan cron writes the rows via
+  `db.save_g32_shadow`, which is idempotent on `(rec_date, lane, ticker, source)` and drops non-trading dates.
+- **Before the DDL is applied:** the cron logs "table not created yet — skipped" without failing the lane, and
+  System Trust check ② shows the store as missing.
+- **Cron coverage limits:** `compute_morning_picks` passes `movers=[]` and `risk_recs=[]`, so cron rows never
+  include movers and the add lane runs without G-01.
+- **Retention:** in `data_maintenance._PROTECTED_TABLES` (evidence for a policy decision).
+- **No routing effect:** no recommendation, gate or sizing reads this table.
+
 ### `stock_analyzer/rec_events_capture.py`
 
 Pure `build_rec_event_rows(fired_date, port_df, port_risk, held_data, trades_df, ...)`.

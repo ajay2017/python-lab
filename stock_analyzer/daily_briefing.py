@@ -93,6 +93,7 @@ from stock_analyzer import entry_eligibility
 from stock_analyzer.entry_eligibility import data_trust_hold, macro_block_map, macro_hold
 from stock_analyzer.analyst_intel import trustworthy_composite
 from stock_analyzer import held_news_check
+from stock_analyzer import g32_shadow
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -1310,6 +1311,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # Pacing-only leftovers: cleared EVERY check but lost to the pick cap, the
     # 1-per-sector rule or the mover cap. Unsized by construction.
     overflow_picks: list[dict] = []
+    # G-32 C2 shadow inputs (measure-only): ticker -> (bundle, lane price, lane
+    # stop) recorded where each lane sizes. Read only by the final shadow
+    # attach below; never by a routing decision.
+    _g32_pick_src: dict = {}
+    _g32_add_src: dict = {}
     # Curated picks the flat-day check holds back (verdict not fully confirmed).
     flat_day_held: list[dict] = []
 
@@ -1714,6 +1720,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 _cand_det, ticker, verdict_phrase="a buy",
             )
 
+            _g32_pick_src[ticker.upper()] = (_comp_data, price, _pick_stop)
             pick = {
                 "ticker":          ticker,
                 "score":           _f(row.get("Score", 0)),    # momentum / scanner score
@@ -2051,6 +2058,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             _etf_det_warning = exit_advisor.candidate_deterioration_caption(
                 _etf_det, _et, verdict_phrase="a buy",
             )
+            _g32_pick_src.setdefault(str(_et).upper(), (_ebundle, _etf_price, _etf_stop))
             _etf_label = str(_etf_rec.get("label", ""))
             # Derived, not hardcoded -- etf_newpick_eligible's own bar is
             # COMPOSITE_STRONG_BUY, which today equals COMPOSITE_HIGH_
@@ -2543,6 +2551,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     else f"Down {abs(_pnl_v):.1f}% vs entry" if _pnl_v < 0
                     else "At breakeven vs entry"
                 )
+                _g32_add_src[ticker.upper()] = (
+                    (held_data or {}).get(ticker), price,
+                    _held_stop if _held_stop > 0 else None)
                 add_positions.append({
                     "ticker":    ticker,
                     "score":     scr,
@@ -2574,6 +2585,22 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "entry_unchecked": list(_entry_v["unchecked"]),
                 })
         add_positions.sort(key=lambda x: (-x["score"], -x["gap"]))
+
+    # G-32 C2 shadow: measure-only, read by cron_runner's g32_shadow capture; never routes.
+    # Runs after every routing decision; a failure here can't touch an item or the lists.
+    for _g32_items, _g32_src in ((new_picks, _g32_pick_src),
+                                 (add_positions, _g32_add_src),
+                                 (overflow_picks, _g32_pick_src)):
+        for _g32_it in _g32_items:
+            try:
+                _g32_b, _g32_e, _g32_s = _g32_src.get(
+                    str(_g32_it.get("ticker", "")).upper(), (None, None, None))
+                _g32_it["entry_rr"] = g32_shadow.shadow_measure(_g32_b, _g32_e, _g32_s)
+            except Exception:
+                try:
+                    _g32_it["entry_rr"] = {"rr": None, "state": "unknown", "why": "no_bundle"}
+                except Exception:
+                    pass
 
     return {
         "tone":                       tone,

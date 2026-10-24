@@ -50,6 +50,7 @@ _PROTECTED_TABLES: "frozenset[str]" = frozenset({
     "recommendations",
     "exit_signals",
     "gate_suppressions",
+    "g32_shadow",
     "rec_events",
     "score_history",
     "model_predictions",
