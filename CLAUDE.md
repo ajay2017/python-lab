@@ -257,6 +257,11 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 
 ### Live checks pending (Railway is back as of 2026-10-22; app.py has no tests, so a screenshot is the only check)
 
+- **Provider throttle + Data Health (`8f98f7b`, pushed 2026-10-25):**
+  - **Finnhub:** after visiting 🧾 Summary / 📜 Rec History, Finnhub's rate-limited count barely moves.
+  - **Bundle cache:** the tile shows "N saved", with no "served last saved snapshot" note on a normal visit.
+  - **"Error details" expander:** opens under Data Health and lists FMP's 402s by endpoint (D-1 readout after a few days).
+  - **Cross-check:** any "Price cross-check paused — a price source (X)…" note clears once X recovers.
 - **Earnings-week trim unification (`b2f905c`, pushed 2026-10-25), validate Mon 10-26:**
   - **📡 Signals:** a held name over `SINGLE_NAME_TRIM_TRIGGER` with a gain and earnings within 7 days reads "Sell N shares … → ~10%" plus "sized by the same earnings-week rule the 🏠 Brief and 🔔 Catalyst Watch use".
   - **The same name on 🏠 Brief → Review and on the 🔔 Catalyst Watch playbook** shows the same share count.
