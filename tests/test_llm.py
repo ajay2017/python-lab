@@ -60,10 +60,14 @@ def test_role_sets():
     ("claude-opus-4-8", llm.PROFILE_OPUS_4X),
     ("claude-opus-5", llm.PROFILE_OPUS_4X),
     ("claude-sonnet-5", llm.PROFILE_OPUS_4X),
-    ("claude-haiku-5-5", llm.PROFILE_MODERN),
-    ("claude-sonnet-5-5", llm.PROFILE_MODERN),
-    ("claude-opus-5-5", llm.PROFILE_MODERN),
-    ("claude-some-future-9", llm.PROFILE_MODERN)])
+    ("claude-haiku-5-5", llm.PROFILE_KNOWN_MODERN),
+    ("claude-sonnet-5-5", llm.PROFILE_KNOWN_MODERN),
+    ("claude-opus-5-5", llm.PROFILE_KNOWN_MODERN),
+    ("claude-haiku-5-5-20261001", llm.PROFILE_KNOWN_MODERN),
+    ("claude-sonnet-5-5-preview", llm.PROFILE_GENERIC),
+    ("claude-haiku-5-6", llm.PROFILE_GENERIC),
+    ("claude-opus-6", llm.PROFILE_GENERIC),
+    ("claude-some-future-9", llm.PROFILE_GENERIC)])
 def test_profile_for(m, p):
     assert llm.profile_for(m) == p
 
@@ -256,6 +260,7 @@ class _Factory:
     def __init__(self, response=None, exc=None):
         self.calls = []
         self.requests = []
+        self.beta_requests = []
         self.response = response
         self.exc = exc
 
@@ -271,6 +276,15 @@ class _Factory:
                     if outer.exc:
                         raise outer.exc
                     return outer.response
+
+            class beta:
+                class messages:
+                    @staticmethod
+                    def create(**req):
+                        outer.beta_requests.append(req)
+                        if outer.exc:
+                            raise outer.exc
+                        return outer.response
         return C()
 
 
@@ -468,3 +482,340 @@ def test_complete_status_code_rejects_a_bool():
     r = llm.complete(llm.ROLE_FAST, api_key="sk-test-123456", max_tokens=10,
                      messages=[{"role": "user", "content": "x"}], client_factory=_Client)
     assert r.status_code is None
+
+
+# ---- Phase 2 (P2-a2): resolution with source ----
+RS = llm.RoleSetting
+
+
+def test_resolve_code_default_with_source():
+    assert llm.resolve_model_with_source("fast", env={}) == (llm.HAIKU_4_5, "code")
+
+
+def test_resolve_explicit_beats_env_and_setting():
+    got = llm.resolve_model_with_source(
+        "fast", "claude-a", setting={"fast": RS("claude-s")},
+        env={"DRISHTA_LLM_MODEL_FAST": "claude-e"})
+    assert got == ("claude-a", "explicit")
+
+
+def test_resolve_env_beats_setting():
+    got = llm.resolve_model_with_source(
+        "fast", setting={"fast": RS("claude-s")},
+        env={"DRISHTA_LLM_MODEL_FAST": " claude-e "})
+    assert got == ("claude-e", "env")
+
+
+def test_resolve_setting_beats_code():
+    got = llm.resolve_model_with_source("deep", setting={"deep": RS("claude-s")}, env={})
+    assert got == ("claude-s", "setting")
+
+
+@pytest.mark.parametrize("bad", ["  ", "gpt-4", ""])
+def test_resolve_bad_env_ignored(bad):
+    got = llm.resolve_model_with_source(
+        "fast", setting={"fast": RS("claude-s")}, env={"DRISHTA_LLM_MODEL_FAST": bad})
+    assert got == ("claude-s", "setting")
+    assert llm.resolve_model_with_source(
+        "fast", env={"DRISHTA_LLM_MODEL_FAST": bad}) == (llm.HAIKU_4_5, "code")
+
+
+@pytest.mark.parametrize("entry", ["claude-s", RS("gpt-4"), {"model": "claude-s"}, None])
+def test_resolve_bad_setting_entry_ignored(entry):
+    got = llm.resolve_model_with_source("fast", setting={"fast": entry}, env={})
+    assert got == (llm.HAIKU_4_5, "code")
+
+
+@pytest.mark.parametrize("role", sorted(llm.PINNED_ROLES))
+def test_pinned_role_ignores_env_and_setting(role):
+    got = llm.resolve_model_with_source(
+        role, setting={role: RS("claude-s")},
+        env={"DRISHTA_LLM_MODEL_" + role.upper(): "claude-e"})
+    assert got == (llm.CODE_DEFAULTS[role], "code")
+    with pytest.raises(ValueError):
+        llm.resolve_model_with_source(role, "claude-other", env={})
+
+
+def test_extract_strong_ignores_env_and_setting_explicit_wins():
+    env = {"DRISHTA_LLM_MODEL_EXTRACT_STRONG": "claude-e"}
+    st = {"extract_strong": RS("claude-s")}
+    assert llm.resolve_model_with_source("extract_strong", setting=st, env=env) == (
+        llm.OPUS_4_8, "code")
+    assert llm.resolve_model_with_source("extract_strong", "claude-x", setting=st, env=env) == (
+        "claude-x", "explicit")
+
+
+def test_resolve_model_returns_the_string():
+    assert llm.resolve_model("deep", setting={"deep": RS("claude-s")}, env={}) == "claude-s"
+
+
+def test_resolve_reads_os_environ_by_default(monkeypatch):
+    monkeypatch.setenv("DRISHTA_LLM_MODEL_FAST", "claude-x")
+    assert llm.resolve_model_with_source("fast") == ("claude-x", "env")
+
+
+def test_editable_roles():
+    assert llm.EDITABLE_ROLES == {"fast", "deep", "extract"}
+
+
+# ---- Phase 2: build_request ----
+def test_known_modern_effort_passthrough_and_default():
+    r = llm.build_request("fast", "claude-haiku-5-5", max_tokens=300, messages=MSG,
+                          effort="medium")
+    assert r["output_config"] == {"effort": "medium"}
+    r = llm.build_request("fast", "claude-haiku-5-5", max_tokens=300, messages=MSG)
+    assert r["output_config"] == {"effort": "low"}
+
+
+@pytest.mark.parametrize("model", ["claude-haiku-5-5", "claude-some-future-9"])
+def test_effort_above_high_rejected(model):
+    with pytest.raises(ValueError):
+        llm.build_request("fast", model, max_tokens=5, messages=MSG, effort="max")
+
+
+@pytest.mark.parametrize("model", ["claude-haiku-5-5", "claude-some-future-9"])
+def test_effort_not_in_capabilities_rejected(model):
+    with pytest.raises(ValueError):
+        llm.build_request("fast", model, max_tokens=5, messages=MSG, effort="high",
+                          capabilities={"efforts": ["low", "medium"]})
+
+
+def test_generic_shape():
+    caps = {"efforts": ["low", "medium"], "max_tokens": 100000}
+    r = llm.build_request("fast", "claude-some-future-9", max_tokens=300, messages=MSG,
+                          temperature=0.3, capabilities=caps, effort="medium")
+    assert "thinking" not in r and "temperature" not in r
+    assert r["output_config"] == {"effort": "medium"}
+    assert r["max_tokens"] == 390 + 2048
+    # default effort low is listed
+    r = llm.build_request("fast", "claude-some-future-9", max_tokens=300, messages=MSG,
+                          capabilities=caps)
+    assert r["output_config"] == {"effort": "low"}
+    # not listed / no capabilities -> no output_config
+    r = llm.build_request("fast", "claude-some-future-9", max_tokens=300, messages=MSG,
+                          capabilities={"efforts": []})
+    assert "output_config" not in r
+    r = llm.build_request("fast", "claude-some-future-9", max_tokens=300, messages=MSG)
+    assert "output_config" not in r
+
+
+def test_generic_headroom_on_json_role():
+    r = llm.build_request("score", "claude-some-future-9", max_tokens=300, messages=MSG)
+    assert r["max_tokens"] == 390 + 2048 and "thinking" not in r
+
+
+def test_generic_clamps_to_capabilities_max_tokens():
+    r = llm.build_request("extract", "claude-some-future-9", max_tokens=8000, messages=MSG,
+                          capabilities={"efforts": [], "max_tokens": 4096})
+    assert r["max_tokens"] == 4096
+
+
+def test_known_modern_clamp():
+    r = llm.build_request("deep", "claude-sonnet-5-5", max_tokens=300, messages=MSG,
+                          capabilities={"efforts": ["low"], "max_tokens": 1000})
+    assert r["max_tokens"] == 1000
+
+
+def test_legacy_ignores_effort_and_capabilities():
+    a = llm.build_request("fast", llm.HAIKU_4_5, max_tokens=300, messages=MSG, temperature=0)
+    b = llm.build_request("fast", llm.HAIKU_4_5, max_tokens=300, messages=MSG, temperature=0,
+                          effort="max", capabilities={"efforts": [], "max_tokens": 1})
+    assert a == b
+    a = llm.build_request("deep", "claude-opus-5", max_tokens=300, messages=MSG)
+    b = llm.build_request("deep", "claude-opus-5", max_tokens=300, messages=MSG,
+                          effort="medium", capabilities={"efforts": [], "max_tokens": 1})
+    assert a == b
+
+
+@pytest.mark.parametrize("model,has", [
+    ("claude-sonnet-5-5", True), ("claude-opus-5-5", True),
+    ("claude-sonnet-5-5-20261001", True),
+    ("claude-haiku-5-5", False), (llm.HAIKU_4_5, False), (llm.SONNET_4_6, False),
+    ("claude-opus-4-8", False), ("claude-opus-5", False),
+    ("claude-sonnet-5-5-preview", False), ("claude-some-future-9", False)])
+def test_fallback_fields(model, has):
+    r = llm.build_request("deep", model, max_tokens=5, messages=MSG)
+    assert llm.uses_fallback(model) is has
+    if has:
+        assert r["betas"] == [llm.FALLBACK_BETA] and r["fallbacks"] == "default"
+    else:
+        assert "betas" not in r and "fallbacks" not in r
+
+
+# ---- Phase 2: parse_response ----
+def test_parse_served_model_and_requested():
+    resp = _resp([_t("x")])
+    resp.model = "claude-sonnet-5-5-20261001"
+    r = llm.parse_response("fast", resp, "claude-sonnet-5-5")
+    assert r.model == "claude-sonnet-5-5-20261001"
+    assert r.requested_model == "claude-sonnet-5-5"
+    assert r.fell_back is False
+
+
+def test_parse_no_response_model_uses_passed():
+    r = llm.parse_response("fast", _resp([_t("x")]), "m")
+    assert r.model == "m" and r.requested_model == "m"
+
+
+def test_parse_fell_back_via_block():
+    r = llm.parse_response("fast", _resp([NS(type="fallback"), _t("served")]), "m")
+    assert r.fell_back and r.text == "served"
+
+
+def test_parse_fell_back_via_usage_iterations():
+    resp = _resp([_t("x")])
+    resp.usage.iterations = [NS(type="message"), NS(type="fallback_message")]
+    assert llm.parse_response("fast", resp, "m").fell_back is True
+    resp.usage.iterations = [NS(type="message")]
+    assert llm.parse_response("fast", resp, "m").fell_back is False
+
+
+def test_text_before_fallback_block_is_never_returned():
+    r = llm.parse_response(
+        "deep", _resp([_t("declined part"), NS(type="fallback"), _t("served")]), "m")
+    assert r.text == "served"
+    r = llm.parse_response("deep", _resp([_t("declined"), NS(type="fallback")]), "m")
+    assert r.text is None and not r.ok and r.fell_back
+
+
+def test_json_mode_unknown_role_fails_closed():
+    assert llm.json_mode("nope", None) is True
+    with pytest.raises(ValueError):
+        llm.json_mode("nope", False)
+
+
+# ---- Phase 2: complete (beta path, setting) ----
+def test_complete_known_sonnet_uses_beta_client():
+    f = _Factory(_resp([_t("ok")]))
+    r = llm.complete("deep", api_key="k", messages=MSG, max_tokens=50,
+                     model="claude-sonnet-5-5", client_factory=f)
+    assert r.ok and r.model_source == "explicit" and r.requested_model == "claude-sonnet-5-5"
+    assert f.requests == [] and len(f.beta_requests) == 1
+    assert f.beta_requests[0]["betas"] == [llm.FALLBACK_BETA]
+    assert f.beta_requests[0]["fallbacks"] == "default"
+
+
+def test_complete_legacy_uses_plain_client():
+    f = _Factory(_resp([_t("ok")]))
+    r = llm.complete("fast", api_key="k", messages=MSG, max_tokens=50, client_factory=f)
+    assert r.model_source == "code" and f.beta_requests == [] and len(f.requests) == 1
+
+
+def test_complete_haiku_5_5_uses_plain_client():
+    f = _Factory(_resp([_t("ok")]))
+    llm.complete("fast", api_key="k", messages=MSG, max_tokens=50,
+                 model="claude-haiku-5-5", client_factory=f)
+    assert f.beta_requests == [] and len(f.requests) == 1
+
+
+def test_complete_setting_passes_effort():
+    f = _Factory(_resp([_t("ok")]))
+    r = llm.complete("fast", api_key="k", messages=MSG, max_tokens=50, client_factory=f,
+                     setting={"fast": RS("claude-haiku-5-5", "medium")})
+    assert r.model_source == "setting"
+    assert f.requests[0]["output_config"] == {"effort": "medium"}
+
+
+def test_complete_explicit_ignores_setting_effort():
+    f = _Factory(_resp([_t("ok")]))
+    llm.complete("fast", api_key="k", messages=MSG, max_tokens=50, client_factory=f,
+                 model="claude-haiku-5-5",
+                 setting={"fast": RS("claude-haiku-5-5", "high")})
+    assert f.requests[0]["output_config"] == {"effort": "low"}
+
+
+def test_complete_error_result_carries_source():
+    f = _Factory(exc=RuntimeError("boom"))
+    r = llm.complete("deep", api_key="k", messages=MSG, max_tokens=5, client_factory=f)
+    assert r.requested_model == llm.SONNET_4_6 and r.model_source == "code"
+
+
+# ---- Phase 2: Models API helpers ----
+def _full_info():
+    def sup(v):
+        return NS(supported=v)
+    effort = NS(supported=True, low=sup(True), medium=sup(True), high=sup(True),
+                xhigh=sup(False), max=sup(True))
+    caps = NS(effort=effort,
+              thinking=NS(types=NS(adaptive=sup(True), enabled=sup(False))),
+              structured_outputs=sup(True))
+    return NS(capabilities=caps, max_tokens=64000, max_input_tokens=200000)
+
+
+def test_normalize_capabilities_full():
+    assert llm.normalize_capabilities(_full_info()) == {
+        "efforts": ["low", "medium", "high", "max"],
+        "thinking_types": ["adaptive"],
+        "structured_outputs": True,
+        "max_tokens": 64000,
+        "max_input_tokens": 200000,
+    }
+
+
+def test_normalize_capabilities_missing_everything():
+    assert llm.normalize_capabilities(NS()) == {
+        "efforts": [], "thinking_types": [], "structured_outputs": False,
+        "max_tokens": None, "max_input_tokens": None}
+    assert llm.normalize_capabilities(None)["efforts"] == []
+    info = NS(capabilities=NS(effort=NS(supported=False, low=NS(supported=True))))
+    assert llm.normalize_capabilities(info)["efforts"] == []
+
+
+class _ModelsFactory:
+    def __init__(self, info=None, ids=(), exc=None):
+        self.calls = []
+        self.info, self.ids, self.exc = info, ids, exc
+
+    def __call__(self, **kw):
+        self.calls.append(kw)
+        outer = self
+
+        class C:
+            class models:
+                @staticmethod
+                def retrieve(mid):
+                    if outer.exc:
+                        raise outer.exc
+                    return outer.info
+
+                @staticmethod
+                def list(limit=None):
+                    if outer.exc:
+                        raise outer.exc
+                    return iter(NS(id=i) for i in outer.ids)
+        return C()
+
+
+def test_retrieve_model_ok_error_nokey():
+    f = _ModelsFactory(info=_full_info())
+    caps, err = llm.retrieve_model("k", "claude-x", client_factory=f)
+    assert err is None and caps["max_tokens"] == 64000
+    assert f.calls == [{"api_key": "k", "timeout": 10}]
+    f = _ModelsFactory(exc=RuntimeError("bad key sk-secret-123 here"))
+    caps, err = llm.retrieve_model("sk-secret-123", "claude-x", client_factory=f)
+    assert caps is None and "sk-secret-123" not in err and "***REDACTED***" in err
+    f = _ModelsFactory()
+    assert llm.retrieve_model("", "claude-x", client_factory=f) == (None, "no API key")
+    assert f.calls == []
+
+
+def test_list_model_ids_ok_error_nokey():
+    f = _ModelsFactory(ids=["claude-a", "claude-b"])
+    assert llm.list_model_ids("k", client_factory=f) == (["claude-a", "claude-b"], None)
+    f = _ModelsFactory(exc=RuntimeError("bad key sk-secret-123 here"))
+    ids, err = llm.list_model_ids("sk-secret-123", client_factory=f)
+    assert ids is None and "sk-secret-123" not in err
+    assert llm.list_model_ids("", client_factory=_ModelsFactory()) == (None, "no API key")
+
+
+# ---- Phase 2: price table ----
+def test_approx_cost_usd():
+    u = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+    assert llm.approx_cost_usd("claude-opus-5-5", u) == pytest.approx(24.0)
+    assert llm.approx_cost_usd("claude-haiku-5-5-20261001", u) == pytest.approx(0.6)
+    assert llm.approx_cost_usd(llm.HAIKU_4_5, u) == pytest.approx(6.0)
+    assert llm.approx_cost_usd("claude-unknown-9", u) is None
+    assert llm.approx_cost_usd("claude-opus-5-5", {"input_tokens": None, "output_tokens": 1}) is None
+    assert llm.approx_cost_usd("claude-opus-5-5", None) is None
+    with pytest.raises(TypeError):
+        llm.PRICES_PER_MTOK["x"] = (1, 1)

@@ -1,6 +1,6 @@
 # LLM model routing: move to current models, and change models without code changes
 
-**Status (2026-10-25): Phase 2 IN BUILD. P2-a1 SHIPPED (section 15). NEXT: P2-a2.** *(Earlier 2026-10-25: READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry.)* *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
+**Status (2026-10-25): Phase 2 IN BUILD. P2-a1 and P2-a2 SHIPPED (section 15). NEXT: P2-b.** *(Earlier 2026-10-25: READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry.)* *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
 lead from an AST inventory of every Anthropic call (2026-10-22) and the Claude API migration guide bundled with Claude
 Code (cached 2026-10-06). **Owner agreed with every lead recommendation in section 7 (2026-10-22):** D-1 App Settings
 with the score role pinned in code; D-2 switch the score model, but last, after the Phase 4 dry run; D-3 Sonnet 5.5
@@ -693,3 +693,43 @@ The lead re-checked B1 (`app.py:8258`, `debate_agent.py:462`), B8 (`thesis_advis
   constants change). The UI error "LLM offline or API key invalid" (app.py ~43687, ~43794) also shows for a cut-off
   review (cosmetic).
 - **Cosmetic:** `portfolio_qa.narrate_answer`'s own empty-text branch can no longer be reached (harmless duplicate).
+
+- **P2-a2** (2026-10-25), inert:
+  - **Resolver:** `llm.resolve_model_with_source` returns (model, source) in the order explicit, then env
+    `DRISHTA_LLM_MODEL_<ROLE>`, then `setting[role]` (a `RoleSetting`), then the code default, for `EDITABLE_ROLES` only.
+    The pinned roles and `extract_strong` never read env or the setting. `resolve_model` still returns a str.
+  - **Profiles:** `known-modern` matches `^claude-(haiku|sonnet|opus)-5-5(-\d{8})?$`. `generic` covers any other
+    non-legacy id: no thinking field, no temperature, effort only when the capabilities list it, headroom on every role,
+    clamped to the capabilities' `max_tokens`.
+  - **Effort:** capped at `ALLOWED_EFFORTS` (B3).
+  - **Refusal fallback:** `betas` plus `fallbacks="default"` through `client.beta.messages.create`, on known Sonnet / Opus
+    5.5 only.
+  - **`LLMResult`:** gains `requested_model`, `fell_back` and `model_source`, and `model` is now the model that served the
+    reply (N3: a persisted `model` field may record a dated id where an alias was sent). Text before the last `fallback`
+    block is discarded.
+  - **New helpers:** the Models API helpers `normalize_capabilities`, `retrieve_model` and `list_model_ids`; the
+    `PRICES_PER_MTOK` table (from `scripts/session_cost.py`) and `approx_cost_usd`; and the `complete(setting=...)` seam,
+    which nothing passes yet.
+  - **Folded in from §15:** the `premarket_stance` opt-in, the unknown role failing closed, and a test that no
+    `llm.complete` call uses `**kwargs`.
+  - **Tests:** a conftest autouse fixture clears `DRISHTA_LLM_MODEL_*` (N13).
+  - Built by `implementer` (Sonnet 5.5); Opus review SHIP, 0 blocking. The golden fixture is unchanged.
+
+**Carried forward from the P2-a2 review:**
+- **P2-b (`llm.py`), before Phase 3:** after a fallback, `LLMResult.model` may still name the model that declined.
+  - The SDK says the top-level `model` can be the primary's (`lib/middleware/_fallbacks.py` ~471).
+  - When `fell_back`, take the `model` of the last `fallback_message` entry in `usage.iterations`. If there is none, take
+    the last `fallback` block's `to.model`. Otherwise use `response.model`.
+  - Add a test whose fake sets the top-level `model` to the requested id.
+- **P2-b validation:** a setting's `effort` is silently dropped on the legacy / opus-4x profiles. Reject an effort for
+  those models, or have P2-c offer none.
+- **P2-b tests:**
+  - `complete` with an env-sourced model (`model_source == "env"`)
+  - a setting whose effort is `"max"`, which must return an error result, not raise
+  - setting capabilities clamping `max_tokens` end to end
+- **P2-d:** a bad `DRISHTA_LLM_MODEL_*` value (whitespace, or not `claude-`) is ignored with no record. Show "env set but
+  ignored" in System Trust, alongside N8.
+- **P2-c, first live check before Phase 3:** run Test role on a Sonnet 5.5 JSON role (`extract`). The SDK's thinking
+  types don't list `between_tools`, so whether `between_tools` plus `fallbacks` is accepted rests on §13.2 D.
+- **Theoretical:** known-modern sends the default `"low"` even when the stored capabilities don't list it. Every 5.5 model
+  lists `low`.

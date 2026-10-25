@@ -57,6 +57,15 @@ ast.parse = _guarded_parse
 ast.get_source_segment = _guarded_get_source_segment
 
 
+@pytest.fixture(autouse=True)
+def _clear_llm_model_env(monkeypatch):
+    """N13: a DRISHTA_LLM_MODEL_* variable in the developer's shell must never
+    change which model a test resolves."""
+    import os
+    for k in [k for k in os.environ if k.startswith("DRISHTA_LLM_MODEL_")]:
+        monkeypatch.delenv(k, raising=False)
+
+
 def make_risk_advisor_inputs(
     rows,
     *,

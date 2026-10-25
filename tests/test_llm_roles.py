@@ -81,7 +81,7 @@ def _collect(with_flag: bool = False) -> dict:
     return found
 
 
-# Sites whose reply is parsed as JSON (or a trailing Verdict: line) on a
+# Sites whose reply is parsed as JSON (or a trailing Verdict:/Stance: line) on a
 # narrative role, so they opt in to JSON handling per call.
 EXPECTS_JSON = {
     ("portfolio_qa", "parse_question"): "True",
@@ -93,6 +93,7 @@ EXPECTS_JSON = {
     ("regime_stress", "generate_regime_scenario"): "True",
     ("thesis_advisor", "review_thesis"): "True",
     ("thesis_advisor", "generate_earnings_thesis_update"): "True",
+    ("premarket_stance", "generate_stance"): "True",
 }
 
 
@@ -125,3 +126,25 @@ def test_expects_json_opt_in_sites():
     variable fails until EXPECTS_JSON is edited by hand."""
     flagged = {k: v for k, v in _collect(with_flag=True).items() if v is not None}
     assert flagged == EXPECTS_JSON
+
+
+def _collect_star_kwargs() -> list:
+    """Every collected llm.complete call that has a ``**`` keyword."""
+    bad = []
+    files = sorted((ROOT / "stock_analyzer").glob("*.py")) + [ROOT / "app.py", ROOT / "cron_runner.py"]
+    for path in files:
+        tree = parse_file_cached(path)
+        for n in ast.walk(tree):
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "complete"
+                    and isinstance(n.func.value, ast.Name)
+                    and n.func.value.id.endswith("llm")
+                    and any(k.arg is None for k in n.keywords)):
+                bad.append((path.stem, n.lineno))
+    return bad
+
+
+def test_no_llm_complete_call_uses_star_kwargs():
+    """A ``**kwargs`` call could carry ``expects_json`` where the pin above
+    can't see it, so none is allowed."""
+    assert _collect_star_kwargs() == []

@@ -207,6 +207,9 @@ def generate_stance(
             max_tokens=max_tokens,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
+            # the reply ends in a parsed `Stance:` line, so a cut-off reply
+            # must fail rather than fall back to "Neutral at open"
+            expects_json=True,
         )
         if not r.ok:
             return None
