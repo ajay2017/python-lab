@@ -761,6 +761,16 @@ EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT  = 22.0  # binary-event risk cap even for a
 EARNINGS_OVERWEIGHT_TOLERANCE_PP      = 5.0   # buffer added to equal-weight (100/N)
 EARNINGS_OVERWEIGHT_TRIM_TO_PCT       = 10.0
 
+# 📅 Earnings page (earnings_advisor._recommend) REDUCE / MONITOR rules — values
+# previously bare literals in that function, named here with the SAME values.
+EARNINGS_REDUCE_MIN_WEIGHT_PCT = 5.0    # a weak-signal REDUCE only fires on a position at least this heavy (% of portfolio)
+EARNINGS_REVISION_REDUCE_NET   = -2     # net analyst revisions (90d) at or below this = negative-revision REDUCE
+EARNINGS_PARTIAL_TRIM_PCT      = 35.0   # % of shares trimmed by the revisions / beat-history / bearish-reaction REDUCE rules
+EARNINGS_WEAK_TRIM_PCT         = 50.0   # % of shares trimmed by the weak-composite (Sell-zone) REDUCE rule
+EARNINGS_STOP_COVER_FRAC       = 0.85   # stop gap < this fraction of the estimated earnings move = "stop at risk"
+# 🌐 Macro PROTECT-mode half-trim (macro_playbook._action_detail, non-overweight branch).
+MACRO_PROTECT_HALF_TRIM_PCT    = 50.0   # % of shares trimmed on a PROTECT-mode event
+
 # 🔍 Weak large position — trim-down rule.
 # Target is set below the 10% LARGE_POSITION_WEIGHT_PCT re-flag threshold so
 # the position stops appearing in Review next session. Anything lower would

@@ -11,11 +11,13 @@ For each upcoming high-impact macro event generates:
 import pandas as _pd
 
 from stock_analyzer.market_time import today_et
+from stock_analyzer.trim_sizing import fraction_trim_shares, shares_to_trim
 
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
     SINGLE_NAME_CEILING,
+    MACRO_PROTECT_HALF_TRIM_PCT,
     MACRO_PROTECT_PNL_PCT,
     MACRO_PROTECT_PNL_WINDOW_DAYS,
     MACRO_IMMINENT_DAYS,
@@ -439,18 +441,26 @@ def _action_detail(row, event_name: str, action: str) -> str:
 
     if action == "PROTECT":
         if weight > _PROTECT_WEIGHT:
-            target_w   = SINGLE_NAME_CEILING
-            trim_frac  = (weight - target_w) / weight
-            trim_sh    = max(1, int(shares * trim_frac))
-            trim_val   = round(trim_frac * mval)
+            trim_sh    = shares_to_trim(shares, weight, SINGLE_NAME_CEILING)
+            if trim_sh < 1:
+                return (
+                    f"Over the ~{SINGLE_NAME_CEILING:.0f}% line by less than one share at today's price, "
+                    "so no trim is sized. Keep stops in place through the release."
+                )
+            trim_val   = round(trim_sh * (mval / shares)) if shares > 0 else 0
             return (
                 f"Trim to ~{SINGLE_NAME_CEILING:.0f}% weight: **sell {trim_sh:,} shares (~${trim_val:,.0f})** before the event. "
                 f"Keep the core position for the upside scenario — just cap the binary event risk."
             )
-        trim_sh  = max(1, shares // 2)
+        trim_sh  = fraction_trim_shares(shares, MACRO_PROTECT_HALF_TRIM_PCT)
+        if trim_sh < 1:
+            return (
+                f"A {MACRO_PROTECT_HALF_TRIM_PCT:.0f}% reduction of a {shares}-share position is under one share, "
+                "so no trim is sized. Keep stops in place through the release."
+            )
         trim_val = round(trim_sh * price)
         return (
-            f"Reduce 50% before the release: **sell {trim_sh:,} shares (~${trim_val:,.0f})**. "
+            f"Reduce {MACRO_PROTECT_HALF_TRIM_PCT:.0f}% before the release: **sell {trim_sh:,} shares (~${trim_val:,.0f})**. "
             f"Re-enter from a smaller base if the report clears the risk."
         )
 

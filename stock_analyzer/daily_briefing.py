@@ -27,6 +27,7 @@ from datetime import date, datetime as _dt, timedelta
 
 import pandas as pd
 
+from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_STRONG_BUY,
@@ -2815,10 +2816,17 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
         # max(1, ...) floor below to read "1 of 0 shares," or "exit most/all of
         # 0 shares" on the EXIT side. Fall back to a share-count-free phrasing
         # rather than show a self-contradictory quantity on either branch.
-        _trim_qty_clause = (
-            f" ({max(1, int(d['shares'] * DETERIORATION_TRIM_SUGGESTED_PCT / 100.0))} of {d['shares']} shares)"
-            if d["shares"] > 0 else ""
-        )
+        _det_n = _trim_sizing.fraction_trim_shares(d["shares"], DETERIORATION_TRIM_SUGGESTED_PCT)
+        if d["shares"] > 0 and _det_n >= 1:
+            _trim_qty_clause = f" ({_det_n} of {d['shares']} shares)"
+        elif d["shares"] > 0:
+            _trim_qty_clause = (
+                f" (at {d['shares']} shares a {DETERIORATION_TRIM_SUGGESTED_PCT:.0f}% "
+                f"trim is under one share; the smallest real trim is 1 share, "
+                f"{100.0 / d['shares']:.0f}% of the position, or exit)"
+            )
+        else:
+            _trim_qty_clause = ""
         _exit_qty_clause = f"of {d['shares']} shares" if d["shares"] > 0 else "of the position"
         items.append({
             "priority": "high",
@@ -3142,18 +3150,9 @@ def _consolidate_act_today(items: list[dict], port_df) -> list[dict]:
 
 # ── Review Before Close ────────────────────────────────────────────────────────
 
-def _dynamic_overweight_floor(n_positions: int) -> float:
-    """Equal-weight + EARNINGS_OVERWEIGHT_TOLERANCE_PP buffer, clamped to
-    [EARNINGS_OVERWEIGHT_TRIM_PCT, EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT]. A flat
-    threshold assumes a fixed portfolio size; this scales with however many
-    positions are actually held, while still capping binary earnings-event
-    exposure even for a deliberately concentrated book.
-    """
-    if n_positions <= 0:
-        return EARNINGS_OVERWEIGHT_TRIM_PCT
-    eq_target = 100.0 / n_positions
-    return max(EARNINGS_OVERWEIGHT_TRIM_PCT,
-               min(eq_target + EARNINGS_OVERWEIGHT_TOLERANCE_PP, EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT))
+# Moved to trim_sizing.earnings_overweight_floor (single source, 2026-10-25); the
+# alias keeps the old name importable.
+_dynamic_overweight_floor = _trim_sizing.earnings_overweight_floor
 
 
 def _review_list(port_df, news_items, macro_events, held_data, today,
@@ -3280,7 +3279,10 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             continue
         lock_profits = pnl_pct >= STOP_PROFIT_LOCK_PNL_PCT
         if is_critical and lock_profits:
-            trim_shares = max(1, int(round(shares * STOP_PROFIT_LOCK_TRIM_PCT / 100)))
+            trim_shares = _trim_sizing.fraction_trim_shares(shares, STOP_PROFIT_LOCK_TRIM_PCT)
+        else:
+            trim_shares = 0
+        if is_critical and lock_profits and trim_shares >= 1:
             trim_dollars = round(trim_shares * price, 0)
             action = {
                 "type":         "TRIM_AND_TIGHTEN",
@@ -3292,6 +3294,16 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             why = (
                 f"Gap critical ({gap:.1f}% < 3%) and P&L +{pnl_pct:.1f}% above "
                 f"{STOP_PROFIT_LOCK_PNL_PCT:.0f}% — lock part of the gain, tighten stop on the rest."
+            )
+        elif is_critical and lock_profits:
+            # A profit-lock trim that floors to 0 shares (2026-10-23 rule: no
+            # sub-share trim calls): tighten only, and say why without the
+            # "still has room" wording, which a critical gap contradicts.
+            action = {"type": "TIGHTEN_ONLY", "new_stop": new_stop}
+            why = (
+                f"Gap critical ({gap:.1f}% < 3%) and P&L +{pnl_pct:.1f}%. A "
+                f"{STOP_PROFIT_LOCK_TRIM_PCT:.0f}% trim is under one share, so only "
+                "the stop is tightened."
             )
         else:
             action = {"type": "TIGHTEN_ONLY", "new_stop": new_stop}
@@ -3333,20 +3345,19 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         if pm.empty:
             continue
         weight = _f(pm["Weight (%)"].iloc[0])
-        shares = int(_f(pm["Shares"].iloc[0]))
+        shares_raw = _f(pm["Shares"].iloc[0])
         price  = _f(pm["Price"].iloc[0])
         label  = "TODAY" if days == 0 else f"in {days}d"
-        if weight > _overweight_floor and portfolio_value > 0:
-            target_value = portfolio_value * (EARNINGS_OVERWEIGHT_TRIM_TO_PCT / 100)
-            current_value = portfolio_value * (weight / 100)
-            trim_dollars = round(current_value - target_value, 0)
-            trim_shares  = max(1, int(round(trim_dollars / price))) if price > 0 else 0
+        _etrim = _trim_sizing.earnings_week_trim(weight, _n_pos, shares_raw)
+        if _etrim is not None and _etrim["trim_shares"] >= 1:
+            trim_shares  = _etrim["trim_shares"]
+            trim_dollars = round(trim_shares * price, 0)
             action = {
                 "type":           "TRIM_TO_TARGET",
                 "trim_shares":    trim_shares,
                 "trim_dollars":   trim_dollars,
                 "from_weight":    weight,
-                "target_weight":  EARNINGS_OVERWEIGHT_TRIM_TO_PCT,
+                "target_weight":  _etrim["target_pct"],
                 "reason_key":     "earnings",
             }
             why = (
@@ -3355,6 +3366,14 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 f"(N={_n_pos} positions). Trim to size-down the binary event exposure."
             )
             trigger = "Beat → re-enter post-print if composite holds; Miss → existing stop protects rest."
+        elif _etrim is not None:
+            action = {"type": "WATCH"}
+            why = (
+                f"Weight {weight:.1f}% is over the {_overweight_floor:.1f}% "
+                f"position-count-adjusted line by less than one share at today's "
+                f"price, so no trim is sized (N={_n_pos} positions)."
+            )
+            trigger = "Surprise miss + price gap-down → existing stop protects; no pre-event action needed."
         else:
             action = {"type": "WATCH"}
             why = (

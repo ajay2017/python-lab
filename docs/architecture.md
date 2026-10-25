@@ -400,6 +400,12 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `EARNINGS_BEAT_RATE_REDUCE_THRESHOLD` | 60.0 | Pre-Earnings Playbook (F-174) — CNBC-sourced historical beat rate below this, combined with composite < `COMPOSITE_BUY`, adds a REDUCE condition |
 | `EARNINGS_BEAT_RATE_STRONG_THRESHOLD` | 75.0 | Pre-Earnings Playbook (F-174) — beat rate at/above this strengthens the HOLD_OR_ADD narrative (annotation only, does not change the verdict) |
 | `EARNINGS_BEARISH_REACTION_COMPOSITE_GATE` | 75 | Pre-Earnings Playbook (F-174) — a bearish CNBC-sourced post-earnings reaction history, combined with composite below this gate, adds a REDUCE condition |
+| `EARNINGS_REDUCE_MIN_WEIGHT_PCT` | 5.0 | Pre-Earnings Playbook `_recommend` — the weak-composite / negative-revision / poor-beat-history / bearish-reaction REDUCE rules only fire on a position at least this heavy (% of portfolio). Named 2026-10-25; was a bare `5` |
+| `EARNINGS_REVISION_REDUCE_NET` | -2 | Pre-Earnings Playbook `_recommend` — net analyst revisions (90d) at or below this add a REDUCE condition. Named 2026-10-25; was a bare `-2` |
+| `EARNINGS_PARTIAL_TRIM_PCT` | 35.0 | Pre-Earnings Playbook `_recommend` — % of shares trimmed by the negative-revision, poor-beat-history and bearish-reaction REDUCE rules (floored; a 0-share result falls through). Named 2026-10-25; was a bare `0.35` |
+| `EARNINGS_WEAK_TRIM_PCT` | 50.0 | Pre-Earnings Playbook `_recommend` — % of shares trimmed by the weak-composite (Sell-zone) REDUCE rule. Named 2026-10-25; was `shares // 2` |
+| `EARNINGS_STOP_COVER_FRAC` | 0.85 | Pre-Earnings Playbook — a stop gap below this fraction of the estimated earnings move reads "stop at risk" (MONITOR + `stop_at_risk`). Named 2026-10-25; was a bare `0.85` |
+| `MACRO_PROTECT_HALF_TRIM_PCT` | 50.0 | Macro Playbook `_action_detail` — % of shares trimmed on a PROTECT-mode event for a name not over `SINGLE_NAME_CEILING`. Named 2026-10-25; was `shares // 2` |
 | `EARNINGS_MIN_BEAT_RATE_ENTRY` | 70.0 | Catalyst Scanner (F-37b, Earnings Playbook Phase 3) — min historical beat rate for a watchlist name to surface as an Entry Candidate on 🔔 Catalyst Watch. Awareness-only filter, combined with composite ≥ `COMPOSITE_BUY` + reaction ≠ bearish; never a Buy rec |
 | `EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS` | 2 | Pre-Earnings Playbook — minimum net analyst upgrades (90d) for the HOLD_OR_ADD verdict (with composite ≥ `COMPOSITE_STRONG_BUY`). Inside `EARNINGS_IMMINENT_DAYS` the same setup is returned as HOLD (S-D D6, no add into a report); the advisor never sizes an add |
 | `MACRO_IMMINENT_DAYS` | 3 | Hard suppress new picks in sectors with HIGH-impact macro within this window Since F-307 (2026-10-16) this also governs 📋 Watchlist ENTER NOW, its email and 📈 Analysis's not-held Buy size (shared `entry_eligibility`). |
@@ -3233,7 +3239,7 @@ create table if not exists public.rec_events (
     metric_name             text,                -- 'single_name_pct' | 'portfolio_beta' | 'avg_pairwise_corr'
     metric_before           numeric,             -- NULL-preserving, never fabricated 0
     metric_predicted_after  numeric,             -- nullable — no formula exists yet for diversify_add
-    rec_dollars             numeric,          -- rebal_trim rows fired before 2026-10-23 are UNDERSTATED by a factor of weight/100 (portfolio.rebalance_actions sized the trim as mval × (w − SINGLE_NAME_CEILING) / 100; fixed to … / w). Don't compare dollar sizes across that date.
+    rec_dollars             numeric,          -- rebal_trim rows fired before 2026-10-23 are UNDERSTATED by a factor of weight/100 (portfolio.rebalance_actions sized the trim as mval × (w − SINGLE_NAME_CEILING) / 100; fixed to … / w). Don't compare dollar sizes across that date. From 2026-10-25 an earnings-week rebal_trim row is sized to EARNINGS_OVERWEIGHT_TRIM_TO_PCT (its metric_predicted_after says so), so its rec_dollars is larger than a ceiling-sized row for the same weight.
     price_at_rec            numeric,             -- ADD only; NULL when unavailable
     candidates              jsonb,               -- ADD only — the full surfaced candidate pool
     corr_coverage_n         integer,             -- ADD only
@@ -3347,7 +3353,10 @@ own try/except so one failing generator never blanks the others (mirrors
 - **`rebal_trim`** — from `portfolio.rebalance_actions()`'s "trim" branch (fires on
   `weight > SINGLE_NAME_TRIM_TRIGGER and pnl > REBALANCE_TRIM_PNL_PCT`). `metric_name=
   "single_name_pct"`, `metric_before`=current weight, `metric_predicted_after`=
-  `SINGLE_NAME_CEILING`, `rec_dollars`=trim_val.
+  the action's `target_weight` (`SINGLE_NAME_CEILING`, or `EARNINGS_OVERWEIGHT_TRIM_TO_PCT`
+  when the ticker's earnings fall within `EARNINGS_IMMINENT_DAYS`, from 2026-10-25),
+  `rec_dollars`=trim_val. Rows describe themselves: readers use each row's own
+  `metric_predicted_after`, so no version column is needed.
 - **`beta_trim`** — reproduces (does **not** import) `risk_advisor.py`'s beta-card
   top-contributor trim pick, so `risk_advisor.py` itself stays untouched by this feature (it
   is a `_GATE_FILES` member; touching it would pull an unrelated mandatory-review scope into

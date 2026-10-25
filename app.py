@@ -78,6 +78,7 @@ from stock_analyzer.stress_test import (
     _EARLIEST_STRESS_START,
 )
 from stock_analyzer import monte_carlo as _mc
+from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer import forward_sim as _fsim
 from stock_analyzer import attribution_readiness as _attr_ready
 from stock_analyzer.personalized_discovery import build_winner_profile
@@ -6102,7 +6103,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 19  # bumped: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 20  # bumped: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -6313,7 +6314,10 @@ if page == "🏠 Home":
         st.session_state["_n_danger_cache"]   = n_danger
         st.session_state["_n_warning_cache"]  = n_warning
 
-        actions = rebalance_actions(port_df, deterioration=_det_signals)
+        actions = rebalance_actions(
+            port_df, deterioration=_det_signals,
+            earnings_days=_trim_sizing.earnings_days_by_ticker(held_data, _today_et()),
+        )
         st.session_state["_actions_cache"] = actions
 
         _crb = home_risk_synthesis.build_correlation_bundle(
@@ -16094,17 +16098,27 @@ elif page == "📡 Signals & Advice":
                     elif act["type"] == "trim":
                         ts = act["trim_shares"]
                         tv = act["trim_val"]
+                        # The target the trim was sized to: SINGLE_NAME_CEILING, or
+                        # EARNINGS_OVERWEIGHT_TRIM_TO_PCT in earnings week (trim_sizing).
+                        _tw = act.get("target_weight", SINGLE_NAME_CEILING)
                         if ts >= 1:
                             action_text = (
                                 f"Sell **{ts} share{'s' if ts != 1 else ''}** (~${ts * act['price']:,.0f}) to reduce from "
-                                f"{act['weight']:.0f}% → ~{SINGLE_NAME_CEILING:.0f}% portfolio weight.  \n"
+                                f"{act['weight']:.0f}% → ~{_tw:.0f}% portfolio weight.  \n"
                                 f"This locks in a portion of the {act['pnl']:.0f}% gain while keeping "
                                 f"the core position."
                             )
                         else:
                             action_text = (
-                                f"The excess over {SINGLE_NAME_CEILING:.0f}% (~${tv:,.0f}) is less than "
+                                f"The excess over {_tw:.0f}% (~${tv:,.0f}) is less than "
                                 f"one share at the current price, so no trim is sized."
+                            )
+                        if act.get("basis") == "earnings_week":
+                            _ed = act.get("earnings_days")
+                            _ed_txt = "today" if _ed == 0 else f"in {_ed}d"
+                            action_text += (
+                                f"  \nEarnings {_ed_txt} — sized by the same earnings-week rule "
+                                "the 🏠 Brief and 🔔 Catalyst Watch use."
                             )
                         st.markdown(action_text)
 

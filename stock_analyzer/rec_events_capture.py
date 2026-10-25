@@ -96,6 +96,7 @@ from stock_analyzer.constants import (
     WEAK_CONVICTION_SCORE,
 )
 from stock_analyzer.portfolio import diversification_recommendations, rebalance_actions
+from stock_analyzer.trim_sizing import earnings_days_by_ticker
 
 _SOURCE = "cron"
 
@@ -119,6 +120,7 @@ def _fired_date_str(fired_date) -> str:
 
 def _build_rebal_trim_rows(
     port_df, fired_date_str: str, skipped_out: "set[str] | None" = None,
+    earnings_days: "dict[str, int] | None" = None,
 ) -> "list[dict]":
     """One row per `rebalance_actions()` "trim" action that day.
 
@@ -129,13 +131,15 @@ def _build_rebal_trim_rows(
     `trim_shares` keeps the row.
 
     `metric_before` = the ticker's current portfolio weight; `metric_predicted_
-    after` = `SINGLE_NAME_CEILING` (the target the trim rec is sized against);
+    after` = the action's `target_weight` (the target the trim rec is sized
+    against: `EARNINGS_OVERWEIGHT_TRIM_TO_PCT` in earnings week via
+    `earnings_days`, else `SINGLE_NAME_CEILING`);
     `rec_dollars` = the recommended trim amount (`trim_val`).
     """
     if port_df is None or getattr(port_df, "empty", True):
         return []
     try:
-        actions = rebalance_actions(port_df)
+        actions = rebalance_actions(port_df, earnings_days=earnings_days)
     except Exception:
         return []
 
@@ -159,7 +163,7 @@ def _build_rebal_trim_rows(
             "source":                 _SOURCE,
             "metric_name":            "single_name_pct",
             "metric_before":          _safe_float(act.get("weight")),
-            "metric_predicted_after": _safe_float(SINGLE_NAME_CEILING),
+            "metric_predicted_after": _safe_float(act.get("target_weight", SINGLE_NAME_CEILING)),
             "rec_dollars":            _safe_float(act.get("trim_val")),
             "price_at_rec":           None,
             "candidates":             None,
@@ -557,7 +561,11 @@ def build_rec_event_rows(
 
     try:
         _rebal_skipped: "set[str]" = set()
-        rebal_rows = _build_rebal_trim_rows(port_df, fired_date_str, _rebal_skipped)
+        _fd = fired_date.date() if hasattr(fired_date, "hour") else fired_date
+        rebal_rows = _build_rebal_trim_rows(
+            port_df, fired_date_str, _rebal_skipped,
+            earnings_days=earnings_days_by_ticker(held_data, _fd),
+        )
         # Skipped (unsized) trims stay in the dedup set so no new
         # single_name_concentration row appears where none was written before.
         rebal_trim_tickers = {r["ticker"] for r in rebal_rows} | _rebal_skipped

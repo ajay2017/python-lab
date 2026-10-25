@@ -35,7 +35,7 @@ FIRED_DATE = datetime.date(2026, 9, 15)
 # ── rebal_trim ───────────────────────────────────────────────────────────────
 
 def test_rebal_trim_row_built_from_rebalance_actions_trim_action(monkeypatch):
-    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
         {"type": "trim", "ticker": "AAA", "weight": 22.0, "trim_val": 3500.0},
     ])
     rows = rec._build_rebal_trim_rows(pd.DataFrame({"Ticker": ["AAA"]}), "2026-09-15")
@@ -56,7 +56,7 @@ def test_rebal_trim_row_built_from_rebalance_actions_trim_action(monkeypatch):
 
 
 def test_rebal_trim_skips_unsized_trim_and_reports_it(monkeypatch):
-    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
         {"type": "trim", "ticker": "AAA", "weight": 22.0, "trim_val": 500.0, "trim_shares": 0},
         {"type": "trim", "ticker": "BBB", "weight": 22.0, "trim_val": 5000.0, "trim_shares": 2},
         {"type": "trim", "ticker": "CCC", "weight": 22.0, "trim_val": 5000.0},
@@ -71,7 +71,7 @@ def test_unsized_trim_ticker_gets_no_single_name_conc_row_either(monkeypatch):
     port = _sn_port_df(weight=20.0, score=WEAK_CONVICTION_SCORE)
     # Precondition: absent the dedup this ticker WOULD get a concentration row.
     assert len(rec._build_single_name_conc_rows(port, None, FIRED_DATE, "2026-09-15")) == 1
-    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
         {"type": "trim", "ticker": "AAA", "weight": 20.0, "trim_val": 500.0, "trim_shares": 0},
     ])
     rows = rec.build_rec_event_rows(
@@ -82,7 +82,7 @@ def test_unsized_trim_ticker_gets_no_single_name_conc_row_either(monkeypatch):
 
 
 def test_rebal_trim_ignores_non_trim_actions(monkeypatch):
-    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
         {"type": "add", "ticker": "BBB", "weight": 2.0},
         {"type": "review", "ticker": "CCC"},
     ])
@@ -96,7 +96,7 @@ def test_rebal_trim_empty_port_df_returns_empty():
 
 
 def test_rebal_trim_generator_failure_returns_empty_not_raise(monkeypatch):
-    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: (_ for _ in ()).throw(RuntimeError("boom")))
     assert rec._build_rebal_trim_rows(pd.DataFrame({"Ticker": ["AAA"]}), "2026-09-15") == []
 
 
@@ -485,7 +485,7 @@ def test_sector_conc_empty_port_df_returns_empty():
 # ── orchestrator: isolation + NULL-preserving ────────────────────────────────
 
 def test_build_rec_event_rows_combines_all_three_generators(monkeypatch):
-    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
         {"type": "trim", "ticker": "AAA", "weight": 22.0, "trim_val": 1000.0},
     ])
     monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [
@@ -505,7 +505,7 @@ def test_one_generator_failure_never_blanks_the_others(monkeypatch):
     """The load-bearing isolation contract: rebal_trim generator raises,
     beta_trim and diversify_add must still produce their rows."""
     monkeypatch.setattr(rec, "rebalance_actions",
-                         lambda port_df: (_ for _ in ()).throw(RuntimeError("boom")))
+                         lambda port_df, **_kw: (_ for _ in ()).throw(RuntimeError("boom")))
     monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [
         {"type": "ADD", "sector": "Energy", "candidates": ["XOM"]},
     ])
@@ -522,7 +522,7 @@ def test_one_generator_failure_never_blanks_the_others(monkeypatch):
 
 
 def test_beta_trim_failure_never_blanks_rebal_trim_or_diversify_add(monkeypatch):
-    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
         {"type": "trim", "ticker": "AAA", "weight": 22.0, "trim_val": 1000.0},
     ])
     monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [
@@ -542,7 +542,7 @@ def test_beta_trim_failure_never_blanks_rebal_trim_or_diversify_add(monkeypatch)
 
 
 def test_no_qualifying_rec_returns_empty_list_not_none(monkeypatch):
-    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [])
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [])
     monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [])
     rows = rec.build_rec_event_rows(
         FIRED_DATE, pd.DataFrame({"Ticker": ["AAA"]}), {"beta": 1.0}, {}, None,
@@ -558,7 +558,7 @@ def test_orchestrator_dedups_single_name_conc_against_rebal_trim(monkeypatch):
     single_name_concentration (weight/score in port_df) -- must produce
     exactly ONE row for AAA, not two, per the §11-class conflation ratified
     against on 2026-09-21."""
-    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
         {"type": "trim", "ticker": "AAA", "weight": 25.0, "trim_val": 2500.0},
     ])
     monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [])
@@ -580,7 +580,7 @@ def test_orchestrator_single_name_conc_fires_when_rebal_trim_misses_it(monkeypat
     """BBB is oversized+strong-conviction but rebal_trim (mocked) doesn't
     name it (e.g. not yet profitable) -- single_name_concentration must
     still capture the genuine gap."""
-    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [])
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [])
     monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [])
     port_df = pd.DataFrame({
         "Ticker":       ["BBB"],
@@ -597,7 +597,7 @@ def test_orchestrator_single_name_conc_fires_when_rebal_trim_misses_it(monkeypat
 
 
 def test_orchestrator_single_name_conc_or_sector_conc_failure_never_blanks_others(monkeypatch):
-    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df: [
+    monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
         {"type": "trim", "ticker": "AAA", "weight": 22.0, "trim_val": 1000.0},
     ])
     monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [

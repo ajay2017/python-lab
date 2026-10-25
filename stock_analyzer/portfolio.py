@@ -6,6 +6,7 @@ import numpy as np
 from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_UNDERSIZED_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS, EARNINGS_IMMINENT_DAYS, EARNINGS_CRITICAL_DAYS, REDEPLOY_CORR_DIVERSIFIER_MAX, REDEPLOY_CORR_CORRELATED_MIN, CORR_MIN_OBS_TRUSTED
 from stock_analyzer.earnings_advisor import _today_et
 from stock_analyzer import asset_type
+from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
 
 
@@ -829,6 +830,7 @@ def alerts(
 def rebalance_actions(
     portfolio_df: pd.DataFrame,
     deterioration: list[dict] | None = None,
+    earnings_days: dict[str, int] | None = None,
 ) -> list[dict]:
     """
     Returns structured recommendation dicts instead of plain strings.
@@ -837,6 +839,12 @@ def rebalance_actions(
 
     `deterioration` (optional): see `alerts()`'s docstring — same annotation-only
     pattern, applied to the "review" (bearish-signal) action type here.
+
+    `earnings_days` (optional): upper-cased ticker -> days to earnings
+    (`trim_sizing.earnings_days_by_ticker`). In earnings week a trim is sized by
+    the shared earnings-week rule (target EARNINGS_OVERWEIGHT_TRIM_TO_PCT) instead
+    of SINGLE_NAME_CEILING; the action carries `target_weight` / `basis` /
+    `earnings_days`.
     """
     _det_tier = {d["ticker"]: d["tier"] for d in (deterioration or []) if d.get("ticker")}
     actions = []
@@ -861,15 +869,32 @@ def rebalance_actions(
             # divided by 100, understating the trim by w/100.) Floor the share
             # count; a sub-one-share excess sizes 0 shares (action still emitted,
             # but urgency "low" and sized=False: no sell call is actually made).
-            trim_val    = mval * (w - SINGLE_NAME_CEILING) / w if w > 0 else 0.0
-            trim_shares = int(trim_val / price) if price and price > 0 else 0
+            _ed = (earnings_days or {}).get(str(ticker).upper())
+            _ew = (
+                _trim_sizing.earnings_week_trim(w, len(portfolio_df), shares)
+                if _trim_sizing.in_earnings_window(_ed) else None
+            )
+            if _ew is not None:
+                _target, _basis = _ew["target_pct"], "earnings_week"
+                _trigger = (
+                    f"Weight {w:.0f}% with earnings {'today' if _ed == 0 else f'in {_ed}d'} — the earnings-week "
+                    f"rule trims to {_target:.0f}%"
+                )
+            else:
+                _target, _basis = SINGLE_NAME_CEILING, "ceiling"
+                _trigger = f"Weight {w:.0f}% exceeds {SINGLE_NAME_TRIM_TRIGGER:.0f}% threshold with +{pnl:.0f}% profit"
+            trim_val    = mval * (w - _target) / w if w > 0 else 0.0
+            trim_shares = _trim_sizing.shares_to_trim(shares, w, _target)
             actions.append({
                 "type":    "trim",
                 "urgency": "medium" if trim_shares >= 1 else "low",
                 "sized":   trim_shares >= 1,
                 "ticker":  ticker,
                 "title":   "Oversized Position with Strong Gain",
-                "trigger": f"Weight {w:.0f}% exceeds {SINGLE_NAME_TRIM_TRIGGER:.0f}% threshold with +{pnl:.0f}% profit",
+                "trigger": _trigger,
+                "target_weight": _target,
+                "basis":   _basis,
+                "earnings_days": _ed,
                 "trim_shares": trim_shares,
                 "trim_val":    trim_val,
                 "weight":  w,

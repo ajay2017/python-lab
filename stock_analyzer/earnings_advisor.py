@@ -25,6 +25,17 @@ from stock_analyzer.constants import (
     COMPOSITE_STRONG_BUY,
     SINGLE_NAME_CEILING,
     SINGLE_NAME_TRIM_TRIGGER,
+    EARNINGS_REDUCE_MIN_WEIGHT_PCT,
+    EARNINGS_REVISION_REDUCE_NET,
+    EARNINGS_PARTIAL_TRIM_PCT,
+    EARNINGS_WEAK_TRIM_PCT,
+    EARNINGS_STOP_COVER_FRAC,
+)
+from stock_analyzer.trim_sizing import (
+    earnings_week_trim,
+    fraction_trim_shares,
+    in_earnings_window,
+    shares_to_trim,
 )
 
 _ET = _pytz.timezone("America/New_York")
@@ -164,6 +175,8 @@ def _recommend(
     est_move: float,
     beat_rate: float | None = None,
     reaction: str | None = None,
+    n_positions: int | None = None,
+    sizing_shares: float | None = None,
 ) -> tuple[str, str, str, str]:
     """
     Returns (action, priority, detail, institutional_lens).
@@ -189,41 +202,75 @@ def _recommend(
             ),
         )
 
+    # Trim sizes use the unrounded share count when given, the same input the
+    # Brief and Signals size from, so a fractional holding gets the same whole-
+    # share trim on every surface. `shares` (int) stays the display count.
+    _sz = sizing_shares if sizing_shares is not None else shares
+
     # ── REDUCE — oversized position ───────────────────────────────────────────
-    if weight > SINGLE_NAME_TRIM_TRIGGER:
-        target_w  = SINGLE_NAME_CEILING
-        trim_frac = (weight - target_w) / weight
-        trim_sh   = max(1, int(shares * trim_frac))
-        trim_val  = round(trim_frac * market_value)
-        return (
-            "REDUCE",
-            "HIGH",
-            (
-                f"Position is **{weight:.0f}% of your portfolio** — too concentrated for a binary earnings event. "
-                f"An estimated ±{est_move:.0f}% earnings move on a ${market_value:,.0f} position = "
-                f"±${est_move / 100 * market_value:,.0f} in a single session. "
-                f"**Trim to ~15% weight: sell {trim_sh:,} shares (~${trim_val:,.0f})** before earnings. "
-                "Keep the core position for the upside scenario — just cap the binary risk."
-            ),
-            (
-                "Institutional position sizing rule for binary events: no single position above 15% of "
-                "portfolio going into an earnings report, regardless of conviction. "
-                "The reason is not that you're wrong — it's that earnings are inherently uncertain "
-                "even with perfect fundamental analysis. Managing size IS the risk management. "
-                "You can always add back after the report confirms the thesis."
-            ),
-        )
+    # Earnings week (0 <= days <= EARNINGS_IMMINENT_DAYS): the ONE earnings-week
+    # rule (shared with the Brief and Signals) sizes the trim. Outside the
+    # window the single-name ceiling rule applies. A 0-share trim never returns
+    # REDUCE — it falls through to the next rules.
+    if in_earnings_window(days):
+        r = earnings_week_trim(weight, n_positions or 0, _sz)
+        if r is not None and r["trim_shares"] >= 1:
+            trim_sh  = r["trim_shares"]
+            trim_val = round(trim_sh * (market_value / _sz)) if _sz > 0 else 0
+            return (
+                "REDUCE",
+                "HIGH",
+                (
+                    f"Position is **{weight:.0f}% of your portfolio** — above the "
+                    f"{r['floor_pct']:.1f}% earnings-week line for a binary earnings event. "
+                    f"An estimated ±{est_move:.0f}% earnings move on a ${market_value:,.0f} position = "
+                    f"±${est_move / 100 * market_value:,.0f} in a single session. "
+                    f"**Trim to ~{r['target_pct']:.0f}% weight: sell {trim_sh:,} shares (~${trim_val:,.0f})** before earnings. "
+                    "Keep the core position for the upside scenario — just cap the binary risk."
+                ),
+                (
+                    f"Institutional position sizing rule for binary events: size down going into an earnings "
+                    f"report, regardless of conviction. The earnings-week rule scales with how many positions "
+                    f"you hold (N={n_positions or 0}): it fires above {r['floor_pct']:.1f}% and trims to "
+                    f"{r['target_pct']:.0f}%. "
+                    "The reason is not that you're wrong — it's that earnings are inherently uncertain "
+                    "even with perfect fundamental analysis. Managing size IS the risk management. "
+                    "You can always add back after the report confirms the thesis."
+                ),
+            )
+    elif weight > SINGLE_NAME_TRIM_TRIGGER:
+        trim_sh  = shares_to_trim(_sz, weight, SINGLE_NAME_CEILING)
+        trim_val = round(trim_sh * (market_value / _sz)) if _sz > 0 else 0
+        if trim_sh >= 1:
+            return (
+                "REDUCE",
+                "HIGH",
+                (
+                    f"Position is **{weight:.0f}% of your portfolio** — too concentrated for a binary earnings event. "
+                    f"An estimated ±{est_move:.0f}% earnings move on a ${market_value:,.0f} position = "
+                    f"±${est_move / 100 * market_value:,.0f} in a single session. "
+                    f"**Trim to ~{SINGLE_NAME_CEILING:.0f}% weight: sell {trim_sh:,} shares (~${trim_val:,.0f})** before earnings. "
+                    "Keep the core position for the upside scenario — just cap the binary risk."
+                ),
+                (
+                    f"Institutional position sizing rule for binary events: no single position above {SINGLE_NAME_CEILING:.0f}% of "
+                    "portfolio going into an earnings report, regardless of conviction. "
+                    "The reason is not that you're wrong — it's that earnings are inherently uncertain "
+                    "even with perfect fundamental analysis. Managing size IS the risk management. "
+                    "You can always add back after the report confirms the thesis."
+                ),
+            )
 
     # ── REDUCE — weak fundamentals ────────────────────────────────────────────
-    if score < COMPOSITE_HOLD and weight >= 5:
-        trim_sh = max(1, shares // 2)
+    trim_sh = fraction_trim_shares(_sz, EARNINGS_WEAK_TRIM_PCT)
+    if score < COMPOSITE_HOLD and weight >= EARNINGS_REDUCE_MIN_WEIGHT_PCT and trim_sh >= 1:
         return (
             "REDUCE",
             "HIGH",
             (
                 f"Composite score **{score:.0f}/100** is in the Sell zone — going into a binary event "
                 "with weak fundamentals compounds the risk significantly. "
-                f"**Trim 50%: sell {trim_sh:,} shares** before the report. "
+                f"**Trim {EARNINGS_WEAK_TRIM_PCT:.0f}%: sell {trim_sh:,} shares** before the report. "
                 "If earnings surprise to the upside and fundamentals improve, re-enter from a smaller base. "
                 "If they confirm the weakness, you've protected yourself from a larger loss."
             ),
@@ -237,8 +284,8 @@ def _recommend(
         )
 
     # ── REDUCE — negative revision momentum ───────────────────────────────────
-    if net_rev <= -2 and weight >= 5:
-        trim_sh = max(1, int(shares * 0.35))
+    trim_sh = fraction_trim_shares(_sz, EARNINGS_PARTIAL_TRIM_PCT)
+    if net_rev <= EARNINGS_REVISION_REDUCE_NET and weight >= EARNINGS_REDUCE_MIN_WEIGHT_PCT and trim_sh >= 1:
         return (
             "REDUCE",
             "MEDIUM",
@@ -246,7 +293,7 @@ def _recommend(
                 f"Analysts have been **cutting estimates** heading into this report "
                 f"(net revisions: {net_rev:+d} over 90 days). "
                 "Negative revision momentum into earnings is one of the strongest miss-risk signals. "
-                f"**Trim 35%: sell {trim_sh:,} shares** before the report. "
+                f"**Trim {EARNINGS_PARTIAL_TRIM_PCT:.0f}%: sell {trim_sh:,} shares** before the report. "
                 "Negative revisions suggest analysts already know something is wrong — "
                 "the report may confirm it."
             ),
@@ -263,9 +310,9 @@ def _recommend(
         beat_rate is not None
         and beat_rate < EARNINGS_BEAT_RATE_REDUCE_THRESHOLD
         and score < COMPOSITE_BUY
-        and weight >= 5
+        and weight >= EARNINGS_REDUCE_MIN_WEIGHT_PCT
+        and trim_sh >= 1
     ):
-        trim_sh = max(1, int(shares * 0.35))
         return (
             "REDUCE",
             "MEDIUM",
@@ -273,7 +320,7 @@ def _recommend(
                 f"Historical beat rate **{beat_rate:.0f}%** is below the {EARNINGS_BEAT_RATE_REDUCE_THRESHOLD:.0f}% threshold "
                 f"and composite score **{score:.0f}/100** is below the entry gate — "
                 "a low-beat-rate name with weak fundamentals heading into an earnings binary event is a compounding risk. "
-                f"**Trim 35%: sell {trim_sh:,} shares** before the report."
+                f"**Trim {EARNINGS_PARTIAL_TRIM_PCT:.0f}%: sell {trim_sh:,} shares** before the report."
             ),
             (
                 "Historical beat rates below 60% combined with a sub-entry composite score mean both "
@@ -286,9 +333,9 @@ def _recommend(
     if (
         reaction == "bearish"
         and score < EARNINGS_BEARISH_REACTION_COMPOSITE_GATE
-        and weight >= 5
+        and weight >= EARNINGS_REDUCE_MIN_WEIGHT_PCT
+        and trim_sh >= 1
     ):
-        trim_sh = max(1, int(shares * 0.35))
         return (
             "REDUCE",
             "MEDIUM",
@@ -297,7 +344,7 @@ def _recommend(
                 f"is below the {EARNINGS_BEARISH_REACTION_COMPOSITE_GATE} gate — "
                 "holding through a report where the stock has historically sold off, with a weak composite, "
                 "stacks two negative factors. "
-                f"**Trim 35%: sell {trim_sh:,} shares** before the report."
+                f"**Trim {EARNINGS_PARTIAL_TRIM_PCT:.0f}%: sell {trim_sh:,} shares** before the report."
             ),
             (
                 "When a name has a documented pattern of selling off after earnings and its own composite "
@@ -326,7 +373,7 @@ def _recommend(
         )
 
     # ── MONITOR — stop close to estimated move ───────────────────────────────
-    if gap_to_stop < est_move * 0.85:
+    if gap_to_stop < est_move * EARNINGS_STOP_COVER_FRAC:
         return (
             "MONITOR",
             "MEDIUM",
@@ -493,6 +540,8 @@ def build_earnings_playbook(
             days_until, score, weight, pnl_pct,
             gap, net_rev, signal, shares, mval, est_move,
             beat_rate=beat_rate, reaction=reaction,
+            n_positions=len(port_df),
+            sizing_shares=_f(row.get("Shares", 0)),
         )
 
         watch = _SECTOR_WATCH.get(sector, _DEFAULT_WATCH)
@@ -533,7 +582,7 @@ def build_earnings_playbook(
             # Volatility
             "est_move":      est_move,
             "earn_risk":     earn_risk,
-            "stop_at_risk":  (gap is not None and gap < est_move * 0.85),
+            "stop_at_risk":  (gap is not None and gap < est_move * EARNINGS_STOP_COVER_FRAC),
             # Playbook
             "action":        action,
             "priority":      priority,
