@@ -1,7 +1,9 @@
 """LLM role -> model registry, request builder and the one Anthropic SDK call.
 
 Pure apart from the SDK call in ``complete``. No Streamlit import and no
-module-level mutable state (constants and frozen tables only).
+module-level mutable state (constants and frozen tables only); the App
+Settings snapshot lives in ``llm_settings`` and is reached through a lazy
+import (``_provider_setting``).
 
 Phase 1 (docs/plans/llm-model-routing.md, section 11): every role resolves to
 today's model and the legacy/opus-4x profiles forward exactly what the caller
@@ -168,6 +170,31 @@ def resolve_model(role: str, model: str | None = None, *,
                   env: Mapping | None = None) -> str:
     """The model string of ``resolve_model_with_source``."""
     return resolve_model_with_source(role, model, setting=setting, env=env)[0]
+
+
+def _provider_setting(role, model) -> Mapping | None:
+    """The App Settings snapshot for an editable role with no explicit model,
+    else None. Pinned roles and ``extract_strong`` never trigger a DB read.
+    Never raises."""
+    if role not in EDITABLE_ROLES or (isinstance(model, str) and model):
+        return None
+    try:
+        from stock_analyzer import llm_settings
+        return llm_settings.current_setting()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def resolved_with_source(role: str, model: str | None = None) -> tuple[str, str]:
+    """(model, source) as ``complete`` would resolve it now (env, the App
+    Settings snapshot, then the code default)."""
+    return resolve_model_with_source(role, model,
+                                     setting=_provider_setting(role, model))
+
+
+def resolved(role: str, model: str | None = None) -> str:
+    """The model string of ``resolved_with_source``."""
+    return resolved_with_source(role, model)[0]
 
 
 def _known_family(model: str) -> str | None:
@@ -359,6 +386,25 @@ def parse_response(role, response, model, *, expects_json=None) -> LLMResult:
             error = f"no text in reply (stop_reason={stop})"
 
     served = getattr(response, "model", None)
+    if fell_back:
+        # On a mid-stream fallback the SDK keeps the primary's top-level
+        # ``model``, so prefer the fallback iteration, then the last
+        # ``fallback`` block's ``to.model``.
+        fb_model = None
+        if isinstance(iterations, (list, tuple)):
+            for it in iterations:
+                if getattr(it, "type", None) == "fallback_message":
+                    m = getattr(it, "model", None)
+                    if isinstance(m, str) and m:
+                        fb_model = m
+        if fb_model is None:
+            for b in blocks:
+                if getattr(b, "type", None) == "fallback":
+                    m = getattr(getattr(b, "to", None), "model", None)
+                    if isinstance(m, str) and m:
+                        fb_model = m
+        if fb_model is not None:
+            served = fb_model
     return LLMResult(text=text, stop_reason=stop, error=error,
                      model=served if isinstance(served, str) and served else model,
                      usage=usage, truncated=truncated, requested_model=model,
@@ -379,6 +425,8 @@ def complete(role, *, api_key, messages, max_tokens, system=None, model=None,
     resolved = None
     source = None
     try:
+        if setting is None:
+            setting = _provider_setting(role, model)
         resolved, source = resolve_model_with_source(role, model, setting=setting)
         json_mode(role, expects_json)  # invalid flag -> error result, no client
         if not api_key:

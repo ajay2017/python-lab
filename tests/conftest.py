@@ -66,6 +66,16 @@ def _clear_llm_model_env(monkeypatch):
         monkeypatch.delenv(k, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _stub_llm_settings_loader(monkeypatch):
+    """N13: no test may ever read a real App Settings model row."""
+    from stock_analyzer import llm_settings
+    monkeypatch.setattr(llm_settings, "_default_loader", lambda: ("no_row", None))
+    llm_settings.invalidate()
+    yield
+    llm_settings.invalidate()
+
+
 def make_risk_advisor_inputs(
     rows,
     *,

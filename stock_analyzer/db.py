@@ -7015,6 +7015,30 @@ def load_reference_table(name: str) -> "dict | None":
         return None
 
 
+def load_reference_table_status(name: str) -> "tuple[str, dict | None]":
+    """Same query as `load_reference_table`, but tells "no row" apart from
+    "couldn't read". Returns `("ok", row)`, `("no_row", None)` or
+    `("unreadable", None)` (no name, no credentials, or any exception).
+    """
+    if not name or not has_db():
+        return "unreadable", None
+    try:
+        rows = (
+            _client()
+            .table("reference_tables")
+            .select("*")
+            .eq("name", name)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if rows:
+            return "ok", rows[0]
+        return "no_row", None
+    except Exception:
+        return "unreadable", None
+
+
 def load_reference_table_history(name: str, limit: int = 50) -> "list[dict] | None":
     """Read up to `limit` history rows for `name`, newest first.
 
@@ -7049,7 +7073,11 @@ def save_reference_table(name: str, payload: dict, updated_by: str) -> dict:
     that leaves `as_of` alone. Canonicalization (sorted buckets, sorted +
     upper-cased tickers) is delegated to
     `stock_analyzer.reference_data.canonicalize` so reordering tickers is
-    never mistaken for a real edit.
+    never mistaken for a real edit. Canonicalization, the content hash and
+    pre-save validation dispatch per table name through
+    `reference_data.canonicalize_for` / `payload_hash_for` /
+    `validate_for_save` (the `llm_models` row has its own; every other table
+    is unchanged). An invalid payload is refused before any write.
 
     Never raises — any DB failure during the write is reported via the
     return value, matching `save_model_predictions_batch`'s try/except
@@ -7065,16 +7093,18 @@ def save_reference_table(name: str, payload: dict, updated_by: str) -> dict:
     if not has_db():
         return {"status": "error", "detail": "no database connection"}
     try:
-        import hashlib
-        import json
-
+        from stock_analyzer import reference_data
         from stock_analyzer.market_time import today_et
-        from stock_analyzer.reference_data import canonicalize
 
-        normalized = canonicalize(payload)
-        new_hash = hashlib.sha256(
-            json.dumps(normalized, sort_keys=True).encode("utf-8")
-        ).hexdigest()
+        # Per-table validation (fail closed: an invalid payload writes
+        # nothing). Existing tables have none, so they behave as before.
+        errors = reference_data.validate_for_save(name, payload)
+        if errors:
+            return {"status": "error",
+                    "detail": "invalid payload: " + "; ".join(errors)}
+
+        normalized = reference_data.canonicalize_for(name, payload)
+        new_hash = reference_data.payload_hash_for(name, normalized)
 
         existing = load_reference_table(name)
         if existing is not None and existing.get("payload_hash") == new_hash:

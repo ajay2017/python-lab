@@ -819,3 +819,105 @@ def test_approx_cost_usd():
     assert llm.approx_cost_usd("claude-opus-5-5", None) is None
     with pytest.raises(TypeError):
         llm.PRICES_PER_MTOK["x"] = (1, 1)
+
+
+# ---- Phase 2 (P2-b): provider, served model after a fallback ----
+def _patch_provider(monkeypatch, setting):
+    from stock_analyzer import llm_settings
+    calls = []
+
+    def fake():
+        calls.append(1)
+        return setting
+    monkeypatch.setattr(llm_settings, "current_setting", fake)
+    return calls
+
+
+def test_complete_uses_provider_setting(monkeypatch):
+    _patch_provider(monkeypatch, {"fast": RS("claude-haiku-5-5", "medium")})
+    f = _Factory(_resp([_t("ok")]))
+    r = llm.complete("fast", api_key="k", messages=MSG, max_tokens=50, client_factory=f)
+    assert r.ok and r.model_source == "setting"
+    req = f.requests[0]
+    assert req["model"] == "claude-haiku-5-5"
+    assert req["output_config"] == {"effort": "medium"}
+
+
+@pytest.mark.parametrize("role,model", [("score", None), ("extract_strong", None),
+                                        ("filter", None), ("fast", "claude-x")])
+def test_provider_not_consulted(monkeypatch, role, model):
+    calls = _patch_provider(monkeypatch, {"fast": RS("claude-haiku-5-5")})
+    f = _Factory(_resp([_t("ok")]))
+    llm.complete(role, api_key="k", messages=MSG, max_tokens=50, model=model,
+                 client_factory=f)
+    assert calls == []
+    assert llm.resolved(role, model) is not None
+    assert calls == []
+
+
+def test_resolved_follows_setting_but_not_for_pinned(monkeypatch):
+    _patch_provider(monkeypatch, {"fast": RS("claude-haiku-5-5"),
+                                  "score": RS("claude-haiku-5-5")})
+    assert llm.resolved("fast") == "claude-haiku-5-5"
+    assert llm.resolved_with_source("fast") == ("claude-haiku-5-5", "setting")
+    assert llm.resolved("score") == llm.HAIKU_4_5
+    assert llm.resolved("fast", "claude-x") == "claude-x"
+
+
+def test_provider_exception_means_code_default(monkeypatch):
+    from stock_analyzer import llm_settings
+    monkeypatch.setattr(llm_settings, "current_setting", lambda: 1 / 0)
+    assert llm.resolved_with_source("fast") == (llm.HAIKU_4_5, "code")
+
+
+def test_complete_env_source(monkeypatch):
+    monkeypatch.setenv("DRISHTA_LLM_MODEL_FAST", "claude-haiku-5-5")
+    f = _Factory(_resp([_t("ok")]))
+    r = llm.complete("fast", api_key="k", messages=MSG, max_tokens=50, client_factory=f)
+    assert r.model_source == "env" and f.requests[0]["model"] == "claude-haiku-5-5"
+
+
+def test_setting_with_effort_max_is_an_error_result_not_a_raise():
+    f = _Factory(_resp([_t("ok")]))
+    r = llm.complete("fast", api_key="k", messages=MSG, max_tokens=50, client_factory=f,
+                     setting={"fast": RS("claude-haiku-5-5", "max")})
+    assert not r.ok and r.error and r.model_source == "setting"
+    assert f.calls == []
+
+
+def test_setting_capabilities_clamp_end_to_end():
+    f = _Factory(_resp([_t("ok")]))
+    llm.complete("fast", api_key="k", messages=MSG, max_tokens=800, client_factory=f,
+                 setting={"fast": RS("claude-haiku-5-5", "low", {"max_tokens": 500})})
+    assert f.requests[0]["max_tokens"] == 500
+
+
+def test_served_model_after_fallback_prefers_iteration_model():
+    resp = _resp([NS(type="fallback", to=NS(model="claude-block")), _t("served")])
+    resp.model = "claude-requested"
+    resp.usage.iterations = [NS(type="message", model="claude-requested"),
+                             NS(type="fallback_message", model="claude-iter")]
+    r = llm.parse_response("deep", resp, "claude-requested")
+    assert r.fell_back and r.model == "claude-iter"
+    assert r.requested_model == "claude-requested"
+
+
+def test_served_model_after_fallback_uses_block_when_no_iterations():
+    resp = _resp([NS(type="fallback", to=NS(model="claude-b1")),
+                  NS(type="fallback", to=NS(model="claude-b2")), _t("served")])
+    resp.model = "claude-requested"
+    r = llm.parse_response("deep", resp, "claude-requested")
+    assert r.fell_back and r.model == "claude-b2"
+
+
+def test_served_model_after_fallback_with_nothing_else_is_response_model():
+    resp = _resp([NS(type="fallback"), _t("served")])
+    resp.model = "claude-requested"
+    assert llm.parse_response("deep", resp, "m").model == "claude-requested"
+
+
+def test_no_fallback_ignores_iteration_model():
+    resp = _resp([_t("x")])
+    resp.model = "claude-top"
+    resp.usage.iterations = [NS(type="message", model="claude-other")]
+    assert llm.parse_response("deep", resp, "m").model == "claude-top"

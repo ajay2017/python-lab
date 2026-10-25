@@ -2744,6 +2744,7 @@ def _run_monthly_report(now_et, force: bool) -> int:
     Sunday cron lane. v1 grades engine entry quality (Q0) + signal discipline (Q1).
     Inert without ANTHROPIC_API_KEY."""
     import datetime as _dt
+    global _LAST_LANE_FAILURE_DETAIL
 
     # First-Sunday-of-month gate (Sunday AND day-of-month ≤ 7). force bypasses.
     if not force and not (now_et.weekday() == 6 and now_et.day <= 7):
@@ -2843,8 +2844,17 @@ def _run_monthly_report(now_et, force: bool) -> int:
 
     result = _ir.generate_report(package, api_key)
     if result is None:
-        _log("monthly: LLM call failed or no data — skip.")
-        return 0
+        if not package.get("has_data"):
+            _log("monthly: no data in the window — skip.")
+            return 0
+        # A paid generation that produced nothing is a failed lane, not a quiet
+        # one (B4b; mirrors the debrief lane above).
+        _model, _source = llm.resolved_with_source(llm.ROLE_DEEP)
+        _LAST_LANE_FAILURE_DETAIL = ("monthly_blind: no report generated "
+                                     f"(LLM call failed; deep={_model} ({_source}))")
+        _log(f"monthly: {_LAST_LANE_FAILURE_DETAIL}")
+        _notify_failure("monthly", _LAST_LANE_FAILURE_DETAIL)
+        return 1
 
     saved = db.save_monthly_report(result)
     _log(f"monthly: saved={saved} · period={result['period_start']}→{result['period_end']} · "
@@ -3517,6 +3527,11 @@ def main() -> int:
         "eod" if now_et.hour >= 12 else "premarket"
     )
     _log(f"start · {now_et.isoformat()} ET · mode={mode} · force={force} · test_email={test_email}")
+    try:
+        from stock_analyzer import llm_settings
+        _log("llm: " + llm_settings.resolution_summary())
+    except Exception:  # noqa: BLE001 - a log line must never fail a lane
+        pass
 
     if test_email:
         return _run_test_email(now_et)

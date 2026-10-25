@@ -90,6 +90,43 @@ def canonicalize(payload: dict) -> dict:
     return dict(sorted(out.items()))
 
 
+def canonicalize_for(name: str, payload: dict) -> dict:
+    """Per-table canonical form: the `llm_models` row has its own (sorted
+    keys, stripped strings, case preserved); every other table uses
+    `canonicalize` unchanged."""
+    from stock_analyzer import llm_settings
+
+    if name == llm_settings.TABLE_NAME:
+        return llm_settings.canonicalize(payload)
+    return canonicalize(payload)
+
+
+def payload_hash_for(name: str, normalized: dict) -> str:
+    """sha256 hex of the canonical payload, as `db.save_reference_table`
+    stores it. For `llm_models` the hash view leaves out `checked_at`, so a
+    re-check alone never changes the hash."""
+    import hashlib
+    import json
+
+    from stock_analyzer import llm_settings
+
+    view = (llm_settings.hash_view(normalized)
+            if name == llm_settings.TABLE_NAME else normalized)
+    return hashlib.sha256(
+        json.dumps(view, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def validate_for_save(name: str, payload: dict) -> "list[str]":
+    """Pre-save validation errors for tables that have a save-time validator
+    (`llm_models` only); `[]` for every other table."""
+    from stock_analyzer import llm_settings
+
+    if name == llm_settings.TABLE_NAME:
+        return llm_settings.validate_payload(payload)
+    return []
+
+
 def resolve_universe(name: str) -> "tuple[dict, date]":
     """Resolve the current `(payload, as_of)` for a DB-backed reference
     table, reading both from the SAME row so no caller can ever have them

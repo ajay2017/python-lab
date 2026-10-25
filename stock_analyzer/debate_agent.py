@@ -459,7 +459,7 @@ def run_debate(corpus: dict, debate_type: str, api_key: str,
 
     # Resolve once so every round AND the judge (ROLE_EXTRACT, whose own
     # default is Sonnet) run on the same model: the fast-role Haiku.
-    model = llm.resolve_model(llm.ROLE_FAST, model)
+    model = llm.resolved(llm.ROLE_FAST, model)
 
     ticker      = corpus.get("ticker", "?")
     corpus_text = _format_corpus(corpus, debate_type)

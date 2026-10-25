@@ -974,6 +974,9 @@ _GATE_FILES = {
     # 2026-10-25: single source of trim share counts + the earnings-week overweight
     # trim rule shared by the Brief, Catalyst Watch playbook and Signals.
     "stock_analyzer/trim_sizing.py",
+    # 2026-10-25: the App Settings model choice for fast / deep / extract; the
+    # extract role reaches the Valuation pillar through analyst_coverage.
+    "stock_analyzer/llm_settings.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,

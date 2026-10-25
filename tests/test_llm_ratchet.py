@@ -122,3 +122,25 @@ def test_llm_import_form():
                         bad.append(f"{rel}:{n.lineno} import stock_analyzer.llm "
                                    f"as {a.asname!r}")
     assert not bad, "bad llm import form:\n" + "\n".join(bad)
+
+
+def test_resolve_model_only_called_inside_llm():
+    """B1: resolve_model / resolve_model_with_source are called only inside
+    llm.py (and llm_settings.py); every other site uses ``llm.resolved`` so the
+    App Settings choice can't be bypassed by an early resolve."""
+    names = {"resolve_model", "resolve_model_with_source"}
+    allowed = {"stock_analyzer/llm.py", "stock_analyzer/llm_settings.py"}
+    bad = []
+    for path in _files():
+        rel = _rel(path)
+        if rel in allowed:
+            continue
+        for n in ast.walk(parse_file_cached(path)):
+            if not isinstance(n, ast.Call):
+                continue
+            f = n.func
+            name = f.attr if isinstance(f, ast.Attribute) else (
+                f.id if isinstance(f, ast.Name) else None)
+            if name in names:
+                bad.append(f"{rel}:{n.lineno} {name}")
+    assert not bad, "resolve_model called outside llm.py:\n" + "\n".join(bad)

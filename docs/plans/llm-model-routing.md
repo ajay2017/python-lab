@@ -1,6 +1,6 @@
 # LLM model routing: move to current models, and change models without code changes
 
-**Status (2026-10-25): Phase 2 IN BUILD. P2-a1 and P2-a2 SHIPPED (section 15). NEXT: P2-b.** *(Earlier 2026-10-25: READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry.)* *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
+**Status (2026-10-25): Phase 2 IN BUILD. P2-a1, P2-a2 and P2-b SHIPPED (section 15). NEXT: P2-d, then P2-c with its prerequisites (section 15).** *(Earlier 2026-10-25: READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry.)* *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
 lead from an AST inventory of every Anthropic call (2026-10-22) and the Claude API migration guide bundled with Claude
 Code (cached 2026-10-06). **Owner agreed with every lead recommendation in section 7 (2026-10-22):** D-1 App Settings
 with the score role pinned in code; D-2 switch the score model, but last, after the Phase 4 dry run; D-3 Sonnet 5.5
@@ -733,3 +733,60 @@ The lead re-checked B1 (`app.py:8258`, `debate_agent.py:462`), B8 (`thesis_advis
   types don't list `between_tools`, so whether `between_tools` plus `fallbacks` is accepted rests on §13.2 D.
 - **Theoretical:** known-modern sends the default `"low"` even when the stored capabilities don't list it. Every 5.5 model
   lists `low`.
+
+- **P2-b** (2026-10-25), behaviour-neutral until an `llm_models` row exists (none does; nothing in this chunk writes
+  one):
+  - **`stock_analyzer/llm_settings.py` (new, a `_GATE_FILES` member):**
+    - Payload validation: version 1; only `fast` / `deep` / `extract`; effort within `ALLOWED_EFFORTS` and the stored
+      capabilities; no effort on legacy / opus-4x models; capabilities required for a generic id.
+    - B4a: a row whose payload doesn't match its `payload_hash` is ignored.
+    - A lock-protected process snapshot (TTL 300 s, 30 s when the row was unreadable) with the states ok / no_row /
+      unreadable / invalid, plus warnings for System Trust, and `invalidate()`.
+    - `decide_save`, `apply_role` / `reset_role`, `save()` (invalidates the cache) and `resolution_summary()`.
+  - **`db.save_reference_table`:** validates, canonicalizes and hashes per table through
+    `reference_data.canonicalize_for` / `payload_hash_for` / `validate_for_save`, and fails closed on an invalid
+    `llm_models` payload. Existing tables are byte-identical, pinned by a hardcoded hash. New
+    `db.load_reference_table_status`.
+  - **`llm.complete`:** consults the snapshot only for an editable role with no explicit model.
+    `llm.resolved` / `resolved_with_source` are new. After a fallback, the served model comes from `usage.iterations`
+    or the fallback block's `to.model`.
+  - **B1:** debate and premarket stance use `llm.resolved`. A ratchet test limits `resolve_model(` calls to `llm.py` /
+    `llm_settings.py`.
+  - **B4b:** the monthly lane goes red when the report fails while the window has data.
+  - **Cron:** each process logs `llm: fast=… (code) · …` at start.
+  - Built by `implementer` (Sonnet 5.5); Opus review SHIP, 0 blocking.
+
+**Carried forward from the P2-b review.**
+
+*P2-c prerequisites: no row may be saved until these land.*
+- **B1 is half closed.** Debate (`debate_agent.py:462` → `_call_haiku`) and premarket stance (`app.py:8288` →
+  `generate_stance`) pass the resolved model as an explicit `model=`. So a setting's effort and capabilities (the
+  `max_tokens` clamp) are never applied there, and `model_source` reads "explicit". Add `llm.resolved_setting(role)`
+  (the `RoleSetting` or None) and pass `setting=`. The debate judge (`extract`) gets `{extract: <fast entry>}`.
+- **`decide_save` refuses only `NotFoundError`.** A 401 / 403 / "no API key" counts as unreachable, so a known id would
+  be saved unchecked. Refuse every 4xx `APIStatusError`, and allow an unchecked save only on a connection error, a
+  timeout or a 5xx.
+- **Validation:**
+  - Validate the canonical form (`canonicalize_for(name, payload)`), so "passes on save" equals "passes on load" by
+    construction.
+  - Restrict `capabilities` to the `normalize_capabilities` shape (key set and value types). A float like `1e+20`
+    would come back from JSONB as an int and break B4a's hash.
+- **Gate list:** add `stock_analyzer/reference_data.py` to `_GATE_FILES` (its `validate_for_save` is now the
+  fail-closed guard of a gated write), with its review-policy line.
+
+*P2-c design notes:*
+- **`checked_at`:** left out of the hash (N9), so a pure re-check returns `no_change` and the new `checked_at` isn't
+  stored. Don't label the stored value "last verified".
+
+*Hardening (P2-c or later):*
+- **Snapshot reload:** `get_snapshot` holds the lock across the Supabase read, and PostgREST's default timeout is
+  120 s. A hung DB blocks every editable-role call for up to that long, once per TTL (every 30 s while unreadable).
+  Use a single-flight reload (other threads get the expired snapshot) or a short timeout on this read.
+- **Cron (300 s TTL):**
+  - A lane longer than 5 minutes (thesis) can re-resolve mid-run, so the start line may not name every call's model.
+    Pin the snapshot per cron process, or note it.
+  - The first read also runs before each lane's own DB-outage probe.
+- **Tests:**
+  - The `resolve_model` ratchet globs `stock_analyzer/*.py` non-recursively, so `stock_analyzer/providers/` isn't
+    covered; use `rglob`.
+  - `test_provider_not_consulted` lacks `extract_trigger`.

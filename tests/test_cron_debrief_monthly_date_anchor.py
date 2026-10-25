@@ -313,3 +313,43 @@ def test_run_monthly_report_forced_retry_six_days_later_still_anchors_to_the_sam
     assert rc == 0
     assert captured["end_date"] == datetime.date(2026, 8, 16)
     assert captured["end_date"] != now_et.date()
+
+
+# ── _run_monthly_report: B4b, an empty report with data is a failed lane ──────
+
+def _monthly_with_package(monkeypatch, has_data, notified):
+    from stock_analyzer import intelligence_report as ir
+    import yfinance
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(cr.db, "load_recommendations",
+                        lambda **kw: pd.DataFrame({"ticker": ["AAPL"]}))
+    monkeypatch.setattr(cr.db, "load_trades", lambda: pd.DataFrame())
+    monkeypatch.setattr(cr.db, "load_weekly_debriefs", lambda limit=5: pd.DataFrame())
+    monkeypatch.setattr("stock_analyzer.data.fetch_live_prices",
+                        lambda *a, **k: {})
+    monkeypatch.setattr(yfinance, "download",
+                        lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(ir, "build_report_package", lambda **kw: {
+        "n_total": 1, "n_acted": 0, "n_graded": 0, "q0_ready": False,
+        "has_data": has_data})
+    monkeypatch.setattr(ir, "generate_report", lambda package, api_key: None)
+    monkeypatch.setattr(cr, "_notify_failure", lambda m, d: notified.append((m, d)))
+    monkeypatch.setattr(cr, "_LAST_LANE_FAILURE_DETAIL", None)
+
+
+def test_run_monthly_report_none_with_data_fails_the_lane(monkeypatch):
+    notified = []
+    _monthly_with_package(monkeypatch, True, notified)
+    now_et = cr._ET.localize(datetime.datetime(2026, 8, 16, 18, 0, 0))
+    assert cr._run_monthly_report(now_et, force=True) == 1
+    assert cr._LAST_LANE_FAILURE_DETAIL.startswith("monthly_blind")
+    assert "deep=" in cr._LAST_LANE_FAILURE_DETAIL
+    assert notified == [("monthly", cr._LAST_LANE_FAILURE_DETAIL)]
+
+
+def test_run_monthly_report_none_without_data_is_a_quiet_skip(monkeypatch):
+    notified = []
+    _monthly_with_package(monkeypatch, False, notified)
+    now_et = cr._ET.localize(datetime.datetime(2026, 8, 16, 18, 0, 0))
+    assert cr._run_monthly_report(now_et, force=True) == 0
+    assert cr._LAST_LANE_FAILURE_DETAIL is None and notified == []

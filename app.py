@@ -8285,7 +8285,7 @@ if page == "🏠 Home":
             # graceful degradation so the rest of Today's Brief is unaffected.
             _pms_key = _anthropic_key()
             if _pms_key:
-                _pms_model     = _llm.resolve_model(_llm.ROLE_FAST)
+                _pms_model     = _llm.resolved(_llm.ROLE_FAST)
                 _pms_today_key = str(_today_et())
                 _pms_cache_key = f"_pm_stance__{_pms_today_key}__{_pms_model}"
                 _pms_cached    = st.session_state.get(_pms_cache_key)
