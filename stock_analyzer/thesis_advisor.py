@@ -219,6 +219,9 @@ def review_thesis(
         user_prompt = _format_prompt(ticker, user_thesis, inputs)
         r = llm.complete(
             llm.ROLE_DEEP,
+            # The reply ends in a parsed Verdict: line, so a cut-off reply must fail
+            # rather than be saved as the parser's WEAKENING default.
+            expects_json=True,
             api_key=api_key,
             model=model,
             max_tokens=max_tokens,
@@ -898,6 +901,9 @@ def generate_earnings_thesis_update(
 
         resp = llm.complete(
             llm.ROLE_DEEP,
+            # The reply ends in a parsed Verdict: line, so a cut-off reply must fail
+            # rather than be saved as the parser's WEAKENING default.
+            expects_json=True,
             api_key=api_key,
             model=model,
             max_tokens=max_tokens,

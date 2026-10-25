@@ -7,6 +7,9 @@ Phase 1 (docs/plans/llm-model-routing.md, section 11): every role resolves to
 today's model and the legacy/opus-4x profiles forward exactly what the caller
 passed, so no request changes. The ``modern`` profile is built and tested now
 and used from Phase 3.
+
+JSON handling is decided by the role, and a call can add it with
+``expects_json=True`` (Phase 2, section 13.2 A).
 """
 from __future__ import annotations
 
@@ -96,11 +99,32 @@ def profile_for(model: str) -> str:
     return PROFILE_MODERN
 
 
+def json_mode(role: str, expects_json: bool | None = None) -> bool:
+    """True when the reply must be treated as JSON (thinking off on modern
+    models, a cut-off or odd-stop reply is a failure, not text).
+
+    The role decides, and a call can only ADD JSON handling: ``expects_json=True``
+    turns it on for a narrative role (a ``fast`` / ``deep`` site that parses
+    JSON or a trailing verdict line). ``False`` on a JSON role is a programming
+    error, and so is any non-bool value other than None.
+    """
+    if expects_json is None:
+        return role in JSON_ROLES
+    if expects_json is True:
+        return True
+    if expects_json is False:
+        if role in JSON_ROLES:
+            raise ValueError(
+                f"role {role!r} always expects JSON; expects_json=False is not allowed")
+        return False
+    raise ValueError(f"expects_json must be True, False or None, not {expects_json!r}")
+
+
 def build_request(role, model, *, max_tokens, messages, system=None,
-                  temperature=None, timeout=None) -> dict:
+                  temperature=None, timeout=None, expects_json=None) -> dict:
     """Pure: the kwargs for ``client.messages.create``."""
     profile = profile_for(model)
-    narrative = role in NARRATIVE_ROLES
+    narrative = not json_mode(role, expects_json)
     req: dict = {"model": model, "max_tokens": max_tokens, "messages": messages}
     if system is not None:
         req["system"] = system
@@ -143,7 +167,7 @@ class LLMResult:
         return self.text is not None
 
 
-def parse_response(role, response, model) -> LLMResult:
+def parse_response(role, response, model, *, expects_json=None) -> LLMResult:
     """Pure: turn an SDK response into an LLMResult."""
     stop = getattr(response, "stop_reason", None)
     u = getattr(response, "usage", None)
@@ -152,14 +176,20 @@ def parse_response(role, response, model) -> LLMResult:
         usage = {"input_tokens": getattr(u, "input_tokens", None),
                  "output_tokens": getattr(u, "output_tokens", None)}
 
+    # First text block with real content; empty / whitespace-only text is no
+    # reply. The kept text is unstripped, exactly as returned.
     text = None
+    saw_text_block = False
     content = getattr(response, "content", None)
     for block in (content if content is not None else []):
         if getattr(block, "type", None) == "text":
-            text = getattr(block, "text", None)
-            break
+            saw_text_block = True
+            t = getattr(block, "text", None)
+            if isinstance(t, str) and t.strip():
+                text = t
+                break
 
-    narrative = role in NARRATIVE_ROLES
+    narrative = not json_mode(role, expects_json)
     error = None
     truncated = False
 
@@ -178,32 +208,37 @@ def parse_response(role, response, model) -> LLMResult:
             error = f"unexpected stop_reason: {stop}"
 
     if text is None and error is None:
-        error = f"no text in reply (stop_reason={stop})"
+        if saw_text_block:
+            error = f"no text in reply (empty text, stop_reason={stop})"
+        else:
+            error = f"no text in reply (stop_reason={stop})"
 
     return LLMResult(text=text, stop_reason=stop, error=error, model=model,
                      usage=usage, truncated=truncated)
 
 
 def complete(role, *, api_key, messages, max_tokens, system=None, model=None,
-             temperature=None, timeout=None, client_kwargs=None,
-             client_factory=None) -> LLMResult:
+             temperature=None, expects_json=None, timeout=None,
+             client_kwargs=None, client_factory=None) -> LLMResult:
     """Resolve model, build request, call the SDK, parse. Never raises."""
     resolved = None
     try:
         resolved = resolve_model(role, model)
+        json_mode(role, expects_json)  # invalid flag -> error result, no client
         if not api_key:
             return LLMResult(text=None, stop_reason=None, error="no API key",
                              model=resolved, usage=None)
         request = build_request(role, resolved, max_tokens=max_tokens,
                                 messages=messages, system=system,
-                                temperature=temperature, timeout=timeout)
+                                temperature=temperature, timeout=timeout,
+                                expects_json=expects_json)
         factory = client_factory
         if factory is None:
             import anthropic
             factory = anthropic.Anthropic
         client = factory(api_key=api_key, **(client_kwargs or {}))
         response = client.messages.create(**request)
-        return parse_response(role, response, resolved)
+        return parse_response(role, response, resolved, expects_json=expects_json)
     except Exception as e:  # noqa: BLE001 - never raises by contract
         msg = f"{type(e).__name__}: {e}"
         if isinstance(api_key, str) and len(api_key) >= 6:

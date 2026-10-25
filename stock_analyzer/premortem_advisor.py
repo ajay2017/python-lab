@@ -300,6 +300,7 @@ def generate_case_against(
         user_prompt = _format_case_against_prompt(ticker, inputs)
         r = llm.complete(
             llm.ROLE_FAST,
+            expects_json=True,
             api_key=api_key,
             model=model,
             max_tokens=max_tokens,

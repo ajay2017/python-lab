@@ -132,9 +132,84 @@ def test_text_after_thinking_block():
     assert r.model == "m"
 
 
-def test_empty_text_kept():
-    r = llm.parse_response("fast", _resp([_t("")]), "m")
-    assert r.text == "" and r.ok
+@pytest.mark.parametrize("role", ["fast", "score"])
+@pytest.mark.parametrize("txt", ["", "   ", "\n\t"])
+def test_empty_text_is_no_reply(role, txt):
+    r = llm.parse_response(role, _resp([_t(txt)]), "m")
+    assert r.text is None and not r.ok
+    assert r.error.startswith("no text in reply (empty text")
+
+
+def test_empty_block_then_real_text():
+    r = llm.parse_response("fast", _resp([_t(""), _t("hello")]), "m")
+    assert r.text == "hello"
+
+
+def test_whitespace_text_kept_unstripped():
+    r = llm.parse_response("fast", _resp([_t("  hi \n")]), "m")
+    assert r.text == "  hi \n"
+
+
+@pytest.mark.parametrize("role,flag,want", [
+    ("fast", None, False), ("deep", None, False), ("fast", True, True),
+    ("deep", True, True), ("fast", False, False), ("score", None, True),
+    ("score", True, True),
+])
+def test_json_mode_table(role, flag, want):
+    assert llm.json_mode(role, flag) is want
+
+
+@pytest.mark.parametrize("role,flag", [
+    ("score", False), ("extract", False), ("fast", 1), ("fast", 0), ("fast", "yes"),
+])
+def test_json_mode_rejects(role, flag):
+    with pytest.raises(ValueError):
+        llm.json_mode(role, flag)
+
+
+@pytest.mark.parametrize("role", ["fast", "deep"])
+def test_expects_json_drops_cut_off_reply(role):
+    r = llm.parse_response(role, _resp([_t("{")], stop="max_tokens"), "m",
+                           expects_json=True)
+    assert r.text is None and r.truncated and r.error == "reply cut off at max_tokens"
+
+
+def test_expects_json_drops_odd_stop():
+    r = llm.parse_response("fast", _resp([_t("x")], stop="pause_turn"), "m",
+                           expects_json=True)
+    assert r.text is None and "pause_turn" in r.error
+
+
+def test_expects_json_builds_json_shape():
+    r = llm.build_request("fast", "claude-haiku-5-5", max_tokens=300, messages=MSG,
+                          expects_json=True)
+    assert r["thinking"] == {"type": "disabled"}
+    assert r["max_tokens"] == math.ceil(300 * 1.3)
+    r = llm.build_request("deep", "claude-sonnet-5-5", max_tokens=300, messages=MSG,
+                          expects_json=True)
+    assert r["thinking"] == {"type": "between_tools"}
+
+
+def test_expects_json_legacy_byte_identical():
+    a = llm.build_request("fast", llm.HAIKU_4_5, max_tokens=300, messages=MSG,
+                          temperature=0, expects_json=True)
+    b = llm.build_request("fast", llm.HAIKU_4_5, max_tokens=300, messages=MSG,
+                          temperature=0)
+    assert a == b
+
+
+def test_complete_invalid_flag_returns_error_no_client():
+    f = _Factory(_resp([_t("x")]))
+    r = llm.complete("score", api_key="k", messages=MSG, max_tokens=5,
+                     expects_json=False, client_factory=f)
+    assert not r.ok and "ValueError" in r.error and f.calls == []
+
+
+def test_complete_expects_json_drops_cut_off():
+    f = _Factory(response=_resp([_t("{")], stop="max_tokens"))
+    r = llm.complete("fast", api_key="k", messages=MSG, max_tokens=5,
+                     expects_json=True, client_factory=f)
+    assert r.text is None and r.truncated
 
 
 def test_refusal_with_text_is_none():

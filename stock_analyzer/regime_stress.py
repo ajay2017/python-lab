@@ -194,6 +194,7 @@ def generate_regime_scenario(evidence, api_key, model=None):
         evidence_text = _format_evidence(evidence)
         r = llm.complete(
             llm.ROLE_FAST,
+            expects_json=True,
             api_key=api_key,
             model=model,
             max_tokens=400,

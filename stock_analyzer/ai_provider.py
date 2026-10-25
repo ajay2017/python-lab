@@ -149,9 +149,10 @@ def call_llm(provider: str, model: str, api_key: str, system: str, user: str,
                 timeout=timeout,
             )
             # llm.parse_response scans for the first TEXT block (a reasoning
-            # model can lead with a thinking block that has no .text), but it
-            # accepts empty text. Keep this module's stricter rule: empty or
-            # whitespace-only text is "no reply".
+            # model can lead with a thinking block that has no .text), and it
+            # now treats empty or whitespace-only text as no reply (error
+            # prefix "no text in reply"). The r.text.strip() check below stays
+            # as a defensive duplicate of that rule.
             if r.ok and r.text.strip():
                 return r.text
             if (r.stop_reason is None and r.error

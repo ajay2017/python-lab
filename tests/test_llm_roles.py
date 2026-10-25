@@ -50,7 +50,9 @@ EXPECTED = {
 }
 
 
-def _collect() -> dict:
+def _collect(with_flag: bool = False) -> dict:
+    """(file stem, function) -> role arg; with ``with_flag`` -> the call's
+    ``expects_json`` keyword rendered with ast.unparse (None when absent)."""
     found = {}
     files = sorted((ROOT / "stock_analyzer").glob("*.py")) + [ROOT / "app.py", ROOT / "cron_runner.py"]
     for path in files:
@@ -68,11 +70,30 @@ def _collect() -> dict:
                     arg = ast.unparse(child.args[0]) if child.args else None
                     key = (path.stem, nf)
                     assert key not in found, f"two llm.complete calls in {key}"
-                    found[key] = arg
+                    if with_flag:
+                        kw = {k.arg: ast.unparse(k.value) for k in child.keywords}
+                        found[key] = kw.get("expects_json")
+                    else:
+                        found[key] = arg
                 walk(child, nf)
 
         walk(tree, None)
     return found
+
+
+# Sites whose reply is parsed as JSON (or a trailing Verdict: line) on a
+# narrative role, so they opt in to JSON handling per call.
+EXPECTS_JSON = {
+    ("portfolio_qa", "parse_question"): "True",
+    ("premortem_advisor", "generate_case_against"): "True",
+    ("thesis_red_team", "generate_counter_evidence"): "True",
+    ("missed_opportunity", "generate_missed_opportunity_patterns"): "True",
+    ("thesis_cluster", "generate_thesis_clusters"): "True",
+    ("catalyst_stress", "generate_catalyst_narrative"): "True",
+    ("regime_stress", "generate_regime_scenario"): "True",
+    ("thesis_advisor", "review_thesis"): "True",
+    ("thesis_advisor", "generate_earnings_thesis_update"): "True",
+}
 
 
 def test_every_llm_complete_call_uses_its_expected_role():
@@ -93,3 +114,14 @@ def test_debate_call_haiku_call_sites_pass_the_expected_role():
             roles.append((n.lineno, kw.get("role", "<default>")))
     roles = [r for _, r in sorted(roles)]
     assert roles == ["<default>"] * 4 + ["llm.ROLE_EXTRACT"], roles
+
+
+def test_expects_json_opt_in_sites():
+    """From Phase 3 an App Settings change can move `fast` / `deep` onto a
+    modern model. Without ``expects_json=True`` the sites that parse JSON or a
+    trailing Verdict: line would get narrative handling there (thinking on, a
+    cut-off reply kept and parsed). So the opt-in set is pinned exactly:
+    removing the flag, adding it to a new site, or writing ``False`` or a
+    variable fails until EXPECTS_JSON is edited by hand."""
+    flagged = {k: v for k, v in _collect(with_flag=True).items() if v is not None}
+    assert flagged == EXPECTS_JSON

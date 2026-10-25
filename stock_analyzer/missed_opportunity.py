@@ -193,6 +193,7 @@ def generate_missed_opportunity_patterns(corpus: list[dict], api_key: str,
         prompt_text = _format_corpus_for_prompt(corpus)
         r = llm.complete(
             llm.ROLE_FAST,
+            expects_json=True,
             api_key=api_key,
             model=model,
             max_tokens=600,

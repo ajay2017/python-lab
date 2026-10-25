@@ -1,6 +1,6 @@
 # LLM model routing: move to current models, and change models without code changes
 
-**Status (2026-10-25): Phase 2 READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry. Nothing built. NEXT: P2-a1.** *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
+**Status (2026-10-25): Phase 2 IN BUILD. P2-a1 SHIPPED (section 15). NEXT: P2-a2.** *(Earlier 2026-10-25: READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry.)* *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
 lead from an AST inventory of every Anthropic call (2026-10-22) and the Claude API migration guide bundled with Claude
 Code (cached 2026-10-06). **Owner agreed with every lead recommendation in section 7 (2026-10-22):** D-1 App Settings
 with the score role pinned in code; D-2 switch the score model, but last, after the Phase 4 dry run; D-3 Sonnet 5.5
@@ -662,3 +662,34 @@ The lead re-checked B1 (`app.py:8258`, `debate_agent.py:462`), B8 (`thesis_advis
 | **P2-c** | App Settings section with Test role (B6) and the effort cap; `requirements.md` F-ID in this commit | Required |
 | **P2-e** | The remaining docs (on the lead: they carry policy) | Not needed |
 
+## 15. Phase 2 progress
+
+- **P2-a1** (2026-10-25): `llm.json_mode(role, expects_json)`. JSON handling is decided by the role, and a call can
+  only add it (`expects_json=True`; `False` on a JSON role, or a non-bool, raises, which `complete` returns as an error
+  result before building a client). `build_request`, `parse_response` and `complete` take the flag. The 7 `fast` JSON
+  sites and the 2 thesis sites (B8) opt in, pinned exactly by `tests/test_llm_roles.py::test_expects_json_opt_in_sites`.
+  Empty or whitespace-only text is no reply for every role (`parse_response` takes the first text block with real
+  content; error `"no text in reply (empty text, ...)"`). No request changes: every default is still legacy and the
+  golden fixture is unchanged. Live effect today: a cut-off reply at the 9 sites fails instead of being parsed (a
+  cut-off thesis review is skipped, not saved as WEAKENING), and an empty reply fails everywhere (the debrief lane goes
+  red instead of emailing an empty debrief; AI Snapshot keeps the previous brief). Built by `implementer` (Sonnet 5.5);
+  Opus review SHIP, 0 blocking.
+
+**Carried forward from the P2-a1 review (fold into P2-a2, which is reviewed anyway):**
+- **Missed site:** `premarket_stance.generate_stance` (`fast`) parses a trailing `Stance:` line and falls back to
+  "Neutral at open", so a cut-off reply shows a made-up stance on Home (session state only; not saved or emailed). Opt
+  it in plus one pin row before Phase 3.
+- **Unknown-role default:** `json_mode(role, None)` returns `role in JSON_ROLES`, so an unknown role gets narrative
+  handling (it used to get JSON). Unreachable through `complete` (`resolve_model` raises first), but make it fail
+  closed: `role not in NARRATIVE_ROLES`, and raise on `False` when `role not in NARRATIVE_ROLES`.
+- **Pin gap:** the AST pin doesn't see a flag passed through `**kwargs`. Assert that no `llm.complete` call uses `**`.
+- **Monthly lane:** an empty monthly reply now takes the quiet `return 0` skip instead of saving an empty report. B4b
+  (P2-b) turns it red.
+- **Before Phase 3, the B8 drop rate:** `review_thesis` / `generate_earnings_thesis_update` keep `max_tokens` 300, and a
+  cut-off review is now dropped; a partial drop is only counted in the cron log. `_parse_response` strips the verdict
+  line from `summary`, so fallback rows can't be told apart exactly. Heuristic, read-only:
+  `select count(*) filter (where summary !~ '[.!?)"]\s*$'), count(*) from thesis_reviews where status = 'WEAKENING'
+  and reviewed_at > now() - interval '90 days';`. A high share means the budget is too tight (raising it is its own
+  constants change). The UI error "LLM offline or API key invalid" (app.py ~43687, ~43794) also shows for a cut-off
+  review (cosmetic).
+- **Cosmetic:** `portfolio_qa.narrate_answer`'s own empty-text branch can no longer be reached (harmless duplicate).

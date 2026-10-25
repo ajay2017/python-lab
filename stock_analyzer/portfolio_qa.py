@@ -339,6 +339,7 @@ def parse_question(question: str, api_key: str, today_et, history=None,
     try:
         r = llm.complete(
             llm.ROLE_FAST,
+            expects_json=True,
             api_key=api_key,
             model=model,
             max_tokens=max_tokens,

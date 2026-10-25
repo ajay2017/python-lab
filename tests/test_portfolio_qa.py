@@ -1285,7 +1285,9 @@ def test_narrate_answer_empty_response_returns_none_with_reason():
     _install_fake_anthropic("")
     answer = qa_mod.narrate_answer("trade_lookup", [], "fake-key")
     assert answer is None
-    assert qa_mod.LAST_NARRATE_ERROR == "model returned an empty response"
+    # llm.parse_response treats empty text as no reply (P2-a1), so the reason
+    # now comes from llm rather than narrate_answer's own empty-text branch.
+    assert qa_mod.LAST_NARRATE_ERROR.startswith("no text in reply (empty text")
 
 
 # ─── parse_question — real success path via the fake client ────────────────

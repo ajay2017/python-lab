@@ -288,6 +288,7 @@ def generate_catalyst_narrative(evidence: dict, api_key: str, model: str | None 
         evidence_text = _format_evidence(evidence)
         r = llm.complete(
             llm.ROLE_FAST,
+            expects_json=True,
             api_key=api_key,
             model=model,
             max_tokens=350,

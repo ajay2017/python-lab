@@ -256,6 +256,7 @@ def generate_counter_evidence(
         system_prompt, user_prompt = inputs
         r = llm.complete(
             llm.ROLE_FAST,
+            expects_json=True,
             api_key=api_key,
             model=model,
             max_tokens=max_tokens,
