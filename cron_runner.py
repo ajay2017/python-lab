@@ -2790,14 +2790,15 @@ def _run_monthly_report(now_et, force: bool) -> int:
             str(t).strip().upper() for t in recs_df["ticker"].dropna().tolist() if str(t).strip()
         })
         if tickers:
-            # 2026-09-24 app review, Q2 (antipattern-baseline decision):
             # fetch_live_prices' return type is always `dict[str, dict]`,
-            # never None (traced to providers/orchestrator.py::get_live_prices,
-            # which always returns its accumulator dict). A raised exception
-            # is already caught by this block's own enclosing except below,
-            # which logs "live-price fetch failed ... degrades gracefully" --
-            # `or {}` is redundant here, not a fabricated-all-clear risk.
-            px = fetch_live_prices(tickers) or {}
+            # never None (providers/orchestrator.py::get_live_prices always
+            # returns its accumulator dict); a raised exception is caught by
+            # the enclosing except below, which logs "live-price fetch failed
+            # ... degrades gracefully". So no `or {}` (it was redundant; the
+            # 2026-09-24 baseline decision recorded that, removed 2026-10-25).
+            # Bulk rec-ticker universe: Yahoo's batched download, not the real-
+            # time Finnhub budget the live app shares (provider-investigation P3).
+            px = fetch_live_prices(tickers, realtime=False)
             prices = {t: float(d.get("price", 0)) for t, d in px.items() if d and d.get("price")}
     except Exception as e:
         _log(f"monthly: live-price fetch failed ({str(e)[:80]}) — graded outcomes degrade gracefully.")

@@ -1,7 +1,7 @@
 # Data provider investigation: Finnhub 429s, FMP 402s, Data Health footnote
 
-**Status (2026-10-25): READ-ONLY INVESTIGATION DONE (lead). Fix design proposed (section 4); owner decisions D-1–D-3
-open. Nothing built.**
+**Status (2026-10-25): BUILDING P1 + P2 + P3 + P5 + P6 (owner decisions, section 6).** *(Earlier the same day:
+read-only investigation done by the lead; fix design in section 4.)*
 
 Trigger: Data Health on 2026-10-23 showed Finnhub with 15 calls OK, **112 rate-limited (429)** and 8 parse errors,
 and FMP returning **402 Payment Required on every call**. Queue item 6 in CLAUDE.md.
@@ -114,3 +114,22 @@ P1 + P2 are small and remove most of the 429 noise. P3 removes the cause. P4 is 
   symbol-level only. Needs the 402 text first.
 - **D-2 scope:** build P1 + P2 + P3 (+ P4) now, or P1 + P2 only.
 - **D-3:** whether the `news-sentiment` calls stay, once the parse-error text is known.
+
+## 6. Owner decisions (2026-10-25)
+
+Data Health readout the owner sent (one session, after the 2026-10-25 deploy):
+- **Finnhub:** 14 calls, 9 rate-limited, 6 parse; last error 429.
+- **FMP:** 11 calls, 11 quota (402); today 6/250; last error "402 Client Error: Payment Required for url: h…". The
+  tile truncates at 45 characters, so the endpoint and symbol aren't visible.
+- **Bundle cache:** 42 "calls" = Yahoo News 42. These are the write-through saves, which confirms section 3.
+
+Decisions:
+- **D-1 FMP:** keep it as-is for now. **First measure whether the failover is actually needed** before deciding on
+  a paid plan. That is P6 below: per-endpoint / per-symbol error counts and the full error text in Data Health.
+  Then judge how many FMP calls were real failovers (Yahoo failed for history or fundamentals), and how many were
+  gap-fills for symbols no provider prices (the bad watchlist entries) or sparse-info backfills.
+- **D-2 scope:** P1 + P2 + P3 + P5 as one reviewed build (lead recommendation, owner agreed). P4 is not built.
+- **Added P6:** `api_health` counts errors by endpoint key. FMP's error messages carry the endpoint path and
+  symbol. A collapsed "Error details" expander in Data Health shows each source's full last error and its counts.
+  This also answers D-3: Finnhub's parse errors will be keyed `quote` or `news-sentiment`.
+- **D-3 news-sentiment:** deferred until P6 shows which Finnhub endpoint produces the parse errors.

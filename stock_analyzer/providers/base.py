@@ -61,6 +61,8 @@ class DataProvider:
     name: str = "base"
     #: frozenset of CAP_* this provider can serve
     capabilities: frozenset = frozenset()
+    #: True for a real-time quote source (bulk historical lookups skip it)
+    realtime: bool = False
 
     def is_configured(self) -> bool:
         """True when the provider has everything it needs to make calls (e.g. an

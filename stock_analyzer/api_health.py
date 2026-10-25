@@ -34,6 +34,8 @@ def _blank():
         "auth_errors":        0,
         "parse_errors":       0,
         "empty_returns":      0,
+        "saves":              0,    # write-through saves (NOT calls / successes)
+        "by_key":             {},   # {"<endpoint> <event>": count} for non-success events
         "consecutive_errors": 0,
         "last_success_ts":    None,
         "last_error_ts":      None,
@@ -53,15 +55,18 @@ _stats: dict = {
 }
 
 
-def record(source: str, event: str, msg: str = "") -> None:
+def record(source: str, event: str, msg: str = "", key: str | None = None) -> None:
     """
     Record an API event for a data source.
 
     Parameters
     ----------
     source : "yahoo_finance" | "fmp" | "finnhub" | "fred" | "supabase" (or any string)
-    event  : "success" | "error" | "rate_limit" | "empty"
+    event  : "success" | "save" | "error" | "rate_limit" | "empty" | "quota" | "auth" | "parse"
+             ("save" counts a write-through save only: not a call, success or error)
     msg    : optional error message (truncated to 120 chars)
+    key    : optional endpoint label (e.g. "quote"); when given, any event other
+             than success/save is also counted in by_key as "<key> <event>"
     """
     if source not in _stats:
         _stats[source] = _blank()
@@ -69,7 +74,14 @@ def record(source: str, event: str, msg: str = "") -> None:
     s   = _stats[source]
     now = _now()
 
-    if event == "success":
+    if key and event not in ("success", "save"):
+        _bk = f"{key} {event}"
+        s["by_key"][_bk] = s["by_key"].get(_bk, 0) + 1
+
+    if event == "save":
+        s["saves"] += 1
+
+    elif event == "success":
         s["calls"]              += 1
         s["successes"]          += 1
         s["last_success_ts"]    = now
@@ -137,6 +149,7 @@ def get_health(source: str) -> dict:
             "calls": 0, "successes": 0, "errors": 0,
             "rate_limits": 0, "empty": 0, "freshness": "—",
             "level": "gray", "icon": "⚪", "last_error": "", "consec_err": 0,
+            "saves": 0, "by_key": [],
         }
 
     s = _stats[source]
@@ -172,6 +185,8 @@ def get_health(source: str) -> dict:
         "auth_errors": s["auth_errors"],
         "parse_errors": s["parse_errors"],
         "last_success_ts": s["last_success_ts"],
+        "saves":       s["saves"],
+        "by_key":      sorted(s["by_key"].items()),
     }
 
 

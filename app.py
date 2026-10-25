@@ -3617,6 +3617,8 @@ with st.sidebar:
                 _ah_parts.append(f"**{_ah_h['auth_errors']} auth**")
             if _ah_h.get("parse_errors", 0) > 0:
                 _ah_parts.append(f"**{_ah_h['parse_errors']} parse**")
+            if _ah_h.get("saves", 0) > 0:
+                _ah_parts.append(f"{_ah_h['saves']} saved")
             if _ah_src == "fmp":
                 from stock_analyzer.constants import FMP_DAILY_SOFT_CAP as _C_SOFT, FMP_DAILY_CALL_CAP as _C_CAP
                 _fmp_d = _ah.get_fmp_daily_quota()
@@ -3638,7 +3640,7 @@ with st.sidebar:
                 f"</span>",
                 unsafe_allow_html=True,
             )
-            if _ah_src == "bundle_cache" and _ah_h["calls"] > 0:
+            if _ah_src == "bundle_cache" and _ah_h["successes"] > 0:
                 st.markdown(
                     "<span style='font-size:0.72em;color:#666'>"
                     "↳ live providers failed for ≥1 ticker; app served last saved snapshot instead"
@@ -3648,6 +3650,25 @@ with st.sidebar:
         if st.button("Reset counters", key="_ah_reset", width="stretch"):
             _ah.reset()
             st.rerun()
+
+    # Streamlit forbids nested expanders, so this is a sibling of Data Health.
+    # Full last error + per-endpoint counts for any source that has errored.
+    # External text (URLs, provider messages): plain st.* only, no raw HTML.
+    with st.expander("Error details", expanded=False):
+        _ah_any_err = False
+        for _ah_src2 in ("finnhub", "yahoo_finance", "fmp", "fred", "supabase",
+                         "yahoo_news", "bundle_cache"):
+            _ah_h2 = _ah.get_health(_ah_src2)
+            if not (_ah_h2["last_error"] or _ah_h2["by_key"]):
+                continue
+            _ah_any_err = True
+            st.markdown(f"**{_provider_label(_ah_src2)}**")
+            if _ah_h2["last_error"]:
+                st.text(f"Last error: {_ah_h2['last_error']}")
+            for _ah_k, _ah_n in _ah_h2["by_key"]:
+                st.text(f"  {_ah_k}: {_ah_n}")
+        if not _ah_any_err:
+            st.caption("No errors recorded since the last reset.")
 
     # ── Curated news feed — filled after page data loads ─────────────────
     st.divider()
@@ -5206,7 +5227,10 @@ if page == "🏠 Home":
     # is unchanged — this only moves WHEN the (5-min cached, so free to compute
     # early) result is available, not what it says or where it's shown.
     _xc_validator_down = crosscheck_validator_degraded()
-    _xc = _cached_price_xcheck(tuple(sorted(held_tickers))) if held_tickers else {}
+    # A paused cross-check is not run (and not cached for the 5-min TTL), so it
+    # resumes as soon as the source recovers, matching the caption below.
+    _xc = (_cached_price_xcheck(tuple(sorted(held_tickers)))
+           if held_tickers and not _xc_validator_down else {})
     _xc_bad_prev_tickers = {t for t, r in _xc.items() if r.get("prev_ok") is False}
     st.session_state["_xc_bad_prev_tickers"] = _xc_bad_prev_tickers
 
@@ -5279,13 +5303,15 @@ if page == "🏠 Home":
     # "decides, fail loud" posture, a breach is surfaced as a red banner, not
     # buried — the user decides whether to trust the figure.
     # _xc / _xc_validator_down are computed early, above Day Shock — see that
-    # hoist's comment. Validator health is LIVE; the cross-check result is
-    # 5-min cached. A disagreement computed while the validator was healthy
-    # can be served from cache for ≤5 min after it goes red — so the red
-    # banner can outlive the outage briefly. That's the SAFE direction (a real
-    # fault is never suppressed, only cleared slightly late); do NOT "fix" it
-    # by gating the banner on live health, which would mask genuine integrity
-    # faults.
+    # hoist's comment. Source health is LIVE (orchestrator._failing_now); the
+    # cross-check result is 5-min cached. Since 2026-10-25 a paused check is
+    # neither run nor read from cache (provider-investigation P2, Opus review):
+    # while a source is failing NOW, a cached disagreement is hidden at once,
+    # with the visible "cross-check paused" caption below, instead of up to
+    # 5 min later as before; the check resumes on the next render once the
+    # source recovers. The trade was made deliberately: before, a paused
+    # re-run blanked the result within 5 min anyway, and during a primary pause
+    # Home prices come from Yahoo, not the faulty feed.
     if held_tickers:
         _xc_today_str = str(_today_et())
         if st.session_state.get("_price_xcheck_logged_date") != _xc_today_str and _xc:
@@ -5382,7 +5408,7 @@ if page == "🏠 Home":
                 # Cross-check skipped because its validator is the degraded source —
                 # surface why (don't silently drop the integrity readout). Clears on recovery.
                 st.caption(
-                    f"ℹ️ Price cross-check paused — an independent source ({_provider_label(_xc_validator_down)}) "
+                    f"ℹ️ Price cross-check paused — a price source ({_provider_label(_xc_validator_down)}) "
                     "is degraded; the integrity check resumes automatically when it recovers."
                 )
 
@@ -14301,7 +14327,7 @@ elif page == "🧾 Summary":
                 _etr_prices_fresh: dict = {}
                 if _etr_all_tickers:
                     try:
-                        _px = fetch_live_prices(_etr_all_tickers)
+                        _px = fetch_live_prices(_etr_all_tickers, realtime=False)
                         _etr_prices_fresh = {
                             t: float(d.get("price", 0))
                             for t, d in (_px or {}).items()
@@ -14371,7 +14397,7 @@ elif page == "🧾 Summary":
                 _etr_prot_fresh: dict = {}
                 if _etr_prot_missing:
                     try:
-                        _px2 = fetch_live_prices(_etr_prot_missing)
+                        _px2 = fetch_live_prices(_etr_prot_missing, realtime=False)
                         _etr_prot_fresh = {
                             t: float(d.get("price", 0))
                             for t, d in (_px2 or {}).items()
@@ -25402,7 +25428,8 @@ elif page == "📈 Analysis":
     # Portfolio page. Reuses the 5-min-cached batch cross-check. prev_close
     # mismatch (strict) = real integrity fault; live gap (loose) = latency.
     _an_validator_down = crosscheck_validator_degraded()
-    _an_xc = _cached_price_xcheck(tuple(sorted(results.keys())))
+    _an_xc = (_cached_price_xcheck(tuple(sorted(results.keys())))
+              if not _an_validator_down else {})
     if _an_xc:
         # D23: same alarm-worthiness split as the Home banner — a settled
         # prev-close disagreement is always a real fault; a live-only gap
@@ -25445,7 +25472,7 @@ elif page == "📈 Analysis":
             )
     elif _an_validator_down:
         st.caption(
-            f"ℹ️ Price cross-check paused — the validator ({_provider_label(_an_validator_down)}) "
+            f"ℹ️ Price cross-check paused — a price source ({_provider_label(_an_validator_down)}) "
             "is degraded; the integrity check resumes automatically when it recovers."
         )
 
@@ -34438,7 +34465,7 @@ elif page == "📜 Recommendations History":
         _rh_prices_fresh: dict = {}
         if _rh_all_tickers:
             try:
-                _px = fetch_live_prices(_rh_all_tickers)
+                _px = fetch_live_prices(_rh_all_tickers, realtime=False)
                 _rh_prices_fresh = {
                     t: float(d.get("price", 0))
                     for t, d in (_px or {}).items()
@@ -35098,7 +35125,7 @@ elif page == "📊 Predictive Analytics":
         _pac_prices: dict = {}
         if _pac_tickers:
             try:
-                _px2 = fetch_live_prices(_pac_tickers)
+                _px2 = fetch_live_prices(_pac_tickers, realtime=False)
                 _pac_prices = {
                     t: float(d.get("price", 0))
                     for t, d in (_px2 or {}).items()
@@ -44151,7 +44178,7 @@ elif page == "🧠 AI Insights":
                     })
                     if _mr_tickers:
                         try:
-                            _mpx = fetch_live_prices(_mr_tickers)
+                            _mpx = fetch_live_prices(_mr_tickers, realtime=False)
                             _mr_prices = {
                                 t: float(d.get("price", 0))
                                 for t, d in (_mpx or {}).items() if d and d.get("price")
@@ -44303,7 +44330,7 @@ elif page == "🧠 AI Insights":
                         })
                         _mr_px2: dict = {}
                         try:
-                            _p2 = fetch_live_prices(_mr_tk2) if _mr_tk2 else {}
+                            _p2 = fetch_live_prices(_mr_tk2, realtime=False) if _mr_tk2 else {}
                             _mr_px2 = {t: float(d.get("price", 0)) for t, d in (_p2 or {}).items() if d and d.get("price")}
                         except Exception:
                             _mr_px2 = {}
@@ -49268,7 +49295,7 @@ elif page == "🎯 My Edge":
                     _stv_prices_fresh: dict = {}
                     if _stv_tickers:
                         try:
-                            _stv_px = fetch_live_prices(_stv_tickers)
+                            _stv_px = fetch_live_prices(_stv_tickers, realtime=False)
                             _stv_prices_fresh = {
                                 t: float(d.get("price", 0))
                                 for t, d in (_stv_px or {}).items()
@@ -49515,7 +49542,7 @@ elif page == "🎯 My Edge":
                     _sts_prices_fresh: dict = {}
                     if _sts_tickers:
                         try:
-                            _sts_px = fetch_live_prices(_sts_tickers)
+                            _sts_px = fetch_live_prices(_sts_tickers, realtime=False)
                             _sts_prices_fresh = {
                                 t: float(d.get("price", 0))
                                 for t, d in (_sts_px or {}).items()

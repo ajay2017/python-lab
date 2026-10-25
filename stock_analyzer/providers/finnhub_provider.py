@@ -29,6 +29,7 @@ _BASE = "https://finnhub.io/api/v1"
 class FinnhubProvider(DataProvider):
     name = "finnhub"
     capabilities = frozenset({CAP_LIVE_PRICE})
+    realtime = True
 
     def __init__(self):
         self._key = get_secret("FINNHUB_API_KEY")
@@ -76,7 +77,13 @@ class FinnhubProvider(DataProvider):
                 }
             except Exception as exc:
                 had_error = True
-                _ah.record("finnhub", classify_error(exc), msg=f"quote/{t}: {str(exc)[:100]}")
+                ev = classify_error(exc)
+                _ah.record("finnhub", ev, msg=f"quote/{t}: {str(exc)[:100]}", key="quote")
+                if ev == "rate_limit":
+                    # Stop at the first 429: the remaining tickers would 429 too and
+                    # each one deepens the breaker. The orchestrator gap-fills the
+                    # rest from the next provider.
+                    break
                 continue
 
         if results:
@@ -122,5 +129,6 @@ class FinnhubProvider(DataProvider):
                 "symbol":        str(ticker),
             }
         except Exception as exc:
-            _ah.record("finnhub", classify_error(exc), msg=f"news-sentiment/{ticker}: {str(exc)[:90]}")
+            _ah.record("finnhub", classify_error(exc), msg=f"news-sentiment/{ticker}: {str(exc)[:90]}",
+                   key="news-sentiment")
             return None

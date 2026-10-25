@@ -2106,7 +2106,7 @@ def save_bundle_cache(ticker: str, bundle: dict) -> bool:
             "fetched_at":   pd.Timestamp.now(tz="UTC").isoformat(),
         }
         _client().table("bundle_cache").upsert(record, on_conflict="ticker").execute()
-        _ah.record("bundle_cache", "success")
+        _ah.record("bundle_cache", "save")   # a save is not a serve: kept out of calls/successes
         return True
     except Exception as e:
         _ah.record("bundle_cache", "error", msg=f"save: {str(e)[:100]}")

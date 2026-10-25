@@ -47,9 +47,9 @@ def crosscheck_prices(tickers: list[str]) -> dict[str, dict]:
 
 
 def crosscheck_validator_degraded() -> str | None:
-    """Validator source name when the live-price cross-check validator is RED in
-    api_health (so the cross-check is being skipped), else None. Lets the UI show
-    a 'cross-check paused — validator degraded' note (see orchestrator)."""
+    """Name of the price source whose failure is pausing the live-price
+    cross-check (the primary first, then the validator), else None. Lets the UI
+    show a 'cross-check paused' note (see orchestrator._failing_now)."""
     if not _C.DATA_MULTISOURCE_ENABLED:
         return None
     return _orch.live_price_validator_degraded()
@@ -110,14 +110,19 @@ def fetch_market_indices() -> list[dict]:
     return _PRIMARY.market_indices()
 
 
-def fetch_live_prices(tickers: list[str]) -> dict[str, dict]:
+def fetch_live_prices(tickers: list[str], realtime: bool = True) -> dict[str, dict]:
     """
     Lightweight batch fetch of current prices only — bypasses the full history load.
     Returns {ticker: {"price": float, "prev_close": float|None, "change_pct": float|None, "fetched_at": str}}.
     prev_close / change_pct are None when the source omits the prior close (never
     fabricated as prev==price — that would disarm the cross-check's strict leg; M2).
+    `realtime=False` is for bulk historical valuation lookups: the multi-source
+    layer then skips the real-time (per-ticker, rate-limited) provider and starts
+    from Yahoo's single batched download.
     """
     if _C.DATA_MULTISOURCE_ENABLED:
+        if not realtime:
+            return _orch.get_live_prices(tickers, realtime=False)
         return _orch.get_live_prices(tickers)
     return _PRIMARY.live_prices(tickers)
 

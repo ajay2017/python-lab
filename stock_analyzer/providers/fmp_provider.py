@@ -114,6 +114,13 @@ class FMPProvider(DataProvider):
             s = s.replace(self._key, "***")
         return s[:120]
 
+    def _err_msg(self, path: str, symbol, exc) -> str:
+        """Compact, key-free error text naming the endpoint and symbol, built from
+        the HTTP status when available (e.g. "quote AAPL: HTTP 402")."""
+        code = getattr(getattr(exc, "response", None), "status_code", None)
+        what = f"HTTP {code}" if code else self._safe(str(exc))[:80]
+        return self._safe(f"{path} {symbol}: {what}" if symbol else f"{path}: {what}")
+
     # ── Live prices (per-symbol; stable quote is single-symbol) ───────────────
     def live_prices(self, tickers: list[str]) -> dict[str, dict]:
         if not self._key:
@@ -131,13 +138,22 @@ class FMPProvider(DataProvider):
             except Exception as exc:
                 _db.increment_daily_quota("fmp")
                 had_error = True
-                _ah.record("fmp", classify_error(exc), msg=self._safe(str(exc)))
+                _ev = classify_error(exc)
+                _ah.record("fmp", _ev,
+                           msg=self._err_msg("quote", t, exc), key="quote")
+                if _ev in ("rate_limit", "auth"):
+                    # Limit / key refusals apply to every remaining ticker:
+                    # stop here. NOT on "quota" (402): FMP's free quotes are a
+                    # per-symbol allowlist (system_health), so a 402 on one
+                    # symbol says nothing about the next, and the per-symbol
+                    # 402s are the evidence owner decision D-1 measures.
+                    break
                 continue
 
             err = _fmp_error(payload)
             if err:
                 had_error = True
-                _ah.record("fmp", "error", msg=self._safe(err))
+                _ah.record("fmp", "error", msg=self._safe(f"quote {t}: {err}"), key="quote")
                 continue
 
             row = payload[0] if isinstance(payload, list) and payload else (
@@ -165,7 +181,7 @@ class FMPProvider(DataProvider):
         if results:
             _ah.record("fmp", "success")
         elif not had_error:
-            _ah.record("fmp", "empty")
+            _ah.record("fmp", "empty", key="quote")
         return results
 
     # ── History ────────────────────────────────────────────────────────────────
@@ -184,18 +200,22 @@ class FMPProvider(DataProvider):
             _db.increment_daily_quota("fmp")
         except Exception as exc:
             _db.increment_daily_quota("fmp")
-            _ah.record("fmp", classify_error(exc), msg=self._safe(str(exc)))
+            _ah.record("fmp", classify_error(exc),
+                       msg=self._err_msg("historical-price-eod/full", ticker, exc),
+                       key="historical-price-eod/full")
             raise ProviderUnavailable(self._safe(str(exc))) from exc
 
         err = _fmp_error(payload)
         if err:
-            _ah.record("fmp", "error", msg=self._safe(err))
+            _ah.record("fmp", "error",
+                       msg=self._safe(f"historical-price-eod/full {ticker}: {err}"),
+                       key="historical-price-eod/full")
             raise ProviderUnavailable(err)
 
         # Stable returns a flat list; legacy returned {"historical":[...]}. Accept both.
         rows = payload.get("historical") if isinstance(payload, dict) else payload
         if not rows:
-            _ah.record("fmp", "empty")
+            _ah.record("fmp", "empty", key="historical-price-eod/full")
             raise ProviderUnavailable(f"fmp no history for {ticker}")
 
         df = pd.DataFrame(rows)
@@ -210,11 +230,12 @@ class FMPProvider(DataProvider):
                 "Volume": df.get("volume"),
             }).dropna(subset=["Close"])
         except Exception as exc:
-            _ah.record("fmp", "error", msg=f"history parse {ticker}: {self._safe(str(exc))}")
+            _ah.record("fmp", "error", msg=f"history parse {ticker}: {self._safe(str(exc))}",
+                       key="historical-price-eod/full")
             raise ProviderUnavailable(self._safe(str(exc))) from exc
 
         if out.empty:
-            _ah.record("fmp", "empty")
+            _ah.record("fmp", "empty", key="historical-price-eod/full")
             raise ProviderUnavailable(f"fmp empty history for {ticker}")
         _ah.record("fmp", "success")
         return out
@@ -236,17 +257,21 @@ class FMPProvider(DataProvider):
             _db.increment_daily_quota("fmp")
         except Exception as exc:
             _db.increment_daily_quota("fmp")
-            _ah.record("fmp", classify_error(exc), msg=self._safe(str(exc)))
+            _ah.record("fmp", classify_error(exc),
+                       msg=self._err_msg("historical-price-eod/full", ticker, exc),
+                       key="historical-price-eod/full")
             raise ProviderUnavailable(self._safe(str(exc))) from exc
 
         err = _fmp_error(payload)
         if err:
-            _ah.record("fmp", "error", msg=self._safe(err))
+            _ah.record("fmp", "error",
+                       msg=self._safe(f"historical-price-eod/full {ticker}: {err}"),
+                       key="historical-price-eod/full")
             raise ProviderUnavailable(err)
 
         rows = payload.get("historical") if isinstance(payload, dict) else payload
         if not rows:
-            _ah.record("fmp", "empty")
+            _ah.record("fmp", "empty", key="historical-price-eod/full")
             return None
         try:
             df = pd.DataFrame(rows)
@@ -254,7 +279,8 @@ class FMPProvider(DataProvider):
             df = df.sort_values("date")
             price = _num(df.iloc[0].to_dict(), "close")
         except Exception as exc:
-            _ah.record("fmp", "error", msg=f"historical_close parse {ticker}: {self._safe(str(exc))}")
+            _ah.record("fmp", "error", msg=f"historical_close parse {ticker}: {self._safe(str(exc))}",
+                       key="historical-price-eod/full")
             return None
         if price is None or price <= 0:
             return None
@@ -272,11 +298,15 @@ class FMPProvider(DataProvider):
             _db.increment_daily_quota("fmp")
         except Exception as exc:
             _db.increment_daily_quota("fmp")
-            _ah.record("fmp", classify_error(exc), msg=self._safe(str(exc)))
+            _ah.record("fmp", classify_error(exc),
+                       msg=self._err_msg(path, (params or {}).get("symbol"), exc), key=path)
             raise ProviderUnavailable(self._safe(str(exc))) from exc
         err = _fmp_error(payload)
         if err:
-            _ah.record("fmp", "error", msg=self._safe(err))
+            _sym = (params or {}).get("symbol")
+            _ah.record("fmp", "error",
+                       msg=self._safe(f"{path} {_sym}: {err}" if _sym else f"{path}: {err}"),
+                       key=path)
             raise ProviderUnavailable(err)
         return payload
 

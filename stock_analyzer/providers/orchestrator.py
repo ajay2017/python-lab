@@ -277,15 +277,45 @@ def _live_price_providers() -> list:
     return [p for p in _chain_for(C.DATA_LIVE_PRICE_ORDER) if p.supports(CAP_LIVE_PRICE)]
 
 
-def get_live_prices(tickers: list[str]) -> dict[str, dict]:
+def _failing_now(name: str) -> bool:
+    """True when source `name` is failing NOW: in its rate-limit cooldown, or
+    "red" with a live error streak (consec_err > 0). api_health "red" alone is a
+    cumulative session-lifetime read (rate_limits >= 3 never decays, see
+    system_health's `recovered` re-grade), so gating on it would pause the
+    cross-check until a restart. Any success resets consec_err, so a source that
+    has recovered is used again. The single detector for the cross-check gates
+    and the "cross-check paused" note (live_price_validator_degraded)."""
+    if _ah.in_cooldown(name, C.PROVIDER_RL_COOLDOWN_SEC):
+        return True
+    return _is_red(name) and (_ah.get_health(name).get("consec_err") or 0) > 0
+
+
+def _not_cooling(p) -> bool:
+    """True when provider `p` is NOT in its rate-limit cooldown (the same
+    circuit-breaker predicate `_providers_for` uses)."""
+    return not _ah.in_cooldown(p.name, C.PROVIDER_RL_COOLDOWN_SEC)
+
+
+def get_live_prices(tickers: list[str], realtime: bool = True) -> dict[str, dict]:
     """Live-price primary (Finnhub, real-time) fills as many tickers as it can;
     subsequent providers in DATA_LIVE_PRICE_ORDER gap-fill only the ones still
     missing. A provider failing is skipped, not fatal — so a Finnhub outage
-    silently degrades to yfinance (delayed), never worse than today."""
+    silently degrades to yfinance (delayed), never worse than today.
+
+    A provider in its rate-limit cooldown is skipped (it is not re-hammered ticker
+    after ticker). `realtime=False` (bulk historical lookups, where a delayed
+    quote is fine) also skips providers flagged `realtime` so the keyed
+    real-time source's per-ticker budget is left for the live surfaces."""
     if not tickers:
         return {}
     results: dict[str, dict] = {}
-    for prov in _live_price_providers():
+    _cands = [p for p in _live_price_providers()
+              if realtime or not getattr(p, "realtime", False)]
+    # Skip cooling providers, but if EVERY candidate is cooling fall back to the
+    # full candidate list: the same "never a permanent hard-block" rule as
+    # _providers_for (docs/architecture.md, PROVIDER_RL_COOLDOWN_SEC).
+    _active = [p for p in _cands if _not_cooling(p)] or _cands
+    for prov in _active:
         remaining = [t for t in tickers if t not in results]
         if not remaining:
             break
@@ -321,7 +351,7 @@ def crosscheck_price(ticker: str, primary_price: float,
     for prov in _provs:
         if prov.name == primary_name:
             continue  # need an INDEPENDENT source to validate
-        if _is_red(prov.name):
+        if _failing_now(prov.name):
             # Validator degraded (rate-limited / hard-erroring) → its prices can't
             # be trusted, so a "disagreement" would be its own degradation, not a
             # real fault. Skip rather than raise a false "sources disagree" (mirrors
@@ -387,7 +417,7 @@ def crosscheck_against(source: str, ticker: str, primary_price: float,
     if "price" not in C.DATA_XCHECK_FIELDS or not primary_price:
         return None
     prov = next((p for p in _live_price_providers() if p.name == source), None)
-    if prov is None or _is_red(prov.name):
+    if prov is None or _failing_now(prov.name):
         return None
     # 2026-09-24 app review, Q2 (antipattern-baseline decision): same
     # reasoning as crosscheck_price()'s identical `or {}` above in this
@@ -446,7 +476,11 @@ def crosscheck_batch(tickers: list[str]) -> dict[str, dict]:
     # is the validator's own degradation, not a real integrity fault. Surfacing a
     # red "sources disagree" banner then is a false alarm. Skip the cross-check
     # this cycle; it auto-resumes when the validator recovers (api_health clears).
-    if _is_red(validator.name):
+    if _failing_now(validator.name):
+        return {}
+    # Primary-health gate: a red / cooling-down primary (Finnhub 429-ing) is not
+    # called again, and the validator is never promoted to primary in its place.
+    if _failing_now(primary.name):
         return {}
     try:
         prim = primary.live_prices(list(tickers))
@@ -486,8 +520,9 @@ def _is_red(source: str) -> bool:
 
 
 def live_price_validator_degraded() -> str | None:
-    """Name of the live-price cross-check validator if it is currently RED in
-    api_health, else None. The held-position cross-check (crosscheck_batch) skips
+    """Name of the degraded source blocking the live-price cross-check, else None:
+    the PRIMARY when `_failing_now` (checked first), otherwise the validator when
+    `_failing_now` (cooling, or red with a live error streak). The held-position cross-check (crosscheck_batch) skips
     when this is set — a 'disagreement' against a degraded validator is a false
     alarm, not an integrity fault. Lets the UI show a transparent 'cross-check
     paused' note instead of either a red banner or silent nothing."""
@@ -496,5 +531,7 @@ def live_price_validator_degraded() -> str | None:
     provs = _live_price_providers()
     if len(provs) < 2:
         return None
-    validator = provs[1]
-    return validator.name if _is_red(validator.name) else None
+    primary, validator = provs[0], provs[1]
+    if _failing_now(primary.name):
+        return primary.name
+    return validator.name if _failing_now(validator.name) else None
