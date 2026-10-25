@@ -1,6 +1,6 @@
 # LLM model routing: move to current models, and change models without code changes
 
-**Status (2026-10-22): Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12). Phase 2 not started.** *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
+**Status (2026-10-25): Phase 2 READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry. Nothing built. NEXT: P2-a1.** *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
 lead from an AST inventory of every Anthropic call (2026-10-22) and the Claude API migration guide bundled with Claude
 Code (cached 2026-10-06). **Owner agreed with every lead recommendation in section 7 (2026-10-22):** D-1 App Settings
 with the score role pinned in code; D-2 switch the score model, but last, after the Phase 4 dry run; D-3 Sonnet 5.5
@@ -429,4 +429,236 @@ Pure apart from the SDK call; no Streamlit import; no module-level mutable state
   monitoring rather than remove cards. On an env-only deploy the BUY flow shows the AI case-against (full order) yet
   saves no declared stop. Revisit with the Phase 4 pinned-role switch.
 - **Cosmetic:** the helpers sit inside app.py's import block (~414-438); move them after it in a later app.py edit.
+
+## 13. Phase 2 design (lead, 2026-10-25)
+
+**Owner's goal (2026-10-25):** when a faster or cheaper model ships, moving a role onto it is a settings change, not
+a code change. The owner chose Phase 2 for that reason, ahead of the section-1 condition (the 30-day console usage
+export). That export is still wanted as the cost baseline for Phase 3. Phase 2 itself changes no model: every
+default stays equal to today's.
+
+**Owner decisions (2026-10-25):**
+- **D2-1:** `extract_strong` (broker ticker resolution) stays code-only. It's neither pinned nor editable in App
+  Settings until it's checked that the import preview lets the owner catch a wrong ticker.
+- **D2-2:** for Sonnet 5.5 and Opus 5.5 requests, turn on the API's server-side refusal fallback (beta `fallbacks`).
+  Haiku 5.5 has none (a `fallbacks` list is a 400 there; `"default"` is a no-op).
+- **D2-3:** usage per role is tracked in process only (System Trust). Cost comes from the console export. No new
+  table.
+- **D2-4:** planner review before any build.
+
+### 13.1 Facts found while designing (2026-10-25, verified at HEAD `47faf75`)
+
+1. **JSON is decided by role, and 8 JSON-reading sites are on narrative roles.** `llm.parse_response` and
+   `llm.build_request` treat `fast` / `deep` as narrative (cut-off text kept, adaptive thinking plus headroom on
+   `modern`). These sites parse JSON but are on `fast`: `portfolio_qa.parse_question`,
+   `premortem_advisor.generate_case_against`, `thesis_red_team`, `missed_opportunity`, `thesis_cluster`,
+   `catalyst_stress`, `regime_stress`. The Investigator plan stage is on `deep` (section 12). Making `fast` / `deep`
+   editable without fixing this would let one App Settings change give those sites the narrative treatment.
+   **Phase 2 has to fix this before the roles become editable.**
+2. **The Models API doesn't say how to turn thinking off.** `client.models.retrieve(id).capabilities` reports
+   `thinking.types.{adaptive,enabled}`, `effort.{low..max}`, `structured_outputs` and `image_input`, plus
+   `max_input_tokens` / `max_tokens`. It doesn't report the "thinking off" form (`disabled` on Haiku 5.5,
+   `between_tools` on Sonnet 5.5, none on Opus 5.5), whether `temperature` is accepted, or prices.
+3. **API version `2026-10-21` rejects `temperature` / `top_p` / `top_k` on every model, even at default values.**
+   Python SDK 2.0.0 sends it by default. `requirements.txt` pins `anthropic>=0.40.0,<1.0` (venv 0.121.0), so the app
+   still sends `2023-06-01`: nothing is broken today. But the legacy profile forwards `temperature` from 14 sites, so
+   **the SDK can't be upgraded past `<1.0` while any role runs on a legacy-profile model.** Phase 3 lifts this for the
+   editable roles and Phase 4 for the pinned ones.
+4. **No new table.** The setting is one `reference_tables` row (`name = 'llm_models'`), and `reference_table_history`
+   gives the dated audit trail. But `db.save_reference_table` always runs `reference_data.canonicalize`, which
+   upper-cases values and expects `{bucket: [tickers]}`. Model IDs saved through it as-is would be corrupted. It needs a
+   canonicalizer per table (`db.py` is a gate file).
+5. **System Trust ⑧ is reserved** for the cross-page consistency check (`docs/plans/app-trust-verification.md` item 3).
+   The existing "🤖 Portfolio Investigator — AI provider" section (app.py, System Trust page) becomes "🤖 AI models".
+6. **The `extract` role reaches decisions.** `analyst_intel.extract_report` feeds `analyst_coverage`, which since
+   F-311 is the Valuation price-target fallback, so it reaches the composite. The owner confirms an editable preview
+   before saving. It stays editable (owner decision, section 10); the review should weigh this.
+
+### 13.2 Design
+
+**A. JSON is a property of the call, not the role (`llm.py`).** `complete(..., expects_json: bool | None = None)`.
+`None` keeps today's role-derived value (so nothing changes until a site opts in). The 8 sites in 13.1 #1 pass
+`expects_json=True`. `parse_response` and `build_request` read the per-call value. A test pins `expects_json=True` at
+each of the 8 sites (extend `tests/test_llm_roles.py`). In the same change, adopt ai_provider's rule that empty or
+whitespace-only text is no reply, for every role (open since P1-c).
+
+**B. Model resolution order (`llm.py`, pure).** `resolve_model(role, model=None, *, setting=None, env=None)`:
+1. pinned roles (`score`, `filter`, `extract_trigger`) and `extract_strong` (D2-1) → `CODE_DEFAULTS`, ignoring env
+   and the setting (an explicit `model=` that differs still raises for pinned roles, as today);
+2. an explicit non-empty `model=` (Investigator, AI Snapshot, tests);
+3. env `DRISHTA_LLM_MODEL_<ROLE>`;
+4. the validated App Settings entry for the role;
+5. `CODE_DEFAULTS`.
+
+It returns the model **and its source** (`code` / `setting` / `env` / `explicit`) so the UI and System Trust can show
+where it came from. `EDITABLE_ROLES = {fast, deep, extract}`.
+
+**C. Request shape for a model the code doesn't know (`llm.py`, pure).** Today an unknown ID gets `modern`, which
+guesses the thinking-off form from a substring (`"haiku"` / `"sonnet"`). Replace that with two profiles:
+- **`known-modern`:** the code table of families whose thinking-off form is known (Haiku 5.5 `disabled`, Sonnet 5.5
+  `between_tools`, Opus 5.5 none). Today's `modern` rules apply, keyed by an exact ID, not a substring.
+- **`generic`** (any other ID): no sampling parameters; **no `thinking` field** (the model's own default, adaptive on
+  every 5.x model); `output_config.effort` only when the stored capabilities list that level (otherwise left out);
+  thinking headroom on `max_tokens` for every role, because thinking may be on even for JSON roles. It never sends a
+  field that only one family accepts.
+
+So a new model works with no code change. Adding its row to the known table is an optional saving (thinking off for
+JSON roles), not a requirement. **Capabilities come from the stored setting** (E below), never a live Models API call
+on the request path.
+
+**D. Refusal fallback (D2-2).** For known Sonnet 5.5 / Opus 5.5 requests: `client.beta.messages.create(...,
+betas=["server-side-fallback-2026-07-01"], fallbacks="default")`. Not for Haiku 5.5, legacy models, `generic`, or the
+Batches API.
+- **Limit:** on Sonnet 5.5 it retries only `cyber` / `frontier_llm` declines (onto Sonnet 5), not `general_harms`,
+  `bio` or `reasoning_extraction`. A `between_tools` request that falls back runs on Sonnet 5 with thinking
+  `disabled`.
+- **`LLMResult.model`** records `response.model` (the model that actually served the reply). New field
+  `LLMResult.fell_back` (a `fallback` content block, or a `fallback_message` entry in `usage.iterations`).
+- **The record:** persisted `model` fields (thesis reviews) record the serving model.
+
+**E. Settings row and validation (`llm_settings.py`, new; `db.py`).**
+- **Payload:** `{"version": 1, "roles": {role: {"model": str, "effort": "low"|"medium"|"high"|null,
+  "capabilities": {...snapshot...}, "checked_at": ISO}}}`. Only `EDITABLE_ROLES` keys are allowed.
+- **`db.save_reference_table`:** dispatches canonicalize and validate by `name`. `llm_models` gets its own
+  canonicalizer (sort keys, strip, never change case) and a `validate_payload` branch. Existing tables are
+  byte-for-byte unchanged (a test hashes a fixture payload before and after).
+- **On save (app, owner-only):** `client.models.retrieve(id)` must succeed with the current key. Its `capabilities`
+  are stored in the row. The chosen effort must be one the model lists, or none. If the Models API can't be reached,
+  the save is refused unless the ID is in the known table.
+- **At runtime:** each read re-validates the row (shape, roles, a model string with a `claude-` prefix, effort valid
+  against the stored capabilities). Rows have been edited in SQL before. A role that fails validation falls back to
+  `CODE_DEFAULTS` and records a warning for System Trust.
+- **Reading it:**
+  - The app uses `st.cache_data(ttl=300)` around a pure loader, and an App Settings save clears the cache.
+  - Each cron lane reads it once at start.
+  - The read is `db.load_reference_table('llm_models')`. `None` (the database is offline) and "no row" both mean
+    code defaults, which is correct here. Section 5.4 explains why this table, unlike the ticker tables, has a code
+    fallback.
+- **`llm_settings` has no Streamlit import.** The app wraps the loader. It passes `setting` / `env` into `complete`
+  through a thin `llm_settings.complete_for(role, **kw)`, or call sites keep calling `llm.complete` and it asks a
+  resolver hook. **Open for the planner:** which of the two (a hook is module state, which the "no module-level
+  mutable state in `llm.py`" rule forbids).
+
+**F. App Settings "🤖 AI models" section (app.py, render only; decisions in `llm_settings`).**
+- **One row per role:** the role, what it does, the current model and its source, and the effort.
+- **Editable roles:** a model picker (the Models API `list()`, the IDs this key can use, plus free text) and an effort
+  picker limited to the levels the model lists.
+- **"Test role":** one tiny real call through `complete` with the candidate model. It shows the stop reason, input /
+  output tokens, response time and an approximate cost (from a small code price table; a model not in the table shows
+  "price unknown"). Then **Save** (history row) and **Reset to code default** (deletes the role's key).
+- **Pinned roles and `extract_strong`:** shown read-only with the reason.
+- **The page's warning text** ("no gate, threshold, scoring weight") stays true. Its wording adds that model choice
+  for the roles that move decisions is not here.
+
+**G. System Trust "🤖 AI models" (app.py, replaces the Investigator AI-provider section).**
+- **Per role:** the model, its source, whether the key can use it (one cached `models.list()` per session; "not
+  checked" shows as unknown, never green), any runtime validation warning, and calls / errors / last error / tokens
+  **seen by this process** (D2-3).
+- **Cron-only roles** (`deep` in the weekly lanes, `score` in every lane) show "unknown from here". The cron reporting
+  per-role errors in its heartbeat `detail` (200 chars) is optional (see 13.4).
+- **Counters live in `st.session_state`,** never in `llm.py`.
+
+### 13.3 Chunks
+
+| Chunk | What | Review |
+|---|---|---|
+| **P2-a** | `llm.py`: `expects_json` (A) + the 8 sites + the empty-text rule; `resolve_model` order with source (B), with no setting wired yet; `known-modern` / `generic` profiles (C); fallback request + `fell_back` (D). Golden fixture unchanged (every default is still legacy). | Required |
+| **P2-b** | `llm_settings.py` (payload validation, runtime loader, save-time Models API check, price table) + `db.save_reference_table` / `reference_data` per-table dispatch + tests; wired into `complete` resolution. Behaviour-neutral until a row exists. | Required (`db.py`) |
+| **P2-c** | App Settings section (F) | Required (new owner surface feeding a decision input) |
+| **P2-d** | System Trust section (G) | Light |
+| **P2-e** | `docs/requirements.md` F-ID, `docs/architecture.md`, User Guide, `_GATE_FILES` + `docs/review-policy.md` line for `llm_settings.py` | Not needed |
+
+After P2-e: Phase 3 is the owner switching `fast` → Haiku 5.5, `deep` / `extract` → Sonnet 5.5 in App Settings, one
+role at a time, Test role first.
+
+### 13.4 Open questions for the planner
+
+1. How `complete` gets the setting without module state in `llm.py` (E, last bullet).
+2. Should the cron report per-role errors (heartbeat `detail`, or one heartbeat `lane = 'llm'`), or is "unknown from
+   here" enough for `deep` until Phase 4?
+3. Should a saved `extract` change carry a regime note, since it reaches Valuation (13.1 #6)? Or is the
+   `reference_table_history` row enough?
+4. Is the `generic` profile's "thinking on for JSON roles + headroom" safe for the `extract` role's 8000-token limit
+   (`ANALYST_EXTRACT_MAX_TOKENS`) and its non-streaming timeout? SDK guidance: non-streaming beyond ~16k `max_tokens`
+   risks HTTP timeouts.
+5. Anything in the Phase 1 golden or ratchet tests that the per-call `expects_json` flag or the beta-client path would
+   weaken.
+
+## 14. Planner review of section 13 (Opus 5.5, 2026-10-25): PROCEED WITH CHANGES
+
+The lead re-checked B1 (`app.py:8258`, `debate_agent.py:462`), B8 (`thesis_advisor._parse_response` defaults to
+`WEAKENING`) and B10 (the Investigator picker is in the System Trust section) against the code.
+
+**Corrections to 13.1:**
+- **#1:** 7 of the 8 JSON sites are confirmed on `fast`. The Investigator plan stage can't be reached by a setting:
+  it always passes an explicit user-picked model, and its `ai_provider` site also serves the report stage. It is out
+  of P2-a.
+- **Two `deep` sites are missing from #1:** `thesis_advisor.review_thesis` and `generate_earnings_thesis_update`. They
+  parse a trailing `Verdict:` line, so a reply cut off at `max_tokens` is parsed as `WEAKENING`, and the weekly cron
+  saves it.
+- **#4:** `save_reference_table` doesn't call `validate_payload` today, so the dispatch is new behaviour and must fail
+  closed. `load_reference_table` returns `None` for both "offline" and "no row".
+- **#6:** `extract` also feeds `earnings_intel.extract_playbook` → `earnings_context` → `earnings_advisor`. Both
+  `extract` paths go through an owner-confirmed preview.
+
+**Answers to 13.4:**
+1. **How `complete` gets the setting:**
+   - `llm_settings` owns a process-level immutable snapshot: lock-protected, TTL-based, with `invalidate()` called on
+     save.
+   - `llm.complete` gains a `setting=` seam and consults the provider (lazy import) only for `EDITABLE_ROLES` with no
+     explicit `model`, so pinned roles never trigger a DB read.
+   - No `complete_for` wrapper (it would escape the AST guards) and no `st.cache_data`.
+   - The Models API helpers and the known-model and price tables live in `llm.py`; the ratchet allowlist is not
+     widened.
+2. **Cron reporting:** no new heartbeat lane. Each lane logs the resolved model and its source; an LLM failure puts
+   the role, model and error into the lane's failure detail; the monthly lane goes red when `generate_report` returns
+   `None` while it has data.
+3. **`extract`:** no regime note. Both of its paths are preview-gated and `reference_table_history` dates the change.
+   Each preview caption shows "extracted by <served model>".
+4. **`generic` on `extract`:** fails visibly rather than silently. A timeout is shown and nothing is saved. Mitigate
+   with effort `low` and a clamp to `capabilities.max_tokens`.
+5. **The Phase 1 guards:** the AST pin is the only guard for `expects_json`. The golden fake client has no `.beta`,
+   so the fallback needs its own unit test. `resolve_model` keeps returning a string.
+
+**Blocking changes, and the owner's decisions on them (2026-10-25):**
+
+| # | Change | Owner |
+|---|---|---|
+| B1 | Premarket stance (`app.py:8258`) and `debate_agent.py:462` resolve the `fast` model early and pass it as an explicit `model=`, which bypasses the setting. Add a setting-aware `llm.resolved(role)` for both. An AST ratchet limits `resolve_model(` to `llm.py` / `llm_settings.py`. | Accepted (defect fix) |
+| B2 | `expects_json` may only add JSON handling: `json_mode = role in JSON_ROLES or expects_json is True`; `False` on a JSON role raises. An AST pin covers each site. | Accepted (defect fix) |
+| B3 | Editable roles' effort is limited to `{low, medium, high}` ∩ the model's capabilities, because the thinking-off forms are a 400 above `high`. | **Accepted** |
+| B4a | A row whose payload doesn't match its `payload_hash` (edited in SQL) is ignored: code defaults plus a System Trust warning. | **Accepted 2026-10-25** |
+| B4b | The monthly report lane goes red on `None` with data. | Accepted (defect fix) |
+| B5 | The snapshot state is `ok` / `no_row` / `unreadable` / `invalid`; `unreadable` is not cached for the full TTL. | Accepted (defect fix) |
+| B6 | "Test role" sends the production request (`setting=`, not `model=`) with a realistically sized prompt per role, and shows latency against the site's timeout. | Accepted |
+| B7 | The 13.4 #1 answer is folded into the spec. | Accepted |
+| B8 | Add `review_thesis` and `generate_earnings_thesis_update` to the opt-in, so a cut-off reply fails instead of saving `WEAKENING`. | **Accepted 2026-10-25** |
+| B9 | `llm_settings.py`'s `_GATE_FILES` entry and `docs/review-policy.md` line land in P2-b, the commit that creates it. | Accepted (CLAUDE.md rule) |
+| B10 | Keep the Investigator picker (it writes `_inv_provider` / `_inv_model` and the key store the Investigator reads); add the AI-models table beside it. | Accepted (defect fix) |
+| opt | Retry once on the code default when a setting's model returns 404. | Not selected |
+
+**Non-blocking, adopted unless the owner objects:**
+- **N3:** `LLMResult.model` is the model that served the reply, plus a `requested_model` field. An alias may come back
+  as a dated ID; note that in the commit.
+- **N4:** unit-test the beta path with a fake `.beta`.
+- **N5:** raise the floor to `anthropic>=0.121.0` before Phase 3.
+- **N6:** known-modern is matched by `^claude-(haiku|sonnet|opus)-5-5(-\d{8})?$`.
+- **N7:** `generic` applies `MODERN_TOKEN_FACTOR` and is clamped to `capabilities.max_tokens`.
+- **N8:** the UI shows when env is the source, and that Save won't take effect then.
+- **N9:** `checked_at` is left out of the hash.
+- **N10:** the `fast` role's description mentions the debate label on Act Today.
+- **N11:** drop `temperature` forwarding when the SDK reaches 2.0.
+- **N12:** the TTL is an internal constant.
+- **N13:** an autouse test fixture clears `DRISHTA_LLM_MODEL_*` and stubs the provider.
+
+**Revised chunks:**
+
+| Chunk | What | Review |
+|---|---|---|
+| **P2-a1** | Add-only `expects_json` at the 7 `fast` sites and the 2 thesis sites (B8), and the empty-text rule | Required |
+| **P2-a2** | Resolver with source, `setting=` seam, known-modern and `generic` profiles with the effort cap, beta fallback with `fell_back`, Models API helpers in `llm.py`. Inert. | Required |
+| **P2-b** | `llm_settings` (validation, state, TTL, `invalidate()`), per-table dispatch in `db.py` / `reference_data.py` with existing tables byte-identical, the B1 fixes, the monthly lane fix, `_GATE_FILES` and the review-policy line | Required |
+| **P2-d** | System Trust "🤖 AI models" with the Investigator picker kept: observability before the write path | Required |
+| **P2-c** | App Settings section with Test role (B6) and the effort cap; `requirements.md` F-ID in this commit | Required |
+| **P2-e** | The remaining docs (on the lead: they carry policy) | Not needed |
 
