@@ -419,6 +419,7 @@ from stock_analyzer import llm as _llm
 from stock_analyzer import llm_settings as _llm_settings
 from stock_analyzer import llm_usage as _llm_usage
 from stock_analyzer import ai_models_view as _ai_models_view
+from stock_analyzer import ai_models_settings as _ai_models_settings
 
 
 def _anthropic_secret(section, key):
@@ -8337,10 +8338,12 @@ if page == "🏠 Home":
                                 if n.get("headline")
                             ],
                         )
+                        # No model= here: llm.complete resolves the fast role
+                        # itself, so a setting's effort and capabilities apply.
+                        # _pms_model above only keys the session cache.
                         _pms_result = pms_generate_stance(
                             inputs  = _pms_inputs,
                             api_key = _pms_key,
-                            model   = _pms_model,
                         )
                         if _pms_result:
                             st.session_state[_pms_cache_key] = _pms_result
@@ -37739,7 +37742,7 @@ elif page == "🩺 System Trust":
         st.caption(
             "Which model each AI role runs on, and where that choice comes from. "
             "\"code default\" = set in reviewed code; \"App Settings\" = chosen on "
-            "⚙️ App Settings (coming in a later change); for the editable roles "
+            "⚙️ App Settings; for the editable roles "
             "(fast, deep, extract) an environment variable overrides both. "
             "Calls, errors and \"Last served\" count this app process since it "
             "started, so calls made under a role on another model (the "
@@ -37890,7 +37893,7 @@ elif page == "🩺 System Trust":
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "⚙️ App Settings":
     st.title("⚙️ App Settings")
-    st.caption("Owner-only · edits the engine's INPUT SET, never a decision rule")
+    st.caption("Owner-only · edits the engine's INPUT SET, never a decision rule · picks AI models")
 
     if db.is_readonly():
         # Defense in depth: the sidebar nav entry is already hidden for a
@@ -37905,8 +37908,11 @@ elif page == "⚙️ App Settings":
         "weight, or `COMPOSITE_BUY`. Those change the **decision rule** and stay "
         "in code, where git is their audit trail — a UI edit would leave no "
         "diff, no review, and no way to reconstruct what the engine believed "
-        "when it made a past call. This page only changes the **input set** "
-        "the rules are applied to."
+        "when it made a past call. Apart from the 🤖 AI models section, this "
+        "page only changes the **input set** the rules are applied to; that "
+        "section picks which model runs three AI roles and changes no rule, "
+        "and the roles whose output feeds the composite, Act Today or the "
+        "R-Multiple declared stop stay pinned in reviewed code."
     )
 
     _AS_TABLES = [
@@ -38138,9 +38144,12 @@ elif page == "⚙️ App Settings":
         "mutable scan universe, so every accepted edit is versioned here."
     )
     with st.expander("View change history", expanded=False):
+        # llm_models joins the history picker only: _AS_TABLES also drives the
+        # Edit buttons and the shelf rows, and this table has neither.
+        _AS_HIST_LABELS = {**_AS_LABELS, "llm_models": "AI model settings"}
         _as_hist_table = st.selectbox(
-            "Table", [k for k, _ in _AS_TABLES],
-            format_func=lambda k: _AS_LABELS.get(k, k),
+            "Table", [k for k, _ in _AS_TABLES] + ["llm_models"],
+            format_func=lambda k: _AS_HIST_LABELS.get(k, k),
             key="_as_hist_select",
         )
         _as_hist_rows = db.load_reference_table_history(_as_hist_table)
@@ -38160,9 +38169,16 @@ elif page == "⚙️ App Settings":
                 _as_hr_payload = _as_hr.get("payload")
                 if _as_hr_payload is None:
                     _as_hr_payload = {}
-                _as_delta = reference_data.history_delta(_as_hr_payload, _as_older_payload)
                 _as_when = str(_as_hr.get("as_of") or _as_hr.get("created_at") or "")[:10]
                 _as_who  = _as_hr.get("updated_by") or "?"
+                if _as_hist_table == "llm_models":
+                    # Not ticker buckets: history_delta doesn't fit this payload.
+                    st.markdown(f"**{_as_when}** (by `{_as_who}`)")
+                    for _as_line in _ai_models_settings.history_lines(
+                            _as_hr_payload, _as_older_payload):
+                        st.markdown(f"- {_as_line}")
+                    continue
+                _as_delta = reference_data.history_delta(_as_hr_payload, _as_older_payload)
                 if _as_delta["initial"]:
                     st.markdown(f"**{_as_when}** — Initial capture (by `{_as_who}`)")
                 else:
@@ -38175,6 +38191,248 @@ elif page == "⚙️ App Settings":
                         + (f"· _{', '.join(_as_delta['buckets_touched'])}_ " if _as_delta["buckets_touched"] else "")
                         + f"(by `{_as_who}`)"
                     )
+
+    # ── 🤖 AI models (LLM routing P2-c) ───────────────────────────────────────
+    # The decisions live in stock_analyzer/ai_models_settings.py (what Test role
+    # sends, whether Save is allowed) and llm_settings.py (what may be stored);
+    # this only renders and wires the buttons.
+    st.divider()
+    st.markdown("##### 🤖 AI models")
+    try:
+        st.caption(
+            "Which model each AI role runs on. The three editable roles (fast, "
+            "deep, extract) can be switched here: Check model, then Test role "
+            "on that exact model and effort, and only a passing test unlocks "
+            "Save. Each test is one real API call and is counted in the 🩺 "
+            "System Trust AI models counters. The roles whose output feeds the "
+            "composite, Act Today or the R-Multiple declared stop (score, "
+            "filter, extract_trigger) stay pinned in reviewed code, and "
+            "extract_strong stays code-only until the broker import preview is "
+            f"checked. An environment variable `{_llm.ENV_PREFIX}<ROLE>` set to a "
+            "claude- model id overrides a saved choice and hides that role's "
+            "controls. The extract role "
+            "reaches the Valuation pillar's price-target fallback (analyst "
+            "research) and the earnings playbook only through previews you "
+            "review and save."
+        )
+        _aims_post = {"success": st.success, "info": st.info,
+                      "warning": st.warning, "error": st.error}
+        _aims_flash = st.session_state.pop("_aims_flash", None)
+        if _aims_flash:
+            _aims_post.get(_aims_flash[0], st.info)(_aims_flash[1])
+
+        _aims_snap = _llm_settings.get_snapshot()
+        _aims_level, _aims_text, _aims_others = _ai_models_view.settings_status(_aims_snap)
+        if _aims_level == "ok":
+            st.success(_aims_text)
+        elif _aims_level == "warn":
+            st.warning(_aims_text)
+        else:
+            st.error(_aims_text)
+        for _aims_w in _aims_others:
+            st.warning(_aims_w)
+
+        _aims_key = _anthropic_key()
+        if "_llm_key_models_cache" not in st.session_state:
+            st.session_state["_llm_key_models_cache"] = (
+                _llm.list_model_ids(_aims_key) if _aims_key else (None, "no API key")
+            )
+        _aims_ids, _aims_ids_err = st.session_state["_llm_key_models_cache"]
+        if st.button("Re-check key access", key="_aims_key_recheck"):
+            st.session_state.pop("_llm_key_models_cache", None)
+            st.rerun()
+        if _aims_ids_err:
+            st.caption(f"Key check: {_aims_ids_err}")
+
+        _aims_rows = _ai_models_view.build_rows(
+            _aims_snap, available_ids=_aims_ids, usage=None)
+        _AIMS_OTHER = "Other…"
+
+        def _aims_write(role, build, action="save"):
+            """Save or reset one role on top of the stored row."""
+            _status, _row = db.load_reference_table_status(_llm_settings.TABLE_NAME)
+            _base, _notes = _llm_settings.base_payload_for_save(_status, _row)
+            if _base is None:
+                for _n in _notes:
+                    st.error(_n)
+                return
+            _res = _llm_settings.save(build(_base), updated_by="app_settings_ui")
+            _lvl, _txt = _ai_models_settings.save_outcome_message(
+                _res, _aims_snap.state, action=action)
+            _txt = _txt + "".join("\n\nNote: " + _n for _n in _notes)
+            if isinstance(_res, dict) and _res.get("status") == "saved":
+                for _k in (f"_aims_check_{role}", f"_aims_test_{role}"):
+                    st.session_state.pop(_k, None)
+                # shown on the next run: a message written just before a rerun is lost
+                st.session_state["_aims_flash"] = (_lvl, f"{role}: {_txt}")
+                st.rerun()
+            _aims_post.get(_lvl, st.info)(_txt)
+
+        for _aims_r in _aims_rows:
+            if not _aims_r["editable"]:
+                continue
+            _role = _aims_r["role"]
+            st.markdown(
+                f"**{_role}** · {_aims_r['description']}  \n"
+                f"Model: `{_aims_r['model']}` · Source: {_aims_r['source_label']}"
+            )
+            _blk = _ai_models_settings.edit_block_reason(_aims_r)
+            for _n in _aims_r["notes"]:
+                if _blk is None or _n not in _blk:
+                    st.info(_n)
+            for _w in _aims_r["warnings"]:
+                st.warning(_w)
+            if _blk:
+                st.info(_blk)
+                continue
+
+            _case = _ai_models_settings.TEST_CASES[_role]
+            with st.expander(f"Change {_role}"):
+                _choices = _ai_models_settings.model_choices(_aims_ids, _aims_r["model"])
+                _mk = f"_aims_model_{_role}"
+                if st.session_state.get(_mk) not in _choices + [_AIMS_OTHER]:
+                    st.session_state.pop(_mk, None)
+                _sel = st.selectbox(
+                    "Model", _choices + [_AIMS_OTHER],
+                    index=_choices.index(_aims_r["model"]) if _aims_r["model"] in _choices else 0,
+                    key=_mk,
+                )
+                if _sel == _AIMS_OTHER:
+                    _model = st.text_input(
+                        "Model id", key=f"_aims_other_{_role}",
+                        placeholder="claude-…",
+                    ).strip()
+                else:
+                    _model = _sel
+
+                _ck = f"_aims_check_{_role}"
+                if st.button("Check model", key=f"_aims_check_btn_{_role}",
+                             disabled=not _model):
+                    _c_caps, _c_err, _c_kind = _llm.retrieve_model(_aims_key, _model)
+                    st.session_state[_ck] = (_model, _c_caps, _c_err, _c_kind,
+                                             _now_et().isoformat())
+                    st.rerun()
+                _chk = st.session_state.get(_ck)
+                _entry = None
+                if _chk and _chk[0] == _model:
+                    _, _caps, _c_err, _c_kind, _c_at = _chk
+                    if _c_err:
+                        st.error(f"Models API check of {_model} failed ({_c_kind}): {_c_err}")
+                    else:
+                        _efs = ", ".join(_caps["efforts"]) if _caps["efforts"] else "none"
+                        _mt = _caps["max_tokens"]
+                        st.caption(
+                            f"Checked at {_ai_models_settings.format_checked_at(_c_at)}: "
+                            f"efforts {_efs} · max output tokens "
+                            f"{'unknown' if _mt is None else _mt}"
+                        )
+                    _opts = _ai_models_settings.effort_options(_model, _caps)
+                    _ek = f"_aims_effort_{_role}"
+                    if _ek in st.session_state and st.session_state[_ek] not in _opts:
+                        st.session_state.pop(_ek, None)
+                    _effort = st.selectbox(
+                        "Effort", _opts,
+                        format_func=lambda e, _m=_model, _c=_caps: _ai_models_settings.effort_label(_m, e, _c),
+                        key=_ek,
+                    )
+                    _entry, _errs = _llm_settings.decide_save(
+                        _role, _model, _effort, _caps, _c_err, _c_at, error_kind=_c_kind)
+                    for _e in _errs:
+                        st.error(_e)
+                else:
+                    st.caption("Check the model to see its effort options.")
+
+                _fast_note = (
+                    f" That site passes no timeout of its own, so the test uses "
+                    f"{_case['timeout']}s, the budget the debate rounds use."
+                    if _role == _llm.ROLE_FAST else ""
+                )
+                st.caption(
+                    f"Test role sends one real request shaped like {_case['site']} "
+                    f"with sample inputs.{_fast_note}"
+                )
+                _tk = f"_aims_test_{_role}"
+                if st.button("Test role", key=f"_aims_test_btn_{_role}",
+                             disabled=_entry is None):
+                    with st.spinner("Testing…"):
+                        st.session_state[_tk] = _ai_models_settings.run_test(
+                            _role, _entry, _aims_key)
+                _test = st.session_state.get(_tk)
+                if (_test and _entry is not None
+                        and _test.get("key") == _ai_models_settings.candidate_key(_entry)):
+                    if _test["ok"]:
+                        st.success("The test call succeeded.")
+                    else:
+                        st.error(f"The test call failed: {_test['error']}")
+                    _served, _req = _test["served_model"], _test["requested_model"]
+                    _served_txt = _served or "—"
+                    if _served and _req and _served != _req:
+                        _served_txt += (f" (requested {_req}; fell back to another model)"
+                                        if _test["fell_back"] else f" (requested {_req})")
+                    _tin = "—" if _test["input_tokens"] is None else f"{_test['input_tokens']:,}"
+                    _tout = "—" if _test["output_tokens"] is None else f"{_test['output_tokens']:,}"
+                    _lat = "—" if _test["latency_s"] is None else f"{_test['latency_s']:.1f}s"
+                    _cost_txt = ("price unknown" if _test["cost_usd"] is None
+                                 else f"≈\\${_test['cost_usd']:.4f}")
+                    _cut = " (cut off)" if _test["truncated"] else ""
+                    _lat_basis = ("site's" if _case["site_timeout"] else "test's")
+                    _lat_noun = "timeout" if _case["site_timeout"] else "budget"
+                    if _test["ok"] and _test["fell_back"]:
+                        st.warning(
+                            f"The candidate declined the sample and {_test['served_model']} "
+                            f"answered instead, so this test did not exercise {_model}; "
+                            "Save stays off."
+                        )
+                    st.markdown(
+                        f"Stop reason: {_test['stop_reason'] or '—'}{_cut} · "
+                        f"Served by: {_served_txt} · "
+                        f"Tokens in / out: {_tin} / {_tout} · "
+                        f"Latency: {_lat} of the {_lat_basis} {_test['timeout_s']}s {_lat_noun} · "
+                        f"Cost: {_cost_txt}"
+                    )
+                    if _test["ok"]:
+                        if _test["format_ok"] is True:
+                            st.caption(f"Format check passed: the reply has {_case['format_label']}.")
+                        elif _test["format_ok"] is False:
+                            st.warning(
+                                f"Format check failed: the reply lacks {_case['format_label']}, "
+                                f"which {_case['site']} needs."
+                            )
+                        st.code(_test["preview"] or "(empty)", language=None)
+
+                _can, _why = (_ai_models_settings.can_save(_entry, _test)
+                              if _entry is not None else (False, "check the model first"))
+                if st.button("💾 Save", key=f"_aims_save_btn_{_role}",
+                             type="primary", disabled=not _can):
+                    _aims_write(_role, lambda b, _r=_role, _e=_entry:
+                                _llm_settings.apply_role(b, _r, _e))
+                if not _can:
+                    st.caption(f"Save is off: {_why}.")
+
+                _can_reset = (_aims_r["source"] == _llm.SOURCE_SETTING
+                              or _aims_snap.state == _llm_settings.STATE_INVALID)
+                if st.button("Reset to code default", key=f"_aims_reset_btn_{_role}",
+                             disabled=not _can_reset):
+                    _aims_write(_role, lambda b, _r=_role: _llm_settings.reset_role(b, _r),
+                                action="reset")
+                if not _can_reset:
+                    st.caption("Reset is off: this role isn't using an App Settings choice.")
+
+        _aims_locked = [r for r in _aims_rows if not r["editable"]]
+        st.markdown("**Not editable here**")
+        st.dataframe(
+            [{"Role": r["role"], "What it does": r["description"],
+              "Model": r["model"], "Why it is locked": r["lock_reason"] or "—"}
+             for r in _aims_locked],
+            hide_index=True, use_container_width=True,
+        )
+        for _aims_r in _aims_locked:
+            for _n in _aims_r["notes"]:
+                st.info(f"{_aims_r['role']}: {_n}")
+            for _w in _aims_r["warnings"]:
+                st.warning(_w)
+    except Exception as _aims_e:  # noqa: BLE001 - this section must never break the page
+        st.warning("AI models section unavailable: " + str(_aims_e)[:200])
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -465,12 +465,18 @@ def run_debate(corpus: dict, debate_type: str, api_key: str,
     _fast_entry = llm.resolved_setting(llm.ROLE_FAST) if _src == llm.SOURCE_SETTING else None
     # When the fast role comes from App Settings, pass the entry (not the bare
     # model) so its effort and capabilities apply; the judge gets the same entry
-    # under its own role. Edge: an env var DRISHTA_LLM_MODEL_EXTRACT would win
-    # for the judge here (env always wins for its role).
+    # under its own role. Guard: an env var DRISHTA_LLM_MODEL_EXTRACT always wins
+    # for the extract role, so when it is set the judge keeps the explicit fast
+    # model instead (no setting), and every round and the judge stay on one model.
+    _judge_model = model
     if _fast_entry is not None and _fast_entry.model == model:
         _round_kw = {"setting": {llm.ROLE_FAST: _fast_entry}}
-        _judge_kw = {"setting": {llm.ROLE_EXTRACT: _fast_entry}}
         model = None
+        if llm.resolved_with_source(llm.ROLE_EXTRACT)[1] == llm.SOURCE_ENV:
+            _judge_kw = {}
+        else:
+            _judge_kw = {"setting": {llm.ROLE_EXTRACT: _fast_entry}}
+            _judge_model = None
     else:
         _round_kw = _judge_kw = {}
 
@@ -537,7 +543,7 @@ def run_debate(corpus: dict, debate_type: str, api_key: str,
         for t in transcript
     )
     judge_raw = _call_haiku(
-        api_key, model, _JUDGE_SYSTEM,
+        api_key, _judge_model, _JUDGE_SYSTEM,
         f"Debate transcript:\n{full_transcript_text}\n\nIssue your verdict.",
         max_tokens=300, role=llm.ROLE_EXTRACT, **_judge_kw,
     )

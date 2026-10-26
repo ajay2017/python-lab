@@ -581,3 +581,44 @@ def test_load_reference_table_status(monkeypatch):
     assert st == "ok" and row["name"] == "llm_models"
     _wire_fake_db(monkeypatch, raise_on_execute=True)
     assert db.load_reference_table_status("llm_models") == ("unreadable", None)
+
+
+# ---- P2-c review fixes (2026-10-26) ----
+def test_decide_save_refuses_when_capabilities_were_never_checked():
+    entry, errs = ls.decide_save("fast", "claude-haiku-5-5", None, None, None, None)
+    assert entry is None
+    assert errs == ["claude-haiku-5-5's capabilities weren't checked; check the "
+                    "model first"]
+
+
+def test_decide_save_unchecked_still_only_through_the_unreachable_branch():
+    entry, errs = ls.decide_save("fast", "claude-haiku-5-5", None, None,
+                                 "APIConnectionError: down", None,
+                                 error_kind=llm.ERR_UNREACHABLE)
+    assert errs == [] and entry["capabilities"] is None
+
+
+@pytest.mark.parametrize("version", [True, 1.0, "1", None, 2])
+def test_payload_version_must_be_exactly_the_int(version):
+    errs = ls.validate_payload({"version": version, "roles": {}})
+    assert any("version must be 1" in e for e in errs)
+
+
+def test_snapshot_with_a_bool_version_is_invalid():
+    payload = {"version": True, "roles": {}}
+    row = {"payload": payload, "as_of": "2026-10-25", "updated_by": "t",
+           "payload_hash": reference_data.payload_hash_for(
+               ls.TABLE_NAME, ls.canonicalize(payload))}
+    assert ls.build_snapshot("ok", row).state == ls.STATE_INVALID
+
+
+def test_snapshot_is_invalid_when_the_hash_computation_raises(monkeypatch):
+    # a null stored hash must not be "matched" by a failed recompute
+    def boom(*a, **k):
+        raise ValueError("unhashable")
+    monkeypatch.setattr(reference_data, "payload_hash_for", boom)
+    row = {"payload": _payload(), "payload_hash": None,
+           "as_of": "2026-10-25", "updated_by": "t"}
+    snap = ls.build_snapshot("ok", row)
+    assert snap.state == ls.STATE_INVALID and not snap.setting
+    assert snap.warnings

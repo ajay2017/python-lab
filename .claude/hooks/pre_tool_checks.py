@@ -981,6 +981,9 @@ _GATE_FILES = {
     # hash of a gated DB write (db.save_reference_table); validate_payload guards the
     # ticker rosters the scan and the Diversification Advisor read.
     "stock_analyzer/reference_data.py",
+    # 2026-10-26: decides whether an AI model setting may be saved (Test-before-Save)
+    # and what the App Settings Test role button sends.
+    "stock_analyzer/ai_models_settings.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,

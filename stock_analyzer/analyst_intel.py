@@ -76,6 +76,65 @@ Output STRICT JSON ONLY — no prose, no markdown fences, no commentary before o
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def parse_extract_text(text: str) -> list[dict]:
+    """Parse an extraction reply into a list of per-stock record dicts (possibly
+    empty). Raises (json.JSONDecodeError etc.) on an unparseable reply; the
+    caller decides what a failure means."""
+    # Robust JSON parse: strip markdown fences first, then slice to first { ... last }
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        # Strip opening fence (```json or ```)
+        cleaned = cleaned.split("\n", 1)[-1]
+        # Strip closing fence
+        if cleaned.endswith("```"):
+            cleaned = cleaned[: cleaned.rfind("```")]
+        cleaned = cleaned.strip()
+    # Slice to the outermost JSON container. Must also recognize a bare
+    # "[" opener (shape 3 below is a documented raw-array response) — an
+    # object-only check here would find the FIRST "{" inside the array's
+    # own elements and corrupt a well-formed multi-item array into
+    # invalid, comma-joined fragments before json.loads ever sees it.
+    if not cleaned.startswith(("{", "[")):
+        start = min((i for i in (cleaned.find("{"), cleaned.find("[")) if i != -1), default=-1)
+        if start != -1:
+            closer = "}" if cleaned[start] == "{" else "]"
+            end = cleaned.rfind(closer)
+            if end > start:
+                cleaned = cleaned[start : end + 1]
+    parsed = json.loads(cleaned)
+
+    # Normalize into a list of self-contained per-stock records.
+    # Handles three shapes the LLM might return:
+    #   1. {"article_date":..., "reports":[...]}  ← new canonical format
+    #   2. {"ticker":..., ...}                    ← bare single-record dict (old format)
+    #   3. [...]                                  ← raw array (defensive)
+    top_date: str | None = None
+    if isinstance(parsed, dict):
+        reports = parsed.get("reports")
+        top_date = parsed.get("article_date") or None
+        if isinstance(reports, list):
+            records: list[dict] = reports
+        elif "ticker" in parsed:
+            # Bare single-record dict — wrap it
+            records = [parsed]
+        else:
+            records = []
+    elif isinstance(parsed, list):
+        records = parsed
+    else:
+        records = []
+
+    # Keep only well-formed dict records — defends the app-side `.get()`
+    # calls against a stray non-dict element in a bare-list / reports response.
+    records = [r for r in records if isinstance(r, dict)]
+
+    # Stamp article_date into each record if the record itself lacks one
+    for rec in records:
+        if not rec.get("article_date") and top_date:
+            rec["article_date"] = top_date
+    return records
+
+
 def extract_report(
     raw_text: str,
     api_key: str,
@@ -113,61 +172,7 @@ def extract_report(
         if not r.ok:
             LAST_EXTRACT_ERROR = r.error
             return None
-        text = r.text
-        # Robust JSON parse: strip markdown fences first, then slice to first { ... last }
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            # Strip opening fence (```json or ```)
-            cleaned = cleaned.split("\n", 1)[-1]
-            # Strip closing fence
-            if cleaned.endswith("```"):
-                cleaned = cleaned[: cleaned.rfind("```")]
-            cleaned = cleaned.strip()
-        # Slice to the outermost JSON container. Must also recognize a bare
-        # "[" opener (shape 3 below is a documented raw-array response) — an
-        # object-only check here would find the FIRST "{" inside the array's
-        # own elements and corrupt a well-formed multi-item array into
-        # invalid, comma-joined fragments before json.loads ever sees it.
-        if not cleaned.startswith(("{", "[")):
-            start = min((i for i in (cleaned.find("{"), cleaned.find("[")) if i != -1), default=-1)
-            if start != -1:
-                closer = "}" if cleaned[start] == "{" else "]"
-                end = cleaned.rfind(closer)
-                if end > start:
-                    cleaned = cleaned[start : end + 1]
-        parsed = json.loads(cleaned)
-
-        # Normalize into a list of self-contained per-stock records.
-        # Handles three shapes the LLM might return:
-        #   1. {"article_date":..., "reports":[...]}  ← new canonical format
-        #   2. {"ticker":..., ...}                    ← bare single-record dict (old format)
-        #   3. [...]                                  ← raw array (defensive)
-        top_date: str | None = None
-        if isinstance(parsed, dict):
-            reports = parsed.get("reports")
-            top_date = parsed.get("article_date") or None
-            if isinstance(reports, list):
-                records: list[dict] = reports
-            elif "ticker" in parsed:
-                # Bare single-record dict — wrap it
-                records = [parsed]
-            else:
-                records = []
-        elif isinstance(parsed, list):
-            records = parsed
-        else:
-            records = []
-
-        # Keep only well-formed dict records — defends the app-side `.get()`
-        # calls against a stray non-dict element in a bare-list / reports response.
-        records = [r for r in records if isinstance(r, dict)]
-
-        # Stamp article_date into each record if the record itself lacks one
-        for rec in records:
-            if not rec.get("article_date") and top_date:
-                rec["article_date"] = top_date
-
-        return records
+        return parse_extract_text(r.text)
     except Exception as e:
         LAST_EXTRACT_ERROR = f"{type(e).__name__}: {e}"[:300]
         return None

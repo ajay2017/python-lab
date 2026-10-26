@@ -568,3 +568,22 @@ def test_run_debate_code_default_branch_keeps_the_explicit_model(monkeypatch):
     for c in calls:
         assert c["model"] == llm.CODE_DEFAULTS[llm.ROLE_FAST]
         assert c["setting"] is None
+
+
+def test_run_debate_setting_branch_judge_keeps_fast_model_when_env_sets_extract(monkeypatch):
+    # Env wins for the extract role, so handing the judge the fast entry as a
+    # setting would run it on the env model; it keeps the explicit fast model.
+    from stock_analyzer import llm_settings
+    _install_fake_anthropic()
+    monkeypatch.delenv("DRISHTA_LLM_MODEL_FAST", raising=False)
+    monkeypatch.setenv("DRISHTA_LLM_MODEL_EXTRACT", "claude-opus-4-8")
+    entry = llm.RoleSetting("claude-haiku-5-5", "low", None)
+    monkeypatch.setattr(llm_settings, "current_setting", lambda: {"fast": entry})
+    calls = _record_complete(monkeypatch)
+    result = da.run_debate({"ticker": "AAPL"}, "entry", api_key="fake-key")
+    assert result["partial"] is False and len(calls) == 5
+    for c in calls[:4]:
+        assert c["model"] is None and c["setting"] == {"fast": entry}
+    judge = calls[4]
+    assert judge["role"] == llm.ROLE_EXTRACT
+    assert judge["model"] == "claude-haiku-5-5" and judge["setting"] is None

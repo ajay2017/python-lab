@@ -1,6 +1,6 @@
 # LLM model routing: move to current models, and change models without code changes
 
-**Status (2026-10-25): Phase 2 IN BUILD. P2-a1, P2-a2, P2-b and P2-d SHIPPED (section 15). NEXT: P2-c with its prerequisites (section 15), then P2-e.** *(Earlier 2026-10-25: READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry.)* *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
+**Status (2026-10-26): Phase 2 IN BUILD. P2-a1, P2-a2, P2-b, P2-d, the P2-c prerequisites and P2-c SHIPPED (section 15). NEXT: P2-e (docs), then Phase 3 (the owner switches roles in App Settings, Test role first).** *(2026-10-25: P2-a1, P2-a2, P2-b and P2-d SHIPPED; NEXT was P2-c with its prerequisites.)* *(Earlier 2026-10-25: READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry.)* *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
 lead from an AST inventory of every Anthropic call (2026-10-22) and the Claude API migration guide bundled with Claude
 Code (cached 2026-10-06). **Owner agreed with every lead recommendation in section 7 (2026-10-22):** D-1 App Settings
 with the score role pinned in code; D-2 switch the score model, but last, after the Phase 4 dry run; D-3 Sonnet 5.5
@@ -816,3 +816,37 @@ The lead re-checked B1 (`app.py:8258`, `debate_agent.py:462`), B8 (`thesis_advis
 - **P2-c:** `max_retries=1` also applies to `retrieve_model`, so a single transient failure reaches `decide_save`'s
   "unreachable" branch sooner. Land it with the "refuse every 4xx" prerequisite.
 - **Cosmetic:** `settings_status` reads the private `llm_settings._WARN_UNREADABLE`; make it public.
+
+- **P2-c prerequisites** (2026-10-26, `246d927`), behaviour-neutral (no row exists):
+  - **B1 closed:** `llm.resolved_setting(role)`; the debate passes the fast entry as `setting=` (the judge gets it under
+    `extract`), and `premarket_stance.generate_stance` gained a `setting=` seam.
+  - **Save errors:** `llm.classify_api_error`; `retrieve_model` returns `(caps, error, error_kind)`. `decide_save`
+    allows an unchecked save only for `ERR_UNREACHABLE` (connection error, timeout, 5xx) on a model the code knows;
+    every 4xx, no key or unrecognised error refuses.
+  - **Validation:** on the canonical form; `capabilities` must be exactly `llm.CAPABILITY_KEYS` with strict types
+    (floats refused).
+  - `reference_data.py` joined `_GATE_FILES`. New `llm_settings.base_payload_for_save`. Single-flight snapshot reload
+    with a generation counter. `WARN_UNREADABLE` public. The LLM ratchet / role / golden tests use `rglob`.
+  - Built by `implementer` (Sonnet 5.5); Opus review SHIP, 0 blocking.
+
+- **P2-c** (2026-10-26): ⚙️ App Settings "🤖 AI models" (F-313).
+  - **`stock_analyzer/ai_models_settings.py` (new, a `_GATE_FILES` member):** `TEST_CASES` mirror each role's strictest
+    production site (fast: the pre-market stance; deep: `thesis_advisor.review_thesis`; extract:
+    `analyst_intel.extract_report`), with max_tokens and timeouts pinned to the site by test; `run_test` sends them
+    through `setting=` (B6); `can_save` requires a passing test of the same model, effort and capabilities, served with
+    source "setting" and the site's reply format; `effort_options` / `effort_label` (B3; labels match what
+    `build_request` sends); `edit_block_reason` (N8: env source hides the controls); `history_lines`;
+    `save_outcome_message` (handles `no_change` on an invalid row).
+  - **app.py:** the section (render only), the History expander's "AI model settings" option, the reworded page warning,
+    and the premarket stance no longer passes `model=` (so a setting's effort and clamp apply there).
+  - **Folded in from the prerequisites review:** the debate judge keeps the explicit fast model when
+    `DRISHTA_LLM_MODEL_EXTRACT` is set; `decide_save` refuses a "checked" save with no capabilities; the version must be
+    an int; an unhashable payload is INVALID straight away.
+  - `analyst_intel.parse_extract_text` extracted verbatim from `extract_report` (used by the extract format check).
+  - Built by `implementer` (Sonnet 5.5).
+
+**Still open after P2-c:**
+- **Cron snapshot pin** (from the P2-b review): a lane longer than the 300 s TTL can re-resolve mid-run, so its start
+  line may not name every call's model. Pin the snapshot per cron process, or accept and note it.
+- **First live check before Phase 3:** Test role on `extract` with Sonnet 5.5 (whether `between_tools` plus `fallbacks`
+  is accepted).

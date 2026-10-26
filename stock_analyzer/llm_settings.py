@@ -177,8 +177,9 @@ def _top_level_errors(payload) -> list[str]:
     extra = sorted(str(k) for k in payload if k not in ("version", "roles"))
     if extra:
         errors.append(f"unexpected key(s): {extra}")
-    if payload.get("version") != PAYLOAD_VERSION:
-        errors.append(f"version must be {PAYLOAD_VERSION}, not {payload.get('version')!r}")
+    version = payload.get("version")
+    if not (type(version) is int and version == PAYLOAD_VERSION):
+        errors.append(f"version must be {PAYLOAD_VERSION}, not {version!r}")
     roles = payload.get("roles")
     if not isinstance(roles, dict):
         errors.append("roles must be an object")
@@ -227,7 +228,7 @@ def _empty() -> Mapping:
 def build_snapshot(status, row) -> Snapshot:
     if status == STATE_UNREADABLE:
         return Snapshot(STATE_UNREADABLE, _empty(), (WARN_UNREADABLE,))
-    if status == STATE_NO_ROW or status != "ok" or not isinstance(row, dict):
+    if status == STATE_NO_ROW or status != STATE_OK or not isinstance(row, dict):
         return Snapshot(STATE_NO_ROW if status == STATE_NO_ROW else STATE_UNREADABLE,
                         _empty(),
                         () if status == STATE_NO_ROW else (WARN_UNREADABLE,))
@@ -236,7 +237,7 @@ def build_snapshot(status, row) -> Snapshot:
     try:
         recomputed = reference_data.payload_hash_for(TABLE_NAME, canonicalize(payload))
     except Exception:  # noqa: BLE001 - an unhashable payload is a mismatch
-        recomputed = None
+        return Snapshot(STATE_INVALID, _empty(), (_WARN_HASH,), as_of, updated_by)
     if recomputed != row.get("payload_hash"):
         return Snapshot(STATE_INVALID, _empty(), (_WARN_HASH,), as_of, updated_by)
     payload = canonicalize(payload)
@@ -275,6 +276,8 @@ def decide_save(role, model, effort, capabilities, retrieve_error, checked_at, *
         if not isinstance(model, str) or llm.profile_for(model) == llm.PROFILE_GENERIC:
             return None, [f"couldn't check {model} with the Models API ({retrieve_error}); "
                           "only a model the code knows can be saved unchecked"]
+    if retrieve_error is None and capabilities is None:
+        return None, [f"{model}'s capabilities weren't checked; check the model first"]
     try:
         entry = canonicalize({"model": model, "effort": effort,
                               "capabilities": capabilities,
@@ -294,13 +297,13 @@ def base_payload_for_save(status, row) -> tuple[dict | None, list[str]]:
     dropped with a note rather than carried into the new row."""
     if status == STATE_NO_ROW:
         return {"version": PAYLOAD_VERSION, "roles": {}}, []
-    if status != "ok" or not isinstance(row, dict):
+    if status != STATE_OK or not isinstance(row, dict):
         return None, ["couldn't read the current AI model settings, so a save now "
                       "could overwrite another role's setting; try again"]
     if build_snapshot(status, row).state == STATE_INVALID:
         return ({"version": PAYLOAD_VERSION, "roles": {}},
                 ["the stored AI model settings row is invalid and is being ignored "
-                 "(code defaults are in use); saving replaces it with only this change"])
+                 "(code defaults are in use); a save or reset replaces it with a new row holding only this role's change"])
     payload = canonicalize(row.get("payload"))
     roles: dict = {}
     notes: list[str] = []

@@ -137,7 +137,7 @@ def settings_status(snapshot) -> tuple[str, str, list[str]]:
     if state == llm_settings.STATE_NO_ROW:
         return ("ok", "No App Settings row: every editable role is on its "
                       "code default unless an environment variable is set "
-                      "(see the table)", others)
+                      "(see each role below)", others)
     if state == llm_settings.STATE_INVALID:
         return ("error", "AI model settings row is invalid; code defaults in use "
                          "unless an environment variable is set", others)

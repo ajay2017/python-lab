@@ -144,7 +144,7 @@ def test_settings_status_no_row():
     level, text, _ = v.settings_status(_snap())
     assert level == "ok"
     assert text == ("No App Settings row: every editable role is on its code "
-                    "default unless an environment variable is set (see the table)")
+                    "default unless an environment variable is set (see each role below)")
 
 
 def test_settings_status_ok_with_missing_meta():
