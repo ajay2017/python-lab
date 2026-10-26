@@ -126,10 +126,13 @@ def test_llm_import_form():
 
 def test_resolve_model_only_called_inside_llm():
     """B1: resolve_model / resolve_model_with_source are called only inside
-    llm.py (and llm_settings.py); every other site uses ``llm.resolved`` so the
+    llm.py (and llm_settings.py, plus ai_models_view.py for display); every other site uses ``llm.resolved`` so the
     App Settings choice can't be bypassed by an early resolve."""
     names = {"resolve_model", "resolve_model_with_source"}
-    allowed = {"stock_analyzer/llm.py", "stock_analyzer/llm_settings.py"}
+    # ai_models_view only DISPLAYS a resolution (System Trust) against the
+    # snapshot and env it is handed; it never builds a request.
+    allowed = {"stock_analyzer/llm.py", "stock_analyzer/llm_settings.py",
+               "stock_analyzer/ai_models_view.py"}
     bad = []
     for path in _files():
         rel = _rel(path)

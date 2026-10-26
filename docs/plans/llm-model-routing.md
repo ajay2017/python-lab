@@ -1,6 +1,6 @@
 # LLM model routing: move to current models, and change models without code changes
 
-**Status (2026-10-25): Phase 2 IN BUILD. P2-a1, P2-a2 and P2-b SHIPPED (section 15). NEXT: P2-d, then P2-c with its prerequisites (section 15).** *(Earlier 2026-10-25: READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry.)* *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
+**Status (2026-10-25): Phase 2 IN BUILD. P2-a1, P2-a2, P2-b and P2-d SHIPPED (section 15). NEXT: P2-c with its prerequisites (section 15), then P2-e.** *(Earlier 2026-10-25: READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry.)* *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
 lead from an AST inventory of every Anthropic call (2026-10-22) and the Claude API migration guide bundled with Claude
 Code (cached 2026-10-06). **Owner agreed with every lead recommendation in section 7 (2026-10-22):** D-1 App Settings
 with the score role pinned in code; D-2 switch the score model, but last, after the Phase 4 dry run; D-3 Sonnet 5.5
@@ -555,8 +555,11 @@ Batches API.
   checked" shows as unknown, never green), any runtime validation warning, and calls / errors / last error / tokens
   **seen by this process** (D2-3).
 - **Cron-only roles** (`deep` in the weekly lanes, `score` in every lane) show "unknown from here". The cron reporting
-  per-role errors in its heartbeat `detail` (200 chars) is optional (see 13.4).
-- **Counters live in `st.session_state`,** never in `llm.py`.
+  per-role errors in its heartbeat `detail` (200 chars) is optional (see 13.4). *(Built 2026-10-25 as a caption: cron
+  lanes aren't counted here, and each cron run logs the editable roles' models in its "llm: ..." line.)*
+- **Counters live in `st.session_state`,** never in `llm.py`. *(Superseded at build, 2026-10-25: they live in a
+  process-level `stock_analyzer/llm_usage.py`, because D2-3 is "seen by this process" and a session_state counter
+  sees one browser session and resets on refresh. Still never in `llm.py`; the P2-d review agreed.)*
 
 ### 13.3 Chunks
 
@@ -790,3 +793,26 @@ The lead re-checked B1 (`app.py:8258`, `debate_agent.py:462`), B8 (`thesis_advis
   - The `resolve_model` ratchet globs `stock_analyzer/*.py` non-recursively, so `stock_analyzer/providers/` isn't
     covered; use `rglob`.
   - `test_provider_not_consulted` lacks `extract_trigger`.
+
+- **P2-d** (2026-10-25): 🩺 System Trust "🤖 AI models" section, above the Investigator picker (B10: the picker code is
+  unchanged; its heading is now `######`).
+  - **`stock_analyzer/ai_models_view.py` (new, pure):**
+    - Per-role rows: what the role does, editable or the lock reason, model and source (resolved against the same
+      snapshot `complete` uses), and key status from one `models.list()` per session. Key status is an exact id or an
+      8-digit dated variant, and "not checked" is never green.
+    - N8 env notes, "env set but ignored", the per-role warnings and the usage counters.
+    - `settings_status` for the 4 snapshot states.
+  - **`stock_analyzer/llm_usage.py` (new):** a process-level per-role tally (deviation from 13.2 G, noted there).
+    `llm.complete` records every result exactly once.
+  - **Models API client:** `max_retries=1`.
+  - **Tests:** pin display = runtime (`build_rows` equals `llm.resolved` for every role).
+  - Built by `implementer` (Sonnet 5.5). Opus review FIX-FIRST (2 blocking): a ✅ for a model the key can't use
+    (`claude-opus-5` matched `claude-opus-5-5`), and role descriptions naming the wrong role for the debate judge, AI
+    Snapshot and an uncalled extraction. Fixed by `implementer`; confirming round SHIP, 0 blocking.
+
+**Carried forward from the P2-d review:**
+- **P2-e:** the User Guide (app.py ~43015) still quotes "🤖 Portfolio Investigator — AI provider" and doesn't mention 🤖
+  AI models.
+- **P2-c:** `max_retries=1` also applies to `retrieve_model`, so a single transient failure reaches `decide_save`'s
+  "unreachable" branch sooner. Land it with the "refuse every 4xx" prerequisite.
+- **Cosmetic:** `settings_status` reads the private `llm_settings._WARN_UNREADABLE`; make it public.

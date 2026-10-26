@@ -416,6 +416,9 @@ from stock_analyzer import broker_import as _bimp
 from stock_analyzer import broker_screenshot as _bscr
 from stock_analyzer import debate_agent
 from stock_analyzer import llm as _llm
+from stock_analyzer import llm_settings as _llm_settings
+from stock_analyzer import llm_usage as _llm_usage
+from stock_analyzer import ai_models_view as _ai_models_view
 
 
 def _anthropic_secret(section, key):
@@ -37728,6 +37731,84 @@ elif page == "🩺 System Trust":
         " This page reports only; it changes nothing."
     )
 
+    st.markdown("---")
+    # ── 🤖 AI models: which model each LLM role runs on (plan 13.2 G) ─────────
+    # The decisions live in stock_analyzer/ai_models_view.py; this only renders.
+    try:
+        st.markdown("##### 🤖 AI models")
+        st.caption(
+            "Which model each AI role runs on, and where that choice comes from. "
+            "\"code default\" = set in reviewed code; \"App Settings\" = chosen on "
+            "⚙️ App Settings (coming in a later change); for the editable roles "
+            "(fast, deep, extract) an environment variable overrides both. "
+            "Calls, errors and \"Last served\" count this app process since it "
+            "started, so calls made under a role on another model (the "
+            "🔎 Investigator, 🤖 AI Snapshot) show there too. Cron lanes run in "
+            "their own processes and aren't counted here; each cron run logs the "
+            "editable roles' models in its \"llm: ...\" line (the pinned roles "
+            "use the same model everywhere). The Key column checks the app's "
+            "main Anthropic key; the news filter and the Pre-Mortem trigger read "
+            "the key from the [anthropic] secrets section only."
+        )
+        _aim_snap = _llm_settings.get_snapshot()
+        _aim_level, _aim_text, _aim_others = _ai_models_view.settings_status(_aim_snap)
+        if _aim_level == "ok":
+            st.success(_aim_text)
+        elif _aim_level == "warn":
+            st.warning(_aim_text)
+        else:
+            st.error(_aim_text)
+        for _aim_w in _aim_others:
+            st.warning(_aim_w)
+
+        if "_llm_key_models_cache" not in st.session_state:
+            _aim_key = _anthropic_key()
+            st.session_state["_llm_key_models_cache"] = (
+                _llm.list_model_ids(_aim_key) if _aim_key else (None, "no API key")
+            )
+        _aim_ids, _aim_err = st.session_state["_llm_key_models_cache"]
+        if st.button("Re-check key access", key="_llm_key_recheck"):
+            st.session_state.pop("_llm_key_models_cache", None)
+            st.rerun()
+        if _aim_err:
+            st.caption(f"Key check: {_aim_err}")
+
+        _aim_rows = _ai_models_view.build_rows(
+            _aim_snap, available_ids=_aim_ids, usage=_llm_usage.snapshot())
+        _aim_key_label = {"available": "✅ available",
+                          "not_listed": "⚠️ not in this key's model list",
+                          "unknown": "⚪ not checked"}
+        _aim_table = []
+        for _aim_r in _aim_rows:
+            _aim_u = _aim_r["usage"] or {}
+            _aim_ti, _aim_to = _aim_u.get("input_tokens"), _aim_u.get("output_tokens")
+            _aim_table.append({
+                "Role": _aim_r["role"],
+                "What it does": _aim_r["description"],
+                "Model": _aim_r["model"],
+                "Source": _aim_r["source_label"],
+                "Editable": "yes" if _aim_r["editable"] else _aim_r["lock_reason"],
+                "Key": _aim_key_label.get(_aim_r["key"], "⚪ not checked"),
+                "Last served": _aim_u.get("last_model") or "—",
+                "Calls": _aim_u.get("calls", 0),
+                "Errors": _aim_u.get("errors", 0),
+                "Fallbacks": _aim_u.get("fell_back", 0),
+                "Tokens in/out": (f"{_aim_ti:,} / {_aim_to:,}"
+                                  if (_aim_ti or _aim_to) else "—"),
+                "Last error": (
+                    f"{_aim_u['last_error']} ({_aim_u['last_error_at']})"
+                    if _aim_u.get("last_error") and _aim_u.get("last_error_at")
+                    else (_aim_u.get("last_error") or "—")),
+            })
+        st.dataframe(_aim_table, hide_index=True, use_container_width=True)
+        for _aim_r in _aim_rows:
+            for _aim_n in _aim_r["notes"]:
+                st.info(f"{_aim_r['role']}: {_aim_n}")
+            for _aim_w in _aim_r["warnings"]:
+                st.warning(_aim_w)
+    except Exception as _aim_e:  # noqa: BLE001 - this section must never break the page
+        st.warning("AI models section unavailable: " + str(_aim_e)[:200])
+
     # ── Portfolio Investigator — AI provider/model config ────────────────────
     # docs/plans/portfolio-investigator.md, ratified 2026-09-18: this config
     # lives on System Trust (not App Settings, which is scoped to the engine's
@@ -37735,8 +37816,7 @@ elif page == "🩺 System Trust":
     # Snapshot's own provider choice or 💬 Ask's hardwired Anthropic key. Only
     # a (provider, model) pair with a recorded refusal-eval PASS
     # (investigator.EVAL_PASSED_MODELS) is ever offered here.
-    st.markdown("---")
-    st.markdown("##### 🤖 Portfolio Investigator — AI provider")
+    st.markdown("###### Portfolio Investigator — AI provider")
     st.caption(
         "Configures which AI model the 🔎 Investigator tab (🧠 AI Insights) uses. "
         "Separate from 🤖 AI Snapshot's own provider choice — not shared, not "

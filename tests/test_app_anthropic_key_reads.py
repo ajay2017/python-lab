@@ -92,4 +92,5 @@ def test_helpers_defined_before_first_use():
 
 
 def test_full_order_site_count():
-    assert len(_calls_to("_anthropic_key")) == 13
+    # 13 + System Trust's AI-models key check (P2-d, models.list only)
+    assert len(_calls_to("_anthropic_key")) == 14

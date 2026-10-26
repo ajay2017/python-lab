@@ -418,10 +418,34 @@ def _err_text(e: Exception, api_key) -> str:
     return msg[:_ERROR_MAX_CHARS]
 
 
+def _record(role, result) -> None:
+    """Tally a result in ``llm_usage`` (process-level). Swallows everything."""
+    try:
+        if role not in ROLES:
+            return
+        from stock_analyzer import llm_usage
+        llm_usage.record(role, result)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def complete(role, *, api_key, messages, max_tokens, system=None, model=None,
              temperature=None, expects_json=None, timeout=None, setting=None,
              client_kwargs=None, client_factory=None) -> LLMResult:
-    """Resolve model, build request, call the SDK, parse. Never raises."""
+    """Resolve model, build request, call the SDK, parse. Never raises. Every
+    result (an unknown role excepted) is tallied once in ``llm_usage``."""
+    result = _complete(role, api_key=api_key, messages=messages,
+                       max_tokens=max_tokens, system=system, model=model,
+                       temperature=temperature, expects_json=expects_json,
+                       timeout=timeout, setting=setting,
+                       client_kwargs=client_kwargs, client_factory=client_factory)
+    _record(role, result)
+    return result
+
+
+def _complete(role, *, api_key, messages, max_tokens, system, model,
+              temperature, expects_json, timeout, setting,
+              client_kwargs, client_factory) -> LLMResult:
     resolved = None
     source = None
     try:
@@ -497,7 +521,8 @@ def _models_client(api_key, client_factory, timeout):
     if factory is None:
         import anthropic
         factory = anthropic.Anthropic
-    return factory(api_key=api_key, timeout=timeout)
+    # max_retries=1: a hung API otherwise stalls the page ~30 s (SDK default is 2 retries)
+    return factory(api_key=api_key, timeout=timeout, max_retries=1)
 
 
 def retrieve_model(api_key, model_id, *, client_factory=None,

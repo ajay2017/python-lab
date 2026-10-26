@@ -790,7 +790,7 @@ def test_retrieve_model_ok_error_nokey():
     f = _ModelsFactory(info=_full_info())
     caps, err = llm.retrieve_model("k", "claude-x", client_factory=f)
     assert err is None and caps["max_tokens"] == 64000
-    assert f.calls == [{"api_key": "k", "timeout": 10}]
+    assert f.calls == [{"api_key": "k", "timeout": 10, "max_retries": 1}]
     f = _ModelsFactory(exc=RuntimeError("bad key sk-secret-123 here"))
     caps, err = llm.retrieve_model("sk-secret-123", "claude-x", client_factory=f)
     assert caps is None and "sk-secret-123" not in err and "***REDACTED***" in err
@@ -921,3 +921,59 @@ def test_no_fallback_ignores_iteration_model():
     resp.model = "claude-top"
     resp.usage.iterations = [NS(type="message", model="claude-other")]
     assert llm.parse_response("deep", resp, "m").model == "claude-top"
+
+
+# ---- P2-d: complete() tallies every result once in llm_usage ----
+def _usage_calls(role):
+    from stock_analyzer import llm_usage
+    return llm_usage.snapshot().get(role, {}).get("calls", 0)
+
+
+def test_complete_records_once_on_success():
+    from stock_analyzer import llm_usage
+    r = llm.complete("fast", api_key="sk-test-123456", messages=MSG, max_tokens=5,
+                     client_factory=_Factory(_resp([_t("x")])))
+    assert r.ok
+    snap = llm_usage.snapshot()["fast"]
+    assert snap["calls"] == 1 and snap["errors"] == 0
+    assert snap["input_tokens"] == 11 and snap["output_tokens"] == 22
+
+
+def test_complete_records_once_on_sdk_exception():
+    from stock_analyzer import llm_usage
+
+    def factory(**kw):
+        raise RuntimeError("boom")
+
+    r = llm.complete("deep", api_key="sk-test-123456", messages=MSG, max_tokens=5,
+                     client_factory=factory)
+    assert not r.ok
+    snap = llm_usage.snapshot()["deep"]
+    assert snap["calls"] == 1 and snap["errors"] == 1
+    assert snap["last_error"].startswith("RuntimeError")
+
+
+def test_complete_records_once_on_no_key():
+    from stock_analyzer import llm_usage
+    r = llm.complete("extract", api_key="", messages=MSG, max_tokens=5)
+    assert r.error == "no API key"
+    snap = llm_usage.snapshot()["extract"]
+    assert snap["calls"] == 1 and snap["errors"] == 1
+
+
+def test_complete_does_not_record_an_unknown_role():
+    from stock_analyzer import llm_usage
+    r = llm.complete("nope", api_key="sk-test-123456", messages=MSG, max_tokens=5)
+    assert not r.ok
+    assert llm_usage.snapshot() == {}
+
+
+def test_complete_survives_a_raising_recorder(monkeypatch):
+    from stock_analyzer import llm_usage
+
+    def boom(role, result):
+        raise RuntimeError("tally broke")
+    monkeypatch.setattr(llm_usage, "record", boom)
+    r = llm.complete("fast", api_key="sk-test-123456", messages=MSG, max_tokens=5,
+                     client_factory=_Factory(_resp([_t("x")])))
+    assert r.ok and r.text == "x"
