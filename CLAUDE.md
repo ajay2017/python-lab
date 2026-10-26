@@ -257,7 +257,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 
 ### Live checks pending (Railway is back as of 2026-10-22; app.py has no tests, so a screenshot is the only check)
 
-- **🩺 System Trust → 🤖 AI models (LLM Phase 2 P2-d, pushed 2026-10-25):** a green "No App Settings row: every editable role is on its code default unless an environment variable is set (see the table)"; a 7-row table where every Source reads "code default", the models are Haiku 4.5 for fast / filter / score / extract_trigger, Sonnet 4.6 for deep / extract and Opus 4.8 for extract_strong, and Key reads ✅ available (⚪ = the key check failed, its caption says why; ⚠️ = that id isn't in the key's model list, a finding to report, not a render bug); no `st.info` notes; the Investigator picker still works under "Portfolio Investigator — AI provider". After using a fast-role feature (Ask, a debate), Calls / Last served move on that row.
+- **🩺 System Trust → 🤖 AI models (P2-d, `b3eec89`) VERIFIED live 2026-10-25:** green no-row line, 7 rows all "code default" on the expected models, Key ✅ on all 7, no env notes, counters moving (score 29 calls, filter 1), Investigator picker intact. Cosmetic: the long "What it does" / "Editable" cells truncate at column width.
 - **Provider throttle + Data Health (`8f98f7b`, pushed 2026-10-25):**
   - **Finnhub:** after visiting 🧾 Summary / 📜 Rec History, Finnhub's rate-limited count barely moves.
   - **Bundle cache:** the tile shows "N saved", with no "served last saved snapshot" note on a normal visit.
