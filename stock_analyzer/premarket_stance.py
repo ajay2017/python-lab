@@ -183,6 +183,7 @@ def generate_stance(
     api_key: str,
     model: str | None = None,
     max_tokens: int = 500,
+    setting=None,
 ) -> dict | None:
     """
     Call Anthropic with the assembled inputs. Returns a parsed stance
@@ -204,6 +205,7 @@ def generate_stance(
             llm.ROLE_FAST,
             api_key=api_key,
             model=model,
+            setting=setting,
             max_tokens=max_tokens,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],

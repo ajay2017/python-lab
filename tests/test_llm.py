@@ -788,14 +788,19 @@ class _ModelsFactory:
 
 def test_retrieve_model_ok_error_nokey():
     f = _ModelsFactory(info=_full_info())
-    caps, err = llm.retrieve_model("k", "claude-x", client_factory=f)
-    assert err is None and caps["max_tokens"] == 64000
+    caps, err, kind = llm.retrieve_model("k", "claude-x", client_factory=f)
+    assert err is None and kind is None and caps["max_tokens"] == 64000
     assert f.calls == [{"api_key": "k", "timeout": 10, "max_retries": 1}]
     f = _ModelsFactory(exc=RuntimeError("bad key sk-secret-123 here"))
-    caps, err = llm.retrieve_model("sk-secret-123", "claude-x", client_factory=f)
+    caps, err, kind = llm.retrieve_model("sk-secret-123", "claude-x", client_factory=f)
     assert caps is None and "sk-secret-123" not in err and "***REDACTED***" in err
+    assert kind == llm.ERR_REJECTED       # an unrecognised error fails closed
+    down = type("E", (Exception,), {"status_code": 503})("down")
+    f = _ModelsFactory(exc=down)
+    assert llm.retrieve_model("k", "claude-x", client_factory=f)[2] == llm.ERR_UNREACHABLE
     f = _ModelsFactory()
-    assert llm.retrieve_model("", "claude-x", client_factory=f) == (None, "no API key")
+    assert llm.retrieve_model("", "claude-x", client_factory=f) == (
+        None, "no API key", llm.ERR_REJECTED)
     assert f.calls == []
 
 
@@ -844,7 +849,8 @@ def test_complete_uses_provider_setting(monkeypatch):
 
 
 @pytest.mark.parametrize("role,model", [("score", None), ("extract_strong", None),
-                                        ("filter", None), ("fast", "claude-x")])
+                                        ("filter", None), ("extract_trigger", None),
+                                        ("fast", "claude-x")])
 def test_provider_not_consulted(monkeypatch, role, model):
     calls = _patch_provider(monkeypatch, {"fast": RS("claude-haiku-5-5")})
     f = _Factory(_resp([_t("ok")]))
@@ -853,6 +859,18 @@ def test_provider_not_consulted(monkeypatch, role, model):
     assert calls == []
     assert llm.resolved(role, model) is not None
     assert calls == []
+
+
+def test_resolved_setting_returns_the_entry_only_when_the_source_is_setting(monkeypatch):
+    entry = RS("claude-haiku-5-5", "medium")
+    _patch_provider(monkeypatch, {"fast": entry, "score": RS("claude-haiku-5-5")})
+    monkeypatch.delenv("DRISHTA_LLM_MODEL_FAST", raising=False)
+    assert llm.resolved_setting("fast") is entry
+    assert llm.resolved_setting("deep") is None           # no entry -> code default
+    assert llm.resolved_setting("score") is None          # pinned role
+    monkeypatch.setenv("DRISHTA_LLM_MODEL_FAST", "claude-sonnet-5-5")
+    assert llm.resolved_setting("fast") is None           # env wins
+    assert llm.resolved_setting("nope") is None           # never raises
 
 
 def test_resolved_follows_setting_but_not_for_pinned(monkeypatch):

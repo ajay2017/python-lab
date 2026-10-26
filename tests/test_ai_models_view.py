@@ -155,7 +155,7 @@ def test_settings_status_ok_with_missing_meta():
 def test_settings_status_unreadable():
     level, text, others = v.settings_status(
         _snap(llm_settings.STATE_UNREADABLE,
-              warnings=(llm_settings._WARN_UNREADABLE,)))
+              warnings=(llm_settings.WARN_UNREADABLE,)))
     assert (level, text) == ("warn", "AI model settings couldn't be read; "
                                      "code defaults in use unless an "
                                      "environment variable is set")

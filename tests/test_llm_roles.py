@@ -54,7 +54,7 @@ def _collect(with_flag: bool = False) -> dict:
     """(file stem, function) -> role arg; with ``with_flag`` -> the call's
     ``expects_json`` keyword rendered with ast.unparse (None when absent)."""
     found = {}
-    files = sorted((ROOT / "stock_analyzer").glob("*.py")) + [ROOT / "app.py", ROOT / "cron_runner.py"]
+    files = sorted((ROOT / "stock_analyzer").rglob("*.py")) + [ROOT / "app.py", ROOT / "cron_runner.py"]
     for path in files:
         tree = parse_file_cached(path)
 
@@ -131,7 +131,7 @@ def test_expects_json_opt_in_sites():
 def _collect_star_kwargs() -> list:
     """Every collected llm.complete call that has a ``**`` keyword."""
     bad = []
-    files = sorted((ROOT / "stock_analyzer").glob("*.py")) + [ROOT / "app.py", ROOT / "cron_runner.py"]
+    files = sorted((ROOT / "stock_analyzer").rglob("*.py")) + [ROOT / "app.py", ROOT / "cron_runner.py"]
     for path in files:
         tree = parse_file_cached(path)
         for n in ast.walk(tree):

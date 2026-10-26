@@ -518,3 +518,53 @@ def test_call_haiku_default_role_is_fast():
     # in the test above has its own default, so it can't catch a change here.
     import inspect
     assert inspect.signature(da._call_haiku).parameters["role"].default == llm.ROLE_FAST
+
+
+# ─── B1: the fast setting's effort / capabilities reach every call ────────────
+
+class _Reply:
+    ok = True
+
+    def __init__(self, text):
+        self.text = text
+
+
+def _record_complete(monkeypatch):
+    calls = []
+
+    def _fake(role, **kw):
+        calls.append({"role": role, **kw})
+        return _Reply(_JUDGE_JSON if len(calls) == 5 else f"reply{len(calls)}")
+
+    monkeypatch.setattr(llm, "complete", _fake)
+    return calls
+
+
+def test_run_debate_setting_branch_passes_the_entry_not_a_bare_model(monkeypatch):
+    from stock_analyzer import llm_settings
+    _install_fake_anthropic()
+    monkeypatch.delenv("DRISHTA_LLM_MODEL_FAST", raising=False)
+    entry = llm.RoleSetting("claude-haiku-5-5", "low", None)
+    monkeypatch.setattr(llm_settings, "current_setting", lambda: {"fast": entry})
+    calls = _record_complete(monkeypatch)
+    result = da.run_debate({"ticker": "AAPL"}, "entry", api_key="fake-key")
+    assert result["partial"] is False and len(calls) == 5
+    for c in calls[:4]:
+        assert c["role"] == llm.ROLE_FAST
+        assert c["model"] is None and c["setting"] == {"fast": entry}
+    judge = calls[4]
+    assert judge["role"] == llm.ROLE_EXTRACT
+    assert judge["model"] is None and judge["setting"] == {"extract": entry}
+
+
+def test_run_debate_code_default_branch_keeps_the_explicit_model(monkeypatch):
+    from stock_analyzer import llm_settings
+    _install_fake_anthropic()
+    monkeypatch.delenv("DRISHTA_LLM_MODEL_FAST", raising=False)
+    monkeypatch.setattr(llm_settings, "current_setting", lambda: None)
+    calls = _record_complete(monkeypatch)
+    da.run_debate({"ticker": "AAPL"}, "entry", api_key="fake-key")
+    assert len(calls) == 5
+    for c in calls:
+        assert c["model"] == llm.CODE_DEFAULTS[llm.ROLE_FAST]
+        assert c["setting"] is None

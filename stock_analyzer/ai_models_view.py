@@ -142,6 +142,6 @@ def settings_status(snapshot) -> tuple[str, str, list[str]]:
         return ("error", "AI model settings row is invalid; code defaults in use "
                          "unless an environment variable is set", others)
     # unreadable: the status line already says it, so don't repeat the warning
-    others = [w for w in others if w != llm_settings._WARN_UNREADABLE]
+    others = [w for w in others if w != llm_settings.WARN_UNREADABLE]
     return ("warn", "AI model settings couldn't be read; code defaults in use "
                     "unless an environment variable is set", others)

@@ -197,6 +197,18 @@ def resolved(role: str, model: str | None = None) -> str:
     return resolved_with_source(role, model)[0]
 
 
+def resolved_setting(role: str) -> RoleSetting | None:
+    """The App Settings entry ``complete`` would apply for ``role`` now (its
+    resolved source is "setting"), else None (env, code default, or a
+    non-editable role). Never raises."""
+    try:
+        setting = _provider_setting(role, None)
+        _, source = resolve_model_with_source(role, None, setting=setting)
+        return setting[role] if source == SOURCE_SETTING else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _known_family(model: str) -> str | None:
     m = _KNOWN_MODERN_RE.match(model or "")
     return m.group(1) if m else None
@@ -486,7 +498,10 @@ def _complete(role, *, api_key, messages, max_tokens, system, model,
 
 
 # --- Models API helpers (never raise) ---------------------------------------
-_EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+THINKING_TYPES = ("adaptive", "enabled")
+ERR_UNREACHABLE = "unreachable"   # connection error, timeout or 5xx: say nothing about the key
+ERR_REJECTED = "rejected"         # a 4xx or anything unrecognised: the API answered no
 
 
 def _supported(node) -> bool:
@@ -497,6 +512,10 @@ def _int_or_none(v):
     return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
+CAPABILITY_KEYS = frozenset({"efforts", "thinking_types", "structured_outputs",
+                             "max_tokens", "max_input_tokens"})
+
+
 def normalize_capabilities(info) -> dict:
     """Pure: a Models API ``ModelInfo``-like object -> a plain dict snapshot.
     A missing attribute anywhere counts as unsupported / None."""
@@ -504,9 +523,9 @@ def normalize_capabilities(info) -> dict:
     effort = getattr(caps, "effort", None)
     efforts = []
     if _supported(effort):
-        efforts = [lvl for lvl in _EFFORT_ORDER if _supported(getattr(effort, lvl, None))]
+        efforts = [lvl for lvl in EFFORT_LEVELS if _supported(getattr(effort, lvl, None))]
     types_node = getattr(getattr(caps, "thinking", None), "types", None)
-    thinking = [t for t in ("adaptive", "enabled") if _supported(getattr(types_node, t, None))]
+    thinking = [t for t in THINKING_TYPES if _supported(getattr(types_node, t, None))]
     return {
         "efforts": efforts,
         "thinking_types": thinking,
@@ -525,16 +544,33 @@ def _models_client(api_key, client_factory, timeout):
     return factory(api_key=api_key, timeout=timeout, max_retries=1)
 
 
+def classify_api_error(e) -> str:
+    """Pure: ``ERR_UNREACHABLE`` for a 5xx or a connection error / timeout,
+    else ``ERR_REJECTED`` (a 4xx, or anything unrecognised: fail closed)."""
+    status = getattr(e, "status_code", None)
+    if isinstance(status, int) and not isinstance(status, bool):
+        return ERR_UNREACHABLE if status >= 500 else ERR_REJECTED
+    try:
+        import anthropic
+        if isinstance(e, anthropic.APIConnectionError):  # APITimeoutError too
+            return ERR_UNREACHABLE
+    except ImportError:
+        pass
+    return ERR_REJECTED
+
+
 def retrieve_model(api_key, model_id, *, client_factory=None,
-                   timeout=10) -> tuple[dict | None, str | None]:
-    """(normalized capabilities, None) or (None, error). Never raises."""
+                   timeout=10) -> tuple[dict | None, str | None, str | None]:
+    """(normalized capabilities, None, None) or (None, error, error_kind) where
+    error_kind is ``ERR_UNREACHABLE`` or ``ERR_REJECTED`` (no key counts as
+    rejected). Never raises."""
     if not api_key:
-        return None, "no API key"
+        return None, "no API key", ERR_REJECTED
     try:
         client = _models_client(api_key, client_factory, timeout)
-        return normalize_capabilities(client.models.retrieve(model_id)), None
+        return normalize_capabilities(client.models.retrieve(model_id)), None, None
     except Exception as e:  # noqa: BLE001
-        return None, _err_text(e, api_key)
+        return None, _err_text(e, api_key), classify_api_error(e)
 
 
 def list_model_ids(api_key, *, client_factory=None,

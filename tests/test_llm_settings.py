@@ -2,13 +2,17 @@
 per-table dispatch in reference_data / db, and the load status helper."""
 import hashlib
 import json
+import threading
 
+import anthropic
+import httpx
 import pytest
 
 from stock_analyzer import db, llm, llm_settings as ls, reference_data
 from tests.test_reference_data import _wire_fake_db
 
-CAPS = {"efforts": ["low", "medium", "high"], "max_tokens": 64000}
+CAPS = {"efforts": ["low", "medium", "high"], "thinking_types": ["adaptive"],
+        "structured_outputs": True, "max_tokens": 64000, "max_input_tokens": 200000}
 
 
 def _entry(model="claude-haiku-5-5", effort="low", caps=None, checked_at=None):
@@ -86,14 +90,67 @@ def test_role_entry_violations(entry):
     assert ls.validate_role_entry("fast", entry)
 
 
+def _caps(**over):
+    return {**CAPS, **over}
+
+
+@pytest.mark.parametrize("caps", [
+    {k: v for k, v in CAPS.items() if k != "max_tokens"},          # missing key
+    _caps(extra=1),                                                 # unexpected key
+    _caps(efforts=["low", "low"]),                                  # not distinct
+    _caps(efforts=["low", "ultra"]),                                # unknown level
+    _caps(thinking_types=["adaptive", "adaptive"]),
+    _caps(thinking_types=["manual"]),
+    _caps(thinking_types="adaptive"),
+    _caps(structured_outputs=1),
+    _caps(structured_outputs=None),
+    _caps(max_tokens=1e20),                                         # float
+    _caps(max_tokens=0),
+    _caps(max_tokens=-5),
+    _caps(max_tokens=True),
+    _caps(max_input_tokens=1000.0),
+    _caps(max_input_tokens="9"),
+    {},
+])
+def test_capabilities_shape_violations(caps):
+    assert ls.validate_role_entry("fast", _entry("claude-some-future-9", "low", caps))
+
+
+def test_capabilities_none_ints_and_full_shape_pass():
+    caps = _caps(max_tokens=None, max_input_tokens=None, efforts=[], thinking_types=[])
+    assert ls.validate_role_entry("fast", _entry("claude-haiku-5-5", None, caps)) == []
+
+
+def test_normalize_capabilities_output_always_validates():
+    from types import SimpleNamespace as NS
+    from tests.test_llm import _full_info
+    for info in (_full_info(), NS(), None):
+        caps = llm.normalize_capabilities(info)
+        assert set(caps) == llm.CAPABILITY_KEYS
+        assert ls.validate_role_entry(
+            "fast", _entry("claude-some-future-9", None, caps)) == []
+
+
+def test_validate_payload_validates_the_canonical_form():
+    # unstripped model / effort: the saved (canonical) form is what must pass
+    p = _payload(fast={"model": "  claude-haiku-5-5 ", "effort": " low ",
+                       "capabilities": None, "checked_at": None})
+    assert ls.validate_payload(p) == []
+
+
+def test_validate_payload_canonicalize_failure_is_an_error(monkeypatch):
+    monkeypatch.setattr(ls, "canonicalize", lambda p: 1 / 0)
+    assert ls.validate_payload(_payload())
+
+
 def test_role_entry_non_editable_role():
     assert ls.validate_role_entry("score", _entry())
 
 
 def test_effort_must_be_listed_by_capabilities():
-    e = _entry("claude-haiku-5-5", "high", {"efforts": ["low", "medium"]})
+    e = _entry("claude-haiku-5-5", "high", _caps(efforts=["low", "medium"]))
     assert ls.validate_role_entry("fast", e)
-    e = _entry("claude-haiku-5-5", "medium", {"efforts": ["low", "medium"]})
+    e = _entry("claude-haiku-5-5", "medium", _caps(efforts=["low", "medium"]))
     assert ls.validate_role_entry("fast", e) == []
 
 
@@ -250,6 +307,54 @@ def test_invalidate_forces_reload():
     assert loader.n == 2
 
 
+def test_stale_snapshot_served_while_another_reload_is_in_progress():
+    clock, started, release = _Clock(), threading.Event(), threading.Event()
+    ls.get_snapshot(loader=_Loader(), clock=clock)           # cache a no_row snapshot
+    clock.t += ls._TTL_SEC + 1                                # expire it
+
+    def slow():
+        started.set()
+        release.wait(5)
+        return ("unreadable", None)
+
+    out = []
+    t = threading.Thread(target=lambda: out.append(ls.get_snapshot(loader=slow, clock=clock)))
+    t.start()
+    assert started.wait(5)
+    other = _Loader()
+    s = ls.get_snapshot(loader=other, clock=clock)            # must not block or load
+    assert s.state == "no_row" and other.n == 0
+    release.set()
+    t.join(5)
+    assert out[0].state == "unreadable"
+
+
+def test_invalidate_during_a_reload_prevents_the_old_read_being_cached():
+    started, release = threading.Event(), threading.Event()
+
+    def slow():
+        started.set()
+        release.wait(5)
+        return ("unreadable", None)
+
+    out = []
+    t = threading.Thread(target=lambda: out.append(ls.get_snapshot(loader=slow, clock=_Clock())))
+    t.start()
+    assert started.wait(5)
+    ls.invalidate()
+    release.set()
+    t.join(5)
+    assert out[0].state == "unreadable"                       # returned to its caller
+    assert ls._cached is None                                 # but never stored
+
+
+def test_first_ever_load_blocks_and_returns_the_loaded_snapshot():
+    loader = _Loader()
+    assert ls._cached is None
+    assert ls.get_snapshot(loader=loader, clock=_Clock()).state == "no_row"
+    assert loader.n == 1 and ls._cached is not None
+
+
 def test_raising_loader_is_unreadable():
     s = ls.get_snapshot(loader=_Loader(exc=RuntimeError("boom")), clock=_Clock())
     assert s.state == "unreadable"
@@ -286,14 +391,67 @@ def test_decide_save_ok_with_capabilities():
 
 def test_decide_save_not_found_refused():
     entry, errs = ls.decide_save("fast", "claude-haiku-5-5", None, None,
-                                 "NotFoundError: model", None)
-    assert entry is None and "can't use claude-haiku-5-5" in errs[0]
+                                 "NotFoundError: model", None,
+                                 error_kind=llm.ERR_REJECTED)
+    assert entry is None
+    assert errs == ["the Models API rejected claude-haiku-5-5 with this API key "
+                    "(NotFoundError: model)"]
 
 
-def test_decide_save_unreachable_known_id_allowed_without_capabilities():
-    entry, errs = ls.decide_save("fast", "claude-haiku-5-5", "low", None,
-                                 "APIConnectionError: down", None)
+@pytest.mark.parametrize("err", ["AuthenticationError: 401", "PermissionDeniedError: 403",
+                                 "NotFoundError: 404", "RateLimitError: 429",
+                                 "no API key"])
+def test_decide_save_every_rejection_refused_even_for_a_known_id(err):
+    entry, errs = ls.decide_save("fast", "claude-haiku-5-5", None, None, err, None,
+                                 error_kind=llm.ERR_REJECTED)
+    assert entry is None and "rejected" in errs[0]
+
+
+@pytest.mark.parametrize("err", ["InternalServerError: 500", "OverloadedError: 529",
+                                 "APIConnectionError: down", "APITimeoutError: slow"])
+def test_decide_save_unreachable_known_id_allowed_without_capabilities(err):
+    entry, errs = ls.decide_save("fast", "claude-haiku-5-5", "low", None, err, None,
+                                 error_kind=llm.ERR_UNREACHABLE)
     assert errs == [] and entry["capabilities"] is None
+
+
+def test_decide_save_error_without_a_kind_fails_closed():
+    entry, errs = ls.decide_save("fast", "claude-haiku-5-5", None, None,
+                                 "APIConnectionError: down", None)
+    assert entry is None and errs
+
+
+def test_decide_save_strips_effort_and_validates_the_canonical_entry():
+    entry, errs = ls.decide_save("fast", "claude-haiku-5-5", " low ", CAPS, None, None)
+    assert errs == [] and entry["effort"] == "low"
+
+
+_REQ = httpx.Request("GET", "https://x")
+
+
+class _Status(Exception):
+    def __init__(self, code):
+        super().__init__(str(code))
+        self.status_code = code
+
+
+@pytest.mark.parametrize("exc,kind", [
+    (_Status(401), llm.ERR_REJECTED), (_Status(403), llm.ERR_REJECTED),
+    (_Status(404), llm.ERR_REJECTED), (_Status(429), llm.ERR_REJECTED),
+    (_Status(499), llm.ERR_REJECTED), (_Status(500), llm.ERR_UNREACHABLE),
+    (_Status(529), llm.ERR_UNREACHABLE),
+    (anthropic.APIConnectionError(request=_REQ), llm.ERR_UNREACHABLE),
+    (anthropic.APITimeoutError(request=_REQ), llm.ERR_UNREACHABLE),
+    (RuntimeError("what"), llm.ERR_REJECTED),
+])
+def test_classify_api_error(exc, kind):
+    assert llm.classify_api_error(exc) == kind
+
+
+def test_classify_api_error_bool_status_is_not_a_status():
+    class E(Exception):
+        status_code = True
+    assert llm.classify_api_error(E()) == llm.ERR_REJECTED
 
 
 def test_decide_save_unreachable_generic_id_refused():
@@ -305,6 +463,41 @@ def test_decide_save_unreachable_generic_id_refused():
 def test_decide_save_invalid_effort_refused():
     entry, errs = ls.decide_save("fast", "claude-haiku-5-5", "max", CAPS, None, None)
     assert entry is None and errs
+
+
+# ---- base_payload_for_save ----
+_EMPTY = {"version": 1, "roles": {}}
+
+
+def test_base_payload_no_row_is_empty():
+    assert ls.base_payload_for_save("no_row", None) == (_EMPTY, [])
+
+
+@pytest.mark.parametrize("status,row", [("unreadable", None), ("weird", {}),
+                                        ("ok", None), ("ok", [])])
+def test_base_payload_unreadable_gives_none_and_a_note(status, row):
+    p, notes = ls.base_payload_for_save(status, row)
+    assert p is None and len(notes) == 1 and "overwrite" in notes[0]
+
+
+def test_base_payload_invalid_row_is_replaced_with_a_note():
+    row = _row(_payload(fast=_entry()))
+    row["payload"]["roles"]["fast"]["model"] = "claude-opus-5-5"   # hash mismatch
+    p, notes = ls.base_payload_for_save("ok", row)
+    assert p == _EMPTY and len(notes) == 1 and "invalid" in notes[0]
+    row = _row({"version": 2, "roles": {}})
+    p, notes = ls.base_payload_for_save("ok", row)
+    assert p == _EMPTY and len(notes) == 1
+
+
+def test_base_payload_valid_row_keeps_good_roles_and_drops_ignored_ones():
+    good = _entry("claude-haiku-5-5", "low", CAPS)
+    row = _row(_payload(fast=good, deep=_entry("gpt-4")))
+    p, notes = ls.base_payload_for_save("ok", row)
+    assert p == {"version": 1, "roles": {"fast": good}}
+    assert len(notes) == 1 and "deep" in notes[0]
+    row = _row(_payload(fast=good))
+    assert ls.base_payload_for_save("ok", row) == ({"version": 1, "roles": {"fast": good}}, [])
 
 
 # ---- apply_role / reset_role ----

@@ -511,7 +511,7 @@ def _ast_call_sites() -> set[tuple[str, str]]:
     helper `llm.complete(...)`. llm.py itself is the helper, not a site: its
     own messages.create is what every migrated site goes through."""
     found: set[tuple[str, str]] = set()
-    for path in sorted(PKG_DIR.glob("*.py")):
+    for path in sorted(PKG_DIR.rglob("*.py")):
         if path.stem == "llm":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

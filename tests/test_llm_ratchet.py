@@ -28,7 +28,7 @@ _ID_ALLOWED_ASSIGNS = {
 
 def _files():
     return [ROOT / "app.py", ROOT / "cron_runner.py",
-            *sorted((ROOT / "stock_analyzer").glob("*.py"))]
+            *sorted((ROOT / "stock_analyzer").rglob("*.py"))]
 
 
 def _rel(p: Path) -> str:

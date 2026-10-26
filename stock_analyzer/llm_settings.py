@@ -35,7 +35,7 @@ STATE_INVALID = "invalid"
 _ENTRY_KEYS = frozenset({"model", "effort", "capabilities", "checked_at"})
 _MODEL_RE = re.compile(r"^claude-[a-z0-9][a-z0-9.\-]*$")
 
-_WARN_UNREADABLE = "AI model settings could not be read; code defaults in use"
+WARN_UNREADABLE = "AI model settings could not be read; code defaults in use"
 _WARN_HASH = ("AI model settings row doesn't match its saved hash "
               "(edited outside App Settings?); code defaults in use")
 
@@ -71,6 +71,47 @@ def hash_view(normalized):
 
 
 # --- Pure: validation ---------------------------------------------------------
+def _distinct_in(value, allowed) -> bool:
+    return (isinstance(value, list) and all(isinstance(x, str) and x in allowed
+                                            for x in value)
+            and len(set(value)) == len(value))
+
+
+def _pos_int_or_none(v) -> bool:
+    # floats are refused: a JSONB round trip turns 1e20 into an int and would
+    # break the payload hash
+    return v is None or (isinstance(v, int) and not isinstance(v, bool) and v > 0)
+
+
+def _capability_errors(caps: dict, errors: list[str]):
+    """Append shape errors for a capabilities object (exactly the
+    ``llm.normalize_capabilities`` shape). Returns the listed efforts when they
+    are valid, else None."""
+    missing = sorted(llm.CAPABILITY_KEYS - set(caps))
+    extra = sorted(str(k) for k in caps if k not in llm.CAPABILITY_KEYS)
+    if missing:
+        errors.append(f"capabilities missing key(s): {missing}")
+    if extra:
+        errors.append(f"capabilities has unexpected key(s): {extra}")
+    listed = None
+    if "efforts" in caps:
+        if _distinct_in(caps["efforts"], llm.EFFORT_LEVELS):
+            listed = caps["efforts"]
+        else:
+            errors.append("capabilities.efforts must be a list of distinct "
+                          f"levels from {list(llm.EFFORT_LEVELS)}")
+    if "thinking_types" in caps and not _distinct_in(caps["thinking_types"],
+                                                      llm.THINKING_TYPES):
+        errors.append("capabilities.thinking_types must be a list of distinct "
+                      f"values from {list(llm.THINKING_TYPES)}")
+    if "structured_outputs" in caps and not isinstance(caps["structured_outputs"], bool):
+        errors.append("capabilities.structured_outputs must be a bool")
+    for key in ("max_tokens", "max_input_tokens"):
+        if key in caps and not _pos_int_or_none(caps[key]):
+            errors.append(f"capabilities.{key} must be a positive int or None")
+    return listed
+
+
 def validate_role_entry(role, entry) -> list[str]:
     errors: list[str] = []
     if role not in llm.EDITABLE_ROLES:
@@ -104,16 +145,7 @@ def validate_role_entry(role, entry) -> list[str]:
         if not isinstance(caps, dict):
             errors.append("capabilities must be None or an object")
         else:
-            if "efforts" in caps:
-                ef = caps["efforts"]
-                if (isinstance(ef, list) and all(isinstance(x, str) for x in ef)):
-                    listed = ef
-                else:
-                    errors.append("capabilities.efforts must be a list of strings")
-            if "max_tokens" in caps:
-                mt = caps["max_tokens"]
-                if mt is not None and (not isinstance(mt, int) or isinstance(mt, bool)):
-                    errors.append("capabilities.max_tokens must be an int or None")
+            listed = _capability_errors(caps, errors)
     if effort is not None and listed is not None and effort not in listed:
         errors.append(f"effort {effort!r} is not listed by the model's capabilities "
                       f"({listed})")
@@ -164,6 +196,11 @@ def _top_level_errors(payload) -> list[str]:
 
 
 def validate_payload(payload) -> list[str]:
+    """Validate the canonical form, so passing on save equals passing on load."""
+    try:
+        payload = canonicalize(payload)
+    except Exception as e:  # noqa: BLE001
+        return [f"payload could not be normalised ({type(e).__name__})"]
     errors = _top_level_errors(payload)
     roles = payload.get("roles") if isinstance(payload, dict) else None
     if isinstance(roles, dict):
@@ -189,11 +226,11 @@ def _empty() -> Mapping:
 
 def build_snapshot(status, row) -> Snapshot:
     if status == STATE_UNREADABLE:
-        return Snapshot(STATE_UNREADABLE, _empty(), (_WARN_UNREADABLE,))
+        return Snapshot(STATE_UNREADABLE, _empty(), (WARN_UNREADABLE,))
     if status == STATE_NO_ROW or status != "ok" or not isinstance(row, dict):
         return Snapshot(STATE_NO_ROW if status == STATE_NO_ROW else STATE_UNREADABLE,
                         _empty(),
-                        () if status == STATE_NO_ROW else (_WARN_UNREADABLE,))
+                        () if status == STATE_NO_ROW else (WARN_UNREADABLE,))
     as_of, updated_by = row.get("as_of"), row.get("updated_by")
     payload = row.get("payload")
     try:
@@ -223,21 +260,57 @@ def build_snapshot(status, row) -> Snapshot:
                     as_of, updated_by)
 
 
-def decide_save(role, model, effort, capabilities, retrieve_error, checked_at):
-    """The save-time rule (plan 13.2 E): (entry, []) or (None, errors)."""
+def decide_save(role, model, effort, capabilities, retrieve_error, checked_at, *,
+                error_kind=None):
+    """The save-time rule (plan 13.2 E): (entry, []) or (None, errors).
+
+    A retrieve error refuses the save unless ``error_kind`` is
+    ``llm.ERR_UNREACHABLE`` and the code knows the model (an unchecked save);
+    a rejection, or no kind at all, fails closed."""
     model = model.strip() if isinstance(model, str) else model
     if retrieve_error is not None:
-        if str(retrieve_error).startswith("NotFoundError"):
-            return None, [f"this API key can't use {model}"]
+        if error_kind != llm.ERR_UNREACHABLE:
+            return None, [f"the Models API rejected {model} with this API key "
+                          f"({retrieve_error})"]
         if not isinstance(model, str) or llm.profile_for(model) == llm.PROFILE_GENERIC:
             return None, [f"couldn't check {model} with the Models API ({retrieve_error}); "
                           "only a model the code knows can be saved unchecked"]
-    entry = {"model": model, "effort": effort, "capabilities": capabilities,
-             "checked_at": checked_at}
+    try:
+        entry = canonicalize({"model": model, "effort": effort,
+                              "capabilities": capabilities,
+                              "checked_at": checked_at})
+    except Exception as e:  # noqa: BLE001
+        return None, [f"entry could not be normalised ({type(e).__name__})"]
     errors = validate_role_entry(role, entry)
     if errors:
         return None, errors
     return entry, []
+
+
+def base_payload_for_save(status, row) -> tuple[dict | None, list[str]]:
+    """(payload, notes) a Save / Reset should build on. None when the current
+    row couldn't be read (a save then could overwrite another role's setting).
+    An invalid stored row, or a role entry already ignored at runtime, is
+    dropped with a note rather than carried into the new row."""
+    if status == STATE_NO_ROW:
+        return {"version": PAYLOAD_VERSION, "roles": {}}, []
+    if status != "ok" or not isinstance(row, dict):
+        return None, ["couldn't read the current AI model settings, so a save now "
+                      "could overwrite another role's setting; try again"]
+    if build_snapshot(status, row).state == STATE_INVALID:
+        return ({"version": PAYLOAD_VERSION, "roles": {}},
+                ["the stored AI model settings row is invalid and is being ignored "
+                 "(code defaults are in use); saving replaces it with only this change"])
+    payload = canonicalize(row.get("payload"))
+    roles: dict = {}
+    notes: list[str] = []
+    for role, entry in payload["roles"].items():
+        if validate_role_entry(role, entry):
+            notes.append(f"the stored setting for {role} is invalid and is being "
+                         "ignored (its code default is in use); it is dropped")
+        else:
+            roles[role] = entry
+    return {"version": PAYLOAD_VERSION, "roles": roles}, notes
 
 
 def _roles_copy(payload) -> dict:
@@ -259,8 +332,10 @@ def reset_role(payload, role) -> dict:
 
 # --- Process state (the only mutable state; llm.py stays free of it) ----------
 _lock = threading.Lock()
+_reload_lock = threading.Lock()   # single-flight: one thread reads the DB at a time
 _cached: Snapshot | None = None
 _expires_at: float = 0.0
+_gen = 0                          # bumped by invalidate(); a stale reload isn't stored
 
 
 def _default_loader():
@@ -269,24 +344,43 @@ def _default_loader():
 
 
 def get_snapshot(*, loader=None, clock=time.monotonic) -> Snapshot:
+    """The cached snapshot while fresh. On expiry one thread reloads (the DB
+    read runs outside ``_lock``); the others get the stale snapshot meanwhile,
+    and only a first-ever load blocks."""
     global _cached, _expires_at
     with _lock:
         if _cached is not None and clock() < _expires_at:
             return _cached
+        stale = _cached
+    if stale is not None:
+        if not _reload_lock.acquire(blocking=False):
+            return stale
+    else:
+        _reload_lock.acquire()
+    try:
+        with _lock:
+            if _cached is not None and clock() < _expires_at:
+                return _cached   # another thread reloaded while we waited
+            gen = _gen
         try:
             status, row = (loader or _default_loader)()
         except Exception:  # noqa: BLE001
             status, row = STATE_UNREADABLE, None
         snap = build_snapshot(status, row)
         ttl = _UNREADABLE_TTL_SEC if snap.state == STATE_UNREADABLE else _TTL_SEC
-        _cached, _expires_at = snap, clock() + ttl
+        with _lock:
+            if gen == _gen:   # an invalidate() during the read voids it
+                _cached, _expires_at = snap, clock() + ttl
         return snap
+    finally:
+        _reload_lock.release()
 
 
 def invalidate() -> None:
-    global _cached, _expires_at
+    global _cached, _expires_at, _gen
     with _lock:
         _cached, _expires_at = None, 0.0
+        _gen += 1
 
 
 def current_setting():
