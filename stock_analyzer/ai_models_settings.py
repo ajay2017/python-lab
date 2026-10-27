@@ -21,6 +21,7 @@ from stock_analyzer.constants import (
     ANALYST_EXTRACT_MAX_TOKENS,
     ANALYST_EXTRACT_TIMEOUT_SEC,
     LLM_REQUEST_TIMEOUT_SEC,
+    THESIS_REVIEW_MAX_TOKENS,
 )
 
 _PREVIEW_CHARS = 400
@@ -189,9 +190,9 @@ def _extract_format_ok(text) -> bool:
 
 
 # max_tokens mirror the production defaults (generate_stance 500,
-# review_thesis 300); tests pin each against the function signature. The
-# production stance passes no timeout, so the fast test uses the common 30 s
-# budget (LLM_REQUEST_TIMEOUT_SEC).
+# review_thesis THESIS_REVIEW_MAX_TOKENS); tests pin each against the
+# function signature. The production stance passes no timeout, so the fast
+# test uses the common 30 s budget (LLM_REQUEST_TIMEOUT_SEC).
 TEST_CASES = types.MappingProxyType({
     llm.ROLE_FAST: types.MappingProxyType({
         "site": "premarket_stance.generate_stance",
@@ -206,7 +207,7 @@ TEST_CASES = types.MappingProxyType({
     llm.ROLE_DEEP: types.MappingProxyType({
         "site": "thesis_advisor.review_thesis",
         "build": _thesis_prompts,
-        "max_tokens": 300,
+        "max_tokens": THESIS_REVIEW_MAX_TOKENS,
         "expects_json": True,
         "timeout": LLM_REQUEST_TIMEOUT_SEC,
         "format_check": _thesis_format_ok,

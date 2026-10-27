@@ -665,6 +665,15 @@ ANALYST_CALIBRATION_MIN_CASES   = 5    # min cases in an Engine-vs-Analyst disag
 # fails → silent "extraction failed"). Sized generously; billed per token
 # actually generated, so a high ceiling is free for small single-stock pastes.
 ANALYST_EXTRACT_MAX_TOKENS = 8000
+# Max output tokens for a thesis review (review_thesis) and an earnings thesis
+# update (generate_earnings_thesis_update). Both parse a trailing Verdict line,
+# so a reply cut off at max_tokens is dropped, not saved. Raised from a 300
+# literal on 2026-10-27 after a live Sonnet 5.5 test used 363 of 390 (300 x 1.3),
+# in 3.7 s. Billed per token generated; a ceiling, so reply length is unchanged.
+# A reply using the full 1300 (1000 x 1.3 on a 5.5 model) has not been timed
+# against LLM_REQUEST_TIMEOUT_SEC; a timeout fails like a cut-off (dropped).
+THESIS_REVIEW_MAX_TOKENS = 1000
+
 # Per-call timeout for one Ideas-Inbox extraction. A 20-30 call roundup makes the
 # model generate several thousand output tokens, which takes well past the shared
 # 30s LLM_REQUEST_TIMEOUT_SEC → the request times out and looks like a parse

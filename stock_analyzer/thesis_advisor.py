@@ -32,6 +32,7 @@ from stock_analyzer.constants import (
     PT_TARGET_CUT_WARN_PCT,
     THESIS_DELTA_COMPOSITE_PTS,
     THESIS_DELTA_EROSION_PTS,
+    THESIS_REVIEW_MAX_TOKENS,
 )
 # thesis_card.py does not import this module (verified), so this direction
 # is safe -- no import cycle.
@@ -199,7 +200,7 @@ def review_thesis(
     inputs: dict,
     api_key: str,
     model: str | None = None,
-    max_tokens: int = 300,
+    max_tokens: int = THESIS_REVIEW_MAX_TOKENS,
 ) -> dict | None:
     """
     Call the LLM to review a single investment thesis against current evidence.
@@ -840,7 +841,7 @@ def generate_earnings_thesis_update(
     earnings_result: dict,
     api_key: str,
     model: str | None = None,
-    max_tokens: int = 300,
+    max_tokens: int = THESIS_REVIEW_MAX_TOKENS,
 ) -> dict | None:
     """
     Suggest a thesis status update based on actual earnings results.

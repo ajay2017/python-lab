@@ -624,7 +624,7 @@
       "timeout": "<ABSENT>"
     },
     "create": {
-      "max_tokens": 300,
+      "max_tokens": 1000,
       "messages": [
         {
           "content": "Ticker: AAA\nOriginal thesis: Growth continues.\n\nEarnings results:\n- EPS: actual $1.10 vs estimate $1.00 — beat (surprise: +10.0%)\n- Revenue: actual $2.00B vs estimate $1.90B — beat\n- Guidance: raised\n- Management commentary: Strong quarter.",
@@ -647,7 +647,7 @@
       "timeout": "<ABSENT>"
     },
     "create": {
-      "max_tokens": 300,
+      "max_tokens": 1000,
       "messages": [
         {
           "content": "Ticker: AAA\n\nOriginal investment thesis:\n\"Growth continues. Breaks if sales fall.\"\n\nCurrent evidence:\nTechnical: Price is above the 50-day moving average. RSI 55 (neutral). 1-month price change: +3.0%.\nRecent news (1 headlines):\n  - AAA wins contract",

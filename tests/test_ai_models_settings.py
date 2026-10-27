@@ -89,6 +89,14 @@ def test_case_max_tokens_and_timeouts_match_production():
     assert ams.TEST_CASES["extract"]["timeout"] == ANALYST_EXTRACT_TIMEOUT_SEC
 
 
+def test_thesis_review_defaults_use_the_constant_and_draft_stays_300():
+    from stock_analyzer.constants import THESIS_REVIEW_MAX_TOKENS
+    for fn in (thesis_advisor.review_thesis, thesis_advisor.generate_earnings_thesis_update):
+        assert inspect.signature(fn).parameters["max_tokens"].default == THESIS_REVIEW_MAX_TOKENS
+    assert THESIS_REVIEW_MAX_TOKENS == 1000
+    assert inspect.signature(thesis_advisor.draft_thesis).parameters["max_tokens"].default == 300
+
+
 def test_case_expects_json_matches_the_production_call_sites():
     assert ams.TEST_CASES["fast"]["expects_json"] is True
     assert ams.TEST_CASES["deep"]["expects_json"] is True
