@@ -239,6 +239,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
      - Cosmetic: `macro_playbook` can print "a 0-share position" for a holding under 1 share; `daily_briefing` `is_critical = gap <= 3.0` is a bare literal (Hard Rule #1).
    - Wording that contradicts the screen (seen live 2026-10-23): the deterioration-add box (VERIFIED live 2026-10-23) and the Watchlist's "1 share" (screenshot pending) shipped in `e087636`.
    - Rebalancer follow-ups from the 2026-10-22 clean-up review (non-blocking): the trim expander title branch on `shares_delta` / price still sits in app.py (return a ready title field from `rebalancer.py`); `daily_briefing.py` ~961 has a bare `+ 5.0` meaning `TOLERANCE_WATCH` (gate file, its own reviewed change); the drift-chart legend caption hardcodes "2–5pp" / ">5pp" / "±2pp" (interpolate the constants); a news headline with two `$` in the Rebalancer news box could render as LaTeX. Also: "Trims would move" (`trim_pct`) still counts a trim that sizes zero shares (live: 2.4% from META's under-one-share trim, where nothing would be sold); count only trims with `shares_delta` ≥ 1, as `trim_action_needed` does.
+   - **Hook pytest timeout margin (owner call):** on 2026-10-27 the pre-push run timed out twice at `_PYTEST_TIMEOUT_SEC` = 450 on a commit whose pre-commit suite had just passed (~11k tests; one full run that day took 387 s). Options: raise the cap or trim the slowest tests (`--durations=40`); the hook is a `_GATE_FILES` member, so reviewed.
    - `self_track_record` UTC dating
    - the report's "Book side" label
    - 2 stale `.claude/worktrees`
@@ -314,6 +315,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 - **NYSE 2029 calendar:** when NYSE publishes. **BEA 2027 GDP dates:** externally blocked.
 - **Correlation listwise → pairwise:** only if the coverage caption ever shows a short sample. Needs planner + reviewer.
 - **Deterioration-card hysteresis:** only if a card is seen flickering.
+- **Composite-Sell track record:** "REVIEW — Signal: Sell" cards (composite < `COMPOSITE_HOLD`) are graded nowhere (the 🛡️ Defense facet covers deterioration TRIM/EXIT + risk-off only). Build once `score_history` shows ≥ 8 distinct Sell episodes (2026-10-27: 2, SPCX 10-15→10-16 and TSLA 10-23→); grade retroactively from `score_history` + prices (no new capture needed). Needs planner. Trigger query: `select ticker, min(score_date), max(score_date), count(*) from score_history where composite < 44 group by ticker`.
 - **F-305 (d), the overflow-vs-picks readout:** build only once ≥ `GATE_LEDGER_MIN_CALLS` matured paired days exist (pre-registered in `docs/plans/grow-today-owns-buys.md`).
 - **F-234 Phase 3:** wire ONE validated predictive signal into ONE protective gate, **tightening-only**, only if its skill score > 0 across a real window including ≥ 1 stress episode. Needs planner + reviewer and fresh explicit approval.
 - **F-308 revisit trigger D-G:** ≥ 5 Review news WATCH cards on 3 of the first 5 trading days.
