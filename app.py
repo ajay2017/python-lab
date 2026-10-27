@@ -3686,30 +3686,38 @@ with st.sidebar:
         _pp_off += [f"FMP {_n}" for _n in sorted(_pp_C.FMP_SKIP_ENDPOINTS)]
         _pp_n = _pp_probe.probe_counts()
         st.caption(
-            f"One read-only request per endpoint against AAPL — {sum(_pp_n.values())} calls "
+            f"One read-only request per endpoint against the ticker below — {sum(_pp_n.values())} calls "
             f"({_pp_n['finnhub']} Finnhub, {_pp_n['fmp']} FMP). The call/error counters above "
             "are untouched; the FMP requests do count toward FMP's daily quota (the "
             f"\"today: N/{_pp_C.FMP_DAILY_CALL_CAP}\" figure rises after its cache refresh). \"candidate\" rows are "
             "endpoints the app doesn't use yet. "
             "Turned off in settings: " + (", ".join(_pp_off) if _pp_off else "none") + "."
         )
+        _pp_sym_raw = st.text_input("Ticker", value="AAPL", key="_provider_probe_sym",
+                                    max_chars=10)
         if st.button("Run endpoint test", key="_provider_probe_run", width="stretch",
                      disabled=st.session_state.get("_readonly", False)):
-            try:
-                with st.spinner("Testing endpoints…"):
-                    _pp_rows = _pp_probe.run_probe(
-                        {"finnhub": _pp_secret("FINNHUB_API_KEY"),
-                         "fmp": _pp_secret("FMP_API_KEY")},
-                        on_fmp_call=lambda: db.increment_daily_quota("fmp"),
-                        fmp_used_today=db.get_daily_quota("fmp"),
-                    )
-                st.session_state["_provider_probe_result"] = {
-                    "at": _now_et(), "rows": _pp_rows}
-            except Exception as _pp_exc:
-                st.error(f"Endpoint test failed: {type(_pp_exc).__name__}")
+            _pp_sym = _pp_probe.normalize_symbol(_pp_sym_raw)
+            if _pp_sym is None:
+                st.warning("Enter a ticker of 1–10 letters, digits, '.' or '-'.")
+            else:
+                try:
+                    with st.spinner("Testing endpoints…"):
+                        _pp_rows = _pp_probe.run_probe(
+                            {"finnhub": _pp_secret("FINNHUB_API_KEY"),
+                             "fmp": _pp_secret("FMP_API_KEY")},
+                            symbol=_pp_sym,
+                            on_fmp_call=lambda: db.increment_daily_quota("fmp"),
+                            fmp_used_today=db.get_daily_quota("fmp"),
+                        )
+                    st.session_state["_provider_probe_result"] = {
+                        "at": _now_et(), "rows": _pp_rows, "symbol": _pp_sym}
+                except Exception as _pp_exc:
+                    st.error(f"Endpoint test failed: {type(_pp_exc).__name__}")
         _pp_res = st.session_state.get("_provider_probe_result")
         if _pp_res:
-            st.caption(f"Run at {_pp_res['at'].strftime('%H:%M')} ET")
+            st.caption(f"Run at {_pp_res['at'].strftime('%H:%M')} ET for "
+                       f"{_pp_res.get('symbol', 'AAPL')}")
             st.dataframe(
                 pd.DataFrame([{
                     "Provider": r["provider"], "Endpoint": r["endpoint"],

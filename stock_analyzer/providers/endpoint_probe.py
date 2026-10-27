@@ -14,6 +14,7 @@ Detail strings are redacted and never contain a key.
 """
 
 import json
+import re
 from datetime import date, timedelta
 
 import requests
@@ -39,6 +40,18 @@ ROLE_CANDIDATE = "candidate"    # being evaluated as a replacement
 
 _PLAN_WORDS = ("access", "plan", "premium", "subscription")
 _FMP_PLAN_WORDS = ("plan", "subscription", "premium", "upgrade", "legacy")
+
+
+_SYMBOL_RE = re.compile(r"[A-Z0-9.\-]{1,10}")
+
+
+def normalize_symbol(raw) -> str | None:
+    """Pure: strip + uppercase a typed ticker; 1-10 chars of A-Z, 0-9, '.', '-'
+    (BRK-B, BRK.B). Anything else (empty, inner spaces, '$AAPL', too long) -> None."""
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip().upper()
+    return s if _SYMBOL_RE.fullmatch(s) else None
 
 
 def _scrub(text, key: str | None, n: int = 120) -> str:

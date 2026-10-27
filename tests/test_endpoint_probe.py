@@ -194,3 +194,18 @@ def test_limit_phrase_in_a_working_2xx_body_is_not_rate_limited():
     body = json.dumps([{"title": "Congress nears a debt limit reached deal"}])
     assert ep.classify_response("fmp", "news/stock", 200, body)[0] == ep.OUT_WORKS
     assert ep.classify_response("finnhub", "company-news", 200, body)[0] == ep.OUT_WORKS
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("AAPL", "AAPL"), ("  aapl ", "AAPL"), ("brk-b", "BRK-B"), ("BRK.B", "BRK.B"),
+    ("A", "A"), ("ABCDEFGHIJ", "ABCDEFGHIJ"),
+])
+def test_normalize_symbol_accepts(raw, want):
+    assert ep.normalize_symbol(raw) == want
+
+
+@pytest.mark.parametrize("raw", [
+    "", "   ", "AA PL", "$AAPL", "ABCDEFGHIJK", "AAPL!", "AA/PL", None, 123,
+])
+def test_normalize_symbol_rejects(raw):
+    assert ep.normalize_symbol(raw) is None
