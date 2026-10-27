@@ -295,6 +295,9 @@ COMPOSITE_SELL       = 30        # Sell floor — below this = Strong Sell
 # line". Display-only: does NOT gate, suppress, or alter any recommendation.
 COMPOSITE_FIRMNESS_MARGIN = 3
 
+# Pillar-score gap (Technical vs Business Quality) beyond which the Signals card names one pillar as the primary driver.
+SIGNAL_DRIVER_GAP_PTS = 15
+
 # Conviction tiers (Grow Today new-pick label only — not a hard gate).
 # A pick that clears COMPOSITE_BUY but doesn't yet reach STRONG_BUY is
 # "moderate" conviction; STRONG_BUY+ is "high."

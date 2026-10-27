@@ -304,6 +304,7 @@ from stock_analyzer.portfolio import (
 )
 from stock_analyzer.score_label import score_phrase
 from stock_analyzer.rr_readout import fmt_ratio_vs, rank_add_candidates, rr_quality, redeploy_headline
+from stock_analyzer.signal_driver import driver_diagnosis, DRIVER_TEXT, bq_weak, show_driver_box
 from stock_analyzer.beta_repair import (
     aligned_beta, leverage_side_effect, rank_defensive_candidates,
 )
@@ -15763,15 +15764,13 @@ elif page == "📡 Signals & Advice":
                                     "is a thesis change or a technical-only dip."
                                 )
                             elif not _rbc_etf_ok and t_score is not None and _bq_score is not None:
-                                gap_tf = t_score - _bq_score
-                                if gap_tf < -15:
-                                    driver = "🔴 **Business quality deterioration** is the primary driver — this is a thesis-change signal, act with more urgency."
-                                elif gap_tf > 15:
-                                    driver = "🟡 **Technical weakness only** — business quality remains solid. Likely a timing/momentum signal; the ratchet stop may handle it."
-                                else:
-                                    driver = "⚠️ **Both Technical and Business Quality signals are weak** — broader caution warranted."
-                                st.info(driver)
-                            elif _rbc_etf_ok:
+                                _kind = driver_diagnosis(
+                                    t_score, _bq_score, action_type=act["type"],
+                                    t_available=r_data.get("t_available", True),
+                                )
+                                if _kind is not None:
+                                    st.info(DRIVER_TEXT[_kind])
+                            elif _rbc_etf_ok and show_driver_box(act["type"]):
                                 if etf_scoring.cost_urgency_high(_rbc_cost):
                                     st.info("🔴 **High expense ratio is a structural drag** — the fund's ongoing cost weakens the case for holding through this technical rough patch.")
                                 else:
@@ -16093,7 +16092,7 @@ elif page == "📡 Signals & Advice":
                                     f"A low-cost fund on a technical signal alone doesn't warrant a full exit."
                                 )
                         elif _rbc_bq is not None and t_score is not None and _rbc_bq_available:
-                            if _rbc_bq < COMPOSITE_HOLD:
+                            if bq_weak(_rbc_bq):
                                 action_text = (
                                     f"**Business quality weakness — act with urgency.**  \n"
                                     f"Sell **{half} shares** (~\\${half_val:,.0f}) at market now to bank the "
