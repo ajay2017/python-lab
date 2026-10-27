@@ -9,6 +9,14 @@ Cross-reference: many entries here have a fuller, dedicated memory file (see `ME
 ---
 
 **Recently shipped (do not re-chase):**
+- **LLM routing Phase 2: choose AI models in App Settings (2026-10-25..26, F-313; `docs/plans/llm-model-routing.md` §13–15).** The owner's goal: moving a role onto a newer model is a settings change, not a code change.
+  - `279a113` P2-a1: per-call `expects_json` and the empty-text rule.
+  - `782d392` P2-a2: the resolver with source, the known-modern / generic profiles and the refusal fallback (inert).
+  - `51281c6` P2-b: the hash-checked `llm_models` settings row and snapshot (`llm_settings.py`).
+  - `b3eec89` P2-d: 🩺 System Trust → 🤖 AI models (verified live 2026-10-25).
+  - `246d927`: the P2-c prerequisites (4xx refuses a save, canonical validation, single-flight reload).
+  - `a0bda28` P2-c: ⚙️ App Settings → 🤖 AI models. Check model → Test role → Save, where Save unlocks only after a passing test of that exact model + effort, served by that model, in the format its production site parses. Reset and History too.
+  - No model changed: every role stays on its code default until the owner saves one (Phase 3).
 - **Data-provider throttle + honest Data Health (2026-10-25, `docs/plans/provider-investigation.md` P1/P2/P3/P5/P6).** Finnhub's 429 storm had two causes: a live-price path that never stopped or cooled down, and historical-valuation pages pricing the whole rec-ticker universe through real-time Finnhub. Fixes:
   - Finnhub stops at the first 429.
   - The live-price and cross-check paths honour the cooldown through `orchestrator._failing_now` (cooling, or red with a live error streak). Lifetime "red" no longer pauses the F-123 cross-check forever, and a paused check isn't cached.

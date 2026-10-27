@@ -212,10 +212,15 @@ python-lab/
     ├── data_maintenance.py         Database maintenance / data-quality checks (F-235 ⑦, detection only) — orphaned / duplicate rows, stuck states, the impossible-states audit (check 6) and held tickers with no curated sector (check 7); see its own section below
     ├── impossible_states.py        Impossible-states audit baseline + regression decision (`classify`) for data_maintenance check 6 — zero / frozen / accruing per Q0 check id, 2026-10-14 baseline; pure
     ├── llm.py                      The one Anthropic call path: role → model registry, request builder per model profile, reply parser (`LLMResult`), key lookup; every Claude call goes through `complete()`. `_GATE_FILES` member
+    ├── llm_settings.py             The App Settings model choice for the editable roles (fast / deep / extract): validated, hash-checked `llm_models` reference row, process snapshot `complete` consults, save rules. `_GATE_FILES` member
+    ├── ai_models_settings.py       Decisions behind ⚙️ App Settings → 🤖 AI models (F-313): Test role's production-shaped requests, Test-before-Save, effort options, history lines. `_GATE_FILES` member
+    ├── ai_models_view.py           Decisions behind 🩺 System Trust → 🤖 AI models: one row per role (model, source, key access, notes); pure
+    ├── llm_usage.py                Process-level per-role tally of `llm.complete` results (calls, errors, fallbacks, tokens) for System Trust; never read by a decision
     ├── ai_provider.py              Shared multi-provider LLM registry + dispatch, used by 🔎 Portfolio Investigator only (its Claude branch calls `llm.complete`)
     ├── investigator.py             🔎 Portfolio Investigator (F-275) — multi-step LLM orchestration over a FIXED, already-reviewed toolbox of pure functions; redlines enforced in code
     ├── ticker_resolver.py          Company-name → ticker resolution for free-text lookups (Home's Research a Stock box) via yfinance Search; never consulted for input that already looks like a ticker, never raises
     ├── act_today_precedence.py     Held-position banner precedence for add-to-existing flow (stop-breach > reduce call > plain held)
+    ├── score_label.py              Suppression-card score wording: a new pick's scanner score reads "momentum N" (plus "composite N" when trusted), a held add keeps "Score N" (its composite); display only
     ├── grow_dropoff.py             Grow Today transparency helpers (firmness badge, drop-off trace; pure logic)
     ├── premortem_advisor.py        Pre-Mortem Protocol (Concept C) — position-specific counterargument + falsifiable pre-commitment
     ├── premortem_monitor.py        Pre-Commitment Enforcement — actively monitors stated pre-mortem triggers, fires Act Today if breached
@@ -3464,6 +3469,52 @@ Full design: `docs/plans/recommendation-outcomes-measurement.md` §10/§11.
 
 ### `stock_analyzer/llm.py`
 
+*(2026-10-26, Phase 2 through P2-c, `docs/plans/llm-model-routing.md` §13–15. This block
+supersedes the Phase 1 description of `complete()`'s signature and the single `modern` profile
+further down.)*
+
+- **Model resolution.** `resolve_model_with_source(role, model=None, *, setting=None,
+  env=None)` returns `(model, source)`.
+  - Roles outside `EDITABLE_ROLES` (`fast`, `deep`, `extract`) always take `CODE_DEFAULTS`, and
+    a pinned role still raises on a different explicit model.
+  - An editable role resolves in this order: an explicit `model=` (`explicit`), then env
+    `DRISHTA_LLM_MODEL_<ROLE>` when it is a `claude-` id (`env`), then the App Settings entry
+    (`setting`), then `CODE_DEFAULTS` (`code`).
+  - `resolved()` / `resolved_with_source()` / `resolved_setting()` resolve against the live
+    `llm_settings` snapshot, consulted only for an editable role with no explicit model.
+  - An AST ratchet limits `resolve_model(` to `llm.py` / `llm_settings.py`.
+- **`complete(role, *, api_key, messages, max_tokens, system=None, model=None,
+  temperature=None, expects_json=None, timeout=None, setting=None, client_kwargs=None,
+  client_factory=None)`.** It never raises, and every result (an unknown role excepted) is
+  tallied once in `llm_usage`.
+  - `expects_json=True` can only add JSON handling to a narrative role (`json_mode`). A
+    cut-off or odd-stop reply then fails instead of being parsed, and empty or whitespace-only
+    text is no reply for every role.
+  - A setting's effort and capabilities apply only when the source is `setting`.
+- **Request profiles (`profile_for`).**
+  - `legacy-sampling` (Haiku 4.5, Sonnet 4.6, Opus 4.6) forwards `temperature`.
+  - `opus-4x` (Opus 4.7 / 4.8, Opus 5, Sonnet 5) sends no sampling parameters.
+  - `known-modern` (`^claude-(haiku|sonnet|opus)-5-5(-\d{8})?$`):
+    - effort capped at `ALLOWED_EFFORTS` (`low` / `medium` / `high`), default `low`;
+    - for JSON handling, thinking off in the family's form (Haiku `disabled`, Sonnet
+      `between_tools`, Opus none);
+    - `max_tokens` × `MODERN_TOKEN_FACTOR` (1.3, provisional), plus `THINKING_HEADROOM_TOKENS`
+      (2048, provisional) for narrative calls;
+    - on Sonnet / Opus 5.5 only, the server-side refusal fallback (`betas=[FALLBACK_BETA]`,
+      `fallbacks="default"`, via `client.beta.messages.create`).
+  - `generic` (any other id): no thinking field, effort only when the stored capabilities list
+    it, headroom on every role, clamped to the capabilities' `max_tokens`.
+- **`LLMResult`.** `model` is the model that served the reply. On a fallback it comes from
+  `usage.iterations` or the `fallback` block. The record also carries `requested_model`,
+  `fell_back` and `model_source`.
+- **Models API helpers (never raise).**
+  - `retrieve_model` returns `(capabilities, error, error_kind)`.
+  - `classify_api_error`: `ERR_UNREACHABLE` for a connection error, timeout or 5xx;
+    `ERR_REJECTED` for any 4xx or anything unrecognised.
+  - `list_model_ids`; `normalize_capabilities`, whose output has exactly `CAPABILITY_KEYS`;
+    `approx_cost_usd` from `PRICES_PER_MTOK`.
+  - The Models API client uses `max_retries=1`.
+
 The single path for every Anthropic call in the app and the crons (LLM model routing Phase 1,
 `docs/plans/llm-model-routing.md`, commits `74234dc`..P1-e). Callers name a **role**, not a model:
 `fast`, `deep`, `extract`, `extract_strong`, `extract_trigger`, `filter`, `score`.
@@ -3495,6 +3546,100 @@ none); `tests/test_llm_roles.py` pins each call site's role; `tests/test_llm_rat
 fails on a `claude-…` model id outside this file and the user-facing menus
 (`ai_provider.AI_PROVIDERS`, `investigator.EVAL_PASSED_MODELS`, AI Snapshot's `_AI_PROVIDERS`),
 or an Anthropic client / `messages.create` outside this file.
+
+### `stock_analyzer/llm_settings.py`
+
+The App Settings model choice for `llm.EDITABLE_ROLES` (LLM routing P2-b / P2-c). No Streamlit
+import. It is behaviour-neutral until a row exists: no row, an unreadable table, a hash
+mismatch or a failing role all resolve to the code defaults.
+
+- **The row.** One `reference_tables` row, `name = 'llm_models'`, written through
+  `db.save_reference_table`, which dispatches per table through `reference_data.canonicalize_for`
+  / `payload_hash_for` / `validate_for_save`. Every save also writes a
+  `reference_table_history` row.
+  - Payload: `{"version": 1, "roles": {role: {"model", "effort", "capabilities", "checked_at"}}}`.
+  - `canonicalize` sorts keys and strips strings, but never re-cases them.
+  - `hash_view` leaves `checked_at` out of the hash, so a re-check alone is `no_change`.
+- **Validation (`validate_payload`, on the canonical form, so save and load agree).**
+  - `version` must be the int 1, and only editable roles are allowed.
+  - The model must match `^claude-[a-z0-9][a-z0-9.\-]*$`.
+  - Effort must be in `llm.ALLOWED_EFFORTS` and the stored capabilities. No effort is allowed
+    on the legacy / opus-4x profiles.
+  - `capabilities` must be exactly `llm.CAPABILITY_KEYS`, with strict types (floats refused,
+    since a JSONB round trip would break the hash). A generic id must store capabilities.
+- **Snapshot.** `get_snapshot()` returns a frozen `Snapshot(state, setting, warnings, as_of,
+  updated_by)`.
+  - States: `ok`, `no_row`, `unreadable`, `invalid`.
+  - A row whose payload doesn't match its `payload_hash` is `invalid` and ignored (B4a).
+  - A role entry that fails validation is dropped with a warning; the other roles still apply.
+  - TTL is 300 s, or 30 s after an unreadable read.
+  - Reloads are single-flight: the DB read runs outside the lock, other threads get the stale
+    snapshot meanwhile, and a generation counter makes an `invalidate()` during a read void it.
+  - `current_setting()` is what `llm.complete` consults. `save()` invalidates on `saved`.
+  - Each cron lane logs `resolution_summary()` (`fast=<model> (<source>) · … ·
+    settings=<state>`) at start. A lane longer than the TTL can re-resolve mid-run (still open,
+    plan §15).
+- **Save rules.**
+  - `decide_save(role, model, effort, capabilities, retrieve_error, checked_at, *,
+    error_kind=None)`. A Models API error refuses the save unless it is `ERR_UNREACHABLE` and
+    the code knows the model (an unchecked save). A "checked" save with no capabilities is
+    refused.
+  - `base_payload_for_save(status, row)` is what Save / Reset build on. It returns None for an
+    unreadable row, an empty payload for no row or an invalid row, and otherwise the row
+    without the entries the runtime already ignores.
+  - `apply_role` / `reset_role` build the new payload.
+
+### `stock_analyzer/ai_models_settings.py`
+
+The decisions behind ⚙️ App Settings → 🤖 AI models (F-313, LLM routing P2-c). The page only
+renders.
+
+- **`TEST_CASES`.** One per editable role, mirroring its strictest production site: fast is
+  `premarket_stance.generate_stance`, deep is `thesis_advisor.review_thesis`, extract is
+  `analyst_intel.extract_report`.
+  - Each case uses the site's own system prompt, user-prompt builder, `max_tokens` and
+    `expects_json`; tests pin these to the site.
+  - The timeout is the site's own (`LLM_REQUEST_TIMEOUT_SEC` for deep,
+    `ANALYST_EXTRACT_TIMEOUT_SEC` for extract). For fast, the stance passes none, so the test
+    uses `LLM_REQUEST_TIMEOUT_SEC` as its budget (`site_timeout` False).
+  - Each case has a `format_check` that reads the reply the way the site's parser does: a
+    `Stance:` line naming defensive / neutral / constructive, a `Verdict:` line, or
+    `analyst_intel.parse_extract_text`.
+- **`run_test(role, entry, api_key)`.** Calls `llm.complete(..., setting={role: RoleSetting})`,
+  never `model=`. Returns the stop reason, served model, `fell_back`, tokens, latency, an
+  approximate cost and the format check. Never raises.
+- **`can_save(entry, last_test)`.** Save is allowed only when the last test:
+  - matches `candidate_key` (model, effort, canonical capabilities);
+  - succeeded;
+  - didn't fall back to another model;
+  - ran with source `setting`;
+  - passed the format check.
+- **Other helpers.**
+  - `effort_options` / `effort_label`: labels match what `build_request` sends.
+  - `model_choices`.
+  - `edit_block_reason`: when an env var is the source, the role's controls are hidden (N8).
+  - `history_lines`: per-role changes, ignoring `checked_at`.
+  - `format_checked_at`.
+  - `save_outcome_message`: handles `no_change` on an invalid row, and a reset with nothing
+    to reset.
+
+### `stock_analyzer/ai_models_view.py` / `stock_analyzer/llm_usage.py`
+
+The decisions behind 🩺 System Trust → 🤖 AI models (P2-d), reused by App Settings for its
+per-role rows.
+
+- **`ai_models_view.build_rows(snapshot, *, env=None, available_ids=None, usage=None)`.**
+  Returns one row per role:
+  - what the role does (`ROLE_DESCRIPTIONS`);
+  - whether it's editable, or the reason it's locked (`LOCK_REASONS`);
+  - the model and source, resolved exactly as `complete` would;
+  - key access (`key_status`: an exact id or an 8-digit dated variant; "unknown" is never
+    shown as good);
+  - env notes ("set but ignored" for a non-`claude-` value), per-role warnings and usage.
+- **`ai_models_view.settings_status(snapshot)`.** Words the four snapshot states.
+- **`llm_usage`.** A process-level per-role tally (calls, errors, fallbacks, tokens, last
+  error, last served model), written only by `llm.complete` and read only by System Trust.
+  Cron lanes run in their own processes and aren't counted.
 
 ### `stock_analyzer/ai_provider.py`
 
