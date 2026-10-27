@@ -257,7 +257,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 
 ### Live checks pending (Railway is back as of 2026-10-22; app.py has no tests, so a screenshot is the only check)
 
-- **Grow Today score labels (2026-10-26):** the 🌐 macro-event card and the sector hard-cap card read "momentum N" (plus "· composite N" when a trusted composite was recorded) for a new pick; a held add on the sector card still reads "Score N". No literal `**`.
+- **Grow Today score labels (2026-10-26; macro card VERIFIED live 2026-10-27: "S (Cybersecurity, momentum 100 · composite 52)", all 4 shown composites 52–59, below `COMPOSITE_BUY`; sector card not yet seen):** the 🌐 macro-event card and the sector hard-cap card read "momentum N" (plus "· composite N" when a trusted composite was recorded) for a new pick; a held add on the sector card still reads "Score N". No literal `**`.
 - **⚙️ App Settings → 🤖 AI models (P2-c, pushed 2026-10-26):** owner screenshot 2026-10-26 VERIFIED the status line, the 3 roles on code defaults, the 4-row locked table and the literal env-var text; still to see inside the expanders: Check model on a listed id shows efforts + max output tokens; Save stays off until Test role passes; History → "AI model settings" reads "No history yet"; a Test role cost shows `$` (no LaTeX). Nothing is saved by this check unless the owner chooses to.
 - **🩺 System Trust → 🤖 AI models (P2-d, `b3eec89`) VERIFIED live 2026-10-25:** green no-row line, 7 rows all "code default" on the expected models, Key ✅ on all 7, no env notes, counters moving (score 29 calls, filter 1), Investigator picker intact. Cosmetic: the long "What it does" / "Editable" cells truncate at column width.
 - **Provider throttle + Data Health (`8f98f7b`, pushed 2026-10-25):**
