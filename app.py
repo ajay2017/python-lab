@@ -3676,6 +3676,50 @@ with st.sidebar:
         if not _ah_any_err:
             st.caption("No errors recorded since the last reset.")
 
+    # Read-only probe: which endpoints do the owner's keys actually reach? Also a
+    # sibling expander (no nesting). Plain st.* only; no raw HTML.
+    with st.expander("🧪 Test provider endpoints", expanded=False):
+        from stock_analyzer import constants as _pp_C
+        from stock_analyzer.providers import endpoint_probe as _pp_probe
+        from stock_analyzer.providers._util import get_secret as _pp_secret
+        _pp_off = ["Finnhub news-sentiment"] if not _pp_C.FINNHUB_NEWS_SENTIMENT_ENABLED else []
+        _pp_off += [f"FMP {_n}" for _n in sorted(_pp_C.FMP_SKIP_ENDPOINTS)]
+        _pp_n = _pp_probe.probe_counts()
+        st.caption(
+            f"One read-only request per endpoint against AAPL — {sum(_pp_n.values())} calls "
+            f"({_pp_n['finnhub']} Finnhub, {_pp_n['fmp']} FMP). The call/error counters above "
+            "are untouched; the FMP requests do count toward FMP's daily quota (the "
+            f"\"today: N/{_pp_C.FMP_DAILY_CALL_CAP}\" figure rises after its cache refresh). \"candidate\" rows are "
+            "endpoints the app doesn't use yet. "
+            "Turned off in settings: " + (", ".join(_pp_off) if _pp_off else "none") + "."
+        )
+        if st.button("Run endpoint test", key="_provider_probe_run", width="stretch",
+                     disabled=st.session_state.get("_readonly", False)):
+            try:
+                with st.spinner("Testing endpoints…"):
+                    _pp_rows = _pp_probe.run_probe(
+                        {"finnhub": _pp_secret("FINNHUB_API_KEY"),
+                         "fmp": _pp_secret("FMP_API_KEY")},
+                        on_fmp_call=lambda: db.increment_daily_quota("fmp"),
+                        fmp_used_today=db.get_daily_quota("fmp"),
+                    )
+                st.session_state["_provider_probe_result"] = {
+                    "at": _now_et(), "rows": _pp_rows}
+            except Exception as _pp_exc:
+                st.error(f"Endpoint test failed: {type(_pp_exc).__name__}")
+        _pp_res = st.session_state.get("_provider_probe_result")
+        if _pp_res:
+            st.caption(f"Run at {_pp_res['at'].strftime('%H:%M')} ET")
+            st.dataframe(
+                pd.DataFrame([{
+                    "Provider": r["provider"], "Endpoint": r["endpoint"],
+                    "Role": r.get("role", ""),
+                    "HTTP": "" if r["http_status"] is None else str(r["http_status"]),
+                    "Result": r["outcome"], "Detail": r["detail"],
+                } for r in _pp_res["rows"]]),
+                hide_index=True, width="stretch",
+            )
+
     # ── Curated news feed — filled after page data loads ─────────────────
     st.divider()
     st.markdown(
