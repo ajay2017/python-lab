@@ -160,7 +160,21 @@ import sys
 # which xdist cannot split) spent half its time in ast.get_source_segment
 # re-splitting app.py per call. After that fix: 7860 passed in 191s parallel,
 # slowest test 122s -- back to ~2.4x margin. Left at 450 for the reason above.
-_PYTEST_TIMEOUT_SEC = 450
+#
+# 2026-10-27: raised 450 -> 900 (owner decision). The suite is now ~11,070
+# tests; measured that day: 387s parallel on AC, 546s parallel (the
+# implementer's full run), and two pre-commit runs on battery timed out at
+# 450 with no stray process (false hangs, the failure mode described above).
+# 450 was below the worst completed run on record, so no margin was left.
+# 900 is ~1.58x that run (571s, 2026-10-19, 9557 tests; 546s on 10-27) and
+# ~2.3x the AC run; the 10-27 battery runs' true duration is unmeasured
+# (>450s). Short of the 3x rule above, a deliberate trade against a genuine
+# hang costing 15 minutes. Revisit on a completed run >= ~600s or any timeout
+# at 900, and cut the slowest tests (`pytest --durations=40`) rather than
+# raising this again. Run hook-bearing `git commit` / `git push` from Claude
+# Code with run_in_background: its foreground cap (600s) is below this, and a
+# tool kill skips _kill_process_tree and the last-hook-block.log write.
+_PYTEST_TIMEOUT_SEC = 900
 
 # The antipattern scan's own limit. It FAILS OPEN on timeout (reported as
 # "SKIPPED" in the pass line, commit allowed), so a too-tight value does not

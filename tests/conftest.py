@@ -10,7 +10,8 @@ import pytest
 
 # ── Guard: no test parses app.py the slow way ───────────────────────────────
 # app.py is ~3 MB; a plain ast.parse costs 15-90 s per xdist worker, and the
-# commit hook gives the whole suite 450 s (it timed out 3x on 2026-10-20).
+# commit hook gives the whole suite _PYTEST_TIMEOUT_SEC (.claude/hooks/pre_tool_checks.py;
+# 450 s when it timed out 3x on 2026-10-20, 900 s since 2026-10-27).
 # Tests must use tests._ast_cache.parse_file_cached / source_segment instead.
 # Fires only when a TEST FILE calls ast.parse / ast.get_source_segment
 # DIRECTLY on a huge source: production code (e.g. check_antipatterns parsing
@@ -34,7 +35,7 @@ def _forbid_slow_app_parse(source, fn_name):
         pytest.fail(
             f"{caller.name} calls ast.{fn_name} on a {len(source):,}-char source "
             "(app.py) directly -- use tests._ast_cache.parse_file_cached(path) "
-            "/ source_segment(src, node) so the commit hook stays under 450 s.",
+            "/ source_segment(src, node) so the commit hook stays under its _PYTEST_TIMEOUT_SEC.",
             pytrace=False,
         )
 

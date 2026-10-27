@@ -139,9 +139,13 @@ pytest tests/ -v
   `stock_analyzer/market_time.py` `now_et`/`today_et`), or — if genuinely
   acceptable — regenerate the baseline deliberately
   (`python scripts/check_antipatterns.py --init`).
-- Fails open on infra problems (missing `.venv`, pytest not installed, a
-  450s timeout, a missing gate script) — warns but does not block, since that's
-  an environment gap, not a code problem.
+- When the suite can't be invoked at all (no `.venv` python, pytest won't
+  start) the pytest gate **BLOCKS** (fail-closed since 2026-08-27,
+  `git_hook_adapter.py` "pytest COULD NOT RUN"); a line is also appended to
+  `.claude/hooks/.venv_fail_open.log`, a historical name. **A pytest timeout
+  also BLOCKS** (`_finish_pytest`): `_PYTEST_TIMEOUT_SEC` is 900 s since
+  2026-10-27 (was 450). Every block is written to `last-hook-block.log`. Only the
+  antipattern scan fails open (a missing script or its own timeout).
 
 **2026-09-28 CI/CD efficiency pass — three changes here, none weakening what
 the gate proves** (full detail: `.claude/hooks/pre_tool_checks.py`'s module
