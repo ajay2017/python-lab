@@ -1077,6 +1077,20 @@ DATA_PROVIDER_ORDER = ["yahoo_finance", "finnhub", "fmp"]
 # Finnhub's per-symbol /quote would blow the 60/min free limit on ~200 names).
 DATA_LIVE_PRICE_ORDER = ["finnhub", "yahoo_finance", "fmp"]
 
+# Finnhub /stock/news-sentiment on/off. OFF: on the current Finnhub plan every
+# call returned a non-JSON body (11 parse errors, 0 successes, live Data Health
+# 2026-10-27) and spent ~31% of Finnhub's calls, which share the rate limit with
+# live prices. Flip to True if the plan changes AND the Data Health endpoint
+# probe shows the endpoint works. Callers get {} (the existing "no sentiment
+# data" path) while off.
+FINNHUB_NEWS_SENTIMENT_ENABLED = False
+
+# FMP stable-API endpoints skipped before any HTTP call: each returned 402
+# Payment Required on every call (live Data Health 2026-10-27), i.e. not on the
+# current FMP plan. Their callers already degrade to None / {} on failure.
+# Remove a name once the Data Health endpoint probe shows it works.
+FMP_SKIP_ENDPOINTS = frozenset({"earnings", "grades-consensus"})
+
 # Master switch. When False, data.py behaves EXACTLY as the single-source
 # yfinance code (no failover, no cross-check). Enabled 2026-06-01 after the
 # orchestrator was validated live (selftest: all three sources agree to the

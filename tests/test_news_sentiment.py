@@ -13,6 +13,14 @@ import pytest
 pytestmark = pytest.mark.fast
 
 
+@pytest.fixture(autouse=True)
+def _sentiment_enabled(monkeypatch):
+    # The fetch is switched off by default (FINNHUB_NEWS_SENTIMENT_ENABLED = False,
+    # 2026-10-27); these tests exercise the enabled path. The disabled path is
+    # covered in tests/test_provider_skips.py.
+    monkeypatch.setattr(ns, "FINNHUB_NEWS_SENTIMENT_ENABLED", True)
+
+
 # ─── fetch_sentiment_for_tickers — provider not configured ──────────────────
 
 class _FakeProvider:

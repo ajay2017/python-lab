@@ -290,7 +290,12 @@ class FMPProvider(DataProvider):
     # ── Bundle (failover for the full analysis when yfinance is down) ─────────
     def _get_json(self, path: str, params: dict | None = None):
         """GET /stable/<path> with apikey; raise ProviderUnavailable (key
-        redacted) on transport error or FMP error payload."""
+        redacted) on transport error or FMP error payload. Endpoints in
+        C.FMP_SKIP_ENDPOINTS (not on the current plan) raise before any HTTP
+        call, with no quota increment and no api_health record."""
+        if path in C.FMP_SKIP_ENDPOINTS:
+            raise ProviderUnavailable(
+                f"{path}: skipped (not on the current FMP plan; FMP_SKIP_ENDPOINTS)")
         p = dict(params or {})
         p["apikey"] = self._key
         try:

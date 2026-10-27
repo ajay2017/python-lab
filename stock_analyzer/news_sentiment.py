@@ -1,5 +1,6 @@
 from stock_analyzer.providers.finnhub_provider import FinnhubProvider
 from stock_analyzer.constants import (
+    FINNHUB_NEWS_SENTIMENT_ENABLED,
     NEWS_SENTIMENT_BULLISH_THRESHOLD,
     NEWS_SENTIMENT_BEARISH_THRESHOLD,
     NEWS_SENTIMENT_SHIFT_ALERT_BULLISH,
@@ -12,10 +13,13 @@ def fetch_sentiment_for_tickers(tickers: list[str]) -> dict[str, dict]:
 
     Returns {ticker: sentiment_dict} for tickers where data is available.
     Tickers that fail or return None are omitted from the result.
-    Returns {} if Finnhub is not configured, tickers is empty, or every
-    per-ticker fetch failed/raised — these three cases are intentionally
+    Returns {} if the fetch is switched off (FINNHUB_NEWS_SENTIMENT_ENABLED is
+    False; no HTTP call is made), Finnhub is not configured, tickers is empty,
+    or every per-ticker fetch failed/raised — these cases are intentionally
     indistinguishable to the caller (all mean "no sentiment data available").
     """
+    if not FINNHUB_NEWS_SENTIMENT_ENABLED:
+        return {}
     provider = FinnhubProvider()
     if not provider.is_configured():
         return {}
