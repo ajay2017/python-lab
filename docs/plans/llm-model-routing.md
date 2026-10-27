@@ -1,6 +1,6 @@
 # LLM model routing: move to current models, and change models without code changes
 
-**Status (2026-10-26, evening): Phase 2 COMPLETE. P2-a1, P2-a2, P2-b, P2-d, the P2-c prerequisites, P2-c and P2-e (docs) SHIPPED (section 15). NEXT: Phase 3, the owner's call: switch one role at a time in App Settings, Test role first; the first live check is `extract` on Sonnet 5.5. Still open: pin the settings snapshot per cron process (section 15).** *(Earlier 2026-10-26: P2-c SHIPPED, NEXT was P2-e.)* *(2026-10-25: P2-a1, P2-a2, P2-b and P2-d SHIPPED; NEXT was P2-c with its prerequisites.)* *(Earlier 2026-10-25: READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry.)* *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
+**Status (2026-10-27): Phase 3 SWITCHES DONE (section 16): `extract` → Sonnet 5.5, `fast` → Haiku 5.5, `deep` → Sonnet 5.5, each saved in App Settings after a passing Test role. Watch window open: System Trust errors for ~a week, the first cron `deep` run Sun 11-01 20:00 ET, the console cost compare ~11-10. NEXT after the watch: `filter` + `extract_trigger` → Haiku 5.5 (reviewed `CODE_DEFAULTS` change), then Phase 4 (`score`), Phase 5 (Investigator eval); `extract_strong` → Opus 5.5 after the broker-import preview check (D2-1).** *(2026-10-26, evening: Phase 2 COMPLETE. P2-a1, P2-a2, P2-b, P2-d, the P2-c prerequisites, P2-c and P2-e (docs) SHIPPED (section 15). NEXT: Phase 3, the owner's call: switch one role at a time in App Settings, Test role first; the first live check is `extract` on Sonnet 5.5. Still open: pin the settings snapshot per cron process (section 15).** *(Earlier 2026-10-26: P2-c SHIPPED, NEXT was P2-e.)* *(2026-10-25: P2-a1, P2-a2, P2-b and P2-d SHIPPED; NEXT was P2-c with its prerequisites.)* *(Earlier 2026-10-25: READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry.)* *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
 lead from an AST inventory of every Anthropic call (2026-10-22) and the Claude API migration guide bundled with Claude
 Code (cached 2026-10-06). **Owner agreed with every lead recommendation in section 7 (2026-10-22):** D-1 App Settings
 with the score role pinned in code; D-2 switch the score model, but last, after the Phase 4 dry run; D-3 Sonnet 5.5
@@ -850,3 +850,37 @@ The lead re-checked B1 (`app.py:8258`, `debate_agent.py:462`), B8 (`thesis_advis
   line may not name every call's model. Pin the snapshot per cron process, or accept and note it.
 - **First live check before Phase 3:** Test role on `extract` with Sonnet 5.5 (whether `between_tools` plus `fallbacks`
   is accepted).
+
+## 16. Phase 3 progress
+
+**2026-10-27, owner-run in ⚙️ App Settings → 🤖 AI models, each Test role read with the lead before Save.**
+
+All three were effort "default (low)", `end_turn`, served by the model asked for (no fallback), with the format check
+passing. Figures are the live Test role results:
+
+| Role | Model | Tokens in / out | Out vs budget | Latency | Cost |
+|---|---|---|---|---|---|
+| `extract` | `claude-sonnet-5-5` | 2,875 / 1,453 | 14% of 10,400 | 7.4 s of 90 s | ≈ $0.0203 |
+| `fast` | `claude-haiku-5-5` | 1,051 / 405 | **62%** of 650 | 2.9 s of the test's 30 s | ≈ $0.0003 |
+| `deep` (first test) | `claude-sonnet-5-5` | 933 / 363 | **93%** of 390 | 3.7 s of 30 s | ≈ $0.0055 (not saved) |
+| `deep` (after `b13ed92`) | `claude-sonnet-5-5` | 933 / 355 | 27% of 1,300 | 3.2 s of 30 s | ≈ $0.0054 |
+
+- **The `extract` test answers the §15 open question.** A Sonnet 5.5 JSON request with thinking `between_tools` plus
+  the beta refusal fallback is accepted.
+- **`deep` was held after its first test.** At 93% of the budget, a slightly longer review would be cut off, and since
+  P2-a1 a cut-off review is dropped. Owner Option A: `THESIS_REVIEW_MAX_TOKENS = 1000` replaced the 300 literal for
+  `review_thesis` / `generate_earnings_thesis_update` (`b13ed92`, Opus SHIP). Then the retest passed and was saved.
+- **Also shipped for Phase 3:** `0d36189` raised the SDK floor to `anthropic>=0.121.0,<1.0` (N5).
+
+**Watch:**
+1. The System Trust per-role Errors / Fallbacks. On `fast`, watch for "reply cut off at max_tokens": at 62% it is the
+   slimmest margin, and the fix would be a reviewed budget change.
+2. Sun 11-01 20:00 ET, the thesis lane: `llm: … deep=claude-sonnet-5-5 (setting)`, with reviews saved rather than
+   dropped.
+3. ~11-10: console usage, the two weeks after against the 30 days before.
+
+**Remaining models (each a reviewed code change, not App Settings):**
+- `filter` + `extract_trigger` → Haiku 5.5, after `fast` runs cleanly;
+- `score` → Phase 4;
+- `extract_strong` → Opus 5.5 after the D2-1 preview check;
+- Investigator → Phase 5 (eval).

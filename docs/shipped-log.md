@@ -9,6 +9,7 @@ Cross-reference: many entries here have a fuller, dedicated memory file (see `ME
 ---
 
 **Recently shipped (do not re-chase):**
+- **LLM routing Phase 3: three roles on the 5.5 models (2026-10-27, owner-run in ⚙️ App Settings; plan §16).** `extract` → Sonnet 5.5, `fast` → Haiku 5.5, `deep` → Sonnet 5.5, each after a passing Test role read with the lead. `b13ed92`: `THESIS_REVIEW_MAX_TOKENS` 300 → 1000 first (the `deep` test used 363 of 390, and a cut-off review is dropped). `0d36189`: SDK floor `anthropic>=0.121.0`. Still on code defaults by design: `filter`, `extract_trigger`, `score` (Phase 4), `extract_strong`.
 - **LLM routing Phase 2: choose AI models in App Settings (2026-10-25..26, F-313; `docs/plans/llm-model-routing.md` §13–15).** The owner's goal: moving a role onto a newer model is a settings change, not a code change.
   - `279a113` P2-a1: per-call `expects_json` and the empty-text rule.
   - `782d392` P2-a2: the resolver with source, the known-modern / generic profiles and the refusal fallback (inert).
