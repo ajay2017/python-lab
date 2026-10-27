@@ -302,6 +302,7 @@ from stock_analyzer.portfolio import (
     correlation_claim_verified, correlation_flat,
     beta_diversifying_sectors,
 )
+from stock_analyzer.score_label import score_phrase
 from stock_analyzer.rr_readout import fmt_ratio_vs, rank_add_candidates, rr_quality, redeploy_headline
 from stock_analyzer.beta_repair import (
     aligned_beta, leverage_side_effect, rank_defensive_candidates,
@@ -10568,7 +10569,7 @@ if page == "🏠 Home":
         if sector_blocked:
             _sb_rows = "".join(
                 f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{_safe_html(b['ticker'])}</b> "
-                f"({_safe_html(b.get('sector','?'))} · Score {b.get('score',0):.0f}) — "
+                f"({_safe_html(b.get('sector','?'))} · {_safe_html(score_phrase(b))}) — "
                 f"{_safe_html(b.get('reason','sector over hard cap'))}</div>"
                 for b in sector_blocked[:4]
             )
@@ -10645,7 +10646,7 @@ if page == "🏠 Home":
             _mb_extra = len(macro_blocked) - len(_mb_shown)
             _mb_rows = "".join(
                 f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{_safe_html(b['ticker'])}</b> "
-                f"({_safe_html(b.get('sector','—'))}, Score {b.get('score',0):.0f}) — {_safe_html(b.get('reason',''))}</div>"
+                f"({_safe_html(b.get('sector','—'))}, {_safe_html(score_phrase(b))}) — {_safe_html(b.get('reason',''))}</div>"
                 for b in _mb_shown
             )
             if _mb_extra > 0:
