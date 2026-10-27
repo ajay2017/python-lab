@@ -206,6 +206,62 @@ def feed_state(bundles) -> dict | None:
             "partial": state == "ok" and len(unavailable) >= NEWS_FEED_OUTAGE_MIN_TICKERS}
 
 
+def home_feed_state(grow_composites, held_data) -> dict | None:
+    """`feed_state` over the bundles a Home render holds: Grow candidates plus held
+    names (held wins on a shared ticker). None = nothing to check or the
+    computation failed -- never {} -- so a consumer can tell "couldn't check"."""
+    try:
+        merged: dict = {}
+        if isinstance(grow_composites, dict):
+            merged.update(grow_composites)
+        if isinstance(held_data, dict):
+            merged.update(held_data)
+        return feed_state(merged) if merged else None
+    except Exception:
+        return None
+
+
+_DISCLOSURE_MAX_NAMES = 5
+
+
+def brief_news_disclosure(state) -> dict | None:
+    """On-screen disclosure for the Home Brief from a `feed_state` result.
+
+    {"level": "outage" | "partial", "text": ...} when the Brief's news checks
+    (Act critical-news, Review warning-news, Grow negative-news skip) did not
+    really run; None when the feed is healthy, too thin to call, or the state
+    is None / malformed (couldn't check -> never claim an outage). Never raises.
+    """
+    try:
+        if not isinstance(state, dict):
+            return None
+        kind = state.get("state")
+        if kind == "outage":
+            checked = int(state.get("checked") or 0)
+            return {"level": "outage", "text": (
+                "📰 News feed unavailable this run — the critical-news and "
+                "warning-news checks on your holdings and Grow Today's "
+                "negative-news Skip did not run "
+                f"(0 of {checked} names returned headlines). "
+                "Scores count news sentiment as neutral meanwhile.")}
+        # Any non-outage state: "cached" bundles carry no news, so an all-cached
+        # run reads "thin" with partial False -- count the unavailable names.
+        raw = state.get("unavailable")
+        unavailable = [str(t) for t in (raw if raw is not None else [])]
+        if len(unavailable) >= NEWS_FEED_OUTAGE_MIN_TICKERS:
+            shown = ", ".join(unavailable[:_DISCLOSURE_MAX_NAMES])
+            if len(unavailable) > _DISCLOSURE_MAX_NAMES:
+                shown += ", …"
+            return {"level": "partial", "text": (
+                "📰 News feed partly unavailable — news couldn't be checked for "
+                f"{len(unavailable)} names ({shown}); for those names the "
+                "critical-news / warning-news checks and Grow Today's "
+                "negative-news Skip did not run.")}
+        return None
+    except Exception:
+        return None
+
+
 def outage_failure(*feeds) -> str | None:
     """One cron failure line if ANY of the given `feed_state` results is an outage
     (the lane still does its work and sends its emails -- this only reddens the

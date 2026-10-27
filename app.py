@@ -6336,6 +6336,9 @@ if page == "🏠 Home":
                         cluster_add_blocks = _cluster_add_blocks,
                         pair_add_blocks = _pair_add_blocks,
                         corr_unchecked  = _corr_unchecked,
+                        # The refreshed bundles this build actually used.
+                        news_feed       = _news_feed.home_feed_state(
+                            _grow_composites, held_data),
                     )
                     # Update snapshot so next HIT reads fresh fetched_at values
                     st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
@@ -6757,6 +6760,8 @@ if page == "🏠 Home":
                     cluster_add_blocks = _cluster_add_blocks,
                     pair_add_blocks = _pair_add_blocks,
                     corr_unchecked  = _corr_unchecked,
+                    news_feed       = _news_feed.home_feed_state(
+                        st.session_state.get("_grow_composites", {}), held_data),
                 )
                 # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
                 # the Brief header so the user can see how fresh the data is.
@@ -10877,6 +10882,14 @@ if page == "🏠 Home":
     # None = could not verify; [] = verified clean.  Never "or []" here — that
     # destroys the sentinel contract the whole feature exists to preserve.
     _db_macro_cov = (_db_grow or {}).get("macro_coverage_expired")
+
+    # News-feed outage disclosure (news-feed-restore chunk 3b): the Brief's
+    # critical-news / warning-news / negative-news checks read "no news" when
+    # the feed is down, so say so above the cards. A Brief served from Brief
+    # Lock carries whatever disclosure it had when it was locked.
+    _nf_disc = (_daily_brief or {}).get("news_feed_disclosure")
+    if isinstance(_nf_disc, dict) and _nf_disc.get("text"):
+        st.warning(_nf_disc["text"])
 
     # ── Two-column layout: Act Today (left) | Grow Today (right) ────────
     _db_col_left, _db_col_right = st.columns([1, 1])
@@ -42905,6 +42918,8 @@ The Home brief is split into **offense** (left) and **defense** (right).
 **Adds count what you already hold (since 2026-10-20).** For an add-to-winner both caps apply to the position you end up with — what you hold plus the new shares — not to the new shares alone. An add onto a name already near 15% of your book (or 25% of your net capital) is sized down to the room left and says "Capped by what you already hold"; a name with no room left gets no size and is listed under "🔒 Add Suppressed — Position Already at the Cap". The ⚖️ Rebalancer, the 🧩 Diversification Advisor and the 📡 Signals "Undersized" card never size a buy: they show drift or a sector gap and point to Grow Today / 📈 Analysis.
 
 The footer line beneath the cards states **risk, not capital** — "if every stop hits, the N sized setups above lose ~$X in total" adds up what each *sized* card loses at its stop, after the caps and today's budget, and names any setup that carries no size and why. It is not the cash to deploy.
+
+📰 If the news feed is down or partly down for a run, a warning above the Brief says so — for the names it lists, the critical-news and warning-news checks and Grow Today's negative-news Skip didn't run, so "no news" there doesn't mean the name is quiet.
 
 **Right — three lanes, by urgency:**
 - **🔴 Act Today (decisions only)** — genuine trade decisions for *today*: a stop breached, a sell signal, a **deterioration trim or exit** on a position that's rolling over (see *loss protection* below), a sized trim, breaking critical news (two or more tier-1/2 headlines at or below −0.25 on a holding since midnight ET of the previous trading day — every holding is checked, and the card names the window, e.g. "since Fri Oct 16"). If there's nothing here you'll see **"✅ Nothing to act on — you're set for today."** **Stop-breach cards are re-evaluated against the live intraday price on every render** — the Brief is memoized on portfolio composition (not price), so a breach can fire from yesterday's close even when the live price has already recovered. When the live price is more than 0.5% above the stop, the card is demoted to an amber **"⚠️ Stop Breach — Resolved"** section below Act Today rather than staying in the action lane; when live price data is not yet available the card stays in Act Today with a note to verify the current price before acting. **Tickers you sell during a session are immediately suppressed from Grow Today** — so an exit call you acted on won't re-appear as a BUY recommendation in the same session.

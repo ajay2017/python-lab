@@ -96,6 +96,7 @@ from stock_analyzer.entry_eligibility import data_trust_hold, macro_block_map, m
 from stock_analyzer.analyst_intel import trustworthy_composite
 from stock_analyzer import held_news_check
 from stock_analyzer import g32_shadow
+from stock_analyzer.news_feed import brief_news_disclosure
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -3852,6 +3853,7 @@ def build_daily_briefing(
     cluster_add_blocks: dict | None = None,
     pair_add_blocks: dict | None = None,
     corr_unchecked: list | None = None,
+    news_feed: dict | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -3892,6 +3894,12 @@ def build_daily_briefing(
                      passthrough for a render-layer disclosure caption. None
                      (the default, and every caller before this follow-on)
                      leaves every existing output byte-identical.
+    news_feed:       optional `news_feed.feed_state()` result (news-feed-restore
+                     chunk 3b). Disclosure-only: never read by any gate here.
+                     When it shows an outage or partial outage the result gains
+                     `news_feed_disclosure` ({"level", "text"}) for the Home
+                     banner; otherwise (None, ok, thin) the key is absent and
+                     the output is byte-identical to a build without it.
 
     Returns dict with: act_today, review_list, grow_today, portfolio_tuneup.
     Grow Today owns every new-position and add-to-winner suggestion (the
@@ -4038,6 +4046,10 @@ def build_daily_briefing(
     _nf_crit = held_news_check.critical_news_by_ticker(news_items or [], _nf_held, _news_ts)
     _nf_warn = held_news_check.warning_news_by_ticker(
         news_items or [], _nf_held, _news_ts, exclude=set(_nf_crit))
-    return {"act_today": act, "review_list": review,
-            "grow_today": grow, "portfolio_tuneup": tuneup,
-            "news_flags": held_news_check.news_flags_from_detectors(_nf_crit, _nf_warn)}
+    _result = {"act_today": act, "review_list": review,
+               "grow_today": grow, "portfolio_tuneup": tuneup,
+               "news_flags": held_news_check.news_flags_from_detectors(_nf_crit, _nf_warn)}
+    _nf_disclosure = brief_news_disclosure(news_feed)
+    if _nf_disclosure is not None:
+        _result["news_feed_disclosure"] = _nf_disclosure
+    return _result

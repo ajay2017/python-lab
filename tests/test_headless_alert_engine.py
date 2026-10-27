@@ -1037,6 +1037,10 @@ _APP_ONLY_BRIEF_KWARGS = {
     "corr_unchecked",
     # F-226 personalized-discovery badge (personalized_match); display only.
     "winner_profile",
+    # Disclosure-only (news-feed-restore 3b): adds a `news_feed_disclosure` key
+    # for the Home banner; read by no gate. The cron alerts on an outage itself
+    # via news_feed.outage_failure.
+    "news_feed",
 }
 
 
