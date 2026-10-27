@@ -460,6 +460,15 @@ STOP_TIGHTEN_ATR_MULT     = 1.5
 # in the CRITICAL band (≤3% gap, about to be stopped out) still surface
 # regardless of P&L. Policy value — change = investment-policy decision.
 STOP_TIGHTEN_MIN_GAIN_PCT = 8.0
+# Minimum stop raise worth a Review nudge, as % of price: a "raise stop" card
+# fires only when the recommended stop sits at least this far above the current
+# stop. Because the recommended stop trails price (price − STOP_TIGHTEN_ATR_MULT
+# × ATR), every small up-tick otherwise re-fires the card for a few cents or
+# dollars, even on a stop set that morning (TSLA 2026-10-27: a $1.59 ≈ 0.4%
+# raise on a manual stop set the same day). Applies to every stop-raise card,
+# critical gap included (owner decision 2026-10-27). Policy value — change =
+# investment-policy decision.
+STOP_RAISE_MIN_STEP_PCT   = 1.0
 # Decimal places the Gap-to-Stop % is rounded to BEFORE the breach test
 # (gap <= 0). Shared by build_portfolio_df (the stored "Gap to Stop (%)"),
 # the Daily Brief's breach loop and the Analysis breach gate so all three

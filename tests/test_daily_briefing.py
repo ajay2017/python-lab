@@ -2948,3 +2948,235 @@ def test_build_daily_briefing_etf_candidates_default_none_is_byte_identical():
     brief_default = build_daily_briefing(**kwargs)
     brief_explicit_none = build_daily_briefing(**kwargs, etf_candidates=None)
     assert brief_default == brief_explicit_none
+
+
+# ── Review list defers to a same-ticker reduce card in Act Today ─────────────
+
+from stock_analyzer.constants import (
+    APPROACHING_STOP_GAP_PCT as _APPR_GAP,
+    STOP_PROFIT_LOCK_PNL_PCT as _LOCK_PNL,
+    WEAK_LARGE_TRIM_TO_PCT as _WL_TARGET,
+)
+
+
+def _wl_row(price=100.0):
+    return {"ticker": "AAA", "weight": LARGE_POSITION_WEIGHT_PCT + 2,
+            "score": WEAK_CONVICTION_SCORE - 10, "price": price}
+
+
+def _act(kind, ticker="AAA"):
+    return {"ticker": ticker, "kind": kind, "priority": "high",
+            "directive": "Reduce or exit — composite signal has shifted to Sell.",
+            "why": "Composite score in the Sell zone."}
+
+
+def _weak_large_items(items, ticker="AAA"):
+    return [i for i in items if str(i.get("ticker", "")).upper() == ticker
+            and (i.get("action") or {}).get("reason_key") == "weak_large"]
+
+
+def test_sell_signal_absorbs_weak_large_as_min_trim():
+    port_df = make_port_df([_wl_row()])
+    act = [_act("sell_signal")]
+    items = _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0,
+                         act_today=act)
+    assert _weak_large_items(items) == []
+    mt = act[0]["min_trim"]
+    expected = round(100_000.0 * (LARGE_POSITION_WEIGHT_PCT + 2 - _WL_TARGET) / 100)
+    assert mt["trim_shares"] == int(round(expected / 100.0))
+    assert mt["target_weight"] == _WL_TARGET
+    assert "At minimum, trim" in act[0]["directive"]
+    assert "largest weak holding" in act[0]["why"]
+
+
+def test_min_trim_singular_share_wording():
+    trim_dollars = round(100_000.0 * (LARGE_POSITION_WEIGHT_PCT + 2 - _WL_TARGET) / 100)
+    port_df = make_port_df([_wl_row(price=float(trim_dollars))])
+    act = [_act("sell_signal")]
+    _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0, act_today=act)
+    assert act[0]["min_trim"]["trim_shares"] == 1
+    assert "(1 share ≈" in act[0]["directive"]
+
+
+def test_weak_large_unchanged_without_act_item():
+    port_df = make_port_df([_wl_row()])
+    items = _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0,
+                         act_today=[])
+    assert len(_weak_large_items(items)) == 1
+
+
+def test_weak_large_kept_beside_critical_news_act_item():
+    port_df = make_port_df([_wl_row()])
+    act = [_act("critical_news")]
+    items = _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0,
+                         act_today=act)
+    assert len(_weak_large_items(items)) == 1
+    assert "min_trim" not in act[0]
+
+
+def test_stop_breach_drops_weak_large_without_min_trim():
+    port_df = make_port_df([_wl_row()])
+    act = [_act("stop_breach")]
+    items = _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0,
+                         act_today=act)
+    assert _weak_large_items(items) == []
+    assert "min_trim" not in act[0]
+
+
+def _appr_item(items):
+    return next(i for i in items if i.get("icon") == "📍")
+
+
+def test_approaching_stop_under_sell_signal_is_tighten_only_exit():
+    port_df = make_port_df([{"ticker": "AAA", "weight": 5.0, "pnl_pct": _LOCK_PNL + 5,
+                             "gap_to_stop": _APPR_GAP - 1}])
+    items = _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0,
+                         act_today=[_act("sell_signal")])
+    it = _appr_item(items)
+    assert it["lifecycle"] == "exit"
+    assert it["action"]["type"] == "TIGHTEN_ONLY"
+    assert "still has room" not in it["why"]
+    assert "already says to reduce AAA" in it["why"]
+
+
+def test_approaching_stop_critical_gap_under_sell_never_trims():
+    port_df = make_port_df([{"ticker": "AAA", "weight": 5.0, "pnl_pct": _LOCK_PNL + 5,
+                             "gap_to_stop": 2.0, "shares": 100}])
+    items = _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0,
+                         act_today=[_act("sell_signal")])
+    assert _appr_item(items)["action"]["type"] == "TIGHTEN_ONLY"
+
+
+def test_approaching_stop_without_reduce_call_unchanged():
+    port_df = make_port_df([{"ticker": "AAA", "weight": 5.0, "pnl_pct": _LOCK_PNL + 5,
+                             "gap_to_stop": _APPR_GAP - 1}])
+    items = _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0,
+                         act_today=[_act("critical_news")])
+    it = _appr_item(items)
+    assert it["lifecycle"] == "winning"
+    assert it["action"]["type"] == "TIGHTEN_ONLY"
+    assert "still has room" in it["why"]
+
+
+# ── Minimum stop-raise step (STOP_RAISE_MIN_STEP_PCT) ────────────────────────
+
+from stock_analyzer.constants import (
+    STOP_RAISE_MIN_STEP_PCT as _RAISE_STEP,
+    STOP_TIGHTEN_ATR_MULT as _TIGHTEN_MULT,
+    STOP_TIGHTEN_MIN_GAIN_PCT as _TIGHTEN_GAIN,
+)
+
+
+def _raise_case(raise_pct_of_price, gap=5.0, pnl=None, shares=10):
+    """A held row at price 100 (stop at `gap`% below) whose recommended stop sits
+    `raise_pct_of_price` % of price above the current stop."""
+    price = 100.0
+    stop = price * (1 - gap / 100)   # consistent with the row's gap
+    new_stop = stop + price * raise_pct_of_price / 100
+    atr = (price - new_stop) / _TIGHTEN_MULT
+    port_df = make_port_df([{"ticker": "AAA", "weight": 5.0, "price": price,
+                             "stop": stop, "gap_to_stop": gap, "shares": shares,
+                             "pnl_pct": _TIGHTEN_GAIN + 2 if pnl is None else pnl}])
+    return _review_list(port_df, [], [], {"AAA": {"atr": atr}}, _TODAY,
+                        portfolio_value=100_000.0, act_today=[])
+
+
+def _stop_cards(items):
+    return [i for i in items if i.get("icon") == "📍"]
+
+
+def test_stop_raise_below_min_step_is_not_nudged():
+    assert _stop_cards(_raise_case(_RAISE_STEP - 0.5)) == []
+
+
+def test_stop_raise_above_min_step_is_nudged():
+    cards = _stop_cards(_raise_case(_RAISE_STEP + 0.5))
+    assert len(cards) == 1
+    assert cards[0]["action"]["type"] == "TIGHTEN_ONLY"
+
+
+def test_stop_raise_min_step_applies_in_critical_band_too():
+    # Critical gap with a profit-lock gain would otherwise be TRIM_AND_TIGHTEN;
+    # a trivial raise skips the whole card (owner decision 2026-10-27).
+    assert _stop_cards(_raise_case(_RAISE_STEP - 0.5, gap=2.0,
+                                   pnl=_LOCK_PNL + 5, shares=100)) == []
+    cards = _stop_cards(_raise_case(_RAISE_STEP + 0.5, gap=2.0,
+                                    pnl=_LOCK_PNL + 5, shares=100))
+    assert len(cards) == 1
+    assert cards[0]["action"]["type"] == "TRIM_AND_TIGHTEN"
+
+
+def test_stop_raise_exactly_min_step_is_nudged():
+    # The gate is strict `<`: a raise of exactly the step still fires.
+    assert len(_stop_cards(_raise_case(_RAISE_STEP))) == 1
+
+
+# ── Review-fix follow-ups: only reduce calls ON the name defer ───────────────
+
+def test_risk_card_attribution_does_not_silence_weak_large_or_stop():
+    # A sector_concentration `risk` card's ticker is the sector's largest
+    # holding (an attribution), not a trim target: that name keeps its own
+    # weak-large card and its normal stop card.
+    port_df = make_port_df([_wl_row()])
+    act = [_act("risk")]
+    items = _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0,
+                         act_today=act)
+    assert len(_weak_large_items(items)) == 1
+    assert "min_trim" not in act[0]
+    port_df = make_port_df([{"ticker": "AAA", "weight": 5.0, "pnl_pct": _LOCK_PNL + 5,
+                             "gap_to_stop": _APPR_GAP - 1}])
+    it = _appr_item(_review_list(port_df, [], [], {}, _TODAY,
+                                 portfolio_value=100_000.0, act_today=[_act("risk")]))
+    assert it["lifecycle"] == "winning"
+    assert "still has room" in it["why"]
+
+
+def test_risk_card_attribution_keeps_critical_profit_lock_trim():
+    cards = _stop_cards(_review_list(
+        make_port_df([{"ticker": "AAA", "weight": 5.0, "price": 100.0, "stop": 98.0,
+                       "gap_to_stop": 2.0, "shares": 100, "pnl_pct": _LOCK_PNL + 5}]),
+        [], [], {"AAA": {"atr": (100.0 - 98.0 - _RAISE_STEP - 0.5) / _TIGHTEN_MULT}},
+        _TODAY, portfolio_value=100_000.0, act_today=[_act("risk")]))
+    assert len(cards) == 1
+    assert cards[0]["action"]["type"] == "TRIM_AND_TIGHTEN"
+
+
+def test_deterioration_trim_defers_without_exit_badge():
+    port_df = make_port_df([{"ticker": "AAA", "weight": 5.0, "pnl_pct": _LOCK_PNL + 5,
+                             "gap_to_stop": _APPR_GAP - 1}])
+    it = _appr_item(_review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0,
+                                 act_today=[_act("deterioration_trim")]))
+    assert it["lifecycle"] != "exit"
+    assert it["action"]["type"] == "TIGHTEN_ONLY"
+    assert "already says to reduce AAA" in it["why"]
+    act = [_act("deterioration_trim")]
+    items = _review_list(make_port_df([_wl_row()]), [], [], {}, _TODAY,
+                         portfolio_value=100_000.0, act_today=act)
+    assert _weak_large_items(items) == []
+    assert "min_trim" not in act[0]
+
+
+def test_weak_large_kept_beside_premortem_act_item():
+    act = [_act("premortem_triggered")]
+    items = _review_list(make_port_df([_wl_row()]), [], [], {}, _TODAY,
+                         portfolio_value=100_000.0, act_today=act)
+    assert len(_weak_large_items(items)) == 1
+    assert "min_trim" not in act[0]
+
+
+def test_build_daily_briefing_sell_plus_weak_large_is_one_act_card():
+    from stock_analyzer import decision_bucket
+    port_df = make_port_df([{"ticker": "AAA", "weight": LARGE_POSITION_WEIGHT_PCT + 2,
+                             "score": WEAK_CONVICTION_SCORE - 14, "signal": "Sell"}])
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+    )
+    sell = [a for a in brief["act_today"] if a.get("ticker") == "AAA"]
+    assert len(sell) == 1 and sell[0]["kind"] == "sell_signal"
+    assert sell[0]["min_trim"]["target_weight"] == _WL_TARGET
+    assert "At minimum, trim" in sell[0]["reason"]
+    assert _weak_large_items(brief["review_list"]) == []
+    split = decision_bucket.split_defensive(brief["act_today"], brief["review_list"])
+    assert [i.get("ticker") for i in split["act"]].count("AAA") == 1

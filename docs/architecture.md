@@ -353,6 +353,7 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `FUNDAMENTALS_GATE_MIN_METRICS` | 1 | Min core fundamental metrics required to trust the verdict; below it the verdict is withheld (not scored on a fabricated neutral 50) |
 | `FUNDAMENTALS_CACHE_MAX_AGE_DAYS` | 7 | Max age the persistent last-known-good fundamentals fallback (Supabase `fundamentals_cache`) stays valid; beyond it the verdict withholds again rather than serving stale data |
 | `STOP_TIGHTEN_MIN_GAIN_PCT` | 8.0 | Min P&L before a still-has-room position (gap 3–8% to stop) is nudged to tighten — flat/new positions aren't micromanaged (anti-churn / §2B persona) |
+| `STOP_RAISE_MIN_STEP_PCT` | 1.0 | Min raise (% of price, new stop − current stop) before a Review "raise stop" card fires, critical gap included; stops the trailing recommendation re-firing for a trivial raise (TSLA 2026-10-27: $1.59 ≈ 0.4% on a same-day manual stop) |
 | `POSITION_SETTLING_DAYS` | 10 | Held < this = "settling" lifecycle state → routine stop-tighten nudges suppressed (settling grace); exits/critical never suppressed |
 | `POSITION_AT_RISK_GAP_PCT` / `POSITION_WINNING_PNL_PCT` | 3.0 / 8.0 | Lifecycle thresholds: gap ≤3% = at_risk; P&L ≥8% (and healthy) = winning |
 | `ALERT_PNL_PROFIT_TAKE_PCT` / `ALERT_PNL_STOP_LOSS_PCT` | 15.0 / -8.0 | `portfolio.alerts()`: bearish signal + P&L above/below these = "consider partial profits" warning / danger-level alert. Named per 2026-07-29 audit H3 (were bare literals) |

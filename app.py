@@ -10943,6 +10943,53 @@ if page == "🏠 Home":
                 st.session_state["_broken_thesis_tickers"] = set()
         _broken_thesis_tickers = st.session_state.get("_broken_thesis_tickers", set())
 
+        def _live_px_for(_lp_ticker):
+            _lp = st.session_state.get("_live_prices", {}).get(_lp_ticker)
+            return _lp.get("price") if _lp else None
+
+        def _render_journal_context(_db_ticker):
+            # Trade Journal context for a weak-large position: lets the user
+            # re-evaluate it against their original reasoning.
+            _jctx = _journal_context(_db_ticker)
+            if _jctx:
+                _parts = []
+                if _jctx.get("thesis"):
+                    _t_clip = _jctx["thesis"][:240] + ("…" if len(_jctx["thesis"]) > 240 else "")
+                    _date_tag = f" <span style='color:#78716c'>({_jctx['thesis_date']})</span>" if _jctx.get("thesis_date") else ""
+                    _parts.append(
+                        f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
+                        f"📒 <b>Your entry thesis</b>{_date_tag}: "
+                        f"<span style='color:#e7e5e4;font-style:italic'>“{_html.escape(str(_t_clip))}”</span></div>"
+                    )
+                for _ln in _jctx.get("lessons", []):
+                    _l_clip = _ln["text"][:200] + ("…" if len(_ln["text"]) > 200 else "")
+                    _l_date = f" <span style='color:#78716c'>({_ln['date']})</span>" if _ln.get("date") else ""
+                    _parts.append(
+                        f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
+                        f"💡 <b>Lesson</b>{_l_date}: "
+                        f"<span style='color:#e7e5e4;font-style:italic'>“{_l_clip}”</span></div>"
+                    )
+                if _parts:
+                    st.markdown(
+                        f"<div style='background:#1c1917;border-left:3px solid #fbbf24;"
+                        f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0'>"
+                        + "".join(_parts)
+                        + f"<div style='color:#a8a29e;font-size:0.74em;margin-top:6px'>"
+                        "Re-evaluate this large position against your original reasoning before trimming."
+                        f"</div></div>",
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.markdown(
+                    f"<div style='background:#1c1917;border-left:3px solid #57534e;"
+                    f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0;"
+                    f"color:#a8a29e;font-size:0.76em;font-style:italic'>"
+                    f"📒 No Trade Journal entry found for {_db_ticker}. "
+                    "Log your entry thesis next time so weak-position reviews can be grounded in original reasoning."
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
         def _render_act_card(_db_item, in_act=False):
             _db_is_crit = _db_item["priority"] == "critical"
             _db_bg      = "#450a0a" if _db_is_crit else "#1c1917"
@@ -11020,6 +11067,8 @@ if page == "🏠 Home":
                 + f"</div>",
                 unsafe_allow_html=True,
             )
+            if _db_item.get("min_trim") and _db_ticker:
+                _render_journal_context(_db_ticker)
             if _db_ticker:
                 # Live-price caption for stop_breach cards — confirm active or
                 # flag unavailable data so the user knows the signal's data age.
@@ -11076,10 +11125,30 @@ if page == "🏠 Home":
                             key_suffix="stopsell",
                             label=f"📒 Log this sell ({int(_db_sell_shares)} sh {_db_ticker})",
                         )
+                # Minimum trim attached to a sell_signal card by _review_list when
+                # the same name is also the largest weak holding: one card, one
+                # sizing, with the same log-the-trade affordance as a review trim.
+                _db_min_trim = _db_item.get("min_trim")
+                _db_mt_sh = int(_db_min_trim["trim_shares"]) if _db_min_trim else 0
+                if _db_mt_sh >= 1:
+                    with _act_cols[1]:
+                        _db_mt_px = _live_px_for(_db_ticker)
+                        _render_trade_button(
+                            ticker=_db_ticker,
+                            suggested_action="SELL",
+                            shares=float(_db_mt_sh),
+                            price=float(_db_mt_px) if _db_mt_px else None,
+                            trigger="RECOMMENDATION",
+                            followed_intent="yes",
+                            signal_context=_db_item.get("directive", "")[:140],
+                            notes=("Trim per Today's Brief — " + _db_item.get("directive", ""))[:240],
+                            key_suffix="mintrim",
+                            label=f"📒 Log this trim ({_db_mt_sh} sh {_db_ticker})",
+                        )
                 # Combined elevated card: when BROKEN thesis + TRIM/EXIT coincide,
                 # show a lightweight AI note link (core card is complete without it).
                 if str(_db_ticker).upper() in _broken_thesis_tickers:
-                    with _act_cols[2 if _db_sell_shares else 1]:
+                    with _act_cols[2 if (_db_sell_shares or _db_mt_sh >= 1) else 1]:
                         if st.button(
                             "🔴 Thesis broken — view AI note →",
                             key=f"_db_act_ainote_{_db_ticker}_{_db_item['action'][:10]}",
@@ -11708,45 +11777,7 @@ if page == "🏠 Home":
             # user can re-evaluate the position against their original reasoning,
             # not just the current weight/score metrics.
             if _db_rev.get("icon") == "🔍" and _db_ticker:
-                _jctx = _journal_context(_db_ticker)
-                if _jctx:
-                    _parts = []
-                    if _jctx.get("thesis"):
-                        _t_clip = _jctx["thesis"][:240] + ("…" if len(_jctx["thesis"]) > 240 else "")
-                        _date_tag = f" <span style='color:#78716c'>({_jctx['thesis_date']})</span>" if _jctx.get("thesis_date") else ""
-                        _parts.append(
-                            f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
-                            f"📒 <b>Your entry thesis</b>{_date_tag}: "
-                            f"<span style='color:#e7e5e4;font-style:italic'>“{_html.escape(str(_t_clip))}”</span></div>"
-                        )
-                    for _ln in _jctx.get("lessons", []):
-                        _l_clip = _ln["text"][:200] + ("…" if len(_ln["text"]) > 200 else "")
-                        _l_date = f" <span style='color:#78716c'>({_ln['date']})</span>" if _ln.get("date") else ""
-                        _parts.append(
-                            f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
-                            f"💡 <b>Lesson</b>{_l_date}: "
-                            f"<span style='color:#e7e5e4;font-style:italic'>“{_l_clip}”</span></div>"
-                        )
-                    if _parts:
-                        st.markdown(
-                            f"<div style='background:#1c1917;border-left:3px solid #fbbf24;"
-                            f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0'>"
-                            + "".join(_parts)
-                            + f"<div style='color:#a8a29e;font-size:0.74em;margin-top:6px'>"
-                            "Re-evaluate this large position against your original reasoning before trimming."
-                            f"</div></div>",
-                            unsafe_allow_html=True,
-                        )
-                else:
-                    st.markdown(
-                        f"<div style='background:#1c1917;border-left:3px solid #57534e;"
-                        f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0;"
-                        f"color:#a8a29e;font-size:0.76em;font-style:italic'>"
-                        f"📒 No Trade Journal entry found for {_db_ticker}. "
-                        "Log your entry thesis next time so weak-position reviews can be grounded in original reasoning."
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
+                _render_journal_context(_db_ticker)
 
             _action_type = _action.get("type")
 
@@ -42829,7 +42860,7 @@ The footer line beneath the cards states **risk, not capital** — "if every sto
 - **👁️ Monitoring / Awareness (FYI)** — things to *know*, not act on: an early **deterioration watch** on a weakening hold, negative news on a holding (any headline at or below −0.05 since the previous trading day; the card says how many more tier-1/2 headlines would move it to Act Today), a broad macro event to hold through. Only headlines whose title names the company (or its ticker) count — a story that just mentions it in passing, like a market wrap or a rival's earnings, is ignored everywhere news is used; 📈 Analysis lists those under "Not counted" (if the app has no usable company name for a ticker, every tagged headline still counts, and Analysis says so). If the optional AI news noise filter is set up and couldn't check some negative headlines, a one-line note above this section says so — those cards use raw sentiment. When it does run, a line in the same place says how many headlines it re-read and how many it raised. While a hold is on a deterioration watch, the app also **won't nudge you to add to it** — even if its score still reads Strong Buy — and shows a "🟡 Add Suppressed — Early Deterioration Watch" note instead (don't add to a weakening name).
 - **🔧 Portfolio Tune-up (standing quality)** — slow-moving risk-metric improvements (Sharpe, drawdown). *Not* time-sensitive — act on these when you rebalance or have fresh capital, not on the clock.
 
-**Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop). A **↔ Steady vs yesterday** chip means the signal is unchanged from yesterday — continuity, not a fresh call.
+**Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop), ⛔ Exit (a stop card on a name Act Today already says to sell). A name gets one Act Today card: when a composite Sell and a weak-large trim hit the same holding, the Sell card carries the minimum trim. A raise-stop card shows only when the new stop is at least 1% of price above your current one. A **↔ Steady vs yesterday** chip means the signal is unchanged from yesterday — continuity, not a fresh call.
 
 **🧾 Tax note on exit cards:** when an Act Today **EXIT** or Review Before Close **TRIM** lands on a position that's within ~30 days of long-term-capital-gains eligibility, the card shows an amber note flagging how soon it turns long-term and that waiting can cut the tax rate *if* you'd be selling at a gain. It's **context only — the recommendation itself doesn't change**. Separately, logging a **SELL at a loss** within 30 days of a recent buy on the same ticker surfaces a **wash-sale** heads-up on the confirm step (the sale isn't blocked). For the full per-position picture, see the 💰 Tax Efficiency Advisor.
 

@@ -56,6 +56,7 @@ from stock_analyzer.constants import (
     STOP_PROFIT_LOCK_TRIM_PCT,
     STOP_TIGHTEN_ATR_MULT,
     STOP_TIGHTEN_MIN_GAIN_PCT,
+    STOP_RAISE_MIN_STEP_PCT,
     EARNINGS_OVERWEIGHT_TRIM_PCT,
     EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT,
     EARNINGS_OVERWEIGHT_TOLERANCE_PP,
@@ -3176,6 +3177,11 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
 
     portfolio_value is required to compute dollar amounts for trim
     directives; passed in by build_daily_briefing.
+
+    Side effect: for a ticker under a `sell_signal` Act Today card, the weak-large
+    sizing is attached to that act dict (`min_trim`, plus text appended to its
+    `directive` / `why`) instead of emitting a second card. The act dict is the
+    same object build_daily_briefing returns as `act_today`.
     """
     items: list[dict] = []
     held_tickers = _held_tickers(port_df)
@@ -3185,6 +3191,23 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     # AND a "no action today" WATCH below (the DELL split-brain). Mirrors the
     # act_today dedup that _grow_today already does.
     _act_tickers = {str(a.get("ticker", "")).upper() for a in (act_today or [])}
+    # Tickers under a reduce call ON THAT NAME in Act Today: the reduce card
+    # owns the sell decision, so the stop and weak-large sections below defer
+    # to it instead of issuing a second, contradicting card. Only kinds whose
+    # `ticker` IS the name being reduced count: a `risk` card's ticker is an
+    # attribution (sector_concentration's largest holding, which the
+    # conviction-ranked trim plan may not trim at all), so it must not silence
+    # that name's own trim or stop card. risk_off_derisk isn't in act_today
+    # yet at this point. `_exit_tickers` (exit kinds only) drives the ⛔ Exit
+    # lifecycle badge, so a deterioration TRIM name isn't badged Exit.
+    _exit_tickers = {
+        str(a.get("ticker", "")).upper() for a in (act_today or [])
+        if a.get("kind") in decision_bucket.EXIT_KINDS
+    }
+    _reduce_tickers = _exit_tickers | {
+        str(a.get("ticker", "")).upper() for a in (act_today or [])
+        if a.get("kind") == "deterioration_trim"
+    }
     from stock_analyzer.macro_calendar import HIGH as MC_HIGH, affected_sectors as _aff_sectors
 
     # 0 — Deterioration WATCH (awareness only). The early tripwire: a held name
@@ -3254,6 +3277,14 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         # the recommended level doesn't keep re-firing on rounding noise.
         if new_stop is not None and current_stop >= new_stop - 0.01:
             continue
+        # Minimum-step gate: the recommended stop trails price, so without this
+        # every small up-tick re-fires a "raise stop" for a trivial amount (TSLA
+        # 2026-10-27: +$1.59 ≈ 0.4% on a manual stop set that morning). Applies
+        # to the critical band too; the profit-lock trim rides on the same card,
+        # so it is skipped with it (as the meets-it check above already does).
+        if (new_stop is not None and price > 0
+                and (new_stop - current_stop) < price * STOP_RAISE_MIN_STEP_PCT / 100):
+            continue
         is_critical = gap <= 3.0
         # Lifecycle / settling grace: a freshly-opened position (held <
         # POSITION_SETTLING_DAYS) sits at its normal entry-to-stop distance by
@@ -3261,9 +3292,10 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         # feet. Exits and critical-gap (≤3%) items are unaffected (precedence in
         # classify_position_state + the `not is_critical` guard). age None (no
         # journal) never yields "settling" → management is never silenced blind.
+        _under_reduce = ticker.upper() in _reduce_tickers
         _lifecycle = classify_position_state(
             (held_data or {}).get(ticker, {}).get("position_age_days"),
-            pnl_pct, gap, has_exit_signal=False,
+            pnl_pct, gap, has_exit_signal=ticker.upper() in _exit_tickers,
         )
         if _lifecycle == "settling" and not is_critical:
             continue
@@ -3282,7 +3314,16 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             trim_shares = _trim_sizing.fraction_trim_shares(shares, STOP_PROFIT_LOCK_TRIM_PCT)
         else:
             trim_shares = 0
-        if is_critical and lock_profits and trim_shares >= 1:
+        if _under_reduce:
+            # Today's Brief already says to reduce this name: this card only
+            # manages the stop on the shares that are kept.
+            action = {"type": "TIGHTEN_ONLY", "new_stop": new_stop}
+            why = (
+                f"Gap {gap:.1f}% above stop; P&L {pnl_pct:+.1f}%. Today's Brief "
+                f"already says to reduce {ticker}, so this only tightens the "
+                "stop on the shares you keep."
+            )
+        elif is_critical and lock_profits and trim_shares >= 1:
             trim_dollars = round(trim_shares * price, 0)
             action = {
                 "type":         "TRIM_AND_TIGHTEN",
@@ -3421,6 +3462,40 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             trim_shares  = max(1, int(round(trim_dollars / price)))
         else:
             trim_dollars, trim_shares = 0, 0
+        if ticker.upper() in _reduce_tickers:
+            # A reduce card for this name is already in Act Today. For a
+            # sell_signal, carry this card's sizing onto it as the minimum
+            # trim (mutates the act_today dict passed in; it is the same
+            # object build_daily_briefing returns as `act_today`). Other
+            # reduce kinds size themselves, so the weak-large item is dropped.
+            _first_act = next(
+                (a for a in (act_today or [])
+                 if str(a.get("ticker", "")).upper() == ticker.upper()), None)
+            if (_first_act is not None and _first_act.get("kind") == "sell_signal"
+                    and trim_shares >= 1):
+                _first_act["min_trim"] = {
+                    "trim_shares":   trim_shares,
+                    "trim_dollars":  trim_dollars,
+                    "from_weight":   weight,
+                    "target_weight": WEAK_LARGE_TRIM_TO_PCT,
+                }
+                _first_act["directive"] = (_first_act.get("directive") or "") + (
+                    f" At minimum, trim {weight:.1f}% → {WEAK_LARGE_TRIM_TO_PCT:.1f}% "
+                    f"({trim_shares} share{'' if trim_shares == 1 else 's'} "
+                    f"≈ ${trim_dollars:,.0f})."
+                )
+                _first_act["why"] = (_first_act.get("why") or "") + (
+                    f" Also your largest weak holding: weight {weight:.1f}% ≥ "
+                    f"{LARGE_POSITION_WEIGHT_PCT:.0f}% with score {score:.0f} < "
+                    f"{WEAK_CONVICTION_SCORE}."
+                )
+                # `reason` was synthesized in _consolidate_act_today before
+                # this append; refresh it so its readers (quick_research,
+                # premarket tooltip) see the minimum trim too.
+                _first_act["reason"] = (
+                    f"{_first_act['directive']} {_first_act['why']}".strip()
+                )
+            continue
         items.append({
             "priority": "medium",
             "icon":     "🔍",
