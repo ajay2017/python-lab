@@ -1,9 +1,11 @@
 """Certain-to-fail provider calls are stopped before any HTTP (2026-10-27).
 
 Finnhub news-sentiment (FINNHUB_NEWS_SENTIMENT_ENABLED) and the FMP endpoints in
-FMP_SKIP_ENDPOINTS (earnings, grades-consensus) returned errors on every call on
-the current plans. The skips must make NO HTTP call, spend NO daily FMP quota and
-write NO api_health record, while callers keep today's None / {} result.
+FMP_SKIP_ENDPOINTS (news/stock: endpoint-restricted on the current plan) fail on
+every call. The skips must make NO HTTP call, spend NO daily FMP quota and
+write NO api_health record, while callers keep today's None / {} / [] result.
+earnings and grades-consensus are NOT skipped (the live probe showed them
+working; their earlier 402s were per-symbol).
 """
 import pytest
 
@@ -21,7 +23,9 @@ def _no_http(*a, **k):
 
 def test_constants_pin_the_current_plan():
     assert C.FINNHUB_NEWS_SENTIMENT_ENABLED is False
-    assert {"earnings", "grades-consensus"} <= set(C.FMP_SKIP_ENDPOINTS)
+    assert "news/stock" in C.FMP_SKIP_ENDPOINTS
+    assert "earnings" not in C.FMP_SKIP_ENDPOINTS
+    assert "grades-consensus" not in C.FMP_SKIP_ENDPOINTS
 
 
 def test_disabled_sentiment_returns_empty_and_never_builds_provider(monkeypatch):
@@ -46,22 +50,47 @@ def spies(monkeypatch):
     return quota, recs
 
 
-def test_next_earnings_skipped_returns_none(spies):
+def test_fetch_news_skipped_returns_empty_list(spies):
     quota, recs = spies
-    assert _fmp()._next_earnings("AAPL") is None
-    assert quota == [] and recs == []
-
-
-def test_fetch_revisions_skipped_returns_empty_dict(spies):
-    quota, recs = spies
-    assert _fmp()._fetch_revisions("VOO") == {}
+    assert "news/stock" in C.FMP_SKIP_ENDPOINTS
+    assert _fmp()._fetch_news("AAPL") == []
     assert quota == [] and recs == []
 
 
 def test_get_json_skip_raises_provider_unavailable(spies):
+    skipped = sorted(C.FMP_SKIP_ENDPOINTS)[0]
     with pytest.raises(ProviderUnavailable) as ei:
-        _fmp()._get_json("earnings", {"symbol": "AAPL"})
+        _fmp()._get_json(skipped, {"symbol": "AAPL"})
     assert "SECRETKEY123" not in str(ei.value)
+
+
+def test_next_earnings_now_calls_http(monkeypatch):
+    calls = []
+
+    def _fake(url, params=None, **k):
+        calls.append(url)
+        return [{"symbol": "AAPL", "date": "2099-01-01"}]
+
+    monkeypatch.setattr(fp, "http_get_json", _fake)
+    monkeypatch.setattr(fp._db, "increment_daily_quota", lambda *a, **k: None)
+    monkeypatch.setattr(fp._ah, "record", lambda *a, **k: None)
+    _fmp()._next_earnings("AAPL")
+    assert len(calls) >= 1 and calls[0].endswith("/earnings")
+
+
+def test_fetch_revisions_now_calls_http(monkeypatch):
+    calls = []
+
+    def _fake(url, params=None, **k):
+        calls.append(url)
+        return [{"symbol": "AAPL", "strongBuy": 5, "buy": 10, "hold": 5,
+                 "sell": 0, "strongSell": 0, "consensus": "Buy"}]
+
+    monkeypatch.setattr(fp, "http_get_json", _fake)
+    monkeypatch.setattr(fp._db, "increment_daily_quota", lambda *a, **k: None)
+    monkeypatch.setattr(fp._ah, "record", lambda *a, **k: None)
+    _fmp()._fetch_revisions("AAPL")
+    assert len(calls) == 1 and calls[0].endswith("/grades-consensus")
 
 
 def test_non_skipped_path_still_calls_http(monkeypatch):

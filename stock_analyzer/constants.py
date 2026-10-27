@@ -1085,11 +1085,13 @@ DATA_LIVE_PRICE_ORDER = ["finnhub", "yahoo_finance", "fmp"]
 # data" path) while off.
 FINNHUB_NEWS_SENTIMENT_ENABLED = False
 
-# FMP stable-API endpoints skipped before any HTTP call: each returned 402
-# Payment Required on every call (live Data Health 2026-10-27), i.e. not on the
-# current FMP plan. Their callers already degrade to None / {} on failure.
-# Remove a name once the Data Health endpoint probe shows it works.
-FMP_SKIP_ENDPOINTS = frozenset({"earnings", "grades-consensus"})
+# FMP stable-API endpoints skipped before any HTTP call. news/stock is
+# endpoint-restricted on the current plan (402 "Restricted Endpoint", live
+# endpoint probe 2026-10-27). earnings and grades-consensus were un-skipped the
+# same day: the probe showed them working for AAPL, so their earlier 402s were
+# per-symbol (e.g. VOO), not endpoint-wide. Callers already degrade to None / {} /
+# [] on failure. Remove a name once the probe shows it works.
+FMP_SKIP_ENDPOINTS = frozenset({"news/stock"})
 
 # Master switch. When False, data.py behaves EXACTLY as the single-source
 # yfinance code (no failover, no cross-check). Enabled 2026-06-01 after the
