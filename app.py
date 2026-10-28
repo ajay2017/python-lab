@@ -12741,6 +12741,7 @@ if page == "🏠 Home":
         )
     _action_slot = _hdr_r.empty()
     _info_slot   = st.empty()
+    _snap_note_slot = st.empty()
     _brief_slot  = st.empty()
 
     # ── Provider settings (collapsible, at the bottom of the page) ───────
@@ -12921,6 +12922,7 @@ if page == "🏠 Home":
             "share count, target weight, price target or stop that is not in it, and never "
             "contradict it. If a holding is listed as Watch, say Watch. You may explain a call "
             "using the data and news provided. "
+            "Do not write an action-items or recommendations section; the app appends the Brief's own list. "
             "Output format: use '## SECTION NAME' on its own line for each section header. "
             "Do NOT emit a top-level title or a date line — start directly with '## EXECUTIVE SUMMARY'."
         )
@@ -13040,13 +13042,13 @@ if page == "🏠 Home":
                           + _md_to_html(_brief_cached[_md_heads[1]:]))
         else:
             _body_html = _md_to_html(_brief_cached) + _sec_html
-        _snap_notes = []
-        if st.session_state.get(f"{_brief_cache_key}__cut"):
-            _snap_notes.append("(narrative cut off — regenerate)")
-        if st.session_state.get(f"{_brief_cache_key}__hash") != _snap_hash:
-            _snap_notes.append("Today's Brief changed since this snapshot — regenerate for an updated narrative")
-        for _sn in _snap_notes:
-            st.warning(_sn, icon="⚠️")
+        _snap_notes = _snap_ctx.stale_note(
+            st.session_state.get(f"{_brief_cache_key}__hash"), _snap_hash, _snap_ok,
+            st.session_state.get(f"{_brief_cache_key}__cut"))
+        if _snap_notes:
+            with _snap_note_slot.container():
+                for _sn in _snap_notes:
+                    st.warning(_sn, icon="⚠️")
         _today_str = _now_et().strftime("%A · %B %d, %Y")
         _model_label = _model_opts.get(_sel_model, _sel_model)
 

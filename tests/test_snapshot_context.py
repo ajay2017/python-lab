@@ -115,7 +115,7 @@ def test_grow_rows_shares_signal_message_and_none():
                         "add_positions": [{"ticker": "xyz"}]}}
     rows = [r for r in brief_calls_view(_view(), g, _fmt)["rows"] if r["section"] == "grow"]
     assert rows[0] == {"section": "grow", "subject": "ABC",
-                       "call": "new pick — Strong Buy, 12 shares", "why": ""}
+                       "call": "new pick — Strong Buy, 12 shares", "why": ""}  # grow rows carry no core
     assert rows[1]["subject"] == "XYZ"
     msg = brief_calls_view(_view(), {"grow_today": {"message": "risk-off **mode**"}}, _fmt)["rows"][-1]
     assert msg["call"] == "risk-off mode"
@@ -183,3 +183,24 @@ def test_integration_real_brief_shapes():
     off = act_today_view(offline_brief_stub(), False, None, {}, STOP_RECOVERY_MARGIN_PCT)
     assert generate_allowed(off)[0] is False
     assert brief_calls_view(off, offline_brief_stub(), _fmt)["rows"] == []
+
+
+def test_hash_ignores_headline_numbers_but_not_the_call():
+    def v(head, trig="t"):
+        return brief_calls_view(_view(aware=[{"ticker": "A", "_source": "review", "action": {"type": "WATCH"},
+                                              "headline": head, "trigger": trig}]), {}, _fmt)
+    a, b = v("gap 2.1% above stop, P&L +12.3%"), v("gap 2.4% above stop, P&L +11.9%")
+    assert a["rows"][0]["call"] != b["rows"][0]["call"]          # displayed call keeps the headline
+    assert calls_hash(a) == calls_hash(b)
+    assert calls_hash(a) != calls_hash(v("gap 2.1% above stop", trig="other"))
+
+
+def test_stale_note_texts():
+    from stock_analyzer.snapshot_context import stale_note
+    assert stale_note("a", "a", True, False) == []
+    assert stale_note("a", "b", True, False) == [
+        "Today's Brief changed since this snapshot — regenerate for an updated narrative"]
+    assert stale_note("a", "b", False, False) == [
+        "Today's Brief is offline — this narrative was written against an earlier Brief."]
+    assert stale_note(None, "a", True, True)[0] == "(narrative cut off — regenerate)"
+    assert stale_note("a", "a", False, True) == ["(narrative cut off)"]

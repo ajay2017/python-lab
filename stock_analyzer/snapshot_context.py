@@ -134,11 +134,13 @@ def _row(item, section: str, fmt_action: Callable):
         call = _clean(act)
     else:
         call = "see the Brief card"
+    core = call  # the call without the headline prefix: headlines carry numbers that churn
     head = item.get("headline")
     if (item.get("_source") == "review" and isinstance(head, str) and head.strip()
             and _clean(head) not in call):
         call = f"{_clean(head)} — {call}"
-    return {"section": section, "subject": _subject(item), "call": call, "why": _why(item)}
+    return {"section": section, "subject": _subject(item), "call": call, "why": _why(item),
+            "core": core}
 
 
 def _rows(items, section, fmt_action) -> list[dict]:
@@ -233,7 +235,7 @@ def calls_hash(view: dict) -> str:
         if view.get("state") == "offline":
             payload = "offline"
         else:
-            payload = "\n".join(f"{r['section']}|{r['subject']}|{r['call']}" for r in view["rows"])
+            payload = "\n".join(f"{r['section']}|{r['subject']}|{r.get('core', r['call'])}" for r in view["rows"])
         return hashlib.md5(payload.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
     except Exception:
         return "unknown"
@@ -268,3 +270,18 @@ def section_html(view: dict) -> str:
     return (h + block("Act Today", "act", NO_TRADES)
             + block("Monitoring / Awareness", "aware", "none", _AWARE_CAP)
             + block("Grow Today", "grow", "no new picks or adds today"))
+
+
+def stale_note(stored_hash, current_hash, generate_ok: bool, cut_off) -> list[str]:
+    """Warnings shown above a cached narrative (never silently dropped)."""
+    notes = []
+    if cut_off:
+        notes.append("(narrative cut off — regenerate)" if generate_ok
+                     else "(narrative cut off)")
+    if stored_hash != current_hash:
+        notes.append(
+            "Today's Brief changed since this snapshot — regenerate for an updated narrative"
+            if generate_ok else
+            "Today's Brief is offline — this narrative was written against an earlier Brief."
+        )
+    return notes
