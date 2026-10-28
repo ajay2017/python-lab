@@ -26062,6 +26062,12 @@ elif page == "📈 Analysis":
                  "🏦 Analyst Coverage", _ph_label]
             )
 
+            # Set when the "Already held" box below printed the earnings date, so
+            # the plan tab's earnings line further down skips only that case. A
+            # held Hold/Sell never reaches that box (2026-10-28: ABBV, Hold,
+            # earnings in 2 days, showed no date at all).
+            _sa_earn_in_held_box = {"shown": False}
+
             def _sa_held_protection(withheld):
                 """Held-position state + banners for the Analysis plan tab: stop-breach,
                 Reduce/Exit call, unverified-context notices. Returns (stop_breached,
@@ -26337,6 +26343,7 @@ elif page == "📈 Analysis":
                                     + (" — consider reduced add-on size or wait until after the report."
                                        if _earn_is_add else ".")
                                 )
+                                _sa_earn_in_held_box["shown"] = True
                     except Exception:
                         pass
                     st.info(
@@ -27074,7 +27081,12 @@ elif page == "📈 Analysis":
                             if _da_withheld:
                                 # No entry/size advice off a withheld verdict.
                                 st.info(f"📅 Earnings in {days} days ({earn})")
-                            elif not _sa_holding:
+                            elif _sa_holding:
+                                # Held Hold/Sell (or a Buy whose box didn't print it):
+                                # the date only, no sizing advice.
+                                if not _sa_earn_in_held_box["shown"]:
+                                    st.info(f"📅 Earnings in {days} days ({earn})")
+                            else:
                                 st.warning(
                                     f"⚠️ Earnings in {days} days ({earn}) — "
                                     "consider reduced position size or waiting until after the report."
