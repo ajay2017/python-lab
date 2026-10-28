@@ -247,7 +247,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
    - `self_track_record` UTC dating
    - the report's "Book side" label
    - 2 stale `.claude/worktrees`
-  - System Trust ② data-stores sentence (`5c4fea3`): screenshot pending; expect "No store found missing or stale — 6 daily stores are fresh; 17 others exist (existence-only check …); not confirmed: G-32 entry R:R shadow (measure-only): exists, no rows yet."
+  - System Trust ② data-stores sentence (`5c4fea3`): VERIFIED live 2026-10-28 (exact text, 6 + 17 + 1 = 24 stores). Expected "No store found missing or stale — 6 daily stores are fresh; 17 others exist (existence-only check …); not confirmed: G-32 entry R:R shadow (measure-only): exists, no rows yet."
    - owner observations: the Sentiment tile subtitle says "VADER" though LLM rescoring is live; Valuation consensus (saved research) vs Smart Money (provider) can disagree on one screen
    - SPCX item B, the post-earnings score lag (measure before designing)
    - Market Scanner's score breakdown hardcodes stock weights; ETF Phase 2b shipped, so gate it on `asset_type` if an ETF can reach it
@@ -263,10 +263,10 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 
 ### Live checks pending (Railway is back as of 2026-10-22; app.py has no tests, so a screenshot is the only check)
 
-- **Railway deploys were stuck "initializing" (Railway incident, evening 2026-10-28):** `5c4fea3`, `ef59c27` and `445967b` were pushed but had not been seen live; a 14:15 ET snapshot still showed the old AI ACTION ITEMS. Confirm the active deploy is `445967b` (or later) before any check below.
+- **Railway deploys were stuck "initializing" (Railway incident, evening 2026-10-28); RESOLVED the same evening** (owner: deployment complete after `53b7958` was pushed; a 17:21 ET AI Snapshot showed the new code).
 - **2026-10-28 batch (not yet seen live):**
   - Exact shares (fractional holding): 📡 Signals review card reads "about N% of the position" and "Hold remaining 1.95 shares"; 🥧 Portfolio Overview Shares shows "2.95" and sorts as a number; Home Live Prices shows the exact count; a stop breach reads "Sell all 2.95 shares". G-32 C4: a 1.95–1.99 R:R reads "below 2:1" on Watchlist / Analysis / both redeploy headlines, never "2.0". No literal `**`, no `$`-LaTeX.
-  - 🏠 Home → 🤖 AI Snapshot grounded in the Brief (2026-10-28): the card shows "WHAT THE APP IS TELLING YOU TODAY" (Act Today / Monitoring / Grow Today copied from Today's Brief, not AI-written) after EXECUTIVE SUMMARY; the AI narrative has no action items; a footer says the Brief wins; when the Brief is offline, Generate is disabled with a ⏸️ note. Check AAPL reads Watch there, no literal `**`, no `$`-LaTeX.
+  - 🏠 Home → 🤖 AI Snapshot grounded in the Brief (2026-10-28) VERIFIED live 2026-10-28 17:21 ET (Haiku 5.5): "WHAT THE APP IS TELLING YOU TODAY" after EXECUTIVE SUMMARY with Act Today (TSLA only) / Monitoring / Grow Today copied from the Brief, no AI ACTION ITEMS, AAPL = Watch in both rows, no literal `**`, `$` as text. Still unseen: the bottom footer ("…the Brief wins."). AI-narrative oddity to watch: Risk Flags gave TSLA and WAL both 5.2% and FSLR and PLTR both 7.9% above stops (possible mis-attribution). Original check: the card shows "WHAT THE APP IS TELLING YOU TODAY" (Act Today / Monitoring / Grow Today copied from Today's Brief, not AI-written) after EXECUTIVE SUMMARY; the AI narrative has no action items; a footer says the Brief wins; when the Brief is offline, Generate is disabled with a ⏸️ note. Check AAPL reads Watch there, no literal `**`, no `$`-LaTeX.
   - 🏠 Home → 🤖 AI Snapshot (`a07dc6f`) VERIFIED live 2026-10-28: header "App Settings fast model — claude-haiku-5-5 (default)", generated 10:45 ET, full brief (3 action items, not cut off), `$` amounts render as text.
   - The 09:45 morning action email footer (`29a7127`): a stock pick reads "…the tone, sector, concentration, macro and negative-news checks cleared."; an ETF pick adds "Negative-news check isn't applied to ETF picks yet."
   - 🧾 Summary 🩺 Thesis Integrity / Act Today "Thesis reviews couldn't be loaded" (`ca8ba02`): shows only on a DB read failure, so expect nothing on a normal day; the healthy card is unchanged.
