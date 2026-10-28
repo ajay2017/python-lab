@@ -79,6 +79,7 @@ from stock_analyzer.stress_test import (
 )
 from stock_analyzer import monte_carlo as _mc
 from stock_analyzer import trim_sizing as _trim_sizing
+from stock_analyzer import thesis_review_status
 from stock_analyzer import forward_sim as _fsim
 from stock_analyzer import attribution_readiness as _attr_ready
 from stock_analyzer.personalized_discovery import build_winner_profile
@@ -10987,26 +10988,20 @@ if page == "🏠 Home":
         # (not just "once per session") to match every sibling Home cache — a
         # thesis marked BROKEN today is picked up on the next Home render after
         # the ET date rolls over, not just after an app restart (audit Low nit).
-        if st.session_state.get("_broken_thesis_tickers_date") != _today_et().isoformat():
-            st.session_state["_broken_thesis_tickers_date"] = _today_et().isoformat()
+        # Three-state: None = reviews couldn't be loaded, set() = checked and
+        # none broken. The date is stamped ONLY on a successful read so a failed
+        # read retries on the next render instead of hiding the "Thesis broken"
+        # link for the rest of the day.
+        _bt_today_iso = _today_et().isoformat()
+        if st.session_state.get("_broken_thesis_tickers_date") != _bt_today_iso:
             try:
-                _rv_df = db.load_thesis_reviews()
-                if not _rv_df.empty:
-                    # Keep only the most-recent review per ticker
-                    _rv_latest = (
-                        _rv_df.sort_values("reviewed_at", ascending=False)
-                        .drop_duplicates(subset="ticker")
-                    )
-                    st.session_state["_broken_thesis_tickers"] = set(
-                        _rv_latest.loc[
-                            _rv_latest["status"] == "BROKEN", "ticker"
-                        ].astype(str).str.upper()
-                    )
-                else:
-                    st.session_state["_broken_thesis_tickers"] = set()
+                _rv_df = db.load_thesis_reviews_or_none()
             except Exception:
-                st.session_state["_broken_thesis_tickers"] = set()
-        _broken_thesis_tickers = st.session_state.get("_broken_thesis_tickers", set())
+                _rv_df = None
+            st.session_state["_broken_thesis_tickers"] = thesis_review_status.broken_tickers(_rv_df)
+            if st.session_state["_broken_thesis_tickers"] is not None:
+                st.session_state["_broken_thesis_tickers_date"] = _bt_today_iso
+        _broken_thesis_tickers = _get_or_offline(st.session_state, "_broken_thesis_tickers")
 
         def _live_px_for(_lp_ticker):
             _lp = st.session_state.get("_live_prices", {}).get(_lp_ticker)
@@ -11212,7 +11207,7 @@ if page == "🏠 Home":
                         )
                 # Combined elevated card: when BROKEN thesis + TRIM/EXIT coincide,
                 # show a lightweight AI note link (core card is complete without it).
-                if str(_db_ticker).upper() in _broken_thesis_tickers:
+                if _broken_thesis_tickers and str(_db_ticker).upper() in _broken_thesis_tickers:
                     with _act_cols[2 if (_db_sell_shares or _db_mt_sh >= 1) else 1]:
                         if st.button(
                             "🔴 Thesis broken — view AI note →",
@@ -12036,6 +12031,10 @@ if page == "🏠 Home":
         else:
             for _ci, _item in enumerate(_active_act_bucket):
                 _render_defensive_card(_item, _ci, in_act=True)
+            _th_note = thesis_review_status.act_today_note(
+                _broken_thesis_tickers, len(_active_act_bucket))
+            if _th_note:
+                st.caption(_th_note)
 
         # Holdings table removed from here 2026-07-26 — it now lives on the
         # 🧾 Summary page (_render_holdings_table(), shared/module-level, still
@@ -14275,36 +14274,19 @@ elif page == "🧾 Summary":
     # (never disappears just because nothing's wrong — matches Act Today's
     # own "you're set" pattern).
     _sm_held_tickers = set(port_df["Ticker"].astype(str).str.upper())
-    _sm_n_weakening = 0
-    _sm_n_broken    = 0
-    _sm_n_reviewed  = 0
-    _sm_bad_names: list[str] = []   # BROKEN/WEAKENING tickers, worst first
+    # Surface WHICH names, not just how many (2026-08-28): BROKEN first, then
+    # WEAKENING, so the worst names lead. `_sm_th` is None when the reviews
+    # couldn't be loaded (rendered as "Couldn't check", not "No reviews yet").
     try:
-        _sm_rv_df = db.load_thesis_reviews()
-        if not _sm_rv_df.empty:
-            _sm_rv_latest = (
-                _sm_rv_df.sort_values("reviewed_at", ascending=False)
-                .drop_duplicates(subset="ticker")
-            )
-            _sm_rv_latest = _sm_rv_latest[
-                _sm_rv_latest["ticker"].astype(str).str.upper().isin(_sm_held_tickers)
-            ]
-            _sm_n_reviewed  = len(_sm_rv_latest)
-            _sm_n_weakening = int((_sm_rv_latest["status"] == "WEAKENING").sum())
-            _sm_n_broken    = int((_sm_rv_latest["status"] == "BROKEN").sum())
-            # Surface WHICH names, not just how many (2026-08-28). "2 weakening"
-            # cannot be triaged: if they are 2% positions you ignore it, if they
-            # are your two largest you act — so the count alone forced a trip to
-            # AI Insights just to find out whether to care. The rows are already
-            # loaded here; only the ticker column was being discarded. BROKEN
-            # first, then WEAKENING, so the worst names lead.
-            _sm_bad_names = (
-                _sm_rv_latest[_sm_rv_latest["status"].isin(["BROKEN", "WEAKENING"])]
-                .sort_values("status")          # BROKEN sorts before WEAKENING
-                ["ticker"].astype(str).str.upper().tolist()
-            )
+        _sm_th = thesis_review_status.held_summary(
+            db.load_thesis_reviews_or_none(), _sm_held_tickers)
     except Exception:
-        _sm_n_reviewed = 0
+        _sm_th = None
+    _sm_th_vals = _sm_th or {}
+    _sm_n_weakening = _sm_th_vals.get("n_weakening", 0)
+    _sm_n_broken    = _sm_th_vals.get("n_broken", 0)
+    _sm_n_reviewed  = _sm_th_vals.get("n_reviewed", 0)
+    _sm_bad_names: list[str] = _sm_th_vals.get("bad_names", [])   # worst first
 
     # Card #3 — Catalyst Watch. Reuses the SAME 24h process-wide
     # @st.cache_data(_cached_held_earnings_dates) call — same tickers_tuple
@@ -14652,7 +14634,13 @@ elif page == "🧾 Summary":
                 unsafe_allow_html=True,
             )
             st.markdown("**🩺 Thesis Integrity**")
-            if _sm_n_reviewed == 0:
+            if _sm_th is None:
+                st.markdown(
+                    "<div style='color:#f59e0b;font-size:0.95em'>Couldn't check</div>",
+                    unsafe_allow_html=True,
+                )
+                st.caption(thesis_review_status.UNCHECKED_SUMMARY_NOTE)
+            elif _sm_n_reviewed == 0:
                 st.markdown(
                     "<div style='color:#9ca3af;font-size:0.95em'>No reviews yet</div>",
                     unsafe_allow_html=True,
