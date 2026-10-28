@@ -206,6 +206,33 @@ def feed_state(bundles) -> dict | None:
             "partial": state == "ok" and len(unavailable) >= NEWS_FEED_OUTAGE_MIN_TICKERS}
 
 
+def pick_news_note(state, ticker) -> str | None:
+    """One-line disclosure for a morning-email pick when the negative-news Skip
+    (daily_briefing `_cross_reference` -> signal_reconciliation) could not run.
+
+    For STOCK picks only: ETF headlines never reach the Skip's news input, so
+    the email handles ETF picks separately and never calls this. `state` is a
+    `feed_state` dict or None. None -> None (nothing known: say nothing about
+    news). An "outage" state -> a feed-wide note; the ticker (case-insensitive)
+    listed in `unavailable` -> a per-ticker note; anything else -> None. A
+    "thin" state is silent feed-wide (too few live bundles to call it an
+    outage); a per-ticker match still fires.
+    """
+    if not isinstance(state, dict):
+        return None
+    if state.get("state") == "outage":
+        return ("News feed unavailable this run — the negative-news check "
+                "didn't run on this pick.")
+    t = str(ticker or "").strip().upper()
+    _un = state.get("unavailable")
+    if not isinstance(_un, (list, tuple, set)):
+        _un = []   # missing list = nothing to match, not an offline gate
+    if t and t in {str(u).upper() for u in _un}:
+        return (f"News for {t} couldn't be checked this run — the "
+                "negative-news check didn't run on it.")
+    return None
+
+
 def home_feed_state(grow_composites, held_data) -> dict | None:
     """`feed_state` over the bundles a Home render holds: Grow candidates plus held
     names (held wins on a shared ticker). None = nothing to check or the

@@ -295,6 +295,90 @@ def test_render_daily_action_email_footer_etf_pick_does_not_claim_momentum_or_se
     assert "Composite confirms the pick" in body
 
 
+# ─── footer news disclosure (news chunk 3b) ──────────────────────────────────
+
+_OUTAGE_LINE = "News feed unavailable this run"
+
+
+def test_footer_default_has_no_news_line_and_new_wording():
+    _, body = notify.render_daily_action_email(_pick(ticker="AAA"), [], [], "2026-01-15 08:00:00")
+    assert "all gates cleared" not in body
+    assert "the tone, sector, concentration, macro and negative-news checks cleared." in body
+    assert _OUTAGE_LINE not in body
+    assert "couldn&#x27;t be checked" not in body and "couldn't be checked" not in body
+
+
+def test_footer_outage_state_adds_feed_line():
+    _, body = notify.render_daily_action_email(
+        _pick(ticker="AAA"), [], [], "2026-01-15 08:00:00",
+        news_feed={"state": "outage", "unavailable": []})
+    assert _OUTAGE_LINE in body
+    assert "negative-news check" in body
+    assert "negative-news checks cleared" not in body
+    assert "concentration and macro checks cleared" in body
+
+
+def test_footer_unavailable_ticker_adds_ticker_line():
+    _, body = notify.render_daily_action_email(
+        _pick(ticker="AAA"), [], [], "2026-01-15 08:00:00",
+        news_feed={"state": "ok", "unavailable": ["AAA"]})
+    assert "News for AAA couldn" in body
+    assert _OUTAGE_LINE not in body
+    assert "negative-news checks cleared" not in body
+
+
+def test_footer_ok_state_other_ticker_unavailable_no_line():
+    _, body = notify.render_daily_action_email(
+        _pick(ticker="AAA"), [], [], "2026-01-15 08:00:00",
+        news_feed={"state": "ok", "unavailable": ["ZZZ"]})
+    assert "News for" not in body
+    assert _OUTAGE_LINE not in body
+
+
+def test_footer_etf_pick_says_negative_news_not_applied():
+    top_pick = {**_pick(ticker="SPY"), "asset_type": "etf"}
+    for feed in (None, {"state": "outage", "unavailable": ["SPY"]}):
+        _, body = notify.render_daily_action_email(
+            top_pick, [], [], "2026-01-15 08:00:00", news_feed=feed)
+        assert ("Composite confirms the pick; AUM, macro, and same-index-duplicate "
+                "checks cleared. Negative-news check isn't applied to ETF picks yet.") in body
+        assert "negative-news check" not in body.replace("Negative-news check isn", "")
+        assert _OUTAGE_LINE not in body
+        assert "News for SPY" not in body
+
+
+def test_footer_note_ticker_is_escaped():
+    _, body = notify.render_daily_action_email(
+        _pick(ticker="A<&B"), [], [], "2026-01-15 08:00:00",
+        news_feed={"state": "ok", "unavailable": ["A<&B"]})
+    assert "News for A&lt;&amp;B couldn" in body
+    assert "News for A<" not in body
+
+
+def test_cron_runner_passes_news_feed_to_morning_email():
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "cron_runner.py").read_text(encoding="utf-8")
+    calls = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "render_daily_action_email"]
+    assert calls, "render_daily_action_email call not found"
+    assert all("news_feed" in {k.arg for k in c.keywords} for c in calls)
+
+
+def test_pick_news_note_unit():
+    from stock_analyzer.news_feed import pick_news_note
+    assert pick_news_note(None, "AAA") is None
+    assert pick_news_note({"state": "ok", "unavailable": []}, "AAA") is None
+    assert pick_news_note({"state": "thin", "unavailable": []}, "AAA") is None
+    assert pick_news_note({"state": "outage", "unavailable": []}, "AAA") == (
+        "News feed unavailable this run — the negative-news check didn't run on this pick.")
+    assert pick_news_note({"state": "ok", "unavailable": ["AAA"]}, "aaa") == (
+        "News for AAA couldn't be checked this run — the negative-news check didn't run on it.")
+    assert pick_news_note({"state": "ok", "unavailable": ["ZZZ"]}, "AAA") is None
+    assert pick_news_note({"state": "thin", "unavailable": ["AAA"]}, "AAA") == (
+        "News for AAA couldn't be checked this run — the negative-news check didn't run on it.")
+
+
 # ─── _exit_check_unavailable_banner / exit_check_unavailable wiring ─────────
 # (2026-09-24 app review, Top-5 #1 / A1 — the fabricated-all-clear fix)
 

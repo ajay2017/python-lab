@@ -2102,6 +2102,7 @@ def _run_scan(now_et, force: bool) -> int:
                 macro_coverage_expired=payload.get("macro_coverage"),
                 exit_check_unavailable=exit_check_unavailable,
                 budget=_budget_for_email,
+                news_feed=payload.get("news_feed"),
             )
             sent = _send_email("morning-action", subject, html)
             # Save dedup state ONLY on a real send — so a transient Resend failure

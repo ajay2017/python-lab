@@ -754,6 +754,7 @@ def render_daily_action_email(
     macro_coverage_expired: "list[dict] | None" = None,
     exit_check_unavailable: bool = False,
     budget: "dict | None" = None,
+    news_feed: "dict | None" = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the single-action morning email.
 
@@ -929,13 +930,28 @@ def render_daily_action_email(
     # and runs NO sector gate at all (its card shows "Other" sector by
     # design) — claiming either check ran for an ETF pick would be false.
     _top_is_etf = top_pick.get("asset_type") == "etf"
-    _footer_basis = (
-        "Composite confirms the pick; AUM, macro, and same-index-duplicate "
-        "checks cleared."
-        if _top_is_etf else
-        "Composite + momentum both confirm the #1 pick; all gates cleared "
-        "(tone, sector, concentration, macro)."
-    )
+    if _top_is_etf:
+        # ETF headlines never reach the Skip's news input, so the check is not
+        # applied to ETF picks at all (and pick_news_note is not consulted).
+        _footer_basis = (
+            "Composite confirms the pick; AUM, macro, and same-index-duplicate "
+            "checks cleared. Negative-news check isn't applied to ETF picks yet."
+        )
+    else:
+        from stock_analyzer.news_feed import pick_news_note as _pick_news_note
+        _news_note = _pick_news_note(news_feed, top_pick.get("ticker"))
+        if _news_note:
+            # The negative-news check didn't run: don't list it as cleared.
+            _footer_basis = (
+                "Composite + momentum both confirm the #1 pick; the tone, "
+                "sector, concentration and macro checks cleared. "
+                f"{_html.escape(_news_note)}"
+            )
+        else:
+            _footer_basis = (
+                "Composite + momentum both confirm the #1 pick; the tone, "
+                "sector, concentration, macro and negative-news checks cleared."
+            )
 
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
       <div style="max-width:640px;margin:0 auto">
