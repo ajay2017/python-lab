@@ -909,3 +909,35 @@ def test_rr_target_note_none_when_absent():
     assert build_watchlist_recommendation("XYZ", _base_data())["rr_target_note"] is None
     assert build_watchlist_recommendation(
         "XYZ", _base_data(targets=None))["rr_target_note"] is None
+
+
+# ─── G-32 C4: Watchlist R:R is unrounded (no 1.995+ -> "2.00") ────────────────
+
+def test_rr_1996_is_not_enter_now_and_is_unrounded():
+    # price 100 / stop 90 / target 119.96 -> R:R 1.996 (round(.,2) was 2.0)
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(targets={"base": 119.96}))
+    assert rec["action"] != "ENTER_NOW"
+    assert rec["rr"] == pytest.approx(1.996)
+
+
+def test_rr_exactly_two_to_one_still_enter_now_with_float_noise():
+    # (384.25, 381.21, 390.33) computes 1.99999999999998 in raw float
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(current_price=384.25, entry_lo=380.0, entry_hi=385.0,
+                          stop=381.21, targets={"base": 390.33}))
+    assert rec["rr"] == 2.0
+    assert rec["action"] == "ENTER_NOW"
+
+
+def test_rr_none_when_stop_not_below_price():
+    rec = build_watchlist_recommendation("XYZ", _base_data(stop=100.0))
+    assert rec["rr"] is None
+    assert rec["action"] != "ENTER_NOW"
+
+
+def test_rr_none_when_target_not_above_price():
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(targets={"base": 95.0}))
+    assert rec["rr"] is None
+    assert rec["action"] != "ENTER_NOW"

@@ -32,6 +32,7 @@ from stock_analyzer.constants import (
     UNCLASSIFIED_SECTOR,
 )
 from stock_analyzer import exit_advisor
+from stock_analyzer import entry_rr
 from stock_analyzer.rr_readout import fmt_ratio_vs
 from stock_analyzer import asset_type as _asset_type_mod
 from stock_analyzer import entry_eligibility as _entry_elig
@@ -457,9 +458,9 @@ def _build_watchlist_recommendation(
 
     # Risk/reward
     base_target = _f(targets.get("base")) if targets.get("base") else None
-    rr = None
-    if price and stop and base_target and price > stop and base_target > price:
-        rr = round((base_target - price) / (price - stop), 2)
+    # G-32 C4: the unrounded (6-dp canonical) measure, so 1.996 is not "2.00".
+    _rr_m = entry_rr.measure(price, stop, base_target)
+    rr = _rr_m["rr"] if _rr_m["state"] == "ok" else None
 
     # Entry zone analysis
     in_zone  = False

@@ -286,7 +286,7 @@ from stock_analyzer.macro_playbook import (
     _SCENARIO_THRESHOLDS as _MC_THRESHOLDS, _parse_number as _mc_parse_number,
 )
 from stock_analyzer.targets import (
-    support_resistance, entry_zone, compute_price_targets, risk_reward,
+    support_resistance, entry_zone, compute_price_targets,
 )
 from stock_analyzer.portfolio import (
     attach_gate_weight,
@@ -305,6 +305,7 @@ from stock_analyzer.portfolio import (
 )
 from stock_analyzer.score_label import score_phrase
 from stock_analyzer.rr_readout import fmt_ratio_vs, rank_add_candidates, rr_quality, redeploy_headline
+from stock_analyzer import entry_rr as _entry_rr
 from stock_analyzer.signal_driver import driver_diagnosis, DRIVER_TEXT, bq_weak, show_driver_box
 from stock_analyzer.beta_repair import (
     aligned_beta, leverage_side_effect, rank_defensive_candidates,
@@ -11556,10 +11557,8 @@ if page == "🏠 Home":
                                     _cprice = _cb.get("current_price")
                                     _cstop  = _cb.get("stop")
                                     _ctgt   = (_cb.get("targets") or {}).get("base")
-                                    _crr = (
-                                        risk_reward(_cprice, _cstop, _ctgt)
-                                        if (_cprice and _cstop and _ctgt) else None
-                                    )
+                                    # G-32 C4: unrounded R:R (None when unmeasurable)
+                                    _crr = _entry_rr.measure(_cprice, _cstop, _ctgt)["rr"]
                                     # A withheld verdict (unmeasured bq/val/technical
                                     # pillar) leaves a fabricated neutral 50 in
                                     # `total` and a tainted `rec`: use neither, so
@@ -11660,8 +11659,8 @@ if page == "🏠 Home":
                             st.warning(
                                 f"**{_hl['ticker']}** clears the composite Buy gate "
                                 f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R isn't positive "
-                                "at today's price (price at or above its base target, or at or below "
-                                "its stop), so it isn't an entry now. Trimming is still sound; "
+                                "at today's price (price at or above its base target), so it isn't an "
+                                "entry now. Trimming is still sound; "
                                 "check 📈 Analysis.",
                                 icon="🚦",
                             )
@@ -11669,7 +11668,8 @@ if page == "🏠 Home":
                             st.warning(
                                 f"**{_hl['ticker']}** clears the composite Buy gate "
                                 f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R couldn't be "
-                                "computed (no stop or target), so it isn't confirmed as an entry. "
+                                "computed (no usable stop or target, or today's price is at or below its "
+                                "stop), so it isn't confirmed as an entry. "
                                 "Check 📈 Analysis before acting.",
                                 icon="🚦",
                             )
@@ -11695,7 +11695,7 @@ if page == "🏠 Home":
                             )
                             _rr = _c.get("rr")
                             _rr_txt = (
-                                f" · R:R {_rr:.1f}:1"
+                                f" · R:R {fmt_ratio_vs(_rr, RR_ENTRY_MIN)}:1"
                                 if (isinstance(_rr, (int, float)) and _rr > 0
                                     and not _c.get("withheld")) else ""
                             )
@@ -16572,10 +16572,8 @@ elif page == "📡 Signals & Advice":
                                 _cprice = _cb.get("current_price")
                                 _cstop  = _cb.get("stop")
                                 _ctgt   = (_cb.get("targets") or {}).get("base")
-                                _crr    = (
-                                    risk_reward(_cprice, _cstop, _ctgt)
-                                    if (_cprice and _cstop and _ctgt) else None
-                                )
+                                # G-32 C4: unrounded R:R (None when unmeasurable)
+                                _crr    = _entry_rr.measure(_cprice, _cstop, _ctgt)["rr"]
                                 # Withheld verdict (unmeasured bq/val/technical
                                 # pillar): the fabricated-50 `total` / tainted `rec`
                                 # are not used; the reason is carried for the render.
@@ -16669,15 +16667,16 @@ elif page == "📡 Signals & Advice":
                             st.warning(
                                 f"**{_hl['ticker']}** clears the composite Buy gate "
                                 f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R isn't positive "
-                                "at today's price (price at or above its base target, or at or below "
-                                "its stop), so it isn't an entry now. Check 📈 Analysis.",
+                                "at today's price (price at or above its base target), so it isn't an "
+                                "entry now. Check 📈 Analysis.",
                                 icon="🚦",
                             )
                         elif _hl["state"] == "rr_unknown":
                             st.warning(
                                 f"**{_hl['ticker']}** clears the composite Buy gate "
                                 f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R couldn't be "
-                                f"computed (no stop or target), so it isn't confirmed as an entry. "
+                                f"computed (no usable stop or target, or today's price is at or below its "
+                                "stop), so it isn't confirmed as an entry. "
                                 f"Check 📈 Analysis before acting.",
                                 icon="🚦",
                             )
@@ -25472,7 +25471,8 @@ elif page == "📈 Analysis":
         price = r["current_price"]
         targets = r["targets"]
         ps = _an_sizing(ticker)[0]   # budget-adjusted (see _an_sizing above)
-        rr_val = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
+        # G-32 C4: unrounded (None when unmeasurable), shown via fmt_ratio_vs.
+        rr_val = _entry_rr.measure(price, r["stop"], (targets or {}).get("base"))["rr"]
         earn = r["earnings"]
         earn_label = "—"
         if earn:
@@ -25543,7 +25543,7 @@ elif page == "📈 Analysis":
             _sc_cost = "—"
 
         # R:R only meaningful for buy signals
-        _sc_rr = f"{rr_val:.1f}:1" if (rr_val and rr_val > 0 and _sc_is_buy and _sc_basis != "withheld") else "—"
+        _sc_rr = f"{fmt_ratio_vs(rr_val, RR_ENTRY_MIN)}:1" if (rr_val and rr_val > 0 and _sc_is_buy and _sc_basis != "withheld") else "—"
 
         # Pin the Stop column when it's a manual override so the user can see
         # at a glance which tickers have actioned stops vs. ATR-derived ones.
@@ -26394,7 +26394,9 @@ elif page == "📈 Analysis":
 
             # ── Trade Plan / Exit Plan ─────────────────────────────────────
             with plan_tab:
-                rr_val = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
+                # G-32 C4: the unrounded measure drives the gate tile, the F-43b
+                # caveat and every R:R shown on this tab, so a 1.97 never reads 2.0.
+                _rr_m = _entry_rr.measure(price, r["stop"], (targets or {}).get("base"))
 
                 if _da_withheld:
                     # The Exit/Hold/Buy plans below all key off rec["label"] —
@@ -26614,7 +26616,7 @@ elif page == "📈 Analysis":
                         c3.metric("Entry Zone",
                                   f"\\${r['entry_lo']:.2f}–\\${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A",
                                   help=_tip("Entry Zone"))
-                        c4.metric("R:R", f"{rr_val:.1f}:1" if rr_val and rr_val > 0 else "N/A",
+                        c4.metric("R:R", f"{fmt_ratio_vs(_rr_m['rr'], RR_ENTRY_MIN)}:1" if _rr_m["rr"] and _rr_m["rr"] > 0 else "N/A",
                                   help=_tip("R:R Ratio"))
                         st.caption(
                             "Mixed signals — not a high-conviction entry. "
@@ -26690,7 +26692,7 @@ elif page == "📈 Analysis":
                     c3.metric("Stop Loss", f"${r['stop']:.2f}" if r["stop"] else "N/A",
                               delta=_bs_delta,
                               delta_color=_bs_color, help=_tip("ATR Stop"))
-                    c4.metric("R:R", f"{rr_val:.1f}:1" if rr_val and rr_val > 0 else "N/A",
+                    c4.metric("R:R", f"{fmt_ratio_vs(_rr_m['rr'], RR_ENTRY_MIN)}:1" if _rr_m["rr"] and _rr_m["rr"] > 0 else "N/A",
                               help=_tip("R:R Ratio"))
 
                     # Entry-timing caveat — the composite says this is a good STOCK
@@ -26700,7 +26702,7 @@ elif page == "📈 Analysis":
                     # lose the quality signal) — the Analysis page is a research
                     # surface, so we flag the tension clearly and leave the call to
                     # the user. Hard R:R gating lives on Watchlist ENTER_NOW (G-13).
-                    if rr_val is not None and 0 < rr_val < RR_ENTRY_MIN and price and r["stop"] and targets:
+                    if _entry_rr.classify(_rr_m) == "below" and price and r["stop"] and targets:
                         _risk_ps   = price - r["stop"]
                         _reward_ps = targets["base"] - price
                         _lo = r.get("entry_lo")
@@ -26709,7 +26711,7 @@ elif page == "📈 Analysis":
                              else "⚖️ **Strong stock, weak entry here.** ")
                             + f"{rec['label']} reflects "
                             f"quality (composite {_da_display_total:.0f}), but the **entry R:R is "
-                            f"{rr_val:.1f}:1** — below the {RR_ENTRY_MIN:.0f}:1 target. At "
+                            f"{fmt_ratio_vs(_rr_m['rr'], RR_ENTRY_MIN)}:1** — below the {RR_ENTRY_MIN:.0f}:1 target. At "
                             f"\\${price:.2f} you'd risk **\\${_risk_ps:.2f}/sh** (to the \\${r['stop']:.2f} "
                             f"stop) to make **\\${_reward_ps:.2f}/sh** (to the \\${targets['base']:.2f} "
                             f"base target) — unfavourable asymmetry. "
@@ -26822,7 +26824,7 @@ elif page == "📈 Analysis":
                         r.get("bq_available", r.get("fundamentals_available", True))
                         and r.get("val_available", True)
                     )
-                    _gate_rr_ok     = (rr_val >= RR_ENTRY_MIN)       if rr_val else None
+                    _gate_rr_ok     = _entry_rr.gate_state(_rr_m)
                     # S-D: the concentration tile reads the one shared function
                     # (whole position after the add, book AND net-capital basis),
                     # for held and not-held names alike.
@@ -26840,7 +26842,7 @@ elif page == "📈 Analysis":
                         ("Data Quality",  _gate_bq_ok,
                          "Expense ratio available" if _da_etf_ok else "BQ + Valuation metrics available"),
                         (f"R/R ≥ {RR_ENTRY_MIN:.0f}×", _gate_rr_ok,
-                         f"R/R = {rr_val:.1f}×" if rr_val else "R/R unavailable"),
+                         f"R/R = {fmt_ratio_vs(_rr_m['rr'], RR_ENTRY_MIN)}×" if _rr_m["rr"] is not None else "R/R unavailable"),
                         ("Concentration", _gate_conc_ok, _gc_ct["detail"]),
                         ("Sector cap",    _gate_sector_ok,
                          f"{_gc_sw:.1f}% in sector" if _gc_sw is not None else "See Account page"),
@@ -27084,12 +27086,12 @@ elif page == "📈 Analysis":
                                     f"{_lbl} `${_tgt:.2f}` <span style='color:{_clr}'>{_pct:+.1f}%</span>",
                                     unsafe_allow_html=True,
                                 )
-                            if rr_val and rr_val > 0:
+                            if _rr_m["rr"] and _rr_m["rr"] > 0:   # G-32 C4: unrounded, so the band agrees with the gate
                                 quality = {
                                     "favourable": "✅ Favourable", "marginal": "⚠️ Marginal",
-                                }.get(rr_quality(rr_val), "❌ Poor")
+                                }.get(rr_quality(_rr_m["rr"]), "❌ Poor")
                                 st.markdown(
-                                    f"**R:R** `{fmt_ratio_vs(rr_val, RR_MARGINAL_MIN, RR_FAVOURABLE_MIN)}:1` — {quality}"
+                                    f"**R:R** `{fmt_ratio_vs(_rr_m['rr'], RR_MARGINAL_MIN, RR_FAVOURABLE_MIN)}:1` — {quality}"
                                 )
                         _bn = targets.get("base_note")
                         if isinstance(_bn, str) and _bn:
@@ -28542,7 +28544,7 @@ elif page == "📈 Analysis":
             # Same budget-adjusted size as on screen (one source: _an_sizing).
             ps = _an_sizing(ticker)[0]
             _ap_entry = _an_entry[ticker]
-            rr_v = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
+            rr_v = _entry_rr.measure(price, r["stop"], (targets or {}).get("base"))["rr"]   # G-32 C4: unrounded
             rm = r["risk_metrics"]
             if _ap_withheld:
                 # No verdict -> no signal heading, trade line or rationale in the
@@ -28560,7 +28562,7 @@ elif page == "📈 Analysis":
                 f"### {ticker} — {_ap_display_rec['icon']} {_ap_display_rec['label']} ({_ap_display_total}/100)",
                 f"**Price**: \\${price:.2f}" if price else "",
                 (f"**Trade**: Buy {ps['shares']} @ \\${r['entry_lo']:.2f}–\\${r['entry_hi']:.2f} · "
-                 f"Stop \\${r['stop']:.2f} · Target \\${targets['base']:.2f} · R:R {rr_v:.1f}:1"
+                 f"Stop \\${r['stop']:.2f} · Target \\${targets['base']:.2f} · R:R {fmt_ratio_vs(rr_v, RR_ENTRY_MIN)}:1"
                  if ps and rr_v and rr_v > 0 else ""),
                 (f"**Trade**: no size today — {_ap_entry['reason_if_no_size']}"
                  if _ap_entry["entry_checked"] and not _ap_entry["offer_size"] else ""),
@@ -29358,7 +29360,7 @@ elif page == "📋 Watchlist":
                     if _earn_d is not None and 0 <= _earn_d <= 7 else ""
                 )
                 _price_chip = f"<span style='color:#9ca3af'>${_price:.2f}</span>" if _price else ""
-                _rr_chip = f"<span style='color:#9ca3af'>R:R {_rr:.1f}:1</span>" if _rr else ""
+                _rr_chip = f"<span style='color:#9ca3af'>R:R {fmt_ratio_vs(_rr, RR_ENTRY_MIN)}:1</span>" if _rr else ""
                 st.markdown(
                     f"<div style='padding:4px 12px;border-left:4px solid {_a_bd};"
                     f"display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-size:0.92em'>"
@@ -29405,9 +29407,9 @@ elif page == "📋 Watchlist":
                           if _price and _stop else None,
                           delta_color="off")
             _wm[3].metric("R:R",
-                          f"{_rr:.1f}:1" if _rr else "—",
-                          delta=f"≥{RR_ENTRY_MIN:.0f}:1 ✓" if _rr and _rr >= RR_ENTRY_MIN else (f"< {RR_ENTRY_MIN:.0f}:1" if _rr else None),
-                          delta_color="normal" if (_rr and _rr >= RR_ENTRY_MIN) else "inverse")
+                          f"{fmt_ratio_vs(_rr, RR_ENTRY_MIN)}:1" if _rr else "—",
+                          delta=f"≥{RR_ENTRY_MIN:.0f}:1 ✓" if _entry_rr.clears_rr(_rr) else (f"< {RR_ENTRY_MIN:.0f}:1" if _rr else None),
+                          delta_color="normal" if _entry_rr.clears_rr(_rr) else "inverse")
             _wm[4].metric("Earnings",
                           f"{_earn_d}d" if _earn_d is not None and _earn_d >= 0 else "—",
                           delta="⚠️ Imminent" if _earn_d is not None and 0 <= _earn_d <= 7 else None,

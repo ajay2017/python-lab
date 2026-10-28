@@ -80,6 +80,23 @@ def clears(m: dict, rr_min: float = RR_ENTRY_MIN) -> bool:
     return m.get("state") == "ok" and m.get("rr") is not None and m["rr"] >= rr_min
 
 
+def clears_rr(rr, rr_min: float = RR_ENTRY_MIN) -> bool:
+    """`clears` for a bare, already-measured R:R (the Watchlist result's `rr`):
+    True only for a finite, positive value at or above `rr_min`."""
+    return _finite(rr) and float(rr) > 0 and float(rr) >= rr_min
+
+
+def gate_state(m: dict, rr_min: float = RR_ENTRY_MIN):
+    """Tri-state for a gate tile: True (clears), False (measured but below, or
+    no upside), None (unknown: couldn't be measured)."""
+    state = m.get("state")
+    if state == "ok":
+        return clears(m, rr_min)
+    if state == "no_upside":
+        return False
+    return None
+
+
 def classify(m: dict, rr_min: float = RR_ENTRY_MIN) -> str:
     """"pass" | "below" (measured, under rr_min) | "no_upside" | "unknown"."""
     state = m.get("state")

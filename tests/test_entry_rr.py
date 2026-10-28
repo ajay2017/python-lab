@@ -103,3 +103,21 @@ def test_custom_rr_min():
     assert not entry_rr.clears(m)
     assert entry_rr.clears(m, rr_min=1.0)
     assert entry_rr.classify(m, rr_min=1.0) == "pass"
+
+
+def test_gate_state_tristate():
+    assert entry_rr.gate_state(entry_rr.measure(100, 95, 110)) is True
+    assert entry_rr.gate_state(entry_rr.measure(100, 95, 109.9)) is False   # 1.98
+    assert entry_rr.gate_state(entry_rr.measure(100, 95, 99)) is False      # no upside
+    assert entry_rr.gate_state(entry_rr.measure(None, 95, 99)) is None
+    assert entry_rr.gate_state(entry_rr.measure(100, 100, 110)) is None     # stop >= entry
+
+
+def test_clears_rr_boundaries():
+    assert entry_rr.clears_rr(2.0) is True
+    assert entry_rr.clears_rr(1.97) is False
+    assert entry_rr.clears_rr(0.0) is False
+    assert entry_rr.clears_rr(-1.0) is False
+    assert entry_rr.clears_rr(None) is False
+    assert entry_rr.clears_rr(float("nan")) is False
+    assert entry_rr.clears_rr(1.0, rr_min=1.0) is True

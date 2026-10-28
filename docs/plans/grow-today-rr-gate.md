@@ -1,6 +1,8 @@
 # Grow Today R:R gate (G-32): entry reward:risk ≥ 2:1 on new picks AND adds
 
-**Status:** C1 BUILT 2026-10-23 (`stock_analyzer/entry_rr.py`, `scripts/grow_rr_dryrun.py`; Opus FIX-FIRST/2 → SHIP/0).
+**Status:** **C4 SHIPPED 2026-10-28** (standalone, ahead of C3): the Watchlist G-13, the Home Rebalancer and 📡 Signals Diversification "genuine entry" headlines, the 📈 Analysis gate tile / F-43b caveat now use `entry_rr.measure` (unrounded), and every R:R that can sit below 2:1 is printed with `rr_readout.fmt_ratio_vs`; `targets.risk_reward` has no production caller left (only `scripts/grow_rr_dryrun.py`). Opus SHIP, 0 blocking. Enforcement (C3 + C5) still waits on the shadow readout.
+
+Earlier: C1 BUILT 2026-10-23 (`stock_analyzer/entry_rr.py`, `scripts/grow_rr_dryrun.py`; Opus FIX-FIRST/2 → SHIP/0).
 Nothing enforced. **Dry run DONE 2026-10-23 (readout + outcome analysis below). Owner chose the C2 shadow first (2026-10-23): C2 BUILT 2026-10-23, persisting to a new `g32_shadow` table; the owner applies its DDL by hand. Next: about 4–6 weeks of shadow rows, then an outcome readout, then the owner rules on U1–U13.** (Was: the owner runs the dry run (`python scripts/grow_rr_dryrun.py --days 30 --csv grow_rr.csv`, then
 `python scripts/grow_rr_dryrun.py --today`, from a shell with `SUPABASE_URL` / `SUPABASE_KEY`); the lead records the readout
 here; the owner rules on U1–U13.) Enforcement (C3–C5) waits for that; C4 ships before or with C3.
