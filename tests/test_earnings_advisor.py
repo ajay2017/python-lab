@@ -592,3 +592,52 @@ def test_hold_or_add_branch_compares_net_rev_to_the_constant_not_a_bare_2():
     for n in hits:
         comp = n.comparators[0]
         assert isinstance(comp, ast.Name) and comp.id == "EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS"
+
+
+# ── analyst_fields: load_bundle shape (financials + name, no "info") ────────
+
+def test_analyst_fields_reads_load_bundle_shape():
+    data = {
+        "name": "AbbVie Inc.",
+        "financials": {"forward_eps": 11.0, "eps": 6.5, "forward_pe": 14.2,
+                       "revenue_growth": 0.05, "earnings_growth": 0.12},
+    }
+    af = ea.analyst_fields(data, "ABBV")
+    assert af == {"company": "AbbVie Inc.", "fwd_eps": 11.0, "trail_eps": 6.5,
+                  "fwd_pe": 14.2, "rev_growth": 0.05, "earn_growth": 0.12}
+
+
+def test_analyst_fields_info_only_legacy_fallback():
+    data = {"info": {"shortName": "Acme", "forwardEps": 2.0, "trailingEps": 1.5,
+                     "forwardPE": 20, "revenueGrowth": 0.1, "earningsGrowth": 0.2}}
+    af = ea.analyst_fields(data, "ACME")
+    assert af["company"] == "Acme"
+    assert (af["fwd_eps"], af["trail_eps"], af["fwd_pe"]) == (2.0, 1.5, 20.0)
+    assert (af["rev_growth"], af["earn_growth"]) == (0.1, 0.2)
+
+
+def test_analyst_fields_nan_financials_fall_back_to_info():
+    nan = float("nan")
+    data = {"financials": {"forward_eps": nan, "eps": float("inf")},
+            "info": {"forwardEps": 3.0, "trailingEps": 2.0}}
+    af = ea.analyst_fields(data, "X")
+    assert af["fwd_eps"] == 3.0 and af["trail_eps"] == 2.0
+
+
+def test_analyst_fields_nan_everywhere_is_none():
+    nan = float("nan")
+    data = {"financials": {"forward_eps": nan, "forward_pe": "bad"},
+            "info": {"forwardEps": nan}}
+    af = ea.analyst_fields(data, "X")
+    assert af["fwd_eps"] is None and af["fwd_pe"] is None
+    assert af["trail_eps"] is None and af["rev_growth"] is None
+
+
+def test_analyst_fields_missing_name_is_ticker():
+    assert ea.analyst_fields({}, "ABBV")["company"] == "ABBV"
+    assert ea.analyst_fields(None, "ABBV")["company"] == "ABBV"
+
+
+def test_fetch_financials_from_info_exposes_forward_eps():
+    from stock_analyzer.data import fetch_financials_from_info
+    assert fetch_financials_from_info({"forwardEps": 5.1})["forward_eps"] == 5.1

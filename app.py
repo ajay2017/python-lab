@@ -67,7 +67,7 @@ from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
 from stock_analyzer.risk import atr_stop_loss, position_sizing, sizing_unavailable_reason, compute_all_risk, rate_sensitivity_per_ticker, capital_equivalent_risk, beta_vs_market
 from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations
-from stock_analyzer.earnings_advisor import build_earnings_playbook
+from stock_analyzer.earnings_advisor import build_earnings_playbook, analyst_fields as _analyst_fields
 from stock_analyzer import earnings_intel as _earn_intel
 from stock_analyzer.watchlist_advisor import build_watchlist_recommendation, sort_key_for_action
 from stock_analyzer.trade_analytics import build_full_analytics
@@ -4463,11 +4463,12 @@ def _render_holdings_earnings(port_df, held_data):
     for _, _pr in port_df.iterrows():
         _t   = _pr["Ticker"]
         _d   = held_data.get(_t, {}).get("earnings") or _earn_dates.get(str(_t).strip().upper())
-        _inf = held_data.get(_t, {}).get("info", {}) or {}
-        _name = _inf.get("shortName") or _inf.get("longName") or _t
-        _fwd_eps  = _inf.get("forwardEps")
-        _trail_eps = _inf.get("trailingEps")
-        _rev_growth = _inf.get("revenueGrowth")
+        # load_bundle results carry `financials` / `name`, not `info`.
+        _af = _analyst_fields(held_data.get(_t), _t)
+        _name = _af["company"]
+        _fwd_eps  = _af["fwd_eps"]
+        _trail_eps = _af["trail_eps"]
+        _rev_growth = _af["rev_growth"]
         try:
             _edate = datetime.strptime(_d, "%Y-%m-%d").date() if _d else None
         except Exception:
@@ -4686,7 +4687,12 @@ def _render_holdings_earnings(port_df, held_data):
 
             _cnbc_badge = "  📰 CNBC" if _pb.get("has_cnbc_context") else ""
             with st.expander(
-                f"{_act_icon} **{_act_label}** · {_pb['ticker']} — {_pb['company']}  "
+                f"{_act_icon} **{_act_label}** · {_pb['ticker']}"
+                + (f" — {_pb['company']}"
+                   if str(_pb['company'] or "").strip()
+                   and str(_pb['company']).strip().lower() != str(_pb['ticker']).strip().lower()
+                   else "")
+                + "  "
                 f"| {_urg_icon} {_earn_dt_str} ({_pb['days_until']}d)  "
                 f"| Est. move ±{_pb['est_move']:.0f}%{_cnbc_badge}",
                 expanded=_expand,

@@ -7,6 +7,7 @@ earnings volatility, a specific pre-earnings action, and what to watch
 during the report itself.
 """
 
+import math as _math
 import pytz as _pytz
 from datetime import date as _date, datetime as _datetime
 
@@ -56,6 +57,47 @@ def _f(val, default=0.0):
         return default if (f != f) else f
     except (TypeError, ValueError):
         return default
+
+
+def _finite_or_none(val):
+    """float(val), or None for None / NaN / inf / non-numeric."""
+    if val is None or isinstance(val, bool):
+        return None
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return None
+    return f if _math.isfinite(f) else None
+
+
+def analyst_fields(data: dict, ticker: str) -> dict:
+    """Company name + analyst-estimate fields for one held bundle.
+
+    load_bundle results carry `financials` / `name`, not `info`; raw fetch
+    bundles still carry `info`, so it stays as the fallback. Numeric fields
+    are finite floats or None (never NaN).
+    """
+    data = data or {}
+    fin = data.get("financials")
+    fin = fin if isinstance(fin, dict) else {}
+    info = data.get("info")
+    info = info if isinstance(info, dict) else {}
+
+    def _pick(fin_key, info_key):
+        v = _finite_or_none(fin.get(fin_key))
+        return v if v is not None else _finite_or_none(info.get(info_key))
+
+    company = (
+        data.get("name") or info.get("shortName") or info.get("longName") or ticker
+    )
+    return {
+        "company":     company,
+        "fwd_eps":     _pick("forward_eps", "forwardEps"),
+        "trail_eps":   _pick("eps", "trailingEps"),
+        "fwd_pe":      _pick("forward_pe", "forwardPE"),
+        "rev_growth":  _pick("revenue_growth", "revenueGrowth"),
+        "earn_growth": _pick("earnings_growth", "earningsGrowth"),
+    }
 
 
 _SECTOR_DEFAULTS = {
@@ -513,16 +555,17 @@ def build_earnings_playbook(
         beat_rate = ctx.get("beat_rate_pct")           # float | None
         reaction  = ctx.get("recent_reaction_direction")  # str | None
 
-        info      = data.get("info") or {}
         rev       = data.get("revisions") or {}
         rm        = data.get("risk_metrics") or {}
 
-        fwd_eps      = info.get("forwardEps")
-        trail_eps    = info.get("trailingEps")
-        rev_growth   = info.get("revenueGrowth")
-        earn_growth  = info.get("earningsGrowth")
-        fwd_pe       = info.get("forwardPE")
-        company      = info.get("shortName") or info.get("longName") or ticker
+        # load_bundle results carry `financials` / `name`, not `info`.
+        _af          = analyst_fields(data, ticker)
+        fwd_eps      = _af["fwd_eps"]
+        trail_eps    = _af["trail_eps"]
+        rev_growth   = _af["rev_growth"]
+        earn_growth  = _af["earn_growth"]
+        fwd_pe       = _af["fwd_pe"]
+        company      = _af["company"]
 
         net_rev  = int(_f(rev.get("net", 0)))
         ups_90   = int(_f(rev.get("upgrades_90d", 0)))

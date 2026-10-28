@@ -247,6 +247,7 @@ def fetch_financials_from_info(info: dict) -> dict:
         "pe_ratio":         info.get("trailingPE"),
         "forward_pe":       info.get("forwardPE"),
         "eps":              info.get("trailingEps"),
+        "forward_eps":      info.get("forwardEps"),
         "market_cap":       mkt_cap,
         # Cash flow (primary institutional metric)
         "free_cashflow":    fcf,
