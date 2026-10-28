@@ -12811,7 +12811,7 @@ if page == "🏠 Home":
                 _err = RuntimeError(r.error)
                 _err.status_code = r.status_code
                 raise _err
-            return r.text
+            return r.text, bool(getattr(r, "truncated", False))
         elif provider == "OpenAI":
             from openai import OpenAI as _OAI
             c = _OAI(api_key=api_key)
@@ -12820,12 +12820,12 @@ if page == "🏠 Home":
                 messages=[{"role": "system", "content": sys_prompt},
                            {"role": "user",   "content": usr_prompt}],
             )
-            return r.choices[0].message.content
+            return r.choices[0].message.content, r.choices[0].finish_reason == "length"
         elif provider == "Gemini (Google)":
             import google.generativeai as _genai
             _genai.configure(api_key=api_key)
             _gm = _genai.GenerativeModel(model, system_instruction=sys_prompt)
-            return _gm.generate_content(usr_prompt).text
+            return _gm.generate_content(usr_prompt).text, False
         elif provider == "Groq (Free tier)":
             from openai import OpenAI as _OAI
             c = _OAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
@@ -12834,12 +12834,20 @@ if page == "🏠 Home":
                 messages=[{"role": "system", "content": sys_prompt},
                            {"role": "user",   "content": usr_prompt}],
             )
-            return r.choices[0].message.content
+            return r.choices[0].message.content, r.choices[0].finish_reason == "length"
         raise ValueError(f"Unknown provider: {provider}")
 
     # ── Brief cache key: invalidate when provider or model changes ────────
     _sel_model_key = (f"{_SNAPSHOT_FAST}:{_snap_fast_resolved}"
                       if _sel_model == _SNAPSHOT_FAST else _sel_model)
+    # The action list on the card is copied from the CURRENT Brief every render
+    # (never cached); the LLM narrative is cached, so remember which Brief calls
+    # it was written against and say so when they have since changed.
+    from stock_analyzer import snapshot_context as _snap_ctx
+    _snap_view = _snap_ctx.brief_calls_view(_act_view, _daily_brief, _fmt_action)
+    _snap_brief_lines = _snap_ctx.brief_calls_lines(_act_view, _daily_brief, _fmt_action)
+    _snap_hash = _snap_ctx.calls_hash(_snap_view)
+    _snap_ok, _snap_why_not = _snap_ctx.generate_allowed(_act_view)
     _brief_cache_key = f"_ai_snapshot__{_sel_provider}__{_sel_model_key}"
     _brief_cached    = st.session_state.get(_brief_cache_key)
     _brief_ts        = st.session_state.get(f"{_brief_cache_key}__ts", "")
@@ -12852,10 +12860,11 @@ if page == "🏠 Home":
             key="_gen_brief_btn",
             width="stretch",
             type="primary",
-            disabled=not _active_key or st.session_state.get("_readonly", False),
+            disabled=(not _active_key or st.session_state.get("_readonly", False)
+                      or not _snap_ok),
         )
 
-    if not _active_key:
+    if _snap_ok and not _active_key:
         with _info_slot.container():
             st.info(
                 f"Open **⚙️ Provider settings** below to enter your "
@@ -12863,7 +12872,11 @@ if page == "🏠 Home":
                 icon="🔑",
             )
 
-    if _gen_btn and _active_key:
+    if not _snap_ok:
+        with _info_slot.container():
+            st.info(_snap_why_not, icon="⏸️")
+
+    if _gen_btn and _active_key and _snap_ok:
         # Build portfolio context (same for all providers)
         _ctx_lines = [
             f"Date: {_now_et().strftime('%A, %B %d, %Y %H:%M ET')}",
@@ -12881,7 +12894,7 @@ if page == "🏠 Home":
                 f"Signal: {_pr['Signal']} | Score: {_pr['Score']:.0f}/100 | "
                 f"Gap to Stop: {_gap_s}"
             )
-        _ctx_lines += ["", "## ACTIVE ALERTS"]
+        _ctx_lines += ["", "## ALERTS (context only — not trade calls; Today's Brief decides)"]
         if alert_list:
             for _al in alert_list[:12]:
                 _ctx_lines.append(f"  [{_al['level'].upper()}] {_al['msg'].replace('*','').replace('_','').replace('`','')}")
@@ -12897,13 +12910,17 @@ if page == "🏠 Home":
             _ctx_lines += ["", "## TOP NEWS"]
             for _ni in _news_ctx[:8]:
                 _ctx_lines.append(f"  [{_ni['ticker']}] {_ni['label']:8s} | {_ni['title'][:100]}")
+        _ctx_lines += [""] + _snap_brief_lines
 
         _sys_prompt = (
             "You are a senior portfolio manager at a top-tier institutional investment firm. "
             "Write a concise, professional morning monitoring brief. "
             "Be specific: name tickers, cite numbers. Short structured sections. "
             "Tone: confident, analytical, no fluff. Maximum 450 words. "
-            "End with 3 concrete action items ranked by urgency. "
+            "The TODAY'S BRIEF block is the app's decision for today. Never propose a trade, "
+            "share count, target weight, price target or stop that is not in it, and never "
+            "contradict it. If a holding is listed as Watch, say Watch. You may explain a call "
+            "using the data and news provided. "
             "Output format: use '## SECTION NAME' on its own line for each section header. "
             "Do NOT emit a top-level title or a date line — start directly with '## EXECUTIVE SUMMARY'."
         )
@@ -12913,20 +12930,21 @@ if page == "🏠 Home":
             "Required sections (use '## HEADING' on its own line — no title, no date):\n"
             "## EXECUTIVE SUMMARY (2-3 sentences)\n"
             "## MARKET CONTEXT (1-2 sentences)\n"
-            "## PORTFOLIO HIGHLIGHTS (top movers, key risks)\n"
-            "## RISK FLAGS (alerts — what needs attention)\n"
+            "## PORTFOLIO HIGHLIGHTS (top movers, key risks; describe risks, do not recommend trades)\n"
+            "## RISK FLAGS (alerts — what needs attention; describe risks, do not recommend trades)\n"
             "## KEY NEWS CATALYSTS (material news affecting holdings)\n"
-            "## ACTION ITEMS (3 prioritised, specific)\n"
         )
 
         with st.spinner(f"Generating brief with {_sel_provider}…"):
             try:
-                _brief_text = _call_ai_brief(
+                _brief_text, _brief_cut = _call_ai_brief(
                     _sel_provider, _sel_model, _active_key, _sys_prompt, _usr_prompt
                 )
                 _ts_now = _now_et().strftime("%b %d %Y %H:%M ET")
                 st.session_state[_brief_cache_key]           = _brief_text
                 st.session_state[f"{_brief_cache_key}__ts"]  = _ts_now
+                st.session_state[f"{_brief_cache_key}__hash"] = _snap_hash
+                st.session_state[f"{_brief_cache_key}__cut"]  = _brief_cut
                 _brief_cached = _brief_text
                 _brief_ts     = _ts_now
             except Exception as _e:
@@ -13013,7 +13031,22 @@ if page == "🏠 Home":
                 out.append(f"</{in_list}>")
             return "\n".join(out)
 
-        _body_html = _md_to_html(_brief_cached)
+        # The action list is the Brief's own, copied fresh each render (never
+        # cached, never written by the LLM): it goes second, after the summary.
+        _sec_html = _snap_ctx.section_html(_snap_view)
+        _md_heads = [m.start() for m in _re.finditer(r"(?m)^## ", _brief_cached)]
+        if len(_md_heads) >= 2:
+            _body_html = (_md_to_html(_brief_cached[:_md_heads[1]]) + _sec_html
+                          + _md_to_html(_brief_cached[_md_heads[1]:]))
+        else:
+            _body_html = _md_to_html(_brief_cached) + _sec_html
+        _snap_notes = []
+        if st.session_state.get(f"{_brief_cache_key}__cut"):
+            _snap_notes.append("(narrative cut off — regenerate)")
+        if st.session_state.get(f"{_brief_cache_key}__hash") != _snap_hash:
+            _snap_notes.append("Today's Brief changed since this snapshot — regenerate for an updated narrative")
+        for _sn in _snap_notes:
+            st.warning(_sn, icon="⚠️")
         _today_str = _now_et().strftime("%A · %B %d, %Y")
         _model_label = _model_opts.get(_sel_model, _sel_model)
 
@@ -13072,7 +13105,12 @@ if page == "🏠 Home":
             f'<div class="ai-brief-body">{_body_html}</div>'
             f'</div>'
             f'<div class="ai-brief-foot">'
-            f'Based on live portfolio + market data at generation time — refresh for latest.'
+            f'Based on live portfolio + market data at generation time — refresh for latest.<br>'
+            + _safe_html(
+                "Narrative by AI; the 'What the app is telling you today' list is copied "
+                "from Today's Brief, not written by the AI. If the narrative ever names a "
+                "trade the Brief doesn't, the Brief wins."
+            ) +
             f'</div>'
         )
         _brief_slot.markdown(_css + _card, unsafe_allow_html=True)
@@ -43328,7 +43366,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **📅 Catalyst-Specific Stress — "which upcoming EVENT threatens this book most?"** Right below the scenario above, on the same tab, click **📅 Generate catalyst-specific stress** to check whether any upcoming HIGH-impact macro event (within 14 days) or one of your own holdings' earnings reports overlaps the same structural weak points. Broad, sector-wide events like FOMC and GDP releases are deliberately excluded from this ranking — they threaten everything equally, so they can't point to a SPECIFIC vulnerability. If neither a macro event nor an earnings report has real overlap with your weak points, this says so plainly rather than manufacturing a concern — but only on a fully-measured correlation matrix; otherwise it says the result isn't verified, since which names count as weak points depends on that matrix. The narrative itself is likewise only generated and saved on a fully-measured matrix. **Awareness only: the event-driven twin of the scenario above, never a new stress calculation, never a gate.**
 
-- **🤖 AI Snapshot** — On-demand, point-in-time portfolio narrative generated live from your holdings, active alerts, market indices, and news. Your choice of provider: Claude, OpenAI, Gemini, or Groq. Claude uses the ⚙️ App Settings `fast` model by default (you can pick another under ⚙️ Provider settings). For cadence-driven reflection (thesis health, weekly/monthly review), use 🧠 AI Insights instead.
+- **🤖 AI Snapshot** — On-demand, point-in-time portfolio narrative generated live from your holdings, active alerts, market indices, and news, plus Today's Brief calls. Its “what the app is telling you today” list is copied from Today's Brief (not written by the AI), and the AI narrative is instructed not to add trades. Your choice of provider: Claude, OpenAI, Gemini, or Groq. Claude uses the ⚙️ App Settings `fast` model by default (you can pick another under ⚙️ Provider settings). For cadence-driven reflection (thesis health, weekly/monthly review), use 🧠 AI Insights instead.
 
 ---
 
@@ -43430,7 +43468,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **📜 Recommendations History** — every recommendation the app surfaced over time (the audit trail).
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🧭 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
 - **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY**, shown as 🎯 Add (a high-conviction name with a tailwind; it carries no share count — for an add and its size, check 📈 Analysis, which shows Grow Today's call; within 3 days of the release it isn't shown as an add: it reads WATCH if a WATCH rule applies, otherwise HOLD), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
-- **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). Claude uses the ⚙️ App Settings `fast` model by default (you can pick another under ⚙️ Provider settings). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
+- **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, and a “what the app is telling you today” list copied from Today's Brief (the AI narrative is instructed not to add trades; it is paused while the Brief is offline). Pick your own AI provider (Claude/OpenAI/Gemini/Groq). Claude uses the ⚙️ App Settings `fast` model by default (you can pick another under ⚙️ Provider settings). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer with two independent sections. **Forward Volatility Forecaster** (Phase 1) tests whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. **Earnings-Move Magnitude** (Phase 2) tests whether the app's own already-live pre-earnings sizing heuristic beats a naive "assume it moves like its own past prints" baseline, per held ticker around its scheduled print — unsigned magnitude only, never a directional call, and no "upcoming, not yet matured" preview (an outcome is only ever shown after it's known). Both sections feed **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. Each section's skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated.
 - **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Six checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh), and **⑥ Write outcomes** (did today's interactive ledger writes — 6 write paths: the buy recommendations log, the Grow Today gate suppression ledger, the Watchlist Ready-to-Enter log, and the 3 Watchlist/Rebalancer/Analysis gate-ledger capture sites added 2026-09-13 — actually save, or did a swallowed failure look identical to a healthy "nothing to record"?). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Check ⑥, unlike ④/⑤, DOES feed the Home banner — it is a same-session pass/fail signal, not a standing condition or a cold-load cache. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.** Below the checks, **🤖 AI models** lists which model each AI role runs on and where that choice comes from (code default, ⚙️ App Settings, or an environment variable), whether the app's API key can use it, and this app process's calls, errors and fallbacks per role (cron runs happen in their own processes and aren't counted). Under it, a **Portfolio Investigator — AI provider** section lets you choose which AI model the 🔎 Investigator tab (🧠 AI Insights) uses — separate from 🤖 AI Snapshot's own provider choice, not shared or inherited. Only a model that's already passed a required accuracy check is offered.
 - **🛑 The Road Not Taken** — owner-only, not shown in read-only viewer mode. Grades the app's own restraint: every time a gate held back a pick, an add, or downgraded a call, this page shows what the forward return vs SPY over the following ~30 trading days would have been — did the app's caution help or hurt? Covers 14 gates: the original 8 inside Grow Today (macro/sector filters, single-name ceiling, drift conflict, cooldown, early-deterioration WATCH, bear-day tone) plus 6 more — a Rebalancer ADD suppression, a Watchlist ENTER_NOW downgrade to NEAR_ENTRY (sector, beta, or unvalidated R:R — 3 separate gates), and an Analysis add-to-position suppression on a breached stop. A downgrade and an outright suppression are graded as distinct claims (a downgraded name still rendered, just weaker), never blended together. Per gate, not aggregate, and a gate shows no verdict at all ("building") until enough matured, priced, distinct-ticker calls have accrued — expect every gate to read "building" for the first couple of months, longer for the 6 gates added 2026-09-13. **A pure retrospective measurement — it never changes what the engine recommends, gates, or sizes**, today or in the future.

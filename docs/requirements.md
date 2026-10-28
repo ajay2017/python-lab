@@ -707,8 +707,8 @@ Renamed from "AI Brief" (2026-07-12) — the Home tab shares no functional overl
 
 | ID | Requirement |
 |----|-------------|
-| F-110 | Generate a natural language portfolio snapshot using an LLM (Anthropic / OpenAI / Google); Claude defaults to the ⚙️ App Settings `fast` model (another can be picked under ⚙️ Provider settings) |
-| F-111 | Snapshot should summarise portfolio state, key risks, and suggested actions |
+| F-110 | Generate a natural language portfolio snapshot using an LLM (Anthropic / OpenAI / Google); Claude defaults to the ⚙️ App Settings `fast` model (another can be picked under ⚙️ Provider settings); its prompt includes Today's Brief calls as context and instructs the model not to propose or contradict trades |
+| F-111 | Snapshot should summarise portfolio state, key risks, and suggested actions; the "what the app is telling you today" action list is copied from Today's Brief (Act Today / Monitoring / Grow Today), not written by the AI, and the AI narrative is instructed not to add trades; generation is paused while the Brief is offline |
 
 ### 3.10 Market Data Layer (multi-source: failover + cross-check)
 

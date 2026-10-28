@@ -967,6 +967,7 @@ _GATE_FILES = {
     # that Grow Today and, from chunks 3-7, Watchlist/Analysis/email share.
     "stock_analyzer/entry_eligibility.py",
     "stock_analyzer/held_news_check.py",
+    "stock_analyzer/snapshot_context.py",
     # Added 2026-10-17 (docs/plans/headline-relevance.md): whether a headline counts
     # toward a ticker at all; applied once in bundle_loader before every news consumer.
     "stock_analyzer/news_relevance.py",
