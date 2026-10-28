@@ -552,7 +552,8 @@ def _probe_store(store: _Store) -> dict:
 
     base = {"table": store.table, "label": store.label, "lane": store.lane,
             "cadence": store.cadence, "severity": "unknown", "state": "unknown",
-            "latest": None, "detail": ""}
+            "latest": None, "detail": "", "age_checked": False,
+            "unconditional": store.unconditional}
     if not db.has_db():
         # DELIBERATE ASYMMETRY with check ③, which grades the same condition
         # "down" (see check_providers). Not an inconsistency to harmonise:
@@ -601,7 +602,9 @@ def _probe_store(store: _Store) -> dict:
             base["severity"], base["detail"] = "ok", f"latest {latest_d.isoformat()}"
         elif latest_d >= expected:
             base["severity"], base["detail"] = "ok", f"fresh — latest {latest_d.isoformat()}"
+            base["age_checked"] = True
         else:
+            base["age_checked"] = True
             base["severity"] = "warn"
             base["detail"] = f"stale — latest {latest_d.isoformat()}, expected {expected.isoformat()}"
     else:
@@ -620,7 +623,8 @@ def check_data_stores() -> list[dict]:
         except Exception as exc:  # defense in depth — one bad probe can't sink the check
             out.append({"table": store.table, "label": store.label, "lane": store.lane,
                         "cadence": store.cadence, "severity": "unknown", "state": "error",
-                        "latest": None, "detail": str(exc)[:120]})
+                        "latest": None, "detail": str(exc)[:120], "age_checked": False,
+                        "unconditional": store.unconditional})
     return out
 
 

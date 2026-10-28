@@ -37616,6 +37616,7 @@ elif page == "🩺 System Trust":
         st.stop()
 
     from stock_analyzer import system_health as _sysh
+    from stock_analyzer import store_health_view as _store_health_view
 
     st.caption(
         "*Can I trust what the app told me today?* Every check below is read live "
@@ -37737,7 +37738,8 @@ elif page == "🩺 System Trust":
 
     def _sysh_section(title: str, rows: list, noun: str, all_ok_text: str, partial_text: str,
                        tech_key: str | None = None,
-                       none_confirmed_text: str | None = None) -> None:
+                       none_confirmed_text: str | None = None,
+                       summary_fn=None) -> None:
         st.markdown(title)
         if not rows:
             return
@@ -37763,6 +37765,8 @@ elif page == "🩺 System Trust":
             else:
                 _label = f"All {_n} {noun}" if _n != 1 else f"The 1 {noun}"
                 _detail = all_ok_text if _n_ok == _n else partial_text.format(n_ok=_n_ok, n=_n)
+                if summary_fn is not None:
+                    _detail = summary_fn(rows)
                 _sysh_row("ok", _label, _detail)
         else:
             for _r in rows:
@@ -37784,13 +37788,13 @@ elif page == "🩺 System Trust":
     _sysh_section(
         "##### ② Data stores — existence & freshness (the DDL-catcher)",
         _health.get("stores", []), noun="tracked data stores",
-        all_ok_text="Present, with fresh data for their expected cadence",
-        partial_text="No missing/stale stores — {n_ok}/{n} confirmed fresh, rest exist "
-                     "(conditionally-written, not due this cycle)",
+        all_ok_text="",  # unused: summary_fn builds the collapsed text
+        partial_text="",  # unused: summary_fn builds the collapsed text
         none_confirmed_text="nothing was verified this run — most often the database "
                             "is unreadable, so this check had nothing to read "
                             "(see ③ Data providers below)",
         tech_key="table",
+        summary_fn=_store_health_view.stores_summary,
     )
 
     _sysh_section(
