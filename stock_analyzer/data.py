@@ -14,7 +14,7 @@ _ET = pytz.timezone("America/New_York")
 # Primary (yfinance) provider, used directly whenever the multi-source layer is
 # OFF so behaviour is byte-for-byte the pre-provider code. When
 # constants.DATA_MULTISOURCE_ENABLED is True, the public fetch_* functions route
-# through `_orch` (failover chain yfinance → Finnhub → FMP + price cross-check).
+# through `_orch` (failover chain yfinance → Finnhub (FMP left it 2026-10-27) + price cross-check).
 _PRIMARY = YFinanceProvider()
 
 

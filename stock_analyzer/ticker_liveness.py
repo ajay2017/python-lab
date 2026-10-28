@@ -63,8 +63,8 @@ _SWEEP_WALL_CLOCK_CAP_SEC = 180
 #
 # The escalation call is a mixed chain: fetch_live() fans the WHOLE suspects
 # list to Finnhub (loops per-ticker internally), then yfinance (ONE batched
-# yf.download for the gap), then FMP (loops per-ticker internally) for what's
-# still missing. Finnhub/FMP's per-ticker loops are each request-capped at
+# yf.download for the gap); FMP left DATA_LIVE_PRICE_ORDER 2026-10-27. Finnhub's
+# per-ticker loop is request-capped at
 # their own ~10s client timeout, but nothing bounds the LOOP as a whole, so a
 # batch of ~23 suspects (the realistic worst case at the health floor) could
 # still run for minutes. This cap wraps the single fetch_live(suspects) call
@@ -239,12 +239,12 @@ def sweep(
     # ~10% of the roster (~23 names). ONE batched fetch_live(suspects) call —
     # NOT N sequential single-ticker calls — since get_live_prices already
     # fans a full ticker list across Finnhub → yfinance (one batched download)
-    # → FMP; batching collapses N yfinance downloads into 1 without changing
-    # the per-ticker result. Bounded by _SWEEP_ESCALATION_CAP_SEC so the
-    # remaining per-ticker Finnhub/FMP loops can't hang the lane (see the
+    # (FMP left the order 2026-10-27); batching collapses N yfinance downloads
+    # into 1 without changing the per-ticker result. Bounded by _SWEEP_ESCALATION_CAP_SEC so the
+    # remaining per-ticker Finnhub loops can't hang the lane (see the
     # constant's comment above).
     #
-    # A miss across all providers (Finnhub → yfinance → FMP) IS the semantic
+    # A miss across all providers (Finnhub → yfinance; FMP until 2026-10-27) IS the semantic
     # "unknown symbol" — we do NOT parse Yahoo's 404 (yfinance swallows it;
     # hitting quoteSummary directly depends on an unofficial crumb-gated
     # endpoint, explicitly rejected).

@@ -3601,7 +3601,7 @@ with st.sidebar:
         for _ah_src, _ah_label in [
             ("finnhub",       "Finnhub (live-price primary)"),
             ("yahoo_finance", "Yahoo Finance (history/failover)"),
-            ("fmp",           "FMP (failover)"),
+            ("fmp",           "FMP (earnings calendar + profile)"),
             ("fred",          "FRED (St. Louis Fed)"),
             ("supabase",      "Supabase DB"),
             ("yahoo_news",    "Yahoo News (yf.Search)"),
@@ -3690,7 +3690,7 @@ with st.sidebar:
             f"({_pp_n['finnhub']} Finnhub, {_pp_n['fmp']} FMP). The call/error counters above "
             "are untouched; the FMP requests do count toward FMP's daily quota (the "
             f"\"today: N/{_pp_C.FMP_DAILY_CALL_CAP}\" figure rises after its cache refresh). \"candidate\" rows are "
-            "endpoints the app doesn't use yet. "
+            "endpoints the app doesn't use yet; \"not used\" rows (FMP, except its earnings calendar and company profile) are no longer called. "
             "Turned off in settings: " + (", ".join(_pp_off) if _pp_off else "none") + "."
         )
         _pp_sym_raw = st.text_input("Ticker", value="AAPL", key="_provider_probe_sym",
@@ -3752,7 +3752,7 @@ with st.sidebar:
     else:
         st.markdown("🔴 **Database unreachable** — the app cannot read your "
                     "holdings, trades or watchlist")
-    st.caption("Market data: Finnhub + Yahoo Finance + FMP · Not financial advice")
+    st.caption("Market data: Finnhub + Yahoo Finance (FMP: earnings calendar + profile) · Not financial advice")
 
 # ── DB-outage gate ───────────────────────────────────────────────────────────
 # Placed HERE, immediately after the sidebar block closes, rather than at the
@@ -25774,17 +25774,18 @@ elif page == "📈 Analysis":
                     )
 
                 # Fundamentals backfill transparency — when yfinance .info was sparse,
-                # the orchestrator pulled the fundamental leg from a failover source
-                # (FMP). Flagging it tells the user this composite is on backfilled
-                # fundamentals, not a yfinance hiccup that would have collapsed it to
-                # a neutral 50 (the old Buy↔Hold flip).
+                # the orchestrator refilled it from the profile-only FMP backfill
+                # (sector, market cap; DATA_INFO_BACKFILL_ORDER). Flagging it tells
+                # the user the composite kept sector norms from a refill rather than
+                # Yahoo's own company data.
                 _info_src = r.get("info_source")
                 if _info_src:
                     _src_label = {"fmp": "FMP", "finnhub": "Finnhub"}.get(_info_src, _info_src)
                     st.caption(
-                        f"ℹ️ Fundamentals via {_src_label} — Yahoo Finance company data was "
-                        f"unavailable, so the fundamental score was backfilled from the "
-                        f"cross-check source (keeps the composite stable)."
+                        f"ℹ️ Company profile (sector, market cap) via {_src_label} — Yahoo "
+                        f"Finance's company data came back thin, so the sector and size "
+                        f"were refilled from {_src_label}. The other fundamentals come "
+                        f"from the last saved copy (or the verdict is withheld if none is recent)."
                     )
 
                 if not _da_etf_ok:
@@ -43163,7 +43164,7 @@ The app's intelligence is computed live in your browser — so it can only reach
                 subgraph cluster_data {
                     label="Your data  &  market feeds"
                     style=filled fillcolor="#f1f5f9" color="#94a3b8" fontsize=11
-                    MktData [label="Market data\\nyfinance · Finnhub · FMP" shape=cylinder style=filled fillcolor=white]
+                    MktData [label="Market data\\nyfinance · Finnhub · FMP (calendar)" shape=cylinder style=filled fillcolor=white]
                     Port    [label="Portfolio\\ntrades · thesis · history" shape=cylinder style=filled fillcolor=white]
                     YFNews  [label="Yahoo Finance\\nnews  (live feed)" shape=cylinder style=filled fillcolor=white]
                     Paste   [label="Pasted research\\nCNBC Pro · broker notes" shape=note style=filled fillcolor="#fffde7" color="#d97706"]
@@ -43711,7 +43712,7 @@ Learn more: [Investopedia ↗](https://www.investopedia.com/) · data terms vary
         with st.expander("🔌 Data sources & disclaimer", expanded=False):
             st.markdown(
                 """
-- **Prices & fundamentals:** Yahoo Finance (yfinance), Finnhub, and Financial Modeling Prep (FMP) — with automatic failover between them. [yfinance ↗](https://finance.yahoo.com/) · [FMP ↗](https://site.financialmodelingprep.com/)
+- **Live prices:** Finnhub (real-time), with Yahoo Finance as backup. **History and fundamentals:** Yahoo Finance (the last saved copy if it fails). **FMP:** the market-wide earnings calendar, plus the company profile (sector, market cap) on days Yahoo's company data comes back thin. [yfinance ↗](https://finance.yahoo.com/) · [FMP ↗](https://site.financialmodelingprep.com/)
 - **Macro data:** FRED (Federal Reserve Economic Data). [FRED ↗](https://fred.stlouisfed.org/)
 - Prices may be delayed. Scores are algorithmic and can be wrong.
 
@@ -46045,7 +46046,7 @@ elif page == "🧠 AI Insights":
                 st.caption(f"{_sc_ladder['n_unrated']} evaluable call(s) had an unrecognized consensus label — excluded from the ladder.")
 
             # ── Missing-anchor fetch-now — a live single-ticker pull via the
-            # yfinance -> FMP failover chain (orchestrator.get_historical_close),
+            # yfinance history chain (orchestrator.get_historical_close),
             # sharing analyst_intel.fetch_anchor_price() with the batch backfill
             # script so the two never drift. Only save-time auto-fill (held
             # tickers) skips this; a new-idea ticker not yet held has no live
@@ -46057,7 +46058,7 @@ elif page == "🧠 AI Insights":
                     expanded=False,
                 ):
                     st.caption(
-                        "Pulls the next trading-day close from Yahoo Finance (FMP fallback if unavailable) "
+                        "Pulls the next trading-day close from Yahoo Finance "
                         "and saves it — no need to wait for the periodic backfill workflow."
                     )
                     for r in _sc_no_anchor:

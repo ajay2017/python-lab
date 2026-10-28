@@ -261,8 +261,8 @@ Macro-event protective trims fire only when an affected sector is concentrated (
 
 Multi-source, orchestrated in `data.py` over `providers/` (`DATA_MULTISOURCE_ENABLED=True`):
 
-- **General data** (history/bundle/indices/risk-free): order `yahoo_finance → finnhub → fmp` (`DATA_PROVIDER_ORDER`). Yahoo primary (free, unquota'd, only free-tier history source).
-- **Live price:** order `finnhub → yahoo_finance → fmp` (`DATA_LIVE_PRICE_ORDER`) — Finnhub primary because its free tier serves *real-time* US quotes (yfinance is ~15-min delayed).
+- **General data** (history/bundle/indices/risk-free): order `yahoo_finance → finnhub` (`DATA_PROVIDER_ORDER`). Yahoo primary (free, unquota'd, only free-tier history source). FMP left both orders on 2026-10-27: its free plan serves only sample symbols. It keeps the market-wide earnings calendar (`DATA_EARNINGS_CALENDAR_ORDER`) and a one-call company-profile refill on days Yahoo's `.info` is sparse (`DATA_INFO_BACKFILL_ORDER`), which keeps the holding's sector norms.
+- **Live price:** order `finnhub → yahoo_finance` (`DATA_LIVE_PRICE_ORDER`) — Finnhub primary because its free tier serves *real-time* US quotes (yfinance is ~15-min delayed).
 - **Cross-check** (`DATA_XCHECK_FIELDS={"price"}`): prev_close must match within 0.5% (strict — a breach means a real fault: missed split, wrong symbol, poisoned feed); live price checked loosely within 3% (latency-tolerant). F-123/F-123a.
 - **Resilience:** last-known-good bundle cache serves real-but-aged data up to `BUNDLE_CACHE_MAX_AGE_DAYS` (=5) with a staleness banner rather than "Could not load." Provider circuit-breaker skips a red provider for `PROVIDER_RL_COOLDOWN_SEC` (=120s). Refresh buttons cool down for `REFRESH_COOLDOWN_SEC` (=60s). FMP free tier soft-capped at 220/250 calls/day. Concurrency held to `DATA_LOAD_MAX_WORKERS` (=2) with staggered starts to stay under Yahoo's burst throttle.
 

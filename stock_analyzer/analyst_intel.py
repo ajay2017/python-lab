@@ -774,11 +774,9 @@ def fetch_anchor_price(ticker: str, article_date) -> float | None:
     shared here so a live "fetch now" button (Research Scorecard) and the
     batch backfill never drift apart.
 
-    Goes through the multi-source failover chain (yfinance -> FMP; see
-    providers/orchestrator.get_historical_close) rather than calling yfinance
-    directly, so a ticker Yahoo has no data for (delisted, renamed, thin
-    coverage) gets a second, independent attempt via FMP before giving up.
-    Finnhub is NOT in this chain — its free tier serves live quotes only, no
+    Goes through the provider chain (yfinance only since FMP left it on
+    2026-10-27; see providers/orchestrator.get_historical_close) rather than
+    calling yfinance directly. Neither FMP nor Finnhub is in this chain — its free tier serves live quotes only, no
     historical candles (see providers/finnhub_provider.py).
 
     Unlike derive_consensus()/classify_call() this makes a live network call

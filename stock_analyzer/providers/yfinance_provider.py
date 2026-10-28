@@ -52,8 +52,8 @@ def _call_with_timeout(fn, args, kwargs, timeout: float):
 
     yfinance exposes no request-level timeout, so a TCP-level hang would block
     until the OS socket timeout (minutes) or — in the headless cron — the 15-min
-    job kill. Bounding each call lets the orchestrator fail over to Finnhub/FMP
-    instead. On breach we ABANDON the worker (shutdown(wait=False)) rather than
+    job kill. Bounding each call lets the orchestrator fail over (Finnhub for live
+    prices) instead. On breach we ABANDON the worker (shutdown(wait=False)) rather than
     block on it — a hung socket would make wait=True re-block here; the orphaned
     thread dies with the process / OS socket timeout. Exceptions raised inside fn
     (e.g. a 429) propagate unchanged via .result(), so the retry logic below still
@@ -185,7 +185,7 @@ class YFinanceProvider(DataProvider):
             }
             # Search defaults to a 30s timeout but runs inside the bundle's single
             # DATA_YF_REQUEST_TIMEOUT_SEC budget: a slow news call must time out
-            # well before it, or it would fail the WHOLE bundle (-> FMP failover).
+            # well before it, or it would fail the WHOLE bundle (-> last-saved-copy fallback).
             r = _YfData().get(
                 url=f"{_YF_BASE_URL}/v1/finance/search", params=params,
                 timeout=max(1, DATA_YF_REQUEST_TIMEOUT_SEC // 4),

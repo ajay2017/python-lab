@@ -1065,7 +1065,29 @@ REGIME_WINNING_SCORE_MIN   = 1      # winning regime's score must exceed this, e
 # provider (key present) that advertises the capability. yfinance is primary
 # here — it's free, unquota'd, and the only one that serves history/bundle/
 # indices on the free tier. Order is a setting, not hardcoded.
-DATA_PROVIDER_ORDER = ["yahoo_finance", "finnhub", "fmp"]
+#
+# FMP was dropped from this order 2026-10-27 (owner decision): for non-sample
+# symbols its price / history / fundamentals endpoints return 402 "Premium Query
+# Parameter" on the free plan (live probe: AAPL worked on 10 of 11 endpoints,
+# CRWD and VOO did not), so as a failover it could not serve real holdings. FMP
+# stays for the earnings calendar (below) and a profile-only .info refill
+# (DATA_INFO_BACKFILL_ORDER).
+DATA_PROVIDER_ORDER = ["yahoo_finance", "finnhub"]
+
+# Providers for the market-wide EARNINGS CALENDAR (Catalyst Watch /
+# earnings_move_forecast). Separate from the failover orders above: FMP's
+# earnings-calendar endpoint is market-wide, not per-symbol, and works on the
+# free plan for every symbol (live probe 2026-10-27, 40 rows).
+DATA_EARNINGS_CALENDAR_ORDER = ["fmp"]
+
+# Providers tried, in order, to refill a SPARSE yfinance `.info` (orchestrator.
+# get_bundle). FMP's `profile` endpoint works on the free plan for every symbol
+# (live probe 2026-10-27: AAPL, CRWD, VOO) and supplies sector / marketCap /
+# beta / 52-week range, so a sparse-.info day keeps sector norms in scoring
+# (bundle_loader `_sector_for_scoring`) instead of falling to default norms. One
+# call per sparse ticker, cached DATA_FMP_INFO_CACHE_TTL_SEC. The other
+# `_build_info` endpoints are in FMP_SKIP_ENDPOINTS.
+DATA_INFO_BACKFILL_ORDER = ["fmp"]
 
 # Failover order for the LIVE-PRICE field specifically — DIFFERENT from the
 # general order on purpose. Finnhub is primary because its free tier serves
@@ -1075,7 +1097,10 @@ DATA_PROVIDER_ORDER = ["yahoo_finance", "finnhub", "fmp"]
 # today's delayed behaviour, never worse. Only the live-price path uses this;
 # the broad scanner/movers scans stay on yfinance (they use history, and
 # Finnhub's per-symbol /quote would blow the 60/min free limit on ~200 names).
-DATA_LIVE_PRICE_ORDER = ["finnhub", "yahoo_finance", "fmp"]
+# FMP dropped 2026-10-27: its quote endpoint returns 402 "Premium Query
+# Parameter" for non-sample symbols (CRWD / VOO in the live probe), so it could
+# not gap-fill real holdings.
+DATA_LIVE_PRICE_ORDER = ["finnhub", "yahoo_finance"]
 
 # Finnhub /stock/news-sentiment on/off. OFF: on the current Finnhub plan every
 # call returned a non-JSON body (11 parse errors, 0 successes, live Data Health
@@ -1085,20 +1110,27 @@ DATA_LIVE_PRICE_ORDER = ["finnhub", "yahoo_finance", "fmp"]
 # data" path) while off.
 FINNHUB_NEWS_SENTIMENT_ENABLED = False
 
-# FMP stable-API endpoints skipped before any HTTP call. news/stock is
-# endpoint-restricted on the current plan (402 "Restricted Endpoint", live
-# endpoint probe 2026-10-27). earnings and grades-consensus were un-skipped the
-# same day: the probe showed them working for AAPL, so their earlier 402s were
-# per-symbol (e.g. VOO), not endpoint-wide. Callers already degrade to None / {} /
-# [] on failure. Remove a name once the probe shows it works.
-FMP_SKIP_ENDPOINTS = frozenset({"news/stock"})
+# FMP stable-API endpoints skipped before any HTTP call. ratios-ttm,
+# key-metrics-ttm, financial-growth and price-target-consensus return a
+# per-symbol 402 "Premium Query Parameter" for non-sample symbols on the free plan
+# (CRWD / VOO probe 2026-10-27); news/stock is endpoint-restricted (402
+# "Restricted Endpoint"). With these skipped, FMPProvider._build_info makes
+# exactly one request (profile), which works for every symbol. earnings and
+# grades-consensus are not listed: no live path reaches them now (FMP is not in
+# the bundle chain). Callers already degrade to None / {} / [] on failure.
+# Remove a name once the probe shows it works for non-sample symbols.
+FMP_SKIP_ENDPOINTS = frozenset({
+    "news/stock", "ratios-ttm", "key-metrics-ttm",
+    "financial-growth", "price-target-consensus",
+})
 
 # Master switch. When False, data.py behaves EXACTLY as the single-source
 # yfinance code (no failover, no cross-check). Enabled 2026-06-01 after the
 # orchestrator was validated live (selftest: all three sources agree to the
 # cent; Finnhub-primary real-time live prices; prev_close cross-check ok). With
 # it True: live prices come from Finnhub (real-time) with gap-fill to yfinance/
-# FMP, and history/bundle/indices fail over yfinance→FMP. Cross-check surfacing
+# FMP, and history/bundle/indices fail over yfinance→FMP (FMP left both orders
+# 2026-10-27: its free plan covers sample symbols only). Cross-check surfacing
 # is wired separately (Phase 5b-ii).
 DATA_MULTISOURCE_ENABLED = True
 
@@ -1265,14 +1297,14 @@ DB_OUTAGE_SAFE_PAGES = ("🩺 System Trust", "📖 User Guide")
 # request-level timeout, so a TCP-level hang would otherwise block until the OS
 # socket timeout (minutes) or — in the headless cron — the 15-min job kill. The
 # provider runs each yfinance call in a worker thread and abandons it past this
-# cap so the orchestrator can fail over to Finnhub/FMP instead of hanging the
+# cap so the orchestrator can fail over (Finnhub; FMP until 2026-10-27) instead of hanging the
 # whole page/run. Operational knob — NOT an investment threshold; set above a
 # legitimately slow bundle (history+info+news+earnings) but well under the job
 # budget. Tune from observation.
 DATA_YF_REQUEST_TIMEOUT_SEC = 20
 
 # Last-known-good bundle cache (data-resilience; bundle_cache table). When the
-# history/bundle providers (Yahoo→FMP) ALL fail, load_all serves the last cached
+# history/bundle providers (Yahoo; FMP until 2026-10-27) ALL fail, load_all serves the last cached
 # bundle (real data, aged) so the portfolio still renders WITH a staleness banner
 # instead of "Could not load". Bounds how stale a displayed analysis may be —
 # beyond this, fail loud rather than pass off very old signals as current. Mild
@@ -1312,10 +1344,10 @@ DATA_XCHECK_LIVE_TOL_PCT      = 3.0   # loose — live gaps expected (latency)
 # gain. Kept as a set for cheap membership tests in the orchestrator.
 DATA_XCHECK_FIELDS = {"price"}
 
-# How long FMP fundamentals (the `.info` backfill) are cached per ticker, in
-# seconds. FMP's free tier is 250 calls/day and one fundamentals fetch is ~5
-# calls; without a cache, every cache-miss reload of a sparse-yfinance ticker
-# re-spends that. 1h comfortably covers a session's repeated analyses of the
+# How long the FMP `.info` backfill (now profile-only: one call per ticker, see
+# DATA_INFO_BACKFILL_ORDER) is cached per ticker, in seconds. FMP's free tier is
+# 250 calls/day; without a cache, every cache-miss reload of a sparse-yfinance
+# ticker re-spends that. 1h comfortably covers a session's repeated analyses of the
 # same name while staying fresh enough for daily fundamentals (which barely
 # move intraday). Process-local cache — cleared on reboot or orchestrator reset.
 DATA_FMP_INFO_CACHE_TTL_SEC = 3600
@@ -1342,8 +1374,9 @@ FMP_DAILY_SOFT_CAP = 220   # pause FMP at this count (30-call buffer)
 FUNDAMENTALS_GATE_MIN_METRICS = 1
 
 # Persistent last-known-good fundamentals cache (Supabase `fundamentals_cache`).
-# When the live fundamental leg is unavailable (yfinance .info sparse AND FMP
-# couldn't backfill), serve the last good copy rather than withholding — real
+# When the live fundamental leg is unavailable (yfinance .info sparse; the
+# profile-only FMP refill, DATA_INFO_BACKFILL_ORDER, supplies no core metrics),
+# serve the last good copy rather than withholding — real
 # data, transparently aged. This is the MAX age that fallback stays valid;
 # beyond it the verdict is withheld again (stale-but-real has a limit). Policy
 # value: forward_pe drifts daily with price, the rest are quarterly, so a week

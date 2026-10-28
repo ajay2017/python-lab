@@ -171,11 +171,35 @@ def test_run_probe_skips_fmp_over_cap_and_sends_nothing_to_fmp():
 
 def test_every_row_has_a_role_and_finnhub_covers_the_apps_endpoints():
     rows = ep.run_probe({"finnhub": "", "fmp": ""}, today=date(2026, 10, 27))
-    assert all(r["role"] in (ep.ROLE_IN_USE, ep.ROLE_CANDIDATE) for r in rows)
+    assert all(r["role"] in (ep.ROLE_IN_USE, ep.ROLE_CANDIDATE, ep.ROLE_NOT_USED) for r in rows)
     fh_in_use = {r["endpoint"] for r in rows
                  if r["provider"] == "finnhub" and r["role"] == ep.ROLE_IN_USE}
     assert fh_in_use == {"quote", "stock/news-sentiment", "stock/earnings"}
-    assert all(r["role"] == ep.ROLE_IN_USE for r in rows if r["provider"] == "fmp")
+    fmp_roles = {r["endpoint"]: r["role"] for r in rows if r["provider"] == "fmp"}
+    assert fmp_roles.pop("earnings-calendar") == ep.ROLE_IN_USE
+    assert fmp_roles.pop("profile") == ep.ROLE_IN_USE   # profile-only .info refill
+    assert set(fmp_roles.values()) == {ep.ROLE_NOT_USED}
+
+
+def _fmp_roles(rows):
+    return {r["endpoint"]: r["role"] for r in rows if r["provider"] == "fmp"}
+
+
+def test_fmp_roles_are_derived_from_the_order_constants(monkeypatch):
+    from stock_analyzer import constants as C
+    today = date(2026, 10, 27)
+    monkeypatch.setattr(C, "DATA_EARNINGS_CALENDAR_ORDER", [])
+    monkeypatch.setattr(C, "DATA_INFO_BACKFILL_ORDER", [])
+    rows = ep.run_probe({"finnhub": "", "fmp": ""}, today=today)
+    assert set(_fmp_roles(rows).values()) == {ep.ROLE_NOT_USED}
+    # FMP back in a failover order -> every FMP endpoint is "in use".
+    monkeypatch.setattr(C, "DATA_PROVIDER_ORDER", ["yahoo_finance", "finnhub", "fmp"])
+    rows = ep.run_probe({"finnhub": "", "fmp": ""}, today=today)
+    assert set(_fmp_roles(rows).values()) == {ep.ROLE_IN_USE}
+    monkeypatch.setattr(C, "DATA_PROVIDER_ORDER", ["yahoo_finance", "finnhub"])
+    monkeypatch.setattr(C, "DATA_LIVE_PRICE_ORDER", ["finnhub", "fmp"])
+    rows = ep.run_probe({"finnhub": "", "fmp": ""}, today=today)
+    assert set(_fmp_roles(rows).values()) == {ep.ROLE_IN_USE}
 
 
 def test_fmp_news_probe_uses_the_apps_window():

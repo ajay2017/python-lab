@@ -1,13 +1,14 @@
 """
 FMP (Financial Modeling Prep) provider — failover for prices and history.
 
-Role in the chain (memory project_second_data_source): FMP's free tier (250
-calls/day) has the broadest coverage of the keyed candidates — quotes,
-historical prices, fundamentals, analyst targets, news. This adapter implements
-the price + history capabilities now; the full `bundle()` (mapping FMP's
-profile/ratios/estimates into the yfinance-shaped `info` dict + news + earnings
-+ revisions) is the larger, live-validation-dependent piece and is built in a
-follow-up step. Until then FMP advertises CAP_LIVE_PRICE + CAP_HISTORY only.
+Current role (2026-10-27): FMP's free plan covers only sample symbols for
+quotes, history and fundamentals (402 "Premium Query Parameter" otherwise), so
+it is NOT in DATA_PROVIDER_ORDER / DATA_LIVE_PRICE_ORDER. It serves the
+market-wide earnings calendar (DATA_EARNINGS_CALENDAR_ORDER) and a profile-only
+`.info` refill (DATA_INFO_BACKFILL_ORDER; the rest of `_build_info` is in
+FMP_SKIP_ENDPOINTS). The price / history / bundle code below stays for a plan
+upgrade or an order revert. Originally the keyed failover candidate (memory
+project_second_data_source).
 
 Endpoints — FMP's CURRENT "stable" API (the legacy /api/v3/ paths 403 on the
 free plan after FMP's 2024 revamp):
@@ -90,7 +91,7 @@ class FMPProvider(DataProvider):
     # D-E/targets) + revisions all populate correctly for AAPL. Known soft gaps:
     # news may be empty (→ neutral sentiment, 15% weight) and earnings-date may
     # be None on the failover path — both degrade gracefully and only matter
-    # while yfinance is actually down. Bundle failover chain is now yfinance→fmp.
+    # while yfinance is actually down. (Bundle failover chain was yfinance→fmp until FMP left the order 2026-10-27.)
     capabilities = frozenset({CAP_LIVE_PRICE, CAP_HISTORY, CAP_BUNDLE})
 
     _INFO_CACHE_MAXSIZE = 50  # evict oldest when exceeded; ~watchlist+holdings headroom
@@ -98,7 +99,8 @@ class FMPProvider(DataProvider):
     def __init__(self):
         self._key = get_secret("FMP_API_KEY")
         # Process-local fundamentals cache {ticker: (fetched_at, info)} — one
-        # info() fetch is ~5 calls against a 250/day free tier, so caching it
+        # info() fetch is one call (profile; the other info endpoints are in
+        # FMP_SKIP_ENDPOINTS since 2026-10-27) against a 250/day free tier, so caching it
         # keeps repeated analyses of the same sparse-yfinance ticker from
         # re-spending the quota. TTL in constants; cleared on reboot.
         self._info_cache: dict[str, tuple[float, dict]] = {}
@@ -243,9 +245,10 @@ class FMPProvider(DataProvider):
     def historical_close(self, ticker: str, start, end) -> float | None:
         """First close on/after `start` within [start, end] — an arbitrary
         historical window (price_history() above is period-relative-to-today,
-        which doesn't fit an old article_date). Used as the FMP failover leg
-        for the Research Scorecard's anchor-price fetch (Finnhub's free tier
-        has no historical candles at all, so it isn't in this chain). Returns
+        which doesn't fit an old article_date). Was the FMP failover leg
+        for the Research Scorecard's anchor-price fetch (inactive since FMP left
+        DATA_PROVIDER_ORDER 2026-10-27; Finnhub's free tier has no historical
+        candles at all, so it isn't in this chain). Returns
         None on no data / parse failure rather than raising, so the orchestrator's
         _failover_single treats "no price found" the same as an empty frame."""
         if not self._key:

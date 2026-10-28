@@ -78,16 +78,24 @@ def _providers_for(capability: str) -> list:
     # (yahoo_finance / finnhub / fmp) for the cooldown lookup to match.
     live = [p for p in capable
             if not _ah.in_cooldown(p.name, C.PROVIDER_RL_COOLDOWN_SEC)]
-    # Soft-cap: suppress FMP for the rest of the day when the daily quota is at
-    # or above the threshold. Count is cached in api_health (5-min TTL) — not a
-    # per-call DB hit. Only checks when FMP would otherwise be chosen.
+    live = _apply_fmp_soft_cap(live)
+    return live if live else capable
+
+
+def _apply_fmp_soft_cap(live: list) -> list:
+    """Soft-cap: suppress FMP for the rest of the day when the daily quota is at
+    or above the threshold. Count is cached in api_health (5-min TTL) — not a
+    per-call DB hit. Only checks when FMP is in `live`. Shared by
+    _providers_for and the profile-only .info backfill in get_bundle. (Since
+    2026-10-27 FMP is not in DATA_PROVIDER_ORDER, so _providers_for reaches this
+    only if that order is reverted.)"""
     if any(p.name == "fmp" for p in live):
         _daily = _ah.get_fmp_daily_quota()
         if _daily is not None and _daily >= C.FMP_DAILY_SOFT_CAP:
             live = [p for p in live if p.name != "fmp"]
             _ah.record("fmp", "quota",
                        f"daily soft-cap reached: {_daily}/{C.FMP_DAILY_CALL_CAP}")
-    return live if live else capable
+    return live
 
 
 # ── Single-result failover (history / bundle / indices / risk-free) ──────────
@@ -139,8 +147,9 @@ def get_history(ticker: str, period: str = "6mo") -> pd.DataFrame:
 
 def get_historical_close(ticker: str, start, end) -> float | None:
     """First close on/after `start` within [start, end] via the CAP_HISTORY
-    failover chain (yfinance -> FMP; Finnhub has no historical candles on its
-    free tier, so it never advertises CAP_HISTORY). Unlike get_history()'s
+    failover chain (yfinance only since FMP left DATA_PROVIDER_ORDER on
+    2026-10-27; Finnhub has no historical candles on its free tier, so it
+    never advertises CAP_HISTORY). Unlike get_history()'s
     period-relative-to-today window, this takes an arbitrary historical
     window — used to anchor a Research Scorecard analyst-coverage row to its
     article_date (analyst_intel.fetch_anchor_price()). Inherits the same
@@ -168,9 +177,13 @@ def _info_sparse(info: dict | None) -> bool:
 def get_bundle(ticker: str, period: str = "6mo") -> dict:
     """Bundle with failover AND fundamental backfill. The primary (yfinance)
     bundle is used for history + news (sentiment); if its `.info` is sparse (a
-    yfinance hiccup), fundamentals are backfilled from the next bundle-capable
-    provider (FMP) so the composite stays stable across surfaces instead of
-    flipping Buy↔Hold on missing `.info`. Keeps the richest of both sources."""
+    yfinance hiccup), `.info` is refilled from a provider in
+    DATA_INFO_BACKFILL_ORDER (FMP, profile only: sector / market cap) so the
+    composite keeps sector norms and stays stable across surfaces instead of
+    flipping Buy↔Hold on missing `.info`. A non-sparse refill REPLACES the
+    primary's `.info` wholesale (it does not merge); since 2026-10-27 that
+    refill is FMP's profile only, so core metrics then come from
+    fundamentals_cache."""
     providers = _providers_for(CAP_BUNDLE)
     primary = None
     last_exc: Exception | None = None
@@ -197,8 +210,15 @@ def get_bundle(ticker: str, period: str = "6mo") -> dict:
         raise ProviderUnavailable(f"no configured provider served bundle for {ticker}")
 
     # Backfill fundamentals if the primary's .info is sparse.
+    # Providers come from DATA_INFO_BACKFILL_ORDER (FMP: profile-only refill,
+    # 2026-10-27), NOT the bundle chain, which FMP left. Skip a provider in
+    # rate-limit cooldown and apply the same FMP daily soft-cap as _providers_for
+    # (no fall-through to a cooled provider: a missed refill just leaves .info
+    # sparse and the fundamentals_cache fallback applies).
     if _info_sparse(primary.get("info")):
-        for prov in providers:
+        _backfill = [p for p in _chain_for(C.DATA_INFO_BACKFILL_ORDER)
+                     if not _ah.in_cooldown(p.name, C.PROVIDER_RL_COOLDOWN_SEC)]
+        for prov in _apply_fmp_soft_cap(_backfill):
             if prov.name == primary.get("_source") or not hasattr(prov, "info"):
                 continue
             try:
@@ -241,11 +261,12 @@ def get_bundle(ticker: str, period: str = "6mo") -> dict:
 
 
 def get_earnings_calendar(from_date: str, to_date: str) -> list[dict]:
-    """Market-wide upcoming earnings for a date range. Only FMP serves this, so
+    """Market-wide upcoming earnings for a date range, from
+    DATA_EARNINGS_CALENDAR_ORDER (FMP; it left the general chain on 2026-10-27). Only FMP serves this, so
     it's a best-effort single-source lookup: return [] (not an error) when no
     provider in the chain offers it, so Catalyst Watch degrades to held-only
     earnings rather than failing the page."""
-    for prov in chain():
+    for prov in _chain_for(C.DATA_EARNINGS_CALENDAR_ORDER):
         if hasattr(prov, "earnings_calendar"):
             try:
                 # 2026-09-24 app review, Q2 (antipattern-baseline decision):

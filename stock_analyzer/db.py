@@ -300,7 +300,7 @@ the user acted on it):
     );
 
     -- Last-known-good fundamentals fallback (load_all serves this when the live
-    -- .info leg is sparse and FMP can't backfill, bounded by
+    -- .info leg is sparse and the profile-only FMP refill can't, bounded by
     -- FUNDAMENTALS_CACHE_MAX_AGE_DAYS). Optional: until created, the app runs
     -- live-only exactly as before (load/save degrade to no-ops).
     create table if not exists fundamentals_cache (
@@ -341,7 +341,7 @@ the user acted on it):
 
     -- Last-known-good bundle cache — data-resilience fallback (added 2026-06-10).
     -- load_all write-throughs the raw history + info here on every successful
-    -- fetch; when the history/bundle providers (Yahoo→FMP) ALL fail it serves
+    -- fetch; when the history/bundle providers (Yahoo only now) ALL fail it serves
     -- this aged copy (with a staleness banner) instead of "Could not load".
     -- Optional: until created, load returns None / save no-ops, so the app keeps
     -- today's fail-loud behaviour. System cache (not user data) — but gated by

@@ -37,6 +37,7 @@ OUT_SKIPPED = "skipped"
 
 ROLE_IN_USE = "in use"          # the app calls this endpoint today
 ROLE_CANDIDATE = "candidate"    # being evaluated as a replacement
+ROLE_NOT_USED = "not used"      # the app no longer calls this endpoint (still probed to re-check a plan upgrade)
 
 _PLAN_WORDS = ("access", "plan", "premium", "subscription")
 _FMP_PLAN_WORDS = ("plan", "subscription", "premium", "upgrade", "legacy")
@@ -123,7 +124,19 @@ def _finnhub_probes(sym: str, today) -> list[tuple[str, dict, str]]:
 
 def _fmp_probes(sym: str, today) -> list[tuple[str, dict, str]]:
     d = lambda n: (today + timedelta(days=n)).isoformat()  # noqa: E731
-    return [(ep, params, ROLE_IN_USE) for ep, params in [
+    # Roles are derived from the order constants, never hardcoded: the calendar
+    # endpoint is in use while "fmp" is in DATA_EARNINGS_CALENDAR_ORDER, profile
+    # while "fmp" is in DATA_INFO_BACKFILL_ORDER, and every FMP endpoint while
+    # "fmp" is back in DATA_PROVIDER_ORDER / DATA_LIVE_PRICE_ORDER. The rest are
+    # "not used" but still probed so a plan upgrade is visible.
+    _all = "fmp" in C.DATA_PROVIDER_ORDER or "fmp" in C.DATA_LIVE_PRICE_ORDER
+    _used = set()
+    if "fmp" in C.DATA_EARNINGS_CALENDAR_ORDER:
+        _used.add("earnings-calendar")
+    if "fmp" in C.DATA_INFO_BACKFILL_ORDER:
+        _used.add("profile")
+    return [(ep, params, ROLE_IN_USE if (_all or ep in _used) else ROLE_NOT_USED)
+            for ep, params in [
         ("quote", {"symbol": sym}),
         ("profile", {"symbol": sym}),
         ("historical-price-eod/full", {"symbol": sym, "from": d(-10), "to": d(0)}),

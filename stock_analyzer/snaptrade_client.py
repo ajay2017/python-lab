@@ -5,8 +5,8 @@ for the full design.
 
 Every public function here returns `None` on any failure (missing
 credentials, timeout, SDK/API error) — never raises into caller code. This
-mirrors the multi-source provider convention elsewhere in the app (Finnhub/
-yfinance/FMP failover): callers treat `None` as "unavailable this call" and
+mirrors the multi-source provider convention elsewhere in the app (provider
+failover): callers treat `None` as "unavailable this call" and
 apply the offline-sentinel contract themselves (never render `None` as zero
 or as "no data").
 

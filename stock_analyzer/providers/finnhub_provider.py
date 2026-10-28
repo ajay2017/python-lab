@@ -6,7 +6,7 @@ offers the only real-time US quote among the keyed candidates (60 calls/min),
 which makes it the best source to cross-check yfinance's price field. Stock
 candles (history) and full fundamentals are premium-gated on the free tier, so
 this adapter advertises ONLY CAP_LIVE_PRICE — it is a price source, not a
-bundle source. FMP covers history/fundamentals failover.
+bundle source. (FMP no longer covers history/fundamentals failover: it left the chain 2026-10-27.)
 
 Quote endpoint: GET /quote?symbol=AAPL&token=KEY
   -> {"c": current, "d": change, "dp": pct, "h","l","o", "pc": prev_close, "t"}

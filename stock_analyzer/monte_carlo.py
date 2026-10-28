@@ -46,7 +46,7 @@ def fetch_long_history(
 ) -> dict[str, pd.DataFrame | None]:
     """
     Fetch multi-year price history per ticker via the existing multi-source
-    failover (data.fetch_price_history — yfinance -> Finnhub -> FMP). Returns
+    failover (data.fetch_price_history — yfinance only for history now). Returns
     {ticker: df}; df is None on fetch failure so callers can report it rather
     than silently treating a failed fetch as "no history".
     """

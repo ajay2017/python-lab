@@ -6,7 +6,7 @@ call. This package introduces a thin provider seam so `data.py` can become a
 failover orchestrator (try primary; fall to the next source on failure) and
 cross-check the price field across sources — without anything ABOVE `data.py`
 changing. See memory `project_second_data_source` for the converged design
-(chain: yfinance → Finnhub → FMP, configurable; price-only cross-check).
+(chain: yfinance → Finnhub, configurable; FMP left it 2026-10-27; price-only cross-check).
 
 A provider implements only the capabilities it can actually serve (declared in
 `capabilities`); the orchestrator builds a per-data-type chain from whichever

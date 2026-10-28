@@ -154,7 +154,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         _from_cache = True
     # Per-ticker news feed status. A last-known-good cached bundle carries no news
     # (never cached there) -> "cached". A bundle from a provider without its own
-    # status (FMP failover) reads "ok" only when it really has headlines; an empty
+    # status (not Yahoo) reads "ok" only when it really has headlines; an empty
     # one cannot be told from a failed fetch there, so it reads "error" (loud).
     if _from_cache:
         _news_status = _news_feed.NEWS_STATUS_CACHED
@@ -167,7 +167,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     financials = fetch_financials_from_info(bundle["info"])
     # ── Persistent last-known-good fundamentals fallback ──────────────────────
     # The fundamental leg is the fragile one: yfinance .info intermittently
-    # returns empty AND the FMP backfill can be quota-exhausted, leaving zero
+    # returns empty AND the profile-only FMP refill can fail or be paused, leaving zero
     # core metrics. Serve the last good copy from Supabase (real data, aged,
     # bounded by FUNDAMENTALS_CACHE_MAX_AGE_DAYS) rather than blacking out on a
     # transient double-miss. Write-through when live is good. db.* degrade to

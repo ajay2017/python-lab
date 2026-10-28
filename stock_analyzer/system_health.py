@@ -274,7 +274,7 @@ _LANES: tuple[_Lane, ...] = (
 _PROVIDERS: tuple[tuple[str, str], ...] = (
     ("finnhub",       "Live prices — Finnhub (primary)"),
     ("yahoo_finance", "Live prices — Yahoo Finance (secondary)"),
-    ("fmp",           "Live prices — FMP (tertiary)"),
+    ("fmp",           "Earnings calendar + profile — FMP"),
     ("supabase",      "Database — Supabase"),
     ("fred",          "Macro data — FRED"),
     # F-244: api_health.py has recorded a "snaptrade" source since the
