@@ -34,6 +34,29 @@ def broken_tickers(df: pd.DataFrame | None) -> set[str] | None:
     return set(latest.loc[latest["status"] == "BROKEN", "ticker"])
 
 
+def debrief_broken(df: pd.DataFrame | None, held_tickers) -> list[str] | None:
+    """Sorted tickers for the Weekly Debrief's "BROKEN thesis" line.
+
+    Three-state: None when reviews are unavailable, [] when there are none (or
+    none qualify). Uses each ticker's LATEST review only (a thesis that went
+    BROKEN then back to INTACT is not broken), and, when ``held_tickers`` is
+    not None, only names currently held. ``held_tickers=None`` = no holdings
+    filter (holdings couldn't be read).
+    """
+    if df is None:
+        return None
+    if df.empty:
+        return []
+    if not {"status", "ticker", "reviewed_at"} <= set(df.columns):
+        return None  # unreadable shape = couldn't check, never "none broken"
+    latest = latest_per_ticker(df)
+    latest = latest[latest["status"] == "BROKEN"]
+    if held_tickers is not None:
+        held = {str(t).upper() for t in held_tickers}
+        latest = latest[latest["ticker"].isin(held)]
+    return sorted(latest["ticker"].tolist())
+
+
 def held_summary(df: pd.DataFrame | None, held_tickers) -> dict | None:
     """Counts + worst-first names for held tickers; None when unavailable."""
     if df is None:

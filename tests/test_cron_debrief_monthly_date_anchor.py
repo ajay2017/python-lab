@@ -159,6 +159,8 @@ def test_run_debrief_no_minimum_snapshot_floor_anymore(monkeypatch):
         reached.append(kw)
         raise RuntimeError("stop here")
     monkeypatch.setattr(cr.db, "load_recommendations", _stop)
+    monkeypatch.setattr(cr.db, "load_thesis_reviews_or_none", lambda: pd.DataFrame())
+    monkeypatch.setattr(cr.db, "load_holdings_or_none", lambda: pd.DataFrame({"Ticker": []}))
     with pytest.raises(RuntimeError, match="stop here"):
         cr._run_debrief(cr._ET.localize(datetime.datetime(2026, 8, 9, 18, 0, 0)), force=False)
     assert reached and reached[0]["end_date"] == datetime.date(2026, 8, 9)
@@ -183,7 +185,8 @@ def _full_lane(monkeypatch, *, generate, saved, notified):
     monkeypatch.setattr(sdata, "fetch_spy", lambda period="6mo": None)
     monkeypatch.setattr(cr.db, "load_recommendations", lambda **k: pd.DataFrame())
     monkeypatch.setattr(cr.db, "load_exit_signals_or_none", lambda days_back=10: pd.DataFrame())
-    monkeypatch.setattr(cr.db, "load_thesis_reviews", lambda: pd.DataFrame())
+    monkeypatch.setattr(cr.db, "load_thesis_reviews_or_none", lambda: pd.DataFrame())
+    monkeypatch.setattr(cr.db, "load_holdings_or_none", lambda: pd.DataFrame({"Ticker": []}))
     monkeypatch.setattr(cr.db, "load_weekly_debriefs", lambda limit=1: pd.DataFrame())
     monkeypatch.setattr(cr.db, "save_weekly_debrief", lambda rec: saved)
     monkeypatch.setattr(da, "build_debrief_package",
@@ -252,6 +255,82 @@ def test_run_debrief_reads_exit_signals_back_to_the_weeks_first_day(monkeypatch)
     cr._run_debrief(cr._ET.localize(datetime.datetime(2026, 8, 14, 9, 0, 0)), force=True)  # Friday retry
     assert seen == [da.signal_days_back(datetime.date(2026, 8, 14), datetime.date(2026, 8, 3))] == [12]
     assert orig is cr.db
+
+
+def test_run_debrief_thesis_read_failure_fails_the_lane_before_any_llm_call(monkeypatch):
+    from stock_analyzer import debrief_advisor as da
+    notified, generated = [], []
+    _full_lane(monkeypatch, generate=dict(_RESULT), saved=True, notified=notified)
+    monkeypatch.setattr(da, "generate_debrief", lambda pkg, key: generated.append(1) or dict(_RESULT))
+    monkeypatch.setattr(cr.db, "load_thesis_reviews_or_none", lambda: None)
+    monkeypatch.setattr(cr, "_db_unavailable_detail", lambda: None)
+    notified.clear()
+    rc = cr._run_debrief(cr._ET.localize(datetime.datetime(2026, 8, 9, 18, 0, 0)), force=False)
+    assert rc == 1 and generated == []
+    assert notified == [("debrief", "debrief_inputs_offline: thesis_reviews")]
+    assert cr._LAST_LANE_FAILURE_DETAIL == "debrief_inputs_offline: thesis_reviews"
+
+
+def test_run_debrief_broken_list_is_latest_per_ticker_and_held_only(monkeypatch):
+    from stock_analyzer import debrief_advisor as da
+    notified, pkgs = [], []
+    reviews = pd.DataFrame([
+        {"ticker": "AAA", "status": "BROKEN", "reviewed_at": "2026-07-01"},
+        {"ticker": "AAA", "status": "INTACT", "reviewed_at": "2026-08-01"},
+        {"ticker": "bbb", "status": "BROKEN", "reviewed_at": "2026-08-01"},
+        {"ticker": "CCC", "status": "BROKEN", "reviewed_at": "2026-08-01"},
+    ])
+    _full_lane(monkeypatch, generate=dict(_RESULT), saved=True, notified=notified)
+    monkeypatch.setattr(cr.db, "load_thesis_reviews_or_none", lambda: reviews)
+    monkeypatch.setattr(cr.db, "load_holdings_or_none",
+                        lambda: pd.DataFrame({"Ticker": ["AAA", "BBB"]}))
+    monkeypatch.setattr(da, "build_debrief_package",
+                        lambda **k: pkgs.append(k["broken_theses"]) or
+                        {"narratable": True, "result_status": "ok", "week_ending": "2026-08-09"})
+    cr._run_debrief(cr._ET.localize(datetime.datetime(2026, 8, 9, 18, 0, 0)), force=False)
+    assert pkgs == [["BBB"]]
+
+
+def test_run_debrief_thesis_read_failure_on_db_outage_routes_to_outage_handler(monkeypatch):
+    notified, routed = [], []
+    _full_lane(monkeypatch, generate=dict(_RESULT), saved=True, notified=notified)
+    monkeypatch.setattr(cr.db, "load_thesis_reviews_or_none", lambda: None)
+    monkeypatch.setattr(cr, "_db_unavailable_detail", lambda: "db down")
+    monkeypatch.setattr(cr, "_handle_db_unavailable",
+                        lambda mode, now, detail: routed.append((mode, detail)) or 7)
+    notified.clear()
+    rc = cr._run_debrief(cr._ET.localize(datetime.datetime(2026, 8, 9, 18, 0, 0)), force=False)
+    assert rc == 7 and routed == [("debrief", "db down")] and notified == []
+
+
+def test_run_debrief_unusable_reviews_frame_fails_the_lane(monkeypatch):
+    notified = []
+    _full_lane(monkeypatch, generate=dict(_RESULT), saved=True, notified=notified)
+    monkeypatch.setattr(cr.db, "load_thesis_reviews_or_none",
+                        lambda: pd.DataFrame([{"ticker": "AAA", "reviewed_at": "2026-08-01"}]))
+    notified.clear()
+    rc = cr._run_debrief(cr._ET.localize(datetime.datetime(2026, 8, 9, 18, 0, 0)), force=False)
+    assert rc == 1
+    assert notified == [("debrief", "debrief_inputs_offline: thesis_reviews")]
+
+
+def test_run_debrief_holdings_read_failure_keeps_list_unfiltered(monkeypatch):
+    from stock_analyzer import debrief_advisor as da
+    notified, pkgs, logs = [], [], []
+    reviews = pd.DataFrame([
+        {"ticker": "AAA", "status": "BROKEN", "reviewed_at": "2026-08-01"},
+        {"ticker": "CCC", "status": "BROKEN", "reviewed_at": "2026-08-01"},
+    ])
+    _full_lane(monkeypatch, generate=dict(_RESULT), saved=True, notified=notified)
+    monkeypatch.setattr(cr.db, "load_thesis_reviews_or_none", lambda: reviews)
+    monkeypatch.setattr(cr.db, "load_holdings_or_none", lambda: None)
+    monkeypatch.setattr(cr, "_log", lambda msg: logs.append(msg))
+    monkeypatch.setattr(da, "build_debrief_package",
+                        lambda **k: pkgs.append(k["broken_theses"]) or
+                        {"narratable": True, "result_status": "ok", "week_ending": "2026-08-09"})
+    cr._run_debrief(cr._ET.localize(datetime.datetime(2026, 8, 9, 18, 0, 0)), force=False)
+    assert pkgs == [["AAA", "CCC"]]
+    assert any("holdings lookup failed" in m for m in logs)
 
 
 # ── _run_monthly_report: same anchor, same guarantee ──────────────────────────

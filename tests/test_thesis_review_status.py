@@ -73,3 +73,38 @@ def test_act_and_awareness_notes_fire_exactly_once_when_offline():
                 aw = trs.awareness_note(broken, n_act, n_aware)
                 assert not (act and aw)
                 assert bool(act or aw) == (broken is None and n_act + n_aware > 0)
+
+
+def test_debrief_broken_three_state():
+    assert trs.debrief_broken(None, {"AAA"}) is None
+    assert trs.debrief_broken(_df([]), {"AAA"}) == []
+
+
+def test_debrief_broken_uses_latest_review_only():
+    df = _df([
+        ("AAA", "BROKEN", "2026-10-01"), ("AAA", "INTACT", "2026-10-10"),
+        ("BBB", "INTACT", "2026-10-01"), ("BBB", "BROKEN", "2026-10-10"),
+    ])
+    assert trs.debrief_broken(df, None) == ["BBB"]
+
+
+def test_debrief_broken_excludes_sold_names_when_held_given():
+    df = _df([("AAA", "BROKEN", "2026-10-01"), ("BBB", "BROKEN", "2026-10-01")])
+    assert trs.debrief_broken(df, {"BBB"}) == ["BBB"]
+    assert trs.debrief_broken(df, set()) == []
+
+
+def test_debrief_broken_held_none_means_no_filter_and_sorted():
+    df = _df([("ZZZ", "BROKEN", "2026-10-01"), ("AAA", "BROKEN", "2026-10-01")])
+    assert trs.debrief_broken(df, None) == ["AAA", "ZZZ"]
+
+
+def test_debrief_broken_mixed_case_tickers():
+    df = _df([("aaa", "BROKEN", "2026-10-01"), ("AAA", "INTACT", "2026-10-10"),
+              ("bbb", "BROKEN", "2026-10-01")])
+    assert trs.debrief_broken(df, ["Bbb", "aaa"]) == ["BBB"]
+
+
+def test_debrief_broken_missing_status_column_is_unchecked():
+    df = pd.DataFrame([{"ticker": "AAA", "reviewed_at": "2026-08-01"}])
+    assert trs.debrief_broken(df, {"AAA"}) is None

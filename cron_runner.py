@@ -2583,6 +2583,7 @@ def _run_debrief(now_et, force: bool) -> int:
     from stock_analyzer import notify as _notify
     from stock_analyzer import period_attribution as _pa
     from stock_analyzer import period_inputs as _pi
+    from stock_analyzer import thesis_review_status as _thesis_review_status
     from stock_analyzer.constants import LEVERAGE_REFERENCE_TARGET
 
     # The last completed Mon-Sun week; a `force` retry on a different calendar day
@@ -2602,6 +2603,39 @@ def _run_debrief(now_et, force: bool) -> int:
             return _handle_db_unavailable("debrief", now_et, _detail)
         _LAST_LANE_FAILURE_DETAIL = f"debrief_inputs_offline: {', '.join(_offline)}"
         _log(f"debrief: engine inputs unreadable ({', '.join(_offline)}) — no debrief written.")
+        _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
+        return 1
+
+    # Thesis reviews feed the "BROKEN thesis" line. A failed read (None) must
+    # not collapse to "no broken theses" in a saved, emailed debrief.
+    try:
+        reviews_df = db.load_thesis_reviews_or_none()
+    except Exception:
+        reviews_df = None
+    if reviews_df is None:
+        _detail = _db_unavailable_detail()
+        if _detail:
+            return _handle_db_unavailable("debrief", now_et, _detail)
+        _LAST_LANE_FAILURE_DETAIL = "debrief_inputs_offline: thesis_reviews"
+        _log("debrief: thesis reviews unreadable — no debrief written.")
+        _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
+        return 1
+    held = None
+    try:
+        _holdings_df = db.load_holdings_or_none()
+        if _holdings_df is not None:
+            held = {str(t).upper() for t in _holdings_df["Ticker"]}
+    except Exception:
+        held = None
+    if held is None:
+        _log("debrief: holdings lookup failed — broken-thesis list not "
+             "limited to current holdings.")
+    # BROKEN theses: latest review per ticker, current holdings only. None =
+    # the reviews frame had no usable shape: same as an unreadable read.
+    broken_theses = _thesis_review_status.debrief_broken(reviews_df, held)
+    if broken_theses is None:
+        _LAST_LANE_FAILURE_DETAIL = "debrief_inputs_offline: thesis_reviews"
+        _log("debrief: thesis reviews unusable (missing columns) — no debrief written.")
         _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
         return 1
 
@@ -2648,18 +2682,6 @@ def _run_debrief(now_et, force: bool) -> int:
         inputs, week_start, week_ending,
         spy_prices_by_date=spy_by_date, reference_leverage=LEVERAGE_REFERENCE_TARGET,
     )
-
-    # Collect BROKEN theses from thesis_reviews
-    broken_theses: list[str] = []
-    try:
-        reviews_df = db.load_thesis_reviews()
-        if not reviews_df.empty:
-            broken_theses = (
-                reviews_df[reviews_df["status"] == "BROKEN"]["ticker"]
-                .astype(str).str.upper().unique().tolist()
-            )
-    except Exception:
-        pass
 
     # Build data package and call LLM
     package = _da.build_debrief_package(

@@ -44508,10 +44508,13 @@ elif page == "🧠 AI Insights":
                     _wd_all_recs = _ai_db.load_recommendations()
                     _wd_exit_sigs = _ai_db.load_exit_signals_or_none(
                         days_back=_dba.signal_days_back(_today_et(), _wd_start))
-                    _wd_broken = list(
-                        _thesis_reviews_df[_thesis_reviews_df["status"] == "BROKEN"]["ticker"]
-                        .astype(str).str.upper().unique()
-                    ) if not _thesis_reviews_df.empty and "status" in _thesis_reviews_df.columns else []
+                    # Latest review per ticker, current holdings only (a thesis
+                    # that recovered, or a name since sold, is not "broken").
+                    # Holdings unknown (no session key) -> no filter, never
+                    # "filter everything out".
+                    _wd_broken = thesis_review_status.debrief_broken(
+                        _thesis_reviews_df,
+                        _open_tickers if "holdings_df" in st.session_state else None)
 
                     # SPY closes by date (None on any failure -> SPY reads as unknown;
                     # the account result stays independent of an SPY outage).
