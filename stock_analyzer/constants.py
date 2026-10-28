@@ -360,6 +360,19 @@ RR_ENTRY_MIN = 2.0
 RR_FAVOURABLE_MIN = 2.5
 RR_MARGINAL_MIN = RR_ENTRY_MIN
 
+# Watchlist readiness % (watchlist_advisor._card) partial-credit boundaries —
+# display/sort only, NOT a gate (ENTER_NOW gates on COMPOSITE_BUY / RR_ENTRY_MIN).
+# Named 2026-10-28 from bare literals, values unchanged.
+# WATCHLIST_READINESS_RR_PARTIAL deliberately stays 1.5 although RR_MARGINAL_MIN
+# moved 1.5 -> 2.0 on 2026-10-23: owner decision 2026-10-28 to keep partial
+# readiness credit for a 1.5-2.0 R:R ("closer to ready", not an entry).
+# Earnings: no date or days > CLEAR = full credit, days > NEAR = half credit.
+# WATCHLIST_READINESS_EARN_NEAR_DAYS is defined below EARNINGS_IMMINENT_DAYS,
+# which it aliases.
+WATCHLIST_READINESS_SCORE_PARTIAL = 55
+WATCHLIST_READINESS_RR_PARTIAL = 1.5
+WATCHLIST_READINESS_EARN_CLEAR_DAYS = 14
+
 # ── Price-target construction heuristics (targets.compute_price_targets) ────
 # One level upstream of RR_ENTRY_MIN above (which IS the actual entry gate) —
 # these size the bull/base/bear price levels R:R is computed from. Named per
@@ -957,6 +970,9 @@ ETF_MAX_PICKS = 1
 
 # ── Earnings / macro proximity windows (days) ────────────────────────────────
 EARNINGS_IMMINENT_DAYS      = 7  # any trade within this window = caution (binary-event conflict)
+# Watchlist readiness % gives no earnings credit inside the same window that
+# drives HOLD_OFF_EARNINGS (watchlist_advisor), so it aliases, never diverges.
+WATCHLIST_READINESS_EARN_NEAR_DAYS = EARNINGS_IMMINENT_DAYS
 # Tighter "danger" sub-window inside EARNINGS_IMMINENT_DAYS — decide position
 # size before the report, vs. the wider window's "review ahead of report."
 # Single source for portfolio.py's alert danger/warning split and

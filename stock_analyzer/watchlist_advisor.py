@@ -30,6 +30,10 @@ from stock_analyzer.constants import (
     RR_ENTRY_MIN,
     EARNINGS_IMMINENT_DAYS,
     UNCLASSIFIED_SECTOR,
+    WATCHLIST_READINESS_SCORE_PARTIAL,
+    WATCHLIST_READINESS_RR_PARTIAL,
+    WATCHLIST_READINESS_EARN_CLEAR_DAYS,
+    WATCHLIST_READINESS_EARN_NEAR_DAYS,
 )
 from stock_analyzer import exit_advisor
 from stock_analyzer import entry_rr
@@ -982,7 +986,7 @@ def _card(
     # Readiness score 0–100: how close is this to a full green-light?
     pts = 0
     if score >= COMPOSITE_BUY:    pts += 35
-    elif score >= 55:             pts += 20
+    elif score >= WATCHLIST_READINESS_SCORE_PARTIAL: pts += 20
     elif score >= COMPOSITE_HOLD: pts += 10
     if action in ("ENTER_NOW",):       pts += 35
     elif action in ("ENTRY_HELD",):    pts += 25   # below ENTER_NOW: held, not ready to act on
@@ -990,9 +994,9 @@ def _card(
     elif action in ("WAIT_ENTRY",):    pts += 15
     elif action in ("WAIT_CATALYST",): pts += 5
     if rr and rr >= RR_ENTRY_MIN:     pts += 20
-    elif rr and rr >= 1.5:            pts += 10
-    if earn_days is None or earn_days > 14: pts += 10
-    elif earn_days > 7:                     pts += 5
+    elif rr and rr >= WATCHLIST_READINESS_RR_PARTIAL: pts += 10
+    if earn_days is None or earn_days > WATCHLIST_READINESS_EARN_CLEAR_DAYS: pts += 10
+    elif earn_days > WATCHLIST_READINESS_EARN_NEAR_DAYS: pts += 5
     readiness_pct = min(100, pts)
 
     return {

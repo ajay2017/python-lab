@@ -4,6 +4,13 @@ coverage despite containing an actual portfolio-risk GATE
 (_portfolio_risk_gate) that can downgrade a stock-level ENTER_NOW call.
 """
 from stock_analyzer.constants import (
+    COMPOSITE_BUY,
+    COMPOSITE_HOLD,
+    RR_ENTRY_MIN,
+    WATCHLIST_READINESS_SCORE_PARTIAL,
+    WATCHLIST_READINESS_RR_PARTIAL,
+    WATCHLIST_READINESS_EARN_CLEAR_DAYS,
+    WATCHLIST_READINESS_EARN_NEAR_DAYS,
     DETERIORATION_TREND_MA,
     PORTFOLIO_BETA_CEILING,
     PORTFOLIO_BETA_ELEVATED,
@@ -13,6 +20,7 @@ from stock_analyzer.constants import (
 )
 from stock_analyzer.watchlist_advisor import (
     _f,
+    _card,
     _earn_days_until,
     _pct_from_entry,
     _portfolio_risk_gate,
@@ -941,3 +949,44 @@ def test_rr_none_when_target_not_above_price():
         "XYZ", _base_data(targets={"base": 95.0}))
     assert rec["rr"] is None
     assert rec["action"] != "ENTER_NOW"
+
+
+# ─── Readiness % partial-credit boundaries (display/sort only) ───────────────
+def _readiness(score=40, rr=None, earn_days=None, action="WAIT_CATALYST"):
+    # WAIT_CATALYST = +5 action points; baseline below adds those.
+    return _card(
+        "XYZ", action, score, "Hold", 100.0, 95.0, 100.0, 90.0, rr,
+        earn_days, "t", "s", "d", [], [], "i",
+    )["readiness_pct"]
+
+
+def test_readiness_constants_pin_todays_values():
+    assert WATCHLIST_READINESS_SCORE_PARTIAL == 55
+    assert WATCHLIST_READINESS_RR_PARTIAL == 1.5
+    assert WATCHLIST_READINESS_EARN_CLEAR_DAYS == 14
+    assert WATCHLIST_READINESS_EARN_NEAR_DAYS == 7
+
+
+def test_readiness_score_boundaries():
+    # earn_days None = +10, action WAIT_CATALYST = +5 -> base 15
+    assert _readiness(score=COMPOSITE_BUY) == 15 + 35
+    assert _readiness(score=WATCHLIST_READINESS_SCORE_PARTIAL) == 15 + 20
+    assert _readiness(score=54.9) == 15 + 10   # still >= COMPOSITE_HOLD
+    assert _readiness(score=COMPOSITE_HOLD - 0.1) == 15
+
+
+def test_readiness_rr_boundaries():
+    base = _readiness(rr=None)  # 15
+    assert _readiness(rr=RR_ENTRY_MIN) == base + 20
+    assert _readiness(rr=1.99) == base + 10
+    assert _readiness(rr=1.5) == base + 10
+    assert _readiness(rr=1.49) == base
+
+
+def test_readiness_earnings_boundaries():
+    # score 40 (< COMPOSITE_HOLD) so only action (+5) and earnings count
+    assert _readiness(earn_days=None) == 5 + 10
+    assert _readiness(earn_days=15) == 5 + 10
+    assert _readiness(earn_days=14) == 5 + 5
+    assert _readiness(earn_days=8) == 5 + 5
+    assert _readiness(earn_days=7) == 5
