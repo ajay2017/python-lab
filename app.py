@@ -11002,10 +11002,11 @@ if page == "🏠 Home":
         _bt_today_iso = _today_et().isoformat()
         if st.session_state.get("_broken_thesis_tickers_date") != _bt_today_iso:
             try:
-                _rv_df = db.load_thesis_reviews_or_none()
+                _bt_set = thesis_review_status.broken_tickers(
+                    db.load_thesis_reviews_or_none())
             except Exception:
-                _rv_df = None
-            st.session_state["_broken_thesis_tickers"] = thesis_review_status.broken_tickers(_rv_df)
+                _bt_set = None  # couldn't load or classify → offline, not "none broken"
+            st.session_state["_broken_thesis_tickers"] = _bt_set
             if st.session_state["_broken_thesis_tickers"] is not None:
                 st.session_state["_broken_thesis_tickers_date"] = _bt_today_iso
         _broken_thesis_tickers = _get_or_offline(st.session_state, "_broken_thesis_tickers")
@@ -12156,6 +12157,12 @@ if page == "🏠 Home":
             else:
                 for _ci, _item in enumerate(_aware_bucket):
                     _render_defensive_card(_item, 1000 + _ci)
+                # Reviews-offline note once per page: under Awareness only when
+                # Act Today showed no cards (else it sits under Act Today).
+                _th_note_aw = thesis_review_status.awareness_note(
+                    _broken_thesis_tickers, len(_active_act_bucket), len(_aware_bucket))
+                if _th_note_aw:
+                    st.caption(_th_note_aw)
 
         # Macro-exposure trim coverage note — one caption when the macro calendar
         # has lapsed.  The review-list item 5 (macro-affected sector trim) goes
@@ -20353,9 +20360,12 @@ elif page == "🧩 Intelligence":
                         _sca_trade_date[_sca_bt] = str(_sca_brow.get("traded_at", ""))[:10]
 
         # Thesis erosion — latest reviewed row per ticker.
-        _sca_reviews_df = db.load_thesis_reviews()
+        try:
+            _sca_reviews_df = db.load_thesis_reviews_or_none()  # None = couldn't load
+        except Exception:
+            _sca_reviews_df = None
         _sca_erosion: dict = {}
-        if not _sca_reviews_df.empty:
+        if _sca_reviews_df is not None and not _sca_reviews_df.empty:
             for _, _sca_rv in _sca_reviews_df.iterrows():
                 _sca_t = str(_sca_rv["ticker"]).upper()
                 if _sca_t not in _sca_erosion:
@@ -20465,13 +20475,18 @@ elif page == "🧩 Intelligence":
             if "bull" in _sca_dirs and "bear" in _sca_dirs:
                 _sca_cards.append({"ticker": _sca_t, "signals": _sca_signals})
 
+        if _sca_reviews_df is None and _sca_held:
+            st.caption("🩺 Thesis reviews couldn't be loaded this run, so thesis status isn't part of this audit.")
         if not _sca_held:
             st.info("No held positions to audit this session.")
         elif _sca_evaluated == 0:
+            # Reviews offline: "save theses" would contradict the caption above.
             st.caption(
                 "Not enough overlapping signals yet to audit. This fills in as you "
-                "save theses (weekly thesis review) and run debates (⚔️ buttons on "
-                "candidates and deterioration cards)."
+                + ("run debates (⚔️ buttons on candidates and deterioration cards)."
+                   if _sca_reviews_df is None else
+                   "save theses (weekly thesis review) and run debates (⚔️ buttons on "
+                   "candidates and deterioration cards).")
             )
         elif not _sca_cards:
             st.caption("No disagreements found among your signals today.")
@@ -43855,7 +43870,11 @@ elif page == "🧠 AI Insights":
     _ai_api_key = _anthropic_key()
 
     # ── Load shared data ONCE for the status header + sections ───────────────
-    _thesis_reviews_df = _ai_db.load_thesis_reviews()
+    try:
+        _thesis_reviews_df = _ai_db.load_thesis_reviews_or_none()  # None = couldn't load
+    except Exception:
+        _thesis_reviews_df = None
+    _ai_reviews_offline = _thesis_reviews_df is None
 
     # Build thesis lookup: ticker → most recent BUY with a thesis
     _thesis_by_ticker: dict = {}
@@ -43894,7 +43913,7 @@ elif page == "🧠 AI Insights":
 
     # Build review lookup: ticker → most recent review row
     _review_by_ticker: dict = {}
-    if not _thesis_reviews_df.empty:
+    if _thesis_reviews_df is not None and not _thesis_reviews_df.empty:
         for _, _rv in _thesis_reviews_df.iterrows():
             _t = str(_rv["ticker"]).upper()
             if _t not in _review_by_ticker:
@@ -43969,7 +43988,13 @@ elif page == "🧠 AI Insights":
 
     _h1, _h2, _h3, _h4 = st.columns(4)
     with _h1:
-        if _hdr_attn_count:
+        if _ai_reviews_offline and _open_tickers:
+            st.markdown(
+                "<div style='text-align:center'><div style='color:#9ca3af;font-size:0.75em'>🩺 Positions</div>"
+                "<div style='color:#f59e0b;font-weight:600'>couldn't check</div></div>",
+                unsafe_allow_html=True,
+            )
+        elif _hdr_attn_count:
             st.markdown(
                 f"<div style='text-align:center'><div style='color:#9ca3af;font-size:0.75em'>🩺 Positions</div>"
                 f"<div style='color:#f59e0b;font-weight:600'>{_hdr_attn_count} need review</div></div>",
@@ -44101,6 +44126,11 @@ elif page == "🧠 AI Insights":
         if not _open_tickers:
             st.info("No open positions found — add positions via the Trade Journal.")
         else:
+            if _ai_reviews_offline:
+                st.warning(
+                    "Thesis reviews couldn't be read from the database, so the "
+                    "statuses below aren't shown. Reload the page in a moment."
+                )
             _status_colour = {"INTACT": "#22c55e", "WEAKENING": "#f59e0b", "BROKEN": "#ef4444"}
             _status_icon   = {"INTACT": "✅", "WEAKENING": "⚠️", "BROKEN": "🔴"}
 
@@ -44115,7 +44145,8 @@ elif page == "🧠 AI Insights":
                 if not _thesis:
                     _exp_label = f"**{_ticker}** — no thesis yet"
                 else:
-                    _exp_label = f"**{_ticker}** — " + (_status or "awaiting review")
+                    _exp_label = f"**{_ticker}** — " + (
+                        _status or ("status not loaded" if _ai_reviews_offline else "awaiting review"))
 
                 with st.expander(_exp_label, expanded=(_status == "BROKEN")):
 
@@ -44162,6 +44193,12 @@ elif page == "🧠 AI Insights":
                                 f"font-size:0.85em;font-weight:600'>"
                                 f"{_chip_icon} {_status}</span>"
                             )
+                        elif _ai_reviews_offline:
+                            _chip_html = (
+                                "<span style='background:#374151;border:1px solid #4b5563;"
+                                "color:#9ca3af;border-radius:4px;padding:2px 8px;"
+                                "font-size:0.85em'>Status couldn't be loaded</span>"
+                            )
                         else:
                             _chip_html = (
                                 "<span style='background:#374151;border:1px solid #4b5563;"
@@ -44188,7 +44225,10 @@ elif page == "🧠 AI Insights":
                             st.markdown("**AI assessment:**")
                             st.markdown(_summary)
                         else:
-                            st.caption("Click Re-evaluate to run the first AI review for this position.")
+                            # Offline: a review may exist but couldn't be read, so
+                            # "run the first review" would be a false claim.
+                            if not _ai_reviews_offline:
+                                st.caption("Click Re-evaluate to run the first AI review for this position.")
 
                         # Re-evaluate button
                         if st.button(f"Re-evaluate {_ticker}", key=f"_ai_reeval_{_ticker}", disabled=not _ai_api_key):
@@ -44454,6 +44494,8 @@ elif page == "🧠 AI Insights":
                                       ("daily_snapshots_df", "daily price snapshots"))
                     if _wd_inputs[_k] is None
                 ]
+                if _thesis_reviews_df is None:
+                    _wd_failed.append("thesis reviews")
                 if _wd_failed:
                     st.error(
                         "Could not read " + ", ".join(_wd_failed) + " — the database may be "

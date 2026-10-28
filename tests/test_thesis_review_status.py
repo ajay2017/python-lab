@@ -53,3 +53,23 @@ def test_act_today_note():
     assert trs.act_today_note(None, 2) == trs.UNCHECKED_ACT_NOTE
     assert trs.act_today_note(None, 0) is None
     assert trs.act_today_note(set(), 2) is None
+
+
+def test_awareness_note_fires_only_when_act_empty_and_aware_present():
+    assert trs.awareness_note(None, 0, 3) == trs.UNCHECKED_ACT_NOTE
+    assert trs.awareness_note(None, 2, 3) is None
+    assert trs.awareness_note(None, 1, 0) is None
+    assert trs.awareness_note(set(), 0, 3) is None
+    assert trs.awareness_note({"AAA"}, 0, 3) is None
+    assert trs.awareness_note(None, 0, 0) is None
+
+
+def test_act_and_awareness_notes_fire_exactly_once_when_offline():
+    # Once-per-page promise: never both; one fires iff offline and any card shows.
+    for broken in (None, set(), {"A"}):
+        for n_act in (0, 1):
+            for n_aware in (0, 1):
+                act = trs.act_today_note(broken, n_act)
+                aw = trs.awareness_note(broken, n_act, n_aware)
+                assert not (act and aw)
+                assert bool(act or aw) == (broken is None and n_act + n_aware > 0)

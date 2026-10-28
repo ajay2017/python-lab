@@ -10,7 +10,7 @@ import pandas as pd
 
 UNCHECKED_ACT_NOTE = (
     "🩺 Thesis reviews couldn't be loaded this run, so a 🔴 Thesis broken link "
-    "can't show on the cards above. Check 🧠 AI Insights."
+    "can't show on today's Brief cards. Check 🧠 AI Insights."
 )
 UNCHECKED_SUMMARY_NOTE = (
     "Thesis reviews couldn't be loaded. Reload the page, or open 🧠 AI Insights."
@@ -57,5 +57,13 @@ def held_summary(df: pd.DataFrame | None, held_tickers) -> dict | None:
 def act_today_note(broken: set | None, n_act_cards: int) -> str | None:
     """Caption under the Act Today cards when the broken-thesis set is offline."""
     if broken is None and n_act_cards > 0:
+        return UNCHECKED_ACT_NOTE
+    return None
+
+
+def awareness_note(broken: set | None, n_act_cards: int, n_aware_cards: int) -> str | None:
+    """Same note under Awareness, only when Act Today showed no cards (so it
+    appears exactly once on the page)."""
+    if broken is None and n_act_cards == 0 and n_aware_cards > 0:
         return UNCHECKED_ACT_NOTE
     return None
