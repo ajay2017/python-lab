@@ -2960,8 +2960,12 @@ from stock_analyzer.constants import (
 
 
 def _wl_row(price=100.0):
-    return {"ticker": "AAA", "weight": LARGE_POSITION_WEIGHT_PCT + 2,
-            "score": WEAK_CONVICTION_SCORE - 10, "price": price}
+    # shares consistent with weight: (LARGE+2)% of a 100k book at `price`
+    # (the trim is sized from shares, floored -- 2026-10-28).
+    _w = LARGE_POSITION_WEIGHT_PCT + 2
+    return {"ticker": "AAA", "weight": _w,
+            "score": WEAK_CONVICTION_SCORE - 10, "price": price,
+            "shares": 100_000.0 * _w / 100 / price}
 
 
 def _act(kind, ticker="AAA"):

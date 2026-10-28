@@ -935,7 +935,11 @@ def rebalance_actions(
             # a profitable Sell signal needs manual review now, not later.
             _gap_close = (gap is None) or (gap < REBALANCE_REVIEW_GAP_PCT)
             urgency = "high" if (score < COMPOSITE_SELL or _gap_close) else "medium"
-            half_shares = max(1, shares // 2)
+            # Floored (owner 2026-10-23: no 0-share or rounded-up-to-1 trim); 0
+            # for a 1-share or sub-1-share holding. No constants.py value means
+            # "sell half" for this card (MACRO_PROTECT_HALF_TRIM_PCT is the macro
+            # PROTECT rule), so the plain halving intent stays literal.
+            half_shares = math.floor(shares / 2) if shares == shares and shares > 0 else 0
             _tier = _det_tier.get(ticker)
             _trigger = f"Composite score {score:.0f}/100 ({signal.split()[-1]}) while position is +{pnl:.1f}% profitable"
             if _tier:

@@ -16155,6 +16155,14 @@ elif page == "📡 Signals & Advice":
                         half = act["half_shares"]
                         half_val = half * act["price"]
                         full_val = act["shares"] * act["price"]
+                        # Floored half is 0 for a 1-share / sub-1-share holding:
+                        # never print "Sell 0 shares"; say the real choices.
+                        _no_half = half < 1
+                        _no_half_line = (
+                            f"Half this position is under one share — "
+                            f"the real choices are hold with the stop, or exit.  \n"
+                            f"Stop at **\\${act['stop']:.2f}** ({act['stop_type']})."
+                        )
                         _rbc_bq = r_data.get("bq_score", f_score)
                         # 2026-09-22 app-review follow-up: `_rbc_bq` can be a
                         # FABRICATED neutral 50 when business quality was never
@@ -16175,44 +16183,66 @@ elif page == "📡 Signals & Advice":
                                     f"**High fund cost compounds a weakening trend — act with urgency.**  \n"
                                     f"This fund's expense ratio is a permanent drag, so there's less "
                                     f"reason to hold through a technical rough patch.  \n"
+                                ) + (_no_half_line if _no_half else (
                                     f"Sell **{half} shares** (~\\${half_val:,.0f}) at market now to bank "
                                     f"the {act['pnl']:.0f}% gain on half the position.  \n"
                                     f"Hold remaining {act['shares'] - half} shares with stop at "
                                     f"**\\${act['stop']:.2f}** ({act['stop_type']})."
-                                )
+                                ))
                             else:
                                 action_text = (
                                     f"**Technical-only weakness — the fund's cost profile is fine.**  \n"
                                     f"Option A (conservative): let the ratchet stop at **\\${act['stop']:.2f}** "
                                     f"do the work — it already locks in a portion of your gain.  \n"
+                                ) + (
+                                    "Half this position is under one share, so there is no "
+                                    "partial trim — hold with the stop.  \n"
+                                    if _no_half else
                                     f"Option B (active): sell **{half} shares** (~\\${half_val:,.0f}) to "
                                     f"reduce exposure, trail the remainder with the existing stop.  \n"
+                                ) + (
                                     f"A low-cost fund on a technical signal alone doesn't warrant a full exit."
                                 )
                         elif _rbc_bq is not None and t_score is not None and _rbc_bq_available:
                             if bq_weak(_rbc_bq):
                                 action_text = (
                                     f"**Business quality weakness — act with urgency.**  \n"
+                                ) + (_no_half_line if _no_half else (
                                     f"Sell **{half} shares** (~\\${half_val:,.0f}) at market now to bank the "
                                     f"{act['pnl']:.0f}% gain on half the position.  \n"
                                     f"Hold remaining {act['shares'] - half} shares with stop at "
-                                    f"**\\${act['stop']:.2f}** ({act['stop_type']}).  \n"
-                                    f"Revisit full exit if stop is breached or next earnings disappoint."
+                                    f"**\\${act['stop']:.2f}** ({act['stop_type']})."
+                                )) + (
+                                    f"  \nRevisit full exit if stop is breached or next earnings disappoint."
                                 )
                             else:
                                 action_text = (
                                     f"**Technical-only weakness — fundamentals are intact.**  \n"
                                     f"Option A (conservative): Let the ratchet stop at **\\${act['stop']:.2f}** "
                                     f"do the work — it already locks in a portion of your gain.  \n"
+                                ) + (
+                                    "Half this position is under one share, so there is no "
+                                    "partial trim — hold with the stop.  \n"
+                                    if _no_half else
                                     f"Option B (active): Sell **{half} shares** (~\\${half_val:,.0f}) to reduce "
                                     f"exposure, trail remainder with the existing stop.  \n"
-                                    f"Do NOT sell all {act['shares']} shares on a technical signal alone "
-                                    f"when fundamentals are solid."
+                                ) + (
+                                    ("Do NOT sell the whole position on a technical signal alone "
+                                     if _no_half else
+                                     f"Do NOT sell all {act['shares']} shares on a technical signal alone ")
+                                    + "when fundamentals are solid."
                                 )
                                 if earn_flag:
-                                    action_text += f"  \n⚠️ Earnings proximity tips toward Option B — reduce before the report."
+                                    if _no_half:
+                                        action_text += (
+                                            "  \n⚠️ Earnings are close — at this size there is no "
+                                            "partial trim before the report; the stop at "
+                                            f"**\\${act['stop']:.2f}** is your protection through it."
+                                        )
+                                    else:
+                                        action_text += f"  \n⚠️ Earnings proximity tips toward Option B — reduce before the report."
                         else:
-                            action_text = (
+                            action_text = _no_half_line if _no_half else (
                                 f"Sell **{half} shares** (~\\${half_val:,.0f}) to bank gain on half the position.  \n"
                                 f"Hold remainder with stop at **\\${act['stop']:.2f}**."
                             )
@@ -16221,7 +16251,9 @@ elif page == "📡 Signals & Advice":
                                     "  \n❔ Business quality couldn't be measured for this "
                                     "ticker (no fundamentals data available) — can't tell "
                                     "whether this is a business-quality or technical-only "
-                                    "signal, so this defaults to the even split above."
+                                    "signal, so "
+                                    + ("the card offers both choices above." if _no_half
+                                       else "this defaults to the even split above.")
                                 )
                         st.markdown(action_text)
 
@@ -16288,6 +16320,11 @@ elif page == "📡 Signals & Advice":
                         # prefill is meaningless, so no Log button.
                         with log_col:
                             st.caption("Under one share — nothing to log.")
+                    elif act["type"] == "review" and not act.get("half_shares"):
+                        # Half of a 1-share / sub-1-share holding sizes 0
+                        # shares: a 0-share SELL prefill is meaningless.
+                        with log_col:
+                            st.caption("Half the position is under one share — nothing to log.")
                     else:
                         with log_col:
                             _default_shares = (

@@ -3454,13 +3454,15 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         if not (weight >= LARGE_POSITION_WEIGHT_PCT and score < WEAK_CONVICTION_SCORE):
             continue
         ticker = str(row["Ticker"])
-        shares = int(_f(row.get("Shares")))
         price  = _f(row.get("Price"))
-        if portfolio_value > 0 and price > 0:
-            target_value = portfolio_value * (WEAK_LARGE_TRIM_TO_PCT / 100)
-            current_value = portfolio_value * (weight / 100)
-            trim_dollars = round(current_value - target_value, 0)
-            trim_shares  = max(1, int(round(trim_dollars / price)))
+        _shares_raw = _f(row.get("Shares"))
+        _sized = portfolio_value > 0 and price > 0 and _shares_raw > 0
+        if _sized:
+            # Floored whole shares (owner 2026-10-23: never round a sub-share
+            # excess up to 1); dollars reconciled to N x price.
+            trim_shares  = _trim_sizing.shares_to_trim(
+                _shares_raw, weight, WEAK_LARGE_TRIM_TO_PCT)
+            trim_dollars = round(trim_shares * price, 0)
         else:
             trim_dollars, trim_shares = 0, 0
         if ticker.upper() in _reduce_tickers:
@@ -3496,6 +3498,36 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 _first_act["reason"] = (
                     f"{_first_act['directive']} {_first_act['why']}".strip()
                 )
+            continue
+        if trim_shares < 1:
+            # No whole-share trim can be sized (price / portfolio value
+            # unavailable, or the excess is under one share at today's price):
+            # say that instead of a 0-share trade.
+            _wl_why_tail = (
+                f"The weight is over the {WEAK_LARGE_TRIM_TO_PCT:.1f}% "
+                "target by less than one share at today's price, so no trim is sized."
+                if _sized else
+                "The share count, price or portfolio value is unavailable, so no trim can be sized."
+            )
+            _wl_trigger = (
+                "No trade sized today — re-check if the weight grows or the score falls into Sell."
+                if _sized else
+                "No trade sized — re-check once prices and portfolio value load."
+            )
+            items.append({
+                "priority": "medium",
+                "icon":     "🔍",
+                "ticker":   ticker,
+                "headline": f"largest weak holding — {weight:.1f}% weight, score {score:.0f}/100",
+                "action":   {"type": "WATCH"},
+                "why": (
+                    f"Weight {weight:.1f}% ≥ {LARGE_POSITION_WEIGHT_PCT:.0f}% AND score "
+                    f"{score:.0f} < {WEAK_CONVICTION_SCORE} — largest position with weakest "
+                    f"conviction. {_wl_why_tail}"
+                ),
+                "trigger": _wl_trigger,
+                "weight":  weight,
+            })
             continue
         items.append({
             "priority": "medium",
@@ -3674,7 +3706,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             # than the position holds.
             reduction_pp = min(MACRO_AFFECTED_TRIM_REDUCTION_PP, weak_weight)
             trim_dollars = round(portfolio_value * (reduction_pp / 100), 0)
-            trim_shares  = max(1, int(round(trim_dollars / weak_price))) if weak_price > 0 else 0
+            # Floored (owner 2026-10-23: never round a sub-share excess up to 1).
+            trim_shares  = _trim_sizing.shares_for_dollars(trim_dollars, weak_price)
             # Reconcile the displayed dollars + pp with the ROUNDED whole-share
             # count so "trim N shares (~$X)" is internally consistent (X = N ×
             # price). The pp-target alone diverges badly on small portfolios /
@@ -3684,29 +3717,59 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 reduction_pp = (round(trim_dollars / portfolio_value * 100, 1)
                                 if portfolio_value > 0 else reduction_pp)
             new_exposure = max(0.0, exposure_pct - reduction_pp)
-            action = {
-                "type":           "PROTECTIVE_TRIM",
-                "trim_ticker":    weak_ticker,
-                "trim_shares":    trim_shares,
-                "trim_dollars":   trim_dollars,
-                "from_exposure":  exposure_pct,
-                "to_exposure":    new_exposure,
-                "reduction_pp":   reduction_pp,
-                "weakest_score":  weak_score,
-                "conviction_unmeasured": _conviction_unmeasured,
-            }
-            why = (
-                f"Affected-sector exposure {exposure_pct:.1f}% > "
-                f"{MACRO_AFFECTED_TRIM_THRESHOLD_PCT:.0f}% trim threshold. "
-                + (
-                    "Conviction is unmeasured for every affected holding not "
-                    "already in Act Today (fundamentals unavailable), so the "
-                    "weakest name can't be ranked — trimming the largest "
-                    "remaining affected position instead."
-                    if _conviction_unmeasured else
-                    "Trimming weakest holding first preserves higher-conviction names."
+            if weak_price <= 0 or trim_shares < 1:
+                # No whole-share trim can be sized (price unavailable, or the
+                # target trim is under one share): WATCH, never a 0-share trade.
+                # (Two `$` in `why` are safe: the Review card is ONE raw-HTML
+                # block (starts with <div, no blank lines), so Streamlit does
+                # no `$...$` math parsing inside it. `util.safe_html` itself
+                # leaves `$` alone.)
+                action = {
+                    "type":          "WATCH",
+                    "from_exposure": exposure_pct,
+                    "threshold":     MACRO_AFFECTED_TRIM_THRESHOLD_PCT,
+                }
+                if weak_price <= 0:
+                    why = (
+                        f"Affected-sector exposure {exposure_pct:.1f}% > "
+                        f"{MACRO_AFFECTED_TRIM_THRESHOLD_PCT:.0f}% trim threshold, but "
+                        f"{weak_ticker}'s price is unavailable, so no trim can be "
+                        "sized. Re-check once prices load."
+                    )
+                else:
+                    _one_share_pp = weak_price / portfolio_value * 100
+                    why = (
+                        f"Affected-sector exposure {exposure_pct:.1f}% > "
+                        f"{MACRO_AFFECTED_TRIM_THRESHOLD_PCT:.0f}% trim threshold, but the "
+                        f"{reduction_pp:g}pp trim (≈${trim_dollars:,.0f}) "
+                        f"is under one share of {weak_ticker} (≈${weak_price:,.0f}/share), so "
+                        f"no trim is sized; the smallest real trim is 1 share ≈ "
+                        f"{_one_share_pp:.1f}% of the book."
+                    )
+            else:
+                action = {
+                    "type":           "PROTECTIVE_TRIM",
+                    "trim_ticker":    weak_ticker,
+                    "trim_shares":    trim_shares,
+                    "trim_dollars":   trim_dollars,
+                    "from_exposure":  exposure_pct,
+                    "to_exposure":    new_exposure,
+                    "reduction_pp":   reduction_pp,
+                    "weakest_score":  weak_score,
+                    "conviction_unmeasured": _conviction_unmeasured,
+                }
+                why = (
+                    f"Affected-sector exposure {exposure_pct:.1f}% > "
+                    f"{MACRO_AFFECTED_TRIM_THRESHOLD_PCT:.0f}% trim threshold. "
+                    + (
+                        "Conviction is unmeasured for every affected holding not "
+                        "already in Act Today (fundamentals unavailable), so the "
+                        "weakest name can't be ranked — trimming the largest "
+                        "remaining affected position instead."
+                        if _conviction_unmeasured else
+                        "Trimming weakest holding first preserves higher-conviction names."
+                    )
                 )
-            )
         elif (exposure_pct > MACRO_AFFECTED_TRIM_THRESHOLD_PCT and not sector_rows.empty
               and _macro_eligible.empty):
             # Over threshold, but every affected holding already has an Act Today

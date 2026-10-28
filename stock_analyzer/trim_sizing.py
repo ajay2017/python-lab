@@ -4,8 +4,8 @@ Pure logic — no Streamlit, no I/O. Owner decisions:
   * 2026-10-23: no surface proposes a trim that sizes 0 shares (floor, never
     round a sub-share excess UP to 1). Migrated 2026-10-25: the Brief's
     earnings / profit-lock / deterioration items, the earnings playbook, macro
-    PROTECT text and Signals' concentration trim. Still rounding up (queued):
-    the Brief's weak-large TRIM_TO_TARGET and PROTECTIVE_TRIM, and Signals'
+    PROTECT text and Signals' concentration trim. Migrated 2026-10-28: the
+    Brief's weak-large TRIM_TO_TARGET and PROTECTIVE_TRIM, and Signals'
     "review" half_shares.
   * 2026-10-25 (Option A): in earnings week (0 <= days <= EARNINGS_IMMINENT_DAYS)
     ONE rule sizes the overweight trim — the Brief's: fires above the
@@ -45,6 +45,14 @@ def shares_to_trim(shares: float, weight_pct: float, target_pct: float) -> int:
     if s <= 0 or t < 0 or w <= t:
         return 0
     return max(0, math.floor(s * (w - t) / w))
+
+
+def shares_for_dollars(dollars: float, price: float) -> int:
+    """Whole shares worth at most `dollars` at `price`, floored; 0 for bad input."""
+    d, p = _num(dollars), _num(price)
+    if d is None or p is None or d <= 0 or p <= 0:
+        return 0
+    return max(0, math.floor(d / p))
 
 
 def fraction_trim_shares(shares: float, pct: float) -> int:
