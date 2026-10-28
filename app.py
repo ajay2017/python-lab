@@ -4790,11 +4790,11 @@ def _render_holdings_earnings(port_df, held_data):
                 # Action recommendation
                 st.markdown(
                     f"<div style='padding:12px 16px;background:#0d1117;"
-                    f"border-radius:6px;border-left:4px solid {_bclr};margin:10px 0'>"
-                    f"<span style='font-size:0.72em;color:{_bclr};font-weight:700;"
+                    f"border-radius:6px;border-left:4px solid {_safe_html(_bclr)};margin:10px 0'>"
+                    f"<span style='font-size:0.72em;color:{_safe_html(_bclr)};font-weight:700;"
                     f"letter-spacing:0.09em;text-transform:uppercase'>"
-                    f"{_act_icon} Pre-Earnings Action: {_act_label}</span><br>"
-                    f"<span style='color:#eee;font-size:0.9em'>{_pb['detail']}</span>"
+                    f"{_safe_html(_act_icon)} Pre-Earnings Action: {_safe_html(_act_label)}</span><br>"
+                    f"<span style='color:#eee;font-size:0.9em'>{_md_bold(_pb['detail'])}</span>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )

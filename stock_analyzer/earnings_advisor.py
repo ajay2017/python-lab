@@ -383,7 +383,7 @@ def _recommend(
                 "A negative surprise could gap through the stop in a single session — stops don't protect "
                 "against overnight gaps. "
                 "**Be prepared to exit at market open if the report is negative** — don't wait for the stop "
-                "to trigger at a price that may be 10% lower than it shows."
+                "to fill at a price well below it."
             ),
             (
                 "Stops are daily risk management tools — they don't protect against overnight gaps. "
