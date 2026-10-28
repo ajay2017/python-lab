@@ -12673,9 +12673,20 @@ if page == "🏠 Home":
     import os, re as _re
 
     # ── Provider / model config ───────────────────────────────────────────
+    # Sentinel: Claude defaults to the ⚙️ App Settings `fast` model (model=None).
+    _SNAPSHOT_FAST = "__app_settings_fast__"
+    try:
+        _snap_fast_resolved = _llm.resolved(_llm.ROLE_FAST)
+    except Exception:  # noqa: BLE001
+        _snap_fast_resolved = ""
     _AI_PROVIDERS = {
         "Claude (Anthropic)": {
             "models": {
+                _SNAPSHOT_FAST: (
+                    f"App Settings fast model — {_snap_fast_resolved} (default)"
+                    if _snap_fast_resolved
+                    else "App Settings fast model (default)"
+                ),
                 "claude-haiku-4-5-20251001": "Haiku 4.5 — fast & cheap",
                 "claude-sonnet-4-6":         "Sonnet 4.6 — more capable",
             },
@@ -12789,7 +12800,8 @@ if page == "🏠 Home":
     def _call_ai_brief(provider, model, api_key, sys_prompt, usr_prompt):
         if provider == "Claude (Anthropic)":
             r = _llm.complete(
-                _llm.ROLE_FAST, api_key=api_key, model=model, max_tokens=700,
+                _llm.ROLE_FAST, api_key=api_key,
+                model=None if model == _SNAPSHOT_FAST else model, max_tokens=700,
                 system=sys_prompt,
                 messages=[{"role": "user", "content": usr_prompt}],
             )
@@ -12826,7 +12838,9 @@ if page == "🏠 Home":
         raise ValueError(f"Unknown provider: {provider}")
 
     # ── Brief cache key: invalidate when provider or model changes ────────
-    _brief_cache_key = f"_ai_snapshot__{_sel_provider}__{_sel_model}"
+    _sel_model_key = (f"{_SNAPSHOT_FAST}:{_snap_fast_resolved}"
+                      if _sel_model == _SNAPSHOT_FAST else _sel_model)
+    _brief_cache_key = f"_ai_snapshot__{_sel_provider}__{_sel_model_key}"
     _brief_cached    = st.session_state.get(_brief_cache_key)
     _brief_ts        = st.session_state.get(f"{_brief_cache_key}__ts", "")
 
@@ -43262,7 +43276,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **📅 Catalyst-Specific Stress — "which upcoming EVENT threatens this book most?"** Right below the scenario above, on the same tab, click **📅 Generate catalyst-specific stress** to check whether any upcoming HIGH-impact macro event (within 14 days) or one of your own holdings' earnings reports overlaps the same structural weak points. Broad, sector-wide events like FOMC and GDP releases are deliberately excluded from this ranking — they threaten everything equally, so they can't point to a SPECIFIC vulnerability. If neither a macro event nor an earnings report has real overlap with your weak points, this says so plainly rather than manufacturing a concern — but only on a fully-measured correlation matrix; otherwise it says the result isn't verified, since which names count as weak points depends on that matrix. The narrative itself is likewise only generated and saved on a fully-measured matrix. **Awareness only: the event-driven twin of the scenario above, never a new stress calculation, never a gate.**
 
-- **🤖 AI Snapshot** — On-demand, point-in-time portfolio narrative generated live from your holdings, active alerts, market indices, and news. Your choice of provider: Claude, OpenAI, Gemini, or Groq. For cadence-driven reflection (thesis health, weekly/monthly review), use 🧠 AI Insights instead.
+- **🤖 AI Snapshot** — On-demand, point-in-time portfolio narrative generated live from your holdings, active alerts, market indices, and news. Your choice of provider: Claude, OpenAI, Gemini, or Groq. Claude uses the ⚙️ App Settings `fast` model by default (you can pick another under ⚙️ Provider settings). For cadence-driven reflection (thesis health, weekly/monthly review), use 🧠 AI Insights instead.
 
 ---
 
@@ -43364,7 +43378,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **📜 Recommendations History** — every recommendation the app surfaced over time (the audit trail).
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🧭 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
 - **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY**, shown as 🎯 Add (a high-conviction name with a tailwind; it carries no share count — for an add and its size, check 📈 Analysis, which shows Grow Today's call; within 3 days of the release it isn't shown as an add: it reads WATCH if a WATCH rule applies, otherwise HOLD), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
-- **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
+- **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). Claude uses the ⚙️ App Settings `fast` model by default (you can pick another under ⚙️ Provider settings). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer with two independent sections. **Forward Volatility Forecaster** (Phase 1) tests whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. **Earnings-Move Magnitude** (Phase 2) tests whether the app's own already-live pre-earnings sizing heuristic beats a naive "assume it moves like its own past prints" baseline, per held ticker around its scheduled print — unsigned magnitude only, never a directional call, and no "upcoming, not yet matured" preview (an outcome is only ever shown after it's known). Both sections feed **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. Each section's skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated.
 - **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Six checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh), and **⑥ Write outcomes** (did today's interactive ledger writes — 6 write paths: the buy recommendations log, the Grow Today gate suppression ledger, the Watchlist Ready-to-Enter log, and the 3 Watchlist/Rebalancer/Analysis gate-ledger capture sites added 2026-09-13 — actually save, or did a swallowed failure look identical to a healthy "nothing to record"?). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Check ⑥, unlike ④/⑤, DOES feed the Home banner — it is a same-session pass/fail signal, not a standing condition or a cold-load cache. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.** Below the checks, **🤖 AI models** lists which model each AI role runs on and where that choice comes from (code default, ⚙️ App Settings, or an environment variable), whether the app's API key can use it, and this app process's calls, errors and fallbacks per role (cron runs happen in their own processes and aren't counted). Under it, a **Portfolio Investigator — AI provider** section lets you choose which AI model the 🔎 Investigator tab (🧠 AI Insights) uses — separate from 🤖 AI Snapshot's own provider choice, not shared or inherited. Only a model that's already passed a required accuracy check is offered.
 - **🛑 The Road Not Taken** — owner-only, not shown in read-only viewer mode. Grades the app's own restraint: every time a gate held back a pick, an add, or downgraded a call, this page shows what the forward return vs SPY over the following ~30 trading days would have been — did the app's caution help or hurt? Covers 14 gates: the original 8 inside Grow Today (macro/sector filters, single-name ceiling, drift conflict, cooldown, early-deterioration WATCH, bear-day tone) plus 6 more — a Rebalancer ADD suppression, a Watchlist ENTER_NOW downgrade to NEAR_ENTRY (sector, beta, or unvalidated R:R — 3 separate gates), and an Analysis add-to-position suppression on a breached stop. A downgrade and an outright suppression are graded as distinct claims (a downgraded name still rendered, just weaker), never blended together. Per gate, not aggregate, and a gate shows no verdict at all ("building") until enough matured, priced, distinct-ticker calls have accrued — expect every gate to read "building" for the first couple of months, longer for the 6 gates added 2026-09-13. **A pure retrospective measurement — it never changes what the engine recommends, gates, or sizes**, today or in the future.

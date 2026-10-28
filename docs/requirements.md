@@ -707,7 +707,7 @@ Renamed from "AI Brief" (2026-07-12) — the Home tab shares no functional overl
 
 | ID | Requirement |
 |----|-------------|
-| F-110 | Generate a natural language portfolio snapshot using an LLM (Anthropic / OpenAI / Google) |
+| F-110 | Generate a natural language portfolio snapshot using an LLM (Anthropic / OpenAI / Google); Claude defaults to the ⚙️ App Settings `fast` model (another can be picked under ⚙️ Provider settings) |
 | F-111 | Snapshot should summarise portfolio state, key risks, and suggested actions |
 
 ### 3.10 Market Data Layer (multi-source: failover + cross-check)
