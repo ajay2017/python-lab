@@ -4606,8 +4606,8 @@ def _render_holdings_earnings(port_df, held_data):
         )
         st.caption(
             "🔴 Imminent = ≤7 days · 🟡 Soon = 8–14 days · 🟢 Ahead = >14 days  |  "
-            "Fwd EPS = analyst consensus estimate for next quarter · "
-            "Earnings dates from Yahoo Finance — verify before acting."
+            "Fwd EPS = analyst consensus for the next fiscal year (full year, Yahoo Finance) · "
+            "Earnings dates from Yahoo Finance, FMP as fallback — verify before acting."
         )
 
     # ── Pre-Earnings Playbook ─────────────────────────────────────────────
