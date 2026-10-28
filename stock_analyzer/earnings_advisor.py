@@ -34,6 +34,8 @@ from stock_analyzer.constants import (
 from stock_analyzer.trim_sizing import (
     earnings_week_trim,
     fraction_trim_shares,
+    exact_shares,
+    fmt_shares,
     in_earnings_window,
     shares_to_trim,
 )
@@ -170,7 +172,7 @@ def _recommend(
     gap_to_stop: float | None,
     net_rev: int,
     signal: str,
-    shares: int,
+    shares: float,
     market_value: float,
     est_move: float,
     beat_rate: float | None = None,
@@ -191,7 +193,7 @@ def _recommend(
                 f"You already have a **Sell signal** on this position. "
                 "Holding through a binary earnings event with a bearish signal is one of the highest-risk "
                 "decisions in portfolio management — you are hoping the event reverses the trend. "
-                f"**Sell all {shares:,} shares before the report.** "
+                f"**Sell all {fmt_shares(shares)} shares before the report.** "
                 "If the report is positive and you want back in, you can re-enter after confirmation."
             ),
             (
@@ -204,7 +206,7 @@ def _recommend(
 
     # Trim sizes use the unrounded share count when given, the same input the
     # Brief and Signals size from, so a fractional holding gets the same whole-
-    # share trim on every surface. `shares` (int) stays the display count.
+    # share trim on every surface. `shares` is now the exact count too.
     _sz = sizing_shares if sizing_shares is not None else shares
 
     # ── REDUCE — oversized position ───────────────────────────────────────────
@@ -490,7 +492,7 @@ def build_earnings_playbook(
         gap        = _f(row.get("Gap to Stop (%)"), None)
         stop_price = _f(row.get("Stop"), None)
         stop_type  = str(row.get("Stop Type", "ATR Stop"))
-        shares     = int(_f(row.get("Shares", 0)))
+        shares     = exact_shares(row)
         sector     = str(row.get("Sector", "Other"))
 
         data = held_data.get(ticker) or {}
@@ -541,7 +543,7 @@ def build_earnings_playbook(
             gap, net_rev, signal, shares, mval, est_move,
             beat_rate=beat_rate, reaction=reaction,
             n_positions=len(port_df),
-            sizing_shares=_f(row.get("Shares", 0)),
+            sizing_shares=shares,
         )
 
         watch = _SECTOR_WATCH.get(sector, _DEFAULT_WATCH)

@@ -25,6 +25,11 @@ from stock_analyzer.constants import (
 )
 
 
+# Fractional-share precision of broker quantities; cleans float noise (2.3 - 0.3).
+# Not a policy threshold (same idea as entry_rr._RR_CANON_DIGITS).
+_SHARE_DP = 6
+
+
 def _num(v) -> float | None:
     """Finite float or None (None / NaN / inf / non-numeric)."""
     try:
@@ -32,6 +37,40 @@ def _num(v) -> float | None:
     except (TypeError, ValueError):
         return None
     return x if math.isfinite(x) else None
+
+
+def exact_shares(row) -> float:
+    """Held share count for SIZING / sell-all text from a port_df row (dict or
+    Series): "Shares Exact" when present and finite, else "Shares", else 0.0.
+    "Shares" stays int-truncated as the Today's-P&L snapshot baseline, so a
+    fractional holding (2.95 sh, a 0.4-sh DRIP lot) is only visible here.
+    Non-finite / negative -> 0.0.
+    """
+    for key in ("Shares Exact", "Shares"):
+        try:
+            v = row[key]
+        except (KeyError, IndexError, TypeError):
+            continue
+        x = _num(v)
+        if x is not None:
+            return round(x, _SHARE_DP) if x > 0 else 0.0
+    return 0.0
+
+
+def fmt_shares(x) -> str:
+    """Share count for text, from the same _SHARE_DP rounding as exact_shares:
+    whole -> "10" / "1,200"; fractional up to _SHARE_DP decimals, trailing zeros
+    stripped, thousands separators ("2.95", "0.4", "1,200.5"); None / NaN / <= 0 -> "0"."""
+    v = _num(x)
+    if v is None:
+        return "0"
+    r = round(v, _SHARE_DP)
+    if r <= 0:
+        return "0"
+    if r == int(r):
+        return f"{int(r):,}"
+    whole, frac = f"{r:.{_SHARE_DP}f}".split(".")
+    return f"{int(whole):,}.{frac.rstrip('0')}"
 
 
 def shares_to_trim(shares: float, weight_pct: float, target_pct: float) -> int:

@@ -11,7 +11,7 @@ For each upcoming high-impact macro event generates:
 import pandas as _pd
 
 from stock_analyzer.market_time import today_et
-from stock_analyzer.trim_sizing import fraction_trim_shares, shares_to_trim
+from stock_analyzer.trim_sizing import exact_shares, fmt_shares, fraction_trim_shares, shares_to_trim
 
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
@@ -432,7 +432,7 @@ def _action_detail(row, event_name: str, action: str) -> str:
     ticker  = str(row.get("Ticker", ""))
     sector  = str(row.get("Sector", ""))
     weight  = _f(row.get("Weight (%)"), 0.0)
-    shares  = int(_f(row.get("Shares"), 0))
+    shares  = exact_shares(row)
     price   = _f(row.get("Price"),  0.0)
     mval    = _f(row.get("Market Value"), 0.0)
 
@@ -455,7 +455,7 @@ def _action_detail(row, event_name: str, action: str) -> str:
         trim_sh  = fraction_trim_shares(shares, MACRO_PROTECT_HALF_TRIM_PCT)
         if trim_sh < 1:
             return (
-                f"A {MACRO_PROTECT_HALF_TRIM_PCT:.0f}% reduction of a {shares}-share position is under one share, "
+                f"A {MACRO_PROTECT_HALF_TRIM_PCT:.0f}% reduction of a {fmt_shares(shares)}-share position is under one share, "
                 "so no trim is sized. Keep stops in place through the release."
             )
         trim_val = round(trim_sh * price)
@@ -576,7 +576,7 @@ def build_event_playbooks(
                 "signal":        str(row.get("Signal",     "")),
                 "pnl_pct":       _f(row.get("P&L (%)"),   0.0),
                 "market_value":  mval,
-                "shares":        int(_f(row.get("Shares"), 0)),
+                "shares":        exact_shares(row),
                 "price":         _f(row.get("Price"),      0.0),
                 "action":        action,
                 "priority":      priority,
@@ -739,7 +739,7 @@ def build_post_event_analysis(
         score       = _f(row.get("Score"),       50.0)
         signal      = str(row.get("Signal",      ""))
         pnl_pct     = _f(row.get("P&L (%)"),     0.0)
-        shares      = int(_f(row.get("Shares"),  0))
+        shares      = exact_shares(row)
         price       = _f(row.get("Price"),       0.0)
 
         sector_move   = _f(sc["sector_moves"].get(sector, 0))

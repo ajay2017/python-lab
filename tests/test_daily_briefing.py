@@ -1756,8 +1756,9 @@ def test_tuneup_non_trim_driver_types_never_filtered():
 
 
 # ── _act_today — deterioration TRIM/EXIT directive, sub-1-share holdings ──────
-# d["shares"] is int()-truncated upstream (exit_advisor.py) -- a genuine
-# fractional-share holding under 1 share reports 0. 2026-08-05 audit finding:
+# d["shares"] is 0 when the count is unknown (exit_advisor.py now reports the
+# exact fractional count, 2026-10-28; fractions: tests/test_exact_shares.py).
+# 2026-08-05 audit finding:
 # the TRIM directive's suggested-quantity clause combined a max(1, ...) floor
 # with that 0 to read "1 of 0 shares"; the EXIT directive had the same class
 # of defect ("exit most/all of 0 shares"). Both must fall back to a

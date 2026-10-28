@@ -2705,7 +2705,7 @@ def deterioration_signals(
             price=_f(row.get("Price"), None),
             atr=data.get("atr"),
             avg_cost=_f(row.get("Avg Cost"), None),
-            shares=_f(row.get("Shares"), 0),
+            shares=_trim_sizing.exact_shares(row),
             pnl_pct=_f(row.get("P&L (%)"), None),
             weight_pct=_f(row.get("Weight (%)"), None),
             age_days=data.get("position_age_days"),
@@ -2755,7 +2755,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
         if gap is None:
             continue
         if gap <= 0:
-            _shares = int(_f(row.get("Shares")))
+            _shares = _trim_sizing.exact_shares(row)
             items.append({
                 "priority": "critical",
                 "icon":     "🛑",
@@ -2763,7 +2763,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                 "kind":     "stop_breach",
                 "action":   "SELL — Stop Breached",
                 "directive": (
-                    f"Sell all {_shares} shares at next open — mechanical stop rule."
+                    f"Sell all {_trim_sizing.fmt_shares(_shares)} shares at next open — mechanical stop rule."
                 ),
                 "why": (
                     f"Price ${_f(row.get('Price')):.2f} closed below the "
@@ -2813,23 +2813,30 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
         _is_exit = d["tier"] == "EXIT"
         _pnl = d.get("pnl_pct") or 0.0
         _wt = d.get("weight_pct") or 0.0
-        # d["shares"] is int()-truncated upstream (exit_advisor.py) — a genuine
-        # sub-1-share holding reports 0, which would otherwise combine with the
-        # max(1, ...) floor below to read "1 of 0 shares," or "exit most/all of
-        # 0 shares" on the EXIT side. Fall back to a share-count-free phrasing
+        # d["shares"] is the exact (fractional) count from exit_advisor.py; 0
+        # means the share count is unknown, which would otherwise combine with
+        # the max(1, ...) floor below to read "1 of 0 shares," or "exit most/all
+        # of 0 shares" on the EXIT side. Fall back to a share-count-free phrasing
         # rather than show a self-contradictory quantity on either branch.
         _det_n = _trim_sizing.fraction_trim_shares(d["shares"], DETERIORATION_TRIM_SUGGESTED_PCT)
+        _det_sh = _trim_sizing.fmt_shares(d["shares"])
         if d["shares"] > 0 and _det_n >= 1:
-            _trim_qty_clause = f" ({_det_n} of {d['shares']} shares)"
-        elif d["shares"] > 0:
+            _trim_qty_clause = f" ({_det_n} of {_det_sh} shares)"
+        elif d["shares"] >= 1:
             _trim_qty_clause = (
-                f" (at {d['shares']} shares a {DETERIORATION_TRIM_SUGGESTED_PCT:.0f}% "
+                f" (at {_det_sh} shares a {DETERIORATION_TRIM_SUGGESTED_PCT:.0f}% "
                 f"trim is under one share; the smallest real trim is 1 share, "
                 f"{100.0 / d['shares']:.0f}% of the position, or exit)"
             )
+        elif d["shares"] > 0:
+            # Whole position is under one share: 1 share is more than the position.
+            _trim_qty_clause = (
+                f" (at {_det_sh} shares the whole position is under one share, "
+                f"so no whole-share trim is sized; the real choices are hold or exit)"
+            )
         else:
             _trim_qty_clause = ""
-        _exit_qty_clause = f"of {d['shares']} shares" if d["shares"] > 0 else "of the position"
+        _exit_qty_clause = f"of {_det_sh} shares" if d["shares"] > 0 else "of the position"
         items.append({
             "priority": "high",
             "icon":     "📉" if _is_exit else "✂️",
@@ -3267,7 +3274,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             continue
         ticker = str(row["Ticker"])
         price  = _f(row.get("Price"))
-        shares = int(_f(row.get("Shares")))
+        shares = _trim_sizing.exact_shares(row)
         pnl_pct = _f(row.get("P&L (%)"))
         weight  = _f(row.get("Weight (%)"))
         current_stop = _f(row.get("Stop"))
@@ -3387,7 +3394,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         if pm.empty:
             continue
         weight = _f(pm["Weight (%)"].iloc[0])
-        shares_raw = _f(pm["Shares"].iloc[0])
+        shares_raw = _trim_sizing.exact_shares(pm.iloc[0])
         price  = _f(pm["Price"].iloc[0])
         label  = "TODAY" if days == 0 else f"in {days}d"
         _etrim = _trim_sizing.earnings_week_trim(weight, _n_pos, shares_raw)
@@ -3455,7 +3462,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             continue
         ticker = str(row["Ticker"])
         price  = _f(row.get("Price"))
-        _shares_raw = _f(row.get("Shares"))
+        _shares_raw = _trim_sizing.exact_shares(row)
         _sized = portfolio_value > 0 and price > 0 and _shares_raw > 0
         if _sized:
             # Floored whole shares (owner 2026-10-23: never round a sub-share

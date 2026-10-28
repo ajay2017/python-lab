@@ -60,6 +60,7 @@ from stock_analyzer.constants import (
     RISK_OFF_TRIM_PCT,
     STOP_TIGHTEN_ATR_MULT,
 )
+from stock_analyzer.trim_sizing import exact_shares
 
 WATCH = "WATCH"
 TRIM = "TRIM"
@@ -344,7 +345,7 @@ def assess_holding(
         "dollar_pnl": round(dollar_pnl, 0),
         "pnl_pct": pnl_pct,
         "weight_pct": weight_pct,
-        "shares": int(shares),
+        "shares": float(shares),
         "dollar_risk": round(float(price) * shares, 0),   # position size — Act-Today sort tiebreak
     }
 
@@ -602,10 +603,8 @@ def assess_risk_off_derisk(
             price = float(row.get("Price"))
         except (TypeError, ValueError):
             price = 0.0
-        try:
-            shares = float(row.get("Shares"))
-        except (TypeError, ValueError):
-            shares = 0.0
+        # Exact (fractional) count: "Shares" is int-truncated for the P&L baseline.
+        shares = exact_shares(row)
         try:
             pnl = float(row.get("P&L (%)"))
         except (TypeError, ValueError):

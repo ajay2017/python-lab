@@ -1485,10 +1485,10 @@ def _render_holdings_table(port_df) -> None:
         _hday    = None if _ht in _hxc_bad else _hlive.get("change_pct")
         _hprice  = _hlive.get("price", _hr["Price"])
         _htotal  = _hr["P&L (%)"]
-        _hshares = _hr["Shares"]
+        _hshares = _trim_sizing.exact_shares(_hr)
         _hval    = _hr["Market Value"]
         _hweight = _hr["Weight (%)"]
-        _hshares_txt = _m(f"{_hshares:,.0f}")
+        _hshares_txt = _m(_trim_sizing.fmt_shares(_hshares))
         _hval_txt    = _m(f"${_hval:,.0f}")
         if _ht in _hxc_bad:
             _hday_disp, _hday_color = "⚠ unverified", "#f0ad4e"
@@ -1599,7 +1599,7 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
     atr_val  = _f(r.get("atr"))
     if not (price and price > 0 and avg_cost > 0 and atr_val > 0):
         return
-    shares = int(_f(holding.get("Shares")))
+    shares = _trim_sizing.exact_shares(holding)
 
     _manual = str(holding.get("Stop Type")) == "Manual" or r.get("_stop_source") == "manual"
     _manual_stop = _f(holding.get("Stop")) if _manual else None
@@ -1895,10 +1895,10 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
                 _realized_pct = (_active / avg_cost - 1) * 100
                 _realized = (_active - avg_cost) * shares
                 _outcome = (
-                    f"locking in <b>{_realized_pct:+.1f}%</b> (<b>${_realized:+,.0f}</b> on {shares} shares) — "
+                    f"locking in <b>{_realized_pct:+.1f}%</b> (<b>${_realized:+,.0f}</b> on {_trim_sizing.fmt_shares(shares)} shares) — "
                     f"a profitable exit, not a loss."
                     if _active >= avg_cost else
-                    f"realizing <b>{_realized_pct:+.1f}%</b> (<b>${_realized:+,.0f}</b> on {shares} shares) — "
+                    f"realizing <b>{_realized_pct:+.1f}%</b> (<b>${_realized:+,.0f}</b> on {_trim_sizing.fmt_shares(shares)} shares) — "
                     f"the loss is capped here, by design."
                 )
                 st.markdown(
@@ -11184,7 +11184,7 @@ if page == "🏠 Home":
                             followed_intent="yes",
                             notes=(f"{_db_sell_reason} — {_db_item.get('why', '')}")[:240],
                             key_suffix="stopsell",
-                            label=f"📒 Log this sell ({int(_db_sell_shares)} sh {_db_ticker})",
+                            label=f"📒 Log this sell ({_trim_sizing.fmt_shares(_db_sell_shares)} sh {_db_ticker})",
                         )
                 # Minimum trim attached to a sell_signal card by _review_list when
                 # the same name is also the largest weak holding: one card, one
@@ -16195,6 +16195,11 @@ elif page == "📡 Signals & Advice":
                         half = act["half_shares"]
                         half_val = half * act["price"]
                         full_val = act["shares"] * act["price"]
+                        # Whole-share half of a fractional holding isn't 50%: say the real share.
+                        _half_txt = (
+                            f"about {half / act['shares'] * 100:.0f}% of the position"
+                            if act["shares"] > 0 else "part of the position"
+                        )
                         # Floored half is 0 for a 1-share / sub-1-share holding:
                         # never print "Sell 0 shares"; say the real choices.
                         _no_half = half < 1
@@ -16225,8 +16230,8 @@ elif page == "📡 Signals & Advice":
                                     f"reason to hold through a technical rough patch.  \n"
                                 ) + (_no_half_line if _no_half else (
                                     f"Sell **{half} shares** (~\\${half_val:,.0f}) at market now to bank "
-                                    f"the {act['pnl']:.0f}% gain on half the position.  \n"
-                                    f"Hold remaining {act['shares'] - half} shares with stop at "
+                                    f"the {act['pnl']:.0f}% gain on {_half_txt}.  \n"
+                                    f"Hold remaining {_trim_sizing.fmt_shares(act['shares'] - half)} shares with stop at "
                                     f"**\\${act['stop']:.2f}** ({act['stop_type']})."
                                 ))
                             else:
@@ -16249,8 +16254,8 @@ elif page == "📡 Signals & Advice":
                                     f"**Business quality weakness — act with urgency.**  \n"
                                 ) + (_no_half_line if _no_half else (
                                     f"Sell **{half} shares** (~\\${half_val:,.0f}) at market now to bank the "
-                                    f"{act['pnl']:.0f}% gain on half the position.  \n"
-                                    f"Hold remaining {act['shares'] - half} shares with stop at "
+                                    f"{act['pnl']:.0f}% gain on {_half_txt}.  \n"
+                                    f"Hold remaining {_trim_sizing.fmt_shares(act['shares'] - half)} shares with stop at "
                                     f"**\\${act['stop']:.2f}** ({act['stop_type']})."
                                 )) + (
                                     f"  \nRevisit full exit if stop is breached or next earnings disappoint."
@@ -16269,7 +16274,7 @@ elif page == "📡 Signals & Advice":
                                 ) + (
                                     ("Do NOT sell the whole position on a technical signal alone "
                                      if _no_half else
-                                     f"Do NOT sell all {act['shares']} shares on a technical signal alone ")
+                                     f"Do NOT sell all {_trim_sizing.fmt_shares(act['shares'])} shares on a technical signal alone ")
                                     + "when fundamentals are solid."
                                 )
                                 if earn_flag:
@@ -16283,7 +16288,7 @@ elif page == "📡 Signals & Advice":
                                         action_text += f"  \n⚠️ Earnings proximity tips toward Option B — reduce before the report."
                         else:
                             action_text = _no_half_line if _no_half else (
-                                f"Sell **{half} shares** (~\\${half_val:,.0f}) to bank gain on half the position.  \n"
+                                f"Sell **{half} shares** (~\\${half_val:,.0f}) to bank gain on {_half_txt}.  \n"
                                 f"Hold remainder with stop at **\\${act['stop']:.2f}**."
                             )
                             if _rbc_bq is not None and t_score is not None and not _rbc_bq_available:
@@ -20723,6 +20728,9 @@ elif page == "🥧 Portfolio Overview":
                         "P&L ($)", "P&L (%)", "Weight (%)",
                         "Stop", "Stop Type", "Gap to Stop (%)", "Signal", "Score"]
         _tbl = port_df[display_cols].copy()
+        # Display the exact (fractional) count as a numeric column so it still
+        # sorts; port_df "Shares" itself stays the int snapshot baseline.
+        _tbl["Shares"] = [_trim_sizing.exact_shares(_r) for _, _r in port_df.iterrows()]
         if st.session_state.get("_privacy"):
             for _mc in ["Avg Cost", "Market Value", "P&L ($)"]:
                 _tbl[_mc] = "••••••"
@@ -20732,6 +20740,7 @@ elif page == "🥧 Portfolio Overview":
                 .map(_stop_color, subset=["Stop Type"])
                 .map(_sig_color,  subset=["Signal"])
                 .format({
+                    "Shares":          _trim_sizing.fmt_shares,
                     "Price":           "${:.2f}",
                     "P&L (%)":         "{:+.1f}%",
                     "Weight (%)":      "{:.1f}%",
@@ -20749,6 +20758,7 @@ elif page == "🥧 Portfolio Overview":
                 .map(_stop_color, subset=["Stop Type"])
                 .map(_sig_color,  subset=["Signal"])
                 .format({
+                    "Shares":          _trim_sizing.fmt_shares,
                     "Avg Cost":        "${:.2f}",
                     "Price":           "${:.2f}",
                     "Market Value":    "${:,.0f}",
@@ -20789,7 +20799,7 @@ elif page == "🥧 Portfolio Overview":
             # Decision Context block so we capture *why* the trade was made.
             _ps_sig   = str(ps_row.get("Signal", "")).strip()
             _ps_score = ps_row.get("Score")
-            _ps_shares = float(ps_row.get("Shares", 0))
+            _ps_shares = _trim_sizing.exact_shares(ps_row)
             _ps_signal_ctx = (
                 f"{_ps_sig} · Score {_ps_score:.0f}/100"
                 if _ps_sig and _ps_score is not None and pd.notna(_ps_score)
@@ -26245,7 +26255,7 @@ elif page == "📈 Analysis":
                     )
 
                 if _sa_holding and _stop_breached:
-                    _br_shares   = int(_sa_holding.get("Shares", 0))
+                    _br_shares   = _trim_sizing.fmt_shares(_trim_sizing.exact_shares(_sa_holding))
                     # Describe the stop by its ACTUAL type (the held Stop Type: Manual /
                     # a ratchet tier / ATR Stop) so the banner never labels a ratchet
                     # stop "ATR" now that _sa_stop is the ratcheted value. Build a
@@ -27160,7 +27170,7 @@ elif page == "📈 Analysis":
                     f"{rec['label']} · Composite {_da_display_total:.0f}/100"
                 )
                 _ap_held_shares = (
-                    float(_sa_holding.get("Shares", 0)) if _sa_holding else None
+                    _trim_sizing.exact_shares(_sa_holding) if _sa_holding else None
                 )
                 _ap_followed_buy  = "yes" if "Buy"  in rec["label"] else None
                 _ap_followed_sell = "yes" if "Sell" in rec["label"] else None

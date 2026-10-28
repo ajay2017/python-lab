@@ -25,6 +25,7 @@ from stock_analyzer import db
 from stock_analyzer import broker_sync
 from stock_analyzer import exit_advisor
 from stock_analyzer import split_detector
+from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer import news_feed
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer.bundle_loader import load_bundle
@@ -254,10 +255,10 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         if gap is None or gap > 0:
             continue
         t = str(row.get("Ticker", "")).upper()
-        shares = int(_f(row.get("Shares"), 0) or 0)
+        shares = _trim_sizing.exact_shares(row)
         alerts.append({
             "kind": "stop_breach", "ticker": t, "action": "SELL — Stop Breached",
-            "directive": f"Sell all {shares} shares at next open — mechanical stop rule.",
+            "directive": f"Sell all {_trim_sizing.fmt_shares(shares)} shares at next open — mechanical stop rule.",
             "why": (f"Price ${_f(row.get('Price'), 0):.2f} closed below the "
                     f"{row.get('Stop Type', row.get('Stop Source',''))} stop "
                     f"${_f(row.get('Stop'), 0):.2f} (gap {gap:+.1f}%)."),

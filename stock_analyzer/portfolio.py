@@ -601,6 +601,8 @@ def build_portfolio_df(
             # bucket) — a classification artifact, not a real concentration.
             "Sector": resolve_sector(ticker, r.get("sector")),
             "Shares": int(shares),
+            # Shares stays int as the Today's-P&L snapshot baseline; sizing / sell-all text reads Shares Exact.
+            "Shares Exact": float(shares),
             "Avg Cost": avg_cost,
             "Price": price,
             "Market Value": market_val,
@@ -855,7 +857,7 @@ def rebalance_actions(
         pnl    = row["P&L (%)"]
         ticker = row["Ticker"]
         price  = row["Price"]
-        shares = row["Shares"]
+        shares = _trim_sizing.exact_shares(row)
         signal = row["Signal"]
         score  = row["Score"]
         stop   = row["Stop"]
