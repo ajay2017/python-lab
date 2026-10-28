@@ -264,7 +264,9 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
                      ticker, type(_cov_exc).__name__, _cov_exc)
     _fin_for_pt = financials if isinstance(financials, dict) else {}
     # Source key: `_source` is the provider that served the bundle; `_info_source`
-    # is set only when ANOTHER provider back-filled sparse info (so it wins).
+    # wins only when ANOTHER provider back-filled sparse info AND actually
+    # supplied targetMeanPrice (`_info_filled_keys`; the refill is merged, so a
+    # Yahoo target must not be labelled with the refill provider).
     # A bundle served from the last-known-good bundle cache carries neither
     # (the cache stores only history + info) -> generic "data provider" label.
     # as_of = when the provider's target was actually fetched, as an America/New_York
@@ -282,7 +284,10 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         _fin_for_pt.get("analyst_target"), _fin_for_pt.get("num_analyst_opinions"),
         # Financials from the fundamentals cache may have been written by a
         # different provider than this bundle's, so name none (generic label).
-        (bundle.get("_info_source") or bundle.get("_source")) if _fund_source == "live" else None,
+        ((bundle.get("_info_source")
+          if isinstance(bundle.get("_info_filled_keys"), (list, tuple))
+          and "targetMeanPrice" in bundle["_info_filled_keys"] else None)
+         or bundle.get("_source")) if _fund_source == "live" else None,
         _pt_as_of,
         _stale_as_of is not None or _fund_source != "live",
         _saved_targets, price,

@@ -25776,18 +25776,17 @@ elif page == "📈 Analysis":
                     )
 
                 # Fundamentals backfill transparency — when yfinance .info was sparse,
-                # the orchestrator refilled it from the profile-only FMP backfill
-                # (sector, market cap; DATA_INFO_BACKFILL_ORDER). Flagging it tells
-                # the user the composite kept sector norms from a refill rather than
-                # Yahoo's own company data.
+                # the orchestrator merged in the profile-only FMP backfill
+                # (DATA_INFO_BACKFILL_ORDER): Yahoo's own values are kept and the
+                # refill fills only missing fields. Whether the fundamentals then
+                # come from the saved copy is the 📦 banner's job above, not this one.
                 _info_src = r.get("info_source")
                 if _info_src:
                     _src_label = {"fmp": "FMP", "finnhub": "Finnhub"}.get(_info_src, _info_src)
                     st.caption(
-                        f"ℹ️ Company profile (sector, market cap) via {_src_label} — Yahoo "
-                        f"Finance's company data came back thin, so the sector and size "
-                        f"were refilled from {_src_label}. The other fundamentals come "
-                        f"from the last saved copy (or the verdict is withheld if none is recent)."
+                        f"ℹ️ Company profile filled in from {_src_label}: Yahoo Finance's company "
+                        f"data came back thin, so missing profile fields (such as sector or market "
+                        f"cap) were taken from {_src_label}. Whatever Yahoo did return was kept."
                     )
 
                 if not _da_etf_ok:

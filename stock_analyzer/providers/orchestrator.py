@@ -21,6 +21,8 @@ NOTE: this module must NOT be imported by providers/__init__.py — it imports t
 registry FROM __init__, so importing it there would create a cycle.
 """
 
+import math
+
 import pandas as pd
 
 from stock_analyzer import constants as C
@@ -163,6 +165,18 @@ def get_historical_close(ticker: str, start, end) -> float | None:
         return None
 
 
+def _info_missing(v) -> bool:
+    """True for a value readers treat as absent: None, blank string, NaN.
+    0 / 0.0 / False are real values and stay present."""
+    if v is None:
+        return True
+    if isinstance(v, str):
+        return not v.strip()
+    if isinstance(v, float):
+        return math.isnan(v)
+    return False
+
+
 def _info_sparse(info: dict | None) -> bool:
     """True when an `.info` dict can't support fundamental scoring — yfinance's
     `.info` intermittently returns empty/sparse, which would collapse the
@@ -180,9 +194,12 @@ def get_bundle(ticker: str, period: str = "6mo") -> dict:
     yfinance hiccup), `.info` is refilled from a provider in
     DATA_INFO_BACKFILL_ORDER (FMP, profile only: sector / market cap) so the
     composite keeps sector norms and stays stable across surfaces instead of
-    flipping Buy↔Hold on missing `.info`. A non-sparse refill REPLACES the
-    primary's `.info` wholesale (it does not merge); since 2026-10-27 that
-    refill is FMP's profile only, so core metrics then come from
+    flipping Buy↔Hold on missing `.info`. A non-sparse refill is MERGED in:
+    the primary's own non-empty values (not None / blank / NaN) win and the
+    refill supplies only keys that are absent or empty, so core metrics a sparse `.info` still carried
+    (earningsGrowth, debtToEquity, forwardPE: not `_info_sparse` anchors) are
+    kept. Since 2026-10-27 the refill is FMP's profile only (sector / market
+    cap), so any other core metrics come from the primary or
     fundamentals_cache."""
     providers = _providers_for(CAP_BUNDLE)
     primary = None
@@ -226,7 +243,18 @@ def get_bundle(ticker: str, period: str = "6mo") -> dict:
             except Exception:
                 continue
             if not _info_sparse(other_info):
-                primary["info"] = other_info
+                _prim_info = primary.get("info")
+                merged = dict(other_info)
+                _kept = {}
+                if isinstance(_prim_info, dict):
+                    _kept = {k: v for k, v in _prim_info.items()
+                             if not _info_missing(v)}
+                    merged.update(_kept)
+                primary["info"] = merged
+                # Keys the refill actually supplied (provenance: a partly
+                # refilled .info is not wholly this provider's).
+                primary["_info_filled_keys"] = sorted(
+                    k for k in merged if k not in _kept)
                 primary["_info_source"] = prov.name
                 break
 

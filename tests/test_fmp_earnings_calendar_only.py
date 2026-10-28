@@ -176,6 +176,96 @@ def test_sparse_info_is_refilled_from_fmp_profile_with_sector(monkeypatch):
     assert b["_info_source"] == "fmp"
 
 
+def test_refill_merges_keeping_sparse_primary_core_metrics(monkeypatch):
+    calls: list = []
+    _bundle_registry(monkeypatch, {"earningsGrowth": 0.2, "debtToEquity": 55.0}, calls)
+    b = orch.get_bundle("ABC")
+    assert calls == ["fmp.info"]
+    assert b["info"]["earningsGrowth"] == 0.2 and b["info"]["debtToEquity"] == 55.0
+    assert b["info"]["marketCap"] == 5e9 and b["info"]["sector"] == "Technology"
+    assert b["_info_source"] == "fmp"
+
+
+def test_refill_merge_primary_value_wins_on_shared_key(monkeypatch):
+    calls: list = []
+    _bundle_registry(monkeypatch, {"sector": "Energy", "forwardPE": 12.0}, calls)
+    b = orch.get_bundle("ABC")
+    assert b["info"]["sector"] == "Energy"
+    assert b["info"]["forwardPE"] == 12.0 and b["info"]["marketCap"] == 5e9
+
+
+def test_refill_merge_fills_key_that_is_none_in_primary(monkeypatch):
+    calls: list = []
+    _bundle_registry(monkeypatch, {"sector": None, "earningsGrowth": 0.1}, calls)
+    b = orch.get_bundle("ABC")
+    assert b["info"]["sector"] == "Technology" and b["info"]["earningsGrowth"] == 0.1
+
+
+def test_sparse_refill_leaves_primary_info_untouched(monkeypatch):
+    calls: list = []
+    _bundle_registry(monkeypatch, {"earningsGrowth": 0.2}, calls, fmp_info={"beta": 1.1})
+    b = orch.get_bundle("ABC")
+    assert calls == ["fmp.info"]
+    assert b["info"] == {"earningsGrowth": 0.2} and "_info_source" not in b
+
+
+def test_refill_blank_string_and_whitespace_sector_are_missing(monkeypatch):
+    for blank in ("", "   "):
+        calls: list = []
+        _bundle_registry(monkeypatch, {"sector": blank, "earningsGrowth": 0.1}, calls)
+        b = orch.get_bundle("ABC")
+        assert b["info"]["sector"] == "Technology" and b["info"]["earningsGrowth"] == 0.1
+
+
+def test_refill_merge_keeps_zero_and_replaces_nan(monkeypatch):
+    calls: list = []
+    _bundle_registry(monkeypatch, {"debtToEquity": 0.0, "beta": float("nan")}, calls,
+                     fmp_info={"beta": 1.2, "marketCap": 5e9})
+    b = orch.get_bundle("ABC")
+    assert b["info"]["debtToEquity"] == 0.0 and b["info"]["beta"] == 1.2
+
+
+def test_refill_merge_keeps_etf_identity_keys(monkeypatch):
+    calls: list = []
+    _bundle_registry(monkeypatch, {"quoteType": "ETF", "netExpenseRatio": 0.03}, calls,
+                     fmp_info={"marketCap": 5e9})
+    b = orch.get_bundle("ABC")
+    assert b["info"]["quoteType"] == "ETF" and b["info"]["netExpenseRatio"] == 0.03
+    assert b["info"]["marketCap"] == 5e9
+
+
+def test_refill_merge_does_not_alias_refill_dict_and_records_filled_keys(monkeypatch):
+    calls: list = []
+    fmp_info = {"sector": "Technology", "marketCap": 5e9, "beta": 1.2}
+    _bundle_registry(monkeypatch, {"sector": "Energy", "earningsGrowth": 0.1}, calls,
+                     fmp_info=fmp_info)
+    b = orch.get_bundle("ABC")
+    assert b["info"] is not fmp_info
+    assert fmp_info == {"sector": "Technology", "marketCap": 5e9, "beta": 1.2}
+    assert b["_info_filled_keys"] == ["beta", "marketCap"]
+
+
+def test_pt_label_uses_primary_source_unless_refill_supplied_target(monkeypatch):
+    from stock_analyzer import bundle_loader
+    from tests.test_bundle_loader_asset_type import _fake_bundle, _NoopDb
+    seen: list = []
+    real = bundle_loader.choose_pt_target
+
+    def spy(*a, **k):
+        seen.append(a[2])
+        return real(*a, **k)
+
+    monkeypatch.setattr(bundle_loader, "db", _NoopDb)
+    monkeypatch.setattr(bundle_loader, "choose_pt_target", spy)
+    for filled, expect in ((["marketCap"], "yahoo_finance"), (["targetMeanPrice"], "fmp")):
+        b = _fake_bundle({"targetMeanPrice": 100.0})
+        b.update({"_source": "yahoo_finance", "_info_source": "fmp",
+                  "_info_filled_keys": filled})
+        monkeypatch.setattr(bundle_loader, "fetch_ticker_bundle", lambda t, p, b=b: b)
+        bundle_loader.load_bundle("TESTX")
+        assert seen[-1] == expect
+
+
 def test_non_sparse_info_makes_no_backfill_call(monkeypatch):
     calls: list = []
     _bundle_registry(monkeypatch, {"marketCap": 1e9, "sector": "Energy"}, calls)
