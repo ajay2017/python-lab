@@ -36,6 +36,7 @@ from stock_analyzer.constants import (
     WATCHLIST_READINESS_EARN_NEAR_DAYS,
     WATCHLIST_NEAR_ZONE_PCT,
     WATCHLIST_APPROACHING_ZONE_PCT,
+    WATCHLIST_CONSTRUCTIVE_SCORE,
 )
 from stock_analyzer import exit_advisor
 from stock_analyzer import entry_rr
@@ -496,7 +497,7 @@ def _build_watchlist_recommendation(
                 "and fundamental signals are warning you away. "
                 "There is no thesis to wait on here. "
                 "**Remove from watchlist.** If you still believe in the long-term story, "
-                "set a price alert for when the composite score recovers above 55 — "
+                f"set a price alert for when the composite score recovers above {WATCHLIST_CONSTRUCTIVE_SCORE:g} — "
                 "then re-evaluate from scratch with fresh data."
             ),
             conditions_met=[],
@@ -515,7 +516,7 @@ def _build_watchlist_recommendation(
         )
 
     # ── HOLD OFF — EARNINGS IMMINENT ─────────────────────────────────────────
-    if earn_soon and score >= 55:
+    if earn_soon and score >= WATCHLIST_CONSTRUCTIVE_SCORE:
         return _card(
             ticker, "HOLD_OFF_EARNINGS", score, rec_label, price, entry_lo, entry_hi,
             stop, rr, earn_days,

@@ -1114,3 +1114,35 @@ def test_g13_bad_stop_with_target_says_cant_be_computed():
     assert rec["action"] == "NEAR_ENTRY"
     assert rec["rr"] is None
     assert rec["title"] == "XYZ — R:R Can't Be Computed"
+
+
+# ── WATCHLIST_CONSTRUCTIVE_SCORE (HOLD_OFF_EARNINGS bar, named 2026-10-28) ──
+
+def test_constructive_score_value_pinned():
+    from stock_analyzer.constants import WATCHLIST_CONSTRUCTIVE_SCORE, COMPOSITE_BUY
+    assert WATCHLIST_CONSTRUCTIVE_SCORE == 55
+    # HOLD_OFF precedes ENTER_NOW, so it only shields every entry-eligible
+    # name inside the earnings window while this holds.
+    assert WATCHLIST_CONSTRUCTIVE_SCORE <= COMPOSITE_BUY
+
+
+def _earn_in(days):
+    from datetime import timedelta
+    from stock_analyzer.market_time import today_et
+    return (today_et() + timedelta(days=days)).isoformat()
+
+
+def test_hold_off_earnings_fires_at_constructive_score_boundary():
+    rec = build_watchlist_recommendation("XYZ", _base_data(total=55.0, earnings=_earn_in(3)))
+    assert rec["action"] == "HOLD_OFF_EARNINGS"
+
+
+def test_hold_off_earnings_not_below_constructive_score():
+    rec = build_watchlist_recommendation("XYZ", _base_data(total=54.9, earnings=_earn_in(3)))
+    assert rec["action"] == "WAIT_CATALYST"
+
+
+def test_remove_card_alert_text_cites_constructive_score():
+    rec = build_watchlist_recommendation("XYZ", _base_data(total=30.0))
+    assert rec["action"] == "REMOVE"
+    assert "recovers above 55 —" in rec["detail"]

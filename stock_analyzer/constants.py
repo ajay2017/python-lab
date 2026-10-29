@@ -381,6 +381,16 @@ WATCHLIST_READINESS_EARN_CLEAR_DAYS = 14
 WATCHLIST_NEAR_ZONE_PCT = 3.0
 WATCHLIST_APPROACHING_ZONE_PCT = 8.0
 
+# Watchlist "constructive setup" composite (watchlist_advisor). Named 2026-10-28
+# from bare literals, value unchanged. With earnings inside EARNINGS_IMMINENT_DAYS,
+# a score at or above this gets HOLD_OFF_EARNINGS ("Good Setup, But Earnings in
+# Nd"); below it the name falls through to WAIT_CATALYST. It never makes an
+# entry (ENTER_NOW needs COMPOSITE_BUY). Must stay <= COMPOSITE_BUY so HOLD_OFF
+# (checked before ENTER_NOW) shields every entry-eligible name in the window. The REMOVE card's
+# "recovers above N" price-alert advice cites the same bar. Distinct from
+# WATCHLIST_READINESS_SCORE_PARTIAL (same value, display-only readiness credit).
+WATCHLIST_CONSTRUCTIVE_SCORE = 55
+
 # ── Price-target construction heuristics (targets.compute_price_targets) ────
 # One level upstream of RR_ENTRY_MIN above (which IS the actual entry gate) —
 # these size the bull/base/bear price levels R:R is computed from. Named per
