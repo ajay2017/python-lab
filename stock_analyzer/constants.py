@@ -304,11 +304,13 @@ SIGNAL_DRIVER_GAP_PTS = 15
 COMPOSITE_HIGH_CONVICTION = COMPOSITE_STRONG_BUY
 
 # Stricter Grow Today bar on flat market days — only the highest-quality
-# setups clear when the index isn't providing tailwind.
+# setups clear when the index isn't providing tailwind. NB: it gates the SCANNER
+# MOMENTUM score of Grow Today's curated pool (daily_briefing._grow_today), not
+# the composite; the composite gate stays COMPOSITE_BUY on every non-bear day.
 COMPOSITE_BUY_FLAT_DAY = 78
 
 # Market tone (bull/bear/flat) from the S&P 500's daily % move — selects
-# COMPOSITE_BUY (bull) vs COMPOSITE_BUY_FLAT_DAY (flat) vs no new entries
+# Grow Today's momentum bar COMPOSITE_BUY (bull) vs COMPOSITE_BUY_FLAT_DAY (flat) vs no new entries
 # (bear). Single source for both the interactive app (Home's market-context
 # assembly) and the headless cron (headless_alert_engine.py's morning email)
 # so the two runtimes can never independently drift on which gate a given

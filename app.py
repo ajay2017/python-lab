@@ -305,6 +305,7 @@ from stock_analyzer.portfolio import (
 )
 from stock_analyzer.score_label import score_phrase
 from stock_analyzer.rr_readout import fmt_ratio_vs, rank_add_candidates, rr_quality, redeploy_headline
+from stock_analyzer import entry_posture as _entry_posture
 from stock_analyzer import entry_rr as _entry_rr
 from stock_analyzer.signal_driver import driver_diagnosis, DRIVER_TEXT, bq_weak, show_driver_box
 from stock_analyzer.beta_repair import (
@@ -11653,14 +11654,26 @@ if page == "🏠 Home":
 
                         st.markdown("**Redeploy into — engine-vetted candidates:**")
                         _hl = redeploy_headline(_display)
-                        if _hl["state"] == "entry":
-                            st.success(
-                                f"**{_hl['ticker']}** ({_hl['sector']}) clears the Buy gate "
-                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f} · "
-                                f"R:R {fmt_ratio_vs(_hl['rr'], RR_ENTRY_MIN)}:1 ≥ {RR_ENTRY_MIN:.0f}:1) "
-                                "— a genuine redeploy entry, not just a sector filler.",
-                                icon="🎯",
-                            )
+                        # Grow Today owns buy calls: on a non-bull / unreadable
+                        # tone (or a data-trust hold) the headline defers to it.
+                        # Home's own market read only: no live fallback here.
+                        _hm_ctx = globals().get("_market_context")
+                        _hm_tone = (
+                            _entry_elig.resolve_tone_state(
+                                _hm_ctx, True, _hm_ctx.get("tone_read_at"), None, False)
+                            if isinstance(_hm_ctx, dict)
+                            else {"tone": None, "sp500_pct": None, "available": False,
+                                  "source": None, "as_of": None}
+                        )
+                        _hl_bundle = next(
+                            (_c.get("_bundle") for _c in _display
+                             if _c.get("ticker") == _hl.get("ticker")), None)
+                        _call = _entry_posture.redeploy_call(
+                            _hl, _entry_posture.new_entry_posture(_hm_tone), bundle=_hl_bundle)
+                        _own_pick = " or pick your own name" if _call["invite_own_pick"] else ""
+                        if _call["text"] is not None:
+                            {"success": st.success, "info": st.info}.get(
+                                _call["level"], st.warning)(_call["text"], icon=_call["icon"])
                         elif _hl["state"] == "rr_fails":
                             st.warning(
                                 f"**{_hl['ticker']}** clears the composite Buy gate "
@@ -11668,7 +11681,7 @@ if page == "🏠 Home":
                                 f"{fmt_ratio_vs(_hl['rr'], RR_ENTRY_MIN)}:1 — below the "
                                 f"{RR_ENTRY_MIN:.0f}:1 minimum the Watchlist uses for an entry, so it "
                                 "isn't confirmed as an entry at today's price. Check 📈 Analysis. "
-                                "Trimming is still sound — wait for a better entry or pick your own name.",
+                                f"Trimming is still sound — wait for a better entry{_own_pick}.",
                                 icon="🚦",
                             )
                         elif _hl["state"] == "no_upside":
@@ -11693,9 +11706,11 @@ if page == "🏠 Home":
                             st.warning(
                                 f"No under-represented-sector name clears the Buy gate "
                                 f"(≥ {COMPOSITE_BUY:.0f}) today. Trimming is still sound — wait for a "
-                                "better entry or pick your own name.",
+                                f"better entry{_own_pick}.",
                                 icon="🚦",
                             )
+                        if _call["source_line"]:
+                            st.caption(_call["source_line"])
 
                         for _c in _display:
                             _t = _c["ticker"]
@@ -16563,6 +16578,22 @@ elif page == "📡 Signals & Advice":
                     _add_risk_cache_raw.get("beta") if _add_risk_cache_raw is not None else None
                 )
                 _add_pv = st.session_state.get("_portfolio_value", 0)
+                # Grow Today owns buy calls: tone from today's Home read, else a
+                # live S&P read (fetched only when Home's isn't usable).
+                _sg_syn = _get_or_offline(st.session_state, "_home_synth_cache")
+                _sg_tone = _entry_posture.tone_state_for_page(
+                    _sg_syn, _today_et().isoformat(), None, False)
+                if not _sg_tone["available"]:
+                    _sg_live_pct = None
+                    try:
+                        _sg_idx = fetch_market_indices()
+                        _sg_sp = next((i for i in _sg_idx if i["short"] == "S&P 500"), None)
+                        _sg_live_pct = float(_sg_sp["change_pct"]) if _sg_sp else None
+                    except Exception:
+                        _sg_live_pct = None
+                    _sg_tone = _entry_posture.tone_state_for_page(
+                        _sg_syn, _today_et().isoformat(), _sg_live_pct,
+                        _sg_live_pct is not None)
                 for rec in add_recs:
                     with st.container(border=True):
                         ac1, ac2 = st.columns([3, 1])
@@ -16695,7 +16726,16 @@ elif page == "📡 Signals & Advice":
 
                         # Headline: does the sector need have an actionable entry today?
                         _hl = redeploy_headline(_top)
-                        if _hl["state"] == "entry":
+                        # annotate_add_candidates rows carry no sector: name this rec's.
+                        _call = _entry_posture.redeploy_call(
+                            {**_hl, "sector": _hl.get("sector") or rec["sector"]},
+                            _entry_posture.new_entry_posture(_sg_tone),
+                            bundle=_div_bundles.get(_hl.get("ticker")), site="signals")
+                        _own_pick = f" or pick your own {rec['sector']} name" if _call["invite_own_pick"] else ""
+                        if _call["text"] is not None and not _call["entry_called"]:
+                            {"success": st.success, "info": st.info}.get(
+                                _call["level"], st.warning)(_call["text"], icon=_call["icon"])
+                        elif _hl["state"] == "entry":
                             st.success(
                                 f"✅ **{_hl['ticker']}** clears the Buy gate "
                                 f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f} · "
@@ -16709,8 +16749,8 @@ elif page == "📡 Signals & Advice":
                                 f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R is "
                                 f"{fmt_ratio_vs(_hl['rr'], RR_ENTRY_MIN)}:1 — below the "
                                 f"{RR_ENTRY_MIN:.0f}:1 minimum the Watchlist uses for an entry, so it "
-                                f"isn't confirmed as an entry at today's price. Check 📈 Analysis. "
-                                f"Or pick your own {rec['sector']} name.",
+                                f"isn't confirmed as an entry at today's price. Check 📈 Analysis."
+                                + (f" Or pick your own {rec['sector']} name." if _call["invite_own_pick"] else ""),
                                 icon="🚦",
                             )
                         elif _hl["state"] == "no_upside":
@@ -16734,10 +16774,11 @@ elif page == "📡 Signals & Advice":
                             st.warning(
                                 f"⚠️ The sector tilt is sound, but none of these names currently "
                                 f"clear the Buy gate (≥ {COMPOSITE_BUY:.0f}). Diversifying here is "
-                                f"reasonable — but wait for a better entry or pick your own "
-                                f"{rec['sector']} name.",
+                                f"reasonable — but wait for a better entry{_own_pick}.",
                                 icon="🚦",
                             )
+                        if _call["source_line"]:
+                            st.caption(_call["source_line"])
 
                         # Show how wide the net was cast vs the curated 4-roster.
                         st.caption(
@@ -43167,10 +43208,10 @@ Every stock gets a **Composite score (0–100)** blending four factors:
 
 A composite of **65 or higher** clears the Buy threshold. Momentum alone is *not* enough — a hot breakout (high momentum) is **skipped** if the full composite says Hold/Sell ("composite contradicts momentum").
 
-**The bar for a *new* entry moves with the market tape.** Composite ≥ 65 is the baseline, but how strong a brand-new position must be depends on how much the market is helping you that day:
+**The bar for a *new* entry moves with the market tape.** Composite ≥ 65 is the Buy gate on every day new picks run; what moves with the market is the scanner **momentum** bar and how many picks you get:
 
-- **Bull day** (S&P 500 up ≥ +0.5%): bar = **65**, up to **3** new picks. A rising tide assists a merely-good setup, so a solid "Buy" is worth initiating.
-- **Flat day** (S&P roughly −0.5% to +0.5%): bar jumps to **78**, capped at **1** entry. With no tailwind, a new name has to be strong enough to work *on its own* — a 67–77 "Buy" that would qualify on a bull day is held back here.
+- **Bull day** (S&P 500 up ≥ +0.5%): momentum bar = **65**, up to **3** new picks, and adds to held winners can run. A rising tide assists a merely-good setup, so a solid "Buy" is worth initiating.
+- **Flat day** (S&P roughly −0.5% to +0.5%): the momentum bar jumps to **78**, capped at **1** entry, a curated name's verdict must also check out (confirmed or unverified), adds to held names pause, and ETF picks run on bull days only. The composite Buy gate stays 65. With no tailwind, a new scanner pick has to be moving strongly *on its own* — a Buy with momentum in the 65–77 range that would qualify on a bull day is held back here (today's big movers aren't held to the momentum bar).
 - **Down day** (S&P down ≥ −0.5%): **no new entries** — the app defers initiating until the tape stabilises and focuses on protecting what you hold.
 
 This is why a name can show up in Grow Today in the morning (bull open) and quietly drop off by the afternoon (tape gone flat): the *stock* didn't change — the bar it had to clear did. It's the same medium-term discipline as the loss protection below: don't chase risk the market isn't rewarding.
@@ -43218,7 +43259,7 @@ When a name looks strong but isn't recommended, one of these gates fired — and
 - **Single-name ceiling (15%)** — one position can't exceed this share of the portfolio; beyond it, a Strong Buy is a *KEEP, not an add*.
 - **Imminent macro event** — a HIGH-impact release (jobs, CPI, Fed) is within a few days and hits that sector; opening into a known binary catalyst is the anti-pattern this blocks.
 - **Composite contradicts momentum** — momentum is hot but the full composite is below the Buy threshold; skip until it confirms.
-- **Market tape raised the bar** — on a flat day the bar for a *new* entry rises from 65 to **78** (and the cap drops to 1 pick); on a down day new entries are deferred entirely. A good-but-not-great name (composite 67–77) clears at a bull open and gets held back later the same day if the tape goes flat — see *"How stocks are scored"* above.
+- **Market tape raised the bar** — on a flat day the momentum bar for a *new* entry rises from 65 to **78** (and the cap drops to 1 pick; the composite gate stays 65); on a down day new entries are deferred entirely. A name with momentum in the 65–77 range clears at a bull open and gets held back later the same day if the tape goes flat — see *"How stocks are scored"* above.
 - **Recently added (cooldown)** — you already added to this winner in the last ~10 days; the app waits for the new shares to settle before suggesting more (anti-churn).
 """
             )
@@ -43255,7 +43296,7 @@ When a single sector grows past the **35% hard cap** (or approaches the **25% wa
 
 **Trim first — how much, and why.** It lists your holdings in that sector **weakest-conviction first** (by the engine's composite score), and for each shows the *basis* so a single number never proposes a trim blind: the composite's four pillars (**technical · business quality · valuation · sentiment**), its **recent momentum** (1-week / 1-month), and which pillar is holding the score down. It then turns the headline target into a plan that **adds up** — fully exit the weakest names, partial-trim the last — showing the **$ · % · ≈shares** to sell each and a 🧾 flag for whether the sale **realizes a gain or a loss**; the trims sum to exactly the reduction needed to bring the sector back under the warn line.
 
-**Where to redeploy — engine-vetted, correlation-checked.** For your **under-represented** sectors it names real tickers to consider, scored on the **same Composite ≥ 65 Buy gate** used everywhere else; names that clear both that gate and an R:R of at least 2:1 are listed first, so if any scanned name is an entry, at least one is always shown; the headline calls a name "a genuine entry" only when one of the names shown also has an **R:R of at least 2:1**, the minimum the Watchlist uses for an entry (otherwise it names the top scorer and why it isn't confirmed: R:R below 2:1, R:R not positive at today's price, or R:R not computable), each annotated with its **correlation to your actual book** (🟢 genuine diversifier → 🔴 moves with what you already own) so you can pick a name that truly spreads risk — plus your saved analyst research as an awareness note. **▶ Analyze** jumps to the full scorecard to trade from there. Each sector's **Gap to 10% target** figure is how far that sector sits below its target in dollars of your book, not a buy size: size any buy on 📈 Analysis.
+**Where to redeploy — engine-vetted, correlation-checked.** For your **under-represented** sectors it names real tickers to consider, scored on the **same Composite ≥ 65 Buy gate** used everywhere else; names that clear both that gate and an R:R of at least 2:1 are listed first, so if any scanned name is an entry, at least one is always shown; the headline calls a name "a genuine entry" only when one of the names shown also has an **R:R of at least 2:1**, the minimum the Watchlist uses for an entry (otherwise it names the top scorer and why it isn't confirmed: R:R below 2:1, R:R not positive at today's price, or R:R not computable). **The headline only calls an entry on a bull day:** on a mixed day it says the name clears on its own numbers but 🏠 Grow Today makes today's buy calls (⏸), on a down day it says new entries are deferred (🛡️ Protect Mode), and if the market tone couldn't be read or the name's data is stale it says the entry isn't confirmed (⚠️); when the market read is available, a line under the headline says where it came from. Each name is annotated with its **correlation to your actual book** (🟢 genuine diversifier → 🔴 moves with what you already own) so you can pick a name that truly spreads risk — plus your saved analyst research as an awareness note. **▶ Analyze** jumps to the full scorecard to trade from there. Each sector's **Gap to 10% target** figure is how far that sector sits below its target in dollars of your book, not a buy size: size any buy on 📈 Analysis.
 
 **It advises; you decide.** The engine's conviction score sets the order (on the redeploy list, names that also clear the 2:1 R:R come first); correlation and analyst data only *annotate* (they never re-rank or gate). When a sector *must* be cut there are two honest schools — **trim the laggard** (momentum) or **take profit on the runner** (rebalance) — and the card names both and leaves the final call to you. Nothing is auto-sold.
 

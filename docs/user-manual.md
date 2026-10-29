@@ -204,7 +204,7 @@ Market tone from the S&P 500 daily move selects the offense posture: **bull** > 
 
 Grow Today recommends **at most** `GROW_MAX_PICKS_BULL` (=3) new positions on bull days, `GROW_MAX_PICKS_DEFAULT` (=1) on flat days, and **zero on bear days** (capital-preservation). Candidates are over-fetched (`GROW_CANDIDATE_POOL`=12) so enough survive the gates. A candidate must clear a stack of hard gates (surfaced as the 5-chip checklist, F-163):
 
-1. **Composite ≥ 65** (`COMPOSITE_BUY`), raised to **78** on flat days (`COMPOSITE_BUY_FLAT_DAY`).
+1. **Composite ≥ 65** (`COMPOSITE_BUY`) on every day new picks run. On flat days the **scanner momentum** bar rises from 65 to **78** (`COMPOSITE_BUY_FLAT_DAY`) and a curated name's verdict must also reconcile (confirmed / unverified); the composite bar stays 65, and adds to held names pause.
 2. **Data freshness** — fundamentals no older than `GROW_TODAY_MAX_FUND_AGE_DAYS` (=2 days), stricter than held-position display (F-180).
 3. **Macro-sector suppression** — a HIGH-impact macro event ≤ `MACRO_IMMINENT_DAYS` (=3) in the candidate's sector hard-suppresses it (F-39a).
 4. **Concentration** — suppressed at/above the sector cap (F-39e); add-to-winner blocked above the single-name ceiling (see II.5).
@@ -325,7 +325,7 @@ The decision-critical constants, transcribed from [`constants.py`](../stock_anal
 | `COMPOSITE_BUY` | 65 | Buy / entry / add-to-winner gate |
 | `COMPOSITE_HOLD` | 44 | Hold floor (below = Sell zone) |
 | `COMPOSITE_SELL` | 30 | Strong Sell floor |
-| `COMPOSITE_BUY_FLAT_DAY` | 78 | Stricter flat-day entry bar |
+| `COMPOSITE_BUY_FLAT_DAY` | 78 | Grow Today's flat-day **scanner momentum** bar (bull days use 65); not a composite bar — the composite gate stays `COMPOSITE_BUY` |
 | `COMPOSITE_WEIGHTS` | BQ .35 / Val .30 / Tech .25 / Sent .10 | Composite pillar weights |
 | `SINGLE_NAME_CEILING` | 15% | Hard single-name cap |
 | `NET_CAPITAL_POSITION_CAP_PCT` | 25% | New-position cap, % of net capital (F-255) |
@@ -334,7 +334,7 @@ The decision-critical constants, transcribed from [`constants.py`](../stock_anal
 | `SECTOR_CEILING` / `SECTOR_ELEVATED` | 35% / 25% | Sector cap / soft warn |
 | `PORTFOLIO_BETA_TARGET/_ELEVATED/_CEILING` | 1.0 / 1.3 / 1.4 | Portfolio beta bands |
 | `RISK_PCT_PER_TRADE` | 1.5% | Risk per trade (sizing) |
-| `RR_ENTRY_MIN` | 2.0 | Min entry reward:risk (ENTER_NOW gate; also the redeploy/diversification headline's "genuine entry" bar) |
+| `RR_ENTRY_MIN` | 2.0 | Min entry reward:risk (ENTER_NOW gate; also the redeploy/diversification headline's "genuine entry" bar, which since 2026-10-29 is only called on a readable bull day — otherwise the headline defers to Grow Today) |
 | `RR_FAVOURABLE_MIN` / `RR_MARGINAL_MIN` | 2.5 / 2.0 | R:R display bands (✅ ≥ 2.5 / ⚠️ 2.0–2.5 / ❌ below the 2.0 entry minimum), not a gate; the 2.0 floor is `RR_ENTRY_MIN` (owner, 2026-10-23) |
 | `ATR_STOP_MULT` / `STOP_TIGHTEN_ATR_MULT` | 2.0 / 1.5 | Stop width / tighten |
 | `DETERIORATION_WATCH/TRIM/EXIT_DD_PCT` | 6 / 8 / 12% | Exit ladder drawdown floors |
