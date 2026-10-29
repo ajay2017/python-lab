@@ -6,6 +6,7 @@ when conditions are right to open a position, when to wait, and when to remove
 the ticker because the thesis is broken.
 """
 
+import math
 import pytz as _pytz
 from datetime import date as _date, datetime as _datetime
 
@@ -105,6 +106,15 @@ def _pct_from_entry(price: float, entry_hi: float) -> float | None:
     if not entry_hi or entry_hi <= 0:
         return None
     return (price - entry_hi) / entry_hi * 100
+
+
+def _score_txt(score: float) -> str:
+    """Score as a whole number, unless rounding would cross COMPOSITE_BUY
+    (64.6 must not read "65"); then floor to one decimal."""
+    s = f"{score:.0f}"
+    if (score < COMPOSITE_BUY) != (float(s) < COMPOSITE_BUY):
+        return f"{math.floor(score * 10) / 10:.1f}"
+    return s
 
 
 def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None,
@@ -517,18 +527,33 @@ def _build_watchlist_recommendation(
 
     # ── HOLD OFF — EARNINGS IMMINENT ─────────────────────────────────────────
     if earn_soon and score >= WATCHLIST_CONSTRUCTIVE_SCORE:
+        _s = _score_txt(score)
+        _is_buy = score >= COMPOSITE_BUY
         return _card(
             ticker, "HOLD_OFF_EARNINGS", score, rec_label, price, entry_lo, entry_hi,
             stop, rr, earn_days,
-            title=f"{ticker} — Good Setup, But Earnings in {earn_days}d",
+            title=(
+                f"{ticker} — Good Setup, But Earnings in {earn_days}d" if _is_buy
+                else f"{ticker} — Constructive, But Earnings in {earn_days}d"
+            ),
             summary=(
-                f"Score {score:.0f}/100 is strong and the setup looks constructive. "
-                f"But earnings are {earn_days} day(s) away — opening a position now "
-                "means your first session is a binary earnings event."
+                (
+                    f"Score {_s}/100 clears the {COMPOSITE_BUY:.0f} Buy bar and the setup looks constructive. "
+                    f"But earnings are {earn_days} day(s) away — opening a position now "
+                    "means your first session is a binary earnings event."
+                ) if _is_buy else (
+                    f"Score {_s}/100 is constructive but below the {COMPOSITE_BUY:.0f} Buy bar, "
+                    f"and earnings are {earn_days} day(s) away — opening a position now "
+                    "means your first session is a binary earnings event."
+                )
             ),
             detail=(
-                f"The technical and fundamental picture is solid (score {score:.0f}/100). "
-                f"However, with earnings in {earn_days} day(s), the next major move "
+                (
+                    f"The technical and fundamental picture is solid (score {_s}/100). "
+                    if _is_buy else
+                    f"The picture is constructive but not yet a Buy (score {_s}/100; a Buy needs {COMPOSITE_BUY:.0f}). "
+                )
+                + f"However, with earnings in {earn_days} day(s), the next major move "
                 "is determined by whether the company beats or misses consensus — "
                 "not by any of the signals that drove this score. "
                 "**Wait for the earnings report. Then evaluate the post-earnings setup.** "
@@ -536,10 +561,16 @@ def _build_watchlist_recommendation(
                 "pullback. A miss gives you data that may change the thesis entirely."
             ),
             conditions_met=[
-                f"Score {score:.0f}/100 — above threshold",
+                (
+                    f"Score {_s}/100 — above the {COMPOSITE_BUY:.0f} Buy threshold" if _is_buy
+                    else f"Score {_s}/100 — at or above the {WATCHLIST_CONSTRUCTIVE_SCORE:.0f} constructive-setup bar"
+                ),
                 f"Signal: {rec_label}",
             ],
-            conditions_missing=[
+            conditions_missing=(
+                [] if _is_buy else
+                [f"Score below the {COMPOSITE_BUY:.0f} Buy threshold — a Watchlist Enter Now after earnings still needs it"]
+            ) + [
                 f"Earnings in {earn_days}d — binary risk makes entry timing poor",
                 "Wait for post-earnings price action to establish new entry zone",
             ],
@@ -918,10 +949,10 @@ def _build_watchlist_recommendation(
                 f"Price in today's entry zone (${entry_lo:.2f}–${entry_hi:.2f})",
             ],
             conditions_missing=[
-                f"Risk/reward not validated — {rr_reason}",
+                f"Risk/reward too low — {rr_reason}",
                 (f"R:R reaches {RR_ENTRY_MIN:g}:1 at about ${_pb['price']:.2f}" if _pb_ok else ""),
             ],
-            institutional_lens=_G13_LENS,
+            institutional_lens=_G13_LOW_RR_LENS,
             # Gate Suppression Ledger — same G-13 contract as the branch above.
             suppression_kind="rr",
             gate_value=rr,
@@ -1125,6 +1156,14 @@ _G13_LENS = (
     "ratio requires a real target, not just an entry zone. Institutional desks "
     "never size a position off price alone — target, stop, and entry all have to "
     "line up before capital moves. Refresh the data before entering; don't skip the check."
+)
+
+_G13_LOW_RR_LENS = (
+    "A target isn't enough on its own: at today's price the room to it is too "
+    "small for the risk to the stop. Institutional desks size off target, stop and "
+    f"entry together, and here they don't line up yet. Below {RR_ENTRY_MIN:g}:1, each "
+    f"dollar at risk to the stop has less than {RR_ENTRY_MIN:g} dollars of room to "
+    "the target, so the trade doesn't pay enough for being wrong. Wait for the numbers; don't chase."
 )
 
 _HOLD_SUPPRESSION_KIND = {"tone": "entry_tone", "macro": "entry_macro"}

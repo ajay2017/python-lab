@@ -384,7 +384,8 @@ WATCHLIST_APPROACHING_ZONE_PCT = 8.0
 # Watchlist "constructive setup" composite (watchlist_advisor). Named 2026-10-28
 # from bare literals, value unchanged. With earnings inside EARNINGS_IMMINENT_DAYS,
 # a score at or above this gets HOLD_OFF_EARNINGS ("Good Setup, But Earnings in
-# Nd"); below it the name falls through to WAIT_CATALYST. It never makes an
+# Nd"; below COMPOSITE_BUY the title reads "Constructive, But Earnings in Nd");
+# below this bar the name falls through to WAIT_CATALYST. It never makes an
 # entry (ENTER_NOW needs COMPOSITE_BUY). Must stay <= COMPOSITE_BUY so HOLD_OFF
 # (checked before ENTER_NOW) shields every entry-eligible name in the window. The REMOVE card's
 # "recovers above N" price-alert advice cites the same bar. Distinct from

@@ -1146,3 +1146,72 @@ def test_remove_card_alert_text_cites_constructive_score():
     rec = build_watchlist_recommendation("XYZ", _base_data(total=30.0))
     assert rec["action"] == "REMOVE"
     assert "recovers above 55 —" in rec["detail"]
+
+
+# ── G-13 lens split + HOLD_OFF copy below COMPOSITE_BUY (2026-10-29) ──
+
+def test_g13_low_rr_card_uses_low_rr_lens_not_refresh_lens():
+    from stock_analyzer.watchlist_advisor import _G13_LOW_RR_LENS
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(targets={"base": 115.0, "base_source": "analyst"}))
+    assert rec["title"] == f"XYZ — R:R Below {RR_ENTRY_MIN:g}:1 at Today's Price"
+    assert rec["institutional_lens"] == _G13_LOW_RR_LENS
+    assert "Refresh the data" not in rec["institutional_lens"]
+    assert "requires a real target" not in rec["institutional_lens"]
+    assert not any("not validated" in c.lower() for c in rec["conditions_missing"])
+
+
+def test_g13_no_target_card_keeps_refresh_lens():
+    from stock_analyzer.watchlist_advisor import _G13_LENS
+    rec = build_watchlist_recommendation("XYZ", _base_data(targets={}))
+    assert rec["institutional_lens"] == _G13_LENS
+    assert "Refresh the data" in rec["institutional_lens"]
+
+
+def _hold_off_text(rec):
+    return " ".join(
+        [rec["title"], rec["summary"], rec["detail"]]
+        + list(rec["conditions_met"])
+    )
+
+
+def test_hold_off_at_buy_score_keeps_good_setup_copy():
+    rec = build_watchlist_recommendation("XYZ", _base_data(total=70.0, earnings=_earn_in(3)))
+    assert rec["action"] == "HOLD_OFF_EARNINGS"
+    assert "Good Setup" in rec["title"]
+    assert f"clears the {COMPOSITE_BUY:.0f} Buy bar" in rec["summary"]
+    assert "Buy threshold" in rec["conditions_met"][0]
+
+
+def test_hold_off_below_buy_score_does_not_overclaim():
+    rec = build_watchlist_recommendation("XYZ", _base_data(total=60.0, earnings=_earn_in(3)))
+    assert rec["action"] == "HOLD_OFF_EARNINGS"
+    assert "Constructive, But Earnings" in rec["title"]
+    txt = _hold_off_text(rec)
+    for bad in ("is strong", "is solid", "above threshold"):
+        assert bad not in txt
+    assert "Buy threshold" in rec["conditions_missing"][0]
+
+
+def test_hold_off_just_below_buy_never_reads_buy_score():
+    rec = build_watchlist_recommendation("XYZ", _base_data(total=64.6, earnings=_earn_in(3)))
+    assert rec["action"] == "HOLD_OFF_EARNINGS"
+    assert "64.6/100" in rec["summary"]
+    assert "65/100" not in _hold_off_text(rec)
+
+
+def test_score_txt_boundaries():
+    from stock_analyzer.watchlist_advisor import _score_txt
+    assert _score_txt(70.0) == "70"
+    assert _score_txt(64.6) == "64.6"
+    assert _score_txt(64.4) == "64"
+    assert _score_txt(65.0) == "65"
+    assert _score_txt(64.96) == "64.9"
+
+
+def test_hold_off_at_exactly_composite_buy_reads_good_setup():
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(total=float(COMPOSITE_BUY), earnings=_earn_in(3)))
+    assert rec["action"] == "HOLD_OFF_EARNINGS"
+    assert "Good Setup" in rec["title"]
+    assert f"clears the {COMPOSITE_BUY:.0f} Buy bar" in rec["summary"]
