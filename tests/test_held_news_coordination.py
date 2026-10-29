@@ -239,7 +239,9 @@ def test_card_renderers_escape_via_md_bold():
     for v in ("_db_directive", "_db_why", "_db_trigger"):
         assert "{_md_bold(%s)}" % v in act
     r = _APP.index("def _render_review_card(")
-    rev = _APP[r:r + 6000]
+    # Bound by the next renderer, not a char count (a fixed window broke when
+    # the manual-stop badge grew the function).
+    rev = _APP[r:_APP.index("def _render_defensive_card(", r)]
     for v in ("_headline", "_why", "_trigger"):
         assert "{_md_bold(%s)}" % v in rev
 

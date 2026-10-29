@@ -4753,9 +4753,9 @@ def _render_holdings_earnings(port_df, held_data):
                     )
                     if _pb["latest_rev"]:
                         for _rv in _pb["latest_rev"]:
-                            _rv_dir = str(_rv.get("direction", ""))
+                            _rv_dir = str(_rv.get("action", "")).lower()
                             _rv_firm = str(_rv.get("firm", ""))
-                            _rv_icon = "⬆️" if _rv_dir == "up" else ("⬇️" if _rv_dir == "down" else "➡️")
+                            _rv_icon = "⬇️" if _rv_dir == "down" else ("⬆️" if _rv_dir in ("up", "init") else "➡️")
                             st.markdown(
                                 f"<div style='font-size:0.8em;color:#999;margin-left:8px'>"
                                 f"{_safe_text(_rv_icon)} {_safe_text(_rv_firm)}</div>",
@@ -9599,9 +9599,13 @@ if page == "🏠 Home":
                     "No high-confidence setups meet today's criteria. "
                     "Run Market Scanner to refresh candidates."
                 )
+            elif tone == "bear":
+                st.caption(
+                    "Markets down — no new positions today while the app protects capital."
+                )
             else:
                 st.caption(
-                    "Flat market — waiting for clearer direction before adding new positions."
+                    "Mixed market — waiting for clearer direction before adding new positions."
                 )
             # Hide the re-scan CTA when emptiness is macro-driven — a fresh
             # scan can't un-block names suppressed for an imminent event, so
@@ -10459,7 +10463,7 @@ if page == "🏠 Home":
                 + _dt_rows
                 + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
                 "These holdings are below their trend line and pulling back from recent "
-                "highs — an early deterioration Watch (also shown in Review Before Close). "
+                "highs — an early deterioration Watch. "
                 "The app won't nudge you to add to a weakening position, whatever its "
                 "score; once the trend re-strengthens, the Watch lifts and they can "
                 "qualify for an add again."
@@ -11151,8 +11155,8 @@ if page == "🏠 Home":
                     _sb_stop    = _db_item.get("_live_stop")
                     if _sb_state == "active" and _sb_live_px and _sb_stop:
                         st.caption(
-                            f"⚠️ Breach confirmed at live price ${_sb_live_px:.2f} "
-                            f"— still below stop ${_sb_stop:.2f}."
+                            f"⚠️ Breach confirmed at live price \\${_sb_live_px:.2f} "
+                            f"— still below stop \\${_sb_stop:.2f}."
                         )
                     elif _sb_state == "unavailable":
                         st.caption(
@@ -11801,14 +11805,37 @@ if page == "🏠 Home":
             if _ms_for_item:
                 _ms_set_at = str(_ms_for_item.get("set_at", ""))[:10]
                 _ms_p_val  = float(_ms_for_item.get("stop_price") or 0)
-                _title_left += (
-                    f" <span style='background:#1e3a8a;color:#bfdbfe;"
-                    f"border-radius:8px;padding:1px 6px;font-size:0.82em;"
-                    f"margin-left:6px'>"
-                    f"📌 manual stop ${_ms_p_val:.2f}"
-                    + (f" · set {_ms_set_at}" if _ms_set_at else "")
-                    + "</span>"
-                )
+                # Manual stop only wins when >= the auto stop; the portfolio
+                # frame records the winner, so say so when it isn't in use.
+                _ms_active = None
+                try:
+                    _ms_pf = st.session_state.get("_last_port_df")
+                    if _ms_pf is not None and not _ms_pf.empty:
+                        _ms_row = _ms_pf[_ms_pf["Ticker"].astype(str).str.upper()
+                                         == str(_db_ticker or "").upper()]
+                        if not _ms_row.empty and str(_ms_row.iloc[0]["Stop Type"]) != "Manual":
+                            _ms_active = float(_ms_row.iloc[0]["Stop"])
+                            if _ms_active != _ms_active:  # NaN
+                                _ms_active = None
+                except Exception:
+                    _ms_active = None
+                if _ms_active is not None:
+                    _title_left += (
+                        f" <span style='background:#1f2937;color:#9ca3af;"
+                        f"border-radius:8px;padding:1px 6px;font-size:0.82em;"
+                        f"margin-left:6px'>"
+                        f"📌 manual stop ${_ms_p_val:.2f} not in use · "
+                        f"auto stop ${_ms_active:.2f} is tighter</span>"
+                    )
+                else:
+                    _title_left += (
+                        f" <span style='background:#1e3a8a;color:#bfdbfe;"
+                        f"border-radius:8px;padding:1px 6px;font-size:0.82em;"
+                        f"margin-left:6px'>"
+                        f"📌 manual stop ${_ms_p_val:.2f}"
+                        + (f" · set {_ms_set_at}" if _ms_set_at else "")
+                        + "</span>"
+                    )
 
             # Concept F subject: a PROTECTIVE_TRIM card carries ticker=None with
             # its real subject (the weakest sector holding) in action.trim_ticker,
@@ -29455,13 +29482,19 @@ elif page == "📋 Watchlist":
             if isinstance(_wl_rr_note, str) and _wl_rr_note:
                 st.caption("🎯 " + _wl_rr_note + (" — the R:R above is built from it." if _rr else ""))
 
-            # Summary banner
+            # Summary banner (ENTRY_HELD shows held_label in its own header below)
+            _wl_title = str(_wr.get("title") or "")
+            if _wl_title.startswith(f"{_ticker} — "):
+                _wl_title = _wl_title[len(f"{_ticker} — "):]
+            if _action == "ENTRY_HELD":
+                _wl_title = ""
             st.markdown(
                 f"<div style='padding:10px 14px;background:#1a1a1a;"
                 f"border-radius:6px;border-left:4px solid {_bclr};margin:10px 0'>"
                 f"<span style='font-size:0.72em;color:#888;font-weight:700;"
                 f"letter-spacing:0.09em;text-transform:uppercase'>Buy Readiness Assessment</span><br>"
-                f"<span style='color:#eee'>{_md_bold(_wr['summary'])}</span>"
+                + (f"<b style='color:#eee'>{_safe_html(_wl_title)}</b><br>" if _wl_title else "")
+                + f"<span style='color:#eee'>{_md_bold(_wr['summary'])}</span>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -42559,9 +42592,9 @@ elif page == "📅 Economic Calendar":
                                 f"<div style='background:#0d1117;border-left:3px solid {_ac_clr};"
                                 f"border-radius:0 6px 6px 0;padding:10px 14px;margin:4px 0 12px 0;"
                                 f"font-size:0.85em;color:#ccc'>"
-                                f"{_pos['rationale']}<br>"
+                                f"{_md_bold(_pos['rationale'])}<br>"
                                 f"<span style='color:{_ac_clr};font-weight:600;margin-top:6px;"
-                                f"display:block'>{_pos['detail']}</span>"
+                                f"display:block'>{_md_bold(_pos['detail'])}</span>"
                                 f"</div>",
                                 unsafe_allow_html=True,
                             )
