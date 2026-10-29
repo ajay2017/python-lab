@@ -28,6 +28,7 @@ from datetime import date, datetime as _dt, timedelta
 import pandas as pd
 
 from stock_analyzer import trim_sizing as _trim_sizing
+from stock_analyzer import stop_breach_text as _stop_breach_text
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_STRONG_BUY,
@@ -2765,10 +2766,9 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                 "directive": (
                     f"Sell all {_trim_sizing.fmt_shares(_shares)} shares at next open — mechanical stop rule."
                 ),
-                "why": (
-                    f"Price ${_f(row.get('Price')):.2f} closed below the "
-                    f"{row.get('Stop Type','')} stop ${_f(row.get('Stop')):.2f} "
-                    f"(gap {gap:+.1f}%)."
+                "why": _stop_breach_text.breach_why(
+                    _f(row.get("Price")), _f(row.get("Stop")),
+                    row.get("Stop Type", ""), gap,
                 ),
                 "trigger": "Already breached — this is the exit signal, not a watch.",
                 "weight":  _f(row.get("Weight (%)")),
@@ -4043,7 +4043,11 @@ def build_daily_briefing(
     # H6 still holds for non-news WATCH kinds. News-only cards (critical_news /
     # news WATCH) are exempt (D-D, docs/plans/held-news-coverage.md): a mild
     # headline must not move the protective TRIM off the biggest beta contributor.
-    _reduced = decision_bucket.all_flagged_tickers(act, review)
+    # The macro card's "Affected" list strips only names already carrying a
+    # reduce call (SELL / TRIM, same canon as the Act-bucket reconciler). A
+    # WATCH-only name stays listed: the macro card is its only mention of the
+    # print (2026-10-29 live check, GDP card hid ~10 Watch-only names).
+    _reduced = decision_bucket.reduce_call_tickers(act, review)
     _rewrite_macro_affected(act, _reduced)
     _risk_off = exit_advisor.assess_risk_off_derisk(
         port_df, held_data,

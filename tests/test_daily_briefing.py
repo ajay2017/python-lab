@@ -1901,6 +1901,66 @@ def test_stop_breach_suppresses_deterioration_exit_on_same_ticker():
     assert matches[0]["kind"] == "stop_breach"
 
 
+def test_stop_breach_why_says_closed_at_when_price_above_stop_in_rounding_band():
+    # SAP 2026-10-29: price 233.03 vs stop 233.02, gap rounds to +0.0% -> still
+    # a breach (kept), but the text must not claim a close BELOW the stop.
+    port_df = make_port_df([{"ticker": "SAP", "price": 233.03, "stop": 233.02,
+                             "gap_to_stop": 0.0}])
+    item = find_item(_act_today(port_df, [], [], [], [], _TODAY), "SAP")
+    assert item["kind"] == "stop_breach"
+    assert "closed at the" in item["why"]
+    assert "closed below" not in item["why"]
+
+
+def test_stop_breach_why_says_closed_below_when_price_below_stop():
+    port_df = make_port_df([{"ticker": "SAP", "price": 230.0, "stop": 233.02,
+                             "gap_to_stop": -1.3}])
+    item = find_item(_act_today(port_df, [], [], [], [], _TODAY), "SAP")
+    assert item["kind"] == "stop_breach"
+    assert "closed below the" in item["why"]
+    assert "(gap -1.3%)" in item["why"]
+
+
+def test_macro_affected_strips_reduce_names_only_not_watch_only_names():
+    # 2026-10-29: the macro card hid names that only carried a WATCH card
+    # because all_flagged_tickers (any card) was used instead of the reduce set.
+    from stock_analyzer import decision_bucket
+    act = [_macro_item(["AAA", "BBB", "CCC"]),
+           {"kind": "stop_breach", "ticker": "AAA", "why": "x"}]
+    review = [{"ticker": "BBB", "action": {"type": "WATCH"}}]
+    reduced = decision_bucket.reduce_call_tickers(act, review)
+    assert reduced == {"AAA"}
+    assert "BBB" in decision_bucket.all_flagged_tickers(act, review)
+    _rewrite_macro_affected(act, reduced)
+    assert act[0]["why"].endswith("Affected: BBB, CCC.")
+
+
+def test_build_daily_briefing_macro_affected_keeps_watch_only_name(monkeypatch):
+    # Wiring pin for the 2026-10-29 fix: build_daily_briefing must strip only
+    # reduce-call names (AAA, stop breach) from the macro card, NOT every
+    # flagged name (BBB carries a non-news deterioration WATCH card).
+    import stock_analyzer.daily_briefing as _db
+    watch = {**_deterioration_item("WATCH", 10), "ticker": "BBB"}
+    monkeypatch.setattr(_db, "deterioration_signals", lambda *a, **k: [watch])
+    port_df = make_port_df([
+        {"ticker": "AAA", "weight": 5.0, "gap_to_stop": -1.0},
+        {"ticker": "BBB", "weight": 5.0},
+    ])
+    macro_events = [{
+        "impact": _MACRO_HIGH, "date": _TODAY, "category": "Economic",
+        "event": "GDP", "affected_tickers": ["AAA", "BBB"],
+    }]
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=macro_events, held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+    )
+    assert find_item(brief["review_list"], "BBB") is not None  # the WATCH exists
+    assert find_item(brief["act_today"], "AAA")["kind"] == "stop_breach"
+    macro = next(i for i in brief["act_today"] if i.get("kind") == "macro")
+    assert macro["why"].endswith("Affected: BBB.")
+
+
 # ── sold_today suppression (SAP buy-after-exit bug, 2026-08-26) ───────────────
 # When a user sells a position, the exit advisor stops watching it, so
 # _act_blocked (built from exit/reduce calls on HELD tickers) has no memory of

@@ -26,6 +26,7 @@ from stock_analyzer import broker_sync
 from stock_analyzer import exit_advisor
 from stock_analyzer import split_detector
 from stock_analyzer import trim_sizing as _trim_sizing
+from stock_analyzer import stop_breach_text as _stop_breach_text
 from stock_analyzer import news_feed
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer.bundle_loader import load_bundle
@@ -259,9 +260,9 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         alerts.append({
             "kind": "stop_breach", "ticker": t, "action": "SELL — Stop Breached",
             "directive": f"Sell all {_trim_sizing.fmt_shares(shares)} shares at next open — mechanical stop rule.",
-            "why": (f"Price ${_f(row.get('Price'), 0):.2f} closed below the "
-                    f"{row.get('Stop Type', row.get('Stop Source',''))} stop "
-                    f"${_f(row.get('Stop'), 0):.2f} (gap {gap:+.1f}%)."),
+            "why": _stop_breach_text.breach_why(
+                _f(row.get("Price"), 0), _f(row.get("Stop"), 0),
+                row.get("Stop Type", row.get("Stop Source", "")), gap),
             "trigger": "Already breached — this is the exit signal.",
             "weight": _f(row.get("Weight (%)")), "pnl_pct": _f(row.get("P&L (%)")),
         })
