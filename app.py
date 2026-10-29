@@ -29422,8 +29422,9 @@ elif page == "📋 Watchlist":
                     icon="👁️",
                 )
             st.caption(
-                "**Readiness** = % of entry criteria currently met "
-                "(price in zone, score, trend, R:R, sector fit)."
+                "**Readiness** (0–100) = how close this is to a full green light, "
+                "from the composite score, today's Watchlist call, R:R and how far "
+                "away earnings are. Display and sort only; it doesn't change the call."
             )
             # Metrics strip
             _wm = st.columns(5)

@@ -34,6 +34,8 @@ from stock_analyzer.constants import (
     WATCHLIST_READINESS_RR_PARTIAL,
     WATCHLIST_READINESS_EARN_CLEAR_DAYS,
     WATCHLIST_READINESS_EARN_NEAR_DAYS,
+    WATCHLIST_NEAR_ZONE_PCT,
+    WATCHLIST_APPROACHING_ZONE_PCT,
 )
 from stock_analyzer import exit_advisor
 from stock_analyzer import entry_rr
@@ -473,7 +475,7 @@ def _build_watchlist_recommendation(
     if price and entry_hi and entry_lo:
         in_zone   = entry_lo <= price <= entry_hi
         pct_above = _pct_from_entry(price, entry_hi)
-        near_zone = pct_above is not None and pct_above <= 3.0
+        near_zone = pct_above is not None and pct_above <= WATCHLIST_NEAR_ZONE_PCT
 
     net_rev = int(_f(revisions.get("net", 0)))
 
@@ -841,7 +843,7 @@ def _build_watchlist_recommendation(
         )
 
     # ── NEAR ENTRY ───────────────────────────────────────────────────────────
-    if score >= COMPOSITE_BUY and pct_above is not None and pct_above <= 8:
+    if score >= COMPOSITE_BUY and pct_above is not None and pct_above <= WATCHLIST_APPROACHING_ZONE_PCT:
         return _card(
             ticker, "NEAR_ENTRY", score, rec_label, price, entry_lo, entry_hi,
             stop, rr, earn_days,
@@ -864,7 +866,7 @@ def _build_watchlist_recommendation(
             conditions_met=[
                 f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
                 f"Signal: {rec_label}",
-                f"Thesis intact — within 8% of entry zone",
+                f"Thesis intact — within {WATCHLIST_APPROACHING_ZONE_PCT:g}% of entry zone",
             ],
             conditions_missing=[
                 f"Price {abs(pct_above):.1f}% above entry zone — wait for pullback or set limit",

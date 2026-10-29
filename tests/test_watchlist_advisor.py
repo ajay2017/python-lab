@@ -11,6 +11,8 @@ from stock_analyzer.constants import (
     WATCHLIST_READINESS_RR_PARTIAL,
     WATCHLIST_READINESS_EARN_CLEAR_DAYS,
     WATCHLIST_READINESS_EARN_NEAR_DAYS,
+    WATCHLIST_NEAR_ZONE_PCT,
+    WATCHLIST_APPROACHING_ZONE_PCT,
     DETERIORATION_TREND_MA,
     PORTFOLIO_BETA_CEILING,
     PORTFOLIO_BETA_ELEVATED,
@@ -423,11 +425,48 @@ def test_near_entry_generic_approaching_copy_unaffected_when_out_of_zone():
 
 
 def test_near_entry_when_price_moderately_above_zone():
-    # price 5% above entry_hi of 100 -> pct_above=5, not near_zone(<=3) but <=8
+    # price 5% above entry_hi of 100 -> pct_above=5, not near_zone (<= WATCHLIST_NEAR_ZONE_PCT, 3) but <= WATCHLIST_APPROACHING_ZONE_PCT (8)
     rec = build_watchlist_recommendation(
         "XYZ", _base_data(current_price=105.0, entry_lo=90.0, entry_hi=100.0)
     )
     assert rec["action"] == "NEAR_ENTRY"
+
+
+# ─── Entry-zone proximity boundaries (named 2026-10-28, values unchanged) ────
+# _pct_from_entry does not round: (price - hi) / hi * 100. With hi=100 the
+# prices 103.0 / 108.0 give exactly 3.0 / 8.0 in float, so "exactly" is real.
+
+def test_zone_proximity_constant_values_pinned():
+    assert WATCHLIST_NEAR_ZONE_PCT == 3.0
+    assert WATCHLIST_APPROACHING_ZONE_PCT == 8.0
+
+
+def test_near_zone_boundary_enter_now_at_exactly_3pct_above():
+    assert _pct_from_entry(103.0, 100.0) == WATCHLIST_NEAR_ZONE_PCT
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(current_price=103.0, entry_lo=90.0, entry_hi=100.0))
+    assert rec["action"] == "ENTER_NOW"
+
+
+def test_near_zone_boundary_not_enter_now_just_above_3pct():
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(current_price=103.01, entry_lo=90.0, entry_hi=100.0))
+    assert rec["action"] != "ENTER_NOW"
+    assert rec["action"] == "NEAR_ENTRY"
+
+
+def test_approaching_boundary_near_entry_at_exactly_8pct_above():
+    assert _pct_from_entry(108.0, 100.0) == WATCHLIST_APPROACHING_ZONE_PCT
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(current_price=108.0, entry_lo=90.0, entry_hi=100.0))
+    assert rec["action"] == "NEAR_ENTRY"
+    assert "within 8% of entry zone" in " ".join(rec["conditions_met"])
+
+
+def test_approaching_boundary_not_near_entry_just_above_8pct():
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(current_price=108.01, entry_lo=90.0, entry_hi=100.0))
+    assert rec["action"] != "NEAR_ENTRY"
 
 
 # ─── Gate Suppression Ledger fields (roadmap B2, 2026-09-13) ─────────────────
@@ -446,8 +485,8 @@ def test_ordinary_enter_now_card_has_no_suppression_kind():
 
 
 def test_approaching_zone_near_entry_card_has_no_suppression_kind():
-    """LOAD-BEARING: the approaching-zone branch (watchlist_advisor.py:530,
-    `pct_above <= 8`, no R:R involved) emits action=NEAR_ENTRY but must NEVER
+    """LOAD-BEARING: the approaching-zone branch (watchlist_advisor.py NEAR ENTRY block,
+    `pct_above <= WATCHLIST_APPROACHING_ZONE_PCT` (8), no R:R involved) emits action=NEAR_ENTRY but must NEVER
     be mistaken for a G-13 downgrade — it is a plain price-distance state,
     not a suppression. A gate_ledger builder that inferred a row from
     action=="NEAR_ENTRY" alone (without also checking suppression_kind) would

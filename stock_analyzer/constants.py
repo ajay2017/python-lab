@@ -373,6 +373,14 @@ WATCHLIST_READINESS_SCORE_PARTIAL = 55
 WATCHLIST_READINESS_RR_PARTIAL = 1.5
 WATCHLIST_READINESS_EARN_CLEAR_DAYS = 14
 
+# Watchlist entry-zone proximity (watchlist_advisor), % above the entry-zone top
+# (pct_above from _pct_from_entry). Named 2026-10-28 from bare literals, values
+# unchanged. NEAR_ZONE: price up to this far above the zone still counts as
+# "in zone" for the ENTER_NOW gate (with COMPOSITE_BUY + RR_ENTRY_MIN).
+# APPROACHING_ZONE: up to this far above = NEAR_ENTRY ("Approaching Entry Zone").
+WATCHLIST_NEAR_ZONE_PCT = 3.0
+WATCHLIST_APPROACHING_ZONE_PCT = 8.0
+
 # ── Price-target construction heuristics (targets.compute_price_targets) ────
 # One level upstream of RR_ENTRY_MIN above (which IS the actual entry gate) —
 # these size the bull/base/bear price levels R:R is computed from. Named per
