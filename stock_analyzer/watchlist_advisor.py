@@ -39,6 +39,7 @@ from stock_analyzer.constants import (
 )
 from stock_analyzer import exit_advisor
 from stock_analyzer import entry_rr
+from stock_analyzer import rr_pullback
 from stock_analyzer.rr_readout import fmt_ratio_vs
 from stock_analyzer import asset_type as _asset_type_mod
 from stock_analyzer import entry_eligibility as _entry_elig
@@ -724,7 +725,7 @@ def _build_watchlist_recommendation(
             detail=(
                 f"The setup you were waiting for has arrived. Score {score:.0f}/100 confirms "
                 f"the thesis is intact. "
-                f"Price {'is inside' if in_zone else f'is within 3% of'} the entry zone "
+                f"Price {'is inside' if in_zone else f'is within {WATCHLIST_NEAR_ZONE_PCT:g}% of'} the entry zone "
                 f"(${entry_lo:.2f}–${entry_hi:.2f}). "
                 + (f"Risk/reward is {rr:.1f}:1 — well above the {RR_ENTRY_MIN:.0f}:1 minimum. " if rr else "")
                 # Deliberately does NOT say "use the position sizing below": that
@@ -803,46 +804,132 @@ def _build_watchlist_recommendation(
             if rr is not None else
             "no validated price target, so risk/reward can't be computed"
         )
+        if rr is None:
+            _nt_title = (
+                f"{ticker} — R:R Not Validated (No Price Target)"
+                if base_target is None else f"{ticker} — R:R Can't Be Computed"
+            )
+            return _card(
+                ticker, "NEAR_ENTRY", score, rec_label, price, entry_lo, entry_hi,
+                stop, rr, earn_days,
+                title=_nt_title,
+                summary=(
+                    f"Score {score:.0f}/100 and price is already inside the entry zone "
+                    f"(${entry_lo:.2f}–${entry_hi:.2f}). Entry isn't confirmed yet: {rr_reason}."
+                ),
+                detail=(
+                    f"The thesis is solid (score {score:.0f}/100, {rec_label}), but {rr_reason}. "
+                    "Refresh analyst targets (or set one manually) and re-check before opening "
+                    "the position — entering without a validated R:R is incomplete homework, "
+                    "not a green light."
+                ),
+                conditions_met=[
+                    f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
+                    f"Signal: {rec_label}",
+                    f"Price in today's entry zone (${entry_lo:.2f}–${entry_hi:.2f})",
+                ],
+                conditions_missing=[
+                    f"Risk/reward not validated — {rr_reason}",
+                ],
+                institutional_lens=_G13_LENS,
+                # Gate Suppression Ledger (roadmap B2, 2026-09-13) — this branch
+                # is G-13 specifically (in-zone, R:R not validated). The separate
+                # "approaching zone" NEAR_ENTRY branch below (no R:R involved)
+                # must NEVER set this — that is the load-bearing boundary a test
+                # asserts directly.
+                suppression_kind="rr",
+                gate_value=rr,
+                gate_threshold=RR_ENTRY_MIN,
+            )
+        _pb = rr_pullback.pullback_to_rr(price, stop, base_target, targets.get("base_source"))
+        _pb_ok = _pb["state"] == "ok"
+        _pb_summary = ""
+        if _pb_ok:
+            # -0.05: display-rounding boundary for the .1f format (avoids printing
+            # "-0.0%"), not a decision threshold.
+            _pb_where = (
+                f" ({_pb['pct']:.1f}%)" if _pb["pct"] <= -0.05
+                else ", less than 0.1% below today's price"
+            )
+            _pb_summary = (
+                f" R:R reaches {RR_ENTRY_MIN:g}:1 if price pulls back to about "
+                f"${_pb['price']:.2f}{_pb_where}."
+            )
+        elif _pb["state"] == "beyond_stop":
+            _pb_summary = (
+                f" Reaching {RR_ENTRY_MIN:g}:1 would take a pullback past today's stop "
+                "level, so this isn't a near-term entry."
+            )
+        elif _pb["state"] == "target_moves":
+            _chosen = targets.get("analyst_target")
+            _chosen_ok = (
+                entry_rr._finite(_chosen) and float(_chosen) > 0
+            )
+            if _chosen_ok:
+                _pb_summary = (
+                    " This name trades at or above its analyst target, so its base target "
+                    "is rebuilt from today's price (nearest resistance, momentum or a flat "
+                    "placeholder) and can fall with it: a pullback doesn't reliably lift "
+                    "R:R, so there's no pullback price to watch."
+                )
+            elif targets.get("base_source"):
+                _pb_summary = (
+                    " No analyst target qualified for this name, so its base target is "
+                    "rebuilt from today's price (nearest resistance, momentum or a flat "
+                    "placeholder) and can fall with it: a pullback doesn't reliably lift "
+                    "R:R, so there's no pullback price to watch."
+                )
+            else:
+                _pb_summary = (
+                    " Where this name's base target came from isn't recorded, so no "
+                    "pullback price is shown."
+                )
+        if _pb["state"] in ("ok", "beyond_stop"):
+            _pb_explain = (
+                "A pullback raises R:R here because the analyst target stays put while the "
+                "stop trails the price at the same ATR distance: the risk stays about the "
+                "same and the room to the target grows."
+            )
+        elif _pb["state"] == "target_moves":
+            _pb_explain = "No pullback price is shown for this target type."
+        else:
+            _pb_explain = ""
+        _pb_detail = (
+            f" Set a price alert at about ${_pb['price']:.2f}. It's an estimate: the target "
+            "and ATR move daily, and if price gets there the app re-checks the score and "
+            "every gate before calling an entry; it is not a buy order."
+            if _pb_ok else ""
+        )
         return _card(
             ticker, "NEAR_ENTRY", score, rec_label, price, entry_lo, entry_hi,
             stop, rr, earn_days,
-            title=f"{ticker} — In Entry Zone, R:R Not Yet Validated",
-            summary=(
-                f"Score {score:.0f}/100 and price is already inside the entry zone "
-                f"(${entry_lo:.2f}–${entry_hi:.2f}). Entry isn't confirmed yet: {rr_reason}."
-            ),
+            title=f"{ticker} — R:R Below {RR_ENTRY_MIN:g}:1 at Today's Price",
+            summary=f"Score {score:.0f}/100, but {rr_reason}." + _pb_summary,
             detail=(
-                f"The thesis is solid (score {score:.0f}/100, {rec_label}) and price at "
-                f"${price:.2f} is right where you wanted it. But {rr_reason}. "
-                "Refresh analyst targets (or set one manually) and re-check before opening "
-                "the position — entering without a validated R:R is incomplete homework, "
-                "not a green light."
+                f"The thesis is solid (score {score:.0f}/100, {rec_label}), but {rr_reason}: "
+                "the target is too close for today's price. "
+                + _pb_explain
+                + _pb_detail
             ),
             conditions_met=[
                 f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
                 f"Signal: {rec_label}",
-                f"Price in entry zone (${entry_lo:.2f}–${entry_hi:.2f})",
+                f"Price in today's entry zone (${entry_lo:.2f}–${entry_hi:.2f})",
             ],
             conditions_missing=[
                 f"Risk/reward not validated — {rr_reason}",
+                (f"R:R reaches {RR_ENTRY_MIN:g}:1 at about ${_pb['price']:.2f}" if _pb_ok else ""),
             ],
-            institutional_lens=(
-                "Price being right is necessary but not sufficient. A validated risk/reward "
-                "ratio requires a real target, not just an entry zone. Institutional desks "
-                "never size a position off price alone — target, stop, and entry all have to "
-                "line up before capital moves. Refresh the data before entering; don't skip the check."
-            ),
-            # Gate Suppression Ledger (roadmap B2, 2026-09-13) — this branch
-            # is G-13 specifically (in-zone, R:R not validated). The separate
-            # "approaching zone" NEAR_ENTRY branch below (no R:R involved)
-            # must NEVER set this — that is the load-bearing boundary a test
-            # asserts directly.
+            institutional_lens=_G13_LENS,
+            # Gate Suppression Ledger — same G-13 contract as the branch above.
             suppression_kind="rr",
             gate_value=rr,
             gate_threshold=RR_ENTRY_MIN,
+            rr_pullback=_pb,
         )
 
     # ── NEAR ENTRY ───────────────────────────────────────────────────────────
+    # The live entry zone is centred on today's price (bundle_loader → targets.entry_zone), so this and WAIT_ENTRY below rarely fire; R:R (G-13 above) is what holds back a name that has run. Kept as a safety net for a zone not built from today's price.
     if score >= COMPOSITE_BUY and pct_above is not None and pct_above <= WATCHLIST_APPROACHING_ZONE_PCT:
         return _card(
             ticker, "NEAR_ENTRY", score, rec_label, price, entry_lo, entry_hi,
@@ -982,6 +1069,9 @@ def _card(
     # pass-through branch. Additive display string; never influences action,
     # score, rr, or any gate/suppression field above.
     deterioration_warning: str | None = None,
+    # R:R-pullback estimate (2026-10-28) — additive, display-only; set ONLY by
+    # the G-13 branch. The dict from rr_pullback.pullback_to_rr, or None.
+    rr_pullback: dict | None = None,
 ) -> dict:
     priority = _ACTION_PRIORITY.get(action, "MONITOR")
 
@@ -1025,8 +1115,16 @@ def _card(
         "gate_value":         gate_value,
         "gate_threshold":     gate_threshold,
         "deterioration_warning": deterioration_warning,
+        "rr_pullback":        rr_pullback,
     }
 
+
+_G13_LENS = (
+    "Price being right is necessary but not sufficient. A validated risk/reward "
+    "ratio requires a real target, not just an entry zone. Institutional desks "
+    "never size a position off price alone — target, stop, and entry all have to "
+    "line up before capital moves. Refresh the data before entering; don't skip the check."
+)
 
 _HOLD_SUPPRESSION_KIND = {"tone": "entry_tone", "macro": "entry_macro"}
 
@@ -1087,7 +1185,7 @@ def _entry_held_card(ticker, chk, score, rec_label, price, entry_lo, entry_hi,
         ),
         detail=(
             f"The stock-level setup is a go (score {score:.0f}/100, {rec_label}, price "
-            f"{'inside' if in_zone else 'within 3% of'} the entry zone{zone_txt}). "
+            f"{'inside' if in_zone else f'within {WATCHLIST_NEAR_ZONE_PCT:g}% of'} the entry zone{zone_txt}). "
             f"A shared new-entry check holds it today: {reason}. "
             f"It clears when: {binding['clears_when']}."
         ),

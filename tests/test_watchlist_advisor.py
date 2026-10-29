@@ -385,7 +385,7 @@ def test_near_entry_in_zone_missing_target_gets_distinct_copy_not_approaching():
     # anything, it already arrived; the real blocker is the missing target.
     rec = build_watchlist_recommendation("XYZ", _base_data(targets={}))
     assert rec["action"] == "NEAR_ENTRY"
-    assert rec["title"] == "XYZ — In Entry Zone, R:R Not Yet Validated"
+    assert rec["title"] == "XYZ — R:R Not Validated (No Price Target)"
     assert "Approaching Entry Zone" not in rec["title"]
     assert "no validated price target" in rec["summary"]
 
@@ -396,7 +396,7 @@ def test_near_entry_in_zone_low_rr_gets_distinct_copy_not_approaching():
     rec = build_watchlist_recommendation("XYZ", _base_data(targets={"base": 115.0}))
     # base=115, price=100, stop=90 -> rr = (115-100)/(100-90) = 1.5 < RR_ENTRY_MIN(2.0)
     assert rec["action"] == "NEAR_ENTRY"
-    assert rec["title"] == "XYZ — In Entry Zone, R:R Not Yet Validated"
+    assert rec["title"] == "XYZ — R:R Below 2:1 at Today's Price"
     assert "1.5" in rec["summary"]
     assert "below the 2:1 minimum" in rec["summary"]
 
@@ -504,7 +504,7 @@ def test_approaching_zone_near_entry_card_has_no_suppression_kind():
 def test_g13_in_zone_low_rr_card_carries_suppression_kind_rr():
     rec = build_watchlist_recommendation("XYZ", _base_data(targets={"base": 115.0}))
     assert rec["action"] == "NEAR_ENTRY"
-    assert rec["title"] == "XYZ — In Entry Zone, R:R Not Yet Validated"
+    assert rec["title"] == "XYZ — R:R Below 2:1 at Today's Price"
     assert rec["suppression_kind"] == "rr"
     assert rec["gate_value"] == pytest.approx(1.5)   # (115-100)/(100-90)
     from stock_analyzer.constants import RR_ENTRY_MIN
@@ -1029,3 +1029,88 @@ def test_readiness_earnings_boundaries():
     assert _readiness(earn_days=14) == 5 + 5
     assert _readiness(earn_days=8) == 5 + 5
     assert _readiness(earn_days=7) == 5
+
+
+def test_g13_low_rr_ok_pullback_card_text_and_key():
+    # price 100, stop 90, base 115 -> rr 1.5; p* = 115 - 2*10 = 95 (-5.0%)
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(targets={"base": 115.0, "base_source": "analyst"}))
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["suppression_kind"] == "rr"
+    assert rec["rr_pullback"]["state"] == "ok"
+    assert rec["rr_pullback"]["price"] == pytest.approx(95.0)
+    assert "about $95.00 (-5.0%)" in rec["summary"]
+    assert "Set a price alert at about $95.00" in rec["detail"]
+    assert "not a buy order" in rec["detail"]
+    assert "analyst target stays put while the stop trails" in rec["detail"]
+    assert "Refresh analyst targets" not in rec["detail"]
+    assert any("reaches 2:1 at about $95.00" in c for c in rec["conditions_missing"])
+    assert any("Price in today's entry zone" in c for c in rec["conditions_met"])
+
+
+def test_g13_tiny_pullback_pct_is_not_printed_as_zero():
+    # base 119.9 -> rr 1.99; p* = 119.9 - 20 = 99.9 (-0.1%): at the -0.05 cut it prints
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(targets={"base": 119.9, "base_source": "analyst"}))
+    assert rec["rr_pullback"]["state"] == "ok"
+    assert "(-0.1%)" in rec["summary"]
+    # base 119.99 -> p* = 99.99 (-0.01%): under the cut, worded instead
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(targets={"base": 119.99, "base_source": "analyst"}))
+    assert rec["rr_pullback"]["state"] == "ok"
+    assert "less than 0.1% below today's price" in rec["summary"]
+    assert "-0.0%" not in rec["summary"]
+
+
+def test_g13_low_rr_beyond_stop_text():
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(targets={"base": 105.0, "base_source": "analyst"}))
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["rr_pullback"]["state"] == "beyond_stop"
+    assert "past today's stop level" in rec["summary"]
+    assert "price alert" not in rec["detail"]
+
+
+@pytest.mark.parametrize("targets,sentence", [
+    ({"base": 115.0, "base_source": "resistance", "analyst_target": 95.0},
+     "This name trades at or above its analyst target, so its base target is rebuilt from today's price"),
+    ({"base": 115.0, "base_source": "momentum", "analyst_target": 100.0},
+     "This name trades at or above its analyst target, so its base target is rebuilt from today's price"),
+    ({"base": 115.0, "base_source": "flat", "analyst_target": None},
+     "No analyst target qualified for this name, so its base target is rebuilt from today's price"),
+    ({"base": 115.0, "base_source": "flat", "analyst_target": 0},
+     "No analyst target qualified for this name, so its base target is rebuilt from today's price"),
+    ({"base": 115.0},
+     "Where this name's base target came from isn't recorded, so no pullback price is shown."),
+    ({"base": 115.0, "base_source": ""},
+     "Where this name's base target came from isn't recorded, so no pullback price is shown."),
+])
+def test_g13_non_analyst_target_moves_card(targets, sentence):
+    rec = build_watchlist_recommendation("XYZ", _base_data(targets=targets))
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["suppression_kind"] == "rr"
+    assert rec["rr_pullback"]["state"] == "target_moves"
+    assert rec["rr_pullback"]["price"] is None
+    assert sentence in rec["summary"]
+    assert "No pullback price is shown for this target type." in rec["detail"]
+    assert "trades at or above" not in rec["detail"] and "qualified" not in rec["detail"]
+    assert "price alert" not in rec["detail"]
+    assert "Refresh analyst targets" not in rec["detail"]
+    assert not any("reaches 2:1" in c for c in rec["conditions_missing"])
+
+
+def test_g13_no_target_keeps_refresh_advice_and_no_pullback():
+    rec = build_watchlist_recommendation("XYZ", _base_data(targets={}))
+    assert rec["title"] == "XYZ — R:R Not Validated (No Price Target)"
+    assert rec["rr_pullback"] is None
+    assert "Refresh analyst targets" in rec["detail"]
+    assert "today's price" not in rec["detail"]
+    assert rec["suppression_kind"] == "rr"
+
+
+def test_g13_bad_stop_with_target_says_cant_be_computed():
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(stop=100.0, targets={"base": 115.0, "base_source": "analyst"}))
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["rr"] is None
+    assert rec["title"] == "XYZ — R:R Can't Be Computed"

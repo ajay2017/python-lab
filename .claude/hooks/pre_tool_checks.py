@@ -986,6 +986,9 @@ _GATE_FILES = {
     # 2026-10-23: the unrounded entry R:R measure + `clears` predicate G-32 uses to
     # hold Grow Today picks / adds below RR_ENTRY_MIN (nothing wired yet in C1).
     "stock_analyzer/entry_rr.py",
+    # 2026-10-28: the R:R-pullback alert price shown on the Watchlist's "R:R below
+    # 2:1" card; a user-facing decision-surface number from day one.
+    "stock_analyzer/rr_pullback.py",
     # 2026-10-25: single source of trim share counts + the earnings-week overweight
     # trim rule shared by the Brief, Catalyst Watch playbook and Signals.
     "stock_analyzer/trim_sizing.py",

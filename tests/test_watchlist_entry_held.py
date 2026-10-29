@@ -88,9 +88,12 @@ def test_entry_ctx_none_is_byte_identical(name, data, pctx, frozen_clock):
     # advisor (git 400b01c), so this no longer compares new code with itself.
     # C3: the public wrapper adds one key (rr_target_note), appended last; the
     # frozen golden predates it, so compare the card without that key.
+    # 2026-10-28: `rr_pullback` (additive, display-only, G-13 branch) is excluded the same way.
     assert a["rr_target_note"] is None and b["rr_target_note"] is None
-    a_core = {k: v for k, v in a.items() if k != "rr_target_note"}
-    b_core = {k: v for k, v in b.items() if k != "rr_target_note"}
+    if name != "rr":
+        assert a.get("rr_pullback") is None and b.get("rr_pullback") is None
+    a_core = {k: v for k, v in a.items() if k not in ("rr_target_note", "rr_pullback")}
+    b_core = {k: v for k, v in b.items() if k not in ("rr_target_note", "rr_pullback")}
     assert repr(a_core) == _GOLDEN[name]
     assert repr(b_core) == _GOLDEN[name]
     # no entry-check key leaks onto a legacy card
