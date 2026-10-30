@@ -260,6 +260,70 @@ def test_history_period_needed():
                                     as_of=asof) == "2y"
 
 
+def test_history_period_needed_accepts_any_first_date_type():
+    E = date(2026, 6, 1)
+    asof = date(2026, 6, 10)
+    for naive, want in ((date(2026, 5, 1), "1y"), (date(2025, 1, 2), None)):
+        ts = pd.Timestamp(naive)
+        variants = [naive, ts, ts.tz_localize("America/New_York"),
+                    (ts + pd.Timedelta(hours=4)).tz_localize("UTC")]
+        got = [hs.history_period_needed(v, E, None, 60, as_of=asof) for v in variants]
+        assert got == [want] * 4
+
+
+def _gap_frame():
+    """Prior close 324.89; entry-session range 280.36-288.33 (GOOGL-like)."""
+    idx = pd.bdate_range("2026-04-01", periods=130)
+    close = np.full(len(idx), 320.0)
+    df = pd.DataFrame({"Open": close, "High": close * 1.01, "Low": close * 0.99,
+                       "Close": close}, index=idx)
+    k = 120
+    df.iloc[k - 1, df.columns.get_loc("Close")] = 324.89
+    df.iloc[k, df.columns.get_loc("Open")] = 286.88
+    df.iloc[k, df.columns.get_loc("High")] = 288.33
+    df.iloc[k, df.columns.get_loc("Low")] = 280.36
+    df.iloc[k, df.columns.get_loc("Close")] = 282.0
+    return df, k
+
+
+def test_extended_hours_fill_between_prev_close_and_session_keeps_anchor():
+    df, k = _gap_frame()
+    r = run(df, d(df, k + 3), ep(d(df, k), 310.60), 310.60)
+    assert r["components"]["entry"] is not None
+    assert "unrecorded split" not in r["reason"]
+
+
+def test_googl_like_breach_reads_breached():
+    df, k = _gap_frame()
+    r = run(df, d(df, k + 3), ep(d(df, k), 310.60), 310.60)
+    entry = r["components"]["entry"]
+    # fill 310.60 minus 2 x the ATR before entry (flat 320 bars: ATR ~ 6.4 here)
+    assert entry == pytest.approx(310.60 - 2.0 * hs._atr_series(
+        df["High"], df["Low"], df["Close"], 14).iloc[k - 1])
+    assert r["stop"] is not None and r["stop"] >= entry - 1e-9
+    assert 280.49 < r["stop"]  # a price of 280.49 is below the stop: breached
+
+
+def test_unrecorded_split_and_just_outside_widened_band_rejected():
+    df, k = _gap_frame()
+    bad = run(df, d(df, k + 3), ep(d(df, k), 310.60 * 2.0), 310.60)
+    assert bad["components"]["entry"] is None and "unrecorded split" in bad["reason"]
+    hi = 324.89 * 1.02  # prev_close is the band top, tol 2%
+    over = run(df, d(df, k + 3), ep(d(df, k), hi * 1.001), 310.60)
+    assert over["components"]["entry"] is None
+    inside = run(df, d(df, k + 3), ep(d(df, k), hi * 0.999), 310.60)
+    assert inside["components"]["entry"] is not None
+
+
+def test_prev_close_inside_session_range_keeps_old_band():
+    df = walk(n=160, seed=9, vol=0.001)
+    c = float(df["Close"].iloc[90])
+    hi = float(df["High"].iloc[90]) * 1.02
+    E = d(df, 90)
+    assert run(df, d(df, 150), ep(E, hi * 1.01), c)["components"]["entry"] is None
+    assert run(df, d(df, 150), ep(E, hi * 0.99), c)["components"]["entry"] is not None
+
+
 def test_atr_length_matches_risk_default():
     assert hs._ATR_LENGTH == inspect.signature(risk._atr_value).parameters["length"].default
 

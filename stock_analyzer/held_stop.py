@@ -21,8 +21,16 @@ dated < D enter it. Let E be the ET date the CURRENT holding episode began
 
   entry anchor A   = first_buy_price / split_ratio - initial_mult x ATR at the
                      last completed bar before E (dropped, with a reason, if
-                     the fill is outside the entry session's range widened by
-                     fill_tol_pct: an unrecorded split)
+                     the fill is outside the band [min(Low_E, prev_close),
+                     max(High_E, prev_close)] widened by fill_tol_pct %, where
+                     prev_close is the Close of the completed bar just before
+                     the entry session: an extended-hours fill lands between
+                     the prior close and the session; an unrecorded split
+                     lands far outside both. Known residual: a forward split
+                     nobody recorded, on a position bought near the bottom of
+                     an entry-day gap-down of about the split factor (~49% for
+                     2:1), would be accepted and give a false-tight anchor;
+                     judged too rare to add a policy parameter, 2026-10-30)
   trailing T       = max over completed sessions s, max(E, trail_start) <= s < D
                      of (Close_s - trail_mult x ATR_s), only for sessions with
                      at least warmup_bars bars before them
@@ -185,6 +193,17 @@ def episode_from_journal(ticker: str, trades_df: pd.DataFrame | None,
 _PERIOD_DAYS = (("1y", 366), ("2y", 732), ("5y", 1830))
 
 
+def _first_date_naive(value) -> pd.Timestamp | None:
+    """date / naive Timestamp / tz-aware Timestamp -> naive midnight ET date
+    (tz-aware converts to ET first, as `_et_dates`)."""
+    if value is None or pd.isna(value):
+        return None
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert(_ET).tz_localize(None)
+    return ts.normalize()
+
+
 def history_period_needed(df_first_date, episode_start, trail_start,
                           warmup_bars: int, *, as_of: date) -> str | None:
     """None when the frame already reaches back to the episode start minus the
@@ -200,11 +219,12 @@ def history_period_needed(df_first_date, episode_start, trail_start,
     # the ATR origin both sit before E regardless of trail_start. trail_start is
     # kept in the signature for callers; it can't shrink the need.
     anchor = pd.Timestamp(episode_start)
+    first = _first_date_naive(df_first_date)
     # Holiday slack: BDay ignores NYSE holidays, so a business-day count
     # under-shoots the real session count. The caller must still trust the basis
     # that compute_held_stop returns, not this estimate.
     need = anchor - pd.offsets.BDay(int(int(warmup_bars) * 1.05) + 10)
-    if df_first_date is not None and pd.Timestamp(df_first_date) <= need:
+    if first is not None and first <= need:
         return None
     back = (pd.Timestamp(as_of) - need).days
     for label, days in _PERIOD_DAYS:
@@ -294,11 +314,15 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
     else:
         fill_adj = fb / ratio
         row = bars.iloc[pe]
-        lo = float(row["Low"]) * (1 - fill_tol_pct / 100.0)
-        hi = float(row["High"]) * (1 + fill_tol_pct / 100.0)
+        lo_b, hi_b = float(row["Low"]), float(row["High"])
+        if pe > 0:  # extended-hours fills sit between the prior close and the session
+            prev_close = float(bars["Close"].iloc[pe - 1])
+            lo_b, hi_b = min(lo_b, prev_close), max(hi_b, prev_close)
+        lo = lo_b * (1 - fill_tol_pct / 100.0)
+        hi = hi_b * (1 + fill_tol_pct / 100.0)
         if not (lo <= fill_adj <= hi):
             notes.append("entry anchor dropped: fill outside the entry session's "
-                         "range (possible unrecorded split)")
+                         "range and the prior close (possible unrecorded split)")
         else:
             entry = fill_adj - initial_mult * float(atr.iloc[pe - 1])
 

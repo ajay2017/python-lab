@@ -1,6 +1,6 @@
 # Held-position trailing stop (finding #26)
 
-**Status:** C1 SHIPPED 2026-10-30 (`ea8719a`, `stock_analyzer/held_stop.py`, unwired, in `_GATE_FILES`). C2 SHIPPED 2026-10-30 (`3e650d6`, `scripts/held_stop_dryrun.py`, read-only; Opus FIX-FIRST 7 blocking → SHIP). NEXT: owner runs `--today --live --csv today.csv` and `--replay --replay-variants a,b --csv replay.csv` → owner rules U1–U7 → C3a + C3b wiring (with finding #24) in one push after a close. C3 also: `held_stop.history_period_needed` must normalise a tz-aware first-bar date (own reviewed change), and `HELD_TRAIL_START` should be the last completed session before go-live (else day 1 has no trailing / ratchet and (c) loosens winners for a session).
+**Status:** C1 SHIPPED (`ea8719a`), C2 SHIPPED (`3e650d6`). **Owner ruled U1–U7 on 2026-10-30** (3.0×, variant (c), trail from the last completed session before go-live). NEXT: `held_stop.py` fix (tz + extended-hours fill guard, reviewed) → planner C3 design (long-history fetch, unadjusted closes, degraded-basis banner, persisted floor) → C3a + C3b + #24 in one push after a close.
 
 ## The defect (confirmed 2026-10-30)
 
@@ -26,7 +26,16 @@ For as-of session D (ET), using only bars dated before D:
 
 All policy values are explicit parameters in C1; no constant has changed.
 
-## Owner decisions pending (after the C2 dry run)
+## Owner decisions (2026-10-30, after the C2 dry run)
+
+**Accepted the lead's recommendations:** U1 `HELD_TRAIL_ATR_MULT` = **3.0**; U2 variant **(c)** with `HELD_TRAIL_START` = the last completed session before go-live; U3 sticky ratchet yes; U4 no reset of the trailing part on an add; U5 breach on close / live price (not the day's low); U6 `prior_session` fallback when the buy date is unknown; U7 record the first breach per episode (own chunk C5). Technical values go in as proposed unless the owner objects: warm-up 60 bars, min bars 15, fill tolerance 2%, shares tolerance 1e-4.
+
+**Dry-run evidence (2026-10-30, 12 holdings, 123 closed round trips: 68 losers / 55 winners, variant a):** 2.0× fired on 35/68 losers and 14/55 winners and pre-empted the ladder on all but 1 loser; 3.0× fired on 24/68 losers and 5/55 winners, with the ladder alone or first on 6 losers and the same session on 8; per fire, selling at the next open beat the actual exit by a median ~+1pp on losers and lost ~−5pp on winners; median fire one session before the actual exit; whipsaw (close back above the fired stop within 10 sessions) 59–86% at every multiple. Day 1 under (c): FSLR and GOOGL newly breached (both well below their entry-risk stop), OKTA / PLTR at risk, ABBV / WAL looser for one session (closed by the trail-start rule).
+
+**Found by the dry run, fix before C3 (gate file, reviewed):** (1) `history_period_needed` must normalise a tz-aware first-bar date; (2) the split guard rejects real extended-hours fills (GOOGL 10-29 fill $310.60 vs a regular session of $280.36–$288.33): accept a fill within [min(Low, prev close), max(High, prev close)] ± tolerance.
+
+### Original pending list (for the record)
+
 
 - **U1 trail multiple:** 2.0 (= `ATR_STOP_MULT`) fires a sell-all before the deterioration ladder's TRIM on every name; planner prior ≥ 3.0 (about the ladder's EXIT distance). Decide from the replay.
 - **U2 start:** recommended variant (c): entry anchor retroactive from each buy, trailing / ratchet from a fixed deploy date (`HELD_TRAIL_START`).
