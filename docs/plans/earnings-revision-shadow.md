@@ -1,9 +1,8 @@
 # Pre-earnings Watch flags and the rating-change shadow (finding #22)
 
-**Status:** C1 SHIPPED 2026-10-30 (`bd7f197`, `stock_analyzer/revision_flag.py`, constant renamed
-`EARNINGS_REVISION_WATCH_NET`). C2+C3 (playbook demotion + share wording), C4 (🏠 Brief + 📡 Signals wiring) and C5
-(`earnings_revision_shadow` table, EOD cron) built and in review 2026-10-30; they ship in ONE push, after the owner
-applies the C5 DDL (`docs/architecture.md` §6.52). Retro study (U5) not started. Readout: not before the trigger below.
+**Status:** C1–C5 SHIPPED 2026-10-30 (`bd7f197` C1, `6f3a4c2` C2+C3, `3593170` C5, `af36c2e` C4; one push; the owner
+applied the C5 DDL 2026-10-30, `docs/architecture.md` §6.52). Retro study (U5) not started. The re-enable margin is an
+open owner call. Readout: not before the trigger below.
 
 ## Why
 
@@ -36,9 +35,9 @@ signals". And the data isn't estimate revisions at all: `bundle["revisions"]` is
 | Chunk | What | State |
 |---|---|---|
 | C1 | `revision_flag.py` (read / is_flagged / flag_line / revisions_phrase / checklist_line), rename, FMP `basis` tag, yfinance `window_days`, `_GATE_FILES` | SHIPPED `bd7f197` |
-| C2+C3 | 🔔 playbook: revision / beat / reaction REDUCEs → flags (never override EXIT, the earnings-week / ceiling REDUCE, weak REDUCE, stop MONITORs; replace only the general HOLD); U6; truthful copy; "Sell N share(s) (about X% of your S shares)" | in review |
-| C4 | 🏠 Brief 📅 earnings card `why` + 📡 Signals checklist use the same flag line | in review |
-| C5 | `earnings_revision_shadow` + EOD step 7b + System Trust ② store + `_PROTECTED_TABLES` | Opus SHIP; small fixes in progress |
+| C2+C3 | 🔔 playbook: revision / beat / reaction REDUCEs → flags (never override EXIT, the earnings-week / ceiling REDUCE, weak REDUCE, stop MONITORs; replace only the general HOLD); U6; truthful copy; "Sell N share(s) (about X% of your S shares)" | SHIPPED `6f3a4c2` |
+| C4 | 🏠 Brief 📅 earnings card (separate `revision_flag_line`) + 📡 Signals checklist use the same flag line | SHIPPED `af36c2e` |
+| C5 | `earnings_revision_shadow` + EOD step 7b + System Trust ② store + `_PROTECTED_TABLES` | SHIPPED `3593170` |
 | C6 | this plan + the retro study script | plan written; script not started |
 
 ## Readout (pre-registered 2026-10-30; don't change after seeing data)

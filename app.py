@@ -43723,6 +43723,8 @@ The **🔔 Catalyst Watch** page lists **upcoming earnings dates** so a report n
 
 It is **awareness, not a buy signal** — an upcoming earnings date is a *reason to be careful*, not a reason to act. It actually works *with* the gates: when a name you'd otherwise be told to buy reports within a few days, the app **holds that entry back** (an earnings print is a coin-flip you don't need to step into) and tells you why. For names you already hold, it surfaces a short pre-earnings checklist so you can decide whether to trim or hold into the print.
 
+Some signals on that checklist are **flagged to watch, never acted on**: net analyst **rating changes** (upgrades and initiations minus downgrades over about 90 days — rating changes, not earnings-estimate cuts) at or below the watch line, and a poor beat history or a bearish post-earnings reaction from a pasted CNBC preview. None of these has a measured record here, so none sizes a trim; the same ⚑ rating-change line appears on the playbook, on 🏠 Today's Brief earnings card and in 📡 Signals. In the week before each report the app records every held name, flagged or not, so it can later check whether the flag predicted a weak report.
+
 The page has three tabs: **📋 Positions** (your positions' earnings + pre-earnings playbook), **📡 Radar** (watchlist & universe upcoming reports), and **🧭 Entry Candidates** — watchlist names near earnings that have historically beaten estimates *and* clear the composite bar. Entry Candidates is still **awareness only** (never a buy recommendation) and only populates once you've pasted CNBC earnings previews via 🧠 AI Insights → Ideas Inbox → 📅 Pre-Earnings.
 """
             )
