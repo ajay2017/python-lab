@@ -562,4 +562,5 @@ class FMPProvider(DataProvider):
         return {
             "upgrades_90d": ups, "downgrades_90d": downs,
             "maintained_90d": h, "net": ups - downs, "latest": [],
+            "basis": "consensus_snapshot",
         }

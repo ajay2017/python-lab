@@ -819,7 +819,7 @@ EARNINGS_OVERWEIGHT_TRIM_TO_PCT       = 10.0
 # 📅 Earnings page (earnings_advisor._recommend) REDUCE / MONITOR rules — values
 # previously bare literals in that function, named here with the SAME values.
 EARNINGS_REDUCE_MIN_WEIGHT_PCT = 5.0    # a weak-signal REDUCE only fires on a position at least this heavy (% of portfolio)
-EARNINGS_REVISION_REDUCE_NET   = -2     # net analyst revisions (90d) at or below this = negative-revision REDUCE
+EARNINGS_REVISION_WATCH_NET   = -2     # net analyst rating changes (upgrades+initiations - downgrades, 90d) at or below this: today the Pre-Earnings Playbook negative-revision REDUCE trigger; becomes the Watch-only flag (revision_flag.is_flagged, sizes nothing) when that REDUCE is removed (finding #22)
 EARNINGS_PARTIAL_TRIM_PCT      = 35.0   # % of shares trimmed by the revisions / beat-history / bearish-reaction REDUCE rules
 EARNINGS_WEAK_TRIM_PCT         = 50.0   # % of shares trimmed by the weak-composite (Sell-zone) REDUCE rule
 EARNINGS_STOP_COVER_FRAC       = 0.85   # stop gap < this fraction of the estimated earnings move = "stop at risk"

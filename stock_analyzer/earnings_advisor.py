@@ -27,7 +27,7 @@ from stock_analyzer.constants import (
     SINGLE_NAME_CEILING,
     SINGLE_NAME_TRIM_TRIGGER,
     EARNINGS_REDUCE_MIN_WEIGHT_PCT,
-    EARNINGS_REVISION_REDUCE_NET,
+    EARNINGS_REVISION_WATCH_NET,
     EARNINGS_PARTIAL_TRIM_PCT,
     EARNINGS_WEAK_TRIM_PCT,
     EARNINGS_STOP_COVER_FRAC,
@@ -329,7 +329,7 @@ def _recommend(
 
     # ── REDUCE — negative revision momentum ───────────────────────────────────
     trim_sh = fraction_trim_shares(_sz, EARNINGS_PARTIAL_TRIM_PCT)
-    if net_rev <= EARNINGS_REVISION_REDUCE_NET and weight >= EARNINGS_REDUCE_MIN_WEIGHT_PCT and trim_sh >= 1:
+    if net_rev <= EARNINGS_REVISION_WATCH_NET and weight >= EARNINGS_REDUCE_MIN_WEIGHT_PCT and trim_sh >= 1:
         return (
             "REDUCE",
             "MEDIUM",

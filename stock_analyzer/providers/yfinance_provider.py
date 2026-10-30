@@ -248,12 +248,14 @@ class YFinanceProvider(DataProvider):
                 upg = t.upgrades_downgrades
                 if upg is not None and not upg.empty:
                     upg = upg.copy()
+                    window_days = 90
                     try:
                         upg.index = pd.to_datetime(upg.index, utc=True)
                         cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=90)
                         recent = upg[upg.index >= cutoff]
                     except Exception:
                         recent = upg.head(20)
+                        window_days = None  # undated fallback: not a 90-day window
                     actions = recent["Action"].str.lower() if not recent.empty else pd.Series([], dtype=str)
                     ups   = int(actions.isin(["up", "init"]).sum())
                     downs = int((actions == "down").sum())
@@ -263,6 +265,7 @@ class YFinanceProvider(DataProvider):
                         "downgrades_90d": downs,
                         "maintained_90d": maint,
                         "net":            ups - downs,
+                        "window_days":    window_days,
                         "latest": [
                             {
                                 "firm":       str(row.get("Firm", "")),

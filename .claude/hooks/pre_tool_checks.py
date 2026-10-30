@@ -967,6 +967,14 @@ _GATE_FILES = {
     # that Grow Today and, from chunks 3-7, Watchlist/Analysis/email share.
     "stock_analyzer/entry_eligibility.py",
     "stock_analyzer/held_news_check.py",
+    # Added 2026-10-30 (finding #22): the one pre-earnings analyst-rating-change flag
+    # every surface shares; earnings_advisor sizes pre-earnings trims (was missing).
+    "stock_analyzer/revision_flag.py",
+    "stock_analyzer/earnings_advisor.py",
+    # Added 2026-10-30 (finding #13): whether a same-day macro release has passed,
+    # i.e. whether the Brief macro card / Pre-Event Playbook still show a pre-release
+    # hold / reduce instruction; imported by the gate file act_today_view.
+    "stock_analyzer/macro_release.py",
     "stock_analyzer/snapshot_context.py",
     # Added 2026-10-17 (docs/plans/headline-relevance.md): whether a headline counts
     # toward a ticker at all; applied once in bundle_loader before every news consumer.
