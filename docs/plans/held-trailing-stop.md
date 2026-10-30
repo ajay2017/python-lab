@@ -1,6 +1,6 @@
 # Held-position trailing stop (finding #26)
 
-**Status:** C1 SHIPPED (`ea8719a`), C2 SHIPPED (`3e650d6`). **Owner ruled U1–U7 on 2026-10-30** (3.0×, variant (c), trail from the last completed session before go-live). NEXT: `held_stop.py` fix (tz + extended-hours fill guard, reviewed) → planner C3 design (long-history fetch, unadjusted closes, degraded-basis banner, persisted floor) → C3a + C3b + #24 in one push after a close.
+**Status:** C1 SHIPPED (`ea8719a`, fix `2a2e0e4`), C2 SHIPPED (`3e650d6`). Owner ruled U1–U7 and the C3 decisions D1–D5 on 2026-10-30. **C3 deploy: weekend 2026-11-07/08, after the EOD lane** (build + review during the week of 11-02; nothing pushed before). C3c (persisted floor) by 2026-12-07 or on the first data-caused degraded-basis banner. Owner to set manual / broker stops on exposed names (FSLR, GOOGL) meanwhile.
 
 ## The defect (confirmed 2026-10-30)
 
@@ -56,3 +56,46 @@ All policy values are explicit parameters in C1; no constant has changed.
 - C1 SHIPPED 2026-10-30: `held_stop.py` + `tests/test_held_stop.py`.
 - C2: `scripts/held_stop_dryrun.py` (read-only): `--today` per holding (today's stop vs each variant × multiple ∈ {2.0, 2.5, 3.0, 3.5}, newly-breached flags, basis) and `--replay` over closed round trips (first fire vs the ladder's TRIM / EXIT and the actual exit, 5- / 10-session forward return, whipsaw). `NYSE_HOLIDAYS` starts 2026-01-01, so exclude pre-2026 post-holiday days from basis counts.
 - C3a engine + cron wiring; C3b app wiring (one push); C4 wording / User Guide / requirements F-17 / F-18 + new F-ID; C4b `exit_ladder_replay.py` on `held_stop`; C5 breach measurement (if U7).
+
+
+## C3 design (planner, Opus 5.5, 2026-10-30: PROCEED WITH CHANGES)
+
+### Owner decisions on C3 (2026-10-30, all as recommended)
+- **D1** Persisted floor deferred to its own chunk **C3c, by 2026-12-07** or on the first day a data-caused degraded-basis banner appears (XOM, the oldest holding, outgrows the 6-month frame around mid-December).
+- **D2** `HELD_TRAIL_START` = the last trading session BEFORE the deploy date (for the 11-07/08 deploy: 2026-11-06). Re-run `scripts/held_stop_dryrun.py --today --live --trail-start 2026-11-06` on deploy day.
+- **D3** Deploy outside market hours after the EOD lane, weekend 2026-11-07/08, so the owner sees the sell-all cards before Monday's protective email.
+- **D4** One-time "stops recalculated" notice: Home `st.info` for `HELD_STOP_NOTICE_SESSIONS = 5` sessions from go-live, plus one line in the first protective email.
+- **D5** The Brief's raise-stop card (`STOP_TIGHTEN_ATR_MULT` 1.5, opt-in via Mark Done) stays as is; revisit at the C5 readout.
+
+### Four changes to the earlier plan
+1. Persisted floor waits (D1). Interim guards: the bundle-frame fallback is `partial` with a banner, and the banner never claims "only moves up".
+2. **A new breach rebuilds the Brief:** the Home memo (`_synth_sig`) gains `held_sig(port_df)`, and a memo hit is treated as a miss when `brief_breached_set(port_df) − breached_at_build` is non-empty (only NEW breaches, so the `STOP_RECOVERY_MARGIN_PCT` hysteresis is kept); same for the memoized `alert_list`. `_SYNTH_SCHEMA_VER` 20 → 21.
+3. `build_portfolio_df(holdings, loaded_data, manual_stops=None, *, held_stops)`: keyword REQUIRED, no default. `held_stops is None` or a missing ticker → "Stop Unavailable" (never the old engine). The `protective_stop(price, …)` call is removed.
+4. C4 wording ships in the same push (tooltips, explainer, User Guide), so no screen says "price − 2×ATR" beside a different number.
+
+### Commit split (one push, after a close; hook commits with run_in_background)
+- **(a)** Constants + unadjusted history fetch (not wired): `HELD_TRAIL_ATR_MULT = 3.0`, `HELD_TRAIL_START` (ISO string), `HELD_STOP_WARMUP_BARS = 60`, `HELD_STOP_MIN_BARS = 15`, `HELD_STOP_FILL_TOL_PCT = 2.0`, `HELD_STOP_SHARES_TOL = 1e-4`, `HELD_STOP_NOTICE_SESSIONS = 5` beside `ATR_STOP_MULT` (the initial multiple reuses it); architecture constants rows; the dry run imports them. `YFinanceProvider.price_history_unadjusted` (`auto_adjust=False`, `_retry`) and `data.fetch_unadjusted_history` (Yahoo only, no failover, never raises, None on failure).
+- **(b)** New gate module `stock_analyzer/held_stop_wiring.py` (+ `_GATE_FILES` + review-policy line): `build_held_stops(holdings, held_data, trades_df, as_of, *, fetch_history)` (exact float shares; policy values read from constants inside; fallback chain long frame → bundle frame as `partial` with a note → C1 `prior_session` / `unavailable`; never raises). Labels: entry → "Entry Stop", trailing → "Trailing Stop", ratchet → its `STOP_RATCHET_LEVELS` label, prior_session → "Prior-close ATR", unavailable → "Stop Unavailable". Also `fetch_or_raise`, `analysis_manual_override`, `degraded`, `brief_breached_set`, `held_sig`; an additive `atr_last` in the C1 result; non-gate `stock_analyzer/held_stop_view.py` for the explainer (`what_if(h) ≥ current Auto Stop` by construction).
+- **(c)** The switch (atomic):
+  - `build_portfolio_df` new columns `Auto Stop`, `Stop Basis`, `Stop Since`, `Stop Note`, `Stop Entry`, `Stop Trailing`, `Stop Ratchet`, `Stop ATR`, `Stop HW Close` (scalars only; `loaded_data[t]["stop"]` / `["atr"]` never mutated).
+  - **#24** in `portfolio.alerts` (the function is `alerts`, not `get_alerts`; stop bands ~701-715): a first branch for gap ≤ 0 via new `stop_breach_text.alert_breach_msg` ("⛔ **WDAY** is 2.5% below its stop $200.25 — breached; Today's Brief says sell at the next open"; one `$` per message). `stop_breach_text.stop_noun` for app.py ~26423-26430; `daily_briefing` ~3378 uses `_label` (no "Trailing Stop stop").
+  - Cron: `_build_context` reads `db.load_trades_or_none()` once (strict for held stops, an empty frame for the old consumers) and passes `held_stops=build_held_stops(...)`. Journal unreadable → the lane fails like `price_outage`; per-name degradation → a log line + an email footer; the rule-change line in the first email.
+  - App: a `_held_stops_for` wrapper using `_budget_strict_trades()` + `_today_et()`; `_cached_unadjusted_history` (`st.cache_data` ttl 1 day keyed by ET date; failures raise so they aren't cached; a 5-minute negative cache; parallel fan-out). All three `build_portfolio_df` calls (app ~2836, ~5526, headless ~176) switch. The Analysis merge (~25214-25255) → `analysis_manual_override`. One degraded-basis `st.warning` after ~5550 naming each ticker + note; an Analysis caption under Stop Loss when the basis isn't full; `_render_stop_ladder` driven by `held_stop_view`; the Exit Plan caption ~26645 for held names; drill-down help ~21006 → `_tip("Protective Stop")`; the D4 notice. U8 stays a separate push.
+- **(d)** Docs: `_tip` ~937 / ~978, User Guide, requirements F-17 / F-18 + new **F-315** (held-position stop), architecture stop section + forward_sim wording (~3075), queue, shipped-log, memory.
+- **Review:** one Opus pass over (a)–(c) as a combined diff before the push; a confirming round after any FIX-FIRST. Design = planner, Build = implementer on each `feat(`.
+
+### Risks / follow-ups
+- Day 1: FSLR + GOOGL sell-all cards (Brief, Signals danger, Monday email); OKTA / PLTR at-risk; FSLR / OKTA / PLTR lose add room. Trailing from D−1 can add a breach the 10-30 dry run never showed (it used trail_start = as_of).
+- Never deploy intraday. No new session key (rides `_port_df_enriched`); if a `_held_stops_cache` is ever published, register it in `coord_freshness.py`.
+- `db.load_manual_stops()` returns `{}` on failure (4 of 12 stops are manual-binding): follow-up `load_manual_stops_or_none` + a banner (db.py, reviewed).
+- A name whose anchor the guard drops stays `partial` permanently: word the banner calmly and watch for banner fatigue.
+- Premarket compares close(D−1) with stop(D) ≡ stop(D−1) for breach purposes (pin with a property test); overnight gaps remain U8 (a pre-market price merge).
+
+### Tests the build must include
+- No network in tests: monkeypatch `fetch_unadjusted_history`, plus a conftest guard that fails on a real yfinance call.
+- AST parity pinning both ends of all three `build_portfolio_df(` calls (`held_stops=` from `_held_stops_for` / `build_held_stops`; strict trades; `_today_et()`); no `protective_stop(` / `stop_ladder(` left in app.py; `_synth_sig` contains `held_sig(` and the hit test uses `brief_breached_set(`.
+- Goldens: `loaded_data` stop / atr untouched; Grow Today add sizing unchanged; `bundle_loader` stop == `risk.atr_stop_loss`.
+- Monotone over 40 sessions on a full basis; rolling-frame fallback → partial with no "only moves up"; a partial bar dated as_of never moves stop(as_of); a session can't breach its own trailing value; premarket equivalence property; weekend / holiday as_of; trail-start boundary (as_of = HELD_TRAIL_START → no trailing / ratchet; the next session → exactly one).
+- Real cases: GOOGL (extended-hours fill accepted, $283.82 breached, "Sell all 5 shares at next open") and FSLR (episode 10-12, add 10-16).
+- Fetch None / raise / stale → bundle partial; bundle missing → prior_session / unavailable; `held_stops=None` → all "Stop Unavailable"; journal None → prior_session "trade journal could not be read"; a cron with every name prior_session fails the lane; fractional shares ok.
+- Manual parity between `analysis_manual_override` and `build_portfolio_df`; labels (no "Stop stop"); #24 messages (−2.5, gap 0.0 at/above, +0.1 unchanged, one `$`); explainer what-if; memo breach set; a tripwire on the `yfinance==1.3.0` pin.
