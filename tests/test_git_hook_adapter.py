@@ -17,6 +17,7 @@ for subprocesses.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -380,7 +381,7 @@ def test_parse_push_refs_drops_deletions_and_keeps_real_refs(monkeypatch):
         "(delete) " + "0" * 40 + " refs/heads/gone " + "0" * 40 + "\n"
         "\n",
     )
-    assert adapter._parse_push_refs() == [("refs/heads/main", "aaa")]
+    assert adapter._parse_push_refs() == [("refs/heads/main", "aaa", "bbb")]
 
 
 class _Ptc:
@@ -1064,3 +1065,408 @@ def test_snapshot_plumbing_uses_long_git_timeouts(monkeypatch):
     assert wt and ct, calls
     assert wt[0] >= 120
     assert ct[0] >= 120
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-30: pre-commit stamps tested trees; pre-push skips covered pushes.
+# ---------------------------------------------------------------------------
+
+_REAL_PUSH_COVERED = adapter._push_already_covered
+_REAL_STAMP_PATH = adapter._stamp_path
+
+
+@pytest.fixture(autouse=True)
+def _isolate_stamps_and_coverage(monkeypatch, tmp_path_factory):
+    """Never touch the real repo's stamp file; never let a canned push in the
+    older tests consult real git. Coverage tests call `_REAL_PUSH_COVERED`."""
+    stamp = str(tmp_path_factory.mktemp("stamps") / "drishta-tested-trees")
+    monkeypatch.setattr(adapter, "_stamp_path", lambda: stamp)
+    monkeypatch.setattr(adapter, "_push_already_covered", lambda refs, ptc, remote="": (False, "stubbed", (0, 0)))
+    return stamp
+
+
+def _stamps():
+    return adapter._read_stamps(adapter._stamp_path())
+
+
+def test_parse_push_refs_returns_remote_sha_too(monkeypatch):
+    _stub_stdin(
+        monkeypatch,
+        "refs/heads/main aaa refs/heads/main bbb\n"
+        "(delete) " + "0" * 40 + " refs/heads/gone " + "0" * 40 + "\n",
+    )
+    assert adapter._parse_push_refs() == [("refs/heads/main", "aaa", "bbb")]
+
+
+def test_pre_push_skips_when_everything_is_covered(monkeypatch, capsys):
+    _stub_stdin(monkeypatch, "refs/heads/main abc refs/heads/main def\n")
+    monkeypatch.setattr(adapter, "_push_already_covered", lambda refs, ptc, remote="": (True, "ok", (2, 1)))
+
+    def _explode(*a, **k):
+        raise AssertionError("suite must not run")
+
+    import pre_tool_checks as ptc
+
+    monkeypatch.setattr(ptc, "_run_gates_concurrently", _explode)
+    assert adapter._run_test_gates("pre-push") == 0
+    err = capsys.readouterr().err
+    assert "2 commit(s) passed the full suite at pre-commit (exact tree)" in err
+    assert "1 touch no tested path or suite-input doc" in err
+    assert "does not gate the deploy" in err
+    assert "GitHub CI re-runs it remotely" not in err
+
+
+def test_stamp_written_only_on_snapshot_and_pass(monkeypatch, tmp_path):
+    _scratch_repo(tmp_path, monkeypatch)
+    _use_real_snapshot(monkeypatch)
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["app.py"])
+
+    _stub_gates(monkeypatch, {"pytest": (False, "1 failed"), "antipattern": (True, "")})
+    assert adapter._run_test_gates("pre-commit") == 1
+    assert _stamps() == set(), "a failing run must not stamp"
+
+    _stub_gates(monkeypatch, {"pytest": (True, ""), "antipattern": (False, "x")})
+    assert adapter._run_test_gates("pre-commit") == 1
+    assert _stamps() == set()
+
+    _stub_gates(monkeypatch, {"pytest": (True, ""), "antipattern": (True, "")})
+    assert adapter._run_test_gates("pre-commit") == 0
+    assert len(_stamps()) == 1
+
+
+def test_stamp_not_written_on_working_tree_fallback(monkeypatch, tmp_path):
+    _scratch_repo(tmp_path, monkeypatch)  # autouse: snapshot unavailable
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["app.py"])
+    _stub_gates(monkeypatch, {"pytest": (True, ""), "antipattern": (True, "")})
+    assert adapter._run_test_gates("pre-commit") == 0
+    assert _stamps() == set()
+
+
+def test_stamp_not_written_when_pytest_was_not_needed(monkeypatch, tmp_path):
+    _scratch_repo(tmp_path, monkeypatch)
+    _use_real_snapshot(monkeypatch)
+    import pre_tool_checks as ptc
+
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["docs/x.md"])
+    monkeypatch.setattr(ptc, "_touches_tested_code", lambda f: False)
+    monkeypatch.setattr(ptc, "_touches_scanned_code", lambda f: True)
+    _stub_gates(monkeypatch, {"antipattern": (True, "")})
+    assert adapter._run_test_gates("pre-commit") == 0
+    assert _stamps() == set()
+
+
+def test_stamp_file_is_trimmed_and_io_failure_is_swallowed(tmp_path, capsys):
+    path = str(tmp_path / "stamps")
+    for i in range(adapter._TESTED_TREES_KEEP + 5):
+        adapter._record_tested_tree(path, f"t{i}")
+    lines = open(path, encoding="utf-8").read().split()
+    assert len(lines) == adapter._TESTED_TREES_KEEP
+    assert lines[-1] == f"t{adapter._TESTED_TREES_KEEP + 4}" and "t0" not in lines
+
+    adapter._record_tested_tree(str(tmp_path / "no" / "dir" / "f"), "x")  # no raise
+    assert "could not record the tested tree" in capsys.readouterr().err
+    adapter._record_tested_tree(None, "x")  # no raise
+
+
+def test_stamp_path_uses_the_common_dir(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(adapter, "_stamp_path", _REAL_STAMP_PATH)
+    path = adapter._stamp_path()
+    assert _same(os.path.dirname(path), repo / ".git")
+    assert os.path.basename(path) == "drishta-tested-trees"
+
+
+# --- _push_already_covered against a real throwaway repo ---
+
+class _CodePtc:
+    """`_touches_tested_code` stand-in: .py files are 'tested code'."""
+
+    @staticmethod
+    def _touches_tested_code(files):
+        return any(f.endswith(".py") for f in files)
+
+
+def _commit(repo, name, text="x\n"):
+    (repo / name).write_text(text)
+    _sg(repo, "add", name)
+    _sg(repo, "commit", "-q", "-m", f"add {name}")
+    return _sg(repo, "rev-parse", "HEAD")
+
+
+def _tree_of(repo, sha):
+    return _sg(repo, "rev-parse", f"{sha}^{{tree}}")
+
+
+def _covered(monkeypatch, repo, local, remote="0" * 40, stamps=()):
+    path = str(repo.parent / "stamps-under-test")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(stamps) + "\n")
+    monkeypatch.setattr(adapter, "_stamp_path", lambda: path)
+    return _REAL_PUSH_COVERED([("refs/heads/main", local, remote)], _CodePtc)
+
+
+def test_covered_when_every_commit_tree_is_stamped(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    base = _sg(repo, "rev-parse", "HEAD")
+    c1 = _commit(repo, "b.py")
+    c2 = _commit(repo, "c.py")
+    ok, why, n = _covered(monkeypatch, repo, c2, base, [_tree_of(repo, c1), _tree_of(repo, c2)])
+    assert ok and n == (2, 0)
+
+
+def test_not_covered_when_one_code_commit_is_unstamped(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    base = _sg(repo, "rev-parse", "HEAD")
+    _commit(repo, "b.py")
+    c2 = _commit(repo, "c.py")
+    ok, why, n = _covered(monkeypatch, repo, c2, base, [_tree_of(repo, c2)])
+    assert not ok and "not tested at pre-commit" in why
+
+
+def test_docs_only_child_of_a_stamped_commit_is_covered(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    base = _sg(repo, "rev-parse", "HEAD")
+    c1 = _commit(repo, "b.py")
+    c2 = _commit(repo, "notes.md")
+    ok, _, n = _covered(monkeypatch, repo, c2, base, [_tree_of(repo, c1)])
+    assert ok
+
+
+def test_docs_only_child_of_an_unstamped_new_commit_is_not_covered(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    base = _sg(repo, "rev-parse", "HEAD")
+    _commit(repo, "b.py")  # code, never tested
+    c2 = _commit(repo, "notes.md")
+    ok, _, n = _covered(monkeypatch, repo, c2, base, [])
+    assert not ok
+
+
+def test_docs_only_commit_whose_parent_is_on_the_remote_is_covered(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    base = _sg(repo, "rev-parse", "HEAD")
+    c1 = _commit(repo, "notes.md")
+    ok, why, n = _covered(monkeypatch, repo, c1, base, [])
+    assert ok and n == (0, 1)
+
+
+def test_merge_commit_is_not_covered(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    base = _sg(repo, "rev-parse", "HEAD")
+    _sg(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, "side.md")
+    _sg(repo, "checkout", "-q", "-")
+    _commit(repo, "main.md")
+    _sg(repo, "merge", "-q", "--no-ff", "-m", "merge", "side")
+    head = _sg(repo, "rev-parse", "HEAD")
+    ok, why, n = _covered(monkeypatch, repo, head, base, [])
+    assert not ok and "merge" in why
+
+
+def test_git_error_is_not_covered(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    ok, why, n = _covered(monkeypatch, repo, "f" * 40, "e" * 40, [])
+    assert not ok and "could not verify" in why
+
+
+def test_empty_revlist_is_not_covered(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    head = _sg(repo, "rev-parse", "HEAD")
+    ok, why, n = _covered(monkeypatch, repo, head, head, [])
+    assert not ok and "no new commits" in why
+
+
+def test_new_branch_push_uses_not_remotes(monkeypatch):
+    seen = []
+
+    def _lines(*args):
+        seen.append(args)
+        if args[0] == "rev-list" and "--reverse" in args:
+            return ["c1"]
+        if args[0] == "rev-parse":
+            return ["TREE1"]
+        raise AssertionError(args)
+
+    monkeypatch.setattr(adapter, "_git_lines", _lines)
+    monkeypatch.setattr(adapter, "_read_stamps", lambda p: {"TREE1"})
+    ok, _, n = _REAL_PUSH_COVERED([("refs/heads/new", "L", "0" * 40)], _CodePtc)
+    assert ok
+    assert ("rev-list", "--reverse", "--topo-order", "L", "--not", "--remotes") in seen
+
+
+def test_more_than_200_new_commits_is_not_covered(monkeypatch):
+    monkeypatch.setattr(adapter, "_git_lines", lambda *a: [f"c{i}" for i in range(201)])
+    monkeypatch.setattr(adapter, "_read_stamps", lambda p: set())
+    ok, why, n = _REAL_PUSH_COVERED([("refs/heads/m", "L", "R")], _CodePtc)
+    assert not ok and "201" in why
+
+
+def test_tag_only_push_is_not_covered(monkeypatch):
+    monkeypatch.setattr(adapter, "_read_stamps", lambda p: set())
+    ok, _, n = _REAL_PUSH_COVERED([("refs/tags/v1", "L", "0" * 40)], _CodePtc)
+    assert not ok, "nothing verified -> run the suite"
+
+
+# --- 2026-10-30 review round: suite-input docs, tags, remote name, real predicate ---
+
+import pre_tool_checks as _real_ptc  # noqa: E402
+
+
+def _with_remote(repo, base):
+    """Make `base` look already pushed to a remote called origin."""
+    _sg(repo, "update-ref", "refs/remotes/origin/main", base)
+
+
+def test_docs_only_commit_with_the_real_predicate_is_covered(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    base = _sg(repo, "rev-parse", "HEAD")
+    c1 = _commit(repo, "notes.md")
+    path = str(repo.parent / "st")
+    open(path, "w").close()
+    monkeypatch.setattr(adapter, "_stamp_path", lambda: path)
+    ok, _, n = _REAL_PUSH_COVERED([("refs/heads/main", c1, base)], _real_ptc)
+    assert ok and n == (0, 1)
+
+
+@pytest.mark.parametrize("rel", [
+    "docs/requirements.md", "docs/architecture.md", ".gitmessage.txt",
+    "docs/sql/impossible-states-function.sql",
+])
+def test_a_suite_input_doc_commit_is_not_covered(monkeypatch, tmp_path, rel):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    base = _sg(repo, "rev-parse", "HEAD")
+    (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+    c1 = _commit(repo, rel)
+    path = str(repo.parent / "st")
+    open(path, "w").close()
+    monkeypatch.setattr(adapter, "_stamp_path", lambda: path)
+    ok, why, _ = _REAL_PUSH_COVERED([("refs/heads/main", c1, base)], _real_ptc)
+    assert not ok and "suite-input doc" in why
+
+
+def test_a_stamped_root_commit_is_covered(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    root = _sg(repo, "rev-parse", "HEAD")
+    ok, _, n = _covered(monkeypatch, repo, root, "0" * 40, [_tree_of(repo, root)])
+    assert ok and n == (1, 0)
+    ok, why, _ = _covered(monkeypatch, repo, root, "0" * 40, [])
+    assert not ok
+
+
+def test_a_stamped_merge_commit_is_covered(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    base = _sg(repo, "rev-parse", "HEAD")
+    _sg(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, "side.md")
+    _sg(repo, "checkout", "-q", "-")
+    _commit(repo, "main.md")
+    _sg(repo, "merge", "-q", "--no-ff", "-m", "merge", "side")
+    head = _sg(repo, "rev-parse", "HEAD")
+    ok, _, n = _covered(monkeypatch, repo, head, base, [_tree_of(repo, head)])
+    # the two docs-only parents are covered as docs-only, the merge by its stamp
+    assert ok and n == (1, 2)
+
+
+def test_branch_plus_tag_push_with_an_untested_tagged_commit_is_not_covered(monkeypatch, tmp_path):
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    base = _sg(repo, "rev-parse", "HEAD")
+    _with_remote(repo, base)
+    c1 = _commit(repo, "b.py")
+    (repo / "stock_analyzer").mkdir()
+    c2 = _commit(repo, "stock_analyzer/c.py")  # tested path, never tested
+    path = str(repo.parent / "st")
+    with open(path, "w") as fh:
+        fh.write(_tree_of(repo, c1) + "\n")
+    monkeypatch.setattr(adapter, "_stamp_path", lambda: path)
+    zero = "0" * 40
+    refs = [("refs/heads/main", c1, base), ("refs/tags/v1", c2, zero)]
+    ok, why, _ = _REAL_PUSH_COVERED(refs, _real_ptc, "origin")
+    assert not ok and "not tested at pre-commit" in why
+    # control: the tag on the stamped commit is fine, and the remote name is honoured
+    refs = [("refs/heads/main", c1, base), ("refs/tags/v1", c1, zero)]
+    ok, _, n = _REAL_PUSH_COVERED(refs, _real_ptc, "origin")
+    assert ok and n == (1, 0)
+
+
+def test_remote_name_scopes_the_not_remotes_query(monkeypatch):
+    seen = []
+
+    def _lines(*args):
+        seen.append(args)
+        if args[0] == "rev-list" and "--reverse" in args:
+            return ["c1"]
+        return ["TREE1"]
+
+    monkeypatch.setattr(adapter, "_git_lines", _lines)
+    monkeypatch.setattr(adapter, "_read_stamps", lambda p: {"TREE1"})
+    _REAL_PUSH_COVERED([("refs/heads/n", "L", "0" * 40)], _CodePtc, "origin")
+    assert ("rev-list", "--reverse", "--topo-order", "L", "--not", "--remotes=origin") in seen
+
+
+def test_pre_push_passes_the_remote_name_from_argv(monkeypatch):
+    got = {}
+
+    def _spy(refs, ptc, remote=""):
+        got["remote"] = remote
+        return (True, "ok", (1, 0))
+
+    _stub_stdin(monkeypatch, "refs/heads/main abc refs/heads/main def\n")
+    monkeypatch.setattr(adapter, "_push_already_covered", _spy)
+    monkeypatch.setattr(sys, "argv", ["git_hook_adapter.py", "pre-push", "origin", "https://x"])
+    assert adapter._run_test_gates("pre-push") == 0
+    assert got["remote"] == "origin"
+
+
+def test_the_tree_stamped_by_pre_commit_is_the_committed_tree(monkeypatch, tmp_path):
+    """End to end through the real snapshot seam: stage a change, run the
+    pre-commit gate (gates stubbed green), make the real commit, and check the
+    stamp IS that commit's tree -- so a push of it is recognised as covered."""
+    repo = _scratch_repo(tmp_path, monkeypatch)
+    base = _sg(repo, "rev-parse", "HEAD")
+    _use_real_snapshot(monkeypatch)
+    monkeypatch.setattr(adapter, "_changed_files", lambda: ["app.py"])
+    _stub_gates(monkeypatch, {"pytest": (True, ""), "antipattern": (True, "")})
+    (repo / "a.py").write_text("v1\n")
+    _sg(repo, "add", "a.py")
+    assert adapter._run_test_gates("pre-commit") == 0
+    _sg(repo, "commit", "-q", "-m", "change")
+    head = _sg(repo, "rev-parse", "HEAD")
+    assert _tree_of(repo, head) in _stamps()
+    ok, _, n = _REAL_PUSH_COVERED([("refs/heads/main", head, base)], _real_ptc)
+    assert ok and n == (1, 0)
+
+
+# --- ratchet: every repo file a test reads must be a tested path or a suite input ---
+
+_ROOT_READ = re.compile(
+    r'(?:\bROOT|\b_ROOT|\bREPO_ROOT|\b_REPO|\.parent\.parent|\.parents\[1\])'
+    r'\s*((?:/\s*"[^"\n]+"\s*)+)'
+)
+
+
+def _repo_files_read_by_tests():
+    found = {}
+    here = os.path.dirname(os.path.abspath(__file__))
+    for f in sorted(os.path.join(here, n) for n in os.listdir(here) if n.endswith(".py")):
+        text = open(f, encoding="utf-8", errors="replace").read()
+        for m in _ROOT_READ.finditer(text):
+            rel = "/".join(re.findall(r'"([^"\n]+)"', m.group(1)))
+            found.setdefault(rel, set()).add(os.path.basename(f))
+    return found
+
+
+def test_every_non_tested_repo_file_a_test_reads_is_a_suite_input():
+    """A test that reads a doc / SQL / template the pre-commit gate does not scan
+    makes a commit touching it NOT docs-only for the push skip. This scan keeps
+    `_PUSH_SUITE_INPUT_*` complete: add the new file there, not an exemption here."""
+    found = _repo_files_read_by_tests()
+    assert found, "scan found no repo-file reads at all -- the regex has rotted"
+    assert "docs/requirements.md" in found and ".gitmessage.txt" in found, found.keys()
+    missing = {
+        rel: sorted(who) for rel, who in found.items()
+        if not (_real_ptc._is_tested_path(rel) or _real_ptc._is_tested_path(rel + "/")
+                or adapter._is_push_suite_input(rel))
+    }
+    assert not missing, (
+        f"tests read repo files that are neither tested paths nor suite inputs: "
+        f"{missing}. Add them to git_hook_adapter._PUSH_SUITE_INPUT_FILES/_PREFIXES."
+    )

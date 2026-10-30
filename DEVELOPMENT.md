@@ -298,7 +298,9 @@ skips the suite).
 different lever than the Tier 1 marker above (execution time, not
 collection/selection time):**
 - The hook's own pytest invocation now runs under `pytest-xdist`
-  (`-n auto --dist=loadgroup`) whenever it's importable in the resolved
+  (`-n auto --dist=loadgroup`; since 2026-10-30 ¾ of the cores, overridable
+  with `DRISHTA_HOOK_PYTEST_WORKERS`, at below-normal priority — CI keeps
+  `-n auto`) whenever it's importable in the resolved
   `.venv` — falls back to a correct serial run otherwise (a `.venv` that
   predates `pip install -r requirements-dev.txt` picking up `pytest-xdist`
   is an environment gap, not a reason to fail the gate). Measured on the

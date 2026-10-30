@@ -1155,3 +1155,86 @@ def test_kill_process_tree_falls_back_to_kill_and_never_raises(monkeypatch):
             raise OSError("already dead")
 
     hook._kill_process_tree(_Q())  # must not raise
+
+
+# --- CPU cap + low priority for the gate's pytest (2026-10-30) ---
+
+class TestPytestWorkerCount:
+    def test_env_override_is_honoured(self, monkeypatch):
+        monkeypatch.setenv(hook._HOOK_PYTEST_WORKERS_ENV, "3")
+        assert hook._pytest_worker_count() == 3
+
+    @pytest.mark.parametrize("bad", ["0", "-2", "abc", "", "  "])
+    def test_invalid_env_is_ignored(self, monkeypatch, bad):
+        import os
+        monkeypatch.setenv(hook._HOOK_PYTEST_WORKERS_ENV, bad)
+        monkeypatch.setattr(os, "cpu_count", lambda: 12)
+        assert hook._pytest_worker_count() == 9
+
+    @pytest.mark.parametrize("cpus, expect", [(12, 9), (8, 6), (1, 2), (3, 2), (None, 2)])
+    def test_default_is_three_quarters_of_the_cores_with_floor_of_two(self, monkeypatch, cpus, expect):
+        import os
+        monkeypatch.delenv(hook._HOOK_PYTEST_WORKERS_ENV, raising=False)
+        monkeypatch.setattr(os, "cpu_count", lambda: cpus)
+        assert hook._pytest_worker_count() == expect
+
+    def test_pytest_args_use_the_count_not_auto(self, monkeypatch):
+        monkeypatch.setenv(hook._HOOK_PYTEST_WORKERS_ENV, "5")
+        monkeypatch.setattr(hook, "_xdist_available", lambda py: True)
+        args = hook._pytest_args("py")
+        assert args[args.index("-n") + 1] == "5"
+        assert "auto" not in args and "--dist=loadgroup" in args
+
+    def test_no_xdist_means_no_n_flag(self, monkeypatch):
+        monkeypatch.setattr(hook, "_xdist_available", lambda py: False)
+        assert "-n" not in hook._pytest_args("py")
+
+
+class TestStartProcessPriority:
+    def _capture(self, monkeypatch, fail_first=False):
+        calls = []
+
+        def _popen(args, **kw):
+            calls.append(kw)
+            if fail_first and len(calls) == 1:
+                raise OSError("priority refused")
+            return "PROC"
+
+        monkeypatch.setattr(hook.subprocess, "Popen", _popen)
+        return calls
+
+    def test_windows_uses_below_normal_priority(self, monkeypatch):
+        monkeypatch.setattr(hook.os, "name", "nt")
+        monkeypatch.setattr(hook.subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x4000, raising=False)
+        calls = self._capture(monkeypatch)
+        assert hook._start_process(["x"]) == "PROC"
+        assert calls[0]["creationflags"] == 0x4000
+
+    def test_posix_nices_and_keeps_new_session(self, monkeypatch):
+        monkeypatch.setattr(hook.os, "name", "posix")
+        calls = self._capture(monkeypatch)
+        hook._start_process(["x"])
+        assert calls[0]["start_new_session"] is True
+        assert calls[0]["preexec_fn"] is hook._lower_priority
+
+    @pytest.mark.parametrize("osname", ["nt", "posix"])
+    def test_priority_failure_falls_back_to_a_normal_start(self, monkeypatch, osname):
+        monkeypatch.setattr(hook.os, "name", osname)
+        calls = self._capture(monkeypatch, fail_first=True)
+        assert hook._start_process(["x"]) == "PROC"
+        assert len(calls) == 2
+        assert "creationflags" not in calls[1] and "preexec_fn" not in calls[1]
+
+    def test_total_failure_returns_none(self, monkeypatch):
+        def _boom(*a, **k):
+            raise OSError("no")
+
+        monkeypatch.setattr(hook.subprocess, "Popen", _boom)
+        assert hook._start_process(["x"]) is None
+
+    def test_lower_priority_never_raises(self, monkeypatch):
+        def _boom(n):
+            raise OSError("no")
+
+        monkeypatch.setattr(hook.os, "nice", _boom, raising=False)
+        hook._lower_priority()

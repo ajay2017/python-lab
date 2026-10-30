@@ -87,7 +87,7 @@ pytest tests/ -v
 > |---|---|
 > | `commit-msg` | `Review =` citation + `Design =`/`Build =` trailers |
 > | `pre-commit` | pytest (path-gated) + `check_antipatterns.py` |
-> | `pre-push` | full pytest on any push that adds commits — against the WORKING TREE, not the pushed commits (prints a MISMATCH warning when they differ) |
+> | `pre-push` | full pytest on any push that adds commits — against the WORKING TREE, not the pushed commits (prints a MISMATCH warning when they differ). Since 2026-10-30 skipped when every pushed commit is covered (its tree passed at pre-commit, or a docs-only commit that touches no suite-input doc sits on a covered or already-pushed parent) |
 >
 > `pre_tool_checks.py` still owns all the gate LOGIC and is imported by
 > `git_hook_adapter.py`, so *what the gates check* is unchanged. **But the rest
@@ -101,9 +101,12 @@ pytest tests/ -v
 > 3. **The commit-time scope is wider than §2 says:** `app.py`,
 >    `cron_runner.py` and `.claude/hooks/` also trigger the suite, not just
 >    `stock_analyzer/` and `tests/`.
-> 4. **The §3 "skip a provably-redundant push-time re-run" optimisation does
->    NOT apply** to the native `pre-push` hook — it has no verified-tree marker
->    and always runs the suite (unless the push is deletions-only).
+> 4. **The §3 "skip a provably-redundant push-time re-run" optimisation now
+>    applies** to the native `pre-push` hook (2026-10-30): `pre-commit` records
+>    each green snapshot's tree in `<git-common-dir>/drishta-tested-trees`, and
+>    `pre-push` skips its local run only when every pushed commit's tree is
+>    stamped, or the commit touches no tested path and no suite-input doc on top
+>    of a covered or already-pushed parent. Anything else runs the suite.
 > 5. **`pre-push` verifies the WORKING TREE, not the commits being pushed.** It
 >    prints a MISMATCH warning (and does not block) when they differ. So it is
 >    not a true backstop: `--no-verify` a broken commit, fix the tree without
@@ -151,7 +154,9 @@ pytest tests/ -v
 the gate proves** (full detail: `.claude/hooks/pre_tool_checks.py`'s module
 docstring, `docs/plans/test-suite-optimization.md`'s addendum):
 1. **Parallel execution.** The hook's pytest invocation adds
-   `-n auto --dist=loadgroup` (`pytest-xdist`) whenever it's importable in
+   `-n auto --dist=loadgroup` (`pytest-xdist`; since 2026-10-30 the hook uses
+   ¾ of the cores, `DRISHTA_HOOK_PYTEST_WORKERS` overrides, at below-normal
+   priority — CI keeps `-n auto`) whenever it's importable in
    the resolved `.venv`, falling back to serial otherwise. Measured on the
    real suite: **474.37s serial vs ~190s parallel, 6397 passed both ways** —
    a genuine ~2.5x cut. `-n auto` alone (default `--dist=load`) only reached

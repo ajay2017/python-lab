@@ -15,7 +15,7 @@ for the honesty caveat and the SubagentStop-hook upgrade path.
 Pipeline-efficiency pass (2026-09-28, docs/plans/test-suite-optimization.md +
 that day's CI/CD analysis session). Three changes here attack real, measured
 waste in this same gate without weakening what it proves:
-  - pytest now runs under `pytest-xdist` (-n auto --dist=loadgroup) whenever
+  - pytest now runs under `pytest-xdist` (-n <workers> --dist=loadgroup) whenever
     the venv has it installed, falling back to a correct serial run otherwise
     (a missing plugin is an environment gap, not a reason to fail the gate).
     Measured on this machine the day this shipped: 6397 tests, 474.37s serial
@@ -174,6 +174,13 @@ import sys
 # raising this again. Run hook-bearing `git commit` / `git push` from Claude
 # Code with run_in_background: its foreground cap (600s) is below this, and a
 # tool kill skips _kill_process_tree and the last-hook-block.log write.
+#
+# 2026-10-30: the gate now runs THREE QUARTERS of the cores (`_pytest_worker_count`,
+# was `-n auto`) at reduced priority so the owner's machine keeps headroom, so
+# wall time lengthens (roughly 4/3x the worker-bound part). If completed runs approach
+# ~600 s, trim the slowest tests first; if a quiet 9-worker run still passes
+# ~600 s (or a loaded one ~780 s), raising the workers or this cap is an owner
+# call. DRISHTA_HOOK_PYTEST_WORKERS overrides the worker count for a one-off.
 _PYTEST_TIMEOUT_SEC = 900
 
 # The antipattern scan's own limit. It FAILS OPEN on timeout (reported as
@@ -577,6 +584,23 @@ def _xdist_available(py: str) -> bool:
         return False
 
 
+_HOOK_PYTEST_WORKERS_ENV = "DRISHTA_HOOK_PYTEST_WORKERS"
+
+
+def _pytest_worker_count() -> int:
+    """xdist worker count for the gate: the env override if it parses to an
+    int >= 1, else three quarters of the cores (floor 2) so the machine keeps
+    headroom while a run stays well inside _PYTEST_TIMEOUT_SEC."""
+    raw = os.environ.get(_HOOK_PYTEST_WORKERS_ENV, "").strip()
+    try:
+        n = int(raw)
+        if n >= 1:
+            return n
+    except ValueError:
+        pass
+    return max(2, (os.cpu_count() or 2) * 3 // 4)
+
+
 def _pytest_args(py: str) -> list:
     args = [py, "-m", "pytest", "tests/", "-q"]
     if _xdist_available(py):
@@ -587,30 +611,51 @@ def _pytest_args(py: str) -> list:
         # land on the same worker instead of each re-paying that cost --
         # `-n auto` alone (--dist=load, the xdist default) ignores the marker
         # entirely and silently defeats that caching (found 2026-09-28).
-        args += ["-n", "auto", "--dist=loadgroup"]
+        # Worker count (2026-10-30): 3/4 of the cores, not `auto`, so a commit /
+        # push does not peg the owner's whole machine; override with
+        # DRISHTA_HOOK_PYTEST_WORKERS (see _pytest_worker_count).
+        args += ["-n", str(_pytest_worker_count()), "--dist=loadgroup"]
     return args
 
 
-def _start_process(args: list):
+def _lower_priority() -> None:
+    """POSIX preexec hook: nice the child (and so its xdist workers). Never raises."""
     try:
-        # encoding/errors explicit (2026-10-02 review M4 follow-up, see
-        # feedback_subprocess_text_mode_locale_codec): text=True alone
-        # decodes with the LOCALE codec (cp1252 on Windows), which can
-        # crash on a pytest failure message containing non-ASCII bytes --
-        # these call sites only decide pass/fail on returncode today, so a
-        # crash here wouldn't flip a verdict, but it would lose the actual
-        # failure detail printed to the user. Applied to all subprocess
-        # call sites in this file for the same reason, not just this one.
-        # POSIX: a new session/process group so a timeout can killpg the whole
-        # pytest tree (xdist workers included). Windows needs no flag --
-        # taskkill /T walks the parent-pid tree (see _kill_process_tree).
-        extra = {"start_new_session": True} if os.name != "nt" else {}
-        return subprocess.Popen(
-            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            encoding="utf-8", errors="replace", **extra,
-        )
+        os.nice(10)
     except Exception:
-        return None
+        pass
+
+
+def _start_process(args: list):
+    # encoding/errors explicit (2026-10-02 review M4 follow-up, see
+    # feedback_subprocess_text_mode_locale_codec): text=True alone
+    # decodes with the LOCALE codec (cp1252 on Windows), which can
+    # crash on a pytest failure message containing non-ASCII bytes --
+    # these call sites only decide pass/fail on returncode today, so a
+    # crash here wouldn't flip a verdict, but it would lose the actual
+    # failure detail printed to the user. Applied to all subprocess
+    # call sites in this file for the same reason, not just this one.
+    # POSIX: a new session/process group so a timeout can killpg the whole
+    # pytest tree (xdist workers included). Windows needs no flag for that --
+    # taskkill /T walks the parent-pid tree (see _kill_process_tree).
+    # 2026-10-30: reduced priority (Windows BELOW_NORMAL class / POSIX nice 10;
+    # children inherit it). A priority failure falls back to a normal start.
+    if os.name == "nt":
+        low = {"creationflags": getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)}
+        plain: dict = {}
+    else:
+        low = {"start_new_session": True, "preexec_fn": _lower_priority}
+        plain = {"start_new_session": True}
+    for extra in (low, plain):
+        try:
+            return subprocess.Popen(
+                args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                encoding="utf-8", errors="replace", **extra,
+            )
+        except Exception:
+            if extra is plain:
+                return None
+    return None
 
 
 def _kill_process_tree(proc) -> None:

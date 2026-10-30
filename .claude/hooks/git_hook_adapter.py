@@ -30,9 +30,24 @@ on snapshot plumbing alone (pytest itself still fails closed):
   * scripts/check_antipatterns.py  (`_touches_scanned_code`)
 
 `pre-push` -- a second full pytest run, for any push that is not purely
-deletions. It is the only gate that fires at all for a commit `pre-commit` never
-saw (made with --no-verify, by cherry-pick/revert/rebase/`am`, or before these
-hooks were installed).
+deletions, EXCEPT when every commit being pushed is already covered (2026-10-30,
+to stop paying the full suite twice per push). It is the only gate that fires at
+all for a commit `pre-commit` never saw (made with --no-verify, by
+cherry-pick/revert/rebase/`am`, an amend that staged no tested code, or before
+these hooks were installed). THE SKIP RULE: `pre-commit` appends the tree sha of
+every snapshot it tested GREEN to `<git common dir>/drishta-tested-trees` (never
+committed; shared by linked worktrees). At push time each new commit (those not
+on the push's remote; tag refs are processed like branches) is "covered" if
+(a) its tree sha is stamped there, or (b) it is a single-parent commit that
+touches no tested path (`_touches_tested_code`) AND no suite-input doc
+(`_is_push_suite_input`: docs the tests read but the gate does not scan), on a
+parent that is itself covered or already pushed. Only if EVERY new commit is
+covered does the hook skip the run. An unstamped merge or root commit, an
+unstamped code-touching or suite-input-doc commit (--no-verify, cherry-pick,
+rebase, amend, `am`), any git error, or more than 200 new commits means NOT
+covered, and the full run happens as before. GitHub CI re-runs the suite only
+for pushes matching tests.yml's path filters, and it does not gate the deploy,
+so the skip message must not claim otherwise.
 
   **READ THIS BEFORE CALLING IT A BACKSTOP.** pytest runs against the WORKING
   TREE, never against the commits being pushed. When the tree does not match
@@ -133,6 +148,26 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+_TESTED_TREES_NAME = "drishta-tested-trees"
+_TESTED_TREES_KEEP = 2000
+_PUSH_COVER_MAX_COMMITS = 200
+
+# Files the TEST SUITE reads although `pre_tool_checks._touches_tested_code`
+# deliberately does not treat them as tested code (docs, SQL, the commit
+# template). A commit touching one is NOT "docs-only" for the push skip: it can
+# change a test's verdict. Pinned by `test_every_non_tested_repo_file_a_test_reads_is_a_suite_input`
+# in tests/test_git_hook_adapter.py, which scans tests/*.py for repo-file reads.
+_PUSH_SUITE_INPUT_FILES = (
+    "docs/requirements.md", "docs/architecture.md", ".gitmessage.txt",
+)
+_PUSH_SUITE_INPUT_PREFIXES = ("docs/sql/",)
+
+
+def _is_push_suite_input(path: str) -> bool:
+    return path in _PUSH_SUITE_INPUT_FILES or any(
+        path.startswith(p) for p in _PUSH_SUITE_INPUT_PREFIXES
+    )
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -275,14 +310,17 @@ def _install() -> int:
     print()
     print("commit-msg : review citation + provenance trailers (feat/fix/refactor/perf)")
     print("pre-commit : pytest + antipattern check, when staged paths need them")
-    print("pre-push   : full pytest suite, for any push that adds commits")
+    print("pre-push   : full pytest suite, for any push that adds commits, unless")
+    print("             every pushed commit's tree already passed at pre-commit, or")
+    print("             is a docs-only commit (no tested path, no suite-input doc)")
+    print("             sitting on a covered or already-pushed parent -- then skipped")
     print()
     print("NOT gated: cherry-pick / revert / rebase / am and a clean merge skip")
     print("BOTH commit-msg and pre-commit -- only pre-push sees them. `--amend`")
     print("runs pre-commit, but only over newly-staged changes, and its text")
     print("gates are indistinguishable from an ordinary commit's.")
     print()
-    print("pre-push runs pytest against the WORKING TREE, not the pushed")
+    print("When pre-push does run, pytest uses the WORKING TREE, not the pushed")
     print("commits; it prints a MISMATCH warning when those differ.")
     return 0
 
@@ -355,7 +393,7 @@ def _parse_push_refs():
 
     git writes one `<local ref> <local sha> <remote ref> <remote sha>` line per
     ref; a DELETION carries an all-zero local sha. Returns [(local_ref,
-    local_sha)] for the rows that actually add something -- an empty list means
+    local_sha, remote_sha)] (remote_sha is "" if git omitted it) for the rows that actually add something -- an empty list means
     there is no code to verify (nothing queued, or deletions only).
 
     Reading this rather than discarding it is what lets the hook tell a push
@@ -377,9 +415,10 @@ def _parse_push_refs():
         if len(parts) < 2:
             continue
         local_ref, local_sha = parts[0], parts[1]
+        remote_sha = parts[3] if len(parts) >= 4 else ""
         if set(local_sha) == {"0"}:  # all-zero local sha == deletion
             continue
-        refs.append((local_ref, local_sha))
+        refs.append((local_ref, local_sha, remote_sha))
     return refs
 
 
@@ -427,7 +466,7 @@ def _push_tree_mismatch(refs: list, ptc) -> list:
         # ref as the expression `HEAD~2` -- so the one push most likely to
         # ship something other than HEAD printed no warning at all.
         off_head = sorted({
-            ref for ref, sha in refs
+            ref for ref, sha, *_rest in refs
             if not ref.startswith("refs/tags/") and _peel_commit(sha) != head
         })
         if off_head:
@@ -435,6 +474,127 @@ def _push_tree_mismatch(refs: list, ptc) -> list:
                 "pushing " + ", ".join(off_head) + ", which is not the checked-out HEAD"
             )
     return reasons
+
+
+def _stamp_path() -> str | None:
+    """Absolute path of the tested-trees stamp file, or None if git can't say.
+
+    Built from `--git-common-dir`, NOT `--git-path`: `--git-path` only maps a
+    fixed list of names to the shared dir, so an unknown file name resolves into
+    the per-WORKTREE git dir -- a linked worktree would then never see the
+    stamps its sibling wrote. The common dir is shared by all of them. Resolve
+    BEFORE any chdir (git prints it relative to the cwd). Never raises.
+    """
+    try:
+        r = _git("rev-parse", "--git-common-dir")
+        if r.returncode != 0 or not r.stdout.strip():
+            return None
+        return os.path.join(os.path.abspath(r.stdout.strip()), _TESTED_TREES_NAME)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _read_stamps(path: str | None) -> set:
+    if not path:
+        return set()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return {ln.strip() for ln in fh if ln.strip()}
+    except FileNotFoundError:
+        return set()
+
+
+def _record_tested_tree(path: str | None, tree: str) -> None:
+    """Append `tree` to the stamp file, keeping the last _TESTED_TREES_KEEP lines.
+    Any failure prints one note and is swallowed -- it must never fail the gate
+    (a missing stamp only costs a full suite run at push time)."""
+    try:
+        if not path:
+            raise RuntimeError("git common dir unavailable")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                lines = [ln.strip() for ln in fh if ln.strip()]
+        except FileNotFoundError:
+            lines = []
+        lines.append(tree)
+        lines = lines[-_TESTED_TREES_KEEP:]
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n".join(lines) + "\n")
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[native git hook: pre-commit] note: could not record the tested "
+            f"tree ({type(exc).__name__}: {exc}); pre-push will re-run the suite.",
+            file=sys.stderr,
+        )
+
+
+def _push_already_covered(refs: list, ptc, remote: str = "") -> tuple[bool, str, tuple]:
+    """-> (covered, reason, (stamped, docs_only)).
+
+    True only if EVERY commit being pushed was already tested green at
+    pre-commit (its tree is stamped: `stamped`) or is a single-parent commit
+    touching no tested path and no suite-input doc (`_is_push_suite_input`) on a
+    covered / already-pushed parent (`docs_only`). Any doubt -> False, i.e. run
+    the suite. MUST be called before `_scrub_git_env()` (git queries).
+
+    "Already pushed" == not among the new commits, which the rev-list
+    `--not <remote sha>` / `--not --remotes[=<remote>]` construction guarantees
+    (`remote` is git's first pre-push hook argument, the remote name -- the
+    adapter's sys.argv[2]; empty -> every remote). Tag refs
+    are processed like branches (rev-list peels the tag), so a branch+tag push
+    with an untested tagged commit is NOT covered; a tag whose commit is already
+    pushed simply contributes no new commits.
+    """
+    zero = (False, "", (0, 0))
+    try:
+        stamps = _read_stamps(_stamp_path())
+        stamped_set: set = set()
+        docs_set: set = set()
+        remotes_arg = f"--remotes={remote}" if remote else "--remotes"
+        for ref, local_sha, *rest in refs:
+            remote_sha = rest[0] if rest else ""
+            if remote_sha and set(remote_sha) != {"0"}:
+                new = _git_lines("rev-list", "--reverse", "--topo-order",
+                                 local_sha, "--not", remote_sha)
+            else:
+                new = _git_lines("rev-list", "--reverse", "--topo-order",
+                                 local_sha, "--not", remotes_arg)
+            if not new:
+                if ref.startswith("refs/tags/"):
+                    continue  # tag on an already-pushed commit: nothing new
+                return False, f"{ref}: no new commits found (cannot verify)", (0, 0)
+            if len(new) > _PUSH_COVER_MAX_COMMITS:
+                return False, f"{ref}: {len(new)} new commits (> {_PUSH_COVER_MAX_COMMITS})", (0, 0)
+            new_set = set(new)
+            covered: set = set()
+            for sha in new:  # oldest first
+                tree = _git_lines("rev-parse", f"{sha}^{{tree}}")[0]
+                if tree in stamps:
+                    covered.add(sha)
+                    stamped_set.add(sha)
+                    continue
+                parents = _git_lines("rev-list", "--parents", "-n", "1", sha)[0].split()[1:]
+                if len(parents) != 1:
+                    return False, f"{sha[:10]} is an unstamped merge/root commit", (0, 0)
+                parent = parents[0]
+                r = _git("diff", "--name-only", "--no-renames", "-z", parent, sha)
+                if r.returncode != 0:
+                    return False, f"`git diff` failed for {sha[:10]}", (0, 0)
+                files = [f for f in r.stdout.split("\0") if f]
+                if ptc._touches_tested_code(files):
+                    return False, f"{sha[:10]} touches tested code and was not tested at pre-commit", (0, 0)
+                if any(_is_push_suite_input(f) for f in files):
+                    return False, f"{sha[:10]} touches a suite-input doc and was not tested at pre-commit", (0, 0)
+                if parent in new_set and parent not in covered:
+                    return False, f"{sha[:10]}'s parent {parent[:10]} is not covered", (0, 0)
+                covered.add(sha)
+                docs_set.add(sha)
+        docs_set -= stamped_set
+        if not stamped_set and not docs_set:
+            return False, "no branch commits to verify", (0, 0)
+        return True, "all new commits covered", (len(stamped_set), len(docs_set))
+    except Exception as exc:  # noqa: BLE001 - fail toward running the suite
+        return False, f"could not verify coverage ({type(exc).__name__}: {exc})", (0, 0)
 
 
 def _write_tree() -> tuple[str | None, str]:
@@ -538,7 +698,12 @@ def _run_test_gates(mode: str) -> int:
     """The CODE gates: pytest and the antipattern scan.
 
     `pre-commit` narrows by staged path; `pre-push` always runs the full suite
-    because it is the backstop for every commit the `pre-commit` gate never saw.
+    because it is the backstop for every commit the `pre-commit` gate never saw
+    -- EXCEPT when `_push_already_covered` proves every pushed commit's exact tree
+    already passed at pre-commit (stamp file), or is a docs-only commit (no tested
+    path, no suite-input doc) on a covered / already-pushed parent, in which case
+    it skips. pre-commit stamps a tree only when pytest was required, ran against
+    the SNAPSHOT, and passed.
     """
     sys.path.insert(0, _HERE)
     import pre_tool_checks as ptc  # noqa: E402 - path set above
@@ -546,6 +711,7 @@ def _run_test_gates(mode: str) -> int:
     mismatch: list = []
     tree: str | None = None
     tree_reason = ""
+    stamp_file: str | None = None
 
     if mode == "pre-commit":
         # RESOLVED BEFORE THE SCRUB, deliberately: `git diff --cached` needs the
@@ -569,6 +735,7 @@ def _run_test_gates(mode: str) -> int:
         # only reachable through the inherited GIT_INDEX_FILE. Failure -> None,
         # and the working-tree fallback below (loudly).
         tree, tree_reason = _write_tree()
+        stamp_file = _stamp_path()  # absolute; resolved before any chdir
     else:
         refs = _parse_push_refs()
         if refs is None:
@@ -590,6 +757,27 @@ def _run_test_gates(mode: str) -> int:
         need_pytest, need_antipattern = True, False
         scope = "the working tree"
         # Resolved before the scrub -- these are git queries.
+        # The shim passes git's own args after the mode: argv = [script,
+        # "pre-push", <remote name>, <url>]. Guarded on argv[1] so a unit test
+        # (argv = pytest's) never mistakes a pytest flag for a remote.
+        remote = ""
+        if sys.argv[1:2] == ["pre-push"] and len(sys.argv) > 2 and not sys.argv[2].startswith("-"):
+            remote = sys.argv[2]
+        covered, why, (n_stamped, n_docs) = _push_already_covered(refs, ptc, remote)
+        if covered:
+            docs_note = (
+                f", {n_docs} touch no tested path or suite-input doc on top of a "
+                "covered or already-pushed parent" if n_docs else ""
+            )
+            print(
+                f"[native git hook: pre-push] {n_stamped} commit(s) passed the "
+                f"full suite at pre-commit (exact tree){docs_note} -- skipping "
+                "the local re-run. GitHub CI re-runs the suite only for pushes "
+                "matching tests.yml's path filters, and it does not gate the "
+                "deploy.",
+                file=sys.stderr,
+            )
+            return 0
         mismatch = _push_tree_mismatch(refs, ptc)
 
     _scrub_git_env()
@@ -676,6 +864,9 @@ def _run_test_gates(mode: str) -> int:
             file=sys.stderr,
         )
         return 1
+
+    if mode == "pre-commit" and need_pytest and wt and tree:
+        _record_tested_tree(stamp_file, tree)
 
     print(
         f"[native git hook: {mode}] {'; '.join(ran)} (scope: {scope}). "
