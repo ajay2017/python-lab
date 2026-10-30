@@ -30,6 +30,7 @@ import pandas as pd
 from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer import stop_breach_text as _stop_breach_text
 from stock_analyzer import revision_flag as _revision_flag
+from stock_analyzer import earnings_stop_cover as _esc
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_STRONG_BUY,
@@ -3408,6 +3409,14 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         price  = _f(pm["Price"].iloc[0])
         label  = "TODAY" if days == 0 else f"in {days}d"
         _etrim = _trim_sizing.earnings_week_trim(weight, _n_pos, shares_raw)
+        # Finding #23: the Trigger line looks at the stop, same decision as
+        # the 🔔 Playbook (earnings_stop_cover). None gap stays None.
+        _esc_sector = str(pm["Sector"].iloc[0]) if "Sector" in pm.columns else "Other"
+        _esc_gap = _f(pm["Gap to Stop (%)"].iloc[0], None) if "Gap to Stop (%)" in pm.columns else None
+        _esc_rm = (data or {}).get("risk_metrics")
+        _esc_est = _esc.estimate_earnings_move(
+            _esc_rm if isinstance(_esc_rm, dict) else {}, _esc_sector)
+        _esc_state = _esc.stop_cover_state(_esc_gap, _esc_est)
         if _etrim is not None and _etrim["trim_shares"] >= 1:
             trim_shares  = _etrim["trim_shares"]
             trim_dollars = round(trim_shares * price, 0)
@@ -3424,7 +3433,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 f"{_overweight_floor:.1f}% position-count-adjusted threshold "
                 f"(N={_n_pos} positions). Trim to size-down the binary event exposure."
             )
-            trigger = "Beat → re-enter post-print if composite holds; Miss → existing stop protects rest."
+            trigger = _esc.brief_earnings_trigger(_esc_state, _esc_gap, _esc_est, trimmed=True)
         elif _etrim is not None:
             action = {"type": "WATCH"}
             why = (
@@ -3432,7 +3441,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 f"position-count-adjusted line by less than one share at today's "
                 f"price, so no trim is sized (N={_n_pos} positions)."
             )
-            trigger = "Surprise miss + price gap-down → existing stop protects; no pre-event action needed."
+            trigger = _esc.brief_earnings_trigger(_esc_state, _esc_gap, _esc_est, trimmed=False)
         else:
             action = {"type": "WATCH"}
             why = (
@@ -3440,7 +3449,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 f"(≤ {_overweight_floor:.1f}% position-count-adjusted threshold, "
                 f"N={_n_pos} positions). Existing sizing already conservative for the binary risk."
             )
-            trigger = "Surprise miss + price gap-down → existing stop protects; no pre-event action needed."
+            trigger = _esc.brief_earnings_trigger(_esc_state, _esc_gap, _esc_est, trimmed=False)
         # Rating-change Watch flag (shared rule/wording): its own field, never
         # appended to `why` (the Snapshot caps `why`), never changes the
         # action, sizing or priority.

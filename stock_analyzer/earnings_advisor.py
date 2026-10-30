@@ -12,6 +12,11 @@ import pytz as _pytz
 from datetime import date as _date, datetime as _datetime
 
 from stock_analyzer import revision_flag as _revflag
+from stock_analyzer.earnings_stop_cover import (
+    SECTOR_DEFAULTS,
+    estimate_earnings_move,
+    stop_cover_state,
+)
 from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
 
 from stock_analyzer.constants import (
@@ -29,7 +34,6 @@ from stock_analyzer.constants import (
     SINGLE_NAME_TRIM_TRIGGER,
     EARNINGS_REDUCE_MIN_WEIGHT_PCT,
     EARNINGS_WEAK_TRIM_PCT,
-    EARNINGS_STOP_COVER_FRAC,
 )
 from stock_analyzer.trim_sizing import (
     earnings_week_trim,
@@ -99,25 +103,7 @@ def analyst_fields(data: dict, ticker: str) -> dict:
     }
 
 
-_SECTOR_DEFAULTS = {
-    "Semiconductors":  10.0,
-    "AI & Data":        9.0,
-    "AI & Cloud":       8.0,
-    "Cybersecurity":    9.0,
-    "Healthcare":       8.0,
-    "Energy":           6.0,
-    "Defense":          5.0,
-    "Financials":       6.0,
-    "Clean Energy":     8.0,
-    "Consumer Tech":    8.0,
-    "EV & Auto":       10.0,
-    "Enterprise Tech":  7.0,
-    # Added 2026-09-15 (F-274 follow-on, user-confirmed) — regulated,
-    # rate-case-driven utility earnings are famously small and predictable;
-    # real post-earnings moves for DUK/SO/D/AEP/EXC are typically 1-3%,
-    # well below the previous floor here (Defense, 5.0).
-    "Utilities":        3.0,
-}
+_SECTOR_DEFAULTS = SECTOR_DEFAULTS  # moved to earnings_stop_cover (finding #23)
 
 _SECTOR_WATCH = {
     "Semiconductors": [
@@ -198,11 +184,7 @@ _DEFAULT_WATCH = [
 
 def _estimate_move(risk_metrics: dict, sector: str) -> float:
     """Estimate typical earnings-day move from daily VaR × 3."""
-    var95 = abs(_f(risk_metrics.get("var_95")))
-    est = max(3.0, min(25.0, var95 * 3.0))
-    if est <= 3.1:
-        est = _SECTOR_DEFAULTS.get(sector, 7.0)
-    return round(est, 1)
+    return estimate_earnings_move(risk_metrics, sector)
 
 
 def _sh(n) -> str:
@@ -445,7 +427,7 @@ def _recommend_core(
         )
 
     # ── MONITOR — stop close to estimated move ───────────────────────────────
-    if gap_to_stop < est_move * EARNINGS_STOP_COVER_FRAC:
+    if stop_cover_state(gap_to_stop, est_move) == "at_risk":
         if _out is not None:
             _out["watch_reason"] = "stop"
         return (
@@ -702,7 +684,7 @@ def build_earnings_playbook(
             # Volatility
             "est_move":      est_move,
             "earn_risk":     earn_risk,
-            "stop_at_risk":  (gap is not None and gap < est_move * EARNINGS_STOP_COVER_FRAC),
+            "stop_at_risk":  (stop_cover_state(gap, est_move) == "at_risk"),
             # Playbook
             "action":        action,
             "priority":      priority,

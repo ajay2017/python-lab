@@ -1016,6 +1016,9 @@ _GATE_FILES = {
     # every surface shares; earnings_advisor sizes pre-earnings trims (was missing).
     "stock_analyzer/revision_flag.py",
     "stock_analyzer/earnings_advisor.py",
+    # Added 2026-10-30 (finding #23): the one stop-vs-earnings-move decision the
+    # Catalyst Watch Playbook (MONITOR, stop_at_risk) and the Brief trigger share.
+    "stock_analyzer/earnings_stop_cover.py",
     # Added 2026-10-30 (finding #13): whether a same-day macro release has passed,
     # i.e. whether the Brief macro card / Pre-Event Playbook still show a pre-release
     # hold / reduce instruction; imported by the gate file act_today_view.
