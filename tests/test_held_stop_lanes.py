@@ -11,7 +11,7 @@ import cron_runner as cr
 from stock_analyzer import headless_alert_engine as hae
 
 TODAY = datetime.date(2026, 10, 30)
-GO_LIVE_DAY = datetime.datetime(2026, 11, 9, 8, 30)
+GO_LIVE_DAY = datetime.datetime(2026, 11, 2, 8, 30)   # first Monday after the 10-31 go-live
 
 
 def _hs(basis="full", fell_back=False, buy_day=False, label="Trailing Stop", note=""):

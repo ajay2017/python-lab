@@ -255,27 +255,27 @@ def test_stop_noun_never_doubles_stop():
 
 # ── D4 notice window ─────────────────────────────────────────────────────────
 @pytest.mark.parametrize("today,visible", [
-    (date(2026, 11, 6), False),    # HELD_TRAIL_START itself: before go-live
-    (date(2026, 11, 7), True),     # deploy Saturday: 0 sessions elapsed
-    (date(2026, 11, 8), True),
-    (date(2026, 11, 9), True),     # session 1
-    (date(2026, 11, 13), True),    # session 5 = HELD_STOP_NOTICE_SESSIONS
-    (date(2026, 11, 14), True),    # weekend after session 5 (still 5)
-    (date(2026, 11, 16), False),   # session 6
+    (date(2026, 10, 30), False),   # HELD_TRAIL_START itself: before go-live
+    (date(2026, 10, 31), True),    # deploy Saturday: 0 sessions elapsed
+    (date(2026, 11, 1), True),
+    (date(2026, 11, 2), True),     # session 1
+    (date(2026, 11, 6), True),     # session 5 = HELD_STOP_NOTICE_SESSIONS
+    (date(2026, 11, 7), True),     # weekend after session 5 (still 5)
+    (date(2026, 11, 9), False),    # session 6
     (date(2026, 12, 1), False),
 ])
 def test_notice_window(today, visible):
-    assert C.HELD_TRAIL_START == "2026-11-06" and C.HELD_STOP_NOTICE_SESSIONS == 5
+    assert C.HELD_TRAIL_START == "2026-10-30" and C.HELD_STOP_NOTICE_SESSIONS == 5
     assert hv.notice_visible(today) is visible
     assert (hv.recalc_notice(today) is not None) is visible
     assert (hv.email_notice_line(today) is not None) is visible
 
 
 def test_notice_text_is_true_and_says_sell_all_possible():
-    t = hv.recalc_notice(date(2026, 11, 9))
+    t = hv.recalc_notice(date(2026, 11, 2))
     assert "recalculated" in t and "only moves up" in t and "sell-all" in t
     assert "$" not in t and "**" not in t
-    e = hv.email_notice_line(date(2026, 11, 9))
+    e = hv.email_notice_line(date(2026, 11, 2))
     assert "recalculated" in e and "sell-all" in e
 
 

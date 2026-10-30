@@ -57,7 +57,7 @@ def test_constants_values_owner_ruled(monkeypatch):
     assert (C.HELD_TRAIL_ATR_MULT, C.HELD_STOP_WARMUP_BARS, C.HELD_STOP_MIN_BARS,
             C.HELD_STOP_FILL_TOL_PCT, C.HELD_STOP_SHARES_TOL,
             C.HELD_STOP_NOTICE_SESSIONS) == (3.0, 60, 15, 2.0, 1e-4, 5)
-    assert date.fromisoformat(C.HELD_TRAIL_START) == date(2026, 11, 6)
+    assert date.fromisoformat(C.HELD_TRAIL_START) == date(2026, 10, 30)
 
 
 def test_yfinance_pin_tripwire():
