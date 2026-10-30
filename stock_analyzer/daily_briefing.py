@@ -2997,6 +2997,10 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             # like a contradictory second opinion rather than the same call).
             "_affected_all": list(ev.get("affected_tickers", [])),
             "_event_category": ev.get("category", "Economic"),
+            # Release timing for the render-time post-release swap
+            # (macro_release.refresh_macro_card); the Brief is memoized.
+            "_event_date": ev.get("date"),
+            "_event_time_et": ev.get("time_et"),
         })
 
     # 5 — HIGH-priority risk advisor flags

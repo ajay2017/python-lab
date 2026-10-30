@@ -220,6 +220,48 @@ def test_action_detail_hold_is_generic():
     assert "Hold current position" in detail
 
 
+# ─── same-day release: post-release wording (2026-10-30 #13) ──────────────────
+from datetime import datetime as _dt
+
+
+def _fomc_event(time_et="14:00"):
+    return {"event": "FOMC Rate Decision", "date": today_et(),
+            "impact": "HIGH", "time_et": time_et}
+
+
+def _fin_port():
+    return pd.DataFrame([_row(Signal="Sell")])
+
+
+def _at(hour):
+    return _dt.combine(today_et(), _dt.min.time()).replace(hour=hour)
+
+
+def test_action_detail_hold_uses_event_time_not_hardcoded_0830():
+    d = _action_detail(_row(), "FOMC Rate Decision", "HOLD", "14:00")
+    assert "14:00 ET" in d and "08:30" not in d
+    assert _action_detail(_row(), "FOMC Rate Decision", "HOLD").endswith("when the release drops.")
+
+
+def test_playbook_after_same_day_release_is_marked_released():
+    pb = build_event_playbooks([_fomc_event()], _fin_port(), 5000.0, now=_at(15))[0]
+    assert pb["released"] is True and pb["time_et"] == "14:00"
+    assert pb["positions"][0]["action"] == "PROTECT"
+    for p in pb["positions"]:
+        assert p["detail"].startswith("Released at 14:00 ET")
+
+
+def test_playbook_before_same_day_release_is_unchanged():
+    pb = build_event_playbooks([_fomc_event()], _fin_port(), 5000.0, now=_at(9))[0]
+    assert pb["released"] is False
+    assert all("Released at" not in p["detail"] for p in pb["positions"])
+
+
+def test_playbook_unknown_time_never_released():
+    pb = build_event_playbooks([_fomc_event(time_et=None)], _fin_port(), 5000.0, now=_at(23))[0]
+    assert pb["released"] is False
+
+
 def test_post_event_rules_bear_only():
     text = _post_event_rules(_row(Ticker="XYZ", Sector="Financials"), "Non-Farm Payrolls")
     assert "Miss + Downward Revisions" in text or "If" in text

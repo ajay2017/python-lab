@@ -34,6 +34,7 @@ instead, so the two pages can no longer drift apart.
 import pandas as pd
 
 from stock_analyzer import decision_bucket
+from stock_analyzer.macro_release import refresh_macro_card
 from stock_analyzer.util import stop_recovery_state
 
 
@@ -125,6 +126,7 @@ def act_today_view(
     port_df_enriched,
     live_prices: dict | None,
     margin_pct: float,
+    now=None,
 ) -> dict:
     """Return the single canonical Act Today read for this render.
 
@@ -199,11 +201,18 @@ def act_today_view(
         else:
             active.append(item)
 
+    # Same-day macro release passed -> swap the pre-release wording here, once,
+    # for every consumer of the view (the Brief is memoized, so the build can't).
+    aware = split["aware"]
+    if now is not None:
+        active = [refresh_macro_card(i, now) for i in active]
+        aware = [refresh_macro_card(i, now) for i in aware]
+
     n_active = len(active)
     return {
         "state": "act" if n_active > 0 else "clear",
         "active": active,
         "resolved": resolved,
-        "aware": split["aware"],
+        "aware": aware,
         "n_active": n_active,
     }

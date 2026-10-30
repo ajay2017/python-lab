@@ -10,7 +10,8 @@ For each upcoming high-impact macro event generates:
 
 import pandas as _pd
 
-from stock_analyzer.market_time import today_et
+from stock_analyzer.market_time import now_et, today_et
+from stock_analyzer.macro_release import release_passed, released_text
 from stock_analyzer.score_text import composite_score_text
 from stock_analyzer.trim_sizing import exact_shares, fmt_shares, fraction_trim_shares, shares_to_trim
 
@@ -429,7 +430,7 @@ def _build_rationale(row, event_name: str, action: str, opp_downgraded: bool = F
     )
 
 
-def _action_detail(row, event_name: str, action: str) -> str:
+def _action_detail(row, event_name: str, action: str, time_et=None) -> str:
     ticker  = str(row.get("Ticker", ""))
     sector  = str(row.get("Sector", ""))
     weight  = _f(row.get("Weight (%)"), 0.0)
@@ -474,7 +475,8 @@ def _action_detail(row, event_name: str, action: str) -> str:
 
     return (
         f"Hold current position. Stops in place. "
-        f"Be at your terminal when the release drops at 08:30 ET."
+        + (f"Be at your terminal when the release drops at {time_et} ET."
+           if time_et else "Be at your terminal when the release drops.")
     )
 
 
@@ -510,6 +512,7 @@ def build_event_playbooks(
     events: list,
     port_df,
     total_val: float,
+    now=None,
 ) -> list:
     """
     Generate a Pre-Event Playbook for each upcoming HIGH-impact event.
@@ -525,6 +528,7 @@ def build_event_playbooks(
     if port_df is None or port_df.empty:
         return []
 
+    now       = now or now_et()
     today     = today_et()
     playbooks = []
 
@@ -543,6 +547,8 @@ def build_event_playbooks(
         if not sc_def:
             continue
 
+        time_et            = event.get("time_et")
+        released           = release_passed(ev_date, time_et, now) is True
         positions          = []
         total_bear_impact  = 0.0
         total_bull_impact  = 0.0
@@ -566,7 +572,8 @@ def build_event_playbooks(
 
             action, priority, opp_down = _pre_event_action(row, ev_name, days_until)
             rationale        = _build_rationale(row, ev_name, action, opp_down)
-            detail           = _action_detail(row, ev_name, action)
+            detail           = (released_text(time_et) if released
+                                else _action_detail(row, ev_name, action, time_et))
             post_evt         = _post_event_rules(row, ev_name)
 
             positions.append({
@@ -616,6 +623,8 @@ def build_event_playbooks(
             "date":              ev_date,
             "days_until":        days_until,
             "days_label":        event.get("days_label", ""),
+            "time_et":           time_et,
+            "released":          released,
             "category":          event.get("category", ""),
             "description":       event.get("description", ""),
             "estimate":          event.get("estimate"),

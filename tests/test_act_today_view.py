@@ -85,6 +85,46 @@ def test_clear_when_act_bucket_empty_and_not_offline():
     assert view["active"] == []
 
 
+# ── Same-day macro release wording (2026-10-30 #13) ──────────────────────────
+
+def _macro_card():
+    from datetime import date
+    return {"ticker": None, "kind": "macro", "priority": "high",
+            "action": "MACRO — GDP", "directive": "Hold through the print",
+            "why": "w", "trigger": "t",
+            "_event_date": date(2026, 10, 29), "_event_time_et": "08:30"}
+
+
+def _macro_view(now):
+    card = _macro_card()
+    view = act_today_view(
+        daily_brief={"act_today": [card], "review_list": []},
+        brief_offline=False, port_df_enriched=None, live_prices=None,
+        margin_pct=MARGIN, now=now,
+    )
+    items = [i for i in view["active"] + view["aware"] if i.get("kind") == "macro"]
+    assert len(items) == 1
+    return card, items[0]
+
+
+def test_view_swaps_macro_directive_after_release_without_mutating_brief():
+    from datetime import datetime
+    card, out = _macro_view(datetime(2026, 10, 29, 12, 0))
+    assert out["directive"].startswith("Released at 08:30 ET")
+    assert card["directive"] == "Hold through the print"
+
+
+def test_view_macro_unchanged_before_release():
+    from datetime import datetime
+    _, out = _macro_view(datetime(2026, 10, 29, 8, 0))
+    assert out["directive"] == "Hold through the print"
+
+
+def test_view_macro_unchanged_when_now_is_none():
+    _, out = _macro_view(None)
+    assert out["directive"] == "Hold through the print"
+
+
 # ── Stop-breach demotion boundary ───────────────────────────────────────────
 
 def test_recovered_breach_demotes_to_resolved():

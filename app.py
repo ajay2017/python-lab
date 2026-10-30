@@ -241,6 +241,7 @@ from stock_analyzer import budget_view as _budget_view
 from stock_analyzer import sizing_path as _sizing_path
 from stock_analyzer import stop_breach_text as _stop_breach_text
 from stock_analyzer import score_text as _score_text
+from stock_analyzer import macro_release as _macro_release
 from stock_analyzer import trade_caption as _trade_caption
 from stock_analyzer import entry_eligibility as _entry_elig
 from stock_analyzer import news_feed as _news_feed
@@ -7997,6 +7998,7 @@ if page == "🏠 Home":
         port_df_enriched = _pe_live,
         live_prices      = _lp_live,
         margin_pct       = _STOP_REC_MARGIN,
+        now              = _now_et(),
     )
     _db_offline        = _act_view["state"] == "offline"
     _active_act_bucket = _act_view["active"]
@@ -14112,6 +14114,7 @@ elif page == "🧾 Summary":
             port_df_enriched = st.session_state.get("_port_df_enriched"),
             live_prices      = st.session_state.get("_live_prices"),
             margin_pct       = _SM_STOP_REC_MARGIN,
+            now              = _now_et(),
         )
         _sm_act_bucket = _sm_act_view["active"]
         # Disclose a demoted breach explicitly — _sm_act_bucket is now the
@@ -42576,9 +42579,11 @@ elif page == "📅 Economic Calendar":
                     _sign_bull = "+" if _pb["total_bull_impact"] > 0 else ""
                     _pk2.metric("🐻 Bear Scenario",  f"${_pb['total_bear_impact']:+,.0f}")
                     _pk3.metric("🐂 Bull Scenario",  f"${_pb['total_bull_impact']:+,.0f}")
+                    _pb_view = _macro_release.pre_event_view(_pb.get("released"))
+                    _pb_prot_live = _pb["protect_count"] > 0 and _pb_view["protect_delta_on"]
                     _pk4.metric("🛡️ PROTECT",        _pb["protect_count"],
-                                delta="action needed" if _pb["protect_count"] > 0 else None,
-                                delta_color="inverse" if _pb["protect_count"] > 0 else "off")
+                                delta="action needed" if _pb_prot_live else None,
+                                delta_color="inverse" if _pb_prot_live else "off")
                     _pk5.metric("🎯 Add",  _pb["opp_count"])
 
                     # ── Scenario cards ─────────────────────────────────────
@@ -42625,9 +42630,16 @@ elif page == "📅 Economic Calendar":
                         f"⚡ Pre-Event Actions — "
                         f"{_pb['protect_count']} Protect  ·  {_pb['watch_count']} Watch  ·  "
                         f"{_pb['opp_count']} Add  ·  "
-                        f"{len(_pb['positions']) - _pb['protect_count'] - _pb['watch_count'] - _pb['opp_count']} Hold",
-                        expanded=(_pb_urgent and _actions_needed > 0),
+                        f"{len(_pb['positions']) - _pb['protect_count'] - _pb['watch_count'] - _pb['opp_count']} Hold"
+                        f"{_pb_view['header_suffix']}",
+                        expanded=(_pb_urgent and _actions_needed > 0 and _pb_view["auto_expand_ok"]),
                     ):
+                        if _pb.get("released"):
+                            st.info(
+                                f"🕗 {_pb['event']} was released at {_pb['time_et']} ET today — "
+                                "the pre-event actions below no longer apply. "
+                                "See 📊 Post-Event Results."
+                            )
                         for _pos in _pb["positions"]:
                             _ac     = _pos["action"]
                             _ac_clr, _ac_bg = _action_colors.get(_ac, ("#6b7280", "#111"))
@@ -42681,10 +42693,8 @@ elif page == "📅 Economic Calendar":
                     _post_positions = [p for p in _pb["positions"] if p["action"] in ("PROTECT", "WATCH")]
                     if _post_positions:
                         with st.expander("🎯 Post-Event Decision Rules", expanded=False):
-                            st.caption(
-                                "These rules apply the morning the number drops (08:30 ET). "
-                                "Have a plan before the release — not after."
-                            )
+                            st.caption(_macro_release.post_rules_caption(
+                                _pb.get("released"), _pb.get("time_et")))
                             for _pp in _post_positions:
                                 _ac_clr, _ = _action_colors.get(_pp["action"], ("#6b7280", "#111"))
                                 st.markdown(

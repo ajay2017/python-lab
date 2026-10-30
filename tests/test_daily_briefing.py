@@ -1989,6 +1989,24 @@ def test_build_daily_briefing_macro_affected_drops_risk_off_trim_name(monkeypatc
     assert macro["why"].endswith("Affected: BBB.")
 
 
+def test_macro_item_carries_release_date_and_time_for_render_swap():
+    # 2026-10-30 #13: the memoized Brief can't check the clock, so the macro
+    # card carries the event's date/time for macro_release.refresh_macro_card.
+    port_df = make_port_df([{"ticker": "AAA", "weight": 5.0}])
+    macro_events = [{
+        "impact": _MACRO_HIGH, "date": _TODAY, "category": "Economic",
+        "event": "GDP", "affected_tickers": ["AAA"], "time_et": "08:30",
+    }]
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=macro_events, held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+    )
+    macro = next(i for i in brief["act_today"] if i.get("kind") == "macro")
+    assert macro["_event_date"] == _TODAY
+    assert macro["_event_time_et"] == "08:30"
+
+
 def test_affected_text_caps_at_five_with_more_tail():
     from stock_analyzer.daily_briefing import _affected_text
     assert _affected_text(list("ABCDE")) == "A, B, C, D, E"
