@@ -276,3 +276,12 @@ def test_entry_eligibility_is_pure_and_margin_isolated():
             f = node.func
             nm = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
             assert nm not in ("now", "today", "utcnow"), f"clock read {nm}()"
+
+
+def test_tone_source_line_home_locked_with_and_without_clock():
+    from datetime import datetime
+    from stock_analyzer.entry_eligibility import tone_source_line
+    ts = {"available": True, "source": "home_locked", "as_of": datetime(2026, 10, 29, 9, 45)}
+    assert tone_source_line(ts) == "Market read from Home's locked Brief (Lock Setup, locked 9:45 AM ET)."
+    ts["as_of"] = None
+    assert tone_source_line(ts) == "Market read from Home's locked Brief (Lock Setup)."

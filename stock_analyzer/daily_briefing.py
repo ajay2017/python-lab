@@ -1145,6 +1145,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         _bear_expired = _expired_macro_series(today)
         return {
             "tone":          "bear",
+            "sp500_pct":     sp500_pct,
+            "tone_available": market_context.get("tone_available"),
             "message":       (
                 f"S&P 500 {sp500_pct:+.2f}% today — market in risk-off mode. "
                 "Focus on protecting existing positions. "
@@ -2654,6 +2656,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "adds_paused":                [] if tone == "bull" else _adds_paused_list(),
         "risk_banner":                risk_banner,
         "sp500_pct":                  sp500_pct,
+        # None when the context carries no flag; False = Home's index read failed
+        # (Grow Today then ran the day as flat); read by entry_posture.
+        "tone_available":             market_context.get("tone_available"),
         "nasdaq_pct":                 nasdaq_pct,
         "leading_sectors":            lead_secs,
         # LATE construction: built after every suppression decision so the G-07

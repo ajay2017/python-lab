@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import math
 
+from stock_analyzer import entry_eligibility
+from stock_analyzer.act_today_view import locked_snapshot_servable
 from stock_analyzer.constants import COMPOSITE_BUY, MARKET_TONE_BEAR_PCT, RR_ENTRY_MIN
 from stock_analyzer.entry_eligibility import (
     classify_tone,
@@ -31,6 +33,12 @@ from stock_analyzer.rr_readout import fmt_ratio_vs
 _UNAVAILABLE = {"tone": None, "sp500_pct": None, "available": False, "source": None, "as_of": None}
 
 _TONE_TO_POSTURE = {"bull": "open", "flat": "confirmed_only", "bear": "deferred"}
+
+# Strictness of a tone for a new entry: bear > flat > bull.
+_TONE_STRICTNESS = {"bull": 0, "flat": 1, "bear": 2}
+
+# Sources meaning "this read is Home's" (live Brief or its locked snapshot).
+_HOME_SOURCES = ("home", "home_locked")
 
 
 def _finite(x) -> bool:
@@ -59,23 +67,85 @@ def new_entry_posture(tone_state) -> dict:
     }
 
 
-def tone_state_for_page(home_synth, today_iso, live_pct, live_ok) -> dict:
-    """Tone state for a page that isn't Home: today's ``_home_synth_cache``
-    market context when it carries a readable tone, else the live S&P read,
-    else unavailable.  Never raises."""
+def page_home_state(home_synth, today_iso) -> str:
+    """How Home's Brief stands for today's tone, from ``_home_synth_cache``:
+    ``HOME_NOT_TODAY`` unless built today (dict with a dict bundle), else
+    ``entry_eligibility.home_tone_state`` of its market context.  Never raises."""
     try:
         if (
             isinstance(home_synth, dict)
             and home_synth.get("date") == today_iso
             and isinstance(home_synth.get("bundle"), dict)
         ):
+            return entry_eligibility.home_tone_state(
+                home_synth["bundle"].get("_market_context"), True)
+    except Exception:
+        pass
+    return entry_eligibility.HOME_NOT_TODAY
+
+
+def tone_state_for_page(home_synth, today_iso, live_pct, live_ok) -> dict:
+    """Tone state for a page that isn't Home: today's ``_home_synth_cache``
+    market context when it carries a readable tone; unavailable when Home was
+    built today but its tone read failed (Home then ran the day as flat, so a
+    live read must not call an entry Grow Today didn't make); else the live S&P
+    read when Home isn't built today; else unavailable.  Never raises."""
+    try:
+        home_state = page_home_state(home_synth, today_iso)
+        if home_state == entry_eligibility.HOME_TODAY_TONE_FAILED:
+            return dict(_UNAVAILABLE)
+        if home_state != entry_eligibility.HOME_NOT_TODAY:
             ctx = home_synth["bundle"].get("_market_context")
             st = resolve_tone_state(
                 ctx, True, ctx.get("tone_read_at") if isinstance(ctx, dict) else None,
                 None, False)
             if st.get("available"):
                 return st
+            # Built today but the tone is unusable (e.g. NaN S&P change): never
+            # fall back to the live read.
+            return dict(_UNAVAILABLE)
         return resolve_tone_state(None, False, None, live_pct, live_ok)
+    except Exception:
+        return dict(_UNAVAILABLE)
+
+
+def locked_snapshot_for_today(locked_flag, locked_for_date, today, snapshot):
+    """The Brief Lock snapshot when it is servable for ``today``, else None."""
+    try:
+        if locked_flag and locked_for_date == today and locked_snapshot_servable(snapshot):
+            return snapshot
+    except Exception:
+        pass
+    return None
+
+
+def stricter_tone_state(current, locked_snapshot, locked_at=None) -> dict:
+    """While the Brief is locked, Grow Today shows the locked morning tone; use
+    the STRICTER of it and ``current`` (bear > flat > bull) so following the
+    lock can never loosen the call.  ``locked_snapshot`` None (no servable lock
+    for today) -> ``current``.  An unavailable ``current`` stays unavailable; a
+    malformed lock withholds.  A tie returns ``current``."""
+    if locked_snapshot is None:
+        return current
+    try:
+        gt = locked_snapshot.get("grow_today") if isinstance(locked_snapshot, dict) else None
+        gt = gt if isinstance(gt, dict) else {}
+        l_tone = gt.get("tone")
+        l_pct = gt.get("sp500_pct")
+        if (l_tone not in _TONE_STRICTNESS or not _finite(l_pct)
+                or gt.get("tone_available") is False):
+            # A lock written while Home's index read failed carries a made-up
+            # flat 0.0: withhold rather than quote it.
+            return dict(_UNAVAILABLE)
+        if not isinstance(current, dict) or current.get("available") is not True:
+            return current if isinstance(current, dict) else dict(_UNAVAILABLE)
+        c_rank = _TONE_STRICTNESS.get(current.get("tone"))
+        if c_rank is None:
+            return dict(_UNAVAILABLE)
+        if _TONE_STRICTNESS[l_tone] > c_rank:
+            return {"tone": l_tone, "sp500_pct": l_pct, "available": True,
+                    "source": "home_locked", "as_of": locked_at}
+        return current
     except Exception:
         return dict(_UNAVAILABLE)
 
@@ -91,7 +161,8 @@ def _fmt_pct(posture: dict) -> str:
     return txt
 
 
-def redeploy_call(headline, posture, *, bundle=None, site: str = "home") -> dict:
+def redeploy_call(headline, posture, *, bundle=None, site: str = "home",
+                  home_state=None) -> dict:
     """What the redeploy headline may say given today's entry posture.
 
     ``headline`` is a ``rr_readout.redeploy_headline`` dict; ``posture`` is the
@@ -117,7 +188,7 @@ def redeploy_call(headline, posture, *, bundle=None, site: str = "home") -> dict
             "available": kind != "unknown",
             "source": p.get("source"),
             "as_of": p.get("as_of"),
-        })
+        }, home_state)
     except Exception:
         source_line = None
 
@@ -174,7 +245,7 @@ def redeploy_call(headline, posture, *, bundle=None, site: str = "home") -> dict
             out.update(level="warning", icon="🛡️", text=(
                 f"Protect Mode — S&P {_fmt_pct(p)}% (risk-off at "
                 f"{MARKET_TONE_BEAR_PCT:g}% or worse): new entries are deferred today"
-                + (", matching 🏠 Home" if p.get("source") == "home" else "")
+                + (", matching 🏠 Home" if p.get("source") in _HOME_SOURCES else "")
                 + f". **{t}**{sec} clears both bars "
                 f"({s} ≥ {COMPOSITE_BUY:.0f} · R:R {rr}:1) on its own numbers; it isn't "
                 "an entry today."
@@ -183,7 +254,8 @@ def redeploy_call(headline, posture, *, bundle=None, site: str = "home") -> dict
             out.update(level="warning", icon="⚠️", text=(
                 f"Market tone couldn't be read, so **{t}** ({h['sector'] + '; ' if h.get('sector') else ''}{s} ≥ "
                 f"{COMPOSITE_BUY:.0f} · R:R {rr}:1) isn't confirmed as an entry here. "
-                "🏠 Grow Today treats an unread market as a flat day. Reload to retry."))
+                "🏠 Grow Today treats an unread market as a flat day. "
+                + ("Reload to retry." if site == "home" else "Open 🏠 Home to retry.")))
     except Exception:
         out.update(
             entry_called=False, level="warning", icon="⚠️", invite_own_pick=False,

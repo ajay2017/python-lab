@@ -11666,6 +11666,16 @@ if page == "🏠 Home":
                             else {"tone": None, "sp500_pct": None, "available": False,
                                   "source": None, "as_of": None}
                         )
+                        # Brief locked: Grow Today shows the locked morning tone;
+                        # follow the stricter of it and the current read.
+                        _hm_tone = _entry_posture.stricter_tone_state(
+                            _hm_tone,
+                            _entry_posture.locked_snapshot_for_today(
+                                st.session_state.get("_brief_locked", False),
+                                st.session_state.get("_brief_locked_for_date"),
+                                _today_et(),
+                                st.session_state.get("_brief_locked_snapshot")),
+                            st.session_state.get("_brief_locked_at"))
                         _hl_bundle = next(
                             (_c.get("_bundle") for _c in _display
                              if _c.get("ticker") == _hl.get("ticker")), None)
@@ -16582,9 +16592,13 @@ elif page == "📡 Signals & Advice":
                 # Grow Today owns buy calls: tone from today's Home read, else a
                 # live S&P read (fetched only when Home's isn't usable).
                 _sg_syn = _get_or_offline(st.session_state, "_home_synth_cache")
+                _sg_home_state = _entry_posture.page_home_state(
+                    _sg_syn, _today_et().isoformat())
                 _sg_tone = _entry_posture.tone_state_for_page(
                     _sg_syn, _today_et().isoformat(), None, False)
-                if not _sg_tone["available"]:
+                # Live read only when Home's Brief isn't built today; if it was
+                # built but its tone read failed, the posture stays unknown.
+                if not _sg_tone["available"] and _sg_home_state == _entry_elig.HOME_NOT_TODAY:
                     _sg_live_pct = None
                     try:
                         _sg_idx = fetch_market_indices()
@@ -16595,6 +16609,16 @@ elif page == "📡 Signals & Advice":
                     _sg_tone = _entry_posture.tone_state_for_page(
                         _sg_syn, _today_et().isoformat(), _sg_live_pct,
                         _sg_live_pct is not None)
+                # Brief locked: Grow Today shows the locked morning tone; follow
+                # the stricter of it and the current read.
+                _sg_tone = _entry_posture.stricter_tone_state(
+                    _sg_tone,
+                    _entry_posture.locked_snapshot_for_today(
+                        st.session_state.get("_brief_locked", False),
+                        st.session_state.get("_brief_locked_for_date"),
+                        _today_et(),
+                        st.session_state.get("_brief_locked_snapshot")),
+                    st.session_state.get("_brief_locked_at"))
                 for rec in add_recs:
                     with st.container(border=True):
                         ac1, ac2 = st.columns([3, 1])
@@ -16731,7 +16755,8 @@ elif page == "📡 Signals & Advice":
                         _call = _entry_posture.redeploy_call(
                             {**_hl, "sector": _hl.get("sector") or rec["sector"]},
                             _entry_posture.new_entry_posture(_sg_tone),
-                            bundle=_div_bundles.get(_hl.get("ticker")), site="signals")
+                            bundle=_div_bundles.get(_hl.get("ticker")), site="signals",
+                            home_state=_sg_home_state)
                         _own_pick = f" or pick your own {rec['sector']} name" if _call["invite_own_pick"] else ""
                         if _call["text"] is not None and not _call["entry_called"]:
                             {"success": st.success, "info": st.info}.get(

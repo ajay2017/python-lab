@@ -537,13 +537,13 @@ def test_build_daily_briefing_top_level_keys_exclude_grow_today_fields():
         assert key in brief["grow_today"], f"{key!r} missing from grow_today"
 
 
-def test_build_daily_briefing_bear_tone_grow_today_omits_sp500_pct():
+def test_build_daily_briefing_bear_tone_grow_today_carries_sp500_pct():
     """Pins a real asymmetry (2026-08-04 reviewer note): the bear-day early
-    return in _grow_today builds only a message string and omits sp500_pct/
-    nasdaq_pct/leading_sectors/cooldown_adds/deterioration_blocked_adds --
-    unlike the bull/flat path, which includes all of them. compute_morning_
-    picks() must (and does) fall back to market_context's own sp500_pct for
-    this case rather than logging the real move as unavailable."""
+    return in _grow_today omits nasdaq_pct/leading_sectors/cooldown_adds/
+    deterioration_blocked_adds. 2026-10-30 (#20 review): it now carries
+    sp500_pct and tone_available so a Brief Lock's bear tone is readable by
+    entry_posture.stricter_tone_state; compute_morning_picks() still has its
+    own market_context fallback."""
     port_df = make_port_df([{"ticker": "HELD", "weight": 10.0, "sector": "Tech"}])
     brief = build_daily_briefing(
         port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
@@ -553,7 +553,7 @@ def test_build_daily_briefing_bear_tone_grow_today_omits_sp500_pct():
     )
     grow = brief["grow_today"]
     assert grow["tone"] == "bear"
-    assert "sp500_pct" not in grow
+    assert grow["sp500_pct"] == -1.5
     for key in ("new_picks", "sector_blocked_picks", "sector_unknown_picks",
                 "macro_blocked_picks", "composite_skipped", "composite_unavailable",
                 "etf_screened_out"):

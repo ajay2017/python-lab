@@ -40,7 +40,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bear__earn_0d": {
@@ -71,7 +73,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -111,7 +115,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -151,7 +157,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -191,7 +199,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -231,7 +241,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -271,7 +283,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bear__etf_macro_all": {
@@ -302,7 +316,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bear__etf_negative_news": {
@@ -333,7 +349,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bear__macro_3d": {
@@ -364,7 +382,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -404,7 +424,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -444,7 +466,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -484,7 +508,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -524,7 +550,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -564,7 +592,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -604,7 +634,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -644,7 +676,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -684,7 +718,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -724,7 +760,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -764,7 +802,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -804,7 +844,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -844,7 +886,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -884,7 +928,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -924,7 +970,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -964,7 +1012,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -1004,7 +1054,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -1053,7 +1105,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 95.0,
@@ -1122,7 +1176,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 95.0,
@@ -1182,7 +1238,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -1222,7 +1280,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -1262,7 +1322,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -1302,7 +1364,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -1342,7 +1406,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -1382,7 +1448,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -1422,7 +1490,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -1462,7 +1532,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -1502,7 +1574,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -1542,7 +1616,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -1595,7 +1671,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.5,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "boundary__bear_edge__clean": {
@@ -1626,7 +1704,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.5,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 90.0,
@@ -1675,7 +1755,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.5,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 95.0,
@@ -1754,6 +1836,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": -0.49,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "boundary__bear_edge_plus__clean": {
@@ -1862,6 +1945,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": -0.49,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "boundary__bear_edge_plus__multi_mixed": {
@@ -2117,6 +2201,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": -0.49,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 91.0,
@@ -2402,6 +2487,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.5,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "boundary__bull_edge__clean": {
@@ -2559,6 +2645,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.5,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "boundary__bull_edge__multi_mixed": {
@@ -2934,6 +3021,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.5,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "boundary__bull_edge_minus__adds": {
@@ -2983,6 +3071,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.49,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "boundary__bull_edge_minus__clean": {
@@ -3091,6 +3180,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.49,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "boundary__bull_edge_minus__multi_mixed": {
@@ -3346,6 +3436,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.49,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 91.0,
@@ -3631,6 +3722,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__earn_0d": {
@@ -3739,6 +3831,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__earn_at_imminent": {
@@ -3847,6 +3940,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__earn_imminent_plus1": {
@@ -4005,6 +4099,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__earn_in_held_data_7d": {
@@ -4113,6 +4208,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__earn_unknown": {
@@ -4270,6 +4366,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__etf_clean": {
@@ -4368,6 +4465,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__etf_macro_all": {
@@ -4411,6 +4509,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__etf_negative_news": {
@@ -4454,6 +4553,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_3d": {
@@ -4565,6 +4665,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_3d_medium": {
@@ -4722,6 +4823,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_4d": {
@@ -4879,6 +4981,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_all_sectors_2d": {
@@ -4942,6 +5045,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_all_sectors_4d": {
@@ -5099,6 +5203,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_day0_after_time": {
@@ -5256,6 +5361,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_day0_at_time": {
@@ -5413,6 +5519,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_day0_bad_time": {
@@ -5524,6 +5631,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_day0_before_time": {
@@ -5635,6 +5743,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_day0_no_time_unreleased": {
@@ -5746,6 +5855,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_day0_released_flag": {
@@ -5903,6 +6013,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_empty": {
@@ -6060,6 +6171,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_fomc_day0_after": {
@@ -6123,6 +6235,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_fomc_day0_before": {
@@ -6186,6 +6299,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_fomc_day0_released_flag": {
@@ -6249,6 +6363,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_none": {
@@ -6406,6 +6521,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__macro_past_1d": {
@@ -6563,6 +6679,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__multi_mixed": {
@@ -6938,6 +7055,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__multi_mixed_macro3d": {
@@ -7234,6 +7352,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__news_at_threshold": {
@@ -7347,6 +7466,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__news_just_above": {
@@ -7505,6 +7625,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__news_none": {
@@ -7662,6 +7783,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__news_single_strong_neg": {
@@ -7775,6 +7897,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__trust_fresh": {
@@ -7932,6 +8055,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__trust_fund_age_at_max": {
@@ -8089,6 +8213,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__trust_fund_age_max_plus1": {
@@ -8192,6 +8317,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__trust_fundamentals_unavailable": {
@@ -8298,6 +8424,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__trust_keys_absent": {
@@ -8455,6 +8582,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "bull__trust_stale_as_of": {
@@ -8558,6 +8686,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__adds_matrix_macro3d_energy": {
@@ -8607,6 +8736,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__earn_0d": {
@@ -8716,6 +8846,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__earn_at_imminent": {
@@ -8825,6 +8956,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__earn_imminent_plus1": {
@@ -8934,6 +9066,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__earn_in_held_data_7d": {
@@ -9043,6 +9176,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__earn_unknown": {
@@ -9151,6 +9285,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__etf_clean": {
@@ -9187,6 +9322,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__etf_macro_all": {
@@ -9223,6 +9359,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__etf_negative_news": {
@@ -9259,6 +9396,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_3d": {
@@ -9370,6 +9508,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_3d_medium": {
@@ -9478,6 +9617,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_4d": {
@@ -9586,6 +9726,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_all_sectors_2d": {
@@ -9649,6 +9790,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_all_sectors_4d": {
@@ -9757,6 +9899,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_day0_after_time": {
@@ -9865,6 +10008,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_day0_at_time": {
@@ -9973,6 +10117,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_day0_bad_time": {
@@ -10084,6 +10229,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_day0_before_time": {
@@ -10195,6 +10341,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_day0_no_time_unreleased": {
@@ -10306,6 +10453,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_day0_released_flag": {
@@ -10414,6 +10562,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_empty": {
@@ -10522,6 +10671,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_fomc_day0_after": {
@@ -10585,6 +10735,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_fomc_day0_before": {
@@ -10648,6 +10799,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_fomc_day0_released_flag": {
@@ -10711,6 +10863,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_none": {
@@ -10819,6 +10972,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__macro_past_1d": {
@@ -10927,6 +11081,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__multi_mixed": {
@@ -11182,6 +11337,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 91.0,
@@ -11414,6 +11570,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": [
    {
     "momentum_score": 91.0,
@@ -11536,6 +11693,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__news_just_above": {
@@ -11645,6 +11803,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__news_none": {
@@ -11753,6 +11912,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__news_single_strong_neg": {
@@ -11862,6 +12022,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__trust_fresh": {
@@ -11970,6 +12131,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__trust_fund_age_at_max": {
@@ -12078,6 +12240,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__trust_fund_age_max_plus1": {
@@ -12181,6 +12344,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__trust_fundamentals_unavailable": {
@@ -12287,6 +12451,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__trust_keys_absent": {
@@ -12395,6 +12560,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "flat__trust_stale_as_of": {
@@ -12498,6 +12664,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "n2_bear__adds_matrix": {
@@ -12541,7 +12708,9 @@
   "sector_blocked_adds": [],
   "sector_blocked_picks": [],
   "sector_unknown_picks": [],
+  "sp500_pct": -0.8,
   "tone": "bear",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "n2_bull__adds_matrix": {
@@ -12814,6 +12983,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.8,
   "tone": "bull",
+  "tone_available": null,
   "unevaluated_leads": []
  },
  "n2_flat__adds_matrix": {
@@ -12863,6 +13033,7 @@
   "sector_unknown_picks": [],
   "sp500_pct": 0.0,
   "tone": "flat",
+  "tone_available": null,
   "unevaluated_leads": []
  }
 }

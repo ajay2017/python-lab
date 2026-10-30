@@ -730,9 +730,9 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
     _bar = None if _tone == "bear" else (COMPOSITE_BUY if _tone == "bull" else COMPOSITE_BUY_FLAT_DAY)
     diag = {
         "tone":             _tone,
-        # _grow_today's bear-day early return omits "sp500_pct" entirely (it
-        # only builds the message string) -- fall back to market_context's own
-        # fetched value so a real risk-off move never logs as "S&P n/a".
+        # _grow_today's bear-day early return carries "sp500_pct" since
+        # 2026-10-30 (#20); the market_context fallback is belt-and-braces so a
+        # real risk-off move never logs as "S&P n/a".
         "sp500_pct":        grow.get("sp500_pct", market_context.get("sp500_pct")),
         "bar":              _bar,
         "sector_blocked":   len(grow.get("sector_blocked_picks", []) or []),

@@ -449,6 +449,10 @@ def tone_source_line(tone_state, home_state=None) -> "str | None":
     if tone_state.get("source") == "home":
         clock = _fmt_read_time(tone_state.get("as_of"))
         return ("Market read from Home's Brief" + (f", {clock} ET" if clock else "") + ".")
+    if tone_state.get("source") == "home_locked":
+        clock = _fmt_read_time(tone_state.get("as_of"))
+        return ("Market read from Home's locked Brief (Lock Setup"
+                + (f", locked {clock} ET" if clock else "") + ").")
     if home_state == HOME_TODAY_TONE_FAILED:
         return ("Market read live — 🏠 Home's Brief couldn't read the market this run "
                 "and is treating today as flat (its picks were not deferred).")
@@ -487,7 +491,7 @@ def watchlist_banner(tone_state, macro_map, recs, home_state=None, exclude=()) -
             if holds and all(isinstance(h, dict) and h.get("check") == "tone" for h in holds):
                 tickers.append(str(r.get("ticker")))
         n = len(tickers)
-        matching = " matching 🏠 Home." if ts.get("source") == "home" else ""
+        matching = " matching 🏠 Home." if ts.get("source") in ("home", "home_locked") else ""
         protect = {
             "title": (f"🛡️ Protect Mode — S&P {pct_txt} "
                       f"(risk-off at {MARKET_TONE_BEAR_PCT:g}% or worse)."),
@@ -777,7 +781,7 @@ def analysis_hold_banner(decision, tone_state=None, home_state=None) -> "dict | 
     # for this ticker (it may not be listed there at all).
     same = ("📋 Watchlist and 🏠 Home apply the same check."
             if (binding.get("check") == "tone" and ts.get("available")
-                and ts.get("source") == "home")
+                and ts.get("source") in ("home", "home_locked"))
             else "📋 Watchlist applies the same check.")
     all_holds = decision.get("holds")
     all_holds = [] if all_holds is None else all_holds
