@@ -1901,23 +1901,23 @@ def test_stop_breach_suppresses_deterioration_exit_on_same_ticker():
     assert matches[0]["kind"] == "stop_breach"
 
 
-def test_stop_breach_why_says_closed_at_when_price_above_stop_in_rounding_band():
+def test_stop_breach_why_says_at_or_just_above_when_price_above_stop_in_rounding_band():
     # SAP 2026-10-29: price 233.03 vs stop 233.02, gap rounds to +0.0% -> still
     # a breach (kept), but the text must not claim a close BELOW the stop.
     port_df = make_port_df([{"ticker": "SAP", "price": 233.03, "stop": 233.02,
                              "gap_to_stop": 0.0}])
     item = find_item(_act_today(port_df, [], [], [], [], _TODAY), "SAP")
     assert item["kind"] == "stop_breach"
-    assert "closed at the" in item["why"]
-    assert "closed below" not in item["why"]
+    assert "is at or just above the" in item["why"]
+    assert "is below" not in item["why"]
 
 
-def test_stop_breach_why_says_closed_below_when_price_below_stop():
+def test_stop_breach_why_says_is_below_when_price_below_stop():
     port_df = make_port_df([{"ticker": "SAP", "price": 230.0, "stop": 233.02,
                              "gap_to_stop": -1.3}])
     item = find_item(_act_today(port_df, [], [], [], [], _TODAY), "SAP")
     assert item["kind"] == "stop_breach"
-    assert "closed below the" in item["why"]
+    assert "is below the" in item["why"]
     assert "(gap -1.3%)" in item["why"]
 
 

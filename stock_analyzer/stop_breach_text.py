@@ -3,8 +3,12 @@
 A breach fires when the stored `Gap to Stop (%)` (rounded to
 `GAP_TO_STOP_ROUND_DECIMALS` in portfolio.build_portfolio_df) is <= 0, so a
 price a hair ABOVE the stop (gap rounds to +0.0%) still counts as breached.
-"closed below the stop" is false for that case; this module picks the sentence
+"below the stop" is false for that case; this module picks the sentence
 that matches the price/stop relation without changing the breach test itself.
+The sentence avoids "closed" because the in-app Brief passes a LIVE intraday
+price (only the premarket cron and after-close runs use a close). The stop
+label is trimmed of a trailing "stop" because portfolio.py's stop types can
+already end in it ("ATR Stop"), which would read "the ATR Stop stop".
 Pure; shared by daily_briefing and headless_alert_engine so they can't drift.
 """
 from __future__ import annotations
@@ -28,20 +32,32 @@ def _money(x) -> str:
         return "n/a"
 
 
+def _label(stop_type) -> str:
+    """Stop-type label without a trailing word "stop" (case-insensitive)."""
+    t = "" if stop_type is None else str(stop_type).strip()
+    if t.lower() == "stop":
+        return ""
+    if t.lower().endswith(" stop"):
+        t = t[:-5].rstrip()
+    return t
+
+
 def breach_why(price, stop, stop_type, gap) -> str:
     """The "why" sentence for a stop breach (see module docstring)."""
     try:
         gap_txt = f"{float(gap):+.{GAP_TO_STOP_ROUND_DECIMALS}f}"
     except (TypeError, ValueError):
         gap_txt = "n/a"
+    label = _label(stop_type)
+    stop_phrase = f"the {label} stop" if label else "the stop"
     if _finite(price) and _finite(stop) and float(price) >= float(stop):
         return (
-            f"Price ${_money(price)} closed at the {stop_type} stop "
+            f"Price ${_money(price)} is at or just above {stop_phrase} "
             f"${_money(stop)} (gap {gap_txt}%): a gap that rounds to 0 "
             f"counts as a breach."
         )
     return (
-        f"Price ${_money(price)} closed below the {stop_type} stop "
+        f"Price ${_money(price)} is below {stop_phrase} "
         f"${_money(stop)} (gap {gap_txt}%)."
     )
 

@@ -435,8 +435,8 @@ def test_protective_alerts_stop_breach_detected():
     assert result["alerts"][0]["kind"] == "stop_breach"
     assert result["alerts"][0]["ticker"] == "AAPL"
     # Fixture price 100.0 is at/above stop 90.0 (only the gap is forced to
-    # -2.0), so the why must say "closed at", never "closed below".
-    assert "closed at the" in result["alerts"][0]["why"]
+    # -2.0), so the why must say "at or just above", never "is below".
+    assert "is at or just above the" in result["alerts"][0]["why"]
 
 
 def test_protective_alerts_no_breach_when_gap_positive_or_none():
