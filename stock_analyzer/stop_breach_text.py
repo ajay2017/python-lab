@@ -80,3 +80,36 @@ def live_breach_caption(live_px, stop) -> str | None:
         f"⚠️ Live price ${px:.2f} is at or just above the stop ${st_:.2f}, "
         f"within the {STOP_RECOVERY_MARGIN_PCT:g}% recovery margin, so the breach still stands."
     )
+
+
+def stop_noun(stop_type) -> str:
+    """The stop's own name as a noun phrase for a sentence ("your <noun> $X").
+    The label never doubles the word "stop": a held-stop label such as
+    "Trailing Stop" becomes "trailing stop", a profit-lock tier ("Protect 25%
+    gain") a parenthetical, "Prior-close ATR" "prior-close ATR stop"."""
+    t = "" if stop_type is None else str(stop_type).strip()
+    if not t or t == "Stop Unavailable":
+        return "stop"
+    if t == "Manual":
+        return "manual stop"
+    if t in ("Entry Stop", "Trailing Stop"):
+        return t[:-5].lower() + " stop"
+    if t == "ATR Stop":
+        return "ATR stop"
+    if t == "Prior-close ATR":
+        return "prior-close ATR stop"
+    return f"profit-lock stop ({t})"
+
+
+def alert_breach_msg(ticker, gap, stop) -> str:
+    """Signals Active Alerts line for a stop at or past the price (gap <= 0,
+    the rounded gap the breach rule uses). Exactly one `$`, so Streamlit's
+    markdown never pairs two as LaTeX."""
+    try:
+        g = float(gap)
+    except (TypeError, ValueError):
+        g = 0.0
+    where = (f"is {abs(g):.{GAP_TO_STOP_ROUND_DECIMALS}f}% below its stop" if g < 0
+             else "is at or just above its stop")
+    return (f"⛔ **{ticker}** {where} ${_money(stop)} — breached; "
+            "Today's Brief says sell at the next open")

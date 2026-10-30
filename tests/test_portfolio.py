@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from tests._held_stops import hs_for
 from stock_analyzer.constants import (
     CORR_DANGER_PAIRS_THRESHOLD,
     CORR_HIGH_PAIRS_THRESHOLD,
@@ -750,14 +751,14 @@ def _loaded_row(price=100.0, stop=90.0):
 
 def test_build_portfolio_df_valid_holding_has_empty_dropped_list():
     holdings = [{"Ticker": "AAA", "Shares": 10, "Avg Cost ($)": 50.0}]
-    df = build_portfolio_df(holdings, {"AAA": _loaded_row()})
+    df = build_portfolio_df(holdings, {"AAA": _loaded_row()}, held_stops=hs_for({"AAA": _loaded_row()}))
     assert df.attrs["dropped_holdings"] == []
     assert list(df["Ticker"]) == ["AAA"]
 
 
 def test_build_portfolio_df_zero_shares_is_dropped_and_reported():
     holdings = [{"Ticker": "BBB", "Shares": 0, "Avg Cost ($)": 50.0}]
-    df = build_portfolio_df(holdings, {"BBB": _loaded_row()})
+    df = build_portfolio_df(holdings, {"BBB": _loaded_row()}, held_stops=hs_for({"BBB": _loaded_row()}))
     assert df.empty
     assert df.attrs["dropped_holdings"] == [{
         "ticker": "BBB", "shares": 0.0, "avg_cost": 50.0,
@@ -767,7 +768,7 @@ def test_build_portfolio_df_zero_shares_is_dropped_and_reported():
 
 def test_build_portfolio_df_invalid_avg_cost_is_dropped_and_reported():
     holdings = [{"Ticker": "CCC", "Shares": 10, "Avg Cost ($)": 0}]
-    df = build_portfolio_df(holdings, {"CCC": _loaded_row()})
+    df = build_portfolio_df(holdings, {"CCC": _loaded_row()}, held_stops=hs_for({"CCC": _loaded_row()}))
     assert df.attrs["dropped_holdings"] == [{
         "ticker": "CCC", "shares": 10.0, "avg_cost": 0.0,
         "reason": "invalid_shares_or_cost",
@@ -779,7 +780,7 @@ def test_build_portfolio_df_mixed_valid_and_invalid_holdings():
         {"Ticker": "AAA", "Shares": 10, "Avg Cost ($)": 50.0},
         {"Ticker": "BBB", "Shares": -5, "Avg Cost ($)": 50.0},
     ]
-    df = build_portfolio_df(holdings, {"AAA": _loaded_row(), "BBB": _loaded_row()})
+    df = build_portfolio_df(holdings, {"AAA": _loaded_row(), "BBB": _loaded_row()}, held_stops=hs_for({"AAA": _loaded_row(), "BBB": _loaded_row()}))
     assert list(df["Ticker"]) == ["AAA"]
     assert df.attrs["dropped_holdings"] == [{
         "ticker": "BBB", "shares": -5.0, "avg_cost": 50.0,
@@ -794,7 +795,7 @@ def test_build_portfolio_df_no_price_data_is_dropped_and_reported():
     # Weight (%) denominator below and inflated every surviving holding's
     # weight with no disclosure.
     holdings = [{"Ticker": "DDD", "Shares": 10, "Avg Cost ($)": 50.0}]
-    df = build_portfolio_df(holdings, {"DDD": {}})   # no current_price key at all
+    df = build_portfolio_df(holdings, {"DDD": {}}, held_stops=hs_for({"DDD": {}}))   # no current_price key at all
     assert df.empty
     assert df.attrs["dropped_holdings"] == [{
         "ticker": "DDD", "shares": 10.0, "avg_cost": 50.0,
@@ -806,7 +807,7 @@ def test_build_portfolio_df_missing_bundle_entirely_is_also_no_price_data():
     # loaded_data has no entry for the ticker at all (r is None), not just a
     # bundle missing current_price -- same reason, same disclosure.
     holdings = [{"Ticker": "EEE", "Shares": 10, "Avg Cost ($)": 50.0}]
-    df = build_portfolio_df(holdings, {})
+    df = build_portfolio_df(holdings, {}, held_stops=hs_for({}))
     assert df.attrs["dropped_holdings"] == [{
         "ticker": "EEE", "shares": 10.0, "avg_cost": 50.0,
         "reason": "no_price_data",
@@ -824,7 +825,7 @@ def test_build_portfolio_df_no_price_data_does_not_shrink_weight_denominator_sil
         {"Ticker": "AAA", "Shares": 10, "Avg Cost ($)": 50.0},
         {"Ticker": "DDD", "Shares": 10, "Avg Cost ($)": 50.0},
     ]
-    df = build_portfolio_df(holdings, {"AAA": _loaded_row(), "DDD": {}})
+    df = build_portfolio_df(holdings, {"AAA": _loaded_row(), "DDD": {}}, held_stops=hs_for({"AAA": _loaded_row(), "DDD": {}}))
     assert list(df["Ticker"]) == ["AAA"]
     assert float(df.loc[df["Ticker"] == "AAA", "Weight (%)"].iloc[0]) == 100.0
     assert df.attrs["dropped_holdings"] == [{
@@ -837,7 +838,7 @@ def test_build_portfolio_df_missing_ticker_not_added_to_dropped_list():
     # A row with no ticker at all isn't a reportable "skipped holding" -- it's
     # not a holding to begin with (e.g. a stray blank row).
     holdings = [{"Ticker": "", "Shares": 10, "Avg Cost ($)": 50.0}]
-    df = build_portfolio_df(holdings, {})
+    df = build_portfolio_df(holdings, {}, held_stops=hs_for({}))
     assert df.attrs["dropped_holdings"] == []
 
 
@@ -854,7 +855,7 @@ def test_build_portfolio_df_fundamentals_unavailable_withholds_score_and_signal(
     bundle = _loaded_row()
     bundle["fundamentals_available"] = False
     bundle["val_available"] = True
-    df = build_portfolio_df(holdings, {"ETF1": bundle})
+    df = build_portfolio_df(holdings, {"ETF1": bundle}, held_stops=hs_for({"ETF1": bundle}))
     row = df.iloc[0]
     assert pd.isna(row["Score"])
     assert row["Signal"] == WITHHELD_SIGNAL
@@ -868,7 +869,7 @@ def test_build_portfolio_df_valuation_unavailable_alone_also_withholds():
     bundle = _loaded_row()
     bundle["fundamentals_available"] = True
     bundle["val_available"] = False
-    df = build_portfolio_df(holdings, {"ETF2": bundle})
+    df = build_portfolio_df(holdings, {"ETF2": bundle}, held_stops=hs_for({"ETF2": bundle}))
     row = df.iloc[0]
     assert pd.isna(row["Score"])
     assert row["Signal"] == WITHHELD_SIGNAL
@@ -881,7 +882,7 @@ def test_build_portfolio_df_both_flags_true_leaves_score_and_signal_untouched():
     bundle = _loaded_row()
     bundle["fundamentals_available"] = True
     bundle["val_available"] = True
-    df = build_portfolio_df(holdings, {"AAA": bundle})
+    df = build_portfolio_df(holdings, {"AAA": bundle}, held_stops=hs_for({"AAA": bundle}))
     row = df.iloc[0]
     assert row["Score"] == bundle["total"]
     assert row["Signal"] == f"{bundle['rec']['icon']} {bundle['rec']['label']}"
@@ -896,7 +897,7 @@ def test_build_portfolio_df_legacy_bundle_missing_flags_fails_open():
     holdings = [{"Ticker": "AAA", "Shares": 10, "Avg Cost ($)": 50.0}]
     bundle = _loaded_row()
     assert "fundamentals_available" not in bundle and "val_available" not in bundle
-    df = build_portfolio_df(holdings, {"AAA": bundle})
+    df = build_portfolio_df(holdings, {"AAA": bundle}, held_stops=hs_for({"AAA": bundle}))
     row = df.iloc[0]
     assert row["Score"] == bundle["total"]
     assert row["Signal"] == f"{bundle['rec']['icon']} {bundle['rec']['label']}"
@@ -911,7 +912,7 @@ def test_build_portfolio_df_all_withheld_book_score_column_is_numeric_not_object
     holdings = [{"Ticker": "ETF1", "Shares": 10, "Avg Cost ($)": 50.0}]
     bundle = _loaded_row()
     bundle["fundamentals_available"] = False
-    df = build_portfolio_df(holdings, {"ETF1": bundle})
+    df = build_portfolio_df(holdings, {"ETF1": bundle}, held_stops=hs_for({"ETF1": bundle}))
     assert pd.api.types.is_float_dtype(df["Score"])
     assert df["Score"].isna().all()
     # Must not raise -- proves a real NaN, not a surviving object-dtype None.
@@ -945,7 +946,7 @@ def test_build_portfolio_df_stock_score_signal_unaffected_by_etf_wiring():
     bundle["fundamentals_available"] = True
     bundle["val_available"] = True
     bundle["asset_type"] = "stock"
-    df = build_portfolio_df(holdings, {"AAA": bundle})
+    df = build_portfolio_df(holdings, {"AAA": bundle}, held_stops=hs_for({"AAA": bundle}))
     row = df.iloc[0]
     assert row["Score"] == bundle["total"]
     assert row["Signal"] == f"{bundle['rec']['icon']} {bundle['rec']['label']}"
@@ -962,7 +963,7 @@ def test_build_portfolio_df_etf_available_surfaces_etf_composite():
     bundle["etf_available"] = True
     bundle["etf_total"] = 68.0
     bundle["etf_rec"] = {"icon": "⬆", "label": "Buy"}
-    df = build_portfolio_df(holdings, {"SPY": bundle})
+    df = build_portfolio_df(holdings, {"SPY": bundle}, held_stops=hs_for({"SPY": bundle}))
     row = df.iloc[0]
     assert row["Score"] == 68.0
     assert row["Signal"] == "⬆ Buy"
@@ -980,7 +981,7 @@ def test_build_portfolio_df_etf_unavailable_still_withholds():
     bundle["etf_available"] = False  # no net_expense_ratio data
     bundle["etf_total"] = None
     bundle["etf_rec"] = None
-    df = build_portfolio_df(holdings, {"OBSCUREETF": bundle})
+    df = build_portfolio_df(holdings, {"OBSCUREETF": bundle}, held_stops=hs_for({"OBSCUREETF": bundle}))
     row = df.iloc[0]
     assert pd.isna(row["Score"])
     assert row["Signal"] == WITHHELD_SIGNAL
@@ -1001,7 +1002,7 @@ def test_build_portfolio_df_etf_ok_never_true_for_a_stock_even_if_etf_available_
     bundle["etf_available"] = True
     bundle["etf_total"] = 68.0
     bundle["etf_rec"] = {"icon": "⬆", "label": "Buy"}
-    df = build_portfolio_df(holdings, {"AAA": bundle})
+    df = build_portfolio_df(holdings, {"AAA": bundle}, held_stops=hs_for({"AAA": bundle}))
     row = df.iloc[0]
     assert pd.isna(row["Score"])
     assert row["Signal"] == WITHHELD_SIGNAL

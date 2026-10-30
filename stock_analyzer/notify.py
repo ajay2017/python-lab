@@ -358,8 +358,13 @@ def render_alert_email(
     built_at: str,
     velocity_alerts: list[dict] | None = None,
     split_withheld: list[str] | None = None,
+    footer_lines: list[str] | None = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the protective-alert email.
+
+    `footer_lines` (optional, finding #26 C3): plain lines printed above the
+    standing footer, e.g. the one-time "stops recalculated" note and any holding
+    whose stop is on a limited basis. Escaped here.
 
     `alerts` are the hard protective signals (stop breaches, EXIT, risk-off).
     `velocity_alerts` (optional) are WATCH tickers whose composite score is
@@ -376,6 +381,9 @@ def render_alert_email(
     """
     velocity_alerts = velocity_alerts or []
     split_withheld = split_withheld or []
+    footer_html = "".join(
+        f'<div style="margin-bottom:4px">{_html.escape(str(l))}</div>'
+        for l in (footer_lines or []))
     n = len(alerts)
     n_vel = len(velocity_alerts)
     n_split = len(split_withheld)
@@ -501,6 +509,7 @@ def render_alert_email(
         {split_html}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;margin-top:18px;
                     border-top:1px solid #292524;padding-top:10px">
+          {footer_html}
           Protective signals (stop breaches · deterioration EXIT · risk-off trim) are directives —
           not auto-executed, open DRISHTA to act. Early-warning WATCH velocity is informational only
           (the position has not yet reached TRIM). Signal-withheld notices mean a suspected

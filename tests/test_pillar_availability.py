@@ -13,6 +13,7 @@ import math
 import pandas as pd
 import pytest
 
+from tests._held_stops import hs_for
 from stock_analyzer import analyst_intel, premortem_advisor
 from stock_analyzer.constants import (
     COMPOSITE_BUY, COMPOSITE_STRONG_BUY, ETF_AUM_THIN_FLOOR_USD, TECHNICAL_MIN_BARS,
@@ -110,11 +111,11 @@ _H = [{"Ticker": "AAA", "Shares": 10, "Avg Cost ($)": 50.0}]
 
 
 def test_portfolio_score_available_only_when_technical_measured():
-    ok = build_portfolio_df(_H, {"AAA": _loaded_row(t_available=True, t_bars=120)})
+    ok = build_portfolio_df(_H, {"AAA": _loaded_row(t_available=True, t_bars=120)}, held_stops=hs_for({"AAA": _loaded_row(t_available=True, t_bars=120)}))
     assert ok.iloc[0]["Score Available"] == True  # noqa: E712 - fires first
     assert ok.iloc[0]["Score"] == 70
     assert ok.attrs["score_withheld"] == []
-    bad = build_portfolio_df(_H, {"AAA": _loaded_row(t_available=False, t_bars=30)})
+    bad = build_portfolio_df(_H, {"AAA": _loaded_row(t_available=False, t_bars=30)}, held_stops=hs_for({"AAA": _loaded_row(t_available=False, t_bars=30)}))
     row = bad.iloc[0]
     assert row["Score Available"] == False  # noqa: E712
     assert pd.isna(row["Score"])
@@ -124,8 +125,8 @@ def test_portfolio_score_available_only_when_technical_measured():
 
 
 def test_portfolio_legacy_bundle_equals_t_available_true():
-    legacy = build_portfolio_df(_H, {"AAA": _loaded_row()})
-    explicit = build_portfolio_df(_H, {"AAA": _loaded_row(t_available=True)})
+    legacy = build_portfolio_df(_H, {"AAA": _loaded_row()}, held_stops=hs_for({"AAA": _loaded_row()}))
+    explicit = build_portfolio_df(_H, {"AAA": _loaded_row(t_available=True)}, held_stops=hs_for({"AAA": _loaded_row(t_available=True)}))
     pd.testing.assert_frame_equal(legacy, explicit)
     assert legacy.attrs["score_withheld"] == explicit.attrs["score_withheld"] == []
 
@@ -134,9 +135,9 @@ def test_portfolio_etf_t_unavailable_withheld_no_crash_on_missing_etf_rec():
     etf_rec = {"icon": "G", "label": "Buy"}
     good = _loaded_row(asset_type="etf", fundamentals_available=False, val_available=False,
                        etf_available=True, etf_total=80.0, etf_rec=etf_rec, t_available=True)
-    assert build_portfolio_df(_H, {"AAA": good}).iloc[0]["Score"] == 80.0   # fires first
+    assert build_portfolio_df(_H, {"AAA": good}, held_stops=hs_for({"AAA": good})).iloc[0]["Score"] == 80.0   # fires first
     bad = dict(good, t_available=False, etf_rec=None)    # etf_rec must never be touched
-    df = build_portfolio_df(_H, {"AAA": bad})
+    df = build_portfolio_df(_H, {"AAA": bad}, held_stops=hs_for({"AAA": bad}))
     assert pd.isna(df.iloc[0]["Score"])
     assert df.attrs["score_withheld"][0]["missing"] == ["Technical"]
 
@@ -145,7 +146,7 @@ def test_protective_outputs_identical_regardless_of_technical_flag():
     """Stops, gap-to-stop, weight and the stop/concentration alerts are
     price-based: a withheld technical pillar must not touch them."""
     def run(t):
-        df = build_portfolio_df(_H, {"AAA": _loaded_row(price=100.0, stop=99.0, t_available=t)})
+        df = build_portfolio_df(_H, {"AAA": _loaded_row(price=100.0, stop=99.0, t_available=t)}, held_stops=hs_for({"AAA": _loaded_row(price=100.0, stop=99.0, t_available=t)}))
         al = [a for a in alerts(df) if a["category"] in ("stop", "concentration")]
         return df, al
     df_t, al_t = run(True)
@@ -493,7 +494,7 @@ def _two_holdings(t_flag):
         strong["t_available"] = t_flag
     other = _loaded_row(price=100.0, stop=70.0, total=50, sector="Healthcare",
                         rec={"icon": "H", "label": "Hold"})
-    return build_portfolio_df(holdings, {"AAA": strong, "BBB": other})
+    return build_portfolio_df(holdings, {"AAA": strong, "BBB": other}, held_stops=hs_for({"AAA": strong, "BBB": other}))
 
 
 def _grow_adds(df):

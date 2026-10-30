@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 from datetime import date, datetime, timedelta
 
+import pandas as pd
 import pytz
 
 from stock_analyzer import db
@@ -27,6 +28,7 @@ from stock_analyzer import exit_advisor
 from stock_analyzer import split_detector
 from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer import stop_breach_text as _stop_breach_text
+from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import news_feed
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer.bundle_loader import load_bundle
@@ -119,10 +121,16 @@ def _build_context(today: date) -> dict:
     if holdings_df.empty:
         return {"ok": False, "reason": "no_holdings", "errors": ["no holdings"]}
 
+    # STRICT read for the held stops (finding #26 C3): None = journal unreadable,
+    # which `build_held_stops` turns into a flagged prior-close stop per name and
+    # the lane then fails on. The OLD consumers below keep their lenient shape (an
+    # empty frame when unreadable), as `db.load_trades()` always gave them.
     try:
-        trades_df = db.load_trades()
+        trades_strict = db.load_trades_or_none()
     except Exception:
-        trades_df = None
+        trades_strict = None
+    trades_df = (trades_strict if trades_strict is not None
+                 else pd.DataFrame(columns=db._TRADE_COLS))
     # Strict read (2026-10-30): the lenient `load_manual_stops()` returned {} on a
     # failed read, silently dropping every manual stop from the stop-breach scan.
     # None = couldn't read: carry on with {} (auto stops still evaluate) but make
@@ -182,7 +190,31 @@ def _build_context(today: date) -> dict:
     # uses last close (stop rule = "CLOSED below stop"); the EOD run is post-close
     # so last close IS today's final close — correct for the snapshot too.
     holdings = holdings_df.to_dict("records")
-    port_df = build_portfolio_df(holdings, held_data, manual_stops=manual_stops)
+    held_stops = _held_stop_wiring.build_held_stops(
+        holdings, held_data, trades_strict, today,
+        fetch_history=_held_stop_wiring.fetch_or_raise)
+    held_stop_notes = [f"{t} ({label}): {note}"
+                       for t, label, note in _held_stop_wiring.degraded_notes(held_stops)]
+    for _line in held_stop_notes:
+        errors.append(f"held stop on a limited basis: {_line}")
+    # Every name on a prior-close / unavailable stop = the held-stop engine is not
+    # working (journal unreadable, or no long history for anyone): the lane fails.
+    # A buy-day name (bought today) is built by design from a prior-close value
+    # and is neither degraded nor counted here. Names that fell back to the 6-month
+    # bundle frame count as fallen back too (the long history failed for them all).
+    held_stops_failed = None
+    _judged = [h for h in held_stops.values() if not h.get("buy_day")]
+    if _judged and all(h.get("fell_back") or h.get("basis") in ("prior_session", "unavailable")
+                       for h in _judged):
+        if trades_strict is None:
+            held_stops_failed = "trade journal could not be read"
+        elif all(h.get("basis") in ("prior_session", "unavailable") for h in _judged):
+            held_stops_failed = "no holding has a usable held stop"
+        else:
+            held_stops_failed = ("the longer price history could not be loaded for any holding "
+                                 "(every stop was built from the 6-month data)")
+    port_df = build_portfolio_df(holdings, held_data, manual_stops=manual_stops,
+                                 held_stops=held_stops)
     if port_df is None or port_df.empty:
         return {"ok": False, "reason": "empty_port_df",
                 "errors": errors + ["portfolio frame empty after load"]}
@@ -234,7 +266,13 @@ def _build_context(today: date) -> dict:
             "held_tickers": held_tickers,
             # Additive (2026-10-30) — True when the manual_stops read failed
             # (distinct from "no manual stops"). Lanes turn it into a failure.
-            "manual_stops_unreadable": manual_stops_unreadable}
+            "manual_stops_unreadable": manual_stops_unreadable,
+            # Additive (2026-10-30, #26 C3): one line per holding whose stop is not
+            # on a full basis, and a reason string when EVERY holding is on a
+            # prior-close / unavailable stop (None = fine). The premarket lane
+            # turns the latter into a failure and the former into an email footer.
+            "held_stop_notes": held_stop_notes,
+            "held_stops_failed": held_stops_failed}
 
 
 def compute_protective_alerts(today: date | None = None) -> dict:
@@ -438,6 +476,8 @@ def compute_protective_alerts(today: date | None = None) -> dict:
     return {
         "alerts": alerts, "built_at": built_at, "errors": errors,
         "manual_stops_unreadable": bool(ctx.get("manual_stops_unreadable")),
+        "held_stop_notes": list(ctx.get("held_stop_notes", [])),
+        "held_stops_failed": ctx.get("held_stops_failed"),
         # Additive — full WATCH/TRIM/EXIT + RISK_OFF signal lists (composite_score
         # attached above) for exit_signals capture. Never used to build `alerts`
         # above; the EXIT-only/risk_off email scope is unchanged.

@@ -117,6 +117,22 @@ class YFinanceProvider(DataProvider):
             return df
         return _retry(_fetch)
 
+    def price_history_unadjusted(self, ticker: str, period: str) -> pd.DataFrame:
+        """OHLCV with `auto_adjust=False`: yfinance 1.3.0 then leaves Open / High /
+        Low / Close as Yahoo's raw chart values (split-adjusted, dividend-
+        UNadjusted) and keeps a separate "Adj Close"; `auto_adjust=True` (the
+        default `price_history` uses) overwrites OHLC with Adj-scaled values, so
+        every ex-dividend date re-adjusts all past closes. The held stop needs
+        history that doesn't move after the fact. Same frame shape and NaN-Close
+        strip as `price_history`; raises on a transport failure like it."""
+        def _fetch():
+            df = yf.Ticker(ticker).history(period=period, auto_adjust=False)
+            df.index = pd.to_datetime(df.index)
+            if "Close" in df.columns:
+                df = df[df["Close"].notna()]
+            return df
+        return _retry(_fetch)
+
     def historical_close(self, ticker: str, start, end) -> float | None:
         """First close on/after `start` within [start, end] — an arbitrary
         historical window (unlike price_history's period-relative-to-today),

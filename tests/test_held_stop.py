@@ -239,7 +239,12 @@ def test_compose_matches_manual_stop_wins(auto, manual):
 
 def test_compose_manual_between_old_and_new_auto_loses():
     assert hs.compose_with_manual(110.0, 105.0) == (110.0, False)
-    assert hs.compose_with_manual(None, 90.0) == (None, False)
+    # no auto stop: a valid manual stop still applies, nothing otherwise
+    assert hs.compose_with_manual(None, 90.0) == (90.0, True)
+    assert hs.compose_with_manual(None, 90.126) == (90.13, True)
+    assert hs.compose_with_manual(None, 0.0) == (None, False)
+    assert hs.compose_with_manual(None, -5.0) == (None, False)
+    assert hs.compose_with_manual(None, float("nan")) == (None, False)
     assert hs.compose_with_manual(100.0, 101.234) == (101.23, True)
     assert hs.compose_with_manual(None, None) == (None, False)
 

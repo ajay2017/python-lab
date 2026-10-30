@@ -2490,10 +2490,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 # or estimate a stop (spec item 2).
                 # NOTE: the add lane deliberately stays on the bundle's
                 # last-close ATR stop rather than re-deriving against the live
-                # price as the new-pick lane does. Safe because this branch is
-                # already gated on gap >= ADD_WINNER_MIN_GAP_PCT measured from
-                # the RATCHETED stop (>= the ATR stop), so price > stop holds by
-                # construction. Don't "unify the lanes" without re-reading that
+                # price as the new-pick lane does. The gap >= ADD_WINNER_MIN_GAP_PCT
+                # gate above measures from the HELD stop (#26 C3), which can sit
+                # below this ATR stop, so price > stop is NOT guaranteed here;
+                # when it fails, position_sizing returns stop_infeasible (no size,
+                # with a reason). Don't "unify the lanes" without re-reading that
                 # gate; and per memory project_stop_ladder_and_display the ATR
                 # basis here is a policy decision (the ratchet stop would sit
                 # higher, suggest MORE shares, and over-buy into strength).
@@ -2950,8 +2951,8 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                 "kind":     "critical_news",
                 "action":   "Watch — Critical News",
                 "directive": (
-                    "Hold for now, but tighten your stop and re-evaluate the thesis "
-                    "after the news is confirmed."
+                    "Hold for now, but consider setting a tighter manual stop, and re-evaluate "
+                    "the thesis after the news is confirmed."
                 ),
                 "why": (
                     f"{_n} headline{'s' if _n != 1 else ''} from tier-1/2 sources "
@@ -3375,7 +3376,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "priority": "medium" if is_critical else "low",
             "icon":     "📍",
             "ticker":   ticker,
-            "headline": f"gap {gap:.1f}% above {row.get('Stop Type','ATR')} stop, P&L {pnl_pct:+.1f}%",
+            "headline": f"gap {gap:.1f}% above {_stop_breach_text.stop_noun(row.get('Stop Type', ''))}, P&L {pnl_pct:+.1f}%",
             "action":   action,
             "why":      why,
             "trigger":  "Stop break = full exit next open.",
@@ -3628,7 +3629,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "trigger":  (
                 f"{need} more tier-1/2 headline{'s' if need != 1 else ''} at or below "
                 f"{NEWS_SENTIMENT_CRITICAL:+.2f} since {news_window_label} "
-                "→ Act Today critical news (tighten your stop)."
+                "→ Act Today critical news (consider a tighter manual stop)."
             ),
             "weight":   0,
             "news_headline": str(_item.get("title") or _item.get("headline") or "news")[:140],

@@ -467,10 +467,17 @@ def stop_ladder(
 def build_portfolio_df(
     holdings: list[dict], loaded_data: dict,
     manual_stops: dict | None = None,
+    *, held_stops: dict | None,
 ) -> pd.DataFrame:
     """
     holdings: [{"ticker": "AVGO", "shares": 10, "avg_cost": 200.0}, ...]
     loaded_data: dict of ticker -> load_all() result
+    held_stops: REQUIRED keyword (no default, finding #26 C3):
+        {TICKER: result of held_stop_wiring.build_held_stops}. The automatic stop
+        of every holding comes from here. `None`, or a ticker missing from it,
+        reads "Stop Unavailable" -- never the old `risk.atr_stop_loss` /
+        `protective_stop` engine, which `loaded_data[t]["stop"]` still feeds for
+        fresh-entry sizing only (that value is never mutated here).
     manual_stops: optional {ticker: {"stop_price", "set_at", ...}} — when set
         for a ticker, the user's stop overrides the ATR-derived stop. All
         downstream consumers (Brief, Analysis, Scorecard, risk advisor) read
@@ -526,12 +533,20 @@ def build_portfolio_df(
         # Never silently substitute a fabricated stop — that would let mechanical
         # SELL rules fire on a number nobody chose. Surface None downstream so
         # consumers can treat it as "manual review required."
-        _raw_stop = r.get("stop")
-        if _raw_stop is None or _raw_stop <= 0:
-            stop, stop_label, gap_to_stop = None, "Stop Unavailable", None
-        else:
-            stop, stop_label = protective_stop(price, avg_cost, _raw_stop)
-            gap_to_stop = round((price - stop) / price * 100, GAP_TO_STOP_ROUND_DECIMALS)
+        # The automatic stop is the HELD stop (held_stop_wiring), built from
+        # completed sessions only. Missing / None -> "Stop Unavailable".
+        _hs = held_stops.get(ticker) if isinstance(held_stops, dict) else None
+        _hs = _hs if isinstance(_hs, dict) else {}
+        _hc = _hs.get("components")
+        _hc = _hc if isinstance(_hc, dict) else {}
+        try:
+            _auto = float(_hs.get("stop")) if _hs.get("stop") is not None else None
+        except (TypeError, ValueError):
+            _auto = None
+        if _auto is not None and not (_auto == _auto and _auto > 0):
+            _auto = None
+        stop_label = (str(_hs.get("label") or "Stop Unavailable")
+                      if _auto is not None else "Stop Unavailable")
 
         # Manual-stop override: user actioned a Brief "raise stop" recommendation
         # and recorded the new level. Persisted in Supabase manual_stops table
@@ -544,13 +559,22 @@ def build_portfolio_df(
         #      original ATR/Ratchet label is preserved in Stop Type Auto so
         #      Trade Plan can show "your manual stop overrides ATR Stop $X".
         _ms = manual_stops.get(ticker) if manual_stops else None
-        stop_type_auto = stop_label
-        if _ms and stop is not None:
-            _ms_price = float(_ms.get("stop_price") or 0)
-            if manual_stop_wins(_ms_price, stop):
-                stop = round(_ms_price, 2)
-                stop_label = "Manual"
-                gap_to_stop = round((price - stop) / price * 100, GAP_TO_STOP_ROUND_DECIMALS)
+        stop_type_auto = stop_label if _auto is not None else None
+        # compose_with_manual (imported here: held_stop imports this module) is
+        # manual_stop_wins plus the rule that a valid manual stop still applies
+        # when the automatic stop is unavailable.
+        from stock_analyzer.held_stop import compose_with_manual as _compose
+        _ms_price = None
+        if _ms:
+            try:
+                _ms_price = float(_ms.get("stop_price") or 0)
+            except (TypeError, ValueError):
+                _ms_price = None
+        stop, _is_manual = _compose(_auto, _ms_price)
+        if _is_manual:
+            stop_label = "Manual"
+        gap_to_stop = (round((price - stop) / price * 100, GAP_TO_STOP_ROUND_DECIMALS)
+                       if stop is not None else None)
 
         # Verdict-basis resolution (pillar_availability.verdict_basis — the ONE
         # shared function, so the duplicated availability expressions cannot
@@ -611,7 +635,18 @@ def build_portfolio_df(
             "Weight (%)": 0.0,
             "Stop": stop,
             "Stop Type": stop_label,
-            "Stop Type Auto": stop_type_auto if stop is not None else None,
+            "Stop Type Auto": stop_type_auto,
+            # Held-stop detail (scalars only; None when there is no auto stop):
+            # explainer, degraded-basis banner and the Home memo read these.
+            "Auto Stop": _auto,
+            "Stop Basis": _hs.get("basis") if _auto is not None else "unavailable",
+            "Stop Since": _hs.get("since") if _auto is not None else None,
+            "Stop Note": (_hs.get("note") or "") if _hs else "No stop could be built for this holding.",
+            "Stop Entry": _hc.get("entry"),
+            "Stop Trailing": _hc.get("trailing"),
+            "Stop Ratchet": _hc.get("ratchet"),
+            "Stop ATR": _hs.get("atr_last"),
+            "Stop HW Close": _hs.get("hw_close"),
             "Manual Stop Set At": (_ms or {}).get("set_at") if _ms else None,
             "Gap to Stop (%)": gap_to_stop,
             "Signal": _signal,
@@ -698,10 +733,17 @@ def alerts(
         # Stop proximity — skip when stop data is unavailable (gap is None),
         # otherwise the comparison crashes. Stop-unavailable is surfaced
         # separately via the Stop Type column.
-        if gap is None:
+        if gap is None or pd.isna(gap):
             result.append({
                 "level": "warning", "category": "stop",
                 "msg": f"🟡 **{ticker}** — stop data unavailable; set a manual stop in your broker",
+            })
+        elif gap <= 0:
+            # Breached (the rounded gap the Brief's breach rule uses): finding #24.
+            from stock_analyzer.stop_breach_text import alert_breach_msg
+            result.append({
+                "level": "danger", "category": "stop",
+                "msg": alert_breach_msg(ticker, gap, row["Stop"]),
             })
         elif gap < POSITION_AT_RISK_GAP_PCT:
             result.append({

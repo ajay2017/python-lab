@@ -242,14 +242,36 @@ def _tier(gain_pct: float, ratchet_levels) -> tuple[float, str] | None:
 
 
 def _result(stop, basis, binding, reason, since=None, last_session=None,
-            hw_close=None, hw_session=None, components=None, ratchet_label=None):
+            hw_close=None, hw_session=None, components=None, ratchet_label=None,
+            atr_last=None):
     return {
         "stop": stop, "basis": basis, "binding": binding, "reason": reason,
         "since": since, "last_session": last_session,
         "hw_close": hw_close, "hw_session": hw_session,
         "components": components or {"entry": None, "trailing": None, "ratchet": None},
         "ratchet_label": ratchet_label,
+        # ATR (dollars) through the last completed bar the stop used; None when
+        # no stop could be built. Additive (C3b): the what-if explainer holds it constant.
+        "atr_last": atr_last,
     }
+
+
+def entry_anchor_atr(bars: pd.DataFrame, episode_start, warmup_bars: int) -> float | None:
+    """ATR (dollars) at the last completed bar BEFORE `episode_start`, seeded
+    exactly as `compute_held_stop`'s entry anchor seeds it: `warmup_bars` real
+    bars before the first bar dated >= `episode_start` (ATR is causal, so
+    truncating at that bar gives the same value as the full series). `bars` are
+    the completed bars (`completed_bars`). For an episode starting today this is
+    the value the NEXT session's entry component will use. None when the frame
+    doesn't reach back `warmup_bars` bars or the value isn't finite."""
+    wb = int(warmup_bars)
+    pe = int(bars.index.searchsorted(pd.Timestamp(episode_start)))
+    origin = pe - wb
+    if wb < 1 or pe < 1 or origin < 0:
+        return None
+    sub = bars.iloc[origin:pe]
+    v = float(_atr_series(sub["High"], sub["Low"], sub["Close"], _ATR_LENGTH).iloc[-1])
+    return v if v == v and v not in (float("inf"), float("-inf")) else None
 
 
 def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
@@ -258,7 +280,8 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
                       min_bars: int, fill_tol_pct: float) -> dict:
     """See the module docstring. Returns a dict: stop, basis (full / partial /
     prior_session / unavailable), binding, reason, since, last_session,
-    hw_close, hw_session, components {entry, trailing, ratchet}, ratchet_label."""
+    hw_close, hw_session, components {entry, trailing, ratchet}, ratchet_label,
+    atr_last."""
     if int(warmup_bars) < 1:
         raise ValueError(f"warmup_bars must be >= 1 (got {warmup_bars})")
     bars = completed_bars(df, as_of)
@@ -276,7 +299,7 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
         stop = float(close_all.iloc[-1]) - max(initial_mult, trail_mult) * float(atr_all.iloc[-1])
         return _result(round(stop, 2), "prior_session", "prior_session",
                        f"episode {status}: {(episode or {}).get('reason', '')}".rstrip(": "),
-                       last_session=last_date)
+                       last_session=last_date, atr_last=float(atr_all.iloc[-1]))
 
     E = pd.Timestamp(episode["start"])
     since = E.date()
@@ -358,7 +381,8 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
         return _result(round(stop, 2), "prior_session", "prior_session",
                        "; ".join(notes + partial_notes + ["no component computable"]),
                        since=since, last_session=last_date, hw_close=hw_close,
-                       hw_session=hw_session, components=comps)
+                       hw_session=hw_session, components=comps,
+                       atr_last=float(atr_all.iloc[-1]))
     best = max(avail.values())
     binding = next(k for k in ("ratchet", "trailing", "entry")
                    if avail.get(k) == best)
@@ -379,7 +403,8 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
 
     return _result(round(best, 2), basis, binding, reason, since=since,
                    last_session=last_date, hw_close=hw_close, hw_session=hw_session,
-                   components=comps, ratchet_label=label)
+                   components=comps, ratchet_label=label,
+                   atr_last=float(atr.iloc[-1]))
 
 
 # ── manual override ──────────────────────────────────────────────────────────
@@ -387,8 +412,16 @@ def compose_with_manual(auto_stop: float | None,
                         manual_price: float | None) -> tuple[float | None, bool]:
     """(stop, stop_type_is_manual). The decision is `portfolio.manual_stop_wins`
     (a manual stop wins only when >= the auto stop), rounded to cents like
-    build_portfolio_df. With no auto stop there is nothing to override."""
-    if auto_stop is None:  # as build_portfolio_df: manual applies only over an auto stop
+    build_portfolio_df. With NO auto stop ("Stop Unavailable") a valid manual
+    price still applies: dropping a stop the owner set because the automatic one
+    couldn't be built would leave the position unprotected (C3b, 2026-10-30)."""
+    if auto_stop is None:
+        try:
+            mp = float(manual_price)
+        except (TypeError, ValueError):
+            return None, False
+        if mp == mp and mp > 0 and mp != float("inf"):
+            return round(mp, 2), True
         return None, False
     if manual_stop_wins(manual_price, auto_stop):
         return round(float(manual_price), 2), True

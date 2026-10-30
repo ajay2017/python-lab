@@ -23,6 +23,7 @@ import pytest
 
 from datetime import timedelta
 
+from tests._held_stops import hs_for
 from stock_analyzer.constants import (
     ADD_WINNER_COOLDOWN_DAYS,
     ADD_WINNER_MIN_GAP_PCT,
@@ -2135,7 +2136,7 @@ def test_build_portfolio_df_empty_really_has_no_ticker_column():
     ever starts returning a typed empty frame, this test says so loudly rather
     than letting the guards quietly become dead code."""
     from stock_analyzer.portfolio import build_portfolio_df
-    df = build_portfolio_df({}, {})
+    df = build_portfolio_df({}, {}, held_stops=hs_for({}))
     assert df.empty
     assert "Ticker" not in df.columns
 
@@ -2144,7 +2145,7 @@ def test_held_tickers_helpers_tolerate_every_empty_shape():
     import pandas as pd
     from stock_analyzer.daily_briefing import _has_positions, _held_tickers, _port_rows
     from stock_analyzer.portfolio import build_portfolio_df
-    for empty in (None, pd.DataFrame(), build_portfolio_df({}, {})):
+    for empty in (None, pd.DataFrame(), build_portfolio_df({}, {}, held_stops=hs_for({}))):
         assert _has_positions(empty) is False
         assert _held_tickers(empty) == set()
         assert _port_rows(empty, "SAP").empty
@@ -2164,7 +2165,7 @@ def test_build_daily_briefing_survives_a_zero_holdings_book():
     composites = {"SAP": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
     from stock_analyzer.portfolio import build_portfolio_df
     brief = build_daily_briefing(
-        build_portfolio_df({}, {}), [], [], [], [], {}, scanner, 100_000.0, _TODAY,
+        build_portfolio_df({}, {}, held_stops=hs_for({})), [], [], [], [], {}, scanner, 100_000.0, _TODAY,
         market_context={"tone": "bull"},
         grow_composites=composites,
     )

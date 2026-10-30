@@ -193,6 +193,8 @@ def _patch_context_deps(**overrides):
         has_db=True,
         load_holdings=pd.DataFrame({"Ticker": ["AAPL"]}),
         load_trades=None,
+        held_stops={"AAPL": {"ticker": "AAPL", "stop": 90.0, "basis": "full", "label": "Entry Stop",
+                              "binding": "entry", "note": "", "degraded": False}},
         load_manual_stops={},
         fetch_risk_free_rate=0.045,
         fetch_spy_6mo=pd.DataFrame({"Close": [100.0, 101.0]}),
@@ -214,8 +216,10 @@ def _run_build_context(cfg):
     with patch("stock_analyzer.headless_alert_engine.db.has_db", return_value=cfg["has_db"]), \
          patch("stock_analyzer.headless_alert_engine.db.load_holdings_or_none",
                return_value=cfg["load_holdings"], side_effect=cfg.get("load_holdings_side_effect")), \
-         patch("stock_analyzer.headless_alert_engine.db.load_trades",
+         patch("stock_analyzer.headless_alert_engine.db.load_trades_or_none",
                return_value=cfg["load_trades"]), \
+         patch("stock_analyzer.headless_alert_engine._held_stop_wiring.build_held_stops",
+               return_value=cfg["held_stops"]), \
          patch("stock_analyzer.headless_alert_engine.db.load_manual_stops_or_none",
                return_value=cfg["load_manual_stops"]), \
          patch("stock_analyzer.headless_alert_engine.fetch_risk_free_rate",

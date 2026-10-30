@@ -154,7 +154,7 @@ def test_review_watch_wording_plural_and_singular():
                         "Not enough alone for an Act Today card — wait for confirmation.")
     assert w["trigger"] == (f"{NEWS_CRITICAL_MIN_HEADLINES} more tier-1/2 headlines at or below "
                             f"{NEWS_SENTIMENT_CRITICAL:+.2f} since Fri Oct 16 "
-                            "→ Act Today critical news (tighten your stop).")
+                            "→ Act Today critical news (consider a tighter manual stop).")
     one = find_item(_rev([_it(c=-0.60, tier=1, title="solo")]), "AAA")
     assert one["headline"] == 'negative headline since Fri Oct 16 (worst -0.60): "solo"'
     assert one["why"] == ("One negative headline since Fri Oct 16 (sentiment -0.60). "
