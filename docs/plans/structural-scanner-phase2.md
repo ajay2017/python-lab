@@ -1,5 +1,7 @@
 # Structural Vulnerability Scanner — Phase 2 Design Plan
 
+**STATUS CORRECTED 2026-10-30: SHIPPED 2026-07-27** (`ce9282b`, the Home structural alert banner; shipped-log `2abd470`). The plan text below describes the pre-build state.
+
 **Date:** 2026-07-27
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5

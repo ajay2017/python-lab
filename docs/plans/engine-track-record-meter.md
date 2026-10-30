@@ -1,5 +1,7 @@
 # Engine Track Record — Standing Calibration Meter
 
+**STATUS CORRECTED 2026-10-30: SHIPPED 2026-08-05 as F-229** (`b2d40c4`, engine BUY-call alpha on 🧾 Summary; `8d13014` added the 🛡️ Defense facet). The "PLANNING — not built" line below is stale; `docs/requirements.md` F-229 is authoritative.
+
 **Status:** PLANNING — 2026-08-05. Not built. **Awaiting user review of this plan + the mockup at [docs/mockups/engine-track-record-meter.html](../mockups/engine-track-record-meter.html) before any code.**
 
 **Origin:** First zoom-in from [next-evolution-2026-08-05.md](next-evolution-2026-08-05.md) (Brainstorm Pass #2), Lens 2/3 — "the app's own track record as a standing surface."

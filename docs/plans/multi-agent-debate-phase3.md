@@ -1,5 +1,7 @@
 # Multi-Agent Debate — Phase 3 Design Plan
 
+**STATUS CORRECTED 2026-10-30: SHIPPED 2026-07-27** (`3efeedd`, the 🧠 AI Insights Debate Log tab; shipped-log `11f2a31`). The plan text below describes the pre-build state.
+
 **Date:** 2026-07-27
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5

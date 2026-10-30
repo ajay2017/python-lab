@@ -1,5 +1,7 @@
 # Thesis Red Team Agent — Design Plan
 
+**STATUS CORRECTED 2026-10-30: Phase 1 and Phase 2 both SHIPPED** (Phase 2 = `78a6adc`, 2026-07-27; plan `thesis-red-team-phase2.md`). The "Phase 2 pending" line below is stale.
+
 **Date:** 2026-07-23
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 4.6
