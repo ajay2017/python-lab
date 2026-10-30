@@ -18,6 +18,17 @@ def _today_et():
     return datetime.now(_ET_TZ).date()
 
 
+def _pos_or_zero(v) -> float:
+    """A finite positive float, else 0.0 (NaN / None / non-numeric / <= 0). A held
+    stop of None becomes NaN once it shares a DataFrame column with real stops, and
+    NaN is truthy, so `x or fallback` would let it through."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return x if (x == x and x > 0) else 0.0
+
+
 def _f(v, default=0.0):
     """Best-effort float coerce — returns `default` on None / non-numeric.
 
@@ -79,6 +90,8 @@ from stock_analyzer.stress_test import (
 )
 from stock_analyzer import monte_carlo as _mc
 from stock_analyzer import trim_sizing as _trim_sizing
+from stock_analyzer import held_stop_wiring as _held_stop_wiring
+from stock_analyzer import held_stop_view as _held_stop_view
 from stock_analyzer import thesis_review_status
 from stock_analyzer import forward_sim as _fsim
 from stock_analyzer import attribution_readiness as _attr_ready
@@ -297,7 +310,7 @@ from stock_analyzer.portfolio import (
     gate_basis,
     refresh_outcome,
     build_portfolio_df, sector_exposure, alerts, rebalance_actions,
-    annotate_add_candidates, resolve_sector, stop_ladder, protective_stop,
+    annotate_add_candidates, resolve_sector,
     manual_stop_wins, holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
     trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
@@ -737,6 +750,21 @@ _ANALYST_RTYPE_LABELS = {
 
 
 # ── Glossary tooltips ─────────────────────────────────────────────────────────
+from stock_analyzer.constants import (
+    ATR_STOP_MULT as _TIP_ATR_MULT,
+    HELD_TRAIL_ATR_MULT as _TIP_TRAIL_MULT,
+    HELD_TRAIL_START as _TIP_TRAIL_START,
+    STOP_RATCHET_LEVELS as _TIP_RATCHET_LEVELS,
+)
+_TIP_RATCHET_DESC = "\n".join(
+    f"• +{_thr:.0f}% gain → floor {_m*100:.0f}% above your average cost ({_lab})"
+    for _thr, _m, _lab in sorted(_TIP_RATCHET_LEVELS, key=lambda x: x[0])
+)
+_TIP_RATCHET_MD = chr(10).join(
+    f"   - **+{_thr:.0f}% gain** → floor **{_m*100:.0f}%** above your average cost ({_lab})"
+    for _thr, _m, _lab in sorted(_TIP_RATCHET_LEVELS, key=lambda x: x[0])
+)
+_UG_PRIOR_MULT = max(_TIP_ATR_MULT, _TIP_TRAIL_MULT)   # held_stop prior_session uses the wider multiple
 _TIPS = {
     "P/E Ratio": (
         "Price ÷ trailing 12-month earnings per share.\n\n"
@@ -935,12 +963,12 @@ _TIPS = {
         "Learn more: investopedia.com/terms/m/macd.asp"
     ),
     "ATR Stop": (
-        "Average True Range stop loss — a volatility-adjusted exit level.\n\n"
-        "ATR measures the average daily price range. The stop is set at "
-        "Price − (2 × ATR), placing it outside normal day-to-day noise.\n\n"
+        f"Average True Range stop loss — the stop a NEW buy (or an add) is sized with: {_TIP_ATR_MULT:g} × ATR below today's price.\n\n"
+        "ATR measures the average daily price range, so the level sits outside normal day-to-day noise. "
+        "It sizes a new buy: the position is sized so a hit costs a fixed share of your book.\n\n"
         "This means stops on volatile stocks are wider (they need room to breathe) "
-        "and tighter on stable stocks. Professional traders never use arbitrary "
-        "percentage stops — ATR-based stops respect the stock's actual behaviour.\n\n"
+        "and tighter on stable stocks. Once you own the stock, the stop that protects the position is the "
+        "'Protective Stop' (hover that label).\n\n"
         "Learn more: investopedia.com/terms/a/atr.asp"
     ),
     "R:R Ratio": (
@@ -964,27 +992,31 @@ _TIPS = {
         "Learn more: investopedia.com/terms/p/positionsizing.asp"
     ),
     "Ratchet Stop": (
-        "A stop loss that automatically moves up as your gains accumulate, "
-        "locking in profits while letting winners run.\n\n"
-        "This app's ratchet levels:\n"
-        "• +10% gain → Stop moves to breakeven (you can't lose money)\n"
-        "• +25% gain → Stop floors at +10% (protect 10% gain)\n"
-        "• +50% gain → Stop floors at +25% (protect 25% gain)\n"
-        "• +75% gain → Stop floors at +40% (protect 40% gain)\n\n"
-        "Professional traders call this 'trailing stop' or 'profit ratchet'. "
-        "It solves the hardest problem in investing: letting winners run while "
-        "never giving back all your gains."
+        "The profit-lock part of a held position's stop: a floor above your average cost "
+        f"that is set by the best completed close since your last buy or {_TIP_TRAIL_START}, "
+        "whichever is later, and stays after the price falls back.\n\n"
+        "This app's rungs:\n"
+        f"{_TIP_RATCHET_DESC}\n\n"
+        "It is one of the parts of the Protective Stop (hover that label); the stop in force "
+        "is the highest of its parts."
     ),
     "Protective Stop": (
-        "The stop the app acts on for a position you hold — the TIGHTER (higher) "
-        "of two levels, plus any manual override:\n\n"
-        "• ATR stop: Price − 2 × ATR (a volatility floor outside daily noise)\n"
-        "• Profit-ratchet floor: climbs as your gain grows (+10% → breakeven, "
-        "+25% → lock +10%, and so on)\n"
-        "• Manual override: a stop you've placed yourself wins whenever it's tighter\n\n"
-        "So the number can come from volatility even when the label names a profit "
-        "tier. Open the 🛡️ 'How your stop is set' panel below for the full "
-        "breakdown and a what-if simulator."
+        "The stop the app acts on for a position you hold. It is built from completed "
+        "trading days only, so today's price can't move it. It is the HIGHEST of up to three "
+        "parts, plus any manual stop that is at least as tight:\n\n"
+        f"• Entry stop: your first fill minus {_TIP_ATR_MULT:g} × ATR\n"
+        f"• Trailing stop: the highest of each day's close minus {_TIP_TRAIL_MULT:g} × that day's ATR, "
+        f"over completed days since the stop went live ({_TIP_TRAIL_START}) or since you bought, whichever is later\n"
+        "• Profit lock: a floor above your average cost once your gain reaches a rung:\n"
+        f"{_TIP_RATCHET_DESC}\n"
+        "• Manual stop: yours wins whenever it is at least as tight as the automatic one, "
+        "and it still applies when no automatic stop could be built\n\n"
+        "With complete price history, and until you add shares, the automatic stop only moves up. "
+        f"On the day you buy, the stop is your fill price minus {_TIP_ATR_MULT:g} × ATR (ATR from the last "
+        f"completed session); from the next session the trailing and profit-lock parts can raise it. "
+        "The label under the number says which part is in force; a note appears when the price history is "
+        "incomplete, and then the stop is a rough guide only. Open the 🛡️ 'How your stop is set' "
+        "panel for the breakdown and a what-if."
     ),
     "Composite Score": (
         "Weighted composite signal combining four analytical dimensions:\n\n"
@@ -1577,82 +1609,48 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
                         under_reduce: bool = False, buy_add: bool = False) -> None:
     """Analysis-page explainer + what-if simulator for a HELD position's stop.
 
-    Read-only / educational: it never changes a gate, threshold, or
-    recommendation — it only VISUALISES the stop the engine already computed and
-    SIMULATES it forward. Faithful by construction: every number comes from
-    `portfolio.stop_ladder`, which reuses `protective_stop` + the real ATR
-    formula + the real constants; the CURRENT-state active stop is pinned to the
-    engine's own `r["stop"]` (via atr_stop_override) so it is bit-exact with the
-    "Stop Loss" metric / Brief. Renders nothing unless we have price, avg cost
-    and ATR.
+    Read-only / educational: it never changes a gate, threshold or
+    recommendation. Every number comes from the held-position stop the portfolio
+    build already computed (`held_stop_wiring` -> the "Auto Stop" / "Stop ..."
+    columns of `holding`), read back through `held_stop_view`; the stop in force
+    is `holding["Stop"]` itself, so it is bit-exact with the "Stop Loss" metric
+    and the Brief. Renders nothing without a price, an average cost and a stop.
 
-    `under_reduce`: the Brief flags this position for reduce/exit — suppress the
-    "keep climbing" nudges (next-ratchet, tighten-option) so the explainer never
-    softens an active exit directive.
+    `under_reduce`: the Brief flags this position for reduce/exit; the what-if
+    is then labelled informational so it never softens the exit directive.
 
     `buy_add`: rendered on the Buy/Strong-Buy tab of a position you already hold.
-    Two stops are in play there and MUST be distinguished: the position is sized
-    (shares + R:R) off `r["stop"]` — the ATR fresh-entry stop (or your manual
-    stop) — DELIBERATELY, so new capital is risked at today's volatility rather
-    than off the tighter stop the existing shares earned (sizing off the ratchet
-    would over-buy into strength). The ladder's *active* level is your ratcheted
-    PROTECTIVE stop. A note frames both so the two numbers can't read as a
-    contradiction; sizing/R:R are unchanged.
+    Two stops are in play there and MUST be distinguished: the add is sized
+    (shares + R:R) off `r["stop"]`, the fresh-entry stop (or your manual stop),
+    DELIBERATELY, so new capital is risked at today's volatility. The stop that
+    protects the combined position is the held stop. A note frames both.
     """
     from stock_analyzer.constants import (
-        ATR_STOP_MULT, STOP_TIGHTEN_ATR_MULT, STOP_TIGHTEN_MIN_GAIN_PCT, APPROACHING_STOP_GAP_PCT,
-        STOP_RATCHET_LEVELS,
+        ATR_STOP_MULT, STOP_RATCHET_LEVELS,
     )
 
     avg_cost = _f(holding.get("Avg Cost"))
-    atr_val  = _f(r.get("atr"))
-    if not (price and price > 0 and avg_cost > 0 and atr_val > 0):
+    _active = _f(holding.get("Stop"))
+    if not (price and price > 0 and avg_cost > 0 and _active > 0):
         return
     shares = _trim_sizing.exact_shares(holding)
-
+    h = _held_stop_view.from_row(holding)
+    _basis = h.get("basis")
     _manual = str(holding.get("Stop Type")) == "Manual" or r.get("_stop_source") == "manual"
-    _manual_stop = _f(holding.get("Stop")) if _manual else None
-
-    # atr_stop_override pins the ladder's ATR stop to the engine's exact value —
-    # but ONLY on the non-manual path. When a manual stop is active the Analysis
-    # bundle overwrites r["stop"] with the manual price, so passing it as the ATR
-    # override would render the manual price under the "2× ATR" label (the very
-    # label-vs-number confusion this feature exists to kill). Manual → derive the
-    # true ATR stop from atr_val; the active stop stays exact via manual_stop.
-    L = stop_ladder(
-        price, avg_cost, atr_val,
-        tighten_multiplier=STOP_TIGHTEN_ATR_MULT,
-        manual_stop=_manual_stop,
-        atr_stop_override=None if _manual else (_f(r.get("stop")) or None),
-    )
-    if not L:
-        return
-
-    _active = L["active_stop"]
-    # Ratchet ladder description, interpolated from the engine's own levels so
-    # the bullet text can never drift from STOP_RATCHET_LEVELS.
-    _rl_desc = ", ".join(
-        f"+{thr:.0f}% → {'breakeven' if mult <= 0.02 else f'lock +{mult*100:.0f}%'}"
+    _manual_stop = _active if _manual else None
+    _rows = _held_stop_view.component_rows(h)
+    _rl_desc = "; ".join(
+        f"+{thr:.0f}% gain → floor {mult*100:.0f}% above your average cost"
         for thr, mult, _ in sorted(STOP_RATCHET_LEVELS, key=lambda x: x[0])
     )
     with st.expander("🛡️ How your stop is set — and what happens next", expanded=False):
-        # ── Buy-add framing: two stops are in play (sizing vs protective) ──────
-        # The shares/R:R below size off r["stop"] (ATR fresh-entry, or a manual
-        # override); the ladder's active level is the ratcheted protective stop.
-        # Name both up front so the different numbers don't read as a bug.
         if buy_add:
             _sizing_stop = _f(r.get("stop"))
-            # r["stop"] is the manual price when a manual override is active (the
-            # Analysis bundle overwrites it), else the raw ATR fresh-entry stop —
-            # so describe the sizing stop by what it actually IS. (A manual stop
-            # in the [ATR, ratchet-floor) gap is accepted here but rejected by the
-            # portfolio's ratchet gate, so _sizing_stop can be the manual price
-            # even in the "different" branch — don't hardcode "ATR" there.)
             if _manual:
-                _sz_line = (f"- **Sizing stop ${_sizing_stop:.2f}** — the shares & R:R below are sized off "
+                _sz_line = (f"- **Sizing stop \\${_sizing_stop:.2f}** — the shares & R:R below are sized off "
                             f"**your manual stop**.")
             else:
-                _sz_line = (f"- **Sizing stop ${_sizing_stop:.2f}** — the shares & R:R below are sized off the "
+                _sz_line = (f"- **Sizing stop \\${_sizing_stop:.2f}** — the shares & R:R below are sized off the "
                             f"{ATR_STOP_MULT:g}× ATR fresh-entry stop, on purpose: new capital is risked at "
                             f"today's volatility, not off the tighter stop your existing shares already earned. "
                             f"That keeps the add conservative and avoids over-buying into strength.")
@@ -1660,56 +1658,43 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
                 st.info(
                     f"**Adding to a position you hold — two stops are at work:**\n\n"
                     f"{_sz_line}\n"
-                    f"- **Protective stop ${_active:.2f}** — the real stop on your combined position (the "
-                    f"active level on the ladder below)."
+                    f"- **Protective stop \\${_active:.2f}** — the real stop on your combined position."
                 )
             else:
                 st.info(
                     f"**Adding to a position you hold.** Your sizing stop and protective stop are the same "
-                    f"right now (**${_active:.2f}**) — the shares & R:R below size off it. The ladder shows how "
-                    f"it's built."
+                    f"right now (**\\${_active:.2f}**) — the shares & R:R below size off it."
                 )
             st.caption(
-                f"⚠️ Adding at ${price:.2f} raises your blended average cost, which lowers your gain % — it can "
-                f"drop you into a lower profit-ratchet tier, lowering the floor that tier had locked. Size adds "
-                f"with that in mind."
+                f"⚠️ Adding at \\${price:.2f} raises your blended average cost. The profit-lock floor is "
+                f"measured from the new average cost and restarts from your latest buy, so it can come out "
+                f"lower than before the add."
             )
-        # ── A) The stop ladder ────────────────────────────────────────────────
-        # Every relevant price level on one number-line. Roles (what each level
-        # IS) go in the legend caption + hover — the price cluster is too tight
-        # for long inline labels. The stop actually in force is drawn as a large
-        # ✓ marker; the losing candidate stop is DIMMED, and a "tightest wins"
-        # arrow points to the winner — so "which number binds, and why" reads at
-        # a glance (the AAPL case: ratchet tier reached, but the ATR stop binds).
-        _src = L["active_source"]
-        _mk = [dict(label="Entry", role="your average cost", px=avg_cost,
+        _lad_cap = _held_stop_view.basis_caption(holding)
+        if _lad_cap:
+            st.caption(_lad_cap)
+
+        # ── A) Number-line of the parts of the stop ──────────────────────────
+        _mk = [dict(label="Avg cost", role="your average cost", px=avg_cost,
                     color="#9ca3af", active=False, dim=False)]
-        if L["tier_reached"] and L["ratchet_floor"]:
-            _mk.append(dict(label=L["ratchet_floor_label"], role="profit-lock floor",
-                            px=L["ratchet_floor"], color="#3b82f6",
-                            active=(_src == "ratchet"), dim=(_src != "ratchet")))
-        _mk.append(dict(label="ATR stop", role=f"volatility floor · price − {ATR_STOP_MULT:g}× ATR",
-                        px=L["atr_stop"], color="#f59e0b",
-                        active=(_src == "atr"), dim=(_src != "atr")))
-        if _src == "manual":
+        _colors = {"entry": "#f59e0b", "trailing": "#3b82f6", "ratchet": "#a78bfa"}
+        for _row in _rows:
+            _hit = (not _manual) and abs(_row["value"] - _active) < 0.005
+            _mk.append(dict(label=_row["label"], role=_row["text"], px=_row["value"],
+                            color=_colors.get(_row["kind"], "#9ca3af"),
+                            active=_hit, dim=not _hit))
+        if _manual:
             _mk.append(dict(label="Manual", role="your placed override", px=_active,
                             color="#dc2626", active=True, dim=False))
-        if L["tighten_stop"] and _active < L["tighten_stop"] < price:
-            # Violet (not amber) so it doesn't blur into the orange ATR stop —
-            # the one low-contrast pair on the ladder.
-            _mk.append(dict(label="Tighter", role=f"optional · price − {STOP_TIGHTEN_ATR_MULT:g}× ATR",
-                            px=L["tighten_stop"], color="#a78bfa", active=False, dim=True))
         _mk.append(dict(label="Now", role="current price", px=price,
                         color="#22c55e", active=False, dim=False))
-
+        _atr_last = h.get("atr_last") or 0.0
         _lo = min(m["px"] for m in _mk)
         _hi = max(m["px"] for m in _mk)
-        _pad = max((_hi - _lo) * 0.12, atr_val * 0.6)
+        _pad = max((_hi - _lo) * 0.12, _atr_last * 0.6, price * 0.01)
         _xmin, _xmax = _lo - _pad, _hi + _pad
 
         _fig = go.Figure()
-        # #3 — zones: below the active stop = stop-out territory (red); above it =
-        # still holding (green). Makes the cushion legible without reading a number.
         _fig.add_vrect(x0=_xmin, x1=_active, fillcolor="#ef4444", opacity=0.07,
                        line_width=0, layer="below",
                        annotation_text="🛑 stop-out zone", annotation_position="bottom left",
@@ -1720,15 +1705,6 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
                        annotation_font_size=10, annotation_font_color="#86efac")
         _fig.add_vline(x=_active, line_dash="solid", line_color="#dc2626", line_width=1.4)
         _fig.add_vline(x=price, line_dash="dash", line_color="#e5e7eb", line_width=1)
-        # #2 — "tightest wins" arrow, only when there's an actual contest (a
-        # ratchet floor and/or a manual override competing with the ATR stop).
-        if L["tier_reached"] or _src == "manual":
-            _fig.add_annotation(
-                x=_active, y=0.10, text="tightest of these wins → your stop",
-                showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.2,
-                arrowcolor="#dc2626", ax=0, ay=-34, xref="x", yref="y",
-                font=dict(size=10, color="#fca5a5"),
-            )
         for i, m in enumerate(_mk):
             _icon = "✓ " if m["active"] else ""
             _size = 20 if m["active"] else 11
@@ -1752,153 +1728,48 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
             yaxis=dict(visible=False, range=[-1, 1]),
         )
         st.plotly_chart(_fig, width="stretch", key=f"stopladder_{holding.get('Ticker','')}")
-        # #1 — role legend (colour → what it means), so the short chart labels
-        # never need a paragraph next to them.
-        _leg = " &nbsp;·&nbsp; ".join(
-            f"<span style='color:{m['color']}'>⬤</span> {m['label']} "
-            f"<span style='color:#9ca3af'>({m['role']})</span>"
-            + (" — <b>in force</b>" if m["active"] else "")
-            for m in _mk
-        )
-        st.caption(f"−{L['gap_pct']:.1f}% cushion to the active stop.")
-        st.markdown(f"<div style='font-size:0.82em;line-height:1.6'>{_leg}</div>",
-                    unsafe_allow_html=True)
-
-        # ── #4 — Profit-lock staircase ────────────────────────────────────────
-        # The forward story: as price climbs through each ratchet trigger, the
-        # LOCKED floor steps up. Shows the whole path + where you sit on it, so
-        # the next logical rung is obvious. Suppressed under a reduce/exit call
-        # (same reason the "keep-climbing" captions are). The dotted line marks
-        # your ACTUAL stop today — when it sits above the floor, the ATR stop is
-        # what binds (ties back to the "tightest wins" story above).
-        _rungs = L["ratchet_rungs"]
-        if not under_reduce and _rungs:
-            st.markdown("**📈 Profit-lock staircase — how your stop floor climbs as you gain**")
-            _xs = [rr["trigger_price"] for rr in _rungs]
-            _ys = [rr["floor"] for rr in _rungs]
-            _sfig = go.Figure()
-            # Stepped floor line (holds, then jumps up at each trigger price).
-            _sfig.add_trace(go.Scatter(
-                x=_xs + [max(_xs[-1], price) * 1.06], y=_ys + [_ys[-1]],
-                mode="lines", line=dict(shape="hv", color="#3b82f6", width=2),
-                hoverinfo="skip", showlegend=False,
-            ))
-            # Rung markers — reached = green, ahead = grey; the current tier ringed.
-            _sfig.add_trace(go.Scatter(
-                x=_xs, y=_ys, mode="markers+text",
-                marker=dict(
-                    size=[16 if rr["is_current"] else 11 for rr in _rungs],
-                    color=["#22c55e" if rr["reached"] else "#6b7280" for rr in _rungs],
-                    line=dict(width=[2 if rr["is_current"] else 0 for rr in _rungs], color="#e5e7eb"),
-                ),
-                text=[f"+{rr['gain_pct']:.0f}% → ${rr['floor']:.2f}" for rr in _rungs],
-                textposition="top center", textfont=dict(size=10, color="#93c5fd"),
-                hovertext=[f"At ${rr['trigger_price']:.2f} (+{rr['gain_pct']:.0f}%): "
-                           f"stop locks ${rr['floor']:.2f} (+{rr['floor_pct']:.0f}%) — {rr['label']}"
-                           for rr in _rungs],
-                hoverinfo="text", showlegend=False,
-            ))
-            _sfig.add_vline(x=price, line_dash="dash", line_color="#e5e7eb", line_width=1,
-                            annotation_text=f"you are here · +{L['gain_pct']:.1f}%",
-                            annotation_position="top", annotation_font_size=10,
-                            annotation_font_color="#e5e7eb")
-            _sfig.add_hline(y=_active, line_dash="dot", line_color="#f59e0b", line_width=1,
-                            annotation_text=f"actual stop today ${_active:.2f}",
-                            annotation_position="bottom right", annotation_font_size=10,
-                            annotation_font_color="#fbbf24")
-            _sfig.update_layout(
-                height=230, template="plotly_dark", showlegend=False,
-                margin=dict(l=10, r=10, t=30, b=30),
-                xaxis=dict(title="Price ($)",
-                           range=[min(avg_cost, price) * 0.97, max(_xs[-1], price) * 1.08]),
-                # Force the y-range to include the actual-stop hline — an
-                # add_hline shape does NOT expand autorange, so the "actual stop
-                # today" line would clip out of view exactly when the ATR stop
-                # binds below the lowest floor (early positions) or a big-winner
-                # trailing stop sits above the top floor — the cases this chart
-                # exists to explain.
-                yaxis=dict(title="Locked stop floor ($)",
-                           range=[min(min(_ys), _active) * 0.98, max(max(_ys), _active) * 1.02]),
-            )
-            st.plotly_chart(_sfig, width="stretch", key=f"stopstair_{holding.get('Ticker','')}")
-            if _src == "manual":
-                _stair_cap = (
-                    "Green = tier reached · grey = ahead · ringed = your current tier. The floor is the "
-                    "profit-ratchet level only — your **actual** stop (dotted) is your manual override, which is in force."
-                )
-            else:
-                _stair_cap = (
-                    "Green = tier reached · grey = ahead · ringed = your current tier. The floor is the "
-                    f"profit-ratchet level only — your **actual** stop is the higher of it and the {ATR_STOP_MULT:g}× "
-                    "ATR stop (dotted), so early on the ATR stop usually binds."
-                )
-            st.caption(_stair_cap)
+        _gap_now = (price - _active) / price * 100
+        st.caption("Price is at or below the active stop."
+                   if act_today_precedence.is_stop_breached(price, _active)
+                   else f"{_gap_now:.1f}% cushion to the active stop.")
 
         # ── B) Plain-English walk-through (with THIS position's numbers) ───────
-        if L["active_source"] == "atr":
-            _src_line = (
-                f"the **ATR stop** (${L['atr_stop']:.2f}) — you're up +{L['gain_pct']:.1f}%, below the "
-                f"+10% profit-ratchet, so the volatility stop is in force."
-                if not L["tier_reached"] else
-                f"the **ATR stop** (${L['atr_stop']:.2f})."
-            )
-        elif L["active_source"] == "ratchet":
-            _src_line = (
-                f"the **{L['ratchet_floor_label']}** floor (${L['ratchet_floor']:.2f}) — your gain lifted it "
-                f"above the ATR stop."
-            )
-        else:  # manual
-            _src_line = f"**your manual stop** (${_active:.2f}) — it overrides the computed stop because it's tighter."
-        _tier_note = ""
-        if L["tier_reached"] and L["active_source"] == "atr":
-            _tier_note = (
-                f" You're in the **{L['tier_label']}** tier (up +{L['gain_pct']:.1f}%), so the label reads "
-                f"“{L['tier_label']}” — but that floor is only ${L['ratchet_floor']:.2f}, *below* the ATR "
-                f"stop, so the **ATR stop is the number that actually protects you** right now. The label "
-                f"marks the profit tier you've reached; the value comes from volatility."
-            )
-        st.markdown(
-            f"Your stop is built from **three layers**, and each run the app uses the **tightest (highest)** of them:\n\n"
-            f"1. **Volatility floor (ATR).** ATR(14) ≈ **${atr_val:.2f}**/day of typical range. The base stop sits "
-            f"**{ATR_STOP_MULT:g}× ATR** below price = **${L['atr_stop']:.2f}** — outside normal day-to-day noise.\n"
-            f"2. **Profit ratchet.** As your gain grows, a floor lifts to protect profit "
-            f"({_rl_desc}). The app raises the recommended stop for you to place — the lock comes from you "
-            f"moving your broker stop up and never lowering it.\n"
-            f"3. **Your override.** A manual stop you've placed wins whenever it's tighter than the computed one.\n\n"
-            f"**Right now:** price **${price:.2f}**, up **+{L['gain_pct']:.1f}%**. Your active stop is {_src_line}"
-            f"{_tier_note}"
+        _lines = [
+            "Your automatic stop is the **highest** of up to three parts. Each part is built "
+            "from completed trading days only, so today's price can't move it:",
+        ]
+        for _row in _rows:
+            _lines.append(f"- **{_row['label']} \\${_row['value']:.2f}** — {_row['text']}")
+        _lines.append(
+            "A part is missing when it doesn't apply yet (the trailing part starts at the stop's "
+            f"go-live date, the profit lock needs a gain; the rungs are {_rl_desc}) or its data "
+            "failed a check (see the note above, if any)."
         )
-        if (not under_reduce and L["tighten_stop"] and _active < L["tighten_stop"] < price
-                and L["gain_pct"] >= STOP_TIGHTEN_MIN_GAIN_PCT):
-            st.caption(
-                f"💡 A **tighter alternative** sits at **${L['tighten_stop']:.2f}** ({STOP_TIGHTEN_ATR_MULT:g}× ATR). Today's Brief "
-                f"nudges toward it when you're up ≥ {STOP_TIGHTEN_MIN_GAIN_PCT:.0f}% with "
-                f"{APPROACHING_STOP_GAP_PCT:.0f}%-or-less room — it locks more profit at the cost of less "
-                f"breathing room. Optional, not required."
-            )
-        if L["next_tier"] and not under_reduce:
-            _nt = L["next_tier"]
-            st.caption(
-                f"🎯 **Next ratchet up:** if it reaches **${_nt['trigger_price']:.2f}** (+{_nt['gain_pct']:.0f}%), "
-                f"the app will recommend raising your stop to **${_nt['floor']:.2f}** — locking **{_nt['label']}** "
-                f"once you place it."
-            )
+        if _manual:
+            _lines.append(f"**Your manual stop (\\${_active:.2f}) is in force:** it wins because it is "
+                          "at least as tight as the automatic one (or no automatic stop could be built).")
+        _lines.append(f"**Right now:** price **\\${price:.2f}**, stop in force **\\${_active:.2f}** "
+                      f"({holding.get('Stop Type')}).")
+        if _basis == "full":
+            _lines.append("With complete price history, and until you add shares, the automatic stop only "
+                          "moves up. It can fall if you sell out, add shares, or the price "
+                          "data itself changes.")
+        elif _basis in ("partial", "prior_session", "unavailable"):
+            _lines.append("This stop is not on a full price history, so don't assume it only moves up.")
+        st.markdown("\n\n".join(_lines))
 
         # ── C) What-if simulator ──────────────────────────────────────────────
         st.markdown("**🎮 What-if — drag to a price and see what your stop does:**")
         _smin = round(min(avg_cost, _active) * 0.85, 2)
         _smax = round(price * 1.40, 2)
         _step = max(0.01, round(price * 0.005, 2))
-        _sdefault = min(max(round(price, 2), _smin), _smax)  # clamp into range
+        _sdefault = min(max(round(price, 2), _smin), _smax)
         _hypo = st.slider(
             "Simulated price ($)", min_value=_smin, max_value=_smax, value=_sdefault,
             step=_step, key=f"stopsim_{holding.get('Ticker','')}",
-            help="Assumes today's volatility (ATR held constant). Downside = tested against the stop you have TODAY; upside = the higher stop the app would then recommend.",
+            help="Assumes today's volatility (ATR held constant). Downside = tested against the stop you have TODAY; upside = the stop you would have after a session closes at that price.",
         )
         if _hypo < price:
-            # Downside: does a fall to _hypo breach the stop you hold TODAY? (The
-            # app instructs you to place a resting stop at the active level, so we
-            # test against that placed level, not a recomputed one.)
             _drop = (_hypo / price - 1) * 100
             if _hypo <= _active:
                 _realized_pct = (_active / avg_cost - 1) * 100
@@ -1926,35 +1797,34 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
                     unsafe_allow_html=True,
                 )
         else:
-            # Upside: recompute the RECOMMENDED stop at the higher price. The
-            # engine is stateless — it re-derives max(2×ATR stop, current-tier
-            # floor) every run — so this is the level the app would tell you to
-            # RAISE your stop to, not an automatic guarantee. The floor recedes if
-            # the gain later falls into a lower tier; protection is realised only
-            # by you moving your placed stop up and not lowering it.
-            _sim = stop_ladder(_hypo, avg_cost, atr_val,
-                               tighten_multiplier=STOP_TIGHTEN_ATR_MULT, manual_stop=_manual_stop,
-                               atr_stop_override=round(_hypo - L["atr_multiplier"] * atr_val, 2))
-            _new_stop = _sim["active_stop"]
-            _new_pct = (_new_stop / avg_cost - 1) * 100
-            _new_amt = (_new_stop - avg_cost) * shares
-            _driver = (f"the <b>{_sim['ratchet_floor_label']}</b> floor"
-                       if _sim["active_source"] == "ratchet" else "the 2× ATR trailing stop")
-            _tier_txt = (f" You'd enter the <b>{_sim['tier_label']}</b> profit tier (floor ${_sim['ratchet_floor']:.2f})."
-                         if _sim["tier_reached"] else "")
-            _note = (" Today's Brief already flags this position for reduce/exit — treat this as informational."
-                     if under_reduce else "")
-            st.markdown(
-                f"<div style='padding:10px 14px;border-radius:6px;background:#1e3a8a24;"
-                f"border-left:4px solid #3b82f6;color:#bfdbfe'>📈 <b>At ${_hypo:.2f} "
-                f"(+{_sim['gain_pct']:.1f}%)</b>, the app would recommend raising your stop to "
-                f"<b>${_new_stop:.2f}</b> ({_driver}) — protecting <b>{_new_pct:+.1f}%</b> "
-                f"(<b>${_new_amt:+,.0f}</b>) once you place it there and hold it.{_tier_txt}{_note}</div>",
-                unsafe_allow_html=True,
-            )
+            _w = _held_stop_view.what_if(h, _hypo, avg_cost)
+            if _w is None:
+                st.caption("No upside what-if: this stop has no completed-session history behind it "
+                           "(see the note above).")
+            else:
+                _in_force, _w_manual = _held_stop_wiring.analysis_manual_override(
+                    _w["stop"], _manual_stop)
+                _new_pct = (_in_force / avg_cost - 1) * 100
+                _new_amt = (_in_force - avg_cost) * shares
+                _gain_h = (_hypo / avg_cost - 1) * 100
+                _verb = ("would rise to" if _in_force > _active + 0.004 else "would stay at")
+                _src_txt = ("your manual stop" if _w_manual
+                            else f"the automatic stop ({_held_stop_view.driver_label(_w)})")
+                _note = (" Today's Brief already flags this position for reduce/exit — treat this as informational."
+                         if under_reduce else "")
+                st.markdown(
+                    f"<div style='padding:10px 14px;border-radius:6px;background:#1e3a8a24;"
+                    f"border-left:4px solid #3b82f6;color:#bfdbfe'>📈 <b>If a session closed at ${_safe_html(f'{_hypo:.2f}')} "
+                    f"({_safe_html(f'{_gain_h:+.1f}')}% vs your cost)</b>, your stop {_safe_html(_verb)} <b>${_safe_html(f'{_in_force:.2f}')}</b> — "
+                    f"{_safe_html(_src_txt)}. That is <b>{_safe_html(f'{_new_pct:+.1f}')}%</b> vs your average cost "
+                    f"(<b>${_safe_html(f'{_new_amt:+,.0f}')}</b> on {_safe_html(_trim_sizing.fmt_shares(shares))} shares). "
+                    f"The app doesn't place orders: put the same level in your broker "
+                    f"yourself.{_safe_html(_note)}</div>",
+                    unsafe_allow_html=True,
+                )
         st.caption(
-            "Educational only — this mirrors the engine's stop logic; it doesn't change any recommendation. "
-            "Stops are acted at the next open, not intraday."
+            "Educational only — this restates the stop rule for a made-up price; it doesn't change any "
+            "recommendation. A stop is acted on at the next open, not intraday."
         )
 
 
@@ -2602,9 +2472,9 @@ def _stamp_coord(keys=None) -> None:
 
 MANUAL_STOPS_UNREADABLE_BANNER = (
     "⚠️ Your manual stops couldn't be read from the database, so the stops shown "
-    "are the automatic ones only — and the automatic stop moves down with the "
-    "price, so it rarely triggers on its own. Don't rely on the stops shown until this clears: "
-    "refresh the page, and check your broker's stop orders."
+    "are the automatic ones only. A manual stop that is tighter than the automatic "
+    "one is missing from the numbers on screen. Don't rely on the stops shown until "
+    "this clears: refresh the page, and check your broker's stop orders."
 )
 
 
@@ -2752,6 +2622,84 @@ def _budget_strict_allocations():
     return _a
 
 
+# ── Held-position stop (finding #26 C3) ──────────────────────────────────────
+# The automatic stop of every holding is built by held_stop_wiring from a LONG
+# split-adjusted, dividend-UNadjusted history (Yahoo only). One fetch per name
+# per ET day; a failure raises (st.cache_data never stores an exception) and is
+# remembered for HELD_STOP_UNADJ_NEG_CACHE_SEC so a Yahoo outage isn't retried on every
+# rerun. `et_date` has no leading underscore on purpose: it IS the cache key.
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _cached_unadjusted_history(ticker: str, period: str, et_date: str):
+    return _held_stop_wiring.fetch_or_raise(ticker, period)
+
+
+@st.cache_resource
+def _unadj_negative_cache() -> dict:
+    return {}
+
+
+def _unadjusted_history_or_raise(ticker: str, period: str):
+    """`fetch_history` for build_held_stops: cached per ET day; raises on failure."""
+    _neg = _unadj_negative_cache()
+    _k = (str(ticker).upper(), str(period))
+    _t = _neg.get(_k)
+    if _held_stop_view.neg_cache_active(_t, time.time()):
+        raise RuntimeError("unadjusted history fetch failed recently")
+    try:
+        return _cached_unadjusted_history(_k[0], _k[1], _today_et().isoformat())
+    except Exception:
+        _neg[_k] = time.time()
+        raise
+
+
+def _held_stops_for(holdings, held_data) -> dict:
+    """{TICKER: held-stop result} for `build_portfolio_df(..., held_stops=)`.
+    STRICT trades read (None = journal unreadable -> every name falls back to a
+    flagged prior-close stop), ET today, names fanned out over a small thread
+    pool like `_parallel_load_all`. Never raises."""
+    _trades = _budget_strict_trades()
+    _as_of = _today_et()
+    _rows = [h for h in (holdings or []) if isinstance(h, dict)]
+    if not _rows:
+        return {}
+
+    def _one(_h):
+        return _held_stop_wiring.build_held_stops(
+            [_h], held_data, _trades, _as_of,
+            fetch_history=_unadjusted_history_or_raise)
+
+    out: dict = {}
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=DATA_LOAD_MAX_WORKERS) as _ex:
+        _futs = []
+        for _h in _rows:
+            _futs.append((_h, _ex.submit(_one, _h)))
+            time.sleep(DATA_LOAD_STAGGER_SEC)
+        for _h, _f_ in _futs:
+            try:
+                out.update(_f_.result())
+            except Exception as _exc:
+                # Never drop the ticker: a "Stop Unavailable" result keeps it in the
+                # degraded-basis banner instead of vanishing from the stop map.
+                _tk = str(_h.get("Ticker", _h.get("ticker", "")) or "").strip().upper()
+                if _tk:
+                    out[_tk] = _held_stop_wiring.unavailable_result(
+                        _tk, f"Stop could not be computed ({type(_exc).__name__}).")
+    return out
+
+
+def _held_stops_banner_text(held_stops) -> str | None:
+    """Degraded-basis warning text, or None when every stop is on a full basis."""
+    _rows = _held_stop_wiring.degraded_notes(held_stops)
+    if not _rows:
+        return None
+    _lines = [f"- **{_t}** ({_lbl}): {_note}" for _t, _lbl, _note in _rows]
+    return ("⚠️ **Some stops are not on a full price history.** Treat these stops as "
+            "approximate and check them against your broker:\n\n" + "\n".join(_lines))
+
+
 def _publish_brief_coord_caches(brief):
     """Publish the caches derived from a BUILT Brief: `_reduce_calls` and the
     date-stamped `_brief_news_flags_cache`. One helper for the MISS path and the
@@ -2851,7 +2799,8 @@ def _refresh_portfolio_cache_after_trade(h_df: pd.DataFrame) -> None:
             # Couldn't read (not "none set"): build with auto stops only, but say so.
             manual_stops = {}
             st.warning(MANUAL_STOPS_UNREADABLE_BANNER)
-        port_df = build_portfolio_df(holdings, held_data, manual_stops=manual_stops)
+        port_df = build_portfolio_df(holdings, held_data, manual_stops=manual_stops,
+                                     held_stops=_held_stops_for(holdings, held_data))
         port_df = attach_gate_weight(port_df)
 
         # ── The empty-frame branch, which used to be a single silent skip ────
@@ -5549,7 +5498,9 @@ if page == "🏠 Home":
     st.session_state["_manual_stops"] = None if _manual_stops_unreadable else _manual_stops
     if _manual_stops_unreadable:
         _manual_stops = {}
-    port_df = build_portfolio_df(holdings, held_data, manual_stops=_manual_stops)
+    _held_stops = _held_stops_for(holdings, held_data)
+    port_df = build_portfolio_df(holdings, held_data, manual_stops=_manual_stops,
+                                 held_stops=_held_stops)
     st.session_state["_last_port_df"] = port_df          # used by Trade Journal decision context
     st.session_state["_last_held_data"] = held_data      # Catalyst Watch renders holdings earnings from this
     # Snapshot of what holdings this build reflects — lets downstream pages
@@ -5565,6 +5516,16 @@ if page == "🏠 Home":
         # Rendered in-flow (not in the collapsed Alerts expander): a protective
         # input is missing, so this must not be foldable away.
         st.error(MANUAL_STOPS_UNREADABLE_BANNER)
+
+    # Held-stop basis (finding #26 C3): a stop built without the full price
+    # history, or with no usable start date, is named here -- never silent.
+    _hs_banner = _held_stops_banner_text(_held_stops)
+    if _hs_banner:
+        st.warning(_hs_banner)
+    # One-time "stops recalculated" notice for the first few sessions after go-live.
+    _hs_notice = _held_stop_view.recalc_notice(_today_et())
+    if _hs_notice:
+        st.info(_hs_notice)
 
     _pd_dropped = port_df.attrs.get("dropped_holdings") or []
     _pd_dropped_text = _dropped_holdings_banner_text(_pd_dropped)
@@ -6260,7 +6221,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 20  # bumped: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 21  # bumped: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -6277,9 +6238,22 @@ if page == "🏠 Home":
         st.session_state.get("_brief_auto_refresh_nonce", 0),
         _cluster_baseline_sig,
         _SYNTH_SCHEMA_VER,
+        # Every holding's stop (to the cent) and its basis: a new stop, or a
+        # basis change, rebuilds the Brief (finding #26 C3).
+        _held_stop_wiring.held_sig(port_df),
     )
     _synth_cache = st.session_state.get("_home_synth_cache")
-    _synth_hit = _synth_cache is not None and _synth_cache.get("sig") == _synth_sig
+    # A price move can breach an UNCHANGED stop, which the signature cannot see:
+    # a memo hit is a miss when a ticker is breached now that was not at build.
+    # Only NEW breaches count, so the STOP_RECOVERY_MARGIN_PCT hysteresis is kept.
+    _breached_now = _held_stop_wiring.brief_breached_set(port_df)
+    _breached_at_build = (_synth_cache.get("breached_at_build")
+                          if _synth_cache is not None else None)
+    _new_breach = (_synth_cache is not None
+                   and (not isinstance(_breached_at_build, (set, frozenset))
+                        or bool(_breached_now - _breached_at_build)))
+    _synth_hit = (_synth_cache is not None and _synth_cache.get("sig") == _synth_sig
+                  and not _new_breach)
     if _synth_hit:
         # A hit means holdings / shares / date / stops are unchanged, so this
         # brief describes the CURRENT book: re-stamp its epoch (S-D C2). After a
@@ -7365,6 +7339,8 @@ if page == "🏠 Home":
         # unconditional locals.
         st.session_state["_home_synth_cache"] = {
             "sig": _synth_sig,
+            # Tickers breached when this brief was built (new-breach miss test above).
+            "breached_at_build": frozenset(_breached_now),
             # ET date this synthesis was built -- lets cross-page readers (the
             # Watchlist overflow caption) refuse a brief that is not today's.
             "date": _today_et().isoformat(),
@@ -16054,7 +16030,7 @@ elif page == "📡 Signals & Advice":
                                 if etf_scoring.cost_urgency_high(_rbc_cost):
                                     st.info("🔴 **High expense ratio is a structural drag** — the fund's ongoing cost weakens the case for holding through this technical rough patch.")
                                 else:
-                                    st.info("🟡 **Technical weakness only** — this is a low-cost fund, so the ratchet stop may handle it without a full exit.")
+                                    st.info("🟡 **Technical weakness only** — this is a low-cost fund, so your stop may handle it without a full exit.")
 
                         # Specific bearish signals from t_signals
                         # Only when the technical pillar was actually measured: below
@@ -16374,8 +16350,8 @@ elif page == "📡 Signals & Advice":
                             else:
                                 action_text = (
                                     f"**Technical-only weakness — the fund's cost profile is fine.**  \n"
-                                    f"Option A (conservative): let the ratchet stop at **\\${act['stop']:.2f}** "
-                                    f"do the work — it already locks in a portion of your gain.  \n"
+                                    f"Option A (conservative): let your stop at **\\${act['stop']:.2f}** "
+                                    f"do the work.  \n"
                                 ) + (
                                     "Half this position is under one share, so there is no "
                                     "partial trim — hold with the stop.  \n"
@@ -16400,8 +16376,8 @@ elif page == "📡 Signals & Advice":
                             else:
                                 action_text = (
                                     f"**Technical-only weakness — fundamentals are intact.**  \n"
-                                    f"Option A (conservative): Let the ratchet stop at **\\${act['stop']:.2f}** "
-                                    f"do the work — it already locks in a portion of your gain.  \n"
+                                    f"Option A (conservative): Let your stop at **\\${act['stop']:.2f}** "
+                                    f"do the work.  \n"
                                 ) + (
                                     "Half this position is under one share, so there is no "
                                     "partial trim — hold with the stop.  \n"
@@ -19560,8 +19536,8 @@ elif page == "🔗 Risk Analysis":
                     f"price breaks it, relative strength (the engine's own trailing "
                     f"{_FS_RS}-day reading vs SPY, **plus** this scenario's name-vs-SPY "
                     f"differential — additive, so at zero shock it is exactly the "
-                    f"engine's number), your **ratcheted** protective stop (`max(ATR stop, "
-                    f"profit-ratchet floor)`, or a tighter manual override — not the raw "
+                    f"engine's number), your **held-position** protective stop (the highest of the entry, "
+                    f"trailing and profit-lock parts, or a manual stop that is at least as tight — not the raw "
                     f"ATR entry stop), and whether the risk-off regime arms (the shocked "
                     f"SPY close against its real 200-day mean; its two legs are OR'd, so "
                     f"no VIX assumption is needed).\n\n"
@@ -19575,11 +19551,11 @@ elif page == "🔗 Risk Analysis":
                     f"widen as the price falls — which is what would genuinely happen "
                     f"live, but it means the ladder gets harder to trip in a deep "
                     f"shock. Read the exit counts as a floor.\n\n"
-                    f"**A simulated stop-out is not a filled order.** The ratchet stop is "
-                    f"stateless — the app re-derives it from your current gain tier on "
-                    f"every run and it has no high-water memory. So a breach here means "
-                    f"“the stop the app would recommend today was crossed”, not “a resting "
-                    f"broker order executed”.\n\n"
+                    f"**A simulated stop-out is not a filled order.** The stop is "
+                    f"the level the app computes today from completed trading days; it is "
+                    f"not re-priced for the shocked price, and it is not an order at your "
+                    f"broker. So a breach here means “the stop the app has today was "
+                    f"crossed”, not “a resting broker order executed”.\n\n"
                     f"**Not modelled:** the path (this is the trough, not a day-by-day "
                     f"walk), TRIM sizing, taxes, slippage, and anything you would *buy* "
                     f"afterwards. It also says nothing about when to re-enter — the "
@@ -20887,7 +20863,7 @@ elif page == "🥧 Portfolio Overview":
         st.subheader("Position Detail & Protective Stops")
         st.caption(
             "Hover the ℹ️ icon on any column header below for a plain-English explanation.  \n"
-            "**Ratchet stop** moves up automatically as gains grow — locks in profits while letting winners run.  \n"
+            "**Protective stop** is built from completed trading days; with complete price history, and until you add shares, it only moves up, trailing the price as it rises (it doesn't guarantee a profit: it can sit below your cost).  \n"
             "**Score** = Technical 25% + Business Quality 35% + Valuation 30% + Sentiment 10% (composite). "
             "Scanner uses momentum-only scoring — see drill-down for full breakdown."
         )
@@ -21028,16 +21004,20 @@ elif page == "🥧 Portfolio Overview":
             d1, d2, d3, d4 = st.columns(4)
             # Stop and Gap may be None when stop data is unavailable (data
                 # integrity gate) — show "—" rather than crashing on .format.
-            _ps_stop = ps_row.get('Stop')
+            _ps_stop = _pos_or_zero(ps_row.get('Stop')) or None
             _ps_gap  = ps_row.get('Gap to Stop (%)')
+            _ps_gap  = None if pd.isna(_ps_gap) else _ps_gap
             d1.metric("P&L",         _m(f"${ps_row['P&L ($)']:,.0f}"), f"{ps_row['P&L (%)']:+.1f}%")
             d2.metric("Stop Loss",
                       f"${_ps_stop:.2f}" if _ps_stop is not None else "—",
                       ps_row['Stop Type'],
-                      help=_tip("ATR Stop"))
+                      help=_tip("Protective Stop"))
             d3.metric("Gap to Stop",
                       f"{_ps_gap:.1f}%" if _ps_gap is not None else "—",
-                      help=_tip("Ratchet Stop"))
+                      help=_tip("Protective Stop"))
+            _ps_cap = _held_stop_view.basis_caption(ps_row)
+            if _ps_cap:
+                st.caption(_ps_cap)
             # 2026-10-02 review follow-up (found while reviewing the ETF
             # etf_available NaN fix): this tile used to read r["total"]/
             # r["rec"] directly -- the RAW pre-withhold bundle fields,
@@ -21230,9 +21210,10 @@ elif page == "🥧 Portfolio Overview":
                 line=dict(color="#4a9eff", width=2), fill="tozeroy",
                 fillcolor="rgba(74,158,255,0.08)",
             ))
-            if r["stop"]:
-                mini.add_hline(y=r["stop"], line_dash="dashdot", line_color="#ff6600",
-                               annotation_text=f"Stop ${r['stop']:.2f}",
+            _mini_stop = _held_stop_view.display_stop(r["stop"], ps_row)   # held stop, never the entry stop
+            if _mini_stop:
+                mini.add_hline(y=_mini_stop, line_dash="dashdot", line_color="#ff6600",
+                               annotation_text=f"Stop ${_mini_stop:.2f}",
                                annotation_position="right")
             if targets:
                 mini.add_hline(y=targets["base"], line_dash="dash", line_color="#00C851",
@@ -25225,62 +25206,31 @@ elif page == "📈 Analysis":
     # subsequent renders for everyone, not just this user.
     _an_ms_map = st.session_state.get("_manual_stops", {}) or {}
     if _an_ms_map:
-        # Avg-cost map (for the ratchet floor) — read from the SAME frozen
-        # synthesis frame that produced _sa_holding["Stop"] (build_portfolio_df's
-        # `_port_df_enriched`), NOT a separate holdings_df query, so the ratchet
-        # floor computed here can't diverge from the Brief's after a mid-session
-        # trade re-baselines one frame but not the other (F6). protective_stop
-        # degrades to the ATR stop when a ticker's avg_cost is missing.
-        # Per-cell coercion is defensive: one unparseable Avg Cost skips THAT
-        # ticker only — it must never wipe the whole map, which would zero every
-        # _avg and silently drop the gate to the raw ATR stop for the entire
-        # book, re-opening the manual-gate split-brain this block closes (F1).
-        # Absent-frame degradation (accepted): on a cold Analysis-first landing
-        # (or a Home data-outage session) `_port_df_enriched` is empty, so the
-        # map is empty and the gate degrades to the raw ATR stop — but in that
-        # same state `_sa_holding` is None too, so the breach gate and held-stop
-        # display co-degrade; the Analysis surfaces stay mutually consistent and
-        # the Brief always recomputes correctly via build_portfolio_df. Self-heals
-        # on the next Home render.
-        _ac_map = {}
+        # The AUTOMATIC stop of each held name, read from the SAME frozen synthesis
+        # frame that produced _sa_holding["Stop"] (build_portfolio_df's
+        # `_port_df_enriched`), so Analysis and the Brief agree on whether a manual
+        # stop wins (finding #26 C3: `analysis_manual_override` is the same rule
+        # build_portfolio_df uses, including "a manual stop still applies when the
+        # automatic stop is unavailable"). A held name whose automatic stop is
+        # unavailable maps to None; a name not held keeps its bundle stop.
+        _auto_map = {}
         _sc_port_ac = st.session_state.get("_port_df_enriched", pd.DataFrame())
-        if _sc_port_ac is not None and not _sc_port_ac.empty:
+        if _sc_port_ac is not None and not _sc_port_ac.empty and "Auto Stop" in _sc_port_ac.columns:
             for _, _h in _sc_port_ac.iterrows():
-                try:
-                    _ac_map[str(_h.get("Ticker", "")).upper()] = float(_h.get("Avg Cost") or 0)
-                except (TypeError, ValueError):
-                    continue
+                # Every held row maps; an unusable cell (None / NaN / <= 0) maps to
+                # None so a held name never falls back to the bundle stop below.
+                _auto_map[str(_h.get("Ticker", "")).upper()] = _pos_or_zero(_h.get("Auto Stop")) or None
         for _t, _r in list(results.items()):
             _ms = _an_ms_map.get(str(_t).upper())
             if not _ms:
                 continue
-            _base   = _r.get("stop")
-            try:
-                _ms_p = float(_ms.get("stop_price") or 0)
-            except (TypeError, ValueError):
-                continue
-            if not (_base and _ms_p > 0):
-                continue
-            # Gate on the RATCHETED protective stop (max of ATR stop and the
-            # profit-ratchet floor) — the SAME gate logic as build_portfolio_df —
-            # not the raw ATR stop. So Analysis and the Brief/portfolio agree on
-            # whether a manual stop wins: a manual in the [ATR, floor) gap is
-            # rejected here too (the ratchet floor protects more profit), instead
-            # of being accepted only on this page. Degrades to the ATR stop
-            # (_base) when avg_cost is unavailable — same as the old behaviour.
-            # NB: this runs on the live-merged price (above), while build ran on
-            # the synthesis-frozen price, so the tier can differ if the stock
-            # crosses a ratchet threshold within the 60s live-refresh window —
-            # the same self-healing fragment-vs-synthesis skew the breach gate
-            # accepts; it re-converges on the next synthesis (not price-identical,
-            # but same-basis and directionally correct for a live view).
-            _price = _r.get("current_price")
-            _avg   = _ac_map.get(str(_t).upper(), 0.0)
-            _prot  = protective_stop(_price, _avg, _base)[0] if (_price and _avg > 0) else _base
-            if manual_stop_wins(_ms_p, _prot):
+            _tu = str(_t).upper()
+            _auto = _auto_map[_tu] if _tu in _auto_map else _r.get("stop")
+            _ms_stop, _ms_is_manual = _held_stop_wiring.analysis_manual_override(_auto, _ms)
+            if _ms_is_manual:
                 results[_t] = {
                     **_r,
-                    "stop":          _ms_p,
+                    "stop":          _ms_stop,
                     "_stop_source":  "manual",
                     "_stop_set_at":  _ms.get("set_at"),
                 }
@@ -25743,8 +25693,9 @@ elif page == "📈 Analysis":
 
         # Pin the Stop column when it's a manual override so the user can see
         # at a glance which tickers have actioned stops vs. ATR-derived ones.
-        _sc_stop_str = f"${r['stop']:.2f}" if r["stop"] else "—"
-        if r.get("_stop_source") == "manual" and r["stop"]:
+        _sc_stop = _held_stop_view.display_stop(r["stop"], _held_stop_view.held_row(_sc_port, ticker))
+        _sc_stop_str = f"${_sc_stop:.2f}" if _sc_stop else "—"
+        if r.get("_stop_source") == "manual" and _sc_stop:
             _sc_stop_str = f"📌 {_sc_stop_str}"
         # When fundamentals are unavailable the composite ran on a fabricated
         # neutral-50 fundamental leg, so the Score/Signal are not trustworthy.
@@ -26321,7 +26272,9 @@ elif page == "📈 Analysis":
                 # exactly when the Brief flags a breach, not only once price falls the
                 # extra distance to the ATR stop (the F-47 held-stop pattern; ps/R:R
                 # deliberately stay on `r["stop"]` = the ATR fresh-entry basis).
-                _sa_stop = (_f(_sa_holding.get("Stop")) or r.get("stop")) if _sa_holding else r.get("stop")
+                # A HELD name takes its held stop only (finding #26 C3): when that is
+                # unavailable there is no stop to breach, never the bundle's fresh-entry stop.
+                _sa_stop = (_pos_or_zero(_sa_holding.get("Stop")) or None) if _sa_holding else r.get("stop")
                 # Mirror the Brief's skip for "Stop Unavailable" rows: when
                 # build_portfolio_df had no ATR stop it writes Stop=None AND
                 # Gap to Stop (%)=None, and the Brief SKIPS the breach test
@@ -26451,13 +26404,7 @@ elif page == "📈 Analysis":
                     # ("your profit-ratchet stop (Protect 25% gain)"). "Stop Unavailable"
                     # (build had no stop) falls back to the ATR label — accurate, since
                     # _sa_stop then falls back to r["stop"] (the ATR stop).
-                    _br_st = str(_sa_holding.get("Stop Type", "") or "").strip()
-                    if not _br_st or _br_st in ("Stop Unavailable", "ATR Stop"):
-                        _br_stoplabel = "ATR stop"
-                    elif _br_st == "Manual":
-                        _br_stoplabel = "manual stop"
-                    else:
-                        _br_stoplabel = f"profit-ratchet stop ({_br_st})"
+                    _br_stoplabel = _stop_breach_text.stop_noun(_sa_holding.get("Stop Type"))
                     _br_gap      = ((price - _sa_stop) / price * 100) if price else 0
                     if withheld:
                         # No composite exists to "override": same breach facts, no
@@ -26613,13 +26560,16 @@ elif page == "📈 Analysis":
                     if _sa_holding or (_sa_port_state != "ready"):
                         _wh_br, _, _wh_rc = _sa_held_protection(True)
                     if _sa_holding:
-                        _hold_stop = (_f(_sa_holding.get("Stop")) or 0.0) or r["stop"]
+                        _hold_stop = _pos_or_zero(_sa_holding.get("Stop"))
                         _wc1, _wc2, _wc3, _wc4 = st.columns(4)
                         _wc1.metric("Price", f"${price:.2f}" if price else "N/A")
                         _wh_delta, _wh_color = _stop_distance_delta(price, _hold_stop)
                         _wc2.metric("Stop Loss", f"${_hold_stop:.2f}" if _hold_stop else "N/A",
                                     delta=_wh_delta, delta_color=_wh_color,
                                     help=_tip("Protective Stop"))
+                        _wh_cap = _held_stop_view.basis_caption(_sa_holding)
+                        if _wh_cap:
+                            st.caption(_wh_cap)
                         _wc3.metric("Shares Held", f"{int(_sa_holding.get('Shares', 0)):,}")
                         _wc4.metric("P&L",
                                     f"${_sa_holding.get('P&L ($)', 0):+,.0f}",
@@ -26673,7 +26623,15 @@ elif page == "📈 Analysis":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    if r["stop"] and price:
+                    if _sa_holding:
+                        # HELD: the held stop in force (never the bundle's fresh-entry stop).
+                        _x_cap = _held_stop_view.held_exit_stop_caption(_sa_holding, price)
+                        if _x_cap:
+                            st.caption(_x_cap)
+                        _x_basis = _held_stop_view.basis_caption(_sa_holding)
+                        if _x_basis:
+                            st.caption(_x_basis)
+                    elif r["stop"] and price:
                         if r["stop"] < price:
                             st.caption(
                                 f"📉 ATR downside level: **${r['stop']:.2f}** — "
@@ -26748,7 +26706,7 @@ elif page == "📈 Analysis":
                     # the held stop so the metric, the Hold narrative, the scenarios
                     # line and the stop-ladder explainer all agree with the Brief.
                     # Non-held Hold → r["stop"] (a fresh ATR entry stop is correct).
-                    _hold_stop = (_f(_sa_holding.get("Stop")) if _sa_holding else 0.0) or r["stop"]
+                    _hold_stop = (_pos_or_zero(_sa_holding.get("Stop")) if _sa_holding else r["stop"])
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Price", f"${price:.2f}" if price else "N/A")
                     _hs_delta, _hs_color = _stop_distance_delta(price, _hold_stop)
@@ -26761,26 +26719,37 @@ elif page == "📈 Analysis":
                         c4.metric("P&L",
                                   f"${_sa_holding.get('P&L ($)', 0):+,.0f}",
                                   f"{_sa_holding.get('P&L (%)', 0):+.1f}%")
+                        _hold_cap = _held_stop_view.basis_caption(_sa_holding)
+                        if _hold_cap:
+                            st.caption(_hold_cap)
                         from datetime import date, timedelta
                         _recheck = (date.today() + timedelta(days=7)).strftime("%b %d")
-                        # Badge the stop value if it's a user override so the user
-                        # remembers this stop came from their own decision, not ATR.
-                        _stop_badge = (
-                            " <span style='background:#1e3a8a;color:#bfdbfe;"
-                            "border-radius:8px;padding:1px 6px;font-size:0.82em'>"
-                            "📌 manual</span>"
-                            if r.get("_stop_source") == "manual" else ""
-                        )
-                        st.markdown(
-                            "<div style='background:#172554;border-left:4px solid #3b82f6;"
-                            "border-radius:6px;padding:10px 14px;color:#dbeafe;font-size:0.92em'>"
-                            f"<b>Hold</b> your {int(_sa_holding.get('Shares', 0))} shares with stop at "
-                            f"<b>${_hold_stop:.2f}</b>{_stop_badge}. Mixed signals — re-check {_recheck}. "
-                            f"Add to position if score ≥ {COMPOSITE_BUY:.0f} and price holds above stop. "
-                            f"Exit immediately if price closes below stop."
-                            "</div>",
-                            unsafe_allow_html=True,
-                        )
+                        # A manual stop is marked in plain text (the old pill was raw HTML
+                        # interpolated into the box, which the XSS ratchet rightly flags).
+                        _hold_manual_txt = " (📌 manual)" if r.get("_stop_source") == "manual" else ""
+                        if _hold_stop:
+                            st.markdown(
+                                "<div style='background:#172554;border-left:4px solid #3b82f6;"
+                                "border-radius:6px;padding:10px 14px;color:#dbeafe;font-size:0.92em'>"
+                                f"<b>Hold</b> your {_safe_html(int(_sa_holding.get('Shares', 0)))} shares with stop at "
+                                f"<b>${_safe_html(f'{_hold_stop:.2f}')}</b>{_safe_html(_hold_manual_txt)}. "
+                                f"Mixed signals — re-check {_safe_html(_recheck)}. "
+                                f"Add to position if score ≥ {_safe_html(f'{COMPOSITE_BUY:.0f}')} and price holds above stop. "
+                                f"Exit immediately if price closes below stop."
+                                "</div>",
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown(
+                                "<div style='background:#172554;border-left:4px solid #3b82f6;"
+                                "border-radius:6px;padding:10px 14px;color:#dbeafe;font-size:0.92em'>"
+                                f"<b>Hold</b> your {_safe_html(int(_sa_holding.get('Shares', 0)))} shares — "
+                                "no stop could be built for this position, so set one at your broker. "
+                                f"Mixed signals — re-check {_safe_html(_recheck)}. "
+                                f"Add to position only if score ≥ {_safe_html(f'{COMPOSITE_BUY:.0f}')}."
+                                "</div>",
+                                unsafe_allow_html=True,
+                            )
                         if _hold_stop:  # skip when the engine reports "Stop Unavailable"
                             # surface-proprioception F-260 finding: a bare
                             # `or {}` here would let an unverified _reduce_calls
@@ -27546,9 +27515,10 @@ elif page == "📈 Analysis":
                     fig.add_hline(y=lvl, line_dash="dot", line_color="green", line_width=1,
                                   annotation_text=f"S ${lvl:.2f}", annotation_position="right",
                                   row=1, col=1)
-                if r["stop"]:
-                    fig.add_hline(y=r["stop"], line_dash="dashdot", line_color="#ff6600",
-                                  line_width=1.5, annotation_text=f"Stop ${r['stop']:.2f}",
+                _chart_stop = _held_stop_view.display_stop(r["stop"], _sa_holding)
+                if _chart_stop:
+                    fig.add_hline(y=_chart_stop, line_dash="dashdot", line_color="#ff6600",
+                                  line_width=1.5, annotation_text=f"Stop ${_chart_stop:.2f}",
                                   annotation_position="right", row=1, col=1)
                 if "RSI" in df.columns:
                     fig.add_trace(go.Scatter(
@@ -43403,25 +43373,29 @@ When a single sector grows past the **35% hard cap** (or approaches the **25% wa
 """
             )
 
-        with st.expander("🎚️ How your stop level is set — ATR, profit-ratchet & the what-if simulator", expanded=False):
+        with st.expander("🎚️ How your stop level is set — entry, trailing, profit lock & the what-if simulator", expanded=False):
             st.markdown(
-                """
-Your protective stop is built from **three layers**, and each run the app uses the **tightest (highest)** of them:
+                f"""
+Your protective stop is the **highest** of up to three automatic parts, and it is built from **completed trading days only**: today's price, up or down, cannot move it. (The earlier version was rebuilt from the latest price every day, so it followed the price down and could almost never be breached.)
 
-1. **Volatility floor (ATR stop)** — `price − 2 × ATR`, where ATR (Average True Range) is the stock's typical daily range. This sits *outside* normal day-to-day noise, so a routine wiggle doesn't stop you out. A jumpy name gets a **wider** stop and a steady one a **tighter** stop — the buffer respects each stock's own behaviour rather than an arbitrary percentage.
-2. **Profit ratchet** — as your gain grows, a floor climbs *under* the price to lock in profit so a winner never round-trips back to a loss:
-   - **+10% gain → Breakeven guard** (floor at ~+2% — you can't give it back to a loss)
-   - **+25% → locks +10%** · **+50% → locks +25%** · **+75% → locks +40%**
-3. **Your manual override** — a stop you place yourself (via the Action Log) wins **only when it's tighter** than the computed one; a stale, looser manual stop won't be allowed to erode the ratchet's profit protection.
+1. **Entry stop** — your first fill minus **{_TIP_ATR_MULT:g} × ATR** (ATR, Average True Range, is the stock's typical daily range), measured on the last completed day before you bought. It needs the fill price in your Trade Journal to sit inside that day's price range; if it doesn't, this part is dropped and a note says so.
+2. **Trailing stop** — the highest of each day's close minus **{_TIP_TRAIL_MULT:g} × that day's ATR**, over completed days since the stop went live (**{_TIP_TRAIL_START}**) or since you bought, whichever is later. With complete price history this part only rises, and buying more does not reset it.
+3. **Profit lock** — once your gain, measured at the best completed close since your last buy or {_TIP_TRAIL_START}, whichever is later, reaches a rung, a floor is set above your average cost, and it **stays** after the price falls back:
+{_TIP_RATCHET_MD}
+   Buying more restarts this part from the new average cost, so the floor can come out lower after an add.
+4. **Your manual override** — a stop you place yourself (via the Action Log) wins **when it is at least as tight** as the automatic one. It also still applies when no automatic stop could be built.
 
-**The one thing that confuses people:** the stop's **label** names the profit *tier* you've reached (e.g. *"Breakeven guard"*), but the **number** can still come from the ATR stop when that sits higher — the app always uses whichever is tighter. So a position can read *"Breakeven guard"* while the dollar figure is actually the volatility (ATR) stop. That's not a bug; the label is the tier, the number is the tighter of the two.
+**What the label means.** The label under the stop number says which part is in force: *Entry Stop*, *Trailing Stop*, a profit-lock tier name (e.g. *Breakeven guard*), or *Manual*. Two labels mean the stop could not be built from the full history: *Prior-close ATR* (used when the start date of the position can't be established, or when no part of the stop can be computed yet: the last completed close minus {_UG_PRIOR_MULT:g} × ATR; it does not trail and can move down) and *Stop Unavailable* (no usable price history).
+
+**On the day you buy.** There is no completed session of your own yet, so the stop is your fill price minus {_TIP_ATR_MULT:g} × ATR (ATR from the last completed session), labelled *Entry Stop*. The fill is fixed, so today's price can't move it. From the next session the trailing and profit-lock parts can raise it. No warning is shown for this; if the fill price isn't recorded, the stop falls back to *Prior-close ATR* with a ⚠️ note.
+
+**When history is incomplete.** If the app could not load the longer price history for a name, or the trade journal could not date the position, a ⚠️ banner on 🏠 Home and a note on 📈 Analysis name the holding and say what is missing. Treat those stops as rough guides and don't assume they only move up.
 
 **See it and simulate it.** On **📈 Analysis → a position you hold → 📋 Trade Plan**, open **"🛡️ How your stop is set — and what happens next"** for a read-only walkthrough:
-- a **stop ladder** placing entry, the ratchet floor, the ATR stop, your active stop and the price on one line — the level actually *in force* is marked, the losing candidate dimmed, and an arrow points to the winner;
-- a **profit-lock staircase** showing how your locked floor climbs through each tier as the stock gains — so the next rung is obvious;
-- a **what-if price slider** — drag it down to see whether a drop breaches your stop (and the P&L you'd realise), or up to see the higher stop the app would then recommend.
+- a **number line** placing your average cost, each part of the stop, your stop in force and the price, with the stop in force marked;
+- a **what-if price slider** — drag it down to see whether a drop breaches your stop (and the P&L you'd realise), or up to see where your stop would sit after a session closes at that price.
 
-It's **educational only — it explains the stop, it never changes a recommendation.** The stop shown on Analysis matches Today's Brief exactly — same ratcheted stop, same live price, same breach test — so the two surfaces never tell you different things about where your stop is.
+It's **educational only — it explains the stop, it never changes a recommendation.** The stop shown on Analysis matches Today's Brief exactly — same stop, same live price, same breach test — so the two surfaces never tell you different things about where your stop is.
 """
             )
 
@@ -43814,7 +43788,7 @@ The **🧯 After My Rules** tab (5th tab on 🔗 Risk Analysis) is the third sce
 
 **What it does NOT do:** it issues no recommendation, changes no score, and moves no gate. It doesn't model the day-by-day path (it's the trough, not the journey), TRIM sizing, taxes, or slippage. And it says nothing about **when to buy back in** — the app's de-risk rule is the exit half of a two-sided trend rule, and the re-entry half doesn't exist yet. Measuring whether that gap actually costs you anything is exactly what this tab is for.
 
-**One honesty point worth internalising:** a simulated stop-out is **not** a filled order. The app re-derives your ratchet stop from your current gain on every run — it has no memory and doesn't sit at the broker. So a breach here means "the stop the app would recommend today was crossed," not "a resting order executed." If a position shows **⚠️ no stop**, the exit counts are an *under*-statement, not a clean bill of health.
+**One honesty point worth internalising:** a simulated stop-out is **not** a filled order. Your stop is the level the app computes today from completed trading days; it doesn't sit at the broker. So a breach here means "the stop the app has today was crossed," not "a resting order executed." If a position shows **⚠️ no stop**, the exit counts are an *under*-statement, not a clean bill of health.
 
 **If you carry margin, this tab also shows whether the shock would trigger a call** — a section beneath the scenario results states how many of the modeled scenarios would cross your margin maintenance floor, and for the one you've selected, whether your own stops firing into the shock would sell enough to cover it. Read-only awareness, same as the rest of this tab — it never changes a gate or a recommendation. Your standing (unshocked) cushion always lives on 🧾 Summary and 💰 Account; this only models it under a chosen shock.
 """

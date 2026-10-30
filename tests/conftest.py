@@ -59,6 +59,40 @@ ast.get_source_segment = _guarded_get_source_segment
 
 
 @pytest.fixture(autouse=True)
+def _no_real_yfinance_network(monkeypatch):
+    """No test may make a real Yahoo HTTP request (held-stop C3: the long-history
+    fetch must be monkeypatched). yfinance routes every request through
+    YfData._make_request; a test that needs it patches the provider or this
+    attribute itself. pytest.fail is a BaseException, so a swallowing
+    `except Exception` in the code under test cannot hide it."""
+    try:
+        from yfinance import data as _yfd
+    except Exception:
+        return
+
+    def _blocked(self, url, request_method=None, *a, **k):
+        pytest.fail(f"real yfinance network call in a test: {url}", pytrace=False)
+
+    monkeypatch.setattr(_yfd.YfData, "_make_request", _blocked, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_risk_free_fetch(monkeypatch):
+    """`fetch_risk_free_rate` swallows its own network failure and falls back to
+    4.5%, so several morning-picks tests silently hit Yahoo (^IRX) for years. With
+    the network guard above they would fail, so stub it to its own fallback value:
+    the same number the offline path returns. A test that needs another value
+    patches it itself (monkeypatch stacks). Only modules already imported are
+    touched, so this never forces a heavy import."""
+    import sys
+    for _mod, _attr in (("stock_analyzer.data", "fetch_risk_free_rate"),
+                        ("stock_analyzer.headless_alert_engine", "fetch_risk_free_rate")):
+        m = sys.modules.get(_mod)
+        if m is not None and hasattr(m, _attr):
+            monkeypatch.setattr(m, _attr, lambda fallback=0.045: fallback)
+
+
+@pytest.fixture(autouse=True)
 def _clear_llm_model_env(monkeypatch):
     """N13: a DRISHTA_LLM_MODEL_* variable in the developer's shell must never
     change which model a test resolves."""

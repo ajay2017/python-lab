@@ -523,7 +523,7 @@ def test_header_and_compact_table_content(capsys):
                            replay_variants=("a",), live=False)
     dr.print_header(args, 3, 0, True)
     out = capsys.readouterr().out
-    for want in ("proposed, not owner-approved", "survivorship", "day-1 picture",
+    for want in ("constants.py HELD_STOP_", "survivorship", "day-1 picture",
                  "dividend-UNadjusted", "WARNING: 0 manual stops", "steady state of (c)",
                  "ADD_WINNER_MIN_GAP_PCT", "<="):
         assert want in out

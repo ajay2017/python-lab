@@ -481,6 +481,31 @@ STOP_PROFIT_LOCK_TRIM_PCT = 25.0
 # the Analysis stop-ladder explainer so the number can never drift between the
 # engine and what the UI explains. Policy value — change = investment-policy decision.
 ATR_STOP_MULT             = 2.0
+
+# Held-position stop (finding #26 C3; owner decisions 2026-10-30,
+# docs/plans/held-trailing-stop.md; engine: stock_analyzer/held_stop.py). The
+# entry anchor reuses ATR_STOP_MULT; the trailing part uses this wider multiple.
+# Policy value -- change = investment-policy decision.
+HELD_TRAIL_ATR_MULT       = 3.0
+# ISO date: the last trading session BEFORE the held stop went live. The
+# trailing high-water and the sticky ratchet start from max(episode start, this
+# date), so a stop never reaches back into history before go-live (variant (c)).
+# Set to the last session before the deploy date (2026-11-07/08 deploy).
+HELD_TRAIL_START          = "2026-11-06"
+# Real trading bars before the episode start at which the stop's ATR is seeded
+# (same bar every day, so a rolling frame gives the same ATR series).
+HELD_STOP_WARMUP_BARS     = 60
+# Fewer completed bars than this -> "Stop Unavailable" (no stop is invented).
+HELD_STOP_MIN_BARS        = 15
+# Recorded fill price must sit inside the entry session's range (and the prior
+# close) widened by this %; outside it the entry anchor is dropped as a probable
+# unrecorded split. Data-quality tolerance, not a stop width.
+HELD_STOP_FILL_TOL_PCT    = 2.0
+# Journal-vs-broker share-count tolerance (shares) for trusting the journal's
+# episode; a larger gap means the journal can't date the position.
+HELD_STOP_SHARES_TOL      = 1e-4
+# Sessions after go-live that Home shows the one-time "stops recalculated" notice.
+HELD_STOP_NOTICE_SESSIONS = 5
 # New stop level when tightening = current price − this × ATR.
 # Tighter than the 2.0× used for initial stops because the position is
 # already in the danger zone — less room before next stop-out is warranted.
@@ -1390,6 +1415,10 @@ DATA_XCHECK_FIELDS = {"price"}
 # same name while staying fresh enough for daily fundamentals (which barely
 # move intraday). Process-local cache — cleared on reboot or orchestrator reset.
 DATA_FMP_INFO_CACHE_TTL_SEC = 3600
+# Seconds a FAILED long-history (unadjusted) fetch for the held-position stop is
+# remembered before the app retries it, so a Yahoo outage isn't hit on every
+# rerun. A cache lifetime, not a decision threshold (finding #26 C3).
+HELD_STOP_UNADJ_NEG_CACHE_SEC = 300
 
 # FMP free-tier daily budget (250 calls/day on the free plan). The soft-cap
 # pauses all FMP requests for the rest of the day, leaving a safety buffer

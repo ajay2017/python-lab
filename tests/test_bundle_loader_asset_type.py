@@ -331,3 +331,14 @@ def test_etf_bundle_live_fetch_failure_and_no_cache_leaves_lookthrough_none(monk
 
     assert out["etf_lookthrough"] is None
     assert save_calls == []
+
+
+import pytest as _pytest_nl
+
+
+@_pytest_nl.fixture(autouse=True)
+def _no_real_etf_lookthrough(monkeypatch):
+    """An ETF bundle calls `fetch_etf_lookthrough`, which reached Yahoo for the fake
+    TESTETF tickers (swallowing the failure). Default it to "no look-through" so this
+    file stays offline; a test that needs one patches it itself."""
+    monkeypatch.setattr(bundle_loader, "fetch_etf_lookthrough", lambda ticker: None)

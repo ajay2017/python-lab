@@ -87,6 +87,7 @@ from stock_analyzer.headless_alert_engine import (
     compute_watchlist_entries, _build_context, run_daily_budget,
 )
 from stock_analyzer import hold_reasons
+from stock_analyzer import held_stop_view as _held_stop_view
 from stock_analyzer import llm
 from stock_analyzer import news_feed
 from stock_analyzer.notify import (
@@ -491,6 +492,20 @@ def _run_premarket(now_et, force: bool) -> int:
         failures.append("manual_stops_unreadable -- manual stops could not be read; "
                         "stop breaches on manually-stopped names may be missing "
                         "(protective alerts that were computed were still sent)")
+    # Held-stop engine (finding #26 C3): when EVERY holding is on a prior-close /
+    # unavailable stop (journal unreadable, or no long history for anyone) the
+    # stops this scan judged against are not the real ones. The alerts it did
+    # compute are still sent below; the lane goes red and emails the failure.
+    if payload.get("held_stops_failed"):
+        failures.append(f"held_stops_failed -- {payload['held_stops_failed']}; every holding was "
+                        "checked against a prior-close stop, not the held stop "
+                        "(protective alerts that were computed were still sent)")
+    # Per-name degradation is logged above ("engine note: held stop on a limited
+    # basis ...") and rides in the email footer below.
+    _footer_lines = list(payload.get("held_stop_notes", []))
+    _recalc_line = _held_stop_view.email_notice_line(now_et.date())
+    if _recalc_line:
+        _footer_lines.insert(0, _recalc_line)
     _log(f"computed {len(alerts)} protective alert(s): "
          + (", ".join(f"{a.get('kind')}/{a.get('ticker')}" for a in alerts) or "(none)"))
     # A dead news feed (docs/plans/news-feed-restore.md, D-4): the lane still does
@@ -635,7 +650,7 @@ def _run_premarket(now_et, force: bool) -> int:
     else:
         subject, html = render_alert_email(
             alerts, payload.get("built_at", today_str), velocity_alerts=velocity_alerts,
-            split_withheld=split_withheld,
+            split_withheld=split_withheld, footer_lines=_footer_lines,
         )
         sent = _send_email("protective", subject, html)
 

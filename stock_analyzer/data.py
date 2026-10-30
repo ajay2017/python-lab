@@ -96,6 +96,20 @@ def fetch_price_history(ticker: str, period: str = "6mo") -> pd.DataFrame:
     return _PRIMARY.price_history(ticker, period)
 
 
+def fetch_unadjusted_history(ticker: str, period: str) -> pd.DataFrame | None:
+    """Split-adjusted, dividend-UNadjusted OHLCV from Yahoo only (no provider
+    failover: no other provider offers the same basis, and mixing bases would
+    break the held stop's only-moves-up invariant). Never raises; None on any
+    failure or an empty frame."""
+    try:
+        df = _PRIMARY.price_history_unadjusted(ticker, period)
+    except Exception:
+        return None
+    if df is None or len(df) == 0 or "Close" not in df.columns:
+        return None
+    return df
+
+
 def fetch_ticker_bundle(ticker: str, period: str = "6mo") -> dict:
     """Single session — fetches history, info, news, earnings and revisions in one go."""
     if _C.DATA_MULTISOURCE_ENABLED:

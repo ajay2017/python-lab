@@ -1,6 +1,6 @@
 """2026-10-30: a failed manual_stops read must be distinguishable from "no manual
 stops" (three-state). Until the automatic held stop is fixed (finding #26 C3) the
-manual stops are the only ones that can fire, so a silent {} hid every working
+manual stops were the only ones that could fire (the held stop of C3 has since shipped), so a silent {} hid every working
 stop. Pins: the strict db reader, the lenient wrapper, the premarket lane failure
 (alerts still sent, dedup state saved), that the EOD lane does NOT fail on it, and
 both ends of the app.py wiring (call, banner, None publish, stale-banner render)."""
@@ -139,7 +139,10 @@ def test_app_build_sites_use_strict_read():
 
 def test_app_banner_text_exists_and_is_rendered_at_all_sites():
     assert "Your manual stops couldn't be read from the database" in _APP
-    assert "the automatic stop moves down with the " in _APP
+    assert "are the automatic ones only. A manual stop that is tighter than the automatic " in _APP
+    # the pre-C3 claim is false now that the held stop can be breached
+    assert "moves down with the" not in _APP
+    assert "rarely triggers on its own" not in _APP
     assert "check your broker's stop orders." in _APP
     assert len(re.findall(r"MANUAL_STOPS_UNREADABLE_BANNER\)", _APP)) == 3
     assert "st.error(MANUAL_STOPS_UNREADABLE_BANNER)" in _APP

@@ -133,18 +133,15 @@ from stock_analyzer import portfolio, risk  # noqa: E402
 from stock_analyzer.act_today_precedence import is_stop_breached  # noqa: E402
 from stock_analyzer.constants import (  # noqa: E402
     ADD_WINNER_MIN_GAP_PCT, APPROACHING_STOP_GAP_PCT, ATR_STOP_MULT,
-    GAP_TO_STOP_ROUND_DECIMALS, NYSE_HOLIDAYS, POSITION_AT_RISK_GAP_PCT,
-    STOP_RATCHET_LEVELS,
+    GAP_TO_STOP_ROUND_DECIMALS, HELD_STOP_FILL_TOL_PCT, HELD_STOP_MIN_BARS,
+    HELD_STOP_SHARES_TOL, HELD_STOP_WARMUP_BARS,
+    NYSE_HOLIDAYS, POSITION_AT_RISK_GAP_PCT, STOP_RATCHET_LEVELS,
 )
 
-# proposed value, owner sign-off pending (plan doc docs/plans/held-trailing-stop.md)
-WARMUP_BARS = 60
-# proposed value, owner sign-off pending (plan doc)
-MIN_BARS = 15
-# proposed value, owner sign-off pending (plan doc)
-FILL_TOL_PCT = 2.0
-# proposed value, owner sign-off pending (plan doc)
-SHARES_TOL = 1e-4
+WARMUP_BARS = HELD_STOP_WARMUP_BARS
+MIN_BARS = HELD_STOP_MIN_BARS
+FILL_TOL_PCT = HELD_STOP_FILL_TOL_PCT
+SHARES_TOL = HELD_STOP_SHARES_TOL
 INITIAL_MULT = ATR_STOP_MULT
 RATCHET_LEVELS = STOP_RATCHET_LEVELS
 
@@ -714,7 +711,7 @@ def print_header(args, n_holdings: int, n_manual: "int | None", do_today: bool) 
         print(f"holdings: {n_holdings}; manual stops loaded: {n_manual}"
               f"{'  WARNING: 0 manual stops with holdings present (table read OK but empty)' if n_manual == 0 and n_holdings else ''}")
     print(f"WARMUP_BARS={WARMUP_BARS} MIN_BARS={MIN_BARS} FILL_TOL_PCT={FILL_TOL_PCT} "
-          f"SHARES_TOL={SHARES_TOL}: proposed, not owner-approved")
+          f"SHARES_TOL={SHARES_TOL} (constants.py HELD_STOP_*)")
     print("variants use split-adjusted, dividend-UNadjusted closes; V0 uses the app's adjusted "
           "6-month bundle (div_since_E_pct in the CSV sizes the gap)")
     print("b / c at trail_start = as_of are the day-1 picture: b = prior_session fallback, "

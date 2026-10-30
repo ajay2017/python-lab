@@ -1023,6 +1023,10 @@ _GATE_FILES = {
     # (completed sessions only, only moves up) that C3 will make the stop every
     # breach / Act Today / cron protective email is judged against.
     "stock_analyzer/held_stop.py",
+    # Added 2026-10-30 (finding #26 C3b): the driver that builds every holding's
+    # held stop (history fetch, journal episode, fallback chain, manual-stop and
+    # breach helpers) that the app, cron and headless engine all judge against.
+    "stock_analyzer/held_stop_wiring.py",
     # Added 2026-10-30 (finding #13): whether a same-day macro release has passed,
     # i.e. whether the Brief macro card / Pre-Event Playbook still show a pre-release
     # hold / reduce instruction; imported by the gate file act_today_view.
