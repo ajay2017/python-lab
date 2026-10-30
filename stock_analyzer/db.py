@@ -1036,6 +1036,29 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.g32_shadow;
     create policy "Allow all (service role)" on public.g32_shadow
         for all to service_role using (true) with check (true);
+
+    -- Earnings rating-change flag shadow (finding #22, 2026-10-30,
+    -- revision_flag.build_shadow_rows): one row per held name inside the
+    -- earnings window per EOD run -- flagged, unflagged AND unknown (the
+    -- unflagged are the control group). MEASURE-ONLY: nothing reads it to size
+    -- or gate. First-writer-wins upsert. Applied BY HAND in Supabase -- until
+    -- then save_earnings_revision_shadow reports missing_table (a logged skip).
+    create table if not exists public.earnings_revision_shadow (
+      id bigserial primary key,
+      capture_date date not null, ticker text not null, source text not null,
+      earnings_date date not null, days_until integer,
+      rev_state text not null, net_rev integer, ups_90 integer, downs_90 integer, window_days integer,
+      flag_net integer, flagged boolean,
+      weight_pct numeric, shares numeric, price numeric,
+      composite numeric, score_available boolean,
+      beat_rate_pct numeric, reaction text, ctx_state text,
+      partial_trim_pct numeric, would_trim_shares integer, rule_version text,
+      captured_at timestamptz not null default now(),
+      unique (capture_date, ticker, source));
+    alter table public.earnings_revision_shadow enable row level security;
+    drop policy if exists "Allow all (service role)" on public.earnings_revision_shadow;
+    create policy "Allow all (service role)" on public.earnings_revision_shadow
+      for all to service_role using (true) with check (true);
 """
 
 import math
@@ -3635,6 +3658,97 @@ def save_g32_shadow(rows: list[dict]) -> dict:
             return {"attempted": len(payload), "saved": 0, "error": None,
                     "missing_table": True}
         _record_db_error(f"g32_shadow_upsert: {str(exc)[:100]}")
+        return {"attempted": len(payload), "saved": 0, "error": str(exc)[:200]}
+
+
+def save_earnings_revision_shadow(rows: list[dict]) -> dict:
+    """Persist earnings rating-change shadow rows (UPSERT ONLY, measure-only).
+
+    Same contract as save_g32_shadow: {"attempted", "saved", "error"} plus
+    "missing_table": True when the DDL isn't applied yet (a skip, not a
+    failure). Read-only no-op, non-trading rows dropped, non-finite -> None,
+    upsert on (capture_date, ticker, source) first-writer-wins, never raises.
+    """
+    if is_readonly():
+        return {"attempted": 0, "saved": 0, "error": "read-only"}
+    if not rows or not has_db():
+        return {"attempted": 0, "saved": 0, "error": None}
+    from stock_analyzer.write_guards import split_non_trading_rows
+    rows, _non_trading = split_non_trading_rows(rows, "capture_date")
+    _warn_non_trading("save_earnings_revision_shadow", _non_trading)
+    if not rows:
+        return {"attempted": 0, "saved": 0, "error": None,
+                "skipped_non_trading": _non_trading}
+
+    _num_cols = ("net_rev", "ups_90", "downs_90", "window_days", "flag_net",
+                 "days_until", "weight_pct", "shares", "price", "composite",
+                 "beat_rate_pct", "partial_trim_pct", "would_trim_shares")
+    _int_cols = {"net_rev", "ups_90", "downs_90", "window_days", "flag_net",
+                 "days_until", "would_trim_shares"}
+    _bool_cols = ("flagged", "score_available")
+    payload: list[dict] = []
+    for r in rows:
+        tk = str(r.get("ticker", "") or "").strip().upper()
+        src = str(r.get("source", "") or "").strip()
+        cd = r.get("capture_date")
+        ed = r.get("earnings_date")
+        if not tk or not src or cd is None or ed is None or not r.get("rev_state"):
+            continue
+        item = {
+            "capture_date":  cd.isoformat() if hasattr(cd, "isoformat") else str(cd)[:10],
+            "ticker":        tk,
+            "source":        src,
+            "earnings_date": ed.isoformat() if hasattr(ed, "isoformat") else str(ed)[:10],
+            "rev_state":     r.get("rev_state"),
+            "reaction":      r.get("reaction"),
+            "ctx_state":     r.get("ctx_state"),
+            "rule_version":  r.get("rule_version"),
+        }
+        for c in _bool_cols:
+            item[c] = None if r.get(c) is None else bool(r.get(c))
+        for c in _num_cols:
+            try:
+                v = float(r.get(c)) if r.get(c) is not None else None
+            except (TypeError, ValueError):
+                v = None
+            v = v if v is not None and math.isfinite(v) else None
+            item[c] = int(v) if (v is not None and c in _int_cols) else v
+        payload.append(item)
+    if not payload:
+        return {"attempted": 0, "saved": 0, "error": None}
+    payload = _sanitize_for_write(payload, "save_earnings_revision_shadow")
+
+    def _missing(exc) -> bool:
+        try:
+            from stock_analyzer.system_health import _is_missing_table
+            return bool(_is_missing_table(exc))
+        except Exception:
+            return False   # can't tell -> treat as a real error, never a skip
+
+    on_conflict = "capture_date,ticker,source"
+    try:
+        _client().table("earnings_revision_shadow").upsert(
+            payload, on_conflict=on_conflict, ignore_duplicates=True,
+        ).execute()
+        return {"attempted": len(payload), "saved": len(payload), "error": None}
+    except TypeError:
+        try:
+            _client().table("earnings_revision_shadow").upsert(
+                payload, on_conflict=on_conflict,
+            ).execute()
+            return {"attempted": len(payload), "saved": len(payload),
+                    "error": "compat: ignore_duplicates unsupported (last-writer-wins)"}
+        except Exception as exc2:
+            if _missing(exc2):
+                return {"attempted": len(payload), "saved": 0, "error": None,
+                        "missing_table": True}
+            _record_db_error(f"earnings_revision_shadow_upsert_compat: {str(exc2)[:100]}")
+            return {"attempted": len(payload), "saved": 0, "error": str(exc2)[:200]}
+    except Exception as exc:
+        if _missing(exc):
+            return {"attempted": len(payload), "saved": 0, "error": None,
+                    "missing_table": True}
+        _record_db_error(f"earnings_revision_shadow_upsert: {str(exc)[:100]}")
         return {"attempted": len(payload), "saved": 0, "error": str(exc)[:200]}
 
 

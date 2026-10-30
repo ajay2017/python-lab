@@ -158,3 +158,9 @@ def test_no_overclaim_words():
         for w in ("urgency", "strongest", "reliable"):
             assert w not in low
         assert "estimate" not in re.sub("not earnings-estimate cuts", "", low)
+
+
+def test_tail_is_true_at_any_distance_from_the_report():
+    l = rf.flag_line({"state": "ok", "net": WATCH, "ups": 0, "downs": -WATCH})
+    assert "the app is recording" not in l
+    assert "before each report the app records whether this predicts a weak report" in l

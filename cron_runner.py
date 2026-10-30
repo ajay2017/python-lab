@@ -1095,6 +1095,43 @@ def _run_eod(now_et, force: bool) -> int:
         _log(f"model_predictions (earnings, live) FAILED — {str(e)[:120]} — continuing.")
         failures.append(f"model_predictions (earnings, live): {str(e)[:120]}")
 
+    # 7b. Earnings rating-change flag shadow (finding #22, 2026-10-30).
+    # MEASURE-ONLY: one row per held name inside the earnings window, flagged,
+    # unflagged and unknown, so the flag can be judged before it may size a
+    # trim. Missing table (DDL applied by hand) = a logged skip, not a failure.
+    try:
+        from stock_analyzer import revision_flag as _rf
+        from stock_analyzer import trim_sizing as _rf_tsz
+        _rf_pdf = payload.get("port_df")
+        _rf_held = payload.get("held_data")
+        if (_rf_pdf is None or getattr(_rf_pdf, "empty", True)
+                or not isinstance(_rf_held, dict) or not _rf_held):
+            _log("revision shadow: no portfolio / held data — nothing to record.")
+        else:
+            _rf_ctx = db.load_earnings_context_batch([str(t).upper() for t in _rf_held])
+            _rf_rows = _rf.build_shadow_rows(
+                _rf_pdf, _rf_held, _rf_ctx, now_et.date(), now_et, "cron")
+            _rf_res = db.save_earnings_revision_shadow(_rf_rows)
+            if _rf_res.get("missing_table"):
+                _log("revision shadow: table not created yet — skipped")
+            else:
+                _rf_inwin = sum(
+                    1 for _t, _d in _rf_held.items()
+                    if _rf_tsz.in_earnings_window(
+                        _rf_tsz.days_to_earnings(
+                            _d.get("earnings") if isinstance(_d, dict) else None,
+                            now_et.date())))
+                _log(f"revision shadow: in_window={_rf_inwin} built={len(_rf_rows)} "
+                     f"saved={_rf_res.get('saved', 0)}/"
+                     f"{_rf_res.get('attempted', 0)} row(s)"
+                     + (f" — {_rf_res.get('error')}" if _rf_res.get("error") else ""))
+                _rf_err_msg = _rf_res.get("error")
+                if _rf_err_msg and not str(_rf_err_msg).startswith("compat"):
+                    failures.append(f"revision shadow: {str(_rf_err_msg)[:120]}")
+    except Exception as _rf_err:
+        _log(f"revision shadow: FAILED — {str(_rf_err)[:120]} — continuing.")
+        failures.append(f"revision shadow: {str(_rf_err)[:120]}")
+
     # 8. Predictive Modeling Shadow Layer — Phase 2 maturation. Independent of
     # step 7 (a PRIOR day's live prediction can mature today even if today's
     # live write above failed). Also runs the reschedule backstop: a frozen

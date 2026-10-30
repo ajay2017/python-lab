@@ -50,7 +50,7 @@ def test_all_protected_tables_named_in_the_hard_constraint():
     the kind of drift a mechanical test should catch."""
     assert dm._PROTECTED_TABLES == frozenset({
         "recommendations", "exit_signals", "gate_suppressions", "g32_shadow",
-        "rec_events",
+        "earnings_revision_shadow", "rec_events",
         "score_history", "model_predictions", "analyst_target_snapshots",
         "judgment_opinions", "judgment_grades", "analyst_coverage",
     })

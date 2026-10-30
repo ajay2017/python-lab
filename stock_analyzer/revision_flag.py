@@ -17,15 +17,23 @@ from __future__ import annotations
 import math
 from numbers import Real
 
+from stock_analyzer import trim_sizing
 from stock_analyzer.constants import (
     EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS,
+    EARNINGS_IMMINENT_DAYS,
+    EARNINGS_PARTIAL_TRIM_PCT,
     EARNINGS_REVISION_WATCH_NET,
 )
 
+RULE_VERSION = "rev-watch-v1"
+
+_WINDOW_PHRASE = ("the week" if EARNINGS_IMMINENT_DAYS == 7
+                  else f"the {EARNINGS_IMMINENT_DAYS} days")
 _TAIL = (
     " These are rating changes, not earnings-estimate cuts. Flagged to watch, "
-    "not acted on: the app is recording whether this predicts a weak report "
-    "and won't size a trim from it unless that record supports it."
+    f"not acted on: in {_WINDOW_PHRASE} before each report the app records whether "
+    "this predicts a weak report, and won't size a trim from it unless that "
+    "record supports it."
 )
 _AMBER = "#f59e0b"
 _GREY = "#9ca3af"
@@ -129,3 +137,92 @@ def checklist_line(r) -> tuple[str, str, str]:
     if _ok(r):
         return ("•", f"Analyst rating changes ({'90d' if _win(r) else 'recent'}): net {_num(r['net']):+d}.", _GREY)
     return ("•", "Analyst rating changes unavailable.", _GREY)
+
+
+def _fnum(v):
+    """float of a finite real number, else None (bools rejected)."""
+    if isinstance(v, bool) or not isinstance(v, Real):
+        return None
+    try:
+        f = float(v)
+    except Exception:
+        return None
+    return f if math.isfinite(f) else None
+
+
+def build_shadow_rows(port_df, held_data, earnings_ctx, today, now_et,
+                      source: str = "cron") -> list[dict]:
+    """One measure-only row per held name inside the earnings window.
+
+    Flagged, unflagged and unknown names all get a row (the unflagged are the
+    control group). Days come from `trim_sizing.days_to_earnings` on
+    `held_data[t]["earnings"]`, the same helper the Brief / playbook use.
+    `earnings_ctx` is `db.load_earnings_context_batch`'s dict, which is {} for
+    both "no context" and "read failed", so ctx_state records
+    "none_or_unavailable" / "present". `now_et` is part of the caller's
+    signature and unused. Pure; a malformed row is skipped, never raised.
+    """
+    rows: list[dict] = []
+    try:
+        if port_df is None or getattr(port_df, "empty", True):
+            return rows
+        held = held_data if isinstance(held_data, dict) else {}
+        ctx_all = earnings_ctx if isinstance(earnings_ctx, dict) else {}
+        held_u = {str(k).upper(): v for k, v in held.items()}
+        seen: set = set()
+        for _, row in port_df.iterrows():
+            try:
+                tk = str(row["Ticker"]).strip().upper()
+                if not tk or tk in seen:
+                    continue
+                data = held_u.get(tk)
+                earn = data.get("earnings") if isinstance(data, dict) else None
+                days = trim_sizing.days_to_earnings(earn, today)
+                if not trim_sizing.in_earnings_window(days):
+                    continue
+                r = read(data)   # read() is unknown-safe on a non-dict
+                shares = trim_sizing.exact_shares(row)
+                comp = _fnum(row.get("Score"))
+                _sa = row.get("Score Available")
+                if _sa is None:
+                    flag_ok = True                 # missing column = available
+                elif isinstance(_sa, float) and math.isnan(_sa):
+                    flag_ok = False                # NaN flag is not "available"
+                else:
+                    flag_ok = _sa is not False and str(_sa).lower() not in ("false", "0")
+                avail = flag_ok and comp is not None
+                comp = comp if avail else None
+                ctx = ctx_all.get(tk)
+                has_ctx = isinstance(ctx, dict)
+                rows.append({
+                    "capture_date": today.isoformat(),
+                    "ticker": tk,
+                    "source": source,
+                    "earnings_date": str(earn)[:10],
+                    "days_until": days,
+                    "rev_state": r["state"],
+                    "net_rev": r["net"],
+                    "ups_90": r["ups"],
+                    "downs_90": r["downs"],
+                    "window_days": r["window_days"],
+                    "flag_net": EARNINGS_REVISION_WATCH_NET,
+                    "flagged": is_flagged(r),
+                    "weight_pct": _fnum(row.get("Weight (%)")),
+                    "shares": shares,
+                    "price": _fnum(row.get("Price")),
+                    "composite": comp,
+                    "score_available": avail,
+                    "beat_rate_pct": _fnum(ctx.get("beat_rate_pct")) if has_ctx else None,
+                    "reaction": ctx.get("recent_reaction_direction") if has_ctx else None,
+                    "ctx_state": "present" if has_ctx else "none_or_unavailable",
+                    "partial_trim_pct": EARNINGS_PARTIAL_TRIM_PCT,
+                    "would_trim_shares": trim_sizing.fraction_trim_shares(
+                        shares, EARNINGS_PARTIAL_TRIM_PCT),
+                    "rule_version": RULE_VERSION,
+                })
+                seen.add(tk)
+            except Exception:
+                continue
+    except Exception:
+        return rows
+    return rows

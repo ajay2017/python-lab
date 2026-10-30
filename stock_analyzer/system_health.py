@@ -164,6 +164,9 @@ _INVENTORY: tuple[_Store, ...] = (
     # G-32 C2 shadow capture (measure-only): conditional like gate_suppressions; the
     # cron skips cleanly until the owner applies the DDL, and this row is what shows it.
     _Store("g32_shadow",                 "G-32 entry R:R shadow (measure-only)",      "scan",   "daily", False),
+    # Earnings rating-change flag shadow (finding #22, 2026-10-30): EOD cron, conditional
+    # (rows only on days a held name is in the earnings window); DDL applied by hand.
+    _Store("earnings_revision_shadow",   "Earnings rating-change flag shadow (measure-only)", "eod", "daily", False),
     # rec_events (Recommendation-Outcomes-Measurement Phase 1b, 2026-09-17):
     # written by the EOD cron alongside portfolio_risk_snapshots, but
     # CONDITIONAL like gate_suppressions above — a day with no qualifying
