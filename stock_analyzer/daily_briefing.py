@@ -2966,7 +2966,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
     from stock_analyzer.macro_calendar import HIGH as MC_HIGH
     today_macro = [e for e in (macro_events or []) if e.get("date") == today and e.get("impact") == MC_HIGH]
     for ev in today_macro:
-        _affected = ", ".join(ev.get("affected_tickers", [])[:5]) or "broad market"
+        _affected = _affected_text(ev.get("affected_tickers", [])) or "broad market"
         items.append({
             "priority": "high",
             "icon":     "🌐",
@@ -3853,6 +3853,18 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     return items
 
 
+_MACRO_AFFECTED_SHOWN = 5  # display cap only, not a decision threshold
+
+
+def _affected_text(names) -> str:
+    """Comma-joined names, capped for display, with a "+N more" tail when cut."""
+    names = list(names or [])
+    out = ", ".join(names[:_MACRO_AFFECTED_SHOWN])
+    if len(names) > _MACRO_AFFECTED_SHOWN:
+        out += f" +{len(names) - _MACRO_AFFECTED_SHOWN} more"
+    return out
+
+
 def _rewrite_macro_affected(act: list[dict], reduced: set[str]) -> None:
     """Strip tickers already carrying an Act Today reduce card out of every
     macro item's "Affected" list, in place.
@@ -3883,7 +3895,7 @@ def _rewrite_macro_affected(act: list[dict], reduced: set[str]) -> None:
         remaining = [t for t in affected_all if str(t).upper() not in reduced]
         category = it.get("_event_category", "Economic")
         if remaining:
-            it["why"] = f"{category} release today. Affected: {', '.join(remaining[:5])}."
+            it["why"] = f"{category} release today. Affected: {_affected_text(remaining)}."
         else:
             it["why"] = (
                 f"{category} release today. "
@@ -4043,12 +4055,6 @@ def build_daily_briefing(
     # H6 still holds for non-news WATCH kinds. News-only cards (critical_news /
     # news WATCH) are exempt (D-D, docs/plans/held-news-coverage.md): a mild
     # headline must not move the protective TRIM off the biggest beta contributor.
-    # The macro card's "Affected" list strips only names already carrying a
-    # reduce call (SELL / TRIM, same canon as the Act-bucket reconciler). A
-    # WATCH-only name stays listed: the macro card is its only mention of the
-    # print (2026-10-29 live check, GDP card hid ~10 Watch-only names).
-    _reduced = decision_bucket.reduce_call_tickers(act, review)
-    _rewrite_macro_affected(act, _reduced)
     _risk_off = exit_advisor.assess_risk_off_derisk(
         port_df, held_data,
         fragility=fragility, spy_trend_df=spy_trend_df, vix_level=vix_level,
@@ -4090,6 +4096,14 @@ def build_daily_briefing(
             _kept_act.append(_it)
         act = _kept_act
         act = act + _risk_off
+    # The macro card's "Affected" list strips only names already carrying a
+    # reduce call (SELL / TRIM, same canon as the Act-bucket reconciler),
+    # including a risk-off TRIM appended just above, so this runs once `act`
+    # and `review` are final. A WATCH-only name stays listed: the macro card is
+    # its only mention of the print (2026-10-29 live check, GDP card hid ~10
+    # Watch-only names).
+    _reduced = decision_bucket.reduce_call_tickers(act, review)
+    _rewrite_macro_affected(act, _reduced)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, review_list=review, composites=grow_composites or {},
                          risk_recs=risk_recs,

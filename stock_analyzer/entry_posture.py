@@ -1,7 +1,7 @@
 """Whether a redeploy headline may call a NEW ENTRY on today's market tone.
 
 Grow Today owns every buy call (owner D1, 2026-10-15): it makes no new entries
-on a bear day and takes only fully confirmed setups on a flat day.  The
+on a bear day and raises its bar for new picks on a flat day.  The
 Diversification Advisor / Rebalancer redeploy headline
 (``rr_readout.redeploy_headline``) knows only the composite Buy gate and R:R,
 so on a non-bull day it could say "a genuine redeploy entry" while Grow Today

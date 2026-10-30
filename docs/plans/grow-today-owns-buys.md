@@ -25,7 +25,7 @@ Debrief (Go picks), Portfolio Thesis (`action_posture` "deploying"), Self Track 
 - **D3:** log them as `rec_type = "overflow_pick"` (sizing columns NULL, trusted composite, `hold_reason`).
   `buy_candidate` writes stop entirely → historical-only type.
 - **D4 + OP-07:** flat-day held-back names get a visible box "⏸ Flat market — only fully confirmed setups
-  today" with each name's reason AND what would clear it. Scanner names Grow Today didn't evaluate (flat day:
+  today" (header renamed 2026-10-29 to "⏸ Mixed market — held back by today's higher bar") with each name's reason AND what would clear it. Scanner names Grow Today didn't evaluate (flat day:
   momentum below `COMPOSITE_BUY_FLAT_DAY` or beyond the flat-day working set; bear day: all) are a COLLAPSED,
   NAMED list "▸ Momentum leads — not checked today (N)" with ▶ Analyze, marked as carrying no verdict.
 - **OP-07:** on flat/bear days, held names that WOULD qualify for an add show as a collapsed line

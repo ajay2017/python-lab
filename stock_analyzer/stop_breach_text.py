@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 
-from stock_analyzer.constants import GAP_TO_STOP_ROUND_DECIMALS
+from stock_analyzer.constants import GAP_TO_STOP_ROUND_DECIMALS, STOP_RECOVERY_MARGIN_PCT
 
 
 def _finite(x) -> bool:
@@ -43,4 +43,24 @@ def breach_why(price, stop, stop_type, gap) -> str:
     return (
         f"Price ${_money(price)} closed below the {stop_type} stop "
         f"${_money(stop)} (gap {gap_txt}%)."
+    )
+
+
+def live_breach_caption(live_px, stop) -> str | None:
+    """Caption for a confirmed (active) stop breach at the live price.
+
+    `util.stop_recovery_state` keeps a breach active until the live price is
+    more than STOP_RECOVERY_MARGIN_PCT above the stop, so the live price can be
+    at or slightly above the stop; "still below" is false there.
+    """
+    if not (_finite(live_px) and _finite(stop)):
+        return None
+    px, st_ = float(live_px), float(stop)
+    if px <= 0 or st_ <= 0:
+        return None
+    if px < st_:
+        return f"⚠️ Breach confirmed at live price ${px:.2f} — still below stop ${st_:.2f}."
+    return (
+        f"⚠️ Live price ${px:.2f} is at or just above the stop ${st_:.2f}, "
+        f"within the {STOP_RECOVERY_MARGIN_PCT:g}% recovery margin, so the breach still stands."
     )

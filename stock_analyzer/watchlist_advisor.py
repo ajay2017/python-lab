@@ -831,11 +831,16 @@ def _build_watchlist_recommendation(
     # writing regression tests, fixed 2026-07-28 (see project_test_automation
     # memory / docs/plans/test-automation.md).
     if score >= COMPOSITE_BUY and in_zone and (rr is None or rr < RR_ENTRY_MIN):
-        rr_reason = (
-            f"R:R is only {fmt_ratio_vs(rr, RR_ENTRY_MIN)}:1 — below the {RR_ENTRY_MIN:.0f}:1 minimum"
-            if rr is not None else
-            "no validated price target, so risk/reward can't be computed"
-        )
+        if rr is not None:
+            rr_reason = f"R:R is only {fmt_ratio_vs(rr, RR_ENTRY_MIN)}:1 — below the {RR_ENTRY_MIN:.0f}:1 minimum"
+        elif base_target is None:
+            rr_reason = "no validated price target, so risk/reward can't be computed"
+        elif _rr_m.get("why") == "stop_not_below_entry":
+            rr_reason = "today's price is at or below its stop, so risk/reward can't be computed"
+        elif _rr_m.get("state") == "no_upside":
+            rr_reason = "price is at or above its base target, so there's no room to the target"
+        else:
+            rr_reason = "the price or stop needed for risk/reward is missing"
         if rr is None:
             _nt_title = (
                 f"{ticker} — R:R Not Validated (No Price Target)"
@@ -850,10 +855,16 @@ def _build_watchlist_recommendation(
                     f"(${entry_lo:.2f}–${entry_hi:.2f}). Entry isn't confirmed yet: {rr_reason}."
                 ),
                 detail=(
-                    f"The thesis is solid (score {score:.0f}/100, {rec_label}), but {rr_reason}. "
-                    "Refresh analyst targets (or set one manually) and re-check before opening "
-                    "the position — entering without a validated R:R is incomplete homework, "
-                    "not a green light."
+                    (
+                        f"The thesis is solid (score {score:.0f}/100, {rec_label}), but {rr_reason}. "
+                        "Refresh analyst targets (or set one manually) and re-check before opening "
+                        "the position — entering without a validated R:R is incomplete homework, "
+                        "not a green light."
+                    ) if base_target is None else (
+                        f"The thesis is solid (score {score:.0f}/100, {rec_label}), but {rr_reason}. "
+                        "Re-check on 📈 Analysis before opening the position — an entry without "
+                        "a computable R:R isn't a green light."
+                    )
                 ),
                 conditions_met=[
                     f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
@@ -861,9 +872,11 @@ def _build_watchlist_recommendation(
                     f"Price in today's entry zone (${entry_lo:.2f}–${entry_hi:.2f})",
                 ],
                 conditions_missing=[
-                    f"Risk/reward not validated — {rr_reason}",
+                    f"Risk/reward not validated — {rr_reason}"
+                    if base_target is None else
+                    f"Risk/reward can't be computed — {rr_reason}",
                 ],
-                institutional_lens=_G13_LENS,
+                institutional_lens=_G13_LENS if base_target is None else _G13_NO_RR_LENS,
                 # Gate Suppression Ledger (roadmap B2, 2026-09-13) — this branch
                 # is G-13 specifically (in-zone, R:R not validated). The separate
                 # "approaching zone" NEAR_ENTRY branch below (no R:R involved)
@@ -1164,6 +1177,12 @@ _G13_LOW_RR_LENS = (
     f"entry together, and here they don't line up yet. Below {RR_ENTRY_MIN:g}:1, each "
     f"dollar at risk to the stop has less than {RR_ENTRY_MIN:g} dollars of room to "
     "the target, so the trade doesn't pay enough for being wrong. Wait for the numbers; don't chase."
+)
+
+_G13_NO_RR_LENS = (
+    "A target is only half the check: risk/reward also needs a stop below today's "
+    "price and room up to the target. When either is missing the ratio can't confirm "
+    "the entry, so institutional desks wait rather than size a position off price alone."
 )
 
 _HOLD_SUPPRESSION_KIND = {"tone": "entry_tone", "macro": "entry_macro"}

@@ -46,7 +46,7 @@ def reason_text(code, ctx=None) -> str:
 
 OVERFLOW_HEADER = "✔ Also cleared every check — not one of today's picks"
 WATCHLIST_TAG = "📋 On your Watchlist — check Ready to Enter there"
-FLAT_HELD_HEADER = "⏸ Flat market — only fully confirmed setups today"
+FLAT_HELD_HEADER = "⏸ Mixed market — held back by today's higher bar"
 
 
 def leads_note(tone) -> str:

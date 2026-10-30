@@ -239,6 +239,7 @@ from stock_analyzer import home_notices as _home_notices_mod
 from stock_analyzer import act_today_pointer as _act_pointer_mod
 from stock_analyzer import budget_view as _budget_view
 from stock_analyzer import sizing_path as _sizing_path
+from stock_analyzer import stop_breach_text as _stop_breach_text
 from stock_analyzer import trade_caption as _trade_caption
 from stock_analyzer import entry_eligibility as _entry_elig
 from stock_analyzer import news_feed as _news_feed
@@ -11155,10 +11156,9 @@ if page == "🏠 Home":
                     _sb_live_px = _db_item.get("_live_px")
                     _sb_stop    = _db_item.get("_live_stop")
                     if _sb_state == "active" and _sb_live_px and _sb_stop:
-                        st.caption(
-                            f"⚠️ Breach confirmed at live price \\${_sb_live_px:.2f} "
-                            f"— still below stop \\${_sb_stop:.2f}."
-                        )
+                        _sb_txt = _stop_breach_text.live_breach_caption(_sb_live_px, _sb_stop)
+                        if _sb_txt:
+                            st.caption(_sb_txt.replace("$", "\\$"))
                     elif _sb_state == "unavailable":
                         st.caption(
                             "Live price unavailable — signal is from yesterday's close. "
@@ -43183,7 +43183,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **Grow Today is the only place the app issues a buy.** (Until 2026-10-15 a separate "More Buy Candidates" list showed scanner names labelled "BUY — Scanner Pick" on momentum alone; most of them had a composite below the Buy bar, so it was retired.) Below the sized picks you may see these, none with a share size or a trade button — open any of them with ▶ Analyze:
 - **"✔ Also cleared every check — not one of today's picks"** — names that passed every check but were held back only by pacing: the daily pick limit, the one-per-sector slot or the breakout limit (the reason is named). A 📋 tag shows when the name is on your Watchlist.
-- **"⏸ Flat market — only fully confirmed setups today"** — names held back on a flat day, with their composite and, where it can be known, what would clear them (e.g. after earnings).
+- **"⏸ Mixed market — held back by today's higher bar"** — names held back on a flat day, with their composite and, where it can be known, what would clear them (e.g. after earnings).
 - **"Momentum leads — not checked today"** (collapsed) — hot names Grow Today didn't evaluate today, so they carry no verdict.
 - **"Adds paused on a flat/down day"** (collapsed) — holdings that would qualify for an add-to-winner; adds resume on the next up day.
 

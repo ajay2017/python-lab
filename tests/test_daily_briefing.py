@@ -1961,6 +1961,42 @@ def test_build_daily_briefing_macro_affected_keeps_watch_only_name(monkeypatch):
     assert macro["why"].endswith("Affected: BBB.")
 
 
+def test_build_daily_briefing_macro_affected_drops_risk_off_trim_name(monkeypatch):
+    # 2026-10-29 #19b: a name that lands a "Trim - Risk-Off" card AFTER the first
+    # act list is built must still be stripped from the macro "Affected" list.
+    import stock_analyzer.daily_briefing as _db
+    monkeypatch.setattr(_db, "deterioration_signals", lambda *a, **k: [])
+    ro = {"kind": "risk_off_derisk", "ticker": "CCC", "priority": "high",
+          "icon": "🛡️", "title": "CCC — Trim - Risk-Off", "why": "fragile book",
+          "directive": "Trim", "weight": 5.0}
+    monkeypatch.setattr(_db.exit_advisor, "assess_risk_off_derisk",
+                        lambda *a, **k: [dict(ro)])
+    port_df = make_port_df([
+        {"ticker": "BBB", "weight": 5.0},
+        {"ticker": "CCC", "weight": 5.0},
+    ])
+    macro_events = [{
+        "impact": _MACRO_HIGH, "date": _TODAY, "category": "Economic",
+        "event": "GDP", "affected_tickers": ["BBB", "CCC"],
+    }]
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=macro_events, held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+    )
+    assert find_item(brief["act_today"], "CCC")["kind"] == "risk_off_derisk"
+    macro = next(i for i in brief["act_today"] if i.get("kind") == "macro")
+    assert macro["why"].endswith("Affected: BBB.")
+
+
+def test_affected_text_caps_at_five_with_more_tail():
+    from stock_analyzer.daily_briefing import _affected_text
+    assert _affected_text(list("ABCDE")) == "A, B, C, D, E"
+    assert "more" not in _affected_text(list("ABCDE"))
+    assert _affected_text(list("ABCDEFG")) == "A, B, C, D, E +2 more"
+    assert _affected_text([]) == ""
+
+
 # ── sold_today suppression (SAP buy-after-exit bug, 2026-08-26) ───────────────
 # When a user sells a position, the exit advisor stops watching it, so
 # _act_blocked (built from exit/reduce calls on HELD tickers) has no memory of

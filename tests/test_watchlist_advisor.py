@@ -1168,6 +1168,33 @@ def test_g13_no_target_card_keeps_refresh_lens():
     assert "Refresh the data" in rec["institutional_lens"]
 
 
+def test_g13_cant_compute_bad_stop_card_does_not_claim_no_target():
+    from stock_analyzer.watchlist_advisor import _G13_NO_RR_LENS
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(stop=100.0, targets={"base": 115.0, "base_source": "analyst"}))
+    text = " ".join([rec["summary"], rec["detail"]] + list(rec["conditions_missing"]))
+    assert "at or below its stop" in text
+    assert "no validated price target" not in text
+    assert "Refresh analyst targets" not in text
+    assert rec["institutional_lens"] == _G13_NO_RR_LENS
+
+
+def test_g13_cant_compute_no_upside_says_no_room_to_target():
+    from stock_analyzer.watchlist_advisor import _G13_NO_RR_LENS
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(targets={"base": 95.0, "base_source": "analyst"}))
+    assert rec["title"] == "XYZ — R:R Can't Be Computed"
+    assert "no room to the target" in rec["detail"]
+    assert rec["institutional_lens"] == _G13_NO_RR_LENS
+
+
+def test_g13_no_target_card_keeps_no_target_text():
+    rec = build_watchlist_recommendation("XYZ", _base_data(targets={}))
+    assert "no validated price target" in rec["summary"]
+    assert "Refresh analyst targets" in rec["detail"]
+    assert rec["conditions_missing"][0].startswith("Risk/reward not validated")
+
+
 def _hold_off_text(rec):
     return " ".join(
         [rec["title"], rec["summary"], rec["detail"]]
