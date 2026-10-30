@@ -490,8 +490,9 @@ HELD_TRAIL_ATR_MULT       = 3.0
 # ISO date: the last trading session BEFORE the held stop went live. The
 # trailing high-water and the sticky ratchet start from max(episode start, this
 # date), so a stop never reaches back into history before go-live (variant (c)).
-# Set to the last session before the deploy date (2026-11-07/08 deploy).
-HELD_TRAIL_START          = "2026-11-06"
+# Set to the last session before the deploy date (deploy weekend 2026-10-31/11-01;
+# owner moved it up from 2026-11-07/08 on 2026-10-30).
+HELD_TRAIL_START          = "2026-10-30"
 # Real trading bars before the episode start at which the stop's ATR is seeded
 # (same bar every day, so a rolling frame gives the same ATR series).
 HELD_STOP_WARMUP_BARS     = 60

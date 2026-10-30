@@ -8,7 +8,7 @@
 
 ## P1 — Exits and stops (does a sell fire when it should, and only then)
 
-The highest-impact area. Note: until finding #26 C3 ships (deploy weekend 2026-11-07/08), only manual stops can fire; until then, verify that the screens never imply an automatic stop is protecting a position.
+The highest-impact area. Note: until finding #26 C3 ships (deploy weekend 2026-10-31/11-01), only manual stops can fire; until then, verify that the screens never imply an automatic stop is protecting a position.
 
 | Surface | Screenshot | What gets checked |
 |---|---|---|
