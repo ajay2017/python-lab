@@ -1,6 +1,6 @@
 # Held-position trailing stop (finding #26)
 
-**Status:** C1 SHIPPED 2026-10-30 (`ea8719a`, `stock_analyzer/held_stop.py`, unwired, in `_GATE_FILES`). NEXT: C2 dry-run script → owner runs it → owner rules U1–U7 → C3a + C3b wiring (with finding #24) in one push after a close.
+**Status:** C1 SHIPPED 2026-10-30 (`ea8719a`, `stock_analyzer/held_stop.py`, unwired, in `_GATE_FILES`). C2 SHIPPED 2026-10-30 (`3e650d6`, `scripts/held_stop_dryrun.py`, read-only; Opus FIX-FIRST 7 blocking → SHIP). NEXT: owner runs `--today --live --csv today.csv` and `--replay --replay-variants a,b --csv replay.csv` → owner rules U1–U7 → C3a + C3b wiring (with finding #24) in one push after a close. C3 also: `held_stop.history_period_needed` must normalise a tz-aware first-bar date (own reviewed change), and `HELD_TRAIL_START` should be the last completed session before go-live (else day 1 has no trailing / ratchet and (c) loosens winners for a session).
 
 ## The defect (confirmed 2026-10-30)
 
