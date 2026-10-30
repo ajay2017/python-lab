@@ -240,6 +240,7 @@ from stock_analyzer import act_today_pointer as _act_pointer_mod
 from stock_analyzer import budget_view as _budget_view
 from stock_analyzer import sizing_path as _sizing_path
 from stock_analyzer import stop_breach_text as _stop_breach_text
+from stock_analyzer import score_text as _score_text
 from stock_analyzer import trade_caption as _trade_caption
 from stock_analyzer import entry_eligibility as _entry_elig
 from stock_analyzer import news_feed as _news_feed
@@ -20895,7 +20896,7 @@ elif page == "🥧 Portfolio Overview":
             _ps_score = ps_row.get("Score")
             _ps_shares = _trim_sizing.exact_shares(ps_row)
             _ps_signal_ctx = (
-                f"{_ps_sig} · Score {_ps_score:.0f}/100"
+                f"{_ps_sig} · Score {_score_text.composite_score_text(_ps_score)}/100"
                 if _ps_sig and _ps_score is not None and pd.notna(_ps_score)
                 else _ps_sig or ""
             )
@@ -20929,7 +20930,7 @@ elif page == "🥧 Portfolio Overview":
             with _trc3:
                 st.caption(
                     f"Current signal: **{_ps_sig or '—'}**"
-                    + (f" · {_ps_score:.0f}/100" if _ps_score is not None and pd.notna(_ps_score) else "")
+                    + (f" · {_score_text.composite_score_text(_ps_score)}/100" if _ps_score is not None and pd.notna(_ps_score) else "")
                     + " — pre-fills the Trade Journal's Decision Context so you don't re-type it."
                 )
 
@@ -20968,7 +20969,7 @@ elif page == "🥧 Portfolio Overview":
                 # bare "Sell" label had the identical quirk; closing it
                 # here since this fix is specifically about this tile
                 # never visually contradicting the signal it's reporting).
-                d4.metric("Composite Score", f"{_ps_score:.0f}/100", _ps_sig,
+                d4.metric("Composite Score", f"{_score_text.composite_score_text(_ps_score)}/100", _ps_sig,
                           delta_color="off", help=_tip("Composite Score"))
             else:
                 d4.metric("Composite Score", "❔ Withheld", "no data",
@@ -27261,7 +27262,7 @@ elif page == "📈 Analysis":
                 # the user can still override action / shares / price in the form.
                 st.markdown("---")
                 _ap_signal_ctx = (
-                    f"{rec['label']} · Composite {_da_display_total:.0f}/100"
+                    f"{rec['label']} · Composite {_score_text.composite_score_text(_da_display_total)}/100"
                 )
                 _ap_held_shares = (
                     _trim_sizing.exact_shares(_sa_holding) if _sa_holding else None
@@ -29473,7 +29474,7 @@ elif page == "📋 Watchlist":
                     f"border-radius:20px;text-transform:uppercase;white-space:nowrap'>"
                     f"{_a_icon} {_a_label}</span>"
                     f"<span style='font-weight:800;color:#e5e7eb'>{_ticker}</span>"
-                    f"<span style='color:#9ca3af'>Score {_wr['score']:.0f}/100</span>"
+                    f"<span style='color:#9ca3af'>Score {_score_text.composite_score_text(_wr['score'])}/100</span>"
                     f"<span style='color:#9ca3af;display:inline-flex;align-items:center;gap:6px'>"
                     f"Readiness <span style='width:60px;height:6px;background:#1f2937;"
                     f"border-radius:3px;display:inline-block;overflow:hidden'>"
@@ -29797,7 +29798,7 @@ elif page == "📋 Watchlist":
                     # block (signal_seen + followed_signal) is auto-populated
                     # consistent with the same flow on Position Details / Analysis.
                     _wl_signal_ctx = (
-                        f"{_wr['signal']} · Score {_wr['score']:.0f}/100"
+                        f"{_wr['signal']} · Score {_score_text.composite_score_text(_wr['score'])}/100"
                         + (f" · Readiness {_wr['readiness_pct']}%" if _wr.get("readiness_pct") is not None else "")
                     )
                     _wl_entry_price = (
@@ -29811,7 +29812,7 @@ elif page == "📋 Watchlist":
                         shares=(_wl_ps["shares"] if _wl_ps else None),
                         trigger="WATCHLIST_ENTRY",
                         followed_intent="yes",
-                        notes=f"Watchlist entry — score {_wr['score']:.0f}/100",
+                        notes=f"Watchlist entry — score {_score_text.composite_score_text(_wr['score'])}/100",
                         key_suffix=f"wl_{_ticker}",
                         label=f"📒 Log buy for {_ticker}",
                     )

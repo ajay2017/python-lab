@@ -11,6 +11,7 @@ For each upcoming high-impact macro event generates:
 import pandas as _pd
 
 from stock_analyzer.market_time import today_et
+from stock_analyzer.score_text import composite_score_text
 from stock_analyzer.trim_sizing import exact_shares, fmt_shares, fraction_trim_shares, shares_to_trim
 
 from stock_analyzer.constants import (
@@ -385,7 +386,7 @@ def _build_rationale(row, event_name: str, action: str, opp_downgraded: bool = F
             )
         if score < _PROTECT_SCORE:
             return (
-                f"**{ticker}** composite score is {score:.0f}/100 — weak fundamentals compounded "
+                f"**{ticker}** composite score is {composite_score_text(score)}/100 — weak fundamentals compounded "
                 f"by a binary event that could move {sector} ~{bear_move:.0f}% on a miss. "
                 f"Each risk layer independently justifies reducing size. Both together mandate action."
             )
@@ -403,7 +404,7 @@ def _build_rationale(row, event_name: str, action: str, opp_downgraded: bool = F
 
     if action == "OPPORTUNITY" or (action == "HOLD" and opp_downgraded):
         text = (
-            f"**{ticker}** is high-conviction (score {score:.0f}/100, {signal}) in {sector} — "
+            f"**{ticker}** is high-conviction (score {composite_score_text(score)}/100, {signal}) in {sector} — "
             f"a sector that could move ~{bull_move:.0f}% on a {bull_label}. "
             f"Positive revision momentum into an event is the strongest alpha setup in institutional investing."
         )
@@ -415,7 +416,7 @@ def _build_rationale(row, event_name: str, action: str, opp_downgraded: bool = F
     if action == "WATCH":
         return (
             f"**{ticker}** ({sector}) has ~{bear_move:.0f}% sector exposure in the bear scenario. "
-            f"Score {score:.0f}/100, weight {weight:.1f}%. No pre-event action required — "
+            f"Score {composite_score_text(score)}/100, weight {weight:.1f}%. No pre-event action required — "
             f"but if the bear scenario prints, check the 📊 Post-Event Results tab once the "
             f"number drops for a fresh, outcome-specific action rather than guessing now."
         )
@@ -423,7 +424,7 @@ def _build_rationale(row, event_name: str, action: str, opp_downgraded: bool = F
     if bear_move < 0.5:
         return f"**{ticker}** has limited direct exposure to this event category. No action needed."
     return (
-        f"**{ticker}** — score {score:.0f}/100, weight {weight:.1f}%. "
+        f"**{ticker}** — score {composite_score_text(score)}/100, weight {weight:.1f}%. "
         f"Risk/reward of holding through the release is acceptable at current size."
     )
 

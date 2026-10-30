@@ -253,6 +253,17 @@ def test_remove_on_low_score():
     assert rec["priority"] == "HIGH"
 
 
+def test_remove_card_score_never_rounds_up_to_the_hold_floor():
+    # 43.7 is below COMPOSITE_HOLD (44); ":.0f" printed "44 — below the 44 threshold".
+    from stock_analyzer.constants import COMPOSITE_HOLD
+    score = COMPOSITE_HOLD - 0.3
+    rec = build_watchlist_recommendation("XYZ", _base_data(total=score))
+    assert rec["action"] == "REMOVE"
+    text = " ".join(rec["conditions_missing"])
+    assert f"Score {score:.1f}/100 — below the {COMPOSITE_HOLD:.0f} threshold" in text
+    assert f"Score {COMPOSITE_HOLD:.0f}/100" not in text
+
+
 # ─── Data-availability gate (2026-08-04 audit finding) ───────────────────────
 
 def test_data_unavailable_withholds_instead_of_remove():

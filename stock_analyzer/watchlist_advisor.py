@@ -6,7 +6,6 @@ when conditions are right to open a position, when to wait, and when to remove
 the ticker because the thesis is broken.
 """
 
-import math
 import pytz as _pytz
 from datetime import date as _date, datetime as _datetime
 
@@ -40,6 +39,7 @@ from stock_analyzer.constants import (
     WATCHLIST_CONSTRUCTIVE_SCORE,
 )
 from stock_analyzer import exit_advisor
+from stock_analyzer.score_text import composite_score_text
 from stock_analyzer import entry_rr
 from stock_analyzer import rr_pullback
 from stock_analyzer.rr_readout import fmt_ratio_vs
@@ -109,12 +109,9 @@ def _pct_from_entry(price: float, entry_hi: float) -> float | None:
 
 
 def _score_txt(score: float) -> str:
-    """Score as a whole number, unless rounding would cross COMPOSITE_BUY
-    (64.6 must not read "65"); then floor to one decimal."""
-    s = f"{score:.0f}"
-    if (score < COMPOSITE_BUY) != (float(s) < COMPOSITE_BUY):
-        return f"{math.floor(score * 10) / 10:.1f}"
-    return s
+    """Score as display text that never rounds across a composite band edge
+    (64.6 must not read "65"); see score_text.composite_score_text."""
+    return composite_score_text(score)
 
 
 def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None,
@@ -496,14 +493,14 @@ def _build_watchlist_recommendation(
         return _card(
             ticker, "REMOVE", score, rec_label, price, entry_lo, entry_hi,
             stop, rr, earn_days,
-            title=f"{ticker} — Thesis Broken (score {score:.0f}/100)",
+            title=f"{ticker} — Thesis Broken (score {_score_txt(score)}/100)",
             summary=(
-                f"Composite score {score:.0f}/100 with a **{rec_label}** signal. "
+                f"Composite score {_score_txt(score)}/100 with a **{rec_label}** signal. "
                 "The thesis that put this on the watchlist has not materialised — "
                 "or conditions have deteriorated since you added it."
             ),
             detail=(
-                f"Score {score:.0f}/100 and a {rec_label} signal means both technical "
+                f"Score {_score_txt(score)}/100 and a {rec_label} signal means both technical "
                 "and fundamental signals are warning you away. "
                 "There is no thesis to wait on here. "
                 "**Remove from watchlist.** If you still believe in the long-term story, "
@@ -512,7 +509,7 @@ def _build_watchlist_recommendation(
             ),
             conditions_met=[],
             conditions_missing=[
-                f"Score {score:.0f}/100 — below the {COMPOSITE_HOLD:.0f} threshold for any buy consideration",
+                f"Score {_score_txt(score)}/100 — below the {COMPOSITE_HOLD:.0f} threshold for any buy consideration",
                 f"Signal: {rec_label} — active bearish signal",
             ],
             institutional_lens=(
@@ -604,7 +601,7 @@ def _build_watchlist_recommendation(
                 stop, rr, earn_days,
                 title=f"{ticker} — Setup Ready, But Sector Check Couldn't Run",
                 summary=(
-                    f"Score {score:.0f}/100 and price in entry zone — the stock-level setup is a go. "
+                    f"Score {_score_txt(score)}/100 and price in entry zone — the stock-level setup is a go. "
                     "But this ticker's sector couldn't be identified, so the sector-concentration "
                     "check couldn't run. It isn't recommended today."
                 ),
@@ -615,7 +612,7 @@ def _build_watchlist_recommendation(
                     "after the ticker is added to the curated sector map)."
                 ),
                 conditions_met=[
-                    f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
+                    f"Score {_score_txt(score)}/100 — above {COMPOSITE_BUY:.0f} threshold",
                     f"Signal: {rec_label}",
                     f"Price {'in' if in_zone else 'near'} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
                     f"R:R {rr:.1f}:1 — above {RR_ENTRY_MIN:.0f}:1 minimum" if rr else "Risk/reward acceptable",
@@ -643,7 +640,7 @@ def _build_watchlist_recommendation(
                 stop, rr, earn_days,
                 title=f"{ticker} — Setup Ready, But Portfolio Fit Blocks Entry",
                 summary=(
-                    f"Score {score:.0f}/100 and price in entry zone — the stock-level setup is a go. "
+                    f"Score {_score_txt(score)}/100 and price in entry zone — the stock-level setup is a go. "
                     "However, opening this position now would breach a portfolio risk limit."
                 ),
                 detail=(
@@ -656,7 +653,7 @@ def _build_watchlist_recommendation(
                     "The watchlist alert is right; the timing relative to your book is wrong."
                 ),
                 conditions_met=[
-                    f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
+                    f"Score {_score_txt(score)}/100 — above {COMPOSITE_BUY:.0f} threshold",
                     f"Signal: {rec_label}",
                     f"Price {'in' if in_zone else 'near'} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
                     f"R:R {rr:.1f}:1 — above {RR_ENTRY_MIN:.0f}:1 minimum" if rr else "Risk/reward acceptable",
@@ -750,12 +747,12 @@ def _build_watchlist_recommendation(
             stop, rr, earn_days,
             title=f"{ticker} — Ready to Enter",
             summary=(
-                f"Score {score:.0f}/100 · price is {'in' if in_zone else 'near'} the entry zone"
+                f"Score {_score_txt(score)}/100 · price is {'in' if in_zone else 'near'} the entry zone"
                 + (f" · R:R {rr:.1f}:1" if rr else "")
                 + ". All conditions align for opening a position."
             ),
             detail=(
-                f"The setup you were waiting for has arrived. Score {score:.0f}/100 confirms "
+                f"The setup you were waiting for has arrived. Score {_score_txt(score)}/100 confirms "
                 f"the thesis is intact. "
                 f"Price {'is inside' if in_zone else f'is within {WATCHLIST_NEAR_ZONE_PCT:g}% of'} the entry zone "
                 f"(${entry_lo:.2f}–${entry_hi:.2f}). "
@@ -773,7 +770,7 @@ def _build_watchlist_recommendation(
                 "Place the ATR stop immediately on entry — do not hold without a stop."
             ),
             conditions_met=[
-                f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
+                f"Score {_score_txt(score)}/100 — above {COMPOSITE_BUY:.0f} threshold",
                 f"Signal: {rec_label}",
                 f"Price {'in' if in_zone else 'near'} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
                 f"R:R {rr:.1f}:1 — above {RR_ENTRY_MIN:.0f}:1 minimum" if rr else "Risk/reward acceptable",
@@ -851,23 +848,23 @@ def _build_watchlist_recommendation(
                 stop, rr, earn_days,
                 title=_nt_title,
                 summary=(
-                    f"Score {score:.0f}/100 and price is already inside the entry zone "
+                    f"Score {_score_txt(score)}/100 and price is already inside the entry zone "
                     f"(${entry_lo:.2f}–${entry_hi:.2f}). Entry isn't confirmed yet: {rr_reason}."
                 ),
                 detail=(
                     (
-                        f"The thesis is solid (score {score:.0f}/100, {rec_label}), but {rr_reason}. "
+                        f"The thesis is solid (score {_score_txt(score)}/100, {rec_label}), but {rr_reason}. "
                         "Refresh analyst targets (or set one manually) and re-check before opening "
                         "the position — entering without a validated R:R is incomplete homework, "
                         "not a green light."
                     ) if base_target is None else (
-                        f"The thesis is solid (score {score:.0f}/100, {rec_label}), but {rr_reason}. "
+                        f"The thesis is solid (score {_score_txt(score)}/100, {rec_label}), but {rr_reason}. "
                         "Re-check on 📈 Analysis before opening the position — an entry without "
                         "a computable R:R isn't a green light."
                     )
                 ),
                 conditions_met=[
-                    f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
+                    f"Score {_score_txt(score)}/100 — above {COMPOSITE_BUY:.0f} threshold",
                     f"Signal: {rec_label}",
                     f"Price in today's entry zone (${entry_lo:.2f}–${entry_hi:.2f})",
                 ],
@@ -949,15 +946,15 @@ def _build_watchlist_recommendation(
             ticker, "NEAR_ENTRY", score, rec_label, price, entry_lo, entry_hi,
             stop, rr, earn_days,
             title=f"{ticker} — R:R Below {RR_ENTRY_MIN:g}:1 at Today's Price",
-            summary=f"Score {score:.0f}/100, but {rr_reason}." + _pb_summary,
+            summary=f"Score {_score_txt(score)}/100, but {rr_reason}." + _pb_summary,
             detail=(
-                f"The thesis is solid (score {score:.0f}/100, {rec_label}), but {rr_reason}: "
+                f"The thesis is solid (score {_score_txt(score)}/100, {rec_label}), but {rr_reason}: "
                 "the target is too close for today's price. "
                 + _pb_explain
                 + _pb_detail
             ),
             conditions_met=[
-                f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
+                f"Score {_score_txt(score)}/100 — above {COMPOSITE_BUY:.0f} threshold",
                 f"Signal: {rec_label}",
                 f"Price in today's entry zone (${entry_lo:.2f}–${entry_hi:.2f})",
             ],
@@ -981,12 +978,12 @@ def _build_watchlist_recommendation(
             stop, rr, earn_days,
             title=f"{ticker} — Approaching Entry Zone ({pct_above:+.1f}% above zone)",
             summary=(
-                f"Score {score:.0f}/100 and strong signal. Price is {abs(pct_above):.1f}% "
+                f"Score {_score_txt(score)}/100 and strong signal. Price is {abs(pct_above):.1f}% "
                 "above the ideal entry zone — close but not yet optimal. "
                 "Set a limit order or watch for a small pullback."
             ),
             detail=(
-                f"The thesis is solid (score {score:.0f}/100, {rec_label}). "
+                f"The thesis is solid (score {_score_txt(score)}/100, {rec_label}). "
                 f"Price at ${price:.2f} is {abs(pct_above):.1f}% above the entry zone top "
                 f"(${entry_hi:.2f}). Chasing 5% above entry erodes your R:R meaningfully. "
                 "**Set a limit order at $"
@@ -996,7 +993,7 @@ def _build_watchlist_recommendation(
                 "do not chase. If it pulls back to the zone, you're positioned perfectly."
             ),
             conditions_met=[
-                f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
+                f"Score {_score_txt(score)}/100 — above {COMPOSITE_BUY:.0f} threshold",
                 f"Signal: {rec_label}",
                 f"Thesis intact — within {WATCHLIST_APPROACHING_ZONE_PCT:g}% of entry zone",
             ],
@@ -1022,13 +1019,13 @@ def _build_watchlist_recommendation(
             stop, rr, earn_days,
             title=f"{ticker} — Strong Thesis, Wrong Price ({dist_str})",
             summary=(
-                f"Score {score:.0f}/100 confirms the thesis is intact. "
+                f"Score {_score_txt(score)}/100 confirms the thesis is intact. "
                 "But the price has run past the optimal entry zone. "
                 "Wait for a pullback — do not chase."
             ),
             detail=(
                 f"Everything about {ticker} looks right at the fundamental and technical level "
-                f"(score {score:.0f}/100, {rec_label}). "
+                f"(score {_score_txt(score)}/100, {rec_label}). "
                 "The problem is price: the stock has moved away from the entry zone, "
                 "which means your stop would be set further from current price and "
                 "your risk/reward is now worse than when you added it to the watchlist. "
@@ -1037,7 +1034,7 @@ def _build_watchlist_recommendation(
                 "Re-evaluate if the score changes materially."
             ),
             conditions_met=[
-                f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
+                f"Score {_score_txt(score)}/100 — above {COMPOSITE_BUY:.0f} threshold",
                 f"Signal: {rec_label}",
                 "Thesis intact",
             ],
@@ -1060,13 +1057,13 @@ def _build_watchlist_recommendation(
     return _card(
         ticker, "WAIT_CATALYST", score, rec_label, price, entry_lo, entry_hi,
         stop, rr, earn_days,
-        title=f"{ticker} — Monitoring for Catalyst (score {score:.0f}/100)",
+        title=f"{ticker} — Monitoring for Catalyst (score {_score_txt(score)}/100)",
         summary=(
-            f"Score {score:.0f}/100 — above the remove threshold but not yet at "
+            f"Score {_score_txt(score)}/100 — above the remove threshold but not yet at "
             f"conviction level ({COMPOSITE_BUY:.0f}+). Mixed signals suggest waiting for a clearer setup."
         ),
         detail=(
-            f"Score {score:.0f}/100 places {ticker} in the 'monitoring' zone — "
+            f"Score {_score_txt(score)}/100 places {ticker} in the 'monitoring' zone — "
             "fundamentals and technical signals are mixed. "
             "This is not a clear buy setup yet. "
             f"**Keep on watchlist and wait for one of:** a composite score break above {COMPOSITE_BUY:.0f}, "
@@ -1075,11 +1072,11 @@ def _build_watchlist_recommendation(
             "The stock is worth watching but does not yet meet the bar for capital deployment."
         ),
         conditions_met=[
-            f"Score {score:.0f}/100 — above remove threshold",
+            f"Score {_score_txt(score)}/100 — above remove threshold",
             "Thesis partially supported",
         ],
         conditions_missing=[
-            f"Score {score:.0f}/100 — needs to reach {COMPOSITE_BUY:.0f}+ for conviction entry",
+            f"Score {_score_txt(score)}/100 — needs to reach {COMPOSITE_BUY:.0f}+ for conviction entry",
             f"Signal {rec_label} — needs Buy or Strong Buy",
             "No specific catalyst confirmed yet",
         ],
@@ -1238,18 +1235,18 @@ def _entry_held_card(ticker, chk, score, rec_label, price, entry_lo, entry_hi,
         stop, rr, earn_days,
         title=f"{ticker} — Ready on Its Own Numbers, Held Today",
         summary=(
-            f"Score {score:.0f}/100 · price is {'in' if in_zone else 'near'} the entry zone"
+            f"Score {_score_txt(score)}/100 · price is {'in' if in_zone else 'near'} the entry zone"
             + (f" · R:R {rr:.1f}:1" if rr else "")
             + f". Held today: {reason}."
         ),
         detail=(
-            f"The stock-level setup is a go (score {score:.0f}/100, {rec_label}, price "
+            f"The stock-level setup is a go (score {_score_txt(score)}/100, {rec_label}, price "
             f"{'inside' if in_zone else f'within {WATCHLIST_NEAR_ZONE_PCT:g}% of'} the entry zone{zone_txt}). "
             f"A shared new-entry check holds it today: {reason}. "
             f"It clears when: {binding['clears_when']}."
         ),
         conditions_met=[
-            f"Score {score:.0f}/100 — above {COMPOSITE_BUY:.0f} threshold",
+            f"Score {_score_txt(score)}/100 — above {COMPOSITE_BUY:.0f} threshold",
             f"Signal: {rec_label}",
             f"Price {'in' if in_zone else 'near'} entry zone" + zone_txt,
             f"R:R {rr:.1f}:1 — above {RR_ENTRY_MIN:.0f}:1 minimum" if rr else "",

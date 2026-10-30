@@ -311,6 +311,11 @@ def test_get_scenario_conditions_unknown_event_returns_empty_strings():
     assert conditions == {"bull": "", "base": "", "bear": ""}
 
 
+def test_rationale_score_never_rounds_up_across_buy_edge():
+    text = _build_rationale(_row(Ticker="AAPL", Score=64.6, **{"Weight (%)": 9.0}), "Non-Farm Payrolls", "WATCH")
+    assert "64.6/100" in text and "65/100" not in text
+
+
 # ─── build_event_playbooks ────────────────────────────────────────────────────
 
 def _port_df_row(ticker="XYZ", sector="Financials", weight=5.0, score=60.0,
