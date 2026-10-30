@@ -5212,14 +5212,28 @@ def save_watchlist(tickers: list[str]) -> bool:
 # record the user acted on it.
 
 def load_manual_stops() -> dict:
-    """Return {ticker: {"stop_price", "set_at", "note", "source_action"}}.
+    """Lenient wrapper over `load_manual_stops_or_none`: `{}` on ANY failure.
 
-    Empty dict when DB is offline or table empty. Failure to read returns
-    empty rather than raising so the rest of the app keeps working with
-    ATR-derived stops — graceful degradation, not silent gate disable.
+    WARNING: `{}` here means BOTH "no manual stops" and "could not read them" —
+    a failed read silently drops every working stop. Decision paths (Brief,
+    Signals, the pre-market protective cron) must use the strict
+    `load_manual_stops_or_none` and surface a banner / lane failure on None.
+    """
+    r = load_manual_stops_or_none()
+    return {} if r is None else r
+
+
+def load_manual_stops_or_none() -> "dict | None":
+    """Return {ticker: {"stop_price", "set_at", "note", "source_action"}}, or
+    `None` (the offline sentinel) when the table could not be read.
+
+    `{}` means the table was read and holds no (valid) manual stops. `None`
+    means the read failed (exception) OR there is no DB at all (`has_db()`
+    False) — same convention as `load_trades_or_none` / `load_holdings_or_none`.
+    Never raises.
     """
     if not has_db():
-        return {}
+        return None
     try:
         rows = (
             _client().table("manual_stops")
@@ -5243,7 +5257,7 @@ def load_manual_stops() -> dict:
             }
         return out
     except Exception:
-        return {}
+        return None
 
 
 def save_manual_stop(ticker: str, stop_price: float,

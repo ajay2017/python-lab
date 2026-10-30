@@ -87,7 +87,8 @@ All policy values are explicit parameters in C1; no constant has changed.
 ### Risks / follow-ups
 - Day 1: FSLR + GOOGL sell-all cards (Brief, Signals danger, Monday email); OKTA / PLTR at-risk; FSLR / OKTA / PLTR lose add room. Trailing from D−1 can add a breach the 10-30 dry run never showed (it used trail_start = as_of).
 - Never deploy intraday. No new session key (rides `_port_df_enriched`); if a `_held_stops_cache` is ever published, register it in `coord_freshness.py`.
-- `db.load_manual_stops()` returns `{}` on failure (4 of 12 stops are manual-binding): follow-up `load_manual_stops_or_none` + a banner (db.py, reviewed).
+- Manual-stops read: `db.load_manual_stops_or_none` + the `MANUAL_STOPS_UNREADABLE_BANNER` (Home, post-trade refresh, every page via `_render_portfolio_stale_banner`) and a premarket lane failure SHIPPED 2026-10-30 (pre-C3 protection). **C3 must rewrite `MANUAL_STOPS_UNREADABLE_BANNER`** (its "the automatic stop moves down with the price, so it rarely triggers on its own" becomes false once the held stop ships) and update its pinned test string.
+- Follow-ups from that review: while the manual-stops read is failing, the Brief raise-stop card can suggest a level below the user's real manual stop and Mark Done → Save / Revert to ATR would overwrite or clear it (disable Save / Revert when `_manual_stops` is None; DB-write path, reviewed); optionally note the unreadable read inside the protective email itself (`render_alert_email`).
 - A name whose anchor the guard drops stays `partial` permanently: word the banner calmly and watch for banner fatigue.
 - Premarket compares close(D−1) with stop(D) ≡ stop(D−1) for breach purposes (pin with a property test); overnight gaps remain U8 (a pre-market price merge).
 

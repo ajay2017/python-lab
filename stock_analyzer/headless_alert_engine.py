@@ -123,10 +123,19 @@ def _build_context(today: date) -> dict:
         trades_df = db.load_trades()
     except Exception:
         trades_df = None
+    # Strict read (2026-10-30): the lenient `load_manual_stops()` returned {} on a
+    # failed read, silently dropping every manual stop from the stop-breach scan.
+    # None = couldn't read: carry on with {} (auto stops still evaluate) but make
+    # it loud via `errors` + the `manual_stops_unreadable` flag the lanes fail on.
     try:
-        manual_stops = db.load_manual_stops()
+        manual_stops = db.load_manual_stops_or_none()
     except Exception:
+        manual_stops = None
+    manual_stops_unreadable = manual_stops is None
+    if manual_stops_unreadable:
         manual_stops = {}
+        errors.append("manual stops could not be read — stop breaches on "
+                      "manually-stopped names may be missing")
 
     try:
         rfr = fetch_risk_free_rate()
@@ -222,7 +231,10 @@ def _build_context(today: date) -> dict:
             # the expected set from either would be circular and always
             # report "nothing missing". This is the one correct source for
             # `portfolio.correlation_unchecked()`'s `held_tickers` argument.
-            "held_tickers": held_tickers}
+            "held_tickers": held_tickers,
+            # Additive (2026-10-30) — True when the manual_stops read failed
+            # (distinct from "no manual stops"). Lanes turn it into a failure.
+            "manual_stops_unreadable": manual_stops_unreadable}
 
 
 def compute_protective_alerts(today: date | None = None) -> dict:
@@ -425,6 +437,7 @@ def compute_protective_alerts(today: date | None = None) -> dict:
 
     return {
         "alerts": alerts, "built_at": built_at, "errors": errors,
+        "manual_stops_unreadable": bool(ctx.get("manual_stops_unreadable")),
         # Additive — full WATCH/TRIM/EXIT + RISK_OFF signal lists (composite_score
         # attached above) for exit_signals capture. Never used to build `alerts`
         # above; the EXIT-only/risk_off email scope is unchanged.
@@ -1628,4 +1641,5 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
             # `held_tickers` kwarg so the EOD cron's correlation write can
             # detect a ticker missing from `held_data` entirely (circularity
             # guard — see that function's docstring).
-            "held_tickers": ctx.get("held_tickers")}
+            "held_tickers": ctx.get("held_tickers"),
+            "manual_stops_unreadable": bool(ctx.get("manual_stops_unreadable"))}

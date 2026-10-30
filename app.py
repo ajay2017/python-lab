@@ -2600,6 +2600,14 @@ def _stamp_coord(keys=None) -> None:
     )
 
 
+MANUAL_STOPS_UNREADABLE_BANNER = (
+    "⚠️ Your manual stops couldn't be read from the database, so the stops shown "
+    "are the automatic ones only — and the automatic stop moves down with the "
+    "price, so it rarely triggers on its own. Don't rely on the stops shown until this clears: "
+    "refresh the page, and check your broker's stop orders."
+)
+
+
 def _bump_coord_epoch() -> None:
     """The book changed. Everything derived from it is now a generation behind
     until its producer re-publishes and re-stamps."""
@@ -2620,6 +2628,11 @@ def _render_portfolio_stale_banner(key_suffix: str = "") -> None:
     keeps serving the pre-outage snapshot with nothing marking it stale —
     _home_data_outage_at flags that case too.
     """
+    # A published None means the last build couldn't read the manual stops
+    # (`{}` would mean "none set"). Checked first: it precedes the early return below.
+    if "_manual_stops" in st.session_state and st.session_state["_manual_stops"] is None:
+        st.error(MANUAL_STOPS_UNREADABLE_BANNER)
+
     # A crashed republisher is louder than a stale cache, so it goes first.
     # Rendering this is the point: _refresh_error used to be written and read
     # nowhere, which made a crashed refresh indistinguishable from a successful
@@ -2832,7 +2845,12 @@ def _refresh_portfolio_cache_after_trade(h_df: pd.DataFrame) -> None:
             for t, bundle in _parallel_load_all(missing).items():
                 if bundle is not None:
                     held_data[t] = bundle
-        manual_stops = db.load_manual_stops()
+        manual_stops = db.load_manual_stops_or_none()
+        _published_manual_stops = manual_stops   # None = couldn't read (3-state)
+        if manual_stops is None:
+            # Couldn't read (not "none set"): build with auto stops only, but say so.
+            manual_stops = {}
+            st.warning(MANUAL_STOPS_UNREADABLE_BANNER)
         port_df = build_portfolio_df(holdings, held_data, manual_stops=manual_stops)
         port_df = attach_gate_weight(port_df)
 
@@ -2875,7 +2893,7 @@ def _refresh_portfolio_cache_after_trade(h_df: pd.DataFrame) -> None:
         st.session_state["_last_port_df"]      = port_df
         st.session_state["_last_held_data"]    = held_data
         st.session_state["_last_held_tickers"] = sorted(tickers)
-        st.session_state["_manual_stops"]      = manual_stops
+        st.session_state["_manual_stops"]      = _published_manual_stops
         st.session_state["_holdings_sig_at_home_build"] = _sig
         st.session_state["_port_df_enriched"]  = port_df
         st.session_state["_acct_gate_cache"]   = _basis
@@ -5521,8 +5539,16 @@ if page == "🏠 Home":
     # Load manual stop overrides once per render. Stays in session_state so
     # the "Mark Done" UI can read/write without an extra DB round-trip and
     # all downstream consumers see the same merged view.
-    _manual_stops = db.load_manual_stops()
-    st.session_state["_manual_stops"] = _manual_stops
+    # Strict read: None = couldn't read (NOT "no manual stops"). Build with {}
+    # (auto stops only) but say so loudly below -- the auto stop rarely triggers
+    # on its own, so a silent {} would hide every working stop.
+    _manual_stops = db.load_manual_stops_or_none()
+    _manual_stops_unreadable = _manual_stops is None
+    # Publish None (3-state) so other pages' stale banner can say it; the LOCAL
+    # stays {} for the build and the signature below.
+    st.session_state["_manual_stops"] = None if _manual_stops_unreadable else _manual_stops
+    if _manual_stops_unreadable:
+        _manual_stops = {}
     port_df = build_portfolio_df(holdings, held_data, manual_stops=_manual_stops)
     st.session_state["_last_port_df"] = port_df          # used by Trade Journal decision context
     st.session_state["_last_held_data"] = held_data      # Catalyst Watch renders holdings earnings from this
@@ -5534,6 +5560,11 @@ if page == "🏠 Home":
         for _h in holdings
     )
     st.session_state["_signals_computed_at"] = _now_et().strftime("%I:%M %p")  # for staleness warning
+
+    if _manual_stops_unreadable:
+        # Rendered in-flow (not in the collapsed Alerts expander): a protective
+        # input is missing, so this must not be foldable away.
+        st.error(MANUAL_STOPS_UNREADABLE_BANNER)
 
     _pd_dropped = port_df.attrs.get("dropped_holdings") or []
     _pd_dropped_text = _dropped_holdings_banner_text(_pd_dropped)

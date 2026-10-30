@@ -505,6 +505,17 @@ def test_script_pops_fmp_key_only_under_main():
     assert lines[i].startswith("    ")
 
 
+def test_header_prints_unreadable_for_none_manual_stops(capsys):
+    from types import SimpleNamespace
+    args = SimpleNamespace(as_of=date(2026, 10, 30), trail_start=date(2026, 10, 30),
+                           trail_start_explicit=False, mults=(2.0, 3.0), variant="c",
+                           replay_variants=("a",), live=False)
+    dr.print_header(args, 3, None, True)
+    out = capsys.readouterr().out
+    assert "manual stops: UNREADABLE" in out
+    assert "manual stops loaded" not in out
+
+
 def test_header_and_compact_table_content(capsys):
     from types import SimpleNamespace
     args = SimpleNamespace(as_of=date(2026, 10, 30), trail_start=date(2026, 10, 30),

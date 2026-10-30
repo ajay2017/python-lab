@@ -483,6 +483,14 @@ def _run_premarket(now_et, force: bool) -> int:
                         f"without prices; stops / exits NOT checked")
         _log(f"PROTECTIVE SCAN RAN WITHOUT PRICES ({_price_outage_reason}) — "
              f"stops and exits were NOT checked; this is not a clean day.")
+    # Unreadable manual stops (2026-10-30): the scan DID run (auto stops and every
+    # computed alert still go out below) but manually-stopped names were checked
+    # against the auto stop only, so a real breach may be missing. Red heartbeat
+    # + failure email; deliberately NOT part of `_price_outage` (no suppression).
+    if payload.get("manual_stops_unreadable"):
+        failures.append("manual_stops_unreadable -- manual stops could not be read; "
+                        "stop breaches on manually-stopped names may be missing "
+                        "(protective alerts that were computed were still sent)")
     _log(f"computed {len(alerts)} protective alert(s): "
          + (", ".join(f"{a.get('kind')}/{a.get('ticker')}" for a in alerts) or "(none)"))
     # A dead news feed (docs/plans/news-feed-restore.md, D-4): the lane still does
@@ -706,6 +714,8 @@ def _run_eod(now_et, force: bool) -> int:
     if _book_outage:
         failures.append(f"price_outage: {_book_outage_reason} -- account/risk/rec_events "
                         f"snapshots skipped")
+    # NB: no `manual_stops_unreadable` failure here (2026-10-30 review): no EOD
+    # write depends on stops; the engine-note loop above already logs it.
 
     # PARTIAL price outage (D-M1 review follow-up; owner decision 3A',
     # 2026-10-12): some holdings read fine but could not be priced, so

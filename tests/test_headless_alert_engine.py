@@ -216,7 +216,7 @@ def _run_build_context(cfg):
                return_value=cfg["load_holdings"], side_effect=cfg.get("load_holdings_side_effect")), \
          patch("stock_analyzer.headless_alert_engine.db.load_trades",
                return_value=cfg["load_trades"]), \
-         patch("stock_analyzer.headless_alert_engine.db.load_manual_stops",
+         patch("stock_analyzer.headless_alert_engine.db.load_manual_stops_or_none",
                return_value=cfg["load_manual_stops"]), \
          patch("stock_analyzer.headless_alert_engine.fetch_risk_free_rate",
                return_value=cfg["fetch_risk_free_rate"], side_effect=cfg.get("rfr_side_effect")), \
@@ -289,6 +289,21 @@ def test_build_context_happy_path():
     assert "AAPL" in result["held_data"]
     assert result["fragility"]["severity"] == "elevated"
     assert result["vix"] == 16.0
+
+
+def test_build_context_unreadable_manual_stops_still_builds_and_flags():
+    """2026-10-30: strict read None = couldn't read (not 'no manual stops')."""
+    result = _run_build_context(_patch_context_deps(load_manual_stops=None))
+    assert result["ok"] is True
+    assert result["manual_stops_unreadable"] is True
+    assert any("manual stops could not be read" in e for e in result["errors"])
+
+
+def test_build_context_readable_manual_stops_not_flagged():
+    for stops in ({}, {"AAPL": {"stop_price": 1.0}}):
+        result = _run_build_context(_patch_context_deps(load_manual_stops=stops))
+        assert result["manual_stops_unreadable"] is False
+        assert result["errors"] == []
 
 
 def test_build_context_returns_raw_holdings_and_trades_frames():

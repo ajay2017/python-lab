@@ -76,8 +76,8 @@ Usage:
     python scripts/held_stop_dryrun.py --today --trail-start 2026-10-15 --mults 3.0,3.5 --detail
 
 Loaders (read-only): db.load_holdings_or_none (exact fractional shares),
-db.load_trades_or_none (None = unreadable), db.load_manual_stops ({} on failure:
-the count is printed), data.fetch_ticker_bundle(t, "6mo")["history"] for V0 (the
+db.load_trades_or_none (None = unreadable), db.load_manual_stops_or_none (None =
+unreadable: the header prints "manual stops: UNREADABLE" and the run continues with {}), data.fetch_ticker_bundle(t, "6mo")["history"] for V0 (the
 app's bundle path: yfinance default auto_adjust=True, dividend-ADJUSTED, today's
 partial bar included), data.fetch_live_prices (--live), and
 yf.Ticker(t).history(period=..., auto_adjust=False) for the long frame.
@@ -699,15 +699,20 @@ _FLAG_SHORT = {
 }
 
 
-def print_header(args, n_holdings: int, n_manual: int, do_today: bool) -> None:
+def print_header(args, n_holdings: int, n_manual: "int | None", do_today: bool) -> None:
     print("=== HELD-STOP DRY RUN (finding #26, C2) ===")
     print(f"as_of={args.as_of}  trail_start={args.trail_start}"
           f"{'' if args.trail_start_explicit else ' (default = as_of)'}  mults={list(args.mults)}")
     print(f"today variant shown: {args.variant}; replay variants: {list(args.replay_variants)}")
     print(f"price basis: {'live price' if args.live else 'latest bar Close incl. today (raw frame)'} "
           "for V0 and every variant; 'last_close' = last completed session (info)")
-    print(f"holdings: {n_holdings}; manual stops loaded: {n_manual}"
-          f"{'  WARNING: 0 manual stops with holdings present (load_manual_stops returns {} on failure)' if n_manual == 0 and n_holdings else ''}")
+    if n_manual is None:   # strict read failed: NOT the same as "none set"
+        print(f"holdings: {n_holdings}; manual stops: UNREADABLE "
+              "(load_manual_stops_or_none returned None; continuing with {} -- "
+              "MANUAL_NOW_LOSES / manual columns below are NOT reliable)")
+    else:
+        print(f"holdings: {n_holdings}; manual stops loaded: {n_manual}"
+              f"{'  WARNING: 0 manual stops with holdings present (table read OK but empty)' if n_manual == 0 and n_holdings else ''}")
     print(f"WARMUP_BARS={WARMUP_BARS} MIN_BARS={MIN_BARS} FILL_TOL_PCT={FILL_TOL_PCT} "
           f"SHARES_TOL={SHARES_TOL}: proposed, not owner-approved")
     print("variants use split-adjusted, dividend-UNadjusted closes; V0 uses the app's adjusted "
@@ -969,8 +974,11 @@ def main(argv=None) -> int:
     if do_today and holdings is None:
         print("Holdings could not be read; nothing computed.")
         return 1
-    manual = db.load_manual_stops() if do_today else {}
-    print_header(args, len(holdings) if holdings is not None else 0, len(manual), do_today)
+    manual = db.load_manual_stops_or_none() if do_today else {}
+    print_header(args, len(holdings) if holdings is not None else 0,
+                 None if manual is None else len(manual), do_today)
+    if manual is None:
+        manual = {}
     csv_rows: list[dict] = []
     if do_today:
         rows, skipped = run_today(args, holdings, trades, manual)
