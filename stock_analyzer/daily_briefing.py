@@ -29,6 +29,7 @@ import pandas as pd
 
 from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer import stop_breach_text as _stop_breach_text
+from stock_analyzer import revision_flag as _revision_flag
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_STRONG_BUY,
@@ -3440,6 +3441,10 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 f"N={_n_pos} positions). Existing sizing already conservative for the binary risk."
             )
             trigger = "Surprise miss + price gap-down → existing stop protects; no pre-event action needed."
+        # Rating-change Watch flag (shared rule/wording): its own field, never
+        # appended to `why` (the Snapshot caps `why`), never changes the
+        # action, sizing or priority.
+        _rf_line = _revision_flag.flag_line(_revision_flag.read(data))
         items.append({
             "priority": "medium" if days <= EARNINGS_CRITICAL_DAYS else "low",
             "icon":     "📅",
@@ -3449,6 +3454,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "why":      why,
             "trigger":  trigger,
             "weight":   weight,
+            **({"revision_flag_line": _rf_line} if _rf_line else {}),
         })
 
     # 3 — Weak large positions (weight ≥ LARGE_POSITION_WEIGHT_PCT, Score < WEAK_CONVICTION_SCORE)

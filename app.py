@@ -243,6 +243,7 @@ from stock_analyzer import stop_breach_text as _stop_breach_text
 from stock_analyzer import score_text as _score_text
 from stock_analyzer import macro_release as _macro_release
 from stock_analyzer import trade_caption as _trade_caption
+from stock_analyzer import revision_flag as _revision_flag
 from stock_analyzer import entry_eligibility as _entry_elig
 from stock_analyzer import news_feed as _news_feed
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
@@ -11132,6 +11133,11 @@ if page == "🏠 Home":
                     f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
                     f"<b>Why:</b> {_md_bold(_db_why)}</div>"
                 )
+            if _db_item.get("revision_flag_line"):
+                _body += (
+                    f"<div style='color:#f59e0b;font-size:0.74em;margin-top:2px'>"
+                    f"⚑ {_md_bold(_db_item.get('revision_flag_line'))}</div>"
+                )
             if _db_trigger:
                 _body += (
                     f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
@@ -11923,6 +11929,13 @@ if page == "🏠 Home":
                 + f"</div>",
                 unsafe_allow_html=True,
             )
+
+            if _db_rev.get("revision_flag_line"):
+                st.markdown(
+                    f"<div style='color:#f59e0b;font-size:0.74em;margin:-2px 0 6px 14px'>"
+                    f"⚑ {_safe_html(_db_rev.get('revision_flag_line'))}</div>",
+                    unsafe_allow_html=True,
+                )
 
             # Weak-large-position items get Trade Journal context injected so the
             # user can re-evaluate the position against their original reasoning,
@@ -16066,17 +16079,12 @@ elif page == "📡 Signals & Advice":
                             except Exception:
                                 pass
 
-                        # Analyst revisions
-                        if rev:
-                            net_rev = rev.get("net", 0)
-                            ups = rev.get("upgrades_90d", 0)
-                            dns = rev.get("downgrades_90d", 0)
-                            if net_rev > 0:
-                                _check("✅", f"Analysts: ↑{ups} upgrades vs ↓{dns} downgrades (90d) — institutional conviction intact.", "#00C851")
-                            elif net_rev < 0:
-                                _check("🔴", f"Analysts: ↑{ups} upgrades vs ↓{dns} downgrades (90d) — estimates being cut. Higher urgency.", "#ff4444")
-                            else:
-                                _check("🟡", f"Analyst revisions: neutral (90d).")
+                        # Analyst rating changes: one shared rule + wording
+                        # (revision_flag); a Watch flag, never "higher urgency".
+                        _rv_emoji, _rv_text, _rv_color = _revision_flag.checklist_line(
+                            _revision_flag.read(r_data)
+                        )
+                        _check(_rv_emoji, _safe_html(_rv_text), _rv_color)
 
                         # Short interest
                         short_pct = fin.get("short_pct_float")

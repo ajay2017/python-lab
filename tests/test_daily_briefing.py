@@ -54,6 +54,7 @@ from stock_analyzer.daily_briefing import (
     build_daily_briefing,
 )
 from stock_analyzer.signal_reconciliation import effective_verdict_bucket
+from stock_analyzer import revision_flag as _revision_flag_mod
 from tests.conftest import find_item, make_port_df
 
 pytestmark = pytest.mark.fast
@@ -3299,3 +3300,61 @@ def test_build_daily_briefing_sell_plus_weak_large_is_one_act_card():
     assert _weak_large_items(brief["review_list"]) == []
     split = decision_bucket.split_defensive(brief["act_today"], brief["review_list"])
     assert [i.get("ticker") for i in split["act"]].count("AAA") == 1
+
+
+# ── Review Before Close: analyst rating-change Watch flag (finding #22) ─────
+_FLAGGED_REV = {"net": -2, "upgrades_90d": 0, "downgrades_90d": 2}
+_CLEAN_REV = {"net": 1, "upgrades_90d": 1, "downgrades_90d": 0}
+
+
+def _earn_item(ticker_weight: float, revisions, n: int = 8):
+    port_df = make_port_df(_earn_rows("AAA", ticker_weight, n))
+    bundle = {"earnings": "2026-07-29"}
+    if revisions is not None:
+        bundle["revisions"] = revisions
+    items = _review_list(port_df, [], [], {"AAA": bundle}, _TODAY, portfolio_value=100_000.0)
+    return find_item(items, "AAA")
+
+
+@pytest.mark.parametrize("over_floor", [False, True])
+def test_earnings_card_flagged_sets_separate_field_why_unchanged(over_floor):
+    floor = _dynamic_overweight_floor(8)
+    w = floor + 3.0 if over_floor else 5.0
+    base = _earn_item(w, None)
+    flagged = _earn_item(w, _FLAGGED_REV)
+    line = _revision_flag_mod.flag_line(_revision_flag_mod.read({"revisions": _FLAGGED_REV}))
+    assert line
+    assert flagged["revision_flag_line"] == line
+    assert flagged["why"] == base["why"]
+    for k in ("action", "priority", "headline", "trigger", "weight"):
+        assert flagged[k] == base[k]
+
+
+def test_earnings_card_unflagged_and_unknown_have_no_flag_field():
+    base = _earn_item(5.0, None)
+    for rev in ({}, _CLEAN_REV):
+        it = _earn_item(5.0, rev)
+        assert it["why"] == base["why"]
+        assert not it.get("revision_flag_line")
+    assert not base.get("revision_flag_line")
+
+
+def test_brief_and_playbook_agree_on_the_rating_change_flag():
+    # Finding #22: the 🏠 Brief 📅 card and the 🔔 playbook show the same flag line
+    # from the same bundle, and neither sizes a trim from it.
+    from stock_analyzer import earnings_advisor
+    for rev in (_FLAGGED_REV, _CLEAN_REV, {}):
+        r = _revision_flag_mod.read({"revisions": rev})
+        line = _revision_flag_mod.flag_line(r)
+        assert (line is not None) == _revision_flag_mod.is_flagged(r)
+        assert _earn_item(5.0, rev).get("revision_flag_line") == line
+        port_df = make_port_df(_earn_rows("AAA", 5.0, 8))
+        pb = earnings_advisor.build_earnings_playbook(
+            port_df, {"AAA": {"earnings": "2026-07-29", "revisions": rev}}, today=_TODAY)
+        p = next(x for x in pb if x["ticker"] == "AAA")
+        assert p["revision_flag"] == _revision_flag_mod.is_flagged(r)
+        if line:
+            assert line in p["flag_lines"]
+        else:
+            assert not any("Analyst ratings" in s for s in p["flag_lines"])
+        assert p["action"] != "REDUCE"
