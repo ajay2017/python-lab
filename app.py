@@ -849,12 +849,11 @@ _TIPS = {
         "Learn more: investopedia.com/terms/i/insidertrading.asp"
     ),
     "Analyst Revisions": (
-        "Net count of analyst upgrades minus downgrades over the last 90 days.\n\n"
-        "Earnings revision momentum is one of the most reliable alpha factors "
-        "in quantitative investing: stocks where analysts are raising estimates "
-        "consistently outperform those where estimates are being cut.\n\n"
-        "• Positive net → Analysts getting more bullish → tailwind\n"
-        "• Negative net → Analysts losing conviction → headwind\n\n"
+        "Analyst rating changes: upgrades plus initiations, minus downgrades, over "
+        "the last 90 days (rating changes, not earnings-estimate revisions).\n\n"
+        "• Positive net → more upgrades than downgrades\n"
+        "• Negative net → more downgrades than upgrades\n\n"
+        "This is shown for context. The app does not treat it as a forecast.\n\n"
         "Learn more: investopedia.com/terms/e/earningsrevision.asp"
     ),
     "Analyst Consensus": (
@@ -4746,15 +4745,27 @@ def _render_holdings_earnings(port_df, held_data):
 
                     # Analyst revisions
                     st.markdown("")
-                    _rev_color = "#00C851" if _pb["net_rev"] > 0 else ("#ff4444" if _pb["net_rev"] < 0 else "#888")
-                    st.markdown(
-                        f"<div style='font-size:0.88em;color:#bbb'>"
-                        f"Analyst revisions (90d): "
-                        f"<span style='color:{_rev_color};font-weight:700'>{_pb['net_rev']:+d} net</span>"
-                        f"  ({_pb['ups_90']} ↑ / {_pb['dns_90']} ↓)"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
+                    if _pb.get("revision_state") == "unknown" or _pb.get("net_rev") is None:
+                        st.markdown(
+                            "<div style='font-size:0.88em;color:#bbb'>"
+                            "Analyst rating changes: unavailable</div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        _rev_win_lbl = "90d" if _pb.get("revision_window_90", True) else "recent"
+                        _rev_counts = (
+                            f"  ({int(_pb['ups_90'])} ↑ / {int(_pb['dns_90'])} ↓)"
+                            if _pb.get("ups_90") is not None and _pb.get("dns_90") is not None else ""
+                        )
+                        _rev_color = "#00C851" if _pb["net_rev"] > 0 else ("#ff4444" if _pb["net_rev"] < 0 else "#888")
+                        st.markdown(
+                            f"<div style='font-size:0.88em;color:#bbb'>"
+                            f"Analyst rating changes ({_safe_html(_rev_win_lbl)}): "
+                            f"<span style='color:{_safe_html(_rev_color)};font-weight:700'>"
+                            f"{_safe_html(format(_pb['net_rev'], '+d'))} net</span>"
+                            f"{_safe_html(_rev_counts)}</div>",
+                            unsafe_allow_html=True,
+                        )
                     if _pb["latest_rev"]:
                         for _rv in _pb["latest_rev"]:
                             _rv_dir = str(_rv.get("action", "")).lower()
@@ -4801,7 +4812,10 @@ def _render_holdings_earnings(port_df, held_data):
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    st.markdown(f"**Score:** {_pb['score']:.0f}/100 · **Signal:** {_pb['signal']}")
+                    if _pb.get("score_available", True) and _pb.get("score") is not None:
+                        st.markdown(f"**Score:** {_pb['score']:.0f}/100 · **Signal:** {_pb['signal']}")
+                    else:
+                        st.markdown(f"**Score:** composite withheld · **Signal:** {_pb['signal']}")
 
                 # Action recommendation
                 st.markdown(
@@ -4814,6 +4828,15 @@ def _render_holdings_earnings(port_df, held_data):
                     f"</div>",
                     unsafe_allow_html=True,
                 )
+
+                # Watch flags ride along under any action (a flag-Watch card already
+                # carries them in its detail). Plain text; none of them sizes a trim.
+                _pb_flag_watch = _pb.get("watch_reason") in (
+                    "revision_flag", "beat_history", "bearish_reaction")
+                if not _pb_flag_watch:
+                    _pb_fl = _pb.get("flag_lines")
+                    for _fl in ([] if _pb_fl is None else _pb_fl):
+                        st.caption(f"⚑ {_fl}")
 
                 # What to watch during the report
                 _watch_items = list(_pb.get("watch_for") or [])
@@ -4833,8 +4856,9 @@ def _render_holdings_earnings(port_df, held_data):
                 if _action == "MONITOR" and _pb.get("earnings_date"):
                     st.info(
                         f"🗓️ **Re-evaluate after earnings ({_earn_dt_str})** — "
-                        f"return once results are in to reassess the position. "
-                        f"If the report is negative, be prepared to exit at the open."
+                        f"return once results are in to reassess the position."
+                        + ("" if _pb_flag_watch else
+                           " If the report is negative, be prepared to exit at the open.")
                     )
 
 

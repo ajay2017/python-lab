@@ -816,11 +816,13 @@ EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT  = 22.0  # binary-event risk cap even for a
 EARNINGS_OVERWEIGHT_TOLERANCE_PP      = 5.0   # buffer added to equal-weight (100/N)
 EARNINGS_OVERWEIGHT_TRIM_TO_PCT       = 10.0
 
-# 📅 Earnings page (earnings_advisor._recommend) REDUCE / MONITOR rules — values
-# previously bare literals in that function, named here with the SAME values.
-EARNINGS_REDUCE_MIN_WEIGHT_PCT = 5.0    # a weak-signal REDUCE only fires on a position at least this heavy (% of portfolio)
-EARNINGS_REVISION_WATCH_NET   = -2     # net analyst rating changes (upgrades+initiations - downgrades, 90d) at or below this: today the Pre-Earnings Playbook negative-revision REDUCE trigger; becomes the Watch-only flag (revision_flag.is_flagged, sizes nothing) when that REDUCE is removed (finding #22)
-EARNINGS_PARTIAL_TRIM_PCT      = 35.0   # % of shares trimmed by the revisions / beat-history / bearish-reaction REDUCE rules
+# 📅 Earnings page (earnings_advisor._recommend) REDUCE / MONITOR rules and Watch-flag
+# bounds — values previously bare literals in that function, named here with the SAME
+# values. Since 2026-10-30 (finding #22) the rating-change, beat-history and
+# bearish-reaction rules are Watch flags that size nothing.
+EARNINGS_REDUCE_MIN_WEIGHT_PCT = 5.0    # the weak-composite REDUCE and the beat-history / bearish-reaction Watch flags only fire on a position at least this heavy (% of portfolio)
+EARNINGS_REVISION_WATCH_NET   = -2     # net analyst rating changes (upgrades+initiations - downgrades, 90d) at or below this raise the pre-earnings Watch flag (revision_flag.is_flagged) on the Playbook, Brief and Signals; sizes nothing, shadow-measured (finding #22)
+EARNINGS_PARTIAL_TRIM_PCT      = 35.0   # measure-only since 2026-10-30: the counterfactual trim recorded in earnings_revision_shadow.would_trim_shares (no rule sizes a trim from it)
 EARNINGS_WEAK_TRIM_PCT         = 50.0   # % of shares trimmed by the weak-composite (Sell-zone) REDUCE rule
 EARNINGS_STOP_COVER_FRAC       = 0.85   # stop gap < this fraction of the estimated earnings move = "stop at risk"
 # 🌐 Macro PROTECT-mode half-trim (macro_playbook._action_detail, non-overweight branch).
@@ -1017,9 +1019,9 @@ CATALYST_WATCH_WINDOW_DAYS = 7
 
 # Earnings Playbook — beat-rate and reaction-posture thresholds.
 # These are investment-policy values; discuss with the user before changing.
-EARNINGS_BEAT_RATE_REDUCE_THRESHOLD      = 60.0  # below this + weak composite → REDUCE pressure
+EARNINGS_BEAT_RATE_REDUCE_THRESHOLD      = 60.0  # below this + composite < COMPOSITE_BUY → beat-history Watch flag (sizes nothing since 2026-10-30)
 EARNINGS_BEAT_RATE_STRONG_THRESHOLD      = 75.0  # above this + bullish reaction → strengthens HOLD_OR_ADD
-EARNINGS_BEARISH_REACTION_COMPOSITE_GATE = 75    # bearish reaction history + composite < this → REDUCE
+EARNINGS_BEARISH_REACTION_COMPOSITE_GATE = 75    # bearish reaction history + composite < this → reaction Watch flag (sizes nothing since 2026-10-30)
 EARNINGS_MIN_BEAT_RATE_ENTRY             = 70.0  # catalyst scanner — min beat rate to surface a watchlist candidate
 EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS   = 2     # min net analyst upgrades (90d) for Catalyst HOLD_OR_ADD
 

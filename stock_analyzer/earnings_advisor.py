@@ -11,6 +11,7 @@ import math as _math
 import pytz as _pytz
 from datetime import date as _date, datetime as _datetime
 
+from stock_analyzer import revision_flag as _revflag
 from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
 
 from stock_analyzer.constants import (
@@ -27,8 +28,6 @@ from stock_analyzer.constants import (
     SINGLE_NAME_CEILING,
     SINGLE_NAME_TRIM_TRIGGER,
     EARNINGS_REDUCE_MIN_WEIGHT_PCT,
-    EARNINGS_REVISION_WATCH_NET,
-    EARNINGS_PARTIAL_TRIM_PCT,
     EARNINGS_WEAK_TRIM_PCT,
     EARNINGS_STOP_COVER_FRAC,
 )
@@ -206,13 +205,93 @@ def _estimate_move(risk_metrics: dict, sector: str) -> float:
     return round(est, 1)
 
 
-def _recommend(
+def _sh(n) -> str:
+    """'1 share' / '5 shares' / '2.95 shares'."""
+    return f"{fmt_shares(n)} share{'s' if n != 1 else ''}"
+
+
+def _trim_sentence(n, held, pct) -> str:
+    """The one wording for a whole-share trim sized by a percentage rule."""
+    pct_of = 100.0 * n / held if held else 0.0
+    return (
+        f"**Sell {_sh(n)}** (about {pct_of:.0f}% of your {fmt_shares(held)} shares) "
+        f"before the report. The rule's {pct:.0f}% trim rounds down to whole shares."
+    )
+
+
+def _rev_from_net(net_rev) -> dict:
+    """A revision_flag-shaped reading from a bare net count (None = unknown)."""
+    if net_rev is None:
+        return {"state": "unknown", "net": None, "ups": None, "downs": None,
+                "window_days": None}
+    return {"state": "ok", "net": int(net_rev), "ups": None, "downs": None,
+            "window_days": 90}
+
+
+def _beat_flag(beat_rate, score, score_available, weight) -> bool:
+    return bool(
+        beat_rate is not None
+        and score_available
+        and beat_rate < EARNINGS_BEAT_RATE_REDUCE_THRESHOLD
+        and score < COMPOSITE_BUY
+        and weight >= EARNINGS_REDUCE_MIN_WEIGHT_PCT
+    )
+
+
+def _reaction_flag(reaction, score, score_available, weight) -> bool:
+    return bool(
+        reaction == "bearish"
+        and score_available
+        and score < EARNINGS_BEARISH_REACTION_COMPOSITE_GATE
+        and weight >= EARNINGS_REDUCE_MIN_WEIGHT_PCT
+    )
+
+
+def flag_lines_for(rev, beat_rate, reaction, beat_flag, reaction_flag) -> list[str]:
+    """Plain-text Watch-flag sentences (no markdown, no `$`). None sizes a trim."""
+    lines = []
+    rl = _revflag.flag_line(rev)
+    if rl:
+        lines.append(rl)
+    if beat_flag and beat_rate is not None:
+        lines.append(
+            f"Beat history: {beat_rate:.0f}% of past reports beat estimates "
+            f"(below {EARNINGS_BEAT_RATE_REDUCE_THRESHOLD:.0f}%), from pasted CNBC "
+            "context. Flagged to watch, not acted on."
+        )
+    if reaction_flag:
+        lines.append(
+            "Post-earnings reaction history: bearish, from pasted CNBC context. "
+            "Flagged to watch, not acted on."
+        )
+    return lines
+
+
+_WATCH_PREFIX = "**Watch — no pre-earnings trim.** "
+
+
+def _recommend(*args, **kwargs) -> tuple[str, str, str, str]:
+    """Returns (action, priority, detail, institutional_lens).
+    Actions: EXIT | REDUCE | MONITOR | HOLD | HOLD_OR_ADD. See _recommend_full."""
+    return _recommend_core(*args, **kwargs)
+
+
+def _recommend_full(*args, **kwargs) -> tuple[str, str, str, str, str | None]:
+    """_recommend plus watch_reason: "stop" for the stop MONITORs;
+    "revision_flag" / "beat_history" / "bearish_reaction" when a Watch flag
+    replaced the general HOLD; else None."""
+    out: dict = {}
+    action, priority, detail, lens = _recommend_core(*args, _out=out, **kwargs)
+    return action, priority, detail, lens, out.get("watch_reason")
+
+
+def _recommend_core(
     days: int,
     score: float,
     weight: float,
     pnl_pct: float,
     gap_to_stop: float | None,
-    net_rev: int,
+    net_rev: int | None,
     signal: str,
     shares: float,
     market_value: float,
@@ -221,11 +300,21 @@ def _recommend(
     reaction: str | None = None,
     n_positions: int | None = None,
     sizing_shares: float | None = None,
+    rev: dict | None = None,
+    score_available: bool = True,
+    _out: dict | None = None,
 ) -> tuple[str, str, str, str]:
     """
-    Returns (action, priority, detail, institutional_lens).
-    Actions: EXIT | REDUCE | MONITOR | HOLD | HOLD_OR_ADD
+    Returns (action, priority, detail, institutional_lens). When `_out` is a
+    dict, `_out["watch_reason"]` is set for the MONITOR returns.
+
+    The analyst rating-change, beat-history and bearish-reaction signals are
+    unmeasured, so they are Watch flags only: they never size a trim and never
+    override EXIT / REDUCE / the stop MONITORs (owner decision 2026-10-30).
+    A withheld composite (score_available False) fires no composite-conditioned rule.
     """
+    if rev is None:
+        rev = _rev_from_net(net_rev)
     # ── EXIT ─────────────────────────────────────────────────────────────────
     if "Sell" in signal or "Strong Sell" in signal:
         return (
@@ -269,7 +358,7 @@ def _recommend(
                     f"{r['floor_pct']:.1f}% earnings-week line for a binary earnings event. "
                     f"An estimated ±{est_move:.0f}% earnings move on a ${market_value:,.0f} position = "
                     f"±${est_move / 100 * market_value:,.0f} in a single session. "
-                    f"**Trim to ~{r['target_pct']:.0f}% weight: sell {trim_sh:,} shares (~${trim_val:,.0f})** before earnings. "
+                    f"**Trim to ~{r['target_pct']:.0f}% weight: sell {_sh(trim_sh)} (~${trim_val:,.0f})** before earnings. "
                     "Keep the core position for the upside scenario — just cap the binary risk."
                 ),
                 (
@@ -293,7 +382,7 @@ def _recommend(
                     f"Position is **{weight:.0f}% of your portfolio** — too concentrated for a binary earnings event. "
                     f"An estimated ±{est_move:.0f}% earnings move on a ${market_value:,.0f} position = "
                     f"±${est_move / 100 * market_value:,.0f} in a single session. "
-                    f"**Trim to ~{SINGLE_NAME_CEILING:.0f}% weight: sell {trim_sh:,} shares (~${trim_val:,.0f})** before earnings. "
+                    f"**Trim to ~{SINGLE_NAME_CEILING:.0f}% weight: sell {_sh(trim_sh)} (~${trim_val:,.0f})** before earnings. "
                     "Keep the core position for the upside scenario — just cap the binary risk."
                 ),
                 (
@@ -307,14 +396,15 @@ def _recommend(
 
     # ── REDUCE — weak fundamentals ────────────────────────────────────────────
     trim_sh = fraction_trim_shares(_sz, EARNINGS_WEAK_TRIM_PCT)
-    if score < COMPOSITE_HOLD and weight >= EARNINGS_REDUCE_MIN_WEIGHT_PCT and trim_sh >= 1:
+    if (score_available and score < COMPOSITE_HOLD
+            and weight >= EARNINGS_REDUCE_MIN_WEIGHT_PCT and trim_sh >= 1):
         return (
             "REDUCE",
             "HIGH",
             (
                 f"Composite score **{score:.0f}/100** is in the Sell zone — going into a binary event "
                 "with weak fundamentals compounds the risk significantly. "
-                f"**Trim {EARNINGS_WEAK_TRIM_PCT:.0f}%: sell {trim_sh:,} shares** before the report. "
+                f"{_trim_sentence(trim_sh, _sz, EARNINGS_WEAK_TRIM_PCT)} "
                 "If earnings surprise to the upside and fundamentals improve, re-enter from a smaller base. "
                 "If they confirm the weakness, you've protected yourself from a larger loss."
             ),
@@ -327,78 +417,16 @@ def _recommend(
             ),
         )
 
-    # ── REDUCE — negative revision momentum ───────────────────────────────────
-    trim_sh = fraction_trim_shares(_sz, EARNINGS_PARTIAL_TRIM_PCT)
-    if net_rev <= EARNINGS_REVISION_WATCH_NET and weight >= EARNINGS_REDUCE_MIN_WEIGHT_PCT and trim_sh >= 1:
-        return (
-            "REDUCE",
-            "MEDIUM",
-            (
-                f"Analysts have been **cutting estimates** heading into this report "
-                f"(net revisions: {net_rev:+d} over 90 days). "
-                "Negative revision momentum into earnings is one of the strongest miss-risk signals. "
-                f"**Trim {EARNINGS_PARTIAL_TRIM_PCT:.0f}%: sell {trim_sh:,} shares** before the report. "
-                "Negative revisions suggest analysts already know something is wrong — "
-                "the report may confirm it."
-            ),
-            (
-                "Earnings revision momentum is a reliable miss-risk signal in professional portfolio management. "
-                "When analysts are cutting estimates heading into a report, it's usually because channel checks, "
-                "supplier data, or management conversations signal emerging trouble. "
-                "Negative pre-earnings revisions correlate with higher miss rates. Reduce before the report; re-evaluate after."
-            ),
-        )
-
-    # ── REDUCE — poor beat history + weak composite (CNBC enrichment) ────────
-    if (
-        beat_rate is not None
-        and beat_rate < EARNINGS_BEAT_RATE_REDUCE_THRESHOLD
-        and score < COMPOSITE_BUY
-        and weight >= EARNINGS_REDUCE_MIN_WEIGHT_PCT
-        and trim_sh >= 1
-    ):
-        return (
-            "REDUCE",
-            "MEDIUM",
-            (
-                f"Historical beat rate **{beat_rate:.0f}%** is below the {EARNINGS_BEAT_RATE_REDUCE_THRESHOLD:.0f}% threshold "
-                f"and composite score **{score:.0f}/100** is below the entry gate — "
-                "a low-beat-rate name with weak fundamentals heading into an earnings binary event is a compounding risk. "
-                f"**Trim {EARNINGS_PARTIAL_TRIM_PCT:.0f}%: sell {trim_sh:,} shares** before the report."
-            ),
-            (
-                "Historical beat rates below 60% combined with a sub-entry composite score mean both "
-                "the fundamental signal and the historical execution pattern argue against holding full size "
-                "into an uncertain binary event. Reduce to limit the downside; re-enter after confirmation."
-            ),
-        )
-
-    # ── REDUCE — bearish post-earnings reaction history + composite gate ──────
-    if (
-        reaction == "bearish"
-        and score < EARNINGS_BEARISH_REACTION_COMPOSITE_GATE
-        and weight >= EARNINGS_REDUCE_MIN_WEIGHT_PCT
-        and trim_sh >= 1
-    ):
-        return (
-            "REDUCE",
-            "MEDIUM",
-            (
-                f"Post-earnings reaction history is **bearish** and composite score **{score:.0f}/100** "
-                f"is below the {EARNINGS_BEARISH_REACTION_COMPOSITE_GATE} gate — "
-                "holding through a report where the stock has historically sold off, with a weak composite, "
-                "stacks two negative factors. "
-                f"**Trim {EARNINGS_PARTIAL_TRIM_PCT:.0f}%: sell {trim_sh:,} shares** before the report."
-            ),
-            (
-                "When a name has a documented pattern of selling off after earnings and its own composite "
-                "is flagging weakness, the expected-value calculation on holding through the report is "
-                "negative even in the beat scenario. Reduce size; you can always re-add after a positive reaction."
-            ),
-        )
+    # Analyst rating-change, beat-history and bearish-reaction signals are
+    # unmeasured Watch flags (owner decision 2026-10-30): none sizes a trim and
+    # none overrides the rules above or the stop MONITORs below.
+    _beat_flag_on = _beat_flag(beat_rate, score, score_available, weight)
+    _react_flag_on = _reaction_flag(reaction, score, score_available, weight)
 
     # ── MONITOR — stop unavailable (data integrity gap) ──────────────────────
     if gap_to_stop is None:
+        if _out is not None:
+            _out["watch_reason"] = "stop"
         return (
             "MONITOR",
             "MEDIUM",
@@ -418,6 +446,8 @@ def _recommend(
 
     # ── MONITOR — stop close to estimated move ───────────────────────────────
     if gap_to_stop < est_move * EARNINGS_STOP_COVER_FRAC:
+        if _out is not None:
+            _out["watch_reason"] = "stop"
         return (
             "MONITOR",
             "MEDIUM",
@@ -439,7 +469,10 @@ def _recommend(
         )
 
     # ── HOLD_OR_ADD — high conviction + positive revisions ───────────────────
-    if score >= COMPOSITE_STRONG_BUY and net_rev >= EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS:
+    _net_for_add = rev.get("net") if rev.get("state") == "ok" else None
+    if (score_available and score >= COMPOSITE_STRONG_BUY
+            and _net_for_add is not None
+            and _net_for_add >= EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS):
         _hoa_extras = []
         if beat_rate is not None and beat_rate >= EARNINGS_BEAT_RATE_STRONG_THRESHOLD:
             _hoa_extras.append(f"historical beat rate **{beat_rate:.0f}%**")
@@ -451,15 +484,12 @@ def _recommend(
         )
         _hoa_head = (
             f"Strong setup heading into earnings: score **{score:.0f}/100** with "
-            f"**+{net_rev} net analyst upgrades** in 90 days — analysts are raising estimates, "
-            "not cutting. Positive revision momentum into earnings is historically the strongest "
-            f"predictor of a beat-and-raise.{_hoa_context} "
+            f"**+{_net_for_add} net analyst rating upgrades or initiations** over {'the last 90 days' if _revflag._win(rev) else 'recent months'}.{_hoa_context} "
         )
         _hoa_lens_head = (
-            "'Earnings revision momentum' is one of the most robust alpha factors in quantitative "
-            "investing — stocks with rising analyst estimates consistently outperform those with "
-            "falling estimates. When you have both a strong composite score AND rising estimates "
-            "heading into a report, "
+            "A strong composite score with net analyst rating upgrades is a constructive "
+            "setup into a report, though neither signal is a forecast of the result. "
+            "Heading into a report, "
         )
         # S-D D6: only one sizing path hands out share counts, so this advisor
         # never sizes an add. With the report inside the imminent window it
@@ -484,14 +514,42 @@ def _recommend(
             "The risk is real but the setup is genuinely positive.",
         )
 
+    # ── MONITOR — Watch flags (only where the chain would end in the general HOLD)
+    _lines = flag_lines_for(rev, beat_rate, reaction, _beat_flag_on, _react_flag_on)
+    if _lines:
+        if _out is not None:
+            _out["watch_reason"] = (
+                "revision_flag" if _revflag.is_flagged(rev)
+                else "beat_history" if _beat_flag_on else "bearish_reaction"
+            )
+        return (
+            "MONITOR",
+            "MEDIUM",
+            _WATCH_PREFIX + " ".join(_lines) + " Hold with your stop in place.",
+            (
+                "These signals are being measured and have no demonstrated predictive "
+                "record in this app yet, so the app sizes no trim from them. They are "
+                "listed so you can weigh them yourself; the stop and the sizing rules "
+                "above are what protect the position."
+            ),
+        )
+
     # ── HOLD — general case, score is decent ─────────────────────────────────
     _gap_str = f"gap to stop {gap_to_stop:.1f}%" if gap_to_stop is not None else "stop unavailable"
+    _score_part = (
+        f"No major pre-earnings risk flags. Score {score:.0f}/100, "
+        if score_available else
+        "Composite withheld, so the weak-score check and the CNBC beat-history / "
+        "reaction checks couldn't run. "
+    )
+    if not score_available:
+        _gap_str = _gap_str[:1].upper() + _gap_str[1:]
     return (
         "HOLD",
         "OK",
         (
-            f"No major pre-earnings risk flags. Score {score:.0f}/100, "
-            f"{_gap_str}, and revisions are neutral. "
+            f"{_score_part}"
+            f"{_gap_str}, and analyst rating changes are {_revflag.revisions_phrase(rev)}. "
             "**Hold current position with stops in place.** "
             "The report is the next major thesis checkpoint — watch forward guidance closely."
         ),
@@ -527,6 +585,13 @@ def build_earnings_playbook(
         mval       = _f(row.get("Market Value"))
         pnl_pct    = _f(row.get("P&L (%)"))
         score      = _f(row.get("Score"))
+        # A withheld composite (Score None / Score Available False) is not 0:
+        # no composite-conditioned rule may fire on it. Missing column = available.
+        _sa = row.get("Score Available")
+        score_available = (
+            False if _sa is False or (_sa is not None and str(_sa).lower() in ("false", "0"))
+            else _finite_or_none(row.get("Score")) is not None
+        )
         signal     = str(row.get("Signal", ""))
         # Preserve None when stop data is unavailable — defaulting to 0 here
         # would falsely declare the position "at risk vs estimated move" when
@@ -555,7 +620,8 @@ def build_earnings_playbook(
         beat_rate = ctx.get("beat_rate_pct")           # float | None
         reaction  = ctx.get("recent_reaction_direction")  # str | None
 
-        rev       = data.get("revisions") or {}
+        rev_raw   = data.get("revisions") or {}
+        rev_read  = _revflag.read(data)
         rm        = data.get("risk_metrics") or {}
 
         # load_bundle results carry `financials` / `name`, not `info`.
@@ -567,10 +633,12 @@ def build_earnings_playbook(
         fwd_pe       = _af["fwd_pe"]
         company      = _af["company"]
 
-        net_rev  = int(_f(rev.get("net", 0)))
-        ups_90   = int(_f(rev.get("upgrades_90d", 0)))
-        dns_90   = int(_f(rev.get("downgrades_90d", 0)))
-        latest_rev = rev.get("latest", [])
+        # None (not a fabricated 0) when the rating-change read is unknown.
+        net_rev  = None if rev_read["state"] == "unknown" else rev_read["net"]
+        ups_90   = rev_read["ups"]   # None when unknown (no fabricated 0)
+        dns_90   = rev_read["downs"]
+        _rev_win90 = _revflag._win(rev_read)
+        latest_rev = rev_raw.get("latest", [])
 
         est_move = _estimate_move(rm, sector)
         earn_risk = round(est_move / 100 * mval)
@@ -581,13 +649,18 @@ def build_earnings_playbook(
             else "AHEAD"
         )
 
-        action, priority, detail, inst_lens = _recommend(
+        action, priority, detail, inst_lens, watch_reason = _recommend_full(
             days_until, score, weight, pnl_pct,
             gap, net_rev, signal, shares, mval, est_move,
             beat_rate=beat_rate, reaction=reaction,
             n_positions=len(port_df),
             sizing_shares=shares,
+            rev=rev_read,
+            score_available=score_available,
         )
+        _rflag = _revflag.is_flagged(rev_read)
+        _bflag = _beat_flag(beat_rate, score, score_available, weight)
+        _xflag = _reaction_flag(reaction, score, score_available, weight)
 
         watch = _SECTOR_WATCH.get(sector, _DEFAULT_WATCH)
 
@@ -609,7 +682,8 @@ def build_earnings_playbook(
             "shares":        shares,
             "market_value":  mval,
             "pnl_pct":       pnl_pct,
-            "score":         score,
+            "score":         score if score_available else None,
+            "score_available": score_available,
             "signal":        signal,
             "gap_to_stop":   gap,
             "stop_price":    stop_price,
@@ -623,6 +697,7 @@ def build_earnings_playbook(
             "net_rev":       net_rev,
             "ups_90":        ups_90,
             "dns_90":        dns_90,
+            "revision_window_90": _rev_win90,
             "latest_rev":    latest_rev[:3],
             # Volatility
             "est_move":      est_move,
@@ -634,6 +709,13 @@ def build_earnings_playbook(
             "detail":        detail,
             "institutional_lens":  inst_lens,
             "watch_for":     watch,
+            # Watch flags (never size a trim)
+            "revision_flag":  _rflag,
+            "revision_state": rev_read["state"],
+            "beat_flag":      _bflag,
+            "reaction_flag":  _xflag,
+            "watch_reason":   watch_reason,
+            "flag_lines":     flag_lines_for(rev_read, beat_rate, reaction, _bflag, _xflag),
         })
 
     playbook.sort(key=lambda x: x["days_until"])

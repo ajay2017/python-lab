@@ -408,12 +408,12 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `RISK_PCT_PER_TRADE` | 0.015 | 1.5% portfolio risk per trade (Moderate) |
 | `EARNINGS_IMMINENT_DAYS` | 7 | Trades within this window flagged caution Since 2026-10-18 (shared-entry chunk 7) this also governs Grow Today's add-to-winner on held names (the ENTRY check). |
 | `EARNINGS_CRITICAL_DAYS` | 3 | Tighter "danger" sub-window inside `EARNINGS_IMMINENT_DAYS` — decide position size before the report, vs. the wider window's "review ahead of report." Single source for `portfolio.alerts()`'s danger/warning split and `daily_briefing`'s earnings-overweight priority bump; was a duplicated bare `3` in each (2026-08-04 audit finding) |
-| `EARNINGS_BEAT_RATE_REDUCE_THRESHOLD` | 60.0 | Pre-Earnings Playbook (F-174) — CNBC-sourced historical beat rate below this, combined with composite < `COMPOSITE_BUY`, adds a REDUCE condition |
+| `EARNINGS_BEAT_RATE_REDUCE_THRESHOLD` | 60.0 | Pre-Earnings Playbook (F-174) — CNBC-sourced historical beat rate below this, combined with composite < `COMPOSITE_BUY` (and weight ≥ `EARNINGS_REDUCE_MIN_WEIGHT_PCT`), raises a beat-history Watch flag. Sizes nothing since 2026-10-30 (finding #22; was a 35% REDUCE) |
 | `EARNINGS_BEAT_RATE_STRONG_THRESHOLD` | 75.0 | Pre-Earnings Playbook (F-174) — beat rate at/above this strengthens the HOLD_OR_ADD narrative (annotation only, does not change the verdict) |
-| `EARNINGS_BEARISH_REACTION_COMPOSITE_GATE` | 75 | Pre-Earnings Playbook (F-174) — a bearish CNBC-sourced post-earnings reaction history, combined with composite below this gate, adds a REDUCE condition |
-| `EARNINGS_REDUCE_MIN_WEIGHT_PCT` | 5.0 | Pre-Earnings Playbook `_recommend` — the weak-composite / negative-revision / poor-beat-history / bearish-reaction REDUCE rules only fire on a position at least this heavy (% of portfolio). Named 2026-10-25; was a bare `5` |
-| `EARNINGS_REVISION_WATCH_NET` | -2 | Net analyst rating changes (upgrades + initiations − downgrades, 90d) at or below this: today the Pre-Earnings Playbook `_recommend` negative-revision REDUCE trigger; becomes the Watch-only flag (`revision_flag.is_flagged`, sizes nothing) when that REDUCE is removed (finding #22). Renamed 2026-10-30 from `EARNINGS_REVISION_REDUCE_NET` |
-| `EARNINGS_PARTIAL_TRIM_PCT` | 35.0 | Pre-Earnings Playbook `_recommend` — % of shares trimmed by the negative-revision, poor-beat-history and bearish-reaction REDUCE rules (floored; a 0-share result falls through). Named 2026-10-25; was a bare `0.35` |
+| `EARNINGS_BEARISH_REACTION_COMPOSITE_GATE` | 75 | Pre-Earnings Playbook (F-174) — a bearish CNBC-sourced post-earnings reaction history, combined with composite below this gate (and weight ≥ `EARNINGS_REDUCE_MIN_WEIGHT_PCT`), raises a reaction Watch flag. Sizes nothing since 2026-10-30 (finding #22; was a 35% REDUCE) |
+| `EARNINGS_REDUCE_MIN_WEIGHT_PCT` | 5.0 | Pre-Earnings Playbook `_recommend` — the weak-composite REDUCE and the poor-beat-history / bearish-reaction Watch flags only fire on a position at least this heavy (% of portfolio); the rating-change flag has no weight floor. Named 2026-10-25; was a bare `5` |
+| `EARNINGS_REVISION_WATCH_NET` | -2 | Net analyst rating changes (upgrades + initiations − downgrades, 90d) at or below this raise the pre-earnings Watch flag (`revision_flag.is_flagged`) on the 🔔 Playbook, the 🏠 Brief 📅 card and the 📡 Signals checklist; sizes nothing; shadow-measured in `earnings_revision_shadow` (finding #22). Renamed 2026-10-30 from `EARNINGS_REVISION_REDUCE_NET` (was the negative-revision REDUCE trigger) |
+| `EARNINGS_PARTIAL_TRIM_PCT` | 35.0 | Pre-Earnings Playbook `_recommend` — measure-only since 2026-10-30 (finding #22): the counterfactual trim (floored) recorded as `earnings_revision_shadow.would_trim_shares`; no rule sizes a trim from it (it was the negative-revision / poor-beat-history / bearish-reaction REDUCE size). Named 2026-10-25; was a bare `0.35` |
 | `EARNINGS_WEAK_TRIM_PCT` | 50.0 | Pre-Earnings Playbook `_recommend` — % of shares trimmed by the weak-composite (Sell-zone) REDUCE rule. Named 2026-10-25; was `shares // 2` |
 | `EARNINGS_STOP_COVER_FRAC` | 0.85 | Pre-Earnings Playbook — a stop gap below this fraction of the estimated earnings move reads "stop at risk" (MONITOR + `stop_at_risk`). Named 2026-10-25; was a bare `0.85` |
 | `MACRO_PROTECT_HALF_TRIM_PCT` | 50.0 | Macro Playbook `_action_detail` — % of shares trimmed on a PROTECT-mode event for a name not over `SINGLE_NAME_CEILING`. Named 2026-10-25; was `shares // 2` |
@@ -3356,6 +3356,44 @@ entry R:R, so the owner can measure outcomes before deciding whether to enforce 
 - **Cron coverage limits:** `compute_morning_picks` passes `movers=[]` and `risk_recs=[]`, so cron rows never
   include movers and the add lane runs without G-01.
 - **Retention:** in `data_maintenance._PROTECTED_TABLES` (evidence for a policy decision).
+- **No routing effect:** no recommendation, gate or sizing reads this table.
+
+### 6.52 `earnings_revision_shadow` table
+
+```sql
+create table if not exists public.earnings_revision_shadow (
+  id bigserial primary key,
+  capture_date date not null, ticker text not null, source text not null,
+  earnings_date date not null, days_until integer,
+  rev_state text not null, net_rev integer, ups_90 integer, downs_90 integer, window_days integer,
+  flag_net integer, flagged boolean,
+  weight_pct numeric, shares numeric, price numeric,
+  composite numeric, score_available boolean,
+  beat_rate_pct numeric, reaction text, ctx_state text,
+  partial_trim_pct numeric, would_trim_shares integer, rule_version text,
+  captured_at timestamptz not null default now(),
+  unique (capture_date, ticker, source));
+alter table public.earnings_revision_shadow enable row level security;
+drop policy if exists "Allow all (service role)" on public.earnings_revision_shadow;
+create policy "Allow all (service role)" on public.earnings_revision_shadow
+  for all to service_role using (true) with check (true);
+```
+
+Finding #22 chunk C5 (2026-10-30, `docs/plans/earnings-revision-shadow.md`): a **measure-only** record of the
+pre-earnings analyst rating-change Watch flag (`revision_flag.is_flagged`), so the owner can see whether it predicts a
+weak report before it may ever size a trim again.
+- **What a row is:** one row per held name per EOD run while the name is inside `trim_sizing.in_earnings_window`
+  (days 0 to `EARNINGS_IMMINENT_DAYS`), flagged, unflagged (the control group) and unknown alike.
+- **What it records:** the rating-change reading (`rev_state`, `net_rev`, `ups_90`, `downs_90`, `window_days`),
+  `flag_net` (= `EARNINGS_REVISION_WATCH_NET` at capture) and `flagged`; the position (`weight_pct`, exact `shares`,
+  `price`); `composite` (None when withheld) and `score_available`; the pasted CNBC context if any (`beat_rate_pct`,
+  `reaction`, `ctx_state`, honest about `load_earnings_context_batch` returning `{}` on failure); the counterfactual
+  trim (`partial_trim_pct` = `EARNINGS_PARTIAL_TRIM_PCT`, `would_trim_shares`); `rule_version`.
+- **How it gets there:** `cron_runner._run_eod` step 7b calls `revision_flag.build_shadow_rows` and
+  `db.save_earnings_revision_shadow` (first-writer-wins on `(capture_date, ticker, source)`, non-trading dates dropped).
+- **Before the DDL is applied:** the cron logs a skip without failing the lane, and System Trust check ② shows the
+  store as missing. The flag's own text says that in the week before each report the app records whether it predicts a weak report, so the DDL must be applied when the flag ships.
+- **Retention:** in `data_maintenance._PROTECTED_TABLES`.
 - **No routing effect:** no recommendation, gate or sizing reads this table.
 
 ### `stock_analyzer/rec_events_capture.py`

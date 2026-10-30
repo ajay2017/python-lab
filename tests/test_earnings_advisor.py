@@ -131,27 +131,33 @@ def test_recommend_weak_fundamentals_requires_weight_at_least_5():
     assert action != "REDUCE"
 
 
-def test_recommend_reduce_negative_revisions():
+# CHANGED 2026-10-30 (finding #22): the negative-revision, beat-history and
+# bearish-reaction REDUCE tests (test_recommend_reduce_negative_revisions,
+# test_recommend_negative_revisions_beats_poor_beat_rate,
+# test_recommend_reduce_poor_beat_rate_and_weak_composite) pinned a sized trim
+# from an unmeasured signal. They now pin the Watch-flag behaviour instead.
+
+def test_recommend_negative_revisions_is_watch_not_reduce():
     action, priority, detail, _ = _rec(net_rev=-2, weight=8.0, score=60.0)
-    assert action == "REDUCE"
+    assert action == "MONITOR"
     assert priority == "MEDIUM"
-    assert "cutting estimates" in detail
+    assert "Watch — no pre-earnings trim" in detail
+    assert "Trim" not in detail and "sell" not in detail.lower()
 
 
-def test_recommend_negative_revisions_beats_poor_beat_rate():
-    # Both net_rev<=-2 (checked earlier) and beat_rate<60/score<65 apply --
-    # negative-revisions branch must win since it's checked first.
+def test_recommend_negative_revisions_and_poor_beat_rate_both_listed_no_trim():
     action, _, detail, _ = _rec(net_rev=-3, weight=8.0, score=50.0, beat_rate=40.0)
-    assert "cutting estimates" in detail
+    assert action == "MONITOR"
+    assert "Analyst ratings" in detail and "Beat history" in detail
 
 
-def test_recommend_reduce_poor_beat_rate_and_weak_composite():
+def test_recommend_poor_beat_rate_and_weak_composite_is_watch_not_reduce():
     action, priority, detail, _ = _rec(
         weight=8.0, score=50.0, beat_rate=EARNINGS_BEAT_RATE_REDUCE_THRESHOLD - 1,
     )
-    assert action == "REDUCE"
+    assert action == "MONITOR"
     assert priority == "MEDIUM"
-    assert "beat rate" in detail
+    assert "Beat history" in detail and "Trim" not in detail
 
 
 def test_recommend_poor_beat_rate_requires_score_below_composite_buy():
@@ -170,13 +176,13 @@ def test_recommend_beat_rate_none_skips_that_branch():
     assert action in ("MONITOR", "HOLD", "HOLD_OR_ADD")
 
 
-def test_recommend_reduce_bearish_reaction_history():
+def test_recommend_bearish_reaction_history_is_watch_not_reduce():
+    # CHANGED 2026-10-30: was test_recommend_reduce_bearish_reaction_history.
     action, priority, detail, _ = _rec(
         weight=8.0, score=EARNINGS_BEARISH_REACTION_COMPOSITE_GATE - 1, reaction="bearish",
     )
-    assert action == "REDUCE"
-    assert priority == "MEDIUM"
-    assert "bearish" in detail
+    assert action == "MONITOR"
+    assert "bearish" in detail and "Trim" not in detail
 
 
 def test_recommend_bearish_reaction_requires_score_below_gate():
@@ -211,7 +217,7 @@ def test_recommend_hold_or_add_high_conviction_positive_revisions():
     )
     assert action == "HOLD_OR_ADD"
     assert priority == "OK"
-    assert "net analyst upgrades" in detail
+    assert "net analyst rating upgrades" in detail
 
 
 def test_recommend_hold_or_add_requires_min_net_revisions():
@@ -229,7 +235,7 @@ def test_recommend_hold_or_add_inside_imminent_window_is_hold_no_add_advice():
         net_rev=EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS, weight=2.0, gap_to_stop=20.0,
     )
     assert action == "HOLD" and priority == "OK"
-    assert "net analyst upgrades" in detail
+    assert "net analyst rating upgrades" in detail
     assert "Hold full position" in detail
     assert "this isn't the window to add" in detail
     assert "5–10%" not in detail and "small add" not in detail
@@ -584,14 +590,12 @@ def test_catalyst_candidates_real_verdict_etf_not_listed_as_withheld_nor_ranked(
 
 
 def test_hold_or_add_branch_compares_net_rev_to_the_constant_not_a_bare_2():
-    tree = ast.parse(inspect.getsource(ea._recommend))
+    tree = ast.parse(inspect.getsource(ea._recommend_core))
     hits = [n for n in ast.walk(tree) if isinstance(n, ast.Compare)
-            and isinstance(n.left, ast.Name) and n.left.id == "net_rev"
-            and any(isinstance(o, ast.GtE) for o in n.ops)]
-    assert hits, "expected a `net_rev >= ...` comparison"
-    for n in hits:
-        comp = n.comparators[0]
-        assert isinstance(comp, ast.Name) and comp.id == "EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS"
+            and any(isinstance(o, ast.GtE) for o in n.ops)
+            and isinstance(n.comparators[0], ast.Name)
+            and n.comparators[0].id == "EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS"]
+    assert hits, "expected a `... >= EARNINGS_HOLD_OR_ADD_MIN_NET_REVISIONS` comparison"
 
 
 # ── analyst_fields: load_bundle shape (financials + name, no "info") ────────
@@ -641,3 +645,203 @@ def test_analyst_fields_missing_name_is_ticker():
 def test_fetch_financials_from_info_exposes_forward_eps():
     from stock_analyzer.data import fetch_financials_from_info
     assert fetch_financials_from_info({"forwardEps": 5.1})["forward_eps"] == 5.1
+
+
+# ── finding #22: rating changes are a Watch flag, never a trim ─────────────
+
+def _aapl_row(score=65.0, **kw):
+    r = _port_row(ticker="AAPL", weight=11.3, mval=1_500.0, score=score,
+                  gap=10.0, shares=5, **kw)
+    return r
+
+
+def _pb_for(row, bundle, **kw):
+    df = pd.DataFrame([row])
+    held = {row["Ticker"]: bundle}
+    return ea.build_earnings_playbook(df, held, today=TODAY, **kw)
+
+
+def _earn(days):
+    return (TODAY + timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def test_aapl_regression_negative_revisions_is_watch_no_trim():
+    from stock_analyzer.util import earnings_posture_alert_count
+    b = _bundle(earnings=_earn(4), net=-2, upgrades=0, downgrades=2)
+    pb = _pb_for(_aapl_row(), b)
+    assert len(pb) == 1
+    p = pb[0]
+    assert p["action"] == "MONITOR"
+    assert "Watch — no pre-earnings trim" in p["detail"]
+    assert "sell" not in p["detail"].lower() and "Trim" not in p["detail"]
+    assert p["revision_flag"] is True and p["watch_reason"] == "revision_flag"
+    assert p["flag_lines"]
+    assert earnings_posture_alert_count(pb, False) == 0
+
+
+@pytest.mark.parametrize("net", [-10, -2, 0, 1])
+def test_revision_never_sizes_a_trim(net):
+    # weight 20 / 200 shares outside the earnings window -> ceiling REDUCE
+    # regardless of the revision reading; shares identical.
+    row = _port_row(weight=20.0, mval=20_000.0, shares=200, score=60.0)
+    base = _pb_for(row, _bundle(earnings=_earn(20), net=0))[0]
+    cur = _pb_for(row, _bundle(earnings=_earn(20), net=net))[0]
+    assert cur["action"] == base["action"] == "REDUCE"
+    assert cur["detail"] == base["detail"]
+
+
+@pytest.mark.parametrize("net", [-10, -2, 0, 1])
+def test_revision_only_swaps_general_hold_for_watch(net):
+    row = _port_row(weight=2.0, mval=2_000.0, shares=20, score=60.0, gap=20.0)
+    cur = _pb_for(row, _bundle(earnings=_earn(20), net=net))[0]
+    if net <= -2:
+        assert cur["action"] == "MONITOR" and cur["watch_reason"] == "revision_flag"
+    else:
+        assert cur["action"] == "HOLD" and cur["watch_reason"] is None
+
+
+def test_flagged_plus_earnings_week_oversize_same_reduce():
+    row = _port_row(weight=25.0, mval=25_000.0, shares=250, score=60.0)
+    a = _pb_for(row, _bundle(earnings=_earn(3), net=0))[0]
+    b = _pb_for(row, _bundle(earnings=_earn(3), net=-5))[0]
+    assert a["action"] == b["action"] == "REDUCE"
+    assert a["detail"] == b["detail"]
+    assert b["revision_flag"] is True and b["flag_lines"]
+
+
+def test_flagged_plus_stop_at_risk_keeps_stop_monitor():
+    row = _port_row(weight=2.0, mval=2_000.0, shares=20, score=60.0, gap=1.0)
+    p = _pb_for(row, _bundle(earnings=_earn(20), net=-4, var_95=-5.0))[0]
+    assert p["action"] == "MONITOR" and p["watch_reason"] == "stop"
+    assert "below current price" in p["detail"]
+    assert p["revision_flag"] is True and p["flag_lines"]
+
+
+def test_flagged_never_overrides_exit():
+    row = _port_row(weight=8.0, signal="Sell", score=30.0)
+    p = _pb_for(row, _bundle(earnings=_earn(5), net=-5))[0]
+    assert p["action"] == "EXIT"
+
+
+def test_beat_and_reaction_never_reduce_and_set_flags():
+    row = _port_row(weight=8.0, mval=8_000.0, shares=80, score=50.0, gap=20.0)
+    ctx = {"AAPL": {"beat_rate_pct": EARNINGS_BEAT_RATE_REDUCE_THRESHOLD - 10,
+                    "recent_reaction_direction": "bearish"}}
+    p = _pb_for(row, _bundle(earnings=_earn(20)), earnings_context=ctx)[0]
+    assert p["action"] == "MONITOR"
+    assert p["beat_flag"] is True and p["reaction_flag"] is True
+    assert len(p["flag_lines"]) == 2
+    assert all("$" not in ln and "**" not in ln for ln in p["flag_lines"])
+
+
+def test_unknown_revisions_no_flag_and_hold_says_unavailable():
+    row = _port_row(weight=2.0, mval=2_000.0, shares=20, score=60.0, gap=20.0)
+    b = _bundle(earnings=_earn(20))
+    b["revisions"] = {}
+    p = _pb_for(row, b)[0]
+    assert p["revision_flag"] is False and p["revision_state"] == "unknown"
+    assert p["net_rev"] is None
+    assert p["action"] == "HOLD"
+    assert "unavailable" in p["detail"] and "neutral" not in p["detail"]
+
+
+def test_withheld_score_never_reduces_and_never_prints_zero():
+    row = _port_row(weight=8.0, mval=8_000.0, shares=80, score=None, gap=20.0,
+                    signal="❔ Verdict Withheld")
+    row["Score Available"] = False
+    ctx = {"AAPL": {"beat_rate_pct": 10.0, "recent_reaction_direction": "bearish"}}
+    p = _pb_for(row, _bundle(earnings=_earn(20)), earnings_context=ctx)[0]
+    assert p["action"] != "REDUCE"
+    assert p["beat_flag"] is False and p["reaction_flag"] is False
+    assert "0/100" not in p["detail"]
+    assert "withheld" in p["detail"]
+    assert p["score"] is None and p["score_available"] is False
+
+
+def test_withheld_score_row_without_flag_column_but_none_score():
+    row = _port_row(weight=8.0, score=None, gap=20.0)
+    p = _pb_for(row, _bundle(earnings=_earn(20)))[0]
+    assert p["action"] != "REDUCE" and "0/100" not in p["detail"]
+
+
+def test_weak_reduce_copy_whole_shares_and_percent():
+    action, _, detail, _ = ea._recommend(
+        10, 40.0, 8.0, 0.0, 10.0, 0, "Hold", 5, 5_000.0, 5.0)
+    assert action == "REDUCE"
+    assert "Sell 2 shares** (about 40% of your 5 shares)" in detail
+    assert "rounds down to whole shares" in detail
+    assert "Trim 50%" not in detail
+
+
+def test_weak_reduce_copy_singular_one_share():
+    action, _, detail, _ = ea._recommend(
+        10, 40.0, 8.0, 0.0, 10.0, 0, "Hold", 3, 3_000.0, 5.0)
+    assert action == "REDUCE"
+    assert "Sell 1 share** (about 33% of your 3 shares)" in detail
+    assert "1 shares" not in detail
+
+
+def test_trim_sentence_three_shares_fifty_percent():
+    t = ea._trim_sentence(1, 3, 50.0)
+    assert "Sell 1 share" in t and "about 33% of your 3 shares" in t
+
+
+def test_no_overclaim_words_in_flag_or_hold_text():
+    row = _port_row(weight=8.0, mval=8_000.0, shares=80, score=50.0, gap=20.0)
+    ctx = {"AAPL": {"beat_rate_pct": 20.0, "recent_reaction_direction": "bearish"}}
+    p = _pb_for(row, _bundle(earnings=_earn(20), net=-3, upgrades=0, downgrades=3),
+                earnings_context=ctx)[0]
+    text = (p["detail"] + " " + p["institutional_lens"]).lower()
+    text = text.replace("not earnings-estimate cuts", "")
+    for w in ("strongest", "reliable", "robust alpha", "cutting estimates"):
+        assert w not in text
+    assert "estimate cuts" not in text
+
+
+# ── review follow-ups 2026-10-30 ────────────────────────────────────────────
+
+def test_withheld_hold_does_not_claim_clean():
+    row = _port_row(weight=2.0, mval=2_000.0, shares=20, score=None, gap=20.0)
+    p = _pb_for(row, _bundle(earnings=_earn(20)))[0]
+    assert p["action"] == "HOLD"
+    assert "No major pre-earnings risk flags" not in p["detail"]
+    assert "weak-score check and the CNBC beat-history / reaction checks couldn't run" in p["detail"]
+    assert "no other pre-earnings risk flag fired" not in p["detail"]
+    assert "couldn't run. Gap to stop" in p["detail"] or "couldn't run. Stop unavailable" in p["detail"]
+
+
+def test_hold_or_add_window_wording_follows_revision_window():
+    kw = dict(days=EARNINGS_IMMINENT_DAYS + 1, score=COMPOSITE_STRONG_BUY, weight=2.0,
+              gap_to_stop=20.0)
+    ninety = {"state": "ok", "net": 3, "ups": 3, "downs": 0, "window_days": 90}
+    undated = dict(ninety, window_days=None)
+    d90 = _rec(net_rev=3, **kw)  # default via net only
+    assert "last 90 days" in ea._recommend(
+        kw["days"], kw["score"], kw["weight"], 0.0, 20.0, 3, "Hold", 100, 10_000.0,
+        5.0, rev=ninety)[2]
+    d_rec = ea._recommend(
+        kw["days"], kw["score"], kw["weight"], 0.0, 20.0, 3, "Hold", 100, 10_000.0,
+        5.0, rev=undated)[2]
+    assert "recent months" in d_rec and "90 days" not in d_rec
+
+
+def test_playbook_counts_none_when_unknown_and_window_flag():
+    row = _port_row(weight=2.0, mval=2_000.0, shares=20, score=60.0, gap=20.0)
+    b = _bundle(earnings=_earn(20))
+    b["revisions"] = {}
+    p = _pb_for(row, b)[0]
+    assert p["ups_90"] is None and p["dns_90"] is None
+    b2 = _bundle(earnings=_earn(20), net=-2, upgrades=0, downgrades=2)
+    b2["revisions"]["window_days"] = 45
+    p2 = _pb_for(row, b2)[0]
+    assert p2["revision_window_90"] is False
+    assert p2["ups_90"] == 0 and p2["dns_90"] == 2
+
+
+def test_watch_reason_for_stop_and_flag_via_full():
+    r = ea._recommend_full(20, 60.0, 2.0, 0.0, 1.0, -3, "Hold", 20, 2_000.0, 5.0)
+    assert r[0] == "MONITOR" and r[4] == "stop"
+    r = ea._recommend_full(20, 60.0, 2.0, 0.0, 20.0, -3, "Hold", 20, 2_000.0, 5.0)
+    assert r[0] == "MONITOR" and r[4] == "revision_flag"
+    r = ea._recommend_full(20, 60.0, 2.0, 0.0, 20.0, 0, "Hold", 20, 2_000.0, 5.0)
+    assert r[0] == "HOLD" and r[4] is None

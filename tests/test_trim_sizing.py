@@ -274,11 +274,13 @@ def test_every_reduce_branch_with_one_share_does_not_return_reduce():
     assert a != "REDUCE" and _no_sell_one(a, d)
 
 
-def test_partial_trim_branches_still_reduce_with_enough_shares():
+def test_rating_change_flag_never_trims_and_weak_reduce_still_floors():
+    # Finding #22 (2026-10-30): net rating changes <= EARNINGS_REVISION_WATCH_NET are
+    # a Watch flag; they no longer size the old floor(20 * 35%) = 7-share REDUCE.
     a, _p, d, _l = ea._recommend(10, 70.0, 6.0, 0.0, 10.0, -5, "Hold", 20, 1000.0, 8.0)
-    assert a == "REDUCE" and "sell 7 shares" in d  # floor(20 * 35%)
+    assert a != "REDUCE" and "sell" not in d.lower()
     a, _p, d, _l = ea._recommend(10, COMPOSITE_HOLD - 5, 6.0, 0.0, 10.0, 0, "Hold", 21, 1000.0, 8.0)
-    assert a == "REDUCE" and "sell 10 shares" in d  # floor(21 * 50%)
+    assert a == "REDUCE" and "**Sell 10 shares**" in d  # floor(21 * 50%)
 
 
 def test_brief_earnings_item_under_one_share_excess_is_watch():
