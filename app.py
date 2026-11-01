@@ -4374,7 +4374,16 @@ def _fetch_factor_etf_returns() -> dict:
 # ── Market index strip — shown on every page ─────────────────────────────────
 @st.fragment(run_every=60)
 def _index_strip():
-    indices = _cached_market_indices()
+    # A failed index read must never take the page down: this runs at the top of
+    # every page, and a fragment's exception on a FULL run stops the whole script
+    # (2026-10-31: Yahoo's batch index download returned empty on Railway and the
+    # app showed only a ProviderUnavailable traceback). Show one muted line instead.
+    try:
+        indices = _cached_market_indices()
+    except Exception as _ix_err:
+        print(f"[index_strip] market indices unavailable: {type(_ix_err).__name__}: {_ix_err}")
+        st.caption("Market indices unavailable — retrying every minute.")
+        return
     if not indices:
         return
     tiles = ""
@@ -13020,8 +13029,13 @@ if page == "🏠 Home":
                 _ctx_lines.append(f"  [{_al['level'].upper()}] {_al['msg'].replace('*','').replace('_','').replace('`','')}")
         else:
             _ctx_lines.append("  No active alerts.")
-        _live_idx = fetch_market_indices()
+        try:
+            _live_idx = fetch_market_indices()
+        except Exception:
+            _live_idx = []
         _ctx_lines += ["", "## MARKET INDICES"]
+        if not _live_idx:
+            _ctx_lines.append("  unavailable")
         for _ix in _live_idx:
             _sign = "+" if _ix["change_pct"] >= 0 else ""
             _ctx_lines.append(f"  {_ix['short']:8s} {_ix['price']:,.2f}  ({_sign}{_ix['change_pct']:.2f}%)")
