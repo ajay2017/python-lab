@@ -1037,6 +1037,15 @@ trades or `reference_tables` (AST); the legacy-select fallback.
   decision role's model in effect, any pending switch, the eval id, today's drift total and today's news-score rows
   by model; the cron `llm:` line includes the decision roles. Docs: F-316, User Guide. **Remaining:** the owner runs
   the evals and switches (C8), then the reviewed `CODE_DEFAULTS` catch-up; optional C9 (extract_strong).
+- **2026-11-01: first real eval runs (owner).** Haiku 4.5 vs itself: filter PASS; score quality ~0 but 37% of calls
+  failed in the full burst (rate limiting; 0/80 in a diagnostic run); extract_trigger 9.2% "parse failures" from 13 real
+  trades. Diagnosis: production `premortem_monitor._parse_trigger` dropped a fenced reply followed by an explanation
+  (harmless for those 13, which were all "not checkable", but it would drop a real stop). Fixed: the parser accepts
+  only when every JSON answer object in the reply agrees (so an echoed prompt example can't become a stop). Eval
+  engine: retries only rate-limit / server / connection errors; aborts with no verdict and saves nothing on
+  unrecovered API failures (credits ran out mid-run); per-failure diagnostics; `--max-rows` seeded subsample, marked
+  in the row and on App Settings. Fixture case `ambiguous_direction` deleted (Haiku 4.5 reads it as above $150; 27
+  left). Eval rows 1-3 are FAIL rows from the credit outage; superseded.
 - **Carried into C5:** when an explicit `model=` equals a saved decision setting, `_complete` reports source
   `explicit` and doesn't apply the entry's effort / capabilities (latent: no caller passes `model=` for a decision
   role). **Carried into C3 / C5:** stale-if-error for the `score` snapshot, so a transient unreadable reload doesn't

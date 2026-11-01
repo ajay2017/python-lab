@@ -75,29 +75,48 @@ or
 {"checkable": false, "direction": null, "price_level": null}"""
 
 
+def _json_objects(text: str) -> list:
+    """Every top-level JSON value that decodes from a '{' in `text`, in order.
+    A '{' that doesn't start a decodable object (prose like "{closing basis}") is
+    skipped; a '{' inside an object already decoded is never revisited."""
+    dec = json.JSONDecoder()
+    out, i = [], 0
+    while True:
+        i = text.find("{", i)
+        if i == -1:
+            return out
+        try:
+            obj, end = dec.raw_decode(text, i)
+        except ValueError:
+            i += 1
+            continue
+        out.append(obj)
+        i = end
+
+
 def _parse_trigger(text: str) -> dict | None:
-    """Robust JSON-object parse: strip markdown fences, then slice to the
-    first '{' .. last '}'. Validates the shape strictly — returns None on
-    any malformed response rather than guessing a partial result."""
+    """Strict parse of the extraction reply. Finds EVERY JSON object in the reply
+    that has a "checkable" key and accepts only when there is at least one and
+    they are all identical, then validates the shape strictly. Returns None on
+    any malformed or ambiguous reply rather than guessing.
+
+    Why every object, not the first: the system prompt itself shows example
+    objects (incl. a checkable $150 "below" one), so a reply that echoes an
+    example before its real answer must be refused, never saved as a fabricated
+    declared stop. Why not one json.loads of the whole text: a fenced object
+    followed by an explanation (seen live on Haiku 4.5, 2026-11-01: 13 trades)
+    is a valid single answer and used to be dropped."""
     if not text:
         return None
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.split("\n", 1)[-1]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[: cleaned.rfind("```")]
-        cleaned = cleaned.strip()
-    if not cleaned.startswith("{"):
-        start = cleaned.find("{")
-        end   = cleaned.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            cleaned = cleaned[start : end + 1]
-    try:
-        parsed = json.loads(cleaned)
-    except Exception:
+    answers = [o for o in _json_objects(text) if isinstance(o, dict) and "checkable" in o]
+    if not answers or any(a != answers[0] for a in answers[1:]):
         return None
-    if not isinstance(parsed, dict) or "checkable" not in parsed:
+    # Every quoted "checkable" must belong to a decoded answer: an echoed example
+    # followed by a MALFORMED real answer would otherwise leave the example as the
+    # only decoded object (a fabricated stop). Prose quoting the key fails closed.
+    if text.count('"checkable"') != len(answers):
         return None
+    parsed = answers[0]
     checkable = parsed.get("checkable")
     if not isinstance(checkable, bool):
         return None

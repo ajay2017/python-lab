@@ -24,6 +24,9 @@ import hashlib
 import json
 import math
 import re
+import threading
+import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable, Mapping
@@ -41,6 +44,11 @@ from stock_analyzer.sentiment import analyze_news
 BASELINE_SCORE = "stored-cache + current re-run"
 BASELINE_FILTER = "current re-run (live) + current re-run (noise floor)"
 BASELINE_TRIGGER = "hand-labelled fixture + stored triggers"
+
+# Eval-only: production makes one call with max_retries=0 and does not retry. The
+# eval retries a failed score call / filter batch ONCE after this pause so a burst
+# of rate-limit errors doesn't read as a model failure.
+RETRY_PAUSE_SEC = 2.0
 
 # Alert tiers by compound, most severe first (constants.py NEWS_SENTIMENT_* block).
 TIER_CLEAR, TIER_WARN, TIER_NEGATIVE, TIER_CRITICAL = 0, 1, 2, 3
@@ -175,6 +183,158 @@ def trigger_failures(metrics: Mapping) -> list[str]:
     return out + _failures(metrics, TRIGGER_CHECKS)
 
 
+# --- failure kinds + API-problem detection (used by scripts/llm_role_eval.py) ----------
+KIND_API = "api"              # transport / rate-limit / server error: the eval retries it once
+KIND_API_FATAL = "api_fatal"  # the API refused (4xx billing, auth, model): counts as an API
+#                               problem, never retried
+KIND_MODEL = "model"          # timeout, refusal, cut-off, empty or unparseable reply
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504, 529})
+MAX_DIAGNOSTICS = 50          # per eval: failed-call diagnostics kept in metrics
+_DIAG_TEXT_CHARS = 160
+
+
+def classify_failure(result) -> str:
+    """Kind of a FAILED llm.complete result (an LLMResult-like object, or None when no
+    failed call was recorded). KIND_API: status in {429, 500, 502, 503, 504, 529}, or a
+    connection error with no response. KIND_API_FATAL: any other HTTP status. Everything
+    else (timeout, refusal, max_tokens stop, empty reply, a reply that parsed badly, no
+    call recorded) is KIND_MODEL: a model / latency property that counts as a failure."""
+    if result is None or getattr(result, "ok", False):
+        return KIND_MODEL
+    status = getattr(result, "status_code", None)
+    if isinstance(status, int) and not isinstance(status, bool):
+        return KIND_API if status in _RETRYABLE_STATUS else KIND_API_FATAL
+    if getattr(result, "stop_reason", None) is None:
+        txt = str(getattr(result, "error", None) or "").lower()
+        if "timeout" in txt or "timed out" in txt:
+            return KIND_MODEL
+        if "connection" in txt:
+            return KIND_API
+    return KIND_MODEL
+
+
+def call_info(result) -> dict | None:
+    """{stop_reason, status, error} of a recorded call, for diagnostics."""
+    if result is None:
+        return None
+    return {"stop_reason": getattr(result, "stop_reason", None),
+            "status": getattr(result, "status_code", None),
+            "error": str(getattr(result, "error", None) or "")[:120]}
+
+
+class CallTally:
+    """Thread-safe record of every llm.complete call: (ok, status_code, error text
+    truncated to 120 chars, stop_reason), plus the LAST result per thread (production
+    calls llm.complete inline on the worker thread, so right after a failed attempt
+    `last()` is the call just made)."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._rows: list = []
+        self._local = threading.local()
+
+    def record(self, result) -> None:
+        self._local.last = result
+        err = str(getattr(result, "error", None) or "")[:120]
+        row = (bool(getattr(result, "ok", False)), getattr(result, "status_code", None), err,
+               getattr(result, "stop_reason", None))
+        with self._lock:
+            self._rows.append(row)
+
+    def last(self):
+        return getattr(self._local, "last", None)
+
+    def rows(self) -> list:
+        with self._lock:
+            return list(self._rows)
+
+
+def api_failures(rows) -> list:
+    """Raw tally rows that failed at the API level (status or error text, no reply
+    text and no stop_reason): diagnostics only, includes failures a retry recovered."""
+    return [r for r in rows if not r[0] and r[3] is None and (r[1] is not None or r[2])]
+
+
+def top_api_errors(bad, key: str | None = None, n: int = 3) -> list:
+    def mask(e):
+        return e.replace(key, "***") if key else e
+    return Counter((r[1], mask(r[2])) for r in bad).most_common(n)
+
+
+def api_problem(metrics, key: str | None = None):
+    """None when UNRECOVERED API failures (metrics["api_failures_unrecovered"]) are
+    within LLM_EVAL_MAX_FAILURE_PCT % of the eval's final calls (metrics["final_calls"]);
+    else {"failures", "calls", "pct", "top": [((status, error), n) ...3]}. Model
+    failures (refusals, timeouts, cut-offs, bad replies) never count: they are a FAIL.
+    The threshold reuses LLM_EVAL_MAX_FAILURE_PCT, so a criteria change moves the abort
+    point too."""
+    calls = metrics.get("final_calls") or 0
+    bad = metrics.get("api_failures_unrecovered") or 0
+    if calls <= 0 or bad <= 0:
+        return None
+    pct = bad * 100.0 / calls
+    if pct <= C.LLM_EVAL_MAX_FAILURE_PCT:
+        return None
+
+    def mask(e):
+        return str(e).replace(key, "***") if key else str(e)
+    raw_top = metrics.get("api_errors_top")
+    top = [] if raw_top is None else [((st, mask(err)), n) for st, err, n in raw_top][:3]
+    return {"failures": bad, "calls": calls, "pct": pct, "top": top}
+
+
+def _none_kind():
+    return None
+
+
+def _failed_call(failure_kind, failure_info):
+    """(raw kind or None, call info or None) right after a failed attempt, on the same
+    thread. Never raises."""
+    try:
+        kind = failure_kind()
+    except Exception:  # noqa: BLE001
+        kind = None
+    try:
+        info = failure_info()
+    except Exception:  # noqa: BLE001
+        info = None
+    return kind, info
+
+
+def _is_api(kind) -> bool:
+    return kind in (KIND_API, KIND_API_FATAL)
+
+
+class _FailureLedger:
+    """Collects final failures: api (unrecovered) vs model counts, the top API errors
+    and a capped list of diagnostics."""
+
+    def __init__(self):
+        self.api = 0
+        self.model = 0
+        self.errors = Counter()
+        self.diag: list = []
+
+    def add(self, kind, info, **ctx):
+        if _is_api(kind):
+            self.api += 1
+            if info:
+                self.errors[(info.get("status"), info.get("error"))] += 1
+        else:
+            self.model += 1
+        if len(self.diag) < MAX_DIAGNOSTICS:
+            self.diag.append({**ctx, "kind": kind if kind else KIND_MODEL, **(info or {})})
+
+    def metrics(self, final_calls: int) -> dict:
+        return {
+            "final_calls": final_calls,
+            "api_failures_unrecovered": self.api,
+            "model_failures": self.model,
+            "api_errors_top": [[st, err, n] for (st, err), n in self.errors.most_common(5)],
+            "failure_diagnostics": self.diag,
+        }
+
+
 # --- small helpers ----------------------------------------------------------------
 def _pmap(fn: Callable, items: list, workers: int) -> list:
     if workers <= 1 or len(items) <= 1:
@@ -251,12 +411,16 @@ def _avg_of(res) -> float:
 
 # --- score ---------------------------------------------------------------------------
 def eval_score(rows, history, rescore, *, current, candidate,
-               cumulative_shift_pts: float = 0.0, workers: int = 1) -> EvalResult:
+               cumulative_shift_pts: float = 0.0, workers: int = 1,
+               sleep: Callable = time.sleep, failure_kind: Callable = _none_kind,
+               failure_info: Callable = _none_kind) -> EvalResult:
     """Δcomposite of `candidate` vs the stored cache rows, net of the current model's
     own re-run (noise floor). See the module docstring for the callables."""
     cur_set = {llm.ROLE_SCORE: current}
     cand_set = {llm.ROLE_SCORE: candidate}
     hist = {(str(t).upper(), str(d)[:10]): v for (t, d), v in (history or {}).items()}
+    retried = {"candidate": 0, "current": 0}
+    retry_lock = threading.Lock()
 
     def one(row):
         ticker = str(row.get("ticker") or "").upper()
@@ -270,24 +434,49 @@ def eval_score(rows, history, rescore, *, current, candidate,
         if not hl:
             return None          # production never calls the LLM with no headlines
 
-        def run(setting):
+        def attempt(setting):
             try:
                 res = rescore([dict(h) for h in hl], ticker, setting)
             except Exception:    # noqa: BLE001 - a raising call is a failed call
                 return None
             return _avg_of(res) if _valid_rescore(res, len(hl)) else None
 
-        a, b = run(cand_set), run(cand_set)
-        c = run(cur_set)
+        def run(setting, which):
+            # Eval-only: ONE retry after a pause, and only for a transport / rate-limit
+            # / server failure (kind "api"). A timeout, refusal, cut-off or unparseable
+            # reply is a model failure and counts at once, so a retry never loosens
+            # LLM_EVAL_MAX_FAILURE_PCT. Unknown kind (default failure_kind): no retry.
+            out = attempt(setting)
+            kind = info = None
+            if out is None:
+                kind, info = _failed_call(failure_kind, failure_info)
+                if kind == KIND_API:
+                    with retry_lock:
+                        retried[which] += 1
+                    sleep(RETRY_PAUSE_SEC)
+                    out = attempt(setting)
+                    if out is None:
+                        kind, info = _failed_call(failure_kind, failure_info)
+            return out, kind, info
+
+        ra, rb = run(cand_set, "candidate"), run(cand_set, "candidate")
+        rc = run(cur_set, "current")
         return {
             "key": (ticker, str(row.get("score_date"))[:10]),
-            "stored": stored_avg, "a": a, "b": b, "c": c,
+            "stored": stored_avg, "a": ra[0], "b": rb[0], "c": rc[0],
+            "fails": [(nm, r[1], r[2]) for nm, r in
+                      (("candidate A", ra), ("candidate B", rb), ("current", rc))
+                      if r[0] is None],
         }
 
     results = [r for r in _pmap(one, list(rows or []), workers) if r is not None]
     cand_calls = 2 * len(results)
     cand_fail = sum((r["a"] is None) + (r["b"] is None) for r in results)
     cur_fail = sum(r["c"] is None for r in results)
+    ledger = _FailureLedger()
+    for r in results:
+        for nm, kind, info in r["fails"]:
+            ledger.add(kind, info, ticker=r["key"][0], score_date=r["key"][1], run=nm)
     ok = [r for r in results if None not in (r["a"], r["b"], r["c"])]
     n = len(ok)
 
@@ -341,8 +530,11 @@ def eval_score(rows, history, rescore, *, current, candidate,
         "buy_entry_cross_net_pct": pct(a_up - c_up, n_hist),
         "self_spread": _mean(spread),
         "candidate_calls": cand_calls, "candidate_failures": cand_fail,
+        "retried_calls_candidate": retried["candidate"],
+        "retried_calls_current": retried["current"],
         "failure_pct": pct(cand_fail, cand_calls) if cand_calls else 100.0,
         "current_failures": cur_fail,
+        **ledger.metrics(3 * len(results)),
         "current_model": current.model, "current_effort": current.effort,
         "cumulative_prior_pts": float(cumulative_shift_pts or 0.0),
         "cumulative_shift_abs": abs(float(cumulative_shift_pts or 0.0) + net_shift),
@@ -381,12 +573,14 @@ def select_negative_headlines(headlines) -> list[dict]:
     return out
 
 
-def _filter_run(items, score_batch, setting, workers):
+def _filter_run(items, score_batch, setting, workers, sleep=time.sleep,
+                failure_kind=_none_kind, failure_info=_none_kind):
     """One production-shaped pass: batches of `_RESCORE_BATCH`, suppress-only applied
     with production's `_apply_suppress_only`. A failed batch (raise, non-list,
     wrong length) is retried ONCE (eval-only; production does not retry). Returns
-    a list of (final compound, failed) per item: an item fails when it has no valid
-    score after the retry, and then stays at its VADER compound."""
+    (list of (final compound, failed, kind, info) per item, batches retried): an item
+    fails when it has no valid score after the retry, and then stays at its VADER
+    compound. `kind` / `info` describe the final failed call (None when ok)."""
     batches = [items[i:i + _RESCORE_BATCH] for i in range(0, len(items), _RESCORE_BATCH)]
 
     def attempt(b):
@@ -396,21 +590,36 @@ def _filter_run(items, score_batch, setting, workers):
             return None
         return got if isinstance(got, list) and len(got) == len(b) else None
 
+    retried = [0]
+    retry_lock = threading.Lock()
+
     def call(b):
         got = attempt(b)
-        return got if got is not None else attempt(b)
+        kind = info = None
+        if got is None:                   # documented (C2): retry on ANY failure
+            with retry_lock:
+                retried[0] += 1
+            kind, info = _failed_call(failure_kind, failure_info)
+            sleep(RETRY_PAUSE_SEC)
+            got = attempt(b)
+            if got is None:
+                kind, info = _failed_call(failure_kind, failure_info)
+        return got, kind, info
 
     outs = _pmap(call, batches, workers)
     finals = []
-    for b, got in zip(batches, outs):
+    for b, (got, kind, info) in zip(batches, outs):
         scores = got if got is not None else [None] * len(b)
         for item, sc in zip(b, scores):
             upd = _apply_suppress_only(item, sc) if sc is not None else None
-            finals.append(((upd or item)["compound"], sc is None))
-    return finals
+            finals.append(((upd or item)["compound"], sc is None,
+                           kind if sc is None else None, info if sc is None else None))
+    return finals, retried[0]
 
 
-def eval_filter(headlines, score_batch, *, current, candidate, workers: int = 1) -> EvalResult:
+def eval_filter(headlines, score_batch, *, current, candidate, workers: int = 1,
+                sleep: Callable = time.sleep, failure_kind: Callable = _none_kind,
+                failure_info: Callable = _none_kind) -> EvalResult:
     """Alert-tier changes of `candidate` vs the current model's live re-run, net of
     the current model's run-to-run noise (C1 vs C2). Runs: current twice, candidate
     once. Items that failed in ANY run are excluded from the tier comparisons (and
@@ -421,9 +630,14 @@ def eval_filter(headlines, score_batch, *, current, candidate, workers: int = 1)
     n = len(items)
     cur_set = {llm.ROLE_FILTER: current}
     cand_set = {llm.ROLE_FILTER: candidate}
-    r1 = _filter_run(items, score_batch, cur_set, workers)
-    r2 = _filter_run(items, score_batch, cur_set, workers)
-    rk = _filter_run(items, score_batch, cand_set, workers)
+    r1, t1 = _filter_run(items, score_batch, cur_set, workers, sleep, failure_kind, failure_info)
+    r2, t2 = _filter_run(items, score_batch, cur_set, workers, sleep, failure_kind, failure_info)
+    rk, tk = _filter_run(items, score_batch, cand_set, workers, sleep, failure_kind, failure_info)
+    ledger = _FailureLedger()
+    for run_name, rr in (("current 1", r1), ("current 2", r2), ("candidate", rk)):
+        for it, x in zip(items, rr):
+            if x[1]:
+                ledger.add(x[2], x[3], ticker=it["ticker"], title=it["title"][:80], run=run_name)
     keep = [i for i in range(n) if not (r1[i][1] or r2[i][1] or rk[i][1])]
     c1 = [r1[i][0] for i in keep]
     c2 = [r2[i][0] for i in keep]
@@ -466,6 +680,8 @@ def eval_filter(headlines, score_batch, *, current, candidate, workers: int = 1)
         "failure_pct_c1": fpct(f1), "failure_pct_c2": fpct(f2), "failure_pct_candidate": fpct(fk),
         "candidate_failures": fk,
         "failure_pct": fpct(fk) if n else 100.0,
+        "retried_calls_candidate": tk, "retried_calls_current": t1 + t2,
+        **ledger.metrics(3 * n),
         "current_model": current.model, "current_effort": current.effort,
     }
     failures = filter_failures(metrics)
@@ -534,7 +750,9 @@ def classify_trigger(text: str, expected_price, expected_direction, got, *,
     return CLS_OK
 
 
-def eval_trigger(fixture, real_rows, extract, *, candidate, workers: int = 1) -> EvalResult:
+def eval_trigger(fixture, real_rows, extract, *, candidate, workers: int = 1,
+                 failure_kind: Callable = _none_kind,
+                 failure_info: Callable = _none_kind) -> EvalResult:
     """Pre-Mortem trigger extraction by `candidate`: every fixture case and real trade
     run twice. `fixture`: [{id, text, expected: {price, direction}}]. `real_rows`:
     [{id, premortem_commitment, premortem_trigger_price, premortem_trigger_direction}]
@@ -548,7 +766,13 @@ def eval_trigger(fixture, real_rows, extract, *, candidate, workers: int = 1) ->
             exp = {}
         jobs.append(("fixture", case.get("id"), case.get("text") or "",
                      exp.get("price"), exp.get("direction")))
+    blank_skipped = 0
     for r in real_rows or []:
+        # Production's extract_trigger returns None WITHOUT calling the model for a
+        # blank / whitespace commitment, so such a row can't be evaluated.
+        if not str(r.get("premortem_commitment") or "").strip():
+            blank_skipped += 1
+            continue
         # Stored direction has three states: NULL = never extracted (UNLABELLED:
         # many trades predate the trigger columns, and a failed extraction also
         # stays NULL), "not_checkable" = the old model said no price, and
@@ -564,8 +788,11 @@ def eval_trigger(fixture, real_rows, extract, *, candidate, workers: int = 1) ->
                 got = extract(text, setting)
             except Exception:    # noqa: BLE001
                 got = None
-            outs.append((classify_trigger(text, ep, ed, got,
-                                         expected_is_truth=(kind == "fixture")), got))
+            cls = classify_trigger(text, ep, ed, got, expected_is_truth=(kind == "fixture"))
+            fk = fi = None
+            if cls == CLS_PARSE_FAILURE:      # no retry here: record why, on this thread
+                fk, fi = _failed_call(failure_kind, failure_info)
+            outs.append((cls, got, fk, fi))
         return outs
 
     def unlabelled(kind, ed):
@@ -576,10 +803,15 @@ def eval_trigger(fixture, real_rows, extract, *, candidate, workers: int = 1) ->
               CLS_MISSED: 0, CLS_PARSE_FAILURE: 0}
     fixture_wrong_price = fixture_misses = real_other = 0
     disagreements = []
+    fixture_outcomes = []
+    ledger = _FailureLedger()
     for job, outs in zip(jobs, outcomes):
         kind, jid, _text, ep, ed = job
         is_unlabelled = unlabelled(kind, ed)
-        for run_no, (cls, got) in enumerate(outs, start=1):
+        for run_no, (cls, got, fk, fi) in enumerate(outs, start=1):
+            if cls == CLS_PARSE_FAILURE:
+                ledger.add(fk, fi, trade_id=jid, source=kind, run=run_no,
+                           commitment_len=len(_text), commitment=_text[:_DIAG_TEXT_CHARS])
             if is_unlabelled:
                 # No stored label: only a price that appears nowhere in the text
                 # and a parse failure count; the rest is listed for information.
@@ -590,12 +822,19 @@ def eval_trigger(fixture, real_rows, extract, *, candidate, workers: int = 1) ->
                         "trade_id": jid, "run": run_no, "class": cls,
                         "stored": {"price": ep, "direction": ed},
                         "candidate": (dict(got) if isinstance(got, Mapping) else None),
+                        "text": _text[:_DIAG_TEXT_CHARS],
                         "unlabelled": True,
                     })
                 continue
             if cls in counts:
                 counts[cls] += 1
             if kind == "fixture":
+                if cls != CLS_OK:
+                    fixture_outcomes.append({
+                        "id": jid, "run": run_no, "class": cls, "text": _text,
+                        "expected": {"price": ep, "direction": ed},
+                        "got": (dict(got) if isinstance(got, Mapping) else None),
+                    })
                 fixture_wrong_price += cls == CLS_WRONG_PRICE
                 fixture_misses += cls == CLS_MISSED
             elif cls != CLS_OK:
@@ -605,11 +844,13 @@ def eval_trigger(fixture, real_rows, extract, *, candidate, workers: int = 1) ->
                     "trade_id": jid, "run": run_no, "class": cls,
                     "stored": {"price": ep, "direction": ed},
                     "candidate": (dict(got) if isinstance(got, Mapping) else None),
+                    "text": _text[:_DIAG_TEXT_CHARS],
                 })
     calls = 2 * len(jobs)
     fixture_n = sum(1 for j in jobs if j[0] == "fixture")
     metrics = {
         "sample_n": len(jobs), "fixture_n": fixture_n, "real_n": len(jobs) - fixture_n,
+        "real_blank_skipped": blank_skipped,
         "invented": counts[CLS_INVENTED],
         "wrong_direction": counts[CLS_WRONG_DIRECTION],
         "wrong_price": counts[CLS_WRONG_PRICE],
@@ -620,6 +861,9 @@ def eval_trigger(fixture, real_rows, extract, *, candidate, workers: int = 1) ->
         "real_other": real_other,
         "failure_pct": (counts[CLS_PARSE_FAILURE] * 100.0 / calls) if calls else 100.0,
         "real_disagreements": disagreements,
+        "fixture_outcomes": fixture_outcomes,
+        "retried_calls_candidate": 0, "retried_calls_current": 0,
+        **ledger.metrics(calls),
     }
     failures = trigger_failures(metrics)
     return EvalResult(

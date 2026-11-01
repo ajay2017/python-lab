@@ -1119,9 +1119,13 @@ def eval_summary(eval_row):
         v = metrics.get(key)
         rows.append({"label": label, "value": _num_text(v), "limit": _num_text(limit),
                      "constant": const, "within": _finite(v) and v <= limit})
+    mr, total = metrics.get("max_rows"), metrics.get("sample_total")
+    subsample = (f"subsample {min(mr, total)} of {total}"
+                 if _finite(mr) and _finite(total) and mr > 0 else None)
     ran = _as_utc(eval_row.get("ran_at"))
     failures = eval_row.get("failures")
     return {
+        "subsample": subsample,
         "verdict": "PASS" if eval_row.get("passed") else "FAIL",
         "passed": bool(eval_row.get("passed")),
         "ran_at": _et_stamp(ran) if ran else "an unknown time",

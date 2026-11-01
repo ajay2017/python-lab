@@ -67,6 +67,69 @@ def _hist(prices, start="2024-01-01"):
 
 # ── _parse_trigger ───────────────────────────────────────────────────────────
 
+def test_parse_trigger_fenced_reply_with_trailing_explanation_not_checkable():
+    # Exact shape seen live on Haiku 4.5 (2026-11-01, 13 trades): a fenced object,
+    # then prose. It used to fail json.loads on the trailing text.
+    reply = ('```json\n{"checkable": false, "direction": null, "price_level": null}\n```\n\n'
+             'This commitment describes a qualitative condition (earnings guidance revision) '
+             'with no explicit numeric price level stated.')
+    assert pm._parse_trigger(reply) == {"checkable": False, "direction": None, "price_level": None}
+
+
+def test_parse_trigger_fenced_checkable_with_trailing_text_keeps_the_price():
+    # The harmful case: a real price followed by commentary must not be dropped
+    # (dropping it loses the R-Multiple declared stop).
+    reply = ('```json\n{"checkable": true, "direction": "below", "price_level": 244.01}\n```\n\n'
+             'The investor states an explicit exit below $244.01 {closing basis}.')
+    assert pm._parse_trigger(reply) == {"checkable": True, "direction": "below",
+                                        "price_level": 244.01}
+
+
+def test_parse_trigger_prose_before_and_after_the_object():
+    reply = 'Here it is: {"checkable": true, "direction": "above", "price_level": 52.25} done.'
+    assert pm._parse_trigger(reply)["price_level"] == 52.25
+
+
+def test_parse_trigger_echoed_prompt_examples_before_a_different_answer_is_refused():
+    # The system prompt shows these two example objects. A reply that echoes them
+    # and then answers must NOT be saved as the example's fabricated $150 stop.
+    reply = ('Format: {"checkable": true, "direction": "below", "price_level": 150.0} or '
+             '{"checkable": false, "direction": null, "price_level": null}\n'
+             'Answer: {"checkable": false, "direction": null, "price_level": null}')
+    assert pm._parse_trigger(reply) is None
+
+
+def test_parse_trigger_echoed_example_plus_malformed_answer_is_refused():
+    # Reviewer probe 2026-11-01: the example is the only object that decodes.
+    reply = ('Format: {"checkable": true, "direction": "below", "price_level": 150.0} '
+             'Answer: {"checkable": false, direction: null}')
+    assert pm._parse_trigger(reply) is None
+
+
+def test_parse_trigger_two_disagreeing_objects_is_refused():
+    reply = ('{"checkable": true, "direction": "below", "price_level": 150.0}\n'
+             'Correction: {"checkable": true, "direction": "below", "price_level": 140.0}')
+    assert pm._parse_trigger(reply) is None
+
+
+def test_parse_trigger_identical_repeated_answer_is_accepted():
+    obj = '{"checkable": true, "direction": "above", "price_level": 410.0}'
+    assert pm._parse_trigger(f"{obj}\nFinal: {obj}") == {
+        "checkable": True, "direction": "above", "price_level": 410.0}
+
+
+def test_parse_trigger_prompt_example_appears_in_the_real_answer_only_once():
+    # A genuine $150 trigger (the same value as the prompt's example) is fine.
+    assert pm._parse_trigger(
+        '```json\n{"checkable": true, "direction": "below", "price_level": 150.0}\n```'
+    )["price_level"] == 150.0
+
+
+def test_parse_trigger_no_object_or_broken_object_is_none():
+    assert pm._parse_trigger("no json here") is None
+    assert pm._parse_trigger('```json\n{"checkable": tru\n```') is None
+
+
 def test_parse_trigger_checkable_below():
     result = pm._parse_trigger('{"checkable": true, "direction": "below", "price_level": 150.0}')
     assert result == {"checkable": True, "direction": "below", "price_level": 150.0}

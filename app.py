@@ -39022,6 +39022,7 @@ elif page == "⚙️ App Settings":
                             f"Latest stored eval: {_dsum['verdict']} · ran {_dsum['ran_at']} · "
                             f"sample {_dsum['sample_n']} · criteria version "
                             f"{_dsum['criteria_version']} · baseline: {_dsum['baseline']}"
+                            + (f" · {_dsum['subsample']}" if _dsum.get("subsample") else "")
                         )
                         st.dataframe(
                             [{"Metric": m["label"], "Measured": m["value"],

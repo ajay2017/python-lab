@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -34,6 +35,9 @@ from stock_analyzer import constants as C  # noqa: E402
 from stock_analyzer import llm, llm_role_eval as ev, sentiment_cache  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "premortem_trigger_cases.json"
+SAMPLE_SEED = 20261101   # fixed: --max-rows picks the same rows every run
+MAX_DISAGREEMENT_LINES = 20
+MAX_DIAGNOSTIC_LINES = 20
 WORKERS = 3   # production's own rescore pool is 3 (news_intelligence._RESCORE_WORKERS)
 
 
@@ -85,25 +89,75 @@ def score_sample(rows, current: llm.RoleSetting) -> list:
     return [r for r in rows if sentiment_cache.row_matches(r, current)]
 
 
+def sample_rows(items, n):
+    """`n` items at random (fixed seed) from `items`, in their original order; all of
+    them when `n` is falsy or >= len. Returns (sample, total)."""
+    items = list(items)
+    total = len(items)
+    if not n or n >= total:
+        return items, total
+    idx = sorted(random.Random(SAMPLE_SEED).sample(range(total), n))
+    return [items[i] for i in idx], total
+
+
+def _recording_complete(tally):
+    """(real, wrapped) llm.complete: the wrapper records every call in `tally`."""
+    real = llm.complete
+
+    def wrapped(*a, **kw):
+        r = real(*a, **kw)
+        try:
+            tally.record(r)
+        except Exception:  # noqa: BLE001 - never break a call over bookkeeping
+            pass
+        return r
+    return real, wrapped
+
+
 def _print_report(res: ev.EvalResult, role: str) -> None:
     print()
     print(f"=== {role} eval: {'PASS' if res.passed else 'FAIL'} ===")
     print(f"model {res.model}  effort {res.effort}  criteria v{res.criteria_version}  "
           f"sample_n {res.sample_n}  baseline: {res.baseline}")
     print("capabilities hash:", res.capabilities_hash[:16], "...")
+    if res.metrics.get("max_rows"):
+        print(f"subsample {min(res.metrics['max_rows'], res.metrics.get('sample_total') or 0)} "
+              f"of {res.metrics.get('sample_total')}")
     print()
     print(f"{'metric':44} {'value':>10}   {'limit':>8}  constant")
     for key, const, limit, label in ev.limit_table(role):
         v = res.metrics.get(key)
         print(f"{label:44} {ev._fmt(v):>10}   {ev._fmt(limit):>8}  {const}")
     print()
+    if role == llm.ROLE_SCORE:
+        hr = res.metrics.get("history_rows", 0)
+        print(f"  history_rows (sampled rows with a score_history composite): {hr}"
+              + ("   <-- 0: band crossings cannot be measured" if not hr else ""))
     extras = {k: v for k, v in res.metrics.items()
-              if k not in {k2 for k2, *_ in ev.limit_table(role)} and k != "real_disagreements"}
+              if k not in {k2 for k2, *_ in ev.limit_table(role)} and k not in ("real_disagreements", "fixture_outcomes",
+                                                       "failure_diagnostics", "api_errors_top")}
     for k, v in extras.items():
         print(f"  {k}: {v if not isinstance(v, float) else round(v, 4)}")
-    for d in res.metrics.get("real_disagreements", []) or []:
+    for c in res.metrics.get("fixture_outcomes", []) or []:
+        print(f"  fixture case {c['id']} run {c['run']} {c['class']}: expected "
+              f"{c['expected']} got {c['got']} | text: {c['text']}")
+    dis = res.metrics.get("real_disagreements", []) or []
+    for d in dis[:MAX_DISAGREEMENT_LINES]:
         print(f"  real-trade disagreement: trade {d['trade_id']} run {d['run']} "
-              f"{d['class']}: stored {d['stored']} vs candidate {d['candidate']}")
+              f"{d['class']}: stored {d['stored']} vs candidate {d['candidate']} "
+              f"| text: {d.get('text', '')}")
+    if len(dis) > MAX_DISAGREEMENT_LINES:
+        print(f"  ... and {len(dis) - MAX_DISAGREEMENT_LINES} more")
+    diag = res.metrics.get("failure_diagnostics", []) or []
+    n_fail = (res.metrics.get("api_failures_unrecovered", 0) or 0) + (res.metrics.get("model_failures", 0) or 0)
+    for g in diag[:MAX_DIAGNOSTIC_LINES]:
+        who = (f"trade {g['trade_id']} ({g.get('source')}) len {g.get('commitment_len')} "
+               f"'{g.get('commitment')}'" if "trade_id" in g else
+               f"{g.get('ticker')} {g.get('score_date') or g.get('title') or ''}")
+        print(f"  failed call [{g.get('kind')}] {who} run {g.get('run')}: "
+              f"stop_reason {g.get('stop_reason')} status {g.get('status')} error {g.get('error')}")
+    if n_fail > min(len(diag), MAX_DIAGNOSTIC_LINES):
+        print(f"  ... and {n_fail - min(len(diag), MAX_DIAGNOSTIC_LINES)} more failed calls (not shown)")
     if res.failures:
         print("\nFailed limits:")
         for f in res.failures:
@@ -145,50 +199,32 @@ def main(argv=None) -> int:
     from stock_analyzer import db
     from stock_analyzer import news_intelligence as ni, premortem_monitor as pm
 
-    if args.role == llm.ROLE_EXTRACT_TRIGGER:
-        fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
-        real = db.load_premortem_trigger_rows()
-        if real is None:
-            _die("couldn't read trades (premortem rows).", 1)
-        if args.max_rows:
-            fixture, real = fixture[:args.max_rows], real[:args.max_rows]
-        print(f"fixture cases {len(fixture)}, real trades with a commitment {len(real)}")
-        res = ev.eval_trigger(
-            fixture, real,
-            lambda text, setting: pm.extract_trigger(text, api_key, setting=setting),
-            candidate=candidate, workers=WORKERS)
-    else:
-        since, until = _window()
-        rows = db.load_sentiment_cache_sample(since, until)
-        if rows is None:
-            _die("couldn't read sentiment_llm_cache.", 1)
-        print(f"cache rows {since}..{until}: {len(rows)}")
-        if args.role == llm.ROLE_SCORE:
-            rows = score_sample(rows, current)
-            print(f"rows produced by the current entry ({current.model}, {current.effort}): {len(rows)}")
-            if args.max_rows:
-                rows = rows[:args.max_rows]
-            history = db.load_score_history_composites(since, until)
-            if history is None:
-                _die("couldn't read score_history.", 1)
-            res = ev.eval_score(
-                rows, history,
-                lambda hl, ticker, setting: ni.rescore_headlines_llm(
-                    hl, api_key, ticker, setting=setting),
-                current=current, candidate=candidate,
-                cumulative_shift_pts=_score_cumulative(), workers=WORKERS)
-        else:
-            if args.max_rows:
-                rows = rows[:args.max_rows]
-            heads = [{"ticker": r.get("ticker"), "title": h.get("headline")}
-                     for r in rows for h in (r.get("headlines") or [])
-                     if isinstance(h, dict)]
-            res = ev.eval_filter(
-                heads,
-                lambda items, setting: ni.llm_score_batch(items, api_key, setting=setting),
-                current=current, candidate=candidate, workers=WORKERS)
+    tally = ev.CallTally()
+    real_complete, llm.complete = _recording_complete(tally)
+    try:
+        res = _run_eval(args, db, ni, pm, api_key, current, candidate, tally)
+    finally:
+        llm.complete = real_complete
+
+    rows_t = tally.rows()
+    # Only UNRECOVERED API failures count (the engine's own tally of final calls);
+    # refusals, timeouts, cut-offs and unparseable replies are a FAIL, not "no verdict".
+    problem = ev.api_problem(res.metrics, key=api_key)
+    if problem:
+        print()
+        print("API / connection problem: no verdict")
+        print(f"{problem['failures']} of {problem['calls']} calls failed at the API after "
+              f"any retry ({problem['pct']:.1f}%, limit {C.LLM_EVAL_MAX_FAILURE_PCT}%). Nothing saved.")
+        for (status, err), n in problem["top"]:
+            print(f"  {n} x status {status}: {err}")
+        return 3
 
     _print_report(res, args.role)
+    bad = ev.api_failures(rows_t)
+    if bad:
+        (status, err), n = ev.top_api_errors(bad, api_key, 1)[0]
+        print(f"\nAPI errors (raw, incl. any a retry recovered): {len(bad)} of {len(rows_t)} "
+              f"calls; top: {n} x status {status}: {err}")
     if args.no_save:
         print("\n--no-save: nothing stored.")
     else:
@@ -198,6 +234,62 @@ def main(argv=None) -> int:
             return 1
         print(f"\nSaved llm_role_evals id {eval_id}.")
     return 0 if res.passed else 1
+
+
+def _run_eval(args, db, ni, pm, api_key, current, candidate, tally):
+    # Same-thread reads of the last llm.complete result (see ev.CallTally).
+    kinds = {"failure_kind": lambda: ev.classify_failure(tally.last()),
+             "failure_info": lambda: ev.call_info(tally.last())}
+    total = None
+    if args.role == llm.ROLE_EXTRACT_TRIGGER:
+        fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        real = db.load_premortem_trigger_rows()
+        if real is None:
+            _die("couldn't read trades (premortem rows).", 1)
+        total = len(fixture) + len(real)
+        if args.max_rows:
+            fixture, real = fixture[:args.max_rows], real[:args.max_rows]
+        print(f"fixture cases {len(fixture)}, real trades with a commitment {len(real)}")
+        res = ev.eval_trigger(
+            fixture, real,
+            lambda text, setting: pm.extract_trigger(text, api_key, setting=setting),
+            candidate=candidate, workers=WORKERS, **kinds)
+    else:
+        since, until = _window()
+        rows = db.load_sentiment_cache_sample(since, until)
+        if rows is None:
+            _die("couldn't read sentiment_llm_cache.", 1)
+        print(f"cache rows {since}..{until}: {len(rows)}")
+        if args.role == llm.ROLE_SCORE:
+            rows = score_sample(rows, current)
+            print(f"rows produced by the current entry ({current.model}, {current.effort}): {len(rows)}")
+            rows, total = sample_rows(rows, args.max_rows)
+            if args.max_rows:
+                print(f"sampled {len(rows)} of {total}")
+            history = db.load_score_history_composites(since, until)
+            if history is None:
+                _die("couldn't read score_history.", 1)
+            res = ev.eval_score(
+                rows, history,
+                lambda hl, ticker, setting: ni.rescore_headlines_llm(
+                    hl, api_key, ticker, setting=setting),
+                current=current, candidate=candidate,
+                cumulative_shift_pts=_score_cumulative(), workers=WORKERS, **kinds)
+        else:
+            heads = [{"ticker": r.get("ticker"), "title": h.get("headline")}
+                     for r in rows for h in (r.get("headlines") or [])
+                     if isinstance(h, dict)]
+            heads, total = sample_rows(heads, args.max_rows)
+            if args.max_rows:
+                print(f"sampled {len(heads)} of {total}")
+            res = ev.eval_filter(
+                heads,
+                lambda items, setting: ni.llm_score_batch(items, api_key, setting=setting),
+                current=current, candidate=candidate, workers=WORKERS, **kinds)
+
+    res.metrics["sample_total"] = total
+    res.metrics["max_rows"] = args.max_rows or None
+    return res
 
 
 if __name__ == "__main__":

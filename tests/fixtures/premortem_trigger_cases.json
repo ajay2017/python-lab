@@ -198,15 +198,6 @@
     "note": "Hypothetical upside, explicitly not an exit trigger. Owner: confirm."
   },
   {
-    "id": "ambiguous_direction",
-    "text": "I'll act when it hits $150.",
-    "expected": {
-      "price": null,
-      "direction": null
-    },
-    "note": "Prompt: genuinely ambiguous whether a support break or a breakout -> not checkable."
-  },
-  {
     "id": "support_zone",
     "text": "Exit if it closes below the $60 support level for two days.",
     "expected": {

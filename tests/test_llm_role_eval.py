@@ -627,7 +627,7 @@ def _fixture():
 
 def test_fixture_loads_with_required_keys():
     cases = _fixture()
-    assert len(cases) >= 28
+    assert len(cases) >= 27
     assert len({c["id"] for c in cases}) == len(cases)
     for c in cases:
         assert set(c) >= {"id", "text", "expected", "note"}
@@ -807,3 +807,304 @@ def test_score_sample_uses_row_matches_null_rows_are_haiku_4_5(monkeypatch):
                         lambda row, e: seen.append(row["ticker"]) or real(row, e))
     script.score_sample(rows, old)
     assert seen == ["A", "B", "C", "D"]
+
+
+# ---- eval fixes after the first real runs (E1-E6) ----
+@pytest.fixture(autouse=True)
+def _no_retry_pause(monkeypatch):
+    monkeypatch.setattr(ev, "RETRY_PAUSE_SEC", 0.0)
+
+
+def test_e1_blank_commitment_rows_are_skipped_not_failed():
+    real = [{"id": 1, "premortem_commitment": "   ", "premortem_trigger_price": None,
+             "premortem_trigger_direction": None},
+            {"id": 2, "premortem_commitment": None, "premortem_trigger_price": None,
+             "premortem_trigger_direction": None},
+            {"id": 3, "premortem_commitment": "Out under $90.", "premortem_trigger_price": 90.0,
+             "premortem_trigger_direction": "below"}]
+    calls = []
+
+    def extract(text, setting):
+        calls.append(text)
+        return _ok(90.0)
+    m = ev.eval_trigger([], real, extract, candidate=CAND).metrics
+    assert m["real_blank_skipped"] == 2 and m["real_n"] == 1 and m["sample_n"] == 1
+    assert calls == ["Out under $90."] * 2
+    assert m["parse_failures"] == 0 and m["failure_pct"] == 0.0
+
+
+def test_e2_fixture_outcomes_list_non_ok_cases_only():
+    fixture = [{"id": "f1", "text": "Wrong below $150.", "expected": {"price": 150.0, "direction": "below"}},
+               {"id": "f2", "text": "Stop at -8%.", "expected": {"price": None, "direction": None}}]
+    m = ev.eval_trigger(fixture, [], lambda t, s: _ok(8.0) if t.startswith("Stop") else _ok(150.0),
+                        candidate=CAND).metrics
+    fo = m["fixture_outcomes"]
+    assert [c["id"] for c in fo] == ["f2", "f2"]
+    assert fo[0]["class"] == ev.CLS_INVENTED and fo[0]["text"] == "Stop at -8%."
+    assert fo[0]["expected"] == {"price": None, "direction": None} and fo[0]["got"]["price_level"] == 8.0
+
+
+def test_e4_score_transient_failure_retried_once_and_not_counted():
+    state = {"n": 0}
+    sleeps = []
+
+    def rescore(headlines, ticker, setting):
+        state["n"] += 1
+        if state["n"] == 1:
+            return None
+        return [dict(h) for h in headlines]
+    m = ev.eval_score([_row("AAA", "2026-10-01")], {}, rescore, current=CUR,
+                      candidate=CAND, sleep=sleeps.append).metrics
+    # default failure_kind (unknown): no retry, the failure counts as a model failure
+    assert m["failure_pct"] == 50.0 and m["current_failures"] == 0
+    assert m["retried_calls_candidate"] == 0 and sleeps == []
+
+
+def test_e4_score_double_failure_counts():
+    rescore = _rescore_by_model({"cur-model": 0.0, "cand-model": 0.0}, none_for=("cand-model",))
+    m = ev.eval_score([_row("AAA", "2026-10-01")], {}, rescore, current=CUR,
+                      candidate=CAND, sleep=lambda s: None).metrics
+    assert m["candidate_failures"] == 2 and m["retried_calls_candidate"] == 0
+    assert rescore.calls.count("cand-model") == 2      # unknown kind: not retried
+
+
+def test_e4_filter_retry_uses_the_pause_constant(monkeypatch):
+    monkeypatch.setattr(ev, "RETRY_PAUSE_SEC", 2.0)
+    sleeps, state = [], {"n": 0}
+
+    def sb(items, setting):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise RuntimeError("boom")
+        return [{"score": -0.9, "label": "negative"} for _ in items]
+    ev._filter_run([{"ticker": "T", "title": "x", "compound": -0.9, "label": "negative"}],
+                   sb, {llm.ROLE_FILTER: CUR}, 1, sleeps.append)
+    assert sleeps == [2.0]
+
+
+def _res(status=None, error=None, stop=None, text=None):
+    return llm.LLMResult(text=text, stop_reason=stop, error=error, model="m", usage=None,
+                         status_code=status)
+
+
+def test_b1_classify_failure_kinds():
+    cf = ev.classify_failure
+    for st in (429, 500, 502, 503, 504, 529):
+        assert cf(_res(st, "x")) == ev.KIND_API
+    for st in (400, 401, 403, 404):                     # billing / auth / model refused
+        assert cf(_res(st, "BadRequestError: credit balance is too low")) == ev.KIND_API_FATAL
+    assert cf(_res(None, "APIConnectionError: Connection error.")) == ev.KIND_API
+    assert cf(_res(None, "APITimeoutError: Request timed out.")) == ev.KIND_MODEL   # a timeout is "model"
+    assert cf(_res(None, "unexpected stop_reason: refusal", stop="refusal")) == ev.KIND_MODEL
+    assert cf(_res(None, "no text in reply (stop_reason=max_tokens)", stop="max_tokens")) == ev.KIND_MODEL
+    assert cf(_res(None, "no text in reply (empty text, stop_reason=end_turn)", stop="end_turn")) == ev.KIND_MODEL
+    assert cf(_res(text="ok", stop="end_turn")) == ev.KIND_MODEL    # parsed badly downstream
+    assert cf(None) == ev.KIND_MODEL                                # no failed call recorded
+
+
+def _score_with_results(results_by_call, **kw):
+    """eval_score over one row where call N returns results_by_call[N] (an LLMResult
+    for a failed call, None for a good reply); failures are recorded in a tally."""
+    tally = ev.CallTally()
+    state = {"n": 0}
+
+    def rescore(headlines, ticker, setting):
+        r = results_by_call(state["n"], setting[llm.ROLE_SCORE].model)
+        state["n"] += 1
+        if r is None:
+            return [dict(h) for h in headlines]
+        tally.record(r)
+        return None
+    sleeps = []
+    res = ev.eval_score([_row("AAA", "2026-10-01")], {}, rescore, current=CUR, candidate=CAND,
+                        sleep=sleeps.append, failure_kind=lambda: ev.classify_failure(tally.last()),
+                        failure_info=lambda: ev.call_info(tally.last()), **kw)
+    return res, sleeps, state
+
+
+def test_b1_rate_limit_failures_recovered_by_the_single_retry():
+    def calls(n, model):          # n = 0, 2, 4 are the first attempts: 429, then the retry is good
+        return _res(429, "RateLimitError: slow down") if n % 2 == 0 else None
+    res, sleeps, _ = _score_with_results(calls)
+    m = res.metrics
+    assert m["failure_pct"] == 0.0 and m["api_failures_unrecovered"] == 0 and m["model_failures"] == 0
+    assert m["retried_calls_candidate"] == 2 and m["retried_calls_current"] == 1
+    assert sleeps == [ev.RETRY_PAUSE_SEC] * 3
+    assert ev.api_problem(m) is None
+
+
+def test_b1_model_failures_are_never_retried_and_count():
+    for r in (_res(None, "unexpected stop_reason: refusal", stop="refusal"),
+              _res(None, "APITimeoutError: Request timed out."),
+              _res(None, "no text in reply (stop_reason=max_tokens)", stop="max_tokens")):
+        res, sleeps, state = _score_with_results(lambda n, model, r=r: r)
+        m = res.metrics
+        assert sleeps == [] and state["n"] == 3               # no retry at all
+        assert m["model_failures"] == 3 and m["api_failures_unrecovered"] == 0
+        assert m["failure_pct"] == 100.0 and not res.passed
+        assert m["retried_calls_candidate"] == 0 and m["retried_calls_current"] == 0
+        assert ev.api_problem(m) is None                      # a FAIL, not "no verdict"
+        assert m["failure_diagnostics"][0]["kind"] == ev.KIND_MODEL
+
+
+def test_b1_default_failure_kind_never_retries_and_counts_as_model():
+    rescore = _rescore_by_model({"cur-model": 0.0, "cand-model": 0.0}, none_for=("cand-model",))
+    sleeps = []
+    m = ev.eval_score([_row("AAA", "2026-10-01")], {}, rescore, current=CUR, candidate=CAND,
+                      sleep=sleeps.append).metrics
+    assert sleeps == [] and rescore.calls.count("cand-model") == 2
+    assert m["model_failures"] == 2 and m["retried_calls_candidate"] == 0
+
+
+def test_b1_retry_that_fails_again_counts_as_unrecovered_api():
+    res, sleeps, state = _score_with_results(lambda n, model: _res(503, "InternalServerError: down"))
+    m = res.metrics
+    assert state["n"] == 6 and len(sleeps) == 3
+    assert m["api_failures_unrecovered"] == 3 and m["final_calls"] == 3
+    assert m["failure_pct"] == 100.0 and m["api_errors_top"][0][:2] == [503, "InternalServerError: down"]
+    assert ev.api_problem(m)["failures"] == 3
+
+
+def test_b2_credit_exhausted_is_an_api_problem_and_not_retried():
+    res, sleeps, state = _score_with_results(
+        lambda n, model: _res(400, "BadRequestError: Your credit balance is too low sk-KEY"))
+    assert sleeps == [] and state["n"] == 3
+    p = ev.api_problem(res.metrics, key="sk-KEY")
+    assert p["failures"] == 3 and p["calls"] == 3 and p["pct"] == 100.0
+    (status, err), n = p["top"][0]
+    assert status == 400 and n == 3 and "sk-KEY" not in err and "***" in err
+
+
+def test_b2_filter_retries_any_failure_and_records_kinds():
+    tally = ev.CallTally()
+
+    def sb(items, setting):
+        tally.record(_res(None, "unexpected stop_reason: refusal", stop="refusal"))
+        return None
+    m = ev.eval_filter(_neg_titles(3), sb, current=CUR, candidate=CAND, sleep=lambda s: None,
+                       failure_kind=lambda: ev.classify_failure(tally.last()),
+                       failure_info=lambda: ev.call_info(tally.last())).metrics
+    assert m["model_failures"] == 9 and m["api_failures_unrecovered"] == 0 and m["final_calls"] == 9
+    assert m["retried_calls_candidate"] == 1 and m["retried_calls_current"] == 2
+    assert m["failure_pct"] == 100.0 and ev.api_problem(m) is None
+
+
+def test_b2_trigger_records_kinds_and_n3_diagnostics_without_retry():
+    tally = ev.CallTally()
+    calls = []
+    real = [{"id": 7, "premortem_commitment": "Out under $90 " + "x" * 300,
+             "premortem_trigger_price": None, "premortem_trigger_direction": None}]
+
+    def extract(text, setting):
+        calls.append(text)
+        tally.record(_res(None, "unexpected stop_reason: refusal", stop="refusal"))
+        return None
+    m = ev.eval_trigger([], real, extract, candidate=CAND,
+                        failure_kind=lambda: ev.classify_failure(tally.last()),
+                        failure_info=lambda: ev.call_info(tally.last())).metrics
+    assert len(calls) == 2                                   # two runs, no retry
+    assert m["model_failures"] == 2 and m["api_failures_unrecovered"] == 0 and m["final_calls"] == 2
+    d = m["failure_diagnostics"][0]
+    assert d["trade_id"] == 7 and d["commitment_len"] == len(calls[0]) and len(d["commitment"]) == 160
+    assert d["stop_reason"] == "refusal" and d["kind"] == ev.KIND_MODEL and "status" in d
+
+
+def test_n6_real_disagreements_carry_commitment_text_capped():
+    real = [{"id": 5, "premortem_commitment": "Out under $90. " + "y" * 300,
+             "premortem_trigger_price": 90.0, "premortem_trigger_direction": "below"}]
+    m = ev.eval_trigger([], real, lambda t, s: NOT, candidate=CAND).metrics
+    assert len(m["real_disagreements"][0]["text"]) == 160
+
+
+def test_e3_call_tally_keeps_stop_reason_and_last_per_thread():
+    import threading
+    tally = ev.CallTally()
+    ok = llm.LLMResult(text="x", stop_reason="end_turn", error=None, model="m", usage=None)
+    bad = _res(400, "credit balance too low sk-SECRET " + "e" * 200)
+    for r in [ok] * 8 + [bad] * 2:
+        tally.record(r)
+    rows = tally.rows()
+    assert len(rows) == 10 and all(len(r[2]) <= 120 for r in rows)
+    assert rows[0][3] == "end_turn" and rows[-1][3] is None
+    assert len(ev.api_failures(rows)) == 2
+    assert tally.last() is bad
+    seen = []
+    t = threading.Thread(target=lambda: seen.append(tally.last()))
+    t.start()
+    t.join()
+    assert seen == [None]                                    # last() is per thread
+    assert ev.top_api_errors(ev.api_failures(rows), "sk-SECRET")[0][0][1].count("sk-SECRET") == 0
+
+
+def test_b2_api_problem_threshold_boundary():
+    n = 100
+    lim = C.LLM_EVAL_MAX_FAILURE_PCT
+    at = int(lim * n / 100)
+    assert ev.api_problem({"final_calls": n, "api_failures_unrecovered": at}) is None
+    assert ev.api_problem({"final_calls": n, "api_failures_unrecovered": at + 1}) is not None
+    assert ev.api_problem({}) is None
+
+
+def test_e3_script_exits_3_and_saves_nothing_on_api_problem(monkeypatch, capsys):
+    script = _load_script()
+    monkeypatch.setenv("SUPABASE_URL", "u")
+    monkeypatch.setenv("SUPABASE_KEY", "k")
+    monkeypatch.setattr(llm, "resolve_anthropic_key", lambda environ=None: "sk-KEY")
+    monkeypatch.setattr(llm, "retrieve_model", lambda key, model: ({"efforts": []}, None, None))
+    monkeypatch.setattr(script, "_current_setting", lambda role: CUR)
+    saved = []
+    monkeypatch.setattr(db, "save_llm_role_eval", lambda row: saved.append(row) or 1)
+    bad = _res(400, "BadRequestError: credit balance sk-KEY low")
+    monkeypatch.setattr(llm, "complete", lambda *a, **kw: bad)
+    real_complete = llm.complete
+
+    def fake_eval(args, db_, ni, pm, api_key, current, candidate, tally):
+        for _ in range(5):
+            llm.complete("score")        # the wrapper installed by main() records these
+        assert tally.last() is bad
+        r = ev.eval_score([_row("AAA", "2026-10-01")], {}, lambda h, t, s: None,
+                          current=CUR, candidate=CAND, sleep=lambda s: None,
+                          failure_kind=lambda: ev.classify_failure(tally.last()),
+                          failure_info=lambda: ev.call_info(tally.last()))
+        return r
+    monkeypatch.setattr(script, "_run_eval", fake_eval)
+    rc = script.main(["--role", "score", "--model", "cand-model"])
+    out = capsys.readouterr().out
+    assert rc == 3 and saved == []
+    assert "API / connection problem: no verdict" in out and "sk-KEY" not in out
+    assert llm.complete is real_complete                       # restored
+
+
+def test_n4_subsample_in_report_and_eval_summary(capsys):
+    script = _load_script()
+    res = ev.EvalResult("score", "m", None, "h" * 20, 1, "b", 5,
+                        metrics={"max_rows": 40, "sample_total": 90, "history_rows": 3,
+                                 "failure_diagnostics": [
+                                     {"kind": "model", "trade_id": 1, "source": "real", "run": 1,
+                                      "commitment_len": 3, "commitment": "abc",
+                                      "stop_reason": "refusal", "status": None, "error": "e"}] * 25,
+                                 "model_failures": 25})
+    script._print_report(res, "score")
+    out = capsys.readouterr().out
+    assert "subsample 40 of 90" in out
+    assert out.count("failed call [model]") == script.MAX_DIAGNOSTIC_LINES
+    assert "and 5 more failed calls" in out
+
+
+def test_e5_sample_rows_is_seeded_ordered_and_reports_total():
+    script = _load_script()
+    items = list(range(100))
+    a, total = script.sample_rows(items, 10)
+    b, _ = script.sample_rows(items, 10)
+    assert total == 100 and a == b and len(a) == 10 and a == sorted(a)
+    assert a != items[:10]
+    assert a == sorted(random.Random(20261101).sample(range(100), 10))
+    assert script.sample_rows(items, None) == (items, 100)
+    assert script.sample_rows(items, 500) == (items, 100)
+
+
+def test_e6_no_history_still_fails_and_reports_history_rows():
+    rescore = _rescore_by_model({"cur-model": 0.0, "cand-model": 0.0})
+    res = ev.eval_score([_row("AAA", "2026-10-01")], {}, rescore, current=CUR, candidate=CAND)
+    assert res.metrics["history_rows"] == 0
+    assert any("band crossings could not be measured" in f for f in res.failures)

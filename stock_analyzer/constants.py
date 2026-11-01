@@ -962,7 +962,7 @@ SENTIMENT_LLM_MAX_SWING = 0.5
 # eval stale so nothing saves on criteria it never met.
 LLM_EVAL_CRITERIA_VERSION = 1
 LLM_EVAL_MAX_AGE_DAYS = 14          # an eval older than this can't enable Save
-LLM_EVAL_MAX_FAILURE_PCT = 5.0      # failure %. score: calls that error, time out or return an unparseable reply (an incomplete array keeps VADER for the missing headlines and shows in the shift metrics instead);
+LLM_EVAL_MAX_FAILURE_PCT = 5.0      # failure %. score: calls that error, time out or return an unparseable reply; the eval retries ONLY a rate-limit / server / connection error once, so timeouts, refusals, cut-off and unparseable replies count at once (an incomplete array keeps VADER for the missing headlines and shows in the shift metrics instead);
                                     # filter: items with no valid score after the eval's one retry; extract_trigger: parse failures
 # score: composite points moved by the candidate's news sentiment. Sentiment is
 # 10% of the composite and each headline's AI shift is capped at

@@ -446,6 +446,10 @@ def test_eval_summary_for_each_role():
     assert by["LLM_EVAL_SCORE_MAX_MEAN_ABS_SHIFT_PTS"]["within"] is False
     assert by["LLM_EVAL_SCORE_MAX_BAND_CROSS_PCT"]["value"] == "not measured"
     assert by["LLM_EVAL_SCORE_MAX_BAND_CROSS_PCT"]["within"] is False
+    assert s["subsample"] is None
+    sub = ams.eval_summary(_eval(e, "score", metrics={"max_rows": 40, "sample_total": 90}))
+    assert sub["subsample"] == "subsample 40 of 90"
+    assert ams.eval_summary(_eval(e, "score", metrics={"max_rows": 40, "sample_total": 20}))["subsample"] == "subsample 20 of 20"
     assert ams.eval_summary(_eval(e, "filter"))["verdict"] == "PASS"
     assert len(ams.eval_summary(_eval(e, "extract_trigger"))["metrics"]) == len(
         llm_role_eval.limit_table("extract_trigger"))
