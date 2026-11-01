@@ -796,3 +796,28 @@ def test_f8_save_effective_line_wording():
     line = ams.save_effective_line("score", NOW)
     assert "isn't split between two models in normal operation" in line
     assert "trading day never mixes" not in line
+
+
+def test_trigger_test_role_refuses_an_echoed_price_not_in_the_sample_commitment():
+    # 2026-11-01 in-text price check: the sample commitment states $42.50 only
+    echo = '{"checkable": true, "direction": "below", "price_level": 150.0}'
+    out = ams.run_test("extract_trigger", _entry(), "key", complete=_fake("extract_trigger", echo))
+    assert out["ok"] is True and out["format_ok"] is False
+    good = ams.run_test("extract_trigger", _entry(), "key", complete=_fake("extract_trigger"))
+    assert good["format_ok"] is True
+
+
+def test_trigger_refused_only_by_the_text_check_says_so():
+    echo = '{"checkable": true, "direction": "below", "price_level": 150.0}'
+    out = ams.run_test("extract_trigger", _entry(), "key", complete=_fake("extract_trigger", echo))
+    assert out["refused_price"] == 150.0
+    ok, reason = ams.can_save(_entry(), {**out, "key": ams.candidate_key(_entry())})
+    assert ok is False
+    assert "isn't in the sample commitment" in reason and "format" not in reason
+    # a malformed reply is still a format problem, with no refused price
+    bad = ams.run_test("extract_trigger", _entry(), "key", complete=_fake("extract_trigger", "nope"))
+    assert bad["refused_price"] is None
+    _, reason = ams.can_save(_entry(), {**bad, "key": ams.candidate_key(_entry())})
+    assert "format" in reason
+    good = ams.run_test("extract_trigger", _entry(), "key", complete=_fake("extract_trigger"))
+    assert good["refused_price"] is None

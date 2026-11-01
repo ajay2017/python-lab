@@ -523,7 +523,7 @@
       "timeout": 30
     }
   },
-  "premortem_monitor.extract_trigger#0": {
+  "premortem_monitor.extract_trigger_outcome#0": {
     "client": {
       "api_key": "<KEY>",
       "base_url": "<ABSENT>",

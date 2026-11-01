@@ -281,8 +281,11 @@ def _run_filter(api_key, setting):
 
 def _run_trigger(api_key, setting):
     from stock_analyzer import premortem_monitor
-    return premortem_monitor.extract_trigger(_SAMPLE_COMMITMENT, api_key,
-                                             setting=setting)
+    out = premortem_monitor.extract_trigger_outcome(_SAMPLE_COMMITMENT, api_key,
+                                                    setting=setting)
+    # remembered for run_test: a reply refused ONLY by the in-text price check
+    _tl.refused_price = out["refused_price"]
+    return out["trigger"]
 
 
 def _score_accepts(ret) -> bool:
@@ -474,7 +477,7 @@ def run_test(role, entry, api_key, *, complete=llm.complete,
         "model_source": None, "input_tokens": None, "output_tokens": None,
         "latency_s": None, "timeout_s": case["timeout"] if case else None,
         "cost_usd": None, "format_ok": None, "preview": "",
-        "key": None,
+        "key": None, "refused_price": None,
     }
     started = None
     try:
@@ -499,6 +502,8 @@ def run_test(role, entry, api_key, *, complete=llm.complete,
                                 "no request was sent (missing API key?)")
                 return out
             accepted = bool(case["accepts"](ret))
+            out["refused_price"] = getattr(_tl, "refused_price", None)
+            _tl.refused_price = None
         else:
             system, user = case["build"]()
             started = clock()
@@ -563,6 +568,10 @@ def can_save(entry, last_test) -> tuple[bool, str]:
                        f"(it ran on {last_test.get('served_model') or 'another model'}, "
                        f"source {last_test.get('model_source')}); run Test role again")
     if last_test.get("format_ok") is False:
+        if last_test.get("refused_price") is not None:
+            return False, (f"the reply's price {last_test['refused_price']:,.2f} "
+                           "isn't in the sample commitment, so the in-text price "
+                           "check refused it")
         return False, ("the reply didn't have the format "
                        f"{last_test.get('site') or 'the production site'} parses")
     return True, ""

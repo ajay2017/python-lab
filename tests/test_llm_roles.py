@@ -37,7 +37,7 @@ EXPECTED = {
     ("portfolio_qa", "narrate_answer"): "llm.ROLE_FAST",
     ("premarket_stance", "generate_stance"): "llm.ROLE_FAST",
     ("premortem_advisor", "generate_case_against"): "llm.ROLE_FAST",
-    ("premortem_monitor", "extract_trigger"): "llm.ROLE_EXTRACT_TRIGGER",
+    ("premortem_monitor", "extract_trigger_outcome"): "llm.ROLE_EXTRACT_TRIGGER",
     ("regime_stress", "generate_regime_scenario"): "llm.ROLE_FAST",
     ("structural_scanner", "generate_structural_narrative"): "llm.ROLE_FAST",
     ("thesis_advisor", "review_thesis"): "llm.ROLE_DEEP",

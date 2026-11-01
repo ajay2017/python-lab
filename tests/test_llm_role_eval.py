@@ -13,6 +13,7 @@ import pytest
 from stock_analyzer import constants as C
 from stock_analyzer import db, llm, news_intelligence
 from stock_analyzer import llm_role_eval as ev
+from stock_analyzer import trigger_price_check
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = ROOT / "tests" / "fixtures" / "premortem_trigger_cases.json"
@@ -646,7 +647,7 @@ def test_fixture_labelled_prices_appear_in_their_text_and_cover_the_classes():
     for c in cases:
         p = c["expected"]["price"]
         if p is not None:
-            assert any(abs(n - p) <= C.LLM_EVAL_TRIGGER_PRICE_TOL for n in ev.numbers_in(c["text"])), c["id"]
+            assert any(abs(n - p) <= C.LLM_EVAL_TRIGGER_PRICE_TOL for n in trigger_price_check.price_mentions(c["text"])), c["id"]
     dirs = {c["expected"]["direction"] for c in cases}
     assert dirs == {"above", "below", None}
     assert sum(c["expected"]["price"] is None for c in cases) >= 8
@@ -1108,3 +1109,79 @@ def test_e6_no_history_still_fails_and_reports_history_rows():
     res = ev.eval_score([_row("AAA", "2026-10-01")], {}, rescore, current=CUR, candidate=CAND)
     assert res.metrics["history_rows"] == 0
     assert any("band crossings could not be measured" in f for f in res.failures)
+
+
+# --- strict extractor shared with production (2026-11-01, criteria version 2) ------------------
+def test_an_extractor_that_invents_a_price_is_invented_not_a_parse_failure():
+    fixture = [{"id": "f1", "text": "If guidance disappoints, I'm wrong.",
+                "expected": {"price": None, "direction": None}}]
+    m = ev.eval_trigger(fixture, [], lambda t, s: _ok(150.0), candidate=CAND).metrics
+    assert m["invented"] == 2 and m["parse_failures"] == 0
+
+
+def test_a_percent_number_returned_as_a_price_is_invented():
+    t = "I'm wrong if it falls 15% from here."
+    assert ev.classify_trigger(t, None, None, _ok(15.0)) == ev.CLS_INVENTED
+    assert ev.classify_trigger(t, None, None, _ok(15.0), expected_is_truth=False) == ev.CLS_INVENTED
+    # a time unit is not a price either
+    assert ev.classify_trigger("below the 200-day", None, None, _ok(200.0)) == ev.CLS_INVENTED
+
+
+def test_eval_has_no_private_number_extractor_left():
+    assert not hasattr(ev, "numbers_in") and not hasattr(ev, "_NUM_RE")
+
+
+# --- filter sampling happens on the NEGATIVE headlines (owner run 2026-11-01) --------------------
+def test_filter_max_rows_samples_the_negatives_not_all_headlines():
+    import types
+    script = _load_script()
+    negatives = _neg_titles(200)
+    positives = [{"ticker": "P", "title": f"Wonderful record profit number {i} and great success"}
+                 for i in range(800)]
+    heads = [{"ticker": h["ticker"], "headline": h["title"]} for h in negatives + positives]
+    rows = [{"ticker": "T0", "headlines": heads}]
+    seen = []
+
+    class _DB:
+        @staticmethod
+        def load_sentiment_cache_sample(since, until):
+            return rows
+
+    class _NI:
+        @staticmethod
+        def llm_score_batch(items, api_key, setting=None):
+            seen.append(len(items))
+            return [None] * len(items)
+
+    args = types.SimpleNamespace(role="filter", max_rows=150)
+    tally = types.SimpleNamespace(last=lambda: None)
+    res = script._run_eval(args, _DB, _NI, None, "key", CUR, CAND, tally)
+    assert res.metrics["sample_total"] == 200
+    assert res.metrics["max_rows"] == 150
+    assert res.sample_n == 150
+    assert sum(seen[:6]) >= 150      # the 150 sampled negatives went through the batches
+
+
+# --- real trades whose stored price isn't in their own commitment (NB1) --------------------------
+_LEGACY = {"id": 9, "premortem_commitment": "I'm wrong if it closes below the 200-day",
+           "premortem_trigger_price": 200.0, "premortem_trigger_direction": "below"}
+
+
+def test_legacy_stored_price_not_in_commitment_is_unlabelled_not_a_miss():
+    m = ev.eval_trigger([], [_LEGACY], lambda t, s: NOT, candidate=CAND).metrics
+    assert m["real_other"] == 0 and m["misses"] == 0
+    assert m["real_disagreements"]
+    for d in m["real_disagreements"]:
+        assert d["unlabelled"] is True and d["reason"] == "stored price not in commitment"
+
+
+def test_legacy_stored_price_candidate_returning_it_is_still_invented():
+    m = ev.eval_trigger([], [_LEGACY], lambda t, s: _ok(200.0), candidate=CAND).metrics
+    assert m["invented"] == 2 and m["real_other"] == 0
+
+
+def test_real_trade_with_its_price_in_the_text_stays_labelled():
+    row = dict(_LEGACY, premortem_commitment="I'm wrong if it closes below $200")
+    m = ev.eval_trigger([], [row], lambda t, s: NOT, candidate=CAND).metrics
+    assert m["real_other"] == 2 and m["misses"] == 2
+    assert all("unlabelled" not in d for d in m["real_disagreements"])

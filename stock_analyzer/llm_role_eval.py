@@ -16,14 +16,15 @@ Injected callables (each receives `setting`, a ``{role: llm.RoleSetting}`` mappi
 and must run that model with the production request shape):
   rescore(headlines, ticker, setting)   -> news_intelligence.rescore_headlines_llm
   score_batch(items, setting)           -> news_intelligence.llm_score_batch
-  extract(text, setting)                -> premortem_monitor.extract_trigger
+  extract(text, setting)                -> the model's RAW answer, from before the
+                                           in-text check
+                                           (premortem_monitor.extract_trigger_outcome(...)["raw"])
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import math
-import re
 import threading
 import time
 from collections import Counter
@@ -32,7 +33,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Mapping
 
 from stock_analyzer import constants as C
-from stock_analyzer import llm
+from stock_analyzer import llm, trigger_price_check
 from stock_analyzer.news_intelligence import (
     _RESCORE_BATCH,
     _apply_suppress_only,
@@ -693,8 +694,6 @@ def eval_filter(headlines, score_batch, *, current, candidate, workers: int = 1,
 
 
 # --- extract_trigger --------------------------------------------------------------------
-_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
-
 CLS_OK = "ok"
 CLS_INVENTED = "invented"
 CLS_WRONG_DIRECTION = "wrong_direction"
@@ -705,17 +704,6 @@ CLS_PARSE_FAILURE = "parse_failure"
 # trigger is the old model's output, not ground truth, so this is a listed
 # disagreement (LLM_EVAL_TRIGGER_MAX_REAL_DISAGREE), not an invented price.
 CLS_NEW_PRICE = "new_price"
-
-
-def numbers_in(text: str) -> list[float]:
-    """Every numeral in `text` (commas stripped)."""
-    out = []
-    for m in _NUM_RE.findall(text or ""):
-        try:
-            out.append(float(m.replace(",", "")))
-        except ValueError:
-            pass
-    return out
 
 
 def classify_trigger(text: str, expected_price, expected_direction, got, *,
@@ -738,7 +726,9 @@ def classify_trigger(text: str, expected_price, expected_direction, got, *,
         return CLS_PARSE_FAILURE
     price = float(price)
     tol = C.LLM_EVAL_TRIGGER_PRICE_TOL
-    in_text = any(abs(n - price) <= tol for n in numbers_in(text))
+    # "in the text" uses the same strict extractor and the same rule production
+    # applies (both tolerances are $0.01), so "invented" tracks what production refuses.
+    in_text = any(abs(n - price) <= tol for n in trigger_price_check.price_mentions(text))
     if not has_expected:
         return CLS_NEW_PRICE if (in_text and not expected_is_truth) else CLS_INVENTED
     if not in_text:
@@ -773,6 +763,8 @@ def eval_trigger(fixture, real_rows, extract, *, candidate, workers: int = 1,
         if not str(r.get("premortem_commitment") or "").strip():
             blank_skipped += 1
             continue
+        # (A stored price that isn't in its own commitment is also UNLABELLED; see
+        # unlabelled_reason below.)
         # Stored direction has three states: NULL = never extracted (UNLABELLED:
         # many trades predate the trigger columns, and a failed extraction also
         # stays NULL), "not_checkable" = the old model said no price, and
@@ -795,8 +787,19 @@ def eval_trigger(fixture, real_rows, extract, *, candidate, workers: int = 1,
             outs.append((cls, got, fk, fi))
         return outs
 
-    def unlabelled(kind, ed):
-        return kind == "real" and ed not in ("not_checkable", "below", "above")
+    def unlabelled_reason(kind, ep, ed, text):
+        """None for a labelled job. A real trade is UNLABELLED when no trigger was
+        ever extracted (NULL direction), or when its stored price isn't in its own
+        commitment by the strict extractor (the old model likely fabricated it, so
+        a candidate saying not-checkable must not count as a miss)."""
+        if kind != "real":
+            return None
+        if ed not in ("not_checkable", "below", "above"):
+            return "no stored label"
+        if ed in ("below", "above") and not trigger_price_check.price_in_text(
+                ep, text, tol=C.LLM_EVAL_TRIGGER_PRICE_TOL):
+            return "stored price not in commitment"
+        return None
 
     outcomes = _pmap(run, jobs, workers)
     counts = {CLS_INVENTED: 0, CLS_WRONG_DIRECTION: 0, CLS_WRONG_PRICE: 0,
@@ -807,7 +810,8 @@ def eval_trigger(fixture, real_rows, extract, *, candidate, workers: int = 1,
     ledger = _FailureLedger()
     for job, outs in zip(jobs, outcomes):
         kind, jid, _text, ep, ed = job
-        is_unlabelled = unlabelled(kind, ed)
+        unlabelled_why = unlabelled_reason(kind, ep, ed, _text)
+        is_unlabelled = unlabelled_why is not None
         for run_no, (cls, got, fk, fi) in enumerate(outs, start=1):
             if cls == CLS_PARSE_FAILURE:
                 ledger.add(fk, fi, trade_id=jid, source=kind, run=run_no,
@@ -824,6 +828,7 @@ def eval_trigger(fixture, real_rows, extract, *, candidate, workers: int = 1,
                         "candidate": (dict(got) if isinstance(got, Mapping) else None),
                         "text": _text[:_DIAG_TEXT_CHARS],
                         "unlabelled": True,
+                        "reason": unlabelled_why,
                     })
                 continue
             if cls in counts:

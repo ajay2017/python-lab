@@ -1089,6 +1089,10 @@ _GATE_FILES = {
     # 2026-11-01 (owner U9): extracts the Pre-Mortem trigger saved to trades as
     # the permanent R-Multiple declared stop.
     "stock_analyzer/premortem_monitor.py",
+    # 2026-11-01 (owner U1-U4): refuses an AI Pre-Mortem price that isn't written
+    # in the investor's commitment, before it is saved as the declared stop; also
+    # defines "invented" in the model eval.
+    "stock_analyzer/trigger_price_check.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,

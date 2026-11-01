@@ -30833,6 +30833,18 @@ elif page == "📒 Trade Journal":
             f"at **${_pb_price:,.2f}**"
             f"{_pb_extra}"
         )
+        # Pre-Mortem in-text price check (trigger_price_check): say when the AI's
+        # price was refused, or which trigger will be monitored.
+        from stock_analyzer import trigger_price_check as _pb_tpc
+        _pb_trig_note = st.session_state.get("_tj_pending_buy_trigger_note")
+        if _pb_trig_note:
+            st.warning(_pb_trig_note.replace("$", "\\$"))
+        _pb_trig_cap = _pb_tpc.trigger_caption({
+            "checkable": _pending_buy.get("premortem_trigger_direction") in ("below", "above"),
+            "direction": _pending_buy.get("premortem_trigger_direction"),
+            "price_level": _pending_buy.get("premortem_trigger_price")})
+        if _pb_trig_cap:
+            st.caption(_pb_trig_cap.replace("$", "\\$"))
         # Daily new-position budget awareness (pre-save preview: today's logged
         # buys PLUS this one). Never blocks, never sizes -- the Confirm button
         # below is unaffected whatever this says. A figure that can't be
@@ -31038,6 +31050,7 @@ elif page == "📒 Trade Journal":
                 else:
                     st.error(_holdings_write_failed_msg(_pb_ticker))
                 st.session_state.pop("_tj_pending_buy", None)
+                st.session_state.pop("_tj_pending_buy_trigger_note", None)
                 st.session_state.pop("_tj_prefill", None)
                 st.session_state.pop("_tj_override_price", None)
                 st.session_state.pop("_tj_override_ticker", None)
@@ -31060,6 +31073,7 @@ elif page == "📒 Trade Journal":
                 "price":  _pb_price,
             }
             st.session_state.pop("_tj_pending_buy", None)
+            st.session_state.pop("_tj_pending_buy_trigger_note", None)
             # See the matching SELL-cancel comment above — unlock the form.
             st.session_state.pop("_tj_pending_broker_id", None)
             st.session_state.pop("_tj_broker_prefill", None)
@@ -31670,11 +31684,13 @@ elif page == "📒 Trade Journal":
                     "Required for every live Buy — the discipline comes from "
                     "writing this, not from the AI's case above. "
                     "**Include an explicit price** (e.g. \"if it breaks below "
-                    "$150\" or \"if it rallies above $200\") if you want the app "
+                    "\\$150\" or \"if it rallies above \\$200\") if you want the app "
                     "to actively monitor this and flag it on Home when it "
                     "fires — a purely qualitative condition (e.g. \"if "
                     "guidance disappoints\") is saved but can't be "
-                    "mechanically checked, so it's never auto-monitored."
+                    "mechanically checked, so it's never auto-monitored. "
+                    "Write the price as a number; a price the app can't find "
+                    "in your text isn't monitored."
                 ),
             )
 
@@ -32093,6 +32109,8 @@ elif page == "📒 Trade Journal":
                 # built and pass its result straight into it.
                 _pmt_trigger_price     = None
                 _pmt_trigger_direction = None
+                _pmt_refused           = False
+                st.session_state.pop("_tj_pending_buy_trigger_note", None)
                 if action == "BUY":
                     # Belt-and-suspenders with the render-time ticker-scope clear
                     # above (mirrors the premortem-case submit-time guard at the
@@ -32106,7 +32124,17 @@ elif page == "📒 Trade Journal":
                     if _pmt_commitment:
                         _pmt_api_key = _anthropic_key_section_only()
                         from stock_analyzer import premortem_monitor as _pmt_monitor
-                        _pmt_result = _pmt_monitor.extract_trigger(_pmt_commitment, _pmt_api_key)
+                        # In-text price check: a checkable price that isn't
+                        # written in the commitment is refused (decision lives in
+                        # trigger_price_check); the note shows on the confirm
+                        # screen and the trade write is never blocked.
+                        from stock_analyzer import trigger_price_check as _tpc
+                        _pmt_outcome = _pmt_monitor.extract_trigger_outcome(_pmt_commitment, _pmt_api_key)
+                        _pmt_result = _pmt_outcome["trigger"]
+                        _pmt_refused = _pmt_outcome["refused_price"] is not None
+                        if _pmt_refused:
+                            st.session_state["_tj_pending_buy_trigger_note"] = _tpc.refused_note(
+                                _pmt_outcome["refused_price"], _pmt_outcome["refused_direction"])
                         if _pmt_result is None:
                             _pmt_trigger_direction = None  # extraction failed — never monitored, fails open
                         elif _pmt_result["checkable"]:
@@ -32143,6 +32171,12 @@ elif page == "📒 Trade Journal":
                 except Exception as _exc:
                     _risk_plan = None
                     _risk_plan_skip_reason = f"capture_error:{type(_exc).__name__}"
+                # Only the no-downside-trigger case is relabelled, and only for a
+                # refused "below" price (the one that would have been the declared
+                # stop); retrospective_entry / capture_error:* are never overwritten.
+                if (_pmt_refused and _pmt_outcome["refused_direction"] == "below"
+                        and _risk_plan_skip_reason == "no_downside_trigger"):
+                    _risk_plan_skip_reason = "premortem_trigger_refused"
 
                 # Concept E (Phase 1): freeze the decision context at this
                 # interactive write. Passive, None-safe, no API calls. Flows
@@ -43420,7 +43454,7 @@ elif page == "📖 User Guide":
 
 **The order of operations:**
 
-1. **Log your positions** — **📒 Trade Journal → ➕ Log a Trade.** Enter every **BUY** (and any **SELL**) with ticker, share count, **cost basis (price paid)**, and the **trade date**. This is the source of truth: your holdings, realized P&L, and each position's *age* (the 🌱 Settling / lifecycle badges) all derive from these trades and their dates. On a **BUY** you can also write — or **✨ AI-draft** — your *investment thesis*; 🧠 AI Insights then checks weekly whether it still holds. A live BUY also asks you to **🔍 Run Pre-Mortem** — an optional AI-built case *against* the trade — and requires one line: *what would make you wrong about this*. If you've recorded exit lessons from past trades (📒 Trade Journal → Decision Journal), your own documented patterns appear as chips above the commitment field — ticker-specific first, or your cross-ticker patterns if you haven't exited this name before. This is friction by design (never on SELL, never on an imported/backfilled trade) — the point is to have engaged with the downside before capital moves, not to add a hoop before recording history. **Faster than hand-logging:** use **📥 Import from broker statement** (same page) to upload a Robinhood account-activity CSV — it parses your Buy/Sell rows into an editable preview, flags anything you've already logged so nothing double-counts, and syncs them on confirm. (Buy/Sell only for now; log cash events like dividends separately.)
+1. **Log your positions** — **📒 Trade Journal → ➕ Log a Trade.** Enter every **BUY** (and any **SELL**) with ticker, share count, **cost basis (price paid)**, and the **trade date**. This is the source of truth: your holdings, realized P&L, and each position's *age* (the 🌱 Settling / lifecycle badges) all derive from these trades and their dates. On a **BUY** you can also write — or **✨ AI-draft** — your *investment thesis*; 🧠 AI Insights then checks weekly whether it still holds. A live BUY also asks you to **🔍 Run Pre-Mortem** — an optional AI-built case *against* the trade — and requires one line: *what would make you wrong about this*. Write any exit price as a number (e.g. "closes below 150"): the AI reads it into a monitored trigger, and a price the app can't find in your text is refused and not monitored (the confirm screen says so). If you've recorded exit lessons from past trades (📒 Trade Journal → Decision Journal), your own documented patterns appear as chips above the commitment field — ticker-specific first, or your cross-ticker patterns if you haven't exited this name before. This is friction by design (never on SELL, never on an imported/backfilled trade) — the point is to have engaged with the downside before capital moves, not to add a hoop before recording history. **Faster than hand-logging:** use **📥 Import from broker statement** (same page) to upload a Robinhood account-activity CSV — it parses your Buy/Sell rows into an editable preview, flags anything you've already logged so nothing double-counts, and syncs them on confirm. (Buy/Sell only for now; log cash events like dividends separately.)
 2. **Reconcile against your broker.** Confirm share counts and average cost match your brokerage *exactly*. The Trade Journal runs a **drift check** and flags mismatches (a SELL with no prior BUY, or a stored P&L that disagrees with the replayed history); use **🔄 Rebuild holdings & realized P&L** to preview and apply the correction. Wrong basis → wrong P&L → wrong trim/stop advice.
 3. **(Optional) Add Watchlist names** — **📋 Watchlist** — anything you're tracking but don't yet hold, so the scanner and brief include them.
 4. **Refresh signals** — **🏠 Home → Refresh Signals** — let live prices, composite scores, and risk metrics populate for your names.

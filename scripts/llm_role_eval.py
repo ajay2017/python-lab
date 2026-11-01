@@ -252,7 +252,7 @@ def _run_eval(args, db, ni, pm, api_key, current, candidate, tally):
         print(f"fixture cases {len(fixture)}, real trades with a commitment {len(real)}")
         res = ev.eval_trigger(
             fixture, real,
-            lambda text, setting: pm.extract_trigger(text, api_key, setting=setting),
+            lambda text, setting: pm.extract_trigger_outcome(text, api_key, setting=setting)["raw"],
             candidate=candidate, workers=WORKERS, **kinds)
     else:
         since, until = _window()
@@ -279,6 +279,11 @@ def _run_eval(args, db, ni, pm, api_key, current, candidate, tally):
             heads = [{"ticker": r.get("ticker"), "title": h.get("headline")}
                      for r in rows for h in (r.get("headlines") or [])
                      if isinstance(h, dict)]
+            # Select the NEGATIVE headlines first, then sample those: sampling all
+            # headlines before the selection left only a handful of negatives.
+            # eval_filter's own selection is idempotent on already-shaped items.
+            heads = ev.select_negative_headlines(heads)
+            print(f"negative headlines: {len(heads)}")
             heads, total = sample_rows(heads, args.max_rows)
             if args.max_rows:
                 print(f"sampled {len(heads)} of {total}")

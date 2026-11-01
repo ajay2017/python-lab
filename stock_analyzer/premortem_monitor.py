@@ -50,12 +50,16 @@ Design principles (mirrors premortem_advisor.py / analyst_intel.py):
 from __future__ import annotations
 
 import json
+import logging
+import math
 from datetime import date as _date
 
 import pandas as pd
 
-from stock_analyzer import llm
+from stock_analyzer import llm, trigger_price_check
 from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
+
+_log = logging.getLogger(__name__)
 
 _EXTRACT_SYSTEM_PROMPT = """You extract a structured price trigger from an investor's own written exit commitment ("what would make me wrong about this buy"), written before they bought a stock.
 
@@ -129,30 +133,33 @@ def _parse_trigger(text: str) -> dict | None:
         price_level = float(parsed.get("price_level"))
     except (TypeError, ValueError):
         return None
-    if price_level <= 0:
+    if not math.isfinite(price_level) or price_level <= 0:
         return None
     return {"checkable": True, "direction": direction, "price_level": price_level}
 
 
-def extract_trigger(
+def extract_trigger_outcome(
     commitment_text: str,
     api_key: str,
     model: str | None = None,
     max_tokens: int = 200,
     *,
     setting=None,
-) -> dict | None:
+) -> dict:
     """
-    Parse a free-text Pre-Mortem commitment into a structured price trigger.
+    Parse a free-text Pre-Mortem commitment into a structured price trigger and
+    apply the in-text price check (`trigger_price_check.guard_trigger`).
 
-    Returns {"checkable": bool, "direction": "below"|"above"|None,
-    "price_level": float|None} — or None on ANY failure (no key, API error,
-    malformed response). Fails open: a trade whose extraction fails is
-    simply never monitored, same as every other best-effort AI surface in
-    this app.
+    Returns {"raw": parsed|None (the model's answer, before the check),
+    "trigger": guarded|None (what production saves), "refused_price": float|None,
+    "refused_direction": str|None (set only when the check refused a checkable
+    price that isn't written in the commitment)}. Fails open: any failure (no key,
+    API error, malformed response) gives all-None, and the trade is simply never
+    monitored. The model eval reads "raw"; production reads "trigger".
     """
+    out = {"raw": None, "trigger": None, "refused_price": None, "refused_direction": None}
     if not api_key or not (commitment_text or "").strip():
-        return None
+        return out
     try:
         r = llm.complete(
             llm.ROLE_EXTRACT_TRIGGER,
@@ -166,11 +173,35 @@ def extract_trigger(
             setting=setting,
         )
         if not r.ok:
-            return None
-        text = r.text.strip()
-        return _parse_trigger(text)
+            return out
+        parsed = _parse_trigger(r.text.strip())
+        guarded, refused_price = trigger_price_check.guard_trigger(parsed, commitment_text)
+        out["raw"], out["trigger"] = parsed, guarded
+        if refused_price is not None:
+            out["refused_price"] = refused_price
+            out["refused_direction"] = (parsed or {}).get("direction")
+            _log.warning("[premortem] trigger refused: $%.2f not in commitment", refused_price)
+        return out
     except Exception:
-        return None
+        return {"raw": None, "trigger": None, "refused_price": None, "refused_direction": None}
+
+
+def extract_trigger(
+    commitment_text: str,
+    api_key: str,
+    model: str | None = None,
+    max_tokens: int = 200,
+    *,
+    setting=None,
+) -> dict | None:
+    """
+    The trigger production saves: {"checkable": bool, "direction":
+    "below"|"above"|None, "price_level": float|None} — or None on ANY failure
+    (no key, API error, malformed response) or when the AI's checkable price
+    isn't written in the commitment (see `extract_trigger_outcome`).
+    """
+    return extract_trigger_outcome(
+        commitment_text, api_key, model, max_tokens, setting=setting)["trigger"]
 
 
 def detect_premortem_triggers(

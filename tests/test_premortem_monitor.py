@@ -345,3 +345,84 @@ def test_detect_empty_price_history_is_skipped():
     trades = pd.DataFrame([_buy_row("AAA", 150.0, "below")])
     held_data = {"AAA": {"df": pd.DataFrame({"Close": []})}}
     assert pm.detect_premortem_triggers(trades, held_data, date(2024, 1, 5)) == []
+
+
+# ── in-text price check (trigger_price_check, owner U1-U4, 2026-11-01) ──────
+
+class _Reply:
+    def __init__(self, text):
+        self.text = text
+        self.ok = True
+
+
+def _stub_complete(monkeypatch, text):
+    monkeypatch.setattr(pm.llm, "complete", lambda *a, **k: _Reply(text))
+
+
+_ECHO = '{"checkable": true, "direction": "below", "price_level": 150.0}'
+
+
+def test_echoed_example_on_a_qualitative_commitment_is_refused(monkeypatch):
+    _stub_complete(monkeypatch, _ECHO)
+    text = "If guidance disappoints, I'm wrong"
+    assert pm.extract_trigger(text, "k") is None
+    out = pm.extract_trigger_outcome(text, "k")
+    assert out["refused_price"] == 150.0 and out["refused_direction"] == "below"
+    assert out["trigger"] is None
+    assert out["raw"] == {"checkable": True, "direction": "below", "price_level": 150.0}
+
+
+def test_price_written_in_the_commitment_is_accepted(monkeypatch):
+    _stub_complete(monkeypatch, _ECHO)
+    out = pm.extract_trigger_outcome("I'm wrong if it closes below $150", "k")
+    assert out["trigger"] == out["raw"] == {
+        "checkable": True, "direction": "below", "price_level": 150.0}
+    assert out["refused_price"] is None and out["refused_direction"] is None
+
+
+def test_a_percent_is_not_a_price(monkeypatch):
+    _stub_complete(monkeypatch, '{"checkable": true, "direction": "below", "price_level": 15.0}')
+    out = pm.extract_trigger_outcome("I'm wrong if it falls 15% from here", "k")
+    assert out["trigger"] is None and out["refused_price"] == 15.0
+
+
+def test_not_checkable_and_failure_paths_are_unchanged(monkeypatch):
+    _stub_complete(monkeypatch, '{"checkable": false, "direction": null, "price_level": null}')
+    out = pm.extract_trigger_outcome("If guidance disappoints", "k")
+    assert out["trigger"] == out["raw"] == {"checkable": False, "direction": None, "price_level": None}
+    assert out["refused_price"] is None
+    _stub_complete(monkeypatch, "not json")
+    assert pm.extract_trigger_outcome("below $150", "k") == {
+        "raw": None, "trigger": None, "refused_price": None, "refused_direction": None}
+    assert pm.extract_trigger_outcome("below $150", "") == {
+        "raw": None, "trigger": None, "refused_price": None, "refused_direction": None}
+
+    def boom(*a, **k):
+        raise RuntimeError("down")
+    monkeypatch.setattr(pm.llm, "complete", boom)
+    assert pm.extract_trigger("below $150", "k") is None
+
+
+def test_refusal_log_has_the_price_but_never_the_text(monkeypatch, caplog):
+    _stub_complete(monkeypatch, _ECHO)
+    with caplog.at_level("WARNING"):
+        pm.extract_trigger("my secret thesis words", "k")
+    assert "[premortem] trigger refused: $150.00 not in commitment" in caplog.text
+    assert "secret" not in caplog.text
+
+
+def test_a_stored_row_whose_price_is_not_in_its_commitment_still_fires():
+    # nothing is retroactive: detect_premortem_triggers never reads the commitment
+    row = _buy_row("AAA", 150.0, "below")
+    row["premortem_commitment"] = "If guidance disappoints, I'm wrong"
+    trades = pd.DataFrame([row])
+    held_data = {"AAA": {"df": _hist([160, 155, 140, 130, 125])}}
+    assert len(pm.detect_premortem_triggers(trades, held_data, date(2024, 1, 5))) == 1
+
+
+
+
+@pytest.mark.parametrize("bad", ['NaN', 'Infinity', '-Infinity'])
+def test_parse_trigger_rejects_non_finite_price(bad):
+    assert pm._parse_trigger(
+        '{"checkable": true, "direction": "below", "price_level": %s}' % bad) is None

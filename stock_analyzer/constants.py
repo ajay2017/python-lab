@@ -960,7 +960,11 @@ SENTIMENT_LLM_MAX_SWING = 0.5
 # A boundary value passes (<=). Changing ANY value here is a policy decision:
 # bump LLM_EVAL_CRITERIA_VERSION in the same commit, which makes every stored
 # eval stale so nothing saves on criteria it never met.
-LLM_EVAL_CRITERIA_VERSION = 1
+# 2026-11-01 (owner U3): version 2 because the eval's "invented price" definition
+# became the shared strict extractor `trigger_price_check.price_mentions`
+# (percentages, time units, multiples and letter-prefixed numerals no longer
+# count as a price in the text); stored version-1 evals are stale.
+LLM_EVAL_CRITERIA_VERSION = 2
 LLM_EVAL_MAX_AGE_DAYS = 14          # an eval older than this can't enable Save
 LLM_EVAL_MAX_FAILURE_PCT = 5.0      # failure %. score: calls that error, time out or return an unparseable reply; the eval retries ONLY a rate-limit / server / connection error once, so timeouts, refusals, cut-off and unparseable replies count at once (an incomplete array keeps VADER for the missing headlines and shows in the shift metrics instead);
                                     # filter: items with no valid score after the eval's one retry; extract_trigger: parse failures
@@ -989,6 +993,14 @@ LLM_EVAL_TRIGGER_MAX_WRONG_DIRECTION = 0    # above / below reversed
 LLM_EVAL_TRIGGER_MAX_WRONG_PRICE = 0        # fixture cases: price off by more than the tolerance
 LLM_EVAL_TRIGGER_MAX_MISSES = 1             # fixture cases: a stated trigger not extracted
 LLM_EVAL_TRIGGER_MAX_REAL_DISAGREE = 1      # real trades: other disagreements with the stored trigger
+
+# ── Pre-Mortem trigger: production in-text price check ───────────────────────
+# (Not an LLM_EVAL_* value: changing it does NOT need an eval criteria bump.)
+# Production's in-text price check (trigger_price_check; owner U1, 2026-11-01): the
+# AI's checkable Pre-Mortem price must appear as a numeral in the investor's own
+# commitment within this many $, else no trigger is saved. Deliberately separate
+# from the eval's LLM_EVAL_TRIGGER_PRICE_TOL so tuning one never moves the other.
+PREMORTEM_TRIGGER_PRICE_TOL = 0.01
 
 # ── News-Intelligence "Opportunity Signals" inclusion (Overview) ─────────────
 # A held name surfaces as a positive-news opportunity when BOTH hold: the
