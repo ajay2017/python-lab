@@ -315,7 +315,7 @@ def test_labels():
 
 
 def test_every_result_label_is_allowed_and_never_doubles_stop():
-    allowed = {"Entry Stop", "Trailing Stop", "Prior-close ATR", "Stop Unavailable"} | {
+    allowed = {"Entry Stop", "Trailing Stop", "Prior-close ATR", "Fallback Stop", "Stop Unavailable"} | {
         lab for _, _, lab in C.STOP_RATCHET_LEVELS}
     df, e, px, h, tr = setup(seed=11)
     for i in range(len(df) - 30, len(df) - 1):
@@ -689,12 +689,14 @@ def test_buy_day_fill_keyed_10x_too_high_is_never_a_breach_near_prior_close(with
     h = [{"Ticker": "AAA", "Shares": 10, "Shares Exact": 10.0, "Avg Cost ($)": fill}]
     r = build(h, {"AAA": {"df": held_df}}, trades, _fetch_down)
     # a 10x fill is rejected; the stop is the prior-close leg, so a price near the prior close holds
-    assert r["basis"] == "prior_session" and r["degraded"] and r["label"] == "Prior-close ATR"
+    assert r["basis"] == "prior_session" and r["degraded"]
+    assert r["label"] == ("Fallback Stop" if with_today else "Prior-close ATR")
     assert r["stop"] < prev
     assert _breached_at(h, r, prev) == set()
     assert ("outside today's trading range" in r["note"]) is with_today
     assert ("couldn't be checked against today's trading range yet" in r["note"]) is (not with_today)
-    assert "prior-close level applies" in r["note"]
+    assert ("range-based level applies" in r["note"]) is with_today
+    assert ("prior-close level applies" in r["note"]) is (not with_today)
 
 
 def test_buy_day_binding_labels_follow_the_lower_leg():
@@ -706,11 +708,15 @@ def test_buy_day_binding_labels_follow_the_lower_leg():
     assert high["label"] == "Prior-close ATR" and "prior-close level applies" in high["note"]
 
 
-def test_buy_day_stale_long_frame_is_the_last_resort_not_unavailable():
+def test_buy_day_stale_long_frame_is_degraded_with_the_history_end_date():
     df = walk(n=200, seed=2, end="2026-10-27")     # ends two sessions early: stale
     fill = float(df["Close"].iloc[-1])
     r = _buy_run(fill, df, None)
-    assert r["basis"] != "unavailable" and r["stop"] is not None
+    assert r["basis"] == "partial" and r["degraded"] and r["fell_back"] and not r["buy_day"]
+    assert r["stop"] == round(fill - C.ATR_STOP_MULT * _atr_before(df, AS_OF), 2)
+    assert r["label"] == "Entry Stop" and r["components"]["entry"] == r["stop"]
+    assert "The price history ends on 2026-10-27" in r["note"] and "old data" in r["note"]
+    assert hw.degraded_notes({"AAA": r})
 
 
 def test_buy_day_accepted_note_has_no_next_session_check_claim():
@@ -718,3 +724,91 @@ def test_buy_day_accepted_note_has_no_next_session_check_claim():
     r = build(h, held, trades, _fetch_down)
     assert "or it can come out lower if a later session has to use a fallback basis" in r["note"]
     assert "rejects your recorded fill" not in r["note"]
+
+
+def _prices(df, lo, hi):
+    return _with_today(df, lo, hi)
+
+
+def test_buy_day_third_leg_residual_today_bar_low_and_fill_keyed_10x_high():
+    # reviewer's residual: today's bar at 0.85-0.87 x prior close, real fill 0.86 keyed 10x
+    # too high, price at the real fill. Without the range leg the prior-close stop (above
+    # the price) would breach.
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    real = prev * 0.86
+    held_df = _prices(df, prev * 0.85, prev * 0.87)
+    trades = journal("AAA", 10.0, real * 10.0, AS_OF)
+    h = [{"Ticker": "AAA", "Shares": 10, "Shares Exact": 10.0, "Avg Cost ($)": real * 10.0}]
+    r = build(h, {"AAA": {"df": held_df}}, trades, _fetch_down)
+    atr = _atr_before(df, AS_OF)
+    want = round(prev * 0.85 * (1 - C.HELD_STOP_FILL_TOL_PCT / 100.0) - C.ATR_STOP_MULT * atr, 2)
+    assert r["basis"] == "prior_session" and r["degraded"]
+    assert r["binding"] == "range" and r["label"] == "Fallback Stop"
+    assert r["stop"] == want and r["stop"] < real
+    assert _breached_at(h, r, real) == set()
+    assert "range-based level applies" in r["note"]
+    assert "the lowest of" in r["note"] and "fallback level" in r["note"]
+    assert "cautious" not in r["note"]
+
+
+def test_buy_day_range_leg_on_a_gap_up_is_built_from_the_prior_close():
+    # gap up: today's low is ABOVE the prior close, so the range leg comes from the
+    # prior close, and the note must say "the lower of today's low and the prior
+    # close" (not "the bottom of today's range"), with that leg's value
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    r = _buy_run(prev * 10.0, _prices(df, prev * 1.05, prev * 1.07), df)
+    atr = _atr_before(df, AS_OF)
+    want = round(prev * (1 - C.HELD_STOP_FILL_TOL_PCT / 100.0) - C.ATR_STOP_MULT * atr, 2)
+    assert r["degraded"]
+    assert "the lower of today's low and the prior close" in r["note"]
+    assert f"(\\${want:.2f})" in r["note"]
+    assert "bottom of today's range" not in r["note"]
+
+
+def test_buy_day_range_leg_never_applies_without_a_today_bar():
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    r = _buy_run(prev * 10.0, df, df)
+    assert r["binding"] == "prior_session" and r["label"] == "Prior-close ATR"
+    assert "today's low and the prior close" not in r["note"]
+
+
+def test_buy_day_in_band_fill_is_unchanged_by_the_range_leg():
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    fill = prev * 0.86
+    r = _buy_run(fill, _prices(df, prev * 0.85, prev * 0.87), df)
+    assert r["basis"] == "buy_day" and not r["degraded"]
+    assert r["stop"] == round(fill - C.ATR_STOP_MULT * _atr_before(df, AS_OF), 2)
+
+
+def test_stop_noun_names_the_fallback_label_truthfully():
+    from stock_analyzer.stop_breach_text import stop_noun
+    assert stop_noun("Fallback Stop") == "fallback stop"
+
+
+def test_plain_text_note_drops_the_markdown_escape_and_the_email_footer_has_none():
+    from stock_analyzer import notify
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    r = _buy_run(prev * 0.5, _prices(df, prev * 0.99, prev * 1.01), df)
+    assert chr(92) + "$" in r["note"]                      # the app needs the escape
+    line = f"AAA ({r['label']}): {r['note']}"
+    plain = hw.plain_text_note(line)
+    assert chr(92) + "$" not in plain and "$" in plain
+    _, body = notify.render_alert_email([{"ticker": "AAA", "kind": "stop_breach",
+                                          "message": "x"}], "2026-11-02 08:00:00",
+                                        footer_lines=[plain])
+    assert chr(92) + "$" not in body
+
+
+def test_cron_runner_builds_email_footer_notes_through_plain_text_note():
+    import ast
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parents[1] / "cron_runner.py").read_text(encoding="utf-8")
+    calls = [n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Attribute) and n.func.attr == "plain_text_note"]
+    assert calls
+    assert "list(payload.get(\"held_stop_notes\", []))" not in src

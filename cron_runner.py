@@ -88,6 +88,7 @@ from stock_analyzer.headless_alert_engine import (
 )
 from stock_analyzer import hold_reasons
 from stock_analyzer import held_stop_view as _held_stop_view
+from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import llm
 from stock_analyzer import news_feed
 from stock_analyzer.notify import (
@@ -502,7 +503,9 @@ def _run_premarket(now_et, force: bool) -> int:
                         "(protective alerts that were computed were still sent)")
     # Per-name degradation is logged above ("engine note: held stop on a limited
     # basis ...") and rides in the email footer below.
-    _footer_lines = list(payload.get("held_stop_notes", []))
+    # held-stop notes escape "$" for Streamlit markdown; the email footer is plain text
+    _footer_lines = [_held_stop_wiring.plain_text_note(_n)
+                     for _n in payload.get("held_stop_notes", [])]
     _recalc_line = _held_stop_view.email_notice_line(now_et.date())
     if _recalc_line:
         _footer_lines.insert(0, _recalc_line)

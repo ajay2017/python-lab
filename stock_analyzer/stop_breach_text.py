@@ -98,6 +98,8 @@ def stop_noun(stop_type) -> str:
         return "ATR stop"
     if t == "Prior-close ATR":
         return "prior-close ATR stop"
+    if t == "Fallback Stop":
+        return "fallback stop"
     return f"profit-lock stop ({t})"
 
 

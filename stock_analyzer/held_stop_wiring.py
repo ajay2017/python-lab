@@ -43,6 +43,7 @@ _DEGRADED_BASES = frozenset({"partial", "prior_session", "unavailable"})
 LABEL_ENTRY = "Entry Stop"
 LABEL_TRAILING = "Trailing Stop"
 LABEL_PRIOR = "Prior-close ATR"
+LABEL_FALLBACK = "Fallback Stop"
 LABEL_UNAVAILABLE = "Stop Unavailable"
 
 
@@ -132,6 +133,8 @@ def label_for(basis: str, binding, ratchet_label=None) -> str:
         return LABEL_UNAVAILABLE
     if basis == "prior_session":
         # a buy-day stop whose fill leg is the lower one reads as the entry stop
+        if binding == "range":
+            return LABEL_FALLBACK
         return LABEL_ENTRY if binding == "entry" else LABEL_PRIOR
     if binding == "ratchet":
         return str(ratchet_label or "Profit Lock")
@@ -185,17 +188,24 @@ def _buy_day(t: str, ep: dict, bundle, avg_cost: float, as_of: date, pol: dict,
     entry anchor). The fill is fixed, so today's price cannot move it.
 
     Frame: the fresh unadjusted long frame (same one the next session uses), else
-    the app's bundle frame, else a stale long frame as a last resort.
+    the app's bundle frame, else a stale long frame as a last resort. A buy day
+    served only by the stale frame is DEGRADED (basis "partial", and the note
+    names the date the history ends).
 
     Fill check (`held_stop.fill_in_band`, the same rule as the entry session's):
     the fill must sit in the band of today's range (union over every frame that
     has a today row) and the prior close, widened by `fill_tol_pct`. Pass -> an
     accepted buy_day stop, not degraded. Fail (or no today bar anywhere and the
     fill is off the prior close) -> a DEGRADED prior_session result that is the
-    LOWER of the ordinary prior-close stop and the fill-based level, so a genuine
-    gap-down fill can never produce a stop above the price. A missing fill or ATR
-    falls back to the plain C1 prior_session result and says why."""
+    LOWEST of up to three legs, so a genuine fill can never produce a stop above
+    the price: the prior-close stop, the fill leg (fill - ATR_STOP_MULT x ATR) and,
+    when a today bar exists, the range leg (bottom of the band, tolerance
+    included, minus ATR_STOP_MULT x ATR; label "Fallback Stop"). With no today bar
+    there is no range leg: a genuine fill is then covered by the fill leg alone,
+    and a fill keyed far too high stays an acknowledged residual. A missing fill
+    or ATR falls back to the plain C1 prior_session result and says why."""
     frames = []
+    stale_only = False
     long_df, long_problem = _long_frame(t, ep, as_of, pol, fetch_history)
     if long_df is not None and long_problem is None:
         frames.append(long_df)
@@ -203,6 +213,7 @@ def _buy_day(t: str, ep: dict, bundle, avg_cost: float, as_of: date, pol: dict,
         frames.append(bundle)
     if long_df is not None and long_problem is not None and _usable_frame(long_df):
         frames.append(long_df)                      # stale long frame: last resort
+        stale_only = len(frames) == 1
     if not frames:
         return unavailable_result(t, "No price history is available for this position.", avg_cost)
     df = frames[0]
@@ -210,9 +221,14 @@ def _buy_day(t: str, ep: dict, bundle, avg_cost: float, as_of: date, pol: dict,
     ratio = _f(ep.get("split_ratio")) or 1.0
     bars = hs.completed_bars(df, as_of)
     atr = hs.entry_anchor_atr(bars, ep.get("start"), pol["warmup_bars"])
+    stale_txt = ""
+    if stale_only:
+        _last = bars.index[-1].date() if len(bars) else "no completed session"
+        stale_txt = f"The price history ends on {_last}, so this stop is built from old data. "
     reason = "no usable fill price or ATR for today's buy"
-    fill_leg = None
-    has_today = False
+    fill_leg = range_leg = None
+    has_today = rejected = False
+    mult_i = float(pol["initial_mult"])
     if fill is not None and fill > 0 and atr is not None and ratio > 0:
         fill_adj = fill / ratio
         lows, highs = [], []
@@ -227,10 +243,18 @@ def _buy_day(t: str, ep: dict, bundle, avg_cost: float, as_of: date, pol: dict,
                 highs.append(float(hi))
         has_today = bool(lows)
         prev_close = float(bars["Close"].iloc[-1]) if len(bars) else None
-        stop = round(fill_adj - float(pol["initial_mult"]) * atr, 2)
+        stop = round(fill_adj - mult_i * atr, 2)
         if hs.fill_in_band(fill_adj, min(lows) if lows else None,
                            max(highs) if highs else None, prev_close, pol["fill_tol_pct"]):
             if stop > 0:
+                if stale_only:
+                    note = (f"Bought today. {stale_txt}The stop is your fill price "
+                            f"\\${fill_adj:.2f} minus {_C.ATR_STOP_MULT:g} × ATR (from the "
+                            "last completed session in that history).")
+                    res = hs._result(stop, "partial", "entry", "bought today; history is stale",
+                                     since=ep.get("start"), atr_last=atr,
+                                     components={"entry": stop, "trailing": None, "ratchet": None})
+                    return _wrap(t, res, note, avg_cost, fell_back=True)
                 note = (f"Bought today: the stop is your fill price \\${fill_adj:.2f} minus "
                         f"{_C.ATR_STOP_MULT:g} × ATR (from the last completed session). From the "
                         "next session it is rebuilt from completed sessions: the trailing and "
@@ -240,31 +264,56 @@ def _buy_day(t: str, ep: dict, bundle, avg_cost: float, as_of: date, pol: dict,
                                  atr_last=atr)
                 return _wrap(t, res, note, avg_cost)
         else:
+            rejected = True
             if stop > 0:
                 fill_leg = stop
+            if has_today:
+                band_lo = min(lows)
+                if prev_close is not None:
+                    band_lo = min(band_lo, prev_close)
+                _rl = round(band_lo * (1 - float(pol["fill_tol_pct"]) / 100.0) - mult_i * atr, 2)
+                if _rl > 0:
+                    range_leg = _rl
             reason = ("today's recorded fill price is outside today's trading range and the "
                       "prior close (a mis-keyed fill or an unrecorded split)")
     ep_fb = {"status": "no_history", "reason": reason}
     res = hs.compute_held_stop(df, ep_fb, avg_cost, as_of, **pol)
-    if fill_leg is not None and res.get("stop") is not None:
+    if rejected and res.get("stop") is not None:
         prior = round(float(res["stop"]), 2)
-        leg_binds = fill_leg < prior
+        legs = [(prior, 0, "prior_session")]
+        if fill_leg is not None:
+            legs.append((fill_leg, 1, "entry"))
+        if range_leg is not None:
+            legs.append((range_leg, 2, "range"))
+        low_v, _, binding = min(legs)
         mult = max(float(_C.ATR_STOP_MULT), float(_C.HELD_TRAIL_ATR_MULT))
         lead = ("Bought today, but your recorded fill price is outside today's trading range "
                 "and the prior close (a mis-keyed fill or an unrecorded split)" if has_today else
                 "Bought today, but your recorded fill price couldn't be checked against "
                 "today's trading range yet")
-        note = (f"{lead}. The stop is the lower of the last completed close minus {mult:g} × ATR "
-                f"(\\${prior:.2f}) and your fill price \\${fill / ratio:.2f} minus "
-                f"{_C.ATR_STOP_MULT:g} × ATR (\\${fill_leg:.2f}); "
-                f"the {'fill-based' if leg_binds else 'prior-close'} level applies. It is a "
-                "cautious level because the fill couldn't be confirmed. It does not trail and "
+        parts = [f"the last completed close minus {mult:g} × ATR (\\${prior:.2f})"]
+        if fill_leg is not None:
+            parts.append(f"your fill price \\${fill / ratio:.2f} minus "
+                         f"{_C.ATR_STOP_MULT:g} × ATR (\\${fill_leg:.2f})")
+        if range_leg is not None:
+            parts.append(f"the lower of today's low and the prior close (less the "
+                         f"{float(pol['fill_tol_pct']):g}% tolerance) minus {_C.ATR_STOP_MULT:g} × ATR (\\${range_leg:.2f})")
+        if len(parts) == 1:
+            pick = f"The stop is {parts[0]}"
+        else:
+            head = "lower" if len(parts) == 2 else "lowest"
+            pick = f"The stop is the {head} of " + ", ".join(parts[:-1]) + f" and {parts[-1]}"
+        applies = {"prior_session": "prior-close", "entry": "fill-based",
+                   "range": "range-based"}[binding]
+        note = (f"{lead}. {stale_txt}{pick}; the {applies} level applies. It is a "
+                "fallback level because the fill couldn't be confirmed. It does not trail and "
                 "is rebuilt each session.")
-        res = {**res, "stop": min(prior, fill_leg),
-               "binding": "entry" if leg_binds else "prior_session"}
+        comps = {"entry": fill_leg if binding == "entry" else None,
+                 "trailing": None, "ratchet": None}
+        res = {**res, "stop": low_v, "binding": binding, "components": comps}
         return _wrap(t, res, note, avg_cost)
-    return _wrap(t, res, _note_for(res, ep_fb, bundle=False, n_sessions=None,
-                                   fetch_problem=None), avg_cost)
+    fb_note = _note_for(res, ep_fb, bundle=False, n_sessions=None, fetch_problem=None)
+    return _wrap(t, res, (stale_txt + fb_note).strip() if stale_txt else fb_note, avg_cost)
 
 
 def _note_for(res: dict, ep: dict, *, bundle: bool, n_sessions: int | None,
@@ -423,6 +472,13 @@ def degraded(h) -> bool:
     """True when this ticker's stop is not on a full basis (partial /
     prior_session / unavailable). A missing result counts as degraded."""
     return not isinstance(h, dict) or h.get("basis") in _DEGRADED_BASES or h.get("basis") is None
+
+
+def plain_text_note(note) -> str:
+    """A held-stop note for a plain-text / HTML-escaped surface (the cron email
+    footer): the notes escape each dollar sign for Streamlit markdown, which would
+    print a literal backslash there."""
+    return str(note or "").replace(chr(92) + "$", "$")
 
 
 def degraded_notes(held_stops) -> list[tuple[str, str, str]]:
