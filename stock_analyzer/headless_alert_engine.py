@@ -175,9 +175,11 @@ def _build_context(today: date) -> dict:
             ages = [l["days_held"] for l in lots]
             bundle["position_age_days"] = max(ages) if ages else None
             bundle["material_add_age_days"] = exit_advisor.material_add_window_days(lots)
+            bundle["peak_since"] = exit_advisor.peak_since_date(lots)
         except Exception:
             bundle["position_age_days"] = None
             bundle["material_add_age_days"] = None
+            bundle["peak_since"] = None
         held_data[t] = bundle
 
     if not held_data:

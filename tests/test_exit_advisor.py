@@ -581,3 +581,73 @@ def test_candidate_deterioration_caption_no_markdown_or_math_mode():
         caption = candidate_deterioration_caption(_flag(tier), "XYZ", verdict_phrase="a buy")
         assert "**" not in caption
         assert "$" not in caption
+
+
+# ── #29: peak anchored on the buy DATE (MRVL 2026-10-31) ─────────────────────
+# `_peak_window_bars`' +2 cushion reached two sessions before a 1-day-old buy,
+# fabricating a 22% drawdown from a pre-entry high.
+
+import datetime as _dt29
+from stock_analyzer.exit_advisor import (
+    _peak_close, material_add_window_days, peak_since_date,
+)
+
+
+def _mrvl_frame(tz="America/New_York"):
+    idx = pd.date_range(end=pd.Timestamp("2026-10-30"), periods=63, freq="B", tz=tz)
+    closes = [240.0] * 60 + [251.65, 218.34, 196.40]
+    close = pd.Series(closes, index=idx)
+    return pd.DataFrame({"Close": close, _MA: 300.0}, index=idx)
+
+
+def _mrvl(**kw):
+    base = dict(price=196.40, atr=2.0, avg_cost=196.99, shares=8, age_days=1)
+    base.update(kw)
+    return assess_holding("MRVL", _mrvl_frame(), None, **base)
+
+
+def test_mrvl_known_buy_date_does_not_exit_on_a_pre_entry_peak():
+    assert _mrvl(peak_since=_dt29.date(2026, 10, 30)) is None
+
+
+def test_mrvl_legacy_bar_count_path_still_reproduces_the_exit():
+    out = _mrvl(peak_since=None)
+    assert out is not None and out["tier"] == EXIT and out["peak"] == 251.65
+
+
+def test_peak_since_mid_frame_ignores_a_higher_pre_anchor_close():
+    close = _mrvl_frame()["Close"]
+    assert _peak_close(close, 1, _dt29.date(2026, 10, 29)) == 218.34
+    assert _peak_close(close, 1, _dt29.date(2026, 10, 28)) == 251.65
+
+
+def test_peak_since_after_last_bar_is_dd_zero_no_tier():
+    close = _mrvl_frame()["Close"]
+    assert _peak_close(close, 0, _dt29.date(2026, 11, 2)) is None
+    assert _mrvl(peak_since=_dt29.date(2026, 11, 2), age_days=0) is None
+
+
+def test_non_datetime_index_with_peak_since_uses_legacy_path():
+    df = _frame([240.0] * 60 + [251.65, 218.34, 196.40])
+    df[_MA] = 300.0
+    out = assess_holding("MRVL", df, None, price=196.40, atr=2.0, avg_cost=196.99,
+                         shares=8, age_days=1, peak_since=_dt29.date(2026, 10, 30))
+    assert out is not None and out["peak"] == 251.65
+
+
+def _lot(shares, d, days):
+    return {"shares": shares, "buy_date": d, "days_held": days}
+
+
+def test_peak_since_date_cases():
+    d1, d2 = _dt29.date(2026, 9, 1), _dt29.date(2026, 10, 1)
+    assert peak_since_date([]) is None
+    assert peak_since_date(None) is None
+    assert peak_since_date([_lot(10, d1, 60)]) == d1
+    # material add (50% of position) -> the add's date
+    assert peak_since_date([_lot(10, d1, 60), _lot(10, d2, 30)]) == d2
+    assert material_add_window_days([_lot(10, d1, 60), _lot(10, d2, 30)]) == 30
+    # non-material add (<25%) -> oldest lot's date
+    assert peak_since_date([_lot(90, d1, 60), _lot(5, d2, 30)]) == d1
+    assert material_add_window_days([_lot(90, d1, 60), _lot(5, d2, 30)]) is None
+    assert peak_since_date([{"shares": 1, "days_held": 3}]) is None

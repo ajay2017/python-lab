@@ -5119,10 +5119,12 @@ if page == "🏠 Home":
                 # averaging down doesn't measure drawdown from a stale
                 # pre-add high (false EXIT). None when no qualifying add.
                 bundle["material_add_age_days"] = exit_advisor.material_add_window_days(_lots)
+                bundle["peak_since"] = exit_advisor.peak_since_date(_lots)
             except Exception:
                 bundle["position_age_days"]   = None
                 bundle["days_since_last_buy"] = None
                 bundle["material_add_age_days"] = None
+                bundle["peak_since"] = None
             held_data[t] = bundle
 
     if _hd_load_errs:

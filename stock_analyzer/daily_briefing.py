@@ -2723,6 +2723,7 @@ def deterioration_signals(
             # pre-add high can't fabricate a false EXIT. None → spans the whole
             # holding (oldest lot), as before.
             peak_window_days=data.get("material_add_age_days"),
+            peak_since=data.get("peak_since"),
         )
         if payload:
             out.append(payload)

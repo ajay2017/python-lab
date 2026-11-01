@@ -662,3 +662,17 @@ def test_max_pairwise_corr_skips_nan_cells():
                   [float("nan"), 1.0, 0.3],
                   [0.6, 0.3, 1.0]], ["AAA", "BBB", "CCC"])
     assert forward_sim.max_pairwise_corr(["AAA", "BBB", "CCC"], corr) == 0.6
+
+
+def test_peak_agrees_with_assess_holding_on_a_known_buy_date():
+    import datetime as dt
+    from stock_analyzer.exit_advisor import _peak_close
+    idx = pd.date_range(end=pd.Timestamp("2026-10-30"), periods=63, freq="B",
+                        tz="America/New_York")
+    close = pd.Series([240.0] * 60 + [251.65, 218.34, 196.40], index=idx)
+    since = dt.date(2026, 10, 30)
+    assert forward_sim._peak(close, 1, None, since, 196.40) == 196.40 == _peak_close(close, 1, since)
+    # legacy path unchanged
+    assert forward_sim._peak(close, 1, None) == 251.65
+    # bought today, no bar yet: dd 0 -> the live price, never a pre-entry bar
+    assert forward_sim._peak(close, 0, None, dt.date(2026, 11, 2), 196.40) == 196.40

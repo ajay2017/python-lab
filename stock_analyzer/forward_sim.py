@@ -74,15 +74,17 @@ def _num(value, default=None):
     return out
 
 
-def _peak(close, age_days, peak_window_days):
+def _peak(close, age_days, peak_window_days, peak_since=None, price=None):
     """High-water mark over the holding window.
 
     Window math is SHARED with `assess_holding` via `exit_advisor
     ._peak_window_bars` rather than duplicated, so it cannot drift.
     """
     window = peak_window_days if peak_window_days is not None else age_days
-    peak = float(close.tail(exit_advisor._peak_window_bars(window)).max())
-    return peak if peak > 0 else None
+    peak = exit_advisor._peak_close(close, window, peak_since)
+    if peak is None:   # known entry date, no post-entry bar yet: dd 0 (as assess_holding)
+        peak = price
+    return peak if (peak is not None and peak > 0) else None
 
 
 def _live_rel_strength(close, spy_df):
@@ -132,6 +134,7 @@ def replay_position(
     spy_df=None,
     age_days=None,
     peak_window_days=None,
+    peak_since=None,
 ):
     """Replay one position's stop + deterioration outcome at the shocked price.
 
@@ -161,7 +164,7 @@ def replay_position(
     if shocked <= 0:
         return None
 
-    peak = _peak(close, age_days, peak_window_days)
+    peak = _peak(close, age_days, peak_window_days, peak_since, price_now)
     if peak is None:
         return None
 
@@ -475,6 +478,7 @@ def simulate(
             spy_df=spy_df,
             age_days=data.get("position_age_days"),
             peak_window_days=data.get("material_add_age_days"),
+            peak_since=data.get("peak_since"),
         )
         if result is None:
             uncovered.append(ticker)

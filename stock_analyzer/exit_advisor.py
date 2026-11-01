@@ -37,6 +37,8 @@ See docs/plans/exit-discipline.md.
 
 from __future__ import annotations
 
+import pandas as pd
+
 from stock_analyzer.constants import (
     DETERIORATION_WATCH_DD_PCT,
     DETERIORATION_TRIM_DD_PCT,
@@ -96,6 +98,13 @@ def material_add_window_days(lots) -> int | None:
     smaller measured drawdown, so this can only ever SUPPRESS a (false) exit,
     never manufacture one. Don't "fix" the denominator to the gross bought total.
     """
+    lot = _material_add_lot(lots)
+    return lot.get("days_held") if lot is not None else None
+
+
+def _material_add_lot(lots) -> dict | None:
+    """The lot `material_add_window_days` anchors to (the most recent material
+    add that has a `days_held`), or None. Shared with `peak_since_date`."""
     if not lots or len(lots) < 2:
         return None
     total = sum((l.get("shares") or 0) for l in lots)
@@ -108,9 +117,31 @@ def material_add_window_days(lots) -> int | None:
         sh = l.get("shares") or 0
         if (sh / total) * 100.0 >= MATERIAL_ADD_RESET_THRESHOLD:
             d = l.get("days_held")
-            if d is not None:
-                newest_material = d if newest_material is None else min(newest_material, d)
+            if d is not None and (newest_material is None or d < newest_material.get("days_held")):
+                newest_material = l
     return newest_material
+
+
+def peak_since_date(lots):
+    """Calendar date the deterioration high-water mark may start from, or None.
+
+    The material-add lot's `buy_date` when one exists, else the oldest open
+    lot's `buy_date`; None for no lots / a missing date (caller then falls back
+    to the bar-count window). Finding #29: a bar-count window cannot express
+    "no earlier than the buy date" and its +2 cushion reached before the buy.
+    """
+    if not lots:
+        return None
+    lot = _material_add_lot(lots)
+    if lot is None:
+        lot = lots[0]
+    d = lot.get("buy_date")
+    if d is None:
+        return None
+    try:
+        return d.date() if hasattr(d, "hour") else d
+    except Exception:
+        return None
 
 
 def _trim_floor(atr_pct: float) -> float:
@@ -216,7 +247,12 @@ def _series_close(df):
 
 
 def _peak_window_bars(window: int | None) -> int:
-    """Bars to look back for the high-water mark.
+    """Bars to look back for the high-water mark (FALLBACK for an unknown entry date).
+
+    Used only when no entry date is known (no journal / candidate path). A known
+    entry date uses `peak_since` (see `_peak_close`): this bar-count window's +2
+    cushion reaches before the buy date (finding #29, MRVL 2026-10-31: a peak
+    from two sessions before the buy fabricated a 22% drawdown).
 
     Calendar days → approx trading bars (5/7), +2 cushion, floor of 2. The
     fallback (~3 trading months) applies ONLY when `window` is None — i.e. age
@@ -233,6 +269,23 @@ def _peak_window_bars(window: int | None) -> int:
     if window is not None:
         return max(2, int(round(window * 5.0 / 7.0)) + 2)
     return DETERIORATION_PEAK_FALLBACK_BARS
+
+
+def _peak_close(close, window, peak_since):
+    """High-water mark of `close`, or None when a known entry date has no bar yet.
+
+    With `peak_since` and a datetime-like index: only bars whose own calendar
+    date is >= peak_since count (None if none remain: bought today, no bar yet).
+    Otherwise the legacy `_peak_window_bars` tail. Shared by `assess_holding`
+    and `forward_sim._peak` so they cannot drift.
+    """
+    if peak_since is not None and isinstance(close.index, pd.DatetimeIndex):
+        keep = [bool(pd.Timestamp(ix).date() >= peak_since) for ix in close.index]
+        sub = close[keep]
+        if sub.empty:
+            return None
+        return float(sub.max())
+    return float(close.tail(_peak_window_bars(window)).max())
 
 
 def _pct_return(close, lookback: int):
@@ -258,6 +311,7 @@ def assess_holding(
     weight_pct: float | None = None,
     age_days: int | None = None,
     peak_window_days: int | None = None,
+    peak_since=None,
 ) -> dict | None:
     """Extract the deterioration scalars from price history and classify.
 
@@ -266,6 +320,8 @@ def assess_holding(
                     as 0, which keeps the action tiers from firing on unknown RS).
     peak_window_days : override for the high-water-mark window (caller passes a
                     material-add re-anchored window); defaults to age_days.
+    peak_since    : date of the window anchor (buy / material-add date); when set,
+                    only closes on/after it count toward the peak (finding #29).
 
     Returns a payload dict (tier + the figures the brief needs to render the
     directive / why / trigger and to sort by dollar risk), or None when there is
@@ -297,8 +353,9 @@ def assess_holding(
 
     # High-water mark over the holding window (re-anchored window if provided).
     window = peak_window_days if peak_window_days is not None else age_days
-    peak_series = close.tail(_peak_window_bars(window))
-    peak = float(peak_series.max())
+    peak = _peak_close(close, window, peak_since)
+    if peak is None:   # known entry date, no post-entry bar yet: dd 0, never pre-entry bars
+        peak = float(price)
     if peak <= 0:
         return None
     dd_from_peak_pct = max(0.0, (peak - float(price)) / peak * 100.0)
