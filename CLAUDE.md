@@ -195,6 +195,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 | Functional requirements + operating policy | [docs/requirements.md](docs/requirements.md) |
 | Architecture, data flow, scoring model, db schema, known behaviours | [docs/architecture.md](docs/architecture.md) |
 | Full queue history, closed items and "don't re-propose" reasoning | [docs/queue.md](docs/queue.md) |
+| Every known open bug, one row each, with the agreed fix order | [docs/bug-register.md](docs/bug-register.md) |
 | Review / hook / model-pin history, `_GATE_FILES` reasons | [docs/review-policy.md](docs/review-policy.md) |
 | Coordination cache register | [docs/coordination-caches.md](docs/coordination-caches.md) |
 | What's automated vs. manual testing | [docs/testing-strategy.md](docs/testing-strategy.md) |
