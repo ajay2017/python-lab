@@ -646,3 +646,109 @@ def test_compute_positions_day_pnl_surfaces_unbaselined_sells():
     trades = [{"ticker": "DDD", "action": "SELL", "shares": 5.0, "price": 40.0}]
     result = dp.compute_positions_day_pnl(held, baseline, trades, 1000.0)
     assert [r["ticker"] for r in result["unbaselined_sells"]] == ["DDD"]
+
+
+# ─── fill_late_logged_baseline ────────────────────────────────────────────────
+
+import copy
+import datetime as _dtm
+
+_BD = _dtm.date(2026, 10, 30)      # baseline date (Fri)
+_TODAY = _dtm.date(2026, 11, 2)    # today (Mon)
+_MID = _dtm.date(2026, 10, 31)     # logged Saturday
+
+
+def _jb(tk, d, sh, px, action="BUY"):
+    return {"ticker": tk, "action": action, "shares": sh, "price": px, "date": d}
+
+
+def _fill(held, baseline, today_trades, journal, closes):
+    return dp.fill_late_logged_baseline(held, baseline, today_trades, journal,
+                                        _BD, _TODAY, closes)
+
+
+def test_fill_observed_case_baseline_close():
+    held = [{"ticker": "MRVL", "shares": 8, "price": 110.0}]
+    base = {"AAPL": {"shares": 1, "close": 100.0}}
+    held2 = held + [{"ticker": "AAPL", "shares": 1, "price": 100.0}]
+    nb, filled = _fill(held2, base, [], [_jb("MRVL", _BD, 8, 100.0)], {"MRVL": 105.0})
+    assert nb["MRVL"] == {"shares": 8, "close": 105.0}
+    assert filled == [{"ticker": "MRVL", "shares": 8, "close": 105.0, "basis": "baseline_close"}]
+    res = dp.compute_positions_day_pnl(held2, nb, [], 1000.0)
+    assert res["unbaselined"] == []
+    assert res["day_pnl"] == pytest.approx(8 * (110.0 - 105.0))
+
+
+def test_fill_buy_between_uses_fill_price():
+    held = [{"ticker": "MU", "shares": 5, "price": 90.0}]
+    nb, filled = _fill(held, {"X": {"shares": 1, "close": 1.0}}, [],
+                       [_jb("MU", _MID, 5, 88.0)], {})
+    assert nb["MU"] == {"shares": 5, "close": 88.0}
+    assert filled[0]["basis"] == "fill"
+
+
+def test_fill_mixed_weighted_close():
+    held = [{"ticker": "CSCO", "shares": 10, "price": 60.0}]
+    journal = [_jb("CSCO", _BD, 6, 50.0), _jb("CSCO", _MID, 4, 56.0)]
+    nb, filled = _fill(held, {"X": {"shares": 1, "close": 1.0}}, [], journal, {"CSCO": 52.0})
+    assert nb["CSCO"]["close"] == pytest.approx((6 * 52.0 + 4 * 56.0) / 10)
+    assert filled[0]["basis"] == "mixed"
+
+
+def test_fill_bought_today_only_not_filled():
+    held = [{"ticker": "NEW", "shares": 3, "price": 10.0}]
+    today = [{"ticker": "NEW", "action": "BUY", "shares": 3, "price": 9.5}]
+    nb, filled = _fill(held, {"X": {"shares": 1, "close": 1.0}}, today,
+                       [_jb("NEW", _TODAY, 3, 9.5)], {"NEW": 9.0})
+    assert "NEW" not in nb and filled == []
+
+
+def test_fill_no_journal_buy_not_filled_and_still_unbaselined():
+    held = [{"ticker": "GHOST", "shares": 4, "price": 10.0}]
+    base = {"X": {"shares": 1, "close": 1.0}}
+    nb, filled = _fill(held, base, [], [], {"GHOST": 9.0})
+    assert filled == [] and "GHOST" not in nb
+    res = dp.compute_positions_day_pnl(held, nb, [], 100.0)
+    assert [u["ticker"] for u in res["unbaselined"]] == ["GHOST"]
+
+
+@pytest.mark.parametrize("close", [None, 0, 0.0, float("nan")])
+def test_fill_bad_close_not_filled(close):
+    held = [{"ticker": "MRVL", "shares": 8, "price": 110.0}]
+    closes = {} if close is None else {"MRVL": close}
+    nb, filled = _fill(held, {"X": {"shares": 1, "close": 1.0}}, [],
+                       [_jb("MRVL", _BD, 8, 100.0)], closes)
+    assert filled == [] and "MRVL" not in nb
+
+
+def test_fill_sell_between_not_filled():
+    held = [{"ticker": "MRVL", "shares": 5, "price": 110.0}]
+    journal = [_jb("MRVL", _BD, 8, 100.0), _jb("MRVL", _MID, 3, 105.0, "SELL")]
+    nb, filled = _fill(held, {"X": {"shares": 1, "close": 1.0}}, [], journal, {"MRVL": 100.0})
+    assert filled == [] and "MRVL" not in nb
+
+
+def test_fill_ticker_case_insensitive():
+    held = [{"ticker": "AAPL", "shares": 2, "price": 10.0}]
+    base = {"aapl": {"shares": 2, "close": 9.0}}
+    nb, filled = _fill(held, base, [], [_jb("AAPL", _BD, 2, 9.0)], {"AAPL": 9.0})
+    assert filled == [] and nb == base
+
+
+def test_fill_does_not_mutate_inputs():
+    held = [{"ticker": "MRVL", "shares": 8, "price": 110.0}]
+    base = {"X": {"shares": 1, "close": 1.0}}
+    journal = [_jb("MRVL", _BD, 8, 100.0)]
+    closes = {"MRVL": 105.0}
+    snap = copy.deepcopy((held, base, journal, closes))
+    nb, _ = _fill(held, base, [], journal, closes)
+    assert (held, base, journal, closes) == snap
+    assert "MRVL" not in base and "MRVL" in nb
+
+
+def test_fill_today_split_skipped():
+    held = [{"ticker": "NVDA", "shares": 40, "price": 10.0}]
+    today = [{"ticker": "NVDA", "action": "SPLIT 4:1", "shares": 40, "price": 0}]
+    nb, filled = _fill(held, {"X": {"shares": 1, "close": 1.0}}, today,
+                       [_jb("NVDA", _BD, 10, 40.0)], {"NVDA": 40.0})
+    assert filled == [] and "NVDA" not in nb

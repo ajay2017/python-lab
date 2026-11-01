@@ -327,6 +327,116 @@ def reconcile_baseline(
     }
 
 
+def _parse_date(v):
+    """A `datetime.date` (not datetime) or None."""
+    import datetime as _dt
+    if isinstance(v, _dt.datetime):
+        return v.date()
+    return v if isinstance(v, _dt.date) else None
+
+
+def fill_late_logged_baseline(
+    held: list[dict],
+    baseline: dict,
+    today_trades: list[dict],
+    journal_trades: list[dict],
+    baseline_date,
+    today,
+    baseline_closes: dict,
+) -> tuple[dict, list[dict]]:
+    """
+    Fill missing prior-close baseline rows for buys logged AFTER their trading
+    day's last snapshot.
+
+    Both snapshot writers date the snapshot with today's ET date and skip
+    non-trading days, so a buy logged late (e.g. a Friday fill journalled on
+    Saturday) never enters the baseline, and a weekend can't rewrite it. The
+    name then reads as `unbaselined` and its FULL value counts as a day gain.
+    Here the row is rebuilt from the journal: the shares held at the start of
+    today, at an effective close that blends the baseline-date close (for lots
+    bought on or before `baseline_date`) with the fill price (for lots bought
+    strictly between `baseline_date` and `today`).
+
+    A ticker that can't be fully explained (a SELL or split in between, a
+    non-positive fill, shares the journal doesn't account for, no earlier BUY
+    or no usable baseline-date close for the pre-existing part) is left alone,
+    so the `unbaselined` warning still fires for genuine drift.
+
+    held / baseline / today_trades : as in `compute_positions_day_pnl`.
+    journal_trades  : [{"ticker","action","shares","price","date"}], every
+                      journal trade, `date` the ET trade date; rows without a
+                      parseable date are ignored.
+    baseline_closes : {TICKER: close ON baseline_date} for held names.
+
+    Pure; never mutates its inputs. Returns (new_baseline, filled) with
+    `filled` = [{"ticker","shares","close","basis"}] sorted by ticker, `basis`
+    one of "baseline_close", "fill", "mixed".
+    """
+    import math
+    new_baseline = dict(baseline)
+    filled: list[dict] = []
+    base_keys = {str(k).strip().upper() for k in baseline}
+    b_date = _parse_date(baseline_date)
+    t_date = _parse_date(today)
+    if b_date is None or t_date is None:
+        return new_baseline, filled
+
+    held_sh: dict[str, float] = {}
+    for h in held:
+        tk = str(h.get("ticker", "")).strip().upper()
+        if tk:
+            held_sh[tk] = held_sh.get(tk, 0.0) + _num(h.get("shares"))
+
+    split_today = {str(t.get("ticker", "")).strip().upper()
+                   for t in today_trades if _is_split(t.get("action"))}
+    deltas = today_trade_share_delta(today_trades)
+    closes = {str(k).strip().upper(): v for k, v in (baseline_closes or {}).items()}
+
+    j_by_tk: dict[str, list[tuple]] = {}
+    for j in journal_trades:
+        d = _parse_date(j.get("date"))
+        tk = str(j.get("ticker", "")).strip().upper()
+        if d is None or not tk:
+            continue
+        j_by_tk.setdefault(tk, []).append(
+            (d, str(j.get("action", "")).strip().upper(),
+             _num(j.get("shares")), _num(j.get("price"))))
+
+    for tk in sorted(held_sh):
+        if tk in base_keys or tk in split_today:
+            continue
+        start = held_sh[tk] - deltas.get(tk, 0.0)
+        if start <= BROKER_DRIFT_SHARE_TOL:
+            continue                      # bought today; the cash leg handles it
+        rows = j_by_tk.get(tk, [])
+        between = [r for r in rows if b_date < r[0] < t_date]
+        if any(r[1] != "BUY" for r in between):
+            continue
+        if any(r[2] <= 0 or r[3] <= 0 for r in between):
+            continue
+        between_shares = sum(r[2] for r in between)
+        between_cost = sum(r[2] * r[3] for r in between)
+        pre = start - between_shares
+        if pre < -BROKER_DRIFT_SHARE_TOL:
+            continue
+        if abs(pre) <= BROKER_DRIFT_SHARE_TOL:
+            pre = 0.0
+        close_b = 0.0
+        if pre > 0:
+            if not any(r[1] == "BUY" and r[0] <= b_date for r in rows):
+                continue
+            close_b = _num(closes.get(tk))
+            if not math.isfinite(close_b) or close_b <= 0:
+                continue
+        close_eff = (pre * close_b + between_cost) / start
+        new_baseline[tk] = {"shares": start, "close": close_eff}
+        basis = ("baseline_close" if between_shares == 0
+                 else "fill" if pre == 0 else "mixed")
+        filled.append({"ticker": tk, "shares": start,
+                       "close": round(close_eff, 4), "basis": basis})
+    return new_baseline, filled
+
+
 def compute_positions_day_pnl(
     held: list[dict],
     baseline: dict,

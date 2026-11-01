@@ -96,7 +96,8 @@ from stock_analyzer import thesis_review_status
 from stock_analyzer import forward_sim as _fsim
 from stock_analyzer import attribution_readiness as _attr_ready
 from stock_analyzer.personalized_discovery import build_winner_profile
-from stock_analyzer.daily_pnl import compute_positions_day_pnl, today_trade_cash_delta
+from stock_analyzer.daily_pnl import (compute_positions_day_pnl, fill_late_logged_baseline,
+                                      today_trade_cash_delta)
 # Module-level (not local at each site) because all three import writers need
 # it and app.py runs top-to-bottom — see feedback_module_def_order.
 from stock_analyzer.market_time import et_anchor_iso as _et_anchor_iso
@@ -5912,6 +5913,7 @@ if page == "🏠 Home":
     # Optional DB table: until the user runs the one-time DDL it stays None and
     # the held mark shows, unchanged.
     _dpnl = None
+    _dpnl_filled = []
     _dpnl_baseline_date = None
     _dpnl_is_current = False
     try:
@@ -5941,6 +5943,7 @@ if page == "🏠 Home":
                     # Today's trades (ET day) from the journal — for realized
                     # day-move on names sold today + same-day-buy cash.
                     _today_trades_dp = []
+                    _journal_dp = []
                     _tdf_dp = st.session_state.get("trades_df")
                     if _tdf_dp is not None and not _tdf_dp.empty and "traded_at" in _tdf_dp.columns:
                         _tt = _tdf_dp.copy()
@@ -5948,13 +5951,50 @@ if page == "🏠 Home":
                             pd.to_datetime(_tt["traded_at"], utc=True, errors="coerce", format="ISO8601")
                             .dt.tz_convert("America/New_York").dt.date
                         )
+                        _journal_dp = [
+                            {"ticker": r.get("ticker"), "action": r.get("action"),
+                             "shares": r.get("shares"), "price": r.get("price"),
+                             "date": r["_d"]}
+                            for _, r in _tt.iterrows() if pd.notna(r["_d"])
+                        ]
                         _tt = _tt[_tt["_d"] == _today_et()]
                         _today_trades_dp = [
                             {"action": r.get("action"), "shares": r.get("shares"),
                              "price": r.get("price"), "ticker": r.get("ticker")}
                             for _, r in _tt.iterrows()
                         ]
+                    # Buys logged after their day's last snapshot (e.g. a Friday
+                    # fill journalled on Saturday) are missing from the baseline;
+                    # rebuild those rows from the journal (pure, in daily_pnl).
+                    try:
+                        _bl_date = date.fromisoformat(_dpnl_baseline_date)
+                        _bl_closes = {}
+                        for _h in _held_now:
+                            _tk = str(_h["ticker"]).strip().upper()
+                            if _tk in _baseline:
+                                continue
+                            try:
+                                _hd_entry = held_data.get(_h["ticker"])
+                                _hdf = _hd_entry.get("df") if isinstance(_hd_entry, dict) else None
+                                _cl = _hdf["Close"].dropna()
+                                _ix = pd.DatetimeIndex(_cl.index)
+                                if _ix.tz is not None:
+                                    _ix = _ix.tz_convert("America/New_York")
+                                _hit = _cl[[d == _bl_date for d in _ix.date]]
+                                if len(_hit):
+                                    _cv = float(_hit.iloc[-1])
+                                    if _cv == _cv and _cv > 0 and _cv != float("inf"):
+                                        _bl_closes[_tk] = _cv
+                            except Exception:
+                                continue
+                        _baseline, _dpnl_filled = fill_late_logged_baseline(
+                            _held_now, _baseline, _today_trades_dp, _journal_dp,
+                            _bl_date, _today_et(), _bl_closes)
+                    except Exception:
+                        _dpnl_filled = []
                     _dpnl = compute_positions_day_pnl(_held_now, _baseline, _today_trades_dp, total_val)
+                    if _dpnl is not None:
+                        _dpnl["late_filled"] = _dpnl_filled
                     # Label "Today" only when the baseline IS the prior trading day;
                     # an older baseline (user skipped a day) is an honest multi-day
                     # "since {date}", not "today".
@@ -8001,21 +8041,46 @@ if page == "🏠 Home":
             f"value, so treat this as approximate). Expected if the position was bought "
             f"after the baseline date and held uncaptured until today's sale."
         )
+    # Rows rebuilt from the journal (buys logged after their day's snapshot):
+    # say so, never fill silently. No `$` here, so no LaTeX escape needed.
+    _fill_note = None
+    if _dpnl is not None and _dpnl.get("late_filled"):
+        _fl_d = date.fromisoformat(_dpnl_baseline_date).strftime('%b %d')
+        _fl_by = {"baseline_close": [], "fill": [], "mixed": []}
+        for _fl in _dpnl["late_filled"]:
+            _fl_by.setdefault(_fl["basis"], []).append(_fl["ticker"])
+        _fl_parts = []
+        if _fl_by["baseline_close"]:
+            _fl_parts.append(f"**{', '.join(_fl_by['baseline_close'])}** at their {_fl_d} close")
+        if _fl_by["fill"]:
+            _fl_parts.append(f"**{', '.join(_fl_by['fill'])}** at your fill price")
+        if _fl_by["mixed"]:
+            _fl_parts.append(f"**{', '.join(_fl_by['mixed'])}** from both")
+        _fill_note = (
+            f"ℹ️ Logged after the {_fl_d} snapshot was saved, so filled in from your "
+            f"journal: {'; '.join(_fl_parts)}. Today's P&L counts only their move since then."
+        )
     if len(_dq_msgs) == 1:
         _home_notice("pnldq", "caption")
-        with _alert_ph_pnldq.container():
-            st.caption(_dq_msgs[0])
     elif len(_dq_msgs) > 1:
         _home_notice("pnldq", "warning")
+    elif _fill_note:
+        _home_notice("pnldq", "caption")
+    if _dq_msgs or _fill_note:
         # No nested st.expander (Streamlit disallows expander-in-expander,
         # and this now lives inside the top "⚠️ Alerts" one) -- the per-issue
         # captions just render directly below the summary warning.
         with _alert_ph_pnldq.container():
-            st.warning(
-                f"⚠️ Today's P&L is affected by {len(_dq_msgs)} data issues:"
-            )
-            for _dq_m in _dq_msgs:
-                st.caption(_dq_m)
+            if len(_dq_msgs) == 1:
+                st.caption(_dq_msgs[0])
+            elif len(_dq_msgs) > 1:
+                st.warning(
+                    f"⚠️ Today's P&L is affected by {len(_dq_msgs)} data issues:"
+                )
+                for _dq_m in _dq_msgs:
+                    st.caption(_dq_m)
+            if _fill_note:
+                st.caption(_fill_note)
 
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
