@@ -1209,6 +1209,15 @@ _GATE_FILES = {
     # DROP (split_non_trading_rows). A change to it alone would otherwise
     # change what db.py deletes without the review db.py itself requires.
     "stock_analyzer/write_guards.py",
+    # Added 2026-11-01 (owner decision): the money numbers the owner acts on.
+    # Two money bugs surfaced in them on 2026-11-01 (Home Today's P&L +22% from
+    # a late-logged buy; the weekly debrief's -67% from an account row mixing
+    # broker cash with lagging journal holdings), and the fix for one
+    # (51dd19f) shipped unreviewed.
+    "stock_analyzer/account.py",          # account_daily_snapshots net equity / leverage rows
+    "stock_analyzer/daily_pnl.py",        # Home / Summary Today's P&L and its baseline repair
+    "stock_analyzer/period_inputs.py",    # period account return shared by Reports and the weekly debrief
+    "stock_analyzer/debrief_advisor.py",  # weekly debrief figures saved and emailed
 }
 
 

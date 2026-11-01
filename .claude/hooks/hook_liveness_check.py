@@ -74,6 +74,9 @@ _PRE_RULE_EXEMPT = {
     "4299c8a338deddc9a033d8238da9644ed813aaa2",
     "0f7bf672b2aad3896cb4fcdcae253a68f1ed42f5",
     "8c689b83b65f7871af9237b350d965c39cb6f2a8",
+    # 2026-11-01: daily_pnl.py joined _GATE_FILES after this commit touched it
+    # without a citation (none was required then); same known-false alarm.
+    "51dd19f07b26f2b0c81f539c0bf2db3e9d3c8e77",
 }
 
 
