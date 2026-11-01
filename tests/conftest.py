@@ -102,6 +102,13 @@ def _clear_llm_model_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _clear_healthchecks_key(monkeypatch):
+    """A HEALTHCHECKS_PING_KEY in the developer's shell must never let a test
+    that runs cron_runner._record_heartbeat ping the owner's real checks."""
+    monkeypatch.delenv("HEALTHCHECKS_PING_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _stub_llm_settings_loader(monkeypatch):
     """N13: no test may ever read a real App Settings model row."""
     from stock_analyzer import llm_settings, llm_usage

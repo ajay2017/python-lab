@@ -325,19 +325,25 @@ helper, a session_state key, a constants change with wide blast radius).
 
 ### 4.5 Cron/headless job verification
 
-`.github/workflows/alerts.yml` runs `cron_runner.py` on a schedule (10 UTC
-slots straddling EST/EDT) and includes a dead-man's-switch step that emails a
-failure notice via Resend if a step throws. Per its own in-file comment, this
-**cannot** catch GitHub silently disabling the schedule after 60 days of repo
-inactivity, nor a "ran green but fetched nothing" run — the workflow comment
-itself suggests pairing it with an external heartbeat monitor (e.g.
-healthchecks.io), which is **not yet set up**. Until it is, periodically:
-- Check the Actions tab run history for `alerts.yml` for unexpected gaps or a
-  string of green-but-suspiciously-fast runs.
-- After changing anything `cron_runner.py`/`headless_alert_engine.py`/`notify.py`
-  touches, don't just trust the pytest-covered pure functions — wait for (or
-  manually trigger via `workflow_dispatch`) a real run and confirm the actual
-  email arrives with correct content.
+The 7 lanes run as Railway Cron Job services (`system_health._LANES` is
+authoritative; `.github/workflows/alerts.yml` is manual-dispatch only). Three
+layers report on them:
+- **In-script failure email** (`cron_runner._notify_failure`, via Resend): a
+  run that started and failed.
+- **`cron_heartbeat` rows** read by 🩺 System Trust ①: proof each lane fired,
+  visible only when the app is opened.
+- **External alarm (2026-11-01)**: `stock_analyzer/healthcheck_ping.py` pings
+  healthchecks.io at the end of every lane, and healthchecks emails when an
+  expected ping is missing. That is the one layer that catches a lane Railway
+  never starts, an import crash before the failure path exists, or a dead
+  Resend key. Inert until `HEALTHCHECKS_PING_KEY` is set (setup in
+  DEVELOPMENT.md); until then, check System Trust ① for gaps.
+
+None of these catches a "ran green but fetched nothing" run. After changing
+anything `cron_runner.py` / `headless_alert_engine.py` / `notify.py` touches,
+don't just trust the pytest-covered pure functions: wait for a real run (or
+"Run now" the Railway service) and confirm the actual email arrives with
+correct content.
 
 ### 4.6 Periodic recommendation-quality / engine health check
 

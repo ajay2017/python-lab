@@ -72,6 +72,7 @@ import pytz
 
 from stock_analyzer import broker_sync
 from stock_analyzer import db
+from stock_analyzer import healthcheck_ping
 from stock_analyzer import snaptrade_client
 from stock_analyzer.account import compute_account_snapshot
 from stock_analyzer.constants import (
@@ -418,7 +419,16 @@ def _record_heartbeat(lane: str, now_et, status: str = "ok", detail: str | None 
     still proof the scheduler fired the service). Like _notify_failure, this
     must NEVER raise: a heartbeat write failure can't be allowed to affect the
     lane's real work or its exit code. Inert (returns False) until the
-    cron_heartbeat table's one-time DDL is applied — see stock_analyzer/db.py."""
+    cron_heartbeat table's one-time DDL is applied — see stock_analyzer/db.py.
+    It also pings healthchecks.io (healthcheck_ping) first, so an external
+    monitor notices a lane that stops firing."""
+    try:
+        _hc = healthcheck_ping.ping(lane, status, detail)
+        if _hc != "off":
+            _log(f"healthcheck {lane}={status} ping {_hc}")
+    except Exception as exc:  # noqa: BLE001 - must never affect the lane
+        # Type name only: an exception's text could carry the ping URL (the key).
+        _log(f"healthcheck {lane}: UNCAUGHT — {type(exc).__name__} (ignored — lane unaffected)")
     try:
         ok = db.save_cron_heartbeat(lane, status=status, detail=detail, ran_at=now_et.isoformat())
         _log(f"heartbeat {lane}={status}"

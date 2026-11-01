@@ -71,7 +71,7 @@ python-lab/
 ├── app.py                         UI orchestration; multi-page via st.radio
 ├── DEVELOPMENT.md                 This file
 ├── MEMORY.md                      Auto-memory index (durable decisions / feedback)
-├── requirements.txt               Python dependencies
+├── requirements.txt               Python dependencies: direct pins, then a FROZEN SET of exact transitive versions (refresh from the weekly deps-canary workflow's summary)
 ├── runtime.txt                    Python 3.12
 ├── assets/
 │   └── drishta_logo.png           Brand asset (single combined image)
@@ -174,6 +174,20 @@ Variables to set on the service:
 
 The six Cron Job services share these via Railway **Shared Variables**, plus their own
 `ALERT_RUN_MODE` and the email trio (`RESEND_API_KEY`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`).
+
+**Outside alarm for the crons (`HEALTHCHECKS_PING_KEY`, optional, cron services only).**
+The cron failure email can only be sent by a run that started, so a lane Railway never
+starts, an import error in `cron_runner.py` or a dead Resend key would all be silent.
+When this variable is set (best as a Shared Variable), every lane pings healthchecks.io
+at its end (`stock_analyzer/healthcheck_ping.py`, called from
+`cron_runner._record_heartbeat`): success to check `drishta-<lane>`, any failure to its
+`/fail` URL. healthchecks.io emails you when an expected ping doesn't arrive. One-time
+setup: create a free healthchecks.io project, copy its **ping key** (Project Settings →
+Ping key) into the variable, redeploy the cron services, and let each lane run once
+(`?create=1` creates its check). Then give each check the same cron expression as its
+Railway service, timezone UTC, with a grace period long enough for a slow run. Lanes
+with two DST slots ping on both. Unset, it does nothing. Read with `os.environ`, so no
+`railway_start.sh` line is needed.
 
 > **Gotcha:** adding a new secret that the app reads through `st.secrets` requires a
 > matching line in `railway_start.sh`'s heredoc. Setting the Railway variable alone is
