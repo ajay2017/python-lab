@@ -1,8 +1,8 @@
 """
 Economic Calendar — static backbone + FRED live layer.
 
-Static backbone:  FOMC, CPI, NFP, GDP, PPI, Retail Sales 2025-2026
-                  Published months in advance by Fed / BLS / BEA — 100% reliable.
+Static backbone:  FOMC, CPI, NFP, GDP, PPI, Retail Sales 2025-2027
+                  Published months in advance by Fed / BLS / BEA / Census — 100% reliable.
 FRED live layer:  Federal Reserve Economic Data (St. Louis Fed).
                   Free API key required: fred.stlouisfed.org/docs/api/api_key.html
                   (~2 minutes to register, no credit card).
@@ -139,6 +139,20 @@ _STATIC: list[tuple] = [
     ("2026-11-12", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Oct 2026 CPI"),
     ("2026-12-09", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Nov 2026 CPI"),
 
+    # CPI 2027 — BLS 2027 release schedule, bls.gov/schedule/news_release/cpi.htm (read 2026-10-31)
+    ("2027-01-13", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Dec 2026 CPI"),
+    ("2027-02-11", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Jan 2027 CPI"),
+    ("2027-03-10", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Feb 2027 CPI"),
+    ("2027-04-13", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Mar 2027 CPI"),
+    ("2027-05-12", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Apr 2027 CPI"),
+    ("2027-06-10", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "May 2027 CPI"),
+    ("2027-07-14", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Jun 2027 CPI"),
+    ("2027-08-11", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Jul 2027 CPI"),
+    ("2027-09-14", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Aug 2027 CPI"),
+    ("2027-10-14", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Sep 2027 CPI"),
+    ("2027-11-10", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Oct 2027 CPI"),
+    ("2027-12-10", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Nov 2027 CPI"),
+
     # Non-Farm Payrolls 2025 (first Friday of each month)
     ("2025-01-10", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Dec 2024 jobs report"),
     ("2025-02-07", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Jan 2025 jobs report"),
@@ -167,6 +181,20 @@ _STATIC: list[tuple] = [
     ("2026-11-06", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Oct 2026 jobs report"),
     ("2026-12-04", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Nov 2026 jobs report"),
 
+    # Non-Farm Payrolls 2027 — BLS, bls.gov/schedule/news_release/empsit.htm (read 2026-10-31)
+    ("2027-01-08", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Dec 2026 jobs report"),
+    ("2027-02-05", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Jan 2027 jobs report"),
+    ("2027-03-05", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Feb 2027 jobs report"),
+    ("2027-04-02", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Mar 2027 jobs report"),
+    ("2027-05-07", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Apr 2027 jobs report"),
+    ("2027-06-04", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "May 2027 jobs report"),
+    ("2027-07-02", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Jun 2027 jobs report"),
+    ("2027-08-06", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Jul 2027 jobs report"),
+    ("2027-09-03", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Aug 2027 jobs report"),
+    ("2027-10-08", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Sep 2027 jobs report"),
+    ("2027-11-05", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Oct 2027 jobs report"),
+    ("2027-12-03", "08:30", "Non-Farm Payrolls",    "Employment",  HIGH,   "Nov 2027 jobs report"),
+
     # GDP Advance Estimate (BEA — last week of Jan/Apr/Jul/Oct)
     ("2025-01-30", "08:30", "GDP Advance Estimate", "Growth",      HIGH,   "Q4 2024 GDP — first read on quarterly growth"),
     ("2025-04-30", "08:30", "GDP Advance Estimate", "Growth",      HIGH,   "Q1 2025 GDP"),
@@ -176,6 +204,12 @@ _STATIC: list[tuple] = [
     ("2026-04-29", "08:30", "GDP Advance Estimate", "Growth",      HIGH,   "Q1 2026 GDP"),
     ("2026-07-29", "08:30", "GDP Advance Estimate", "Growth",      HIGH,   "Q2 2026 GDP"),
     ("2026-10-29", "08:30", "GDP Advance Estimate", "Growth",      HIGH,   "Q3 2026 GDP"),
+
+    # GDP Advance Estimate 2027 — BEA 2027 schedule, bea.gov/news/schedule/next-year (read 2026-10-31)
+    ("2027-01-28", "08:30", "GDP Advance Estimate", "Growth",      HIGH,   "Q4 2026 GDP"),
+    ("2027-04-29", "08:30", "GDP Advance Estimate", "Growth",      HIGH,   "Q1 2027 GDP"),
+    ("2027-07-29", "08:30", "GDP Advance Estimate", "Growth",      HIGH,   "Q2 2027 GDP"),
+    ("2027-10-28", "08:30", "GDP Advance Estimate", "Growth",      HIGH,   "Q3 2027 GDP"),
 
     # PPI 2026 (typically 1 day after CPI)
     ("2026-01-15", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Dec 2025 PPI — upstream inflation signal"),
@@ -191,6 +225,20 @@ _STATIC: list[tuple] = [
     ("2026-11-13", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Oct 2026 PPI"),
     ("2026-12-10", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Nov 2026 PPI"),
 
+    # PPI 2027 — BLS, bls.gov/schedule/news_release/ppi.htm (read 2026-10-31)
+    ("2027-01-14", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Dec 2026 PPI — upstream inflation signal"),
+    ("2027-02-12", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Jan 2027 PPI"),
+    ("2027-03-12", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Feb 2027 PPI"),
+    ("2027-04-14", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Mar 2027 PPI"),
+    ("2027-05-13", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Apr 2027 PPI"),
+    ("2027-06-11", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "May 2027 PPI"),
+    ("2027-07-15", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Jun 2027 PPI"),
+    ("2027-08-10", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Jul 2027 PPI"),
+    ("2027-09-10", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Aug 2027 PPI"),
+    ("2027-10-15", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Sep 2027 PPI"),
+    ("2027-11-12", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Oct 2027 PPI"),
+    ("2027-12-15", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Nov 2027 PPI"),
+
     # Retail Sales 2026 (mid-month)
     ("2026-01-16", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Dec 2025 Retail Sales — consumer spending = 70% of GDP"),
     ("2026-02-13", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Jan 2026 Retail Sales"),
@@ -204,6 +252,20 @@ _STATIC: list[tuple] = [
     ("2026-10-16", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Sep 2026 Retail Sales"),
     ("2026-11-13", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Oct 2026 Retail Sales"),
     ("2026-12-11", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Nov 2026 Retail Sales"),
+
+    # Retail Sales 2027 — Census economic-indicators calendar, census.gov/economic-indicators/calendar-listview.html (read 2026-10-31)
+    ("2027-01-15", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Dec 2026 Retail Sales — consumer spending = 70% of GDP"),
+    ("2027-02-17", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Jan 2027 Retail Sales"),
+    ("2027-03-16", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Feb 2027 Retail Sales"),
+    ("2027-04-16", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Mar 2027 Retail Sales"),
+    ("2027-05-14", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Apr 2027 Retail Sales"),
+    ("2027-06-16", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "May 2027 Retail Sales"),
+    ("2027-07-16", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Jun 2027 Retail Sales"),
+    ("2027-08-16", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Jul 2027 Retail Sales"),
+    ("2027-09-16", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Aug 2027 Retail Sales"),
+    ("2027-10-15", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Sep 2027 Retail Sales"),
+    ("2027-11-16", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Oct 2027 Retail Sales"),
+    ("2027-12-15", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Nov 2027 Retail Sales"),
 ]
 
 # ── Sector sensitivity map ────────────────────────────────────────────────────
