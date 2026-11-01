@@ -94,10 +94,12 @@ def canonicalize_for(name: str, payload: dict) -> dict:
     """Per-table canonical form: the `llm_models` row has its own (sorted
     keys, stripped strings, case preserved); every other table uses
     `canonicalize` unchanged."""
-    from stock_analyzer import llm_settings
+    from stock_analyzer import llm_decision_settings, llm_settings
 
     if name == llm_settings.TABLE_NAME:
         return llm_settings.canonicalize(payload)
+    if name == llm_decision_settings.TABLE_NAME:
+        return llm_decision_settings.canonicalize(payload)
     return canonicalize(payload)
 
 
@@ -108,10 +110,14 @@ def payload_hash_for(name: str, normalized: dict) -> str:
     import hashlib
     import json
 
-    from stock_analyzer import llm_settings
+    from stock_analyzer import llm_decision_settings, llm_settings
 
-    view = (llm_settings.hash_view(normalized)
-            if name == llm_settings.TABLE_NAME else normalized)
+    if name == llm_settings.TABLE_NAME:
+        view = llm_settings.hash_view(normalized)
+    elif name == llm_decision_settings.TABLE_NAME:
+        view = llm_decision_settings.hash_view(normalized)
+    else:
+        view = normalized
     return hashlib.sha256(
         json.dumps(view, sort_keys=True).encode("utf-8")
     ).hexdigest()
@@ -119,11 +125,13 @@ def payload_hash_for(name: str, normalized: dict) -> str:
 
 def validate_for_save(name: str, payload: dict) -> "list[str]":
     """Pre-save validation errors for tables that have a save-time validator
-    (`llm_models` only); `[]` for every other table."""
-    from stock_analyzer import llm_settings
+    (`llm_models` and `llm_models_decision`); `[]` for every other table."""
+    from stock_analyzer import llm_decision_settings, llm_settings
 
     if name == llm_settings.TABLE_NAME:
         return llm_settings.validate_payload(payload)
+    if name == llm_decision_settings.TABLE_NAME:
+        return llm_decision_settings.validate_payload(payload)
     return []
 
 

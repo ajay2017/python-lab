@@ -1,0 +1,254 @@
+[
+  {
+    "id": "plain_below_1",
+    "text": "I'm wrong if it falls below $150.",
+    "expected": {
+      "price": 150.0,
+      "direction": "below"
+    },
+    "note": "Plain 'below $X'."
+  },
+  {
+    "id": "plain_below_2",
+    "text": "Exit if the stock drops under $45.50 on a closing basis.",
+    "expected": {
+      "price": 45.5,
+      "direction": "below"
+    },
+    "note": "'drops under' = below (prompt rule)."
+  },
+  {
+    "id": "breaks_price",
+    "text": "If it breaks $210 I was wrong about this one.",
+    "expected": {
+      "price": 210.0,
+      "direction": "below"
+    },
+    "note": "Prompt rule: 'breaks $150' means below."
+  },
+  {
+    "id": "loses_support",
+    "text": "Thesis is dead if it loses $88 support.",
+    "expected": {
+      "price": 88.0,
+      "direction": "below"
+    },
+    "note": "Prompt rule: 'loses $150 support' means below."
+  },
+  {
+    "id": "bare_number",
+    "text": "I would get out at 72 if it keeps sliding.",
+    "expected": {
+      "price": 72.0,
+      "direction": "below"
+    },
+    "note": "Prompt allows a bare '150' as an explicit price; 'get out ... sliding' reads as a downside exit."
+  },
+  {
+    "id": "above_plain",
+    "text": "I'd be wrong (short squeeze risk) if it rallies past $300.",
+    "expected": {
+      "price": 300.0,
+      "direction": "above"
+    },
+    "note": "Prompt rule: 'rallies past $150' means above."
+  },
+  {
+    "id": "above_exceeds",
+    "text": "Exit the hedge if it exceeds $52.25.",
+    "expected": {
+      "price": 52.25,
+      "direction": "above"
+    },
+    "note": "Prompt rule: 'exceeds $150' means above."
+  },
+  {
+    "id": "above_breaks_above",
+    "text": "Wrong if it breaks above $410, because then the base failed.",
+    "expected": {
+      "price": 410.0,
+      "direction": "above"
+    },
+    "note": "Prompt rule: 'breaks above $150' means above."
+  },
+  {
+    "id": "commas_decimals",
+    "text": "Out if it closes below $1,234.56.",
+    "expected": {
+      "price": 1234.56,
+      "direction": "below"
+    },
+    "note": "Comma thousands separator and decimals."
+  },
+  {
+    "id": "commas_whole",
+    "text": "Wrong if the price falls under $2,500.",
+    "expected": {
+      "price": 2500.0,
+      "direction": "below"
+    },
+    "note": "Comma thousands separator, whole dollars."
+  },
+  {
+    "id": "decimals_cents",
+    "text": "Cut it below $9.75 - that is the last low.",
+    "expected": {
+      "price": 9.75,
+      "direction": "below"
+    },
+    "note": "Decimal price."
+  },
+  {
+    "id": "price_and_qual",
+    "text": "If earnings guidance is cut or it falls below $120, I'm wrong.",
+    "expected": {
+      "price": 120.0,
+      "direction": "below"
+    },
+    "note": "Prompt rule: qualitative AND a price -> extract the price."
+  },
+  {
+    "id": "price_and_percent",
+    "text": "I'll exit if it drops 15% or goes below $85.",
+    "expected": {
+      "price": 85.0,
+      "direction": "below"
+    },
+    "note": "Both a percent and an explicit price -> the price is the checkable part."
+  },
+  {
+    "id": "percent_only_1",
+    "text": "I'm wrong if it falls 20% from my entry.",
+    "expected": {
+      "price": null,
+      "direction": null
+    },
+    "note": "Percent only: prompt says do NOT infer a price from percentages, so not checkable."
+  },
+  {
+    "id": "percent_only_2",
+    "text": "Stop at -8%.",
+    "expected": {
+      "price": null,
+      "direction": null
+    },
+    "note": "Percent only: not checkable (no price is stated)."
+  },
+  {
+    "id": "qualitative_1",
+    "text": "I'm wrong if the cloud growth story stalls.",
+    "expected": {
+      "price": null,
+      "direction": null
+    },
+    "note": "Qualitative only: not checkable."
+  },
+  {
+    "id": "qualitative_2",
+    "text": "Sell if management loses the CEO or guides down two quarters in a row.",
+    "expected": {
+      "price": null,
+      "direction": null
+    },
+    "note": "Qualitative only: not checkable."
+  },
+  {
+    "id": "qualitative_date",
+    "text": "Reassess on the Q3 report in late October regardless of price.",
+    "expected": {
+      "price": null,
+      "direction": null
+    },
+    "note": "A date, no price: not checkable (prompt lists dates as qualitative)."
+  },
+  {
+    "id": "current_levels",
+    "text": "I'd leave if it goes meaningfully below current levels.",
+    "expected": {
+      "price": null,
+      "direction": null
+    },
+    "note": "Prompt: do NOT infer a price from 'current levels' or vague language."
+  },
+  {
+    "id": "entry_and_exit",
+    "text": "Bought at $155; I'm out if it closes under $140.",
+    "expected": {
+      "price": 140.0,
+      "direction": "below"
+    },
+    "note": "Two prices; the stated exit level is $140 (155 is the entry)."
+  },
+  {
+    "id": "negated_hold",
+    "text": "I will NOT sell even if it falls below $100; only a broken thesis matters.",
+    "expected": {
+      "price": null,
+      "direction": null
+    },
+    "note": "Negated price: explicitly not an exit trigger, so not checkable. Owner: confirm."
+  },
+  {
+    "id": "hypothetical_celebrate",
+    "text": "If it ever hits $500 I'd be thrilled, that is not a reason to sell.",
+    "expected": {
+      "price": null,
+      "direction": null
+    },
+    "note": "Hypothetical upside, explicitly not an exit trigger. Owner: confirm."
+  },
+  {
+    "id": "ambiguous_direction",
+    "text": "I'll act when it hits $150.",
+    "expected": {
+      "price": null,
+      "direction": null
+    },
+    "note": "Prompt: genuinely ambiguous whether a support break or a breakout -> not checkable."
+  },
+  {
+    "id": "support_zone",
+    "text": "Exit if it closes below the $60 support level for two days.",
+    "expected": {
+      "price": 60.0,
+      "direction": "below"
+    },
+    "note": "Support break with an explicit price."
+  },
+  {
+    "id": "shares_not_price",
+    "text": "I'd sell if I lose money on 100 shares after the report.",
+    "expected": {
+      "price": null,
+      "direction": null
+    },
+    "note": "'100' is a share count, not a price."
+  },
+  {
+    "id": "price_with_dollar_word",
+    "text": "Wrong below 33 dollars.",
+    "expected": {
+      "price": 33.0,
+      "direction": "below"
+    },
+    "note": "Numeral plus the word 'dollars'; numeral is explicit."
+  },
+  {
+    "id": "round_number_text",
+    "text": "Anything under $1000 and I'm out; it should hold that.",
+    "expected": {
+      "price": 1000.0,
+      "direction": "below"
+    },
+    "note": "Plain 'under $X'."
+  },
+  {
+    "id": "empty_ish",
+    "text": "Not sure yet.",
+    "expected": {
+      "price": null,
+      "direction": null
+    },
+    "note": "No content: not checkable."
+  }
+]

@@ -195,7 +195,8 @@ def build_news_intelligence(news_items: list, port_df, reduce_tickers=None) -> d
     }
 
 
-def rescore_news_items_llm(items: list[dict], api_key: str, timeout: float = 8.0) -> list[dict]:
+def rescore_news_items_llm(items: list[dict], api_key: str, timeout: float = 8.0, *,
+                           setting=None) -> list[dict]:
     """
     Re-score VADER compound scores using Claude Haiku financial-domain scoring.
 
@@ -237,6 +238,7 @@ def rescore_news_items_llm(items: list[dict], api_key: str, timeout: float = 8.0
             temperature=0,
             messages=[{"role": "user", "content": prompt}],
             client_kwargs={"max_retries": 0, "timeout": anthropic.Timeout(timeout)},
+            setting=setting,
         )
         if not r.ok:
             return items
@@ -293,7 +295,8 @@ def _apply_suppress_only(item: dict, llm_score) -> dict | None:
     return out
 
 
-def llm_score_batch(items: list[dict], api_key: str, timeout: float = 8.0) -> list | None:
+def llm_score_batch(items: list[dict], api_key: str, timeout: float = 8.0, *,
+                    setting=None) -> list | None:
     """One Anthropic call scoring <= 25 items. Returns scores aligned to `items`
     (None where missing/invalid), or None on any exception / parse failure."""
     if not items or not api_key:
@@ -325,6 +328,7 @@ def llm_score_batch(items: list[dict], api_key: str, timeout: float = 8.0) -> li
             temperature=0,
             messages=[{"role": "user", "content": prompt}],
             client_kwargs={"max_retries": 0, "timeout": anthropic.Timeout(timeout)},
+            setting=setting,
         )
         if not r.ok:
             return None
@@ -394,6 +398,7 @@ def rescore_brief_news(
     memo: dict,
     now_ts: float,
     timeout: float = 8.0,
+    setting=None,
 ) -> tuple[list[dict], dict | None]:
     """Decision-scoped suppress-only rescore of the full held headline list.
 
@@ -430,7 +435,8 @@ def rescore_brief_news(
     failed_idx: set[int] = set()
     if batches:
         def _run(b):
-            return llm_score_batch([items[i] for i in b], api_key, timeout)
+            return llm_score_batch([items[i] for i in b], api_key, timeout,
+                                   setting=setting)
 
         with ThreadPoolExecutor(max_workers=_RESCORE_WORKERS) as ex:
             outs = list(ex.map(_run, batches))
@@ -489,6 +495,8 @@ def rescore_headlines_llm(
     api_key: str,
     ticker: str = "",
     timeout: float = 8.0,
+    *,
+    setting=None,
 ) -> list[dict] | None:
     """Bidirectional LLM rescore for VADER-annotated headline dicts (from analyze_news).
 
@@ -543,6 +551,7 @@ def rescore_headlines_llm(
             temperature=0,
             messages=[{"role": "user", "content": prompt}],
             client_kwargs={"max_retries": 0, "timeout": anthropic.Timeout(timeout)},
+            setting=setting,
         )
         if not r.ok:
             return None

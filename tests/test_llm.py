@@ -46,7 +46,8 @@ def test_unknown_role_raises():
 
 
 def test_role_sets():
-    assert llm.PINNED_ROLES == {"score", "filter", "extract_trigger"}
+    assert llm.DECISION_ROLES == {"score", "filter", "extract_trigger"}
+    assert llm.PINNED_ROLES == llm.DECISION_ROLES   # backward-compatible alias
     assert llm.JSON_ROLES == llm.ROLES - {"fast", "deep"}
     assert set(llm.CODE_DEFAULTS) == set(llm.ROLES)
 
@@ -393,19 +394,28 @@ def test_opus_5_request_is_forwarded_unchanged():
                  "system": "s", "timeout": 90}
 
 
-@pytest.mark.parametrize("role", sorted(llm.PINNED_ROLES))
-def test_pinned_role_rejects_a_different_model(role):
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize("role", sorted(llm.DECISION_ROLES))
+def test_decision_role_rejects_a_different_explicit_model(role):
+    with pytest.raises(ValueError, match="App Settings after a passing eval"):
         llm.resolve_model(role, "claude-haiku-5-5")
 
 
-@pytest.mark.parametrize("role", sorted(llm.PINNED_ROLES))
-def test_pinned_role_accepts_its_own_default(role):
+@pytest.mark.parametrize("role", sorted(llm.DECISION_ROLES))
+def test_decision_role_accepts_its_own_default(role):
     assert llm.resolve_model(role, llm.CODE_DEFAULTS[role]) == llm.CODE_DEFAULTS[role]
 
 
-@pytest.mark.parametrize("role", sorted(llm.ROLES - llm.PINNED_ROLES))
-def test_unpinned_role_accepts_an_explicit_model(role):
+@pytest.mark.parametrize("role", sorted(llm.DECISION_ROLES))
+def test_decision_role_explicit_must_equal_the_setting_when_one_is_given(role):
+    st = {role: llm.RoleSetting("claude-haiku-5-5")}
+    assert llm.resolve_model_with_source(role, "claude-haiku-5-5", setting=st, env={}) == (
+        "claude-haiku-5-5", "explicit")
+    with pytest.raises(ValueError):
+        llm.resolve_model_with_source(role, llm.CODE_DEFAULTS[role], setting=st, env={})
+
+
+@pytest.mark.parametrize("role", sorted(llm.ROLES - llm.DECISION_ROLES - {"extract_strong"}))
+def test_non_decision_role_accepts_an_explicit_model(role):
     assert llm.resolve_model(role, "claude-x") == "claude-x"
 
 
@@ -419,7 +429,7 @@ def test_complete_on_pinned_override_errors_without_calling():
     res = llm.complete("score", api_key="sk-test-key-123", model="claude-haiku-5-5",
                        messages=[{"role": "user", "content": "x"}], max_tokens=10,
                        client_factory=factory)
-    assert res.text is None and "pinned" in (res.error or "")
+    assert res.text is None and "App Settings" in (res.error or "")
     assert made == []
 
 
@@ -526,14 +536,22 @@ def test_resolve_bad_setting_entry_ignored(entry):
     assert got == (llm.HAIKU_4_5, "code")
 
 
-@pytest.mark.parametrize("role", sorted(llm.PINNED_ROLES))
-def test_pinned_role_ignores_env_and_setting(role):
-    got = llm.resolve_model_with_source(
-        role, setting={role: RS("claude-s")},
-        env={"DRISHTA_LLM_MODEL_" + role.upper(): "claude-e"})
-    assert got == (llm.CODE_DEFAULTS[role], "code")
+@pytest.mark.parametrize("role", sorted(llm.DECISION_ROLES))
+def test_decision_role_ignores_env_and_honours_setting(role):
+    env = {"DRISHTA_LLM_MODEL_" + role.upper(): "claude-e"}
+    got = llm.resolve_model_with_source(role, setting={role: RS("claude-s")}, env=env)
+    assert got == ("claude-s", "setting")
+    # env alone never moves a decision role
+    assert llm.resolve_model_with_source(role, env=env) == (llm.CODE_DEFAULTS[role], "code")
+    # a malformed entry is ignored
+    for bad in (None, "claude-s", RS("gpt-4"), {"model": "claude-s"}):
+        assert llm.resolve_model_with_source(
+            role, setting={role: bad}, env={}) == (llm.CODE_DEFAULTS[role], "code")
     with pytest.raises(ValueError):
         llm.resolve_model_with_source(role, "claude-other", env={})
+    with pytest.raises(ValueError):
+        llm.resolve_model_with_source(role, "claude-other", setting={role: RS("claude-s")},
+                                      env=env)
 
 
 def test_extract_strong_ignores_env_and_setting_explicit_wins():

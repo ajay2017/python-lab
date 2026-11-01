@@ -120,6 +120,8 @@ def extract_trigger(
     api_key: str,
     model: str | None = None,
     max_tokens: int = 200,
+    *,
+    setting=None,
 ) -> dict | None:
     """
     Parse a free-text Pre-Mortem commitment into a structured price trigger.
@@ -142,6 +144,7 @@ def extract_trigger(
             system=_EXTRACT_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": commitment_text.strip()}],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
+            setting=setting,
         )
         if not r.ok:
             return None

@@ -111,12 +111,16 @@ def _clear_healthchecks_key(monkeypatch):
 @pytest.fixture(autouse=True)
 def _stub_llm_settings_loader(monkeypatch):
     """N13: no test may ever read a real App Settings model row."""
-    from stock_analyzer import llm_settings, llm_usage
+    from stock_analyzer import llm_decision_settings, llm_settings, llm_usage
     monkeypatch.setattr(llm_settings, "_default_loader", lambda: ("no_row", None))
+    monkeypatch.setattr(llm_decision_settings, "_default_loader",
+                        lambda: ("no_row", None))
     llm_settings.invalidate()
+    llm_decision_settings.invalidate()
     llm_usage.reset()
     yield
     llm_settings.invalidate()
+    llm_decision_settings.invalidate()
     llm_usage.reset()
 
 

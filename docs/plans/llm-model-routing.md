@@ -967,6 +967,12 @@ ALTER TABLE llm_role_evals ENABLE ROW LEVEL SECURITY;  -- + FOR ALL TO service_r
 
 ### 17.5 Owner decisions
 
+**Ruled 2026-11-01 (owner): all nine recommendations ACCEPTED, with one change to U7: no wait for the ~11-10 console
+cost comparison.** The new models are cheaper per token, thinking is off for the decision roles (D-4), and the eval
+measures what matters (same calls), so each role switches as soon as its path is built and its eval passes. The
+owner applies the 17.4 DDL the same day (`docs/sql/llm-decision-roles.sql`). Build order, because a pinned role can't
+call a candidate model until the resolver changes: C1 → C4 ∥ C2 → C3 → C5 → C6 → C7.
+
 | # | Decision | Planner recommendation |
 |---|---|---|
 | U1 | Pass constants (17.3) | The starting values shown; bias and upward Buy crossings judged tightest |
@@ -1008,3 +1014,16 @@ eval, mismatched effort / hash / criteria version, age exactly `LLM_EVAL_MAX_AGE
 fallen-back Test role); every pass function at equality on each constant; the |Δcomposite| ≤ 5.0 property;
 `llm_models` byte-identical and the two rows isolated both ways; the U4 path; `llm_role_eval` never writes the cache,
 trades or `reference_tables` (AST); the legacy-select fallback.
+
+### 17.7 Build progress
+
+- **2026-11-01: C1 + C2 + C4 built** (one commit; Opus FIX-FIRST ×2 → SHIP). Review fixes folded in: real
+  trades with a NULL stored trigger are unlabelled (only an invented price or a parse failure counts); `not_checkable`
+  rows count an in-text price as a disagreement, not invented; `reset_role("score")` keeps today's model as `prior`;
+  an explicit `model=` on a decision role is checked against the saved setting; the filter eval retries a failed
+  batch once and measures tier changes over the compared headlines; three ambiguous fixture cases dropped
+  (`words_price`, `ambiguous_two_dirs`, `entry_price_context`; 28 left).
+- **Carried into C5:** when an explicit `model=` equals a saved decision setting, `_complete` reports source
+  `explicit` and doesn't apply the entry's effort / capabilities (latent: no caller passes `model=` for a decision
+  role). **Carried into C3 / C5:** stale-if-error for the `score` snapshot, so a transient unreadable reload doesn't
+  flip a day's score model to the code default mid-day (reviewer NB11).

@@ -1069,6 +1069,23 @@ _GATE_FILES = {
     # 2026-10-26: decides whether an AI model setting may be saved (Test-before-Save)
     # and what the App Settings Test role button sends.
     "stock_analyzer/ai_models_settings.py",
+    # 2026-11-01: App Settings model choice for the decision roles (score /
+    # filter / extract_trigger), the date-keyed score switch and its fallback.
+    "stock_analyzer/llm_decision_settings.py",
+    # 2026-11-01: the pass/fail eval that must pass before a decision role's
+    # model may be saved.
+    "stock_analyzer/llm_role_eval.py",
+    # 2026-11-01: selects the eval sample and the current model it is compared with.
+    "scripts/llm_role_eval.py",
+    # 2026-11-01: the score cache's date key, which decides which model's
+    # sentiment a given day's composite uses (the date-keyed score switch).
+    "stock_analyzer/sentiment_cache.py",
+    # 2026-11-01 (owner U9): the news score prompt, the swing cap and the
+    # suppress-only filter that hides or releases protective news cards.
+    "stock_analyzer/news_intelligence.py",
+    # 2026-11-01 (owner U9): extracts the Pre-Mortem trigger saved to trades as
+    # the permanent R-Multiple declared stop.
+    "stock_analyzer/premortem_monitor.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,

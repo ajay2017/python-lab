@@ -950,6 +950,46 @@ NEWS_CRITICAL_MIN_WEIGHT_PCT = 8.0
 # bear/bull signals. Impact is further bounded by the 10% composite weight.
 SENTIMENT_LLM_MAX_SWING = 0.5
 
+# ── LLM decision-role eval: pass criteria (llm_role_eval) ─────────────────────
+# Owner decision U1 (2026-11-01; docs/plans/llm-model-routing.md section 17).
+# ⚙️ App Settings enables Save for a decision role (score / filter /
+# extract_trigger) only when a stored `llm_role_evals` row for that exact model
+# + effort passed EVERY limit below. Each limit compares the candidate with the
+# role's current model on real stored inputs. "Net" means after subtracting the
+# noise floor: the same metric for the current model re-run against itself.
+# A boundary value passes (<=). Changing ANY value here is a policy decision:
+# bump LLM_EVAL_CRITERIA_VERSION in the same commit, which makes every stored
+# eval stale so nothing saves on criteria it never met.
+LLM_EVAL_CRITERIA_VERSION = 1
+LLM_EVAL_MAX_AGE_DAYS = 14          # an eval older than this can't enable Save
+LLM_EVAL_MAX_FAILURE_PCT = 5.0      # failure %. score: calls that error, time out or return an unparseable reply (an incomplete array keeps VADER for the missing headlines and shows in the shift metrics instead);
+                                    # filter: items with no valid score after the eval's one retry; extract_trigger: parse failures
+# score: composite points moved by the candidate's news sentiment. Sentiment is
+# 10% of the composite and each headline's AI shift is capped at
+# SENTIMENT_LLM_MAX_SWING, so any model change moves a composite by <= 5.0 pts.
+# Self-spread is the raw mean |run A - run B| of the candidate (not net of anything).
+LLM_EVAL_SCORE_LOOKBACK_DAYS = 30           # stored cache rows sampled (today excluded)
+LLM_EVAL_SCORE_MIN_TICKER_DAYS = 200        # fewer sampled rows = no verdict (fails)
+LLM_EVAL_SCORE_MAX_MEAN_SHIFT_PTS = 0.5     # |net signed mean shift|: systematic bias
+LLM_EVAL_SCORE_MAX_MEAN_ABS_SHIFT_PTS = 1.0 # net mean |shift|: overall disagreement
+LLM_EVAL_SCORE_MAX_BAND_CROSS_PCT = 2.0     # net % of held ticker-days changing band (Sell/Hold/Buy/Strong Buy)
+LLM_EVAL_SCORE_MAX_BUY_ENTRY_CROSS_PCT = 1.0  # net % newly crossing UP into >= COMPOSITE_BUY (loosens entries)
+LLM_EVAL_SCORE_MAX_SELF_SPREAD_PTS = 0.5    # raw mean |A - B| of the candidate's two runs: run-to-run stability
+LLM_EVAL_SCORE_MAX_CUMULATIVE_SHIFT_PTS = 1.0  # U6: |sum of signed mean shifts| across successive switches
+# filter: suppress-only, so a more lenient model RELEASES protective news cards.
+LLM_EVAL_FILTER_MIN_HEADLINES = 150         # negative headlines scored in every run (excluded ones don't count); fewer = no verdict (fails)
+LLM_EVAL_FILTER_MAX_LOOSEN_PCT = 5.0        # net % of compared headlines whose alert tier gets less severe
+LLM_EVAL_FILTER_MAX_CRITICAL_RELEASE_PCT = 2.0  # net % of compared headlines moving from critical to above the warn line
+# extract_trigger: the Pre-Mortem price becomes the permanent R-Multiple declared
+# stop, saved without confirmation, so an invented price or a wrong direction
+# fails outright. Every trigger count is summed over BOTH runs of each case.
+LLM_EVAL_TRIGGER_PRICE_TOL = 0.01           # $ difference still counted as the same price
+LLM_EVAL_TRIGGER_MAX_INVENTED = 0           # price extracted where the text states none
+LLM_EVAL_TRIGGER_MAX_WRONG_DIRECTION = 0    # above / below reversed
+LLM_EVAL_TRIGGER_MAX_WRONG_PRICE = 0        # fixture cases: price off by more than the tolerance
+LLM_EVAL_TRIGGER_MAX_MISSES = 1             # fixture cases: a stated trigger not extracted
+LLM_EVAL_TRIGGER_MAX_REAL_DISAGREE = 1      # real trades: other disagreements with the stored trigger
+
 # ── News-Intelligence "Opportunity Signals" inclusion (Overview) ─────────────
 # A held name surfaces as a positive-news opportunity when BOTH hold: the
 # headline is positive AND the position is decent quality. Kept as their own

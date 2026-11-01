@@ -48,11 +48,14 @@ ROLES = frozenset({
     ROLE_FAST, ROLE_DEEP, ROLE_EXTRACT, ROLE_EXTRACT_STRONG,
     ROLE_EXTRACT_TRIGGER, ROLE_FILTER, ROLE_SCORE,
 })
-PINNED_ROLES = frozenset({ROLE_SCORE, ROLE_FILTER, ROLE_EXTRACT_TRIGGER})
+# Decision roles: App Settings may re-point them only through the eval-gated
+# ``llm_decision_settings`` row; env is always ignored.
+DECISION_ROLES = frozenset({ROLE_SCORE, ROLE_FILTER, ROLE_EXTRACT_TRIGGER})
+PINNED_ROLES = DECISION_ROLES  # backward-compatible alias (plan 17, C4)
 NARRATIVE_ROLES = frozenset({ROLE_FAST, ROLE_DEEP})
 JSON_ROLES = ROLES - NARRATIVE_ROLES
-# The roles App Settings / env may re-point (pinned roles and extract_strong
-# stay in reviewed code).
+# The roles App Settings / env may re-point through the ``llm_models`` row
+# (decision roles use their own row; extract_strong stays in reviewed code).
 EDITABLE_ROLES = frozenset({ROLE_FAST, ROLE_DEEP, ROLE_EXTRACT})
 
 # Where a resolved model came from.
@@ -131,23 +134,34 @@ def resolve_model_with_source(role: str, model: str | None = None, *,
                               env: Mapping | None = None) -> tuple[str, str]:
     """(model, source). Unknown role raises ValueError (a programming error).
 
-    Roles outside EDITABLE_ROLES (the pinned roles and extract_strong) never
-    read env or the setting. An editable role resolves explicit ``model`` ->
-    env ``DRISHTA_LLM_MODEL_<ROLE>`` -> ``setting[role]`` -> code default.
+    Decision roles (score / filter / extract_trigger) always ignore env:
+    ``setting[role]`` (the eval-gated ``llm_models_decision`` entry) or the code
+    default, and an explicit ``model`` is allowed only when it equals that
+    result. ``extract_strong`` never reads env or the setting. An editable role
+    resolves explicit ``model`` -> env ``DRISHTA_LLM_MODEL_<ROLE>`` ->
+    ``setting[role]`` -> code default.
     """
     if role not in ROLES:
         raise ValueError(f"unknown LLM role: {role!r}")
     explicit = isinstance(model, str) and bool(model)
+    if role in DECISION_ROLES:
+        entry = setting.get(role) if isinstance(setting, Mapping) else None
+        if isinstance(entry, RoleSetting) and _claude_id(entry.model):
+            would, src = entry.model, SOURCE_SETTING
+        else:
+            would, src = CODE_DEFAULTS[role], SOURCE_CODE
+        if explicit:
+            # The score / filter / extract_trigger outputs feed the composite
+            # and Act Today and their callers are not all review-gated files,
+            # so no caller can choose a model the resolver wouldn't.
+            if model != would:
+                raise ValueError(
+                    f"role {role!r} resolves to {would!r}; change it in "
+                    f"⚙️ App Settings after a passing eval instead of passing {model!r}")
+            return model, SOURCE_EXPLICIT
+        return would, src
     if role not in EDITABLE_ROLES:
         if explicit:
-            # A pinned role's model is decided here, in reviewed code, so no
-            # caller can choose a different one: the score / filter /
-            # extract_trigger outputs feed the composite and Act Today, and
-            # their callers are not all review-gated files.
-            if role in PINNED_ROLES and model != CODE_DEFAULTS[role]:
-                raise ValueError(
-                    f"role {role!r} is pinned to {CODE_DEFAULTS[role]!r}; "
-                    f"change CODE_DEFAULTS in a reviewed commit instead of passing {model!r}")
             return model, SOURCE_EXPLICIT
         return CODE_DEFAULTS[role], SOURCE_CODE
     if explicit:
@@ -173,12 +187,19 @@ def resolve_model(role: str, model: str | None = None, *,
 
 
 def _provider_setting(role, model) -> Mapping | None:
-    """The App Settings snapshot for an editable role with no explicit model,
-    else None. Pinned roles and ``extract_strong`` never trigger a DB read.
-    Never raises."""
-    if role not in EDITABLE_ROLES or (isinstance(model, str) and model):
+    """The App Settings snapshot for an editable or decision role, else None.
+    An editable role with an explicit model skips the read; a decision role always
+    reads it (cached), because its explicit model is checked against the saved
+    setting. ``extract_strong`` never triggers a DB read. Never raises."""
+    explicit = isinstance(model, str) and bool(model)
+    if explicit and role not in DECISION_ROLES:
         return None
     try:
+        if role in DECISION_ROLES:
+            from stock_analyzer import llm_decision_settings
+            return llm_decision_settings.current_setting()
+        if role not in EDITABLE_ROLES:
+            return None
         from stock_analyzer import llm_settings
         return llm_settings.current_setting()
     except Exception:  # noqa: BLE001

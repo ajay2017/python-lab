@@ -110,7 +110,10 @@ class _Spy:
         self.fail_on = set(fail_on)
         self.score = score
 
-    def __call__(self, items, api_key, timeout=8.0):
+    def __call__(self, items, api_key, timeout=8.0, *, setting=None):
+        # `setting` mirrors llm_score_batch's keyword (LLM decision roles C4);
+        # rescore_brief_news forwards its own setting, None by default.
+        self.settings = getattr(self, "settings", []) + [setting]
         n = len(self.calls)
         self.calls.append([i["title"] for i in items])
         if n in self.fail_on:
@@ -280,7 +283,7 @@ class _PartialSpy:
     def __init__(self):
         self.calls = 0
 
-    def __call__(self, items, api_key, timeout=8.0):
+    def __call__(self, items, api_key, timeout=8.0, *, setting=None):
         self.calls += 1
         return [0.4 if i % 2 == 0 else None for i in range(len(items))]
 
@@ -299,7 +302,7 @@ def test_unscored_items_are_memoized_not_resent(monkeypatch):
 
 
 def test_unfiltered_negative_counts_only_negative(monkeypatch):
-    monkeypatch.setattr(ni, "llm_score_batch", lambda items, k, timeout=8.0: None)
+    monkeypatch.setattr(ni, "llm_score_batch", lambda items, k, timeout=8.0, *, setting=None: None)
     items = ([_it(i, c=0.6) for i in range(20)]
              + [_it(20, c=-0.5), _it(21, c=NEWS_SENTIMENT_WARN), _it(22, c=NEWS_SENTIMENT_WARN + 0.01)])
     out, st = ni.rescore_brief_news(items, "k", window_start_ts=1000.0, memo={}, now_ts=1.0)

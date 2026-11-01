@@ -5520,6 +5520,152 @@ def save_sentiment_llm_cache(
         return False
 
 
+# ── LLM decision-role eval (docs/plans/llm-model-routing.md section 17.3) ─────
+# Readers for stock_analyzer.llm_role_eval's inputs + the one table it may write
+# (`llm_role_evals`, DDL in docs/sql/llm-decision-roles.sql). Nothing here writes
+# the score cache, trades or reference_tables. Every reader returns None (the
+# offline sentinel) when it could not read, never an empty container.
+
+_EVAL_PAGE = 1000
+
+
+def _eval_paged(build) -> list:
+    """All rows of a query: `build()` returns a fresh select; paged by .range()."""
+    rows: list = []
+    start = 0
+    while True:
+        page = build().range(start, start + _EVAL_PAGE - 1).execute().data
+        if not page:
+            break
+        rows.extend(page)
+        if len(page) < _EVAL_PAGE:
+            break
+        start += _EVAL_PAGE
+    return rows
+
+
+def save_llm_role_eval(row: dict) -> "int | None":
+    """Insert one `llm_role_evals` row; returns its new id, or None on any failure
+    (read-only session, no DB, DDL not applied, RLS). Never raises."""
+    if is_readonly() or not row or not has_db():
+        return None
+    try:
+        import json as _json
+        res = (
+            _client().table("llm_role_evals")
+            .insert(_json.loads(_json.dumps(row, default=str)))
+            .execute().data
+        )
+        return int(res[0]["id"]) if res else None
+    except Exception as e:
+        import warnings
+        warnings.warn(f"save_llm_role_eval: {e}")
+        return None
+
+
+def load_latest_llm_role_eval(role: str, model: str, effort: "str | None") -> "dict | None":
+    """The newest stored eval row for (role, model, effort), passed or not, or None
+    (none stored, DB offline, table missing). Never raises."""
+    if not role or not model or not has_db():
+        return None
+    try:
+        q = (
+            _client().table("llm_role_evals").select("*")
+            .eq("role", role).eq("model", model)
+        )
+        q = q.eq("effort", effort) if effort else q.is_("effort", "null")
+        rows = q.order("ran_at", desc=True).order("id", desc=True).limit(1).execute().data
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def load_sentiment_cache_sample(since_date: str, until_date: str) -> "list | None":
+    """`sentiment_llm_cache` rows with since_date <= score_date <= until_date, as dicts
+    {ticker, score_date, headlines, avg_sent, model, effort}. When the provenance
+    columns don't exist yet (DDL not applied) it retries without them and returns
+    model / effort as None (legacy select), with a printed warning. None = unreadable."""
+    if not has_db():
+        return None
+
+    def _read(cols: str) -> list:
+        return _eval_paged(lambda: (
+            _client().table("sentiment_llm_cache").select(cols)
+            .gte("score_date", since_date).lte("score_date", until_date)
+            .order("score_date").order("ticker")
+        ))
+
+    try:
+        try:
+            rows = _read("ticker,score_date,headlines,avg_sent,model,effort")
+        except Exception as e:
+            print(f"load_sentiment_cache_sample: first read failed "
+                  f"({type(e).__name__}); retrying without model/effort columns "
+                  f"(DDL may be missing).")
+            rows = _read("ticker,score_date,headlines,avg_sent")
+            for r in rows:
+                r["model"] = None
+                r["effort"] = None
+        return [r for r in rows if isinstance(r.get("headlines"), list)]
+    except Exception:
+        return None
+
+
+def load_score_history_composites(since_date: str, until_date: str) -> "dict | None":
+    """{(ticker, score_date): composite} from `score_history` for the date range
+    (rows with a NULL composite skipped), or None when unreadable."""
+    if not has_db():
+        return None
+    try:
+        rows = _eval_paged(lambda: (
+            _client().table("score_history").select("ticker,score_date,composite")
+            .gte("score_date", since_date).lte("score_date", until_date)
+            .order("score_date").order("ticker")
+        ))
+        out = {}
+        for r in rows:
+            try:
+                out[(str(r["ticker"]).upper(), str(r["score_date"])[:10])] = float(r["composite"])
+            except (TypeError, ValueError, KeyError):
+                continue
+        return out
+    except Exception:
+        return None
+
+
+def load_premortem_trigger_rows() -> "list | None":
+    """Trades with a non-empty `premortem_commitment`, as dicts {id, ticker,
+    premortem_commitment, premortem_trigger_price (float|None),
+    premortem_trigger_direction (str|None)}. None = unreadable."""
+    if not has_db():
+        return None
+    try:
+        rows = _eval_paged(lambda: (
+            _client().table("trades")
+            .select("id,ticker,premortem_commitment,premortem_trigger_price,"
+                    "premortem_trigger_direction")
+            .not_.is_("premortem_commitment", "null")
+            .order("id")
+        ))
+        out = []
+        for r in rows:
+            if not str(r.get("premortem_commitment") or "").strip():
+                continue
+            try:
+                price = float(r.get("premortem_trigger_price"))
+            except (TypeError, ValueError):
+                price = None
+            out.append({
+                "id": r.get("id"), "ticker": r.get("ticker"),
+                "premortem_commitment": r["premortem_commitment"],
+                "premortem_trigger_price": price,
+                "premortem_trigger_direction": r.get("premortem_trigger_direction"),
+            })
+        return out
+    except Exception:
+        return None
+
+
 # ── Thesis Red Team Agent — erosion score day-cache (ticker × date) ──────────
 # Persists the daily quantitative erosion score (Phase 1) and — in Phase 2 —
 # optional Haiku counter-evidence bullets. READ-ONLY-GATED as of 2026-08-28:
