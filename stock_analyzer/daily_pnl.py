@@ -335,6 +335,69 @@ def _parse_date(v):
     return v if isinstance(v, _dt.date) else None
 
 
+def _journal_shares_at(rows: list[tuple], b_date) -> float | None:
+    """Shares of one ticker implied by journal rows dated <= `b_date`.
+
+    rows: [(date, ACTION, shares, price)]. BUY +shares, SELL -shares, SPLIT sets
+    the running total to its `shares` (the adjusted TOTAL, see `_is_split`).
+    None when the order is ambiguous (a SPLIT shares a date with a BUY/SELL) or
+    the running total after any date's net falls below -BROKER_DRIFT_SHARE_TOL
+    (BUY/SELL are netted per date, so same-day row order doesn't matter). Snapped to 6 dp (as
+    trim_sizing.exact_shares) so float noise can't flip an int comparison.
+    """
+    sel = [r for r in rows if r[0] <= b_date]
+    split_dates = {r[0] for r in sel if _is_split(r[1])}
+    if any(r[0] in split_dates and not _is_split(r[1]) and r[1] in ("BUY", "SELL")
+           for r in sel):
+        return None
+    # Net BUY/SELL per ET date BEFORE applying: db.load_trades returns rows
+    # newest-first, so same-date rows arrive in arbitrary order and a same-day
+    # round trip would otherwise replay SELL-first and read as oversold.
+    net_by_date: dict = {}
+    split_total: dict = {}
+    for d, action, sh, _px in sel:
+        if _is_split(action):
+            split_total[d] = sh
+        elif action == "BUY":
+            net_by_date[d] = net_by_date.get(d, 0.0) + sh
+        elif action == "SELL":
+            net_by_date[d] = net_by_date.get(d, 0.0) - sh
+    total = 0.0
+    for d in sorted(set(net_by_date) | set(split_total)):
+        if d in split_total:
+            total = split_total[d]
+        else:
+            total += net_by_date[d]
+        total = round(total, 6)
+        if total < -BROKER_DRIFT_SHARE_TOL:
+            return None
+    return max(total, 0.0)
+
+
+def close_on_date(df, d) -> float | None:
+    """Finite, positive "Close" of the bar whose ET calendar date == `d` (the
+    last such bar), else None. A tz-aware index is converted to America/New_York
+    first (so a UTC-stamped 00:00 bar maps to the PREVIOUS ET day); a tz-naive
+    index is read as exchange-local dates. Never raises."""
+    import math
+    try:
+        from stock_analyzer.held_stop import _et_dates
+        cl = df["Close"].dropna()
+        if cl.empty:
+            return None
+        dates = _et_dates(cl.index)
+        target = _parse_date(d)
+        if target is None:
+            return None
+        hit = [i for i, x in enumerate(dates) if x.date() == target]
+        if not hit:
+            return None
+        v = float(cl.iloc[hit[-1]])
+        return v if math.isfinite(v) and v > 0 else None
+    except Exception:
+        return None
+
+
 def fill_late_logged_baseline(
     held: list[dict],
     baseline: dict,
@@ -357,10 +420,13 @@ def fill_late_logged_baseline(
     bought on or before `baseline_date`) with the fill price (for lots bought
     strictly between `baseline_date` and `today`).
 
-    A ticker that can't be fully explained (a SELL or split in between, a
-    non-positive fill, shares the journal doesn't account for, no earlier BUY
-    or no usable baseline-date close for the pre-existing part) is left alone,
-    so the `unbaselined` warning still fires for genuine drift.
+    A ticker is filled only when the journal's own replay to `baseline_date`
+    (BUY +, SELL -, SPLIT sets the total) plus the buys in between accounts for
+    the held shares. Anything else (a SELL or split in between, a non-positive
+    fill, a split sharing a date with a BUY/SELL, an oversold history, shares
+    the journal doesn't explain such as a broker rebaseline or a fully-sold
+    old position, or no usable baseline-date close for the pre-existing part)
+    is left alone, so the `unbaselined` warning still fires for genuine drift.
 
     held / baseline / today_trades : as in `compute_positions_day_pnl`.
     journal_trades  : [{"ticker","action","shares","price","date"}], every
@@ -416,6 +482,14 @@ def fill_late_logged_baseline(
             continue
         between_shares = sum(r[2] for r in between)
         between_cost = sum(r[2] * r[3] for r in between)
+        # Replay the journal to the baseline date: the held count comes from the
+        # holdings table, so only fill when the journal itself explains it.
+        net_b = _journal_shares_at(rows, b_date)
+        if net_b is None:
+            continue                      # ambiguous / oversold history
+        # `held` is int-truncated by build_portfolio_df, so compare truncated.
+        if abs(int(round(net_b + between_shares, 6)) - start) > BROKER_DRIFT_SHARE_TOL:
+            continue                      # journal doesn't account for the held shares
         pre = start - between_shares
         if pre < -BROKER_DRIFT_SHARE_TOL:
             continue
@@ -423,8 +497,6 @@ def fill_late_logged_baseline(
             pre = 0.0
         close_b = 0.0
         if pre > 0:
-            if not any(r[1] == "BUY" and r[0] <= b_date for r in rows):
-                continue
             close_b = _num(closes.get(tk))
             if not math.isfinite(close_b) or close_b <= 0:
                 continue

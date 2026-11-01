@@ -752,3 +752,119 @@ def test_fill_today_split_skipped():
     nb, filled = _fill(held, {"X": {"shares": 1, "close": 1.0}}, today,
                        [_jb("NVDA", _BD, 10, 40.0)], {"NVDA": 40.0})
     assert filled == [] and "NVDA" not in nb
+
+
+# ─── journal replay check (review FIX-FIRST) ─────────────────────────────────
+
+_OLD = _dtm.date(2026, 9, 1)
+_OTHER = {"X": {"shares": 1, "close": 1.0}}
+
+
+def test_fill_fully_exited_old_position_not_filled_and_still_unbaselined():
+    held = [{"ticker": "OLD", "shares": 5, "price": 10.0}]
+    journal = [_jb("OLD", _OLD, 5, 9.0), _jb("OLD", _dtm.date(2026, 9, 10), 5, 9.5, "SELL")]
+    nb, filled = _fill(held, _OTHER, [], journal, {"OLD": 10.0})
+    assert filled == [] and "OLD" not in nb
+    res = dp.compute_positions_day_pnl(held, nb, [], 100.0)
+    assert [u["ticker"] for u in res["unbaselined"]] == ["OLD"]
+
+
+def test_fill_journal_net_short_of_pre_not_filled():
+    held = [{"ticker": "MRVL", "shares": 8, "price": 110.0}]
+    nb, filled = _fill(held, _OTHER, [], [_jb("MRVL", _BD, 5, 100.0)], {"MRVL": 105.0})
+    assert filled == [] and "MRVL" not in nb
+
+
+def test_fill_fractional_journal_with_int_truncated_held():
+    held = [{"ticker": "FRC", "shares": 2, "price": 10.0}]
+    nb, filled = _fill(held, _OTHER, [], [_jb("FRC", _BD, 2.5, 9.0)], {"FRC": 9.5})
+    assert filled and filled[0]["ticker"] == "FRC"
+
+
+def test_fill_split_before_baseline_sets_total():
+    held = [{"ticker": "NVDA", "shares": 40, "price": 10.0}]
+    journal = [_jb("NVDA", _OLD, 10, 40.0),
+               _jb("NVDA", _dtm.date(2026, 10, 1), 40, 0, "SPLIT 4:1")]
+    nb, filled = _fill(held, _OTHER, [], journal, {"NVDA": 10.0})
+    assert filled and filled[0]["shares"] == 40
+
+
+def test_fill_split_same_day_as_buy_skipped():
+    held = [{"ticker": "NVDA", "shares": 50, "price": 10.0}]
+    d = _dtm.date(2026, 10, 1)
+    journal = [_jb("NVDA", d, 10, 40.0), _jb("NVDA", d, 40, 0, "SPLIT 4:1"),
+               _jb("NVDA", d, 10, 10.0)]
+    nb, filled = _fill(held, _OTHER, [], journal, {"NVDA": 10.0})
+    assert filled == [] and "NVDA" not in nb
+
+
+def test_fill_oversold_history_skipped():
+    held = [{"ticker": "ODD", "shares": 3, "price": 10.0}]
+    journal = [_jb("ODD", _OLD, 2, 9.0), _jb("ODD", _dtm.date(2026, 9, 5), 5, 9.0, "SELL"),
+               _jb("ODD", _dtm.date(2026, 9, 6), 6, 9.0)]
+    nb, filled = _fill(held, _OTHER, [], journal, {"ODD": 10.0})
+    assert filled == []
+
+
+# ─── close_on_date ───────────────────────────────────────────────────────────
+
+import pandas as _pd
+
+_D = _dtm.date(2026, 10, 30)
+
+
+def _frame(idx, closes):
+    return _pd.DataFrame({"Close": closes}, index=idx)
+
+
+def test_close_on_date_tz_naive():
+    df = _frame(_pd.to_datetime(["2026-10-29", "2026-10-30"]), [1.0, 2.0])
+    assert dp.close_on_date(df, _D) == 2.0
+
+
+def test_close_on_date_et_aware():
+    idx = _pd.DatetimeIndex(["2026-10-29 00:00", "2026-10-30 00:00"]).tz_localize("America/New_York")
+    assert dp.close_on_date(_frame(idx, [1.0, 2.0]), _D) == 2.0
+
+
+def test_close_on_date_utc_midnight_maps_to_previous_et_day():
+    # A bar stamped 00:00 UTC on 10-30 is 20:00 ET on 10-29, so the function
+    # (which converts to ET) files it under 10-29, not 10-30.
+    idx = _pd.DatetimeIndex(["2026-10-30 00:00"]).tz_localize("UTC")
+    df = _frame(idx, [5.0])
+    assert dp.close_on_date(df, _D) is None
+    assert dp.close_on_date(df, _dtm.date(2026, 10, 29)) == 5.0
+
+
+def test_close_on_date_missing_and_bad_closes():
+    df = _frame(_pd.to_datetime(["2026-10-29"]), [1.0])
+    assert dp.close_on_date(df, _D) is None
+    for bad in (float("nan"), 0.0, -1.0):
+        assert dp.close_on_date(_frame(_pd.to_datetime(["2026-10-30"]), [bad]), _D) is None
+    assert dp.close_on_date(None, _D) is None
+
+
+def test_close_on_date_multiple_bars_same_date_takes_last():
+    idx = _pd.to_datetime(["2026-10-30 09:30", "2026-10-30 15:59"])
+    assert dp.close_on_date(_frame(idx, [1.0, 2.0]), _D) == 2.0
+
+
+def test_replay_same_day_round_trip_newest_first_is_filled():
+    # db.load_trades order is newest-first: SELL listed before its BUY.
+    d = _dtm.date(2026, 9, 10)
+    held = [{"ticker": "RT", "shares": 4, "price": 10.0}]
+    journal = [_jb("RT", _BD, 4, 9.0), _jb("RT", d, 10, 9.5, "SELL"), _jb("RT", d, 10, 9.0)]
+    nb, filled = _fill(held, _OTHER, [], journal, {"RT": 9.8})
+    assert filled and filled[0]["ticker"] == "RT" and filled[0]["shares"] == 4
+
+
+def test_replay_same_day_net_reduction_gives_correct_total():
+    d = _dtm.date(2026, 9, 10)
+    rows = [(_BD, "BUY", 3.0, 1.0), (d, "SELL", 6.0, 1.0), (d, "BUY", 2.0, 1.0),
+            (_OLD, "BUY", 10.0, 1.0)]   # newest-first-ish, unsorted
+    assert dp._journal_shares_at(rows, _BD) == 9.0
+
+
+def test_replay_oversold_still_none():
+    rows = [(_OLD, "BUY", 2.0, 1.0), (_dtm.date(2026, 9, 5), "SELL", 5.0, 1.0)]
+    assert dp._journal_shares_at(rows, _BD) is None

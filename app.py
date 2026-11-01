@@ -96,8 +96,8 @@ from stock_analyzer import thesis_review_status
 from stock_analyzer import forward_sim as _fsim
 from stock_analyzer import attribution_readiness as _attr_ready
 from stock_analyzer.personalized_discovery import build_winner_profile
-from stock_analyzer.daily_pnl import (compute_positions_day_pnl, fill_late_logged_baseline,
-                                      today_trade_cash_delta)
+from stock_analyzer.daily_pnl import (close_on_date, compute_positions_day_pnl,
+                                      fill_late_logged_baseline, today_trade_cash_delta)
 # Module-level (not local at each site) because all three import writers need
 # it and app.py runs top-to-bottom — see feedback_module_def_order.
 from stock_analyzer.market_time import et_anchor_iso as _et_anchor_iso
@@ -5973,20 +5973,14 @@ if page == "🏠 Home":
                             _tk = str(_h["ticker"]).strip().upper()
                             if _tk in _baseline:
                                 continue
-                            try:
-                                _hd_entry = held_data.get(_h["ticker"])
-                                _hdf = _hd_entry.get("df") if isinstance(_hd_entry, dict) else None
-                                _cl = _hdf["Close"].dropna()
-                                _ix = pd.DatetimeIndex(_cl.index)
-                                if _ix.tz is not None:
-                                    _ix = _ix.tz_convert("America/New_York")
-                                _hit = _cl[[d == _bl_date for d in _ix.date]]
-                                if len(_hit):
-                                    _cv = float(_hit.iloc[-1])
-                                    if _cv == _cv and _cv > 0 and _cv != float("inf"):
-                                        _bl_closes[_tk] = _cv
-                            except Exception:
-                                continue
+                            # held_data closes are dividend-adjusted (no raw frame is
+                            # in scope here): bounded error ~ shares x dividend on
+                            # an ex-date after the baseline date.
+                            _hd_entry = held_data.get(_h["ticker"])
+                            _hdf = _hd_entry.get("df") if isinstance(_hd_entry, dict) else None
+                            _cv = close_on_date(_hdf, _bl_date) if _hdf is not None else None
+                            if _cv is not None:
+                                _bl_closes[_tk] = _cv
                         _baseline, _dpnl_filled = fill_late_logged_baseline(
                             _held_now, _baseline, _today_trades_dp, _journal_dp,
                             _bl_date, _today_et(), _bl_closes)
@@ -8056,9 +8050,13 @@ if page == "🏠 Home":
             _fl_parts.append(f"**{', '.join(_fl_by['fill'])}** at your fill price")
         if _fl_by["mixed"]:
             _fl_parts.append(f"**{', '.join(_fl_by['mixed'])}** from both")
+        _fl_tail = ("Today's P&L counts only their move since then (since the fill "
+                    "for names filled at your fill price)."
+                    if (_fl_by["fill"] or _fl_by["mixed"])
+                    else "Today's P&L counts only their move since then.")
         _fill_note = (
-            f"ℹ️ Logged after the {_fl_d} snapshot was saved, so filled in from your "
-            f"journal: {'; '.join(_fl_parts)}. Today's P&L counts only their move since then."
+            f"ℹ️ Missing from the {_fl_d} snapshot (for example, logged after it was "
+            f"saved), so filled in from your journal: {'; '.join(_fl_parts)}. {_fl_tail}"
         )
     if len(_dq_msgs) == 1:
         _home_notice("pnldq", "caption")
@@ -14104,6 +14102,11 @@ elif page == "🧾 Summary":
                 _v = _sm_dpnl.get(_k)
                 if isinstance(_v, list):
                     _sm_dp_bad += len(_v)
+            _sm_dp_late = _sm_dpnl.get("late_filled")   # absent on an older cached payload
+            _sm_dp_late_note = (
+                f" {len(_sm_dp_late)} name(s) missing from the baseline snapshot were "
+                f"filled in from the journal (see 🏠 Home → ⚠️ Alerts)."
+                if isinstance(_sm_dp_late, list) and _sm_dp_late else "")
             st.metric(
                 "Today's P&L", _m(f"${_sm_dpnl['day_pnl']:+,.0f}"),
                 f"{_sm_dpnl['day_pnl_pct']:+.2f}%{_sm_dp_scope}",
@@ -14115,11 +14118,13 @@ elif page == "🧾 Summary":
                     (f"Day P&L for tracked positions, measured from the "
                      f"{_sm_dpnl_baseline_date} close — held names + today's realized trades. "
                      f"⚠️ {_sm_dp_bad} position(s) don't reconcile against that baseline, so this "
-                     f"figure is known to be off — see 🏠 Home for the amount and the names.")
+                     f"figure is known to be off — see 🏠 Home for the amount and the names."
+                     f"{_sm_dp_late_note}")
                     if _sm_dp_bad else
                     (f"TRUE day P&L for tracked positions, measured from the "
                      f"{_sm_dpnl_baseline_date} close — held names + today's realized trades. "
-                     f"Same figure as 🏠 Home (published this session).")
+                     f"Same figure as 🏠 Home (published this session)."
+                     f"{_sm_dp_late_note}")
                 ),
             )
             if _sm_dp_bad:
