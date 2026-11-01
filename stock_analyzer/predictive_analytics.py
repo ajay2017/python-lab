@@ -18,6 +18,7 @@ from stock_analyzer.constants import (
     COMPOSITE_WEIGHTS_VERSION,
     PREDICTIVE_MIN_BAND_N,
 )
+from stock_analyzer.market_time import today_et
 
 
 # ── Page population (scope + version + ETF filters, then collapse) ─────────────
@@ -1142,6 +1143,10 @@ def forward_alpha_at_horizon(
         historical_close_fn = get_historical_close
 
     target_date = _advance_trading_days(rec_date, horizon_trading_days)
+    # Not matured yet: no close can exist, so skip the provider call (each one
+    # was a wasted yf.download per row on every page visit, 2026-11-01 log).
+    if target_date > today_et():
+        return None
     try:
         price_fwd = historical_close_fn(ticker, target_date, target_date + timedelta(days=7))
     except Exception:

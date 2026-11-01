@@ -1006,6 +1006,18 @@ def test_forward_alpha_guard_negative_price_at_entry_none():
     assert pa.forward_alpha_at_horizon("AAA", date(2026, 1, 1), -5.0, 3, {}, historical_close_fn=_boom) is None
 
 
+def test_forward_alpha_unmatured_horizon_skips_the_provider(monkeypatch):
+    """A horizon ending after today has no close yet: None, with no provider
+    call (each was a wasted yf.download per row on every page visit)."""
+    monkeypatch.setattr(pa, "today_et", lambda: date(2026, 11, 2))
+    # 2026-10-30 (Fri) + 1 session = Mon 11-02 = today: still priced
+    assert pa.forward_alpha_at_horizon("AAA", date(2026, 10, 30), 100.0, 1, {},
+                                       historical_close_fn=lambda t, s, e: None) is None
+    # + 2 sessions = Tue 11-03, after today: short-circuits
+    assert pa.forward_alpha_at_horizon("AAA", date(2026, 10, 30), 100.0, 2, {},
+                                       historical_close_fn=_boom) is None
+
+
 def test_forward_alpha_fn_raises_returns_none():
     def _raise(t, s, e):
         raise RuntimeError("transport failure")
