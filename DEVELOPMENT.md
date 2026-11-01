@@ -180,13 +180,31 @@ The cron failure email can only be sent by a run that started, so a lane Railway
 starts, an import error in `cron_runner.py` or a dead Resend key would all be silent.
 When this variable is set (best as a Shared Variable), every lane pings healthchecks.io
 at its end (`stock_analyzer/healthcheck_ping.py`, called from
-`cron_runner._record_heartbeat`): success to check `drishta-<lane>`, any failure to its
-`/fail` URL. healthchecks.io emails you when an expected ping doesn't arrive. One-time
+`cron_runner._record_heartbeat`): success to check `drishta-<lane>`, a failed run to its
+`/log` URL. healthchecks.io emails you only when an expected success ping doesn't
+arrive. A failed run is recorded there with its error text but sends no email from
+healthchecks (owner decision 2026-11-01): the deduped Resend failure email already
+covers it, and `/fail` would add a failed/OK email pair per flip during an outage. A
+lane that keeps failing still alarms once its window passes with no success. One-time
 setup: create a free healthchecks.io project, copy its **ping key** (Project Settings →
-Ping key) into the variable, redeploy the cron services, and let each lane run once
-(`?create=1` creates its check). Then give each check the same cron expression as its
-Railway service, timezone UTC, with a grace period long enough for a slow run. Lanes
-with two DST slots ping on both. Unset, it does nothing. Read with `os.environ`, so no
+Ping key, not the API key) into the variable, share it with each cron service,
+redeploy them, and let each lane run once (`?create=1` creates its check; only the 7
+scheduled lanes may create one). Then set each check to Schedule **Cron**, time zone
+**UTC**:
+
+| Check | Cron expression | Grace |
+|---|---|---|
+| `drishta-premarket` | `0 12,13 * * *` | 1 hour |
+| `drishta-scan` | `45 13,14 * * *` | 1 hour |
+| `drishta-intraday` | `30 15,16 * * 1-5` | 1 hour |
+| `drishta-eod` | `30 21 * * 1-5` | 1 hour |
+| `drishta-broker` | `0 16,21 * * *` | 1 hour |
+| `drishta-thesis` | `0 23 * * 0` | 2 hours |
+| `drishta-maintenance` | `0 12 * * 6` (confirm in the Railway dashboard) | 2 hours |
+
+These must match the Railway services' Cron Schedules (`docs/architecture.md` lane
+table); change both together. Skip runs (weekends, holidays, the unused DST slot)
+still ping success. Unset, it does nothing. Read with `os.environ`, so no
 `railway_start.sh` line is needed.
 
 > **Gotcha:** adding a new secret that the app reads through `st.secrets` requires a

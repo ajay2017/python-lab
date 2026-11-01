@@ -33,12 +33,12 @@ def test_ok_url():
 
 
 def test_failed_url():
-    assert hp.ping_url(KEY, "scan", "failed") == f"https://hc-ping.com/{KEY}/drishta-scan/fail?create=1"
+    assert hp.ping_url(KEY, "scan", "failed") == f"https://hc-ping.com/{KEY}/drishta-scan/log?create=1"
 
 
 @pytest.mark.parametrize("status", ["weird", None, "", "OK"])
-def test_unknown_status_is_fail(status):
-    assert hp.ping_url(KEY, "eod", status).endswith("/drishta-eod/fail?create=1")
+def test_unknown_status_is_never_success(status):
+    assert hp.ping_url(KEY, "eod", status).endswith("/drishta-eod/log?create=1")
 
 
 @pytest.mark.parametrize("key", [None, "", "   "])
@@ -70,13 +70,13 @@ def test_lane_normalised():
 @pytest.mark.parametrize("lane", sorted(hp.SCHEDULED_LANES))
 def test_scheduled_lanes_auto_create(lane):
     assert hp.ping_url(KEY, lane, "ok").endswith(f"/drishta-{lane}?create=1")
-    assert hp.ping_url(KEY, lane, "failed").endswith(f"/drishta-{lane}/fail?create=1")
+    assert hp.ping_url(KEY, lane, "failed").endswith(f"/drishta-{lane}/log?create=1")
 
 
 @pytest.mark.parametrize("lane", ["debrief", "monthly", "test"])
 def test_unscheduled_lane_never_creates_a_check(lane):
     assert hp.ping_url(KEY, lane, "ok") == f"https://hc-ping.com/{KEY}/drishta-{lane}"
-    assert hp.ping_url(KEY, lane, "failed") == f"https://hc-ping.com/{KEY}/drishta-{lane}/fail"
+    assert hp.ping_url(KEY, lane, "failed") == f"https://hc-ping.com/{KEY}/drishta-{lane}/log"
 
 
 def test_scheduled_lanes_match_cron_dispatch():
@@ -100,7 +100,7 @@ def test_post_args_and_truncation(post):
     c = post[0]
     assert c["timeout"] == 2.5
     assert c["data"] == ("é" * hp.BODY_MAX_CHARS).encode("utf-8")
-    assert c["url"].endswith("/fail?create=1")
+    assert c["url"].endswith("/log?create=1")
 
 
 def test_default_timeout_and_empty_body(post):

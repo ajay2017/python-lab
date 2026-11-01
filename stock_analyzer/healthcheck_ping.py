@@ -4,7 +4,11 @@
 If Railway never starts a lane, a top-level import in cron_runner.py fails, or
 Resend itself is dead, every lane goes silent. Each lane therefore pings
 healthchecks.io at its end; the service emails the owner when an expected ping
-does not arrive. OBSERVABILITY ONLY: nothing reads this for a decision. Inert
+does not arrive. A failed run pings the check's /log URL (owner decision
+2026-11-01): it records the failure and its error text without changing the
+check's state, so healthchecks never emails a failed/OK flip-flop on top of the
+deduped Resend failure email; a lane that keeps failing still sends no success
+ping, so healthchecks alarms once its window runs out. OBSERVABILITY ONLY: nothing reads this for a decision. Inert
 until the HEALTHCHECKS_PING_KEY env var is set. The key is a secret: it is
 never logged, printed or returned.
 """
@@ -34,7 +38,8 @@ SCHEDULED_LANES = frozenset(
 
 def ping_url(key, lane, status) -> str | None:
     """URL for one lane ping, or None when the key or lane is unusable.
-    Only status "ok" reports success; any other value (incl. None) is /fail."""
+    Only status "ok" reports success; any other value (incl. None) goes to
+    /log, which never counts as a success ping."""
     if not isinstance(key, str) or not key.strip():
         return None
     if not isinstance(lane, str):
@@ -44,7 +49,7 @@ def ping_url(key, lane, status) -> str | None:
         return None
     base = f"{PING_BASE}/{key.strip()}/{SLUG_PREFIX}{lane_s}"
     if status != "ok":
-        base += "/fail"
+        base += "/log"
     return f"{base}?create=1" if lane_s in SCHEDULED_LANES else base
 
 
