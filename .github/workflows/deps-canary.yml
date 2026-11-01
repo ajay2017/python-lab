@@ -1,0 +1,62 @@
+name: Dependency canary
+
+# Weekly early warning for upstream package breakage. requirements.txt ends in a
+# FROZEN SET of exact versions, so Railway builds don't pick up new releases on
+# their own. This job installs WITHOUT that block (the latest versions that
+# satisfy our direct pins) and runs the full suite:
+#   - green: the latest set works. The job summary shows a ready-to-paste
+#     "Frozen block" and what changed vs the committed one. Refreshing is
+#     optional; do it when an upgrade is wanted (e.g. a security fix).
+#   - red:   an upstream release breaks us. Production is unaffected (it is on
+#     the frozen set); the failure says what to fix before the next refresh.
+# Never gates a deploy. Python must match runtime.txt (3.12), as in tests.yml.
+
+on:
+  schedule:
+    - cron: "0 12 * * 6"   # Saturdays 12:00 UTC, no market or cron-lane traffic
+  workflow_dispatch: {}
+
+jobs:
+  latest-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install runtime dependencies without the frozen block
+        run: |
+          sed '/^# ---- FROZEN SET/,$d' requirements.txt > /tmp/req-latest.txt
+          pip install -r /tmp/req-latest.txt
+      - name: Report the latest set vs the committed frozen block
+        run: |
+          # Runtime-only freeze, taken BEFORE the dev install so pytest's own
+          # packages never end up in the block. Packages already pinned with ==
+          # above the block are left out, as in requirements.txt.
+          pip freeze --exclude-editable | sort -f > /tmp/latest.txt
+          grep -E '^[A-Za-z0-9_.-]+==' /tmp/req-latest.txt | cut -d= -f1 \
+            | tr 'A-Z_' 'a-z-' | sort -u > /tmp/direct-exact.txt
+          python - <<'EOF' > /tmp/frozen-latest.txt
+          norm = lambda s: s.split("==")[0].strip().lower().replace("_", "-")
+          exact = set(open("/tmp/direct-exact.txt").read().split())
+          for line in open("/tmp/latest.txt"):
+              line = line.strip()
+              if "==" in line and norm(line) not in exact:
+                  print(line.lower())
+          EOF
+          sed -n '/^# ---- FROZEN SET/,$p' requirements.txt | grep -v '^#' \
+            | grep . | tr 'A-Z' 'a-z' | sort > /tmp/frozen-committed.txt
+          {
+            echo "## Changes vs the committed frozen block"
+            echo '```'
+            diff /tmp/frozen-committed.txt /tmp/frozen-latest.txt || true
+            echo '```'
+            echo "## Frozen block (latest set)"
+            echo '```'
+            cat /tmp/frozen-latest.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run pytest
+        run: pytest tests/ -q -n auto --dist=loadgroup
