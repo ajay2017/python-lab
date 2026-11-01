@@ -1,6 +1,6 @@
 # LLM model routing: move to current models, and change models without code changes
 
-**Status (2026-10-27): Phase 3 SWITCHES DONE (section 16): `extract` → Sonnet 5.5, `fast` → Haiku 5.5, `deep` → Sonnet 5.5, each saved in App Settings after a passing Test role. Watch window open: System Trust errors for ~a week, the first cron `deep` run Sun 11-01 20:00 ET, the console cost compare ~11-10. NEXT after the watch: `filter` + `extract_trigger` → Haiku 5.5 (reviewed `CODE_DEFAULTS` change), then Phase 4 (`score`), Phase 5 (Investigator eval); `extract_strong` → Opus 5.5 after the broker-import preview check (D2-1).** *(2026-10-26, evening: Phase 2 COMPLETE. P2-a1, P2-a2, P2-b, P2-d, the P2-c prerequisites, P2-c and P2-e (docs) SHIPPED (section 15). NEXT: Phase 3, the owner's call: switch one role at a time in App Settings, Test role first; the first live check is `extract` on Sonnet 5.5. Still open: pin the settings snapshot per cron process (section 15).** *(Earlier 2026-10-26: P2-c SHIPPED, NEXT was P2-e.)* *(2026-10-25: P2-a1, P2-a2, P2-b and P2-d SHIPPED; NEXT was P2-c with its prerequisites.)* *(Earlier 2026-10-25: READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry.)* *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
+**Status (2026-11-01): DECISION ROLES TO APP SETTINGS DESIGNED (section 17, planner PROCEED WITH CHANGES): owner intent is that every role, incl. `score` / `filter` / `extract_trigger`, becomes switchable from App Settings behind a stored passing eval. Awaiting owner U1–U9; no code yet. Section 16's "each a reviewed code change" line is superseded once section 17 is built.** *(2026-10-27: Phase 3 SWITCHES DONE (section 16): `extract` → Sonnet 5.5, `fast` → Haiku 5.5, `deep` → Sonnet 5.5, each saved in App Settings after a passing Test role. Watch window open: System Trust errors for ~a week, the first cron `deep` run Sun 11-01 20:00 ET, the console cost compare ~11-10. NEXT after the watch: `filter` + `extract_trigger` → Haiku 5.5 (reviewed `CODE_DEFAULTS` change), then Phase 4 (`score`), Phase 5 (Investigator eval); `extract_strong` → Opus 5.5 after the broker-import preview check (D2-1).)* *(2026-10-26, evening: Phase 2 COMPLETE. P2-a1, P2-a2, P2-b, P2-d, the P2-c prerequisites, P2-c and P2-e (docs) SHIPPED (section 15). NEXT: Phase 3, the owner's call: switch one role at a time in App Settings, Test role first; the first live check is `extract` on Sonnet 5.5. Still open: pin the settings snapshot per cron process (section 15).** *(Earlier 2026-10-26: P2-c SHIPPED, NEXT was P2-e.)* *(2026-10-25: P2-a1, P2-a2, P2-b and P2-d SHIPPED; NEXT was P2-c with its prerequisites.)* *(Earlier 2026-10-25: READY TO BUILD. Designed (section 13); planner review PROCEED WITH CHANGES (section 14); owner accepted every recommended safeguard (B3, B4a, B8), declined the optional 404 retry.)* *(2026-10-22: Phase 1 COMPLETE. P1-a to P1-f built and reviewed (section 12).)* *(Earlier status: READY TO BUILD (Phase 1), 2026-10-22.)* Decisions ratified; planner (Opus 5.5) review: PROCEED WITH CHANGES (section 10). **Owner accepted every section-10 change the same day, including narrowing D-1:** the `filter` and `extract_trigger` roles are pinned in reviewed code alongside `score`, and App Settings chooses models for `fast`, `deep` and `extract` only. Analysis by the
 lead from an AST inventory of every Anthropic call (2026-10-22) and the Claude API migration guide bundled with Claude
 Code (cached 2026-10-06). **Owner agreed with every lead recommendation in section 7 (2026-10-22):** D-1 App Settings
 with the score role pinned in code; D-2 switch the score model, but last, after the Phase 4 dry run; D-3 Sonnet 5.5
@@ -884,3 +884,127 @@ passing. Figures are the live Test role results:
 - `score` → Phase 4;
 - `extract_strong` → Opus 5.5 after the D2-1 preview check;
 - Investigator → Phase 5 (eval).
+
+## 17. Decision roles editable from App Settings (planner, Opus 5.5, 2026-11-01): PROCEED WITH CHANGES
+
+**Owner intent (2026-11-01):** stop hardcoding Haiku 4.5 and make every role, including `score`, `filter` and
+`extract_trigger`, switchable from ⚙️ App Settings, so the next model retirement is a settings change. Trigger:
+Anthropic's deprecation page (read 2026-11-01) lists `claude-haiku-4-5-20251001` as Active, "not sooner than
+October 15, 2026"; retirement comes with ≥ 60 days' notice, which the owner receives.
+
+**Why this replaces the §10 pin rather than contradicting it:** the pin existed so an unmeasured model never reaches
+the composite or the gates. A stored, passing eval against owner-set pass constants, plus a date-keyed score switch
+with per-row provenance, gives the same protection without a code change at each retirement. A Test role call alone
+proves only the request shape, so it can't be the gate for these roles. **Status: awaiting owner decisions U1–U9; no
+code yet.**
+
+### 17.1 Facts at HEAD (planner; F2 and F4 spot-checked by the lead)
+
+| # | Fact | Where | Consequence |
+|---|---|---|---|
+| F1 | A `llm_models` row that names a pinned role is a top-level error: the whole row is invalid and `fast` / `deep` / `extract` fall back too | `llm_settings.py` ~187-195, ~244-248 | Decision roles get their own row, `llm_models_decision`; `llm_models` stays v1, byte-identical |
+| F2 | The score cache date is `_dt.date.today()` (UTC on Railway), baselined `NAIVE_DATE_TODAY` | `bundle_loader.py` ~335 | The switch keys to that `score_date` (00:00 UTC is after the close, before premarket) |
+| F3 | The cache read selects only `headlines,avg_sent`; the save omits the model; PK (ticker, score_date) | `db.py` ~5466-5520 | DDL first, plus a legacy-select fallback |
+| F4 | The composite is linear, sentiment weight 0.10; sentiment = (avg+1)/2×100; per-headline swing cap `SENTIMENT_LLM_MAX_SWING` 0.5 | `scoring.py`, `constants.py` | A model change moves a composite by at most 5.0 points; Δcomposite = 0.10 × Δs exactly |
+| F5 | Stored cache rows hold the current model's capped output; VADER can be recomputed from the text | `news_intelligence.py` ~539-586 | The score eval baseline needs no live re-run (the noise floor does) |
+| F6 | `filter` runs in the app only; outputs never stored; suppress-only; batches of 25, max 75, 8 s, no retry | `news_intelligence.py` ~270-276; app.py ~5194, ~25259 | Filter baseline = a live re-run of the current model (possible throughout any notice window) |
+| F7 | `extract_trigger` runs only in the BUY handler, writes `trades.premortem_trigger_*`, never re-extracted | `premortem_monitor.py`; app.py ~32108 | Baselines: stored triggers + a hand-labelled fixture |
+| F8 | Non-editable roles ignore env and settings; an explicit differing `model=` raises | `llm.py` ~141-152, ~175-185 | Keep "env ignored" for the decision tier |
+| F9 | `complete(setting=...)` is open to any caller | `llm.py` ~464 | AST ratchet on `setting=` for decision roles |
+| F10 | `news_intelligence.py` and `premortem_monitor.py` are not `_GATE_FILES` members | | Add them (U9) |
+| F11 | Tests pinning today's tiers: `test_llm.py` (~49, ~396-407, ~529-534, ~558), `test_ai_models_settings.py` ~74, `test_ai_models_view.py` ~85 | | Rewrite to the new tiers, don't delete |
+
+### 17.2 Design
+
+| Tier | Roles | Before Save | Env override | Takes effect |
+|---|---|---|---|---|
+| T1 narrative | fast, deep, extract | Check model → Test role (unchanged, F-313) | allowed | next call (TTL 300 s) |
+| T2 decision | filter, extract_trigger, score (+ extract_strong, optional, last) | Check model → a passing Test role of that exact candidate → a stored passing eval with the same model, effort, capabilities hash and current `LLM_EVAL_CRITERIA_VERSION`, no older than `LLM_EVAL_MAX_AGE_DAYS` | ignored, with a note | filter / trigger: next call. score: `effective_from` `score_date` |
+
+- **Row:** `reference_tables` row `llm_models_decision`, owned by new `stock_analyzer/llm_decision_settings.py` (gate
+  file), reusing `llm_settings`' canonicalize / hash / entry helpers with its own snapshot, lock and TTL. Entry:
+  `{model, effort, capabilities, checked_at, eval_id, criteria_version}`; score adds `effective_from` and `prior`.
+  An invalid decision row never affects T1, and the reverse (tested).
+- **Score date key:** `sentiment_cache.score_date_today()` = the UTC date (retires the baseline entry);
+  `score_effective_from(now_utc)` = D+1, or D+2 within 300 s of 00:00 UTC; `score_entry_for(score_date)` = the new
+  entry from `effective_from`, else `prior`, else `CODE_DEFAULTS`. `bundle_loader` resolves one entry per bundle and
+  uses it for the cache compare, the call and the write.
+- **Cache rule:** hit iff (row.model, row.effort) == (entry.model, entry.effort); a NULL model reads as (Haiku 4.5,
+  None), so today's rows stay hits.
+- **Fallback:** `CODE_DEFAULTS` stays for no row / unreadable / invalid (U4), with a red System Trust row. After each
+  switch has taken effect, an optional reviewed commit moves `CODE_DEFAULTS` to the saved model; a grey note shows
+  while they differ.
+
+### 17.3 Eval
+
+New pure module `stock_analyzer/llm_role_eval.py` (gate file) with front door `scripts/llm_role_eval.py --role R
+--model M --effort E`, run by the owner from a shell (SUPABASE + ANTHROPIC env, like `held_stop_dryrun`). It writes
+only one `llm_role_evals` row and reuses the production prompts, parsers, timeouts and batching.
+
+| Role | Inputs | Metrics | Pass constants (planner's starting values; owner sets them, U1) |
+|---|---|---|---|
+| score | Last 30 days of cache rows for the current entry, ≥ `LLM_EVAL_SCORE_MIN_TICKER_DAYS` (200), excluding today; VADER recomputed; pillars from `score_history` | Δcomposite vs stored rows: signed mean, mean \|Δ\|, band crossings (`COMPOSITE_HOLD` / `_BUY` / `_STRONG_BUY`), upward crossings into ≥ Buy; candidate run-to-run spread; current-vs-current noise floor; failure rate at 8 s / no retry incl. incomplete arrays | max mean shift 0.5 pt · max mean \|shift\| 1.0 pt · max band-cross 2.0% net · max Buy-entry cross 1.0% · max self-spread 0.5 pt · `LLM_EVAL_MAX_FAILURE_PCT` 5.0 |
+| filter | Cache headlines with recomputed VADER ≤ `NEWS_SENTIMENT_WARN`, ≥ 150, in production batches | Tier per headline under current (live) vs candidate: loosening flips, critical releases, tightening (reported); current-vs-current noise floor | max loosening 5.0% net · max critical release 2.0% · failure % shared |
+| extract_trigger | ~30 hand-labelled commitments (owner approves labels) + real `trades.premortem_commitment` rows vs stored triggers; two runs each | invented price, wrong direction, wrong price (> $0.01), missed, parse failure; real-row disagreements listed | fixture: invented / direction / price 0, misses ≤ 1, both runs; real rows: invented 0, direction 0, other ≤ 1 |
+| extract_strong (optional) | name → ticker fixture (share classes, ADRs, renames) | exact match; abstain only on ambiguous items | 100% on unambiguous items |
+
+Plus `LLM_EVAL_MAX_AGE_DAYS` 14, `LLM_EVAL_CRITERIA_VERSION` 1 (bump on any pass-constant change), and an optional
+cumulative score-shift cap across switches (U6).
+
+### 17.4 DDL (owner applies and confirms before C3)
+
+```sql
+ALTER TABLE sentiment_llm_cache ADD COLUMN IF NOT EXISTS model text,
+  ADD COLUMN IF NOT EXISTS effort text, ADD COLUMN IF NOT EXISTS served_model text;
+CREATE TABLE IF NOT EXISTS llm_role_evals (id bigserial PRIMARY KEY, role text NOT NULL,
+  model text NOT NULL, effort text, capabilities_hash text NOT NULL,
+  criteria_version int NOT NULL, baseline text NOT NULL, sample_n int NOT NULL,
+  metrics jsonb NOT NULL, passed boolean NOT NULL, failures jsonb,
+  ran_at timestamptz NOT NULL DEFAULT now(), ran_by text NOT NULL, code_sha text);
+ALTER TABLE llm_role_evals ENABLE ROW LEVEL SECURITY;  -- + FOR ALL TO service_role policy
+-- if U5: ALTER TABLE trades ADD COLUMN IF NOT EXISTS premortem_trigger_model text;
+```
+
+### 17.5 Owner decisions
+
+| # | Decision | Planner recommendation |
+|---|---|---|
+| U1 | Pass constants (17.3) | The starting values shown; bias and upward Buy crossings judged tightest |
+| U2 | Score switch boundary | UTC `score_date` (no change to the cache regime) |
+| U3 | Eval front door | Script writing `llm_role_evals` (600–900 calls, ~5–10 min), not an in-app button |
+| U4 | Fallback when the decision row is unreadable / invalid | Code default + red System Trust row (alternative: role off) |
+| U5 | Record `premortem_trigger_model` on `trades` | Yes |
+| U6 | Cumulative score-shift cap across switches | Yes, 1.0 point |
+| U7 | First move | Through the new path, then a reviewed `CODE_DEFAULTS` catch-up; keep the agreed order (no switch before the ~11-10 cost compare; filter + extract_trigger first; score before the entry-news replay). If not built by the week of 11-09, wait, or fall back to a reviewed `CODE_DEFAULTS` change citing the same eval output |
+| U8 | extract_strong | T2 with a fixture eval, after the D2-1 preview check; low urgency (Opus 4.8 until ≥ 2027-05-28) |
+| U9 | Add `news_intelligence.py`, `premortem_monitor.py` to `_GATE_FILES` | Yes |
+
+### 17.6 Chunks
+
+| # | Chunk | Review |
+|---|---|---|
+| C0 | Owner applies the 17.4 DDL and confirms with SQL | none (no code) |
+| C1 | `LLM_EVAL_*` constants + architecture.md rows | reviewer |
+| C2 | Eval engine, db readers + `save/load_llm_role_eval`, trigger fixture, script, `_GATE_FILES` entry. 2b: owner runs current-vs-current (engine check + noise floor), then the Haiku 5.5 candidates for information (switches nothing, fine before 11-10) | reviewer |
+| C3 | Score-cache provenance (model / effort / served_model, legacy-select fallback, `sentiment_cache.py`, one entry per bundle); behaviour-neutral | reviewer |
+| C4 | Tier resolver + decision row (`DECISION_ROLES`, env ignored, `setting=` ratchet, `llm_decision_settings.py`, U4 fallback, `reference_data` dispatch); inert with no row | reviewer |
+| C5 | App Settings T2 section (production-shaped Test cases, `can_save_decision`, eval command + verdict, score effective date, date-keyed Reset, History) | reviewer |
+| C6 | System Trust T2 rows + the cron `llm:` line | reviewer |
+| C7 | Docs: requirements.md (F-313), User Guide, this plan, review-policy, CLAUDE.md | lead |
+| C8 | After ~11-10: owner switches filter + extract_trigger (eval → Test → Save), later score; reviewed `CODE_DEFAULTS` catch-up; lift the SDK pin once no role runs a legacy model | reviewer |
+| C9 | Optional: extract_strong into T2 | reviewer |
+
+**Risks the build must handle:** an old process reading a mixed row (separate row); DDL missing (C0 ordering,
+legacy-select fallback, Save refused while the `model` probe select fails); drift over many switches (U6 + a running
+total on System Trust); eval ≠ production (band crossings use held ticker-days only; the 5-point bound caps the
+worst case); no baseline if Haiku 4.5 vanished without notice (by design nothing passes; a reviewed code change is
+the escape route); the filter session memo keeps the old model's scores for that session (bounded); score already
+falls back silently to VADER on a 404 (pre-existing; flag, don't fix here).
+
+**Required tests** (from the planner): the `score_effective_from` 300 s boundary; `score_entry_for` either side of
+`effective_from`; cache match incl. NULL and effort-only cases; an AST pin on both ends that `bundle_loader` uses one
+entry; env ignored + explicit-model mismatch + the `setting=` ratchet; `can_save_decision` at each boundary (no / failed
+eval, mismatched effort / hash / criteria version, age exactly `LLM_EVAL_MAX_AGE_DAYS` allowed and +1 refused, a
+fallen-back Test role); every pass function at equality on each constant; the |Δcomposite| ≤ 5.0 property;
+`llm_models` byte-identical and the two rows isolated both ways; the U4 path; `llm_role_eval` never writes the cache,
+trades or `reference_tables` (AST); the legacy-select fallback.
