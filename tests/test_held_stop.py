@@ -490,3 +490,48 @@ def test_entry_on_non_trading_day_reason():
     r = run(df, d(df, 150), ep(sat, float(df["Close"].iloc[90])), float(df["Close"].iloc[90]))
     assert f"entry date {sat} is not a trading session" in r["reason"]
     assert r["components"]["entry"] is None and r["basis"] == "partial"
+
+
+# ── fill_in_band: the one band rule (entry session + buy-day sanity check) ────
+def test_fill_in_band_inside_and_exact_widened_edges():
+    # session 100..110, prev close 105, tol 2% -> band [98.00, 112.20]
+    assert hs.fill_in_band(105.0, 100.0, 110.0, 105.0, 2.0)
+    assert hs.fill_in_band(100.0 * 0.98, 100.0, 110.0, 105.0, 2.0)
+    assert hs.fill_in_band(110.0 * 1.02, 100.0, 110.0, 105.0, 2.0)
+
+
+def test_fill_in_band_just_outside_both_edges():
+    assert not hs.fill_in_band(100.0 * 0.98 - 0.01, 100.0, 110.0, 105.0, 2.0)
+    assert not hs.fill_in_band(110.0 * 1.02 + 0.01, 100.0, 110.0, 105.0, 2.0)
+
+
+def test_fill_in_band_extended_hours_fill_between_prev_close_and_session():
+    # prev close 90, session 100..110: a pre-market fill at 92 is outside the session
+    # but inside [prev close, session]
+    assert hs.fill_in_band(92.0, 100.0, 110.0, 90.0, 2.0)
+    assert hs.fill_in_band(90.0 * 0.98, 100.0, 110.0, 90.0, 2.0)
+    assert not hs.fill_in_band(90.0 * 0.98 - 0.01, 100.0, 110.0, 90.0, 2.0)
+
+
+def test_fill_in_band_no_session_uses_prev_close_alone():
+    assert hs.fill_in_band(100.0, None, None, 100.0, 2.0)
+    assert hs.fill_in_band(98.0, None, None, 100.0, 2.0)
+    assert hs.fill_in_band(102.0, None, None, 100.0, 2.0)
+    assert not hs.fill_in_band(97.9, None, None, 100.0, 2.0)
+    assert not hs.fill_in_band(102.1, None, None, 100.0, 2.0)
+
+
+def test_fill_in_band_missing_everything_or_nan_is_false():
+    assert not hs.fill_in_band(100.0, None, None, None, 2.0)
+    assert not hs.fill_in_band(100.0, float("nan"), float("nan"), float("nan"), 2.0)
+    assert not hs.fill_in_band(None, 99.0, 101.0, 100.0, 2.0)
+    # a session with no prior close is still a valid band
+    assert hs.fill_in_band(100.0, 99.0, 101.0, None, 2.0)
+
+
+def test_nan_entry_bar_range_still_rejects_the_fill():
+    df, k = _gap_frame()
+    df = df.copy()
+    df.iloc[k, df.columns.get_loc("Low")] = float("nan")
+    r = run(df, d(df, k + 3), ep(d(df, k), 310.60), 310.60)
+    assert r["components"]["entry"] is None

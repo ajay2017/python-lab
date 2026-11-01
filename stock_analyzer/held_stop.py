@@ -69,6 +69,7 @@ are explicit keyword parameters with NO defaults; no constants.py change here.
 """
 from __future__ import annotations
 
+import math
 from datetime import date
 from typing import Any
 
@@ -92,6 +93,33 @@ def _et_dates(index: pd.Index) -> pd.DatetimeIndex:
     if idx.tz is not None:
         idx = idx.tz_convert(_ET).tz_localize(None)
     return idx.normalize()
+
+
+def fill_in_band(fill, session_low, session_high, prev_close, tol_pct) -> bool:
+    """Is a (split-adjusted) fill inside the session's range, widened to the prior
+    close (extended-hours fills sit between the two) and by tol_pct % each side?
+    session_low / session_high None (no bar for that session yet): the band is
+    prev_close alone. Both missing: False. Never raises on None / NaN."""
+    def _ok(x):
+        try:
+            return x is not None and not math.isnan(float(x))
+        except (TypeError, ValueError):
+            return False
+    if not _ok(fill):
+        return False
+    have_session = _ok(session_low) and _ok(session_high)
+    have_prev = _ok(prev_close)
+    if not have_session and not have_prev:
+        return False
+    if have_session:
+        lo_b, hi_b = float(session_low), float(session_high)
+        if have_prev:
+            lo_b, hi_b = min(lo_b, float(prev_close)), max(hi_b, float(prev_close))
+    else:
+        lo_b = hi_b = float(prev_close)
+    lo = lo_b * (1 - tol_pct / 100.0)
+    hi = hi_b * (1 + tol_pct / 100.0)
+    return lo <= float(fill) <= hi
 
 
 def completed_bars(df: pd.DataFrame, as_of: date) -> pd.DataFrame:
@@ -337,13 +365,11 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
     else:
         fill_adj = fb / ratio
         row = bars.iloc[pe]
-        lo_b, hi_b = float(row["Low"]), float(row["High"])
-        if pe > 0:  # extended-hours fills sit between the prior close and the session
-            prev_close = float(bars["Close"].iloc[pe - 1])
-            lo_b, hi_b = min(lo_b, prev_close), max(hi_b, prev_close)
-        lo = lo_b * (1 - fill_tol_pct / 100.0)
-        hi = hi_b * (1 + fill_tol_pct / 100.0)
-        if not (lo <= fill_adj <= hi):
+        prev_close = float(bars["Close"].iloc[pe - 1]) if pe > 0 else None
+        row_lo, row_hi = float(row["Low"]), float(row["High"])
+        # a NaN Low / High always rejected before the helper existed: keep that
+        if (math.isnan(row_lo) or math.isnan(row_hi)
+                or not fill_in_band(fill_adj, row_lo, row_hi, prev_close, fill_tol_pct)):
             notes.append("entry anchor dropped: fill outside the entry session's "
                          "range and the prior close (possible unrecorded split)")
         else:

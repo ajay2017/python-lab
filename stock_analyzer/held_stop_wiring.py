@@ -131,7 +131,8 @@ def label_for(basis: str, binding, ratchet_label=None) -> str:
     if basis == "unavailable":
         return LABEL_UNAVAILABLE
     if basis == "prior_session":
-        return LABEL_PRIOR
+        # a buy-day stop whose fill leg is the lower one reads as the entry stop
+        return LABEL_ENTRY if binding == "entry" else LABEL_PRIOR
     if binding == "ratchet":
         return str(ratchet_label or "Profit Lock")
     if binding == "trailing":
@@ -181,32 +182,87 @@ def _buy_day(t: str, ep: dict, bundle, avg_cost: float, as_of: date, pol: dict,
     session of its own, so its stop is the entry component the NEXT session will
     compute: the recorded fill (split-adjusted) minus ATR_STOP_MULT x the ATR at
     the last completed session (`held_stop.entry_anchor_atr`, seeded like C1's
-    entry anchor). The fill is fixed, so today's price cannot move it. Not
-    degraded. A missing fill or ATR falls back to the ordinary C1 prior_session
-    result, which IS degraded and says why."""
-    df = bundle
-    if df is None:
-        try:
-            df = fetch_history(t, "1y")
-        except Exception:
-            df = None
-    if not _usable_frame(df):
+    entry anchor). The fill is fixed, so today's price cannot move it.
+
+    Frame: the fresh unadjusted long frame (same one the next session uses), else
+    the app's bundle frame, else a stale long frame as a last resort.
+
+    Fill check (`held_stop.fill_in_band`, the same rule as the entry session's):
+    the fill must sit in the band of today's range (union over every frame that
+    has a today row) and the prior close, widened by `fill_tol_pct`. Pass -> an
+    accepted buy_day stop, not degraded. Fail (or no today bar anywhere and the
+    fill is off the prior close) -> a DEGRADED prior_session result that is the
+    LOWER of the ordinary prior-close stop and the fill-based level, so a genuine
+    gap-down fill can never produce a stop above the price. A missing fill or ATR
+    falls back to the plain C1 prior_session result and says why."""
+    frames = []
+    long_df, long_problem = _long_frame(t, ep, as_of, pol, fetch_history)
+    if long_df is not None and long_problem is None:
+        frames.append(long_df)
+    if bundle is not None:
+        frames.append(bundle)
+    if long_df is not None and long_problem is not None and _usable_frame(long_df):
+        frames.append(long_df)                      # stale long frame: last resort
+    if not frames:
         return unavailable_result(t, "No price history is available for this position.", avg_cost)
+    df = frames[0]
     fill = _f(ep.get("first_buy_price"))
     ratio = _f(ep.get("split_ratio")) or 1.0
-    atr = hs.entry_anchor_atr(hs.completed_bars(df, as_of), ep.get("start"), pol["warmup_bars"])
+    bars = hs.completed_bars(df, as_of)
+    atr = hs.entry_anchor_atr(bars, ep.get("start"), pol["warmup_bars"])
+    reason = "no usable fill price or ATR for today's buy"
+    fill_leg = None
+    has_today = False
     if fill is not None and fill > 0 and atr is not None and ratio > 0:
-        stop = round(fill / ratio - float(pol["initial_mult"]) * atr, 2)
-        if stop > 0:
-            note = (f"Bought today: the stop is your fill price \\${fill / ratio:.2f} minus "
-                    f"{_C.ATR_STOP_MULT:g} × ATR (from the last completed session). From the "
-                    "next session the trailing and profit-lock parts can raise it.")
-            res = hs._result(stop, "buy_day", "entry", "bought today", since=ep.get("start"),
-                             atr_last=atr)
-            return _wrap(t, res, note, avg_cost)
-    ep_fb = {"status": "no_history",
-             "reason": "no usable fill price or ATR for today's buy"}
+        fill_adj = fill / ratio
+        lows, highs = [], []
+        for f in frames:    # union of today's ranges across frames can only widen the band
+            try:
+                today = f[hs._et_dates(f.index) == pd.Timestamp(as_of)]
+                lo, hi = today["Low"].min(), today["High"].max()
+            except Exception:
+                continue
+            if pd.notna(lo) and pd.notna(hi):
+                lows.append(float(lo))
+                highs.append(float(hi))
+        has_today = bool(lows)
+        prev_close = float(bars["Close"].iloc[-1]) if len(bars) else None
+        stop = round(fill_adj - float(pol["initial_mult"]) * atr, 2)
+        if hs.fill_in_band(fill_adj, min(lows) if lows else None,
+                           max(highs) if highs else None, prev_close, pol["fill_tol_pct"]):
+            if stop > 0:
+                note = (f"Bought today: the stop is your fill price \\${fill_adj:.2f} minus "
+                        f"{_C.ATR_STOP_MULT:g} × ATR (from the last completed session). From the "
+                        "next session it is rebuilt from completed sessions: the trailing and "
+                        "profit-lock parts can raise it, or it can come out lower if a later session "
+                        "has to use a fallback basis.")
+                res = hs._result(stop, "buy_day", "entry", "bought today", since=ep.get("start"),
+                                 atr_last=atr)
+                return _wrap(t, res, note, avg_cost)
+        else:
+            if stop > 0:
+                fill_leg = stop
+            reason = ("today's recorded fill price is outside today's trading range and the "
+                      "prior close (a mis-keyed fill or an unrecorded split)")
+    ep_fb = {"status": "no_history", "reason": reason}
     res = hs.compute_held_stop(df, ep_fb, avg_cost, as_of, **pol)
+    if fill_leg is not None and res.get("stop") is not None:
+        prior = round(float(res["stop"]), 2)
+        leg_binds = fill_leg < prior
+        mult = max(float(_C.ATR_STOP_MULT), float(_C.HELD_TRAIL_ATR_MULT))
+        lead = ("Bought today, but your recorded fill price is outside today's trading range "
+                "and the prior close (a mis-keyed fill or an unrecorded split)" if has_today else
+                "Bought today, but your recorded fill price couldn't be checked against "
+                "today's trading range yet")
+        note = (f"{lead}. The stop is the lower of the last completed close minus {mult:g} × ATR "
+                f"(\\${prior:.2f}) and your fill price \\${fill / ratio:.2f} minus "
+                f"{_C.ATR_STOP_MULT:g} × ATR (\\${fill_leg:.2f}); "
+                f"the {'fill-based' if leg_binds else 'prior-close'} level applies. It is a "
+                "cautious level because the fill couldn't be confirmed. It does not trail and "
+                "is rebuilt each session.")
+        res = {**res, "stop": min(prior, fill_leg),
+               "binding": "entry" if leg_binds else "prior_session"}
+        return _wrap(t, res, note, avg_cost)
     return _wrap(t, res, _note_for(res, ep_fb, bundle=False, n_sessions=None,
                                    fetch_problem=None), avg_cost)
 

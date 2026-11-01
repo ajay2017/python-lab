@@ -51,6 +51,10 @@ def _boom(t, p):
     raise AssertionError("fetch must not be called")
 
 
+def _fetch_down(t, p):
+    raise RuntimeError("unadjusted history unavailable")   # the bundle frame is used
+
+
 # ── constants / plumbing ─────────────────────────────────────────────────────
 def test_constants_values_owner_ruled(monkeypatch):
     monkeypatch.undo()
@@ -429,7 +433,7 @@ def _buy_today(fill=None, held_stop=50.0, seed=2, price=None):
 
 def test_buy_day_stop_is_fill_minus_entry_mult_times_last_completed_atr():
     df, trades, h, held, fill = _buy_today()
-    r = build(h, held, trades, _boom)
+    r = build(h, held, trades, _fetch_down)
     want = round(fill - C.ATR_STOP_MULT * _atr_before(df, AS_OF), 2)
     assert r["buy_day"] and r["basis"] == "buy_day" and r["label"] == "Entry Stop"
     assert r["stop"] == want and r["stop"] < fill
@@ -438,7 +442,7 @@ def test_buy_day_stop_is_fill_minus_entry_mult_times_last_completed_atr():
 
 def test_buy_day_stop_equals_the_next_sessions_entry_component():
     df, trades, h, held, fill = _buy_today()
-    r = build(h, held, trades, _boom)
+    r = build(h, held, trades, _fetch_down)
     # the D bar completes inside the fill's range; next session = the following business day
     d = pd.Timestamp(AS_OF)
     full = pd.concat([df, pd.DataFrame({"Open": fill, "High": fill * 1.01, "Low": fill * 0.99,
@@ -450,13 +454,33 @@ def test_buy_day_stop_equals_the_next_sessions_entry_component():
     assert round(r2["components"]["entry"], 2) == r["stop"]
 
 
-def test_buy_day_gap_down_before_the_fill_is_not_breached():
+def test_buy_day_gap_down_with_no_today_bar_is_not_breached():
+    # the owner rule: a genuine gap-down fill must not produce a same-day sell-all even
+    # when the (day-cached) history has no bar for today, so the fill can't be range-checked
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    fill = prev * 0.80
+    trades = journal("AAA", 10.0, fill, AS_OF)
+    h = [{"Ticker": "AAA", "Shares": 10, "Shares Exact": 10.0, "Avg Cost ($)": fill}]
+    r = build(h, {"AAA": {"df": df}}, trades, _fetch_down)
+    port = pf.build_portfolio_df(h, {"AAA": {"current_price": fill, "stop": 1.0, "sector": "Technology",
+                                             "rec": {"icon": "🟢", "label": "Buy"}, "total": 70}},
+                                 held_stops={"AAA": r})
+    assert r["stop"] < fill and hw.brief_breached_set(port) == set()
+    assert r["basis"] == "prior_session" and r["degraded"]
+    assert r["label"] == "Entry Stop" and r["binding"] == "entry"
+    assert "couldn't be checked against today's trading range yet" in r["note"]
+    assert "fill-based level applies" in r["note"] and "does not trail" in r["note"]
+
+
+def test_buy_day_gap_down_with_a_today_bar_is_not_breached():
     df = walk(n=200, seed=2)
     prev = float(df["Close"].iloc[-1])
     fill = prev * 0.80                                  # gapped down 20% and bought there
     trades = journal("AAA", 10.0, fill, AS_OF)
     h = [{"Ticker": "AAA", "Shares": 10, "Shares Exact": 10.0, "Avg Cost ($)": fill}]
-    r = build(h, {"AAA": {"df": df}}, trades, _boom)
+    # today's (partial) bar exists and covers the gapped-down fill, as it does live
+    r = build(h, {"AAA": {"df": _with_today(df, fill * 0.99, fill * 1.01)}}, trades, _fetch_down)
     port = pf.build_portfolio_df(h, {"AAA": {"current_price": fill, "stop": 1.0, "sector": "Technology",
                                              "rec": {"icon": "🟢", "label": "Buy"}, "total": 70}},
                                  held_stops={"AAA": r})
@@ -465,7 +489,7 @@ def test_buy_day_gap_down_before_the_fill_is_not_breached():
 
 def test_buy_day_same_day_drop_beyond_the_entry_distance_is_breached():
     df, trades, h, held, fill = _buy_today()
-    r = build(h, held, trades, _boom)
+    r = build(h, held, trades, _fetch_down)
     atr = _atr_before(df, AS_OF)
     price = fill - (C.ATR_STOP_MULT + 0.5) * atr        # fell more than ATR_STOP_MULT x ATR below the fill
     port = pf.build_portfolio_df(h, {"AAA": {"current_price": price, "stop": 1.0, "sector": "Technology",
@@ -476,9 +500,9 @@ def test_buy_day_same_day_drop_beyond_the_entry_distance_is_breached():
 
 def test_buy_day_ignores_the_bundle_stop_entirely():
     df, trades, h, held, fill = _buy_today(held_stop=50.0)
-    a = build(h, held, trades, _boom)
-    b = build(h, {"AAA": {"df": df, "stop": fill * 0.999}}, trades, _boom)
-    c = build(h, {"AAA": {"df": df}}, trades, _boom)
+    a = build(h, held, trades, _fetch_down)
+    b = build(h, {"AAA": {"df": df, "stop": fill * 0.999}}, trades, _fetch_down)
+    c = build(h, {"AAA": {"df": df}}, trades, _fetch_down)
     assert a["stop"] == b["stop"] == c["stop"]
 
 
@@ -486,7 +510,7 @@ def test_buy_day_missing_fill_falls_back_to_a_degraded_prior_session():
     df = walk(n=200, seed=2)
     trades = journal("AAA", 10.0, 0.0, AS_OF)           # no usable fill price
     h = [{"Ticker": "AAA", "Shares": 10, "Shares Exact": 10.0, "Avg Cost ($)": 100.0}]
-    r = build(h, {"AAA": {"df": df}}, trades, _boom)
+    r = build(h, {"AAA": {"df": df}}, trades, _fetch_down)
     assert r["basis"] == "prior_session" and not r["buy_day"] and r["degraded"]
     assert r["label"] == "Prior-close ATR" and r["note"]
     assert hw.degraded_notes({"AAA": r})
@@ -497,19 +521,21 @@ def test_buy_day_with_too_little_history_falls_back_too():
     fill = float(df["Close"].iloc[-1])
     trades = journal("AAA", 10.0, fill, AS_OF)
     h = [{"Ticker": "AAA", "Shares": 10, "Shares Exact": 10.0, "Avg Cost ($)": fill}]
-    r = build(h, {"AAA": {"df": df}}, trades, _boom)
+    r = build(h, {"AAA": {"df": df}}, trades, _fetch_down)
     assert not r["buy_day"] and r["degraded"]
 
 
 def test_buy_day_is_not_degraded_and_has_the_calm_note():
     df, trades, h, held, fill = _buy_today()
-    r = build(h, held, trades, _boom)
+    r = build(h, held, trades, _fetch_down)
     assert r["degraded"] is False and hw.degraded(r) is False
     assert hw.degraded_notes({"AAA": r}) == []
     bs = chr(92)
     assert r["note"] == (f"Bought today: the stop is your fill price {bs}${fill:.2f} minus "
                          f"{C.ATR_STOP_MULT:g} × ATR (from the last completed session). From the "
-                         "next session the trailing and profit-lock parts can raise it.")
+                         "next session it is rebuilt from completed sessions: the trailing and "
+                         "profit-lock parts can raise it, or it can come out lower if a later session "
+                         "has to use a fallback basis.")
     assert "only moves up" not in r["note"].lower()
     row = {"Auto Stop": r["stop"], "Stop Basis": "buy_day", "Stop Note": r["note"],
            "Stop Type": "Entry Stop", "Stop Type Auto": "Entry Stop"}
@@ -556,3 +582,139 @@ def test_neg_cache_active_window():
     assert v.neg_cache_active(1000.0, 1000.0 + C.HELD_STOP_UNADJ_NEG_CACHE_SEC - 1)
     assert not v.neg_cache_active(1000.0, 1000.0 + C.HELD_STOP_UNADJ_NEG_CACHE_SEC)
     assert not v.neg_cache_active(None, 5.0) and C.HELD_STOP_UNADJ_NEG_CACHE_SEC == 300
+
+
+# ── buy-day fill sanity check + unadjusted-frame preference (2026-11-01) ──────
+def _with_today(df, lo, hi, as_of=AS_OF):
+    px = (lo + hi) / 2
+    row = pd.DataFrame({"Open": px, "High": hi, "Low": lo, "Close": px},
+                       index=[pd.Timestamp(as_of)])
+    return pd.concat([df, row])
+
+
+def _buy_run(fill, long_df, bundle_df, seed=2):
+    trades = journal("AAA", 10.0, fill, AS_OF)
+    h = [{"Ticker": "AAA", "Shares": 10, "Shares Exact": 10.0, "Avg Cost ($)": fill}]
+    held = {"AAA": {"df": bundle_df}} if bundle_df is not None else {}
+
+    def fetch(t, p):
+        if long_df is None:
+            raise RuntimeError("down")
+        return long_df
+    return build(h, held, trades, fetch)
+
+
+def test_buy_day_fill_inside_todays_range_is_accepted_unchanged_value():
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    fill = prev * 1.12                        # far from prev close, inside today's range
+    full = _with_today(df, prev * 1.10, prev * 1.14)
+    r = _buy_run(fill, full, df)
+    assert r["basis"] == "buy_day" and not r["degraded"]
+    assert r["stop"] == round(fill - C.ATR_STOP_MULT * _atr_before(df, AS_OF), 2)
+
+
+def test_buy_day_unrecorded_split_fill_is_rejected_and_falls_back():
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    full = _with_today(df, prev * 0.99, prev * 1.01)
+    r = _buy_run(prev * 0.5, full, df)        # a 2:1 split not recorded: fill half the price
+    assert r["basis"] == "prior_session" and r["degraded"] and not r["buy_day"]
+    assert ("your recorded fill price is outside today's trading range and the prior "
+            "close (a mis-keyed fill or an unrecorded split)") in r["note"]
+    assert "$" not in r["note"].replace(chr(92) + "$", "")   # every dollar sign is escaped
+
+
+def test_buy_day_range_only_in_the_bundle_frame_widens_the_band():
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    fill = prev * 1.12
+    stale_long = df                            # cached fetch: no as_of row yet
+    bundle = _with_today(df, prev * 1.10, prev * 1.14)
+    r = _buy_run(fill, stale_long, bundle)
+    assert r["basis"] == "buy_day"
+
+
+def test_buy_day_no_session_row_anywhere_uses_prev_close_band():
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    tol = C.HELD_STOP_FILL_TOL_PCT
+    ok = _buy_run(prev * (1 + tol / 100.0 * 0.5), df, df)
+    assert ok["basis"] == "buy_day"
+    bad = _buy_run(prev * (1 + tol / 100.0 * 1.5) + 0.01, df, df)
+    assert bad["basis"] == "prior_session" and bad["degraded"]
+
+
+def test_buy_day_atr_comes_from_the_unadjusted_frame_not_the_bundle():
+    bundle = walk(n=200, seed=2)
+    wide = bundle.copy()
+    wide["High"] = wide["Close"] * 1.03
+    wide["Low"] = wide["Close"] * 0.97
+    fill = float(bundle["Close"].iloc[-1])
+    r = _buy_run(fill, wide, bundle)
+    assert r["basis"] == "buy_day"
+    assert r["atr_last"] == pytest.approx(_atr_before(wide, AS_OF))
+    assert r["atr_last"] != pytest.approx(_atr_before(bundle, AS_OF))
+
+
+def test_buy_day_unadjusted_fetch_failure_uses_the_bundle():
+    bundle = walk(n=200, seed=2)
+    fill = float(bundle["Close"].iloc[-1])
+    r = _buy_run(fill, None, bundle)
+    assert r["basis"] == "buy_day"
+    assert r["atr_last"] == pytest.approx(_atr_before(bundle, AS_OF))
+
+
+def test_buy_day_accepted_note_names_the_lower_possibility():
+    df, trades, h, held, fill = _buy_today()
+    r = build(h, held, trades, _fetch_down)
+    assert "or it can come out lower if a later session has to use a fallback basis" in r["note"]
+    assert not r["note"].endswith("can raise it.")
+
+
+def _breached_at(h, r, price):
+    port = pf.build_portfolio_df(h, {"AAA": {"current_price": price, "stop": 1.0, "sector": "Technology",
+                                             "rec": {"icon": "🟢", "label": "Buy"}, "total": 70}},
+                                 held_stops={"AAA": r})
+    return hw.brief_breached_set(port)
+
+
+@pytest.mark.parametrize("with_today", [False, True])
+def test_buy_day_fill_keyed_10x_too_high_is_never_a_breach_near_prior_close(with_today):
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    fill = prev * 10.0
+    held_df = _with_today(df, prev * 0.99, prev * 1.01) if with_today else df
+    trades = journal("AAA", 10.0, fill, AS_OF)
+    h = [{"Ticker": "AAA", "Shares": 10, "Shares Exact": 10.0, "Avg Cost ($)": fill}]
+    r = build(h, {"AAA": {"df": held_df}}, trades, _fetch_down)
+    # a 10x fill is rejected; the stop is the prior-close leg, so a price near the prior close holds
+    assert r["basis"] == "prior_session" and r["degraded"] and r["label"] == "Prior-close ATR"
+    assert r["stop"] < prev
+    assert _breached_at(h, r, prev) == set()
+    assert ("outside today's trading range" in r["note"]) is with_today
+    assert ("couldn't be checked against today's trading range yet" in r["note"]) is (not with_today)
+    assert "prior-close level applies" in r["note"]
+
+
+def test_buy_day_binding_labels_follow_the_lower_leg():
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    low = _buy_run(prev * 0.80, df, df)          # fill leg below the prior-close leg
+    assert low["label"] == "Entry Stop" and "fill-based level applies" in low["note"]
+    high = _buy_run(prev * 10.0, df, df)         # prior-close leg below the fill leg
+    assert high["label"] == "Prior-close ATR" and "prior-close level applies" in high["note"]
+
+
+def test_buy_day_stale_long_frame_is_the_last_resort_not_unavailable():
+    df = walk(n=200, seed=2, end="2026-10-27")     # ends two sessions early: stale
+    fill = float(df["Close"].iloc[-1])
+    r = _buy_run(fill, df, None)
+    assert r["basis"] != "unavailable" and r["stop"] is not None
+
+
+def test_buy_day_accepted_note_has_no_next_session_check_claim():
+    df, trades, h, held, fill = _buy_today()
+    r = build(h, held, trades, _fetch_down)
+    assert "or it can come out lower if a later session has to use a fallback basis" in r["note"]
+    assert "rejects your recorded fill" not in r["note"]

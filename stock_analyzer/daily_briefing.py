@@ -2493,8 +2493,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 # price as the new-pick lane does. The gap >= ADD_WINNER_MIN_GAP_PCT
                 # gate above measures from the HELD stop (#26 C3), which can sit
                 # below this ATR stop, so price > stop is NOT guaranteed here;
-                # when it fails, position_sizing returns stop_infeasible (no size,
-                # with a reason). Don't "unify the lanes" without re-reading that
+                # when it fails, `_position_size_for_render` (via
+                # `risk.sizing_unavailable_reason`) returns stop_infeasible (no
+                # size, with a reason). Don't "unify the lanes" without re-reading that
                 # gate; and per memory project_stop_ladder_and_display the ATR
                 # basis here is a policy decision (the ratchet stop would sit
                 # higher, suggest MORE shares, and over-buy into strength).
