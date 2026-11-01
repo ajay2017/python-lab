@@ -1017,6 +1017,8 @@ trades or `reference_tables` (AST); the legacy-select fallback.
 
 ### 17.7 Build progress
 
+- **2026-11-01: C0 DONE.** Owner applied `docs/sql/llm-decision-roles.sql`; verify row 3 / true / 1 / true / 1 / 0
+  (cache columns, RLS on `llm_role_evals`, 1 policy, service_role can insert, `trades.premortem_trigger_model`, 0 evals).
 - **2026-11-01: C1 + C2 + C4 built** (one commit; Opus FIX-FIRST ×2 → SHIP). Review fixes folded in: real
   trades with a NULL stored trigger are unlabelled (only an invented price or a parse failure counts); `not_checkable`
   rows count an in-text price as a disagreement, not invented; `reset_role("score")` keeps today's model as `prior`;

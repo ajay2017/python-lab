@@ -497,6 +497,7 @@ def rescore_headlines_llm(
     timeout: float = 8.0,
     *,
     setting=None,
+    meta: dict | None = None,
 ) -> list[dict] | None:
     """Bidirectional LLM rescore for VADER-annotated headline dicts (from analyze_news).
 
@@ -507,6 +508,10 @@ def rescore_headlines_llm(
     both raise and lower scores using financial domain context. Per-headline adjustment
     is capped at SENTIMENT_LLM_MAX_SWING to prevent a single LLM outlier from dominating
     the average. Falls back to original VADER scores on any failure.
+
+    ``meta`` (optional dict): on a successful call it receives ``served_model``, the
+    model the API actually served (can differ from the requested one after a
+    refusal fallback). Left untouched on failure.
 
     Ticker context is injected into the prompt so the LLM scores relative to THIS stock's
     investment thesis (e.g. "IBM's earnings warning is great for CrowdStrike" scores very
@@ -592,6 +597,8 @@ def rescore_headlines_llm(
             result[idx]["score"] = llm_score
             result[idx]["label"] = label
 
+        if isinstance(meta, dict):
+            meta["served_model"] = r.model
         return result
 
     except Exception:

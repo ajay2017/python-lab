@@ -36,6 +36,7 @@ from stock_analyzer.data import (
 )
 from stock_analyzer import asset_type
 from stock_analyzer import llm
+from stock_analyzer import sentiment_cache
 from stock_analyzer import etf_scoring
 from stock_analyzer.technicals import compute_indicators, technical_score, technical_coverage
 from stock_analyzer.fundamentals import (
@@ -330,9 +331,12 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     # ticker on a given UTC day. Cache miss → call LLM → write cache. Any failure
     # at any step leaves avg_sent / headlines as the original VADER values (fail-open).
     try:
-        import datetime as _dt
         from stock_analyzer.news_intelligence import rescore_headlines_llm as _rescore_hl
-        _today = _dt.date.today().isoformat()
+        _today = sentiment_cache.score_date_today()
+        # ONE score-model entry per bundle: the cache compare, the call and the
+        # write below all use it (plan 17), so a row is never read as one model's
+        # and written as another's.
+        _entry = sentiment_cache.resolve_score_entry(_today)
         _cached = db.load_sentiment_llm_cache(ticker, _today)
         if _cached is not None and _split["checked"]:
             # The shared day-cache can hold rows written before this filter existed
@@ -343,20 +347,26 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
             _csc = [h["score"] for h in _crows if isinstance(h.get("score"), (int, float))]
             _cached = dict(_cached, headlines=_crows,
                            avg_sent=round(sum(_csc) / len(_csc), 3) if _csc else 0.0)
-        if _news_feed.llm_cache_usable(_cached, headlines):
+        if (_news_feed.llm_cache_usable(_cached, headlines)
+                and sentiment_cache.row_matches(_cached, _entry)):
             headlines = _cached["headlines"]
             avg_sent  = _cached["avg_sent"]
         else:
             # Read key: env first (Railway cron lanes), then the [anthropic] secret
             _ant_key = llm.resolve_anthropic_key(_anthropic_section_secret)
             if _ant_key:
-                _rescored = _rescore_hl(headlines, _ant_key, ticker)
+                _meta: dict = {}
+                _rescored = _rescore_hl(headlines, _ant_key, ticker,
+                                        setting={llm.ROLE_SCORE: _entry}, meta=_meta)
                 # None = LLM failed; an EMPTY rescore (no headlines) must never be
                 # saved either -- it would serve "no news" for the rest of the day.
                 if _news_feed.should_save_llm_rescore(_rescored):
                     _sc = [h["score"] for h in _rescored if isinstance(h.get("score"), (int, float))]
                     _new_avg = round(sum(_sc) / len(_sc), 3) if _sc else avg_sent
-                    db.save_sentiment_llm_cache(ticker, _today, _rescored, _new_avg)
+                    db.save_sentiment_llm_cache(
+                        ticker, _today, _rescored, _new_avg,
+                        model=_entry.model, effort=_entry.effort,
+                        served_model=_meta.get("served_model"))
                     headlines = _rescored
                     avg_sent  = _new_avg
     except Exception:

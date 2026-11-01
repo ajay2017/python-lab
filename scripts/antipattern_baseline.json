@@ -473,7 +473,6 @@
       "NAIVE_DATE_TODAY\u001fdatetime.date.today()": 1
     },
     "stock_analyzer/bundle_loader.py": {
-      "NAIVE_DATE_TODAY\u001f_dt.date.today()": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_row.get(\"analysts\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_st.secrets.get(\"anthropic\") or {}": 1
     },

@@ -258,7 +258,7 @@ class _Db:
     load_etf_lookthrough_cache = staticmethod(lambda *a, **k: None)
     load_sentiment_llm_cache = classmethod(lambda cls, *a, **k: cls.cache_row)
     save_sentiment_llm_cache = classmethod(
-        lambda cls, t, d, h, a: cls.saved.append((t, h, a)))
+        lambda cls, t, d, h, a, **kw: cls.saved.append((t, h, a)))
 
 
 def _bundle(news, info=None, names=None, status="ok"):

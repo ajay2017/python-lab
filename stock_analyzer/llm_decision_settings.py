@@ -15,6 +15,14 @@ A model other than the reviewed code default needs a stored passing eval
 (``eval_id`` + ``criteria_version``). The score role also carries a date key
 (``effective_from``, a ``score_date``) so a switch never splits one day's cached
 scores across two models.
+
+Stale-if-error: when a reload comes back UNREADABLE (a transient DB failure) and
+the previous snapshot was OK, the previous OK snapshot keeps being served, marked
+``stale=True`` with ``WARN_STALE`` added, and the read is retried after the short
+unreadable interval. That stops a blip from flipping a day's score model to the
+code default mid-day. With no previous OK snapshot an unreadable read still
+leads to code defaults (U4). INVALID always replaces the snapshot: a bad saved
+row must not be masked by an older good one.
 """
 from __future__ import annotations
 
@@ -24,7 +32,7 @@ import threading
 import time
 import types
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 
 from stock_analyzer import llm, llm_settings, reference_data, sentiment_cache
@@ -47,6 +55,8 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 WARN_UNREADABLE = ("AI decision-model settings could not be read; "
                    "code defaults in use")
+WARN_STALE = ("AI decision-model settings could not be re-read; "
+              "serving the last good copy")
 _WARN_HASH = ("AI decision-model settings row doesn't match its saved hash "
               "(edited outside App Settings?); code defaults in use")
 
@@ -224,6 +234,7 @@ class Snapshot:
     warnings: tuple = ()
     as_of: object = None
     updated_by: object = None
+    stale: bool = False   # an OK snapshot kept after a failed reload
 
     @property
     def status(self) -> str:
@@ -356,6 +367,13 @@ def get_snapshot(*, loader=None, clock=time.monotonic) -> Snapshot:
             status, row = STATE_UNREADABLE, None
         snap = build_snapshot(status, row)
         ttl = _UNREADABLE_TTL_SEC if snap.state == STATE_UNREADABLE else _TTL_SEC
+        if (snap.state == STATE_UNREADABLE and stale is not None
+                and stale.state == STATE_OK):
+            # stale-if-error: keep the last good copy; ``ttl`` stays the short
+            # unreadable retry interval.
+            snap = replace(stale, stale=True,
+                           warnings=tuple(w for w in stale.warnings if w != WARN_STALE)
+                           + (WARN_STALE,))
         with _lock:
             if gen == _gen:   # an invalidate() during the read voids it
                 _cached, _expires_at = snap, clock() + ttl

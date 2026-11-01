@@ -335,7 +335,7 @@ class _Db:
     def load_sentiment_llm_cache(cls, *a, **k): return cls.cache_row
 
     @classmethod
-    def save_sentiment_llm_cache(cls, ticker, day, headlines, avg):
+    def save_sentiment_llm_cache(cls, ticker, day, headlines, avg, **kw):
         cls.saved.append((ticker, headlines, avg))
 
 
@@ -359,7 +359,7 @@ def _patch_llm(monkeypatch, fn):
 
 def test_empty_rescore_is_never_saved(loader, monkeypatch):
     monkeypatch.setattr(loader, "fetch_ticker_bundle", lambda t, p: _bundle([]))
-    _patch_llm(monkeypatch, lambda heads, key, ticker="": heads)   # real fn echoes [] back
+    _patch_llm(monkeypatch, lambda heads, key, ticker="", **kw: heads)   # real fn echoes [] back
     out = loader.load_bundle("ACME")
     assert _Db.saved == []
     assert out["news_status"] == "ok"      # status passed through from the bundle
@@ -367,7 +367,7 @@ def test_empty_rescore_is_never_saved(loader, monkeypatch):
 
 def test_nonempty_rescore_is_saved(loader, monkeypatch):
     monkeypatch.setattr(loader, "fetch_ticker_bundle", lambda t, p: _bundle([_item(ts=NOW)]))
-    _patch_llm(monkeypatch, lambda heads, key, ticker="": [dict(h, score=0.4) for h in heads])
+    _patch_llm(monkeypatch, lambda heads, key, ticker="", **kw: [dict(h, score=0.4) for h in heads])
     loader.load_bundle("ACME")
     assert len(_Db.saved) == 1 and len(_Db.saved[0][1]) == 1
 
@@ -377,7 +377,7 @@ def test_cached_empty_row_with_live_headlines_is_a_miss(loader, monkeypatch):
     monkeypatch.setattr(loader, "fetch_ticker_bundle", lambda t, p: _bundle([_item(ts=NOW)]))
     calls = []
 
-    def _llm(heads, key, ticker=""):
+    def _llm(heads, key, ticker="", **kw):
         calls.append(len(heads))
         return [dict(h, score=0.4) for h in heads]
 
@@ -417,7 +417,7 @@ def test_bundle_without_provider_status_infers_from_news(loader, monkeypatch):
     b = _bundle([_item(ts=NOW)])
     del b["news_status"]
     monkeypatch.setattr(loader, "fetch_ticker_bundle", lambda t, p: b)
-    _patch_llm(monkeypatch, lambda heads, key, ticker="": heads)
+    _patch_llm(monkeypatch, lambda heads, key, ticker="", **kw: heads)
     assert loader.load_bundle("ACME")["news_status"] == "ok"
     b2 = _bundle([])
     del b2["news_status"]

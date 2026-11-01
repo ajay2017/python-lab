@@ -5463,41 +5463,69 @@ def save_sector_cache(ticker: str, sector: str) -> bool:
 # for a given ticker on a given UTC day. System cache → NOT _READONLY-gated
 # (mirrors sector_cache). One row per (ticker, score_date).
 
+def _is_missing_column_error(e: Exception) -> bool:
+    """True when a PostgREST error says a column doesn't exist (DDL not applied)."""
+    t = str(e).lower()
+    return "42703" in t or "pgrst204" in t or (
+        "column" in t and ("does not exist" in t or "could not find" in t))
+
+
 def load_sentiment_llm_cache(ticker: str, score_date: str) -> dict | None:
-    """Return {"headlines": [...], "avg_sent": float} for ticker/date, or None.
+    """Return {"headlines", "avg_sent", "model", "effort", "served_model"} for
+    ticker/date, or None. model / effort / served_model are None on a row written
+    before the provenance columns existed (a NULL model = Haiku 4.5).
 
     None means cache miss (table not created yet, DB offline, or no row for today)
-    — caller should run the LLM and then call save_sentiment_llm_cache. Never raises.
+    — caller should run the LLM and then call save_sentiment_llm_cache. When the
+    provenance columns are missing (DDL not applied) it retries the legacy select so
+    that never turns every load into a miss. Never raises.
     """
     t = str(ticker or "").upper().strip()
     if not t or not has_db():
         return None
-    try:
-        rows = (
+
+    def _read(cols: str):
+        return (
             _client().table("sentiment_llm_cache")
-            .select("headlines,avg_sent")
+            .select(cols)
             .eq("ticker", t)
             .eq("score_date", score_date)
             .limit(1).execute().data
         )
+
+    try:
+        try:
+            rows = _read("headlines,avg_sent,model,effort,served_model")
+        except Exception as e:
+            if not _is_missing_column_error(e):
+                raise
+            print("load_sentiment_llm_cache: provenance columns missing "
+                  f"({type(e).__name__}); using the legacy select (DDL may be missing).")
+            rows = _read("headlines,avg_sent")
         if not rows:
             return None
         row = rows[0]
         if not isinstance(row.get("headlines"), list):
             return None
-        return {"headlines": row["headlines"], "avg_sent": float(row["avg_sent"])}
+        return {"headlines": row["headlines"], "avg_sent": float(row["avg_sent"]),
+                "model": row.get("model"), "effort": row.get("effort"),
+                "served_model": row.get("served_model")}
     except Exception:
         return None
 
 
 def save_sentiment_llm_cache(
-    ticker: str, score_date: str, headlines: list, avg_sent: float
+    ticker: str, score_date: str, headlines: list, avg_sent: float,
+    *, model: str | None = None, effort: str | None = None,
+    served_model: str | None = None,
 ) -> bool:
-    """Upsert LLM-rescored headlines + avg_sent for ticker/date.
+    """Upsert LLM-rescored headlines + avg_sent for ticker/date, with the model /
+    effort / served_model that produced them when given.
 
     Best-effort — a failure (table not created yet, RLS issue) is swallowed so
     it never disrupts the load_bundle success path. The feature degrades to
-    per-request VADER on every failure; the next run retries the DB write.
+    per-request VADER on every failure; the next run retries the DB write. When the
+    upsert fails on a missing provenance column it retries without those keys.
     """
     t = str(ticker or "").upper().strip()
     if not t or not has_db():
@@ -5505,16 +5533,26 @@ def save_sentiment_llm_cache(
     try:
         from datetime import datetime, timezone
         import json as _json
-        _client().table("sentiment_llm_cache").upsert(
-            {
-                "ticker":     t,
-                "score_date": score_date,
-                "headlines":  _json.loads(_json.dumps(headlines)),  # ensure JSON-safe
-                "avg_sent":   round(float(avg_sent), 6),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            # no on_conflict: PostgREST uses PRIMARY KEY (ticker, score_date) automatically
-        ).execute()
+        row = {
+            "ticker":     t,
+            "score_date": score_date,
+            "headlines":  _json.loads(_json.dumps(headlines)),  # ensure JSON-safe
+            "avg_sent":   round(float(avg_sent), 6),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        # All three keys whenever any is given (None -> NULL), so an overwrite
+        # never leaves the previous model's effort / served_model on the row.
+        prov = ({"model": model, "effort": effort, "served_model": served_model}
+                if any(v is not None for v in (model, effort, served_model)) else {})
+        # no on_conflict: PostgREST uses PRIMARY KEY (ticker, score_date) automatically
+        try:
+            _client().table("sentiment_llm_cache").upsert({**row, **prov}).execute()
+        except Exception as e:
+            if not (prov and _is_missing_column_error(e)):
+                raise
+            print("save_sentiment_llm_cache: provenance columns missing "
+                  f"({type(e).__name__}); saving without them (DDL may be missing).")
+            _client().table("sentiment_llm_cache").upsert(row).execute()
         return True
     except Exception:
         return False
