@@ -140,6 +140,10 @@ Current keys (per-key notes, `None` semantics and incident history: [docs/coordi
   - **Prefer a NEW module over growing a `_GATE_FILES` one** (the pattern: `outage_gate.py`, `coord_freshness.py`), so the right move stays the cheap one.
 - **New database columns must be backward-compatible:** `db.load_trades()` backfills `None` for legacy rows.
 - **Date comparisons use America/New_York.** Take "now" / "today" from `stock_analyzer.market_time.now_et` / `today_et`; the hosted containers run UTC.
+- **Quality first, then efficiency (owner, 2026-11-01): a fix must not add a bug.** Three rules, each from a bug class found more than once:
+  - **Time-context matrix.** Any date / day / "today" logic is tested on a weekend or holiday visit, a DST change day, after hours, and a trade logged or imported a day late (in both directions, buy and sell). Calendar day ≠ trading day (N1, N2, #29, #32).
+  - **One freshness per number.** Never combine two sources that update at different times (broker cash vs journal holdings, live vs snapshot) into one figure without reconciling them or saying which side is stale (N1).
+  - **Fix the class.** Before building, list every sibling site of the same pattern (file:line) and either fix it or name it in the commit body / [docs/bug-register.md](docs/bug-register.md). A finding that ships alone gets rediscovered.
 - **For UI suppressions, render a visible banner explaining what was suppressed and why.** Never silently filter.
 - **Escape interpolated HTML with `stock_analyzer.util.safe_html`** (`util.safe_link` for links).
 
