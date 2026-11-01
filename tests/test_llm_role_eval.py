@@ -777,3 +777,33 @@ def test_script_saves_only_through_save_llm_role_eval():
     names, _ = _identifiers(ROOT / "scripts" / "llm_role_eval.py")
     writers = {n for n in names if n.startswith(("save_", "write_"))}
     assert writers == {"save_llm_role_eval"}
+
+
+# ---- scripts/llm_role_eval.score_sample (C3 review A2) ----
+def _load_script():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "llm_role_eval_script", ROOT / "scripts" / "llm_role_eval.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_score_sample_uses_row_matches_null_rows_are_haiku_4_5(monkeypatch):
+    from stock_analyzer import sentiment_cache
+    script = _load_script()
+    rows = [{"ticker": "A", "model": None, "effort": None},
+            {"ticker": "B", "model": llm.HAIKU_4_5, "effort": None},
+            {"ticker": "C", "model": "claude-haiku-5-5", "effort": None},
+            {"ticker": "D", "model": "claude-haiku-5-5", "effort": "low"}]
+    old = llm.RoleSetting(model=llm.HAIKU_4_5)
+    new = llm.RoleSetting(model="claude-haiku-5-5")
+    assert [r["ticker"] for r in script.score_sample(rows, old)] == ["A", "B"]
+    # a NULL model does NOT match a Haiku 5.5 current entry
+    assert [r["ticker"] for r in script.score_sample(rows, new)] == ["C"]
+    seen = []
+    real = sentiment_cache.row_matches
+    monkeypatch.setattr(sentiment_cache, "row_matches",
+                        lambda row, e: seen.append(row["ticker"]) or real(row, e))
+    script.score_sample(rows, old)
+    assert seen == ["A", "B", "C", "D"]

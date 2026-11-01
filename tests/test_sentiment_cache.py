@@ -166,28 +166,117 @@ def test_save_includes_provenance(fq):
     assert r["ticker"] == "AAA"
 
 
-def test_save_without_provenance_keeps_the_old_shape(fq):
-    q = fq([])
-    assert db.save_sentiment_llm_cache("AAA", "2026-11-10", HEADS, 0.1)
-    assert not ({"model", "effort", "served_model"} & set(q.upserts[0]))
+def test_save_requires_model_keyword():
+    with pytest.raises(TypeError):
+        db.save_sentiment_llm_cache("AAA", "2026-11-10", HEADS, 0.1)
+    with pytest.raises(TypeError):
+        db.save_sentiment_llm_cache("AAA", "2026-11-10", HEADS, 0.1, H55)
 
 
-def test_save_writes_null_effort_when_a_model_is_given(fq):
+def test_save_with_legacy_model_still_writes_all_provenance_keys(fq):
     q = fq([])
-    db.save_sentiment_llm_cache("AAA", "2026-11-10", HEADS, 0.1, model=H45)
+    assert db.save_sentiment_llm_cache("AAA", "2026-11-10", HEADS, 0.1, model=H45)
+    assert q.upserts[0]["model"] == H45
     assert q.upserts[0]["effort"] is None and q.upserts[0]["served_model"] is None
 
 
-def test_save_falls_back_without_provenance_on_missing_column(fq, capsys):
+def test_save_legacy_pair_falls_back_without_provenance_on_missing_column(fq, capsys):
     q = fq([], fail_upsert_prov=True)
-    assert db.save_sentiment_llm_cache("AAA", "2026-11-10", HEADS, 0.1, model=H55) is True
+    assert db.save_sentiment_llm_cache("AAA", "2026-11-10", HEADS, 0.1, model=H45) is True
     assert len(q.upserts) == 2 and "model" not in q.upserts[1]
     assert "saving without them" in capsys.readouterr().out
 
 
+def test_save_new_model_is_never_written_unlabelled(fq):
+    q = fq([], fail_upsert_prov=True)
+    assert db.save_sentiment_llm_cache("AAA", "2026-11-10", HEADS, 0.1, model=H55) is False
+    assert len(q.upserts) == 1 and "model" in q.upserts[0]
+
+
+def test_save_legacy_model_with_an_effort_is_not_unlabelled_either(fq):
+    q = fq([], fail_upsert_prov=True)
+    assert db.save_sentiment_llm_cache("AAA", "2026-11-10", HEADS, 0.1, model=H45,
+                                       effort="low") is False
+    assert len(q.upserts) == 1
+
+
 def test_save_other_errors_return_false(fq):
     fq([], fail_upsert_prov=True, err="rls violation")
-    assert db.save_sentiment_llm_cache("AAA", "2026-11-10", HEADS, 0.1, model=H55) is False
+    assert db.save_sentiment_llm_cache("AAA", "2026-11-10", HEADS, 0.1, model=H45) is False
+
+
+# ---- _is_missing_column_error ----
+class _CodeErr(Exception):
+    def __init__(self, code, msg="boom"):
+        super().__init__(msg)
+        self.code = code
+
+
+@pytest.mark.parametrize("code", ["42703", "PGRST204"])
+def test_missing_column_error_checks_the_code_first(code):
+    assert db._is_missing_column_error(_CodeErr(code, "unrelated text")) is True
+
+
+def test_missing_column_error_other_code_falls_back_to_the_text():
+    assert db._is_missing_column_error(_CodeErr("23505", "duplicate key")) is False
+    assert db._is_missing_column_error(
+        _CodeErr("XX", "column foo does not exist")) is True
+    assert db._is_missing_column_error(Exception("connection reset")) is False
+    assert db._is_missing_column_error(Exception("PGRST204 nope")) is True
+
+
+# ---- count_sentiment_cache_models ----
+class _CQ:
+    def __init__(self, rows, fail=False):
+        self.rows, self.fail, self.filters = rows, fail, []
+
+    def table(self, name):
+        return self
+
+    def select(self, cols):
+        self.cols = cols
+        return self
+
+    def eq(self, k, v):
+        self.filters.append((k, v))
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def range(self, a, b):
+        self._r = (a, b)
+        return self
+
+    def execute(self):
+        if self.fail:
+            raise Exception("down")
+        a, b = self._r
+        return type("R", (), {"data": self.rows[a:b + 1]})()
+
+
+def test_count_models_groups_null_as_legacy(monkeypatch):
+    q = _CQ([{"ticker": "A", "model": H55}, {"ticker": "B", "model": None},
+             {"ticker": "C", "model": H55}, {"ticker": "D", "model": ""}])
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client", lambda: q)
+    assert db.count_sentiment_cache_models("2026-11-10") == {
+        H55: 2, "legacy (Haiku 4.5)": 2}
+    assert q.filters == [("score_date", "2026-11-10")] and q.cols == "ticker,model"
+
+
+def test_count_models_none_on_failure_or_no_db(monkeypatch):
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client", lambda: _CQ([], fail=True))
+    assert db.count_sentiment_cache_models("2026-11-10") is None
+    monkeypatch.setattr(db, "has_db", lambda: False)
+    assert db.count_sentiment_cache_models("2026-11-10") is None
+
+
+def test_count_models_empty_day_is_an_empty_dict(monkeypatch):
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client", lambda: _CQ([]))
+    assert db.count_sentiment_cache_models("2026-11-10") == {}
 
 
 # ---- rescore meta ----
@@ -440,6 +529,49 @@ def test_stale_clears_when_the_reload_succeeds():
     clock.t += lds._UNREADABLE_TTL_SEC + 1
     again = lds.get_snapshot(loader=loader, clock=clock)
     assert again.state == "ok" and again.stale is False
+
+
+class _Wall:
+    def __init__(self):
+        self.n = 0
+
+    def __call__(self):
+        self.n += 1
+        return f"2026-11-01T10:0{self.n}:00+00:00"
+
+
+def test_stale_since_set_on_first_failure_and_carried():
+    clock, wall = _Clock(), _Wall()
+    loader = _seq([_ok(), ("unreadable", None), ("unreadable", None)])
+    first = lds.get_snapshot(loader=loader, clock=clock, wall=wall)
+    assert first.stale_since is None and wall.n == 0
+    clock.t += 10_000.0
+    second = lds.get_snapshot(loader=loader, clock=clock, wall=wall)
+    assert second.stale and second.stale_since == "2026-11-01T10:01:00+00:00"
+    clock.t += lds._UNREADABLE_TTL_SEC + 1
+    third = lds.get_snapshot(loader=loader, clock=clock, wall=wall)
+    assert third.stale and third.stale_since == second.stale_since and wall.n == 1
+
+
+def test_stale_since_clears_on_a_good_reload():
+    clock, wall = _Clock(), _Wall()
+    loader = _seq([_ok(), ("unreadable", None), _ok()])
+    lds.get_snapshot(loader=loader, clock=clock, wall=wall)
+    clock.t += 10_000.0
+    assert lds.get_snapshot(loader=loader, clock=clock, wall=wall).stale_since
+    clock.t += lds._UNREADABLE_TTL_SEC + 1
+    again = lds.get_snapshot(loader=loader, clock=clock, wall=wall)
+    assert again.stale is False and again.stale_since is None
+
+
+def test_stale_since_is_a_real_wall_clock_iso_by_default():
+    from datetime import datetime
+    clock = _Clock()
+    loader = _seq([_ok(), ("unreadable", None)])
+    lds.get_snapshot(loader=loader, clock=clock)
+    clock.t += 10_000.0
+    snap = lds.get_snapshot(loader=loader, clock=clock)
+    assert datetime.fromisoformat(snap.stale_since).utcoffset().total_seconds() == 0
 
 
 def test_ok_then_invalid_replaces_the_entries():

@@ -491,8 +491,18 @@ def _complete(role, *, api_key, messages, max_tokens, system, model,
                              model=resolved, usage=None, requested_model=resolved,
                              model_source=source)
         effort = capabilities = None
+        entry = None
         if source == SOURCE_SETTING:
             entry = setting[role]
+        elif (source == SOURCE_EXPLICIT and role in DECISION_ROLES
+                and isinstance(setting, Mapping)):
+            # An explicit model that equals the saved decision setting IS that
+            # setting (resolve_model_with_source refuses any other), so it runs
+            # with the entry's effort and capabilities, not the bare defaults.
+            cand = setting.get(role)
+            if isinstance(cand, RoleSetting) and cand.model == resolved:
+                entry = cand
+        if entry is not None:
             effort, capabilities = entry.effort, entry.capabilities
         request = build_request(role, resolved, max_tokens=max_tokens,
                                 messages=messages, system=system,

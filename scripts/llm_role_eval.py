@@ -31,7 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from stock_analyzer import constants as C  # noqa: E402
-from stock_analyzer import llm, llm_role_eval as ev  # noqa: E402
+from stock_analyzer import llm, llm_role_eval as ev, sentiment_cache  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "premortem_trigger_cases.json"
 WORKERS = 3   # production's own rescore pool is 3 (news_intelligence._RESCORE_WORKERS)
@@ -67,8 +67,8 @@ def _current_setting(role: str) -> llm.RoleSetting:
 def _score_cumulative() -> float:
     try:
         from stock_analyzer import llm_decision_settings as lds
-        entry = lds.get_snapshot().entries.get(llm.ROLE_SCORE) or {}
-        return float(entry.get("cumulative_shift_pts") or 0.0)
+        entry = lds.get_snapshot().entries.get(llm.ROLE_SCORE)
+        return lds.score_cumulative_for(entry, sentiment_cache.score_date_today())
     except Exception:  # noqa: BLE001
         return 0.0
 
@@ -77,6 +77,12 @@ def _window() -> tuple[str, str]:
     today = datetime.now(timezone.utc).date()          # UTC: the cache's own score_date basis
     return ((today - timedelta(days=C.LLM_EVAL_SCORE_LOOKBACK_DAYS)).isoformat(),
             (today - timedelta(days=1)).isoformat())   # today excluded
+
+
+def score_sample(rows, current: llm.RoleSetting) -> list:
+    """The cache rows produced by ``current`` (``sentiment_cache.row_matches``: a
+    NULL model reads as Haiku 4.5, not as whatever ``CODE_DEFAULTS`` says today)."""
+    return [r for r in rows if sentiment_cache.row_matches(r, current)]
 
 
 def _print_report(res: ev.EvalResult, role: str) -> None:
@@ -158,10 +164,7 @@ def main(argv=None) -> int:
             _die("couldn't read sentiment_llm_cache.", 1)
         print(f"cache rows {since}..{until}: {len(rows)}")
         if args.role == llm.ROLE_SCORE:
-            default_model = llm.CODE_DEFAULTS[llm.ROLE_SCORE]
-            rows = [r for r in rows
-                    if (r.get("model") or default_model) == current.model
-                    and (r.get("effort") or None) == (current.effort or None)]
+            rows = score_sample(rows, current)
             print(f"rows produced by the current entry ({current.model}, {current.effort}): {len(rows)}")
             if args.max_rows:
                 rows = rows[:args.max_rows]

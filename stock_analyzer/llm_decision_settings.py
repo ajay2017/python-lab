@@ -49,7 +49,9 @@ STATE_INVALID = llm_settings.STATE_INVALID
 
 _BASE_KEYS = frozenset({"model", "effort", "capabilities", "checked_at"})
 _COMMON_KEYS = _BASE_KEYS | {"eval_id", "criteria_version"}
-_SCORE_KEYS = _COMMON_KEYS | {"effective_from", "prior", "cumulative_shift_pts"}
+_SCORE_KEYS = _COMMON_KEYS | {"effective_from", "prior", "cumulative_shift_pts",
+                              "cumulative_before"}
+_CUM_KEYS = ("cumulative_shift_pts", "cumulative_before")
 _PRIOR_KEYS = frozenset({"model", "effort", "capabilities"})
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -67,23 +69,27 @@ hash_view = llm_settings.hash_view
 
 
 def _norm_cumulative(payload):
-    """cumulative_shift_pts -> ``float(x) + 0.0`` so -0.0 hashes as 0.0."""
+    """cumulative_shift_pts / cumulative_before -> ``float(x) + 0.0`` so -0.0
+    hashes as 0.0."""
     roles = payload.get("roles") if isinstance(payload, dict) else None
     if not isinstance(roles, dict):
         return payload
     out_roles = {}
     for r, e in roles.items():
-        if isinstance(e, dict) and "cumulative_shift_pts" in e:
-            v = e["cumulative_shift_pts"]
-            if (isinstance(v, (int, float)) and not isinstance(v, bool)
-                    and math.isfinite(v)):
-                e = {**e, "cumulative_shift_pts": float(v) + 0.0}
+        if isinstance(e, dict):
+            for key in _CUM_KEYS:
+                if key not in e:
+                    continue
+                v = e[key]
+                if (isinstance(v, (int, float)) and not isinstance(v, bool)
+                        and math.isfinite(v)):
+                    e = {**e, key: float(v) + 0.0}
         out_roles[r] = e
     return {**payload, "roles": out_roles}
 
 
 def canonicalize(payload):
-    """``llm_settings.canonicalize`` plus -0.0 -> 0.0 for ``cumulative_shift_pts``."""
+    """``llm_settings.canonicalize`` plus -0.0 -> 0.0 for ``cumulative_shift_pts`` / ``cumulative_before``."""
     return _norm_cumulative(llm_settings.canonicalize(payload))
 
 
@@ -154,6 +160,11 @@ def validate_role_entry(role, entry) -> list[str]:
         if (isinstance(cum, bool) or not isinstance(cum, (int, float))
                 or not math.isfinite(cum)):
             errors.append("cumulative_shift_pts must be a finite number")
+        if "cumulative_before" in entry:
+            cb = entry["cumulative_before"]
+            if (isinstance(cb, bool) or not isinstance(cb, (int, float))
+                    or not math.isfinite(cb)):
+                errors.append("cumulative_before must be a finite number")
     return errors
 
 
@@ -226,6 +237,26 @@ def score_entry_for(entry: dict, score_date: str) -> llm.RoleSetting | None:
     return _to_setting(prior) if isinstance(prior, dict) else None
 
 
+def _finite_float(v, default: float = 0.0) -> float:
+    ok = isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    return float(v) if ok else default
+
+
+def score_cumulative_for(entry, score_date: str) -> float:
+    """The cumulative score shift (pts) of the model that resolves on
+    ``score_date``: 0.0 with no entry; ``cumulative_shift_pts`` from the entry's
+    ``effective_from``; before it, ``cumulative_before`` (the total of the model
+    that resolved when the entry was saved), else ``cumulative_shift_pts``."""
+    if not isinstance(entry, Mapping):
+        return 0.0
+    cum = _finite_float(entry.get("cumulative_shift_pts"))
+    if score_date >= str(entry.get("effective_from")):
+        return cum
+    if "cumulative_before" in entry:
+        return _finite_float(entry.get("cumulative_before"), cum)
+    return cum
+
+
 # --- Snapshot -----------------------------------------------------------------
 @dataclass(frozen=True)
 class Snapshot:
@@ -235,6 +266,9 @@ class Snapshot:
     as_of: object = None
     updated_by: object = None
     stale: bool = False   # an OK snapshot kept after a failed reload
+    # ISO wall-clock UTC of the first failed reload while an OK snapshot is being
+    # served stale; carried across further stale reloads, None once a reload works.
+    stale_since: str | None = None
 
     @property
     def status(self) -> str:
@@ -296,7 +330,13 @@ def reset_role(payload, role, now_utc: datetime) -> dict:
     effect from ``score_effective_from(now_utc)``. Its ``prior`` is the model that
     resolves TODAY (``score_entry_for(current, <UTC date of now_utc>)``; None = the
     code default), never a pending not-yet-effective entry, so a reset can't start a
-    pending model early. ``cumulative_shift_pts`` is carried over."""
+    pending model early. ``cumulative_before`` is ``score_cumulative_for(current,
+    today)``, the total of what resolves today (correct while the reset is pending).
+    ``cumulative_shift_pts`` (the total once the reset applies) is 0.0 when the code
+    default IS the drift origin (``sentiment_cache.LEGACY_CACHE_MODEL``, Haiku 4.5,
+    which every total is measured from), else that same carried total.
+    TODO(C8): once CODE_DEFAULTS["score"] moves off the drift origin, a reset needs
+    the moved default's own total (e.g. a reviewed constant) instead of the carry."""
     roles = _roles_copy(payload)
     if role != llm.ROLE_SCORE:
         roles.pop(role, None)
@@ -310,6 +350,7 @@ def reset_role(payload, role, now_utc: datetime) -> dict:
         "effective_from": score_effective_from(now_utc),
         "prior": None,
         "cumulative_shift_pts": 0.0,
+        "cumulative_before": 0.0,
     }
     if isinstance(current, dict):
         # prior = what the current entry resolves to TODAY (UTC, the
@@ -324,7 +365,14 @@ def reset_role(payload, role, now_utc: datetime) -> dict:
             entry["prior"] = {
                 "model": rs.model, "effort": rs.effort,
                 "capabilities": dict(rs.capabilities) if rs.capabilities else None}
-        entry["cumulative_shift_pts"] = current.get("cumulative_shift_pts", 0.0)
+        try:
+            cum = score_cumulative_for(current, today) + 0.0
+        except Exception:  # noqa: BLE001
+            cum = 0.0
+        entry["cumulative_before"] = cum
+        entry["cumulative_shift_pts"] = (
+            0.0 if llm.CODE_DEFAULTS[llm.ROLE_SCORE] == sentiment_cache.LEGACY_CACHE_MODEL
+            else cum)
     roles[role] = entry
     return {"version": PAYLOAD_VERSION, "roles": roles}
 
@@ -342,7 +390,11 @@ def _default_loader():
     return db.load_reference_table_status(TABLE_NAME)
 
 
-def get_snapshot(*, loader=None, clock=time.monotonic) -> Snapshot:
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def get_snapshot(*, loader=None, clock=time.monotonic, wall=_utc_now_iso) -> Snapshot:
     """The cached snapshot while fresh. On expiry one thread reloads (the DB
     read runs outside ``_lock``); the others get the stale snapshot meanwhile,
     and only a first-ever load blocks."""
@@ -372,6 +424,7 @@ def get_snapshot(*, loader=None, clock=time.monotonic) -> Snapshot:
             # stale-if-error: keep the last good copy; ``ttl`` stays the short
             # unreadable retry interval.
             snap = replace(stale, stale=True,
+                           stale_since=stale.stale_since or wall(),
                            warnings=tuple(w for w in stale.warnings if w != WARN_STALE)
                            + (WARN_STALE,))
         with _lock:
@@ -419,3 +472,25 @@ def save(payload, updated_by) -> dict:
     if isinstance(result, dict) and result.get("status") == "saved":
         invalidate()
     return result
+
+
+def resolution_summary() -> str:
+    """``score=<model> (<source>, from <date>, prior <model>) · filter=<model>
+    (<source>) · extract_trigger=... · decision_settings=<state>``. Never raises."""
+    try:
+        snap = get_snapshot()
+        parts = []
+        for role in (llm.ROLE_SCORE, llm.ROLE_FILTER, llm.ROLE_EXTRACT_TRIGGER):
+            model, source = llm.resolved_with_source(role)
+            detail = source
+            entry = snap.entries.get(role) if snap.state == STATE_OK else None
+            if role == llm.ROLE_SCORE and isinstance(entry, Mapping):
+                prior = entry.get("prior")
+                prior_model = prior.get("model") if isinstance(prior, Mapping) else None
+                detail += (f", from {entry.get('effective_from')}"
+                           f", prior {prior_model or llm.CODE_DEFAULTS[role]}")
+            parts.append(f"{role}={model} ({detail})")
+        state = snap.state + (" (stale)" if snap.stale else "")
+        return " · ".join(parts) + f" · decision_settings={state}"
+    except Exception:  # noqa: BLE001
+        return "decision model resolution unavailable"

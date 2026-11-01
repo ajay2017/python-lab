@@ -3626,8 +3626,9 @@ def main() -> int:
     )
     _log(f"start · {now_et.isoformat()} ET · mode={mode} · force={force} · test_email={test_email}")
     try:
-        from stock_analyzer import llm_settings
-        _log("llm: " + llm_settings.resolution_summary())
+        from stock_analyzer import llm_decision_settings, llm_settings
+        _log("llm: " + llm_settings.resolution_summary()
+             + " · " + llm_decision_settings.resolution_summary())
     except Exception:  # noqa: BLE001 - a log line must never fail a lane
         pass
 

@@ -343,6 +343,7 @@ def eval_score(rows, history, rescore, *, current, candidate,
         "candidate_calls": cand_calls, "candidate_failures": cand_fail,
         "failure_pct": pct(cand_fail, cand_calls) if cand_calls else 100.0,
         "current_failures": cur_fail,
+        "current_model": current.model, "current_effort": current.effort,
         "cumulative_prior_pts": float(cumulative_shift_pts or 0.0),
         "cumulative_shift_abs": abs(float(cumulative_shift_pts or 0.0) + net_shift),
     }
@@ -465,6 +466,7 @@ def eval_filter(headlines, score_batch, *, current, candidate, workers: int = 1)
         "failure_pct_c1": fpct(f1), "failure_pct_c2": fpct(f2), "failure_pct_candidate": fpct(fk),
         "candidate_failures": fk,
         "failure_pct": fpct(fk) if n else 100.0,
+        "current_model": current.model, "current_effort": current.effort,
     }
     failures = filter_failures(metrics)
     return EvalResult(

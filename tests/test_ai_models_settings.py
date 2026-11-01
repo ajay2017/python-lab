@@ -70,8 +70,8 @@ class _Clock:
 
 
 # ---- TEST_CASES mirror production ----
-def test_one_case_per_editable_role():
-    assert set(ams.TEST_CASES) == set(llm.EDITABLE_ROLES)
+def test_one_case_per_editable_and_decision_role():
+    assert set(ams.TEST_CASES) == set(llm.EDITABLE_ROLES) | set(llm.DECISION_ROLES)
 
 
 def test_case_max_tokens_and_timeouts_match_production():

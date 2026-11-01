@@ -5464,7 +5464,11 @@ def save_sector_cache(ticker: str, sector: str) -> bool:
 # (mirrors sector_cache). One row per (ticker, score_date).
 
 def _is_missing_column_error(e: Exception) -> bool:
-    """True when a PostgREST error says a column doesn't exist (DDL not applied)."""
+    """True when a PostgREST error says a column doesn't exist (DDL not applied).
+    Checks the error's ``code`` (Postgres 42703 / PostgREST PGRST204) first, then
+    falls back to matching the message text."""
+    if getattr(e, "code", None) in {"42703", "PGRST204"}:
+        return True
     t = str(e).lower()
     return "42703" in t or "pgrst204" in t or (
         "column" in t and ("does not exist" in t or "could not find" in t))
@@ -5516,16 +5520,20 @@ def load_sentiment_llm_cache(ticker: str, score_date: str) -> dict | None:
 
 def save_sentiment_llm_cache(
     ticker: str, score_date: str, headlines: list, avg_sent: float,
-    *, model: str | None = None, effort: str | None = None,
+    *, model: str, effort: str | None = None,
     served_model: str | None = None,
 ) -> bool:
     """Upsert LLM-rescored headlines + avg_sent for ticker/date, with the model /
-    effort / served_model that produced them when given.
+    effort / served_model that produced them (``model`` is required: an unlabelled
+    row reads as Haiku 4.5).
 
     Best-effort — a failure (table not created yet, RLS issue) is swallowed so
     it never disrupts the load_bundle success path. The feature degrades to
     per-request VADER on every failure; the next run retries the DB write. When the
-    upsert fails on a missing provenance column it retries without those keys.
+    upsert fails on a missing provenance column it retries without those keys ONLY
+    for (``sentiment_cache.LEGACY_CACHE_MODEL``, no effort), the pair an unlabelled
+    row already means; any other model's row is not written (returns False) so it
+    is never stored unlabelled.
     """
     t = str(ticker or "").upper().strip()
     if not t or not has_db():
@@ -5540,15 +5548,16 @@ def save_sentiment_llm_cache(
             "avg_sent":   round(float(avg_sent), 6),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        # All three keys whenever any is given (None -> NULL), so an overwrite
-        # never leaves the previous model's effort / served_model on the row.
-        prov = ({"model": model, "effort": effort, "served_model": served_model}
-                if any(v is not None for v in (model, effort, served_model)) else {})
+        # All three keys always (None -> NULL), so an overwrite never leaves the
+        # previous model's effort / served_model on the row.
+        prov = {"model": model, "effort": effort, "served_model": served_model}
         # no on_conflict: PostgREST uses PRIMARY KEY (ticker, score_date) automatically
         try:
             _client().table("sentiment_llm_cache").upsert({**row, **prov}).execute()
         except Exception as e:
-            if not (prov and _is_missing_column_error(e)):
+            from stock_analyzer import sentiment_cache
+            if not (_is_missing_column_error(e)
+                    and (model, effort) == (sentiment_cache.LEGACY_CACHE_MODEL, None)):
                 raise
             print("save_sentiment_llm_cache: provenance columns missing "
                   f"({type(e).__name__}); saving without them (DDL may be missing).")
@@ -5645,6 +5654,27 @@ def load_sentiment_cache_sample(since_date: str, until_date: str) -> "list | Non
                 r["model"] = None
                 r["effort"] = None
         return [r for r in rows if isinstance(r.get("headlines"), list)]
+    except Exception:
+        return None
+
+
+def count_sentiment_cache_models(score_date: str) -> "dict | None":
+    """{model: row count} of the `sentiment_llm_cache` rows for one ``score_date``;
+    a NULL / empty model is counted under "legacy (Haiku 4.5)". Proof that every
+    process switched to a new score model (System Trust). One select of the model
+    column. None = unreadable (incl. the provenance column missing), never {}."""
+    if not has_db():
+        return None
+    try:
+        rows = _eval_paged(lambda: (
+            _client().table("sentiment_llm_cache").select("ticker,model")
+            .eq("score_date", score_date).order("ticker")
+        ))
+        out: dict = {}
+        for r in rows:
+            key = (r.get("model") if isinstance(r, dict) else None) or "legacy (Haiku 4.5)"
+            out[key] = out.get(key, 0) + 1
+        return out
     except Exception:
         return None
 

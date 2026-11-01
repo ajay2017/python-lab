@@ -439,6 +439,7 @@ from stock_analyzer import broker_screenshot as _bscr
 from stock_analyzer import debate_agent
 from stock_analyzer import llm as _llm
 from stock_analyzer import llm_settings as _llm_settings
+from stock_analyzer import llm_decision_settings as _llm_decision_settings
 from stock_analyzer import llm_usage as _llm_usage
 from stock_analyzer import ai_models_view as _ai_models_view
 from stock_analyzer import ai_models_settings as _ai_models_settings
@@ -38129,9 +38130,11 @@ elif page == "🩺 System Trust":
             "Calls, errors and \"Last served\" count this app process since it "
             "started, so calls made under a role on another model (the "
             "🔎 Investigator, 🤖 AI Snapshot) show there too. Cron lanes run in "
-            "their own processes and aren't counted here; each cron run logs the "
-            "editable roles' models in its \"llm: ...\" line (the pinned roles "
-            "use the same model everywhere). The Key column checks the app's "
+            "their own processes and aren't counted here; each cron run logs every "
+            "role's model but extract_strong in its \"llm: ...\" line. For score, filter and "
+            "extract_trigger the model comes from the decision-model row "
+            "(chosen on ⚙️ App Settings after a passing eval); an environment "
+            "variable never changes them. The Key column checks the app's "
             "main Anthropic key; the news filter and the Pre-Mortem trigger read "
             "the key from the [anthropic] secrets section only."
         )
@@ -38158,8 +38161,20 @@ elif page == "🩺 System Trust":
         if _aim_err:
             st.caption(f"Key check: {_aim_err}")
 
+        _aimd_snap = _llm_decision_settings.get_snapshot()
+        _aimd_level, _aimd_text, _aimd_others = _ai_models_view.decision_status(_aimd_snap)
+        if _aimd_level == "ok":
+            st.success(_aimd_text)
+        elif _aimd_level == "warn":
+            st.warning(_aimd_text)
+        else:
+            st.error(_aimd_text)
+        for _aim_w in _aimd_others:
+            st.warning(_aim_w)
+
         _aim_rows = _ai_models_view.build_rows(
-            _aim_snap, available_ids=_aim_ids, usage=_llm_usage.snapshot())
+            _aim_snap, available_ids=_aim_ids, usage=_llm_usage.snapshot(),
+            decision_snapshot=_aimd_snap)
         _aim_key_label = {"available": "✅ available",
                           "not_listed": "⚠️ not in this key's model list",
                           "unknown": "⚪ not checked"}
@@ -38172,7 +38187,8 @@ elif page == "🩺 System Trust":
                 "What it does": _aim_r["description"],
                 "Model": _aim_r["model"],
                 "Source": _aim_r["source_label"],
-                "Editable": "yes" if _aim_r["editable"] else _aim_r["lock_reason"],
+                "Editable": _aim_r["editable_label"],
+                "Decision detail": _aim_r.get("detail") or "—",
                 "Key": _aim_key_label.get(_aim_r["key"], "⚪ not checked"),
                 "Last served": _aim_u.get("last_model") or "—",
                 "Calls": _aim_u.get("calls", 0),
@@ -38186,9 +38202,12 @@ elif page == "🩺 System Trust":
                     else (_aim_u.get("last_error") or "—")),
             })
         st.dataframe(_aim_table, hide_index=True, use_container_width=True)
+        st.caption(_ai_models_view.todays_model_counts_line().replace("$", "\\$"))
         for _aim_r in _aim_rows:
             for _aim_n in _aim_r["notes"]:
                 st.info(f"{_aim_r['role']}: {_aim_n}")
+            for _aim_g in _aim_r["grey_notes"]:
+                st.caption(f"{_aim_r['role']}: {_aim_g}")
             for _aim_w in _aim_r["warnings"]:
                 st.warning(_aim_w)
     except Exception as _aim_e:  # noqa: BLE001 - this section must never break the page
@@ -38528,9 +38547,11 @@ elif page == "⚙️ App Settings":
     with st.expander("View change history", expanded=False):
         # llm_models joins the history picker only: _AS_TABLES also drives the
         # Edit buttons and the shelf rows, and this table has neither.
-        _AS_HIST_LABELS = {**_AS_LABELS, "llm_models": "AI model settings"}
+        _AS_HIST_LABELS = {**_AS_LABELS, "llm_models": "AI model settings",
+                           _llm_decision_settings.TABLE_NAME: "AI decision-model settings"}
         _as_hist_table = st.selectbox(
-            "Table", [k for k, _ in _AS_TABLES] + ["llm_models"],
+            "Table", [k for k, _ in _AS_TABLES] + ["llm_models",
+                                                   _llm_decision_settings.TABLE_NAME],
             format_func=lambda k: _AS_HIST_LABELS.get(k, k),
             key="_as_hist_select",
         )
@@ -38553,10 +38574,13 @@ elif page == "⚙️ App Settings":
                     _as_hr_payload = {}
                 _as_when = str(_as_hr.get("as_of") or _as_hr.get("created_at") or "")[:10]
                 _as_who  = _as_hr.get("updated_by") or "?"
-                if _as_hist_table == "llm_models":
+                if _as_hist_table in ("llm_models", _llm_decision_settings.TABLE_NAME):
                     # Not ticker buckets: history_delta doesn't fit this payload.
                     st.markdown(f"**{_as_when}** (by `{_as_who}`)")
-                    for _as_line in _ai_models_settings.history_lines(
+                    _as_hist_fn = (_ai_models_settings.history_lines
+                                   if _as_hist_table == "llm_models"
+                                   else _ai_models_settings.decision_history_lines)
+                    for _as_line in _as_hist_fn(
                             _as_hr_payload, _as_older_payload):
                         st.markdown(f"- {_as_line}")
                     continue
@@ -38588,7 +38612,8 @@ elif page == "⚙️ App Settings":
             "Save. Each test is one real API call and is counted in the 🩺 "
             "System Trust AI models counters. The roles whose output feeds the "
             "composite, Act Today or the R-Multiple declared stop (score, "
-            "filter, extract_trigger) stay pinned in reviewed code, and "
+            "filter, extract_trigger) are switched in the eval-gated block "
+            "below the editable roles, and "
             "extract_strong stays code-only until the broker import preview is "
             f"checked. An environment variable `{_llm.ENV_PREFIX}<ROLE>` set to a "
             "claude- model id overrides a saved choice and hides that role's "
@@ -38800,7 +38825,238 @@ elif page == "⚙️ App Settings":
                 if not _can_reset:
                     st.caption("Reset is off: this role isn't using an App Settings choice.")
 
-        _aims_locked = [r for r in _aims_rows if not r["editable"]]
+        # ── Decision roles (eval-gated; plan 17 C5) ───────────────────────────
+        # Every decision (may Save be pressed, what is written, the effective
+        # date) is in ai_models_settings; this renders and wires the buttons.
+        st.markdown("**Decision roles (eval-gated)**")
+        st.caption(
+            "score, filter and extract_trigger feed the composite's news "
+            "sentiment, the news-card filter and the Pre-Mortem trigger / "
+            "R-Multiple declared stop. Save needs a passing Test role AND a "
+            "passing eval of the exact model and effort, run from a shell with "
+            "the command shown for the candidate, no older than "
+            f"{_ai_models_settings.LLM_EVAL_MAX_AGE_DAYS} days. Environment "
+            "variables are ignored for these roles. A score change takes effect "
+            "at 00:00 UTC on the date shown before Save (normally the next "
+            "one), so a UTC score date (after the US close) isn't split "
+            "between two models in normal operation."
+        )
+        _aimd_now = _ai_models_settings.utc_now()
+        _aimd_snap = _llm_decision_settings.get_snapshot()
+        _aimd_level, _aimd_text, _aimd_others = _ai_models_settings.decision_status(_aimd_snap)
+        _aims_post.get({"ok": "success", "warn": "warning", "error": "error"}[_aimd_level],
+                       st.info)(_aimd_text)
+        for _aimd_w in _aimd_others:
+            st.warning(_aimd_w)
+
+        def _aimd_write(role, entry=None, test=None, eval_row=None, action="save"):
+            """Save or reset one decision role on top of the stored row; a save
+            is re-checked against the freshly read row before it is written."""
+            _status, _row = db.load_reference_table_status(_llm_decision_settings.TABLE_NAME)
+            _base, _notes = _ai_models_settings.base_payload_for_decision(_status, _row)
+            if _base is None:
+                for _n in _notes:
+                    st.error(_n)
+                return
+            _now = _ai_models_settings.utc_now()
+            _cur = _base["roles"].get(role)
+            if action == "save":
+                _ok, _why = _ai_models_settings.can_save_decision(
+                    role, entry, test, eval_row, _cur, _now,
+                    snapshot_state=_llm_decision_settings.build_snapshot(
+                        _status, _row).state)
+                if not _ok:
+                    st.error(f"Save refused: {_why}.")
+                    return
+                _new = _ai_models_settings.build_decision_entry(
+                    role, entry, eval_row, _cur, _now)
+                _payload = _llm_decision_settings.apply_role(_base, role, _new)
+            else:
+                _payload = _llm_decision_settings.reset_role(_base, role, _now)
+                _new = _payload["roles"].get(role)
+            _errs = _llm_decision_settings.validate_payload(_payload)
+            if _errs:
+                for _e in _errs:
+                    st.error(f"Not saved: {_e}")
+                return
+            _res = _llm_decision_settings.save(_payload, updated_by="app_settings_ui")
+            _lvl, _txt = _ai_models_settings.decision_save_message(
+                _res, _aimd_snap.state, role,
+                (_new or {}).get("effective_from"), action=action)
+            _txt = _txt + "".join("\n\nNote: " + _n for _n in _notes)
+            if isinstance(_res, dict) and _res.get("status") == "saved":
+                for _k in (f"_aimd_check_{role}", f"_aimd_test_{role}"):
+                    st.session_state.pop(_k, None)
+                st.session_state["_aims_flash"] = (_lvl, f"{role}: {_txt}")
+                st.rerun()
+            _aims_post.get(_lvl, st.info)(_txt)
+
+        for _drole in (_llm.ROLE_SCORE, _llm.ROLE_FILTER, _llm.ROLE_EXTRACT_TRIGGER):
+            _dv = _ai_models_settings.decision_role_view(_drole, _aimd_snap, _aimd_now)
+            st.markdown(
+                f"**{_drole}** · {_ai_models_view.ROLE_DESCRIPTIONS[_drole]}  \n"
+                f"Model: `{_dv['model']}` ({_dv['effort_text']}) · "
+                f"Source: {_dv['source_label']}"
+            )
+            for _dline in (_dv["effective_line"], _dv["prior_line"], _dv["cumulative_line"]):
+                if _dline:
+                    st.caption(_dline)
+            for _w in _dv["warnings"]:
+                st.warning(_w)
+
+            _dcase = _ai_models_settings.TEST_CASES[_drole]
+            _dcur = _aimd_snap.entries.get(_drole) if _aimd_snap.state == _llm_decision_settings.STATE_OK else None
+            with st.expander(f"Change {_drole} (eval-gated)"):
+                _dchoices = _ai_models_settings.model_choices(_aims_ids, _dv["model"])
+                _dmk = f"_aimd_model_{_drole}"
+                if st.session_state.get(_dmk) not in _dchoices + [_AIMS_OTHER]:
+                    st.session_state.pop(_dmk, None)
+                _dsel = st.selectbox(
+                    "Model", _dchoices + [_AIMS_OTHER],
+                    index=_dchoices.index(_dv["model"]) if _dv["model"] in _dchoices else 0,
+                    key=_dmk,
+                )
+                if _dsel == _AIMS_OTHER:
+                    _dmodel = st.text_input(
+                        "Model id", key=f"_aimd_other_{_drole}", placeholder="claude-…",
+                    ).strip()
+                else:
+                    _dmodel = _dsel
+
+                _dck = f"_aimd_check_{_drole}"
+                if st.button("Check model", key=f"_aimd_check_btn_{_drole}",
+                             disabled=not _dmodel):
+                    _d_caps, _d_err, _d_kind = _llm.retrieve_model(_aims_key, _dmodel)
+                    st.session_state[_dck] = (_dmodel, _d_caps, _d_err, _d_kind,
+                                              _now_et().isoformat())
+                    st.rerun()
+                _dchk = st.session_state.get(_dck)
+                _dentry = None
+                if _dchk and _dchk[0] == _dmodel:
+                    _, _dcaps, _d_err, _d_kind, _d_at = _dchk
+                    if _d_err:
+                        st.error(f"Models API check of {_dmodel} failed ({_d_kind}): {_d_err}")
+                    else:
+                        _defs = ", ".join(_dcaps["efforts"]) if _dcaps["efforts"] else "none"
+                        _dmt = _dcaps["max_tokens"]
+                        st.caption(
+                            f"Checked at {_ai_models_settings.format_checked_at(_d_at)}: "
+                            f"efforts {_defs} · max output tokens "
+                            f"{'unknown' if _dmt is None else _dmt}"
+                        )
+                    _dopts = _ai_models_settings.effort_options(_dmodel, _dcaps)
+                    _dek = f"_aimd_effort_{_drole}"
+                    if _dek in st.session_state and st.session_state[_dek] not in _dopts:
+                        st.session_state.pop(_dek, None)
+                    _deffort = st.selectbox(
+                        "Effort", _dopts,
+                        format_func=lambda e, _m=_dmodel, _c=_dcaps: _ai_models_settings.effort_label(_m, e, _c),
+                        key=_dek,
+                    )
+                    _dentry, _derrs = _ai_models_settings.decide_decision_candidate(
+                        _drole, _dmodel, _deffort, _dcaps, _d_err, _d_at, error_kind=_d_kind)
+                    for _e in _derrs:
+                        st.error(_e)
+                else:
+                    st.caption("Check the model to see its effort options.")
+
+                st.caption(
+                    f"Test role runs {_dcase['site']} itself, with sample inputs and "
+                    "this candidate as the role's setting: its real prompt, request, "
+                    f"{_dcase['timeout']}s timeout and parser."
+                )
+                _dtk = f"_aimd_test_{_drole}"
+                if st.button("Test role", key=f"_aimd_test_btn_{_drole}",
+                             disabled=_dentry is None):
+                    with st.spinner("Testing…"):
+                        st.session_state[_dtk] = _ai_models_settings.run_test(
+                            _drole, _dentry, _aims_key)
+                _dtest = st.session_state.get(_dtk)
+                if (_dtest and _dentry is not None
+                        and _dtest.get("key") == _ai_models_settings.candidate_key(_dentry)):
+                    if _dtest["ok"]:
+                        st.success("The test call succeeded.")
+                    else:
+                        st.error(f"The test call failed: {_dtest['error']}")
+                    if _dtest["ok"] and _dtest["fell_back"]:
+                        st.warning(
+                            f"The candidate declined the sample and {_dtest['served_model']} "
+                            f"answered instead, so this test did not exercise {_dmodel}; "
+                            "Save stays off."
+                        )
+                    _d_tin = "—" if _dtest["input_tokens"] is None else f"{_dtest['input_tokens']:,}"
+                    _d_tout = "—" if _dtest["output_tokens"] is None else f"{_dtest['output_tokens']:,}"
+                    _d_lat = "—" if _dtest["latency_s"] is None else f"{_dtest['latency_s']:.1f}s"
+                    _d_cost = ("price unknown" if _dtest["cost_usd"] is None
+                               else f"≈\\${_dtest['cost_usd']:.4f}")
+                    st.markdown(
+                        f"Stop reason: {_dtest['stop_reason'] or '—'} · "
+                        f"Served by: {_dtest['served_model'] or '—'} · "
+                        f"Tokens in / out: {_d_tin} / {_d_tout} · "
+                        f"Latency: {_d_lat} of the site's {_dtest['timeout_s']}s timeout · "
+                        f"Cost: {_d_cost}"
+                    )
+                    if _dtest["ok"]:
+                        if _dtest["format_ok"] is True:
+                            st.caption(f"Format check passed: the reply is {_dcase['format_label']}.")
+                        elif _dtest["format_ok"] is False:
+                            st.warning(
+                                f"Format check failed: the reply isn't {_dcase['format_label']}, "
+                                f"which {_dcase['site']} needs."
+                            )
+                        st.code(_dtest["preview"] or "(empty)", language=None)
+
+                _deval = None
+                if _dentry is not None:
+                    _deval = db.load_latest_llm_role_eval(
+                        _drole, _dentry["model"], _dentry["effort"])
+                    st.caption("The eval is run from a shell (it needs the SUPABASE and "
+                               "ANTHROPIC environment variables), then reload this page:")
+                    st.code(_ai_models_settings.eval_command(
+                        _drole, _dentry["model"], _dentry["effort"]), language="bash")
+                    _dsum = _ai_models_settings.eval_summary(_deval)
+                    if _dsum is None:
+                        st.caption("No stored eval for this model and effort yet.")
+                    else:
+                        st.markdown(
+                            f"Latest stored eval: {_dsum['verdict']} · ran {_dsum['ran_at']} · "
+                            f"sample {_dsum['sample_n']} · criteria version "
+                            f"{_dsum['criteria_version']} · baseline: {_dsum['baseline']}"
+                        )
+                        st.dataframe(
+                            [{"Metric": m["label"], "Measured": m["value"],
+                              "Limit": m["limit"], "Constant": m["constant"],
+                              "Within limit": "✅" if m["within"] else "❌"}
+                             for m in _dsum["metrics"]],
+                            hide_index=True, width="stretch",
+                        )
+                        if _dsum["failures"]:
+                            st.code("\n".join(_dsum["failures"]), language=None)
+
+                _dcan, _dwhy = (
+                    _ai_models_settings.can_save_decision(
+                        _drole, _dentry, _dtest, _deval, _dcur, _aimd_now,
+                        snapshot_state=_aimd_snap.state)
+                    if _dentry is not None else (False, "check the model first"))
+                _deff_line = _ai_models_settings.save_effective_line(_drole, _aimd_now)
+                if _deff_line:
+                    st.caption(_deff_line)
+                if st.button("💾 Save", key=f"_aimd_save_btn_{_drole}",
+                             type="primary", disabled=not _dcan):
+                    _aimd_write(_drole, _dentry, _dtest, _deval)
+                if not _dcan:
+                    st.caption(f"Save is off: {_dwhy}.")
+
+                _dcan_reset, _dwhy_reset = _ai_models_settings.can_reset_decision(
+                    _drole, _aimd_snap, _aimd_now)
+                if st.button("Reset to code default", key=f"_aimd_reset_btn_{_drole}",
+                             disabled=not _dcan_reset):
+                    _aimd_write(_drole, action="reset")
+                if not _dcan_reset:
+                    st.caption(f"Reset is off: {_dwhy_reset}.")
+
+        _aims_locked = [r for r in _aims_rows
+                        if not r["editable"] and r["role"] not in _llm.DECISION_ROLES]
         st.markdown("**Not editable here**")
         st.dataframe(
             [{"Role": r["role"], "What it does": r["description"],
@@ -43677,7 +43933,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Six checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh), and **⑥ Write outcomes** (did today's interactive ledger writes — 6 write paths: the buy recommendations log, the Grow Today gate suppression ledger, the Watchlist Ready-to-Enter log, and the 3 Watchlist/Rebalancer/Analysis gate-ledger capture sites added 2026-09-13 — actually save, or did a swallowed failure look identical to a healthy "nothing to record"?). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Check ⑥, unlike ④/⑤, DOES feed the Home banner — it is a same-session pass/fail signal, not a standing condition or a cold-load cache. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.** Below the checks, **🤖 AI models** lists which model each AI role runs on and where that choice comes from (code default, ⚙️ App Settings, or an environment variable), whether the app's API key can use it, and this app process's calls, errors and fallbacks per role (cron runs happen in their own processes and aren't counted). Under it, a **Portfolio Investigator — AI provider** section lets you choose which AI model the 🔎 Investigator tab (🧠 AI Insights) uses — separate from 🤖 AI Snapshot's own provider choice, not shared or inherited. Only a model that's already passed a required accuracy check is offered.
 - **🛑 The Road Not Taken** — owner-only, not shown in read-only viewer mode. Grades the app's own restraint: every time a gate held back a pick, an add, or downgraded a call, this page shows what the forward return vs SPY over the following ~30 trading days would have been — did the app's caution help or hurt? Covers 14 gates: the original 8 inside Grow Today (macro/sector filters, single-name ceiling, drift conflict, cooldown, early-deterioration WATCH, bear-day tone) plus 6 more — a Rebalancer ADD suppression, a Watchlist ENTER_NOW downgrade to NEAR_ENTRY (sector, beta, or unvalidated R:R — 3 separate gates), and an Analysis add-to-position suppression on a breached stop. A downgrade and an outright suppression are graded as distinct claims (a downgraded name still rendered, just weaker), never blended together. Per gate, not aggregate, and a gate shows no verdict at all ("building") until enough matured, priced, distinct-ticker calls have accrued — expect every gate to read "building" for the first couple of months, longer for the 6 gates added 2026-09-13. **A pure retrospective measurement — it never changes what the engine recommends, gates, or sizes**, today or in the future.
 - **🎖️ Recommendation Outcomes** — owner-only, not shown in read-only viewer mode. Asks whether past Rebalancer trims, the Risk Advisor's beta-card trim, and Diversification ADD calls actually helped — the trim types compare each call's own predicted metric (target single-name weight, or predicted portfolio beta) against what the portfolio's risk-metric history actually shows at that same call's ~30-trading-day horizon, always as a portfolio-level proxy (never claimed as a per-ticker-causal result); the ADD type shows the added name's own return vs SPY as one leg, and the portfolio's correlation/diversification-score shift as a separate leg — never blended into a single "diversification worked" claim. A call only counts as "acted on" when you traded the SAME named ticker, in the right direction, within 10 trading days of the call firing — trading a different name to address the same concern moves the numbers on 💰 Account's own charts but doesn't credit this specific call. Each type shows no verdict at all ("building") until enough matured, distinct-ticker calls have accrued. Tax-Harvest calls are tracked separately (see 💰 Account's running total), not graded here. **A pure retrospective measurement — it never changes what the engine recommends, gates, or sizes.**
-- **⚙️ App Settings** — owner-only, not shown in read-only viewer mode. Lets you curate the three ticker-roster lists the engine reads — the Grow Today scan universe, the Movers discovery net, and the Diversification candidate roster — from inside the app instead of by editing code. **Edits the engine's INPUT SET, never a decision rule**: no gate, threshold, scoring weight, or `COMPOSITE_BUY` lives here or is ever editable through this page. The database is the single source of truth for these lists — if it's unreachable, the affected page shows "unavailable" rather than silently falling back to a frozen list. Every save is validated (a typo'd symbol blocks the save, never saves with a warning) and versioned in an append-only history, the same way git records why an investment threshold changed. **🤖 AI models** (bottom of the page) picks which model runs three AI roles: **fast** (the pre-market stance, the multi-agent debates, 💬 Ask and the other short narratives), **deep** (thesis reviews and drafts, the weekly debrief, the monthly report) and **extract** (analyst-report and earnings-playbook extraction, which you still review in a preview before saving). For each: **Check model** confirms your API key can use it and shows its effort levels; **Test role** sends one real request shaped like that role's strictest real use and shows the stop reason, tokens, time taken, approximate cost and whether the reply has the format the app reads; **Save** unlocks only after a passing test of that exact model and effort; **Reset to code default** undoes it. The roles whose output feeds the composite, Act Today or the R-Multiple declared stop stay fixed in code and are listed read-only. Picking a model changes no rule, and until you save one every role stays on its code default.
+- **⚙️ App Settings** — owner-only, not shown in read-only viewer mode. Lets you curate the three ticker-roster lists the engine reads — the Grow Today scan universe, the Movers discovery net, and the Diversification candidate roster — from inside the app instead of by editing code. **Edits the engine's INPUT SET, never a decision rule**: no gate, threshold, scoring weight, or `COMPOSITE_BUY` lives here or is ever editable through this page. The database is the single source of truth for these lists — if it's unreachable, the affected page shows "unavailable" rather than silently falling back to a frozen list. Every save is validated (a typo'd symbol blocks the save, never saves with a warning) and versioned in an append-only history, the same way git records why an investment threshold changed. **🤖 AI models** (bottom of the page) picks which model runs three AI roles: **fast** (the pre-market stance, the multi-agent debates, 💬 Ask and the other short narratives), **deep** (thesis reviews and drafts, the weekly debrief, the monthly report) and **extract** (analyst-report and earnings-playbook extraction, which you still review in a preview before saving). For each: **Check model** confirms your API key can use it and shows its effort levels; **Test role** sends one real request shaped like that role's strictest real use and shows the stop reason, tokens, time taken, approximate cost and whether the reply has the format the app reads; **Save** unlocks only after a passing test of that exact model and effort; **Reset to code default** undoes it. Below them, **Decision roles (eval-gated)** lets you switch the three roles whose output feeds the composite's news sentiment, the Act Today / Review news filter and the Pre-Mortem trigger (your R-Multiple declared stop): **score**, **filter** and **extract_trigger**. Because a wrong model there would move scores or hide warnings, Save needs more than a passing Test role: a passing **eval** of that exact model and effort, which you run from a shell with the command the page shows (for score and filter it compares the new model with the current one on your own stored news scores and headlines, and must be recent and measured against the model in effect now; for extract_trigger it checks the new model against labelled examples and your past trades). A **score** switch takes effect at 00:00 UTC on the date shown before you save (normally the next one), so a day's scores aren't split between two models in normal operation; you can't save another score switch while one is pending. The broker ticker lookup (extract_strong) stays fixed in code and is listed read-only. Picking a model changes no rule, and until you save one every role stays on its code default.
 
 - **If the database is unreachable, most pages deliberately refuse to load.** You'll see a red banner saying your portfolio is *not* shown, with a **🔄 Retry connection** button. This is on purpose: rendering an empty portfolio would look like you hold nothing, which is a worse lie than showing nothing at all. Two pages stay open — **🩺 System Trust** (to diagnose it) and **📖 User Guide** (this page) — because neither displays any of your holdings, so neither can mislead you. The app retries by itself every 30 seconds and recovers on its own once the database is back; the button retries immediately. If only your *watchlist* or *trade history* is unreadable, you get an amber warning instead and the app keeps working — your holdings are still correct, but history-driven pages (🎯 My Edge, 🧾 Prior Trades) may look emptier than they are.
 - **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets, a **Consensus-Ladder Performance** panel showing average forward return by rating tier — Strong Buy vs Buy vs Hold vs Mixed vs Sell — to test whether that spread is actually earned, with each tier also benchmarked against SPY over the same window, plus an **Engine vs Analyst Calibration** matrix showing who was right when your saved research and the engine's composite disagreed at save time), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over — and the **💬 Ask** tab, where you can chat about your own trade history, a past recommendation's outcome, or your current position (e.g. "how many trades did I make last week and what was the gain/loss on each," "why did AAPL lose money after being recommended," "what's my current position in DELL," "how is my portfolio doing overall," or "what sector am I heaviest in") and get an answer sourced from what's actually on record or your already-loaded holdings — never a new engine verdict or gate; a follow-up question ("what about MSFT instead?") can refer back to what you just asked. Answers may quote a trade's own recorded thesis/notes/lesson, and — for a recommendation's outcome — the matching purchase's recorded Pre-Mortem risk case and exit commitment, read against what actually happened (never a new call). A position/portfolio/sector question needs your holdings loaded this session (open 🏠 Home first if you haven't); anything outside those question shapes is told plainly it's unsupported rather than guessed at. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot that includes the engine's own reasoning, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.) **Owner-only:** the **🔎 Investigator** tab, next to Ask, is a different kind of tool — not a smarter Ask, but a multi-step investigation that composes several already-reviewed analysis functions to answer an open-ended question the way a research pass would (e.g. "how concentrated is my current portfolio by sector?", "how has my protective EXIT/TRIM alpha performed against SPY?", or "is my own buy instinct beating the app's picks?"), rather than looking up one fact. Every step it runs is shown in an expander, every report ends with a mandatory caveats section, and it can only ever call functions from a fixed, already-reviewed toolbox — it will tell you plainly when a question is outside that toolbox rather than guessing. Read-only and awareness-only, like Ask — it never changes a recommendation, a gate, or a trade. Choose which AI model it uses on 🩺 System Trust (only a model that's passed a required accuracy check is offered); if none is configured yet, the tab tells you so.

@@ -1080,6 +1080,9 @@ _GATE_FILES = {
     # 2026-11-01: the score cache's date key, which decides which model's
     # sentiment a given day's composite uses (the date-keyed score switch).
     "stock_analyzer/sentiment_cache.py",
+    # 2026-11-01: decides what 🩺 System Trust says about the decision roles' model
+    # in effect, a pending score switch and an unreadable / invalid settings row.
+    "stock_analyzer/ai_models_view.py",
     # 2026-11-01 (owner U9): the news score prompt, the swing cap and the
     # suppress-only filter that hides or releases protective news cards.
     "stock_analyzer/news_intelligence.py",

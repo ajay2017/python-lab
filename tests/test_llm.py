@@ -742,6 +742,32 @@ def test_complete_explicit_ignores_setting_effort():
     assert f.requests[0]["output_config"] == {"effort": "low"}
 
 
+@pytest.mark.parametrize("role", sorted(llm.DECISION_ROLES))
+def test_complete_decision_explicit_equal_to_setting_applies_the_entry(role):
+    f = _Factory(_resp([_t("ok")]))
+    r = llm.complete(role, api_key="k", messages=MSG, max_tokens=50, client_factory=f,
+                     model="claude-haiku-5-5",
+                     setting={role: RS("claude-haiku-5-5", "medium")})
+    assert r.ok and r.model_source == "explicit"
+    assert f.requests[0]["output_config"] == {"effort": "medium"}
+
+
+@pytest.mark.parametrize("role", sorted(llm.DECISION_ROLES))
+def test_complete_decision_explicit_without_a_setting_uses_no_entry(role):
+    f = _Factory(_resp([_t("ok")]))
+    r = llm.complete(role, api_key="k", messages=MSG, max_tokens=50, client_factory=f,
+                     model=llm.CODE_DEFAULTS[role], setting={})
+    assert r.ok and r.model_source == "explicit"
+
+
+def test_complete_decision_explicit_other_than_setting_is_refused():
+    f = _Factory(_resp([_t("ok")]))
+    r = llm.complete("score", api_key="k", messages=MSG, max_tokens=50, client_factory=f,
+                     model="claude-sonnet-5-5",
+                     setting={"score": RS("claude-haiku-5-5", "medium")})
+    assert not r.ok and f.requests == [] and f.beta_requests == []
+
+
 def test_complete_error_result_carries_source():
     f = _Factory(exc=RuntimeError("boom"))
     r = llm.complete("deep", api_key="k", messages=MSG, max_tokens=5, client_factory=f)

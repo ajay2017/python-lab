@@ -9,9 +9,9 @@ from stock_analyzer import llm
 def score_date_today() -> str:
     """The UTC date (ISO) the ``sentiment_llm_cache`` rows are keyed on.
 
-    ``bundle_loader`` keys the cache with ``date.today()``, which is the UTC date
-    on the hosted containers; this names that date explicitly so the score
-    model switch (``llm_decision_settings.score_entry_for``) and the cache agree.
+    ``bundle_loader`` keys the cache with this function (the UTC date, whatever
+    the host's local timezone), so the score model switch
+    (``llm_decision_settings.score_entry_for``) and the cache agree.
     """
     return datetime.now(timezone.utc).date().isoformat()
 

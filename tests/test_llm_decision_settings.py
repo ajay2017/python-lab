@@ -326,7 +326,7 @@ def test_reset_role_extract_trigger_removes_only_it():
     assert set(lds.reset_role(p, "extract_trigger", _utc(1, 0, 0))["roles"]) == {"filter"}
 
 
-def test_reset_score_is_date_keyed_and_carries_the_total():
+def test_reset_score_is_date_keyed_and_restarts_the_total_at_the_origin():
     cur = _score(effort="low", caps=CAPS, cumulative_shift_pts=0.4,
                  effective_from="2026-10-20")
     out = lds.reset_role(_payload(score=cur), "score", _utc(12, 0, 0))
@@ -334,7 +334,11 @@ def test_reset_score_is_date_keyed_and_carries_the_total():
     assert e["model"] == llm.CODE_DEFAULTS["score"]
     assert e["effective_from"] == "2026-11-02"
     assert e["prior"] == {"model": NEW, "effort": "low", "capabilities": CAPS}
-    assert e["cumulative_shift_pts"] == 0.4
+    # The code default (Haiku 4.5) IS the drift origin: once the reset applies the
+    # total is 0, and while it is pending today's total (0.4) still resolves.
+    assert e["cumulative_shift_pts"] == 0.0 and e["cumulative_before"] == 0.4
+    assert lds.score_cumulative_for(e, "2026-11-01") == 0.4
+    assert lds.score_cumulative_for(e, "2026-11-02") == 0.0
     assert lds.validate_payload(out) == []
     late = lds.reset_role(_payload(score=cur), "score", _utc(23, 56, 0))
     assert late["roles"]["score"]["effective_from"] == "2026-11-03"
