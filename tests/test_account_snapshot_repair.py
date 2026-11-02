@@ -343,3 +343,228 @@ def test_regression_fixture_1030_row_flagged_and_repaired():
     assert r["original_gross_book"] == 15272.55
     assert r["journal_max_trade_id"] == 103
     assert R.plan_repairs(reps, t, closes, NOW) == ([], [])
+
+
+# ── C3: plan_legacy_repairs (backfill of NULL-provenance rows) ───────────────
+
+D = lambda s: date.fromisoformat(s)  # noqa: E731
+
+# Old book AAA 10 @ 50 + DASH 5 @ 200 + OKTA 7 @ 100 = 2200 (cron: gross and the
+# snapshot rows come from the same Price).
+OLD_GROSS = 2200.0
+
+
+def legacy(d="2026-10-30", gross=OLD_GROSS, cash=-1000.0, cash_as_of=None, **extra):
+    r = row(d=d, gross=gross, cash=cash, max_id=None, book=None,
+            cash_as_of=cash_as_of or f"{d}T21:02:00+00:00", **extra)
+    r["book_positions"] = None
+    return r
+
+
+def snaps(d, **sh):
+    return {(D(d), tk): n for tk, n in sh.items()}
+
+
+BASE_TRADES = [(1, "AAA", "BUY", 10, "2026-09-10T20:00:00+00:00"),
+               (2, "DASH", "BUY", 5, "2026-09-10T20:00:00+00:00"),
+               (3, "OKTA", "BUY", 7, "2026-09-10T20:00:00+00:00")]
+LATE_1030 = [(101, "CSCO", "BUY", 5, ANCHOR_30), (102, "MRVL", "BUY", 8, ANCHOR_30),
+             (103, "MU", "BUY", 4, ANCHOR_30), (104, "DASH", "BUY", 2, ANCHOR_30),
+             (105, "OKTA", "BUY", 1, ANCHOR_30)]
+CLOSES_1030 = {("CSCO", D30): 104.6, ("MRVL", D30): 196.375, ("MU", D30): 442.25,
+               ("DASH", D30): 200.0, ("OKTA", D30): 100.0, ("AAA", D30): 50.0}
+SNAP_OLD = dict(AAA=10, DASH=5, OKTA=7)
+
+
+def plan1(rows, t, sh, closes=None):
+    return R.plan_legacy_repairs(rows, t, sh, CLOSES_1030 if closes is None else closes, NOW)
+
+
+def test_legacy_1101_fixture_partial_quantity_delta_method():
+    t = trades(*BASE_TRADES, *LATE_1030)
+    reps, refs, revs = plan1([legacy()], t, snaps("2026-10-30", **SNAP_OLD))
+    assert refs == [] and revs == [] and len(reps) == 1
+    r = reps[0]
+    assert r["category"] == "partial_quantity"
+    assert {x["ticker"] for x in r["touched"]} == {"CSCO", "MRVL", "MU", "DASH", "OKTA"}
+    delta = round(5 * 104.6 + 8 * 196.375 + 4 * 442.25 + 2 * 200 + 1 * 100, 2)
+    assert delta == 4363.0
+    assert r["new_gross_book"] == round(OLD_GROSS + delta, 2) == 6563.0
+    assert r["gap_before"] == -4363.0 and r["residual"] == 0.0   # the gap IS the late trades
+    f = r["fields"]
+    assert f["gross_book"] == 6563.0
+    m = account_money_fields(6563.0, -1000.0, 0.25)
+    assert f["net_equity"] == pytest.approx(m["net_equity"])
+    assert f["leverage"] == pytest.approx(m["leverage"])
+    for k in ("cash_balance", "cash_as_of", "maintenance_rate"):
+        assert k not in f
+    assert f["original_gross_book"] == OLD_GROSS
+    assert f["journal_max_trade_id"] == 105
+    assert f["repaired_at"] == NOW.isoformat()
+    # book_positions: exact R_c shares x that date's close, EVERY position, no None close
+    bk = f["book_positions"]
+    assert bk == r["book_positions"]
+    assert set(bk) == {"AAA", "DASH", "OKTA", "CSCO", "MRVL", "MU"}
+    assert bk["DASH"] == {"shares": 7.0, "close": 200.0}
+    assert all(v["close"] is not None for v in bk.values())
+    assert sum(v["shares"] * v["close"] for v in bk.values()) == pytest.approx(6563.0)
+
+
+def test_legacy_missing_ticker_only_row():
+    t = trades(*BASE_TRADES, LATE_1030[0], LATE_1030[1])
+    reps, refs, revs = plan1([legacy()], t, snaps("2026-10-30", **SNAP_OLD))
+    assert refs == [] and revs == [] and reps[0]["category"] == "missing_ticker"
+    assert reps[0]["new_gross_book"] == round(OLD_GROSS + 5 * 104.6 + 8 * 196.375, 2)
+
+
+def test_legacy_full_exit_is_missing_ticker_and_leaves_the_book():
+    t = trades(*BASE_TRADES, (50, "OKTA", "SELL", 7, ANCHOR_30))
+    reps, refs, _ = plan1([legacy()], t, snaps("2026-10-30", **SNAP_OLD))
+    assert refs == [] and reps[0]["category"] == "missing_ticker"
+    assert "OKTA" not in reps[0]["fields"]["book_positions"]
+    assert reps[0]["new_gross_book"] == round(OLD_GROSS - 700.0, 2)
+
+
+def test_legacy_trade_after_cash_as_of_is_not_counted():
+    t = trades(*BASE_TRADES, (101, "MU", "BUY", 4, "2026-10-30T21:30:00+00:00"))
+    assert plan1([legacy()], t, snaps("2026-10-30", **SNAP_OLD)) == ([], [], [])
+
+
+def test_legacy_missing_close_refuses_and_never_carries_forward():
+    t = trades(*BASE_TRADES, LATE_1030[0])
+    carried = {("CSCO", D("2026-10-29")): 99.0, ("AAA", D30): 50.0}   # another day: ignored
+    reps, refs, _ = plan1([legacy()], t, snaps("2026-10-30", **SNAP_OLD), carried)
+    assert reps == [] and "CSCO" in refs[0]["reason"] and "no close" in refs[0]["reason"]
+
+
+def test_legacy_split_after_the_row_refuses():
+    t = trades(*BASE_TRADES, LATE_1030[0], (200, "CSCO", "SPLIT", 10, "2026-11-05T20:00:00+00:00"))
+    reps, refs, _ = plan1([legacy()], t, snaps("2026-10-30", **SNAP_OLD))
+    assert reps == [] and "split" in refs[0]["reason"]
+
+
+def test_legacy_oversell_refuses():
+    t = trades(*BASE_TRADES, (40, "CSCO", "BUY", 2, "2026-09-11T20:00:00+00:00"),
+               (50, "CSCO", "SELL", 5, ANCHOR_30))
+    reps, refs, _ = plan1([legacy()], t, snaps("2026-10-30", CSCO=2, **SNAP_OLD))
+    assert reps == [] and "oversell" in refs[0]["reason"]
+
+
+def test_legacy_unreadable_trades_is_one_none_date_refusal():
+    reps, refs, revs = R.plan_legacy_repairs([legacy()], None, snaps("2026-10-30", AAA=10), {}, NOW)
+    assert reps == [] and revs == []
+    assert refs == [{"snapshot_date": None,
+                     "reason": "the journal's trades could not be read, so no row can be checked"}]
+
+
+def test_legacy_row_without_daily_snapshots_is_refused_and_flagged():
+    t = trades(*BASE_TRADES, LATE_1030[0])
+    reps, refs, _ = plan1([legacy()], t, snaps("2026-10-29", AAA=10))
+    assert reps == [] and refs[0]["no_snapshot_rows"] is True
+
+
+def test_legacy_idempotent_and_provenance_rows_are_skipped():
+    t = trades(*BASE_TRADES, *LATE_1030)
+    sh = snaps("2026-10-30", **SNAP_OLD)
+    reps, _, _ = plan1([legacy()], t, sh)
+    applied = {**legacy(), **reps[0]["fields"]}
+    assert plan1([applied], t, sh) == ([], [], [])
+    assert R.stale_rows([applied], t) == []
+
+
+def test_legacy_clean_row_and_naive_now():
+    t = trades(*BASE_TRADES)
+    sh = snaps("2026-10-30", **SNAP_OLD)
+    assert plan1([legacy()], t, sh) == ([], [], [])
+    with pytest.raises(ValueError):
+        R.plan_legacy_repairs([legacy()], t, sh, CLOSES_1030, datetime(2026, 11, 1))
+
+
+def test_legacy_close_needs_lists_held_and_touched_pairs():
+    t = trades(*BASE_TRADES, LATE_1030[0])
+    need = R.legacy_close_needs([legacy()], t, snaps("2026-10-30", **SNAP_OLD))
+    assert need == {(tk, D30) for tk in ("AAA", "DASH", "OKTA", "CSCO")}
+    assert R.legacy_close_needs([legacy()], None, snaps("2026-10-30", **SNAP_OLD)) == set()
+
+
+# -- review-fix: stale gross behind matching daily_snapshots -----------------------
+
+def test_legacy_matching_snapshot_but_gross_gap_is_needs_review():
+    """daily_snapshots was rewritten after the close (last-writer-wins), so the
+    share counts match the journal while gross_book still lacks the trades."""
+    t = trades(*BASE_TRADES, LATE_1030[0], LATE_1030[1])
+    sh = snaps("2026-10-30", CSCO=5, MRVL=8, **SNAP_OLD)
+    reps, refs, revs = plan1([legacy()], t, sh)
+    assert reps == [] and refs == [] and len(revs) == 1
+    exp_gap = round(OLD_GROSS - (2200 + 5 * 104.6 + 8 * 196.375), 2)
+    assert revs[0]["gap"] == exp_gap and revs[0]["snapshot_date"] == "2026-10-30"
+    assert "gross_book" in revs[0]["reason"]
+
+
+def test_legacy_clean_row_reconciles_under_either_gross_regime():
+    t = trades(*BASE_TRADES[:1], (9, "AAA", "BUY", 0.5, "2026-09-10T20:00:00+00:00"))           # 10.5 exact AAA
+    sh = snaps("2026-10-30", AAA=10)
+    exact = legacy(gross=10.5 * 50.0)
+    trunc = legacy(gross=10 * 50.0)
+    assert plan1([exact], t, sh) == ([], [], [])
+    assert plan1([trunc], t, sh) == ([], [], [])
+
+
+def test_legacy_matching_row_with_missing_close_is_reviewed_not_clean():
+    t = trades(*BASE_TRADES)
+    reps, refs, revs = plan1([legacy()], t, snaps("2026-10-30", **SNAP_OLD),
+                             {("AAA", D30): 50.0})
+    assert reps == [] and refs == [] and "can't be checked" in revs[0]["reason"]
+
+
+def test_legacy_repair_whose_residual_does_not_reconcile_is_downgraded():
+    t = trades(*BASE_TRADES, LATE_1030[0], LATE_1030[1])
+    sh = snaps("2026-10-30", **SNAP_OLD)
+    reps, refs, revs = plan1([legacy(gross=OLD_GROSS + 37.0)], t, sh)   # unrelated drift
+    assert refs == [] and revs == [] and len(reps) == 1
+    r = reps[0]
+    assert r["category"] == "unreconciled" and r["residual"] == 37.0
+    assert "book_positions" not in r["fields"] and r["book_positions"] is None
+
+
+# -- review-fix: a removal the EOD book already held -------------------------------
+
+def test_legacy_noon_cash_read_with_import_already_in_snapshot_is_refused():
+    """cash_as_of is the noon read: the 16:00 import is after the cutoff but the
+    EOD snapshot already held it. A removal would be wrong."""
+    t = trades(*BASE_TRADES, LATE_1030[0])
+    sh = snaps("2026-10-30", CSCO=5, **SNAP_OLD)
+    r = legacy(cash_as_of="2026-10-30T16:00:00+00:00")                  # 12:00 EDT
+    reps, refs, revs = plan1([r], t, sh)
+    assert reps == [] and len(refs) == 1
+    assert "post-close" in refs[0]["reason"]
+
+
+def test_legacy_stale_cash_day_before_is_refused():
+    t = trades(*BASE_TRADES, (101, "CSCO", "BUY", 5, "2026-10-29T20:00:00+00:00"))
+    r = legacy(cash_as_of="2026-10-29T21:02:00+00:00")
+    reps, refs, _ = plan1([r], t, snaps("2026-10-30", **SNAP_OLD))
+    assert reps == [] and "post-close" in refs[0]["reason"]
+
+
+def test_legacy_now_stamped_1710_log_already_in_snapshot_is_refused():
+    """A hand-logged buy stamped 17:10 EDT (21:10Z) is after cash_as_of 21:02Z
+    (so R_c lacks it) but the EOD book (21:30Z) held it: R_day == snapshot."""
+    t = trades(*BASE_TRADES, (101, "CSCO", "BUY", 5, "2026-10-30T21:10:00+00:00"))
+    sh = snaps("2026-10-30", CSCO=5, **SNAP_OLD)
+    reps, refs, _ = plan1([legacy()], t, sh)
+    assert reps == [] and "after this row's cash read" in refs[0]["reason"]
+
+
+def test_legacy_genuine_late_buy_still_repairs():
+    t = trades(*BASE_TRADES, LATE_1030[0])                              # R_c == R_day != snap
+    reps, refs, _ = plan1([legacy()], t, snaps("2026-10-30", **SNAP_OLD))
+    assert refs == [] and reps[0]["category"] == "missing_ticker"
+
+
+def test_legacy_null_cash_uses_the_et_date_cutoff():
+    t = trades(*BASE_TRADES, LATE_1030[0])
+    r = legacy(cash=None)
+    r["cash_as_of"] = None
+    reps, refs, _ = plan1([r], t, snaps("2026-10-30", **SNAP_OLD))
+    assert refs == [] and reps[0]["fields"]["net_equity"] is None

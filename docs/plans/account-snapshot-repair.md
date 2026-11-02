@@ -13,7 +13,7 @@
 - **U7:** queued as its own item (planner + reviewer).
 - **U8:** move the broker lane's evening slot to 21:15 UTC (owner, Railway dashboard).
 
-Build started 2026-11-01 with C1 + C2.
+Build started 2026-11-01. **C1 + C2 SHIPPED** `e389d76`. **C3 SHIPPED 2026-11-01** (`scripts/account_snapshot_backfill.py` + `plan_legacy_repairs`; Opus FIX-FIRST (2 blocking: stale gross read as clean; wrong removal on a pre-EOD log) → SHIP): reconciles each legacy row's stored gross to the cent against the journal book × that day's closes, refuses rows whose cash wasn't read post-close or whose difference is trades the EOD book already held, auto-applies only reconciled `missing_ticker` repairs. NEXT: owner dry run → apply → regenerate the 11-01 debrief and October monthly report (by Sat 11-07); then C4-C8.
 
 ## Defect
 

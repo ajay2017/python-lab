@@ -5991,6 +5991,80 @@ def save_account_daily_snapshot(row: dict) -> bool:
         return False
 
 
+def account_snapshot_provenance_available() -> "bool | None":
+    """True when the four N1 provenance columns exist on account_daily_snapshots,
+    False when the probe names a missing column (the DDL in
+    docs/sql/account-snapshot-provenance.sql isn't applied), None when the
+    probe failed for any other reason (can't tell). A backfill must check this
+    first: `save_account_daily_snapshot` silently drops the provenance keys on
+    a missing-column error, which would lose `original_gross_book` for good.
+    Never raises."""
+    if not has_db():
+        return None
+    try:
+        _client().table("account_daily_snapshots").select(
+            ",".join(_ACCOUNT_SNAPSHOT_PROVENANCE_COLS)
+        ).limit(1).execute()
+        return True
+    except Exception as e:
+        msg = str(e)
+        if any(c in msg for c in _ACCOUNT_SNAPSHOT_PROVENANCE_COLS):
+            return False
+        return None
+
+
+_ACCOUNT_SNAPSHOT_REPAIR_COLS = (
+    "gross_book", "net_equity", "leverage", "cushion", "call_distance_pct",
+    "book_positions", "journal_max_trade_id", "original_gross_book", "repaired_at",
+)
+
+
+def apply_account_snapshot_repair(snapshot_date, fields: dict) -> bool:
+    """UPDATE one account_daily_snapshots row (keyed on `snapshot_date`) with a
+    planned repair. Writes ONLY gross_book, net_equity, leverage, cushion,
+    call_distance_pct, book_positions, journal_max_trade_id,
+    original_gross_book and repaired_at: never cash_balance, cash_as_of or
+    maintenance_rate (any other key in `fields` is ignored).
+
+    `original_gross_book` is set ONCE: the row is read first and the key is
+    dropped from the update when the stored value is already non-NULL (an
+    `.is_("original_gross_book", "null")` filter would instead make the whole
+    update a silent no-op, losing the other repaired fields). The row must
+    exist (an UPDATE of a missing row would report success while writing
+    nothing). USER data: the read-only viewer is a no-op. Never raises; True
+    only when the update call succeeded."""
+    if is_readonly():
+        return False
+    if not has_db() or not snapshot_date or not isinstance(fields, dict):
+        return False
+    try:
+        payload = {k: fields[k] for k in _ACCOUNT_SNAPSHOT_REPAIR_COLS if k in fields}
+        if not payload:
+            return False
+        key = str(snapshot_date)[:10]
+        cur = (
+            _client().table("account_daily_snapshots")
+            .select("original_gross_book")
+            .eq("snapshot_date", key)
+            .limit(1)
+            .execute().data
+        )
+        if not cur:
+            return False
+        if cur[0].get("original_gross_book") is not None:
+            payload.pop("original_gross_book", None)
+        res = _client().table("account_daily_snapshots").update(
+            _sanitize_for_write(payload, "apply_account_snapshot_repair")
+        ).eq("snapshot_date", key).execute()
+        # An UPDATE that matched no row returns empty data: a failure, never
+        # a silent success.
+        return bool(getattr(res, "data", None))
+    except Exception as e:
+        import warnings
+        warnings.warn(f"apply_account_snapshot_repair: {e}")
+        return False
+
+
 def load_max_trade_id_or_none() -> "int | None":
     """The highest `trades.id` as an int (0 for a successfully read, empty
     journal), or None on ANY failure (no credentials, a raised query, a

@@ -58,13 +58,17 @@ from datetime import date as _date
 import pandas as pd
 
 from .account import _parse_date, account_money_fields
-from .constants import BROKER_DRIFT_SHARE_TOL
+from .constants import ALERT_EOD_HOUR_ET, BROKER_DRIFT_SHARE_TOL
 from .market_time import ET
 
 # Replay-internal epsilon for "a running total is flat / dropped to nothing".
 # Mirrors db.recalculate_from_trades / capital_vs_margin.holdings_by_date's own
 # 1e-6 float-noise guard; it is not a policy threshold.
 _FLAT_EPS = 1e-6
+
+# A stored gross_book is rounded to 2 dp, so it reconciles with a re-summed book
+# to within one cent. Rounding plumbing like _FLAT_EPS, not a policy threshold.
+_GROSS_CENT_TOL = 0.01
 
 
 # ── small coercion helpers ───────────────────────────────────────────────────
@@ -474,3 +478,286 @@ def plan_repairs(acct_rows, trades_df, closes, now):
             "repaired_at":         now.isoformat(),
         })
     return repairs, refusals
+
+
+# ── C3: backfill of LEGACY rows (NULL provenance) ────────────────────────────
+
+def _norm_snapshot_shares(snapshot_shares) -> dict:
+    """{(date, TICKER): int shares} -> {date: {TICKER: int}}; bad keys / values
+    are skipped."""
+    out: dict = {}
+    for k, v in (snapshot_shares or {}).items():
+        try:
+            d, tk = k
+        except (TypeError, ValueError):
+            continue
+        d = _parse_date(d)
+        sh = _int_or_none(v)
+        tk = str(tk).upper().strip()
+        if d is None or sh is None or not tk:
+            continue
+        out.setdefault(d, {})[tk] = sh
+    return out
+
+
+def _legacy_touched(prep: list, d: "_date", row: dict, snap: dict) -> tuple:
+    """(R_c holdings {ticker: exact shares}, oversold tickers, sorted touched
+    tickers) for one legacy row. R_c is the replay to the row's cutoff
+    (`cash_as_of`, else the ET date). Touched = R_c's int shares differ from
+    the snapshot's."""
+    holdings, oversold = _replay(prep, d, _ts_utc(row.get("cash_as_of")))
+    touched = sorted(tk for tk in set(snap) | set(holdings)
+                     if int(holdings.get(tk, 0.0)) != snap.get(tk, 0))
+    return holdings, oversold, touched
+
+
+def _gross_gap(old_gross: float, holdings: dict, d: "_date", px_by: dict):
+    """old_gross minus sum(shares x close over `holdings`), as the smaller-
+    magnitude of the EXACT-share and the int-truncated-share sums (gross_book
+    was int-based before 2026-10-12 and exact after). None when any held
+    ticker has no close for `d` (the row can't be checked, never guessed)."""
+    exact = trunc = 0.0
+    for tk, sh in holdings.items():
+        px = px_by.get((tk, d))
+        if px is None:
+            return None
+        exact += sh * px
+        trunc += int(sh) * px
+    gaps = [round(old_gross - exact, 2), round(old_gross - trunc, 2)]
+    return min(gaps, key=abs)
+
+
+def _reconciled(gap) -> bool:
+    return gap is not None and abs(gap) <= _GROSS_CENT_TOL + 1e-9
+
+
+def _cash_read_post_close(row: dict, d: "_date") -> bool:
+    """True when `cash_as_of` is absent (the ET-date cutoff applies) or is a
+    same-ET-day read at or after `ALERT_EOD_HOUR_ET`: the timing half of
+    `performance_review.valid_account_snapshot_row`, the only cash read that
+    includes the day's afternoon fills."""
+    ts = _ts_utc(row.get("cash_as_of"))
+    if ts is None:
+        return row.get("cash_as_of") is None
+    et = ts.tz_convert(ET)
+    return et.date() == d and et.hour >= ALERT_EOD_HOUR_ET
+
+
+def legacy_close_needs(acct_rows, trades_df, snapshot_shares) -> set:
+    """{(TICKER, date)} whose close `plan_legacy_repairs` may need: every
+    ticker held in R_c or touched, for every legacy row that has snapshot
+    rows. Lets the caller fetch only those closes. Empty when the trades
+    can't be read."""
+    if trades_df is None or not _trades_usable(trades_df):
+        return set()
+    prep = _prep_trades(trades_df)
+    snap_by = _norm_snapshot_shares(snapshot_shares)
+    need: set = set()
+    for row in _rows(acct_rows):
+        d = _parse_date(row.get("snapshot_date"))
+        snap = snap_by.get(d) if d is not None else None
+        if not snap or _int_or_none(row.get("journal_max_trade_id")) is not None:
+            continue
+        holdings, _o, touched = _legacy_touched(prep, d, row, snap)
+        for tk in set(holdings) | set(touched):
+            need.add((tk, d))
+    return need
+
+
+def plan_legacy_repairs(acct_rows, trades_df, snapshot_shares, closes, now):
+    """Plan the repair of LEGACY rows (NULL `journal_max_trade_id`) from
+    evidence. Pure: the caller does the writes. Returns
+    `(repairs, refusals, reviews)`.
+
+    `snapshot_shares` is `{(date, TICKER): int shares}` from `daily_snapshots`
+    (the int-truncated convention); `closes` is `{(TICKER, date): close}`
+    (unadjusted, caller contract (b)); `trades_df` must satisfy caller
+    contract (a). `now` is a tz-aware ET datetime.
+
+    R_c is the journal replayed to the row's cutoff (`cash_as_of`, else the
+    end of the ET date) with the module's own `_replay`; R_day is every trade
+    with ET date <= the row's date (no time cutoff). A ticker is TOUCHED when
+    R_c's int shares differ from that date's `daily_snapshots` shares (absent
+    or replayed to 0 included).
+
+    Reconciling the stored gross: the cron writes the snapshot rows and
+    `gross_book` from the same Price (`headless_alert_engine.compute_eod`),
+    but `daily_snapshots` is last-writer-wins (the app rewrites today's rows
+    after the close), so matching share counts do NOT prove the gross is
+    right. `gap = old gross - sum(R_c shares x close)` is reconciled when
+    within `_GROSS_CENT_TOL` of EITHER the exact-share or the int-share sum.
+      - A row with no touched ticker and a reconciled gap is clean.
+      - A row with no touched ticker and a gap (or a missing close, so it
+        can't be checked) goes to `reviews` (never auto-applied).
+      - A touched row is repaired by the DELTA method: old gross + sum over
+        touched tickers of (R_c int shares - snapshot shares) x close. A sum
+        over the whole book would silently rewrite any unrelated drift.
+        Legacy rows have no `book_positions` to trust.
+      - The repair's `residual` = new gross - sum(R_c x close). Only when it
+        reconciles is the category `missing_ticker` (every touched ticker is
+        a full add / exit) or `partial_quantity`, and `book_positions`
+        (exact R_c shares to 6 dp x that date's close, every position) is
+        written. Otherwise the category is `unreconciled`, with no
+        `book_positions`: the script applies it only on explicit request.
+
+    Refusals (reason, nothing written): no `daily_snapshots` rows for the date
+    (`no_snapshot_rows`); a touched row whose `cash_as_of` isn't a same-ET-day
+    post-close read; a touched ticker where R_day equals the snapshot but R_c
+    doesn't (the EOD book already held trades logged after the cash read: not
+    late trades, and a removal would be wrong); a split dated after the row; an
+    oversell; a missing close for a touched ticker (never carried forward); a
+    missing stored gross_book; cash present with no maintenance rate.
+    Unreadable trades are ONE refusal with a None date.
+
+    Each repair is {snapshot_date, category, touched[{ticker, snapshot_shares,
+    replay_shares, close, value_delta}], old_/new_ gross_book, net_equity,
+    leverage, gap_before, residual, drift, recomputed_untouched,
+    book_positions, `fields`: the columns `db.apply_account_snapshot_repair`
+    writes}. Provenance: `journal_max_trade_id` = the highest id in
+    `trades_df` now (a second run skips the row), `original_gross_book` = the
+    old gross, `repaired_at` = now. cash_balance / cash_as_of /
+    maintenance_rate are never in `fields`.
+    """
+    if getattr(now, "tzinfo", None) is None:
+        raise ValueError("plan_legacy_repairs: `now` must be tz-aware (ET)")
+    if trades_df is None or not _trades_usable(trades_df):
+        return [], [{"snapshot_date": None,
+                     "reason": "the journal's trades could not be read, so no row can be checked"}], []
+    prep = _prep_trades(trades_df)
+    max_id = max((t["id"] for t in prep), default=0)
+    px_by = _norm_closes(closes)
+    snap_by = _norm_snapshot_shares(snapshot_shares)
+    repairs: list = []
+    refusals: list = []
+    reviews: list = []
+
+    for row in sorted(_rows(acct_rows), key=lambda r: str(r.get("snapshot_date"))):
+        d = _parse_date(row.get("snapshot_date"))
+        if d is None or _int_or_none(row.get("journal_max_trade_id")) is not None:
+            continue                       # unusable date, or already has provenance
+        ds = d.isoformat()
+
+        def refuse(reason, _ds=ds, **extra):
+            refusals.append({"snapshot_date": _ds, "reason": reason, **extra})
+
+        snap = snap_by.get(d)
+        if not snap:
+            refuse("no daily_snapshots rows for this date, so there is nothing to compare "
+                   "the journal with", no_snapshot_rows=True)
+            continue
+
+        holdings, oversold, touched = _legacy_touched(prep, d, row, snap)
+        old_gross = _f(row.get("gross_book"))
+        gap_before = (_gross_gap(old_gross, holdings, d, px_by)
+                      if old_gross is not None else None)
+
+        if not touched:
+            if old_gross is None:
+                reviews.append({"snapshot_date": ds, "gap": None, "old_gross_book": None,
+                                "reason": "no stored gross_book to check"})
+            elif gap_before is None:
+                reviews.append({"snapshot_date": ds, "gap": None, "old_gross_book": old_gross,
+                                "reason": "share counts agree, but a held ticker has no close "
+                                          "for this date, so the gross can't be checked"})
+            elif not _reconciled(gap_before):
+                reviews.append({"snapshot_date": ds, "gap": gap_before,
+                                "old_gross_book": old_gross,
+                                "reason": f"share counts agree with the journal, but gross_book "
+                                          f"is off the journal book by {gap_before:+,.2f}"})
+            continue
+
+        reason = None
+        if not _cash_read_post_close(row, d):
+            reason = (f"cash_as_of {row.get('cash_as_of')} is not a same-day post-close "
+                      "read, so its cutoff can't be trusted")
+        if reason is None:
+            day_holdings, _od = _replay(prep, d, None)
+            for tk in touched:
+                c_sh = int(holdings.get(tk, 0.0))
+                if int(day_holdings.get(tk, 0.0)) == snap.get(tk, 0) != c_sh:
+                    reason = (f"{tk}: the difference is trades after this row's cash read "
+                              "that the EOD book already held, not late trades")
+                    break
+        if reason is None:
+            for t in prep:
+                if t["kind"] == "SPLIT" and t["ticker"] in touched and t["et_date"] > d:
+                    reason = (f"{t['ticker']}: a split on {t['et_date'].isoformat()} falls after "
+                              "this row, so closes for this date are not comparable")
+                    break
+        if reason is None:
+            bad = sorted(set(touched) & oversold)
+            if bad:
+                reason = f"{', '.join(bad)}: the journal sells more than it holds (oversell)"
+        if reason is None:
+            missing = [tk for tk in touched if (tk, d) not in px_by]
+            if missing:
+                reason = f"{', '.join(missing)}: no close for {ds}"
+        if reason is None and old_gross is None:
+            reason = "no stored gross_book to repair"
+        cash = _f(row.get("cash_balance"))
+        rate = _f(row.get("maintenance_rate"))
+        if reason is None and cash is not None and rate is None:
+            reason = "no stored maintenance rate to re-derive the money fields with"
+        if reason is not None:
+            refuse(reason)
+            continue
+
+        touched_out = []
+        delta = 0.0
+        for tk in touched:
+            old_sh, new_sh, px = snap.get(tk, 0), int(holdings.get(tk, 0.0)), px_by[(tk, d)]
+            delta += (new_sh - old_sh) * px
+            touched_out.append({"ticker": tk, "snapshot_shares": old_sh,
+                                "replay_shares": new_sh, "close": px,
+                                "value_delta": round((new_sh - old_sh) * px, 2)})
+        new_gross = round(old_gross + delta, 2)
+        residual = _gross_gap(new_gross, holdings, d, px_by)
+        reconciled = _reconciled(residual)
+        if not reconciled:
+            category = "unreconciled"
+        elif all(x["snapshot_shares"] == 0 or x["replay_shares"] == 0 for x in touched_out):
+            category = "missing_ticker"
+        else:
+            category = "partial_quantity"
+
+        book = ({tk: {"shares": round(sh, 6), "close": px_by[(tk, d)]}
+                 for tk, sh in holdings.items()} if reconciled else None)
+
+        untouched_px = [(sh, px_by.get((tk, d))) for tk, sh in snap.items() if tk not in touched]
+        recomputed_untouched = (None if any(p is None for _, p in untouched_px)
+                                else round(sum(sh * p for sh, p in untouched_px), 2))
+        old_book_px = [(sh, px_by.get((tk, d))) for tk, sh in snap.items()]
+        drift = (None if any(p is None for _, p in old_book_px)
+                 else round(old_gross - sum(sh * p for sh, p in old_book_px), 2))
+
+        money = (account_money_fields(new_gross, cash, rate) if cash is not None else
+                 {"cash_balance": None, "net_equity": None, "leverage": None,
+                  "cushion": None, "call_distance_pct": None})
+        orig = _f(row.get("original_gross_book"))
+        fields = {
+            "gross_book":           new_gross,
+            "net_equity":           money["net_equity"],
+            "leverage":             money["leverage"],
+            "cushion":              money["cushion"],
+            "call_distance_pct":    money["call_distance_pct"],
+            "journal_max_trade_id": max_id,
+            "original_gross_book":  orig if orig is not None else old_gross,
+            "repaired_at":          now.isoformat(),
+        }
+        if book is not None:
+            fields["book_positions"] = book
+        repairs.append({
+            "snapshot_date": ds,
+            "category": category,
+            "touched": touched_out,
+            "old_gross_book": old_gross, "new_gross_book": new_gross,
+            "old_net_equity": _f(row.get("net_equity")), "new_net_equity": money["net_equity"],
+            "old_leverage": _f(row.get("leverage")), "new_leverage": money["leverage"],
+            "gap_before": gap_before,
+            "residual": residual,
+            "drift": drift,
+            "recomputed_untouched": recomputed_untouched,
+            "book_positions": book,
+            "fields": fields,
+        })
+    return repairs, refusals, reviews
