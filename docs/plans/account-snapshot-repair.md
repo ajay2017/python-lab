@@ -13,7 +13,7 @@
 - **U7:** queued as its own item (planner + reviewer).
 - **U8:** move the broker lane's evening slot to 21:15 UTC (owner, Railway dashboard).
 
-Build started 2026-11-01. **C1 + C2 SHIPPED** `e389d76`. **C3 SHIPPED 2026-11-01** (`scripts/account_snapshot_backfill.py` + `plan_legacy_repairs`; Opus FIX-FIRST (2 blocking: stale gross read as clean; wrong removal on a pre-EOD log) → SHIP): reconciles each legacy row's stored gross to the cent against the journal book × that day's closes, refuses rows whose cash wasn't read post-close or whose difference is trades the EOD book already held, auto-applies only reconciled `missing_ticker` repairs. NEXT: owner dry run → apply → regenerate the 11-01 debrief and October monthly report (by Sat 11-07); then C4-C8.
+Build started 2026-11-01. **C1 + C2 SHIPPED** `e389d76`. **C3 SHIPPED 2026-11-01** (`scripts/account_snapshot_backfill.py` + `plan_legacy_repairs`; Opus FIX-FIRST (2 blocking: stale gross read as clean; wrong removal on a pre-EOD log) → SHIP): reconciles each legacy row's stored gross to the cent against the journal book × that day's closes, refuses rows whose cash wasn't read post-close or whose difference is trades the EOD book already held, auto-applies only reconciled `missing_ticker` repairs. Owner applied the backfill and regenerated the 11-01 debrief + monthly report 2026-11-01 (verified live). **C4 BUILT 2026-11-02** (`compute_eod` reads the max trade id before holdings, records `book_positions` from exact shares x close and builds `gross_book` as the same sum; the cron flips the heartbeat on an unreadable id, a missing book or dropped provenance columns; Opus SHIP, 0 blocking). NEXT: C5-C8.
 
 ## Defect
 
@@ -181,3 +181,11 @@ Order: C1 → C2 → C3 dry run → owner approves → apply → regenerate (by 
 - The `51dd19f` render-time baseline fill.
 - `IMPORTED_TRADE_ANCHOR_ET_HOUR`.
 - Also: no new table, no new session cache, and no SnapTrade call in the EOD lane.
+
+## Residuals from the C4 review (2026-11-02, Opus SHIP)
+
+- **Insert-then-holdings race.** Every app path inserts the trade and then saves holdings as two calls (app.py ~30984→31048 BUY, ~30821→30870 SELL, ~33536→33548 / ~33856→33868 broker imports). A trade inserted just before the EOD max-id read whose holdings write lands after the holdings read, or fails, has id <= max yet is absent from the book: undetectable, the row stays wrong the N1 way. Window ~1 s (only an owner confirm near 16:30 ET). The chosen order is still the right one. Optional follow-up (owner call): an EOD check of the book against a replay of trades with id <= max (`trades_strict` is already loaded in `_build_context`); it would also fire on existing holdings drift (bug register FracNew), so it could fail normal days.
+- **Two late trades on one ticker, the first already in the book:** `plan_repairs` counts the first twice and refuses. Rare, fails closed (C6 excludes the row).
+- **C5/C6:** a forced same-day EOD re-run after a repair rewrites book and gross consistently and keeps `original_gross_book` and `repaired_at` (nothing reads them outside the repair code today). C6 must not label a row "repaired" from `repaired_at` alone.
+- **A forced re-run hours after the close** bakes an after-hours fill hand-logged after `cash_as_of` into the book with id <= max (undetectable). The partial-outage text (cron_runner.py ~787-790) tells the owner to re-run "the same evening": the earlier, the safer.
+

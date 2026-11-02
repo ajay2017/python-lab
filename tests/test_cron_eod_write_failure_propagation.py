@@ -30,6 +30,13 @@ def _payload(**overrides):
         "errors": [],
     }
     payload.update(overrides)
+    # N1 C4: compute_eod always returns the provenance pair. Defaults mirror a
+    # healthy run (max id read, book = the priced rows); a missing pair would
+    # (correctly) flip the heartbeat, so it is opt-out via overrides.
+    payload.setdefault("journal_max_trade_id", 1)
+    payload.setdefault("book_positions", {
+        r["ticker"]: {"shares": r["shares"], "close": r["close_price"]}
+        for r in payload["snapshot_rows"]})
     # Default: the book is exactly what got priced (no partial outage), the
     # same shape compute_eod returns on a healthy run. Tests exercising the
     # 2026-10-12 partial-outage guard pass held_tickers explicitly.
@@ -583,7 +590,8 @@ def test_real_no_holdings_payload_still_writes_and_stays_green(monkeypatch):
     held_tickers key. Must NOT read as 'coverage unverified' (blocking #1)."""
     _patch_defaults(monkeypatch, compute_eod=lambda **_k: {
         "snapshot_rows": [], "pullback": None, "built_at": "x",
-        "errors": ["no holdings"], "reason": "no_holdings"})
+        "errors": ["no holdings"], "reason": "no_holdings",
+        "journal_max_trade_id": 1, "book_positions": {}})
     calls = _spy_book_writes(monkeypatch)
     assert cr._run_eod(NOW, force=True) == 0
     assert cr._LAST_LANE_FAILURE_DETAIL is None

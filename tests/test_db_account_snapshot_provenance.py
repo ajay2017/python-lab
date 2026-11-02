@@ -102,6 +102,32 @@ def test_row_without_provenance_keys_saves_unchanged(monkeypatch):
     assert c.payloads == [legacy]
 
 
+def test_info_reports_dropped_keys_only_on_fallback_retry_success(monkeypatch):
+    c = _Client(error="Could not find the 'book_positions' column (PGRST204)", fail_calls=(1,))
+    monkeypatch.setattr(db, "_client", lambda: c)
+    info = {}
+    with pytest.warns(UserWarning):
+        assert db.save_account_daily_snapshot(ROW, info=info) is True
+    assert info == {"provenance_dropped": sorted(PROV)}
+
+
+def test_info_untouched_on_normal_success(monkeypatch):
+    monkeypatch.setattr(db, "_client", lambda: _Client())
+    info = {}
+    assert db.save_account_daily_snapshot(ROW, info=info) is True
+    assert info == {}
+
+
+def test_info_untouched_on_failure(monkeypatch):
+    for c in (_Client(error="connection reset", fail_calls=(1,)),
+              _Client(error="column repaired_at does not exist", fail_calls=(1, 2))):
+        monkeypatch.setattr(db, "_client", lambda c=c: c)
+        info = {}
+        with pytest.warns(UserWarning):
+            assert db.save_account_daily_snapshot(ROW, info=info) is False
+        assert info == {}
+
+
 def test_max_trade_id_returns_int(monkeypatch):
     monkeypatch.setattr(db, "_client", lambda: _Client(read_data=[{"id": 412}]))
     assert db.load_max_trade_id_or_none() == 412

@@ -5941,13 +5941,19 @@ _ACCOUNT_SNAPSHOT_PROVENANCE_COLS = (
 )
 
 
-def save_account_daily_snapshot(row: dict) -> bool:
+def save_account_daily_snapshot(row: dict, *, info: "dict | None" = None) -> bool:
     """Upsert one account_daily_snapshots row, keyed on `snapshot_date`
     (idempotent — a same-day re-run of the EOD lane, e.g. via `force`,
     overwrites rather than duplicates). USER data → honours the read-only
     viewer guard. Never raises: a pre-DDL "relation does not exist" error is
     caught identically to any other failure — reported via the return value
-    only, matching save_model_predictions_batch's contract shape."""
+    only, matching save_model_predictions_batch's contract shape.
+
+    `info` (optional out-param): when the provenance-column fallback retry
+    SUCCEEDS, `info["provenance_dropped"]` is set to the sorted list of keys
+    that were dropped, so a caller can tell a True that lost provenance from a
+    clean True. Untouched on a normal success and on any failure. The return
+    value is unchanged."""
     if is_readonly(): return False  # read-only viewer: no-op
     if not has_db():
         return False
@@ -5984,6 +5990,8 @@ def save_account_daily_snapshot(row: dict) -> bool:
                     ),
                     on_conflict="snapshot_date",
                 ).execute()
+                if info is not None:
+                    info["provenance_dropped"] = sorted(_to_drop)
                 return True
             except Exception as e2:
                 e = e2

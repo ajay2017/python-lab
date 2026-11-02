@@ -825,14 +825,33 @@ def _run_eod(now_et, force: bool) -> int:
         else:
             try:
                 _acct_cash_rec = db.load_account_cash()
-                # gross_book from port_df's Market Value (raw shares), not a
-                # re-sum of the int(shares)-truncated rows -- see compute_eod.
+                # gross_book = exact shares x close summed over book_positions
+                # (Market Value only as a fallback), not a re-sum of the
+                # int(shares)-truncated rows -- see compute_eod.
                 _acct_row = compute_account_snapshot(
                     now_et.date(), rows, _acct_cash_rec,
                     MARGIN_MAINTENANCE_RATE, ACCOUNT_CASH_STALE_DAYS, now_et,
                     gross_book=payload.get("gross_book"),
                 )
-                if db.save_account_daily_snapshot(_acct_row):
+                # N1 provenance (docs/plans/account-snapshot-repair.md C4).
+                # NEVER add original_gross_book / repaired_at here: the merge-
+                # upsert would wipe a repair's set-once value on a re-run.
+                _acct_row["journal_max_trade_id"] = payload.get("journal_max_trade_id")
+                _acct_row["book_positions"] = payload.get("book_positions")
+                if _acct_row["journal_max_trade_id"] is None:
+                    failures.append("account_snapshot_provenance: journal max trade id "
+                                    "unreadable -- row written as legacy (never checked "
+                                    "for late trades)")
+                if _acct_row["book_positions"] is None:
+                    failures.append("account_snapshot_provenance: book_positions "
+                                    "unavailable -- a late trade will flag this row but "
+                                    "it can't be repaired")
+                _acct_save_info: dict = {}
+                if db.save_account_daily_snapshot(_acct_row, info=_acct_save_info):
+                    if _acct_save_info.get("provenance_dropped"):
+                        failures.append("account_snapshot_provenance: columns missing, "
+                                        "provenance dropped (apply "
+                                        "docs/sql/account-snapshot-provenance.sql)")
                     # Also log the old truncated-share row sum, so the size of
                     # the 2026-10-12 regime step (X = fractional remainders the
                     # history used to omit) is measurable from the first run.
@@ -840,7 +859,10 @@ def _run_eod(now_et, force: bool) -> int:
                                    for r in rows)
                     _log(f"account_daily_snapshot written (gross_book=${_acct_row['gross_book']:,.0f}, "
                          f"truncated-share sum=${_row_sum:,.0f}, "
-                         f"leverage={_acct_row['leverage']}, date={today_str}).")
+                         f"leverage={_acct_row['leverage']}, "
+                         f"journal_max_trade_id={_acct_row['journal_max_trade_id']}, "
+                         f"book={'none' if _acct_row['book_positions'] is None else str(len(_acct_row['book_positions'])) + ' positions'}, "
+                         f"date={today_str}).")
                 else:
                     _log(f"account_daily_snapshot NOT written (DB offline / table missing, date={today_str}).")
                     failures.append("account_daily_snapshot")

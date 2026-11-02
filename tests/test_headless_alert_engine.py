@@ -1486,15 +1486,17 @@ def test_compute_watchlist_entries_app_cron_parity_same_helper_same_ctx():
     assert result["entries"] == []
 
 
-def test_compute_eod_gross_book_uses_market_value_not_truncated_rows():
+def test_compute_eod_gross_book_uses_raw_shares_not_truncated_rows():
     """2026-10-12: build_portfolio_df stores int(shares) but Market Value is
     price x RAW shares. compute_eod must report the true book (the same total
     the live app uses) while snapshot_rows keeps the truncated P&L baseline."""
     ctx = {
         "ok": True, "errors": [],
         "port_df": pd.DataFrame([
-            {"Ticker": "AAPL", "Price": 200.0, "Shares": 10, "Market Value": 2120.0},   # 10.6 sh
-            {"Ticker": "BKNG", "Price": 4800.0, "Shares": 0, "Market Value": 1920.0},   # 0.4 sh
+            {"Ticker": "AAPL", "Price": 200.0, "Shares": 10, "Shares Exact": 10.6,
+             "Market Value": 2120.0},   # 10.6 sh
+            {"Ticker": "BKNG", "Price": 4800.0, "Shares": 0, "Shares Exact": 0.4,
+             "Market Value": 1920.0},   # 0.4 sh
         ]),
         "held_data": {}, "fragility": None, "spy_6mo": None,
     }
@@ -1505,9 +1507,11 @@ def test_compute_eod_gross_book_uses_market_value_not_truncated_rows():
     assert result["snapshot_rows"] == [{"ticker": "AAPL", "shares": 10.0, "close_price": 200.0}]
 
 
-def test_compute_eod_gross_book_is_none_without_market_value():
+def test_compute_eod_gross_book_is_none_when_no_book_and_no_market_value():
+    # No Ticker/Price columns -> no book can be built, and no Market Value
+    # fallback either (N1: the book sum is the primary path now).
     ctx = {"ok": True, "errors": [],
-           "port_df": pd.DataFrame([{"Ticker": "AAPL", "Price": 200.0, "Shares": 10}]),
+           "port_df": pd.DataFrame([{"Shares": 10}]),
            "held_data": {}, "fragility": None, "spy_6mo": None}
     with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx):
         result = hae.compute_eod(TODAY)

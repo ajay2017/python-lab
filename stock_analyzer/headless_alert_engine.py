@@ -1626,18 +1626,40 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
     + a reactive pullback read. Returns {"snapshot_rows": [...], "pullback": {...}|None,
     "gross_book": float|None, "built_at": <ET iso>, "errors": [...], plus held_data /
     port_df / port_risk / held_tickers}. Never raises. `gross_book` is the book's true
-    market value (port_df Market Value, raw shares); `snapshot_rows` keeps the
-    truncated int(shares) Today's-P&L baseline on purpose (see the body).
+    market value (raw shares x close, summed over `book_positions`; falls back to
+    port_df Market Value only when the book can't be built); `snapshot_rows` keeps
+    the truncated int(shares) Today's-P&L baseline on purpose (see the body).
+
+    N1 provenance (docs/plans/account-snapshot-repair.md C4), also returned:
+    `journal_max_trade_id` (highest trades.id read BEFORE holdings; None =
+    unreadable) and `book_positions` ({TICKER: {"shares", "close"}} behind
+    `gross_book`; {} for a real all-cash account, None = couldn't be built).
 
     snapshot_rows shape matches db.save_daily_snapshot: {ticker, shares, close_price}.
     Reuses the SAME _build_context as the protective run (post-close → last close
     is final)."""
     today = today or datetime.now(_ET).date()
+    # N1: read the journal's max trade id BEFORE _build_context reads holdings.
+    # A trade inserted between the two reads is then either already in the
+    # holdings ("already reflected" for plan_repairs) or late (id > max) and
+    # repairable. Residual: the app inserts a trade and saves holdings as two
+    # calls, so a trade inserted just before this read whose holdings write lands
+    # after the holdings read (or fails) has id <= max yet is absent from the
+    # book, and can't be detected (~1 s window; plan "Contracts and residuals").
+    # The reverse order is strictly worse.
+    try:
+        journal_max_trade_id = db.load_max_trade_id_or_none()
+    except Exception:
+        journal_max_trade_id = None
     ctx = _build_context(today)
     built_at = datetime.now(_ET).isoformat()
     if not ctx.get("ok"):
         return {"snapshot_rows": [], "pullback": None, "built_at": built_at,
-                "errors": ctx.get("errors", []), "reason": ctx.get("reason")}
+                "errors": ctx.get("errors", []), "reason": ctx.get("reason"),
+                "journal_max_trade_id": journal_max_trade_id,
+                # an all-cash account is a real, empty book (gross 0); any
+                # other failure means no book was read.
+                "book_positions": {} if ctx.get("reason") == "no_holdings" else None}
 
     port_df = ctx["port_df"]
     snapshot_rows = []
@@ -1654,8 +1676,36 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
     # baseline, and daily_pnl's drift check relies on both sides of that
     # comparison being truncated the same way. The account history must not
     # inherit that truncation, so it gets this total instead (2026-10-12).
+    #
+    # N1 (2026-11-02): the book is recorded as `book_positions` (exact shares x
+    # close) and gross_book is the SAME sum over it, so
+    # account_snapshot_repair.plan_repairs (which re-sums shares x close)
+    # reproduces the stored gross exactly (its caller contract (c)). Market Value
+    # is only the fallback when the book can't be built.
+    book_positions = None
+    try:
+        if "Ticker" in port_df.columns and "Price" in port_df.columns:
+            _book: dict = {}
+            for _, row in port_df.iterrows():
+                t = str(row.get("Ticker") or "").strip().upper()
+                px = _f(row.get("Price"))
+                sh = _trim_sizing.exact_shares(row)
+                if not t or px is None or not math.isfinite(px) or px <= 0 or sh <= 0:
+                    continue
+                if t in _book:
+                    _book[t]["shares"] = round(_book[t]["shares"] + sh, 6)
+                else:
+                    _book[t] = {"shares": sh, "close": float(px)}
+            # Rows present but none priced / sized is "couldn't build the
+            # book", never a real empty book (that would record gross 0.0).
+            book_positions = _book if (_book or port_df.empty) else None
+    except Exception:
+        book_positions = None
+
     gross_book = None
-    if "Market Value" in port_df.columns:
+    if book_positions is not None:
+        gross_book = round(sum(v["shares"] * v["close"] for v in book_positions.values()), 2)
+    elif "Market Value" in port_df.columns:
         try:
             import pandas as _pd_gb   # this module has no top-level pandas import
             _mv = _pd_gb.to_numeric(port_df["Market Value"], errors="coerce")
@@ -1667,6 +1717,8 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
     pullback = _assess_pullback(ctx["spy_6mo"], ctx["fragility"], pullback_threshold)
     return {"snapshot_rows": snapshot_rows, "pullback": pullback,
             "gross_book": gross_book,
+            "journal_max_trade_id": journal_max_trade_id,
+            "book_positions": book_positions,
             "built_at": built_at, "errors": list(ctx["errors"]),
             "held_data": ctx.get("held_data", {}),
             # Additive (2026-09-15, portfolio_risk_snapshots capture) — both
