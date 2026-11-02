@@ -34,6 +34,7 @@
 | #22 f/u | Rating-change overclaims remain in `macro_playbook.py` ("strongest alpha setup") and `watchlist_advisor.py`. | Open |
 | Reb | "Trims would move" (`trim_pct`) counts trims sizing zero shares. An unsized trim hides "✅ Portfolio is well-balanced" on Signals. | Open |
 | ST② | 🩺 System Trust ② "23/24 confirmed fresh" doesn't name the unconfirmed store, and only the unconditional stores are age-checked. | Open (`system_health.py`, gate file) |
+| MAlpha | The monthly report's "missed-alpha" is the RAW-return gap (`recommendations_history.py` ~669: avg missed % − avg acted %), but the narrative quotes it right after the alpha figures, and `intelligence_report.py` ~319 labels it "Missed-alpha". October 2026: skipped −10.7% / acted +2.4% → −13.1%, while the alpha gap the reader expects is −8.7 − 4.9 = −13.6. Rename to "missed-return gap" or compute it from alpha (owner call; feeds a saved report). | Open (seen 2026-11-02) |
 | Zone | A price below `entry_lo` reads "within 3% of the entry zone" on ENTER_NOW / ENTRY_HELD (pre-existing, mostly unreachable). | Open |
 
 ## C. Time and weekend context
