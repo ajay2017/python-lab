@@ -2130,11 +2130,14 @@ IMPORTED_TRADE_ANCHOR_ET_HOUR = 16
 # mismatch rather than rounding noise. Absorbs fractional-share noise from
 # SnapTrade's position feed vs the app's trades-derived shares — not a real
 # drift signal below this size.
-# TWO consumers, deliberately sharing one number because it is one question
-# ("is this share difference real or float noise"), not two policies:
+# THREE consumers, deliberately sharing one number because it is one question
+# ("is this share difference real or float noise"), not three policies:
 #   • broker_sync.diff_positions()      — broker feed vs the app's holdings
-#   • daily_pnl.reconcile_baseline()    — prior-close baseline vs holdings
-# Retuning this for the broker feed also moves the day-P&L integrity guard.
+#   • daily_pnl.reconcile_baseline() / fill_late_logged_baseline()
+#                                       — prior-close baseline vs holdings
+#   • account_snapshot_repair           — account-row book vs journal replay
+# Retuning this for the broker feed also moves the day-P&L integrity guard
+# and the account-snapshot repair check.
 BROKER_DRIFT_SHARE_TOL = 0.001
 
 # Truncation-ambiguity bound for daily_pnl.reconcile_baseline()'s qty_drift

@@ -289,3 +289,25 @@ def test_zero_gross_book_is_accepted_not_treated_as_missing():
     rows = [{"ticker": "AAPL", "shares": 10, "close_price": 200.0}]
     r = compute_account_snapshot("2026-10-12", rows, None, 0.25, 7, _NOW, gross_book=0.0)
     assert r["gross_book"] == 0.0
+
+
+# -- account_money_fields (N1: shared by the EOD snapshot and the repair) ------
+
+def test_account_money_fields_matches_compute_account_snapshot_exactly():
+    from datetime import datetime, timezone
+    from stock_analyzer.account import account_money_fields
+    now = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+    rec = {"cash_balance": -12762.22, "updated_at": "2026-10-30T21:00:00+00:00"}
+    snap = compute_account_snapshot("2026-10-30", [], rec, 0.25, 7, now, gross_book=15272.55)
+    m = account_money_fields(15272.55, -12762.22, 0.25)
+    for k in ("cash_balance", "net_equity", "leverage", "cushion", "call_distance_pct"):
+        assert snap[k] == m[k]
+
+
+def test_account_money_fields_unlevered_and_nonpositive_equity():
+    from stock_analyzer.account import account_money_fields
+    pos = account_money_fields(1000.0, 200.0, 0.25)
+    assert pos["net_equity"] == 1200.0 and pos["cushion"] is None
+    assert pos["call_distance_pct"] is None
+    neg = account_money_fields(1000.0, -1500.0, 0.25)
+    assert neg["net_equity"] == -500.0 and neg["leverage"] is None

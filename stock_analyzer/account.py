@@ -34,6 +34,37 @@ def _gross_book_from_rows(snapshot_rows: list[dict]) -> float:
     return round(total, 2)
 
 
+def account_money_fields(gross_book: float, cash_balance: float, rate: float) -> dict:
+    """The cash-derived money fields of one account snapshot — pure.
+
+    Shared by `compute_account_snapshot` (fresh cash at EOD) and
+    `account_snapshot_repair` (re-deriving a row after its gross_book is
+    repaired, with the row's OWN cash and stored maintenance rate), so the two
+    can never drift apart. Returns {cash_balance, net_equity, leverage,
+    cushion, call_distance_pct}; leverage is None when net_equity <= 0, and
+    cushion / call_distance_pct are copied verbatim from
+    margin.call_distance() (None when there is no margin debit).
+    """
+    from . import margin as _margin
+
+    net_equity = gross_book + cash_balance
+    leverage = (gross_book / net_equity) if net_equity > 0 else None
+    margin_debit = -cash_balance if cash_balance < 0 else 0.0
+    cushion = None
+    call_distance_pct = None
+    cd = _margin.call_distance(gross_book, net_equity, margin_debit, rate)
+    if cd is not None:
+        cushion = cd["cushion"]
+        call_distance_pct = cd["call_distance_pct"]
+    return {
+        "cash_balance":      cash_balance,
+        "net_equity":        net_equity,
+        "leverage":          leverage,
+        "cushion":           cushion,
+        "call_distance_pct": call_distance_pct,
+    }
+
+
 def compute_account_snapshot(
     snapshot_date,
     snapshot_rows: list[dict],
@@ -78,7 +109,6 @@ def compute_account_snapshot(
     the history in line with what the Account page shows. A missing,
     non-numeric, negative or non-finite value falls back to the row sum.
     """
-    from . import margin as _margin
     import math as _math
 
     try:
@@ -105,14 +135,12 @@ def compute_account_snapshot(
             age_days = (now - _pd.to_datetime(cash_as_of, utc=True)).days
             if age_days <= stale_days_limit:
                 # Fresh — compute the cash-derived fields.
-                cash_balance = float(rec_cash_balance)
-                net_equity = gross_book + cash_balance
-                leverage = (gross_book / net_equity) if net_equity > 0 else None
-                margin_debit = -cash_balance if cash_balance < 0 else 0.0
-                cd = _margin.call_distance(gross_book, net_equity, margin_debit, rate)
-                if cd is not None:
-                    cushion = cd["cushion"]
-                    call_distance_pct = cd["call_distance_pct"]
+                _m = account_money_fields(gross_book, float(rec_cash_balance), rate)
+                cash_balance = _m["cash_balance"]
+                net_equity = _m["net_equity"]
+                leverage = _m["leverage"]
+                cushion = _m["cushion"]
+                call_distance_pct = _m["call_distance_pct"]
 
     return {
         "snapshot_date":     str(snapshot_date),

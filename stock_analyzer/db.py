@@ -5933,6 +5933,14 @@ def save_account_cash(cash_balance: float, note: str | None = None) -> bool:
 # returns None and save no-ops, so the app behaves exactly as before (the
 # live-only leverage readout, no history chart). See DDL at module top.
 
+# Columns added by docs/sql/account-snapshot-provenance.sql (N1). Optional until
+# the owner applies the DDL; save_account_daily_snapshot drops them on a
+# missing-column error.
+_ACCOUNT_SNAPSHOT_PROVENANCE_COLS = (
+    "journal_max_trade_id", "book_positions", "original_gross_book", "repaired_at",
+)
+
+
 def save_account_daily_snapshot(row: dict) -> bool:
     """Upsert one account_daily_snapshots row, keyed on `snapshot_date`
     (idempotent — a same-day re-run of the EOD lane, e.g. via `force`,
@@ -5954,8 +5962,59 @@ def save_account_daily_snapshot(row: dict) -> bool:
         return True
     except Exception as e:
         import warnings
+        # Graceful degradation (N1 provenance columns): if the DDL in
+        # docs/sql/account-snapshot-provenance.sql isn't applied yet, the
+        # upsert names a missing column. Same detection as save_trade's
+        # optional-column block: drop ALL four provenance keys and retry
+        # once, so the day's row is never lost.
+        _err_str = str(e)
+        _any_prov = any(c in _err_str for c in _ACCOUNT_SNAPSHOT_PROVENANCE_COLS)
+        if _any_prov:
+            _to_drop = {c for c in _ACCOUNT_SNAPSHOT_PROVENANCE_COLS if c in row}
+            warnings.warn(
+                "save_account_daily_snapshot: provenance columns missing "
+                "(apply docs/sql/account-snapshot-provenance.sql); "
+                "retrying without them"
+            )
+            try:
+                _client().table("account_daily_snapshots").upsert(
+                    _sanitize_for_write(
+                        {k: v for k, v in row.items() if k not in _to_drop},
+                        "save_account_daily_snapshot",
+                    ),
+                    on_conflict="snapshot_date",
+                ).execute()
+                return True
+            except Exception as e2:
+                e = e2
         warnings.warn(f"save_account_daily_snapshot: {e}")
         return False
+
+
+def load_max_trade_id_or_none() -> "int | None":
+    """The highest `trades.id` as an int (0 for a successfully read, empty
+    journal), or None on ANY failure (no credentials, a raised query, a
+    non-numeric id). The EOD
+    cron records it BEFORE reading holdings as the row's provenance; None means
+    "couldn't read", which the caller writes as NULL (legacy) provenance.
+    Never raises."""
+    if not has_db():
+        return None
+    try:
+        data = (
+            _client().table("trades")
+            .select("id")
+            .order("id", desc=True)
+            .limit(1)
+            .execute().data
+        )
+        if isinstance(data, list) and not data:
+            return 0          # read succeeded: an empty journal has no trades yet
+        if not data:
+            return None       # a None .data is an anomaly, not an empty journal
+        return int(data[0]["id"])
+    except Exception:
+        return None
 
 
 def load_account_daily_snapshots(start_date=None, end_date=None) -> "pd.DataFrame | None":

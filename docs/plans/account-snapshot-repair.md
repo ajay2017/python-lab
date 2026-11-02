@@ -1,6 +1,19 @@
 # Account snapshot repair (bug register N1)
 
-**Status:** designed 2026-11-01 (planner, Opus 5.5: PROCEED WITH CHANGES). Awaiting owner decisions U1–U8. Nothing built.
+**Status:** designed 2026-11-01 (planner, Opus 5.5: PROCEED WITH CHANGES). **Owner accepted every recommendation 2026-11-01:**
+- **U1:** yes, journal repair plus fail-closed readers.
+- **U2:** 35 days.
+- **U3:** exclude the row with a visible line, and measure to the nearest valid row.
+- **U4:** yes, repair `daily_snapshots` too (C7).
+- **U5:**
+  - (a) apply missing-ticker repairs automatically; show partial-quantity ones for review;
+  - (b) regenerate with Generate Now (no email);
+  - (c) older affected debriefs stay frozen and are listed in the dry run.
+- **U6:** later, after one live trade day.
+- **U7:** queued as its own item (planner + reviewer).
+- **U8:** move the broker lane's evening slot to 21:15 UTC (owner, Railway dashboard).
+
+Build started 2026-11-01 with C1 + C2.
 
 ## Defect
 
@@ -126,7 +139,7 @@ Order: C1 → C2 → C3 dry run → owner approves → apply → regenerate (by 
   - Recomputing a row with its own gross reproduces it exactly.
   - A second repair run plans zero writes.
   - `original_gross_book` is set only once.
-- **The 11-01 regression fixture:** the six rows above plus the three 10-30 buys.
+- **The 11-01 regression fixture:** the five rows in the table above (10-26 left out) plus the three 10-30 buys.
 - **AST pins on both ends:** the EOD writes the provenance keys, and `compute_period_core` applies `stale_rows`.
 
 ## Sibling sweep (same classes, listed so they aren't rediscovered)
@@ -144,6 +157,20 @@ Order: C1 → C2 → C3 dry run → owner approves → apply → regenerate (by 
 - **Residuals:**
   - Editing or deleting an old trade isn't detected.
   - A never-logged trade is caught only by U6.
+
+## Contracts and residuals from the C1/C2 review (2026-11-01, Opus FIX-FIRST round 1)
+
+- **C3 `--apply`** must first confirm the four provenance columns exist. `save_account_daily_snapshot` drops them on an unknown-column error and still returns True, so a backfill without the DDL would lose `original_gross_book` for good. Add a provenance-columns probe.
+- **C4:**
+  - Treat a save that dropped provenance as a degraded heartbeat.
+  - Build `gross_book` as the same Σ shares × close over `book_positions` that `plan_repairs` re-sums. Otherwise switch repairs to old gross + the delta on stale tickers.
+  - Never send `original_gross_book` / `repaired_at` on the EOD upsert, because PostgREST's merge would wipe the set-once value on an `ALERT_FORCE` re-run.
+- **Caller contracts (C3/C5):**
+  - Trades must come from `db.load_trades_or_none` (normalised `traded_at`).
+  - Injected closes must be unadjusted, or the stored `daily_snapshots.close_price`.
+- **Residual, imported trades:** they anchor at 16:00 ET, so an after-hours fill confirmed later always counts as at or before `cash_as_of` and is added to day d, although that day's cash read didn't include it. The 18:00 ET protection covers only hand-logged trades with a real time.
+- **Residual, logged after EOD:** a fill logged without a backdate after EOD falls past the cutoff and is never flagged. U8 (broker lane at 21:15 UTC) and a cash cross-check in C3/C5 narrow both.
+- **Residual, logged between the broker run and EOD:** such a trade is refused only when its ticker also has a late trade. Comparing the whole book to the replay would false-flag the common case of a regular-hours fill logged after the close (owner-visible residual; pinned by a test).
 
 ## Do not change
 

@@ -1218,6 +1218,9 @@ _GATE_FILES = {
     "stock_analyzer/daily_pnl.py",        # Home / Summary Today's P&L and its baseline repair
     "stock_analyzer/period_inputs.py",    # period account return shared by Reports and the weekly debrief
     "stock_analyzer/debrief_advisor.py",  # weekly debrief figures saved and emailed
+    # Added 2026-11-01 (bug register N1): decides which account_daily_snapshots rows
+    # are stale and what a repaired row's gross book and money fields become.
+    "stock_analyzer/account_snapshot_repair.py",
 }
 
 
