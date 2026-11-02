@@ -673,7 +673,8 @@ def test_fill_observed_case_baseline_close():
     held2 = held + [{"ticker": "AAPL", "shares": 1, "price": 100.0}]
     nb, filled = _fill(held2, base, [], [_jb("MRVL", _BD, 8, 100.0)], {"MRVL": 105.0})
     assert nb["MRVL"] == {"shares": 8, "close": 105.0}
-    assert filled == [{"ticker": "MRVL", "shares": 8, "close": 105.0, "basis": "baseline_close"}]
+    assert filled == [{"ticker": "MRVL", "kind": "missing", "shares": 8, "close": 105.0,
+                       "basis": "baseline_close"}]
     res = dp.compute_positions_day_pnl(held2, nb, [], 1000.0)
     assert res["unbaselined"] == []
     assert res["day_pnl"] == pytest.approx(8 * (110.0 - 105.0))
@@ -868,3 +869,126 @@ def test_replay_same_day_net_reduction_gives_correct_total():
 def test_replay_oversold_still_none():
     rows = [(_OLD, "BUY", 2.0, 1.0), (_dtm.date(2026, 9, 5), "SELL", 5.0, 1.0)]
     assert dp._journal_shares_at(rows, _BD) is None
+
+
+# ─── adjusted / removed kinds (late-logged trades on names already in the snapshot) ──
+
+def _by(filled):
+    return {e["ticker"]: e for e in filled}
+
+
+def test_adjust_live_fixture_dash_okta_plus_missing_names():
+    held = [{"ticker": "DASH", "shares": 7, "price": 200.0},
+            {"ticker": "OKTA", "shares": 8, "price": 100.0},
+            {"ticker": "CSCO", "shares": 10, "price": 60.0},
+            {"ticker": "AAA", "shares": 4, "price": 50.0}]
+    base = {"DASH": {"shares": 5, "close": 190.0}, "OKTA": {"shares": 7, "close": 95.0},
+            "AAA": {"shares": 4, "close": 49.0}}
+    journal = [_jb("DASH", _OLD, 5, 180.0), _jb("DASH", _BD, 2, 190.0),
+               _jb("OKTA", _OLD, 7, 90.0), _jb("OKTA", _BD, 1, 95.0),
+               _jb("CSCO", _BD, 10, 55.0), _jb("AAA", _OLD, 4, 40.0)]
+    pre = dp.reconcile_baseline(held, base, [])
+    assert {q["ticker"] for q in pre["qty_drift"]} == {"DASH", "OKTA"}
+    nb, filled = _fill(held, base, [], journal, {"CSCO": 58.0})
+    e = _by(filled)
+    assert e["DASH"]["kind"] == "adjusted" and e["DASH"]["from_shares"] == 5
+    assert e["DASH"]["shares"] == 7 and e["DASH"]["close"] == 190.0
+    assert e["OKTA"]["kind"] == "adjusted" and e["OKTA"]["shares"] == 8
+    assert e["CSCO"]["kind"] == "missing"
+    assert [x["ticker"] for x in filled] == sorted(e)
+    res = dp.compute_positions_day_pnl(held, nb, [], 5000.0)
+    assert res["qty_drift"] == [] and res["unbaselined"] == [] and res["orphans"] == []
+    want = sum(h["shares"] * (h["price"] - nb[h["ticker"]]["close"]) for h in held)
+    assert res["day_pnl"] == pytest.approx(want)
+
+
+def test_adjust_late_partial_sell_goes_down():
+    held = [{"ticker": "AAA", "shares": 3, "price": 10.0}]
+    base = {"AAA": {"shares": 5, "close": 9.0}}
+    journal = [_jb("AAA", _OLD, 5, 8.0), _jb("AAA", _BD, 2, 9.5, "SELL")]
+    nb, filled = _fill(held, base, [], journal, {})
+    assert nb["AAA"] == {"shares": 3, "close": 9.0}
+    assert filled[0]["kind"] == "adjusted" and filled[0]["from_shares"] == 5
+
+
+def test_remove_late_full_exit_no_orphan():
+    held = [{"ticker": "KEEP", "shares": 1, "price": 10.0}]
+    base = {"KEEP": {"shares": 1, "close": 9.0}, "GONE": {"shares": 4, "close": 20.0}}
+    journal = [_jb("GONE", _OLD, 4, 15.0), _jb("GONE", _BD, 4, 20.0, "SELL")]
+    nb, filled = _fill(held, base, [], journal, {})
+    assert "GONE" not in nb and "KEEP" in nb
+    assert filled == [{"ticker": "GONE", "kind": "removed", "shares": 0.0, "from_shares": 4.0}]
+    assert dp.compute_positions_day_pnl(held, nb, [], 100.0)["orphans"] == []
+
+
+def test_adjust_journal_disagrees_untouched_and_drift_reported():
+    held = [{"ticker": "AAA", "shares": 7, "price": 10.0}]
+    base = {"AAA": {"shares": 5, "close": 9.0}}
+    journal = [_jb("AAA", _OLD, 5, 8.0)]            # journal says 5, held says 7
+    nb, filled = _fill(held, base, [], journal, {})
+    assert nb == base and filled == []
+    assert [q["ticker"] for q in dp.compute_positions_day_pnl(held, nb, [], 100.0)["qty_drift"]] == ["AAA"]
+
+
+def test_orphan_with_journal_shares_untouched_and_reported():
+    held = [{"ticker": "KEEP", "shares": 1, "price": 10.0}]
+    base = {"KEEP": {"shares": 1, "close": 9.0}, "ORPH": {"shares": 4, "close": 20.0}}
+    nb, filled = _fill(held, base, [], [_jb("ORPH", _OLD, 4, 15.0)], {})
+    assert nb == base and filled == []
+    assert [o["ticker"] for o in dp.compute_positions_day_pnl(held, nb, [], 100.0)["orphans"]] == ["ORPH"]
+
+
+def test_remove_requires_journal_rows_and_no_between_rows():
+    held = [{"ticker": "KEEP", "shares": 1, "price": 10.0}]
+    base = {"KEEP": {"shares": 1, "close": 9.0}, "G": {"shares": 4, "close": 20.0}}
+    assert _fill(held, base, [], [], {})[1] == []
+    journal = [_jb("G", _OLD, 4, 15.0), _jb("G", _MID, 4, 20.0, "SELL")]
+    assert _fill(held, base, [], journal, {})[1] == []
+
+
+def test_adjust_between_buy_on_existing_name_blends_close():
+    held = [{"ticker": "AAA", "shares": 8, "price": 10.0}]
+    base = {"AAA": {"shares": 5, "close": 9.0}}
+    journal = [_jb("AAA", _OLD, 5, 8.0), _jb("AAA", _BD, 1, 9.0), _jb("AAA", _MID, 2, 12.0)]
+    nb, filled = _fill(held, base, [], journal, {})
+    assert nb["AAA"]["shares"] == 8
+    assert nb["AAA"]["close"] == pytest.approx((6 * 9.0 + 2 * 12.0) / 8)
+    assert filled[0]["basis"] == "mixed"
+
+
+def test_adjust_split_today_skipped():
+    held = [{"ticker": "NVDA", "shares": 40, "price": 10.0}]
+    base = {"NVDA": {"shares": 10, "close": 40.0}}
+    today = [{"ticker": "NVDA", "action": "SPLIT 4:1", "shares": 40, "price": 0}]
+    nb, filled = _fill(held, base, today, [_jb("NVDA", _OLD, 40, 1.0)], {})
+    assert nb == base and filled == []
+
+
+def test_adjust_base_equal_to_start_untouched():
+    held = [{"ticker": "AAA", "shares": 5, "price": 10.0}]
+    base = {"AAA": {"shares": 5, "close": 9.0}}
+    nb, filled = _fill(held, base, [], [_jb("AAA", _OLD, 5, 8.0)], {})
+    assert nb == base and filled == []
+
+
+def test_adjust_fractional_journal_int_truncated_base_and_held():
+    held = [{"ticker": "FRC", "shares": 2, "price": 10.0}]
+    base = {"FRC": {"shares": 2, "close": 9.0}}
+    nb, filled = _fill(held, base, [], [_jb("FRC", _BD, 2.5, 9.0)], {})
+    assert nb == base and filled == []              # same int count: nothing to correct
+    held3 = [{"ticker": "FRC", "shares": 3, "price": 10.0}]
+    nb, filled = _fill(held3, base, [], [_jb("FRC", _OLD, 2.5, 8.0), _jb("FRC", _BD, 1, 9.0)], {})
+    assert filled and filled[0]["kind"] == "adjusted" and nb["FRC"]["shares"] == 3
+
+
+def test_fill_is_idempotent_on_its_own_output():
+    held = [{"ticker": "DASH", "shares": 7, "price": 200.0},
+            {"ticker": "CSCO", "shares": 10, "price": 60.0}]
+    base = {"DASH": {"shares": 5, "close": 190.0}, "GONE": {"shares": 4, "close": 20.0}}
+    journal = [_jb("DASH", _OLD, 5, 180.0), _jb("DASH", _BD, 2, 190.0),
+               _jb("CSCO", _BD, 10, 55.0),
+               _jb("GONE", _OLD, 4, 15.0), _jb("GONE", _BD, 4, 20.0, "SELL")]
+    nb, filled = _fill(held, base, [], journal, {"CSCO": 58.0})
+    assert len(filled) == 3
+    nb2, filled2 = _fill(held, nb, [], journal, {"CSCO": 58.0})
+    assert filled2 == [] and nb2 == nb

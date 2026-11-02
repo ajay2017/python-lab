@@ -8040,8 +8040,11 @@ if page == "🏠 Home":
     _fill_note = None
     if _dpnl is not None and _dpnl.get("late_filled"):
         _fl_d = date.fromisoformat(_dpnl_baseline_date).strftime('%b %d')
+        _fl_miss = [e for e in _dpnl["late_filled"] if e.get("kind", "missing") == "missing"]
+        _fl_adj = [e for e in _dpnl["late_filled"] if e.get("kind") == "adjusted"]
+        _fl_rem = [e for e in _dpnl["late_filled"] if e.get("kind") == "removed"]
         _fl_by = {"baseline_close": [], "fill": [], "mixed": []}
-        for _fl in _dpnl["late_filled"]:
+        for _fl in _fl_miss:
             _fl_by.setdefault(_fl["basis"], []).append(_fl["ticker"])
         _fl_parts = []
         if _fl_by["baseline_close"]:
@@ -8050,14 +8053,33 @@ if page == "🏠 Home":
             _fl_parts.append(f"**{', '.join(_fl_by['fill'])}** at your fill price")
         if _fl_by["mixed"]:
             _fl_parts.append(f"**{', '.join(_fl_by['mixed'])}** from both")
-        _fl_tail = ("Today's P&L counts only their move since then (since the fill "
-                    "for names filled at your fill price)."
-                    if (_fl_by["fill"] or _fl_by["mixed"])
-                    else "Today's P&L counts only their move since then.")
-        _fill_note = (
-            f"ℹ️ Missing from the {_fl_d} snapshot (for example, logged after it was "
-            f"saved), so filled in from your journal: {'; '.join(_fl_parts)}. {_fl_tail}"
-        )
+        _fl_clauses = []
+        if _fl_miss:
+            _fl_clauses.append(
+                f"Missing from the {_fl_d} snapshot (for example, logged after it was "
+                f"saved), so filled in from your journal: {'; '.join(_fl_parts)}.")
+        if _fl_adj:
+            _fl_adj_txt = ", ".join(
+                f"**{e['ticker']}** {e['from_shares']:g} → {e['shares']:g}" for e in _fl_adj)
+            _fl_adj_used_fill = any(e.get("basis") in ("fill", "mixed") for e in _fl_adj)
+            _fl_clauses.append(
+                f"Share counts corrected from your journal: {_fl_adj_txt} "
+                + ("(at their snapshot close, plus your fill price for buys after it)."
+                   if _fl_adj_used_fill else f"(at their {_fl_d} close)."))
+        _fl_used_fill = any(e.get("basis") in ("fill", "mixed") for e in _dpnl["late_filled"]
+                            if e.get("kind") != "removed")
+        # The tail describes only filled-in / corrected names: a removed name
+        # doesn't count toward Today's P&L at all (Opus review 2026-11-01).
+        if _fl_miss or _fl_adj:
+            _fl_clauses.append(
+                "For those names, Today's P&L counts only the move since then"
+                + (" (since the fill for names valued at your fill price)."
+                   if _fl_used_fill else "."))
+        if _fl_rem:
+            _fl_clauses.append(
+                f"Sold by {_fl_d} per your journal, so no longer counted: "
+                f"{', '.join('**' + e['ticker'] + '**' for e in _fl_rem)}.")
+        _fill_note = f"ℹ️ {' '.join(_fl_clauses)}"
     if len(_dq_msgs) == 1:
         _home_notice("pnldq", "caption")
     elif len(_dq_msgs) > 1:
@@ -14104,8 +14126,8 @@ elif page == "🧾 Summary":
                     _sm_dp_bad += len(_v)
             _sm_dp_late = _sm_dpnl.get("late_filled")   # absent on an older cached payload
             _sm_dp_late_note = (
-                f" {len(_sm_dp_late)} name(s) missing from the baseline snapshot were "
-                f"filled in from the journal (see 🏠 Home → ⚠️ Alerts)."
+                f" {len(_sm_dp_late)} name(s) in the baseline snapshot were corrected "
+                f"from the journal (see 🏠 Home → ⚠️ Alerts)."
                 if isinstance(_sm_dp_late, list) and _sm_dp_late else "")
             st.metric(
                 "Today's P&L", _m(f"${_sm_dpnl['day_pnl']:+,.0f}"),

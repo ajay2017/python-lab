@@ -408,35 +408,52 @@ def fill_late_logged_baseline(
     baseline_closes: dict,
 ) -> tuple[dict, list[dict]]:
     """
-    Fill missing prior-close baseline rows for buys logged AFTER their trading
-    day's last snapshot.
+    Repair prior-close baseline rows that the journal shows were wrong or
+    missing because trades were logged AFTER their trading day's last snapshot.
 
     Both snapshot writers date the snapshot with today's ET date and skip
-    non-trading days, so a buy logged late (e.g. a Friday fill journalled on
-    Saturday) never enters the baseline, and a weekend can't rewrite it. The
-    name then reads as `unbaselined` and its FULL value counts as a day gain.
-    Here the row is rebuilt from the journal: the shares held at the start of
-    today, at an effective close that blends the baseline-date close (for lots
-    bought on or before `baseline_date`) with the fill price (for lots bought
-    strictly between `baseline_date` and `today`).
+    non-trading days, so a trade logged late (e.g. a Friday fill journalled on
+    Saturday) never enters the baseline, and a weekend can't rewrite it. Three
+    shapes, each rebuilt from the journal:
 
-    A ticker is filled only when the journal's own replay to `baseline_date`
+      "missing"  : a held name absent from the baseline (read as `unbaselined`,
+                   its FULL value counted as a day gain). Row = the shares held
+                   at the start of today, at an effective close that blends the
+                   baseline-date close (lots bought on or before `baseline_date`)
+                   with the fill price (lots bought strictly between
+                   `baseline_date` and `today`).
+      "adjusted" : a held name already in the baseline with a different share
+                   count (a late BUY or partial SELL dated on or before
+                   `baseline_date`; read as `qty_drift`). Row = shares at the
+                   start of today; the pre-existing part is valued at the
+                   baseline row's OWN stored close, any between-buys at fill.
+      "removed"  : a baseline name no longer held, not traded today, whose
+                   journal replay to `baseline_date` is zero (a full exit logged
+                   after the snapshot; read as an orphan). Row dropped.
+
+    A ticker is repaired only when the journal's own replay to `baseline_date`
     (BUY +, SELL -, SPLIT sets the total) plus the buys in between accounts for
     the held shares. Anything else (a SELL or split in between, a non-positive
-    fill, a split sharing a date with a BUY/SELL, an oversold history, shares
-    the journal doesn't explain such as a broker rebaseline or a fully-sold
-    old position, or no usable baseline-date close for the pre-existing part)
-    is left alone, so the `unbaselined` warning still fires for genuine drift.
+    fill, a split today or sharing a date with a BUY/SELL, an oversold history,
+    shares the journal doesn't explain such as a broker rebaseline or a
+    fully-sold old position, no usable baseline-date close for a missing name's
+    pre-existing part, an orphan with no journal rows or with rows after the
+    baseline date) is left alone, so the unbaselined / qty_drift / orphan
+    warning still fires for genuine drift. A sell dated between `baseline_date`
+    and `today` is never repaired (its proceeds are not in today's cash leg).
 
     held / baseline / today_trades : as in `compute_positions_day_pnl`.
     journal_trades  : [{"ticker","action","shares","price","date"}], every
                       journal trade, `date` the ET trade date; rows without a
                       parseable date are ignored.
-    baseline_closes : {TICKER: close ON baseline_date} for held names.
+    baseline_closes : {TICKER: close ON baseline_date} for held names missing
+                      from the baseline (the other kinds need no lookup).
 
-    Pure; never mutates its inputs. Returns (new_baseline, filled) with
-    `filled` = [{"ticker","shares","close","basis"}] sorted by ticker, `basis`
-    one of "baseline_close", "fill", "mixed".
+    Pure; never mutates its inputs; idempotent on its own output. Returns
+    (new_baseline, filled) with `filled` sorted by ticker, each
+    {"ticker","kind","shares", ...}: "missing" and "adjusted" carry "close" and
+    "basis" ("baseline_close", "fill" or "mixed"); "adjusted" also carries
+    "from_shares"; "removed" has shares 0 and carries "from_shares" only.
     """
     import math
     new_baseline = dict(baseline)
@@ -468,44 +485,85 @@ def fill_late_logged_baseline(
             (d, str(j.get("action", "")).strip().upper(),
              _num(j.get("shares")), _num(j.get("price"))))
 
+    base_orig = {str(k).strip().upper(): k for k in baseline}
+    traded_today = {str(t.get("ticker", "")).strip().upper() for t in today_trades}
+
+    def _blend(tk, start, rows, base_close):
+        """(close_eff, between_shares, pre) or None when the journal can't
+        explain `start` held shares."""
+        between = [r for r in rows if b_date < r[0] < t_date]
+        if any(r[1] != "BUY" for r in between):
+            return None
+        if any(r[2] <= 0 or r[3] <= 0 for r in between):
+            return None
+        between_shares = sum(r[2] for r in between)
+        between_cost = sum(r[2] * r[3] for r in between)
+        # Replay the journal to the baseline date: the held count comes from the
+        # holdings table, so only repair when the journal itself explains it.
+        net_b = _journal_shares_at(rows, b_date)
+        if net_b is None:
+            return None                   # ambiguous / oversold history
+        # `held` is int-truncated by build_portfolio_df, so compare truncated.
+        if abs(int(round(net_b + between_shares, 6)) - start) > BROKER_DRIFT_SHARE_TOL:
+            return None                   # journal doesn't account for the held shares
+        pre = start - between_shares
+        if pre < -BROKER_DRIFT_SHARE_TOL:
+            return None
+        if abs(pre) <= BROKER_DRIFT_SHARE_TOL:
+            pre = 0.0
+        if pre > 0 and (not math.isfinite(base_close) or base_close <= 0):
+            return None
+        return (pre * (base_close if pre > 0 else 0.0) + between_cost) / start, between_shares, pre
+
     for tk in sorted(held_sh):
-        if tk in base_keys or tk in split_today:
+        if tk in split_today:
             continue
         start = held_sh[tk] - deltas.get(tk, 0.0)
         if start <= BROKER_DRIFT_SHARE_TOL:
             continue                      # bought today; the cash leg handles it
         rows = j_by_tk.get(tk, [])
-        between = [r for r in rows if b_date < r[0] < t_date]
-        if any(r[1] != "BUY" for r in between):
+        if tk in base_keys:
+            okey = base_orig[tk]
+            base_sh = _num(baseline[okey].get("shares"))
+            if abs(start - base_sh) <= BROKER_DRIFT_SHARE_TOL:
+                continue                  # row is already right
+            base_close = _num(baseline[okey].get("close"))
+            kind = "adjusted"
+        else:
+            okey = tk
+            base_sh = None
+            base_close = _num(closes.get(tk))
+            kind = "missing"
+        got = _blend(tk, start, rows, base_close)
+        if got is None:
             continue
-        if any(r[2] <= 0 or r[3] <= 0 for r in between):
-            continue
-        between_shares = sum(r[2] for r in between)
-        between_cost = sum(r[2] * r[3] for r in between)
-        # Replay the journal to the baseline date: the held count comes from the
-        # holdings table, so only fill when the journal itself explains it.
-        net_b = _journal_shares_at(rows, b_date)
-        if net_b is None:
-            continue                      # ambiguous / oversold history
-        # `held` is int-truncated by build_portfolio_df, so compare truncated.
-        if abs(int(round(net_b + between_shares, 6)) - start) > BROKER_DRIFT_SHARE_TOL:
-            continue                      # journal doesn't account for the held shares
-        pre = start - between_shares
-        if pre < -BROKER_DRIFT_SHARE_TOL:
-            continue
-        if abs(pre) <= BROKER_DRIFT_SHARE_TOL:
-            pre = 0.0
-        close_b = 0.0
-        if pre > 0:
-            close_b = _num(closes.get(tk))
-            if not math.isfinite(close_b) or close_b <= 0:
-                continue
-        close_eff = (pre * close_b + between_cost) / start
-        new_baseline[tk] = {"shares": start, "close": close_eff}
+        close_eff, between_shares, pre = got
+        new_baseline[okey] = {"shares": start, "close": close_eff}
         basis = ("baseline_close" if between_shares == 0
                  else "fill" if pre == 0 else "mixed")
-        filled.append({"ticker": tk, "shares": start,
-                       "close": round(close_eff, 4), "basis": basis})
+        entry = {"ticker": tk, "kind": kind, "shares": start,
+                 "close": round(close_eff, 4), "basis": basis}
+        if kind == "adjusted":
+            entry["from_shares"] = base_sh
+        filled.append(entry)
+
+    # (B) a full exit logged after the snapshot: in the baseline, not held, not
+    # traded today, journal replay to the baseline date is zero.
+    for tk in sorted(base_keys):
+        if tk in held_sh or tk in traded_today or tk in split_today:
+            continue
+        rows = j_by_tk.get(tk, [])
+        if not rows or any(b_date < r[0] < t_date for r in rows):
+            continue
+        net_b = _journal_shares_at(rows, b_date)
+        if net_b is None or abs(net_b) > BROKER_DRIFT_SHARE_TOL:
+            continue
+        okey = base_orig[tk]
+        base_sh = _num(baseline[okey].get("shares"))
+        new_baseline.pop(okey, None)
+        filled.append({"ticker": tk, "kind": "removed", "shares": 0.0,
+                       "from_shares": base_sh})
+    filled.sort(key=lambda e: e["ticker"])
     return new_baseline, filled
 
 
